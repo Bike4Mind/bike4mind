@@ -19,8 +19,8 @@
  * an unresolved purchase is reported on every run whose window still covers it.
  *
  * Subscription invoices are out of scope: their grants are keyed by an invoice-derived idempotency
- * key and are legitimately skipped by the re-subscribe cooldown (lib/userSubscriptions/serverUtils.ts),
- * so a missing row there is not a reliable signal.
+ * key and are legitimately skipped by the re-subscribe cooldown
+ * (apps/workers/src/lib/userSubscriptions/serverUtils.ts), so a missing row there is not a reliable signal.
  *
  * Schedule: daily at 7am UTC
  * Enabled: production + dev
@@ -34,8 +34,8 @@ import { CreditHolderType } from '@bike4mind/common';
 import { connectDB, creditTransactionRepository, userRepository } from '@bike4mind/database';
 import { isStripeConfigured, stripe } from '@server/integrations/stripe/stripe';
 import { postMessageToSlack } from '@server/integrations/slack/slack';
-import { emitMetric } from '@server/utils/cloudwatch';
-import { Config } from '@server/utils/config';
+import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
 
 const CLOUDWATCH_NAMESPACE = 'Lumina5/CreditPurchases';

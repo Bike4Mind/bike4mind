@@ -9,27 +9,11 @@ import AdminSystemHealthTab from '@client/app/components/admin/AdminSystemHealth
 import { useUser } from '@client/app/contexts/UserContext';
 import CloseIcon from '@mui/icons-material/Close';
 import { IconButton } from '@mui/joy';
-import {
-  Accordion,
-  AccordionDetails,
-  AccordionGroup,
-  AccordionSummary,
-  Box,
-  Button,
-  Drawer,
-  Grid,
-  Sheet,
-  Stack,
-  TabPanel,
-  Tabs,
-  Typography,
-  Badge,
-  Tooltip,
-} from '@mui/joy';
+import { Box, Drawer, Grid, Sheet, TabPanel, Tabs, Typography, Tooltip } from '@mui/joy';
 import { useGetWaitingSubscribersCount } from '@client/app/hooks/data/subscribers';
-import { useRouter, useSearch } from '@tanstack/react-router';
+import { useRouter } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
-import { lazy, useEffect, useRef, useState, type ReactNode } from 'react';
+import { lazy, useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '@client/app/contexts/ApiContext';
 import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
@@ -67,17 +51,21 @@ import SystemSecretsTab from './SystemSecretsTab';
 import MenuIcon from '@mui/icons-material/Menu';
 import ApiReferenceTab from './ApiReferenceTab';
 import ApiCookbookTab from './ApiCookbookTab';
-import { AdminTab, SIDEBAR_SECTIONS, type SidebarGate, type SidebarItem } from './adminSidebarConfig';
-import { adminTabFromSlug } from './adminTabSlugs';
+import { AdminTab } from './adminSidebarConfig';
+import { canRenderAdminTab } from './adminTabRenderability';
+import { useAdminTabUrlSync } from './useAdminTabUrlSync';
 import { useAdminModal } from './useAdminModal';
-import { useAdminSidebarSections } from './useAdminSidebarSections';
+import { SidebarNav } from './AdminSidebarNav';
 
 export { AdminTab } from './adminSidebarConfig';
+
+const AdminDashboardTab = dynamic(() => import('./AdminDashboardTab'), { ssr: false });
 
 const AdminLiveOpsTriageMultiConfigTab = dynamic(() => import('./AdminLiveOpsTriageMultiConfigTab'), {
   ssr: false,
 });
 const WebhookAuditLogsTab = dynamic(() => import('./WebhookAuditLogs'), { ssr: false });
+const AuditLogTab = dynamic(() => import('./AuditLog'), { ssr: false });
 
 const MigrateUsersTab = dynamic(() => import('./MigrateUsersTab'), { ssr: false });
 const AgentOpsTab = dynamic(() => import('./AgentOpsTab'), { ssr: false });
@@ -121,114 +109,6 @@ export const useAdminNotifications = create<{
     }
   },
 }));
-
-type SidebarNavProps = {
-  enableUserMigration?: boolean;
-  showLiveOpsTriageTab: boolean;
-  waitingSubscribersCount?: number;
-  hiddenNotifications: string[];
-  onTabSelect: (tab: AdminTab) => void;
-};
-
-const SidebarNav = ({
-  enableUserMigration,
-  showLiveOpsTriageTab,
-  waitingSubscribersCount,
-  hiddenNotifications,
-  onTabSelect,
-}: SidebarNavProps) => {
-  const activeTab = useAdminModal(state => state.activeTab);
-
-  const { isExpanded, toggleSection } = useAdminSidebarSections(activeTab);
-
-  const gates: Record<SidebarGate, boolean> = {
-    userMigration: !!enableUserMigration,
-    liveOpsTriage: showLiveOpsTriageTab,
-  };
-
-  const getMenuButtonSx = (tabValue: AdminTab) => ({
-    justifyContent: 'flex-start',
-    fontWeight: 500,
-    color: activeTab === tabValue ? 'primary.500' : 'neutral.600',
-    bgcolor: activeTab === tabValue ? 'primary.50' : 'transparent',
-    '&:hover': {
-      bgcolor: activeTab === tabValue ? 'primary.100' : 'neutral.50',
-    },
-    borderRadius: 'md',
-  });
-
-  const renderEndDecorator = (item: SidebarItem): ReactNode => {
-    if (
-      item.badge === 'waitingSubscribers' &&
-      waitingSubscribersCount &&
-      waitingSubscribersCount > 0 &&
-      !hiddenNotifications.includes('waiting-subscribers')
-    ) {
-      return (
-        <Box sx={{ marginLeft: 1 }}>
-          <Tooltip title={`Waiting subscribers: ${waitingSubscribersCount}`}>
-            <Badge
-              badgeContent={waitingSubscribersCount}
-              color="danger"
-              size="sm"
-              sx={{
-                '& .MuiBadge-badge': {
-                  justifyContent: 'center',
-                  fontSize: '10px',
-                  minWidth: '14px',
-                  height: '14px',
-                  padding: '0 3px',
-                },
-              }}
-            />
-          </Tooltip>
-        </Box>
-      );
-    }
-    return null;
-  };
-
-  return (
-    <AccordionGroup sx={{ marginLeft: 0.5 }}>
-      {SIDEBAR_SECTIONS.map(section => {
-        const { Icon: SectionIcon } = section;
-        const visibleItems = section.items.filter(item => !item.gate || gates[item.gate]);
-        return (
-          <Accordion key={section.key} expanded={isExpanded(section.key)} onChange={() => toggleSection(section.key)}>
-            <AccordionSummary>
-              <SectionIcon color="primary" />
-              <Typography color="primary" level="body-md">
-                {section.label}
-              </Typography>
-            </AccordionSummary>
-            <AccordionDetails sx={{ '& .MuiAccordionDetails-content': { p: 1 } }}>
-              <Stack direction={'column'} spacing={1}>
-                {visibleItems.map(item => {
-                  const { Icon: ItemIcon } = item;
-                  return (
-                    <Button
-                      key={item.tab}
-                      {...(item.testid ? { 'data-testid': item.testid } : {})}
-                      startDecorator={<ItemIcon />}
-                      onClick={() => onTabSelect(item.tab)}
-                      variant="plain"
-                      sx={getMenuButtonSx(item.tab)}
-                      endDecorator={renderEndDecorator(item)}
-                    >
-                      <Typography level="body-sm" sx={{ color: 'inherit' }}>
-                        {item.label}
-                      </Typography>
-                    </Button>
-                  );
-                })}
-              </Stack>
-            </AccordionDetails>
-          </Accordion>
-        );
-      })}
-    </AccordionGroup>
-  );
-};
 
 const EnvironmentBanner = () => {
   const router = useRouter();
@@ -303,19 +183,33 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
   const [activeTab, setActiveTab] = useAdminModal(useShallow(state => [state.activeTab, state.setActiveTab]));
   const hiddenNotifications = useAdminNotifications(state => state.hiddenNotifications);
   const { currentUser } = useUser();
-  const { tab: requestedTabSlug } = useSearch({ strict: false }) as { tab?: string };
 
-  // A `?tab=` deep link chooses the opening tab. Keyed on the slug, NOT on activeTab, so this is
-  // an entry point rather than a mirror: activeTab is also driven by the sidebar and by the chat
-  // model picker's "manage models" shortcut (see useAdminModal), and re-asserting the URL's value
-  // on every change would fight both. Leaving the param in place is deliberate - the link stays
-  // shareable and survives a reload.
-  useEffect(() => {
-    const requestedTab = adminTabFromSlug(requestedTabSlug);
-    if (requestedTab !== undefined) {
-      setActiveTab(requestedTab);
-    }
-  }, [requestedTabSlug, setActiveTab]);
+  // LiveOps Triage tab visibility - show everywhere except fork production environments
+  const { data: liveopsEnvData, isError: isLiveOpsEnvError } = useQuery({
+    queryKey: ['liveops-triage', 'env'],
+    queryFn: async () => {
+      const { data } = await api.get<{ stage: string; isForkProduction: boolean; showTab: boolean }>(
+        '/api/admin/liveops-triage-env'
+      );
+      return data;
+    },
+    enabled: currentUser?.isAdmin,
+    staleTime: 1000 * 60 * 60, // Cache for 1 hour - environment doesn't change
+  });
+  const showLiveOpsTriageTab = liveopsEnvData?.showTab ?? false;
+
+  // Selecting a tab this screen cannot draw would leave the content pane blank, so the URL sync
+  // treats it as unknown and corrects the store instead.
+  const isAdminTabRenderable = useCallback(
+    (tab: AdminTab) =>
+      canRenderAdminTab(tab, {
+        enableUserMigration,
+        liveOpsTriage: isLiveOpsEnvError ? false : liveopsEnvData?.showTab,
+      }),
+    [enableUserMigration, liveopsEnvData, isLiveOpsEnvError]
+  );
+
+  useAdminTabUrlSync(activeTab, setActiveTab, isAdminTabRenderable);
 
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
 
@@ -364,33 +258,8 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
   // Global keyboard shortcut: Press '?' to toggle Help Center
   useHelpKeyboardShortcut();
 
-  // LiveOps Triage tab visibility - show everywhere except fork production environments
-  const { data: liveopsEnvData } = useQuery({
-    queryKey: ['liveops-triage', 'env'],
-    queryFn: async () => {
-      const { data } = await api.get<{ stage: string; isForkProduction: boolean; showTab: boolean }>(
-        '/api/admin/liveops-triage-env'
-      );
-      return data;
-    },
-    enabled: currentUser?.isAdmin,
-    staleTime: 1000 * 60 * 60, // Cache for 1 hour - environment doesn't change
-  });
-  const showLiveOpsTriageTab = liveopsEnvData?.showTab ?? false;
-
   // Get waiting subscribers count for badge
   const waitingSubscribers = useGetWaitingSubscribersCount({ enabled: currentUser?.isAdmin });
-
-  // Set default tab based on migration availability. Skipped when the URL asked for a tab: both
-  // this and the `?tab=` effect above read the same `activeTab` snapshot, so on a render where
-  // enableUserMigration is already true they would both fire and this one would land last,
-  // silently overriding the deep link. Today it only loses that race because the flag arrives
-  // from a query a tick later.
-  useEffect(() => {
-    if (enableUserMigration && activeTab === AdminTab.Users && !adminTabFromSlug(requestedTabSlug)) {
-      setActiveTab(AdminTab.Migrate);
-    }
-  }, [enableUserMigration, activeTab, setActiveTab, requestedTabSlug]);
 
   if (!currentUser?.isAdmin) {
     return (
@@ -477,6 +346,9 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
               orientation="vertical"
               sx={{ flex: 1, minHeight: 0, '& [role="tabpanel"]': { height: '100%', overflow: 'auto' } }}
             >
+              <TabPanel value={AdminTab.Dashboard}>
+                {activeTab === AdminTab.Dashboard && <AdminDashboardTab onNavigate={setActiveTab} />}
+              </TabPanel>
               <TabPanel value={AdminTab.Users}>{activeTab === AdminTab.Users && <UsersTab />}</TabPanel>
               <TabPanel value={AdminTab.EmailVerification}>
                 {activeTab === AdminTab.EmailVerification && <EmailVerificationTab />}
@@ -607,6 +479,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
               <TabPanel value={AdminTab.WebhookAuditLogs}>
                 {activeTab === AdminTab.WebhookAuditLogs && <WebhookAuditLogsTab />}
               </TabPanel>
+              <TabPanel value={AdminTab.AuditLog}>{activeTab === AdminTab.AuditLog && <AuditLogTab />}</TabPanel>
               <TabPanel value={AdminTab.GitHubConnection}>
                 {activeTab === AdminTab.GitHubConnection && <GitHubConnectionTab />}
               </TabPanel>

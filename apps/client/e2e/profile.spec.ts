@@ -120,6 +120,23 @@ test.describe.serial('Profile - Settings', () => {
   });
 });
 
+test.describe('Profile - Storage breakdown', () => {
+  test('a new account opens the breakdown and sees no stored files', async ({ profilePage }) => {
+    const { page } = profilePage;
+    await profilePage.gotoProfile();
+
+    const breakdownResponse = page.waitForResponse(
+      r => r.url().includes('/api/users/me/storage-breakdown') && r.request().method() === 'GET'
+    );
+    await page.getByTestId('storage-breakdown-toggle-btn').click();
+    const response = await breakdownResponse;
+    expect(response.status()).toBe(200);
+    expect(await response.json()).toMatchObject({ totalBytes: 0, unaccountedBytes: 0, buckets: [] });
+
+    await expect(page.getByTestId('storage-breakdown-empty')).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+  });
+});
+
 test.describe('Profile - Agent connect', () => {
   test('should copy a key-free agent prompt and MCP snippets from the API Keys tab', async ({
     profilePage,

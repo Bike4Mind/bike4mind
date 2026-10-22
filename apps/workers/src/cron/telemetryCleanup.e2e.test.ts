@@ -15,7 +15,7 @@ import { handler } from './telemetryCleanup';
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 vi.mock('sst', () => ({ Resource: { App: { stage: 'test' } } }));
-vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://test/%STAGE%' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://test/%STAGE%' } }));
 vi.mock('@bike4mind/database', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/database')>()),
   connectDB: vi.fn(),

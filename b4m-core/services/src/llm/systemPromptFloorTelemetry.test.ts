@@ -201,10 +201,10 @@ describe('sortDetailsByDeliveryOrder', () => {
 
     expect(sorted).toEqual([
       'format_prompt',
-      'date_time_context',
       'artifact_emission',
       'help_center',
       'abstention',
+      'date_time_context',
       'extra_context',
     ]);
   });

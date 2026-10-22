@@ -72,10 +72,80 @@ export function isTransientTransactionError(error: unknown): boolean {
   return transientCodes.includes(mongoError.code ?? -1);
 }
 
-/** `overrides` is merged last, e.g. `{ autoIndex: false }` for a read-only script. */
-export const connectDB = async (url: string, logger?: Logger, overrides?: ConnectOptions) => {
+// MongoPoolClearedError subclasses MongoNetworkError but carries its own name, so it is listed too.
+const CONNECTION_LOST_ERROR_NAMES = [
+  'MongoNetworkError',
+  'MongoNetworkTimeoutError',
+  'MongoPoolClearedError',
+  'MongoServerSelectionError',
+];
+
+/**
+ * True when the operation failed because the client had no usable server, not because the server
+ * rejected it: mongoose's command-buffering timeout, a server-selection timeout, or a network error.
+ * Matched by name because more than one copy of the driver can be installed.
+ */
+export function isConnectionLostError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const { name, message } = error as { name?: unknown; message?: unknown };
+  if (typeof name !== 'string') return false;
+  if (CONNECTION_LOST_ERROR_NAMES.includes(name)) return true;
+  return name === 'MongooseError' && typeof message === 'string' && message.includes('buffering timed out');
+}
+
+// A failed socket is already invalidated by the driver, so an immediate re-ping lands on a fresh
+// one. A server-selection timeout has already waited serverSelectionTimeoutMS, so retrying it only
+// doubles the failure latency.
+const PING_RETRY_ERROR_NAMES = CONNECTION_LOST_ERROR_NAMES.filter(name => name !== 'MongoServerSelectionError');
+
+const isRetryablePingError = (error: unknown): boolean => {
+  if (!error || typeof error !== 'object') return false;
+  const { name } = error as { name?: unknown };
+  return typeof name === 'string' && PING_RETRY_ERROR_NAMES.includes(name);
+};
+
+const pingServer = () => mongoose.connection.getClient().db().command({ ping: 1 });
+
+/**
+ * Makes the driver re-check its servers now instead of at the next heartbeat: a pending server
+ * selection requests an immediate monitor check, and mongoose releases buffered commands as soon as
+ * a primary is back.
+ */
+const reselectServer = async (logger?: Logger): Promise<void> => {
+  try {
+    await pingServer();
+  } catch (error) {
+    logger?.warn('Database ping failed while recovering the connection', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+};
+
+const SERVERLESS_IDLE_TIME_MS = 30_000;
+let lastConnectionCheck = 0;
+let connectionAttempt: Promise<boolean> | undefined;
+
+const isServerlessRuntime = () => Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.VERCEL);
+
+const checkWarmConnection = async (logger: Logger): Promise<void> => {
+  try {
+    await pingServer();
+  } catch (error) {
+    if (!isRetryablePingError(error)) throw error;
+    // The driver invalidates failed network connections. Re-select without closing other requests' sockets.
+    logger.warn('Database ping failed after inactivity, retrying on a healthy connection', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    await pingServer();
+  }
+};
+
+const ensureConnection = async (url: string, logger?: Logger, overrides?: ConnectOptions): Promise<boolean> => {
   logger ??= Logger.withMetadata({});
   if (mongoose.connection.readyState === 1) {
+    if (isServerlessRuntime() && Date.now() - lastConnectionCheck >= SERVERLESS_IDLE_TIME_MS) {
+      await checkWarmConnection(logger);
+    }
     return true;
   }
 
@@ -97,14 +167,15 @@ export const connectDB = async (url: string, logger?: Logger, overrides?: Connec
     // Causes indexes to be built automatically. This is the default, but
     // here we make it explicit:
     autoIndex: true,
-    minPoolSize: 1,
+    minPoolSize: isServerlessRuntime() ? 0 : 1,
     // One connection per request is likely enough; 2 may be more than needed.
     maxPoolSize,
-    // Close idle connections after 30s in Lambda/DocumentDB so stale connections
-    // don't cause EPIPE errors. Only set for DocumentDB; local/long-running
-    // processes keep the default (no idle timeout) to avoid unnecessary churn.
-    ...(isDocumentDBConnection(url) && {
-      maxIdleTimeMS: parseInt(process.env.MONGODB_MAX_IDLE_TIME_MS || '30000', 10),
+    // Expire stale sockets for every serverless deployment, including Atlas.
+    // Long-running processes retain the driver default; an explicit 0 disables expiry.
+    ...((isServerlessRuntime() ||
+      isDocumentDBConnection(url) ||
+      process.env.MONGODB_MAX_IDLE_TIME_MS !== undefined) && {
+      maxIdleTimeMS: parseInt(process.env.MONGODB_MAX_IDLE_TIME_MS || String(SERVERLESS_IDLE_TIME_MS), 10),
     }),
     // Connection timeout settings to handle Lambda cold starts and network issues
     serverSelectionTimeoutMS: 30000, // 30s to select a server (default is 30s)
@@ -159,6 +230,21 @@ export const connectDB = async (url: string, logger?: Logger, overrides?: Connec
   );
 };
 
+/** `overrides` is merged last, e.g. `{ autoIndex: false }` for a read-only script. */
+export const connectDB = async (url: string, logger?: Logger, overrides?: ConnectOptions): Promise<boolean> => {
+  if (connectionAttempt) return connectionAttempt;
+
+  // Cold starts and concurrent requests after a thaw must await the same connection check.
+  connectionAttempt = ensureConnection(url, logger, overrides);
+  try {
+    const connected = await connectionAttempt;
+    lastConnectionCheck = Date.now();
+    return connected;
+  } finally {
+    connectionAttempt = undefined;
+  }
+};
+
 export const getDB = () => {
   return mongoose;
 };
@@ -173,9 +259,11 @@ export const getDB = () => {
  * Database writes are rolled back on failure, but external side effects (e.g., API calls) are not.
  *
  * Retry behavior:
- * - Only retries on TransientTransactionError (e.g., WriteConflict)
+ * - Retries on TransientTransactionError (e.g., WriteConflict)
  * - Uses exponential backoff with 25% jitter to prevent thundering herd
  * - Conservative retry count (2) since MongoDB driver already retries internally
+ * - With `retryOnConnectionLoss`, also retries a lost connection (see `isConnectionLostError`) after
+ *   forcing the driver to re-check its servers
  *
  * @param fn - The transaction callback (must be idempotent)
  * @param options - Transaction options including optional logger and maxRetries
@@ -187,32 +275,36 @@ export const withTransaction = async <T>(
   fn: (session: mongoose.mongo.ClientSession) => Promise<T>,
   options?: Partial<mongoose.mongo.TransactionOptions> & {
     logger?: Logger;
-    /** Maximum retry attempts for transient errors (default: 2) */
+    /** Maximum retry attempts for transient errors and, with `retryOnConnectionLoss`, a lost connection (default: 2) */
     maxRetries?: number;
+    /** Also retry when the connection was lost (default: false) */
+    retryOnConnectionLoss?: boolean;
   }
 ): Promise<T> => {
-  const maxRetries = options?.maxRetries ?? 2;
+  // The wrapper options sit alongside the driver's own, so peel them off before handing the rest to
+  // `transaction` - the driver has no use for a logger or a retry budget.
+  const { logger, maxRetries = 2, retryOnConnectionLoss = false, ...transactionOptions } = options ?? {};
   let lastError: unknown;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
       return await mongoose.connection.transaction(async session => {
-        options?.logger?.debug('Starting transaction...', { attempt: attempt + 1 });
+        logger?.debug('Starting transaction...', { attempt: attempt + 1 });
         const result = await fn(session);
-        options?.logger?.debug('Transaction completed');
+        logger?.debug('Transaction completed');
         return result;
-      }, options);
+      }, transactionOptions);
     } catch (error) {
       lastError = error;
 
-      // Only retry transient transaction errors
-      if (!isTransientTransactionError(error)) {
+      const connectionLost = retryOnConnectionLoss && isConnectionLostError(error);
+      if (!connectionLost && !isTransientTransactionError(error)) {
         throw error;
       }
 
       // Don't retry if we've exhausted attempts
       if (attempt >= maxRetries) {
-        options?.logger?.warn(`Transaction failed after ${maxRetries + 1} attempts`, {
+        logger?.warn(`Transaction failed after ${maxRetries + 1} attempts`, {
           error: error instanceof Error ? error.message : String(error),
           code: (error as { code?: number })?.code,
           errorLabels: (error as { errorLabels?: string[] })?.errorLabels,
@@ -220,12 +312,22 @@ export const withTransaction = async <T>(
         throw error;
       }
 
+      if (connectionLost) {
+        logger?.warn('Database connection lost, retrying transaction', {
+          attempt: attempt + 1,
+          maxRetries,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        await reselectServer(logger);
+        continue;
+      }
+
       // Exponential backoff with jitter (25%) to prevent thundering herd
       const baseDelay = 100 * Math.pow(2, attempt); // 100ms, 200ms
       const jitter = baseDelay * 0.25 * Math.random();
       const delayMs = Math.round(baseDelay + jitter);
 
-      options?.logger?.info(`TransientTransactionError, retrying in ${delayMs}ms`, {
+      logger?.info(`TransientTransactionError, retrying in ${delayMs}ms`, {
         attempt: attempt + 1,
         maxRetries,
         code: (error as { code?: number })?.code,

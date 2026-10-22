@@ -68,7 +68,7 @@ vi.mock('@bike4mind/common', async () => {
   };
 });
 
-vi.mock('@server/utils/errors', () => ({
+vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   UnauthorizedError: class UnauthorizedError extends Error {
     constructor(message?: string) {
       super(message);

@@ -1,8 +1,8 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ensureAdmin, BadRequestError } from '@server/utils/errors';
-import { getDlqByLabel, getDlqUrl } from '@server/utils/dlqRegistry';
-import { receiveFromQueue } from '@server/utils/sqs';
+import { ensureAdmin, BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { getDlqByLabel, getDlqUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
+import { receiveFromQueue } from '@bike4mind/server-utils/utils/sqs';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
 

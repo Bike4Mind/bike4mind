@@ -5,7 +5,7 @@ import {
   questRepository,
   sessionRepository,
 } from '@bike4mind/database';
-import { NotFoundError, UnauthorizedError } from '@server/utils/errors';
+import { NotFoundError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import type { ArtifactRefAccessDeps } from '@server/utils/assertArtifactSourceRefsAccessible';
 
 // any: the database repositories do not structurally satisfy the services' repository interfaces;

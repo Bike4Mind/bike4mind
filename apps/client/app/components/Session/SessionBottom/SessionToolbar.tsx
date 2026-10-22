@@ -1,6 +1,5 @@
 import type { AttachScopeMode } from '@bike4mind/common';
 import React, { useEffect, useRef, useState } from 'react';
-import { toast } from 'sonner';
 import { Box, CircularProgress } from '@mui/joy';
 import Button from '@mui/joy/Button';
 import Stack from '@mui/joy/Stack';
@@ -70,6 +69,7 @@ interface SessionToolbarProps {
   pendingAutoSubmitGoal: string | null;
   // Computed once in SessionBottom so the button, Enter and voice share one gate.
   sendBlockedReason: SendBlockedReason | null;
+  onVoiceSendBlocked: (reason: SendBlockedReason) => void;
 
   // Models loading
   isModelsLoading: boolean;
@@ -118,6 +118,7 @@ export function SessionToolbar(props: SessionToolbarProps) {
     handleStopMessage,
     pendingAutoSubmitGoal,
     sendBlockedReason,
+    onVoiceSendBlocked,
     isModelsLoading,
     isVoiceSessionEnabled,
     voiceEngine,
@@ -139,10 +140,10 @@ export function SessionToolbar(props: SessionToolbarProps) {
   const sendBlockedLabel = sendBlockedReason ? getSendBlockedLabel(sendBlockedReason, t) : null;
   // VoiceRecordButton captures onRecordingEnd when recording starts, so the gate has to be
   // read at transcript time, not from that render's closure.
-  const sendBlockedLabelRef = useRef(sendBlockedLabel);
+  const voiceSendGateRef = useRef({ reason: sendBlockedReason, onBlocked: onVoiceSendBlocked });
   useEffect(() => {
-    sendBlockedLabelRef.current = sendBlockedLabel;
-  }, [sendBlockedLabel]);
+    voiceSendGateRef.current = { reason: sendBlockedReason, onBlocked: onVoiceSendBlocked };
+  }, [sendBlockedReason, onVoiceSendBlocked]);
 
   return (
     <Stack className="session-bottom-toolbar" direction="column" spacing={0} alignItems="center" sx={{ width: '100%' }}>
@@ -248,11 +249,11 @@ export function SessionToolbar(props: SessionToolbarProps) {
                       // Keep the transcript rather than drop it when a send isn't allowed yet,
                       // after whatever is already in the composer (SyncValuePlugin mirrors the
                       // store into the editor, as for a rephrase).
-                      const blockedLabel = sendBlockedLabelRef.current;
-                      if (blockedLabel) {
+                      const gate = voiceSendGateRef.current;
+                      if (gate.reason) {
                         const existing = useChatInput.getState().chatInputValue;
                         setChatInputValue(appendTranscript(existing, prompt));
-                        toast.info(blockedLabel);
+                        gate.onBlocked(gate.reason);
                         return;
                       }
                       await handleSendClick(prompt);

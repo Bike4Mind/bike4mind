@@ -51,7 +51,7 @@ async function publishSelfHost(eventName: string, detail: unknown, requiredAccep
   }
   try {
     // Lazy import so modules that never publish don't pull the SQS client at load.
-    const { sendToQueue } = await import('./sqs');
+    const { sendToQueue } = await import('@bike4mind/server-utils/utils/sqs');
     await sendToQueue(queueUrl, { detailType: eventName, detail });
   } catch (error) {
     if (requiredAcceptance) throw error;
@@ -107,10 +107,6 @@ function createEventBuilder({
 
 const event = createEventBuilder({
   getEventBusName: () => Resource.AppEventBus.name,
-});
-
-const slackEvent = createEventBuilder({
-  getEventBusName: () => Resource.SlackEventBus.name,
 });
 
 export const EmailEvents = {
@@ -171,9 +167,14 @@ export const SessionEvents = {
       // Every publisher already passes one, and the summarizeSession chain now types it that way.
       trigger: z.enum(PERSISTED_SESSION_SUMMARY_TRIGGERS),
       // Who asked, when not the owner: the handler's summary write re-checks this user's update
-      // access, and it is forwarded to the Tag job it queues. Distinct from `userId`, which picks
-      // the billed user.
+      // access, and it is forwarded to the Tag job it queues. Distinct from `userId`, the acting
+      // user the summary file and lake tags are resolved for.
       requesterId: z.string().optional(),
+      // Who pays for the operational calls, forwarded to the Tag job too: the user who asked or
+      // whose turn triggered it (sharee or admin), never the owner on their behalf. Unset only where
+      // `userId` already names that user (agent runs) or nobody asked (spider), which bill
+      // `userId ?? session.userId`.
+      payerId: z.string().optional(),
     })
   ),
   Tag: event(
@@ -182,8 +183,9 @@ export const SessionEvents = {
       sessionId: z.string(),
       userId: z.string().optional(),
       // Who asked, when not the owner: the handler's writes re-check this user's update access.
-      // Distinct from `userId`, which picks the billed user.
       requesterId: z.string().optional(),
+      // Who pays, when someone asked (see Summarize.payerId); else `userId ?? session.userId`.
+      payerId: z.string().optional(),
     })
   ),
   ContextSummarize: event(
@@ -197,8 +199,8 @@ export const SessionEvents = {
 
 export const LLMEvents = {
   CompletionStart: event('completion.started', QuestStartBodySchema),
-  // Slack-originated completions publish here - routed to slackQuestProcessor, not questProcessor
-  SlackCompletionStart: slackEvent('slack.completion.started', QuestStartBodySchema),
+  // Slack-originated completions: the distinct detail type routes them to slackQuestProcessor
+  SlackCompletionStart: event('slack.completion.started', QuestStartBodySchema),
   CompletionCompleted: event(
     'completion.completed',
     z.object({

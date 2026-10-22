@@ -9,7 +9,6 @@ import {
   Input,
   Button,
   ButtonGroup,
-  Textarea,
   Divider,
   Stack,
   Box,
@@ -20,13 +19,15 @@ import AddIcon from '@mui/icons-material/Add';
 import RemoveIcon from '@mui/icons-material/Remove';
 import { useQueryClient } from '@tanstack/react-query';
 import { useUserCreditAdjustments, userCreditAdjustmentsKey } from '../hooks/useUserCreditAdjustments';
+import { isValidAdminActionReason } from '@bike4mind/common';
+import { AdminReasonField } from '@client/app/components/admin/shared/AdminReasonField';
 import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 
 interface CreditAdjustmentModalProps {
   open: boolean;
   onClose: () => void;
   selectedUser: AdminUserListItem | null;
-  onCreditAdjustment: (userId: string, adjustment: number, note?: string) => Promise<void>;
+  onCreditAdjustment: (userId: string, adjustment: number, note: string) => Promise<void>;
 }
 
 export const CreditAdjustmentModal: React.FC<CreditAdjustmentModalProps> = ({
@@ -41,6 +42,8 @@ export const CreditAdjustmentModal: React.FC<CreditAdjustmentModalProps> = ({
 
   const { data: adjustments, isLoading: adjustmentsLoading } = useUserCreditAdjustments(selectedUser?.id, open);
 
+  const isReasonValid = isValidAdminActionReason(creditNote);
+
   const handleClose = () => {
     setCreditAmount(100);
     setCreditNote('');
@@ -48,9 +51,9 @@ export const CreditAdjustmentModal: React.FC<CreditAdjustmentModalProps> = ({
   };
 
   const handleCreditAdjustment = async (isAdd: boolean) => {
-    if (selectedUser && creditAmount > 0) {
+    if (selectedUser && creditAmount > 0 && isReasonValid) {
       const adjustment = isAdd ? creditAmount : -creditAmount;
-      await onCreditAdjustment(selectedUser.id, adjustment, creditNote.trim() || undefined);
+      await onCreditAdjustment(selectedUser.id, adjustment, creditNote.trim());
       queryClient.invalidateQueries({ queryKey: userCreditAdjustmentsKey(selectedUser.id) });
       handleClose();
     }
@@ -90,16 +93,14 @@ export const CreditAdjustmentModal: React.FC<CreditAdjustmentModalProps> = ({
               />
             </FormControl>
 
-            <FormControl sx={{ mb: 3 }}>
-              <FormLabel>Note (optional)</FormLabel>
-              <Textarea
-                minRows={2}
-                maxRows={4}
-                placeholder="Reason for adjustment (e.g., 'Promotional bonus', 'Compensation for issue')"
+            <Box sx={{ mb: 3 }}>
+              <AdminReasonField
                 value={creditNote}
-                onChange={e => setCreditNote(e.target.value)}
+                onChange={setCreditNote}
+                placeholder="Reason for adjustment (e.g., 'Promotional bonus', 'Compensation for issue')"
+                data-testid="credit-adjust-reason-input"
               />
-            </FormControl>
+            </Box>
 
             <ButtonGroup sx={{ justifyContent: 'flex-end', gap: '10px' }}>
               <Button
@@ -107,7 +108,8 @@ export const CreditAdjustmentModal: React.FC<CreditAdjustmentModalProps> = ({
                 color="success"
                 startDecorator={<AddIcon />}
                 onClick={() => handleCreditAdjustment(true)}
-                disabled={creditAmount < 10}
+                data-testid="credit-adjust-add-btn"
+                disabled={creditAmount < 10 || !isReasonValid}
               >
                 Add Credits
               </Button>
@@ -116,7 +118,8 @@ export const CreditAdjustmentModal: React.FC<CreditAdjustmentModalProps> = ({
                 color="danger"
                 startDecorator={<RemoveIcon />}
                 onClick={() => handleCreditAdjustment(false)}
-                disabled={creditAmount < 10}
+                data-testid="credit-adjust-remove-btn"
+                disabled={creditAmount < 10 || !isReasonValid}
               >
                 Remove Credits
               </Button>

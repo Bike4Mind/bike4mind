@@ -39,7 +39,7 @@ vi.mock('@server/dataLakes/attachmentLakeAccess', () => ({
 }));
 vi.mock('@bike4mind/llm-adapters', () => ({ getAvailableModels: vi.fn(), getLlmByModel: vi.fn() }));
 vi.mock('@bike4mind/services', () => ({ apiKeyService: {} }));
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: vi.fn() }));
 
 await import('../create-from-context');
 

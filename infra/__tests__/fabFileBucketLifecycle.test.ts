@@ -75,11 +75,31 @@ describe('fab-file bucket notebook export lifecycle', () => {
     );
   });
 
+  it('expires noncurrent versions bucket-wide, so deletes free bytes on a versioned stage', () => {
+    const rule =
+      LIFECYCLE_BLOCK.split(/(?=\bid:\s*')/).find(r => r.startsWith("id: 'expire-noncurrent-versions'")) ?? '';
+
+    expect(rule).toMatch(/status:\s*'Enabled'/);
+    // An empty filter is what makes it bucket-wide; a prefix here would leave files/ uncovered.
+    expect(rule).toMatch(/filter:\s*\{\s*\}/);
+    expect(Number(rule.match(/noncurrentDays:\s*(\d+)/)?.[1])).toBe(30);
+    expect(rule).toMatch(/expiredObjectDeleteMarker:\s*true/);
+  });
+
   it('expires exports after 1 day, never before the signed URL handed out for them', () => {
     const signedUrlSeconds = Number(STORE_EXPORT_FILE_BODY.match(/getSignedUrl\(path,\s*(\d+)\)/)?.[1]);
 
     expect(ruleDays).toBe(1);
     expect(signedUrlSeconds).toBeGreaterThan(0);
     expect(ruleDays * 86400).toBeGreaterThan(signedUrlSeconds);
+  });
+
+  // Audit exports hold actor emails and IPs, so they must land somewhere this rule reaps.
+  it('keeps the admin audit export prefix under the expiring exports prefix', () => {
+    const auditExportSource = read('apps/client/server/utils/adminAuditExportStorage.ts');
+    const auditPrefix = auditExportSource.match(/ADMIN_AUDIT_EXPORT_PREFIX = '([^']+)'/)?.[1];
+
+    expect(rulePrefix).toBeDefined();
+    expect(auditPrefix?.startsWith(rulePrefix ?? '<missing>')).toBe(true);
   });
 });

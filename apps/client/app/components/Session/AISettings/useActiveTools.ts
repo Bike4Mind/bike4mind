@@ -6,6 +6,7 @@ import { useConfig } from '@client/app/hooks/data/settings';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { filterToolsForDisplay } from '@client/app/utils/toolMapping';
+import { effectiveDisabledTools } from '@client/app/utils/effectiveDisabledTools';
 import { AGENT_ONLY_MCP_SERVERS, ICONED_MCP_SERVERS } from '../../common/ToolIndicators';
 
 const PRIMARY_TOOLS = ['web_search', 'web_fetch', 'image_generation'] as const;
@@ -39,7 +40,7 @@ export function useActiveTools(currentSession: ISessionDocument | null) {
   // icon or feed the "+N" badge here. The raw `tools` still goes to ToolsButton -
   // that array is what handleToggleTool reads and rewrites, so filtering it would drop
   // preferences on the next toggle.
-  const disabledTools = currentSession?.disabledTools;
+  const disabledTools = effectiveDisabledTools(currentSession);
   const displayTools = filterToolsForDisplay(tools, serverConfig?.toolAvailability, disabledTools);
   const activePrimaryTools: string[] = PRIMARY_TOOLS.filter(tool => displayTools.includes(tool));
   const isThinkingActive = thinking?.enabled ?? false;

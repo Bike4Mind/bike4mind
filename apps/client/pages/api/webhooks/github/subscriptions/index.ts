@@ -48,12 +48,11 @@ async function verifyOrgMembership(userId: string, orgId: string, isAdmin: boole
     throw new NotFoundError('Organization not found');
   }
 
-  // Check if user is owner, manager, or in the users array
+  // Owner or in the users array (every manager holds a row there)
   const isOwner = org.userId === userId;
-  const isManager = org.managerId === userId;
   const isMember = org.users?.some(u => u.userId === userId);
 
-  if (!isOwner && !isManager && !isMember) {
+  if (!isOwner && !isMember) {
     // Return same error for not found and not authorized (prevent enumeration)
     throw new NotFoundError('Organization not found');
   }

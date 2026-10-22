@@ -7,11 +7,12 @@ import { MCP_ACTION_REPLACED_ERROR_CODE } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { baseApi } from '@server/middlewares/baseApi';
 import { assertMcpServerEnabled } from '@server/utils/mcpServerFlag';
-import { isValidObjectId } from '@server/utils/objectId';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
 import { claimPendingAction } from '@server/utils/pendingActionExecutor';
 import { loadFabFileAttachment, resolvePendingActionTarget } from '@server/utils/pendingActionTarget';
-import { getSelectedRepositoriesForMcp } from '@server/integrations/github/github-repo-helper';
+import { downloadAttachmentUrl } from '@server/utils/downloadAttachmentUrl';
+import { getSelectedRepositoriesForMcp } from '@bike4mind/server-utils/integrations/github/github-repo-helper';
 import { JIRA_UPLOAD_ATTACHMENT, CONFLUENCE_UPLOAD_ATTACHMENT } from '@bike4mind/mcp/atlassian/constants';
 
 // Token expiration time (15 minutes) - must match ChatCompletionProcess.ts
@@ -188,7 +189,9 @@ const handler = baseApi().post(async (req, res) => {
       }
     }
 
-    // Fallback: download from slackFileUrl (S3 presigned URL) if content is still empty
+    // Fallback: download slackFileUrl (an LLM-supplied tool arg) if content is still empty. It goes
+    // through the SSRF guard, so a private-address URL (e.g. self-host object storage) is refused;
+    // fabFileId above is the path for files already in our storage.
     const slackFileUrl = toolParams.slackFileUrl as string | undefined;
     const hasContentAfterFab =
       toolParams.content && typeof toolParams.content === 'string' && (toolParams.content as string).length > 100;
@@ -203,12 +206,7 @@ const handler = baseApi().post(async (req, res) => {
       });
 
       try {
-        const response = await fetch(slackFileUrl);
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
-        const arrayBuffer = await response.arrayBuffer();
-        const fileBuffer = Buffer.from(arrayBuffer);
+        const fileBuffer = await downloadAttachmentUrl(slackFileUrl);
         toolParams.content = fileBuffer.toString('base64');
         logger.info('[Web MCP Confirm] Downloaded file from URL', {
           filename: toolParams.filename,
@@ -218,6 +216,9 @@ const handler = baseApi().post(async (req, res) => {
         logger.error('[Web MCP Confirm] Failed to download file from URL', {
           error: urlError instanceof Error ? urlError.message : String(urlError),
         });
+        // Return before claiming so the action stays for a retry, matching the Slack executor. The
+        // message is generic: the guard's detail (e.g. what a hostname resolved to) is logged above.
+        return res.status(502).json({ success: false, error: 'Failed to download file' });
       }
     }
 

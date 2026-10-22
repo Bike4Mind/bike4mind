@@ -27,6 +27,13 @@ const MOVED = [
     from: 'apps/client/server/queueHandlers/agentExecutorUtils',
     to: 'apps/workers/src/queueHandlers/agentExecutorUtils',
   },
+  // Helpers only workers reach; nothing in apps/client imports them.
+  {
+    from: 'apps/client/server/integrations/github/handlers',
+    to: 'apps/workers/src/integrations/github/handlers',
+  },
+  { from: 'apps/client/server/integrations/sre', to: 'apps/workers/src/integrations/sre' },
+  { from: 'apps/client/server/webhooks', to: 'apps/workers/src/webhooks' },
 ] as const;
 
 /**
@@ -121,6 +128,45 @@ const MOVED_MODULES = [
   // `tools.` also covers tools.handler and tools.wiring, but not toolsHandler.shared, which stays.
   { from: 'apps/client/server/cli', to: 'apps/workers/src/cli', stems: ['tools'] },
   { from: 'apps/client/server/queueHandlers', to: 'apps/workers/src/queueHandlers', stems: ['slackQuestProcessor'] },
+  // Helpers only workers reach, moved out of directories whose other modules apps/client still uses.
+  {
+    from: 'apps/client/server/s3',
+    to: 'apps/workers/src/s3',
+    stems: ['chunkScan', 'chunkRescueSweep', 'moderationRescueSweep'],
+  },
+  {
+    from: 'apps/client/server/dataLakes',
+    to: 'apps/workers/src/dataLakes',
+    stems: [
+      'convergencePauseScope',
+      'extractLakeMemory',
+      'extractLakeMemoryDeadline',
+      'extractLakeMemoryFailureBreaker',
+      'extractLakeMemoryPurgeFence',
+      'runLakeResearch',
+    ],
+  },
+  {
+    from: 'apps/client/server/integrations/github/dataLake',
+    to: 'apps/workers/src/integrations/github/dataLake',
+    stems: ['githubLakeTreeDiff'],
+  },
+  {
+    from: 'apps/client/server/utils',
+    to: 'apps/workers/src/utils',
+    stems: [
+      'eventContext',
+      'dataLakeSpendNotifier',
+      'loadAgentMcpTools',
+      'getFirstIterationSkillsPreamble',
+      'getFirstIterationMementosPreamble',
+    ],
+  },
+  { from: 'apps/client/server/deepAgent', to: 'apps/workers/src/deepAgent', stems: ['missionChatTools'] },
+  { from: 'apps/client/server/services', to: 'apps/workers/src/services', stems: ['secopsTriageService'] },
+  { from: 'apps/client/server/modelDiscovery', to: 'apps/workers/src/modelDiscovery', stems: ['metrics'] },
+  { from: 'apps/client/server/cli', to: 'apps/workers/src/cli', stems: ['defineLambdaRoute'] },
+  { from: 'apps/client/lib/userSubscriptions', to: 'apps/workers/src/lib/userSubscriptions', stems: ['serverUtils'] },
 ] as const;
 
 const MOVED_MODULE_CASES = MOVED_MODULES.flatMap(({ from, to, stems }) => stems.map(stem => ({ from, to, stem })));

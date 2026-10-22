@@ -3,9 +3,9 @@ import { Logger } from '@bike4mind/observability';
 import { randomUUID } from 'crypto';
 import { connectDB, userApiKeyRepository } from '@bike4mind/database';
 import { ApiKeyStatus } from '@bike4mind/common';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
-import { ApiKeyUsageManager } from '@server/managers/apiKeyUsageManager';
+import { ApiKeyUsageManager } from '@bike4mind/server-utils/managers/apiKeyUsageManager';
 
 const contextToLogs = (context: Context) => ({
   requestId: context.awsRequestId ?? randomUUID(),

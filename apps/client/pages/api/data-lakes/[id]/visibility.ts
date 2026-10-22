@@ -1,18 +1,21 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_SHARE_SCOPES } from '@server/dataLakes/dataLakeScopes';
-import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import {
   withTransaction,
   dataLakeRepository,
   dataLakeAccessGrantRepository,
+  orgGitHubLakeConnectionRepository,
   orgGoogleDriveConnectionRepository,
 } from '@bike4mind/database';
 import { Request } from 'express';
 import { z } from 'zod';
-import { resolveActiveOrg } from '@server/utils/resolveActiveOrg';
+import { resolveActiveOrg } from '@bike4mind/server-utils/utils/resolveActiveOrg';
+import { dataLakeResponseSchema } from '@bike4mind/common';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
-import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
+import { respond } from '@server/utils/respond';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 
 // The active account-switcher org (client-supplied) is the org a promotion targets. It is
@@ -68,6 +71,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_SHARE_SCOPES })
             dataLakes: dataLakeRepository,
             dataLakeAccessGrants: dataLakeAccessGrantRepository,
             orgGoogleDriveConnections: orgGoogleDriveConnectionRepository,
+            orgGitHubLakeConnections: orgGitHubLakeConnectionRepository,
             ...lakeConfigAuditDb,
           },
           logger: req.logger,
@@ -75,7 +79,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_SHARE_SCOPES })
       );
     });
 
-    return res.json(result);
+    return respond(res, dataLakeResponseSchema, result);
   });
 
 export const config = {

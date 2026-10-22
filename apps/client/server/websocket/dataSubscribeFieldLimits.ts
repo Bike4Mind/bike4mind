@@ -1,4 +1,5 @@
 import {
+  CHAT_MESSAGE_WITHHELD_FIELDS,
   ORGANIZATION_OWNER_ONLY_FIELDS,
   ORGANIZATION_SECRET_FIELDS,
   OWNER_ONLY_PROMPT_META_PROJECTION_PATHS,
@@ -21,7 +22,10 @@ import {
  * `callback` (the API caller's completion-callback URL and signing key id) is `select: false` on
  * QuestModel, which a change stream ignores, so it is dropped here for EVERY viewer, the owner
  * included: it belongs to the API key that armed it, which may be a collaborator's, not the
- * session owner's. No SPA code reads it, so the owner-cache concern above does not apply.
+ * session owner's. The same goes for `embedding` (the retrieval vector, heavy on every event) and
+ * `slackNotification` (internal reply routing): the list is CHAT_MESSAGE_WITHHELD_FIELDS, the set the
+ * REST chat routes withhold too. No SPA code reads any of them, so the owner-cache concern above does
+ * not apply.
  *
  * organizations: the subscription streams raw org documents, so it has to reproduce what
  * `toSafeOrganization` applies on every REST path - it reads the same two field lists so the
@@ -39,7 +43,7 @@ import {
  * Client subscribers treat an invite event as a cue to refetch through REST rather than reading it.
  */
 /** Quest fields no session viewer should see, the owner included; see the quests note above. */
-const QUEST_SERVER_ONLY_FIELDS = ['callback'] as const;
+const QUEST_SERVER_ONLY_FIELDS = CHAT_MESSAGE_WITHHELD_FIELDS;
 
 /** Invite fields no subscriber may see, and those only a platform admin may; see the invites note above. */
 const INVITE_SECRET_FIELDS = ['token'] as const;

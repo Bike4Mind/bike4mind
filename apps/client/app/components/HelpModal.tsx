@@ -17,7 +17,7 @@ import {
   Box,
 } from '@mui/joy';
 import { createFeedbackOnServer } from '@client/app/utils/feedbackAPICalls';
-import { FeedbackStatus } from '@bike4mind/common';
+import { FeedbackStatus, feedbackDeliveryFailed } from '@bike4mind/common';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useSessions } from '@client/app/contexts/SessionsContext';
 import { useQueryClient } from '@tanstack/react-query';
@@ -116,13 +116,15 @@ export const HelpModal: React.FC = () => {
       // below) still applies to a modal the user can see closing, not one already gone.
       toggleShowHelp();
 
-      // Optional chaining: a rolling deploy can route this request to a server instance
-      // still on the pre-delivery-field handler, where the record saved but `delivery` is
-      // absent - fall back to the success toast (the pre-fix default) rather than throwing.
+      // feedbackDeliveryFailed, not `delivered === false`: a channel that was deliberately
+      // skipped (switched off, no recipients, a non-production stage nobody opted in) is not a
+      // failure to tell the user about, and on staging it is every send. A rolling deploy can
+      // also answer from an instance predating the field entirely - the helper reads that as no
+      // bad news, the pre-fix default.
       // contentStored false (with non-empty submitted text - this modal never sends an empty
       // one) means the text-sibling write itself failed server-side: the report exists, but the
       // words the user typed are gone, which is worth telling them rather than a plain success.
-      const deliveryFailed = feedbackCreated.delivery?.delivered === false;
+      const deliveryFailed = feedbackDeliveryFailed(feedbackCreated.delivery);
       if (feedbackCreated.contentStored === false) {
         toast.warning('Your feedback was received, but we could not save the message text - please try again.');
       } else if (feedbackCreated.contentTruncated && deliveryFailed) {

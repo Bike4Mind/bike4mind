@@ -1,4 +1,5 @@
 import { IFabFileRepository, IUserRepository } from '@bike4mind/common';
+import { reconcileStorageCounter, StorageReconciliationRepair } from '../lib/reconcileStorageCounter';
 
 export interface ReconcileUserStorageAdapters {
   db: {
@@ -30,16 +31,16 @@ export interface UserStorageReconciliation {
  * Returns null when the user does not exist.
  */
 export const reconcileUserStorage = async (
-  { userId, repair }: { userId: string; repair: boolean | ((check: { counter: number; truth: number }) => boolean) },
+  { userId, repair }: { userId: string; repair: StorageReconciliationRepair },
   { db }: ReconcileUserStorageAdapters
 ): Promise<UserStorageReconciliation | null> => {
-  const counter = await db.users.findCurrentStorageSize(userId);
-  if (counter === null) return null;
-  const truth = await db.fabFiles.sumFileSizeByUserId(userId);
-  const drift = counter - truth;
-  const result = { userId, counter, truth, drift, repaired: false, conflict: false };
-  if (drift === 0 || !(typeof repair === 'function' ? repair({ counter, truth }) : repair)) return result;
-
-  const repaired = await db.users.setCurrentStorageIfUnchanged(userId, counter, truth);
-  return { ...result, repaired, conflict: !repaired };
+  const outcome = await reconcileStorageCounter(
+    {
+      readCounter: () => db.users.findCurrentStorageSize(userId),
+      readTruth: () => db.fabFiles.sumFileSizeByUserId(userId),
+      setIfUnchanged: (expected, next) => db.users.setCurrentStorageIfUnchanged(userId, expected, next),
+    },
+    repair
+  );
+  return outcome && { userId, ...outcome };
 };

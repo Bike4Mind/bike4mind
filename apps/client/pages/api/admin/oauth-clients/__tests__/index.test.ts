@@ -2,11 +2,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { ApiKeyScope } from '@bike4mind/common';
 
-const { handlers, configs, db, logAuditEvent } = vi.hoisted(() => ({
+const { handlers, configs, db, recordAdminActionFromRequest } = vi.hoisted(() => ({
   configs: [] as unknown[],
   handlers: {} as Record<string, (req: unknown, res: unknown) => unknown>,
   db: { listOAuthClients: vi.fn(), createOAuthClient: vi.fn() },
-  logAuditEvent: vi.fn(),
+  recordAdminActionFromRequest: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -23,10 +23,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@bike4mind/database', () => db);
-vi.mock('@server/utils/auditLog', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/utils/auditLog')>()),
-  logAuditEvent,
-}));
+vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest }));
 
 import '@pages/api/admin/oauth-clients/index';
 
@@ -95,11 +92,14 @@ describe('/api/admin/oauth-clients', () => {
       redirectUris: ['https://app.example.test/cb'],
       clientType: 'relying-party',
     });
-    expect(logAuditEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'OAUTH_CLIENT_CREATED', adminUserId: 'admin-1' }),
-      undefined
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({
+        action: 'oauth_client.created',
+        target: expect.objectContaining({ kind: 'oauthClient', id: 'c1' }),
+      })
     );
-    expect(JSON.stringify(logAuditEvent.mock.calls)).not.toContain(SECRET);
+    expect(JSON.stringify(recordAdminActionFromRequest.mock.calls.map(([, input]) => input))).not.toContain(SECRET);
   });
 
   it('rejects an invalid redirect URI with a 400 before reaching the service', async () => {
@@ -115,6 +115,6 @@ describe('/api/admin/oauth-clients', () => {
       body: { name: 'My App', redirectUris: ['https://app.example.test/cb'] },
     });
     await expect(handlers.post(req, res)).rejects.toMatchObject({ statusCode: 409 });
-    expect(logAuditEvent).not.toHaveBeenCalled();
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
   });
 });

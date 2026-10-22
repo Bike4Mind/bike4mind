@@ -14,17 +14,21 @@ describe('routeHeading', () => {
     ['/report/abc123', 'Report'],
     ['/quests-v5', 'Quests'],
     ['/hud', 'The Keep'],
-    ['/studio/video', 'Studio'],
     ['/feedback/rollup', 'Your feedback'],
     ['/organizations/abc123', 'Teams'],
   ])('names %s', (pathname, heading) => {
     expect(routeHeading(pathname)).toBe(heading);
   });
 
-  it.each(['/projects', '/quests', '/subscriptions/checkout', '/artifacts-demo', '/constructor', '/hasOwnProperty'])(
-    'leaves %s to a screen with its own h1 (or an unknown one)',
-    pathname => {
-      expect(routeHeading(pathname)).toBeNull();
-    }
-  );
+  it.each([
+    '/projects',
+    '/studio/music',
+    '/quests',
+    '/subscriptions/checkout',
+    '/artifacts-demo',
+    '/constructor',
+    '/hasOwnProperty',
+  ])('leaves %s to a screen with its own h1 (or an unknown one)', pathname => {
+    expect(routeHeading(pathname)).toBeNull();
+  });
 });

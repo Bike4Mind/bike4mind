@@ -62,7 +62,14 @@ export async function recordSessionOperationalUsage(args: RecordSessionOperation
     const organization = user.organizationId ? await organizationRepository.findById(user.organizationId) : null;
     const costUsd = completionInfo?.turnUsage?.length
       ? getTurnsCost(modelInfo, completionInfo.turnUsage)
-      : getTextModelCost(modelInfo, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens);
+      : getTextModelCost(
+          modelInfo,
+          inputTokens,
+          outputTokens,
+          cacheReadTokens,
+          cacheWriteTokens,
+          inputTokens + cacheReadTokens + cacheWriteTokens
+        );
 
     await recordOperationalUsage(
       {

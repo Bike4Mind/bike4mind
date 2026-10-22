@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { UnauthorizedError } from '@bike4mind/common';
+import { ForbiddenError, UnauthorizedError } from '@bike4mind/common';
+import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
+import { InternalServerError } from '@bike4mind/server-utils/utils/errors';
 import { Logger } from '@bike4mind/observability';
 import { JsonWebTokenError, NotBeforeError, TokenExpiredError } from 'jsonwebtoken';
 import type { Context } from 'aws-lambda';
@@ -21,7 +23,7 @@ vi.mock('@aws-sdk/client-apigatewaymanagementapi', async importOriginal => ({
   },
 }));
 
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { STAGE: 'test', MONGODB_URI: 'mongodb://test' },
 }));
 
@@ -104,6 +106,23 @@ describe('withWebSocketContext - auth-error detection', () => {
     expect(result.statusCode).toBe(401);
   });
 
+  it('returns 403 for a ForbiddenError - an authenticated session the server refuses by policy', async () => {
+    // MFA enrollment owed and suspended accounts throw ForbiddenError. Answering 200 would let
+    // $connect hand back a socket the handler already refused (and log a benign refusal as an
+    // internal error); 403 denies the handshake and keeps the refusal in its own bucket.
+    const handler = withWebSocketContext(
+      async () => {
+        throw new ForbiddenError('MFA enrollment required.');
+      },
+      { skipDatabase: true }
+    );
+
+    const result = await handler({} as never, mockContext);
+
+    expect(result.statusCode).toBe(403);
+    expect(JSON.parse(result.body ?? '{}')).toEqual({ error: 'Forbidden' });
+  });
+
   it('preserves 200 for a non-auth error, so an established connection is not dropped', async () => {
     const handler = withWebSocketContext(
       async () => {
@@ -116,6 +135,64 @@ describe('withWebSocketContext - auth-error detection', () => {
 
     expect(result.statusCode).toBe(200);
     expect(JSON.parse(result.body ?? '{}')).toEqual({ error: 'Internal server error' });
+  });
+
+  it('returns 503 with the fixed message when the API-key check lost the database', async () => {
+    const networkError = Object.assign(new Error('connect ECONNREFUSED 10.0.0.1:27017'), { name: 'MongoNetworkError' });
+    const handler = withWebSocketContext(
+      async () => {
+        throw toApiKeyAuthError(networkError);
+      },
+      { skipDatabase: true }
+    );
+
+    const result = await handler({} as never, mockContext);
+
+    expect(result.statusCode).toBe(503);
+    expect(JSON.parse(result.body ?? '{}')).toEqual({ error: 'Authentication temporarily unavailable' });
+    expect(result.body).not.toContain('ECONNREFUSED');
+    expect(result.body).not.toContain('10.0.0.1');
+  });
+
+  it('returns 500 when the API-key check failed for another infra reason', async () => {
+    const handler = withWebSocketContext(
+      async () => {
+        throw new InternalServerError('Authentication failed');
+      },
+      { skipDatabase: true }
+    );
+
+    const result = await handler({} as never, mockContext);
+
+    expect(result.statusCode).toBe(500);
+    expect(JSON.parse(result.body ?? '{}')).toEqual({ error: 'Authentication failed' });
+  });
+
+  it('refuses with 503 when the database connection is lost outside the API-key check', async () => {
+    const handler = withWebSocketContext(
+      async () => {
+        throw Object.assign(new Error('connect ECONNREFUSED 10.0.0.1:27017'), { name: 'MongoNetworkError' });
+      },
+      { skipDatabase: true }
+    );
+
+    const result = await handler({} as never, mockContext);
+
+    expect(result.statusCode).toBe(503);
+    expect(JSON.parse(result.body ?? '{}')).toEqual({ error: 'Service temporarily unavailable' });
+  });
+
+  it('still answers 200 for a plain Error', async () => {
+    const handler = withWebSocketContext(
+      async () => {
+        throw new Error('x');
+      },
+      { skipDatabase: true }
+    );
+
+    const result = await handler({} as never, mockContext);
+
+    expect(result.statusCode).toBe(200);
   });
 
   it('passes through the handler result unchanged on success', async () => {
@@ -146,6 +223,20 @@ describe('withWebSocketContext - auth-error detection', () => {
       const handler = withWebSocketContext(
         async () => {
           throw new UnauthorizedError('Session expired');
+        },
+        { skipDatabase: true }
+      );
+
+      await handler({} as never, mockContext);
+
+      expect(infoSpy).toHaveBeenCalledTimes(1);
+      expect(errorSpy).not.toHaveBeenCalled();
+    });
+
+    it('logs a policy refusal at info, not error (a refused session reports it once per subscription)', async () => {
+      const handler = withWebSocketContext(
+        async () => {
+          throw new ForbiddenError('Account suspended.');
         },
         { skipDatabase: true }
       );

@@ -9,6 +9,7 @@ let settingsLoading = false;
 vi.mock('@client/app/hooks/data/settings', () => ({
   useSettingsFromServer: () => ({ data: serverSettings, isLoading: settingsLoading }),
   useUpdateSettings: () => ({ mutate: vi.fn(), isPending: false, error: null }),
+  useFloorAboveMeasuredWarning: () => undefined,
 }));
 vi.mock('./ScopedSettingOverrides', () => ({ default: () => null }));
 

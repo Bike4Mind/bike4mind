@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { MAX_THINKING_BUDGET_TOKENS } from '../constants/llmLimits';
 // Specific file, not the `../types` barrel - this module is imported by
 // completions.contract.ts, which must stay off the barrel (see the note there).
 import { QUEST_ERROR_CODES } from '../types/entities/SessionTypes';
@@ -35,7 +36,7 @@ export const CompletionReasoningEffortSchema = z.enum(REASONING_EFFORT_VALUES);
  * z.array(z.any()) so client-side bugs (typos in name, missing type) surface
  * at parse time instead of failing silently inside the backend.
  */
-export const CompletionToolSchema = z.object({
+export const CompletionCustomToolSchema = z.object({
   toolSchema: z.object({
     name: z.string(),
     description: z.string(),
@@ -48,11 +49,100 @@ export const CompletionToolSchema = z.object({
       })
       .passthrough(),
     strict: z.boolean().optional(),
+    defer_loading: z
+      .boolean()
+      .optional()
+      .describe(
+        'Keep this definition out of the model context until the tool search server tool (or a `tool_reference`) loads it. ' +
+          'Honoured only on models served by the direct Anthropic API whose `supports_tool_search` is true; on every other ' +
+          'model (including Bedrock-served Claude, for now) it is ignored and the tool is sent as usual. At least one tool, ' +
+          'or a `serverTool` entry, must stay non-deferred (`errorCode: "all_tools_deferred"`).'
+      ),
+    cache_control: z
+      .unknown()
+      .optional()
+      .describe(
+        'Accepted for validation only and not forwarded. Rejected on a deferred tool (`errorCode: "deferred_tool_cache_control"`).'
+      ),
   }),
   _isMcpTool: z.boolean().optional(),
 });
 
+export type CompletionCustomTool = z.infer<typeof CompletionCustomToolSchema>;
+
+/** Anthropic's tool search server tools; `name` is fixed by `type`. */
+export const ToolSearchServerToolSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('tool_search_tool_regex_20251119'), name: z.literal('tool_search_tool_regex') }),
+  z.object({ type: z.literal('tool_search_tool_bm25_20251119'), name: z.literal('tool_search_tool_bm25') }),
+]);
+
+export type ToolSearchServerTool = z.infer<typeof ToolSearchServerToolSchema>;
+
+export const CompletionServerToolSchema = z.object({
+  serverTool: ToolSearchServerToolSchema.describe(
+    'A provider-run tool, sent to the provider as `{ type, name }`. Only the Anthropic tool search tools exist today, and ' +
+      'only on models served by the direct Anthropic API whose `supports_tool_search` is true; any other model, ' +
+      'Bedrock-served Claude included, is refused with `errorCode: "tool_search_unsupported"` rather than run without it.'
+  ),
+});
+
+export type CompletionServerTool = z.infer<typeof CompletionServerToolSchema>;
+
+/** One `tools[]` entry: a caller-defined tool, or a provider-run server tool. */
+export const CompletionToolSchema = z.union([CompletionCustomToolSchema, CompletionServerToolSchema]);
+
 export type CompletionTool = z.infer<typeof CompletionToolSchema>;
+
+export function isCompletionServerTool(tool: CompletionTool): tool is CompletionServerTool {
+  return 'serverTool' in tool;
+}
+
+/**
+ * The `errorCode`s of the completions 400s for tool search requests (CONVENTIONS.md section 1).
+ * Assigned in services/cliCompletionsToolSearch.ts.
+ */
+export const COMPLETION_TOOL_ERROR_CODES = [
+  'tool_search_unsupported',
+  'all_tools_deferred',
+  'deferred_tool_cache_control',
+  'unknown_tool_reference',
+  'tool_changes_unsupported',
+  'invalid_tool_change',
+] as const satisfies readonly ApiErrorCode[];
+export type CompletionToolErrorCode = (typeof COMPLETION_TOOL_ERROR_CODES)[number];
+
+export const TOOL_CHANGE_BLOCK_TYPES = ['tool_addition', 'tool_removal'] as const;
+
+/**
+ * One block of a mid-conversation tool change: a `system`-role message whose content holds only these.
+ * Strict on purpose: the provider takes a name reference to a tool already in `tools`, never an inline
+ * definition or an MCP reference.
+ */
+export const ToolChangeBlockSchema = z
+  .object({
+    type: z.enum(TOOL_CHANGE_BLOCK_TYPES),
+    tool: z.object({ type: z.literal('tool_reference'), name: z.string().min(1) }).strict(),
+  })
+  .strict();
+
+export type ToolChangeBlock = z.infer<typeof ToolChangeBlockSchema>;
+
+export const ToolChangeMessageContentSchema = z.array(ToolChangeBlockSchema).min(1);
+
+/** Whether a content block is shaped like a tool change, whether or not it is a valid one. */
+export function isToolChangeBlockType(block: unknown): boolean {
+  const type = (block as { type?: unknown } | null | undefined)?.type;
+  return typeof type === 'string' && (TOOL_CHANGE_BLOCK_TYPES as readonly string[]).includes(type);
+}
+
+/**
+ * A system message of tool change blocks. Unlike every other system message it is not hoisted into the
+ * provider's system prompt: its position between turns is the point. Shared by the request validation
+ * (services/cliCompletionsToolSearch.ts) and the Anthropic adapter, which must agree on what counts.
+ */
+export function isToolChangeMessage(message: { role: string; content?: unknown }): boolean {
+  return message.role === 'system' && Array.isArray(message.content) && message.content.some(isToolChangeBlockType);
+}
 
 /**
  * JSON Schema definition for structured output. The `schema` field is a full
@@ -82,7 +172,16 @@ export type ResponseFormat = z.infer<typeof ResponseFormatSchema>;
  */
 export const CompletionMessageSchema = z.object({
   role: z.enum(['user', 'assistant', 'system']),
-  content: z.union([z.string(), z.array(z.any())]),
+  content: z
+    .union([z.string(), z.array(z.any())])
+    .describe(
+      'A string, or an array of content blocks. A `system` message may instead hold only `tool_addition` / ' +
+        '`tool_removal` blocks (`{ type, tool: { type: "tool_reference", name } }`) to load or unload a tool named in ' +
+        '`tools` mid-conversation without invalidating the prompt cache. It must follow a user turn or an assistant turn ' +
+        'ending in a tool search result, and be the last message or precede an assistant turn. Only on models whose ' +
+        '`supports_tool_changes` is true and that are served by the direct Anthropic API; otherwise refused with ' +
+        '`errorCode: "tool_changes_unsupported"` (or `invalid_tool_change` / `unknown_tool_reference` when malformed).'
+    ),
   cache: z.boolean().optional(),
 });
 
@@ -121,11 +220,11 @@ export const CompletionRequestSchema = z.object({
         .object({
           enabled: z.boolean(),
           // 1024 is the smallest legacy thinking budget the Anthropic API accepts.
-          budget_tokens: z.number().int().min(1024).optional(),
+          budget_tokens: z.number().int().min(1024).max(MAX_THINKING_BUDGET_TOKENS).optional(),
         })
         .optional()
         .describe(
-          'Ask a model that can think to think on this turn. On Claude, `reasoningEffort` then sets how much it thinks, and `budget_tokens` (default 16000, minimum 1024) sizes thinking on older Claude models. Ignored by models that cannot think, and on the direct Anthropic API when a json_schema `response_format` is served by a forced tool, which cannot run alongside thinking.'
+          'Ask a model that can think to think on this turn. On Claude, `reasoningEffort` then sets how much it thinks, and `budget_tokens` (default 16000, minimum 1024, maximum 32000) sizes thinking on older Claude models. Ignored by models that cannot think, and on the direct Anthropic API when a json_schema `response_format` is served by a forced tool, which cannot run alongside thinking.'
         ),
     })
     .optional(),
@@ -172,6 +271,12 @@ export function normalizeCompletionRequest<T extends CompletionRequest>(req: T):
 const CompletionUsageSchema = z.object({
   inputTokens: z.number().optional(),
   outputTokens: z.number().optional(),
+  reasoningTokens: z
+    .number()
+    .optional()
+    .describe(
+      'Reasoning/thinking tokens the provider reported. A subset of outputTokens, not additive and not billed on top. Absent when the provider or adapter reports no count.'
+    ),
   cacheReadInputTokens: z.number().optional(),
   cacheCreationInputTokens: z.number().optional(),
 });
@@ -233,10 +338,25 @@ export const CompletionSseErrorEventSchema = z.object({
   code: z.enum(COMPLETION_SSE_ERROR_CODES).optional(),
 });
 
+/** Anthropic content block types the provider runs itself; surfaced as `provider_block` frames and echoed back. */
+export const TOOL_SEARCH_BLOCK_TYPES: ReadonlySet<string> = new Set(['server_tool_use', 'tool_search_tool_result']);
+
+/**
+ * A provider content block the caller must echo back verbatim, in stream order, in the assistant
+ * `messages` content of the next request: today the Anthropic tool search `server_tool_use` and
+ * `tool_search_tool_result` blocks. Never executed by the caller and never answered with a tool_result.
+ */
+export const CompletionProviderBlockEventSchema = z.object({
+  type: z.literal('provider_block'),
+  provider: z.literal('anthropic'),
+  block: z.record(z.string(), z.unknown()),
+});
+
 /** One `data:` event in the `text/event-stream` completions response. */
 export const CompletionStreamEventSchema = z.union([
   CompletionMetaEventSchema,
   CompletionContentEventSchema,
+  CompletionProviderBlockEventSchema,
   CompletionSseErrorEventSchema,
 ]);
 

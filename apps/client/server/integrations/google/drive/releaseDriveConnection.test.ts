@@ -46,10 +46,10 @@ vi.mock('@googleapis/drive', () => ({
 }));
 
 import { releaseDriveConnection, releaseDriveConnectionForLake } from './common';
-import type { DriveConnectionOwner } from '@bike4mind/common';
+import type { LakeConnectionOwner } from '@bike4mind/common';
 
-const orgA: DriveConnectionOwner = { kind: 'organization', organizationId: 'orgA' };
-const orgB: DriveConnectionOwner = { kind: 'organization', organizationId: 'orgB' };
+const orgA: LakeConnectionOwner = { kind: 'organization', organizationId: 'orgA' };
+const orgB: LakeConnectionOwner = { kind: 'organization', organizationId: 'orgB' };
 
 describe('releaseDriveConnection', () => {
   beforeEach(() => {

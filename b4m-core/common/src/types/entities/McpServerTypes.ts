@@ -49,7 +49,15 @@ export interface IMcpServerDocument extends IMongoDocument {
   };
 }
 
-// API response type - excludes sensitive envVariables
-export type IMcpServerResponse = Omit<IMcpServerDocument, 'envVariables'>;
+/**
+ * What the /api/mcp-servers routes send: env variable keys without their values, and no webhook
+ * secret. Enforced by mcpServerResponseSchema (../../schemas/mcpServer.ts).
+ */
+export type IMcpServerResponse = Omit<IMcpServerDocument, 'envVariables' | 'metadata'> & {
+  envVariables: { key: string }[];
+  metadata?: Omit<NonNullable<IMcpServerDocument['metadata']>, 'webhooks'> & {
+    webhooks?: { github?: Omit<IGitHubWebhookConfig, 'secret'> };
+  };
+};
 
 export interface IMcpServerRepository extends IBaseRepository<IMcpServerDocument> {}

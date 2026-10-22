@@ -14,6 +14,8 @@ interface SkillToolParams {
 /** Cap on how many invocable skills are listed back when resolution fails. */
 const INVOCABLE_HINT_LIMIT = 50;
 
+const TOOL_NAME_SHAPE = /^[A-Za-z0-9_.:-]{1,64}$/;
+
 /**
  * LLM-invocable `skill` tool - the autonomous counterpart to user `/skill-name`
  * invocations handled by SkillsFeature.
@@ -70,12 +72,20 @@ export const skillTool: ToolDefinition = {
       // Owner-authored skills are trusted prompt content. Anything else
       // (shared / org / system) is authored by someone other than the invoker,
       // so wrap it as untrusted to neutralize prompt-injection in the body.
-      const isOwner = skill.userId === context.userId;
+      // A Skill Market import is owned by the importer but authored by someone else (same rule as
+      // renderInvokedSkill in skillSafety.ts; keep the two in sync).
+      const isOwner = skill.userId === context.userId && !skill.importedFrom;
       if (isOwner) {
         return `## Skill: /${skill.name}\n\n${expandedBody}\n\n---\nFollow the instructions above for the rest of this turn.`;
       }
 
-      const ownerLabel = skill.organizationId ? 'your organization' : skill.isSystem ? 'the system' : 'another user';
+      const ownerLabel = skill.importedFrom
+        ? 'a Skill Market author'
+        : skill.organizationId
+          ? 'your organization'
+          : skill.isSystem
+            ? 'the system'
+            : 'another user';
       const wrapped = wrapUntrustedSkillBody(skill.name, expandedBody, ownerLabel);
 
       // A shared skill may only narrow the tool surface, never widen it. There
@@ -86,7 +96,11 @@ export const skillTool: ToolDefinition = {
       // list is actually narrowed, this is advisory prompt guidance - keep the
       // wording soft rather than claiming a hard guarantee a model could ignore.
       const invokerAllowedTools: string[] | undefined = undefined;
-      const permittedTools = intersectAllowedTools(skill.allowedTools, invokerAllowedTools);
+      // allowedTools is author-controlled and rendered outside the untrusted delimiters, so only
+      // identifier-shaped names are echoed; anything else could smuggle an instruction.
+      const permittedTools = intersectAllowedTools(skill.allowedTools, invokerAllowedTools)?.filter(tool =>
+        TOOL_NAME_SHAPE.test(tool)
+      );
       const toolConstraint =
         permittedTools && permittedTools.length > 0
           ? `\n\nThis skill is intended to use only these tools: ${permittedTools.join(', ')}. Prefer to stay within that set.`

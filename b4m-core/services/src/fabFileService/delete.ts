@@ -17,6 +17,7 @@ import { registryMembershipScope } from '../dataLakeService/lakeMembershipScope'
 import type { ManageActor } from '../dataLakeService/manageRule';
 import { registryCandidateLakes } from '../dataLakeService/registryCandidateLakes';
 import { deleteStoredObjects, type GeneratedCopyStore, type ObjectStorage } from './deleteStoredObjects';
+import { deletedFileReferences, type DeletedFileReferences } from './cleanUpDeletedFileReferences';
 import {
   recordLakeMembershipChange,
   type LakeMembershipAuditAdapters,
@@ -33,6 +34,17 @@ export type DeleteFabFileAction = 'deleted' | 'unshared' | 'not_found' | 'denied
 export interface DeleteFabFileResult {
   action: DeleteFabFileAction;
   fabFile: IFabFileDocument | null;
+  /**
+   * The system-file/project references this delete or unshare leaves behind, set for 'deleted' and
+   * 'unshared'. deleteFabFile does not write them: the caller passes them to
+   * cleanUpDeletedFileReferences once its transaction has committed (see that helper for why).
+   *
+   * Optional only for the connector and generated-asset callers that delete a file they themselves
+   * created and hold no project or system-file reference to; the turn-time scrub covers those if a
+   * reference ever exists. The user-facing doors (deleteFileForUser, bulk-delete, delete-all) must
+   * pass it on.
+   */
+  references?: DeletedFileReferences;
 }
 
 export type PublicDeleteFabFileAction = Exclude<DeleteFabFileAction, 'denied'>;
@@ -182,7 +194,14 @@ export const deleteFabFile = async (
       await onDeleteComplete(ownedFile, sizeToDeduct);
     }
 
-    return { action: 'deleted', fabFile: ownedFile };
+    // The file is gone for everyone: its owner's and direct-share recipients' system files and
+    // projects are unlinked by the caller after commit. Group- or lake-held references are left to
+    // the turn-time scrub.
+    return {
+      action: 'deleted',
+      fabFile: ownedFile,
+      references: deletedFileReferences(ownedFile),
+    };
   }
 
   // 2. User doesn't own the file - check if it's shared to them. A self-unshare (below), a denied
@@ -219,6 +238,10 @@ export const deleteFabFile = async (
       await db.sessions.update({ id: session.id, knowledgeIds: updatedKnowledgeIds });
     }
   }
-
-  return { action: 'unshared', fabFile: sharedFile };
+  // Projects are shared, so their references stay; only this user's own system files let go.
+  return {
+    action: 'unshared',
+    fabFile: sharedFile,
+    references: { fileIds: [sharedFile.id], systemFileUserIds: [userId], projectUserIds: [] },
+  };
 };

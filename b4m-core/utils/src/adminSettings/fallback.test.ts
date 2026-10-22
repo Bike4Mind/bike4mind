@@ -816,6 +816,41 @@ describe('getHttpStatus', () => {
     expect(getHttpStatus(Object.assign(new Error('unavailable'), { $metadata: { httpStatusCode: 503 } }))).toBe(503);
   });
 
+  const awsStreamError = (name: string, extra: object = {}) =>
+    Object.assign(new Error('x'), { name, $fault: 'client', ...extra });
+
+  it.each([
+    ['ValidationException', 400],
+    ['AccessDeniedException', 403],
+    ['ResourceNotFoundException', 404],
+    ['ThrottlingException', 429],
+    ['TooManyRequestsException', 429],
+    ['InternalServerException', 500],
+    ['ServiceUnavailableException', 503],
+  ])('infers a status from the AWS SDK %s name when $metadata carries none (stream exceptions)', (name, status) => {
+    expect(getHttpStatus(awsStreamError(name))).toBe(status);
+  });
+
+  it.each([
+    ['$metadata', { $metadata: { httpStatusCode: 418 } }, 418],
+    ['a bare status field', { status: 503 }, 503],
+  ])('prefers %s over the name', (_label, extra, status) => {
+    expect(getHttpStatus(awsStreamError('ValidationException', extra))).toBe(status);
+  });
+
+  it('returns undefined for an unknown AWS exception name', () => {
+    expect(getHttpStatus(awsStreamError('ModelStreamErrorException'))).toBeUndefined();
+  });
+
+  it('does not resolve prototype keys as exception names', () => {
+    expect(getHttpStatus(awsStreamError('constructor'))).toBeUndefined();
+    expect(getHttpStatus(awsStreamError('toString'))).toBeUndefined();
+  });
+
+  it('ignores a matching name on an error that is not an AWS SDK exception', () => {
+    expect(getHttpStatus(Object.assign(new Error('x'), { name: 'ValidationException' }))).toBeUndefined();
+  });
+
   it('returns undefined for an error without a status', () => {
     expect(getHttpStatus(new Error('boom'))).toBeUndefined();
   });

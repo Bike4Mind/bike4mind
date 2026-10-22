@@ -10,7 +10,7 @@ import { toast } from 'sonner';
 
 export type MediaPlayerFile = Pick<
   IFabFileDocument,
-  'id' | 'fileName' | 'mimeType' | 'fileUrl' | 'presignedUrl' | 'fileUrlExpireAt'
+  'id' | 'fileName' | 'mimeType' | 'fileUrl' | 'presignedUrl' | 'fileUrlExpireAt' | 'moderationStatus'
 >;
 
 type MediaPlayerProps = {
@@ -29,14 +29,33 @@ const RESIGN_GIVE_UP_WINDOW_MS = 60 * 1000;
 export const hasExpired = (expireAt: MediaPlayerFile['fileUrlExpireAt']): boolean =>
   !!expireAt && new Date(expireAt).getTime() <= Date.now();
 
+/** How often, and for how long (ms), to re-ask for the URL of a file whose moderation scan has not finished. */
+export const SCAN_POLL_INTERVAL_MS = 1000;
+export const SCAN_WAIT_MS = 30 * 1000;
+
+const isScanInFlight = (status: MediaPlayerFile['moderationStatus']): boolean =>
+  status === 'pending' || status === 'scanning';
+
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
 /**
  * GET /api/files/:id re-signs the URL only once the stored one has expired (or fails), so asking any earlier
  * returns the same URL. That answer means the URL is still valid: the caller reloads it rather than giving up.
+ *
+ * Every file read withholds the URL until the S3 upload event's moderation scan clears the file (isImageServeable),
+ * which lands about a second after a server-side save. A just-generated file (Studio speech or sound effects) is
+ * listed inside that window, so a scan still in flight is waited out here rather than reported as unplayable.
  */
-const fetchFreshUrl = async (fileId: string): Promise<string> => {
-  const fresh = await getFabFileByIdFromServer(fileId);
-  if (!fresh.fileUrl) throw new Error('the file has no signed url');
-  return fresh.fileUrl;
+const fetchFreshUrl = async (fileId: string, isCancelled: () => boolean): Promise<string> => {
+  const giveUpAt = Date.now() + SCAN_WAIT_MS;
+  for (;;) {
+    const fresh = await getFabFileByIdFromServer(fileId);
+    if (fresh.fileUrl) return fresh.fileUrl;
+    if (!isScanInFlight(fresh.moderationStatus)) throw new Error('the file has no signed url');
+    if (Date.now() + SCAN_POLL_INTERVAL_MS > giveUpAt) throw new Error('the moderation scan did not finish in time');
+    await sleep(SCAN_POLL_INTERVAL_MS);
+    if (isCancelled()) throw new Error('the player was closed');
+  }
 };
 
 const PlayerBody: FC<MediaPlayerProps> = ({ file, preload = 'metadata', hideDownload = false }) => {
@@ -53,6 +72,8 @@ const PlayerBody: FC<MediaPlayerProps> = ({ file, preload = 'metadata', hideDown
   const lastResignAtRef = useRef<number | null>(null);
   // Remounts the element after each re-sign, so a same-URL answer (a transient error) still reloads it.
   const [loadAttempt, setLoadAttempt] = useState(0);
+  const unmountedRef = useRef(false);
+  const isUnmounted = () => unmountedRef.current;
 
   const refresh = async () => {
     const lastResignAt = lastResignAtRef.current;
@@ -63,17 +84,22 @@ const PlayerBody: FC<MediaPlayerProps> = ({ file, preload = 'metadata', hideDown
     lastResignAtRef.current = Date.now();
     setStatus('refreshing');
     try {
-      setSrc(await fetchFreshUrl(file.id));
+      setSrc(await fetchFreshUrl(file.id, isUnmounted));
       setLoadAttempt(attempt => attempt + 1);
       setStatus('ready');
     } catch (error) {
+      if (isUnmounted()) return;
       console.error('Media player could not re-sign the file url:', error);
       setStatus('failed');
     }
   };
 
   useEffect(() => {
+    unmountedRef.current = false;
     if (needsUrl) void refresh();
+    return () => {
+      unmountedRef.current = true;
+    };
     // Mount only (the component is keyed by file id); later failures arrive through onError.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -93,7 +119,7 @@ const PlayerBody: FC<MediaPlayerProps> = ({ file, preload = 'metadata', hideDown
       if (!response.ok) {
         // Most likely expired while the player sat open; re-sign once and try again. The element keeps its own
         // src so playback is not interrupted; it re-signs through onError if it needs to.
-        response = await fetch(await fetchFreshUrl(file.id), { cache: 'no-store' });
+        response = await fetch(await fetchFreshUrl(file.id, isUnmounted), { cache: 'no-store' });
       }
       if (!response.ok) throw new Error(`download failed: ${response.status}`);
       downloadData(await response.blob(), file.fileName);

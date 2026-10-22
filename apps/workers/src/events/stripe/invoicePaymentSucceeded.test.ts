@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { stripe } from '@server/integrations/stripe/stripe';
-import { emitMetric } from '@server/utils/cloudwatch';
+import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import {
   handleUserSubscriptionInvoice,
   handleOrganizationSubscriptionInvoice,
-} from '@client/lib/userSubscriptions/serverUtils';
+} from '@workers/lib/userSubscriptions/serverUtils';
 import { handler } from './invoicePaymentSucceeded';
 import { emitProductEvent } from '@server/analytics/emitActiveEvent';
 import { stableEventId } from '@server/analytics/signupEvents';
@@ -23,22 +23,22 @@ vi.mock('@server/utils/eventBus', () => ({
   },
 }));
 
-vi.mock('@client/lib/userSubscriptions/serverUtils', () => ({
+vi.mock('@workers/lib/userSubscriptions/serverUtils', () => ({
   handleUserSubscriptionInvoice: vi.fn().mockResolvedValue(undefined),
   handleOrganizationSubscriptionInvoice: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('@server/utils/cloudwatch', () => ({
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   emitMetric: vi.fn().mockResolvedValue(undefined),
 }));
 
 // Fixtures set metadata.stage: 'test'; pin the current stage to match so the
 // guard falls through for same-stage events (and trips on mismatch).
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { STAGE: 'test' },
 }));
 
-vi.mock('@server/utils/eventContext', () => ({
+vi.mock('@workers/utils/eventContext', () => ({
   withEventContext: (h: any) => h,
 }));
 

@@ -5,6 +5,7 @@ import {
   buildThinkingParams,
   DEFAULT_ANTHROPIC_EFFORT,
   DEFAULT_QUEST_MASTER_ANTHROPIC_EFFORT,
+  isAdaptiveThinkingByDefault,
   planReasoningEffort,
   reasonsWithinOutputBudget,
   resolveAnthropicEffort,
@@ -77,6 +78,12 @@ describe('buildThinkingParams', () => {
     it('inflates max_tokens to budget + 1000', () => {
       const result = buildThinkingParams(ChatModels.CLAUDE_4_6_OPUS, legacyModel, 16000, 4096);
       expect(result.maxTokens).toBe(17000);
+    });
+
+    it('clamps a budget past MAX_THINKING_BUDGET_TOKENS, so it cannot raise max_tokens past that ceiling', () => {
+      const result = buildThinkingParams(ChatModels.CLAUDE_4_6_OPUS, legacyModel, 10_000_000, 4096);
+      expect(result.thinkingConfig.thinking).toEqual({ type: 'enabled', budget_tokens: 32_000 });
+      expect(result.maxTokens).toBe(33_000);
     });
 
     it('keeps caller max_tokens when already larger than budget + 1000', () => {
@@ -164,6 +171,33 @@ describe('resolveOutputMaxTokens', () => {
 
     it('defaults a legacy model to the caller-supplied fallback', () => {
       expect(resolve(undefined, legacyModel)).toBe(4096);
+    });
+
+    describe('Gemini thinking models', () => {
+      const geminiModel: ModelInfo = {
+        ...baseModelInfo,
+        id: 'gemini-3-pro' as ModelInfo['id'],
+        name: 'Gemini 3 Pro',
+        backend: ModelBackend.Gemini,
+        max_tokens: 65_536,
+        can_think: true,
+      };
+
+      it('defaults an unset budget to the declared model cap', () => {
+        expect(resolve(undefined, geminiModel)).toBe(65_536);
+      });
+
+      it('does not raise an explicit budget', () => {
+        expect(resolve(2048, geminiModel)).toBe(2048);
+      });
+
+      it('keeps the fallback when the cap is derived', () => {
+        expect(resolve(undefined, { ...geminiModel, max_tokens: 4096, maxOutputTokensDerived: true })).toBe(4096);
+      });
+
+      it('keeps the fallback when the model cannot think', () => {
+        expect(resolve(undefined, { ...geminiModel, max_tokens: 8192, can_think: false })).toBe(4096);
+      });
     });
 
     // The starvation this fixes: OpenAI spends reasoning inside max_completion_tokens,
@@ -625,5 +659,43 @@ describe('planReasoningEffort', () => {
   it('leaves a model that cannot think alone', () => {
     const noThinking: ModelInfo = { ...baseModelInfo, id: ChatModels.CLAUDE_3_5_HAIKU_ANTHROPIC, can_think: false };
     expect(planReasoningEffort(noThinking.id, noThinking, 'high', 8192)).toEqual({ kind: 'default' });
+  });
+});
+
+describe('isAdaptiveThinkingByDefault', () => {
+  const adaptive = (id: string): ModelInfo => ({ ...baseModelInfo, id, thinkingStyle: 'adaptive' });
+  const byDefault = Object.values(ChatModels).filter(id => isAdaptiveThinkingByDefault(id, adaptive(id)));
+
+  it('covers the Sonnet 5, Fable, Opus 5 and Haiku 5.5 lines, direct and Bedrock', () => {
+    expect(byDefault).toEqual(
+      expect.arrayContaining([
+        ChatModels.CLAUDE_5_SONNET,
+        ChatModels.CLAUDE_5_5_SONNET_BEDROCK,
+        ChatModels.CLAUDE_FABLE_5,
+        ChatModels.CLAUDE_FABLE_5_1_BEDROCK,
+        ChatModels.CLAUDE_5_OPUS,
+        ChatModels.CLAUDE_5_5_OPUS_BEDROCK,
+        ChatModels.CLAUDE_5_5_HAIKU,
+      ])
+    );
+  });
+
+  it('excludes adaptive models that only think when asked, and legacy ones', () => {
+    expect(isAdaptiveThinkingByDefault(ChatModels.CLAUDE_4_7_OPUS, adaptive(ChatModels.CLAUDE_4_7_OPUS))).toBe(false);
+    expect(isAdaptiveThinkingByDefault(ChatModels.CLAUDE_4_6_SONNET, baseModelInfo)).toBe(false);
+  });
+
+  it('requires a model that can think', () => {
+    const id = ChatModels.CLAUDE_5_OPUS;
+    expect(isAdaptiveThinkingByDefault(id, { ...adaptive(id), can_think: false })).toBe(false);
+  });
+
+  it.each(byDefault)('accepts effort and plans medium as adaptive thinking on %s', id => {
+    expect(supportsAnthropicEffort(id, adaptive(id))).toBe(true);
+    expect(planReasoningEffort(id, adaptive(id), 'medium', 8192)).toEqual({
+      kind: 'adaptive',
+      thinking: { type: 'adaptive' },
+      output_config: { effort: 'medium' },
+    });
   });
 });

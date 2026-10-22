@@ -37,6 +37,8 @@ export type LLMCommandArgs = {
   agentIds?: string[];
   sendJsonMessage?: WebsocketContextValue['sendJsonMessage'];
   promptFileIds: string[];
+  /** The subset of `promptFileIds` scoped to this message only; the server pins the rest. */
+  messageOnlyFileIds?: string[];
   dashboardParams?: LLMApiRequestBody['dashboardParams'];
   questId?: string;
   /** Correct-and-retry target: the quest whose answer the user says was wrong. */
@@ -131,6 +133,7 @@ export async function handleLLMCommand(
       model,
       dashboardParams,
       promptFileIds,
+      messageOnlyFileIds,
       questId,
       correctsQuestId,
       enableQuestMaster,
@@ -232,12 +235,19 @@ export async function handleLLMCommand(
           Object.entries(descriptions).find(([prefix]) => path.startsWith(prefix))?.[1] ||
           (path === '/' ? 'User is on the main Chat page.' : null);
         const messages: NonNullable<LLMApiRequestBody['extraContextMessages']> = [];
-        if (desc) messages.push({ role: 'system' as const, content: `[Current View Context] ${desc} Path: ${path}` });
+        // The view and the brief change every turn: flag them so they ride in the user message and
+        // leave the system prefix stable. `systemContext` below is guidance, not per-turn data.
+        if (desc)
+          messages.push({
+            role: 'system' as const,
+            content: `[Current View Context] ${desc} Path: ${path}`,
+            perTurn: true,
+          });
         // A surface-registered active brief (e.g. the optimization brief) makes
         // "refine this" target the current brief. This is the path interactive
         // chat actually uses - pushChatMessage is REST-only.
         const briefContext = surfaceCtx.briefContext ?? null;
-        if (briefContext) messages.push({ role: 'system' as const, content: briefContext });
+        if (briefContext) messages.push({ role: 'system' as const, content: briefContext, perTurn: true });
         // Per-send context from the caller (e.g. a programmatic launch), for this request only.
         if (systemContext) messages.push({ role: 'system' as const, content: systemContext });
         return messages.length > 0 ? messages : undefined;
@@ -260,6 +270,7 @@ export async function handleLLMCommand(
         fabFileIds,
         message: userPrompt,
         messageFileIds: promptFileIds,
+        ...(messageOnlyFileIds?.length ? { messageOnlyFileIds } : {}),
         enableQuestMaster,
         enableMementos: args.enableMementos,
         enableArtifacts: args.enableArtifacts,

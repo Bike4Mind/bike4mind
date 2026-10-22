@@ -333,7 +333,13 @@ const LoadingPlaceholder = ({ compact }: { compact: boolean }) => (
  * Integrations reads. Usage is recorded through useLogEvent (IntegrationsEvents in @bike4mind/common);
  * `source` names the entry point the page was opened from.
  */
-const IntegrationsGallery = ({ source = 'direct' }: { source?: IntegrationsPageSource }) => {
+const IntegrationsGallery = ({
+  source = 'direct',
+  showHeading = true,
+}: {
+  source?: IntegrationsPageSource;
+  showHeading?: boolean;
+}) => {
   const currentUser = useUser(s => s.currentUser);
   const isAdmin = useUser(s => s.isAdmin);
   const {
@@ -716,13 +722,15 @@ const IntegrationsGallery = ({ source = 'direct' }: { source?: IntegrationsPageS
         justifyContent="space-between"
       >
         <Box>
-          <Typography level="h2" sx={{ fontWeight: 500, fontSize: '20px' }}>
-            Integrations
-          </Typography>
+          {showHeading && (
+            <Typography level="h2" sx={{ fontWeight: 500, fontSize: '20px' }}>
+              Integrations
+            </Typography>
+          )}
           <Typography
             level="body-sm"
             data-testid="integrations-count-line"
-            sx={{ mt: '6px', fontSize: '14px', color: 'text.tertiary' }}
+            sx={{ mt: showHeading ? '6px' : 0, fontSize: '14px', color: 'text.tertiary' }}
           >
             {flagsReady ? `${countLine(counts)}.` : <Skeleton variant="inline" width={260} />}
           </Typography>

@@ -8,14 +8,15 @@ import {
   adminSettingsRepository,
   dataLakeRepository,
   connectDB,
+  organizationRepository,
 } from '@bike4mind/database';
 import { Resource } from 'sst';
 // @ts-ignore - service may not be exported in types yet
 import { emailIngestionService } from '@bike4mind/services';
 import { UnauthorizedError } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
-import { getFilesStorage } from '@server/utils/storage';
-import { sendToQueue } from '@server/utils/sqs';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 
 const { processIngestedEmail, readSenderAuthenticationHeaders } = emailIngestionService;
 type IEmailParserAdapter = emailIngestionService.IEmailParserAdapter;
@@ -227,6 +228,7 @@ export const dispatch: SQSHandler = async (event: SQSEvent) => {
           {
             db: {
               users: userRepository,
+              organizations: organizationRepository,
               ingestedEmails: ingestedEmailRepository,
               fabFiles: fabFileRepository,
               adminSettings: adminSettingsRepository,

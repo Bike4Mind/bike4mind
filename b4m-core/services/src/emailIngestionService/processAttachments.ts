@@ -3,6 +3,7 @@ import {
   IFabFileRepository,
   IAdminSettingsRepository,
   IUserRepository,
+  IOrganizationRepository,
   IDataLakeRepository,
   SupportedFabFileMimeTypes,
 } from '@bike4mind/common';
@@ -12,26 +13,12 @@ import { createFabFile } from '../fabFileService/create';
 import { ParsedEmailObject, ProcessedAttachment, IStorageAdapter } from './types';
 
 /**
- * Normalize a MIME type to a supported type, falling back to text/plain for unknown types.
+ * Maps the one alias spelling email clients use to its supported type. Every other claim is
+ * passed through as-is so `createFabFile` decides: an unknown or binary claim is never relabeled
+ * text/plain, which is how an extensionless executable was being stored and chunked as prose.
  */
-function normalizeMimeType(mimeType: string): SupportedFabFileMimeTypes {
-  const supportedTypes = Object.values(SupportedFabFileMimeTypes);
-  if (supportedTypes.includes(mimeType as SupportedFabFileMimeTypes)) {
-    return mimeType as SupportedFabFileMimeTypes;
-  }
-
-  // Map common variations
-  const mimeTypeMap: Record<string, SupportedFabFileMimeTypes> = {
-    'text/x-markdown': SupportedFabFileMimeTypes.TXT_MARKDOWN,
-    'application/octet-stream': SupportedFabFileMimeTypes.TXT_PLAIN,
-  };
-
-  if (mimeTypeMap[mimeType]) {
-    return mimeTypeMap[mimeType];
-  }
-
-  Logger.warn(`Unknown MIME type: ${mimeType}, using text/plain as fallback`);
-  return SupportedFabFileMimeTypes.TXT_PLAIN;
+function normalizeMimeType(mimeType: string): string {
+  return mimeType === 'text/x-markdown' ? SupportedFabFileMimeTypes.TXT_MARKDOWN : mimeType;
 }
 
 /**
@@ -43,6 +30,7 @@ function mapToFabFileAdapters(
     fabFiles: IFabFileRepository;
     adminSettings: IAdminSettingsRepository;
     users: IUserRepository;
+    organizations: Pick<IOrganizationRepository, 'findById'>;
     // 'find' is forwarded straight to createFabFile, for its fallback tagger's prefix-overlap check.
     dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'find'>;
   }
@@ -54,6 +42,7 @@ function mapToFabFileAdapters(
       },
       adminSettings: db.adminSettings,
       users: db.users,
+      organizations: db.organizations,
       dataLakes: db.dataLakes,
     },
     storage: {
@@ -84,7 +73,6 @@ function mapToFabFileAdapters(
  * @param userId - User ID for fabFile ownership
  * @param emailSubject - Email subject for fabFile notes
  * @param adapters - Storage and database adapters
- * @param organizationId - Optional organization ID for fabFile ownership
  * @returns Array of processed attachment data with fabFileIds
  */
 export async function processAttachments(
@@ -97,11 +85,11 @@ export async function processAttachments(
       fabFiles: IFabFileRepository;
       adminSettings: IAdminSettingsRepository;
       users: IUserRepository;
+      organizations: Pick<IOrganizationRepository, 'findById'>;
       // 'find' is forwarded straight to createFabFile, for its fallback tagger's prefix-overlap check.
       dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'find'>;
     };
-  },
-  organizationId?: string
+  }
 ): Promise<ProcessedAttachment[]> {
   const attachmentCount = parsedEmail.attachments?.length || 0;
   Logger.info(`Processing ${attachmentCount} attachments`);
@@ -169,7 +157,6 @@ export async function processAttachments(
         type: knowledgeType,
         public: false,
         notes: `Attachment from email: ${emailSubject}`,
-        organizationId,
       };
 
       const newFabFile = await createFabFile(userId, fabFileData, mapToFabFileAdapters(adapters.storage, adapters.db));

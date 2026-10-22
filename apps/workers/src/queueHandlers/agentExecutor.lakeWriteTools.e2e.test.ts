@@ -1,5 +1,3 @@
-import { readFileSync } from 'fs';
-import { join } from 'path';
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
@@ -34,59 +32,9 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
 
 /**
  * The lake write tools on the agent host, run against the REAL repositories and audit sinks the
- * executor's toolDeps spread (`lakeWriteToolDb`). `processExecution` has no harness, so the two
- * toolDeps blocks themselves are pinned by the source check below, the same way
- * checkToolAvailabilityWired.test.ts pins the availability wiring.
+ * executor's toolDeps spread (`lakeWriteToolDb`). The toolDeps blocks themselves are pinned
+ * statically in agentExecutor.toolDepsWiring.test.ts.
  */
-describe('agentExecutor toolDeps wiring', () => {
-  const source = readFileSync(join(__dirname, 'agentExecutor.ts'), 'utf8');
-
-  it('spreads the lake write adapters into both the main and the subagent toolDeps', () => {
-    expect(source.match(/\.\.\.lakeWriteToolDb,/g)).toHaveLength(2);
-  });
-
-  it('stamps the run organization on both toolDeps', () => {
-    expect(source).toMatch(/const toolDeps: ToolBuilderDeps = \{[^}]*organizationId: execution\.organizationId,/);
-    expect(source).toMatch(/const toolDeps: ToolBuilderDeps = \{[^}]*organizationId: child\.organizationId,/);
-  });
-
-  // Both are optional on ToolContext.db, so dropping either typechecks and edit_image then refuses
-  // the owner's own generated-image keys with only a logged warning.
-  it('wires the generated-image owner lookup into both the main and the subagent toolDeps', () => {
-    expect(source.match(/findAllByIds: sessionRepository\.findAllByIds\.bind\(sessionRepository\),/g)).toHaveLength(2);
-    expect(source.match(/quests: questRepository,/g)).toHaveLength(2);
-  });
-
-  // executionTurnAuth carries both authOrigin and the key id (see its tests in turnAuth.test.ts).
-  it('forwards the run turn auth to both toolDeps and to every child it spawns', () => {
-    expect(source).toMatch(/const toolDeps: ToolBuilderDeps = \{[^}]*\.\.\.executionTurnAuth\(execution\),/);
-    expect(source).toMatch(/const toolDeps: ToolBuilderDeps = \{[^}]*\.\.\.executionTurnAuth\(child\),/);
-    expect(source).toMatch(/const baseFields = \{[^}]*\.\.\.executionTurnAuth\(execution\),/);
-    expect(source).toMatch(/nodeDefaults: \{[^}]*\.\.\.executionTurnAuth\(execution\),/);
-  });
-
-  it('carries the scope denials to every child row and the child MCP denylist', () => {
-    const baseFieldsAt = source.indexOf('const baseFields = {');
-    expect(baseFieldsAt).toBeGreaterThan(-1);
-    expect(source.slice(baseFieldsAt, source.indexOf('};', baseFieldsAt))).toContain(
-      '...(execution.scopeDeniedTools?.length && { scopeDeniedTools: execution.scopeDeniedTools }),'
-    );
-    expect(source).toMatch(/nodeDefaults: \{[^}]*scopeDeniedTools: execution\.scopeDeniedTools,/);
-    expect(source).toMatch(
-      /sessionDisabledTools: \[\.\.\.\(session\.disabledTools \?\? \[\]\), \.\.\.\(child\.scopeDeniedTools \?\? \[\]\)\]/
-    );
-  });
-
-  it('gates the profile tool resolution on whether the connection has an approver', () => {
-    expect(source).toMatch(
-      /resolveInvocationEnabledTools\(\{[^}]*hasApprover: hasApprover\(execution\.connectionId\),/
-    );
-  });
-
-  it('subtracts the persisted scope denials in the final tool policy pass', () => {
-    expect(source).toMatch(/applySessionToolPolicy\(\{[^}]*scopeDeniedTools: execution\.scopeDeniedTools,/);
-  });
-});
 
 let replSet: MongoMemoryReplSet;
 const MODELS = [

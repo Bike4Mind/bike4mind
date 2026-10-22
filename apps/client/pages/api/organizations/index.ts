@@ -7,7 +7,7 @@ import qs from 'qs';
 import { organizationRepository, userRepository } from '@bike4mind/database';
 import { organizationService } from '@bike4mind/services';
 import { toSafeOrganization, toSafeOrganizations } from '@bike4mind/common';
-import { ensureAdmin } from '@server/utils/errors';
+import { ensureAdmin } from '@bike4mind/server-utils/utils/errors';
 
 const handler = baseApi()
   .get<Request<{}, {}, {}, Record<string, string>>>(async (req, res) => {

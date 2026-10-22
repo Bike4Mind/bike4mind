@@ -29,7 +29,7 @@ vi.mock('@client/app/premium-generated/premiumWorkspaceCopyEntitlements.generate
     return h.copyEntitlements;
   },
 }));
-vi.mock('@server/services/gears/stampGear', () => ({ stampGear: vi.fn() }));
+vi.mock('@bike4mind/server-utils/services/gears/stampGear', () => ({ stampGear: vi.fn() }));
 vi.mock('@bike4mind/services', () => ({ sessionService: { forkSession: h.forkSession } }));
 vi.mock('@bike4mind/database', () => ({
   agentRepository: {},

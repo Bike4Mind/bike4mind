@@ -3,6 +3,8 @@
 // callback (lazy evaluation, not at import time). Do NOT access `router` from waf.ts at module
 // scope — it would be undefined at that point.
 import { wafWebAcl } from './waf';
+import { allowsUsercontentRequest } from '../packages/server-utils/src/utils/usercontentRequest';
+import { minifyRouterFunction } from './routerFunctionCode';
 
 // const isPermanentStage = ['production', 'dev'].includes($app.stage);
 
@@ -155,6 +157,14 @@ const originVerifyInjection = $interpolate`
   event.request.headers["${ORIGIN_VERIFY_HEADER}"] = { value: "${originVerifySecret.result}" };
 `;
 
+// Runs before SST routing AND cache lookup, including S3/static and cached SPA responses.
+const usercontentGateInjection = `
+  var __allowsUsercontentRequest = ${allowsUsercontentRequest.toString()};
+  if (!__allowsUsercontentRequest(event.request.headers.host.value, event.request.uri, event.request.method, ${JSON.stringify(domain ?? '')})) {
+    return { statusCode: 404, statusDescription: "Not Found", headers: { "cache-control": { value: "no-store" } } };
+  }
+`;
+
 // Applied ONLY to user-file responses so the SPA (default behavior) and the ALB API routes
 // (/api/ai/v1/completions, ...) are left untouched.
 const userFileCspInjection = `
@@ -179,6 +189,13 @@ const devCorsInjection = `
   event.response.headers["access-control-allow-methods"] = { value: "GET, HEAD, OPTIONS, POST, PUT" };
   event.response.headers["access-control-allow-headers"] = { value: "*" };
 `;
+
+// SST leaves parts of its generated routing function unminified. With the boundary gates,
+// that exceeds CloudFront's 10 KB limit. Transform only this Router's generated request code.
+$transform(aws.cloudfront.Function, (args, _opts, name) => {
+  if (name !== 'RouterCloudfrontFunctionRequest') return;
+  args.code = $output(args.code).apply(minifyRouterFunction);
+});
 
 const routerInstance = shouldUseSharedRouter
   ? sst.aws.Router.get('Router', process.env.DEV_ROUTER_DISTRIBUTION_ID!)
@@ -225,7 +242,7 @@ const routerInstance = shouldUseSharedRouter
       // `sst dev` stages.
       edge: {
         viewerRequest: {
-          injection: $interpolate`${originVerifyInjection}${userFileMarkerInjection}`,
+          injection: $interpolate`${usercontentGateInjection}${originVerifyInjection}${userFileMarkerInjection}`,
         },
         viewerResponse: {
           injection: userFileCspInjection + ($dev ? devCorsInjection : ''),
@@ -287,7 +304,7 @@ const routerInstance = shouldUseSharedRouter
 /**
  * The base URL path for the local dev file proxy.
  * Must match LOCAL_FILE_PROXY_BASE in
- * apps/client/server/utils/appFileProxy.ts — kept in sync so the
+ * packages/server-utils/src/utils/appFileProxy.ts - kept in sync so the
  * runtime gate and infra always agree on the same string.
  */
 export const LOCAL_FILE_PROXY_BASE = '/api/app-files/serve';
@@ -332,7 +349,7 @@ export const router = routerInstance;
  *   - `oauthServer.ts` uses it as the OIDC issuer, where the exact string is a
  *     spec-level identity rather than a formatting detail.
  *
- * Normalizing once here keeps all four injection sites agreeing on one value, rather
+ * Normalizing once here keeps every injection site agreeing on one value, rather
  * than each deciding for itself.
  */
 export function appUrlForLambdaEnv() {

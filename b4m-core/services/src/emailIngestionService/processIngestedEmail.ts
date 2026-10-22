@@ -204,30 +204,24 @@ export async function processIngestedEmail(
           fabFiles: adapters.db.fabFiles,
           adminSettings: adapters.db.adminSettings,
           users: adapters.db.users,
+          organizations: adapters.db.organizations,
           dataLakes: adapters.db.dataLakes,
         },
-      },
-      validated.organizationId
+      }
     );
 
     // 4. Process email body and create fabFile if substantial
     Logger.info('Processing email body...');
-    const bodyData = await processEmailBody(
-      parsedEmail,
-      validated.userId,
-      emailId,
-      options?.isNewsletter || false,
-      {
-        storage: adapters.storage,
-        db: {
-          fabFiles: adapters.db.fabFiles,
-          adminSettings: adapters.db.adminSettings,
-          users: adapters.db.users,
-          dataLakes: adapters.db.dataLakes,
-        },
+    const bodyData = await processEmailBody(parsedEmail, validated.userId, emailId, options?.isNewsletter || false, {
+      storage: adapters.storage,
+      db: {
+        fabFiles: adapters.db.fabFiles,
+        adminSettings: adapters.db.adminSettings,
+        users: adapters.db.users,
+        organizations: adapters.db.organizations,
+        dataLakes: adapters.db.dataLakes,
       },
-      validated.organizationId
-    );
+    });
 
     // 5. Update email with fabFile information
     Logger.info('Updating email with fabFile references...');

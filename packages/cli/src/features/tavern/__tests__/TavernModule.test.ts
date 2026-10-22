@@ -69,7 +69,7 @@ describe('TavernModule — /quest command', () => {
 
   it('/quest resume displays handoff when present', async () => {
     const mockPlan: QuestPlanResponse = {
-      _id: 'plan-123',
+      id: 'plan-123',
       notebookId: 'nb-1',
       goal: 'Build the thing',
       quests: [],
@@ -112,7 +112,7 @@ describe('TavernModule — /quest command', () => {
 
   it('/quest resume shows message when no handoff exists', async () => {
     const mockPlan: QuestPlanResponse = {
-      _id: 'plan-456',
+      id: 'plan-456',
       notebookId: 'nb-2',
       goal: 'Another quest',
       quests: [],
@@ -134,7 +134,7 @@ describe('TavernModule — /quest command', () => {
 
   it('/quest resume omits empty sections from handoff', async () => {
     const mockPlan: QuestPlanResponse = {
-      _id: 'plan-789',
+      id: 'plan-789',
       notebookId: 'nb-3',
       goal: 'Minimal handoff plan',
       quests: [],

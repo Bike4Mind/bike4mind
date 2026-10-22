@@ -131,15 +131,26 @@ const APPROVAL_QUESTION: Record<ChatDiff['operation'], string> = {
  */
 function NoticeBanner({ notice }: { notice: ChatToolNotice }) {
   const outOfCredits = notice.kind === 'insufficient-credits';
+  const permissionSaveFailed = notice.kind === 'permissions-save-failed';
   return (
     <Sheet
       variant="soft"
       color="warning"
       sx={{ borderRadius: 'sm', px: 1.5, py: 1, mt: 0.5 }}
-      data-testid={outOfCredits ? 'chat-tool-credits-notice' : 'chat-tool-provider-notice'}
+      data-testid={
+        permissionSaveFailed
+          ? 'chat-tool-permissions-notice'
+          : outOfCredits
+            ? 'chat-tool-credits-notice'
+            : 'chat-tool-provider-notice'
+      }
     >
       <Typography level="body-xs" fontWeight="lg">
-        {outOfCredits ? 'Out of credits' : 'A different provider was used'}
+        {permissionSaveFailed
+          ? 'Permission rule was not saved'
+          : outOfCredits
+            ? 'Out of credits'
+            : 'A different provider was used'}
       </Typography>
       <Typography level="body-xs" sx={{ mt: 0.25 }}>
         {notice.text}
@@ -171,6 +182,11 @@ function AlwaysScopeLine({ call }: { call: ChatToolCall }) {
       {call.approvalAlways
         ? `"Always allow" covers ${call.approvalAlways} for the rest of this conversation.`
         : '"Always allow" applies for the rest of this conversation.'}
+      {call.approvalRules && call.approvalRules.length > 0 && (
+        <span data-testid="chat-tool-approval-rules">
+          {` "In every session" saves ${call.approvalRules.join(', ')} to Settings > Permissions.`}
+        </span>
+      )}
     </Typography>
   );
 }
@@ -285,6 +301,18 @@ function ApprovalPrompt({
                 data-testid="chat-tool-approve-always"
               >
                 Always allow
+              </Button>
+            )}
+            {!irreversible && call.approvalRules && call.approvalRules.length > 0 && (
+              <Button
+                size="sm"
+                variant="soft"
+                color="neutral"
+                title={call.approvalRules.join('\n')}
+                onClick={() => onRespond(approvalId, { decision: 'always', everywhere: true })}
+                data-testid="chat-tool-approve-everywhere"
+              >
+                Always, in every session
               </Button>
             )}
             <Button
@@ -587,7 +615,10 @@ function ToolGroupRow({ group, onMove }: { group: ToolCallGroup; onMove?: MoveCa
       {group.calls.map(call => (
         <Box key={call.id}>
           {call.notice && <NoticeBanner notice={call.notice} />}
-          <MediaAttachments media={call.media ?? []} />
+          <MediaAttachments
+            media={call.media ?? []}
+            nameHint={call.name === BROWSER_SCREENSHOT_TOOL_NAME ? 'screenshot' : 'image'}
+          />
           {call.name === GENERATE_VIDEO_TOOL_NAME && <VideoJobsForCall callId={call.id} />}
         </Box>
       ))}
@@ -596,6 +627,7 @@ function ToolGroupRow({ group, onMove }: { group: ToolCallGroup; onMove?: MoveCa
 }
 
 const GENERATE_VIDEO_TOOL_NAME = 'generate_video';
+const BROWSER_SCREENSHOT_TOOL_NAME = 'browser_screenshot';
 
 export function ToolCallList({
   calls,

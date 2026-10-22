@@ -14,7 +14,8 @@ import {
   type SandboxConfig,
   type SandboxMode,
 } from '../sandbox/types.js';
-import { canTrustTool } from '../config/toolSafety';
+import { resolveStaticToolDescriptor } from '../tools/gateway/toolCatalog.js';
+import { canTrustTool } from '../tools/gateway/toolPolicy.js';
 import { PROJECT_CONTEXT_FILES } from '../utils/contextLoader';
 import { logger } from '../utils/Logger';
 
@@ -829,11 +830,13 @@ function mergeConfigs(global: CliConfig, project: ProjectConfig | null, local: P
   // Never-loosen for tools: a repo cannot re-enable a globally-disabled tool,
   // and a repo-contributed trusted tool must be one that can actually be
   // trusted and isn't disabled. (Global's own trustedTools are left untouched.)
+  // Resolved without a catalog instance: config merges before any catalog exists, so a
+  // registered (feature/plugin) tool resolves as unknown here.
   const disabledSet = new Set(merged.tools.disabled);
   merged.tools = { ...merged.tools, enabled: merged.tools.enabled.filter(t => !disabledSet.has(t)) };
   const globalTrusted = new Set(global.trustedTools || []);
   merged.trustedTools = (merged.trustedTools || []).filter(
-    t => globalTrusted.has(t) || (canTrustTool(t) && !disabledSet.has(t))
+    t => globalTrusted.has(t) || (canTrustTool(resolveStaticToolDescriptor(t)) && !disabledSet.has(t))
   );
 
   return merged;

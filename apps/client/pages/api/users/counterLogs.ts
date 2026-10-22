@@ -19,7 +19,7 @@ import { getEffectiveApiKeyByBackend, OperationsModelService } from '@client/ser
 import { z } from 'zod';
 import { Request } from 'express';
 import qs from 'qs';
-import { BadRequestError, ForbiddenError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { sendMaybeGzip } from '@server/utils/sendMaybeGzip';
 import {
   buildUserActivityPipeline,

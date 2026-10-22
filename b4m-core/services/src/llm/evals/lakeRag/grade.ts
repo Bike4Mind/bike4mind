@@ -10,7 +10,7 @@
  * Lexical by design, like the sibling evals: it will miss an exotic paraphrase, but it will not
  * pass a reply that states the stale value as the answer.
  */
-import { findCitationMarkers, type CitableSource } from '@bike4mind/common';
+import { findCitationMarkers, sourceNamedIn, type CitableSource } from '@bike4mind/common';
 import type { EvalGrade } from '../harness';
 import type { LakeRagBankRow, LakeRagKind } from './bank';
 import { LAKE_RAG_KINDS } from './bank';
@@ -130,14 +130,8 @@ function gradeIndexedCitation(
     : { status: 'wrong-source', cited };
 }
 
-/** `galilean-moons.md` matches "galilean-moons.md", "galilean-moons" or "Galilean Moons". */
 function gradeNamedCitation(expectSource: string, reply: string): CitationCheck {
-  const words = expectSource
-    .replace(/\.[a-z0-9]+$/i, '')
-    .split(/[\s_-]+/)
-    .map(word => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-  const named = new RegExp(`\\b${words.join('[\\s_-]+')}\\b`, 'i');
-  return named.test(reply) ? { status: 'matched' } : { status: 'missing' };
+  return sourceNamedIn(reply, expectSource) ? { status: 'matched' } : { status: 'missing' };
 }
 
 function gradeCitation(row: LakeRagBankRow, reply: string, context: LakeRagCitationContext): CitationCheck {

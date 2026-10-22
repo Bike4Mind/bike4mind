@@ -2,7 +2,7 @@
 
 import { baseApi } from '@server/middlewares/baseApi';
 import { inviteRepository, cacheRepository } from '@bike4mind/database';
-import { UnauthorizedError } from '@server/utils/errors';
+import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { sharingService, cacheService } from '@bike4mind/services';
 import { filterInviteRecipientsToSelf } from '@server/managers/inviteManager';
 import { z } from 'zod';

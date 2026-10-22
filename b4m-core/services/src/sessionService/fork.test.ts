@@ -1,5 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
+import { MAX_TOOL_CALLS_CEILING } from '@bike4mind/common';
 import { forkSession } from './fork';
+
+const forkWithEmptyTable = (
+  userId: string,
+  params: Parameters<typeof forkSession>[1],
+  adapters: Omit<Parameters<typeof forkSession>[2], 'workspaceSessionSettings'>
+) => forkSession(userId, params, { ...adapters, workspaceSessionSettings: {} });
 
 describe('forkSession', () => {
   const makeAdapters = () => {
@@ -51,7 +58,7 @@ describe('forkSession', () => {
     });
     db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
 
-    await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+    await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db, workspaceSessionSettings: {} });
 
     expect(db.sessions.create).toHaveBeenCalledWith(expect.objectContaining({ retrievalTags: ['datalake:acme'] }));
   });
@@ -73,7 +80,7 @@ describe('forkSession', () => {
     });
     db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
 
-    await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+    await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db, workspaceSessionSettings: {} });
 
     expect(db.sessions.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -100,11 +107,27 @@ describe('forkSession', () => {
     });
     db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
 
-    await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+    await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db, workspaceSessionSettings: {} });
 
     expect(db.sessions.create).toHaveBeenCalledWith(
       expect.objectContaining({ systemPromptText: 'Answer like a pirate.', temperature: 0.2, maxToolCalls: 7 })
     );
+  });
+
+  it('clamps a stored maxToolCalls past MAX_TOOL_CALLS_CEILING instead of failing the fork', async () => {
+    const { db } = makeAdapters();
+    db.sessions.findByIdAndUserId.mockResolvedValueOnce({
+      id: 'session-1',
+      name: 'Original',
+      knowledgeIds: [],
+      tags: [],
+      maxToolCalls: 1000,
+    });
+    db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
+
+    await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db, workspaceSessionSettings: {} });
+
+    expect(db.sessions.create.mock.calls[0][0].maxToolCalls).toBe(MAX_TOOL_CALLS_CEILING);
   });
 
   // Create-only (not in SessionUpdateRequestSchema), so a fork that drops them can never get them back.
@@ -122,7 +145,7 @@ describe('forkSession', () => {
     });
     db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
 
-    await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+    await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db, workspaceSessionSettings: {} });
 
     expect(db.sessions.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -154,7 +177,7 @@ describe('forkSession', () => {
     });
     db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
 
-    await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+    await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db, workspaceSessionSettings: {} });
 
     expect(findAccessibleInIds).not.toHaveBeenCalled();
     expect(db.sessions.create).toHaveBeenCalledWith(expect.objectContaining({ knowledgeIds: [FILE_ID] }));
@@ -176,7 +199,7 @@ describe('forkSession', () => {
     });
     db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
 
-    await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+    await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db, workspaceSessionSettings: {} });
 
     expect(db.sessions.create).toHaveBeenCalledWith(
       expect.objectContaining({ taggedAt, tags: [{ name: 'racing', strength: 0.9 }] })
@@ -208,7 +231,7 @@ describe('forkSession', () => {
     });
     db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
 
-    await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+    await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db, workspaceSessionSettings: {} });
 
     expect(db.sessions.create.mock.calls[0][0].summaryTrigger).toBeUndefined();
     expect(db.sessions.create.mock.calls[0][0].summary).toBe('the gist');
@@ -228,7 +251,7 @@ describe('forkSession', () => {
     });
     db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
 
-    await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+    await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db, workspaceSessionSettings: {} });
 
     expect(db.sessions.create).toHaveBeenCalledWith(
       expect.objectContaining({ summary: 'the gist', summaryAt, summaryTrigger: 'manual' })
@@ -248,7 +271,7 @@ describe('forkSession', () => {
     });
     db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
 
-    await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+    await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db, workspaceSessionSettings: {} });
 
     expect(db.sessions.create.mock.calls[0][0].summaryTrigger).toBeUndefined();
   });
@@ -265,7 +288,7 @@ describe('forkSession', () => {
     });
     db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
 
-    await forkSession(
+    await forkWithEmptyTable(
       'caller-1',
       { sessionId: 'session-1', messageId: 'm1' },
       { db, resolveSurfaceAccess: async () => ({ entitlements: ['optihashi:pro'] }) }
@@ -289,7 +312,7 @@ describe('forkSession', () => {
     await forkSession(
       'caller-1',
       { sessionId: 'session-1', messageId: 'm1' },
-      { db, resolveSurfaceAccess: async () => ({ entitlements: [] }) }
+      { db, workspaceSessionSettings: {}, resolveSurfaceAccess: async () => ({ entitlements: [] }) }
     );
 
     expect(db.sessions.create.mock.calls[0][0].surface).toBeUndefined();
@@ -299,7 +322,7 @@ describe('forkSession', () => {
     const { db } = makeAdapters();
     db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
 
-    await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+    await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db, workspaceSessionSettings: {} });
 
     expect(db.sessions.create.mock.calls[0][0].surface).toBeUndefined();
   });
@@ -324,7 +347,7 @@ describe('forkSession', () => {
       const run = forkSession(
         'caller-1',
         { sessionId: 'session-1', messageId: 'm1', targetSurface },
-        { db, resolveSurfaceAccess }
+        { db, resolveSurfaceAccess, workspaceSessionSettings: {} }
       );
       return { db, run };
     };
@@ -370,7 +393,7 @@ describe('forkSession', () => {
         surface: 'some-private-surface',
       });
       db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
-      await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+      await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db, workspaceSessionSettings: {} });
       expect(db.sessions.create).toHaveBeenCalledWith(expect.objectContaining({ surface: 'some-private-surface' }));
     });
 
@@ -387,7 +410,11 @@ describe('forkSession', () => {
       { id: 'm0', sessionId: 'session-1', prompt: 'earlier' },
     ]);
 
-    const newSession = await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+    const newSession = await forkSession(
+      'caller-1',
+      { sessionId: 'session-1', messageId: 'm1' },
+      { db, workspaceSessionSettings: {} }
+    );
 
     expect(db.chatHistories.findBySessionIdAndId).toHaveBeenCalledWith('session-1', 'm1');
     expect(newSession).toEqual({ id: 'fork-1' });
@@ -406,7 +433,7 @@ describe('forkSession', () => {
       { id: 'm0', sessionId: 'session-1', prompt: 'a correction', correctsQuestId: 'quest-in-source-session' },
     ]);
 
-    await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+    await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db, workspaceSessionSettings: {} });
 
     expect(created[0]).not.toHaveProperty('correctsQuestId');
     expect(created[0]).toEqual({ sessionId: 'fork-1', prompt: 'a correction' });
@@ -423,7 +450,7 @@ describe('forkSession', () => {
       { id: 'm0', sessionId: 'session-1', prompt: 'earlier', promptMeta: { warnings: ['partial coverage'] } },
     ]);
 
-    await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+    await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db, workspaceSessionSettings: {} });
 
     expect(created[0].promptMeta).toEqual({
       warnings: ['partial coverage'],
@@ -446,7 +473,7 @@ describe('forkSession', () => {
       },
     ]);
 
-    await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+    await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db, workspaceSessionSettings: {} });
 
     expect(created[0].promptMeta).toEqual({
       session: { id: 'fork-1', userId: 'caller-1', organizationId: 'org-1' },
@@ -460,9 +487,9 @@ describe('forkSession', () => {
     const { db } = makeAdapters();
     db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce(null);
 
-    await expect(forkSession('caller-1', { sessionId: 'session-1', messageId: 'missing' }, { db })).rejects.toThrow(
-      'Message not found'
-    );
+    await expect(
+      forkSession('caller-1', { sessionId: 'session-1', messageId: 'missing' }, { db, workspaceSessionSettings: {} })
+    ).rejects.toThrow('Message not found');
     expect(db.chatHistories.findBySessionIdAndId).toHaveBeenCalledWith('session-1', 'missing');
   });
 });

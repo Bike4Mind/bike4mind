@@ -18,7 +18,6 @@ const HEADINGS: Record<string, string> = {
   feedback: 'Your feedback',
   billing: 'Billing',
   share: 'Shared notebook',
-  studio: 'Studio',
   hearth: 'Hearth',
   'deep-agents': 'Deep agents',
   report: 'Report',

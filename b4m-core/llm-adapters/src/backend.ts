@@ -15,6 +15,8 @@ import {
   type ResponseFormat,
   type StreamChannel,
   type ToolStarted,
+  type ToolSearchServerTool,
+  type ProviderBlock,
   type TurnUsage,
 } from '@bike4mind/common';
 import type { AnthropicEffort } from './thinkingParams';
@@ -22,7 +24,10 @@ import type { DegenerateStreamGuardOptions } from './degenerateStreamGuard';
 import type { RecordableToolUse } from './recordToolResult';
 import type { DowngradedToolChoice } from './forcedToolChoice';
 
-/** Maximum number of recursive tool calls to prevent infinite loops */
+/**
+ * Maximum number of recursive tool calls to prevent infinite loops. A session may raise it up to
+ * MAX_TOOL_CALLS_CEILING (@bike4mind/common constants/llmLimits.ts).
+ */
 export const DEFAULT_MAX_TOOL_CALLS = 10;
 
 export interface ITokenizingBackend {}
@@ -115,6 +120,8 @@ export interface ICompletionOptionTools {
       required?: string[];
     };
     strict?: boolean;
+    /** Anthropic tool search; set only by the completions path, which drops it for every other adapter. */
+    defer_loading?: boolean;
   };
   _isMcpTool?: boolean; // Flag to identify MCP tools (enables tool chaining for MCP only)
   /**
@@ -130,6 +137,17 @@ export interface ICompletionOptionTools {
    * Decided by shouldEndTurnAfterTools (executeToolsBatch.ts). Never honored from MCP servers.
    */
   endsTurnAfterText?: boolean;
+}
+
+/**
+ * Receives the timing a backend observes inside one chat turn. Both calls are synchronous
+ * and must not throw - a telemetry fault must never fail the completion.
+ */
+export interface TurnTelemetrySink {
+  /** Time spent waiting for a provider concurrency slot before one API request, in ms. */
+  onSemaphoreWait: (waitMs: number) => void;
+  /** A retry the backend scheduled for a failed API request, before its backoff sleep. */
+  onRetry: (event: { error: Error; delayMs: number; model: string }) => void;
 }
 
 export interface ICompletionOptions {
@@ -153,6 +171,11 @@ export interface ICompletionOptions {
   bestOf?: number;
   logitBias?: { [key: string]: number };
   tools: ICompletionOptionTools[];
+  /**
+   * Provider-run tools sent verbatim after `tools` (direct Anthropic only; see completionsSupportsToolSearch).
+   * Never executed locally: their blocks come back as CompletionInfo.providerBlock.
+   */
+  providerTools?: ToolSearchServerTool[];
   /** If false, backend returns tool calls without executing (for CLI). Default: true */
   executeTools?: boolean;
   /**
@@ -161,6 +184,11 @@ export interface ICompletionOptions {
    * set and no system messages, the request carries no system parameter at all.
    */
   omitIdentityReminder?: boolean;
+  /**
+   * Registry display name (ModelInfo.name) of the model serving THIS call, used in the identity
+   * reminder. Set per hop so a fallback names the fallback model; unset keeps the raw-id wording.
+   */
+  modelDisplayName?: string;
   /**
    * Controls which tool the model should use.
    * - 'auto': Model decides whether to call a tool (default)
@@ -205,6 +233,8 @@ export interface ICompletionOptions {
   anthropicEffort?: AnthropicEffort;
   _internal?: {
     toolCallCount?: number; // Internal counter for tracking recursive tool calls (do not set manually)
+    /** Epoch ms of the first round of this chat turn; set once, carried through recursive tool rounds (timing logs only). */
+    requestStartedAt?: number;
     /** Per-request override for the recursive tool-call ceiling (defaults to DEFAULT_MAX_TOOL_CALLS).
      * When the count hits this, tools are stripped so the model must answer - lowered by
      * some product surfaces so an eager model can't burn round-trips re-emitting capped tool calls. */
@@ -237,6 +267,8 @@ export interface ICompletionOptions {
     accumCacheWriteTokens?: number;
     /** Per-request usage so far in this chain, appended (not summed) per round-trip; see CompletionInfo.turnUsage. */
     accumTurnUsage?: TurnUsage[];
+    /** Stays undefined until a turn reports a count - see reasoningTokens.ts. */
+    accumReasoningTokens?: number;
     /**
      * Multi-turn tool-call accumulator threaded through recursive complete() calls
      * (Ollama). Consumers assign rather than append functionCalls on each callback,
@@ -283,6 +315,12 @@ export interface ICompletionOptions {
      * Internal - do not set manually.
      */
     downgradedToolChoice?: DowngradedToolChoice;
+    /**
+     * Per-turn timing sink, set by ChatCompletionProcess and threaded unchanged through recursive
+     * tool rounds so every round's semaphore wait and transport retry lands on one turn record.
+     * Anthropic and OpenAI only so far. Internal - do not set manually.
+     */
+    turnTelemetry?: TurnTelemetrySink;
   };
   /** Provider-agnostic caching strategy configuration */
   cacheStrategy?: ICacheStrategy;
@@ -354,8 +392,16 @@ export type CompletionInfo = {
   channel?: StreamChannel;
   /** A tool call the provider has just opened; see CompletionInfo.toolStarted in @bike4mind/common. */
   toolStarted?: ToolStarted;
+  /** A provider-run block for the caller to echo back; see CompletionInfo.providerBlock in @bike4mind/common. */
+  providerBlock?: ProviderBlock;
   inputTokens?: number;
   outputTokens?: number;
+  /**
+   * Provider-reported reasoning/thinking tokens: a SUBSET of `outputTokens`, not
+   * additive, and never billed separately. Absent when the provider reported nothing.
+   * Same accumulate-across-tool-turns contract as the other token counts.
+   */
+  reasoningTokens?: number;
   creditsUsed?: number;
   usdCost?: number;
   toolsUsed?: Array<RecordableToolUse>;

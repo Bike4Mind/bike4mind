@@ -3,8 +3,8 @@ import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { BadRequestError } from '@server/utils/errors';
-import { MAX_FILE_SIZE_DEFAULT_MB } from '@server/utils/maxFileSizeDefault';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { MAX_FILE_SIZE_DEFAULT_MB } from '@bike4mind/server-utils/utils/maxFileSizeDefault';
 import { getValidUserDriveAccessToken } from '@server/integrations/google/drive/common';
 import {
   createDriveClient,
@@ -12,7 +12,7 @@ import {
   withDriveReconnectOnAuthError,
 } from '@server/integrations/google/drive/driveClient';
 import { estimateFolder } from '@server/integrations/google/drive/driveContent';
-import { MAX_INGEST_CANDIDATES } from '@server/integrations/google/drive/driveIngestLimits';
+import { MAX_INGEST_CANDIDATES } from '@bike4mind/server-utils/integrations/google/drive/driveIngestLimits';
 
 // Well under the 60s server Lambda and CloudFront origin timeouts: one in-flight page plus
 // withDriveRetry's ~7s of backoff can still land after the deadline.

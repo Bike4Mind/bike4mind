@@ -2,7 +2,7 @@ import { User } from '@bike4mind/database';
 import { AuthStrategy } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 
 const UnlinkSchema = z.object({

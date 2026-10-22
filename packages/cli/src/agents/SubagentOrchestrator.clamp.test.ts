@@ -6,7 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const { generateCliTools } = vi.hoisted(() => ({
   generateCliTools: vi.fn(async () => ({
     tools: [],
-    agentContext: { currentAgent: null, observationQueue: [] },
+    agentContext: { currentAgent: null },
   })),
 }));
 

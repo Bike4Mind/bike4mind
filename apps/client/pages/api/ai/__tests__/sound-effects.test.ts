@@ -1,4 +1,4 @@
-import { CreditHolderType, isZodError } from '@bike4mind/common';
+import { CREDITS_PER_USD_COST, CreditHolderType, isZodError } from '@bike4mind/common';
 import { createMocks } from 'node-mocks-http';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -8,25 +8,42 @@ const {
   estimateSoundCredits,
   generate,
   getSettingsValue,
+  getSettingsMap,
   findById,
   orgFindById,
+  orgFindAccessibleById,
   userIncrement,
   orgIncrement,
   recordUsage,
   saveGeneratedAssetToFiles,
+  pendingHolds,
+  settlementDraw,
 } = vi.hoisted(() => ({
   getEffectiveApiKey: vi.fn(),
   deductCredits: vi.fn(),
   estimateSoundCredits: vi.fn(),
   generate: vi.fn(),
   getSettingsValue: vi.fn(),
+  getSettingsMap: vi.fn(),
   findById: vi.fn(),
   orgFindById: vi.fn(),
+  orgFindAccessibleById: vi.fn(),
   userIncrement: vi.fn(),
   orgIncrement: vi.fn(),
   recordUsage: vi.fn(),
   saveGeneratedAssetToFiles: vi.fn(),
+  pendingHolds: new Map<string, { settledCredits?: number }>(),
+  settlementDraw: vi.fn(),
 }));
+
+// The real stochastic rounding, with its draw pinned so the settled amount is assertable.
+vi.mock('@bike4mind/common', async importActual => {
+  const actual = await importActual<typeof import('@bike4mind/common')>();
+  return {
+    ...actual,
+    usdToCreditsStochastic: (usd: number) => actual.usdToCreditsStochastic(usd, () => settlementDraw()),
+  };
+});
 
 // Contract-adapter mock: stands in for the nextRouteForContract prelude, running
 // the contract's own request schema into `req.validated` (so body validation stays
@@ -62,9 +79,21 @@ vi.mock('@server/middlewares/defineNextRoute', () => ({
   },
 }));
 
-vi.mock('@server/utils/errors', () => ({
+vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   BadRequestError: class BadRequestError extends Error {
     statusCode = 400;
+  },
+  ForbiddenError: class ForbiddenError extends Error {
+    statusCode = 403;
+    constructor(
+      message?: string,
+      public additionalInfo?: Record<string, unknown>
+    ) {
+      super(message);
+    }
+  },
+  NotFoundError: class NotFoundError extends Error {
+    statusCode = 404;
   },
 }));
 vi.mock('@bike4mind/database', () => ({
@@ -74,6 +103,37 @@ vi.mock('@bike4mind/database', () => ({
   organizationRepository: {
     findById: (...a: unknown[]) => orgFindById(...a),
     incrementCredits: (...a: unknown[]) => orgIncrement(...a),
+    // resolveActiveOrg's membership gate for a JWT caller's org id (home or explicitly selected).
+    shareable: { findAccessibleById: (...a: unknown[]) => orgFindAccessibleById(...a) },
+  },
+  pendingCreditHoldRepository: {
+    record: async (hold: object) => {
+      pendingHolds.set('hold-1', { ...hold });
+      return { ...hold, id: 'hold-1' };
+    },
+    claim: async (id: string) => {
+      const hold = pendingHolds.get(id);
+      if (!hold || hold.settledCredits !== undefined) return null;
+      pendingHolds.delete(id);
+      return { ...hold, id };
+    },
+    markSettled: async (id: string, settledCredits: number) => {
+      const hold = pendingHolds.get(id);
+      if (!hold || hold.settledCredits !== undefined) return false;
+      pendingHolds.set(id, { ...hold, settledCredits });
+      return true;
+    },
+    findSettlement: async (id: string) => pendingHolds.get(id)?.settledCredits ?? null,
+  },
+  withTransaction: async <T>(fn: () => Promise<T>): Promise<T> => {
+    const snapshot = new Map(pendingHolds);
+    try {
+      return await fn();
+    } catch (error) {
+      pendingHolds.clear();
+      for (const [id, hold] of snapshot) pendingHolds.set(id, hold);
+      throw error;
+    }
   },
   usageEventRepository: { record: (...a: unknown[]) => recordUsage(...a) },
   userRepository: {
@@ -101,8 +161,8 @@ vi.mock('@bike4mind/services', async () => {
 });
 vi.mock('@bike4mind/utils', () => ({
   aiSoundService: () => ({ generate: (...a: unknown[]) => generate(...a) }),
-  getSettingsMap: vi.fn(async () => ({})),
   getSettingsValue: (...a: unknown[]) => getSettingsValue(...a),
+  getSettingsMap: (...a: unknown[]) => getSettingsMap(...a),
 }));
 vi.mock('@server/utils/saveGeneratedAssetToFiles', () => ({
   saveGeneratedAssetToFiles: (...a: unknown[]) => saveGeneratedAssetToFiles(...a),
@@ -110,7 +170,7 @@ vi.mock('@server/utils/saveGeneratedAssetToFiles', () => ({
 
 const { upload, getSignedUrl } = vi.hoisted(() => ({ upload: vi.fn(), getSignedUrl: vi.fn() }));
 // Only the oversized-audio offload touches storage; the delivery module itself is real.
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ upload, getSignedUrl }),
 }));
 
@@ -122,11 +182,12 @@ const run = (
   body: unknown,
   apiKeyInfo?: unknown,
   userOrganizationId?: string,
-  headers: Record<string, string> = {}
+  headers: Record<string, string> = {},
+  user: Record<string, unknown> = {}
 ) => {
   const { req, res } = createMocks({ method: 'POST', body, headers });
   Object.assign(req, {
-    user: { id: 'u1', organizationId: userOrganizationId ?? null },
+    user: { id: 'u1', organizationId: userOrganizationId ?? null, ...user },
     apiKeyInfo,
     logger: { error: vi.fn(), warn: vi.fn() },
   });
@@ -134,19 +195,24 @@ const run = (
 };
 
 beforeEach(() => {
+  pendingHolds.clear();
   [
     getEffectiveApiKey,
     deductCredits,
     estimateSoundCredits,
     generate,
     getSettingsValue,
+    getSettingsMap,
     findById,
     orgFindById,
+    orgFindAccessibleById,
     userIncrement,
     orgIncrement,
     recordUsage,
     saveGeneratedAssetToFiles,
+    settlementDraw,
   ].forEach(m => m.mockReset());
+  settlementDraw.mockReturnValue(0.5);
   recordUsage.mockResolvedValue(undefined);
   // Default: persistence is a no-op that reports "not saved", so tests not
   // exercising the save path see no persisted-file headers.
@@ -154,14 +220,27 @@ beforeEach(() => {
   upload.mockReset().mockResolvedValue(undefined);
   getSignedUrl.mockReset().mockResolvedValue('https://s3/offload');
   getEffectiveApiKey.mockResolvedValue('eleven-key');
+  getSettingsMap.mockResolvedValue({});
   generate.mockResolvedValue({ audio: Buffer.from('boom'), contentType: 'audio/mpeg' });
   findById.mockResolvedValue({ id: 'u1', currentCredits: 100 });
   // Default reservation results (post-decrement balance, non-negative == funded).
   userIncrement.mockResolvedValue({ currentCredits: 88 });
   orgIncrement.mockResolvedValue({ currentCredits: 980 });
+  // A member of any org they name; tests that need the refusal override this with null.
+  orgFindAccessibleById.mockImplementation(async (_user: unknown, orgId: string) => ({ id: orgId }));
 });
 
 describe('POST /api/ai/sound-effects', () => {
+  it('passes skipCache for enforceCredits so an admin flip applies on the next request', async () => {
+    getSettingsValue.mockReturnValue(true);
+    estimateSoundCredits.mockReturnValue({ requiredCredits: 12, usdCost: 0.006, billedSeconds: 3 });
+
+    const { promise } = run({ text: 'explosion', durationSeconds: 3 });
+    await promise;
+
+    expect(getSettingsMap).toHaveBeenCalledWith(expect.anything(), { names: ['enforceCredits'], skipCache: true });
+  });
+
   it('reserves then settles the user charge on a successful generation (enforceCredits on)', async () => {
     getSettingsValue.mockReturnValue(true);
     estimateSoundCredits.mockReturnValue({ requiredCredits: 12, usdCost: 0.006, billedSeconds: 3 });
@@ -192,6 +271,57 @@ describe('POST /api/ai/sound-effects', () => {
         units: 3,
         status: 'ok',
       })
+    );
+  });
+
+  it.each([
+    [0.25, 151, [['u1', -151]]],
+    [
+      0.75,
+      150,
+      [
+        ['u1', -151],
+        ['u1', 1],
+      ],
+    ],
+  ])(
+    'settles a cost of N + 0.5 credits as N or N+1 and refunds the round-up difference (draw %s -> %s)',
+    async (draw, charged, balanceMoves) => {
+      getSettingsValue.mockReturnValue(true);
+      settlementDraw.mockReturnValue(draw);
+      estimateSoundCredits.mockReturnValue({
+        requiredCredits: 151,
+        usdCost: 150.5 / CREDITS_PER_USD_COST,
+        billedSeconds: 3,
+      });
+
+      const { res, promise } = run({ text: 'explosion', durationSeconds: 3 });
+      await promise;
+
+      expect(res._getStatusCode()).toBe(200);
+      // Held on the round-up, then only the drawn amount is kept.
+      expect(userIncrement.mock.calls).toEqual(balanceMoves);
+      expect(deductCredits.mock.calls[0][0]).toMatchObject({ credits: charged });
+      expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({ creditsCharged: charged }));
+    }
+  );
+
+  it('settles a tiny cost at 0: whole hold refunded, no ledger row, usage event still recorded', async () => {
+    getSettingsValue.mockReturnValue(true);
+    settlementDraw.mockReturnValue(0.5);
+    estimateSoundCredits.mockReturnValue({ requiredCredits: 1, usdCost: 0.00001, billedSeconds: 3 });
+
+    const { res, promise } = run({ text: 'explosion', durationSeconds: 3 });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(userIncrement.mock.calls).toEqual([
+      ['u1', -1],
+      ['u1', 1],
+    ]);
+    expect(deductCredits).not.toHaveBeenCalled();
+    expect(recordUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ feature: 'sound_effects', status: 'ok', creditsCharged: 0, costUsd: 0.00001 })
     );
   });
 
@@ -285,7 +415,7 @@ describe('POST /api/ai/sound-effects', () => {
       fileUrl: 'https://signed.example/audio.mp3',
     });
 
-    const { res, promise } = run({ text: 'rain', durationSeconds: 3 });
+    const { res, promise } = run({ text: 'rain', durationSeconds: 3, promptInfluence: 0.6 });
     await promise;
 
     expect(res._getStatusCode()).toBe(200);
@@ -294,7 +424,13 @@ describe('POST /api/ai/sound-effects', () => {
         userId: expect.any(String),
         bytes: expect.any(Buffer),
         contentType: expect.any(String),
-        generation: { generator: 'sound_effect', provider: expect.any(String), prompt: 'rain', durationSeconds: 3 },
+        generation: {
+          generator: 'sound_effect',
+          provider: expect.any(String),
+          prompt: 'rain',
+          durationSeconds: 3,
+          promptInfluence: 0.6,
+        },
       },
       expect.anything()
     );
@@ -320,6 +456,26 @@ describe('POST /api/ai/sound-effects', () => {
     expect(res.getHeader('X-B4M-Audio-Saved')).toBe('false');
     expect(res.getHeader('X-B4M-Audio-Fab-File-Id')).toBeUndefined();
     expect(res.getHeader('X-B4M-Audio-File-Url')).toBeUndefined();
+  });
+
+  it('keeps a requested prompt influence of 0', async () => {
+    estimateSoundCredits.mockReturnValue({ requiredCredits: 0, usdCost: 0, billedSeconds: 3 });
+
+    const { promise } = run({ text: 'rain', durationSeconds: 3, promptInfluence: 0 });
+    await promise;
+
+    const [{ generation }] = saveGeneratedAssetToFiles.mock.calls[0];
+    expect(generation.promptInfluence).toBe(0);
+  });
+
+  it('leaves prompt influence off the stored metadata when the request omitted it', async () => {
+    estimateSoundCredits.mockReturnValue({ requiredCredits: 0, usdCost: 0, billedSeconds: 3 });
+
+    const { promise } = run({ text: 'rain', durationSeconds: 3 });
+    await promise;
+
+    const [{ generation }] = saveGeneratedAssetToFiles.mock.calls[0];
+    expect(generation).not.toHaveProperty('promptInfluence');
   });
 
   it('rejects an invalid body (422) without resolving a key', async () => {
@@ -377,10 +533,10 @@ describe('POST /api/ai/sound-effects', () => {
     );
   });
 
-  it('still reports the charge (creditsCharged) when the settlement ledger write fails', async () => {
+  it('returns the audio and keeps the hold refundable when the settlement ledger write fails', async () => {
     getSettingsValue.mockReturnValue(true);
     estimateSoundCredits.mockReturnValue({ requiredCredits: 12, usdCost: 0.006, billedSeconds: 3 });
-    // Balance already moved at reservation; a settlement failure must NOT free the audio.
+    // A failed settlement must preserve the provider output and leave its hold refundable.
     deductCredits.mockRejectedValue(new Error('mongo down'));
 
     const { res, promise } = run({ text: 'explosion', durationSeconds: 3 });
@@ -388,10 +544,12 @@ describe('POST /api/ai/sound-effects', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(res._getData().toString()).toBe('boom');
-    // No refund: the customer was charged at reservation; only the ledger row is missing.
+    // The transaction rolled back: the sweep can refund the unresolved reservation.
     expect(userIncrement).toHaveBeenCalledTimes(1);
+    expect(pendingHolds.has('hold-1')).toBe(true);
+    expect(pendingHolds.get('hold-1')).not.toHaveProperty('settledCredits');
     expect(recordUsage).toHaveBeenCalledWith(
-      expect.objectContaining({ feature: 'sound_effects', status: 'ok', creditsCharged: 12 })
+      expect.objectContaining({ feature: 'sound_effects', status: 'ok', creditsCharged: 0 })
     );
   });
 
@@ -509,7 +667,7 @@ describe('POST /api/ai/sound-effects', () => {
     findById.mockResolvedValue({ id: 'u1', currentCredits: 0, isAdmin: true });
     orgFindById.mockResolvedValue({ id: 'org1', currentCredits: 10000, userDetails: [], users: [] });
 
-    const { res, promise } = run({ text: 'boom' }, orgKey);
+    const { res, promise } = run({ text: 'boom' }, orgKey, undefined, {}, { isAdmin: true });
     await promise;
 
     expect(res._getStatusCode()).toBe(200);
@@ -529,6 +687,69 @@ describe('POST /api/ai/sound-effects', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(orgIncrement).toHaveBeenCalled();
+  });
+
+  it('bills the organization the switcher selected for a browser/JWT caller', async () => {
+    getSettingsValue.mockReturnValue(true);
+    estimateSoundCredits.mockReturnValue({ requiredCredits: 15, usdCost: 0.0075, billedSeconds: 4 });
+    orgFindById.mockResolvedValue({ id: 'teamOrg', currentCredits: 500, userDetails: [], users: [{ userId: 'u1' }] });
+
+    // The home seat is a different org on purpose: the body's target must win.
+    const { res, promise } = run({ text: 'chime', organization_id: 'teamOrg' }, undefined, 'homeOrg');
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(orgFindAccessibleById).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }), 'teamOrg');
+    expect(orgIncrement).toHaveBeenCalledWith('teamOrg', -15);
+    expect(userIncrement).not.toHaveBeenCalled();
+    expect(recordUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ ownerId: 'teamOrg', ownerType: CreditHolderType.Organization })
+    );
+  });
+
+  it('bills the personal balance for a browser/JWT caller whose switcher is on Personal', async () => {
+    getSettingsValue.mockReturnValue(true);
+    estimateSoundCredits.mockReturnValue({ requiredCredits: 15, usdCost: 0.0075, billedSeconds: 4 });
+
+    // Explicit null = personal, even for a user who has an org seat.
+    const { res, promise } = run({ text: 'chime', organization_id: null }, undefined, 'homeOrg');
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(orgFindAccessibleById).not.toHaveBeenCalled();
+    expect(orgIncrement).not.toHaveBeenCalled();
+    expect(userIncrement).toHaveBeenCalledWith('u1', -15);
+    expect(recordUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ ownerId: 'u1', ownerType: CreditHolderType.User })
+    );
+  });
+
+  it('refuses (403) an organization the browser caller does not belong to, before money moves', async () => {
+    getSettingsValue.mockReturnValue(true);
+    estimateSoundCredits.mockReturnValue({ requiredCredits: 15, usdCost: 0.0075, billedSeconds: 4 });
+    orgFindAccessibleById.mockResolvedValue(null);
+
+    const { res, promise } = run({ text: 'chime', organization_id: 'otherOrg' });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(orgIncrement).not.toHaveBeenCalled();
+    expect(userIncrement).not.toHaveBeenCalled();
+    expect(generate).not.toHaveBeenCalled();
+  });
+
+  it('refuses (403) a user-billed API key that names an organization', async () => {
+    getSettingsValue.mockReturnValue(true);
+    estimateSoundCredits.mockReturnValue({ requiredCredits: 15, usdCost: 0.0075, billedSeconds: 4 });
+
+    const { res, promise } = run(
+      { text: 'chime', organization_id: 'teamOrg' },
+      { billingOwnerType: CreditHolderType.User }
+    );
+    await promise;
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(generate).not.toHaveBeenCalled();
   });
 
   it('bills the user pool for a user-billed API key (billingOwnerType User), ignoring the org seat', async () => {

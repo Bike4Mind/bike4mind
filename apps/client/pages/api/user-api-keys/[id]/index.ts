@@ -7,7 +7,7 @@ import { gateEmbedBrandingWrite } from '@server/entitlements/embedKeyEntitlement
 import { logEventSafe } from '@server/utils/analyticsLog';
 import { IEmbedBranding, UserApiKeyEvents } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
 interface UpdateEmbedKeyRequest {
   /** Embed key configuration (epic #41 Phase E). Only provided fields change. */

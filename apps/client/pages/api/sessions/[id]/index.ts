@@ -1,15 +1,18 @@
 import {
   SessionEvents,
+  applyWorkspaceSessionSettings,
   redactSessionForClient,
   sessionDeleteContract,
   sessionGetContract,
   sessionUpdateContract,
+  stripSurfaceOwnedFields,
 } from '@bike4mind/common';
 import { sessionService } from '@bike4mind/services';
 import {
   projectRepository,
   sessionRepository,
   userRepository,
+  organizationRepository,
   fabFileRepository,
   cacheRepository,
   sessionAgentConfigRepository,
@@ -17,8 +20,9 @@ import {
 } from '@bike4mind/database';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
+import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';
 import { logEvent } from '@server/utils/analyticsLog';
-import { getFilesStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 
 // Each verb's auth mode, required scope, and path/body validation come from its contract
 // (sessionGetContract, sessionUpdateContract, sessionDeleteContract), the single source of truth
@@ -30,7 +34,23 @@ const getHandler = nextRouteForContract(sessionGetContract).get(async (req, res)
     { db: { sessions: sessionRepository, users: userRepository } }
   );
 
-  return res.json(redactSessionForClient(session));
+  // The settings that apply, not the stored ones: a workspace-owned field is resolved at read time.
+  const doc = session as typeof session & { toJSON?: () => typeof session };
+  const plain = typeof doc.toJSON === 'function' ? doc.toJSON() : session;
+  try {
+    const effective = await applyWorkspaceSessionSettings(
+      plain,
+      { user: req.user, logger: req.logger },
+      premiumWorkspaceSessionSettings
+    );
+    return res.json(redactSessionForClient(effective));
+  } catch (error) {
+    req.logger.warn('Workspace session settings unavailable for GET; returning without owned fields', error);
+    // User-set provenance can preserve stored values during writes, but cannot make an owned
+    // value authoritative when its workspace resolver is unavailable.
+    const fallback = stripSurfaceOwnedFields(plain, premiumWorkspaceSessionSettings, { surface: plain.surface });
+    return res.json(redactSessionForClient(fallback));
+  }
 });
 
 const deleteHandler = nextRouteForContract(sessionDeleteContract).delete(async (req, res) => {
@@ -52,6 +72,7 @@ const deleteHandler = nextRouteForContract(sessionDeleteContract).delete(async (
           projects: projectRepository,
           fabFiles: fabFileRepository,
           users: userRepository,
+          organizations: organizationRepository,
           sessionAgentConfigs: sessionAgentConfigRepository,
         },
         logger: req.logger,

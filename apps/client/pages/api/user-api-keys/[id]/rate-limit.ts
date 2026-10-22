@@ -5,7 +5,7 @@ import { logEventSafe } from '@server/utils/analyticsLog';
 import { UserApiKeyEvents } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
 interface UpdateRateLimitRequest {
   requestsPerMinute?: number;

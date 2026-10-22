@@ -1,6 +1,6 @@
 import { orgGoogleDriveConnectionRepository } from '@bike4mind/database';
 import { decryptStoredToken } from '@server/integrations/google/drive/common';
-import { driveConnectionOwnerOf, type IOrgGoogleDriveConnectionDocument } from '@bike4mind/common';
+import { lakeConnectionOwnerOf, type IOrgGoogleDriveConnectionDocument } from '@bike4mind/common';
 
 /**
  * The org Drive connections that the just-revoked token actually kills.
@@ -30,7 +30,7 @@ async function orgConnectionsUsingRevokedToken(
     connections.map(async connection => {
       const withCredentials = await orgGoogleDriveConnectionRepository.findByIdWithCredentials(
         connection.id,
-        driveConnectionOwnerOf(connection)
+        lakeConnectionOwnerOf(connection)
       );
       return decryptStoredToken(withCredentials?.oauthRefreshToken) === revokedToken ? connection : null;
     })

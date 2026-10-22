@@ -1,3 +1,4 @@
+import { createCompletionCreditHolds } from '@server/billing/completionCreditHolds';
 import express, { type Request, type Response, type Express } from 'express';
 import {
   buildMetaEvent,
@@ -53,6 +54,7 @@ import {
   embedConversationRepository,
 } from '@bike4mind/database';
 import { verifyEmbedApiKey, type ApiKeyInfo } from '@server/cli/auth';
+import { isAuthInfraFailure, setAuthInfraFailureHeaders } from '@server/auth/apiKeyAuthFailure';
 import { extractBearer, resolveEmbedSessionToken } from '@server/embed/resolveEmbedSessionToken';
 import { reauthorizeIdentifiedSession } from '@server/embed/identifiedEmbedUser';
 import { isEmbedOriginAllowed } from '@server/embed/firstPartyOrigin';
@@ -60,10 +62,10 @@ import { checkApiKeyRateLimit } from '@server/utils/apiKeyRateLimitCheck';
 import { checkEmbedSessionRateLimit } from '@server/utils/embedSessionRateLimit';
 import { embedCors } from '@server/middlewares/embedCors';
 import { flattenHeaders } from '@server/utils/flattenHeaders';
-import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
+import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { hydrateEmbedAgent } from './embedAgentHydration';
 import { resolveEmbedTools } from './embedToolResolver';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { emitProcessingFailed } from '../processingFailedMetric';
 import { z } from 'zod';
 
@@ -416,6 +418,11 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       try {
         ctx = await resolveEmbedContext(headers);
       } catch (authErr) {
+        // The key check itself failed (database unreachable): retryable, not a bad credential.
+        if (isAuthInfraFailure(authErr)) {
+          setAuthInfraFailureHeaders(res, authErr);
+          return res.status(authErr.statusCode).json({ error: 'server_error', error_description: authErr.message });
+        }
         const message = authErr instanceof Error ? authErr.message : 'Unauthorized';
         return res.status(401).json({ error: 'unauthorized', error_description: message });
       }
@@ -635,6 +642,7 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
 
       try {
         await executeCompletion({
+          creditHolds: createCompletionCreditHolds(logger),
           userId: actorUserId,
           model: hydrated.model,
           messages,

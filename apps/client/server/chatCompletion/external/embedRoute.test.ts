@@ -78,7 +78,7 @@ vi.mock('@bike4mind/llm-adapters', () => ({
   getLlmByModel: vi.fn(() => ({ currentModel: '', complete: vi.fn() })),
 }));
 
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: vi.fn(() => ({})),
   getGeneratedImageStorage: vi.fn(() => ({})),
 }));
@@ -139,13 +139,17 @@ vi.mock('@server/utils/embedSessionRateLimit', () => ({ checkEmbedSessionRateLim
 const mockHydrate = vi.hoisted(() => vi.fn());
 vi.mock('./embedAgentHydration', () => ({ hydrateEmbedAgent: mockHydrate }));
 
-vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://x/%STAGE%', STAGE: 'test' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
+  Config: { MONGODB_URI: 'mongodb://x/%STAGE%', STAGE: 'test' },
+}));
 
 const mockEmitProcessingFailed = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('../processingFailedMetric', () => ({ emitProcessingFailed: mockEmitProcessingFailed }));
 
 import { registerEmbedRoutes } from './embedRoute';
 import { spendCapExceededError } from '@bike4mind/common';
+import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
+import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 
 const VALID_INFO = {
   keyId: 'key-1',
@@ -251,6 +255,33 @@ describe('POST /api/embed/chat', () => {
     expect(res.status).toBe(401);
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
     expect(mockEmitProcessingFailed).not.toHaveBeenCalled();
+  });
+
+  it('answers 503 server_error with Retry-After and no driver text when the database is unreachable', async () => {
+    mockVerifyEmbedApiKey.mockRejectedValue(
+      toApiKeyAuthError(Object.assign(new Error('connect ECONNREFUSED 10.0.0.1:27017'), { name: 'MongoNetworkError' }))
+    );
+    const res = await post(CHAT);
+    expect(res.status).toBe(503);
+    expect(res.headers.get('retry-after')).toBe('5');
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.error).toBe('server_error');
+    expect(JSON.stringify(body)).not.toMatch(/ECONNREFUSED|10\.0\.0\.1/);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('answers 500 server_error for an unexpected key-check failure', async () => {
+    mockVerifyEmbedApiKey.mockRejectedValue(toApiKeyAuthError(new Error('boom')));
+    const res = await post(CHAT);
+    expect(res.status).toBe(500);
+    expect(((await res.json()) as Record<string, unknown>).error).toBe('server_error');
+  });
+
+  it('answers 401 for an unknown key', async () => {
+    mockVerifyEmbedApiKey.mockRejectedValue(new UnauthorizedError('Invalid or expired API key'));
+    const res = await post(CHAT);
+    expect(res.status).toBe(401);
+    expect(((await res.json()) as Record<string, unknown>).error).toBe('unauthorized');
   });
 
   it('rejects a body agentId that does not match the key', async () => {

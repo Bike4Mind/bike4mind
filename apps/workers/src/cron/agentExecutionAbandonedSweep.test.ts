@@ -50,8 +50,8 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
-vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://test/%STAGE%' } }));
-vi.mock('@server/utils/cloudwatch', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://test/%STAGE%' } }));
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   emitMetric: vi.fn(async (_ns: string, name: string, value: number) => {
     metrics.push({ name, value });
   }),
@@ -68,7 +68,7 @@ vi.mock('@bike4mind/observability', () => ({
 }));
 
 import { handler, runAbandonedExecutionSweep } from './agentExecutionAbandonedSweep';
-import { ABANDONED_REPLY } from '@server/chatCompletion/questTimeoutRecovery';
+import { ABANDONED_REPLY } from '@bike4mind/server-utils/chatCompletion/questTimeoutRecovery';
 
 describe('agentExecutionAbandonedSweep - handler', () => {
   beforeEach(() => {

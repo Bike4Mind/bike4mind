@@ -41,6 +41,7 @@ import { useLLM } from '@client/app/contexts/LLMContext';
 import { useSessions, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import { isToolDenied } from '@client/app/utils/toolMapping';
+import { effectiveDisabledTools } from '@client/app/utils/effectiveDisabledTools';
 import { FC, useState, useRef, useEffect, useLayoutEffect } from 'react';
 import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
@@ -318,7 +319,7 @@ const AttachFileButton = ({
   const researchMode = useLLM(state => state.researchMode);
   const model = useLLM(state => state.model);
   const { setState: setLLM } = useLLM;
-  const showDice = tools.includes('dice_roll') && !isToolDenied('dice_roll', currentSession?.disabledTools);
+  const showDice = tools.includes('dice_roll') && !isToolDenied('dice_roll', effectiveDisabledTools(currentSession));
   const showImageOptions = isImageModel(model);
 
   const toggleAgentMode = () => setLLM({ agentMode: { enabled: !agentMode.enabled, source: 'toggle' } });

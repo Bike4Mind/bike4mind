@@ -26,7 +26,7 @@ vi.mock('../auth/ApiClient', () => ({
   },
 }));
 
-import { B4mApiClient, mapApiError } from './b4mApiClient';
+import { B4mApiClient, mapApiError, mapBobApiError } from './b4mApiClient';
 import { NotAuthenticatedError } from '../auth/ApiClient';
 
 const axiosError = (status: number, opts: { headers?: Record<string, string>; data?: unknown; code?: string } = {}) =>
@@ -116,6 +116,81 @@ describe('B4mApiClient', () => {
     mockGet.mockResolvedValue({ prompt });
     await expect(client.getBriefcasePrompt('p 1')).resolves.toEqual(prompt);
     expect(mockGet).toHaveBeenCalledWith('/api/briefcase/prompts/p%201');
+  });
+
+  it('bounds the startup solver catalog fetch well below the default request timeout', async () => {
+    mockGet.mockResolvedValue({});
+    await client.getSolverCatalog();
+    expect(mockGet).toHaveBeenCalledWith('/api/premium-optihashi/quantum/solve', { timeout: 5000 });
+  });
+
+  it('reads the scopes of its own active key by stored prefix, and none when it cannot be found', async () => {
+    mockGet.mockResolvedValue([
+      { keyPrefix: 'b4m_live_aaaaaaaa', status: 'active', scopes: ['notebooks:read'] },
+      { keyPrefix: 'b4m_live_bbbbbbbb', status: 'revoked', scopes: ['optihashi:read'] },
+      { keyPrefix: 'b4m_live_cccccccc', status: 'active', scopes: ['optihashi:read', 'optihashi:compute'] },
+    ]);
+    const own = (key: string) => new B4mApiClient('http://localhost:3000', undefined, key).getOwnKeyScopes();
+
+    await expect(own('b4m_live_cccccccc0123')).resolves.toEqual(['optihashi:read', 'optihashi:compute']);
+    await expect(own('b4m_live_bbbbbbbb0123')).resolves.toEqual([]);
+    await expect(own('b4m_live_zzzzzzzz0123')).resolves.toEqual([]);
+    expect(mockGet).toHaveBeenCalledWith('/api/user-api-keys', { timeout: 5000 });
+  });
+
+  it('prefers the longest matching stored prefix over a shorter legacy one', async () => {
+    mockGet.mockResolvedValue([
+      { keyPrefix: 'b4m_live_abc', status: 'active', scopes: ['notebooks:read'] },
+      { keyPrefix: 'b4m_live_abcdef01', status: 'active', scopes: ['optihashi:read', 'optihashi:compute'] },
+    ]);
+    const own = new B4mApiClient('http://localhost:3000', undefined, 'b4m_live_abcdef012345');
+
+    await expect(own.getOwnKeyScopes()).resolves.toEqual(['optihashi:read', 'optihashi:compute']);
+  });
+
+  it('refuses to guess between two active keys with equally long matching prefixes', async () => {
+    mockGet.mockResolvedValue([
+      { keyPrefix: 'b4m_live_abc', status: 'active', scopes: ['optihashi:read', 'optihashi:compute'] },
+      { keyPrefix: 'b4m_live_abc', status: 'active', scopes: ['notebooks:read'] },
+    ]);
+    const own = new B4mApiClient('http://localhost:3000', undefined, 'b4m_live_abc999999999');
+
+    await expect(own.getOwnKeyScopes()).resolves.toEqual([]);
+  });
+
+  it('has no key scopes to read for a login caller and makes no request', async () => {
+    mockGet.mockClear();
+    await expect(new B4mApiClient('http://localhost:3000').getOwnKeyScopes()).resolves.toBeUndefined();
+    expect(mockGet).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a non-array response', {}],
+    ['a null row', [null]],
+    ['a non-string prefix', [{ status: 'active', keyPrefix: 42, scopes: [] }]],
+    [
+      'a scope string instead of a list',
+      [{ status: 'active', keyPrefix: 'b4m_live_', scopes: 'optihashi:read optihashi:compute' }],
+    ],
+    ['a non-string scope', [{ status: 'active', keyPrefix: 'b4m_live_', scopes: [42] }]],
+  ])('rejects malformed key metadata: %s', async (_label, response) => {
+    mockGet.mockResolvedValue(response);
+    await expect(client.getOwnKeyScopes()).rejects.toThrow();
+  });
+
+  it('ignores missing and empty prefixes even on active scoped keys', async () => {
+    mockGet.mockResolvedValue([
+      { status: 'active', scopes: ['optihashi:read', 'optihashi:compute'] },
+      { status: 'active', keyPrefix: '', scopes: ['optihashi:read', 'optihashi:compute'] },
+    ]);
+    await expect(client.getOwnKeyScopes()).resolves.toEqual([]);
+  });
+
+  it('forwards solver race arguments to the solver route', async () => {
+    const body = { problem: {}, solverIds: ['greedy'], timeoutMs: 100, includeTrace: true };
+    mockPost.mockResolvedValue({ winner: { solverId: 'greedy' } });
+    await expect(client.runSolverRace(body)).resolves.toEqual({ winner: { solverId: 'greedy' } });
+    expect(mockPost).toHaveBeenCalledWith('/api/premium-optihashi/quantum/solve', body);
   });
 
   it('creates a notebook with only the provided fields', async () => {
@@ -614,6 +689,61 @@ describe('B4mApiClient', () => {
     expect(sent().body).toEqual({ name: 'Apollo', description: 'Moon' });
   });
 
+  const v1Artifact = {
+    id: 'a1',
+    type: 'html',
+    title: 'Spec',
+    description: null,
+    version: 1,
+    version_tag: null,
+    status: 'draft',
+    tags: ['docs'],
+    session_id: 's1',
+    project_id: null,
+    visibility: 'private',
+    created_at: '2026-01-01T00:00:00.000Z',
+    updated_at: '2026-01-01T00:00:00.000Z',
+    content: '<h1>Spec</h1>',
+  };
+
+  it('creates an artifact via v1, sending snake_case ids and mapping the resource', async () => {
+    mockFetch.mockResolvedValue(jsonResponse(v1Artifact, { status: 201 }));
+    const artifact = await client.createArtifact({
+      type: 'html',
+      title: 'Spec',
+      content: '<h1>Spec</h1>',
+      description: 'A spec',
+      notebookId: 's1',
+      projectId: 'p1',
+      tags: ['docs'],
+    });
+    expect(sent()).toMatchObject({ url: 'http://localhost:3000/api/v1/artifacts', method: 'POST' });
+    expect(sent().body).toStrictEqual({
+      type: 'html',
+      title: 'Spec',
+      content: '<h1>Spec</h1>',
+      description: 'A spec',
+      session_id: 's1',
+      project_id: 'p1',
+      tags: ['docs'],
+    });
+    expect(artifact).toEqual({
+      id: 'a1',
+      type: 'html',
+      title: 'Spec',
+      version: 1,
+      notebookId: 's1',
+      projectId: undefined,
+      createdAt: '2026-01-01T00:00:00.000Z',
+    });
+  });
+
+  it('sends only the required artifact fields when the optional ones are omitted', async () => {
+    mockFetch.mockResolvedValue(jsonResponse(v1Artifact, { status: 201 }));
+    await client.createArtifact({ type: 'mermaid', title: 'Flow', content: 'graph TD; A-->B', tags: [] });
+    expect(sent().body).toStrictEqual({ type: 'mermaid', title: 'Flow', content: 'graph TD; A-->B' });
+  });
+
   it('lists artifacts with flat limit/offset params and normalizes the envelope', async () => {
     mockGet.mockResolvedValue({
       artifacts: [{ id: 'artifact_a_1', title: 'A' }],
@@ -737,6 +867,16 @@ describe('mapApiError', () => {
     expect(msg).not.toContain('API key forbidden');
   });
 
+  it('surfaces the user-scope ownership message on a 403 instead of the key-scope hint', () => {
+    const msg = mapApiError(
+      axiosError(403, { data: { error: 'You can only publish to your own user scope' } }),
+      'http://x',
+      'files:write'
+    );
+    expect(msg).toContain('You can only publish to your own user scope');
+    expect(msg).not.toContain('recommended scope');
+  });
+
   it('keeps the API-key scope fallback for a non-CSRF 403 that carries a server body', () => {
     expect(mapApiError(axiosError(403, { data: { error: 'Insufficient scope' } }), 'http://x', 'files:read')).toBe(
       "API key forbidden: check the key's scopes and account access (recommended scope: files:read)"
@@ -810,5 +950,219 @@ describe('mapApiError', () => {
 
   it('falls back to the message for a non-axios error', () => {
     expect(mapApiError(new Error('boom'), 'http://x')).toBe('boom');
+  });
+});
+
+describe('B4mApiClient publish', () => {
+  let client: B4mApiClient;
+  const globalFetch = vi.fn<(input: string | URL | Request, init?: RequestInit) => Promise<Response>>();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubGlobal('fetch', globalFetch);
+    client = new B4mApiClient('http://localhost:3000', undefined, 'b4m_live_key');
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('opens a draft and finalizes it through the authenticated client', async () => {
+    mockPost.mockResolvedValueOnce({ draftId: 'd1', uploadUrls: [] }).mockResolvedValueOnce({ publicId: 'p1' });
+    const request = {
+      tier: 'user' as const,
+      scopeId: 'u1',
+      slug: 'chart-abc',
+      title: 'Chart',
+      files: [{ path: 'index.html', size: 3, mimeType: 'text/html' }],
+    };
+
+    await client.requestPublishUpload(request);
+    await client.finalizePublish('d1');
+
+    expect(mockPost).toHaveBeenNthCalledWith(1, '/api/publish/artifact/upload-url', request);
+    expect(mockPost).toHaveBeenNthCalledWith(2, '/api/publish/artifact/finalize', { draftId: 'd1' });
+  });
+
+  it('looks up an existing publication by the caller of an artifact', async () => {
+    const page = { publicId: 'p1', tier: 'user', scopeId: 'u1', slug: 'chart-1', visibility: 'public' };
+    mockGet.mockResolvedValueOnce({ artifacts: [page] }).mockResolvedValueOnce({ artifacts: [] });
+
+    await expect(client.findPublishedArtifact('artifact_1')).resolves.toEqual(page);
+    await expect(client.findPublishedArtifact('artifact_2')).resolves.toBeNull();
+
+    expect(mockGet).toHaveBeenNthCalledWith(1, '/api/publish/artifacts', {
+      params: { sourceArtifactId: 'artifact_1', limit: 1 },
+    });
+  });
+
+  it('PUTs draft bytes with plain fetch so no auth header breaks a presigned signature', async () => {
+    globalFetch.mockResolvedValue(new Response(null, { status: 200 }));
+
+    await client.uploadPublishDraftFile(
+      'https://bucket.s3.amazonaws.com/drafts/d1/index.html?X-Amz=1',
+      '<p/>',
+      'text/html'
+    );
+
+    expect(mockPut).not.toHaveBeenCalled();
+    expect(mockFetch).not.toHaveBeenCalled();
+    const [url, init] = globalFetch.mock.calls[0];
+    expect(String(url)).toBe('https://bucket.s3.amazonaws.com/drafts/d1/index.html?X-Amz=1');
+    expect(init).toEqual({ method: 'PUT', headers: { 'Content-Type': 'text/html' }, body: '<p/>' });
+  });
+
+  it('resolves a self-host relative proxy URL against the base URL', async () => {
+    globalFetch.mockResolvedValue(new Response(null, { status: 200 }));
+
+    await client.uploadPublishDraftFile('/api/publish/artifact/draft-upload?token=t', '<p/>', 'text/html');
+
+    expect(String(globalFetch.mock.calls[0][0])).toBe(
+      'http://localhost:3000/api/publish/artifact/draft-upload?token=t'
+    );
+  });
+
+  it('fails loudly when the upload is rejected', async () => {
+    globalFetch.mockResolvedValue(new Response(null, { status: 403 }));
+
+    await expect(client.uploadPublishDraftFile('https://s3/x', '<p/>', 'text/html')).rejects.toThrow(
+      'publish upload failed (403)'
+    );
+  });
+});
+
+describe('mapApiError publish slug collisions', () => {
+  it('surfaces the server message instead of a key-scope hint', () => {
+    const err = axiosError(403, {
+      data: { error: 'Only the owner can republish this slug', code: 'slug_owned_by_other' },
+    });
+
+    expect(mapApiError(err, 'http://x', 'files:write')).toBe('Only the owner can republish this slug');
+  });
+
+  it('keeps the key-scope hint for any other 403', () => {
+    expect(mapApiError(axiosError(403, { data: { error: 'nope' } }), 'http://x', 'files:write')).toContain(
+      'recommended scope: files:write'
+    );
+  });
+});
+
+describe('B4mApiClient Bob routes', () => {
+  const RUN_ID = '0b9b6c3e-6a4f-4d0e-9f1a-2c3d4e5f6a7b';
+  let client: B4mApiClient;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    client = new B4mApiClient('http://localhost:3000', undefined, 'b4m_live_key');
+  });
+
+  it.each([
+    [undefined, { url: 'acme.io', runId: RUN_ID }],
+    [null, { url: 'acme.io', runId: RUN_ID, organizationId: null }],
+    ['org1', { url: 'acme.io', runId: RUN_ID, organizationId: 'org1' }],
+  ])('starts a run billed to %s with the body %o', async (organizationId, body) => {
+    mockPost.mockResolvedValue({ ok: true, runId: RUN_ID });
+
+    await client.startBobRun({ url: 'acme.io', runId: RUN_ID, organizationId });
+
+    expect(mockPost).toHaveBeenCalledWith('/api/premium-bob/bob-run', body);
+  });
+
+  it("throws a start's 200 refusal in Bob's words", async () => {
+    mockPost.mockResolvedValue({ ok: false, error: 'Daily run limit reached.', reason: 'credits' });
+
+    await expect(client.startBobRun({ url: 'acme.io', runId: RUN_ID })).rejects.toThrow(/^Daily run limit reached\.$/);
+  });
+
+  it('starts a comparison with both sides and leaves an omitted organizationId out', async () => {
+    mockPost.mockResolvedValue({ ok: true });
+    const ids = { comparisonId: 'c', you: { url: 'a.io', runId: 'y' }, them: { url: 'b.io', runId: 't' } };
+
+    await client.startBobComparison(ids);
+
+    expect(mockPost).toHaveBeenCalledWith('/api/premium-bob/bob-compare', ids);
+  });
+
+  it('refuses an app-shaped run that lacks the agent view', async () => {
+    mockGet.mockResolvedValue({ ok: true, run: { _id: RUN_ID, status: 'ok', url: 'acme.io', mergedReport: {} } });
+
+    await expect(client.getBobRun(RUN_ID)).rejects.toThrow('without its agent view');
+  });
+
+  it('refuses an app-shaped comparison that lacks the agent view', async () => {
+    mockGet.mockResolvedValue({ ok: true, comparison: { id: 'c', you: null, them: null } });
+
+    await expect(client.getBobComparison('c')).rejects.toThrow('answered the Bob comparison without its agent view');
+  });
+
+  it("throws a re-check's 200 refusal in Bob's words", async () => {
+    mockPost.mockResolvedValue({ ok: false, error: 'Re-checks are paused.' });
+
+    await expect(client.recheckBob({ runId: RUN_ID, checkId: 'x' })).rejects.toThrow(/^Re-checks are paused\.$/);
+  });
+
+  it('posts a re-check and unwraps the reading', async () => {
+    mockPost.mockResolvedValue({ ok: true, recheck: { checkId: 'x', state: 'pass' } });
+
+    await expect(client.recheckBob({ runId: RUN_ID, checkId: 'x' })).resolves.toEqual({ checkId: 'x', state: 'pass' });
+    expect(mockPost).toHaveBeenCalledWith('/api/premium-bob/bob-recheck', { runId: RUN_ID, checkId: 'x' });
+  });
+});
+
+describe('mapBobApiError', () => {
+  it("names the scope to grant on Bob's own missing_scope 403", () => {
+    const err = axiosError(403, {
+      data: { ok: false, error: 'API key is missing the bob:run scope', code: 'missing_scope' },
+    });
+    expect(mapBobApiError(err, 'http://x', 'bob:run')).toBe(
+      'API key is missing the bob:run scope (grant the key bob:run)'
+    );
+  });
+
+  it("names the scope to grant on the host gate's 403", () => {
+    const err = new B4mApiError(
+      403,
+      { error: 'Insufficient API key permissions', required_scopes: ['bob:read'] },
+      new Headers()
+    );
+    expect(mapBobApiError(err, 'http://x', 'bob:read')).toBe(
+      'Insufficient API key permissions (grant the key bob:read)'
+    );
+  });
+
+  it('reads a scope code as a scope refusal only on a 403', () => {
+    const err = axiosError(400, { data: { error: 'Bad body', code: 'missing_scope', required_scopes: ['bob:run'] } });
+    expect(mapBobApiError(err, 'http://x', 'bob:run')).toBe('Bad body');
+  });
+
+  it('keeps the broad forbidden message for a 403 that is not about scopes', () => {
+    expect(mapBobApiError(axiosError(403, { data: { error: 'nope' } }), 'http://x', 'bob:run')).toBe(
+      "API key forbidden: check the key's scopes and account access (recommended scope: bob:run)"
+    );
+  });
+
+  it.each([429, 503])('rounds a %s retryAfterMs up to whole seconds', status => {
+    const err = axiosError(status, { data: { error: 'Wait', retryAfterMs: 1001 } });
+    expect(mapBobApiError(err, 'http://x', 'bob:run')).toBe('Wait (retry after 2s)');
+  });
+
+  it('falls back to the Retry-After header for a 429 with no retryAfterMs', () => {
+    const err = axiosError(429, { data: { error: 'Slow down' }, headers: { 'retry-after': '9' } });
+    expect(mapBobApiError(err, 'http://x', 'bob:run')).toBe('Slow down (retry after 9s)');
+  });
+
+  it('does not add a wait to another status that carries retryAfterMs', () => {
+    expect(
+      mapBobApiError(axiosError(409, { data: { error: 'Busy', retryAfterMs: 2000 } }), 'http://x', 'bob:run')
+    ).toBe('Busy');
+  });
+
+  it('says the server has no Bob on a 404 with no error body, and keeps a 404 that names what is missing', () => {
+    expect(mapBobApiError(axiosError(404, { data: '<html>404</html>' }), 'http://x', 'bob:read')).toBe(
+      'Bob is not available on the Bike4Mind server at http://x'
+    );
+    expect(
+      mapBobApiError(axiosError(404, { data: { ok: false, error: 'Run not found.' } }), 'http://x', 'bob:read')
+    ).toBe('Run not found.');
   });
 });

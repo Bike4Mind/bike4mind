@@ -4,6 +4,7 @@ import mongoose from 'mongoose';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
 import {
   createMongoReplSet,
+  settleAutoIndexBuilds,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../packages/database/src/__test__/createMongoServer';
 import { KnowledgeType, Permission } from '@bike4mind/common';
@@ -49,7 +50,7 @@ vi.mock('@server/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 vi.mock('@server/utils/starterCredits', () => ({ getOpenSignupStarterCredits: () => Promise.resolve(0) }));
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ delete: vi.fn().mockResolvedValue(undefined) }),
   getGeneratedImageStorage: () => ({ delete: vi.fn().mockResolvedValue(undefined) }),
   getPublishedArtifactsStorage: () => ({ download: vi.fn() }),
@@ -68,10 +69,11 @@ let serveHandler: Handler;
 
 beforeAll(async () => {
   replSet = await createMongoReplSet();
-  await mongoose.connect(replSet.getUri());
+  await mongoose.connect(replSet.getUri(), { autoIndex: false });
   sessionsHandler = (await import('../sessions/index')).default as unknown as Handler;
   filesHandler = (await import('../files/index')).default as unknown as Handler;
   serveHandler = (await import('../publish/serve/[...path]')).default as unknown as Handler;
+  await settleAutoIndexBuilds(mongoose);
 });
 
 afterAll(async () => {

@@ -44,7 +44,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 
-vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => null }));
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => null }));
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: () => null }));
 vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => null }));
 vi.mock('@bike4mind/database', () => ({ imageGenerationTemplateRepository: {} }));

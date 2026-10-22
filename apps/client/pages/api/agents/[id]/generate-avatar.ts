@@ -2,7 +2,7 @@ import { Request } from 'express';
 import { baseApi } from '@client/server/middlewares/baseApi';
 import { AGENTS_WRITE_SCOPES } from '@server/agents/agentScopes';
 import { assertAgentAccess } from '@server/agents/assertAgentAccess';
-import { agentRepository, imageModerationIncidentRepository } from '@bike4mind/database';
+import { agentRepository } from '@bike4mind/database';
 import { ImageModels, IAgent, ModelInfo } from '@bike4mind/common';
 import {
   BadRequestError,
@@ -21,7 +21,8 @@ import { OperationsModelService } from '@client/services/operationsModelService'
 import { KnowledgeType } from '@bike4mind/common';
 import { fabFileRepository } from '@bike4mind/database';
 import axios from 'axios';
-import imageLogger from '@server/utils/imageLogger';
+import imageLogger from '@bike4mind/server-utils/utils/imageLogger';
+import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
 
 // System prompt for creating visual prompts from agent descriptions
 const AGENT_AVATAR_PROMPT_SYSTEM = `You are an expert at translating rich personality descriptions and agent metadata into detailed visual prompts for AI image generation.
@@ -350,10 +351,10 @@ const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
     await moderateImageOrThrow({
       service: new RekognitionImageModerationService(req.logger),
       enabled: getSettingsValue('ImageModerationEnabled', moderationSettings) ?? true,
-      incidents: imageModerationIncidentRepository,
+      incidents: imageModerationIncidents,
       buffer: imageBuffer,
       mimeType: 'image/png',
-      incidentMeta: { userId, provider: 'avatar', model: 'avatar' },
+      incidentMeta: { userId, provider: 'avatar', model: 'avatar', surface: 'generation' },
       logger: req.logger,
     });
 
@@ -369,7 +370,7 @@ const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
       const filePath = fileName; // Simple filename without directories
 
       // Import storage service
-      const { getFilesStorage } = await import('@server/utils/storage');
+      const { getFilesStorage } = await import('@bike4mind/server-utils/utils/storage/index');
 
       // Upload to S3 (returns just the file path)
       const uploadedPath = await getFilesStorage().upload(imageBuffer, filePath, { ContentType: 'image/png' });
@@ -377,6 +378,13 @@ const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
       if (!uploadedPath) {
         throw new Error('Failed to upload generated image to storage');
       }
+      // The version the up-front 'clean' below covers, so this upload's own S3 event does not send it
+      // back to pending (recordLandedObject). Unknown only costs that one rescan.
+      const { normalizeETag } = await import('@server/s3/moderationScan');
+      const moderationETag = await getFilesStorage()
+        .getMetadata(uploadedPath)
+        .then(head => normalizeETag(head.etag))
+        .catch(() => undefined);
 
       // Generate a signed URL for accessing the uploaded image
       const uploadedUrl = await getFilesStorage().getSignedUrl(uploadedPath, 'get', { expiresIn: 3600 });
@@ -403,6 +411,7 @@ const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
         // transient throttle could strand it un-servable. The atomic scan-claim in
         // objectCreated makes that re-scan a no-op once it observes 'clean'.
         moderationStatus: 'clean' as const,
+        moderationETag,
         // Initialize required shareable fields
         groups: [],
         users: [],

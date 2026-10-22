@@ -1,4 +1,4 @@
-import { getAtlassianOAuthConfig } from '@server/integrations/jira/atlassianConfig';
+import { getAtlassianOAuthConfig } from '@bike4mind/server-utils/integrations/jira/atlassianConfig';
 import { decryptToken } from '@server/security/tokenEncryption';
 
 const ATLASSIAN_REVOKE_URL = 'https://auth.atlassian.com/oauth/token/revoke';

@@ -100,6 +100,8 @@ interface DataLakeExplorerProps {
    * store after creation is wiped by that reset on hosts with a longer adoption path.
    */
   createSessionForFile?: (file: IFabFileDocument) => Promise<string>;
+  /** Lets the embedding surface own lake-scoped session creation from source panels. */
+  startChatForLake?: (dataLakeId: string) => Promise<void>;
   /**
    * Whether the chat tree header shows the close (X) that turns Data Lake mode off. Default true.
    * Hosts entered/left by navigation rather than a per-session toggle pass false.
@@ -153,6 +155,7 @@ export default function DataLakeExplorer({
   chatSlot,
   chatEmbedded = false,
   createSessionForFile,
+  startChatForLake,
   showModeClose = true,
 }: DataLakeExplorerProps) {
   const { copy } = useDataLakeSurface();
@@ -241,6 +244,8 @@ export default function DataLakeExplorer({
 
   // Resolves whether the file was newly attached. An existing session must persist
   // knowledgeIds: a workbench-only add rides one send as fabFileIds, then drops out of context.
+  // (The server pins a composer message attachment itself - see pinFilesToSessionKnowledge - but
+  // never the workbench, which a stale tab could send.)
   // A freshly minted session was created already holding the file, so the workbench suffices.
   // Mid notebook switch (route on B, currentSessionId still A) there is no safe target yet.
   // The docked overlay chat is outside the notebook routes, so its current session is the target.
@@ -776,6 +781,7 @@ export default function DataLakeExplorer({
                 onRetryLakes={() => void refetchLakes()}
                 onAddFiles={soleSelectedLake?.canManage ? addFilesToSelectedLake : undefined}
                 sourceLake={soleSelectedLake ?? undefined}
+                startChatForLake={startChatForLake}
               />
             )
           }

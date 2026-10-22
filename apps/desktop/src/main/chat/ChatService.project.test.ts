@@ -143,6 +143,65 @@ describe('ChatService.updateProject', () => {
     expect(await listWorktrees(main)).toEqual(before);
   });
 
+  describe('worktree with no branch picked', () => {
+    async function masterRepository(name: string): Promise<string> {
+      const { main } = await repository(name);
+      await git(main, ['branch', '-m', 'main', 'master']);
+      return main;
+    }
+
+    it('createCodeSession defaults the base to main instead of refusing, and creates nothing', async () => {
+      const { main } = await repository('default-main-create');
+      const before = await listWorktrees(main);
+
+      const created = await service.createCodeSession({ directory: main, workspace: true });
+
+      expect(created).toMatchObject({ ok: true });
+      if (!created.ok) return;
+      expect(created.session.project).toMatchObject({ branch: 'main', workspace: true, workingDirectory: main });
+      expect(await listWorktrees(main)).toEqual(before);
+    });
+
+    it('updateProject defaults the base to main instead of refusing, and creates nothing', async () => {
+      const { main } = await repository('default-main-update');
+      const before = await listWorktrees(main);
+      const id = await codeSession(main, '');
+
+      expect(await service.updateProject({ sessionId: id, workspace: true })).toMatchObject({ ok: true });
+      expect((await service.getSession(id))?.project?.branch).toBe('main');
+      expect(await listWorktrees(main)).toEqual(before);
+    });
+
+    it('falls back to the repository default when there is no main', async () => {
+      const main = await masterRepository('default-master');
+
+      const created = await service.createCodeSession({ directory: main, workspace: true });
+
+      expect(created).toMatchObject({ ok: true });
+      if (!created.ok) return;
+      expect(created.session.project?.branch).toBe('master');
+    });
+
+    it('cuts a new branch from the base at session start and leaves the original checkout alone', async () => {
+      const { main } = await repository('default-start');
+      const created = await service.createCodeSession({ directory: main, workspace: true });
+      if (!created.ok) throw new Error(created.error);
+
+      const session = await store.get(created.session.id);
+      const failure = await (
+        service as unknown as { ensureWorkspace(s: unknown, name: string): Promise<{ error: string } | null> }
+      ).ensureWorkspace(session, 'add a thing');
+
+      expect(failure).toBeNull();
+      const project = (await service.getSession(created.session.id))?.project;
+      expect(project?.workspaceBranch).toBeTruthy();
+      expect(project?.workspaceBranch).not.toBe('main');
+      expect(project?.workingDirectory).not.toBe(main);
+      expect(await currentBranch(project?.workingDirectory ?? '')).toBe(project?.workspaceBranch);
+      expect(await currentBranch(main)).toBe('main');
+    });
+  });
+
   it('leaves nothing behind when the base is picked over and over', async () => {
     const { main } = await repository('alpha-rethink');
     const id = await codeSession(main);
@@ -445,7 +504,7 @@ describe('ChatService.updateProject', () => {
     const first = await repository('epsilon');
     const second = await repository('zeta');
     const id = await codeSession(first.main);
-    await service.addContextDirectory(id, first.container);
+    await service.shareDirectory(id, first.container);
 
     const result = await service.updateProject({ sessionId: id, directory: second.main });
 
@@ -735,7 +794,9 @@ describe('the worktree status a first turn reports', () => {
 
   beforeEach(async () => {
     store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-status-sessions-')), 'test-model');
-    events = [];
+    // Bound per test: a previous service replying late must not push into this test's events.
+    const emitted: ChatStreamEvent[] = [];
+    events = emitted;
     queueEvents = [];
     onEvent = () => undefined;
     service = new ChatService({
@@ -745,7 +806,7 @@ describe('the worktree status a first turn reports', () => {
       getApiClient: () => ({}) as AuthenticatedApiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
       emit: event => {
-        events.push(event);
+        emitted.push(event);
         onEvent(event);
       },
       queue: new MessageQueue(event => queueEvents.push(event)),

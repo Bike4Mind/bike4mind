@@ -19,14 +19,17 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: { shareable: { findAccessibleById: vi.fn() } },
 }));
 
-vi.mock('@server/utils/storage', () => {
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => {
   const storage = { download: vi.fn().mockResolvedValue(Buffer.from('file-bytes')) };
   return { getFilesStorage: () => storage };
 });
 
 vi.mock('@server/utils/invokeMcpHandler', () => ({ invokeMcpHandler: vi.fn() }));
+vi.mock('@server/utils/downloadAttachmentUrl', () => ({ downloadAttachmentUrl: vi.fn() }));
 vi.mock('@server/utils/pendingActionExecutor', () => ({ claimPendingAction: vi.fn() }));
-vi.mock('@server/integrations/github/github-repo-helper', () => ({ getSelectedRepositoriesForMcp: vi.fn() }));
+vi.mock('@bike4mind/server-utils/integrations/github/github-repo-helper', () => ({
+  getSelectedRepositoriesForMcp: vi.fn(),
+}));
 
 vi.mock('@bike4mind/slack', () => {
   class StubResource {
@@ -36,12 +39,14 @@ vi.mock('@bike4mind/slack', () => {
 });
 
 import { fabFileRepository, Quest, Session } from '@bike4mind/database';
-import { getFilesStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
+import { downloadAttachmentUrl } from '@server/utils/downloadAttachmentUrl';
+import { JIRA_UPLOAD_ATTACHMENT } from '@bike4mind/mcp/atlassian/constants';
 import { claimPendingAction } from '@server/utils/pendingActionExecutor';
-import { getSelectedRepositoriesForMcp } from '@server/integrations/github/github-repo-helper';
+import { getSelectedRepositoriesForMcp } from '@bike4mind/server-utils/integrations/github/github-repo-helper';
 import { assertMcpServerEnabled } from '@server/utils/mcpServerFlag';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import handler from '../confirm';
 
 const SESSION_ID = 'aaaaaaaaaaaaaaaaaaaaaaaa';
@@ -87,6 +92,50 @@ describe('POST /api/mcp/confirm', () => {
     expect(vi.mocked(claimPendingAction).mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(invokeMcpHandler).mock.invocationCallOrder[0]
     );
+  });
+
+  it('downloads slackFileUrl through the SSRF-guarded helper and passes its bytes as base64 content', async () => {
+    const fileBuffer = Buffer.from('x'.repeat(200));
+    vi.mocked(downloadAttachmentUrl).mockResolvedValueOnce(fileBuffer);
+    vi.mocked(Quest.findById).mockResolvedValue({
+      sessionId: SESSION_ID,
+      pendingAction: {
+        tool: JIRA_UPLOAD_ATTACHMENT,
+        params: { issueKey: 'K-1', filename: 'a.txt', slackFileUrl: 'https://h.example.com/a' },
+        ts: pendingActionTs,
+      },
+    } as never);
+
+    const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(downloadAttachmentUrl).toHaveBeenCalledTimes(1);
+    expect(downloadAttachmentUrl).toHaveBeenCalledWith('https://h.example.com/a');
+    expect(vi.mocked(invokeMcpHandler).mock.calls[0][0].toolArgs).toMatchObject({
+      content: fileBuffer.toString('base64'),
+    });
+  });
+
+  it('leaves the action unclaimed and answers generically when the attachment download fails', async () => {
+    vi.mocked(downloadAttachmentUrl).mockRejectedValueOnce(
+      new Error('URL blocked for security reasons: Hostname resolves to private IP address (127.0.0.1)')
+    );
+    vi.mocked(Quest.findById).mockResolvedValue({
+      sessionId: SESSION_ID,
+      pendingAction: {
+        tool: JIRA_UPLOAD_ATTACHMENT,
+        params: { issueKey: 'K-1', filename: 'a.txt', slackFileUrl: 'http://internal.example/a' },
+        ts: pendingActionTs,
+      },
+    } as never);
+
+    const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs });
+
+    expect(res._getStatusCode()).toBe(502);
+    expect(res._getJSONData().error).not.toContain('127.0.0.1');
+    // Left unclaimed so the user can fix the URL and retry.
+    expect(claimPendingAction).not.toHaveBeenCalled();
+    expect(invokeMcpHandler).not.toHaveBeenCalled();
   });
 
   it('refuses before claiming or invoking anything while the MCP admin flag is off', async () => {
@@ -281,16 +330,13 @@ describe('POST /api/mcp/confirm', () => {
         moderationStatus: 'pending',
       } as never);
       const slackBytes = Buffer.from('slack-bytes');
-      vi.stubGlobal(
-        'fetch',
-        vi.fn().mockResolvedValue({ ok: true, arrayBuffer: async () => new Uint8Array(slackBytes).buffer })
-      );
+      vi.mocked(downloadAttachmentUrl).mockResolvedValueOnce(slackBytes);
 
       const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs });
 
       expect(res._getStatusCode()).toBe(200);
       expect(getFilesStorage().download).not.toHaveBeenCalled();
-      expect(fetch).toHaveBeenCalledWith('https://files.example.test/a.txt');
+      expect(downloadAttachmentUrl).toHaveBeenCalledWith('https://files.example.test/a.txt');
       expect(vi.mocked(invokeMcpHandler).mock.calls[0][0].toolArgs).toMatchObject({
         content: slackBytes.toString('base64'),
       });

@@ -3,10 +3,27 @@ import { ChatModels, IMessage, type ModelInfo, ModelBackend } from '@bike4mind/c
 import { ChoiceEndReason, ChoiceStatus, ICompletionOptions, ICompletionResponseChunk } from '../backend';
 import { BaseBedrockBackend } from './base';
 
+// Bedrock rejects max_gen_len above 2048 for Llama models, even where the catalog lists more.
+// See docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-meta.html
+const MAX_GEN_LEN = 2048;
+
+// The base preflight rebuilds the payload on every prune pass with the same options object; warn once per request.
+const clampWarned = new WeakSet<Partial<ICompletionOptions>>();
+
 export default class LlamaBedrockBackend extends BaseBedrockBackend {
   /** Reports done only on response.stop_reason on the terminal chunk, so a missing terminal event means a truncated stream. */
   protected override get signalsStreamTermination(): boolean {
     return true;
+  }
+
+  // Only Llama 3 is listed with its real window; Llama 4 entries below are placeholders.
+  protected override getModelContextWindow(model: string): number {
+    const isLlama3 = model === ChatModels.LLAMA3_INSTRUCT_8B_V1 || model === ChatModels.LLAMA3_INSTRUCT_70B_V1;
+    return isLlama3 ? 8000 : 0;
+  }
+
+  protected override getEffectiveMaxOutputTokens(options: Partial<ICompletionOptions>): number {
+    return Math.min(Math.max(options.maxTokens || MAX_GEN_LEN, 1), MAX_GEN_LEN);
   }
 
   async getModelInfo(): Promise<ModelInfo[]> {
@@ -115,6 +132,16 @@ export default class LlamaBedrockBackend extends BaseBedrockBackend {
     // Add stop sequences to prevent the model from continuing the conversation artificially
     const stopSequences = ['Human:', '\nHuman:', '\n\nHuman:', 'Assistant:', '\nAssistant:'];
 
+    const maxGenLen = this.getEffectiveMaxOutputTokens(options);
+    if (options.maxTokens && options.maxTokens !== maxGenLen && !clampWarned.has(options)) {
+      clampWarned.add(options);
+      Logger.globalInstance.warn('[LlamaBedrockBackend] maxTokens outside Bedrock max_gen_len range, clamping', {
+        model,
+        requested: options.maxTokens,
+        clamped: maxGenLen,
+      });
+    }
+
     const payload = {
       modelId: model,
       contentType: 'application/json',
@@ -123,7 +150,7 @@ export default class LlamaBedrockBackend extends BaseBedrockBackend {
         prompt: prompt,
         temperature: options.temperature || 0.7,
         top_p: options.topP || 0.9,
-        max_gen_len: options.maxTokens || 2048,
+        max_gen_len: maxGenLen,
         stop: stopSequences,
       }),
     };

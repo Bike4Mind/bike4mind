@@ -200,8 +200,16 @@ export function toolsForRequest(options: {
    * tools, the work happens on the server and touches no file the user owns.
    */
   web?: boolean;
-  /** A user is present to answer: main conversations, not spawned sessions. */
+  /**
+   * A user is present to answer a card: every turn of a main conversation, and a turn the user
+   * typed into a spawned one.
+   */
   ask?: boolean;
+  /**
+   * The host keeps a suggestion tray for this conversation, which a spawned session never has even
+   * when the user is typing in it. Defaults to `ask`.
+   */
+  suggestions?: boolean;
   /**
    * Schemas contributed by the user's connected MCP servers, already namespaced and framed
    * (see chat/mcp/names.ts). They are appended rather than merged into a family above because
@@ -220,7 +228,7 @@ export function toolsForRequest(options: {
     ...(options.roots.length > 0 && options.explore ? [exploreTool] : []),
     ...(options.media ? MEDIA_TOOLS : []),
     ...(options.host ? HOST_TOOLS : []),
-    ...(options.host && options.ask ? SUGGESTION_TOOLS : []),
+    ...(options.host && (options.suggestions ?? options.ask) ? SUGGESTION_TOOLS : []),
     ...(options.browser ? BROWSER_TOOLS : []),
     ...(options.memory ? MEMORY_TOOLS : []),
     ...(options.skills ? SKILL_TOOLS : []),

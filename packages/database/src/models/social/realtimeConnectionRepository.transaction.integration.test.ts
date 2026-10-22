@@ -1,7 +1,7 @@
 import { withTransaction } from '@bike4mind/db-core';
 import mongoose, { Types } from 'mongoose';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { createMongoReplSet } from '../../__test__/createMongoServer';
+import { createMongoReplSet, settleAutoIndexBuilds } from '../../__test__/createMongoServer';
 import User from '../auth/UserModel';
 import { Connection } from './ConnectionModel';
 import { QuerySubscription } from './QuerySubscriptionModel';
@@ -18,7 +18,8 @@ let server: Awaited<ReturnType<typeof createMongoReplSet>>;
 
 beforeAll(async () => {
   server = await createMongoReplSet();
-  await mongoose.connect(server.getUri());
+  await mongoose.connect(server.getUri(), { autoIndex: false });
+  await settleAutoIndexBuilds(mongoose);
   // Collections cannot be created implicitly inside a transaction on every server version.
   await Promise.all([User.createCollection(), Connection.createCollection(), QuerySubscription.createCollection()]);
 }, 60000);

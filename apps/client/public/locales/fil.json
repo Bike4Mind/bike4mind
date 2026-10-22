@@ -30,7 +30,8 @@
     "title": "Tala ng Pagbabago"
   },
   "feedback": {
-    "send": "Magpadala ng Feedback"
+    "send": "Magpadala ng Feedback",
+    "rollupTitle": "Ang iyong feedback"
   },
   "terms_policies": "Mga Tuntunin at Patakaran",
   "login": "Mag-login",
@@ -166,7 +167,8 @@
     "messages": "Mga mensahe",
     "invites": "Mga imbitasyon",
     "sendMessage": "Magpadala ng mensahe",
-    "noMessages": "Walang mga mensahe"
+    "noMessages": "Walang mga mensahe",
+    "title_unread": "Inbox, may hindi pa nababasa"
   },
   "addSomething": "Idagdag ang {{ name }}",
   "deleteAllSomething": "Burahin lahat ng {{ name }}",
@@ -286,7 +288,30 @@
     "renews_on": "Magpapatuloy sa {{ date }}"
   },
   "billing": {
-    "title": "Pagsingil"
+    "title": "Pagsingil",
+    "balance": "Balanse",
+    "credits_heading": "Mag-top up ng credits",
+    "credits_sub": "Mga isahang pack na idinadagdag sa iyong balanse. Hindi kailangan ng subscription.",
+    "credits_sub_with_plan": "Mga isahang pack na dagdag sa iyong buwanang allowance.",
+    "free_plan": "Libre",
+    "free_plan_detail": "Magbayad ayon sa paggamit gamit ang mga credit pack",
+    "low_org": "Maaaring magdagdag ng credits sa account na ito ang isang admin ng organisasyon.",
+    "low_with_plan": "Mag-top up para makapagpatuloy hanggang mag-renew ang iyong allowance.",
+    "low_without_plan": "Nagdadagdag ng credits ang plan bawat buwan; agad kang tino-top up ng pack.",
+    "payment_failed": "Nabigo ang bayad",
+    "plan": "Plan",
+    "plan_fallback": "Subscription",
+    "plan_unavailable": "Hindi available",
+    "plan_unavailable_detail": "Hindi namin na-load ang iyong plan.",
+    "plans_change": "Ang iyong plan",
+    "plans_change_sub": "Pamahalaan, palitan, o kanselahin ang iyong subscription.",
+    "plans_heading": "Mga plan",
+    "plans_heading_sub": "Buwanang plan na may credit allowance.",
+    "plans_upgrade": "Mag-upgrade",
+    "plans_upgrade_sub": "Kumuha ng buwanang credit allowance sa halip na mag-top up nang mano-mano.",
+    "retry": "Subukan muli",
+    "see_plans": "Tingnan ang mga plan",
+    "top_up": "Mag-top up"
   },
   "credits": {
     "title": "Mga Kredito",
@@ -314,7 +339,8 @@
     "usage_pattern": "Batay sa iyong pattern ng paggamit mula sa nakaraang {{days}} araw",
     "credits_used": "Ginamit na mga Kredito",
     "credits_purchased": "Biniling mga Kredito",
-    "net_credits": "Netong Kredito"
+    "net_credits": "Netong Kredito",
+    "unit": "credits"
   },
   "time": {
     "last_7_days": "Huling 7 araw",
@@ -362,7 +388,15 @@
       "completed": "Kumpleto",
       "pending": "Naghihintay",
       "failed": "Nabigo"
-    }
+    },
+    "buy_pack": "Bumili ng {{credits}} credits sa halagang {{price}}",
+    "choose_pack": "Pumili ng credit pack",
+    "history_usage_hint": "Mga pagbili lang ang nakalista rito.",
+    "organization_credits_active": "Aktibo ang credits ng organisasyon",
+    "rate_per_thousand": "{{rate}} bawat 1,000 credits",
+    "see_usage": "Tingnan ang paggamit",
+    "shared_rate": "Pare-pareho ang presyo ng bawat pack: {{rate}} bawat 1,000 credits.",
+    "switch_to_personal": "Lumipat sa iyong personal na account para bumili ng credits para sa personal na gamit."
   },
   "settings": {
     "title": "Mga Setting",
@@ -543,7 +577,9 @@
     "personal": "Personal",
     "business": "Negosyo",
     "team": "Koponan",
-    "enterprise": "Negosyo"
+    "enterprise": "Negosyo",
+    "audience_label": "Uri ng plan",
+    "includes": "Kasama"
   },
   "agents": {
     "title": "Mga Ahente",
@@ -572,5 +608,13 @@
   "skills": {
     "title": "Mga Kasanayan",
     "command_palette_description": "Pamahalaan ang mga reusable na template ng instruksyon"
+  },
+  "apiKeys": {
+    "title": "Mga API key"
+  },
+  "connections": {
+    "menuTooltip": "Mga integration tulad ng Google Drive at Slack, kasama ang mga API key para sa sarili mong code",
+    "sections": "Mga seksyon ng mga koneksyon",
+    "title": "Mga koneksyon"
   }
 }

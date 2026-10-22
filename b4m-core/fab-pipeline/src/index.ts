@@ -7,6 +7,7 @@ export * from './embeddings';
 export * from './ingest';
 export { isPlaceholderTitle } from './pageTitle';
 export * from './ssrfProtection';
+export * from './ssrfSafeDownload';
 export * from './storage';
 export { BaseSearchIndex } from './dataLake/BaseSearchIndex';
 export { OpenSearchClient } from './dataLake/opensearchClient';

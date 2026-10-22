@@ -32,6 +32,8 @@ import { GeminiBackend } from './geminiBackend';
 interface MockUsage {
   input: number;
   output: number;
+  /** Emitted in the provider's native reasoning field only when set. */
+  reasoning?: number;
 }
 
 interface CapturedCb {
@@ -131,6 +133,31 @@ interface BackendSpec {
   turnWithText: (text: string, usage: MockUsage) => unknown[];
 }
 
+function anthropicUsage(usage: MockUsage) {
+  return {
+    input_tokens: usage.input,
+    output_tokens: usage.output,
+    ...(usage.reasoning !== undefined ? { output_tokens_details: { thinking_tokens: usage.reasoning } } : {}),
+  };
+}
+
+function openaiChatUsage(usage: MockUsage) {
+  return {
+    prompt_tokens: usage.input,
+    completion_tokens: usage.output,
+    total_tokens: usage.input + usage.output,
+    ...(usage.reasoning !== undefined ? { completion_tokens_details: { reasoning_tokens: usage.reasoning } } : {}),
+  };
+}
+
+function geminiMockUsage(usage: MockUsage) {
+  return {
+    promptTokenCount: usage.input,
+    candidatesTokenCount: usage.output,
+    ...(usage.reasoning !== undefined ? { thoughtsTokenCount: usage.reasoning } : {}),
+  };
+}
+
 // Anthropic SDK: this._api.messages.create(...) returns an async iterable
 // of MessageStreamEvent objects with content_block_*, message_delta, etc.
 const anthropicSpec: BackendSpec = {
@@ -168,7 +195,7 @@ const anthropicSpec: BackendSpec = {
       delta: { type: 'input_json_delta', partial_json: JSON.stringify(args) },
     },
     { type: 'content_block_stop', index: 0 },
-    { type: 'message_delta', usage: { input_tokens: usage.input, output_tokens: usage.output } },
+    { type: 'message_delta', usage: anthropicUsage(usage) },
     { type: 'message_stop' },
   ],
   turnWithText: (text, usage) => [
@@ -176,7 +203,7 @@ const anthropicSpec: BackendSpec = {
     { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
     { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } },
     { type: 'content_block_stop', index: 0 },
-    { type: 'message_delta', usage: { input_tokens: usage.input, output_tokens: usage.output } },
+    { type: 'message_delta', usage: anthropicUsage(usage) },
     { type: 'message_stop' },
   ],
 };
@@ -237,22 +264,14 @@ const openaiSpec: BackendSpec = {
     },
     {
       choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }],
-      usage: {
-        prompt_tokens: usage.input,
-        completion_tokens: usage.output,
-        total_tokens: usage.input + usage.output,
-      },
+      usage: openaiChatUsage(usage),
     },
   ],
   turnWithText: (text, usage) => [
     { choices: [{ index: 0, delta: { content: text }, finish_reason: null }], usage: null },
     {
       choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
-      usage: {
-        prompt_tokens: usage.input,
-        completion_tokens: usage.output,
-        total_tokens: usage.input + usage.output,
-      },
+      usage: openaiChatUsage(usage),
     },
   ],
 };
@@ -323,13 +342,13 @@ const geminiSpec: BackendSpec = {
   turnWithToolCall: (name, _id, args, usage) => [
     {
       candidates: [{ content: { parts: [{ functionCall: { name, args } }] } }],
-      usageMetadata: { promptTokenCount: usage.input, candidatesTokenCount: usage.output },
+      usageMetadata: geminiMockUsage(usage),
     },
   ],
   turnWithText: (text, usage) => [
     {
       candidates: [{ content: { parts: [{ text }] } }],
-      usageMetadata: { promptTokenCount: usage.input, candidatesTokenCount: usage.output },
+      usageMetadata: geminiMockUsage(usage),
     },
   ],
 };
@@ -889,3 +908,308 @@ describe('XAIBackend reasoning tokens', () => {
     }
   );
 });
+
+// xAI is excluded: its adapter does not report a reasoning count yet.
+describe.each([anthropicSpec, openaiSpec, geminiSpec])('$name reasoning tokens', spec => {
+  it('reports the native reasoning count on the terminal cb', async () => {
+    const { backend, setMockSequence } = spec.build();
+    setMockSequence([spec.turnWithText('Hi.', { input: 50, output: 800, reasoning: 780 })]);
+    const { calls, cb } = captureCb();
+
+    await backend.complete(spec.model, [{ role: 'user', content: 'hi' }], { stream: true, tools: [] }, cb);
+
+    expect(finalCbInfo(calls)?.reasoningTokens).toBe(780);
+    // The count is a SUBSET of output, never added to it. Gemini's adapter already folds
+    // thoughtsTokenCount into its output (geminiOutputTokens), so its reported output is 800 + 780.
+    expect(finalCbInfo(calls)?.outputTokens).toBe(spec.name === 'GeminiBackend' ? 1580 : 800);
+  });
+
+  it('sums the reasoning count across tool turns', async () => {
+    const { backend, setMockSequence } = spec.build();
+    setMockSequence([
+      spec.turnWithToolCall('add', 'tool_r1', { a: 2, b: 3 }, { input: 100, output: 20, reasoning: 12 }),
+      spec.turnWithText('The result is 5.', { input: 200, output: 30, reasoning: 7 }),
+    ]);
+    const { calls, cb } = captureCb();
+
+    await backend.complete(
+      spec.model,
+      [{ role: 'user', content: 'What is 2 + 3?' }],
+      { stream: true, tools: [ADD_TOOL], executeTools: true },
+      cb
+    );
+
+    expect(finalCbInfo(calls)?.reasoningTokens).toBe(19);
+  });
+
+  it('keeps an earlier turn count when the terminal turn reports none', async () => {
+    const { backend, setMockSequence } = spec.build();
+    setMockSequence([
+      spec.turnWithToolCall('add', 'tool_r2', { a: 2, b: 3 }, { input: 100, output: 20, reasoning: 12 }),
+      spec.turnWithText('The result is 5.', { input: 200, output: 30 }),
+    ]);
+    const { calls, cb } = captureCb();
+
+    await backend.complete(
+      spec.model,
+      [{ role: 'user', content: 'What is 2 + 3?' }],
+      { stream: true, tools: [ADD_TOOL], executeTools: true },
+      cb
+    );
+
+    expect(finalCbInfo(calls)?.reasoningTokens).toBe(12);
+  });
+
+  it('omits the field entirely when the provider reports no count', async () => {
+    const { backend, setMockSequence } = spec.build();
+    setMockSequence([
+      spec.turnWithToolCall('add', 'tool_r3', { a: 2, b: 3 }, { input: 100, output: 20 }),
+      spec.turnWithText('The result is 5.', { input: 200, output: 30 }),
+    ]);
+    const { calls, cb } = captureCb();
+
+    await backend.complete(
+      spec.model,
+      [{ role: 'user', content: 'What is 2 + 3?' }],
+      { stream: true, tools: [ADD_TOOL], executeTools: true },
+      cb
+    );
+
+    for (const call of calls) {
+      expect(call.info).not.toHaveProperty('reasoningTokens');
+    }
+  });
+
+  it('reports the count on the executeTools: false leaf', async () => {
+    // /v1/completions runs with executeTools: false by default, so the frame that ends a
+    // tool-calling turn comes from this leaf - the recursion the other tests drive is skipped.
+    const { backend, setMockSequence, callCount } = spec.build();
+    setMockSequence([
+      spec.turnWithToolCall('add', 'tool_leaf', { a: 2, b: 3 }, { input: 100, output: 20, reasoning: 12 }),
+    ]);
+    const { calls, cb } = captureCb();
+
+    await backend.complete(
+      spec.model,
+      [{ role: 'user', content: 'Add.' }],
+      { stream: true, tools: [ADD_TOOL], executeTools: false },
+      cb
+    );
+
+    expect(callCount()).toBe(1);
+    expect(finalCbInfo(calls)?.reasoningTokens).toBe(12);
+  });
+});
+
+// ─── Non-streaming reasoning ───────────────────────────────────────
+//
+// `stream` defaults to true, but a caller can pass `stream: false`. The non-streaming branch
+// reads usage from the full response, threads the accumulator through its own tool recursion
+// (or executeTools: false leaf) and emits the total - none of which the streaming specs above
+// touch. Each spec mocks the SDK's non-stream entry point, one payload per request.
+
+interface NonStreamBackendSpec {
+  name: string;
+  model: string;
+  build: (turns: unknown[]) => { backend: ICompletionBackend; callCount: () => number };
+  toolTurn: (id: string, args: Record<string, unknown>, usage: MockUsage) => unknown;
+  textTurn: (text: string, usage: MockUsage) => unknown;
+  /** Visible text plus a call to an end-of-turn tool, so the loop ends without another request. */
+  endTurn: (id: string, text: string, usage: MockUsage) => unknown;
+}
+
+const anthropicNonStreamSpec: NonStreamBackendSpec = {
+  name: 'AnthropicBackend',
+  model: 'claude-sonnet-4-5-20250929',
+  build: turns => {
+    const backend = new AnthropicBackend('test-key');
+    let calls = 0;
+    (backend as unknown as { _api: { messages: { create: () => Promise<unknown> } } })._api = {
+      messages: {
+        create: async () => {
+          const turn = turns[calls++];
+          if (!turn) throw new Error(`No mock for call ${calls}`);
+          return turn;
+        },
+      },
+    };
+    return { backend, callCount: () => calls };
+  },
+  toolTurn: (id, args, usage) => ({
+    content: [{ type: 'tool_use', id, name: 'add', input: args }],
+    usage: anthropicUsage(usage),
+    stop_reason: 'tool_use',
+  }),
+  textTurn: (text, usage) => ({
+    content: [{ type: 'text', text }],
+    usage: anthropicUsage(usage),
+    stop_reason: 'end_turn',
+  }),
+  endTurn: (id, text, usage) => ({
+    content: [
+      { type: 'text', text },
+      { type: 'tool_use', id, name: 'finish', input: {} },
+    ],
+    usage: anthropicUsage(usage),
+    stop_reason: 'tool_use',
+  }),
+};
+
+const openaiNonStreamSpec: NonStreamBackendSpec = {
+  name: 'OpenAIBackend',
+  model: 'gpt-4o',
+  build: turns => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const backend = new OpenAIBackend({ openai: 'test-key' } as any);
+    let calls = 0;
+    (backend as unknown as { _api: { chat: { completions: { create: () => Promise<unknown> } } } })._api = {
+      chat: {
+        completions: {
+          create: async () => {
+            const turn = turns[calls++];
+            if (!turn) throw new Error(`No mock for call ${calls}`);
+            return turn;
+          },
+        },
+      },
+    };
+    return { backend, callCount: () => calls };
+  },
+  toolTurn: (id, args, usage) => ({
+    choices: [
+      {
+        index: 0,
+        message: {
+          role: 'assistant',
+          content: null,
+          tool_calls: [{ id, type: 'function', function: { name: 'add', arguments: JSON.stringify(args) } }],
+        },
+        finish_reason: 'tool_calls',
+      },
+    ],
+    usage: openaiChatUsage(usage),
+  }),
+  textTurn: (text, usage) => ({
+    choices: [{ index: 0, message: { role: 'assistant', content: text }, finish_reason: 'stop' }],
+    usage: openaiChatUsage(usage),
+  }),
+  endTurn: (id, text, usage) => ({
+    choices: [
+      {
+        index: 0,
+        message: {
+          role: 'assistant',
+          content: text,
+          tool_calls: [{ id, type: 'function', function: { name: 'finish', arguments: '{}' } }],
+        },
+        finish_reason: 'tool_calls',
+      },
+    ],
+    usage: openaiChatUsage(usage),
+  }),
+};
+
+const geminiNonStreamSpec: NonStreamBackendSpec = {
+  name: 'GeminiBackend',
+  model: 'gemini-2.5-flash',
+  build: turns => {
+    const backend = new GeminiBackend('test-key');
+    let calls = 0;
+    (backend as unknown as { _api: { models: { generateContent: () => Promise<unknown> } } })._api = {
+      models: {
+        generateContent: async () => {
+          const turn = turns[calls++];
+          if (!turn) throw new Error(`No mock for call ${calls}`);
+          return turn;
+        },
+      },
+    };
+    return { backend, callCount: () => calls };
+  },
+  toolTurn: (_id, args, usage) => ({
+    candidates: [{ content: { parts: [{ functionCall: { name: 'add', args } }] } }],
+    usageMetadata: geminiMockUsage(usage),
+  }),
+  textTurn: (text, usage) => ({
+    candidates: [{ content: { parts: [{ text }] } }],
+    usageMetadata: geminiMockUsage(usage),
+  }),
+  endTurn: (_id, text, usage) => ({
+    candidates: [{ content: { parts: [{ text }, { functionCall: { name: 'finish', args: {} } }] } }],
+    usageMetadata: geminiMockUsage(usage),
+  }),
+};
+
+describe.each([anthropicNonStreamSpec, openaiNonStreamSpec, geminiNonStreamSpec])(
+  '$name non-streaming reasoning',
+  spec => {
+    it('reports the count on a single turn', async () => {
+      const { backend } = spec.build([spec.textTurn('Hi.', { input: 50, output: 30, reasoning: 22 })]);
+      const { calls, cb } = captureCb();
+
+      await backend.complete(spec.model, [{ role: 'user', content: 'hi' }], { stream: false, tools: [] }, cb);
+
+      expect(finalCbInfo(calls)?.reasoningTokens).toBe(22);
+    });
+
+    it('sums the count across tool turns', async () => {
+      const { backend, callCount } = spec.build([
+        spec.toolTurn('tool_ns1', { a: 2, b: 3 }, { input: 100, output: 20, reasoning: 12 }),
+        spec.textTurn('The result is 5.', { input: 200, output: 30, reasoning: 7 }),
+      ]);
+      const { calls, cb } = captureCb();
+
+      await backend.complete(
+        spec.model,
+        [{ role: 'user', content: 'What is 2 + 3?' }],
+        { stream: false, tools: [ADD_TOOL], executeTools: true },
+        cb
+      );
+
+      expect(callCount()).toBe(2);
+      expect(finalCbInfo(calls)?.reasoningTokens).toBe(19);
+    });
+
+    it('reports the count on the executeTools: false leaf', async () => {
+      const { backend, callCount } = spec.build([
+        spec.toolTurn('tool_ns2', { a: 2, b: 3 }, { input: 100, output: 20, reasoning: 12 }),
+      ]);
+      const { calls, cb } = captureCb();
+
+      await backend.complete(
+        spec.model,
+        [{ role: 'user', content: 'Add.' }],
+        { stream: false, tools: [ADD_TOOL], executeTools: false },
+        cb
+      );
+
+      expect(callCount()).toBe(1);
+      expect(finalCbInfo(calls)?.reasoningTokens).toBe(12);
+    });
+  }
+);
+
+// A round that carries answer text and calls only an end-of-turn tool ends the loop there
+// (shouldEndTurnAfterTools), so that round's emit is the terminal one - a branch the
+// single-turn, summed-tool-turn and executeTools: false cases above never reach.
+describe.each([anthropicNonStreamSpec, openaiNonStreamSpec, geminiNonStreamSpec])(
+  '$name non-streaming reasoning on an end-of-turn tool round',
+  spec => {
+    it('carries the count on the terminal emit', async () => {
+      const { backend, callCount } = spec.build([
+        spec.endTurn('tool_et1', 'The result is 5.', { input: 200, output: 30, reasoning: 12 }),
+      ]);
+      const { calls, cb } = captureCb();
+
+      await backend.complete(
+        spec.model,
+        [{ role: 'user', content: 'Finish.' }],
+        { stream: false, tools: [FINISH_TOOL], executeTools: true },
+        cb
+      );
+
+      expect(callCount()).toBe(1);
+      expect(finalCbInfo(calls)?.reasoningTokens).toBe(12);
+    });
+  }
+);

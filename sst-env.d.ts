@@ -317,6 +317,10 @@ declare module "sst" {
       "type": "sst.sst.Secret"
       "value": string
     }
+    "MEMORY_KEY_SECRET": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
     "SECRET_ENCRYPTION_KEY": {
       "type": "sst.sst.Secret"
       "value": string
@@ -376,11 +380,6 @@ declare module "sst" {
     "SecurityAlerts": {
       "arn": string
       "type": "sst.aws.SnsTopic"
-    }
-    "SlackEventBus": {
-      "arn": string
-      "name": string
-      "type": "sst.aws.Bus"
     }
     "SlackQuestProcessor": {
       "name": string

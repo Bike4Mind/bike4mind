@@ -19,13 +19,14 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: h.logEvent }));
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ upload: vi.fn(), getSignedUrl: h.signUrl }),
 }));
 
 // The spy that stands in for every FabFile write. The service is mocked below, so a call here can
 // only come from the route persisting a second time on its own.
 vi.mock('@bike4mind/database', () => ({
+  organizationRepository: {},
   adminSettingsRepository: {},
   scopedSettingsRepository: {},
   dataLakeRepository: {},

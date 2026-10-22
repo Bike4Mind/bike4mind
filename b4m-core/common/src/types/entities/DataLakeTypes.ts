@@ -249,6 +249,13 @@ export const isLakeIngestable = (status?: DataLakeStatus): status is LakeIngesta
 export const acceptsConnectorContent = (origin?: DataLakeOrigin): boolean => origin === 'connector-fed';
 
 /**
+ * True for the `gh-<hex>:` prefix a GitHub connector lake is created with (minted in
+ * apps/client/pages/api/data-lakes/github-connect.ts): an internal key, so UI chips hide it.
+ */
+export const isGeneratedLakeTagPrefix = (lake: { fileTagPrefix?: string; origin?: DataLakeOrigin }): boolean =>
+  lake.origin === 'connector-fed' && /^gh-[0-9a-f]+:$/.test(lake.fileTagPrefix ?? '');
+
+/**
  * What a terminal lifecycle settle may write alongside the status it settles on: the spent
  * file-sweep marks it clears, and the actor stamp from `lakeConfigWriteStamp`. Deliberately narrow
  * - a settle records the OUTCOME of a transition, so widening this to arbitrary lake fields would
@@ -660,6 +667,7 @@ export interface IDataLake {
 export interface IDataLakeDocument extends IDataLake, IMongoDocument {}
 
 export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> {
+  findByIds(ids: string[]): Promise<IDataLakeDocument[]>;
   /**
    * Resolve a lake by slug. Slug is unique only per scope (organizationId), so pass the
    * caller's membership set to disambiguate: a lake in one of the caller's own orgs is
@@ -795,8 +803,8 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    *
    * `ctx.administeredOrgIds` is the org-ADMIN arm and is not interchangeable with
    * `ctx.organizationIds`: it grants no more than the single gate already grants (`canManageLake`
-   * rung 4 admits the same principal, and manage implies read), it exists so the succession roles -
-   * team manager, appointed admin - can DISCOVER the org lakes they may already manage. Absent or
+   * rung 4 admits the same principal, and manage implies read), it exists so the succession role -
+   * an org manager (`adminUserIds`) - can DISCOVER the org lakes they may already manage. Absent or
    * empty simply adds no arm.
    */
   findAccessible(
@@ -935,12 +943,13 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
     extra?: Pick<LakeSettleFields, 'lastUpdatedByUserId'>
   ): Promise<IDataLakeDocument | null>;
   /**
-   * The caller's still-unbound connector-first lake in that org (draft, `pendingConnector` set, name
+   * The caller's still-unbound connector-first lake in that org, or among their personal lakes when
+   * `organizationId` is undefined (draft, `pendingConnector` set, name
    * still exactly `placeholder`), so a retried connect reuses it instead of inserting another.
    */
   findPendingPlaceholderLake(
     userId: string,
-    organizationId: string,
+    organizationId: string | undefined,
     connector: DataLakePendingConnector,
     placeholder: string
   ): Promise<IDataLakeDocument | null>;
@@ -1635,6 +1644,12 @@ export interface DataLakeDocumentPurgeReceipt {
    * `filePath` so the row it keeps stays addressable, and counts that un-attempted key here too.
    */
   storageObjectsRemaining: number;
+  /**
+   * The file is a moderation evidence hold (see isModerationEvidenceHold), so the sweep kept its row
+   * and every stored object on purpose. `verified` is false, but a retry cannot change that until the
+   * hold is cleared - a caller must not present it as a failure to retry. Absent on legacy receipts.
+   */
+  heldForModeration?: boolean;
   /**
    * What happened to the separate retrieval index. NOT read back - the port has no read operation.
    * `purged`: a wired index accepted the removal without throwing. `collocated`: this deployment

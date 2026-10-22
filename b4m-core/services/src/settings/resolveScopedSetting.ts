@@ -24,10 +24,9 @@ import { Logger } from '@bike4mind/observability';
  * definition's `scope` metadata (`settableAt`), so a setting with no metadata resolves to exactly its
  * platform value at every scope - which is why every existing platform-only consumer is unchanged.
  *
- * Contract, mirroring `resolveSearchBudgets`: this NEVER throws. Every failure - a missing owner rung,
- * an unparseable override, a scoped-store outage - degrades to the next wider scope (ultimately the
- * platform default) and warns, because the symptom of a silent failure ("a lever the operator set did
- * nothing") is exactly what the epic's "a lever with no consumer is worse than no lever" rule forbids.
+ * By default, failed reads and unparseable overrides fall back to the next wider scope. Security
+ * callers opt into `readFailureMode: 'throw'` so an unavailable policy cannot grant access through
+ * a wider fallback. Missing settings still resolve to their registered defaults.
  */
 
 /** A narrower-rung override that existed but was skipped during resolution, and why. */
@@ -58,6 +57,11 @@ export interface ResolvedSetting<T> {
  */
 export interface ScopedSettingEntry<T> extends ResolvedSetting<T> {
   stored: boolean;
+  /**
+   * Set when the platform row holds a non-blank value that failed the setting's schema, so `value`
+   * is the coded default despite a stored row. Separates "dropped" from "never set" (both `stored: false`).
+   */
+  platformRejected?: true;
 }
 
 /** The repositories the resolver reads. `scopedSettings` is optional: absent means platform-only. */
@@ -65,6 +69,12 @@ export interface ScopedSettingsDb {
   adminSettings: Pick<IAdminSettingsRepository, 'findBySettingNames' | 'findAll'>;
   scopedSettings?: Pick<IScopedSettingsRepository, 'findOverrides'>;
 }
+
+export type ScopedSettingResolveOptions = {
+  logger?: Logger;
+  /** Security decisions must reject failed reads instead of trusting a wider fallback. */
+  readFailureMode?: 'fallback' | 'throw';
+};
 
 function scopeIdForLevel(scope: SettingScope, level: SettingScopeLevel): string | undefined {
   switch (level) {
@@ -208,16 +218,15 @@ async function resolveAll<K extends SettingKey>(
   keys: readonly K[],
   scope: SettingScope,
   db: ScopedSettingsDb,
-  logger?: Logger
+  options: ScopedSettingResolveOptions = {}
 ): Promise<Map<K, ScopedSettingEntry<SettingValue<K>>>> {
+  const { logger, readFailureMode = 'fallback' } = options;
   const result = new Map<K, ScopedSettingEntry<SettingValue<K>>>();
   if (keys.length === 0) return result;
 
   // 1. Platform base for every key (existing cached accessor - a warm cache costs no round-trip).
-  //    Guarded so the module's "NEVER throws" contract holds even for the platform read: a settings
-  //    outage degrades to the per-key coded default (via getSettingsValue below) and warns, rather
-  //    than rejecting into any caller that took the contract at its word. `getSettingsByNames` yields
-  //    `string | null`; strip the nulls so getSettingsValue sees a genuinely-missing key and falls to
+  //    Read errors degrade unless the caller requires strict resolution. `getSettingsByNames`
+  //    yields `string | null`; strip the nulls so getSettingsValue sees a genuinely-missing key and falls to
   //    the coded default, instead of coercing null (e.g. z.coerce.number() would turn null into 0).
   const platformRecord: Record<string, string> = {};
   try {
@@ -226,6 +235,7 @@ async function resolveAll<K extends SettingKey>(
       if (val !== null && val !== undefined) platformRecord[name] = val;
     }
   } catch (err) {
+    if (readFailureMode === 'throw') throw err;
     logger?.warn?.('[scopedSettings] platform settings read failed; resolving coded defaults', err);
   }
 
@@ -255,6 +265,7 @@ async function resolveAll<K extends SettingKey>(
         { logger }
       );
     } catch (err) {
+      if (readFailureMode === 'throw') throw err;
       logger?.warn?.('[scopedSettings] overlay read failed; resolving platform values only', err);
     }
   }
@@ -285,12 +296,15 @@ async function resolveAll<K extends SettingKey>(
     // An unparseable platform row resolves to the coded default above, so it counts as not stored. So
     // does a blank one: a number schema's preprocess turns '' into the prefaulted default, not a choice.
     const raw = platformRecord[key];
-    const stored = !!won || (!isBlankSettingValue(raw) && def.schema.safeParse(raw).success);
+    const platformParses = !isBlankSettingValue(raw) && def.schema.safeParse(raw).success;
+    const stored = !!won || platformParses;
+    const platformRejected = !won && raw !== undefined && !isBlankSettingValue(raw) && !platformParses;
     result.set(key, {
       value: value as SettingValue<K>,
       source,
       ...(ignored.length > 0 ? { ignoredOverrides: ignored } : {}),
       stored,
+      ...(platformRejected ? { platformRejected: true as const } : {}),
     });
   }
 
@@ -305,7 +319,7 @@ export async function resolveScopedSettingValues<K extends SettingKey>(
   keys: readonly K[],
   scope: SettingScope,
   db: ScopedSettingsDb,
-  opts?: { logger?: Logger }
+  opts?: ScopedSettingResolveOptions
 ): Promise<{ [P in K]: SettingValue<P> }> {
   const entries = await resolveScopedSettingEntries(keys, scope, db, opts);
   const out = {} as { [P in K]: SettingValue<P> };
@@ -321,9 +335,9 @@ export async function resolveScopedSettingEntries<K extends SettingKey>(
   keys: readonly K[],
   scope: SettingScope,
   db: ScopedSettingsDb,
-  opts?: { logger?: Logger }
+  opts?: ScopedSettingResolveOptions
 ): Promise<{ [P in K]: ScopedSettingEntry<SettingValue<P>> }> {
-  const resolved = await resolveAll(keys, scope, db, opts?.logger);
+  const resolved = await resolveAll(keys, scope, db, opts);
   const out = {} as { [P in K]: ScopedSettingEntry<SettingValue<P>> };
   for (const key of keys) out[key] = resolved.get(key)! as ScopedSettingEntry<SettingValue<typeof key>>;
   return out;
@@ -334,10 +348,11 @@ export async function resolveScopedSetting<K extends SettingKey>(
   key: K,
   scope: SettingScope,
   db: ScopedSettingsDb,
-  opts?: { logger?: Logger }
+  opts?: ScopedSettingResolveOptions
 ): Promise<ResolvedSetting<SettingValue<K>>> {
-  const resolved = await resolveAll([key], scope, db, opts?.logger);
-  const { stored, ...setting } = resolved.get(key)!;
+  const resolved = await resolveAll([key], scope, db, opts);
+  // Entry-only fields stay off the single-key result, matching its ResolvedSetting type.
+  const { stored, platformRejected, ...setting } = resolved.get(key)!;
   return setting;
 }
 

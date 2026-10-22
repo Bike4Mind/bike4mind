@@ -1,4 +1,6 @@
 import FirecrawlDefault from '@mendable/firecrawl-js';
+import { UnsafeScrapeTargetError } from './errors';
+import { resolveAndVetUrl } from './ssrfGuard';
 
 type FirecrawlAppCtor = new (config: FirecrawlAppConfig) => FirecrawlClient;
 
@@ -51,11 +53,32 @@ export interface FirecrawlClient {
 }
 
 /**
- * Build a FirecrawlApp from resolved config, or null when neither an API key nor a custom API URL
- * is set - the caller then falls back to plain fetch (self-host without Firecrawl). firecrawl-js
+ * Build a Firecrawl client from resolved config, or null when neither an API key nor a custom API
+ * URL is set - the caller then falls back to plain fetch (self-host without Firecrawl). firecrawl-js
  * allows a keyless client when apiUrl targets a self-hosted instance (not api.firecrawl.dev).
+ *
+ * Returns a guarded wrapper, not the raw client: `scrapeUrl` pre-flights the target through the SSRF
+ * guard so every caller inherits it, and only `scrapeUrl`/`search` are exposed (the FirecrawlClient
+ * slice services use).
  */
 export function createFirecrawlApp(config: FirecrawlAppConfig): FirecrawlClient | null {
   if (!config.apiKey && !config.apiUrl) return null;
-  return new FirecrawlApp({ apiKey: config.apiKey, apiUrl: config.apiUrl });
+  const app = new FirecrawlApp({ apiKey: config.apiKey, apiUrl: config.apiUrl });
+  return {
+    // Guarded here so every Firecrawl caller (web_fetch, deep research, the research engine)
+    // inherits it: a self-hosted instance fetches from inside our network, so a private target is
+    // an SSRF. Pre-flight only - Firecrawl re-resolves DNS itself, which we cannot pin.
+    scrapeUrl: async (url, params) => {
+      const vetted = await resolveAndVetUrl(new URL(url));
+      if (!vetted.safe) {
+        // A private or protocol-refused target is permanent (no retry); a DNS hiccup is not, so it
+        // keeps the caller's normal retry path by staying a plain Error.
+        const message = `Refusing to fetch ${url}: ${vetted.reason}`;
+        if (vetted.retryable) throw new Error(message);
+        throw new UnsafeScrapeTargetError(message);
+      }
+      return app.scrapeUrl(url, params);
+    },
+    search: query => app.search(query),
+  };
 }

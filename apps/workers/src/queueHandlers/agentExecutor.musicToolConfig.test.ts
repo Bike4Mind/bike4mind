@@ -113,6 +113,52 @@ describe('limitMusicTracksPerRun', () => {
       expect.objectContaining({ questId: QUEST_ID })
     );
   });
+
+  it('keeps findJob so the tool can still read jobs back', () => {
+    const findJob = vi.fn();
+    const config = limitMusicTracksPerRun(
+      { ...makeBaseConfig(async () => createdResult), findJob },
+      { questId: QUEST_ID, limit: 1, slots, logger }
+    );
+    expect(config.findJob).toBe(findJob);
+  });
+
+  // At a limit of 1 the rephrased song must still fit after the first one was blocked and discarded.
+  it('gives the slot back for a song the tool discarded, so the rephrase fits the limit', async () => {
+    const createJob = vi.fn(async () => createdResult);
+    const baseRelease = vi.fn(async () => undefined);
+    const config = limitMusicTracksPerRun(
+      { ...makeBaseConfig(createJob), releaseDiscardedJob: baseRelease },
+      { questId: QUEST_ID, limit: 1, slots, logger }
+    );
+
+    await config.createJob(input);
+    await config.releaseDiscardedJob?.('job-1');
+    await expect(config.createJob(input)).resolves.toBe(createdResult);
+
+    expect(baseRelease).toHaveBeenCalledWith('job-1');
+    expect(slots.release).toHaveBeenCalledWith(QUEST_ID);
+    expect(slots.claimed).toBe(1);
+  });
+
+  it('warns rather than throwing when releasing a discarded song slot fails', async () => {
+    slots.release.mockRejectedValueOnce(new Error('db down'));
+    const config = limitMusicTracksPerRun(
+      makeBaseConfig(async () => createdResult),
+      {
+        questId: QUEST_ID,
+        limit: 1,
+        slots,
+        logger,
+      }
+    );
+
+    await expect(config.releaseDiscardedJob?.('job-1')).resolves.toBeUndefined();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('discarded'),
+      expect.objectContaining({ questId: QUEST_ID, jobId: 'job-1' })
+    );
+  });
 });
 
 describe('buildAgentMusicToolConfig', () => {

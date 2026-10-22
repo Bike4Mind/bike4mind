@@ -16,6 +16,12 @@ const h = vi.hoisted(() => ({
   activateIfDraft: vi.fn(),
   storageDelete: vi.fn(),
   recordConfigChange: vi.fn(),
+  incrementCurrentStorage: vi.fn(),
+  changeStorageSize: vi.fn(),
+  userForRefund: vi.fn(),
+  pullSystemFilesForUsers: vi.fn(),
+  pullFileReferences: vi.fn(),
+  logEvent: vi.fn(),
   baseApiOptions: undefined as unknown,
 }));
 
@@ -36,15 +42,16 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@server/utils/analyticsLog', () => ({ logEvent: h.logEvent }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ delete: h.storageDelete, upload: vi.fn(), getSignedUrl: vi.fn() }),
   getGeneratedImageStorage: () => ({ delete: vi.fn() }),
 }));
 
 vi.mock('@bike4mind/database', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/database')>()),
-  changeStorageSize: vi.fn(),
+  changeStorageSize: h.changeStorageSize,
+  organizationRepository: { incrementCurrentStorage: h.incrementCurrentStorage },
   dataLakeRepository: {
     findByDatalakeTag: h.findByDatalakeTag,
     setStats: h.setStats,
@@ -64,9 +71,13 @@ vi.mock('@bike4mind/database', async importOriginal => ({
   },
   fileTagRepository: { touchLastActivityBy: h.touchLastActivityBy },
   sessionRepository: { findAllWithKnowledgeId: h.findAllWithKnowledgeId, update: h.sessionUpdate },
-  userRepository: { findById: h.userFindById },
+  userRepository: {
+    findById: h.userFindById,
+    pullSystemFilesForUsers: h.pullSystemFilesForUsers,
+  },
+  projectRepository: { pullFileReferences: h.pullFileReferences },
   withTransaction: (fn: (session?: unknown) => Promise<unknown>) => fn(undefined),
-  User: { findById: () => ({ session: async () => null }) },
+  User: { findById: (id: string) => ({ session: async () => h.userForRefund(id) }) },
 }));
 
 import handler from '../bulk-delete';
@@ -133,6 +144,61 @@ describe('bulk-delete - data-lake stats', () => {
     // Three member files, one lake: the meta-tags are deduped, so one aggregation, not three.
     expect(h.computeDataLakeStats).toHaveBeenCalledTimes(1);
     expect(h.setStats).toHaveBeenCalledTimes(1);
+  });
+
+  it('unlinks each deleted file against its own owner and recipients, never a batch-wide union', async () => {
+    const files = new Map([
+      ['507f1f77bcf86cd799439011', { ...memberFile('507f1f77bcf86cd799439011'), users: [{ userId: 'recipient-1' }] }],
+      ['507f1f77bcf86cd799439012', { ...memberFile('507f1f77bcf86cd799439012'), users: [{ userId: 'recipient-2' }] }],
+    ]);
+    h.findById.mockImplementation(async (id: string) => files.get(id) ?? null);
+    h.findByIdAndUserId.mockImplementation(async (id: string) => files.get(id) ?? null);
+    const { res } = makeRes();
+
+    await run([...files.keys()], res);
+
+    const [first, second] = [...files.keys()];
+    expect(h.pullSystemFilesForUsers).toHaveBeenCalledWith([OWNER, 'recipient-1'], [first]);
+    expect(h.pullSystemFilesForUsers).toHaveBeenCalledWith([OWNER, 'recipient-2'], [second]);
+    expect(h.pullFileReferences).toHaveBeenCalledWith([first], { userIds: [OWNER, 'recipient-1'] });
+    expect(h.pullFileReferences).toHaveBeenCalledWith([second], { userIds: [OWNER, 'recipient-2'] });
+  });
+
+  it('never pulls a merely unshared file from a holder who still has it, even when the same batch deletes another file', async () => {
+    const owned = { ...memberFile('507f1f77bcf86cd799439021'), users: [{ userId: 'recipient-1' }] };
+    // Owned by Carol, shared directly with the caller: the caller's delete is an unshare.
+    const shared = { ...memberFile('507f1f77bcf86cd799439022', 'carol'), users: [{ userId: OWNER }] };
+    h.findById.mockImplementation(async (id: string) => (id === owned.id ? owned : shared));
+    h.findByIdAndUserId.mockImplementation(async (id: string) => (id === owned.id ? owned : null));
+    const { res } = makeRes();
+
+    await run([owned.id, shared.id], res);
+
+    // The unshared file keeps its place in Carol's project; only the caller's own system files let go.
+    expect(h.pullFileReferences).toHaveBeenCalledWith([owned.id], { userIds: [OWNER, 'recipient-1'] });
+    for (const [fileIds] of h.pullFileReferences.mock.calls) {
+      expect(fileIds).not.toContain(shared.id);
+    }
+    expect(h.pullSystemFilesForUsers).toHaveBeenCalledWith([OWNER], [shared.id]);
+  });
+
+  it('never unlinks the references of a file whose delete rolled back - that file is still live', async () => {
+    const rolledBack = '507f1f77bcf86cd799439011';
+    const committed = '507f1f77bcf86cd799439012';
+    const files = new Map([
+      [rolledBack, { ...memberFile(rolledBack), users: [{ userId: 'recipient-1' }] }],
+      [committed, memberFile(committed)],
+    ]);
+    h.findById.mockImplementation(async (id: string) => files.get(id) ?? null);
+    h.findByIdAndUserId.mockImplementation(async (id: string) => files.get(id) ?? null);
+    h.logEvent.mockRejectedValueOnce(new Error('log failed'));
+    const { res } = makeRes();
+
+    await run([...files.keys()], res);
+
+    expect(h.pullSystemFilesForUsers).toHaveBeenCalledTimes(1);
+    expect(h.pullSystemFilesForUsers).toHaveBeenCalledWith([OWNER], [committed]);
+    expect(h.pullFileReferences).toHaveBeenCalledWith([committed], { userIds: [OWNER] });
   });
 
   it('does not recompute for a batch that only unshares', async () => {
@@ -341,6 +407,72 @@ describe('bulk-delete - tag activity', () => {
     // The names are the owner's tags, not the actor's: touching them would bump a same-named tag in
     // the actor's own registry that they never changed.
     expect(h.touchLastActivityBy).not.toHaveBeenCalled();
+  });
+});
+
+// Storage is billed to the file's OWNER (its org, else its uploader), not to whoever runs the delete.
+describe('bulk-delete - storage refunds per owner', () => {
+  const chargedFile = (id: string, over: Record<string, unknown>) => ({
+    id,
+    userId: OWNER,
+    fileName: `${id}.txt`,
+    filePath: `uploads/${id}.txt`,
+    tags: [],
+    users: [],
+    storageChargedAt: new Date('2026-10-10T00:00:00Z'),
+    ...over,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.userFindById.mockResolvedValue({ id: OWNER });
+    h.update.mockResolvedValue(undefined);
+    h.deleteManyByFabFileId.mockResolvedValue(undefined);
+    h.findAllWithKnowledgeId.mockResolvedValue([]);
+    h.storageDelete.mockResolvedValue(undefined);
+    h.incrementCurrentStorage.mockResolvedValue(undefined);
+    h.changeStorageSize.mockResolvedValue(undefined);
+    h.userForRefund.mockImplementation(async (id: string) => ({ id, save: vi.fn() }));
+  });
+
+  it('refunds each owner its own sum: personal files to the uploader, org files to the org', async () => {
+    const files = new Map(
+      [
+        chargedFile('507f1f77bcf86cd799439031', { fileSize: 100 }),
+        chargedFile('507f1f77bcf86cd799439032', { fileSize: 40, organizationId: 'org1' }),
+        chargedFile('507f1f77bcf86cd799439033', { fileSize: 60, organizationId: 'org1' }),
+        chargedFile('507f1f77bcf86cd799439034', { fileSize: 7, organizationId: 'org2' }),
+        chargedFile('507f1f77bcf86cd799439035', { fileSize: 5 }),
+      ].map(file => [file.id, file])
+    );
+    h.findById.mockImplementation(async (id: string) => files.get(id) ?? null);
+    h.findByIdAndUserId.mockImplementation(async (id: string) => files.get(id) ?? null);
+    const { res, json } = makeRes();
+
+    await run([...files.keys()], res);
+
+    expect(json.mock.calls[0][0].results.deleted).toHaveLength(5);
+    expect(h.incrementCurrentStorage).toHaveBeenCalledTimes(2);
+    expect(h.incrementCurrentStorage).toHaveBeenCalledWith('org1', -100, undefined);
+    expect(h.incrementCurrentStorage).toHaveBeenCalledWith('org2', -7, undefined);
+    // Both personal files collapse into one deduction on the uploader.
+    expect(h.userForRefund).toHaveBeenCalledTimes(1);
+    expect(h.userForRefund).toHaveBeenCalledWith(OWNER);
+    expect(h.changeStorageSize).toHaveBeenCalledTimes(1);
+    expect(h.changeStorageSize).toHaveBeenCalledWith(expect.objectContaining({ id: OWNER }), -105);
+  });
+
+  it("refunds the org, not the deleting user, when an admin deletes someone else's org file", async () => {
+    const file = chargedFile('507f1f77bcf86cd799439041', { fileSize: 30, userId: 'uploader', organizationId: 'org1' });
+    h.findById.mockResolvedValue(file);
+    h.findByIdAndUserId.mockResolvedValue(file);
+    const { res } = makeRes();
+
+    await run([file.id], res);
+
+    expect(h.incrementCurrentStorage).toHaveBeenCalledWith('org1', -30, undefined);
+    expect(h.userForRefund).not.toHaveBeenCalled();
+    expect(h.changeStorageSize).not.toHaveBeenCalled();
   });
 });
 

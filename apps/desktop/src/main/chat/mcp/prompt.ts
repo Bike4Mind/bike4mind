@@ -16,11 +16,26 @@ const MAX_NAME_CHARS = 80;
  * `mcp` is 'read' where no user is present to approve a change (a spawned session), so the text
  * does not promise tools that are not offered there, and null in a build with no MCP at all.
  */
+/**
+ * Where tool permissions live. Said outright because a model asked to "allow gh" will otherwise
+ * invent a setting, and because it must know it cannot change them itself.
+ */
+export const PERMISSIONS_GUIDANCE: readonly string[] = [
+  'Tool permissions belong to the user, and you cannot change them: no tool of yours writes them.',
+  'They are set by the approval mode pill under the message box (Ask, Approve for me, Full access),',
+  'by the "Always allow" and "Always, in every session" buttons on an approval card, in',
+  'Settings -> Permissions (allow, ask and deny rules, for every project or one), and in Claude',
+  "Code's own settings files (~/.claude/settings.json, and a trusted project's",
+  '.claude/settings.json), whose permission rules this app reads. When the user wants something',
+  'allowed or blocked, tell them which of these to use; never name a setting that is not in this list.',
+];
+
 export function desktopAppGuidance(mcp: 'manage' | 'read' | null): string[] {
   const identity = [
     'You are running in the Bike4Mind desktop app. This is not Claude desktop or claude.ai: never',
     'tell the user to open a "Computer use" or "Devices" setting, or any other app\'s settings, to',
     'connect something here.',
+    ...PERMISSIONS_GUIDANCE,
   ];
   if (!mcp) return identity;
   return [

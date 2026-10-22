@@ -4,6 +4,7 @@ import type { Logger } from '@bike4mind/observability';
 const h = vi.hoisted(() => ({
   recordCheck: vi.fn(),
   fetch: vi.fn(),
+  emitMetrics: vi.fn(),
 }));
 
 // Only what the probes may touch: no user, MCP server or workspace repository is exported, so a
@@ -14,8 +15,8 @@ vi.mock('@bike4mind/database', () => ({
   INTEGRATION_HEALTH_THRESHOLDS: { LATENCY_WARNING_MS: 2_000, LATENCY_CRITICAL_MS: 5_000 },
 }));
 
-vi.mock('@server/utils/cloudwatch', () => ({
-  emitMetrics: vi.fn().mockResolvedValue(undefined),
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
+  emitMetrics: h.emitMetrics,
 }));
 
 import { runAllProbes, runProbe } from './integrationHealthService';
@@ -30,6 +31,7 @@ describe('integrationHealthService probes', () => {
   beforeEach(() => {
     h.recordCheck.mockReset().mockImplementation(async (check: unknown) => check);
     h.fetch.mockReset();
+    h.emitMetrics.mockReset().mockResolvedValue(undefined);
     vi.stubGlobal('fetch', h.fetch);
   });
 
@@ -47,6 +49,34 @@ describe('integrationHealthService probes', () => {
       const headers = new Headers((init as RequestInit).headers);
       expect(headers.has('authorization')).toBe(false);
     }
+  });
+
+  it('does not resolve until the CloudWatch metrics are sent', async () => {
+    respondWith(200);
+    let releaseEmit: () => void = () => {};
+    h.emitMetrics.mockReturnValue(new Promise<void>(resolve => (releaseEmit = resolve)));
+
+    let settled = false;
+    const pending = runAllProbes(logger).then(() => (settled = true));
+    await vi.waitFor(() => expect(h.emitMetrics).toHaveBeenCalledTimes(1));
+
+    expect(settled).toBe(false);
+    releaseEmit();
+    await pending;
+    expect(settled).toBe(true);
+  });
+
+  it('publishes an aggregate Latency and Success series for the dimensionless alarms', async () => {
+    respondWith(200);
+
+    await runAllProbes(logger);
+
+    const [, metrics] = h.emitMetrics.mock.calls[0] as [string, Array<{ name: string; dimensions?: object }>];
+    const aggregate = metrics.filter(metric => metric.dimensions === undefined).map(metric => metric.name);
+    expect(aggregate.filter(name => name === 'Latency')).toHaveLength(4);
+    expect(aggregate.filter(name => name === 'Success')).toHaveLength(4);
+    expect(aggregate).not.toContain('Failure');
+    expect(metrics.filter(metric => metric.dimensions !== undefined)).toHaveLength(12);
   });
 
   it.each([401, 403, 404, 429])('treats HTTP %d as reachable, since the provider answered', async status => {

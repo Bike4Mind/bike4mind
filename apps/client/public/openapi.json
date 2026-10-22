@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Bike4Mind API",
-    "version": "14.0.0",
-    "description": "Programmatic access to the Bike4Mind API. Schemas are generated from the same Zod definitions that validate requests at runtime, so this spec cannot drift from the implementation - with one documented exception: a `pollResult` schema (see the `x-poll-result` extension) describes a handoff response's outcome on a plain, non-contract endpoint, so it is hand-maintained against that handler rather than runtime-validated, and can drift if the handler changes without a matching schema update.\n\n## Getting started\n1. Create a key in the web app under **Profile > API Keys** (pick a scope preset).\n2. Make a first call: `GET /api/v1/me` with `Authorization: Bearer b4m_live_<key>`. It needs only the `me:read` scope, spends no credits, and returns your identity, plan tier and credit balance.\n3. Read the rest of this page for the behaviour shared across endpoints: rate limits, credits, errors and async jobs.\n\nEndpoints are grouped by tag: **AI** (chat, completions, embeddings, agent runs, tools, quest polling), **Images**, **Audio**, **Videos**, **Music**, **Transcriptions**, **Sessions**, **Artifacts**, **Files**, **Projects**, **Agents**, **Data Lakes** and **Account**.\n\n## Authentication\nSend an API key as `Authorization: Bearer b4m_live_<key>` (canonical), `x-api-key: b4m_live_<key>` (legacy), or `Authorization: ApiKey b4m_live_<key>`. A JWT access token is also accepted in the `Authorization: Bearer` header.\n\n## Scopes\nAPI keys carry `resource:action` scopes. The canonical set (from the runtime `ApiKeyScope` enum) is:\n- `notebooks:read`\n- `notebooks:write`\n- `files:read`\n- `files:write`\n- `ai:generate`\n- `ai:decide`\n- `ai:chat`\n- `projects:read`\n- `projects:write`\n- `agents:read`\n- `agents:write`\n- `cc-bridge:connect`\n- `me:read`\n- `admin:*`\n- `marketing-reports:read`\n- `marketing-reports:write`\n- `overwatch-ingest:write`\n- `embed:chat`\n- `hearth:read`\n- `hearth:write`\n- `optihashi:read`\n- `optihashi:compute`\n- `datalake:read`\n- `datalake:write`\n- `datalake:share`\n- `datalake:query`\n- `overwatch:read`\n- `qa:ingest`\n\nPer-operation required scopes are published via the `x-required-scopes` extension. Semantics are OR: a key needs ANY ONE of an operation's listed scopes, not all of them. Operations with no `x-required-scopes` enforce no scope (e.g. the JWT-only tools endpoint).\n\n## Rate limits\nEach API key has a per-minute and a per-day request ceiling, by default 60 requests/minute and 1000 requests/day (a key can be minted with its own ceilings). Responses from rate-limited operations carry the current state of both windows (the streaming completions endpoint sends them only on an API-key `429`):\n- `X-RateLimit-Limit-Minute`\n- `X-RateLimit-Remaining-Minute`\n- `X-RateLimit-Reset-Minute`\n- `X-RateLimit-Limit-Day`\n- `X-RateLimit-Remaining-Day`\n- `X-RateLimit-Reset-Day`\n\nReset values are Unix epoch seconds. Exceeding a ceiling returns `429` with a `Retry-After` header; wait that long before retrying. This includes `POST /api/ai/v1/completions`, which rate-limits before it opens its event stream. `GET /api/v1/me`, `GET /api/v1/credits`, `GET /api/v1/models`, `GET /api/v1/video-models`, `GET /api/v1/music-models`, the `GET` list endpoints for `/api/v1/sessions`, `/api/v1/video-generations` and `/api/v1/music-generations`, and the poll endpoints listed under Async jobs are exempt from the per-day ceiling: a poll consumes no daily slot, and only the per-minute limit applies. A request refused at the route scope gate (`403`) or for a bad key (`401`) never reaches the limiter and carries no rate-limit headers.\n\n## Credits\nGeneration endpoints spend credits from the balance shown at `credits.balance` on `GET /api/v1/me` (the caller's personal ledger). A key without `me:read` reads the same number from `GET /api/v1/credits`, which accepts `ai:chat`, `ai:generate` and `ai:decide` too. A synchronous call that cannot be paid for fails with `422` and `errorCode: \"insufficient_credits\"`. On a queued job the same code arrives on the polled result instead (see Async jobs), so check both places.\n\n## Errors\nError bodies use one envelope, the `ErrorResponse` schema: `{ \"error\": string, \"request_id\"?: string }`, plus an `errorCode` on failures a client is expected to branch on (`insufficient_credits`, `spend_cap_exceeded`, `provider_not_configured`, ...). A deprecated `name` field may also appear until its sunset date; do not rely on it. Branch on the HTTP status and `errorCode`, never on the `error` prose. A few operations declare a bespoke error shape for a specific status (e.g. the `500` of the tools endpoint and the `413` of text-to-speech); each operation lists the statuses it can return and the body for each.\n\nThe shared statuses: a malformed JSON body is `400`, a body that fails schema validation is `422`, a missing or invalid credential is `401`, a valid key without the required scope is `403`, an unknown resource is `404` and an exceeded rate limit is `429`. A `401` carrying `errorCode: \"provider_rejected\"` means the upstream provider refused the provider key the request used - the platform key by default, or your own stored provider key when you configured one - so your API key itself was accepted.\n\n## Async jobs\nWork that is not provably fast is queued and polled rather than held open:\n- **Chat** (`POST /api/chat`) and **image generation/editing** (`POST /api/v1/image-generations`, `POST /api/v1/image-edits`) return a quest. Poll `GET /api/v1/quests/{id}` until `status` is `done` or `stopped`; chat text arrives in `reply`, generated images in `images`, edited images in `files[].url`. Check for failure before reading results: a job that ends `done` with `type: \"error\"` failed (the reason is in `reply`), and a job that ends `stopped` also failed even when `type` is not `\"error\"` (its `reply` carries an explanation, not an answer). The outcome schema of each of these quest handoffs is linked from its response via the `x-poll-result` extension. Chat also accepts `wait: true` to block until the reply is ready.\n- **Agent runs** (`POST /api/v1/agent-executions`) return `202`. Poll `GET /api/v1/agent-executions/{id}` until `status` is `completed`, `failed` or `aborted`.\n- **Video generation** (`POST /api/v1/video-generations`) returns `202`. Poll `GET /api/v1/video-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.\n- **Music generation** (`POST /api/v1/music-generations`) returns `202`. Poll `GET /api/v1/music-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.\n- **File uploads** (`POST /api/v1/files`) return a presigned `upload_url`; after the `PUT`, poll `GET /api/v1/files/{id}` until `moderation_status` is `clean` before passing the id elsewhere.\n- **Audio** endpoints are synchronous and return the result directly.\n- **Transcriptions** (`POST /api/v1/transcriptions`) are synchronous too: after the upload, one call returns the text. Long audio can outlast the request timeout and fail with a `504`; see that endpoint for the limit.\n\nPoll with a backoff of a few seconds: each poll counts against the per-minute limit.\n\n## Versioning\nNew endpoints live under `/api/v1`. Published endpoints are forward-only: a live URL is never renamed or removed, and a breaking change ships as a new path while the old one keeps working. Nothing published is removed silently - a deprecated field or endpoint is marked `deprecated` in this spec with a sunset date in its description, and keeps working until that date.\n\n## CORS\nThe spec (`/api/v1/openapi.json`) is served publicly with permissive CORS. The API endpoints themselves are called server-to-server with a secret key and are not intended for browser CORS use.\n\n## Correlation\nEvery response carries an `X-Request-ID` header (echoed as `request_id`/`requestId` in bodies and events) for log correlation.",
+    "version": "19.0.0",
+    "description": "Programmatic access to the Bike4Mind API. Schemas are generated from the same Zod definitions that validate requests at runtime, so this spec cannot drift from the implementation - with one documented exception: a `pollResult` schema (see the `x-poll-result` extension) describes a handoff response's outcome on a plain, non-contract endpoint, so it is hand-maintained against that handler rather than runtime-validated, and can drift if the handler changes without a matching schema update.\n\n## Getting started\n1. Create a key in the web app under **Profile > API Keys** (pick a scope preset).\n2. Make a first call: `GET /api/v1/me` with `Authorization: Bearer b4m_live_<key>`. It needs only the `me:read` scope, spends no credits, and returns your identity, plan tier and credit balance.\n3. Read the rest of this page for the behaviour shared across endpoints: rate limits, credits, errors and async jobs.\n\nEndpoints are grouped by tag: **AI** (chat, completions, embeddings, agent runs, tools, quest polling), **Images**, **Audio**, **Videos**, **Music**, **Transcriptions**, **Sessions**, **Artifacts**, **Files**, **Projects**, **Agents**, **Data Lakes**, **Skills** and **Account**.\n\n## Authentication\nSend an API key as `Authorization: Bearer b4m_live_<key>` (canonical), `x-api-key: b4m_live_<key>` (legacy), or `Authorization: ApiKey b4m_live_<key>`. A JWT access token is also accepted in the `Authorization: Bearer` header.\n\n## Scopes\nAPI keys carry `resource:action` scopes. The canonical set (from the runtime `ApiKeyScope` enum) is:\n- `notebooks:read`\n- `notebooks:write`\n- `files:read`\n- `files:write`\n- `ai:generate`\n- `ai:decide`\n- `ai:chat`\n- `projects:read`\n- `projects:write`\n- `agents:read`\n- `agents:write`\n- `cc-bridge:connect`\n- `me:read`\n- `admin:*`\n- `marketing-reports:read`\n- `marketing-reports:write`\n- `overwatch-ingest:write`\n- `embed:chat`\n- `hearth:read`\n- `hearth:write`\n- `optihashi:read`\n- `optihashi:compute`\n- `datalake:read`\n- `datalake:write`\n- `datalake:share`\n- `datalake:query`\n- `overwatch:read`\n- `qa:ingest`\n- `skills:read`\n- `release-notes:write`\n- `bob:read`\n- `bob:run`\n\nPer-operation required scopes are published via the `x-required-scopes` extension. Semantics are OR: a key needs ANY ONE of an operation's listed scopes, not all of them. Operations with no `x-required-scopes` enforce no scope (e.g. the JWT-only tools endpoint).\n\n## Rate limits\nEach API key has a per-minute and a per-day request ceiling, by default 60 requests/minute and 1000 requests/day (a key can be minted with its own ceilings). Responses from rate-limited operations carry the current state of both windows (the streaming completions endpoint sends them only on an API-key `429`):\n- `X-RateLimit-Limit-Minute`\n- `X-RateLimit-Remaining-Minute`\n- `X-RateLimit-Reset-Minute`\n- `X-RateLimit-Limit-Day`\n- `X-RateLimit-Remaining-Day`\n- `X-RateLimit-Reset-Day`\n\nReset values are Unix epoch seconds. Exceeding a ceiling returns `429` with a `Retry-After` header; wait that long before retrying. This includes `POST /api/ai/v1/completions`, which rate-limits before it opens its event stream. `GET /api/v1/me`, `GET /api/v1/credits`, `GET /api/v1/models`, `GET /api/v1/video-models`, `GET /api/v1/music-models`, the `GET` list endpoints for `/api/v1/sessions`, `/api/v1/video-generations` and `/api/v1/music-generations`, and the poll endpoints listed under Async jobs are exempt from the per-day ceiling: a poll consumes no daily slot, and only the per-minute limit applies. A request refused at the route scope gate (`403`) or for a bad key (`401`) never reaches the limiter and carries no rate-limit headers.\n\n## Credits\nGeneration endpoints spend credits from the balance shown at `credits.balance` on `GET /api/v1/me` (the caller's personal ledger). A key without `me:read` reads the same number from `GET /api/v1/credits`, which accepts `ai:chat`, `ai:generate` and `ai:decide` too. A synchronous call that cannot be paid for fails with `422` and `errorCode: \"insufficient_credits\"`. On a queued job the same code arrives on the polled result instead (see Async jobs), so check both places.\n\n## Errors\nError bodies use one envelope, the `ErrorResponse` schema: `{ \"error\": string, \"request_id\"?: string }`, plus an `errorCode` on failures a client is expected to branch on (`insufficient_credits`, `spend_cap_exceeded`, `provider_not_configured`, ...). A deprecated `name` field may also appear until its sunset date; do not rely on it. Branch on the HTTP status and `errorCode`, never on the `error` prose. A few operations declare a bespoke error shape for a specific status (e.g. the `500` of the tools endpoint and the `413` of text-to-speech); each operation lists the statuses it can return and the body for each.\n\nThe shared statuses: a malformed JSON body is `400`, a body that fails schema validation is `422`, a missing or invalid credential is `401`, a valid key without the required scope is `403`, an unknown resource is `404` and an exceeded rate limit is `429`. A `401` carrying `errorCode: \"provider_rejected\"` means the upstream provider refused the provider key the request used - the platform key by default, or your own stored provider key when you configured one - so your API key itself was accepted.\n\n## Async jobs\nWork that is not provably fast is queued and polled rather than held open:\n- **Chat** (`POST /api/chat`) and **image generation/editing** (`POST /api/v1/image-generations`, `POST /api/v1/image-edits`) return a quest. Poll `GET /api/v1/quests/{id}` until `status` is `done` or `stopped`; chat text arrives in `reply`, generated images in `images`, edited images in `files[].url`. Check for failure before reading results: a job that ends `done` with `type: \"error\"` failed (the reason is in `reply`), and a job that ends `stopped` also failed even when `type` is not `\"error\"` (its `reply` carries an explanation, not an answer). The outcome schema of each of these quest handoffs is linked from its response via the `x-poll-result` extension. Chat also accepts `wait: true` to block until the reply is ready.\n- **Agent runs** (`POST /api/v1/agent-executions`) return `202`. Poll `GET /api/v1/agent-executions/{id}` until `status` is `completed`, `failed` or `aborted`.\n- **Video generation** (`POST /api/v1/video-generations`) returns `202`. Poll `GET /api/v1/video-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.\n- **Music generation** (`POST /api/v1/music-generations`) returns `202`. Poll `GET /api/v1/music-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.\n- **File uploads** (`POST /api/v1/files`) return a presigned `upload_url`; after the `PUT`, poll `GET /api/v1/files/{id}` until `moderation_status` is `clean` before passing the id elsewhere.\n- **Audio** endpoints are synchronous and return the result directly.\n- **Transcriptions** (`POST /api/v1/transcriptions`) are synchronous too: after the upload, one call returns the text. Long audio can outlast the request timeout and fail with a `504`; see that endpoint for the limit.\n\nPoll with a backoff of a few seconds: each poll counts against the per-minute limit.\n\n## Versioning\nNew endpoints live under `/api/v1`. Published endpoints are forward-only: a live URL is never renamed or removed, and a breaking change ships as a new path while the old one keeps working. Nothing published is removed silently - a deprecated field or endpoint is marked `deprecated` in this spec with a sunset date in its description, and keeps working until that date.\n\n## CORS\nThe spec (`/api/v1/openapi.json`) is served publicly with permissive CORS. The API endpoints themselves are called server-to-server with a secret key and are not intended for browser CORS use.\n\n## Correlation\nEvery response carries an `X-Request-ID` header (echoed as `request_id`/`requestId` in bodies and events) for log correlation.",
     "contact": {
       "name": "Bike4Mind",
       "url": "https://your-deployment.example.com"
@@ -701,6 +701,39 @@
           "error"
         ]
       },
+      "sendChatMessageResponse504": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "request_timeout"
+            ]
+          },
+          "quest_id": {
+            "type": "string"
+          },
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error",
+          "errorCode",
+          "quest_id"
+        ]
+      },
       "sendChatMessageRequest": {
         "type": "object",
         "properties": {
@@ -867,6 +900,45 @@
           "tracking_info"
         ]
       },
+      "startAgentExecutionResponse403": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "required_scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "API key scopes this route accepts. Holding any one of them satisfies it."
+          },
+          "also_required_scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "API key scopes this route also requires. Every one must be held, on top of `required_scopes`."
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "billing_organization_mismatch"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
       "startAgentExecutionRequest": {
         "type": "object",
         "properties": {
@@ -885,7 +957,8 @@
             "type": "string"
           },
           "organization_id": {
-            "type": "string"
+            "type": "string",
+            "description": "The organization whose credit pool pays for this run. You must belong to it; a non-member gets 404. Omit it to bill your personal credits. An organization-billed API key always bills its own organization: omit this or set it to the key's; any other value is a 403 (`errorCode: billing_organization_mismatch`)."
           },
           "tools": {
             "type": "array",
@@ -1275,7 +1348,7 @@
             "items": {
               "type": "string"
             },
-            "description": "The data lakes this session grounds on, as lake tags (the `datalake_tag` of each lake from GET /api/v1/data-lakes). Send a list to ground only on those lakes, `[]` to ground on no lake at all, or `null` to clear the choice so retrieval falls back to every lake you can reach. Omit to leave the current choice unchanged. Tags naming a lake you cannot reach are ignored at retrieval time rather than rejected here. Narrowing the scope does not by itself turn retrieval on: pair it with `forceKnowledgeRetrieval: true` for a session that is not already grounded. Conversely `[]` leaves a grounded session nothing to retrieve from, so its forced retrieval is skipped rather than run against every lake."
+            "description": "The data lakes this session searches, as lake tags (the `datalake_tag` of each lake from GET /api/v1/data-lakes). Send a list to search only those lakes, `[]` to search no lake at all, or `null` to clear the choice so retrieval falls back to every lake you can reach. Omit to leave the current choice unchanged. Tags naming a lake you cannot reach are ignored at retrieval time rather than rejected here. A non-empty list also turns forced retrieval on for a session that has never set it, unless `forceKnowledgeRetrieval` is sent in the same request; a value the session already stores is left as it is. Conversely `[]` leaves a session with forced retrieval nothing to retrieve from, so its forced retrieval is skipped rather than run against every lake."
           },
           "includeLibraryFiles": {
             "type": "boolean",
@@ -1493,7 +1566,8 @@
             "enum": [
               "weather_info",
               "web_search",
-              "web_fetch"
+              "web_fetch",
+              "decide"
             ]
           },
           "input": {
@@ -1574,6 +1648,10 @@
                   "outputTokens": {
                     "type": "number"
                   },
+                  "reasoningTokens": {
+                    "type": "number",
+                    "description": "Reasoning/thinking tokens the provider reported. A subset of outputTokens, not additive and not billed on top. Absent when the provider or adapter reports no count."
+                  },
                   "cacheReadInputTokens": {
                     "type": "number"
                   },
@@ -1626,6 +1704,32 @@
             "required": [
               "type",
               "text"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "provider_block"
+                ]
+              },
+              "provider": {
+                "type": "string",
+                "enum": [
+                  "anthropic"
+                ]
+              },
+              "block": {
+                "type": "object",
+                "additionalProperties": {}
+              }
+            },
+            "required": [
+              "type",
+              "provider",
+              "block"
             ]
           },
           {
@@ -1691,7 +1795,13 @@
           "errorCode": {
             "type": "string",
             "enum": [
-              "unknown_model"
+              "unknown_model",
+              "tool_search_unsupported",
+              "all_tools_deferred",
+              "deferred_tool_cache_control",
+              "unknown_tool_reference",
+              "tool_changes_unsupported",
+              "invalid_tool_change"
             ]
           }
         },
@@ -1779,7 +1889,8 @@
                       "type": "array",
                       "items": {}
                     }
-                  ]
+                  ],
+                  "description": "A string, or an array of content blocks. A `system` message may instead hold only `tool_addition` / `tool_removal` blocks (`{ type, tool: { type: \"tool_reference\", name } }`) to load or unload a tool named in `tools` mid-conversation without invalidating the prompt cache. It must follow a user turn or an assistant turn ending in a tool search result, and be the last message or precede an assistant turn. Only on models whose `supports_tool_changes` is true and that are served by the direct Anthropic API; otherwise refused with `errorCode: \"tool_changes_unsupported\"` (or `invalid_tool_change` / `unknown_tool_reference` when malformed)."
                 },
                 "cache": {
                   "type": "boolean"
@@ -1853,85 +1964,8 @@
           "tools": {
             "type": "array",
             "items": {
-              "type": "object",
-              "properties": {
-                "toolSchema": {
-                  "type": "object",
-                  "properties": {
-                    "name": {
-                      "type": "string"
-                    },
-                    "description": {
-                      "type": "string"
-                    },
-                    "parameters": {
-                      "type": "object",
-                      "properties": {
-                        "type": {
-                          "type": "string",
-                          "enum": [
-                            "object"
-                          ]
-                        },
-                        "properties": {
-                          "type": "object",
-                          "additionalProperties": {}
-                        },
-                        "additionalProperties": {
-                          "type": "boolean"
-                        },
-                        "required": {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          }
-                        }
-                      },
-                      "required": [
-                        "type"
-                      ],
-                      "additionalProperties": {}
-                    },
-                    "strict": {
-                      "type": "boolean"
-                    }
-                  },
-                  "required": [
-                    "name",
-                    "description",
-                    "parameters"
-                  ]
-                },
-                "_isMcpTool": {
-                  "type": "boolean"
-                }
-              },
-              "required": [
-                "toolSchema"
-              ]
-            }
-          },
-          "temperature": {
-            "type": "number"
-          },
-          "max_tokens": {
-            "type": "number"
-          },
-          "options": {
-            "type": "object",
-            "properties": {
-              "temperature": {
-                "type": "number"
-              },
-              "maxTokens": {
-                "type": "number"
-              },
-              "stream": {
-                "type": "boolean"
-              },
-              "tools": {
-                "type": "array",
-                "items": {
+              "anyOf": [
+                {
                   "type": "object",
                   "properties": {
                     "toolSchema": {
@@ -1973,6 +2007,13 @@
                         },
                         "strict": {
                           "type": "boolean"
+                        },
+                        "defer_loading": {
+                          "type": "boolean",
+                          "description": "Keep this definition out of the model context until the tool search server tool (or a `tool_reference`) loads it. Honoured only on models served by the direct Anthropic API whose `supports_tool_search` is true; on every other model (including Bedrock-served Claude, for now) it is ignored and the tool is sent as usual. At least one tool, or a `serverTool` entry, must stay non-deferred (`errorCode: \"all_tools_deferred\"`)."
+                        },
+                        "cache_control": {
+                          "description": "Accepted for validation only and not forwarded. Rejected on a deferred tool (`errorCode: \"deferred_tool_cache_control\"`)."
                         }
                       },
                       "required": [
@@ -1987,6 +2028,208 @@
                   },
                   "required": [
                     "toolSchema"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "serverTool": {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "enum": [
+                                "tool_search_tool_regex_20251119"
+                              ]
+                            },
+                            "name": {
+                              "type": "string",
+                              "enum": [
+                                "tool_search_tool_regex"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "name"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "enum": [
+                                "tool_search_tool_bm25_20251119"
+                              ]
+                            },
+                            "name": {
+                              "type": "string",
+                              "enum": [
+                                "tool_search_tool_bm25"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "name"
+                          ]
+                        }
+                      ],
+                      "description": "A provider-run tool, sent to the provider as `{ type, name }`. Only the Anthropic tool search tools exist today, and only on models served by the direct Anthropic API whose `supports_tool_search` is true; any other model, Bedrock-served Claude included, is refused with `errorCode: \"tool_search_unsupported\"` rather than run without it."
+                    }
+                  },
+                  "required": [
+                    "serverTool"
+                  ]
+                }
+              ]
+            }
+          },
+          "temperature": {
+            "type": "number"
+          },
+          "max_tokens": {
+            "type": "number"
+          },
+          "options": {
+            "type": "object",
+            "properties": {
+              "temperature": {
+                "type": "number"
+              },
+              "maxTokens": {
+                "type": "number"
+              },
+              "stream": {
+                "type": "boolean"
+              },
+              "tools": {
+                "type": "array",
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "toolSchema": {
+                          "type": "object",
+                          "properties": {
+                            "name": {
+                              "type": "string"
+                            },
+                            "description": {
+                              "type": "string"
+                            },
+                            "parameters": {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "object"
+                                  ]
+                                },
+                                "properties": {
+                                  "type": "object",
+                                  "additionalProperties": {}
+                                },
+                                "additionalProperties": {
+                                  "type": "boolean"
+                                },
+                                "required": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                }
+                              },
+                              "required": [
+                                "type"
+                              ],
+                              "additionalProperties": {}
+                            },
+                            "strict": {
+                              "type": "boolean"
+                            },
+                            "defer_loading": {
+                              "type": "boolean",
+                              "description": "Keep this definition out of the model context until the tool search server tool (or a `tool_reference`) loads it. Honoured only on models served by the direct Anthropic API whose `supports_tool_search` is true; on every other model (including Bedrock-served Claude, for now) it is ignored and the tool is sent as usual. At least one tool, or a `serverTool` entry, must stay non-deferred (`errorCode: \"all_tools_deferred\"`)."
+                            },
+                            "cache_control": {
+                              "description": "Accepted for validation only and not forwarded. Rejected on a deferred tool (`errorCode: \"deferred_tool_cache_control\"`)."
+                            }
+                          },
+                          "required": [
+                            "name",
+                            "description",
+                            "parameters"
+                          ]
+                        },
+                        "_isMcpTool": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "toolSchema"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "serverTool": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "tool_search_tool_regex_20251119"
+                                  ]
+                                },
+                                "name": {
+                                  "type": "string",
+                                  "enum": [
+                                    "tool_search_tool_regex"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "name"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "tool_search_tool_bm25_20251119"
+                                  ]
+                                },
+                                "name": {
+                                  "type": "string",
+                                  "enum": [
+                                    "tool_search_tool_bm25"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "name"
+                              ]
+                            }
+                          ],
+                          "description": "A provider-run tool, sent to the provider as `{ type, name }`. Only the Anthropic tool search tools exist today, and only on models served by the direct Anthropic API whose `supports_tool_search` is true; any other model, Bedrock-served Claude included, is refused with `errorCode: \"tool_search_unsupported\"` rather than run without it."
+                        }
+                      },
+                      "required": [
+                        "serverTool"
+                      ]
+                    }
                   ]
                 }
               },
@@ -2066,13 +2309,14 @@
                   },
                   "budget_tokens": {
                     "type": "integer",
-                    "minimum": 1024
+                    "minimum": 1024,
+                    "maximum": 32000
                   }
                 },
                 "required": [
                   "enabled"
                 ],
-                "description": "Ask a model that can think to think on this turn. On Claude, `reasoningEffort` then sets how much it thinks, and `budget_tokens` (default 16000, minimum 1024) sizes thinking on older Claude models. Ignored by models that cannot think, and on the direct Anthropic API when a json_schema `response_format` is served by a forced tool, which cannot run alongside thinking."
+                "description": "Ask a model that can think to think on this turn. On Claude, `reasoningEffort` then sets how much it thinks, and `budget_tokens` (default 16000, minimum 1024, maximum 32000) sizes thinking on older Claude models. Ignored by models that cannot think, and on the direct Anthropic API when a json_schema `response_format` is served by a forced tool, which cannot run alongside thinking."
               }
             }
           }
@@ -2244,7 +2488,121 @@
           "fabFileId": "664f1c2b9a1e4d0012ab34cd"
         }
       },
+      "synthesizeSpeechResponse400": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "openai",
+              "elevenlabs"
+            ]
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "insufficient_credits",
+              "provider_not_configured",
+              "provider_rejected"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
       "synthesizeSpeechResponse401": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "openai",
+              "elevenlabs"
+            ]
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "insufficient_credits",
+              "provider_not_configured",
+              "provider_rejected"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "synthesizeSpeechResponse403": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "required_scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "API key scopes this route accepts. Holding any one of them satisfies it."
+          },
+          "also_required_scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "API key scopes this route also requires. Every one must be held, on top of `required_scopes`."
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "billing_organization_mismatch"
+            ]
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "openai",
+              "elevenlabs"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "synthesizeSpeechResponse404": {
         "type": "object",
         "properties": {
           "error": {
@@ -2456,6 +2814,14 @@
           "languageCode": {
             "type": "string",
             "pattern": "^[a-z]{2}$"
+          },
+          "organization_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "description": "The organization to bill: one you belong to, or null for your personal credits. Omitted bills your personal credits, as this endpoint always has. An organization-billed API key always bills its own organization: omit this or set it to the key's organization; any other value, null included, is rejected with a 403 (`errorCode: billing_organization_mismatch`)."
           },
           "encoding": {
             "type": "string",
@@ -2765,6 +3131,45 @@
           "saved": true
         }
       },
+      "generateSoundEffectResponse403": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "required_scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "API key scopes this route accepts. Holding any one of them satisfies it."
+          },
+          "also_required_scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "API key scopes this route also requires. Every one must be held, on top of `required_scopes`."
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "billing_organization_mismatch"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
       "generateSoundEffectResponse413": {
         "type": "object",
         "properties": {
@@ -2829,6 +3234,14 @@
           },
           "format": {
             "type": "string"
+          },
+          "organization_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "description": "The organization to bill: one you belong to, or null for your personal credits. Omitted bills your home organization, or your personal credits if you have none. An organization-billed API key always bills its own organization: omit this or set it to the key's organization; any other value, null included, is rejected with a 403 (`errorCode: billing_organization_mismatch`)."
           },
           "encoding": {
             "type": "string",
@@ -3041,11 +3454,11 @@
                 },
                 "supports_tool_search": {
                   "type": "boolean",
-                  "description": "Whether the model accepts the tool search server tool and `defer_loading: true` on tool definitions, so a large tool catalog is searched on demand instead of loaded into context up front. Describes the model only: `/api/ai/v1/completions` does not accept these yet."
+                  "description": "Whether the model accepts the tool search server tool and `defer_loading: true` on tool definitions, so a large tool catalog is searched on demand instead of loaded into context up front. Describes the model: `/api/ai/v1/completions` honours it only for models whose `backend` is `anthropic`. A `bedrock` model with this flag set is not served with tool search there yet: a `serverTool` entry is refused with `errorCode: \"tool_search_unsupported\"` and `defer_loading` is ignored."
                 },
                 "supports_tool_changes": {
                   "type": "boolean",
-                  "description": "Whether a system-role message can carry `tool_addition` and `tool_removal` blocks, which add or remove a declared tool mid-conversation. Describes the model only: `/api/ai/v1/completions` does not accept these blocks yet."
+                  "description": "Whether a system-role message can carry `tool_addition` and `tool_removal` blocks, which add or remove a declared tool mid-conversation. Describes the model only: `/api/ai/v1/completions` does not accept these blocks yet, and will accept them first for models whose `backend` is `anthropic`."
                 },
                 "supports_vision": {
                   "type": "boolean"
@@ -3410,9 +3823,9 @@
               "replaced_by": null,
               "image": null,
               "credits_per_1m_tokens": {
-                "input": 6000,
-                "output": 30000,
-                "cached_input": 600
+                "input": 4000,
+                "output": 20000,
+                "cached_input": 400
               }
             },
             {
@@ -3807,6 +4220,7 @@
                     "retrieve_knowledge_content",
                     "count_knowledge_base",
                     "describe_knowledge_base",
+                    "decide",
                     "list_my_data_lakes",
                     "create_data_lake",
                     "save_content_to_data_lake",
@@ -3857,6 +4271,14 @@
           },
           "sessionName": {
             "type": "string"
+          },
+          "organization_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "description": "Alias of `organizationId`, for callers used to the snake_case video and music bodies. Sending both with different values is a 422."
           },
           "callbackUrl": {
             "type": "string",
@@ -4137,6 +4559,14 @@
             ],
             "minLength": 1,
             "description": "The organization to bill: one you belong to, or null for your personal credits. Omitted bills your home organization, or your personal credits if you have none. An organization-billed API key always bills its own organization: omit this or set it to the key's organization; any other value, null included, is rejected with a 403 (`errorCode: billing_organization_mismatch`)."
+          },
+          "organization_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "description": "Alias of `organizationId`, for callers used to the snake_case video and music bodies. Sending both with different values is a 422."
           },
           "fabFileIds": {
             "type": "array",
@@ -5775,6 +6205,87 @@
             "type": "object",
             "additionalProperties": {}
           },
+          "turnTiming": {
+            "type": "object",
+            "properties": {
+              "queueMs": {
+                "type": "number"
+              },
+              "contextBuildMs": {
+                "type": "number"
+              },
+              "semaphoreWaitMs": {
+                "type": "number"
+              },
+              "totalMs": {
+                "type": "number"
+              },
+              "fallbackHops": {
+                "type": "number"
+              },
+              "retries": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "stream_idle_timeout",
+                        "stream_truncated",
+                        "request_timeout",
+                        "rate_limit",
+                        "overloaded",
+                        "server_error",
+                        "transport",
+                        "tool_pairing",
+                        "other"
+                      ]
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "retryAfterMs": {
+                      "type": "number"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "delayMs": {
+                      "type": "number"
+                    },
+                    "model": {
+                      "type": "string"
+                    },
+                    "at": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        {
+                          "type": "string",
+                          "format": "date-time"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "delayMs",
+                    "model",
+                    "at"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "queueMs",
+              "semaphoreWaitMs",
+              "fallbackHops",
+              "retries"
+            ]
+          },
           "executionTracking": {}
         },
         "required": [
@@ -6059,7 +6570,8 @@
           },
           "maxToolCalls": {
             "type": "integer",
-            "exclusiveMinimum": 0
+            "exclusiveMinimum": 0,
+            "maximum": 50
           },
           "autoNamePlaceholder": {
             "type": "string"
@@ -9430,6 +9942,38 @@
                       "importance"
                     ]
                   }
+                },
+                "video": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "landscape_url": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "landscape_poster_url": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "portrait_url": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "portrait_poster_url": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  }
                 }
               },
               "required": [
@@ -11207,6 +11751,98 @@
             "@sources"
           ]
         }
+      },
+      "getClaudeMarketplaceResponse200": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "owner": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name"
+            ]
+          },
+          "forceRemoveDeletedPlugins": {
+            "type": "boolean"
+          },
+          "plugins": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "version": {
+                  "type": "string"
+                },
+                "source": {
+                  "type": "object",
+                  "properties": {
+                    "source": {
+                      "type": "string",
+                      "enum": [
+                        "archive"
+                      ]
+                    },
+                    "url": {
+                      "type": "string"
+                    },
+                    "sha256": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "source",
+                    "url",
+                    "sha256"
+                  ]
+                }
+              },
+              "required": [
+                "name",
+                "description",
+                "version",
+                "source"
+              ]
+            }
+          }
+        },
+        "required": [
+          "name",
+          "owner",
+          "forceRemoveDeletedPlugins",
+          "plugins"
+        ],
+        "example": {
+          "name": "b4m-org-664f1c2b9a1e4d0012ab34cd",
+          "owner": {
+            "name": "Acme"
+          },
+          "forceRemoveDeletedPlugins": true,
+          "plugins": [
+            {
+              "name": "review-pr",
+              "description": "Review a pull request against the team checklist.",
+              "version": "3",
+              "source": {
+                "source": "archive",
+                "url": "https://app.bike4mind.com/api/v1/skills/market/664f1c2b9a1e4d0012ab34cd/claude-plugin.zip?version=3",
+                "sha256": "a3f1c0de9b8e7d6c5b4a39281706f5e4d3c2b1a09f8e7d6c5b4a392817060f5e"
+              }
+            }
+          ]
+        }
       }
     },
     "parameters": {}
@@ -11216,7 +11852,7 @@
       "post": {
         "operationId": "sendChatMessage",
         "summary": "Send a chat message",
-        "description": "Sends a message to the AI and creates a quest to process it. By default (async) the call returns immediately with a quest id; poll `GET /api/v1/quests/{id}` for the reply. Send `wait: true` to block until the reply is ready and receive it inline. A tool that produced machine-readable state reports it under `toolPayloads` - an array of `{ type, payload }` entries in emission order, alongside (never instead of) the prose reply - on the `wait: true` body and on the polled quest. A turn can FAIL after the ACK - reported on the polled quest as `type: \"error\"`, since the ACK was already sent. A terminal `status: \"stopped\"` (a missing session, a user-cancelled turn) is ALSO a failure even without `type: \"error\"` - it carries an explanatory string in `reply`/`replies` rather than an answer. `type` is the failure signal for the classified failure classes (an abort, a provider timeout, credit exhaustion); `errorCode` is an optional refinement present only when the failure is a classified billing reason. A recovered stuck quest is NOT in that list: one that still has renderable content resolves as a success by design. `QUEST_ERROR_CODES` has two members, but only `insufficient_credits` is raised as a quest errorCode by any current throw site on this endpoint - `spend_cap_exceeded` is thrown only by the embed chat route's pre-flight, which fires outside the process try/catch that would classify it onto a quest. A caller must treat `type: \"error\"` OR a terminal `status: \"stopped\"` as failure even when `errorCode` is absent, and must not read `reply` as an answer without checking those first. Authenticate with an API key (`b4m_live_`) or a JWT. Session resolution: pass `sessionId` to continue an existing notebook. An API-key caller that omits it gets a BRAND-NEW notebook rather than the notebook the human last had open, and `newConversation: true` forces a new notebook for any auth mode; both return the new id as `sessionId`, so the caller can continue the conversation by passing it back. A first-party JWT caller that omits `sessionId` keeps the last-opened-notebook fallback. Sending `sessionId` and `newConversation` together is a 422.",
+        "description": "Sends a message to the AI and creates a quest to process it. By default (async) the call returns immediately with a quest id; poll `GET /api/v1/quests/{id}` for the reply. Send `wait: true` to block until the reply is ready and receive it inline. A `wait: true` turn is bounded at about 45 seconds: one that runs longer is ended (unused credits refunded) and answered with a 504 naming the quest in `quest_id`. Send long or tool-heavy turns (large attachments, tool calls) in the default async mode and poll instead. A tool that produced machine-readable state reports it under `toolPayloads` - an array of `{ type, payload }` entries in emission order, alongside (never instead of) the prose reply - on the `wait: true` body and on the polled quest. A turn can FAIL after the ACK - reported on the polled quest as `type: \"error\"`, since the ACK was already sent. A terminal `status: \"stopped\"` (a missing session, a user-cancelled turn) is ALSO a failure even without `type: \"error\"` - it carries an explanatory string in `reply`/`replies` rather than an answer. `type` is the failure signal for the classified failure classes (an abort, a provider timeout, credit exhaustion); `errorCode` is an optional refinement present only when the failure is a classified billing reason. A recovered stuck quest is NOT in that list: one that still has renderable content resolves as a success by design. `QUEST_ERROR_CODES` has two members, but only `insufficient_credits` is raised as a quest errorCode by any current throw site on this endpoint - `spend_cap_exceeded` is thrown only by the embed chat route's pre-flight, which fires outside the process try/catch that would classify it onto a quest. A caller must treat `type: \"error\"` OR a terminal `status: \"stopped\"` as failure even when `errorCode` is absent, and must not read `reply` as an answer without checking those first. Authenticate with an API key (`b4m_live_`) or a JWT. Session resolution: pass `sessionId` to continue an existing notebook. An API-key caller that omits it gets a BRAND-NEW notebook rather than the notebook the human last had open, and `newConversation: true` forces a new notebook for any auth mode; both return the new id as `sessionId`, so the caller can continue the conversation by passing it back. A first-party JWT caller that omits `sessionId` keeps the last-opened-notebook fallback. Sending `sessionId` and `newConversation` together is a 422.",
         "tags": [
           "AI"
         ],
@@ -11573,6 +12209,60 @@
                 }
               }
             }
+          },
+          "504": {
+            "description": "A `wait: true` turn ran past the request deadline. The turn is already ended: its quest (`quest_id`) is settled as timed out with any partial reply kept, and unused reserved credits are refunded. Retry in async mode for a long turn.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/sendChatMessageResponse504"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "x-required-scopes": [
@@ -11680,7 +12370,7 @@
             }
           },
           "400": {
-            "description": "No usable default chat model is configured and none was supplied.",
+            "description": "No usable default chat model is configured and none was supplied. An organization-billed API key bills an organization that no longer exists, or one its owner is no longer a member of; re-mint the key.",
             "content": {
               "application/json": {
                 "schema": {
@@ -11752,11 +12442,11 @@
             }
           },
           "403": {
-            "description": "The API key does not hold any of the required scopes.",
+            "description": "The API key holds neither the `ai:chat` nor the `ai:generate` scope, or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`).",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                  "$ref": "#/components/schemas/startAgentExecutionResponse403"
                 }
               }
             },
@@ -11765,6 +12455,42 @@
                 "description": "Correlation id for this request; safe to log and quote in support requests.",
                 "schema": {
                   "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
                 }
               }
             }
@@ -12745,7 +13471,7 @@
       "put": {
         "operationId": "updateSession",
         "summary": "Update a session",
-        "description": "Updates a session (called a \"notebook\" in the product UI): its name, attached knowledge files, tags, or retrieval settings. Set `knowledgeIds` and `forceKnowledgeRetrieval: true` together to enable grounded retrieval for `POST /api/chat` against this session - retrieval is gated by these session fields, not by the chat request. `lakeScope` narrows that retrieval to a chosen set of data lakes; omit it to leave the current choice unchanged, or send `null` to clear it so retrieval reaches every lake you can access. `includeLibraryFiles` sets whether the session grounds on your own library alongside its lakes; `false` confines it to lake content even when every lake is in scope (files attached to the session still reach the model and its knowledge-base tools), and is set aside (library included) while `forceKnowledgeRetrieval` is `false`. Authenticate with an API key (`b4m_live_`) or a JWT. Warning: adding to `knowledgeIds` shares those files with every member of every project containing this session by default (see `propagateToProjects`), and that sharing cannot be undone through the UI.",
+        "description": "Updates a session (called a \"notebook\" in the product UI): its name, attached knowledge files, tags, or retrieval settings. Set `knowledgeIds` and `forceKnowledgeRetrieval: true` together to enable grounded retrieval for `POST /api/chat` against this session - retrieval is gated by these session fields, not by the chat request. `lakeScope` narrows that retrieval to a chosen set of data lakes, and a non-empty list also turns forced retrieval on for a session that has never set it; omit it to leave the current choice unchanged, or send `null` to clear it so retrieval reaches every lake you can access. `includeLibraryFiles` sets whether the session grounds on your own library alongside its lakes; `false` confines it to lake content even when every lake is in scope (files attached to the session still reach the model and its knowledge-base tools), and is set aside (library included) while `forceKnowledgeRetrieval` is `false`. Authenticate with an API key (`b4m_live_`) or a JWT. Warning: adding to `knowledgeIds` shares those files with every member of every project containing this session by default (see `propagateToProjects`), and that sharing cannot be undone through the UI.",
         "tags": [
           "Sessions"
         ],
@@ -13840,7 +14566,7 @@
       "post": {
         "operationId": "executeTool",
         "summary": "Execute a server-side tool",
-        "description": "Runs one of the built-in server-side tools (`weather_info`, `web_search`, `web_fetch`) and returns its result as JSON. Authenticate with a JWT access token only - API keys are NOT accepted on this endpoint. Rate-limited to 100 requests/hour per user, counted separately from other endpoints. `request_id` echoes the X-Request-ID response header.",
+        "description": "Runs one of the built-in server-side tools (`weather_info`, `web_search`, `web_fetch`, `decide`) and returns its result as JSON. Authenticate with a JWT access token only - API keys are NOT accepted on this endpoint. Rate-limited to 100 requests/hour per user, counted separately from other endpoints. `request_id` echoes the X-Request-ID response header.",
         "tags": [
           "AI"
         ],
@@ -14034,7 +14760,7 @@
       "post": {
         "operationId": "createCompletion",
         "summary": "Create a chat completion",
-        "description": "OpenAI-compatible completion. A successful request is ALWAYS answered with an SSE stream (`text/event-stream`), regardless of the `stream` flag: a `meta` event, then `content`/`tool_use` events carrying `usage`/`credits`, terminated by `data: [DONE]`. The terminal event carries `stopReason`; treat `max_tokens` as a TRUNCATED reply rather than a complete one, and note that omitting `max_tokens` on the request lets the server size the output ceiling for the model (recommended for reasoning models, which spend thinking tokens inside that ceiling). A message `content` may be a string or an array of parts; image parts are accepted in OpenAI Chat (`image_url`), OpenAI Responses (`input_image`) or Anthropic (`image` with a `source`) form and are translated to whatever the target model speaks. Authenticate with an API key (`b4m_live_`) or a JWT.\n\nERRORS. Everything checked before the model provider is called fails with a JSON error body and a real HTTP status, before any stream opens: a malformed or otherwise invalid request or an unknown `model` `400` (`errorCode: \"unknown_model\"` for the latter), a bad credential `401`, a key without a required scope `403` (with `required_scopes`), a body over 25 MB `413`, a body that fails schema validation `422`, insufficient credits `422` with `errorCode: \"insufficient_credits\"` (personal or org balance, or an org per-member credit cap), a rate limit `429` with `Retry-After`, and a catalogued model whose provider is not configured on this deployment `503` with `errorCode: \"provider_not_configured\"` (retryable). Once the stream has opened the status stays `200` and a failure arrives as one terminal in-band `error` event. Branch on that event's `code`, never on `message`, which is prose and may change: `insufficient_credits` (buy credits) when credits run out mid-generation, `provider_rejected` when the model provider refused our credentials, `content_blocked` when the model declined the request (do not retry it unchanged), and `provider_error` for any other provider failure. Treat `code` as optional.",
+        "description": "OpenAI-compatible completion. A successful request is ALWAYS answered with an SSE stream (`text/event-stream`), regardless of the `stream` flag: a `meta` event, then `content`/`tool_use` events carrying `usage`/`credits`, terminated by `data: [DONE]`. The terminal event carries `stopReason`; treat `max_tokens` as a TRUNCATED reply rather than a complete one, and note that omitting `max_tokens` on the request lets the server size the output ceiling for the model (recommended for reasoning models, which spend thinking tokens inside that ceiling). A message `content` may be a string or an array of parts; image parts are accepted in OpenAI Chat (`image_url`), OpenAI Responses (`input_image`) or Anthropic (`image` with a `source`) form and are translated to whatever the target model speaks. Authenticate with an API key (`b4m_live_`) or a JWT.\n\nTOOL SEARCH. On a model whose `GET /api/v1/models` row has `supports_tool_search: true` and `backend: \"anthropic\"`, a `tools` entry may set `toolSchema.defer_loading: true`, and a `{ \"serverTool\": { \"type\": \"tool_search_tool_regex_20251119\", \"name\": \"tool_search_tool_regex\" } }` (or the `bm25` pair) entry adds Anthropic's tool search, so deferred definitions load only when the model searches for them. The stream then carries `provider_block` events (`{ type, provider: \"anthropic\", block }`) for the server-run search; echo each block back verbatim, in order, in the assistant `messages` content of the next request, and never answer one with a `tool_result`. When the server-run search loop hits its iteration limit the stream ends with `stopReason: \"pause_turn\"`; continue by re-sending the conversation with that assistant turn's provider blocks echoed. A client-side search may return `{ \"type\": \"tool_reference\", \"tool_name\": \"...\" }` blocks inside a `tool_result`'s content. On every other model, Bedrock-served Claude included, `defer_loading` is ignored (every tool is sent as usual) and a server tool, a `tool_reference` or an echoed tool search block is refused with a `400` rather than run without it.\n\nERRORS. Everything checked before the model provider is called fails with a JSON error body and a real HTTP status, before any stream opens: a malformed or otherwise invalid request or an unknown `model` `400` (`errorCode: \"unknown_model\"` for the latter), a bad credential `401`, a key without a required scope `403` (with `required_scopes`), a body over 25 MB `413`, a body that fails schema validation `422`, insufficient credits `422` with `errorCode: \"insufficient_credits\"` (personal or org balance, or an org per-member credit cap), a rate limit `429` with `Retry-After`, and a catalogued model whose provider is not configured on this deployment, or a model that could only come from a self-hosted model server (Ollama, local image) that is currently unreachable, `503` with `errorCode: \"provider_not_configured\"` (retryable). Once the stream has opened the status stays `200` and a failure arrives as one terminal in-band `error` event. Branch on that event's `code`, never on `message`, which is prose and may change: `insufficient_credits` (buy credits) when credits run out mid-generation, `provider_rejected` when the model provider refused our credentials, `content_blocked` when the model declined the request (do not retry it unchanged), and `provider_error` for any other provider failure. Treat `code` as optional.",
         "tags": [
           "AI"
         ],
@@ -14076,7 +14802,7 @@
             }
           },
           "400": {
-            "description": "Malformed or otherwise invalid request (no `errorCode`), or a `model` the caller cannot use (`errorCode: \"unknown_model\"`): not in the catalog or not available to the caller. List valid ids with `GET /api/v1/models`.",
+            "description": "Malformed or otherwise invalid request (no `errorCode`), or a `model` the caller cannot use (`errorCode: \"unknown_model\"`): not in the catalog or not available to the caller. List valid ids with `GET /api/v1/models`. Tool search requests are refused with: `tool_search_unsupported` (a server tool, `tool_reference` or echoed tool search block on a model that cannot serve tool search here), `all_tools_deferred` (every tool deferred and no server tool), `deferred_tool_cache_control` (`cache_control` on a deferred tool), `unknown_tool_reference` (a `tool_reference` naming a tool not in `tools`, or carrying no string `tool_name`). Mid-conversation tool changes are refused with: `tool_changes_unsupported` (a `tool_addition` / `tool_removal` system message on a model that cannot serve it here), `invalid_tool_change` (a malformed block, or one placed where the provider does not accept it), and `unknown_tool_reference` (a changed tool not in `tools`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -14232,7 +14958,7 @@
             }
           },
           "503": {
-            "description": "Temporarily unavailable: the model's provider is not configured on this deployment (`errorCode: \"provider_not_configured\"`), or the database is unreachable (no `errorCode`). Retry later.",
+            "description": "Temporarily unavailable: the model's provider is not configured on this deployment, or the self-hosted model server that lists it (Ollama, local image) is unreachable (`errorCode: \"provider_not_configured\"`), or the database is unreachable (no `errorCode`). Retry later.",
             "content": {
               "application/json": {
                 "schema": {
@@ -14277,7 +15003,7 @@
       "post": {
         "operationId": "synthesizeSpeech",
         "summary": "Synthesize speech from text",
-        "description": "Generates speech from text using OpenAI or ElevenLabs. When the requested provider has no usable key (or the provider rejects it), another configured provider stands in and the substitution is reported via `provider`/`fallbackFrom` and the `X-B4M-Tts-Provider*` headers. Input length is capped per provider (OpenAI 4096 characters, ElevenLabs 10000), and an output `format` the chosen provider cannot produce is rejected with a 422 before any provider cost is incurred. The default `encoding: \"binary\"` returns the raw audio bytes; `encoding: \"base64\"` returns JSON. Audio over the ~4MB response ceiling is returned by signed URL (a `303` for binary, the `delivery: \"url\"` variant for base64). Generated audio is saved to the file browser unless the call sets `preview`; the outcome is reported in the JSON save fields and the `X-B4M-Audio-*` headers - fetch the saved copy from `fileUrl` / `X-B4M-Audio-File-Url`, since `GET /api/files/{id}` fails closed until moderation completes. Authenticate with an API key (`b4m_live_`) or a JWT.",
+        "description": "Generates speech from text using OpenAI or ElevenLabs. When the requested provider has no usable key (or the provider rejects it), another configured provider stands in and the substitution is reported via `provider`/`fallbackFrom` and the `X-B4M-Tts-Provider*` headers. Input length is capped per provider (OpenAI 4096 characters, ElevenLabs 10000), and an output `format` the chosen provider cannot produce is rejected with a 422 before any provider cost is incurred. `organization_id` picks the payer: an organization you belong to, or null for your personal credits; omitted bills your personal credits, as this endpoint always has. The default `encoding: \"binary\"` returns the raw audio bytes; `encoding: \"base64\"` returns JSON. Audio over the ~4MB response ceiling is returned by signed URL (a `303` for binary, the `delivery: \"url\"` variant for base64). Generated audio is saved to the file browser unless the call sets `preview`; the outcome is reported in the JSON save fields and the `X-B4M-Audio-*` headers - fetch the saved copy from `fileUrl` / `X-B4M-Audio-File-Url`, since `GET /api/files/{id}` fails closed until moderation completes. Authenticate with an API key (`b4m_live_`) or a JWT.",
         "tags": [
           "Audio"
         ],
@@ -14515,6 +15241,60 @@
               }
             }
           },
+          "400": {
+            "description": "The billing organization could not be resolved. An organization-billed API key bills an organization that no longer exists, or one its owner is no longer a member of; re-mint the key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/synthesizeSpeechResponse400"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
           "401": {
             "description": "Missing/invalid credentials, no provider has a usable key (`provider_not_configured`), or the provider refused the key we sent and no alternate could stand in (`provider_rejected`).",
             "content": {
@@ -14570,11 +15350,11 @@
             }
           },
           "403": {
-            "description": "The API key does not hold any of the required scopes.",
+            "description": "The API key lacks the `ai:generate` scope (`required_scopes` names it), or the billing organization names one you do not belong to (or is not a valid id), or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`).",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                  "$ref": "#/components/schemas/synthesizeSpeechResponse403"
                 }
               }
             },
@@ -14583,6 +15363,96 @@
                 "description": "Correlation id for this request; safe to log and quote in support requests.",
                 "schema": {
                   "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "A nonexistent `organization_id`, for an admin caller; for anyone else it is `403`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/synthesizeSpeechResponse404"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
                 }
               }
             }
@@ -15540,7 +16410,7 @@
       "post": {
         "operationId": "generateSoundEffect",
         "summary": "Generate a sound effect",
-        "description": "Generates a short sound effect from a text description. Omitting `durationSeconds` lets the provider pick the length (and bills at its default); `promptInfluence` trades prompt fidelity (1) against variation (0). Credits are reserved before generation and refunded if it fails. The default `encoding: \"binary\"` returns the raw audio bytes; `encoding: \"base64\"` returns JSON. Audio over the ~4MB response ceiling is returned by signed URL (a `303` for binary, the `delivery: \"url\"` variant for base64). Generated audio is saved to the file browser unless the call sets `preview`; the outcome is reported in the JSON save fields and the `X-B4M-Audio-*` headers - fetch the saved copy from `fileUrl` / `X-B4M-Audio-File-Url`, since `GET /api/files/{id}` fails closed until moderation completes. Authenticate with an API key (`b4m_live_`) or a JWT.",
+        "description": "Generates a short sound effect from a text description. Omitting `durationSeconds` lets the provider pick the length (and bills at its default); `promptInfluence` trades prompt fidelity (1) against variation (0). Credits are reserved before generation and refunded if it fails. `organization_id` picks the payer: an organization you belong to, or null for your personal credits; omitted bills your home organization (or personal credits if you have none). The default `encoding: \"binary\"` returns the raw audio bytes; `encoding: \"base64\"` returns JSON. Audio over the ~4MB response ceiling is returned by signed URL (a `303` for binary, the `delivery: \"url\"` variant for base64). Generated audio is saved to the file browser unless the call sets `preview`; the outcome is reported in the JSON save fields and the `X-B4M-Audio-*` headers - fetch the saved copy from `fileUrl` / `X-B4M-Audio-File-Url`, since `GET /api/files/{id}` fails closed until moderation completes. Authenticate with an API key (`b4m_live_`) or a JWT.",
         "tags": [
           "Audio"
         ],
@@ -15743,7 +16613,7 @@
             }
           },
           "400": {
-            "description": "The billing user or organization could not be resolved.",
+            "description": "The billing user or organization could not be resolved. An organization-billed API key bills an organization that no longer exists, or one its owner is no longer a member of; re-mint the key.",
             "content": {
               "application/json": {
                 "schema": {
@@ -15815,11 +16685,11 @@
             }
           },
           "403": {
-            "description": "The API key does not hold any of the required scopes.",
+            "description": "The API key lacks the `ai:generate` scope (`required_scopes` names it), or the billing organization names one you do not belong to (or is not a valid id), or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`).",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                  "$ref": "#/components/schemas/generateSoundEffectResponse403"
                 }
               }
             },
@@ -15828,6 +16698,96 @@
                 "description": "Correlation id for this request; safe to log and quote in support requests.",
                 "schema": {
                   "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "A nonexistent `organization_id`, for an admin caller; for anyone else it is `403`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
                 }
               }
             }
@@ -16099,7 +17059,7 @@
       "get": {
         "operationId": "getMe",
         "summary": "Get the authenticated caller",
-        "description": "Returns the authenticated caller: stable id, display name, plan tier, personal credit balance, and entitlement keys. The subject is always the credential holder - this endpoint accepts no user id, owner id, or impersonation parameter of any kind, so a key can only ever read its own owner. `credits.balance` is the caller's personal ledger; a call billed to an organization draws on a pool this number does not describe. Gate on `tier != \"free\"` for \"is this caller paying\" and on `subscription.price_id` for which product - the `basic`/`pro` rungs come from an internal plan ladder and do not track a plan's marketing name. Responses are never cacheable. Authenticate with an API key (`b4m_live_`) carrying `me:read`, or a JWT.",
+        "description": "Returns the authenticated caller: stable id, display name, plan tier, personal credit balance, and entitlement keys. The subject is always the credential holder - this endpoint accepts no user id, owner id, or impersonation parameter of any kind, so a key can only ever read its own owner. `credits.balance` is the caller's personal ledger; a call billed to an organization draws on a pool this number does not describe. Gate on `tier != \"free\"` for \"does this caller hold a paid plan (own or org seat)\" and on `subscription.price_id` for which product - the `basic`/`pro` rungs come from an internal plan ladder and do not track a plan's marketing name. An org seat (a Team plan held by the caller's organization) confers that org plan's tier and `subscription`, even when the caller pays nothing personally, so `tier != \"free\"` does not by itself mean the caller is billed. Responses are never cacheable. Authenticate with an API key (`b4m_live_`) carrying `me:read`, or a JWT.",
         "tags": [
           "Account"
         ],
@@ -16803,7 +17763,7 @@
       "post": {
         "operationId": "generateImage",
         "summary": "Generate an image",
-        "description": "Queues an image generation and returns immediately with the quest that will carry the result - no image yet, and the call never blocks on the render. Poll `GET /api/v1/quests/{id}` until `status` is `\"done\"` (see the `generateImage200PollResult` schema). Omit `sessionId` to create a new session. The prompt is resolved against the session history first, so a follow-up such as \"make it darker\" binds to the previous image; `enhancedPrompt` reports the prompt actually sent to the model. Send `prompt_resolution: \"literal\"` to skip that step and have the prompt sent as written (apart from truncation to the model's prompt limit). `referenceImageFabFileIds` passes up to 15 already-uploaded images as style anchors, after the input image taken from `fabFileIds`. Only gpt-image models accept them: sending any with another model is rejected with a 400 rather than ignored. Which `size` values a model accepts, and whether it honours `background`, `seed`, `quality`, `n` and reference images, is listed per model in the `image` block of `GET /api/v1/models`. Credits are checked when the render runs, so insufficient credits arrive on the polled quest rather than as a 422. `POST /api/ai/generate-image` is a legacy alias of this endpoint. Authenticate with an API key (`b4m_live_`) or a JWT.\n\nOptional `callbackUrl`: an https URL that receives a signed POST when the quest settles (success, failure, or a stop; a failed render is `type: \"error\"` in the body, same as the poll). The body is the `GET /api/v1/quests/{id}` response. Headers: `X-Webhook-Event-ID` (the same on every attempt for one settlement; delivery is at-least-once, so dedupe on it, and a retried quest settles again under a new one), `X-Webhook-Delivery-ID` (unique per attempt), `X-Webhook-Timestamp` (unix seconds), `X-Webhook-Signature-256` (`sha256=` + hex HMAC-SHA256 of `<timestamp>.<raw body>` keyed with the API key's callback signing secret), and `X-Event-Type: quest.settled`. Delivery makes up to 5 attempts, retrying on a 5xx, 408, 429, timeout or network error - never on any other 4xx, and redirects are not followed; your endpoint must answer 2xx within 10 seconds. Requires API-key authentication and a signing secret on that key (returned once at key creation, or via `POST /api/user-api-keys/{id}/callback-secret`). A `callbackUrl` is rejected with a 400 when the request is not API-key authenticated, the key has no signing secret, the URL resolves to a private address, or the deployment does not deliver callbacks; a URL that is not https fails request validation with a 422. Polling still works whether or not `callbackUrl` is set.",
+        "description": "Queues an image generation and returns immediately with the quest that will carry the result - no image yet, and the call never blocks on the render. Poll `GET /api/v1/quests/{id}` until `status` is `\"done\"` (see the `generateImage200PollResult` schema). Omit `sessionId` to create a new session. The prompt is resolved against the session history first, so a follow-up such as \"make it darker\" binds to the previous image; `enhancedPrompt` reports the prompt actually sent to the model. Send `prompt_resolution: \"literal\"` to skip that step and have the prompt sent as written (apart from truncation to the model's prompt limit). `referenceImageFabFileIds` passes up to 15 already-uploaded images as style anchors, after the input image taken from `fabFileIds`. Only gpt-image models accept them: sending any with another model is rejected with a 400 rather than ignored. Which `size` values a model accepts, and whether it honours `background`, `seed`, `quality`, `n` and reference images, is listed per model in the `image` block of `GET /api/v1/models`. Credits are checked when the render runs, so insufficient credits arrive on the polled quest rather than as a 422. `organization_id` is accepted as an alias of `organizationId`, for callers used to the snake_case video and music bodies; `null` bills the personal account. `POST /api/ai/generate-image` is a legacy alias of this endpoint. Authenticate with an API key (`b4m_live_`) or a JWT.\n\nOptional `callbackUrl`: an https URL that receives a signed POST when the quest settles (success, failure, or a stop; a failed render is `type: \"error\"` in the body, same as the poll). The body is the `GET /api/v1/quests/{id}` response. Headers: `X-Webhook-Event-ID` (the same on every attempt for one settlement; delivery is at-least-once, so dedupe on it, and a retried quest settles again under a new one), `X-Webhook-Delivery-ID` (unique per attempt), `X-Webhook-Timestamp` (unix seconds), `X-Webhook-Signature-256` (`sha256=` + hex HMAC-SHA256 of `<timestamp>.<raw body>` keyed with the API key's callback signing secret), and `X-Event-Type: quest.settled`. Delivery makes up to 5 attempts, retrying on a 5xx, 408, 429, timeout or network error - never on any other 4xx, and redirects are not followed; your endpoint must answer 2xx within 10 seconds. Requires API-key authentication and a signing secret on that key (returned once at key creation, or via `POST /api/user-api-keys/{id}/callback-secret`). A `callbackUrl` is rejected with a 400 when the request is not API-key authenticated, the key has no signing secret, the URL resolves to a private address, or the deployment does not deliver callbacks; a URL that is not https fails request validation with a 422. Polling still works whether or not `callbackUrl` is set.",
         "tags": [
           "Images"
         ],
@@ -17090,7 +18050,7 @@
             }
           },
           "422": {
-            "description": "Request failed validation.",
+            "description": "The body is malformed, or it names the billing organization ambiguously. Both `organizationId` and `organization_id` sent with different values is a `422`; so is an empty or blank value for either (a blank is never treated as an omission, which would bill a different payer), and so is any other billing-org-shaped key such as `billing_org_id` or `payerOrgId`, which would otherwise be stripped and silently bill the caller's home organization.",
             "content": {
               "application/json": {
                 "schema": {
@@ -17170,7 +18130,7 @@
       "post": {
         "operationId": "editImage",
         "summary": "Edit an image",
-        "description": "Queues an edit of an existing image and returns the quest that will carry the result, before the render runs. Poll `GET /api/v1/quests/{id}` until `status` is `\"done\"` (see the `editImage200PollResult` schema). `image` is the URL of the source image; `fabFileIds` must name at least one file, and the first is the inpainting mask. `referenceImageFabFileIds` adds up to 15 style anchors after the source image, so the mask always applies to the source; only gpt-image models accept them, and sending any with another model is rejected with a 400 rather than ignored. Both id fields take ids from `POST /api/v1/files`: upload each file, poll `GET /api/v1/files/{id}` until `moderation_status` is `clean`, then pass its `id`. An id that is not yet `clean` fails the edit on the polled quest. `image` takes a URL rather than an id, so a source uploaded the same way is passed as its `download_url`, which must still be unexpired when the render runs. The edited image is not a file id: read it from `files[].url` on the polled quest, not from `GET /api/v1/files/{id}`. `seed` makes an edit reproducible on BFL (FLUX) models only; gpt-image and Gemini models ignore it. Credits are checked when the render runs, so insufficient credits arrive on the polled quest rather than as a 422. `POST /api/ai/edit-image` is a legacy alias of this endpoint. Authenticate with an API key (`b4m_live_`) or a JWT.\n\nOptional `callbackUrl`: an https URL that receives a signed POST when the quest settles (success, failure, or a stop; a failed render is `type: \"error\"` in the body, same as the poll). The body is the `GET /api/v1/quests/{id}` response. Headers: `X-Webhook-Event-ID` (the same on every attempt for one settlement; delivery is at-least-once, so dedupe on it, and a retried quest settles again under a new one), `X-Webhook-Delivery-ID` (unique per attempt), `X-Webhook-Timestamp` (unix seconds), `X-Webhook-Signature-256` (`sha256=` + hex HMAC-SHA256 of `<timestamp>.<raw body>` keyed with the API key's callback signing secret), and `X-Event-Type: quest.settled`. Delivery makes up to 5 attempts, retrying on a 5xx, 408, 429, timeout or network error - never on any other 4xx, and redirects are not followed; your endpoint must answer 2xx within 10 seconds. Requires API-key authentication and a signing secret on that key (returned once at key creation, or via `POST /api/user-api-keys/{id}/callback-secret`). A `callbackUrl` is rejected with a 400 when the request is not API-key authenticated, the key has no signing secret, the URL resolves to a private address, or the deployment does not deliver callbacks; a URL that is not https fails request validation with a 422. Polling still works whether or not `callbackUrl` is set.",
+        "description": "Queues an edit of an existing image and returns the quest that will carry the result, before the render runs. Poll `GET /api/v1/quests/{id}` until `status` is `\"done\"` (see the `editImage200PollResult` schema). `image` is the URL of the source image; `fabFileIds` must name at least one file, and the first is the inpainting mask. `referenceImageFabFileIds` adds up to 15 style anchors after the source image, so the mask always applies to the source; only gpt-image models accept them, and sending any with another model is rejected with a 400 rather than ignored. Both id fields take ids from `POST /api/v1/files`: upload each file, poll `GET /api/v1/files/{id}` until `moderation_status` is `clean`, then pass its `id`. An id that is not yet `clean` fails the edit on the polled quest. `image` takes a URL rather than an id, so a source uploaded the same way is passed as its `download_url`, which must still be unexpired when the render runs. The edited image is not a file id: read it from `files[].url` on the polled quest, not from `GET /api/v1/files/{id}`. `seed` makes an edit reproducible on BFL (FLUX) models only; gpt-image and Gemini models ignore it. Credits are checked when the render runs, so insufficient credits arrive on the polled quest rather than as a 422. `organization_id` is accepted as an alias of `organizationId`, for callers used to the snake_case video and music bodies; `null` bills the personal account. `POST /api/ai/edit-image` is a legacy alias of this endpoint. Authenticate with an API key (`b4m_live_`) or a JWT.\n\nOptional `callbackUrl`: an https URL that receives a signed POST when the quest settles (success, failure, or a stop; a failed render is `type: \"error\"` in the body, same as the poll). The body is the `GET /api/v1/quests/{id}` response. Headers: `X-Webhook-Event-ID` (the same on every attempt for one settlement; delivery is at-least-once, so dedupe on it, and a retried quest settles again under a new one), `X-Webhook-Delivery-ID` (unique per attempt), `X-Webhook-Timestamp` (unix seconds), `X-Webhook-Signature-256` (`sha256=` + hex HMAC-SHA256 of `<timestamp>.<raw body>` keyed with the API key's callback signing secret), and `X-Event-Type: quest.settled`. Delivery makes up to 5 attempts, retrying on a 5xx, 408, 429, timeout or network error - never on any other 4xx, and redirects are not followed; your endpoint must answer 2xx within 10 seconds. Requires API-key authentication and a signing secret on that key (returned once at key creation, or via `POST /api/user-api-keys/{id}/callback-secret`). A `callbackUrl` is rejected with a 400 when the request is not API-key authenticated, the key has no signing secret, the URL resolves to a private address, or the deployment does not deliver callbacks; a URL that is not https fails request validation with a 422. Polling still works whether or not `callbackUrl` is set.",
         "tags": [
           "Images"
         ],
@@ -17457,7 +18417,7 @@
             }
           },
           "422": {
-            "description": "Request failed validation.",
+            "description": "The body is malformed, or it names the billing organization ambiguously. Both `organizationId` and `organization_id` sent with different values is a `422`; so is an empty or blank value for either (a blank is never treated as an omission, which would bill a different payer), and so is any other billing-org-shaped key such as `billing_org_id` or `payerOrgId`, which would otherwise be stripped and silently bill the caller's home organization.",
             "content": {
               "application/json": {
                 "schema": {
@@ -17537,7 +18497,7 @@
       "post": {
         "operationId": "createFileUpload",
         "summary": "Start a file upload",
-        "description": "Registers a file and returns a presigned `upload_url`. Uploading is three steps: (1) call this endpoint with the file name, MIME type, and size in bytes; (2) `PUT` the raw bytes to `upload_url` before `upload_url_expires_at` - send no `Authorization` header, the URL signature is the credential, and do send a `Content-Type` matching `mime_type`; (3) poll `GET /api/v1/files/{id}` until `moderation_status` is `clean` (usually a few seconds after the PUT), then pass `id` wherever an endpoint takes a file id (for example `fabFileIds` and `referenceImageFabFileIds` on `POST /api/v1/image-edits`). Unsupported types, a size over the upload limit, or a size that would exceed your storage quota are rejected with 400 before any URL is issued. Authenticate with an API key (`b4m_live_`) carrying `files:write`, or a JWT.",
+        "description": "Registers a file and returns a presigned `upload_url`. Uploading is three steps: (1) call this endpoint with the file name, MIME type, and size in bytes; (2) `PUT` the raw bytes to `upload_url` before `upload_url_expires_at` - send no `Authorization` header, the URL signature is the credential, and do send a `Content-Type` matching `mime_type`; the URL is bound to `file_size`, so the body must be exactly that many bytes or storage refuses it with 403; (3) poll `GET /api/v1/files/{id}` until `moderation_status` is `clean` (usually a few seconds after the PUT), then pass `id` wherever an endpoint takes a file id (for example `fabFileIds` and `referenceImageFabFileIds` on `POST /api/v1/image-edits`). Unsupported types, a size over the upload limit, or a size that would exceed your storage quota are rejected with 400 before any URL is issued. Authenticate with an API key (`b4m_live_`) carrying `files:write`, or a JWT.",
         "tags": [
           "Files"
         ],
@@ -29063,6 +30023,157 @@
         }
       }
     },
+    "/api/v1/whats-new/media/{id}/{asset}": {
+      "get": {
+        "operationId": "getWhatsNewMedia",
+        "summary": "Get release note media",
+        "description": "Redirects to one file of a published release note video: `landscape` and `portrait` are the 16:9 and 9:16 MP4s, the `-poster` assets their still images. The `video` URLs that listWhatsNew returns for uploaded files point here, so a browser can use them as `src` and `poster` as they are. Public: no credentials are needed, and the note must be one listWhatsNew would show. The redirect is cacheable for up to 10 minutes and its target is signed for 1 hour, longer than that, so follow it rather than storing the target. Rate limited per client IP.",
+        "tags": [
+          "Release notes"
+        ],
+        "security": [],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "landscape",
+                "landscape-poster",
+                "portrait",
+                "portrait-poster"
+              ]
+            },
+            "required": true,
+            "name": "asset",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "303": {
+            "description": "`Location` is a time-limited signed GET for the file.",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Location": {
+                "description": "Signed URL of the file.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No published note has this id, or the note has no such file, or the file is not an upload this deployment serves (a linked URL is listed as is, not through this route).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The path does not serve this HTTP method.",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Allow": {
+                "description": "The methods this path serves. GET implies HEAD.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request failed validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-IP rate limit exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects": {
       "get": {
         "operationId": "listProjects",
@@ -33679,7 +34790,7 @@
       "post": {
         "operationId": "createTranscription",
         "summary": "Transcribe audio",
-        "description": "Transcribes an upload minted by `POST /api/v1/transcriptions/uploads` and returns the text. Call it within 5 minutes of minting the upload. Credits are charged by file size. The uploaded audio is deleted when the call returns, whether it succeeds or fails, so each upload can be transcribed once.\n\n**Limit:** this call is synchronous. The request times out after about 60 seconds, while the AWS speech backend can take up to about 5 minutes on long audio, so a long recording can fail with a gateway timeout (`504`) instead of returning text. A timed-out upload may not be deleted right away (it expires on its own), so do not retry with the same `file_key`: mint a new upload, or send shorter audio.",
+        "description": "Transcribes an upload minted by `POST /api/v1/transcriptions/uploads` and returns the text. Call it within 5 minutes of minting the upload. Credits are charged by file size. The uploaded audio is deleted when the call returns, whether it succeeds or fails, so each upload can be transcribed once.\n\n**Limit:** this call is synchronous. Provider work stops being awaited after 45 seconds from request arrival, leaving time to return reserved credits and delete the upload before the hosted server stops at 60 seconds. A slow recording returns a gateway timeout (`504`) instead of text. AWS batch jobs cannot be cancelled remotely and may finish later; their output expires automatically. Do not retry with the same `file_key`: mint a new upload and send shorter audio. If cleanup fails, the upload may not be deleted right away (it expires on its own).",
         "tags": [
           "Transcriptions"
         ],
@@ -34074,6 +35185,60 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/createTranscriptionResponse503"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "The transcription exceeded the request deadline; reserved credits are returned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             },
@@ -35914,6 +37079,688 @@
           }
         ]
       }
+    },
+    "/api/v1/skills/market/claude-marketplace.json": {
+      "get": {
+        "operationId": "getClaudeMarketplace",
+        "summary": "Get an organization's Claude Code plugin marketplace",
+        "description": "Returns a Claude Code `marketplace.json` listing the organization's approved Organization-visibility Skill Market listings, one `archive` plugin each, pinned by `sha256`. Public and unlisted listings are not included. Responses are never cacheable. Authenticate with an API key (`b4m_live_`) carrying `skills:read`, sent as `Authorization: Bearer`. Claude Code sends that header when it is set as the marketplace source's `headers` in its settings, and forwards it to the same-origin plugin archives.",
+        "tags": [
+          "Skills"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "orgId",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The marketplace.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/getClaudeMarketplaceResponse200"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The API key lacks `skills:read`, or the caller is not a member of the organization.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The path does not serve this HTTP method.",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Allow": {
+                "description": "The methods this path serves. GET implies HEAD.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request failed validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-user rate limit exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "x-required-scopes": [
+          "skills:read"
+        ],
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -s -X GET \"https://your-deployment.example.com/api/v1/skills/market/claude-marketplace.json\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\""
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/skills/market/claude-marketplace.json\", {\n  method: \"GET\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n  },\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.get(\n    \"https://your-deployment.example.com/api/v1/skills/market/claude-marketplace.json\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n)"
+          }
+        ]
+      }
+    },
+    "/api/v1/skills/market/{id}/claude-plugin.zip": {
+      "get": {
+        "operationId": "getClaudePluginZip",
+        "summary": "Download a Skill Market listing as a Claude Code plugin",
+        "description": "A zip holding an approved version as `skills/<name>/SKILL.md`. The optional `version` query pins the listing version advertised by the feed, so later approvals do not change its bytes or `sha256`. Without it, returns the current approved version. Authenticate with an API key (`b4m_live_`) carrying `skills:read`, sent as `Authorization: Bearer`. Claude Code sends that header when it is set as the marketplace source's `headers` in its settings, and forwards it to the same-origin plugin archives.",
+        "tags": [
+          "Skills"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0
+            },
+            "required": false,
+            "name": "version",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The plugin archive.",
+            "content": {
+              "application/zip": {
+                "schema": {
+                  "type": "string",
+                  "contentEncoding": "binary"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid version query.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The API key lacks `skills:read`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No Organization listing with that id is visible to the caller. A listing in an org you are not in, a public or unlisted listing, and a malformed id are all reported as 404.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The path does not serve this HTTP method.",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Allow": {
+                "description": "The methods this path serves. GET implies HEAD.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-user rate limit exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "x-required-scopes": [
+          "skills:read"
+        ],
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -s -X GET \"https://your-deployment.example.com/api/v1/skills/market/<id>/claude-plugin.zip\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\""
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/skills/market/<id>/claude-plugin.zip\", {\n  method: \"GET\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n  },\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.get(\n    \"https://your-deployment.example.com/api/v1/skills/market/<id>/claude-plugin.zip\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n)"
+          }
+        ]
+      }
     }
   },
   "webhooks": {},
@@ -35981,6 +37828,10 @@
     {
       "name": "Agents",
       "description": "Custom agents with their own system prompt, model settings and tool access: list, read and manage them."
+    },
+    {
+      "name": "Skills",
+      "description": "Your organization's approved Skill Market listings, served as a Claude Code plugin marketplace."
     }
   ]
 }

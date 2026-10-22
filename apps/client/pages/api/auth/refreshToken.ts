@@ -1,6 +1,6 @@
 import { User, userRepository, authSessionRepository, realtimeConnectionRepository } from '@bike4mind/database';
 import { secretRotationRepository } from '@bike4mind/database/infra';
-import { UnauthorizedError } from '@server/utils/errors';
+import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { isRotatedSecretWithinGraceWindow } from '@server/auth/secretRotationGrace';
 import { decryptAtRest } from '@bike4mind/utils/security';
 import { requireNonSystemUser } from '@server/auth/requireNonSystemUser';
@@ -12,7 +12,7 @@ import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
 import { buildSessionDevice } from '@server/auth/sessionDevice';
-import { readRefreshCookie, setRefreshCookie } from '@server/auth/refreshCookie';
+import { readRefreshCookie, setRefreshCookie } from '@bike4mind/server-utils/auth/refreshCookie';
 import { isTokenVersionCurrent, authSessionService } from '@bike4mind/services';
 import { logAuthAudit } from '@server/utils/authAudit';
 import * as z from 'zod';

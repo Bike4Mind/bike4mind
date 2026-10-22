@@ -46,7 +46,9 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ getSignedUrl: browserSigner }) }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
+  getFilesStorage: () => ({ getSignedUrl: browserSigner }),
+}));
 
 // Import after mocks are registered so the chain capture runs.
 import '@pages/api/files/search';
@@ -198,6 +200,24 @@ describe('GET /api/files/search', () => {
     await mockRefs.getHandler!(req, res);
 
     expect(scopeArg()).toBeUndefined();
+  });
+
+  // Owner-only means the unwidened query. Unlike shared/curated it is parsed strictly by the
+  // service, so 'false' must keep the default-view scope rather than quietly narrowing the list.
+  it('injects no scope for the owned view', async () => {
+    const { req, res } = invokeGet({ filters: { generated: 'true', owned: 'true' } });
+
+    await mockRefs.getHandler!(req, res);
+
+    expect(scopeArg()).toBeUndefined();
+  });
+
+  it('keeps the default-view scope for owned spelled false', async () => {
+    const { req, res } = invokeGet({ filters: { owned: 'false' } });
+
+    await mockRefs.getHandler!(req, res);
+
+    expect(scopeArg()?.includeShared).toBe(true);
   });
 
   it('still scopes the default view when neither flag is present at all', async () => {

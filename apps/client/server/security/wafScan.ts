@@ -4,7 +4,7 @@ import {
   type SecurityDashboardStatus,
 } from '@bike4mind/database';
 import { Resource } from 'sst';
-import { resolveStage } from './resolveStage';
+import { resolveStage } from '@bike4mind/server-utils/security/resolveStage';
 import { resolveRouterDistributionId } from './wafSharedHelpers';
 
 type WafSeverity = 'critical' | 'high' | 'medium' | 'low';

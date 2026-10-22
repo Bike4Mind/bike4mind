@@ -9,6 +9,7 @@ const h = vi.hoisted(() => ({
   replace: vi.fn(),
   openManager: vi.fn(),
   openGitHubRepoPicker: vi.fn(),
+  setGitHubConnectFailure: vi.fn(),
   authorizeMutate: vi.fn(),
   toastError: vi.fn(),
   toastInfo: vi.fn(),
@@ -19,8 +20,17 @@ vi.mock('@tanstack/react-router', () => ({
 }));
 vi.mock('@client/app/stores/useDataLakeWizardStore', () => ({
   useDataLakeWizardStore: (
-    selector: (s: { openManager: typeof h.openManager; openGitHubRepoPicker: typeof h.openGitHubRepoPicker }) => unknown
-  ) => selector({ openManager: h.openManager, openGitHubRepoPicker: h.openGitHubRepoPicker }),
+    selector: (s: {
+      openManager: typeof h.openManager;
+      openGitHubRepoPicker: typeof h.openGitHubRepoPicker;
+      setGitHubConnectFailure: typeof h.setGitHubConnectFailure;
+    }) => unknown
+  ) =>
+    selector({
+      openManager: h.openManager,
+      openGitHubRepoPicker: h.openGitHubRepoPicker,
+      setGitHubConnectFailure: h.setGitHubConnectFailure,
+    }),
 }));
 vi.mock('@client/app/hooks/data/githubLake', () => ({
   useAuthorizeLakeGitHubConnect: () => ({ mutate: h.authorizeMutate }),
@@ -114,10 +124,11 @@ describe('GitHubLakeCallbackPage', () => {
     expect(h.replace).toHaveBeenCalledWith('/');
     expect(h.openManager).toHaveBeenCalledWith('mine', 'lake1');
     expect(h.openGitHubRepoPicker).toHaveBeenCalledWith('lake1');
+    expect(h.setGitHubConnectFailure).not.toHaveBeenCalled();
     expect(readGitHubLakeConnectHandoff()).toBeNull();
   });
 
-  it("shows the server's reason and lands without opening the picker when the exchange fails", () => {
+  it("lands on the lake with the server's reason on its banner when the exchange fails", () => {
     setSearch({ code: 'c1', state: 's1' });
     renderPage();
 
@@ -126,7 +137,11 @@ describe('GitHubLakeCallbackPage', () => {
       isAxiosError: true,
       response: { data: { error: 'This authorization already expired.' } },
     });
-    expect(h.toastError).toHaveBeenCalledWith('This authorization already expired.');
+    expect(h.setGitHubConnectFailure).toHaveBeenCalledWith({
+      lakeId: 'lake1',
+      message: 'This authorization already expired.',
+    });
+    expect(h.toastError).not.toHaveBeenCalled();
     expect(h.replace).toHaveBeenCalledWith('/');
     expect(h.openManager).toHaveBeenCalledWith('mine', 'lake1');
     expect(h.openGitHubRepoPicker).not.toHaveBeenCalled();
@@ -138,14 +153,15 @@ describe('GitHubLakeCallbackPage', () => {
 
     const [, options] = h.authorizeMutate.mock.calls[0];
     options.onError(new Error('Network Error'));
-    expect(h.toastError).toHaveBeenCalledWith('Could not connect GitHub.');
+    expect(h.setGitHubConnectFailure).toHaveBeenCalledWith({ lakeId: 'lake1', message: 'Could not connect GitHub.' });
   });
 
-  it('asks for a restart and returns to the lake when GitHub sends back no state', () => {
+  it('asks for a restart on the lake banner when GitHub sends back no state', () => {
     setSearch({});
     renderPage();
 
-    expect(h.toastError).toHaveBeenCalledWith(RESTART_NOTICE);
+    expect(h.setGitHubConnectFailure).toHaveBeenCalledWith({ lakeId: 'lake1', message: RESTART_NOTICE });
+    expect(h.toastError).not.toHaveBeenCalled();
     expect(h.replace).toHaveBeenCalledWith('/');
     expect(h.openManager).toHaveBeenCalledWith('mine', 'lake1');
     expect(h.openGitHubRepoPicker).not.toHaveBeenCalled();
@@ -159,6 +175,7 @@ describe('GitHubLakeCallbackPage', () => {
     renderPage();
 
     expect(h.toastError).toHaveBeenCalledWith(RESTART_NOTICE);
+    expect(h.setGitHubConnectFailure).not.toHaveBeenCalled();
     expect(h.replace).toHaveBeenCalledWith('/');
     expect(h.openManager).not.toHaveBeenCalled();
     expect(h.authorizeMutate).not.toHaveBeenCalled();
@@ -187,11 +204,15 @@ describe('GitHubLakeCallbackPage', () => {
     expect(readGitHubLakeConnectHandoff()).toBeNull();
   });
 
-  it('returns to the lake with a cancel notice when the user declines on GitHub', () => {
+  it('returns to the lake with the cancel on its banner when the user declines on GitHub', () => {
     setSearch({ error: 'access_denied', state: 's1' });
     renderPage();
 
-    expect(h.toastError).toHaveBeenCalledWith('GitHub connection cancelled.');
+    expect(h.setGitHubConnectFailure).toHaveBeenCalledWith({
+      lakeId: 'lake1',
+      message: 'GitHub connection cancelled.',
+    });
+    expect(h.toastError).not.toHaveBeenCalled();
     expect(h.openManager).toHaveBeenCalledWith('mine', 'lake1');
     expect(h.openGitHubRepoPicker).not.toHaveBeenCalled();
     expect(h.authorizeMutate).not.toHaveBeenCalled();

@@ -16,8 +16,13 @@ const makeReq = (user: {
 vi.mock('@server/models/Subscription', () => ({
   subscriptionRepository: {
     findActiveUserSubscriptions: vi.fn(),
+    findActiveSubscriptionsByOwners: vi.fn(async () => []),
   },
 }));
+
+const { findPlanHolderOrgIds } = vi.hoisted(() => ({ findPlanHolderOrgIds: vi.fn(async (): Promise<string[]> => []) }));
+vi.mock('@bike4mind/database', () => ({ organizationRepository: { findPlanHolderOrgIds } }));
+vi.mock('@bike4mind/observability', () => ({ Logger: { globalInstance: { warn: vi.fn() } } }));
 
 // Fixture registry: behavior of the real rows is covered by
 // lib/entitlements/registry.test.ts; here we test the resolver's wiring and
@@ -57,6 +62,7 @@ vi.mock('@server/entitlements/partnerRules', () => ({
 }));
 
 const findActive = subscriptionRepository.findActiveUserSubscriptions as ReturnType<typeof vi.fn>;
+const findActiveByOwners = subscriptionRepository.findActiveSubscriptionsByOwners as ReturnType<typeof vi.fn>;
 
 const user = { id: 'u1', tags: ['SomeTag'], isAdmin: false };
 
@@ -64,6 +70,8 @@ describe('getUserEntitlements', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockPartnerEntitlements.mockResolvedValue(new Set<string>());
+    findPlanHolderOrgIds.mockResolvedValue([]);
+    findActiveByOwners.mockResolvedValue([]);
   });
 
   it('grants keys mapped from active subscription prices, unioned with tag-derived keys', async () => {
@@ -71,6 +79,25 @@ describe('getUserEntitlements', () => {
 
     await expect(getUserEntitlements(user)).resolves.toEqual(expect.arrayContaining(['sometag', 'someproduct:pro']));
     expect(findActive).toHaveBeenCalledWith('u1');
+  });
+
+  // The fixture price stands in for an org-owned row: this pins that org rows feed the same
+  // price-to-key resolution as owned rows. The real Team price has no key row today.
+  it("confers an org row's price-derived keys on a seat member", async () => {
+    findActive.mockResolvedValue([]);
+    findPlanHolderOrgIds.mockResolvedValue(['org1']);
+    findActiveByOwners.mockResolvedValue([{ priceId: 'price_pro', ownerType: 'Organization', ownerId: 'org1' }]);
+
+    await expect(getUserEntitlements(user)).resolves.toContain('someproduct:pro');
+    expect(findActiveByOwners).toHaveBeenCalledWith('Organization', ['org1']);
+  });
+
+  it('does not grant org plan entitlements to a user outside the org', async () => {
+    findActive.mockResolvedValue([]);
+    findPlanHolderOrgIds.mockResolvedValue([]);
+
+    await expect(getUserEntitlements(user)).resolves.not.toContain('someproduct:pro');
+    expect(findActiveByOwners).not.toHaveBeenCalled();
   });
 
   it('grants nothing from unmapped prices; tag passthrough (plus baseline) still applies', async () => {
@@ -200,6 +227,8 @@ describe('userHasEntitlement', () => {
 describe('getRequestEntitlements', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    findPlanHolderOrgIds.mockResolvedValue([]);
+    findActiveByOwners.mockResolvedValue([]);
   });
 
   it('resolves and memoizes the list on req.entitlements (one subscription query per request)', async () => {
@@ -212,6 +241,37 @@ describe('getRequestEntitlements', () => {
     expect(first).toEqual(expect.arrayContaining(['sometag', 'someproduct:pro']));
     expect(second).toBe(first); // same array reference — memoized
     expect(findActive).toHaveBeenCalledTimes(1);
+    // Plan-holder resolution must not fill the data-access membership memo.
+    expect((req as unknown as { membershipOrgIds?: string[] }).membershipOrgIds).toBeUndefined();
+    expect(findPlanHolderOrgIds).toHaveBeenCalledTimes(1);
+  });
+
+  // An org-leg failure degrades to the caller's own rows (logged in activeSubscriptions) rather
+  // than failing every gated route for every org member; the user-owned keys still resolve.
+  it('degrades to user-owned keys when the membership read fails', async () => {
+    findActive.mockResolvedValue([{ priceId: 'price_pro' }]);
+    findPlanHolderOrgIds.mockRejectedValue(new Error('mongo unavailable'));
+    const req = makeReq(user);
+
+    await expect(getRequestEntitlements(req)).resolves.toContain('someproduct:pro');
+    expect(findActiveByOwners).not.toHaveBeenCalled();
+  });
+
+  it('degrades to user-owned keys when the org-subscription read fails', async () => {
+    findActive.mockResolvedValue([]);
+    findPlanHolderOrgIds.mockResolvedValue(['org1']);
+    findActiveByOwners.mockRejectedValue(new Error('mongo unavailable'));
+    const req = makeReq(user);
+
+    await expect(getRequestEntitlements(req)).resolves.not.toContain('someproduct:pro');
+  });
+
+  it('does not memoize when the user-owned read fails', async () => {
+    findActive.mockRejectedValue(new Error('mongo unavailable'));
+    const req = makeReq(user);
+
+    await expect(getRequestEntitlements(req)).rejects.toThrow('mongo unavailable');
+    expect((req as unknown as { entitlements?: unknown }).entitlements).toBeUndefined();
   });
 
   it('memoizes an empty list (??= does not re-query on a valid empty result)', async () => {

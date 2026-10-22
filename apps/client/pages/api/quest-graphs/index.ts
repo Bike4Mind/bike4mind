@@ -6,8 +6,8 @@ import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { requireUser } from '@server/middlewares/requireUser';
 import { requireExperimentalFeature } from '@server/middlewares/requireExperimentalFeature';
 import { respond } from '@server/utils/respond';
-import { isValidObjectId } from '@server/utils/objectId';
-import { NotFoundError } from '@server/utils/errors';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import {
   QuestGraphCreatedResponseSchema,
   QuestGraphListResponseSchema,

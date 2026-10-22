@@ -16,6 +16,8 @@ export interface SSEContentEvent {
   usage?: {
     inputTokens?: number;
     outputTokens?: number;
+    /** Subset of outputTokens, not additive. Absent when the provider reported none. */
+    reasoningTokens?: number;
     /** Anthropic-style cache token deltas */
     cacheReadInputTokens?: number;
     cacheCreationInputTokens?: number;
@@ -78,7 +80,17 @@ export interface SSEMetaEvent {
   requestId: string;
 }
 
-export type SSEEvent = SSEContentEvent | SSEErrorEvent | SSEMetaEvent;
+/** A provider content block to echo back verbatim; see CompletionProviderBlockEventSchema. */
+export interface ProviderBlock {
+  provider: 'anthropic';
+  block: Record<string, unknown>;
+}
+
+export interface SSEProviderBlockEvent extends ProviderBlock {
+  type: 'provider_block';
+}
+
+export type SSEEvent = SSEContentEvent | SSEErrorEvent | SSEMetaEvent | SSEProviderBlockEvent;
 
 export interface CompletionInfo {
   toolsUsed?: Array<{
@@ -88,6 +100,8 @@ export interface CompletionInfo {
   }>;
   inputTokens?: number;
   outputTokens?: number;
+  /** Subset of outputTokens, not additive. Absent when the provider reported none. */
+  reasoningTokens?: number;
   /** Anthropic-style cache token deltas */
   cacheReadInputTokens?: number;
   cacheCreationInputTokens?: number;
@@ -125,16 +139,33 @@ export interface CompletionInfo {
    * what is coming instead of showing a silence. Carries no text.
    */
   toolStarted?: ToolStarted;
+  /**
+   * Set, alone, on the frame an adapter emits for a provider-run block (Anthropic tool search).
+   * The completions routes send it as its own `provider_block` event via buildProviderBlockEvent.
+   */
+  providerBlock?: ProviderBlock;
+}
+
+export function buildProviderBlockEvent(providerBlock: ProviderBlock): SSEProviderBlockEvent {
+  return { type: 'provider_block', provider: providerBlock.provider, block: providerBlock.block };
+}
+
+/** The completions frame for one adapter callback: a provider block frame when it carries one, else buildSSEEvent. */
+export function buildCompletionStreamEvent(
+  text: (string | null | undefined)[],
+  info?: CompletionInfo
+): SSEContentEvent | SSEProviderBlockEvent {
+  return info?.providerBlock ? buildProviderBlockEvent(info.providerBlock) : buildSSEEvent(text, info);
 }
 
 /**
  * Build SSE event from LLM completion callback
  * @param text - Sparse array indexed by the provider's content-block/choice index (may
  *   contain null/undefined/holes). NOT [thinking, response] - see
- *   {@link resolveResponseText} for the real shape. This positional read is kept for
- *   the authenticated API/CLI streams that already depend on it; anonymous callers use
- *   {@link buildPublicSSEEvent}, which resolves the whole array. Either way the text of a
- *   reasoning-tagged frame is dropped.
+ *   {@link resolveResponseText} for the real shape. This positional read (with a joined
+ *   fallback for index 2+) is kept for the authenticated API/CLI streams that already depend
+ *   on it; anonymous callers use {@link buildPublicSSEEvent}, which resolves the whole array.
+ *   Either way the text of a reasoning-tagged frame is dropped.
  * @param info - Completion metadata (tools, usage)
  * @returns SSE event object
  */
@@ -142,8 +173,9 @@ export function buildSSEEvent(text: (string | null | undefined)[], info?: Comple
   // A reasoning-tagged frame is never reply prose, and no caller of this builder (the public
   // completions API, its WebSocket twin, the CLI) shows it: blank its text so tagged reasoning
   // never reaches an API consumer. Usage, tools and thinking blocks still ride the frame. Families
-  // that inline reasoning untagged (inlinesReasoningIntoText) are not covered by this.
-  const textContent = info?.channel === 'reasoning' ? '' : text[1] || text[0] || '';
+  // that inline reasoning untagged (inlinesReasoningIntoText) are not covered by this. Text at
+  // index 2+ (after a tool search's server blocks) falls through to the joined array.
+  const textContent = info?.channel === 'reasoning' ? '' : text[1] || text[0] || resolveResponseText(text);
 
   const event: SSEContentEvent = {
     type: info?.toolsUsed && info.toolsUsed.length > 0 ? 'tool_use' : 'content',
@@ -162,12 +194,14 @@ export function buildSSEEvent(text: (string | null | undefined)[], info?: Comple
   if (
     info?.inputTokens !== undefined ||
     info?.outputTokens !== undefined ||
+    info?.reasoningTokens !== undefined ||
     info?.cacheReadInputTokens !== undefined ||
     info?.cacheCreationInputTokens !== undefined
   ) {
     event.usage = {
       inputTokens: info.inputTokens,
       outputTokens: info.outputTokens,
+      ...(info.reasoningTokens !== undefined ? { reasoningTokens: info.reasoningTokens } : {}),
       cacheReadInputTokens: info.cacheReadInputTokens,
       cacheCreationInputTokens: info.cacheCreationInputTokens,
     };
@@ -256,6 +290,7 @@ export function buildPublicSSEEvent(text: (string | null | undefined)[], info?: 
   const safeInfo: CompletionInfo = {
     inputTokens: info.inputTokens,
     outputTokens: info.outputTokens,
+    reasoningTokens: info.reasoningTokens,
     cacheReadInputTokens: info.cacheReadInputTokens,
     cacheCreationInputTokens: info.cacheCreationInputTokens,
     creditsUsed: info.creditsUsed,

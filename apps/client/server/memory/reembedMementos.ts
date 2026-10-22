@@ -12,7 +12,12 @@ import {
   toMementoVector,
 } from '@bike4mind/common';
 import type { Principal } from '@bike4mind/memory';
-import { createKeyProvider, decryptFact, decryptVector, encryptVector } from './factCipher';
+import {
+  createKeyProvider,
+  decryptFact,
+  decryptVector,
+  encryptVector,
+} from '@bike4mind/server-utils/memory/factCipher';
 import { EmbeddingFactory, getProviderFromModel, resolveEmbeddingConfig } from '@bike4mind/fab-pipeline';
 import { apiKeyService } from '@bike4mind/services';
 import { getSettingsByNames } from '@bike4mind/utils';

@@ -2,7 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { userRepository } from '@bike4mind/database';
 import { z } from 'zod';
 import { encryptToken, decryptToken } from '@server/security/tokenEncryption';
-import { assertUrlAllowed, safeFetch, SsrfError } from '@server/utils/ssrfProtection';
+import { assertUrlAllowed, safeFetch, SsrfError } from '@bike4mind/server-utils/utils/ssrfProtection';
 
 /**
  * Blog Integration Settings API

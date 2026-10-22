@@ -30,7 +30,8 @@
     "title": "Mga Pagbag-o"
   },
   "feedback": {
-    "send": "Ipadala ang Feedback"
+    "send": "Ipadala ang Feedback",
+    "rollupTitle": "Imong feedback"
   },
   "terms_policies": "Mga Termino ug Palisiya",
   "login": "Pag-log in",
@@ -166,7 +167,8 @@
     "messages": "Mga Mensahe",
     "invites": "Mga Imbitasyon",
     "sendMessage": "Magpadala ug mensahe",
-    "noMessages": "Walay mga mensahe"
+    "noMessages": "Walay mga mensahe",
+    "title_unread": "Inbox, adunay wala pa mabasa"
   },
   "addSomething": "Idugang {{ name }}",
   "deleteAllSomething": "I-delete Tanan {{ name }}",
@@ -286,7 +288,30 @@
     "renews_on": "Mabag-o sa {{ date }}"
   },
   "billing": {
-    "title": "Pagbayad"
+    "title": "Pagbayad",
+    "balance": "Balanse",
+    "credits_heading": "Pag-top up og credits",
+    "credits_sub": "Usa ka higayon nga mga pack, idugang sa imong balanse. Dili kinahanglan og subscription.",
+    "credits_sub_with_plan": "Usa ka higayon nga mga pack, dugang sa imong binulan nga allowance.",
+    "free_plan": "Libre",
+    "free_plan_detail": "Bayri sumala sa paggamit pinaagi sa mga credit pack",
+    "low_org": "Ang admin sa organisasyon makadugang og credits niini nga account.",
+    "low_with_plan": "Pag-top up aron makapadayon hangtod ma-renew ang imong allowance.",
+    "low_without_plan": "Ang plan modugang og credits matag bulan; ang pack mo-top up karon dayon.",
+    "payment_failed": "Napakyas ang bayad",
+    "plan": "Plan",
+    "plan_fallback": "Subscription",
+    "plan_unavailable": "Dili magamit",
+    "plan_unavailable_detail": "Wala namo ma-load ang imong plan.",
+    "plans_change": "Imong plan",
+    "plans_change_sub": "Dumalaha, usba, o kanselaha ang imong subscription.",
+    "plans_heading": "Mga plan",
+    "plans_heading_sub": "Binulan nga mga plan nga adunay credit allowance.",
+    "plans_upgrade": "Pag-upgrade",
+    "plans_upgrade_sub": "Pagkuha og binulan nga credit allowance imbes nga mag-top up nga mano-mano.",
+    "retry": "Sulayi pag-usab",
+    "see_plans": "Tan-awa ang mga plan",
+    "top_up": "Pag-top up"
   },
   "credits": {
     "title": "Mga Kredito",
@@ -314,7 +339,8 @@
     "usage_pattern": "Base sa imong pattern sa paggamit gikan sa miaging {{days}} nga mga adlaw",
     "credits_used": "Nagamit nga mga Kredito",
     "credits_purchased": "Mga Kredito nga Napalit",
-    "net_credits": "Net nga Kredito"
+    "net_credits": "Net nga Kredito",
+    "unit": "credits"
   },
   "time": {
     "last_7_days": "Sa Miaging 7 ka mga adlaw",
@@ -351,7 +377,7 @@
     "current_credits": "Karon nga kantidad sa mga kredito",
     "best_value": "Pinakamaayo nga Bili",
     "purchase_success": "Napalit {{credits}} nga mga kredito",
-    "history_title": "Kasaysayan sa Pagpalit sa mga Kredito",
+    "history_title": "Kasaysayan sa pagpalit sa mga kredito",
     "purchase": "Palit",
     "no_transactions": "Walay mga transaksyon pa",
     "low_credits": "Mubo ang imong mga kredito",
@@ -362,7 +388,15 @@
       "completed": "Nahuman",
       "pending": "Nagahulat",
       "failed": "Napakyas"
-    }
+    },
+    "buy_pack": "Palita ang {{credits}} credits sa {{price}}",
+    "choose_pack": "Pagpili og credit pack",
+    "history_usage_hint": "Mga pagpalit lang ang nakalista dinhi.",
+    "organization_credits_active": "Aktibo ang credits sa organisasyon",
+    "rate_per_thousand": "{{rate}} matag 1,000 credits",
+    "see_usage": "Tan-awa ang paggamit",
+    "shared_rate": "Parehas ang presyo sa matag pack: {{rate}} matag 1,000 credits.",
+    "switch_to_personal": "Pagbalhin sa imong personal nga account aron makapalit og credits para sa personal nga gamit."
   },
   "settings": {
     "title": "Mga Setting",
@@ -543,7 +577,9 @@
     "personal": "Personal",
     "business": "Negosyo",
     "team": "Team",
-    "enterprise": "Enterprise"
+    "enterprise": "Enterprise",
+    "audience_label": "Klase sa plan",
+    "includes": "Naglakip"
   },
   "agents": {
     "title": "Mga Ahente",
@@ -572,5 +608,13 @@
   "skills": {
     "title": "Mga Kahanas",
     "command_palette_description": "Pagdumala sa magamit pag-usab nga mga template sa instruksyon"
+  },
+  "apiKeys": {
+    "title": "Mga API key"
+  },
+  "connections": {
+    "menuTooltip": "Mga integration sama sa Google Drive ug Slack, apil ang mga API key para sa imong kaugalingong code",
+    "sections": "Mga seksyon sa mga koneksyon",
+    "title": "Mga koneksyon"
   }
 }

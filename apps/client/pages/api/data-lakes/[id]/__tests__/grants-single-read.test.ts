@@ -38,7 +38,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: repos.toAccessContext }));
 vi.mock('@bike4mind/database', () => ({
   withTransaction: (fn: () => unknown) => fn(),

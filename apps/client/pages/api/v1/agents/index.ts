@@ -12,15 +12,15 @@ import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
 import { decodeCursor, encodeCursor } from '@server/utils/cursorPagination';
-import { isValidObjectId } from '@server/utils/objectId';
-import { UnprocessableEntityError } from '@server/utils/errors';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
+import { UnprocessableEntityError } from '@bike4mind/server-utils/utils/errors';
 import { createAgent } from '@server/agents/createAgent';
 import { toPublicAgent } from '@server/agents/toPublicAgent';
 import { toV1AgentError, v1FieldLabel } from '@server/agents/v1AgentErrors';
 
 const CURSOR_SCOPE = 'v1.agents';
 const perUserRateLimit = (bucket: string) =>
-  rateLimit({ limit: req => resolveUserRateLimitPerMin(req.user), windowMs: 60 * 1000, bucket });
+  rateLimit({ limit: req => resolveUserRateLimitPerMin(req.user, req), windowMs: 60 * 1000, bucket });
 
 const listRoute = nextRouteForContract(listAgentsContract, {
   rateLimit: perUserRateLimit('GET /api/v1/agents'),

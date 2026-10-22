@@ -20,6 +20,7 @@ const draft: AttachmentDraft = {
   dismissRejected: () => {},
   add: async () => {},
   pick: async () => {},
+  attachImage: async () => {},
   remove: () => {},
   clear: () => {},
 };
@@ -197,13 +198,14 @@ describe('the composer command menu', () => {
     expect(rows()).toHaveLength(0);
 
     type('/');
-    expect(rows().map(row => row.getAttribute('data-command-name'))).toEqual(['clear', 'compact', 'pr']);
+    expect(rows().map(row => row.getAttribute('data-command-name'))).toEqual(['clear', 'compact', 'pr', 'add-dir']);
+    expect(rows()[3].textContent).toContain('[path]');
   });
 
   it('leaves the Code-only commands out of a Chat conversation', () => {
     mount({ onRunCommand: () => {}, sessionMode: 'chat' });
     type('/');
-    expect(rows().map(row => row.getAttribute('data-command-name'))).toEqual(['clear', 'compact']);
+    expect(rows().map(row => row.getAttribute('data-command-name'))).toEqual(['clear', 'compact', 'add-dir']);
   });
 
   it('filters as the name is typed', () => {
@@ -277,6 +279,56 @@ describe('the composer command menu', () => {
     mount();
     type('/');
     expect(rows()).toHaveLength(0);
+  });
+});
+
+describe('skills mid-sentence', () => {
+  const skills = {
+    skills: [
+      { name: 'review', description: 'Review a change.', source: 'project' as const, filePath: '/r/review/SKILL.md' },
+      { name: 'ship-it', description: 'Release.', source: 'global' as const, filePath: '/g/ship-it/SKILL.md' },
+    ],
+    projectDirectory: '/r',
+    untrustedProject: null,
+    refresh: async () => {},
+    trustProject: async () => {},
+  };
+  const skillRows = () => Array.from(host?.querySelectorAll('[data-testid="skill-picker-option"]') ?? []);
+  const marks = () =>
+    Array.from(host?.querySelectorAll('[data-skill-token]') ?? []).map(mark => mark.getAttribute('data-skill-token'));
+
+  it('opens the skill menu for a slash after a word, without offering commands', () => {
+    mount({ skills, onRunCommand: () => {} });
+    type('fix the login bug then /rev');
+
+    expect(skillRows().map(row => row.textContent)).toEqual([expect.stringContaining('review')]);
+    // A command run from here would throw away the sentence before it.
+    expect(rows()).toHaveLength(0);
+  });
+
+  it('puts the picked skill in place and keeps the words before it', () => {
+    mount({ skills });
+    type('fix the login bug then /rev');
+    press('Enter');
+
+    expect(input().value).toBe('fix the login bug then /review ');
+    expect(input().selectionStart).toBe(input().value.length);
+    expect(skillRows()).toHaveLength(0);
+  });
+
+  it('draws a highlight behind known skills only', () => {
+    mount({ skills, onRunCommand: () => {} });
+    type('first /ship-it after /review, not /nope or /clear');
+    expect(marks()).toEqual(['ship-it', 'review']);
+
+    type('just prose');
+    expect(host?.querySelector('[data-testid="composer-skill-highlight"]')).toBeNull();
+  });
+
+  it('highlights a command only when it leads the draft', () => {
+    mount({ skills, onRunCommand: () => {} });
+    type('/clear');
+    expect(marks()).toEqual(['clear']);
   });
 });
 

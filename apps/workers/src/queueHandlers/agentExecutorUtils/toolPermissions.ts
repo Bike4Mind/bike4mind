@@ -11,7 +11,7 @@
 
 import type { GatedToolCall } from '@bike4mind/agents';
 import { classifyToolPermission } from '@bike4mind/common';
-import { isHeadlessConnection } from '@server/utils/headlessConnection';
+import { isHeadlessConnection } from '@bike4mind/server-utils/utils/headlessConnection';
 
 export { classifyToolPermission, type ToolPermissionResult } from '@bike4mind/common';
 
@@ -203,9 +203,10 @@ export type ReplayConfidenceOutcome = { status: 'proceed' } | { status: 'paused'
  * see `ReActAgent.takeIterationConfidence` for why the replay path needs its own call
  * into the same decision instead of falling out of the regular post-iteration check.
  *
- * `confidence: null` means nothing was replayed (or nothing scored) - proceed without
- * touching the DB. A `confidenceGateThreshold` of 0 (an unattended-loop profile override)
- * always proceeds too, since a real confidence score is never negative.
+ * `confidence: null` means nothing was replayed, nothing scored, or every replayed call
+ * failed to run (a human cannot fix those) - proceed without touching the DB. A
+ * `confidenceGateThreshold` of 0 (an unattended-loop profile override) always proceeds
+ * too, since a real confidence score is never negative.
  */
 export async function gateReplayConfidence(
   params: {
@@ -480,16 +481,18 @@ export async function settleGatedCall(
 
   if (disposition === 'denied') {
     deps.logger.warn(`[Permission] Tool "${toolName}" is denied - failing execution`);
-    const deniedMessage = `Execution stopped: tool "${toolName}" is not permitted`;
+    const deniedMessage = `Execution stopped: tool "${toolName}" is not permitted.`;
     // `callerSafe`: this string names only a tool the caller already knows about, and
     // the public poll response is documented to name the gated tool - so it is
     // published verbatim rather than collapsed by the sanitizer.
     await deps.markFailed(executionId, { message: deniedMessage, callerSafe: true });
-    await deps.sendWs('failed', { executionId, reason: 'tool_denied', toolName });
+    // The same text the Quest persists below, so the client's prompt bubble does not
+    // change wording when the persisted Quest replaces it.
+    await deps.sendWs('failed', { executionId, reason: 'tool_denied', toolName, message: deniedMessage });
     // Settle the dispatch-time Quest so chat history shows the reason instead of a
     // permanently `pending` empty bubble - only `persistRunAsQuest` ever flips it to
     // `done`.
-    await deps.persistRunAsQuest(`${deniedMessage}.`);
+    await deps.persistRunAsQuest(deniedMessage);
     return 'denied';
   }
 

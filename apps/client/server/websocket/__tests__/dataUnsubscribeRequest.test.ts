@@ -36,12 +36,17 @@ vi.mock('@server/auth/tokenGenerator', () => ({
 
 const mockFindById = vi.fn();
 const mockUpdateOne = vi.fn();
+// The enforceMFA gate in verifyWsAccessToken is covered in its own test; inert here.
+vi.mock('@server/auth/mfaEnforcement', () => ({
+  isMfaEnrollmentOwed: async () => false,
+  MFA_ENROLLMENT_REQUIRED_MESSAGE: 'MFA enrollment required.',
+}));
 vi.mock('@bike4mind/database', () => ({
   User: { findById: (...args: unknown[]) => mockFindById(...args) },
   QuerySubscription: { updateOne: (...args: unknown[]) => mockUpdateOne(...args) },
 }));
 
-vi.mock('@server/utils/errors', () => ({
+vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   ForbiddenError: class ForbiddenError extends Error {},
   NotFoundError: class NotFoundError extends Error {},
   UnauthorizedError: class UnauthorizedError extends Error {},
@@ -56,7 +61,7 @@ vi.mock('sst', () => ({
 }));
 
 import { func } from '../dataUnsubscribeRequest';
-import { ForbiddenError, UnauthorizedError } from '@server/utils/errors';
+import { ForbiddenError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 
 const baseEvent = (accessToken = 'token-123') => ({
   requestContext: { connectionId: 'conn-1' },

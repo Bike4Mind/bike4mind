@@ -30,7 +30,8 @@
     "title": "Ændringslog"
   },
   "feedback": {
-    "send": "Send Feedback"
+    "send": "Send Feedback",
+    "rollupTitle": "Din feedback"
   },
   "terms_policies": "Vilkår og politikker",
   "login": "Log ind",
@@ -166,7 +167,8 @@
     "messages": "Beskeder",
     "invites": "Invitationer",
     "sendMessage": "Send en besked",
-    "noMessages": "Ingen beskeder"
+    "noMessages": "Ingen beskeder",
+    "title_unread": "Indbakke, ulæste elementer"
   },
   "addSomething": "Tilføj {{ name }}",
   "deleteAllSomething": "Slet alle {{ name }}",
@@ -286,7 +288,30 @@
     "renews_on": "Fornys den {{ date }}"
   },
   "billing": {
-    "title": "Fakturering"
+    "title": "Fakturering",
+    "balance": "Saldo",
+    "credits_heading": "Køb flere kreditter",
+    "credits_sub": "Engangspakker, lagt til din saldo. Intet abonnement nødvendigt.",
+    "credits_sub_with_plan": "Engangspakker, oven i din månedlige kvote.",
+    "free_plan": "Gratis",
+    "free_plan_detail": "Betal efter forbrug med kreditpakker",
+    "low_org": "En administrator i organisationen kan tilføje kreditter til denne konto.",
+    "low_with_plan": "Køb flere for at arbejde videre, indtil din kvote fornyes.",
+    "low_without_plan": "Et abonnement giver kreditter hver måned; en pakke fylder op nu.",
+    "payment_failed": "Betalingen mislykkedes",
+    "plan": "Abonnement",
+    "plan_fallback": "Abonnement",
+    "plan_unavailable": "Ikke tilgængelig",
+    "plan_unavailable_detail": "Vi kunne ikke indlæse dit abonnement.",
+    "plans_change": "Dit abonnement",
+    "plans_change_sub": "Administrer, skift eller opsig dit abonnement.",
+    "plans_heading": "Abonnementer",
+    "plans_heading_sub": "Månedlige abonnementer med en kreditkvote.",
+    "plans_upgrade": "Opgrader",
+    "plans_upgrade_sub": "Få en månedlig kreditkvote i stedet for at fylde op manuelt.",
+    "retry": "Prøv igen",
+    "see_plans": "Se abonnementer",
+    "top_up": "Fyld op"
   },
   "credits": {
     "title": "Kreditter",
@@ -314,7 +339,8 @@
     "usage_pattern": "Baseret på din brugsmønster fra de sidste {{days}} dage",
     "credits_used": "Brugte credits",
     "credits_purchased": "Købte credits",
-    "net_credits": "Nettocredits"
+    "net_credits": "Nettocredits",
+    "unit": "kreditter"
   },
   "time": {
     "last_7_days": "Sidste 7 dage",
@@ -362,7 +388,15 @@
       "completed": "Afsluttet",
       "pending": "Afventer",
       "failed": "Fejlet"
-    }
+    },
+    "buy_pack": "Køb {{credits}} kreditter for {{price}}",
+    "choose_pack": "Vælg en kreditpakke",
+    "history_usage_hint": "Her vises kun køb.",
+    "organization_credits_active": "Organisationens kreditter er aktive",
+    "rate_per_thousand": "{{rate}} pr. 1.000 kreditter",
+    "see_usage": "Se forbrug",
+    "shared_rate": "Alle pakker har samme pris: {{rate}} pr. 1.000 kreditter.",
+    "switch_to_personal": "Skift til din personlige konto for at købe kreditter til personligt brug."
   },
   "settings": {
     "title": "Indstillinger",
@@ -543,7 +577,9 @@
     "personal": "Personlig",
     "business": "Virksomhed",
     "team": "Team",
-    "enterprise": "Virksomhed"
+    "enterprise": "Virksomhed",
+    "audience_label": "Abonnementstype",
+    "includes": "Indeholder"
   },
   "agents": {
     "title": "Agenter",
@@ -572,5 +608,13 @@
   "skills": {
     "title": "Færdigheder",
     "command_palette_description": "Administrer genanvendelige instruktion skabeloner"
+  },
+  "apiKeys": {
+    "title": "API-nøgler"
+  },
+  "connections": {
+    "menuTooltip": "Integrationer som Google Drive og Slack samt API-nøgler til din egen kode",
+    "sections": "Sektioner for forbindelser",
+    "title": "Forbindelser"
   }
 }

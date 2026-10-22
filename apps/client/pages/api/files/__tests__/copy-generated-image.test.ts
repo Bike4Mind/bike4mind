@@ -22,7 +22,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ upload: vi.fn(), getSignedUrl: h.signUrl }),
   getGeneratedImageStorage: () => ({ download: h.download, getMetadata: h.getMetadata }),
 }));
@@ -32,6 +32,7 @@ vi.mock('@bike4mind/services', () => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
+  organizationRepository: {},
   FabFile: {},
   User: {},
   adminSettingsRepository: {},

@@ -2,8 +2,9 @@ import { useCallback } from 'react';
 import { toast } from 'sonner';
 import { useShallow } from 'zustand/react/shallow';
 
-import { B4MLLMTools, BRIEFCASE_DISALLOWED_TOOLS } from '@bike4mind/common';
+import { B4MLLMTools, BRIEFCASE_DISALLOWED_TOOLS, isToolHiddenBySurface } from '@bike4mind/common';
 import { useLLM } from '@client/app/contexts/LLMContext';
+import { useHiddenSurfaceIds } from '@client/app/hooks/useHiddenSurfaces';
 import type { LLMSettings } from '@client/app/components/commands/LLMCommand';
 import { recommendTools, mergeTools } from '@client/app/utils/toolRecommender';
 import { isToolDenied } from '@client/app/utils/toolMapping';
@@ -30,6 +31,13 @@ export interface ResolveToolsParams {
    * silently adding its own.
    */
   skipAutoOffers?: boolean;
+  /**
+   * Surface of the session this send goes to. In Smart mode with auto-offers on, tools of a workspace
+   * the user hid are left out of the recommendations and the merged set unless this is that workspace
+   * (`isToolHiddenBySurface`). The briefcase override, "Only tools I pick" and non-Smart modes are
+   * never filtered.
+   */
+  activeSurface?: string | null;
   /**
    * The session's `disabledTools`. Only shapes the "Smart tools" toast, so it never names a tool
    * the server will withhold. The payload is untouched on purpose: the server denylist is the gate.
@@ -66,6 +74,7 @@ export function useLLMSettingsAssembly(): {
   const [temperature, top_p, n, toolMode, tools] = useLLM(
     useShallow(s => [s.temperature, s.top_p, s.n, s.toolMode, s.tools])
   );
+  const hiddenSurfaces = useHiddenSurfaceIds();
 
   const assembleSettings = useCallback(
     ({ stream, safeMaxTokens }: AssembleSettingsParams): LLMSettings => ({
@@ -83,7 +92,15 @@ export function useLLMSettingsAssembly(): {
   );
 
   const resolveTools = useCallback(
-    ({ prompt, supportsTools, toolsOverride, skipAutoOffers, deniedTools }: ResolveToolsParams): ResolveToolsResult => {
+    ({
+      prompt,
+      supportsTools,
+      toolsOverride,
+      skipAutoOffers,
+      activeSurface,
+      deniedTools,
+    }: ResolveToolsParams): ResolveToolsResult => {
+      const visible = (tool: string) => !isToolHiddenBySurface(tool, hiddenSurfaces, activeSurface);
       // Briefcase per-message tools override: a one-click prompt declares exactly
       // the tools its send must run with, for THIS message only - without mutating
       // the user's sticky tool selection. It short-circuits the Smart/Fast ladder
@@ -119,20 +136,20 @@ export function useLLMSettingsAssembly(): {
         if (skipAutoOffers) {
           return { effectiveTools: tools, refused: false };
         }
-        const recommendations = recommendTools(prompt);
+        const recommendations = recommendTools(prompt).filter(r => visible(r.tool));
         const autoSelected = recommendations.filter(r => !tools.includes(r.tool) && !isToolDenied(r.tool, deniedTools));
         if (autoSelected.length > 0) {
           const names = autoSelected.map(r => r.reason).join(', ');
           toast.info(`Smart tools: ${names}`);
         }
-        return { effectiveTools: mergeTools(recommendations, tools), refused: false };
+        return { effectiveTools: mergeTools(recommendations, tools).filter(visible), refused: false };
       }
       if (toolMode === 'fast') {
         return { effectiveTools: [], refused: false };
       }
       return { effectiveTools: tools, refused: false };
     },
-    [tools, toolMode]
+    [tools, toolMode, hiddenSurfaces]
   );
 
   return { assembleSettings, resolveTools };

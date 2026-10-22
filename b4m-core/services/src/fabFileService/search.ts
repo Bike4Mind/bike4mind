@@ -21,6 +21,9 @@ const searchFabFilesSchema = z.object({
       curated: z.coerce.boolean().optional(), // Indicates if the user is searching for curated notebook files
       // Strict, unlike the two above: z.coerce.boolean() reads the query string 'false' as true.
       generated: z.union([z.boolean(), z.enum(['true', 'false']).transform(value => value === 'true')]).optional(),
+      // Owner-only: the route drops the shared/data-lake scope for it (apps/client/pages/api/files/search.ts),
+      // so the query takes its owner-only branch. Strict for the same reason as `generated`.
+      owned: z.union([z.boolean(), z.enum(['true', 'false']).transform(value => value === 'true')]).optional(),
       projectId: z.string().optional(),
       ids: z.array(z.string()).optional(),
     })

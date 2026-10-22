@@ -1,4 +1,4 @@
-import { withEventContext } from '@server/utils/eventContext';
+import { withEventContext } from '@workers/utils/eventContext';
 import { SessionEvents } from '@server/utils/eventBus';
 import { Quest, Session, sessionRepository } from '@bike4mind/database';
 import { OperationsModelService } from '@client/services/operationsModelService';
@@ -7,6 +7,7 @@ import type { CompletionInfo } from '@bike4mind/llm-adapters';
 import { recordSessionOperationalUsage } from '@workers/events/recordSessionOperationalUsage';
 import mongoose from 'mongoose';
 import { stripToolOutputMarker } from '@bike4mind/utils/artifactParser';
+import { isStoppedBeforeReply } from '@bike4mind/utils';
 
 export const handler = withEventContext(async (event, logger) => {
   const body = SessionEvents.ContextSummarize.schema.parse(event.properties);
@@ -43,9 +44,18 @@ export const handler = withEventContext(async (event, logger) => {
     `Context-summarizing session ${sessionId}: ${quests.length} quests (${session.contextSummaryUpToQuestId ?? 'start'} → ${verbatimWindowStartQuestId})`
   );
 
+  const replayableQuests = quests.filter(quest => !isStoppedBeforeReply(quest));
+  const newBoundaryQuestId = quests[quests.length - 1].id;
+  if (!replayableQuests.length) {
+    // Advance over cancelled turns without inventing working memory or billing a model call.
+    await sessionRepository.update({ id: session.id, contextSummaryUpToQuestId: newBoundaryQuestId });
+    logger.debug(`Skipped stopped turns in context summary for session ${sessionId}`);
+    return;
+  }
+
   const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel();
 
-  const questContent = quests
+  const questContent = replayableQuests
     .map(quest => {
       const lines = [`Q: ${quest.prompt}`];
 
@@ -140,9 +150,7 @@ Format: Dense bullet points. Preserve all technical specifics. No word limit.`,
     return;
   }
 
-  // The new boundary is the ID of the last quest we included in this summary
-  const newBoundaryQuestId = quests[quests.length - 1].id;
-
+  // Consume the whole processed window, including its skipped cancelled turns.
   await sessionRepository.update({
     id: session.id,
     contextSummary: contextSummaryText,

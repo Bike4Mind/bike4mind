@@ -12,13 +12,18 @@ vi.mock('@server/middlewares/checkBlockedIP', () => ({
 }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn(() => Promise.resolve()) }));
 vi.mock('@server/analytics/signupEvents', () => ({ emitSignupForSourceProducts: vi.fn().mockResolvedValue([]) }));
-vi.mock('@server/utils/config', () => ({ Config: { JWT_SECRET: 'test-secret' }, isE2EEnabled: () => false }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
+  Config: { JWT_SECRET: 'test-secret' },
+  isE2EEnabled: () => false,
+}));
 vi.mock('@server/auth/tokenGenerator', () => ({
   authTokenGenerator: { signAccessToken: () => 'full-access' },
 }));
 
 const mockSetRefreshCookie = vi.fn();
-vi.mock('@server/auth/refreshCookie', () => ({ setRefreshCookie: (...a: any[]) => mockSetRefreshCookie(...a) }));
+vi.mock('@bike4mind/server-utils/auth/refreshCookie', () => ({
+  setRefreshCookie: (...a: unknown[]) => mockSetRefreshCookie(...a),
+}));
 vi.mock('@server/auth/sessionDevice', () => ({ buildSessionDevice: () => ({}) }));
 
 const mockLogAuthAudit = vi.fn((..._args: any[]) => Promise.resolve());
@@ -32,6 +37,10 @@ vi.mock('@server/auth/trustedDevice', () => ({
 
 // Settings are read through getSettingsValue; drive both flags from one map.
 const settingsValues: Record<string, unknown> = {};
+// Pulled in transitively by signupDomainGrant; the partner mock never matches a rule with a subscription.
+vi.mock('@server/subscriptions/grantIndividualAdminSubscription', () => ({
+  grantIndividualAdminSubscription: vi.fn(),
+}));
 vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: vi.fn(() => Promise.resolve({})),
   getSettingsValue: (key: string) => settingsValues[key],

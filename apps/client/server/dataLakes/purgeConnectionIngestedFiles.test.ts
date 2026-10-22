@@ -6,6 +6,7 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
+  organizationRepository: {},
   dataLakeFindingRepository: {},
   dataLakeRepository: {},
   fabFileChunkRepository: {},
@@ -24,7 +25,7 @@ vi.mock('@bike4mind/services', () => ({
 vi.mock('@bike4mind/fab-pipeline', () => ({ FabFileChunkSearchIndex: {} }));
 vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: () => false }));
 vi.mock('@server/dataLakes/shredMemoryForLakeTags', () => ({ shredMemoryForLakeTags: vi.fn() }));
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ delete: vi.fn() }) }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: () => ({ delete: vi.fn() }) }));
 
 import { purgeConnectionIngestedFiles } from './purgeConnectionIngestedFiles';
 

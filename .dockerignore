@@ -32,3 +32,11 @@ docs-site
 !docs-site/docs/features
 !docs-site/docs/admin
 .playwright-mcp
+
+# Premium glue is generated inside the image: apps/client's postinstall writes it, and the
+# self-host images re-link the overlay and regenerate it after `COPY . .`. A build host that
+# only ran a local install holds the ABSENT form (the overlay link refuses to run outside a
+# self-host build), so copying it in would drop the overlay's LLM tools and system prompts.
+# Keep host state out of every build context and let each image regenerate it.
+apps/client/app/premium-generated
+apps/client/server/premium-generated

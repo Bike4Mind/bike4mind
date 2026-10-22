@@ -1,6 +1,8 @@
 import {
   extensionFromMimeType,
   FabFileSourceType,
+  GENERATED_ASSET_GENERATOR_TAG,
+  GENERATED_ASSET_MAX_STORED_TEXT_CHARS,
   GENERATED_ASSET_TAG,
   isStorageLimitError,
   KnowledgeType,
@@ -35,19 +37,7 @@ const KEY_PREFIX: Record<Modality, string> = {
   image: 'generated',
 };
 
-/** File-name label and tag per generator (`generated` plus this one); hyphenated like the other user-facing tags. */
-const LABEL: Record<GeneratedAssetGenerator, string> = {
-  music: 'music',
-  speech: 'speech',
-  sound_effect: 'sound-effect',
-  video: 'video',
-  image: 'image',
-};
-
 const PROMPT_SNIPPET_CHARS = 40;
-
-// sourceMetadata rides every metadata-only file listing, so a long TTS script or lyric sheet is not stored whole.
-const MAX_STORED_TEXT_CHARS = 2_000;
 
 export type SaveGeneratedAssetResult =
   | { saved: true; fileId: string; s3Key: string; fileName: string; fileUrl?: string }
@@ -126,7 +116,7 @@ export async function saveGeneratedAsset(
         prefix: KEY_PREFIX[modality],
         tags: [
           { name: GENERATED_ASSET_TAG, strength: 1 },
-          { name: LABEL[generation.generator], strength: 1 },
+          { name: GENERATED_ASSET_GENERATOR_TAG[generation.generator], strength: 1 },
           ...(jobTag ? [{ name: jobTag, strength: 1 }] : []),
         ],
       },
@@ -165,10 +155,14 @@ export async function saveGeneratedAsset(
 }
 
 function storedGeneration(generation: GeneratedAssetMetadata): GeneratedAssetMetadata {
+  const prompt = generation.prompt.slice(0, GENERATED_ASSET_MAX_STORED_TEXT_CHARS);
   return {
     ...generation,
-    prompt: generation.prompt.slice(0, MAX_STORED_TEXT_CHARS),
-    ...(generation.lyrics !== undefined && { lyrics: generation.lyrics.slice(0, MAX_STORED_TEXT_CHARS) }),
+    prompt,
+    promptTruncated: prompt.length < generation.prompt.length,
+    ...(generation.lyrics !== undefined && {
+      lyrics: generation.lyrics.slice(0, GENERATED_ASSET_MAX_STORED_TEXT_CHARS),
+    }),
   };
 }
 
@@ -188,7 +182,7 @@ function skipReasonFor(error: unknown): GeneratedAssetSaveSkippedReason {
 
 // No dots in the snippet, so the appended extension is the only one the name carries.
 function buildFileName(generation: GeneratedAssetMetadata, extension: string): string {
-  const label = LABEL[generation.generator];
+  const label = GENERATED_ASSET_GENERATOR_TAG[generation.generator];
   const snippet = generation.prompt
     .trim()
     .replace(/[^\w\s-]/g, '')

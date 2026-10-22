@@ -4,8 +4,8 @@ import {
   generateBackupCodes,
   hashBackupCode,
   userEligibleForMFA,
-  clearFailedAttempts,
 } from './utils';
+import { claimTOTPCode, MfaAttemptRejectedError, withReservedMfaAttempt, type MfaAttemptRepository } from './attempt';
 
 export interface SetupMFARequest {
   user: IUserDocument;
@@ -56,6 +56,9 @@ export async function setupMFA(
       setupAt: new Date(),
       lastUsedAt: undefined,
     },
+    // The step counter is a global clock, not tied to this secret: clear it so a code from the
+    // NEW secret is not refused as a replay of one claimed before re-enrollment.
+    totpLastStep: null,
     updatedAt: new Date(),
   });
 
@@ -77,7 +80,7 @@ export async function setupMFA(
 export async function verifyMFASetup(
   user: IUserDocument,
   token: string,
-  userRepository: Pick<IUserRepository, 'update'>
+  userRepository: Pick<IUserRepository, 'atomicEnableMfa'> & MfaAttemptRepository
 ): Promise<{ success: boolean; user: IUserDocument }> {
   if (!user.mfa || !user.mfa.totpSecret) {
     throw new Error('No MFA setup in progress for this user.');
@@ -87,33 +90,26 @@ export async function verifyMFASetup(
     throw new Error('MFA is already enabled for this user.');
   }
 
-  // Import the verification function here to avoid circular dependencies
-  const { verifyTOTPToken } = await import('./utils');
+  const mfa = user.mfa;
+  return withReservedMfaAttempt(user.id, userRepository, async attemptState => {
+    if ((await claimTOTPCode(user.id, mfa.totpSecret, token, userRepository)) === null) {
+      throw new MfaAttemptRejectedError('Invalid TOTP code.', attemptState);
+    }
 
-  if (!verifyTOTPToken(user.mfa.totpSecret, token)) {
-    throw new Error('Invalid TOTP code.');
-  }
+    // Field-level write, NOT a whole-`mfa` `$set`: rebuilding the subdocument from `user` (or,
+    // worse, from a secret-less echo) risks wiping the select:false totpSecret/backupCodes and
+    // would clear attempts reserved since the snapshot. Enabling MFA plus clearing the
+    // attempt/lockout state touches only those fields, leaving the secrets untouched. It is
+    // conditional on the verified secret so a setup that replaced it in the meantime is not
+    // enabled behind the user's back.
+    const updatedUser = await userRepository.atomicEnableMfa(user.id, mfa.totpSecret);
 
-  // Enable MFA. `user` came from findByIdWithMfaSecrets and carries the select:false
-  // totpSecret + backupCodes; build the write from it - and clear any failed-attempt/lockout
-  // state in this SAME write - so the secrets survive. Clearing from this function's
-  // (not-+selected) return value would omit and `$set`-replace-wipe the secrets, leaving
-  // totpEnabled:true with no secret and permanently bricking sign-in.
-  const updatedMFA = clearFailedAttempts(user.mfa);
-  updatedMFA.totpEnabled = true;
-  updatedMFA.lastUsedAt = new Date();
+    if (!updatedUser) {
+      throw new MfaAttemptRejectedError('MFA setup changed. Please restart enrollment.', attemptState);
+    }
 
-  const updatedUser = await userRepository.update({
-    id: user.id,
-    mfa: updatedMFA,
-    updatedAt: new Date(),
+    return { success: true, user: updatedUser };
   });
-
-  if (!updatedUser) {
-    throw new Error('Failed to enable MFA.');
-  }
-
-  return { success: true, user: updatedUser };
 }
 
 /**

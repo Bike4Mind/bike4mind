@@ -48,6 +48,8 @@ export interface AgentStep {
     confidence?: number;
     /** How the confidence score was determined */
     confidenceSource?: 'deterministic' | 'llm_self_report' | 'heuristic' | 'default';
+    /** Set on an observation whose tool call threw or could not run (not inferred from result text) */
+    toolFailed?: boolean;
   };
 }
 

@@ -184,3 +184,80 @@ describe('PromptMetaInspector timestamps', () => {
     expect(screen.getByText(/Updated: 2026-03-10/)).toBeTruthy();
   });
 });
+
+describe('PromptMetaInspector redirect reporting', () => {
+  beforeEach(() => {
+    usePromptMetaInspector.getState().setPromptMeta(null);
+  });
+
+  const copiedMarkdown = () => {
+    const writeText = vi.fn();
+    Object.assign(navigator, { clipboard: { writeText } });
+    render(<PromptMetaInspector />, { wrapper: TestWrapper });
+    fireEvent.click(screen.getByTestId('prompt-meta-copy-md-btn'));
+    return writeText.mock.calls[0][0] as string;
+  };
+
+  it('flags the requested model when a redirect replaced it', () => {
+    show({ model: { name: 'gemini-3.5-flash' }, redirectedFrom: 'gemini-2.5-pro' });
+    render(<PromptMetaInspector />, { wrapper: TestWrapper });
+
+    expect(screen.getByTestId('prompt-meta-redirected-from-chip')).toHaveTextContent('Redirected from gemini-2.5-pro');
+  });
+
+  it('shows no redirected-from chip when the requested model answered', () => {
+    show({ model: { name: 'gemini-2.5-pro' } });
+    render(<PromptMetaInspector />, { wrapper: TestWrapper });
+
+    expect(screen.queryByTestId('prompt-meta-redirected-from-chip')).toBeNull();
+  });
+
+  it('adds a Redirected from line to the markdown report only when the turn was redirected', () => {
+    show({ model: { name: 'gemini-3.5-flash' }, redirectedFrom: 'gemini-2.5-pro' });
+
+    expect(copiedMarkdown()).toContain('- **Redirected from**: gemini-2.5-pro');
+  });
+
+  it('omits the Redirected from line when the turn was not redirected', () => {
+    show({ model: { name: 'gemini-2.5-pro' } });
+
+    expect(copiedMarkdown()).not.toContain('Redirected from');
+  });
+});
+
+describe('PromptMetaInspector turn timing', () => {
+  beforeEach(() => {
+    usePromptMetaInspector.getState().setPromptMeta(null);
+  });
+
+  it('shows the spliced turnTiming record, one row per retry', () => {
+    show({
+      turnTiming: {
+        queueMs: 120,
+        contextBuildMs: 2400,
+        semaphoreWaitMs: 0,
+        totalMs: 415_000,
+        retries: [
+          { reason: 'stream_idle_timeout', delayMs: 3500, model: 'model-a', at: new Date() },
+          { reason: 'rate_limit', status: 429, requestId: 'req_1', delayMs: 2000, model: 'model-a', at: new Date() },
+        ],
+        fallbackHops: 1,
+      },
+    } as Partial<PromptMeta>);
+    render(<PromptMetaInspector />, { wrapper: TestWrapper });
+
+    const details = screen.getByTestId('turn-timing-details');
+    expect(details.textContent).toContain('Total: 6m 55s');
+    expect(details.textContent).toContain('Fallback hops: 1');
+    const retries = screen.getAllByTestId('turn-timing-retry');
+    expect(retries[0].textContent).toContain('response stalled on model-a');
+    expect(retries[1].textContent).toContain('HTTP 429 - req_1');
+  });
+
+  it('says so when the reply predates turn timing', () => {
+    show({});
+    render(<PromptMetaInspector />, { wrapper: TestWrapper });
+
+    expect(screen.getByTestId('turn-timing-details').textContent).toContain('Not recorded for this reply.');
+  });
+});

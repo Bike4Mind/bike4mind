@@ -20,6 +20,7 @@ import {
   describeStorageLimitError,
   isStorageLimitError,
   parseStorageLimitErrorInfo,
+  redactStorageLimitError,
   type StorageLimitErrorInfo,
 } from '../errors';
 
@@ -196,6 +197,24 @@ describe('StorageLimitError', () => {
     expect(parseStorageLimitErrorInfo({ ...info, errorCode: 'insufficient_credits' })).toBeUndefined();
     expect(parseStorageLimitErrorInfo({ ...info, used_bytes: -1 })).toBeUndefined();
     expect(parseStorageLimitErrorInfo({ error: 'x' })).toBeUndefined();
+  });
+
+  it('redacts to the code and owner, which every reader still recognises and words', () => {
+    const redacted = redactStorageLimitError(new StorageLimitError('x', info));
+
+    expect(redacted.additionalInfo).toStrictEqual({ errorCode: 'storage_limit_exceeded', owner: 'user' });
+    expect(isStorageLimitError(redacted)).toBe(true);
+    expect(parseStorageLimitErrorInfo({ error: 'x', ...redacted.info })).toStrictEqual(redacted.info);
+    expect(redacted.message).toBe(describeStorageLimitError(redacted.info, String));
+    expect(describeStorageLimitError({ errorCode: 'org_storage_limit_exceeded', owner: 'org' }, String)).toBe(
+      "This change would exceed the organization's storage limit."
+    );
+  });
+
+  it('parses nothing from a body that has some byte counts but not all', () => {
+    expect(parseStorageLimitErrorInfo({ errorCode: 'storage_limit_exceeded', owner: 'user', used_bytes: 5 })).toBe(
+      undefined
+    );
   });
 
   it('words each code from its numbers with the supplied byte formatter', () => {

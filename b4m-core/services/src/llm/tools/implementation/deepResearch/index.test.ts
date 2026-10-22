@@ -228,6 +228,22 @@ describe('performDeepResearch honors the turn abort signal', () => {
     expect(provider.search).not.toHaveBeenCalled();
   });
 
+  it('clamps a requested depth past DEEP_RESEARCH_MAX_DEPTH', async () => {
+    createFirecrawlApp.mockReturnValue(null);
+    resolveWebSearchProviders.mockResolvedValue([searchProvider(), null]);
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await performDeepResearch(
+      makeContext(() => controller.signal),
+      { topic: 'marine biology' },
+      { maxDepth: 1000, duration: 1000 }
+    );
+
+    // totalSteps is three per depth level.
+    expect(result.data.totalSteps).toBe(30);
+  });
+
   it('stops after the in-flight iteration instead of running to maxDepth', async () => {
     const controller = new AbortController();
     // Stop pressed while the first iteration's search is in flight.

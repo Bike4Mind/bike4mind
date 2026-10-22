@@ -1,7 +1,7 @@
 import { organizationService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { userRepository } from '@bike4mind/database/auth';
 import { withTransaction } from '@bike4mind/database';
@@ -25,7 +25,9 @@ const handler = baseApi().post(
     // owner-or-platform-admin inline, excluding the appointed manager that every other roster path
     // admits - so a manager could remove a member but not add one.
     if (!organizationService.canAdministerOrganization(req.user, organization)) {
-      throw new ForbiddenError('Only the billing owner, team manager, or admin can add a user to the organization');
+      throw new ForbiddenError(
+        'Only the billing owner, an organization manager, or an admin can add a user to the organization'
+      );
     }
 
     await withTransaction(() =>

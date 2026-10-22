@@ -13,7 +13,7 @@ const { lakes, selectedAccount, toastInfo, organizations, gitHubFlag, slugPrevie
       lakes: { current: [] as { id: string; name: string; organizationId?: string }[] },
       selectedAccount: { current: { id: 'me', personal: true } as { id: string; personal: boolean } | null },
       toastInfo: vi.fn(),
-      organizations: { current: [] as { id: string; userId: string; managerId?: string }[] },
+      organizations: { current: [] as { id: string; userId: string }[] },
       gitHubFlag: { current: true },
       slugPreview,
       slugPreviewMock: vi.fn((_name: string, _enabled: boolean) => ({
@@ -174,12 +174,17 @@ describe('SourceSelectionStep - the source cards', () => {
     expect(screen.getByTestId('create-source-card-googleDrive')).toBeInTheDocument();
   });
 
-  it('shows GitHub disabled with its reason in a personal workspace', () => {
+  it('offers GitHub as available in a personal workspace and opens the create panel without an organization', () => {
     showCards();
     renderStep();
 
-    expect(screen.getByTestId('create-source-card-github')).toBeDisabled();
-    expect(screen.getByTestId('create-source-reason-github')).toHaveTextContent('organization');
+    expect(screen.getByTestId('create-source-card-github')).toBeEnabled();
+    expect(screen.queryByTestId('create-source-reason-github')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('create-source-card-github'));
+
+    expect(useDataLakeWizardStore.getState().createSource).toBe('github');
+    expect(screen.getByTestId('github-create-panel')).toBeInTheDocument();
   });
 
   it('shows GitHub disabled with its reason for a non-manager of the org', () => {
@@ -192,6 +197,7 @@ describe('SourceSelectionStep - the source cards', () => {
   });
 
   it('does not record a source when a disabled card is clicked', () => {
+    asOrgMember();
     showCards();
     renderStep();
 

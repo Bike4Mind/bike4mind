@@ -13,7 +13,7 @@ vi.mock('@server/middlewares/checkBlockedIP', () => ({
 vi.mock('@server/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: any, _res: any, next: any) => next(),
 }));
-vi.mock('@server/utils/errors', () => ({
+vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   UnauthorizedError: class UnauthorizedError extends Error {},
 }));
 vi.mock('@server/auth/requireNonSystemUser', () => ({ requireNonSystemUser: vi.fn() }));
@@ -51,8 +51,14 @@ vi.mock('@bike4mind/services', () => ({
 const mockRevokeBySid = vi.fn();
 const mockFindBySid = vi.fn();
 const mockEndConnections = vi.fn();
+const mockUserFindById = vi.fn();
+const mockRecordForActor = vi.fn();
+vi.mock('@server/utils/adminAudit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@server/utils/adminAudit')>()),
+  recordAdminActionForActor: (...args: any[]) => mockRecordForActor(...args),
+}));
 vi.mock('@bike4mind/database', () => ({
-  userRepository: {},
+  userRepository: { findById: (...args: any[]) => mockUserFindById(...args) },
   realtimeConnectionRepository: { endConnections: (...args: any[]) => mockEndConnections(...args) },
   authSessionRepository: {
     revokeBySid: (...args: any[]) => mockRevokeBySid(...args),
@@ -61,6 +67,53 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 import handler from '../returnToAdmin';
+
+// Secrets the user document can carry. The redactor is stubbed to identity at the top of this file, so the
+// response schema alone is what has to drop them.
+const SECRET_USER_FIELDS = {
+  password: 'bcrypt_secret_value',
+  passwordHash: 'hash_secret_value',
+  oauthCredentials: { github: 'ghp_secret_value' },
+  securityQuestions: [{ question: 'first pet', answer: 'mittens' }],
+  loginRecords: [{ ip: '203.0.113.7' }],
+  authProviders: [{ id: 'goog-sub-1', strategy: 'google', accessToken: 'ya29.secret_value' }],
+  googleDrive: { accessToken: 'gd_secret_value', refreshToken: 'gd_refresh_value', expiresAt: 123 },
+  mfa: { totpEnabled: true, secret: 'totp_secret_value', backupCodes: ['backup_secret_value'] },
+  notInSchema: 'undeclared_secret_value',
+};
+const SECRET_VALUES = [
+  'bcrypt_secret_value',
+  'hash_secret_value',
+  'ghp_secret_value',
+  'mittens',
+  '203.0.113.7',
+  'ya29.secret_value',
+  'gd_secret_value',
+  'gd_refresh_value',
+  'totp_secret_value',
+  'backup_secret_value',
+  'undeclared_secret_value',
+];
+
+function expectUserStrippedOfSecrets(responseBody: { user: Record<string, unknown> }) {
+  const { user } = responseBody;
+  expect(user).toMatchObject({ id: 'user-1' });
+  for (const key of [
+    'password',
+    'passwordHash',
+    'oauthCredentials',
+    'securityQuestions',
+    'loginRecords',
+    'notInSchema',
+  ]) {
+    expect(user).not.toHaveProperty(key);
+  }
+  expect(user.authProviders).toEqual([{ id: 'goog-sub-1', strategy: 'google' }]);
+  expect(user.googleDrive).toEqual({ expiresAt: 123 });
+  expect(user.mfa).toEqual({ totpEnabled: true });
+  const serialized = JSON.stringify(responseBody);
+  for (const secret of SECRET_VALUES) expect(serialized).not.toContain(secret);
+}
 
 /** baseApi normally attaches req.logger; the mocked builder skips its middleware chain. */
 const post = (cookie: string) => {
@@ -74,6 +127,8 @@ describe('POST /api/auth/returnToAdmin', () => {
     vi.clearAllMocks();
     mockRevokeBySid.mockResolvedValue(undefined);
     mockEndConnections.mockResolvedValue({ connectionIds: [] });
+    mockRecordForActor.mockResolvedValue(null);
+    mockUserFindById.mockResolvedValue({ id: 'cust-1', name: 'Customer', username: 'customer' });
     mockRotateSession.mockResolvedValue({
       status: 'rotated',
       user: { id: 'admin-1' },
@@ -84,7 +139,7 @@ describe('POST /api/auth/returnToAdmin', () => {
       impersonatedBy: null,
     });
     // The impersonation session this admin created.
-    mockFindBySid.mockResolvedValue({ sid: 'cust-sid', impersonatedBy: 'admin-1' });
+    mockFindBySid.mockResolvedValue({ sid: 'cust-sid', userId: 'cust-1', impersonatedBy: 'admin-1' });
   });
 
   it('restores the admin session: rotates the parked token into the primary cookie and clears the return cookie', async () => {
@@ -100,6 +155,24 @@ describe('POST /api/auth/returnToAdmin', () => {
     expect(cookies.some(c => c.startsWith('b4m_rt_admin=;') && c.includes('Max-Age=0'))).toBe(true);
 
     expect(res._getJSONData()).toMatchObject({ accessToken: 'admin-access', impersonating: false });
+  });
+
+  it('returns a user stripped of every secret and undeclared field', async () => {
+    mockRotateSession.mockResolvedValue({
+      status: 'rotated',
+      user: { id: 'user-1', ...SECRET_USER_FIELDS },
+      userId: 'admin-1',
+      accessToken: 'admin-access',
+      refreshToken: 'admin-refresh-rotated',
+      sid: 'admin-sid',
+      impersonatedBy: null,
+    });
+    const { req, res } = post('b4m_rt=cust-sid.cust-secret; b4m_rt_admin=admin-sid.admin-secret');
+
+    await handler(req as any, res as any);
+
+    expect(res._getStatusCode()).toBe(200);
+    expectUserStrippedOfSecrets(res._getJSONData());
   });
 
   it('revokes the impersonation session so the abandoned customer token cannot be refreshed later', async () => {
@@ -171,5 +244,66 @@ describe('POST /api/auth/returnToAdmin', () => {
 
     await expect(handler(req as any, res as any)).rejects.toBeInstanceOf(Error);
     expect(mockRotateSession).not.toHaveBeenCalled();
+  });
+
+  describe('impersonation end audit', () => {
+    const cookie = 'b4m_rt=cust-sid.cust-secret; b4m_rt_admin=admin-sid.admin-secret';
+
+    it('records user.impersonation.ended as the restored admin when the rotation succeeded', async () => {
+      mockRotateSession.mockResolvedValue({
+        status: 'rotated',
+        user: { id: 'admin-1', username: 'admin', name: 'Admin', isAdmin: true },
+        userId: 'admin-1',
+        accessToken: 'admin-access',
+        refreshToken: 'admin-refresh-rotated',
+        sid: 'admin-sid',
+        impersonatedBy: null,
+      });
+      const { req, res } = post(cookie);
+
+      await handler(req as any, res as any);
+
+      expect(mockRecordForActor).toHaveBeenCalledTimes(1);
+      const [, actor, input] = mockRecordForActor.mock.calls[0];
+      expect(actor).toMatchObject({ kind: 'user', userId: 'admin-1', impersonatedUserId: 'cust-1' });
+      expect(input).toMatchObject({
+        action: 'user.impersonation.ended',
+        target: { kind: 'user', id: 'cust-1', displayName: 'Customer' },
+        related: { impersonationSessionId: 'cust-sid' },
+      });
+    });
+
+    it('records nothing when the rotation coalesced, so a double click writes one entry', async () => {
+      mockRotateSession.mockResolvedValue({
+        status: 'coalesced',
+        user: { id: 'admin-1' },
+        userId: 'admin-1',
+        accessToken: 'admin-access',
+        sid: 'admin-sid',
+        impersonatedBy: null,
+      });
+      const { req, res } = post(cookie);
+
+      await handler(req as any, res as any);
+
+      expect(mockRecordForActor).not.toHaveBeenCalled();
+    });
+
+    it("records nothing when the impersonation session is not this admin's", async () => {
+      mockFindBySid.mockResolvedValue({ sid: 'cust-sid', userId: 'cust-1', impersonatedBy: 'a-different-admin' });
+      const { req, res } = post(cookie);
+
+      await handler(req as any, res as any);
+
+      expect(mockRecordForActor).not.toHaveBeenCalled();
+    });
+
+    it('records nothing when there is no impersonation cookie to name a session', async () => {
+      const { req, res } = post('b4m_rt_admin=admin-sid.admin-secret');
+
+      await handler(req as any, res as any);
+
+      expect(mockRecordForActor).not.toHaveBeenCalled();
+    });
   });
 });

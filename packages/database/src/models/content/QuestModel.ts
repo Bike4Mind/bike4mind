@@ -137,6 +137,26 @@ const NotServingLakesSchema = subSchema({
   reason: { type: String, required: true },
 });
 
+// ITurnTiming. No enum on `reason`, per the file header's rule: TURN_RETRY_REASONS is the contract.
+const TurnRetrySchema = subSchema({
+  reason: { type: String, required: true },
+  status: { type: Number, required: false },
+  retryAfterMs: { type: Number, required: false },
+  requestId: { type: String, required: false },
+  delayMs: { type: Number, required: true },
+  model: { type: String, required: true },
+  at: { type: Date, required: true },
+});
+
+const TurnTimingSchema = subSchema({
+  queueMs: { type: Number, required: true },
+  contextBuildMs: { type: Number, required: false },
+  semaphoreWaitMs: { type: Number, required: true },
+  totalMs: { type: Number, required: false },
+  retries: { type: [TurnRetrySchema], required: true },
+  fallbackHops: { type: Number, required: true },
+});
+
 // Same rationale as LakeMemorySchema above (subSchema + default:undefined to suppress
 // auto-vivification of `surfaces`/`dataLakeTags` as empty arrays, which would fail the Zod
 // re-parse since `attempted` is required). Top-level on promptMeta, not nested under
@@ -193,6 +213,14 @@ const RetrievalSummarySchema = subSchema({
 const RetrievalCoverageSchema = subSchema({
   partial: { type: Boolean, required: true },
   reasons: [{ type: String, required: false }],
+});
+
+// Required fields and default: undefined for the reason RetrievalCoverageSchema gives: the client
+// banners a reply on this field's presence.
+const RetrievalFloorRejectionSchema = subSchema({
+  floorPct: { type: Number, required: true },
+  measuredPct: { type: Number, required: true },
+  embeddingModel: { type: String, required: true },
 });
 
 // `content` is deliberately absent - see the exclusion note on the context path below.
@@ -286,6 +314,12 @@ const ReplyChoicesOutcomeSchema = subSchema({
   offered: { type: Boolean, required: false },
   status: { type: String, required: false },
   reason: { type: String, required: false },
+});
+
+// A tool call the model wrote as text and finalize stripped. Sub-Schema with `default: undefined`
+// so a turn without one has no field rather than an empty object.
+const NarratedToolCallSchema = subSchema({
+  toolNames: { type: [String], required: false, default: undefined },
 });
 
 export const PromptMetaSchema = new Schema<PromptMeta>(
@@ -435,6 +469,8 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
     retrieval: { type: RetrievalSummarySchema, required: false, default: undefined },
     // Must stay in sync with the Zod PromptMeta `retrievalCoverage` (parity test enforces it).
     retrievalCoverage: { type: RetrievalCoverageSchema, required: false, default: undefined },
+    // Must stay in sync with the Zod PromptMeta `retrievalFloorRejection` (parity test enforces it).
+    retrievalFloorRejection: { type: RetrievalFloorRejectionSchema, required: false, default: undefined },
     functionCalls: [
       {
         name: { type: String, required: false },
@@ -451,6 +487,7 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
     ],
     offeredTools: [{ type: String, required: false }],
     toolMode: { type: String, enum: ChatToolModeSchema.options, required: false },
+    redirectedFrom: { type: String, required: false },
     performance: {
       totalResponseTime: { type: Number, required: false },
       contextRetrievalTime: { type: Number, required: false },
@@ -490,6 +527,8 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
     finishReason: { type: String, required: false },
     // Must stay in sync with the Zod PromptMeta `replyChoices` (parity test enforces it).
     replyChoices: { type: ReplyChoicesOutcomeSchema, required: false, default: undefined },
+    // Must stay in sync with the Zod PromptMeta `narratedToolCall`.
+    narratedToolCall: { type: NarratedToolCallSchema, required: false, default: undefined },
     artifacts: { type: [ArtifactSchema], required: false, default: undefined },
     toolHealth: { type: [ToolHealthSchema], required: false, default: undefined },
     executionTracking: { type: ExecutionTrackingSchema, required: false, default: undefined },
@@ -809,6 +848,8 @@ export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
       required: false,
       _id: false,
     },
+    // Same projection requirement as attachmentNotices.
+    turnTiming: { type: TurnTimingSchema, required: false },
     // Generalized UI side-effects extracted from tool __uiSideEffect sentinels
     uiSideEffects: {
       type: [
@@ -1003,7 +1044,7 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     const result = await this.model
       .find({ sessionId, deletedAt: null })
       .select(
-        'sessionId timestamp type status errorCode prompt reply replies fabFileIds images promptMeta creditsUsed attachmentNotices attachmentDelivery suggestedChoices pinned'
+        'sessionId timestamp type status errorCode prompt reply replies fabFileIds images promptMeta creditsUsed attachmentNotices attachmentDelivery turnTiming suggestedChoices pinned'
       )
       .sort({ timestamp: sort, _id: sort })
       .skip(limit * (page - 1))
@@ -1055,8 +1096,10 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
       // Include suggestedChoices so history can re-attach a turn's stored choices (see
       // withStoredChoices in @bike4mind/utils).
       // Include pinned: IChatHistoryItemDocument types it, so omitting it hands every caller undefined.
+      // Include status so history can skip a prompt stopped before any reply (see isStoppedBeforeReply
+      // in @bike4mind/utils).
       .select(
-        'sessionId timestamp type prompt reply replies structuredReplies toolResults promptMeta images fabFileIds researchModeResults jupyterNotebook oob suggestedChoices pinned _id'
+        'sessionId timestamp type prompt reply replies structuredReplies toolResults promptMeta images fabFileIds researchModeResults jupyterNotebook oob suggestedChoices pinned status _id'
       )
       .sort({ timestamp: -1 })
       .limit(limit)
@@ -1067,6 +1110,12 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     return result
       .filter(doc => doc._id != null)
       .map(doc => ({ ...doc, id: doc._id.toString() }) as IChatHistoryItemDocument);
+  }
+
+  async countBySessionId(sessionId: string) {
+    // Explicit deletedAt, like getMostRecentChatHistory, so the window math counts exactly the quests
+    // that query can return. Covered by deletedAt_sessionId_timestamp_desc: an index-only count.
+    return this.model.countDocuments({ sessionId, deletedAt: null });
   }
 
   async findByIdWithStatus(id: string) {
@@ -1132,7 +1181,8 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
    */
   async findUnfinishedByAgentExecutionIds(agentExecutionIds: string[]): Promise<UnfinishedQuestView[]> {
     if (agentExecutionIds.length === 0) return [];
-    // MUST STAY IN SYNC with `QuestContentView` in questTimeoutRecovery.ts: a
+    // MUST STAY IN SYNC with `QuestContentView` in
+    // packages/server-utils/src/chatCompletion/questTimeoutRecovery.ts: a
     // content field the decision reads but this does not project reads as
     // absent, and a run that produced that content gets stamped as a failure.
     const docs = await this.model
@@ -1153,6 +1203,20 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
       )
       .lean<Array<Omit<UnfinishedQuestView, 'id'> & { _id: mongoose.Types.ObjectId }>>();
     return docs.map(({ _id, ...content }) => ({ ...content, id: _id.toString() }));
+  }
+
+  /**
+   * `update`, but only while the stored quest is still unfinished; null when it already reached a
+   * terminal status. The streaming pipeline saves its in-memory 'running' copy mid-turn, and an
+   * `_id`-only write would put 'running' back over a user Stop before the cancellation watcher saw it.
+   */
+  async updateIfUnfinished(data: Partial<IChatHistoryItemDocument> & { id: string }) {
+    const { id, ...updateData } = data;
+    if (!id) throw new Error('id is required');
+    return this._plainUpdate(
+      { _id: convertId(id), status: { $nin: TERMINAL_QUEST_STATUSES } },
+      updateData as Record<string, unknown>
+    );
   }
 
   /**
@@ -1244,6 +1308,15 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
   }
 
   /**
+   * Stores the MCP write preview a Confirm card renders from, for runs that have no in-memory quest
+   * to assign it to (Agent mode). Replaces any earlier action, as classic chat does. No-op if no
+   * Quest matches.
+   */
+  async setPendingAction(questId: string, action: { tool: string; params: Record<string, unknown>; ts: number }) {
+    await this.model.updateOne({ _id: convertId(questId) }, { $set: { pendingAction: action } });
+  }
+
+  /**
    * Append generation jobs to a chat Quest the moment each job is created. `$addToSet` makes a
    * replayed tool call a no-op. Whole-quest saves keep the id because the caller merges it into the
    * in-memory quest first (see ToolBuilder's onStatusUpdate); only a save already in flight can
@@ -1299,6 +1372,16 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     return [...new Set(docs.map(d => d.sessionId))];
   }
 
+  // Every organization a user's quests were recorded under, soft-deleted ones included: a DSAR
+  // export or deletion has to reach rows the user can no longer see, and telemetry hashes are keyed
+  // by that organization. One full scan of the user's quests, which is why it is not on a read path.
+  async findOrganizationIdsForUser(userId: string): Promise<string[]> {
+    const orgIds: unknown[] = await this.model
+      .distinct('promptMeta.session.organizationId', { 'promptMeta.session.userId': userId })
+      .setOptions({ includeDeleted: true });
+    return orgIds.filter(Boolean).map(String);
+  }
+
   // The subset of `keys` that some quest in this session references as generated media (`images`
   // or `videos`). Session-scoped twin of findSessionIdsByImage: once the caller's access to the
   // session is established, a key is readable iff one of its turns produced it.
@@ -1329,7 +1412,8 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     newerThan?: Date;
     limit?: number;
   }): Promise<StaleRunningQuestView[]> {
-    // MUST STAY IN SYNC with `QuestTimeoutView` in questTimeoutRecovery.ts: a
+    // MUST STAY IN SYNC with `QuestTimeoutView` in
+    // packages/server-utils/src/chatCompletion/questTimeoutRecovery.ts: a
     // content field the decision reads but this does not project reads as
     // absent, and a run that produced that content gets stamped as a failure.
     const docs = await this.model
@@ -1677,8 +1761,9 @@ export const questRepository = new QuestRepository(Quest);
  * Content fields the stranded-quest settle reads, plus the id it writes back to.
  *
  * Picked from `IChatHistoryItem` rather than restated so this and
- * `QuestContentView` (questTimeoutRecovery.ts) cannot drift on field types. The
- * projection in the query above still has to list the same fields by hand.
+ * `QuestContentView` (packages/server-utils/src/chatCompletion/questTimeoutRecovery.ts) cannot
+ * drift on field types. The projection in the query above still has to list the same fields by
+ * hand.
  */
 export type UnfinishedQuestView = { id: string } & Pick<
   IChatHistoryItem,
@@ -1697,8 +1782,8 @@ export type UnfinishedQuestView = { id: string } & Pick<
  * Everything the liveness recovery decision reads, plus the id it writes back to.
  *
  * Picked from `IChatHistoryItem` rather than restated so this and
- * `QuestTimeoutView` (questTimeoutRecovery.ts) cannot drift on field types.
- * `updatedAt` is declared here because it lives on the mongo document, not on
+ * `QuestTimeoutView` (packages/server-utils/src/chatCompletion/questTimeoutRecovery.ts) cannot
+ * drift on field types. `updatedAt` is declared here because it lives on the mongo document, not on
  * `IChatHistoryItem`. The projection in the query above still lists the same
  * fields by hand.
  */

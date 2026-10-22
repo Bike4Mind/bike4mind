@@ -52,6 +52,18 @@ describe('IntegrationAuditLogModel', () => {
     }
   });
 
+  it("accepts a 'custom_mcp' connection event", async () => {
+    const log = await integrationAuditLogRepository.createLog(
+      baseLog({
+        integrationName: 'custom_mcp',
+        entityType: 'mcp_connection',
+        action: 'connection_created',
+        metadata: { connectionId: 'c1', host: 'mcp.example.com', slug: 'example' },
+      })
+    );
+    expect(log).toMatchObject({ integrationName: 'custom_mcp', entityType: 'mcp_connection' });
+  });
+
   it('still rejects an unknown integrationName (enum enforcement intact)', async () => {
     await expect(
       // @ts-expect-error - deliberately invalid value to prove enum still enforces

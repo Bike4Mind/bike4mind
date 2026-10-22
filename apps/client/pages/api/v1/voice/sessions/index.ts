@@ -10,7 +10,6 @@ import {
   fabFileRepository,
   projectRepository,
   sessionRepository,
-  userRepository,
 } from '@bike4mind/database';
 import {
   ChatModels,
@@ -32,18 +31,19 @@ import {
   ForbiddenError,
   HTTPError,
   NotFoundError,
-} from '@server/utils/errors';
-import { isValidObjectId } from '@server/utils/objectId';
-import { refundLostVoiceHoldReserve, settlePriorVoiceHold } from '@server/voice/settleVoiceHold';
+} from '@bike4mind/server-utils/utils/errors';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
+import { reserveVoiceHold, settlePriorVoiceHold } from '@server/voice/settleVoiceHold';
 import { signVoiceSessionToken } from '@server/voice/voiceSessionToken';
-import { MAX_SESSION_SECONDS, shouldReuseVoiceHold } from '@server/voice/voiceSessionLimits';
+import {
+  MAX_SESSION_SECONDS,
+  voiceSessionTokenExpiresAtMs,
+  shouldReuseVoiceHold,
+} from '@bike4mind/server-utils/voice/voiceSessionLimits';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import { requestTurnAuth } from '@server/auth/turnAuth';
 
 const DEFAULT_MODEL = ChatModels.CLAUDE_4_6_SONNET as ChatModelName;
-// The session token must stay valid for the whole call (ElevenLabs replays it on
-// every turn), plus headroom for clock skew and a slightly over-running call.
-const SESSION_TOKEN_TTL_SECONDS = MAX_SESSION_SECONDS + 120;
 // Mirror v1's concurrency guard so a user (or a leaked session endpoint) can't
 // open unbounded parallel calls, each holding a credit reservation.
 const MAX_CONCURRENT_VOICE_SESSIONS = 2;
@@ -77,7 +77,7 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
 
   const settings = await getSettingsMap(
     { adminSettings: adminSettingsRepository },
-    { names: ['voiceV2Enabled', 'enforceCredits', 'elevenLabsServerApiKey'] }
+    { names: ['voiceV2Enabled', 'enforceCredits', 'elevenLabsServerApiKey'], skipCache: true }
   );
 
   if (!getSettingsValue('voiceV2Enabled', settings)) {
@@ -178,7 +178,9 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
       ...requestTurnAuth(req),
       voiceHoldStartedAt: holdStartedAt.toISOString(),
     },
-    SESSION_TOKEN_TTL_SECONDS
+    // Expires with the hold's window, not a fresh window per token: ElevenLabs replays it on every
+    // turn, and a reconnect onto the same hold must not extend the call the reserve covers.
+    Math.ceil((voiceSessionTokenExpiresAtMs(holdStartedAt) - Date.now()) / 1000)
   );
 
   const transport = createElevenLabsConversationalTransport({
@@ -196,11 +198,8 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
     await settlePriorVoiceHold(session);
   }
 
-  if (enforceCredits && !reuseHold) {
-    if ((req.user?.currentCredits ?? 0) < reservedCredits) {
-      throw insufficientCreditsError(`Insufficient credits for voice session (requires ~${reservedCredits} credits)`);
-    }
-    await userRepository.incrementCredits(req.user.id, -reservedCredits);
+  if (enforceCredits && !reuseHold && (req.user?.currentCredits ?? 0) < reservedCredits) {
+    throw insufficientCreditsError(`Insufficient credits for voice session (requires ~${reservedCredits} credits)`);
   }
 
   let createResult;
@@ -217,9 +216,6 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
       ...(req.user.voiceSystemPromptOverride ? { systemPromptOverride: req.user.voiceSystemPromptOverride } : {}),
     });
   } catch (error) {
-    if (enforceCredits && !reuseHold) {
-      await userRepository.incrementCredits(req.user.id, reservedCredits);
-    }
     const errDetail =
       error instanceof Error
         ? { message: error.message, stack: error.stack, name: error.name }
@@ -233,25 +229,23 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
   // shape to the published response schema at compile time.
   const clientBootstrap: VoiceClientBootstrap = createResult.clientBootstrap as ElevenLabsClientBootstrap;
 
-  // A reconnect leaves the original reservation record untouched so end-reconciliation
-  // measures the full call duration, not just the post-reconnect segment.
+  // The reserve and the hold that records it commit together, after the provider call, so a
+  // failure anywhere before this point has nothing to refund. A reconnect keeps the original hold
+  // so end-reconciliation measures the full call duration, not just the post-reconnect segment.
   // Drops any realtime marker explicitly: a prior realtime hold with no reserve is never claimed, so
   // its marker would otherwise survive and this ElevenLabs hold would settle as realtime.
   if (!reuseHold) {
-    const opened = await sessionRepository.openVoiceHold(session.id, priorHoldStartedAt, {
-      voiceReservedCredits: enforceCredits ? reservedCredits : null,
-      voiceSessionStartedAt: holdStartedAt,
+    const opened = await reserveVoiceHold({
+      userId: req.user.id,
+      sessionId: session.id,
+      priorStartedAt: priorHoldStartedAt,
+      reservedCredits: enforceCredits ? reservedCredits : null,
+      startedAt: holdStartedAt,
       realtime: false,
+      unaffordable: () =>
+        insufficientCreditsError(`Insufficient credits for voice session (requires ~${reservedCredits} credits)`),
     });
     if (!opened) {
-      // A concurrent bootstrap of this session wrote its hold first; this one's reserve is not held.
-      if (enforceCredits) {
-        await refundLostVoiceHoldReserve(req.logger, {
-          userId: req.user.id,
-          sessionId: String(session.id),
-          refund: reservedCredits,
-        });
-      }
       throw new ConflictError('Another voice call on this session started at the same time; retry');
     }
   }

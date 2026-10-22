@@ -1,6 +1,6 @@
 import React, { ReactNode } from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -154,5 +154,77 @@ describe('MessageContent - fallback note reload wiring', () => {
     renderMessage(undefined);
 
     expect(screen.queryByTestId('fallback-model-note-chip')).toBeNull();
+  });
+});
+
+describe('MessageContent - reply model chip', () => {
+  const renderWithModel = (
+    model: NonNullable<IChatHistoryItem['promptMeta']>['model'],
+    redirectedFrom?: string,
+    type?: IChatHistoryItem['type']
+  ) =>
+    render(
+      <TestWrapper>
+        <MessageContent
+          sessionId="session-1"
+          messageData={{ ...baseMessage, type, promptMeta: { model, redirectedFrom } } as IChatHistoryItem}
+          index={0}
+          onDelete={vi.fn()}
+          onPinToggle={vi.fn()}
+          onSendMessage={vi.fn()}
+          isLastMessage
+          model="gpt-4o"
+          totalMessages={1}
+          canUseAdminTools={false}
+        />
+      </TestWrapper>
+    );
+
+  it('a redirected reply is labelled with the model that answered, not the one requested', () => {
+    renderWithModel({ name: 'gemini-3.5-flash' }, 'gemini-2.5-pro');
+
+    expect(screen.getByTestId('message-model-chip')).toHaveTextContent('gemini-3.5-flash');
+  });
+
+  it('a reply nothing replaced is labelled with the requested model', () => {
+    renderWithModel({ name: 'gemini-2.5-pro' });
+
+    expect(screen.getByTestId('message-model-chip')).toHaveTextContent('gemini-2.5-pro');
+  });
+
+  it('names the replaced model in a tooltip on a redirected reply', async () => {
+    renderWithModel({ name: 'gemini-3.5-flash' }, 'gemini-2.5-pro');
+
+    fireEvent.mouseOver(screen.getByTestId('message-model-chip'));
+
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('Replaces gemini-2.5-pro');
+  });
+
+  it('shows no replacement tooltip on an error reply, even one that followed a redirect', () => {
+    // Fake timers so the assertion does not race Joy's enterDelay: advancing past it proves the
+    // tooltip stays unmounted, where a wall-clock wait could fire before the popper even mounts.
+    vi.useFakeTimers();
+    try {
+      renderWithModel({ name: 'gemini-3.5-flash' }, 'gemini-2.5-pro', 'error');
+
+      const chip = screen.getByTestId('message-model-chip');
+      expect(chip).toHaveTextContent('gemini-3.5-flash');
+      fireEvent.mouseOver(chip);
+
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      expect(screen.queryByRole('tooltip')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('shows no replacement tooltip when nothing was replaced', () => {
+    renderWithModel({ name: 'gemini-2.5-pro' });
+
+    fireEvent.mouseOver(screen.getByTestId('message-model-chip'));
+
+    expect(screen.queryByRole('tooltip')).toBeNull();
   });
 });

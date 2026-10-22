@@ -5,8 +5,8 @@ import { PaymentDetails, TransactionType } from '@client/lib/credits/types';
 import { handlePackageTransaction, handlePerCreditTransaction } from '@client/lib/credits/utils';
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireStripeWebhook } from '@server/middlewares/requireStripeWebhook';
-import { Config } from '@server/utils/config';
-import { BadRequestError, ForbiddenError } from '@server/utils/errors';
+import { Config } from '@bike4mind/server-utils/utils/config';
+import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { createCustomer, CustomerType, stripe } from '@server/integrations/stripe/stripe';
 import { logEventSafe } from '@server/utils/analyticsLog';
 import type Stripe from 'stripe';
@@ -32,7 +32,7 @@ const handler = baseApi()
     let paymentDetails: PaymentDetails;
     switch (parsedBody.transactionType) {
       case TransactionType.PerCredit:
-        paymentDetails = await handlePerCreditTransaction(parsedBody);
+        paymentDetails = await handlePerCreditTransaction(parsedBody, { userId: req.user.id, logger: req.logger });
         break;
       case TransactionType.Package:
         paymentDetails = await handlePackageTransaction(parsedBody);

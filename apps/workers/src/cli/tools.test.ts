@@ -5,7 +5,7 @@ import type { APIGatewayProxyEventV2, APIGatewayProxyStructuredResultV2 } from '
 // header constants run for real - this is an integration test of the handler's
 // request-ID plumbing and header/body parity, not a unit test.
 
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { MONGODB_URI: 'mongodb://test/%STAGE%', STAGE: 'test' },
 }));
 
@@ -35,6 +35,11 @@ vi.mock('@bike4mind/database', () => ({
 
 vi.mock('@bike4mind/services', () => ({ cliTools: { executeServerTool: vi.fn() } }));
 
+vi.mock('@server/decisions/runDecision', () => ({ runDecision: vi.fn() }));
+// decisionErrors pulls the input resolver and the data-lake access chain in at import time; this
+// handler test only needs the executor to exist.
+vi.mock('@server/decisions/decisionErrors', () => ({ describeDecisionFailure: vi.fn() }));
+
 vi.mock('@server/cli/auth', () => ({
   // verifyApiKey is imported by resolveContractAuth; unused on the jwtOnly tools
   // path but must exist so the mocked module doesn't throw on the missing export.
@@ -45,13 +50,13 @@ vi.mock('@server/cli/auth', () => ({
 
 // Keep the real validateToolRequest (pure), stub only executeToolWithLogging
 // so we can drive the result/handled-failure branches deterministically.
-vi.mock('@server/cli/toolsHandler.shared', async importOriginal => {
-  const actual = await importOriginal<typeof import('@server/cli/toolsHandler.shared')>();
+vi.mock('@bike4mind/server-utils/cli/toolsHandler.shared', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/server-utils/cli/toolsHandler.shared')>();
   return { ...actual, executeToolWithLogging: vi.fn() };
 });
 
 import { handleToolRequest } from './tools';
-import { executeToolWithLogging, SUPPORTED_TOOLS } from '@server/cli/toolsHandler.shared';
+import { executeToolWithLogging, SUPPORTED_TOOLS } from '@bike4mind/server-utils/cli/toolsHandler.shared';
 import { verifyJwtToken, checkRateLimit } from '@server/cli/auth';
 import { REQUEST_ID_HEADER, ToolExecutionRequestSchema } from '@bike4mind/common';
 
@@ -175,6 +180,28 @@ describe('tools Lambda handler — request ID correlation', () => {
 
     expect(header).toBe('from-wrapper');
     expect(body.request_id).toBe('from-wrapper');
+  });
+});
+
+describe('decide on the CLI tools endpoint', () => {
+  beforeEach(() => {
+    vi.mocked(verifyJwtToken).mockResolvedValue({ id: 'user-1', email: 'u@example.com' } as any);
+    vi.mocked(checkRateLimit).mockResolvedValue(undefined);
+  });
+
+  it('accepts a decide body and hands the handler an executor for it', async () => {
+    vi.mocked(executeToolWithLogging).mockResolvedValue({ success: true, content: '{}' } as any);
+    const body = JSON.stringify({
+      toolName: 'decide',
+      input: { input: 'Payouts failing', questions: [{ type: 'predicate', name: 'is_urgent', instructions: 'x' }] },
+    });
+
+    const { status } = parse((await handleToolRequest(makeEvent({ body }))) as any);
+
+    expect(status).toBe(200);
+    const [, context] = vi.mocked(executeToolWithLogging).mock.calls[0];
+    expect(typeof context.executors?.decide).toBe('function');
+    expect(context.userId).toBe('user-1');
   });
 });
 

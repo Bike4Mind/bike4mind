@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { findCitationMarkers } from './citationMarkers';
+import { areCitablesNumbered, findCitationMarkers, sourceNamedIn } from './citationMarkers';
 
 const valuesOf = (text: string) => findCitationMarkers(text).map(match => match.numbers.map(n => n.value));
 
@@ -33,5 +33,46 @@ describe('findCitationMarkers', () => {
   it('reads a comma list on one line but not one that spans a line break', () => {
     expect(valuesOf('[1, 2]')).toEqual([[1, 2]]);
     expect(valuesOf('[1,\n2]')).toEqual([]);
+  });
+});
+
+describe('sourceNamedIn', () => {
+  it('matches a file name with or without its extension, or as spaced words', () => {
+    expect(sourceNamedIn('See galilean-moons.md for more.', 'galilean-moons.md')).toBe(true);
+    expect(sourceNamedIn('Per galilean-moons, Io is volcanic.', 'galilean-moons.md')).toBe(true);
+    expect(sourceNamedIn('The Galilean Moons note says so.', 'galilean-moons.md')).toBe(true);
+  });
+
+  it('does not match a name the text never mentions, or only part of one', () => {
+    expect(sourceNamedIn('Io is volcanic.', 'galilean-moons.md')).toBe(false);
+    expect(sourceNamedIn('A samples table.', 'sample.yaml')).toBe(false);
+  });
+
+  it('treats regex characters in a name literally', () => {
+    expect(sourceNamedIn('Read notes (v2) first.', 'notes (v2).md')).toBe(true);
+    expect(sourceNamedIn('Read notes v2 first.', 'notes (v2).md')).toBe(false);
+  });
+
+  it('matches nothing for a name that is not a string, as a malformed stored citable may carry', () => {
+    expect(sourceNamedIn('anything at all', undefined as unknown as string)).toBe(false);
+  });
+
+  it('matches nothing for a name with no words', () => {
+    expect(sourceNamedIn('anything at all', '')).toBe(false);
+    expect(sourceNamedIn('anything at all', ' - ')).toBe(false);
+  });
+});
+
+describe('areCitablesNumbered', () => {
+  const stamped = (citationIndex?: number) => (citationIndex === undefined ? {} : { metadata: { citationIndex } });
+
+  it('holds when every citable carries the stamp of its own position', () => {
+    expect(areCitablesNumbered([stamped(1), stamped(2)])).toBe(true);
+    expect(areCitablesNumbered([])).toBe(true);
+  });
+
+  it('fails on a missing or misplaced stamp', () => {
+    expect(areCitablesNumbered([stamped(1), stamped()])).toBe(false);
+    expect(areCitablesNumbered([stamped(2), stamped(1)])).toBe(false);
   });
 });

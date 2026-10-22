@@ -30,7 +30,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
     assertLakeAccess: h.assertLakeAccess,
@@ -42,7 +42,9 @@ vi.mock('@bike4mind/services', () => ({
     MAX_CONVERGENCE_WAVE: 200,
   },
 }));
-vi.mock('@server/dataLakes/convergenceKillSwitch', () => ({ isConvergenceHalted: h.isConvergenceHalted }));
+vi.mock('@bike4mind/server-utils/dataLakes/convergenceKillSwitch', () => ({
+  isConvergenceHalted: h.isConvergenceHalted,
+}));
 vi.mock('@bike4mind/database', () => ({
   withTransaction: async (fn: () => unknown) => {
     h.tx.push('enter');
@@ -70,8 +72,8 @@ vi.mock('@bike4mind/common', async () => {
 });
 vi.mock('@bike4mind/utils', () => ({ BadRequestError: class BadRequestError extends Error {} }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
-vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
-vi.mock('@server/utils/dlqRegistry', () => ({ getSourceQueueUrl: h.getSourceQueueUrl }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
+vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({ getSourceQueueUrl: h.getSourceQueueUrl }));
 
 import handler from '../converge';
 

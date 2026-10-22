@@ -8,11 +8,14 @@ import { MessageDataToClient } from '@bike4mind/common';
 import { Connection } from '@bike4mind/database/social';
 import { Logger } from '@bike4mind/observability';
 import { Context } from 'aws-lambda';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { connectDB } from '@bike4mind/database';
 import { contextToLogs } from '@server/utils/logger';
 import { JsonWebTokenError } from 'jsonwebtoken';
-import { UnauthorizedError } from '@bike4mind/common';
+import { ForbiddenError, HTTPError, UnauthorizedError } from '@bike4mind/common';
+import { isConnectionLostError } from '@bike4mind/db-core';
+import { ServiceUnavailableError } from '@bike4mind/server-utils/utils/errors';
+import { AUTH_UNAVAILABLE_RETRY_AFTER_SECONDS } from '@server/auth/apiKeyAuthFailure';
 
 // sendToClient may be called multiple times in a single request,
 // so we cache the ApiGatewayManagementApiClient
@@ -168,7 +171,26 @@ export function withWebSocketContext<T>(
       // BASE class of TokenExpiredError (expired), NotBeforeError (not-yet-valid), and the
       // signature/malformed errors - all of which are token-validity failures that belong in
       // the 401 bucket - so matching the base covers every jwt rejection in one check.
-      const isAuthError = error instanceof UnauthorizedError || error instanceof JsonWebTokenError;
+      // ForbiddenError (an authenticated session the server refuses - MFA enrollment owed, a
+      // suspended account) is a refusal too, not a handler failure: without it a subscribe from
+      // such a session answers 200 "Internal server error" and logs at error severity.
+      const isForbidden = error instanceof ForbiddenError;
+      const isAuthError = isForbidden || error instanceof UnauthorizedError || error instanceof JsonWebTokenError;
+      // A 5xx HTTPError (e.g. the API-key check could not reach the database) keeps its status, and a
+      // raw lost connection (connectDB, the web ticket consume, the Connection write) becomes a 503, so
+      // $connect refuses the handshake as retryable instead of accepting a socket with no Connection row.
+      const infraFailure =
+        error instanceof HTTPError && error.statusCode >= 500
+          ? error
+          : isConnectionLostError(error)
+            ? new ServiceUnavailableError('Service temporarily unavailable', {
+                retryAfter: AUTH_UNAVAILABLE_RETRY_AFTER_SECONDS,
+              })
+            : undefined;
+      if (infraFailure) {
+        logger.error(`Error in WebSocket handler ${context.functionName}:`, error);
+        return { statusCode: infraFailure.statusCode, body: JSON.stringify({ error: infraFailure.message }) };
+      }
 
       // Auth rejections are expected, benign, and high-volume (every stale-token client) -
       // log them at info so they don't flood error logs/alerts. Only genuine (non-auth)
@@ -180,9 +202,9 @@ export function withWebSocketContext<T>(
       }
 
       return {
-        statusCode: isAuthError ? 401 : 200,
+        statusCode: isForbidden ? 403 : isAuthError ? 401 : 200,
         body: JSON.stringify({
-          error: isAuthError ? 'Unauthorized' : 'Internal server error',
+          error: isForbidden ? 'Forbidden' : isAuthError ? 'Unauthorized' : 'Internal server error',
         }),
       };
     }

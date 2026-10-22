@@ -8,7 +8,7 @@ import {
 } from '@bike4mind/common';
 import { resolveVisibility, checkScopePermission, type PublishUser } from '@server/services/publish';
 import { settlePublication } from '@server/services/publish/settlePublication';
-import { getFilesStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 
 /**
  * POST /api/publish/fabfile - publish a FabFile as a public viewer page at

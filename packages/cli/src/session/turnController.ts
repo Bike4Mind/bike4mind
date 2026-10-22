@@ -35,7 +35,7 @@ import { formatStep, extractCompactInstructions } from '../utils';
 import { renderWorkflowReminder } from '../utils/workflowReminder.js';
 import { logger } from '../utils/Logger';
 import { isConnectionDrop } from '../llm/modelCallError';
-import { isReadOnlyTool } from '../config/toolSafety.js';
+import type { ToolCatalog } from '../tools/gateway/toolCatalog.js';
 import type { TodoStore } from '../tools/writeTodosTool.js';
 import type { DecisionStore } from '../tools/decisionLogTool.js';
 import type { BlockerStore } from '../tools/blockerTool.js';
@@ -60,6 +60,8 @@ export interface TurnContext {
   additionalDirectories: string[];
   featureRegistry: FeatureModuleRegistry | null;
   backgroundManager: BackgroundAgentManager | null;
+  /** Resolves which tools are read-only for parallel execution. */
+  toolCatalog: ToolCatalog;
   /**
    * Live workflow stores (todos / decisions / blockers) backing the
    * per-iteration workflow reminder (issue: re-inject live workflow state).
@@ -116,6 +118,7 @@ async function runHeldTurn(message: string, ctx: TurnContext): Promise<void> {
     additionalDirectories,
     featureRegistry,
     backgroundManager,
+    toolCatalog,
     todoStore,
     decisionStore,
     blockerStore,
@@ -326,7 +329,7 @@ async function runHeldTurn(message: string, ctx: TurnContext): Promise<void> {
         previousMessages: previousMessages.length > 0 ? previousMessages : undefined,
         signal: abortController.signal,
         parallelExecution: cliConfig.preferences.enableParallelToolExecution === true,
-        isReadOnlyTool,
+        isReadOnlyTool: toolName => toolCatalog.isReadOnly(toolName),
         workflowReminder,
         drainFeedback: diagnostics
           ? phase => diagnostics.drain(DRAIN_BUDGET_MS[phase], abortController.signal)

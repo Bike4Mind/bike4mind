@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { BadRequestError, CliCompletionChunkAction } from '@bike4mind/common';
 
 const mockExecuteCompletion = vi.fn();
 const mockLogCompletionAnalytics = vi.fn();
@@ -36,7 +37,8 @@ vi.mock('@server/websocket/utils', () => ({
 }));
 
 import { checkApiKeyRateLimitOrThrow, checkRateLimit, verifyApiKey, verifyJwtToken } from '@server/cli/auth';
-import { TooManyRequestsError } from '@server/utils/errors';
+import { TooManyRequestsError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
+import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
 import { sendToConnection } from '@server/websocket/utils';
 import { func } from './cliCompletion';
 
@@ -145,6 +147,25 @@ describe('cliCompletion websocket handler', () => {
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
 
+  it('sends a provider block as its own provider_block chunk, in order with content', async () => {
+    const block = { type: 'server_tool_use', id: 'srvtoolu_1', name: 'tool_search_tool_regex', input: { query: 'x' } };
+    mockExecuteCompletion.mockImplementationOnce(async ({ onChunk }) => {
+      await onChunk(['', 'searching'], {});
+      await onChunk([], { providerBlock: { provider: 'anthropic', block } });
+      await onChunk(['', 'found it'], { outputTokens: 5 });
+    });
+
+    await run();
+
+    const chunks = vi
+      .mocked(sendToConnection)
+      .mock.calls.map(call => call[2] as { action: string })
+      .filter(data => data.action === 'cli_completion_chunk')
+      .map(data => CliCompletionChunkAction.parse(data).chunk);
+    expect(chunks.map(c => c.type)).toEqual(['content', 'provider_block', 'content']);
+    expect(chunks[1]).toEqual({ type: 'provider_block', provider: 'anthropic', block });
+  });
+
   it('logs success analytics with source cli', async () => {
     await run();
 
@@ -167,6 +188,7 @@ describe('cliCompletion websocket handler', () => {
           cacheReadInputTokens: 301_000,
           cacheCreationInputTokens: 500,
           turnUsage,
+          creditsUsed: 7,
         });
         // A trailing frame without the breakdown must not clear the latched one.
         await onChunk([''], { stopReason: 'end_turn' });
@@ -182,6 +204,7 @@ describe('cliCompletion websocket handler', () => {
         finalCacheReadTokens: 301_000,
         finalCacheWriteTokens: 500,
         finalTurnUsage: turnUsage,
+        finalCreditsUsed: 7,
       })
     );
   });
@@ -194,5 +217,78 @@ describe('cliCompletion websocket handler', () => {
     expect(mockLogCompletionAnalytics).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'failure', source: 'cli' })
     );
+  });
+
+  it('keeps the message and errorCode of a 4xx the caller must fix', async () => {
+    mockExecuteCompletion.mockRejectedValueOnce(
+      new BadRequestError('Model does not support tool search.', { errorCode: 'tool_search_unsupported' })
+    );
+
+    await run();
+
+    expect(sendToConnection).toHaveBeenCalledWith('conn-1', 'https://example.test/test', {
+      action: 'cli_completion_error',
+      requestId: '7f0c3f0e-5b1a-4c58-9a57-2f1e8f6f3a11',
+      error: 'Model does not support tool search.',
+      errorCode: 'tool_search_unsupported',
+    });
+  });
+
+  it('sanitizes any other error', async () => {
+    mockExecuteCompletion.mockRejectedValueOnce(new Error('db exploded at 10.0.0.1'));
+
+    await run();
+
+    expect(sendToConnection).toHaveBeenCalledWith('conn-1', 'https://example.test/test', {
+      action: 'cli_completion_error',
+      requestId: '7f0c3f0e-5b1a-4c58-9a57-2f1e8f6f3a11',
+      error: 'Internal server error',
+    });
+  });
+});
+
+const databaseUnreachable = () =>
+  toApiKeyAuthError(Object.assign(new Error('connect ECONNREFUSED 10.0.0.1:27017'), { name: 'MongoNetworkError' }));
+const expectNoDriverLeak = (value: unknown) => {
+  const serialized = JSON.stringify(value);
+  expect(serialized).not.toContain('ECONNREFUSED');
+  expect(serialized).not.toContain('10.0.0.1');
+};
+
+describe('cliCompletion websocket handler - API-key check outcome', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockExecuteCompletion.mockResolvedValue(undefined);
+  });
+
+  it('reports a retryable unavailable frame when the database is unreachable, without trying the JWT', async () => {
+    vi.mocked(verifyApiKey).mockRejectedValueOnce(databaseUnreachable());
+
+    await run();
+
+    const frame = vi.mocked(sendToConnection).mock.calls[0][2];
+    expect(frame).toMatchObject({
+      action: 'cli_completion_error',
+      error: 'Authentication temporarily unavailable',
+      retryAfter: 5,
+    });
+    expectNoDriverLeak(vi.mocked(sendToConnection).mock.calls);
+    expect(verifyJwtToken).not.toHaveBeenCalled();
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('keeps the auth-failed frame for an unknown key that the JWT check also rejects', async () => {
+    vi.mocked(verifyApiKey).mockRejectedValueOnce(new UnauthorizedError('Invalid or expired API key'));
+    vi.mocked(verifyJwtToken).mockRejectedValueOnce(new Error('bad token'));
+
+    await run();
+
+    const frame = vi.mocked(sendToConnection).mock.calls[0][2];
+    expect(frame).toMatchObject({
+      action: 'cli_completion_error',
+      error: 'Authentication failed. Provide a valid API key or JWT token.',
+    });
+    expect(frame).not.toHaveProperty('retryAfter');
+    expect(verifyJwtToken).toHaveBeenCalled();
   });
 });

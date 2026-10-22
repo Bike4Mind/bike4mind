@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, Typography } from '@mui/joy';
+import { Box, Chip, Typography } from '@mui/joy';
 import { useCommandSuggestions } from '@client/app/hooks/useCommandSuggestions';
 import { CommandSuggestionsProps } from './types';
 import { brandAlpha } from '@client/app/utils/themes';
@@ -171,6 +171,16 @@ export const CommandSuggestions: React.FC<CommandSuggestionsProps> = ({
                   <Typography level="body-xs" sx={{ color: 'text.primary', fontSize: '14px' }}>
                     {suggestion.example}
                   </Typography>
+                  {suggestion.badge ? (
+                    <Chip
+                      size="sm"
+                      variant="soft"
+                      color={suggestion.badge.color}
+                      data-testid="command-suggestion-badge"
+                    >
+                      {suggestion.badge.label}
+                    </Chip>
+                  ) : null}
                 </Box>
               </Box>
             </Box>

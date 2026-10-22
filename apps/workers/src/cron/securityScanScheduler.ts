@@ -14,15 +14,15 @@ import { Logger } from '@bike4mind/observability';
 import { connectDB } from '@bike4mind/database';
 import { Resource } from 'sst';
 import { securityScanScheduleRepository, SecurityScanType } from '@bike4mind/database';
-import { getCooldownStatus } from '@server/security/cooldown';
+import { getCooldownStatus } from '@bike4mind/server-utils/security/cooldown';
 import {
   triggerGitHubWorkflow,
   getTargetUrlForStage,
   getWorkflowIdForScanType,
-} from '@server/integrations/github/githubWorkflowTrigger';
+} from '@bike4mind/server-utils/integrations/github/githubWorkflowTrigger';
 import { handler as runCloudScan } from '@server/security/cloudScan';
 import { handler as runWafScan } from '@server/security/wafScan';
-import { calculateNextRunTime } from '@server/utils/scheduleCalculator';
+import { calculateNextRunTime } from '@bike4mind/server-utils/utils/scheduleCalculator';
 import { logAuditEvent, AdminConfigAuditEvents } from '@server/utils/auditLog';
 
 interface ScanResult {

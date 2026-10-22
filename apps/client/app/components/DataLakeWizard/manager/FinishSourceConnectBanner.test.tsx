@@ -17,7 +17,10 @@ const h = vi.hoisted(() => ({
   beginLakeId: undefined as string | undefined,
   openFolderPicker: vi.fn(),
   driveConnectLakeId: undefined as string | undefined,
+  toastError: vi.fn(),
 }));
+
+vi.mock('sonner', () => ({ toast: { error: h.toastError } }));
 
 vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
   useFeatureEnabled: () => ({
@@ -52,6 +55,7 @@ vi.mock('@client/app/hooks/data/useLakeDriveFolderConnect', () => ({
 }));
 
 import FinishSourceConnectBanner from './FinishSourceConnectBanner';
+import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const wrap = (ui: ReactNode) => render(<CssVarsProvider theme={appTheme}>{ui}</CssVarsProvider>);
@@ -63,6 +67,7 @@ const LAKE = {
   canManage: true,
   isCreator: false,
 };
+const PERSONAL_LAKE = { ...LAKE, organizationId: null, canManage: true, isCreator: true };
 const DRIVE_LAKE = { ...LAKE, pendingConnector: 'googleDrive' as const };
 const BANNER = 'github-finish-connect-banner-lake1';
 const DRIVE_BANNER = 'googleDrive-finish-connect-banner-lake1';
@@ -77,6 +82,7 @@ beforeEach(() => {
   h.driveEnabledArg = undefined;
   h.beginLakeId = undefined;
   h.driveConnectLakeId = undefined;
+  useDataLakeWizardStore.setState({ gitHubConnectFailure: null });
 });
 
 describe('FinishSourceConnectBanner', () => {
@@ -91,8 +97,40 @@ describe('FinishSourceConnectBanner', () => {
     expect(h.begin).toHaveBeenCalledTimes(1);
   });
 
+  it('shows on an empty connector-fed personal lake for its creator, and restarts the GitHub connect on click', () => {
+    wrap(<FinishSourceConnectBanner lake={PERSONAL_LAKE} fileCount={0} />);
+
+    expect(screen.getByTestId(BANNER)).toBeInTheDocument();
+    expect(h.gitHubEnabledArg).toBe(true);
+    expect(h.driveEnabledArg).toBe(true);
+    fireEvent.click(screen.getByTestId('github-finish-connect-btn-lake1'));
+    expect(h.beginLakeId).toBe('lake1');
+    expect(h.begin).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the Drive banner on an empty connector-fed personal lake for its creator', () => {
+    wrap(<FinishSourceConnectBanner lake={{ ...PERSONAL_LAKE, pendingConnector: 'googleDrive' }} fileCount={0} />);
+
+    expect(screen.getByTestId(DRIVE_BANNER)).toBeInTheDocument();
+  });
+
+  it('hides on a personal lake for a non-creator, even one the server reports as manageable', () => {
+    wrap(<FinishSourceConnectBanner lake={{ ...PERSONAL_LAKE, isCreator: false }} fileCount={0} />);
+
+    expect(screen.queryByTestId(BANNER)).toBeNull();
+    expect(h.gitHubEnabledArg).toBe(false);
+    expect(h.driveEnabledArg).toBe(false);
+  });
+
+  it('hides on a personal lake for its creator when the status read reports no manage right', () => {
+    h.canManage = false;
+    wrap(<FinishSourceConnectBanner lake={PERSONAL_LAKE} fileCount={0} />);
+
+    expect(screen.queryByTestId(BANNER)).toBeNull();
+  });
+
   it.each([
-    ['a personal lake', { ...LAKE, organizationId: undefined }],
+    ['a personal lake the user did not create', { ...LAKE, organizationId: undefined, canManage: false }],
     ['a curated lake', { ...LAKE, origin: 'curated' as const }],
     ['a lake the user cannot manage', { ...LAKE, canManage: false }],
   ])('hides on %s and never reads its connections', (_label, lake) => {
@@ -257,5 +295,96 @@ describe('FinishSourceConnectBanner', () => {
     wrap(<FinishSourceConnectBanner lake={LAKE} fileCount={fileCount} />);
 
     expect(screen.queryByTestId(BANNER)).toBeNull();
+  });
+
+  describe('after a failed or cancelled GitHub connect', () => {
+    const REASON = 'This authorization already expired.';
+    const failOn = (lakeId: string) =>
+      useDataLakeWizardStore.setState({ gitHubConnectFailure: { lakeId, message: REASON } });
+    const failure = () => useDataLakeWizardStore.getState().gitHubConnectFailure;
+
+    it('shows the reason and a Try again that clears it and restarts the GitHub connect', () => {
+      failOn('lake1');
+      wrap(<FinishSourceConnectBanner lake={LAKE} fileCount={0} />);
+
+      expect(screen.getByTestId(BANNER)).toBeInTheDocument();
+      expect(screen.getByTestId('github-finish-connect-error-lake1')).toHaveTextContent(REASON);
+      expect(h.toastError).not.toHaveBeenCalled();
+      const button = screen.getByTestId('github-finish-connect-btn-lake1');
+      expect(button).toHaveTextContent('Try again');
+      fireEvent.click(button);
+      expect(h.beginLakeId).toBe('lake1');
+      expect(h.begin).toHaveBeenCalledTimes(1);
+      expect(failure()).toBeNull();
+    });
+
+    it.each([
+      ['a curated lake', { ...LAKE, origin: 'curated' as const }, 0],
+      ['a lake that already has files', LAKE, 3],
+      ['a lake pending a Drive connect', DRIVE_LAKE, 0],
+    ])('falls back to a toast on %s, where Try again could not work', (_label, lake, fileCount) => {
+      failOn('lake1');
+      wrap(<FinishSourceConnectBanner lake={lake} fileCount={fileCount} />);
+
+      expect(screen.queryByTestId('github-finish-connect-error-lake1')).toBeNull();
+      expect(h.toastError).toHaveBeenCalledWith(REASON);
+      expect(failure()).toBeNull();
+    });
+
+    it('falls back to a toast for a user who cannot connect', () => {
+      h.canManage = false;
+      failOn('lake1');
+      wrap(<FinishSourceConnectBanner lake={LAKE} fileCount={0} />);
+
+      expect(h.toastError).toHaveBeenCalledWith(REASON);
+      expect(failure()).toBeNull();
+    });
+
+    it('waits for the connection reads before deciding', () => {
+      h.gitHub = { isSuccess: false, data: undefined, isPending: true } as ReadState;
+      failOn('lake1');
+      wrap(<FinishSourceConnectBanner lake={LAKE} fileCount={0} />);
+
+      expect(h.toastError).not.toHaveBeenCalled();
+      expect(failure()).not.toBeNull();
+    });
+
+    it('drops a shown reason without a toast once the lake gains a source', () => {
+      failOn('lake1');
+      const { rerender } = wrap(<FinishSourceConnectBanner lake={LAKE} fileCount={0} />);
+      expect(screen.getByTestId('github-finish-connect-error-lake1')).toBeInTheDocument();
+
+      h.drive = { isSuccess: true, data: { id: 'drive1' } };
+      rerender(
+        <CssVarsProvider theme={appTheme}>
+          <FinishSourceConnectBanner lake={LAKE} fileCount={0} />
+        </CssVarsProvider>
+      );
+
+      expect(screen.queryByTestId(BANNER)).toBeNull();
+      expect(h.toastError).not.toHaveBeenCalled();
+      expect(failure()).toBeNull();
+    });
+
+    it('leaves other lakes alone', () => {
+      failOn('lake2');
+      wrap(<FinishSourceConnectBanner lake={LAKE} fileCount={0} />);
+
+      expect(screen.queryByTestId('github-finish-connect-error-lake1')).toBeNull();
+      expect(screen.getByTestId('github-finish-connect-btn-lake1')).toHaveTextContent('Finish connecting GitHub');
+      expect(h.toastError).not.toHaveBeenCalled();
+      expect(failure()).not.toBeNull();
+    });
+
+    it('goes back to the plain banner once dismissed', () => {
+      failOn('lake1');
+      wrap(<FinishSourceConnectBanner lake={LAKE} fileCount={0} />);
+
+      fireEvent.click(screen.getByTestId('github-finish-connect-dismiss-btn-lake1'));
+      expect(failure()).toBeNull();
+      expect(screen.queryByTestId('github-finish-connect-error-lake1')).toBeNull();
+      expect(screen.getByTestId('github-finish-connect-btn-lake1')).toHaveTextContent('Finish connecting GitHub');
+      expect(h.toastError).not.toHaveBeenCalled();
+    });
   });
 });

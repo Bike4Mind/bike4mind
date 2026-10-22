@@ -30,14 +30,23 @@ vi.mock('@server/analytics/signupEvents', () => ({
 }));
 const mockRecordSignupAcquisition = vi.fn().mockResolvedValue({ isSynthetic: false });
 const mockEmitFunnelEvent = vi.fn().mockResolvedValue(true);
+const mockEmitVerifiedFunnel = vi.fn().mockResolvedValue(undefined);
 vi.mock('@server/analytics/funnel', () => ({
   recordSignupAcquisition: (...a: any[]) => mockRecordSignupAcquisition(...a),
   emitFunnelEvent: (...a: any[]) => mockEmitFunnelEvent(...a),
+  emitEmailVerifiedFunnelEvents: (...a: any[]) => mockEmitVerifiedFunnel(...a),
 }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn(() => Promise.resolve()) }));
-vi.mock('@server/utils/config', () => ({ Config: { JWT_SECRET: 'test-secret' }, isE2EEnabled: () => false }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
+  Config: { JWT_SECRET: 'test-secret' },
+  isE2EEnabled: () => false,
+}));
 vi.mock('@server/auth/tokenGenerator', () => ({
   authTokenGenerator: { createAccessToken: () => ({ accessToken: 'a', refreshToken: 'r' }) },
+}));
+// Pulled in transitively by signupDomainGrant; the partner mock never matches a rule with a subscription.
+vi.mock('@server/subscriptions/grantIndividualAdminSubscription', () => ({
+  grantIndividualAdminSubscription: vi.fn(),
 }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsMap: vi.fn(), getSettingsValue: vi.fn() }));
 
@@ -57,9 +66,11 @@ vi.mock('@server/entitlements/partnerRules', () => ({
 vi.mock('@server/entitlements/invalidate', () => ({ pushEntitlementInvalidation: vi.fn() }));
 
 const mockFindByEmail = vi.fn();
+const mockFindSetting = vi.fn();
 const mockValidateNonce = vi.fn();
 const mockConsumeOtherCodes = vi.fn();
 const mockUserUpdate = vi.fn();
+const mockAddTagsToUser = vi.fn();
 const mockReleasePending = vi.fn();
 const mockTryIncrement = vi.fn(async (_key: string, _limit: number, _ttlMs: number) => ({
   success: true,
@@ -78,7 +89,7 @@ vi.mock('@bike4mind/database', () => ({
     decrementCounter: (...a: any[]) => mockDecrement(...a),
     tryAddWithinLimitFixedWindow: (...a: [string, number, number, number]) => mockTryAdd(...a),
   },
-  adminSettingsRepository: { findBySettingName: vi.fn() },
+  adminSettingsRepository: { findBySettingName: (...args: unknown[]) => mockFindSetting(...args) },
   organizationRepository: {},
   registrationInviteRepository: {},
   subscriberRepository: {},
@@ -88,6 +99,7 @@ vi.mock('@bike4mind/database', () => ({
     findByEmail: (...a: unknown[]) => mockFindByEmail(...a),
     count: vi.fn(),
     update: (...a: unknown[]) => mockUserUpdate(...a),
+    addTagsToUser: (...a: unknown[]) => mockAddTagsToUser(...a),
   },
   pendingOtcTokenRepository: {
     validateAndRotateNonce: (...a: any[]) => mockValidateNonce(...a),
@@ -120,6 +132,11 @@ import { authSessionService } from '@bike4mind/services';
 import { logEvent } from '@server/utils/analyticsLog';
 import handler from '@pages/api/otc/verify';
 import { OTC_LIMITS, otcEmailKey } from '@server/utils/otcLimits';
+
+beforeEach(() => {
+  mockPartnerGrant.mockResolvedValue({ matched: false, entitlements: new Set(), signupCredits: 0, tags: [] });
+  mockFindSetting.mockResolvedValue(null);
+});
 
 // bike4mind.com is seeded as an internal-staff domain in vitest.setup.ts, so the real
 // registry confers optihashi:pro -> its signup-credit total for this address.
@@ -354,7 +371,7 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
     mockFindByEmail.mockResolvedValue(null); // new user -> registration branch
     mockRegisterViaOTC.mockResolvedValue({ id: 'user-1', tokenVersion: 0, currentCredits: 1000 });
     mockAddCredits.mockResolvedValue({ currentCredits: 1000 + EXPECTED_DOMAIN_CREDITS });
-    mockPartnerGrant.mockResolvedValue({ matched: false, entitlements: new Set(), signupCredits: 0 });
+    mockPartnerGrant.mockResolvedValue({ matched: false, entitlements: new Set(), signupCredits: 0, tags: [] });
   });
 
   const firstTouch = `b4m-first-touch=${encodeURIComponent(JSON.stringify({ source: 'widgets' }))}`;
@@ -411,13 +428,17 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
     expect(mockEmitSignup).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1', method: 'otc' }));
   });
 
-  it('reports no credits_granted when the signup seeded none', async () => {
+  it('reports credits_granted with zero when the signup seeded none', async () => {
     mockRegisterViaOTC.mockResolvedValue({ id: 'user-1', tokenVersion: 0, currentCredits: 0 });
     const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
 
     await handler(req, res);
 
-    expect(mockEmitFunnelEvent.mock.calls.map(([c]) => c.event)).toEqual(['email_verified']);
+    expect(mockEmitFunnelEvent.mock.calls.map(([c]) => [c.event, c.metadata])).toEqual([
+      ['email_verified', { method: 'otc' }],
+      ['credits_granted', { amount: 0, source: 'signup', method: 'otc' }],
+      ['signup_completed', { method: 'otc' }],
+    ]);
   });
 
   // The account exists once registerViaOTC returns and a retry is a login, not a signup, so an
@@ -643,6 +664,7 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
       matched: true,
       entitlements: new Set(['optihashi:pro']),
       signupCredits: 150_000,
+      tags: ['Partner'],
     });
     const { req, res } = makeReqRes('person@newpartner.com');
 
@@ -652,6 +674,7 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
     expect(domainGrantCall()?.[0]).toEqual(
       expect.objectContaining({ credits: 150_000, transactionId: 'domain-grant-credits:user-1' })
     );
+    expect(mockAddTagsToUser).toHaveBeenCalledWith('user-1', ['Partner']);
   });
 
   it('honors a DB rule that grants access with 0 bonus credits (no env fallback)', async () => {
@@ -661,6 +684,7 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
       matched: true,
       entitlements: new Set(['optihashi:pro']),
       signupCredits: 0,
+      tags: [],
     });
     const { req, res } = makeReqRes(DOMAIN_EMAIL);
 
@@ -695,7 +719,7 @@ describe('/api/otc/verify - existing user verification and pending free credits'
     mockValidateNonce.mockResolvedValue(true);
     mockVerifyPendingOTC.mockResolvedValue(true);
     mockUserUpdate.mockResolvedValue(undefined);
-    mockPartnerGrant.mockResolvedValue({ matched: false, entitlements: new Set(), signupCredits: 0 });
+    mockPartnerGrant.mockResolvedValue({ matched: false, entitlements: new Set(), signupCredits: 0, tags: [] });
     mockAddCredits.mockResolvedValue({ currentCredits: 15_000 });
     mockApplyPartnerRuleMembership.mockResolvedValue({ added: true, reason: 'added' });
   });
@@ -706,6 +730,7 @@ describe('/api/otc/verify - existing user verification and pending free credits'
       entitlements: new Set(['partner:pro']),
       signupCredits: 15_000,
       organizationId: 'org-partner',
+      tags: ['Partner'],
     });
 
   it('stamps emailVerified first, then strips the pending-credit tag in a separate write', async () => {
@@ -739,6 +764,27 @@ describe('/api/otc/verify - existing user verification and pending free credits'
     expect(res._getJSONData()).toMatchObject({ tags: ['Customer'], pendingCreditGrant: null });
   });
 
+  it('reports email_verified and the summed credits on the first verifying login', async () => {
+    mockFindByEmail.mockResolvedValue(pendingUser({ pendingCreditGrant: 250 }));
+    mockReleasePending.mockResolvedValue({
+      released: true,
+      creditsGranted: 100,
+      currentCredits: 100,
+      patch: { tags: ['Customer'], pendingCreditGrant: null },
+    });
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockEmitVerifiedFunnel).toHaveBeenCalledTimes(1);
+    expect(mockEmitVerifiedFunnel).toHaveBeenCalledWith({
+      user: expect.objectContaining({ id: 'u-existing' }),
+      method: 'otc',
+      creditsGranted: 100,
+    });
+  });
+
   it('leaves an already-verified user untouched', async () => {
     mockFindByEmail.mockResolvedValue(pendingUser({ emailVerified: true }));
     const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
@@ -746,6 +792,7 @@ describe('/api/otc/verify - existing user verification and pending free credits'
     await handler(req, res);
 
     expect(res._getStatusCode()).toBe(200);
+    expect(mockEmitVerifiedFunnel).not.toHaveBeenCalled();
     expect(mockReleasePending).not.toHaveBeenCalled();
     expect(mockUserUpdate).not.toHaveBeenCalled();
   });
@@ -781,6 +828,8 @@ describe('/api/otc/verify - existing user verification and pending free credits'
     // Reflected onto the doc the response serializes, so the client sees the grant without a refetch.
     expect(user).toMatchObject({ currentCredits: 15_000, organizationId: 'org-partner' });
     expect(res._getJSONData()).toMatchObject({ currentCredits: 15_000, organizationId: 'org-partner' });
+    expect(mockAddTagsToUser).toHaveBeenCalledWith('u-existing', ['Partner']);
+    expect(res._getJSONData().tags).toEqual(['Customer', PENDING_FREE_CREDITS_TAG, 'Partner']);
     expect(mockAddCredits).toHaveBeenCalledWith(
       expect.objectContaining({
         ownerId: 'u-existing',
@@ -821,5 +870,147 @@ describe('/api/otc/verify - existing user verification and pending free credits'
     expect(mockPartnerGrant).not.toHaveBeenCalled();
     expect(mockAddCredits).not.toHaveBeenCalled();
     expect(mockApplyPartnerRuleMembership).not.toHaveBeenCalled();
+  });
+});
+
+describe('/api/otc/verify - partner-domain invite bypass', () => {
+  const PARTNER_EMAIL = 'new.person@partner.example';
+  const matchedGrant = {
+    matched: true,
+    ruleId: 'rule-1',
+    domain: 'partner.example',
+    entitlements: new Set(),
+    signupCredits: 0,
+    organizationId: null,
+    tags: [],
+    subscription: null,
+  };
+  const noGrant = { matched: false, entitlements: new Set(), signupCredits: 0, tags: [] };
+  const skipInviteCheckArg = () => mockRegisterViaOTC.mock.calls[0][1].skipInviteCheck;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockTryIncrement.mockResolvedValue({ success: true, count: 1, expiresAt: new Date(Date.now() + 60_000) });
+    mockValidateNonce.mockResolvedValue('hash');
+    mockVerifyPendingOTC.mockResolvedValue(true);
+    mockFindByEmail.mockResolvedValue(null);
+    mockRegisterViaOTC.mockResolvedValue({ id: 'user-1', tokenVersion: 0, currentCredits: 0 });
+    mockPartnerGrant.mockResolvedValue(noGrant);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('skips the invite check once the code proves an email on an enabled partner rule', async () => {
+    mockPartnerGrant.mockResolvedValue(matchedGrant);
+    const { req, res } = makeReqRes(PARTNER_EMAIL);
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockPartnerGrant).toHaveBeenCalledWith(PARTNER_EMAIL, true);
+    expect(skipInviteCheckArg()).toBe(true);
+  });
+
+  it('checks the normalized email, not the raw input', async () => {
+    mockPartnerGrant.mockResolvedValue(matchedGrant);
+    const { req, res } = makeReqRes(PARTNER_EMAIL);
+    req.body.email = '  New.Person@PARTNER.example ';
+
+    await handler(req, res);
+
+    expect(mockPartnerGrant).toHaveBeenCalledWith(PARTNER_EMAIL, true);
+    expect(skipInviteCheckArg()).toBe(true);
+  });
+
+  it('admits a verified partner email to username entry on an invite-only instance', async () => {
+    mockPartnerGrant.mockResolvedValue(matchedGrant);
+    const { req, res } = makeReqRes('  New.Person@PARTNER.example ');
+    req.body.username = undefined;
+
+    await handler(req, res);
+
+    expect(res._getJSONData()).toMatchObject({
+      registrationRequired: true,
+      registrationAllowed: true,
+      email: PARTNER_EMAIL,
+      pendingToken: 'signed-token',
+    });
+    expect(mockPartnerGrant).toHaveBeenCalledWith(PARTNER_EMAIL, true);
+    expect(mockRegisterViaOTC).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    'reports registrationAllowed=%s for a non-partner using the open-registration setting',
+    async open => {
+      mockFindSetting.mockResolvedValue({ settingValue: open });
+      const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+      req.body.username = undefined;
+
+      await handler(req, res);
+
+      expect(res._getJSONData()).toMatchObject({ registrationRequired: true, registrationAllowed: open });
+      expect(mockRegisterViaOTC).not.toHaveBeenCalled();
+    }
+  );
+
+  it('admits the self-host bootstrap user to username entry without a partner rule', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    const { userRepository } = await import('@bike4mind/database');
+    vi.mocked(userRepository.count).mockResolvedValue(0);
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    req.body.username = undefined;
+
+    await handler(req, res);
+
+    expect(res._getJSONData()).toMatchObject({ registrationRequired: true, registrationAllowed: true });
+    expect(mockPartnerGrant).not.toHaveBeenCalled();
+  });
+
+  it('keeps the invite check for a domain with no enabled rule even if the client claims admission', async () => {
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    req.body.registrationAllowed = true;
+
+    await handler(req, res);
+
+    expect(skipInviteCheckArg()).toBe(false);
+  });
+
+  it('rechecks partner admission when creating the account after the username step', async () => {
+    mockPartnerGrant.mockResolvedValue(matchedGrant);
+    const first = makeReqRes(PARTNER_EMAIL);
+    first.req.body.username = undefined;
+    await handler(first.req, first.res);
+    expect(first.res._getJSONData().registrationAllowed).toBe(true);
+
+    mockPartnerGrant.mockResolvedValue(noGrant);
+    const second = makeReqRes(PARTNER_EMAIL);
+    await handler(second.req, second.res);
+
+    expect(skipInviteCheckArg()).toBe(false);
+  });
+
+  it('never consults the rules before the code is proven', async () => {
+    mockPartnerGrant.mockResolvedValue(matchedGrant);
+    mockVerifyPendingOTC.mockResolvedValue(false);
+    const { req, res } = makeReqRes(PARTNER_EMAIL);
+
+    await handler(req, res).catch(() => undefined);
+
+    expect(mockPartnerGrant).not.toHaveBeenCalled();
+    expect(mockRegisterViaOTC).not.toHaveBeenCalled();
+  });
+
+  it('leaves the self-host bootstrap bypass unchanged', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    const { userRepository } = await import('@bike4mind/database');
+    vi.mocked(userRepository.count).mockResolvedValue(0);
+    mockUserUpdate.mockResolvedValue({ id: 'user-1', tokenVersion: 0, currentCredits: 0, isAdmin: true });
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+
+    await handler(req, res);
+
+    expect(skipInviteCheckArg()).toBe(true);
   });
 });

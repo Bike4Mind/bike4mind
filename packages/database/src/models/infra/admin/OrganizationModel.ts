@@ -8,7 +8,7 @@ import {
   OrgMemberPopulation,
   orgAclRowConfersMembership,
 } from '@bike4mind/common';
-import mongoose, { HydratedDocument, Model, Schema } from 'mongoose';
+import mongoose, { type ClientSession, HydratedDocument, Model, Schema } from 'mongoose';
 import { softDeletePlugin } from '../../../utils/mongo';
 import BaseRepository from '@bike4mind/db-core';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
@@ -46,7 +46,7 @@ const MEMBER_PERMISSIONS = ORG_MEMBERSHIP_ACL_PERMISSIONS;
  * Deliberately NO groups arm, unlike the shareable ACL (`findAccessibleById`) that the write-side
  * `resolveActiveOrg` validates against; see that function's note on the wider write predicate.
  *
- * Deliberately NO managerId/adminUserIds arms either, and #2005 is the reason to keep it that way:
+ * Deliberately NO adminUserIds arm either, and #2005 is the reason to keep it that way:
  * org-admin rights DO grant lake visibility, but they earn it through `AccessContext
  * .administeredOrgIds` (`findIdsWithAdminRights` -> the org-admin arm of `findAccessible`), not by
  * being folded in here. Widening this predicate would reach the switcher and therefore
@@ -84,14 +84,10 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
       type: String,
       required: true,
     },
-    managerId: {
-      type: String,
-      required: false,
-      default: null,
-    },
     // Group-type keys this org may have (platform-admin writes only). Default empty = fail-closed.
     allowedGroupTypes: { type: [String], default: [] },
-    // Org admins appointed by the billing owner / platform admin (not a Permission verb, not on users[]).
+    // Org managers appointed by the billing owner / platform admin (not a Permission verb). Each also
+    // holds a users[] row, which the authority checks require (isOrgOwnerOrCurrentAdmin).
     adminUserIds: { type: [String], default: [] },
     // `users[]` (the shareable ACL, from IShareableDocument) is AUTHORITATIVE for org membership -
     // every membership check reads it. `userDetails[]` below is a per-member credit side-table
@@ -150,6 +146,11 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
       required: false,
       default: null,
     },
+    // MB; no schema default so an unset limit keeps tracking DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB.
+    storageLimit: { type: Number, min: 0 },
+    // Bytes owned by the org; written only through incrementCurrentStorage and the reconciliation's
+    // setCurrentStorageIfUnchanged.
+    currentStorageSize: { type: Number, min: 0 },
     /**
      * Organization-wide system prompt applied to all team-member conversations. Lets
      * enterprise customers set domain-specific context that overrides model training
@@ -196,13 +197,11 @@ OrganizationSchema.plugin(softDeletePlugin);
 
 // Per CLAUDE.md MongoDB guideline: performance indexes declared together here,
 // never as `index: true` on field definitions. `userId` (billing owner) and
-// `managerId` back `findIdsAdministeredBy`'s `$or`, which is on the hot path of
-// every `/api/skills` list call. `adminUserIds` backs the third arm of
-// `findIdsWithAdminRights`'s `$or` (#1668) - Mongo index-unions an `$or` only when EVERY
-// branch is index-supported, so without this the org-admin resolution `toAccessContext` runs
-// on every non-admin data-lake request would plan a full `organizations` collscan.
+// `adminUserIds` back the two arms of `findIdsAdministeredBy`'s and `findIdsWithAdminRights`'s
+// `$or` (#1668), which are on the hot path of every `/api/skills` list call and every non-admin
+// data-lake request - Mongo index-unions an `$or` only when EVERY branch is index-supported, so
+// without both the org-admin resolution would plan a full `organizations` collscan.
 OrganizationSchema.index({ userId: 1 });
-OrganizationSchema.index({ managerId: 1 });
 // Backs findMembershipOrgIds' reverse lookup (users[] ACL by member) - previously every
 // membership question collscanned. The owner arm rides the existing { userId: 1 } index.
 OrganizationSchema.index({ 'users.userId': 1 });
@@ -227,6 +226,52 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
 
   async findByStripeCustomerId(stripeCustomerId: string): Promise<IOrganizationDocument | null> {
     return this.organizationModel.findOne({ stripeCustomerId });
+  }
+
+  /**
+   * `session` lets a caller that charges inside a transaction (the S3 charge's compare-and-set claim,
+   * the delete routes) move the org counter atomically with the row write. Not on the interface:
+   * services stay transaction-agnostic.
+   */
+  async incrementCurrentStorage(organizationId: string, bytes: number, session?: ClientSession): Promise<void> {
+    await this.organizationModel.findByIdAndUpdate(
+      organizationId,
+      [
+        {
+          $set: {
+            currentStorageSize: { $max: [0, { $add: [{ $ifNull: ['$currentStorageSize', 0] }, bytes] }] },
+          },
+        },
+      ],
+      session ? { session } : {}
+    );
+  }
+
+  async setCurrentStorageIfUnchanged(organizationId: string, expected: number, next: number): Promise<boolean> {
+    // `null` also matches a missing field, which every reader treats as 0.
+    const counterFilter = expected === 0 ? { $in: [0, null] } : expected;
+    const res = await this.organizationModel.updateOne(
+      { _id: organizationId, currentStorageSize: counterFilter },
+      { $set: { currentStorageSize: next } }
+    );
+    return res.matchedCount === 1;
+  }
+
+  async findCurrentStorageSize(organizationId: string): Promise<number | null> {
+    if (!mongoose.isValidObjectId(organizationId)) return null;
+    const row = await this.organizationModel
+      .findById(organizationId, { currentStorageSize: 1 })
+      .lean<{ currentStorageSize?: number | null }>();
+    return row ? (row.currentStorageSize ?? 0) : null;
+  }
+
+  async listOrganizationIdsAfter(afterId: string | null, limit: number): Promise<string[]> {
+    const rows = await this.organizationModel
+      .find(afterId ? { _id: { $gt: afterId } } : {}, { _id: 1 })
+      .sort({ _id: 1 })
+      .limit(limit)
+      .lean<Array<{ _id: unknown }>>();
+    return rows.map(row => String(row._id));
   }
 
   /**
@@ -417,15 +462,15 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
   }
 
   /**
-   * IDs of every organization the user administers (billing owner or assigned
-   * manager). Used to surface org-scoped resources - e.g. org-scoped skills -
-   * to the people who can manage them, without widening visibility to all
-   * members. Returns a bare id list (projection-only) so callers can feed it
-   * straight into an `$in` filter.
+   * IDs of every organization the user administers (billing owner or current
+   * manager, the `canAdministerOrganization` set). Used to surface org-scoped
+   * resources - e.g. org-scoped skills - to the people who can manage them,
+   * without widening visibility to all members. Returns a bare id list
+   * (projection-only) so callers can feed it straight into an `$in` filter.
    */
   async findIdsAdministeredBy(userId: string): Promise<string[]> {
     const orgs = await this.organizationModel
-      .find({ $or: [{ userId }, { managerId: userId }] })
+      .find({ $or: [{ userId }, { adminUserIds: userId, 'users.userId': userId }] })
       .select('_id')
       .lean();
     return orgs.map(org => org._id.toString());
@@ -437,14 +482,26 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
   }
 
   /**
+   * Membership (owner + users[] ACL) widened with adminUserIds, so an org manager without a member
+   * row still resolves the org plan. Plan resolution only: deliberately a
+   * separate method so `findMembershipOrgIds` (data access) does not widen. Every arm is indexed.
+   */
+  async findPlanHolderOrgIds(userId: string): Promise<string[]> {
+    const docs = await this.organizationModel
+      .find({ $or: [...(orgMembershipFilter(userId).$or as object[]), { adminUserIds: userId }] }, { _id: 1 })
+      .lean();
+    return docs.map(d => String(d._id));
+  }
+
+  /**
    * The forward direction of findMembershipOrgIds: who the org's members are, for scoping a report
    * over content those members authored. Reconciles the two populations rather than choosing one -
    * see OrgMemberPopulation for why they differ and what each one-sided list means.
    *
    * The ACL arm reuses orgAclRowConfersMembership, the in-memory twin of orgMembershipFilter's
    * $elemMatch, so this method and the reverse lookup read one definition of what a users[] row has
-   * to grant. Both exclusions the predicate documents (no groups arm, no managerId/adminUserIds arm)
-   * are inherited as-is: a managerId-only manager reaches the report through the stamp arm, as
+   * to grant. Both exclusions the predicate documents (no groups arm, no adminUserIds arm) are
+   * inherited as-is: a manager without a member row reaches the report through the stamp arm, as
    * stampOnly, not by widening what membership means.
    */
   async findMemberUserIds(organizationId: string): Promise<OrgMemberPopulation> {
@@ -479,20 +536,17 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
   }
 
   async findIdsWithAdminRights(userId: string): Promise<string[]> {
-    // Billing owner OR team manager OR an appointed org admin (adminUserIds). Broader than
-    // findIdsAdministeredBy, which omits appointed admins - see the interface doc for why this is a
-    // separate method. Matches the org-admin semantics of assertCanManageOrgGroups (billing owner +
-    // adminUserIds), extended with managerId for parity with findIdsAdministeredBy.
+    // Billing owner OR a manager (adminUserIds). Broader than findIdsAdministeredBy, which also
+    // requires the manager's users[] row - see the interface doc for why this is a separate method.
     const orgs = await this.organizationModel
-      .find({ $or: [{ userId }, { managerId: userId }, { adminUserIds: userId }] })
+      .find({ $or: [{ userId }, { adminUserIds: userId }] })
       .select('_id')
       .lean();
     return orgs.map(org => org._id.toString());
   }
 
   /**
-   * Atomically drop a member from `users`, `userDetails` and `adminUserIds`, and vacate
-   * `managerId` if they held it, in one pipeline update, so a concurrent add or credit `$inc` on
+   * Atomically drop a member from `users`, `userDetails` and `adminUserIds` in one pipeline update, so a concurrent add or credit `$inc` on
    * another member survives. A pipeline rather than `$pull` because `$pull` rejects the whole
    * update when a field is stored as `null`; `$ifNull` heals that like the old whole-doc write did.
    * Ids compare via `$toString` (pipelines skip Mongoose casting) so a legacy ObjectId entry still
@@ -511,7 +565,6 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
           users: without('users', '$$this.userId'),
           userDetails: without('userDetails', '$$this.id'),
           adminUserIds: without('adminUserIds', '$$this'),
-          managerId: { $cond: [{ $eq: [{ $toString: '$managerId' }, userId] }, null, '$managerId'] },
         },
       },
     ]);
@@ -552,7 +605,7 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
 
   /**
    * Set one member's monthly credit budget override; false when they have no `userDetails` row or
-   * are no longer a member. The membership arm (owner, manager, or a `users[]` row - the same tiers
+   * are no longer a member. The membership arm (owner or a `users[]` row - the same tiers
    * as the services `isCurrentOrgMember`) stops a removal racing the caller's membership check from
    * having a limit written onto the departed member's row.
    */
@@ -561,7 +614,7 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
       {
         _id: organizationId,
         'userDetails.id': userId,
-        $or: [{ userId }, { managerId: userId }, { 'users.userId': userId }],
+        $or: [{ userId }, { 'users.userId': userId }],
       },
       { $set: { 'userDetails.$.maxCredits': maxCredits } }
     );

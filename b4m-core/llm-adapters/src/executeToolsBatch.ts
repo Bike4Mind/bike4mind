@@ -10,8 +10,9 @@ export type TaskOutcome<T> = { ok: true; result: T } | { ok: false; error: unkno
  * A tool failure that must end the turn rather than be fed back to the model as a
  * recoverable observation: a declined tool (PermissionDeniedError) or an out-of-credits
  * error (tagged via `getQuestErrorCode`), neither of which any retry can satisfy.
+ * Also exempts these from the services tool failure guard (toolFailureGuard.ts).
  */
-function isTerminalToolError(error: unknown): boolean {
+export function isTerminalToolError(error: unknown): boolean {
   return error instanceof PermissionDeniedError || getQuestErrorCode(error) !== undefined;
 }
 

@@ -7,6 +7,7 @@ import { ComponentProps, useMemo } from 'react';
 
 interface SubscribeButtonProps {
   priceId: string;
+  onSubscriptionChanged?: () => void;
   /**
    * The user's non-terminal subscriptions. A delinquent (past_due/unpaid) row is
    * deliberately included: it is still the subscription they need to cancel, and
@@ -17,7 +18,12 @@ interface SubscribeButtonProps {
   planName?: string;
 }
 
-const SubscribeButton = ({ priceId, cancellableSubscriptions, planName }: SubscribeButtonProps) => {
+const SubscribeButton = ({
+  priceId,
+  cancellableSubscriptions,
+  planName,
+  onSubscriptionChanged,
+}: SubscribeButtonProps) => {
   const subscribe = useSubscribePlan();
   const cancelSubscription = useCancelSubscription();
   const changeSubscription = useChangeSubscription();
@@ -57,10 +63,10 @@ const SubscribeButton = ({ priceId, cancellableSubscriptions, planName }: Subscr
       case 'cancel':
         return cancelSubscription.mutate(priceId);
       case 'change':
-        return changeSubscription.mutate({
-          priceId,
-          callbackUrl: window.location.href,
-        });
+        return changeSubscription.mutate(
+          { priceId, callbackUrl: window.location.href },
+          { onSuccess: () => onSubscriptionChanged?.() }
+        );
     }
   };
 
@@ -85,7 +91,7 @@ const SubscribeButton = ({ priceId, cancellableSubscriptions, planName }: Subscr
         : `Change subscription to ${planName}`
     : undefined;
   const buttonProps: ComponentProps<typeof Button> = {
-    color: type === 'subscribe' ? 'neutral' : type === 'cancel' ? 'neutral' : 'primary',
+    color: type === 'cancel' ? 'neutral' : 'primary',
     variant: type === 'subscribe' ? 'solid' : type === 'cancel' ? 'outlined' : 'solid',
   };
 

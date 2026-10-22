@@ -30,7 +30,7 @@ import { useGetDataLakes } from '@client/app/hooks/data/dataLakes';
 import { useWizardLakeSlug } from '@client/app/components/DataLakeWizard/useWizardLakeSlug';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
-import { canConnectLakeDrive } from '@client/app/components/datalake/lakeVisibility';
+import { canConnectLakeConnector } from '@client/app/components/datalake/lakeVisibility';
 import {
   getCreateLakeSource,
   resolveCreateLakeSourceAvailability,
@@ -63,7 +63,7 @@ export default function SourceSelectionStep() {
   const config = useDataLakeWizardStore(s => s.config);
   const setConfig = useDataLakeWizardStore(s => s.setConfig);
   const targetLake = useDataLakeWizardStore(s => s.targetLake);
-  const canConnectDrive = !!targetLake && canConnectLakeDrive(targetLake);
+  const canConnectSource = !!targetLake && canConnectLakeConnector(targetLake);
   const optionalSteps = useDataLakeWizardStore(s => s.optionalSteps);
   const setOptionalStep = useDataLakeWizardStore(s => s.setOptionalStep);
   const folderInputRef = useRef<HTMLInputElement>(null);
@@ -192,7 +192,7 @@ export default function SourceSelectionStep() {
       createScope,
       isAdminFeatureEnabled
     );
-    if (availability.status !== 'available' || !createScope.organizationId) {
+    if (availability.status !== 'available') {
       return (
         <Box data-testid="wizard-source-step" sx={{ flex: 1, display: 'flex', flexDirection: 'column', p: 3 }}>
           <CreateSourceCards />
@@ -383,7 +383,7 @@ export default function SourceSelectionStep() {
             connect. (GitHub never reaches here: its card owns the whole screen above, because its
             connect creates the lake server-side and then leaves the page.) */}
         {targetLake ? (
-          canConnectDrive ? (
+          canConnectSource ? (
             <LakeSourceConnectActions lake={targetLake} />
           ) : (
             !targetLake.organizationId && (

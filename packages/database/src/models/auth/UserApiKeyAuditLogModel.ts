@@ -34,6 +34,8 @@ const UserApiKeyAuditLogSchema = new Schema<IUserApiKeyAuditLogDocument>(
 
 UserApiKeyAuditLogSchema.index({ productId: 1, createdAt: -1 });
 UserApiKeyAuditLogSchema.index({ keyId: 1, createdAt: -1 });
+// Per-user Activity pages a user's own key events by keyset, so the index ends in _id.
+UserApiKeyAuditLogSchema.index({ actorUserId: 1, createdAt: -1, _id: -1 });
 UserApiKeyAuditLogSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 export const UserApiKeyAuditLog =

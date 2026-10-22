@@ -34,6 +34,7 @@ vi.mock('@server/entitlements/partnerRules', async importOriginal => ({
 
 // Importing the route registers handlers.get / handlers.post via the mocked baseApi.
 import '@pages/api/admin/partner-signup-rules/index';
+import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
 
 type ReqOverrides = { user?: unknown; body?: unknown; query?: unknown };
 function makeReqRes(method: string, over: ReqOverrides = {}) {
@@ -69,6 +70,21 @@ describe('/api/admin/partner-signup-rules — create (POST)', () => {
     const { req, res } = makeReqRes('POST', { body: { ...validRule, entitlements: ['optihash:pro'] } });
     await expect(handlers.post(req, res)).rejects.toThrow(/unknown entitlement key/i);
     expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects a subscription for an unknown plan with a 400 and never writes', async () => {
+    const body = { ...validRule, subscription: { priceId: 'price_nope', durationMonths: 1 } };
+    const { req, res } = makeReqRes('POST', { body });
+    await expect(handlers.post(req, res)).rejects.toThrow(/unknown subscription plan/i);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('creates a rule with a catalog-plan subscription', async () => {
+    const subscription = { priceId: SUBSCRIPTION_PLANS[0].priceId, durationMonths: 3 };
+    const { req, res } = makeReqRes('POST', { body: { ...validRule, subscription } });
+    await handlers.post(req, res);
+    expect(res._getStatusCode()).toBe(201);
+    expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({ subscription }));
   });
 
   it('rejects a duplicate domain (pre-check) with a 400', async () => {

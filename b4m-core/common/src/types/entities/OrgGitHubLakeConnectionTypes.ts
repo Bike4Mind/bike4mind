@@ -1,8 +1,9 @@
 import { IBaseRepository } from './BaseTypes';
 import { IMongoDocument } from './common';
+import type { LakeConnectionOwner } from './LakeConnectionOwner';
 
 /**
- * A single GitHub repository bound to a single org data lake through the read-only data-lake
+ * A single GitHub repository bound to a single data lake through the read-only data-lake
  * GitHub App (contents:read + metadata:read, "Only select repositories").
  *
  * Deliberately separate from OrgGitHubConnection (internal issue/PR automation) and from the chat
@@ -43,7 +44,11 @@ export function isGitHubLakeAccessLost(connection: {
 }
 
 export interface IOrgGitHubLakeConnection {
-  organizationId: string;
+  /**
+   * The org of an org lake's connection. Absent on a personal lake's connection, which is owned by
+   * `connectedBy` instead - see LakeConnectionOwner.
+   */
+  organizationId?: string;
   targetDataLakeId: string;
   /** GitHub App installation id (numeric on GitHub). Shared across connections from one account. */
   installationId: number;
@@ -194,7 +199,7 @@ export interface IOrgGitHubLakeConnectionRepository extends IBaseRepository<IOrg
   /**
    * The connection feeding a lake, deliberately GLOBAL (no org filter) so a teardown that runs after
    * the lake's org is unresolvable can still release it. SECURITY: server-side only; a route must
-   * verify org access to the lake before trusting the result.
+   * authorize the caller on the lake before trusting the result.
    */
   findByDataLakeIdAny(targetDataLakeId: string): Promise<IOrgGitHubLakeConnectionDocument | null>;
 
@@ -205,7 +210,7 @@ export interface IOrgGitHubLakeConnectionRepository extends IBaseRepository<IOrg
   findByRepositoryIds(repositoryIds: readonly number[]): Promise<IOrgGitHubLakeConnectionDocument[]>;
 
   /** Hard-deletes the row so the unique repositoryId / targetDataLakeId claims are freed. */
-  release(id: string, organizationId: string): Promise<boolean>;
+  release(id: string, owner: LakeConnectionOwner): Promise<boolean>;
 
   // Sync claim, same compare-and-set contract as IOrgGoogleDriveConnectionRepository's methods of the same names.
   // Unlike Drive's, claim/renew also refuse a disabled connection: the other half of disableIfNoLiveSyncClaim's race.
@@ -233,9 +238,9 @@ export interface IOrgGitHubLakeConnectionRepository extends IBaseRepository<IOrg
    * Disconnect's compare-and-set: disables the connection only while no sync claim is live (the
    * isGitHubLakeSyncClaimLive notion). Reports whether the row was enabled before this call, so a caller
    * restores only what it disabled. Null means a sync is in flight (the disconnect must refuse) or no row
-   * matches id + organizationId.
+   * matches id + owner.
    */
-  disableIfNoLiveSyncClaim(id: string, organizationId: string): Promise<{ wasEnabled: boolean } | null>;
+  disableIfNoLiveSyncClaim(id: string, owner: LakeConnectionOwner): Promise<{ wasEnabled: boolean } | null>;
   /**
    * The DELETE route's disable: disableIfNoLiveSyncClaim's compare-and-set that also (re)stamps
    * `disconnectRequestedAt`. Null means a sync is in flight (409). `created` says no disconnect was
@@ -244,20 +249,20 @@ export interface IOrgGitHubLakeConnectionRepository extends IBaseRepository<IOrg
    */
   markDisconnecting(
     id: string,
-    organizationId: string
+    owner: LakeConnectionOwner
   ): Promise<{ stamp: Date; created: boolean; previousEnabled: boolean } | null>;
   /**
    * Undoes markDisconnecting when the purge could not be enqueued, compare-and-set on the exact
    * `stamp` so a concurrent DELETE that re-stamped since is left alone. Returns whether it matched.
    */
-  cancelDisconnect(id: string, organizationId: string, stamp: Date, enabled: boolean): Promise<boolean>;
+  cancelDisconnect(id: string, owner: LakeConnectionOwner, stamp: Date, enabled: boolean): Promise<boolean>;
   /**
    * Stores a sync's tree counts, compare-and-set on the live claim token like renewSyncClaim, so a run
    * that lost its claim cannot overwrite the counts of the one that took it. Returns whether it matched.
    */
   recordTreeCounts(id: string, expectedToken: string, counts: GitHubLakeTreeCounts): Promise<boolean>;
   /** Refreshes a pending disconnect's stamp (each purge slice); false when none is pending. */
-  touchDisconnect(id: string): Promise<boolean>;
+  touchDisconnect(id: string, owner: LakeConnectionOwner): Promise<boolean>;
   /**
    * Flips `enabled` on the lake's binding (lifecycle archive pause); false when the lake has none.
    * Never re-enables a binding with a pending disconnect.

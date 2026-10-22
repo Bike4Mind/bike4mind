@@ -7,6 +7,7 @@ import {
   ChatAckSchema,
   ChatWaitResponseSchema,
   ChatQuestPollResultSchema,
+  ChatWaitTimeoutErrorSchema,
   ApiErrorSchema,
 } from '../../schemas/chat';
 
@@ -24,7 +25,10 @@ export const chatContract = defineEndpoint({
   description:
     'Sends a message to the AI and creates a quest to process it. By default (async) the call ' +
     'returns immediately with a quest id; poll `GET /api/v1/quests/{id}` for the reply. Send ' +
-    '`wait: true` to block until the reply is ready and receive it inline. A tool that produced ' +
+    '`wait: true` to block until the reply is ready and receive it inline. A `wait: true` turn is ' +
+    'bounded at about 45 seconds: one that runs longer is ended (unused credits refunded) and ' +
+    'answered with a 504 naming the quest in `quest_id`. Send long or tool-heavy turns (large ' +
+    'attachments, tool calls) in the default async mode and poll instead. A tool that produced ' +
     'machine-readable state reports it under `toolPayloads` - an array of `{ type, payload }` ' +
     'entries in emission order, alongside (never instead of) the prose reply - on the `wait: true` ' +
     'body and on the polled quest. A turn can FAIL after the ACK - reported on the polled quest as ' +
@@ -129,6 +133,13 @@ export const chatContract = defineEndpoint({
       schema: ApiErrorSchema,
     },
     429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
+    504: {
+      description:
+        'A `wait: true` turn ran past the request deadline. The turn is already ended: its quest ' +
+        '(`quest_id`) is settled as timed out with any partial reply kept, and unused reserved ' +
+        'credits are refunded. Retry in async mode for a long turn.',
+      schema: ChatWaitTimeoutErrorSchema,
+    },
   },
   codeSample: {
     authToken: 'b4m_live_<key>',

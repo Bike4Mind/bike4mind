@@ -1,5 +1,6 @@
 import type {
   IUserRepository,
+  IOrganizationRepository,
   IFabFileRepository,
   IAdminSettingsRepository,
   IIngestedEmailRepository,
@@ -112,6 +113,7 @@ export interface IQueueAdapter {
 export interface EmailIngestionAdapters {
   db: {
     users: IUserRepository;
+    organizations: Pick<IOrganizationRepository, 'findById'>;
     ingestedEmails: IIngestedEmailRepository;
     fabFiles: IFabFileRepository;
     adminSettings: IAdminSettingsRepository;

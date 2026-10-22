@@ -10,10 +10,10 @@ import {
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
 import { logEventSafe } from '@server/utils/analyticsLog';
-import { toObjectIdString } from '@server/utils/objectId';
+import { toObjectIdString } from '@bike4mind/server-utils/utils/objectId';
 import { ApiKeyScope, UserApiKeyEvents } from '@bike4mind/common';
 import { ADMIN_ONLY_API_KEY_SCOPES, USER_API_KEY_SCOPE_VALUES } from '@client/app/constants/apiKeyScopes';
 
@@ -203,6 +203,10 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
       const invalidScopes = requestedScopes.filter(s => !ADMIN_ENDPOINT_MINTABLE_SCOPES.has(s));
       if (invalidScopes.length > 0) {
         throw new BadRequestError(`Scope not allowed: ${invalidScopes.join(', ')}`);
+      }
+      // The release-note routes keep their isAdmin check, so this key is useless on anyone else.
+      if (requestedScopes.includes(ApiKeyScope.RELEASE_NOTES_WRITE) && !targetUser.isAdmin) {
+        throw new BadRequestError(`${ApiKeyScope.RELEASE_NOTES_WRITE} needs a target user who is a platform admin`);
       }
 
       const lakeBinding = await screenPreauthorizedLakeIds(preauthorizedLakeIds, targetUserId, {

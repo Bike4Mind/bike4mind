@@ -34,15 +34,15 @@ export {
   type GroomContext,
 } from '@bike4mind/agents';
 // Host-private modules: Mongo store, tuned LLM steps + prompts, infra adapters.
-export { MongoDeepAgentStore } from './store';
+export { MongoDeepAgentStore } from '@bike4mind/server-utils/deepAgent/store';
 export { LlmWakeSteps, type LlmWakeStepsConfig } from './llmSteps';
-export { buildOrientPrompt, buildReflectPrompt, buildGroomPrompt } from './prompts';
+export { buildOrientPrompt, buildReflectPrompt, buildGroomPrompt } from '@bike4mind/server-utils/deepAgent/prompts';
 export {
   DEFAULT_WAKE_MODEL_ID,
   resolveDeepAgentBackend,
   buildSystemApiKeyTable,
   type ResolvedBackend,
-} from './resolveBackend';
+} from '@bike4mind/server-utils/deepAgent/resolveBackend';
 export { createDeepAgentToolMaterializer, type DeepAgentToolMaterializerConfig } from './toolMaterializer';
 export {
   dispatch as deepAgentWakeDispatch,
@@ -66,7 +66,7 @@ export {
   type ReviewOutcome,
   type ReviewStore,
   type ReviewVerdictStep,
-} from './reviewWake';
+} from '@bike4mind/server-utils/deepAgent/reviewWake';
 export {
   enrollMissionForAgent,
   listMissionsForAgent,

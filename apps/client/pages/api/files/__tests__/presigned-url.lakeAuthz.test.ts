@@ -19,7 +19,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 
 vi.mock('sst', () => ({ Resource: { fabFileBucket: { name: 'test-bucket' } } }));
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ getSignedUrl: vi.fn(async () => 'https://s3.test/signed') }),
 }));
 

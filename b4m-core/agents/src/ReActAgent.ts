@@ -220,6 +220,11 @@ function observationForResult(result: ToolResult | undefined): string {
   return `Error: ${message}`;
 }
 
+/** True when `observationForResult` reported a real tool failure (not a cancellation). */
+function isFailedResult(result: ToolResult | undefined): boolean {
+  return result?.status === 'rejected' && observationForResult(result) !== CANCELLED_TOOL_RESULT;
+}
+
 /**
  * True when an error is an abort/cancellation (user stop or execution timeout)
  * rather than a real failure. Aborts are benign and must NOT be logged at error
@@ -280,6 +285,10 @@ export class ReActAgent extends EventEmitter {
   }> = [];
   /** Confidence scores collected during the current iteration (reset each iteration) */
   private iterationConfidences: number[] = [];
+  /** Parallel to `iterationConfidences`: whether that score came from a failed tool call */
+  private iterationToolFailed: boolean[] = [];
+  /** Ids of calls `executeToolWithQueueFallback` saw fail; drained by `takeToolFailure`. */
+  private failedToolCallIds = new Set<string>();
 
   // --- State for runIteration() / checkpoint support ---
   /** Conversation history, promoted from run()-local to instance for checkpoint/resume */
@@ -424,7 +433,7 @@ export class ReActAgent extends EventEmitter {
     this.turnUsage = [];
     this.toolCallCount = 0;
     this.confidenceLog = [];
-    this.iterationConfidences = [];
+    this.resetIterationConfidences();
     this.lastStopReason = undefined;
     this.repeatedCallGuard.reset();
     this.isReadOnlyToolFn = options.isReadOnlyTool ?? defaultIsReadOnlyTool;
@@ -699,7 +708,11 @@ export class ReActAgent extends EventEmitter {
                       const observation = observationForResult(result);
 
                       this.appendToolMessages(messages, toolUse, observation, thinkingBlocks);
-                      this.emitObservationStep(toolUse.name, observation);
+                      this.emitObservationStep(
+                        toolUse.name,
+                        observation,
+                        isFailedResult(result) || this.takeToolFailure(toolUse)
+                      );
                     }
                   } else {
                     // SEQUENTIAL EXECUTION PATH
@@ -722,7 +735,7 @@ export class ReActAgent extends EventEmitter {
                         this.appendToolMessages(messages, toolUse, observation, thinkingBlocks);
                       }
 
-                      this.emitObservationStep(toolUse.name, observation);
+                      this.emitObservationStep(toolUse.name, observation, this.takeToolFailure(toolUse));
                     }
                   }
                 }
@@ -835,7 +848,7 @@ export class ReActAgent extends EventEmitter {
         }
 
         // Reset iteration confidences for next iteration
-        this.iterationConfidences = [];
+        this.resetIterationConfidences();
 
         // After tools complete, nudge the agent to provide the final answer
         // This prevents the agent from forgetting the user's specific requirements (e.g., "list in detail")
@@ -1228,6 +1241,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
     this.toolCallCount = checkpoint.toolCallCount;
     this.confidenceLog = structuredClone(checkpoint.confidenceLog);
     this.iterationConfidences = [...checkpoint.iterationConfidences];
+    this.iterationToolFailed = checkpoint.iterationConfidences.map(() => false);
     // Fall back to messages.length for legacy checkpoints written before this
     // field existed; safe because at the point fromCheckpoint runs, no iteration
     // messages have been appended yet for the resumed run.
@@ -1296,7 +1310,8 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
       this.turnUsage = [];
       this.toolCallCount = 0;
       this.confidenceLog = [];
-      this.iterationConfidences = [];
+      this.resetIterationConfidences();
+      this.failedToolCallIds.clear();
       this.lastStopReason = undefined;
       this.iterations = 0;
       this.repeatedCallGuard.reset();
@@ -1358,7 +1373,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
     const preIterationCheckpoint = this.toCheckpoint();
 
     this.iterations++;
-    this.iterationConfidences = [];
+    this.resetIterationConfidences();
     const iterationSteps: AgentStep[] = [];
 
     try {
@@ -1549,7 +1564,11 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
                     const result = results.get(getToolId(toolUse));
                     const observation = observationForResult(result);
                     this.appendToolMessages(this.messages, toolUse, observation, thinkingBlocks);
-                    const obsStep = this.buildObservationStep(toolUse.name, observation);
+                    const obsStep = this.buildObservationStep(
+                      toolUse.name,
+                      observation,
+                      isFailedResult(result) || this.takeToolFailure(toolUse)
+                    );
                     iterationSteps.push(obsStep);
                   }
                 } else {
@@ -1575,7 +1594,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
                       observation = await this.executeToolWithQueueFallback(toolUse);
                       this.appendToolMessages(this.messages, toolUse, observation, thinkingBlocks);
                     }
-                    const obsStep = this.buildObservationStep(toolUse.name, observation);
+                    const obsStep = this.buildObservationStep(toolUse.name, observation, this.takeToolFailure(toolUse));
                     iterationSteps.push(obsStep);
                   }
                 }
@@ -1651,7 +1670,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
       }
 
       // Reset iteration confidences for next iteration
-      this.iterationConfidences = [];
+      this.resetIterationConfidences();
 
       // Add nudge for next iteration if tools were called but no final answer
       if (!iterationComplete && hadToolCalls) {
@@ -1827,7 +1846,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
    * Build an observation step, score confidence, push to steps, and emit.
    * Returns the step for callers that need to collect iteration steps.
    */
-  private buildObservationStep(toolName: string, observation: string): AgentStep {
+  private buildObservationStep(toolName: string, observation: string, toolFailed = false): AgentStep {
     const confidence = this.scoreToolResult(toolName, observation);
     const confidenceSource: 'deterministic' | 'default' = observation.startsWith('Error:')
       ? 'deterministic'
@@ -1835,6 +1854,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
 
     this.confidenceLog.push({ toolName, confidence, source: confidenceSource, timestamp: Date.now() });
     this.iterationConfidences.push(confidence);
+    this.iterationToolFailed.push(toolFailed);
 
     const observationStep: AgentStep = {
       type: 'observation',
@@ -1845,6 +1865,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
         iteration: this.iterations - 1,
         confidence,
         confidenceSource,
+        ...(toolFailed ? { toolFailed: true } : {}),
       },
     };
     this.steps.push(observationStep);
@@ -1855,8 +1876,8 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
   /**
    * Create and emit an observation step, scoring confidence for the result
    */
-  private emitObservationStep(toolName: string, observation: string): void {
-    this.buildObservationStep(toolName, observation);
+  private emitObservationStep(toolName: string, observation: string, toolFailed = false): void {
+    this.buildObservationStep(toolName, observation, toolFailed);
   }
 
   /**
@@ -1952,13 +1973,14 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
         `ReActAgent.executeGatedToolCall: backend (${this.context.llm.currentModel}) cannot record a replayed tool result, so an approval-gated tool cannot be run on it`
       );
     }
-    const observation = await this.executeToolWithQueueFallback({
+    const toolUse: ToolUseInfo = {
       id: call.id,
       name: call.name,
       arguments: typeof call.input === 'string' || call.input === undefined ? call.input : JSON.stringify(call.input),
-    });
+    };
+    const observation = await this.executeToolWithQueueFallback(toolUse);
     this.replaceLastToolResultObservation(call.id, observation);
-    this.buildObservationStep(call.name, observation);
+    this.buildObservationStep(call.name, observation, this.takeToolFailure(toolUse));
     return observation;
   }
 
@@ -1974,15 +1996,29 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
    * `iterationConfidences` at its own start regardless, discarding the score
    * before anything reads it. The host calls this right after replaying an
    * approved batch (see `resumeApprovedPause` / `gateReplayConfidence`) so a
-   * replayed tool that failed still gets the same low-confidence pause a normal
-   * iteration would have gotten - resetting `iterationConfidences` here is a
-   * no-op for the next `runIteration()`, which resets it again anyway.
+   * replayed tool gets the same low-confidence pause a normal iteration would
+   * have gotten - resetting `iterationConfidences` here is a no-op for the next
+   * `runIteration()`, which resets it again anyway.
+   *
+   * Scores from calls that failed to run (`toolFailed`) are left out, matching the
+   * web executor's iteration gate (`evaluateConfidenceGate`); `null` when every
+   * scored call failed.
    */
   takeIterationConfidence(): number | null {
-    if (this.iterationConfidences.length === 0) return null;
-    const avg = this.iterationConfidences.reduce((a, b) => a + b, 0) / this.iterationConfidences.length;
+    const scores = this.iterationConfidences.filter((_, i) => !this.iterationToolFailed[i]);
+    this.resetIterationConfidences();
+    if (scores.length === 0) return null;
+    return scores.reduce((a, b) => a + b, 0) / scores.length;
+  }
+
+  private resetIterationConfidences(): void {
     this.iterationConfidences = [];
-    return avg;
+    this.iterationToolFailed = [];
+  }
+
+  /** True (once) when `executeToolWithQueueFallback` recorded this call as failed. */
+  private takeToolFailure(toolUse: ToolUseInfo): boolean {
+    return this.failedToolCallIds.delete(getToolId(toolUse));
   }
 
   /**
@@ -2029,6 +2065,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
       // low-confidence error (they key off `startsWith('Error:')`), but add an explicit
       // instruction to stop retrying and PROCEED - without forcing the whole turn to end, in
       // case the missing tool was peripheral and the plan has other valid steps left.
+      this.failedToolCallIds.add(getToolId(toolUse));
       return (
         `Error: Tool "${toolUse.name}" is not available in this context and cannot be called. ` +
         `Do NOT attempt to call it again. Proceed without it — call other available tools if your ` +
@@ -2057,6 +2094,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
       const message = error instanceof Error ? error.message : String(error);
       observation = `Error: ${message}`;
       succeeded = false;
+      this.failedToolCallIds.add(getToolId(toolUse));
     }
 
     // Track this call's result. A changed result resets the counter (progress);

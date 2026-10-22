@@ -40,6 +40,7 @@ import { extractAndSaveEntitiesFromToolResult, shouldExtractEntitiesFromTool } f
 import type { MinimalSessionRepository } from '../conversationContextService/types';
 import { notifyToolFinish } from './toolFinishObserver';
 import { extractMcpPendingAction, type McpPendingAction } from './mcpPendingAction';
+import { JIRA_LIST_ATTACHMENTS, CONFLUENCE_LIST_ATTACHMENTS } from '@bike4mind/mcp/atlassian/constants';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -88,6 +89,8 @@ export interface ToolBuilderDeps {
    * path). See ToolContext.onToolLlmUsage.
    */
   onToolLlmUsage?: ToolContext['onToolLlmUsage'];
+  /** The `decide` tool's execution seam, forwarded to the tool context (see ToolContext.decide). */
+  decide?: ToolContext['decide'];
   storage: BaseStorage;
   imageGenerateStorage: BaseStorage;
   imageProcessorLambdaName?: string;
@@ -97,6 +100,13 @@ export interface ToolBuilderDeps {
     adminSettingsEnforceCredits: boolean;
     models: ModelInfo[];
   };
+  /**
+   * The models a delegated subagent may run on, when narrower than `precomputed.models`
+   * (which also prices media and tool usage, so it stays the full catalog). The Agent
+   * Executor and the chat path pass the user's runnable models here; a subagent pinned to any
+   * other model falls back to the parent's (see `ServerSubagentOrchestrator.resolveAgentRuntime`).
+   */
+  subagentModels?: ModelInfo[];
   apiKeyTable?: ApiKeyTable;
   thinking?: { enabled: boolean; budget_tokens: number };
   agentStore?: ServerAgentStore;
@@ -162,6 +172,13 @@ export interface ToolBuilderDeps {
    * (see `ServerOrchestratorDeps.checkMemberCreditCap`).
    */
   checkMemberCreditCap?: () => boolean | Promise<boolean>;
+
+  /**
+   * Returns true when the payer cannot cover a subagent's first iteration on the given model;
+   * forwarded like `checkMemberCreditCap`. Set by the agent executor when credits are enforced
+   * (see `ServerOrchestratorDeps.checkInsufficientCredits`).
+   */
+  checkInsufficientCredits?: (model: string) => boolean | Promise<boolean>;
 
   /**
    * The run's tool-permission lists, set only by the agent executor (whose parent gate
@@ -232,8 +249,14 @@ export interface ToolBuilderCallbacks {
    * ToolContext['questId']'s own doc comment for the agent-mode caveat. */
   questId?: string;
 
-  /** Called when delegate_to_agent accumulates credits; meta carries cost attribution when resolvable */
-  onSubagentCredits?: (credits: number, meta?: SubagentUsageMeta) => void;
+  /** See ToolContext['numberCitables']; the chat path supplies it for indexed-citation sessions. */
+  numberCitables?: ToolContext['numberCitables'];
+
+  /**
+   * Bills a delegation's spend that no tracker bills (see `DelegateToAgentToolDeps.onCredits`);
+   * meta carries cost attribution when resolvable.
+   */
+  onSubagentCredits?: (credits: number, meta?: SubagentUsageMeta) => void | Promise<void>;
 
   /** Called when a subagent completes with telemetry */
   onSubagentTelemetry?: (telemetry: unknown) => void;
@@ -290,7 +313,18 @@ export interface BuildSharedToolsOptions {
    * from the schema sent to the model instead of reaching it and then throwing or refusing.
    */
   toolAvailability?: ToolAvailability;
+  /**
+   * Applied to the tools handed to in-process subagents (`parentTools`), before the denylist.
+   * Callers pass the same wrapper they apply to the array this function returns for the parent.
+   */
+  wrapChildTools?: (tools: ICompletionOptionTools[]) => ICompletionOptionTools[];
 }
+
+/** Namespaced `server__tool` ids of the only tools whose `_attachmentList` result is trusted. */
+const ATTACHMENT_LIST_SOURCE_BY_TOOL: ReadonlyMap<string, 'jira' | 'confluence'> = new Map([
+  [`atlassian__${JIRA_LIST_ATTACHMENTS}`, 'jira'],
+  [`atlassian__${CONFLUENCE_LIST_ATTACHMENTS}`, 'confluence'],
+]);
 
 // Sentinel types for wrapping. A tool may emit one of these generic
 // optimization-console side-effects; the type must be allowlisted here so its
@@ -386,6 +420,8 @@ export function buildSharedTools(
       authOrigin,
       apiKeyId,
       questId: callbacks.questId,
+      numberCitables: callbacks.numberCitables,
+      decide: deps.decide,
       getAbortSignal,
     },
     storage,
@@ -419,6 +455,9 @@ export function buildSharedTools(
     ...toolAvailability,
     video_generation: isVideoToolConfig(config.video_generation),
     music_generation: isMusicToolConfig(config.music_generation),
+    // `decide` runs on its host's injected seam; a host that omits it must not offer a tool whose
+    // every call would throw. Derived here, not in the deps literals, so no call site can forget.
+    decide: toolAvailability?.decide !== false && deps.decide !== undefined,
   };
 
   // Filter to enabled tools only
@@ -557,9 +596,13 @@ export function buildSharedTools(
   // delegate tool's closure below, so it never appears in the array this function returns and a
   // denylist applied to that array cannot reach it. Without this, a session-forbidden tool stays
   // callable by a dispatched subagent - the same loophole the delegate gate exists to close.
-  const parentTools = [...tools, ...agentOnlyMcpTools].filter(tool => !deniedToolNames.has(tool.toolSchema.name));
+  const childTools = [...tools, ...agentOnlyMcpTools];
+  const parentTools = (options.wrapChildTools ? options.wrapChildTools(childTools) : childTools).filter(
+    tool => !deniedToolNames.has(tool.toolSchema.name)
+  );
 
-  const subagentModelInfo = deps.precomputed?.models.find(m => m.id === model);
+  const subagentModels = deps.subagentModels ?? deps.precomputed?.models;
+  const subagentModelInfo = subagentModels?.find(m => m.id === model);
   const subagentLlm = getLlmByModel(deps.apiKeyTable!, {
     modelInfo: subagentModelInfo,
     logger,
@@ -576,10 +619,8 @@ export function buildSharedTools(
     logger,
     parentTools,
     getSignal: getAbortSignal,
-    onCredits: callbacks.onSubagentCredits
-      ? (credits: number, meta?: SubagentUsageMeta) => callbacks.onSubagentCredits!(credits, meta)
-      : undefined,
-    availableModels: deps.precomputed?.models,
+    onCredits: callbacks.onSubagentCredits,
+    availableModels: subagentModels,
     onStatusUpdate: callbacks.onSubagentStatusUpdate
       ? async (status: string) => callbacks.onSubagentStatusUpdate!(status)
       : undefined,
@@ -595,6 +636,7 @@ export function buildSharedTools(
     depth: deps.depth,
     optInTools: deps.optInTools,
     checkMemberCreditCap: deps.checkMemberCreditCap,
+    checkInsufficientCredits: deps.checkInsufficientCredits,
     toolPermissions: deps.toolPermissions,
   });
   tools.push(delegateTool);
@@ -609,7 +651,8 @@ export function buildSharedTools(
       logger,
       parentTools,
       getSignal: getAbortSignal,
-      availableModels: deps.precomputed?.models,
+      availableModels: subagentModels,
+      onCredits: callbacks.onSubagentCredits,
       onStatusUpdate: callbacks.onSubagentStatusUpdate
         ? async (status: string) => callbacks.onSubagentStatusUpdate!(status)
         : undefined,
@@ -624,6 +667,7 @@ export function buildSharedTools(
       dagHandoffSignal: deps.dagHandoffSignal,
       optInTools: deps.optInTools,
       checkMemberCreditCap: deps.checkMemberCreditCap,
+      checkInsufficientCredits: deps.checkInsufficientCredits,
       toolPermissions: deps.toolPermissions,
     });
     tools.push(coordinateTool);
@@ -833,14 +877,17 @@ function createMcpToolWrapper(
       try {
         if (typeof result === 'string' && result.includes('_attachmentList')) {
           const parsed = JSON.parse(result);
-          if (parsed._attachmentList === true && Array.isArray(parsed.attachments)) {
+          // Only the Atlassian list tools may mint a list the delete buttons act on; the source comes
+          // from which tool ran, never from the (tool-controlled) payload.
+          const attachmentListSource = ATTACHMENT_LIST_SOURCE_BY_TOOL.get(name);
+          if (attachmentListSource && parsed._attachmentList === true && Array.isArray(parsed.attachments)) {
             logger.debug(`[MCP] Extracted attachment list from tool ${name}`, {
-              source: parsed.source,
+              source: attachmentListSource,
               count: parsed.attachments.length,
             });
 
             const attachmentList = {
-              source: parsed.source,
+              source: attachmentListSource,
               issueKey: parsed.issueKey,
               pageId: parsed.pageId,
               pageTitle: parsed.pageTitle,
@@ -866,7 +913,7 @@ function createMcpToolWrapper(
             }
 
             // Default: return simplified result for AI
-            const sourceLabel = parsed.source === 'jira' ? 'Jira issue' : 'Confluence page';
+            const sourceLabel = attachmentListSource === 'jira' ? 'Jira issue' : 'Confluence page';
             const identifier = parsed.issueKey || parsed.pageId || '';
             return JSON.stringify(
               {

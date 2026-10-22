@@ -8,6 +8,7 @@ const {
   revokeDriveMock,
   revokeAtlassianMock,
   flagConnectionsMock,
+  withdrawListingsMock,
 } = vi.hoisted(() => ({
   deleteEmbedMock: vi.fn(),
   deleteRequestsMock: vi.fn(),
@@ -16,6 +17,7 @@ const {
   revokeDriveMock: vi.fn(),
   revokeAtlassianMock: vi.fn(),
   flagConnectionsMock: vi.fn(),
+  withdrawListingsMock: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -27,6 +29,7 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@server/services/publish/purgeUserPublishedArtifacts', () => ({
   purgeUserPublishedArtifacts: purgePublishedMock,
 }));
+vi.mock('@server/skillMarket/market', () => ({ withdrawAuthorListings: withdrawListingsMock }));
 vi.mock('@server/integrations/google/drive/common', () => ({
   revokeDriveGrant: revokeDriveMock,
   decryptStoredToken: (v: string | undefined) => (v ? `plain-${v}` : null),
@@ -45,6 +48,7 @@ beforeEach(() => {
   deleteRequestsMock.mockReset().mockResolvedValue(0);
   purgePublishedMock.mockReset().mockResolvedValue(undefined);
   hideAnnotationsMock.mockReset().mockResolvedValue(0);
+  withdrawListingsMock.mockReset().mockResolvedValue(0);
   revokeDriveMock.mockReset().mockResolvedValue('revoked');
   revokeAtlassianMock.mockReset().mockResolvedValue('revoked');
   flagConnectionsMock.mockReset().mockResolvedValue({ affectedOrgConnections: 0, affectedPersonalConnections: 0 });
@@ -59,7 +63,19 @@ describe('purgeDeletedUserData', () => {
     expect(deleteRequestsMock).toHaveBeenCalledWith('u1');
     expect(purgePublishedMock).toHaveBeenCalledWith('u1', { deletedBy: 'admin1', logger });
     expect(hideAnnotationsMock).toHaveBeenCalledWith('u1');
+    expect(withdrawListingsMock).toHaveBeenCalledWith('u1');
     expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it('still hides annotations when withdrawing Skill Market listings fails, and never throws', async () => {
+    withdrawListingsMock.mockRejectedValue(new Error('market down'));
+
+    await expect(
+      purgeDeletedUserData('u1', { deletedBy: 'admin1', logger, integrationGrants: null })
+    ).resolves.toBeUndefined();
+
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('Skill Market listings'));
+    expect(hideAnnotationsMock).toHaveBeenCalledWith('u1');
   });
 
   it('still purges published artifacts when the embed purge fails, and never throws', async () => {

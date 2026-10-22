@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // heavy DB/service deps; the two compute* helpers are thin delegations this test verifies.
 vi.mock('@server/middlewares/baseApi', () => ({ baseApi: () => ({ get: (fn: unknown) => fn }) }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
-vi.mock('@server/utils/config', () => ({ Config: {} }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: {} }));
 vi.mock('sst', () => ({ Resource: {} }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -26,10 +26,10 @@ vi.mock('@bike4mind/services/llm/toolAvailability', () => ({
 
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: { name: 'getSettingsByNames' } }));
 
-// The resolution rule itself is pinned in server/embeddings/effectiveEmbeddingModel.test.ts; what
+// The resolution rule itself is pinned in packages/server-utils/src/embeddings/effectiveEmbeddingModel.test.ts; what
 // belongs here is only how this route adapts it for the wire.
 const resolveEffectiveEmbeddingModel = vi.fn();
-vi.mock('@server/embeddings/effectiveEmbeddingModel', () => ({
+vi.mock('@bike4mind/server-utils/embeddings/effectiveEmbeddingModel', () => ({
   resolveEffectiveEmbeddingModel: (...a: unknown[]) => resolveEffectiveEmbeddingModel(...a),
 }));
 

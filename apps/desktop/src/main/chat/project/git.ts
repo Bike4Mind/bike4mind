@@ -303,12 +303,13 @@ async function containerCheckouts(directory: string): Promise<string[] | null> {
 }
 
 /**
- * What a new branch forks from: origin/main when it resolves, matching the default in the
+ * What a new branch forks from: the remote's default branch, else origin/main, matching the default in the
  * user's `worktree` command, and otherwise whatever HEAD is - a repo with no origin still has
  * to produce a usable branch rather than an error the user cannot act on.
  */
 export async function resolveBaseRef(directory: string): Promise<string> {
-  for (const candidate of ['origin/main', 'origin/master']) {
+  const remote = await remoteDefaultBranch(directory);
+  for (const candidate of [...(remote ? [`origin/${remote}`] : []), 'origin/main', 'origin/master']) {
     try {
       await git(directory, ['rev-parse', '--verify', '--quiet', `${candidate}^{commit}`]);
       return candidate;
@@ -319,15 +320,71 @@ export async function resolveBaseRef(directory: string): Promise<string> {
   return 'HEAD';
 }
 
-/** Best-effort freshening so a new branch forks from an up-to-date base, as the shell helper does. */
-export async function fetchRemoteFor(directory: string, baseRef: string): Promise<void> {
-  const remote = baseRef.includes('/') ? baseRef.split('/')[0] : null;
-  if (!remote) return;
+/** The branch the remote's HEAD points at (`origin/HEAD`), or null when none is recorded. */
+async function remoteDefaultBranch(directory: string): Promise<string | null> {
   try {
-    await git(directory, ['fetch', '--quiet', remote]);
+    const head = await git(directory, ['symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD']);
+    const name = head.trim().replace(/^refs\/remotes\/origin\//, '');
+    return name && name !== 'HEAD' ? name : null;
   } catch {
-    // Offline, or no such remote. Branching from the stale ref beats refusing to start.
+    // No remote HEAD recorded, which is ordinary for a local-only or bare-cloned repository.
+    return null;
   }
+}
+
+/**
+ * The branch a worktree session is based on when the user picked none: the first LOCAL branch
+ * among the remote default, `main`, `master` and the checked-out branch. Empty only when none
+ * exist, e.g. a repository with no commits.
+ *
+ * Differs from resolveBaseRef on purpose: that one names a ref to fork from (a remote-tracking
+ * ref, else HEAD), this one names the base the session records and the UI shows, which must be
+ * a branch the user could pick. Both consult the same remote default first, so they agree.
+ */
+export async function defaultBaseBranch(directory: string): Promise<string> {
+  const remote = await remoteDefaultBranch(directory);
+  for (const candidate of [...(remote ? [remote] : []), 'main', 'master']) {
+    if (await branchExists(directory, candidate)) return candidate;
+  }
+  const checkedOut = await currentBranch(directory);
+  return checkedOut && (await branchExists(directory, checkedOut)) ? checkedOut : '';
+}
+
+/** How long one fetch of a base serves every branch cut from it; see fetchRemoteFor. */
+const FETCH_FRESH_MS = 2 * 60_000;
+
+const recentFetches = new Map<string, { at: number; done: Promise<void> }>();
+
+/**
+ * Best-effort freshening so a new branch forks from an up-to-date base, as the shell helper does.
+ *
+ * Only that one branch, and no tags: against a remote over SSH each round trip costs seconds,
+ * which made the fetch most of what starting a worktree session waited on. A fetch of the same
+ * ref begun within FETCH_FRESH_MS is shared rather than repeated, which is what lets the one
+ * prefetchBase starts while a card is read or a first message typed be the one the cut uses.
+ */
+export function fetchRemoteFor(directory: string, baseRef: string): Promise<void> {
+  const slash = baseRef.indexOf('/');
+  if (slash <= 0) return Promise.resolve();
+  const key = `${directory}\u0000${baseRef}`;
+  const recent = recentFetches.get(key);
+  if (recent && Date.now() - recent.at < FETCH_FRESH_MS) return recent.done;
+  const done = git(directory, [
+    'fetch',
+    '--quiet',
+    '--no-tags',
+    baseRef.slice(0, slash),
+    `refs/heads/${baseRef.slice(slash + 1)}`,
+  ]).then(
+    () => undefined,
+    // Offline, no such remote, or a base that only exists locally. Branching from the stale
+    // ref beats refusing to start.
+    () => {
+      if (recentFetches.get(key)?.done === done) recentFetches.delete(key);
+    }
+  );
+  recentFetches.set(key, { at: Date.now(), done });
+  return done;
 }
 
 /**

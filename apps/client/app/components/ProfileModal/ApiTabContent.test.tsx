@@ -17,10 +17,10 @@ vi.mock('@client/app/components/ProfileModal/SettingsTabContent/ApiKeysSection',
 }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
-const renderTab = () =>
+const renderTab = (props: { replaceHistory?: boolean } = {}) =>
   render(
     <CssVarsProvider theme={appTheme}>
-      <ApiTabContent />
+      <ApiTabContent {...props} />
     </CssVarsProvider>
   );
 
@@ -41,5 +41,11 @@ describe('ApiTabContent', () => {
     renderTab();
     fireEvent.click(screen.getByTestId('api-keys-usage-link-btn'));
     expect(navigate).toHaveBeenCalledWith({ to: '/profile', search: { tab: 'usage' }, replace: true });
+  });
+
+  it('pushes a history entry for the Usage link when hosted off the profile page', () => {
+    renderTab({ replaceHistory: false });
+    fireEvent.click(screen.getByTestId('api-keys-usage-link-btn'));
+    expect(navigate).toHaveBeenCalledWith({ to: '/profile', search: { tab: 'usage' }, replace: false });
   });
 });

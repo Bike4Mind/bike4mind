@@ -32,7 +32,7 @@ vi.mock('@server/generationJobs/wiring', async () =>
 vi.mock('@server/generations/signOutputUrl', async () =>
   (await import('@server/generations/__test__/routeHarness')).signOutputUrlMock()
 );
-vi.mock('@server/musicGenerations/listUsableMusicModels', async orig =>
+vi.mock('@bike4mind/server-utils/musicGenerations/listUsableMusicModels', async orig =>
   (await import('@server/generations/__test__/routeHarness')).listUsableMusicModelsMock(orig)
 );
 vi.mock('@server/auth/auth', async orig => (await import('@server/generations/__test__/routeHarness')).authMock(orig));

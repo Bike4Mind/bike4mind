@@ -22,6 +22,9 @@ import {
   getViewSummaryForLLM,
   isNavigableFeaturePath,
   applyReplyChoices,
+  applyNarratedToolCallStrip,
+  NARRATED_TOOL_CALL_NOTICE,
+  stripNarratedToolCallsFromReplies,
   REPLY_CHOICES_GUIDANCE,
   stripChoicesFromReplies,
   ReasoningEffort,
@@ -40,6 +43,8 @@ import {
   QuestErrorCode,
   getQuestErrorCode,
   DEGENERATE_FINISH_REASON,
+  estimateStreamedOutputTokens,
+  MAX_TOOL_CALLS_CEILING,
   TRUNCATED_FINISH_REASON,
   isEarlyStop,
   visibleReplyText,
@@ -47,6 +52,10 @@ import {
   pairDataLakeTools,
   isClaudeModelId,
   questGenerationJobs,
+  resolveWorkspaceDeniedTools,
+  filterRunnableModels,
+  type LLMModelConfig,
+  applyWorkspaceSessionSettings,
 } from '@bike4mind/common';
 import {
   BadRequestError,
@@ -87,8 +96,12 @@ import {
   safeInputWindow,
   withTokenEstimateMultiplier,
 } from '@bike4mind/utils';
+import { isRequestTimeoutError, isStreamIdleTimeoutError, isToolPairingError } from './llmErrorPredicates';
+import { TurnTimingRecorder } from './turnTiming';
 import type { FabFileNotice, EmbeddingCredential } from '@bike4mind/utils';
 import { buildAttachmentNoticePrompt, toAttachmentNoticeStrings } from './attachmentNotices';
+import { buildPromptMetaModel } from './buildPromptMetaModel';
+import { withOllamaThinkingDefault } from './ollamaThinkingDefault';
 import { buildRecentGeneratedImagesNote } from './recentGeneratedImagesNote';
 // Injected into processFabFilesServer so @bike4mind/utils's barrel carries no jimp
 // dependency (keeps it out of the CLI bundle). See issue #660.
@@ -98,6 +111,7 @@ import {
   toRetrievalFilter,
   type RetrievalExclusionOptions,
 } from '@bike4mind/utils/retrievalExclusion';
+import { sentMaxTokensFor } from '@bike4mind/llm-adapters/model-sizing';
 import {
   resolveOutputMaxTokens,
   reasonsWithinOutputBudget,
@@ -107,6 +121,7 @@ import {
   PipelineTimer,
   resolveDeprecatedModelId,
   isTurnEndingTool,
+  ResponsesStreamTruncatedError,
 } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { ToolCacheManager } from './tools/ToolCacheManager';
@@ -120,9 +135,12 @@ import { buildToolEchoSources } from './toolEchoSources';
 import { appendStreamedChunk, shouldStampFirstVisibleToken } from './streamedReplyAccumulator';
 import { buildSystemPromptSourceFiles } from './buildSystemPromptSourceFiles';
 import { resolveCorrectionContext } from './buildCorrectionContext';
+import { resolveDataSourceStatus } from './dataSourceStatus';
 import { scrubMissingKnowledgeIds } from '../sessionService/scrubMissingKnowledgeIds';
+import { scrubStaleSystemFiles } from '../sessionService/scrubStaleFileReferences';
 import { LATTICE_TOOL_NAMES } from './tools';
 import { createWebSearchBudget, MAX_WEB_SEARCHES_PER_TURN } from './tools/implementation/websearch';
+import { createToolFailureGuard } from './tools/toolFailureGuard';
 import {
   getDynamicDataLakeAccess,
   lakeMembershipsFrom,
@@ -158,7 +176,7 @@ import type { MusicToolConfig } from './tools/implementation/musicGeneration';
 import { applyModerationHit, MODERATION_POLICY, moderationThrottleKey } from '../userService/moderationPolicy';
 import { ToolDefinition } from './tools/base/types';
 import { ServerAgentStore } from './agents/ServerAgentStore';
-import throttle from 'lodash/throttle.js';
+import { createStreamingStatusSender } from './streamingStatusSender';
 import {
   AutoNameSessionFeature,
   ChatCompletionFeature,
@@ -186,17 +204,21 @@ import {
   buildTaggedContextMessages,
   filterByPromptMode,
   filterFeaturesByPromptMode,
+  isPerTurnContext,
+  markHistoryCacheAnchor,
   markShareablePrefixBoundary,
   PROMPT_MODE_SOURCES,
   PROMPT_SOURCE_METADATA,
   resolveForcedRetrieval,
   SYSTEM_PROMPT_PRIORITY,
+  relocatePerTurnContext,
   resolveSkipAutoOffers,
   lakeContentTokens,
   toPromptDetails,
   type PromptSourceId,
 } from './systemPromptSources';
 import { buildSystemPromptText, type SystemPromptTextDisclosure } from './systemPromptDisclosure';
+import { buildViewRegistryAdminMessages } from './viewRegistryPrompt';
 import { vetPreauthorizedLakeIds } from '../dataLakeService/vetPreauthorizedLakeIds';
 import { vetReaderConsentDatalakeTags } from './vetReaderConsentDatalakeTags';
 import {
@@ -210,9 +232,10 @@ import {
 } from '../dataLakeService/narrowLakeAccessToSession';
 import { renderCallerPromptMessages } from './renderCallerPromptBlock';
 import { buildInsufficientCreditsMessage, buildMemberCreditCapMessage } from './insufficientCreditsMessage';
-import { ResearchModeService } from './ResearchModeService';
+import { ResearchModeService, researchConfigMaxTokens, type ResearchModeResult } from './ResearchModeService';
 import {
   deductCreditsWithOrgSupport,
+  type DeductCreditsParams,
   subtractCredits,
   getMemberUsedCredits,
   getMemberCreditCap,
@@ -222,18 +245,12 @@ import {
 import {
   TelemetryBuilder,
   mapBackendToProvider,
-  categorizeToolError,
   AnomalyAlertService,
   aggregateWebFetchContentTelemetry,
   performanceFromPromptMeta,
+  buildToolInvocationTelemetry,
 } from '../telemetry';
-import type {
-  ToolTelemetry,
-  ToolErrorCategory,
-  SystemPromptDetail,
-  DataLakeGroundingMode,
-  IAttachmentDelivery,
-} from '@bike4mind/common';
+import type { SystemPromptDetail, DataLakeGroundingMode, IAttachmentDelivery } from '@bike4mind/common';
 import {
   buildAlwaysOnFloorDetails,
   buildInjectedBlockDetails,
@@ -241,6 +258,7 @@ import {
 } from './systemPromptFloorTelemetry';
 import { buildArtifactEmissionMessages, resolveArtifactsEnabled } from './artifactGating';
 import {
+  resolveStickyAutoAddedTools,
   shouldOfferBlogTools,
   shouldOfferDataLakeTools,
   shouldOfferDelegation,
@@ -354,6 +372,16 @@ export const KNOWLEDGE_SEARCH_TOOL_NAME = 'search_knowledge_base';
 const PER_TOOL_SCHEMA_RESERVE_TOKENS = 120; // rough serialized {name,description,input_schema} per enabled tool
 
 /** Coerce an admin-setting value to a fraction in (0, 1], falling back when invalid. */
+// Same check as `isValidTimeZone` in apps/client/pages/api/users/counterLogs.ts.
+export function isValidTimeZone(timeZone: string): boolean {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function clampFraction(raw: unknown, fallback: number): number {
   const parsed = typeof raw === 'number' ? raw : parseFloat(String(raw));
   return Number.isFinite(parsed) && parsed > 0 && parsed <= 1 ? parsed : fallback;
@@ -380,16 +408,11 @@ export function dropOldestHistoryTurn(history: IMessage[]): IMessage[] | null {
 }
 
 /**
- * Conservative fallback for simple query max history.
- * Used before model info is available.
+ * Conservative cap on a requested history count, applied before model info is available. The same for
+ * every query: a count that varied with per-turn complexity moved the history window's start each
+ * turn, which re-writes the provider's prompt cache (see HISTORY_WINDOW_STEP).
  */
-const SIMPLE_QUERY_FALLBACK_MAX = 25;
-
-/**
- * Conservative fallback for complex query max history.
- * Used before model info is available.
- */
-const COMPLEX_QUERY_FALLBACK_MAX = 60;
+const HISTORY_COUNT_FALLBACK_MAX = 60;
 
 /**
  * Calculate optimal history count based on model context window.
@@ -421,31 +444,6 @@ function calculateOptimalHistoryCount(contextWindow: number): number {
 }
 
 /**
- * Get maximum history for simple queries.
- * Simple queries need less context but should still scale with model capacity.
- *
- * @param contextWindow - Model's context window size in tokens
- * @returns Maximum history messages for simple queries
- */
-function getSimpleQueryMaxHistory(contextWindow: number): number {
-  // Simple queries get 40% of the optimal history count
-  const optimal = calculateOptimalHistoryCount(contextWindow);
-  return Math.max(MIN_HISTORY_COUNT, Math.floor(optimal * 0.4));
-}
-
-/**
- * Get maximum history for complex queries.
- * Complex queries benefit from more context.
- *
- * @param contextWindow - Model's context window size in tokens
- * @returns Maximum history messages for complex queries
- */
-function getComplexQueryMaxHistory(contextWindow: number): number {
-  // Complex queries get the full optimal history count
-  return calculateOptimalHistoryCount(contextWindow);
-}
-
-/**
  * Narrow a requested history count to what the model's context window supports.
  *
  * Unlimited is an intent rather than a count, so it returns before any arithmetic. The marker is
@@ -458,19 +456,15 @@ function getComplexQueryMaxHistory(contextWindow: number): number {
 export function resolveModelAwareHistoryCount({
   historyCount,
   contextWindow,
-  isSimpleQuery,
 }: {
   historyCount: number;
   contextWindow: number;
-  isSimpleQuery: boolean;
 }): number {
   if (isUnlimitedHistory(historyCount)) return historyCount;
 
-  const modelAwareMax = isSimpleQuery
-    ? getSimpleQueryMaxHistory(contextWindow)
-    : getComplexQueryMaxHistory(contextWindow);
-
-  return Math.min(historyCount, modelAwareMax);
+  // Per model, never per query: it has to hold still across a session's turns (see
+  // HISTORY_COUNT_FALLBACK_MAX).
+  return Math.min(historyCount, calculateOptimalHistoryCount(contextWindow));
 }
 
 /**
@@ -540,19 +534,7 @@ export function resolveQuestErrorCode(error: unknown): QuestErrorCode | undefine
  */
 export const FORCE_FALLBACK_TEST_MARKER = '[[force-provider-fallback]]';
 
-function isToolPairingError(error: Error): boolean {
-  const msg = error.message.toLowerCase();
-  // Match known Anthropic tool-pairing failure patterns:
-  // - messages mentioning both "tool_use" and "tool_result"
-  // - messages mentioning "tool_use_id" (e.g., "unexpected tool_use_id")
-  const hasToolUseAndResult = msg.includes('tool_use') && msg.includes('tool_result');
-  const hasToolUseIdVariant = msg.includes('tool_use_id');
-  return hasToolUseAndResult || hasToolUseIdVariant;
-}
-
-export function isRequestTimeoutError(error: Error): boolean {
-  return error.message.includes('request timeout') || error.message.includes('Request timeout');
-}
+export { isRequestTimeoutError, isStreamIdleTimeoutError };
 
 /**
  * True when an error is a request abort/cancellation (user stop, client
@@ -570,18 +552,14 @@ export function isAbortError(error: unknown): boolean {
   return error.message.toLowerCase().includes('aborted');
 }
 
-export function isStreamIdleTimeoutError(error: Error): boolean {
-  return error.message.includes('stream timeout') || error.message.includes('Stream timeout');
-}
-
 /**
  * True when a completion failure is a service fault worth counting on the operator
  * `ProcessingFailed` metric. Approximates the terminal branches of the quest-level error handler
- * (billing, abort, request/stream timeout, tool pairing, overloaded, context overflow), which
- * resolve the quest without rethrowing and so never reached /process's failure path. It is not an
- * exact mirror: the handler matches timeouts case-sensitively and rethrows 4xx HTTPErrors (so
- * /process counts them), whereas CLI and embed treat 4xx as caller input and skip them. The CLI and
- * embed routes call this; /process does not.
+ * (billing, abort, request/stream timeout, truncated Responses stream, tool pairing, overloaded,
+ * context overflow), which resolve the quest without rethrowing and so never reached /process's
+ * failure path. It is not an exact mirror: the handler matches timeouts case-sensitively and
+ * rethrows 4xx HTTPErrors (so /process counts them), whereas CLI and embed treat 4xx as caller input
+ * and skip them. The CLI and embed routes call this; /process does not.
  */
 export function isOperatorFault(error: unknown): boolean {
   if (resolveQuestErrorCode(error)) return false;
@@ -591,6 +569,7 @@ export function isOperatorFault(error: unknown): boolean {
     isAbortError(error) ||
     isRequestTimeoutError(error) ||
     isStreamIdleTimeoutError(error) ||
+    error instanceof ResponsesStreamTruncatedError ||
     isToolPairingError(error) ||
     isOverloadedError(error) ||
     error.message.startsWith('Your request is too large for')
@@ -725,12 +704,18 @@ export function resolveEnabledTools(input: ResolveEnabledToolsInput): string[] {
  * The turn's denylist: the session's curated `disabledTools` plus the request's server-set
  * `deniedTools` (e.g. write tools an API key lacks the scope for - see dataLakeScopes.ts). A union,
  * so neither source can re-enable what the other denies. Undefined when both are empty, matching
- * how `sessionDisabledTools` was passed before.
+ * how `sessionDisabledTools` was passed before. `surfaceDeniedTools` is what the session's current surface
+ * denies (see `resolveWorkspaceDeniedTools`).
  */
-export function resolveDeniedTools(sessionDisabledTools: unknown, requestDeniedTools?: string[]): string[] | undefined {
+export function resolveDeniedTools(
+  sessionDisabledTools: unknown,
+  requestDeniedTools?: string[],
+  surfaceDeniedTools?: readonly string[]
+): string[] | undefined {
   const merged = new Set([
     ...(Array.isArray(sessionDisabledTools) ? sessionDisabledTools : []),
     ...(requestDeniedTools ?? []),
+    ...(surfaceDeniedTools ?? []),
   ]);
   return merged.size > 0 ? [...merged] : undefined;
 }
@@ -847,6 +832,42 @@ export function computeSettlementDelta(
   return { delta: available > 0 ? -available : 0, writtenOffCredits: -delta - available };
 }
 
+/** One model's share of a turn's usage, priced against the turn's credit reservation. */
+export interface ReservationUsage {
+  modelInfo: ModelInfo;
+  /** Uncached input; cache reads and writes are counted separately, as the provider reports them. */
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadInputTokens?: number;
+  cacheCreationInputTokens?: number;
+}
+
+/**
+ * The billable usage of a Research-mode turn: each configuration's reported counts, else the turn's
+ * input estimate plus its streamed characters for one that was cut short. A configuration that
+ * streamed nothing and reported nothing never reached a billable state and costs nothing.
+ */
+export function researchModeUsages(
+  results: ResearchModeResult[],
+  models: ModelInfo[],
+  inputTokens: number
+): ReservationUsage[] {
+  return results.flatMap(result => {
+    const modelInfo = models.find(m => m.id === result.model);
+    const reported = result.completionInfo;
+    if (!modelInfo || (!reported && !result.streamedChars)) return [];
+    return [
+      {
+        modelInfo,
+        inputTokens: reported?.inputTokens || inputTokens,
+        outputTokens: reported?.outputTokens || estimateStreamedOutputTokens(result.streamedChars, result.model),
+      },
+    ];
+  });
+}
+
+export { sentMaxTokensFor } from '@bike4mind/llm-adapters/model-sizing';
+
 export class ChatCompletionProcess {
   public db: IChatCompletionServiceOptions['db'];
   public invokeCreateMemento: IChatCompletionServiceOptions['invokeCreateMemento'];
@@ -926,6 +947,9 @@ export class ChatCompletionProcess {
     configured: boolean;
   };
 
+  /** This turn's verbatim history window as the user typed it, oldest first; forced retrieval reads follow-ups with it. */
+  public priorUserPrompts?: string[];
+
   private getEntitlements: IChatCompletionServiceOptions['getEntitlements'];
   private entitlementsResolved = false;
   /**
@@ -997,6 +1021,8 @@ export class ChatCompletionProcess {
   private imageProcessorLambdaName?: string;
   private wsHttpsUrl: string;
   private abilityGetter: IChatCompletionServiceOptions['abilityGetter'];
+  private workspaceDeniedTools: IChatCompletionServiceOptions['workspaceDeniedTools'];
+  private workspaceSessionSettings: IChatCompletionServiceOptions['workspaceSessionSettings'];
   private getScopeFilter: IChatCompletionServiceOptions['getScopeFilter'];
   private getMcpClient: IChatCompletionServiceOptions['getMcpClient'];
   private statusManager: StatusManager | null = null;
@@ -1010,6 +1036,7 @@ export class ChatCompletionProcess {
   private _bedrockSvc: Map<string, BedrockGuardrailsService> = new Map();
   private onReplyStream?: IChatCompletionServiceOptions['onReplyStream'];
   private onToolPreamble?: IChatCompletionServiceOptions['onToolPreamble'];
+  private decide?: IChatCompletionServiceOptions['decide'];
   private verbose: boolean = false;
   // Per-name queue of each tool call's reserved credits, in call order (see
   // ToolBuilder.reserveToolCredits). Settled per-call below so a tool invoked more
@@ -1025,6 +1052,18 @@ export class ChatCompletionProcess {
   private reservedCreditsOwnerId: string = '';
   private reservedCreditsOwnerType: CreditHolderType = CreditHolderType.User;
   private reservedCreditHolder: ICreditHolder | null = null;
+  // What the reservation was priced on: a turn that ends on a thrown abort settles the tokens it
+  // streamed against it (settleAbortedReservation) instead of refunding the whole hold.
+  private reservationBasis: {
+    modelInfo: ModelInfo;
+    inputTokens: number;
+    organization: DeductCreditsParams['organization'];
+    // The running attempt's provider-reported counts, when the adapter reported any before the abort.
+    reported?: Pick<
+      CompletionInfo,
+      'inputTokens' | 'outputTokens' | 'cacheReadInputTokens' | 'cacheCreationInputTokens'
+    >;
+  } | null = null;
 
   // Phase 2: Tool state management
   private toolCacheManager: ToolCacheManager;
@@ -1048,6 +1087,8 @@ export class ChatCompletionProcess {
     this.contextSummarizeSession = options.contextSummarizeSession;
     this.wsHttpsUrl = options.wsHttpsUrl;
     this.abilityGetter = options.abilityGetter;
+    this.workspaceDeniedTools = options.workspaceDeniedTools;
+    this.workspaceSessionSettings = options.workspaceSessionSettings;
     this.getScopeFilter = options.getScopeFilter;
     this.getEntitlements = options.getEntitlements;
     this.getMcpClient = options.getMcpClient;
@@ -1061,6 +1102,7 @@ export class ChatCompletionProcess {
     this.gpcSignalDetected = options.gpcSignalDetected ?? false;
     this.onReplyStream = options.onReplyStream;
     this.onToolPreamble = options.onToolPreamble;
+    this.decide = options.decide;
     this.statusManager = null;
     this.userAbility = null;
     this.systemFilesCache = null;
@@ -1507,7 +1549,7 @@ export class ChatCompletionProcess {
       // unresolvable the semantic arm cannot run at all (the tool falls back to metadata-only keyword
       // search), so nothing is deferrable. Closes the tag-only gap; #1411 hardened the retrieval-side
       // reads this now relies on. `vectorizedChunkCount >= chunkCount` is the usable-data condition.
-      // MUST STAY IN SYNC with `isFabFileCitable` (apps/client/server/memory/lakeSourceReachability.ts),
+      // MUST STAY IN SYNC with `isFabFileCitable` (packages/server-utils/src/memory/lakeSourceReachability.ts),
       // the #1440 lake-memory copy of this same "can the knowledge tool actually reach this doc"
       // predicate (fully vectorized + same embedding model + live/not-excluded). The two live in
       // different packages with no shared symbol; change one, change the other.
@@ -1635,8 +1677,14 @@ export class ChatCompletionProcess {
       imageConfig,
       audioConfig,
       deepResearchConfig,
-      timezone: userTimezone,
+      timezone: requestedTimezone,
     } = parsedBody;
+    // Callers send this unchecked (the browser can report `Etc/Unknown`), and `Intl` throws on a
+    // zone it rejects, so fall back to server time instead of failing the turn.
+    const userTimezone = requestedTimezone && isValidTimeZone(requestedTimezone) ? requestedTimezone : undefined;
+    if (requestedTimezone && !userTimezone) {
+      this.logger.warn(`Ignoring unrecognised timezone "${requestedTimezone}"; using server time`);
+    }
 
     // Companion pairing now runs once in `resolveEnabledTools` (see process()), after the
     // per-session union and attached-knowledge offer, so session-forced and auto-offered
@@ -1719,6 +1767,36 @@ export class ChatCompletionProcess {
    */
   public systemPromptText: SystemPromptTextDisclosure | undefined;
 
+  /**
+   * Refunds the credit reservation this run still holds, if any. The amount is claimed
+   * synchronously before the await, so a caller giving up on a stuck run and the run's own
+   * error rollback cannot both refund it. A run that later reconciles bills the full actual.
+   */
+  public async releaseReservedCredits(questId: string, logger: Logger): Promise<void> {
+    const amount = this.reservedCredits;
+    const ownerId = this.reservedCreditsOwnerId;
+    if (amount <= 0 || !ownerId) return;
+    this.reservedCredits = 0;
+    // Bump the holder in the same synchronous step as the claim, before the refund awaits: a run
+    // that later reaches settlement reads this snapshot, and a stale one (still holding the
+    // reservation-reduced balance) would floor the whole debit at zero. Kept, not nulled, so the
+    // settlement can charge against the restored balance.
+    if (this.reservedCreditHolder) this.reservedCreditHolder.currentCredits += amount;
+    try {
+      const rollbackMethod =
+        this.reservedCreditsOwnerType === CreditHolderType.Organization ? this.db.organizations : this.db.users;
+      await rollbackMethod.incrementCredits(ownerId, amount);
+      logger.info(`Rolled back ${amount} reserved credits for quest ${questId}`);
+    } catch (rollbackError) {
+      // The refund never landed, so a later settlement must not charge against it.
+      if (this.reservedCreditHolder) this.reservedCreditHolder.currentCredits -= amount;
+      logger.error(
+        `CRITICAL: Failed to rollback ${amount} reserved credits for quest ${questId} (ownerType=${this.reservedCreditsOwnerType}). Manual reconciliation required.`,
+        rollbackError
+      );
+    }
+  }
+
   public async process({
     body,
     logger,
@@ -1728,6 +1806,7 @@ export class ChatCompletionProcess {
     externalTools,
     videoToolConfigResolver,
     musicToolConfigResolver,
+    abortSignal,
   }: {
     body: z.infer<typeof QuestStartBodySchema>;
     logger: Logger;
@@ -1744,11 +1823,24 @@ export class ChatCompletionProcess {
     videoToolConfigResolver?: () => Promise<VideoToolConfig | null>;
     /** Resolves the music tool's capability; only invoked when music_generation is enabled. */
     musicToolConfigResolver?: () => Promise<MusicToolConfig | null>;
+    /**
+     * Caller-side cancellation (e.g. the wait=true request deadline). Aborts the turn the same
+     * way the cancel watcher does: process() releases or reconciles its own credit reservation,
+     * but writes no further quest state, so the caller must settle the quest (see the wait path
+     * in apps/client/pages/api/chat.ts).
+     */
+    abortSignal?: AbortSignal;
   }) {
     const processStartTime = Date.now();
     const timer = new PipelineTimer();
     timer.phase('init');
     logger.info('⏱️ === LLM COMPLETION PROCESS START ===');
+
+    // invoke already saved this turn as failed; running it would answer with a model the caller was refused.
+    if (prefetchedQuest?.type === 'error') {
+      logger.info(`Skipping process: quest ${prefetchedQuest.id} was already saved as an error`);
+      return;
+    }
 
     const initContext = await this.initializeProcessContext(body, logger, processStartTime, prefetchedQuest);
     const {
@@ -1780,6 +1872,14 @@ export class ChatCompletionProcess {
     const enableMementos = initialEnableMementos;
     let enableAgents = initialEnableAgents;
     const { questId, sessionId, promptMode } = parsedBody;
+    // From the attempt's timestamp, not createdAt: a user retry reuses the quest doc. The snapshot
+    // replaces any record a previous attempt left, before the first frame streams it. Backend-
+    // reported retries and slot waits land through `onChange`, so live frames and a last save
+    // (a Lambda that dies mid-turn) carry them too, not only the sites below that record directly.
+    const turnTiming = new TurnTimingRecorder(quest.timestamp, processStartTime, logger, snapshot => {
+      quest.turnTiming = snapshot;
+    });
+    quest.turnTiming = turnTiming.snapshot();
 
     // Variables to store actual timing durations
     let actualArtifactProcessingDuration = 0;
@@ -1815,6 +1915,9 @@ export class ChatCompletionProcess {
     const saveQuest = async (quest: IChatHistoryItemDocument): Promise<IChatHistoryItemDocument | null> => {
       // Use the mutex to serialize the save operations
       return await questSaveMutex.runExclusive(async () => {
+        // Once the caller aborts (the wait=true deadline), the caller owns the quest's terminal
+        // state; a late heartbeat or final save here would write `running`/`stopped` over it.
+        if (abortSignal?.aborted) return quest;
         // If quest has researchModeResults, ensure they're saved
         if (quest.researchModeResults?.length) {
           logger.info(
@@ -1823,8 +1926,10 @@ export class ChatCompletionProcess {
         }
         // Deliberate whole-doc write: this is the streaming owner of `quest`, mutated across the
         // pipeline and by tools, so no fixed field list exists. Narrowing needs a snapshot-diff.
-        const result = await this.db.quests.update(quest);
-        return result;
+        // A mid-turn save must not put 'running' back over a user Stop (stopReply in
+        // sessionOperations.ts) before the cancellation watcher reads it.
+        if (quest.status === 'running') return await this.db.quests.updateIfUnfinished(quest);
+        return await this.db.quests.update(quest);
       });
     };
 
@@ -1896,41 +2001,22 @@ export class ChatCompletionProcess {
         enableAgents = false;
       }
 
-      // Reduce history for simple queries to optimize cost and performance
-      // Use conservative fallback here; dynamic adjustment happens after modelInfo is available
-      // Unlimited carries no count to cap, so leave it for buildAndSortMessages to interpret.
-      if (!isUnlimitedHistory(historyCount)) {
-        const originalHistoryCount = historyCount;
-        historyCount = Math.min(historyCount, SIMPLE_QUERY_FALLBACK_MAX);
-
-        if (originalHistoryCount > historyCount) {
-          logger.info(`📉 [SIMPLE_QUERY] History pruned for simple query optimization`, {
-            original: originalHistoryCount,
-            reduced: historyCount,
-            sessionId,
-          });
-        }
-      }
-
+      // History is deliberately NOT reduced for simple queries: the count sets where the history
+      // window starts, and one that changed with each turn's complexity rewrote the prompt cache.
       logger.info(
-        `🚀 [SIMPLE_QUERY] Optimizations: QuestMaster=${enableQuestMaster ? 'ON (explicit)' : 'OFF'}, Mementos=OFF, Agents=${enableAgents ? 'ON' : 'OFF'}, History=${
-          isUnlimitedHistory(historyCount) ? 'unlimited' : historyCount
-        }`
+        `[SIMPLE_QUERY] Optimizations: QuestMaster=${enableQuestMaster ? 'ON (explicit)' : 'OFF'}, Mementos=OFF, Agents=${enableAgents ? 'ON' : 'OFF'}`
       );
-    } else {
-      // For complex queries, apply conservative cap before model info is available
-      // Dynamic model-aware adjustment happens after modelInfo is fetched
-      if (!isUnlimitedHistory(historyCount) && historyCount > COMPLEX_QUERY_FALLBACK_MAX) {
-        logger.info(
-          `📊 [COMPLEX_QUERY] Initial cap at ${COMPLEX_QUERY_FALLBACK_MAX} messages (will adjust based on model)`,
-          {
-            original: historyCount,
-            capped: COMPLEX_QUERY_FALLBACK_MAX,
-            sessionId,
-          }
-        );
-        historyCount = COMPLEX_QUERY_FALLBACK_MAX;
-      }
+    }
+
+    // Conservative cap before model info is available; the model-aware adjustment happens after
+    // modelInfo is fetched. Same for every query, whatever its complexity.
+    if (!isUnlimitedHistory(historyCount) && historyCount > HISTORY_COUNT_FALLBACK_MAX) {
+      logger.info(`[HISTORY_CAP] Initial cap at ${HISTORY_COUNT_FALLBACK_MAX} messages (will adjust based on model)`, {
+        original: historyCount,
+        capped: HISTORY_COUNT_FALLBACK_MAX,
+        sessionId,
+      });
+      historyCount = HISTORY_COUNT_FALLBACK_MAX;
     }
 
     logger.info(`⏱️ [${Date.now() - processStartTime}ms] === PROGRESSIVE LOADING PHASE START ===`);
@@ -1939,9 +2025,25 @@ export class ChatCompletionProcess {
     let finalQuest: IChatHistoryItemDocument | null = null;
     let cancelWatcherInterval: NodeJS.Timeout | null = null;
     let streamingHeartbeatInterval: NodeJS.Timeout | null = null;
+    // Assigned once the streaming sender exists. A pending trailing send reads `quest` at fire
+    // time, so it must be dropped before any terminal write or it publishes `done`/`stopped`
+    // ahead of settlement and the terminal save.
+    let cancelPendingStreamingSend: (() => void) | null = null;
+    const setTerminalQuestStatus = (target: IChatHistoryItemDocument, status: 'done' | 'stopped') => {
+      cancelPendingStreamingSend?.();
+      target.status = status;
+    };
     // Replaced once the turn's deliverable baselines exist; until then nothing can have answered.
     let clearStaleFallbackInfoIfNoAnswer = () => {
       quest.fallbackInfo = null;
+    };
+    // Set once the turn's tools are built. Every exit that persists streamed text (finalize, a
+    // rejecting Stop, the error reply) strips tool calls written as text against this list.
+    let turnOfferedToolNames: readonly string[] = [];
+    const flagNarratedToolCalls = (toolNames: string[]) => {
+      if (toolNames.length === 0) return;
+      logger.warn('[NarratedToolCall] Reply wrote a tool call as text; stripped and not run', { questId, toolNames });
+      if (quest.promptMeta) quest.promptMeta.narratedToolCall = { toolNames };
     };
 
     try {
@@ -1975,7 +2077,7 @@ export class ChatCompletionProcess {
         );
       };
 
-      const [session, organization, apiKeyTable, toolAvailability] = await Promise.all([
+      const [loadedSession, organization, apiKeyTable, toolAvailability] = await Promise.all([
         timeCall('session', Promise.resolve(prefetchedSession ?? this.db.sessions.findById(sessionId))),
         timeCall(
           'organization',
@@ -1996,13 +2098,19 @@ export class ChatCompletionProcess {
         ),
       ]);
 
-      if (!session) {
+      if (!loadedSession) {
         // Try to clean up the quest if session doesn't exist
-        quest.status = 'stopped';
+        setTerminalQuestStatus(quest, 'stopped');
         quest.replies = ['Session not found. Please create a new session or refresh the page.'];
+        turnTiming.finish();
         await saveQuest(quest);
         return;
       }
+      const session = await applyWorkspaceSessionSettings(
+        loadedSession,
+        { user: this.user, logger },
+        this.workspaceSessionSettings
+      );
       // A stop can land between invoke creating the quest and this point (the client defers a
       // first-turn Stop until the quest exists). The save below would write 'running' back over
       // it and the cancel watcher would never see it, so honour it here. The finally block sends
@@ -2010,7 +2118,10 @@ export class ChatCompletionProcess {
       const latestQuestStatus = await this.db.quests.findByIdWithStatus(questId);
       if (latestQuestStatus?.status === 'stopped') {
         logger.info(`Quest ${questId} was stopped before processing started`);
-        quest.status = 'stopped';
+        setTerminalQuestStatus(quest, 'stopped');
+        // The finally block's terminal frame carries the record, so end it here rather than
+        // leaving a total-less record that would read as "still running" forever.
+        turnTiming.finish();
         return;
       }
       quest.status = 'running';
@@ -2037,7 +2148,11 @@ export class ChatCompletionProcess {
       const replyChoicesOffered = !(skipAutoOffers || isResearchMode || parsedBody.skipReplyChoices);
       // Read at every denylist site below instead of `session.disabledTools`: the final pass after
       // buildTools is load-bearing, since intent gates add tools after resolveEnabledTools runs.
-      const deniedTools = resolveDeniedTools(session.disabledTools, parsedBody.deniedTools);
+      const deniedTools = resolveDeniedTools(
+        session.disabledTools,
+        parsedBody.deniedTools,
+        resolveWorkspaceDeniedTools(session.surface, this.workspaceDeniedTools)
+      );
       // Kicked off here (not awaited yet) so its DB read overlaps with the models/admin-settings
       // fetch below instead of serializing in front of it - folded into that Promise.all.
       //
@@ -2144,22 +2259,19 @@ export class ChatCompletionProcess {
       // The invisible-failure warning ("caller has knowledge but no knowledge tool offered")
       // moved to after buildTools, where the authoritative post-build tool list is known.
 
-      const throttledSend = DISABLE_SERVER_THROTTLING
-        ? () => this.sendStatusUpdate(quest, null) // No throttling - direct send
-        : throttle(
-            () => {
-              return this.sendStatusUpdate(quest, null);
-            },
-            THROTTLE_INTERVAL,
-            { leading: true }
-          );
+      const throttledSend = createStreamingStatusSender(
+        () => this.sendStatusUpdate(quest, null),
+        THROTTLE_INTERVAL,
+        DISABLE_SERVER_THROTTLING
+      );
+      cancelPendingStreamingSend = () => throttledSend.cancel();
 
       // Streaming heartbeat: persist quest state to MongoDB every 10s during streaming.
       // Without this, quest.replies and quest.updatedAt stay stale until completion, so a mid-stream
       // refresh shows an empty quest and the check-timeout endpoint falsely marks it as stuck.
       let heartbeatFailureStreak = 0;
       streamingHeartbeatInterval = setInterval(() => {
-        if (quest.status === 'done') return; // Final save handles this — avoid racing
+        if (quest.status !== 'running') return; // The terminal save owns the final write
         void saveQuest(quest)
           .then(() => {
             heartbeatFailureStreak = 0;
@@ -2307,6 +2419,21 @@ export class ChatCompletionProcess {
       if (!modelInfo || !llm) {
         throw new Error('Invalid LLM backend specified');
       }
+      // Queue and agent runs skip ChatCompletionInvoke, so the redirect is first seen here. Record it
+      // with the same convention Invoke uses: model.name is what answers, redirectedFrom what was asked.
+      if (quest.promptMeta && resolvedModelId !== model) {
+        quest.promptMeta.redirectedFrom ??= model;
+        if (quest.promptMeta.model) {
+          Object.assign(quest.promptMeta.model, buildPromptMetaModel(modelInfo));
+        }
+      }
+      if (quest.promptMeta?.redirectedFrom) {
+        this.sendStatusUpdate(
+          quest,
+          `${quest.promptMeta.redirectedFrom} is unavailable; answering with ${resolvedModelId}`,
+          { statusAt: new Date() }
+        );
+      }
       logger.info(
         `⏱️ [${Date.now() - processStartTime}ms] Model setup completed in ${
           Date.now() - modelSetupStartTime
@@ -2334,10 +2461,8 @@ export class ChatCompletionProcess {
           historyFetchLimit: resolveHistoryFetchLimit(historyCount),
         });
       } else {
-        const modelAwareMax = isSimpleQuery
-          ? getSimpleQueryMaxHistory(contextWindow)
-          : getComplexQueryMaxHistory(contextWindow);
-        const adjustedHistoryCount = resolveModelAwareHistoryCount({ historyCount, contextWindow, isSimpleQuery });
+        const modelAwareMax = calculateOptimalHistoryCount(contextWindow);
+        const adjustedHistoryCount = resolveModelAwareHistoryCount({ historyCount, contextWindow });
 
         if (adjustedHistoryCount < historyCount) {
           logger.info(`📊 [DYNAMIC_HISTORY] Adjusting history based on model context window`, {
@@ -2361,10 +2486,11 @@ export class ChatCompletionProcess {
         historyCount = adjustedHistoryCount;
       }
 
-      // Use default admin settings for immediate processing
-      const adminModerationEnabled = this.getDefaultSettingValue('ModerationEnabled', defaultAdminSettings);
-      const adminSettingsEnforceCredits = this.getDefaultSettingValue('enforceCredits', defaultAdminSettings);
-      const enableMCPServer = this.getDefaultSettingValue('EnableMCPServer', defaultAdminSettings);
+      // Schema-aware reads: an absent row takes the setting's default (enforceCredits is on for
+      // hosted), not false, so a missing row can never switch billing off.
+      const adminModerationEnabled = getSettingsValue('ModerationEnabled', defaultAdminSettings) === true;
+      const adminSettingsEnforceCredits = getSettingsValue('enforceCredits', defaultAdminSettings) === true;
+      const enableMCPServer = getSettingsValue('EnableMCPServer', defaultAdminSettings) === true;
       if (adminSettingsEnforceCredits && !this.db.creditTransactions) {
         throw new BadRequestError('Enforce credits is enabled but credit transactions are not available');
       }
@@ -2549,6 +2675,14 @@ export class ChatCompletionProcess {
       const takeoverFeature = featureResults.find(({ result }) => result?.shouldContinue === false);
       if (takeoverFeature) {
         logger.log(`✅ Feature '${takeoverFeature.name}' has taken over processing`);
+        // The feature finishes the turn outside this flow, so this partial record (no total, only
+        // the queue wait) would render as "still running" on a reply it never tracked. Drop it
+        // rather than have the Answer diagnosis claim coverage the turn did not get. The setup save
+        // already persisted it, and a `$set` of `undefined` is dropped, so unset it in the DB too.
+        quest.turnTiming = undefined;
+        void this.db.quests
+          .update({ id: quest.id }, { unset: ['turnTiming'] })
+          .catch(error => logger.warn('Failed to drop turnTiming after feature takeover:', error));
         this.sendStatusUpdate(quest, null, { immediate: true });
         return;
       }
@@ -2705,6 +2839,9 @@ export class ChatCompletionProcess {
         includeReplyChoices: replyChoicesOffered,
       });
       const [previousMessages, totalMessageCount, cacheInfo] = previousMessagesResult;
+      this.priorUserPrompts = previousMessages.flatMap(m =>
+        m.role === 'user' && typeof m.content === 'string' ? [m.content] : []
+      );
       const oldestIncludedQuestId = cacheInfo.oldestIncludedQuestId ?? null;
       const verbatimExcludedCount = cacheInfo.excludedOlderQuestCount ?? 0;
       // Real tool-usage signal for this window - see fetchAndProcessPreviousMessages's own doc
@@ -2722,28 +2859,27 @@ export class ChatCompletionProcess {
       // of when it was added to enabledTools.
       let hasContentTransform = false;
       if (!skipAutoOffers) {
+        // Tools this turn's signals call for that the request did not already name. They join the
+        // session's persisted set below, so the tool list never shrinks again once a tool appears.
+        const triggered: string[] = [];
+        const trigger = (tool: string) => {
+          if (!enabledTools.includes(tool)) triggered.push(tool);
+        };
+
         const blogGates = shouldOfferBlogTools({
           isAdmin: this.user.isAdmin,
           hasBlogIntegration: Boolean(this.user.blogIntegration),
           message,
           priorToolNames,
         });
-        if (blogGates.publish && !enabledTools.includes('blog_publish')) {
-          enabledTools.push('blog_publish');
-        }
-        if (blogGates.edit && !enabledTools.includes('blog_edit')) {
-          enabledTools.push('blog_edit');
-        }
-        if (blogGates.draft && !enabledTools.includes('blog_draft')) {
-          enabledTools.push('blog_draft');
-        }
-        hasContentTransform = blogGates.draft;
+        if (blogGates.publish) trigger('blog_publish');
+        if (blogGates.edit) trigger('blog_edit');
+        if (blogGates.draft) trigger('blog_draft');
 
         // The only honest gate for `skill` is whether this user has a model-invocable skill - a
         // user with zero skills used to pay ~161 tokens for a tool whose every call returns "you
         // have no LLM-invocable skills defined", with no catalog in the prompt to name one.
         if (
-          !enabledTools.includes('skill') &&
           shouldOfferSkillTool({
             hasSkillRepository: Boolean(this.db.skills),
             invocableSkillCount: (quest as QuestWithSkillCatalog)._skillCatalog?.length ?? 0,
@@ -2751,19 +2887,42 @@ export class ChatCompletionProcess {
             priorToolNames,
           })
         ) {
-          enabledTools.push('skill');
+          trigger('skill');
         }
 
-        if (
-          await shouldOfferDataLakeTools({
-            message,
-            priorToolNames,
-            dataLakesEnabled: async () => Boolean(await this.db.adminSettings.getSettingsValue('EnableDataLakes')),
-          })
-        ) {
-          for (const tool of DATA_LAKE_TOOL_NAMES) {
-            if (!enabledTools.includes(tool)) enabledTools.push(tool);
-          }
+        const dataLakesEnabled = async () => Boolean(await this.db.adminSettings.getSettingsValue('EnableDataLakes'));
+        if (await shouldOfferDataLakeTools({ message, priorToolNames, dataLakesEnabled })) {
+          DATA_LAKE_TOOL_NAMES.forEach(trigger);
+        }
+
+        const sticky = await resolveStickyAutoAddedTools({
+          persisted: session.autoAddedTools,
+          triggered,
+          eligibility: {
+            isAdmin: Boolean(this.user.isAdmin),
+            hasBlogIntegration: Boolean(this.user.blogIntegration),
+            hasSkillRepository: Boolean(this.db.skills),
+            dataLakesEnabled,
+          },
+        });
+        // Sorted, so a given set always reaches the provider in the same order.
+        for (const tool of sticky.tools) {
+          if (!enabledTools.includes(tool)) enabledTools.push(tool);
+        }
+        // Read off the final set, not this turn's regex: a blog_draft carried over from an earlier
+        // turn needs its tool-prompt section just as much as the turn that triggered it.
+        hasContentTransform = blogGates.draft || sticky.tools.includes('blog_draft');
+
+        if (sticky.newlyTriggered.length > 0) {
+          session.autoAddedTools = [...new Set([...(session.autoAddedTools ?? []), ...sticky.newlyTriggered])];
+          // A failed write costs stickiness on the next turn, never this one.
+          await this.db.sessions.addAutoAddedTools?.(session.id, sticky.newlyTriggered).catch(error => {
+            logger.warn('[AutoAddedTools] Failed to persist auto-added tools on the session', {
+              sessionId: session.id,
+              tools: sticky.newlyTriggered,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
         }
       }
 
@@ -2828,7 +2987,17 @@ export class ChatCompletionProcess {
 
       // Step 3: Fetching and Converting Fab Files (Feature contexts already loaded above)
       timer.phase('data_sources');
-      this.sendStatusUpdate(quest, 'Gathering data sources...', { statusAt: new Date() });
+      this.sendStatusUpdate(
+        quest,
+        resolveDataSourceStatus({
+          message,
+          sessionFabFileIds,
+          messageFileIds,
+          knowledgeIds: session.knowledgeIds,
+          forceKnowledgeRetrieval: forcedRetrievalEnabled,
+        }),
+        { statusAt: new Date() }
+      );
       // Input-window limits, needed BEFORE building messages because the amount of
       // attached-file content we extract has to be derived from them.
       const contextLimit = effectiveContextWindow(modelInfo);
@@ -2932,14 +3101,38 @@ export class ChatCompletionProcess {
       // inline (audio, an image on a vision-less model, a held or oversized image), and detaching
       // those would destroy notebook contents as a side effect of an ordinary prompt. The helper
       // re-checks both halves; see its docstring for the two gates.
-      const scrubbed = await scrubMissingKnowledgeIds(session.knowledgeIds ?? [], dataSources.fileNotices, {
-        db: { fabFiles: this.db.fabfiles, sessions: this.db.sessions },
-        logger: this.logger,
-      });
+      const scrubbed = await scrubMissingKnowledgeIds(
+        session.knowledgeIds ?? [],
+        dataSources.fileNotices,
+        { db: { fabFiles: this.db.fabfiles, sessions: this.db.sessions }, logger: this.logger },
+        session.id
+      );
       if (scrubbed.length > 0) {
         // Keep the in-memory copy in step so later reads in this run see the cleaned set.
         const removed = new Set(scrubbed);
         session.knowledgeIds = (session.knowledgeIds ?? []).filter((id: string) => !removed.has(id));
+      }
+      // The same ghost can live in the user's own system files, which are re-sent on every prompt of
+      // every session. Same gates; the admin-wide list is only reported, never edited from a turn.
+      const scrubbedSystemFiles = await scrubStaleSystemFiles(
+        this.user.id,
+        dataSources.enabledSystemFileIds,
+        dataSources.fileNotices,
+        { db: { fabFiles: this.db.fabfiles, users: this.db.users }, logger: this.logger }
+      );
+      if (scrubbedSystemFiles.length > 0) {
+        const removed = new Set(scrubbedSystemFiles);
+        this.user.systemFiles = (this.user.systemFiles ?? []).filter(entry => !removed.has(entry.fileId));
+        this.systemFilesCache?.delete(`system-files-${this.user.id}`);
+      }
+      const globalSystemFileIdSet = new Set(dataSources.globalSystemFileIds);
+      const unresolvedGlobalSystemFiles = dataSources.fileNotices.filter(
+        notice => notice.band === 'unresolved' && globalSystemFileIdSet.has(notice.fabFileId)
+      ).length;
+      if (unresolvedGlobalSystemFiles > 0) {
+        this.logger.warn('The SystemFiles admin setting lists files that did not resolve', {
+          count: unresolvedGlobalSystemFiles,
+        });
       }
 
       // Persisted before the completion runs: an attachment that failed to arrive is worth showing
@@ -2977,6 +3170,8 @@ export class ChatCompletionProcess {
         // Generic retrieval exclusion (opt-in per session) - keeps excluded/unvectorized lake files
         // out of the knowledge tools' search + retrieve arms, matching the surface's listing predicate.
         retrievalFilter: toRetrievalFilter(session),
+        // Same source as forced retrieval's numbering (KnowledgeRetrievalFeature), so tools extend it.
+        citationStyle: session.citationStyle,
         inlinedAttachmentIds: actuallyInlinedKnowledgeIds,
         attachedFileIds: [...new Set([...(session.knowledgeIds ?? []), ...sessionFabFileIds, ...messageFileIds])],
         fullyInlinedAttachmentIds,
@@ -2999,6 +3194,7 @@ export class ChatCompletionProcess {
         subagentTelemetryData: this.subagentTelemetryData,
         sendStatusUpdate: (q, status, options) => this.sendStatusUpdate(q, status, options),
         onToolPreamble: this.onToolPreamble,
+        decide: this.decide,
       });
 
       const { mcpToolsByServer, serverAgentConfig } = await toolBuilder.buildMcpTools({
@@ -3058,6 +3254,9 @@ export class ChatCompletionProcess {
         sessionAgentIds: session.agentIds,
         message,
         delegatableAgentNames: fullAgentStore.getAgentNames(),
+        // Names cannot gate this tool (it is pushed as an object), so a denylist entry for it only
+        // takes effect in the final build pass - read it here too, and skip the section entirely.
+        deniedTools,
       });
       // All three delegation surfaces (the tool schema in sharedToolBuilder, the "Agent Delegation"
       // section of the tool prompt, and `promptMeta.offeredTools`) key off the `agentStore` below,
@@ -3100,6 +3299,10 @@ export class ChatCompletionProcess {
         ? await resolveToolConfigSafely('music_generation', musicToolConfigResolver, logger)
         : null;
 
+      const subagentModels = agentStore
+        ? await this.loadSubagentModels(models, modelInfo, entitlementKeys, logger)
+        : undefined;
+
       let allTools = toolBuilder.buildTools({
         enabledTools,
         // Auto-offers are OUR additions, not the caller's, and MCP tools are merged past the
@@ -3134,6 +3337,7 @@ export class ChatCompletionProcess {
           adminSettingsEnforceCredits: !!adminSettingsEnforceCredits,
           models,
         },
+        subagentModels,
         agentOnlyMcpServers,
         apiKeyTable,
         getAbortSignal: () => abortSignalHolder.signal,
@@ -3156,8 +3360,9 @@ export class ChatCompletionProcess {
       // Research Mode runs its configurations in parallel over one tool list, so a shared budget
       // would let one configuration's searches cap another's.
       const webSearchBudget = createWebSearchBudget(MAX_WEB_SEARCHES_PER_TURN);
+      const toolFailureGuard = createToolFailureGuard();
       if (allTools && !isResearchMode) {
-        allTools = webSearchBudget.apply(allTools);
+        allTools = toolFailureGuard.apply(webSearchBudget.apply(allTools));
       }
 
       // Local (Ollama) models are small and easily confused by tools they weren't
@@ -3186,6 +3391,7 @@ export class ChatCompletionProcess {
       }
 
       const offeredToolNames = allTools?.map(t => t.toolSchema.name) ?? [];
+      turnOfferedToolNames = offeredToolNames;
       logger.info('🔧 [Tools] allTools:', {
         count: offeredToolNames.length,
         names: offeredToolNames,
@@ -3382,7 +3588,7 @@ export class ChatCompletionProcess {
       // The built list drops video_generation without a usable config (buildSharedTools), so this is the real offer.
       const videoGenerationAvailable = allTools?.some(t => t.toolSchema.name === 'video_generation') ?? false;
 
-      const toolPromptMessage = await toolBuilder.buildToolPrompt({
+      const toolPromptMessages = await toolBuilder.buildToolPrompt({
         toolPromptId,
         hasContentTransform: hasContentTransform && blogDraftAvailable,
         hasChessEngine: enabledTools.includes('chess_engine'),
@@ -3417,6 +3623,10 @@ export class ChatCompletionProcess {
       const messageBuildingStartTime = Date.now();
       // Generate current date context for the AI.
       // Use user's browser timezone if available, otherwise fall back to server timezone.
+      //
+      // Per timezone-day, so it sits BEHIND the deployment-wide shareable prefix (see
+      // PER_CALLER_AUTHORED_SOURCES); leading the stack, it made that prefix a cache write per
+      // user per day. It is still inside the caller's own cached region, hence:
       //
       // DAY granularity only, deliberately NO clock time. This block sits inside the
       // cached system prefix: the Anthropic caching adapter marks the LAST system block with
@@ -3504,35 +3714,29 @@ export class ChatCompletionProcess {
             content: getSettingsValue('AbstentionPrompt', defaultAdminSettings, ABSTENTION_PROMPT),
           },
         ],
-        // Inject view registry summary when the navigate_view tool reached the model
+        // Inject view registry summary when the navigate_view tool reached the model. The base list
+        // is the same for every user (shareable prefix); the admin views and the current-page
+        // emphasis vary per caller and ride behind it as viewRegistryAdmin.
         viewRegistry: navigateViewAvailable
           ? [
               {
                 role: 'system' as const,
                 // Dropped again if the turn later continues without tools; see stripToolDependentMessages.
                 requiresTool: 'navigate_view',
-                content: (() => {
-                  // Extract current path from extraContextMessages for context-aware prompting
-                  const viewCtx = extraContextMessages.find(
-                    m => typeof m.content === 'string' && m.content.includes('[Current View Context]')
-                  );
-                  const ctxStr = typeof viewCtx?.content === 'string' ? viewCtx.content : '';
-                  const currentPath = ctxStr.match(/Path:\s*(\S+)/)?.[1] || '';
-                  let summary = getViewSummaryForLLM({ isAdmin: this.user?.isAdmin });
-                  // Add path-specific emphasis
-                  if (currentPath.startsWith('/admin')) {
-                    summary +=
-                      '\n\nThe user is currently on the Admin page. When they ask about any admin feature, you MUST call navigate_view with the matching admin.* tab.';
-                  }
-                  return summary;
-                })(),
+                content: getViewSummaryForLLM({ isAdmin: false }),
               },
             ]
+          : [],
+        viewRegistryAdmin: navigateViewAvailable
+          ? buildViewRegistryAdminMessages({ isAdmin: this.user?.isAdmin === true, extraContextMessages })
           : [],
         // Prompt-only, so unlike viewRegistry it needs no tool and runs on every in-app turn;
         // withheld with the other auto-offers - see replyChoicesOffered.
         replyChoices: replyChoicesOffered ? [{ role: 'system' as const, content: REPLY_CHOICES_GUIDANCE }] : [],
-        toolPrompt: toolPromptMessage ? [toolPromptMessage] : [], // Tool prompt, blog draft, MCP guidance, conversation context, agent delegation
+        // Split so the per-user half (timezone, MCP integrations, conversation entities, agent
+        // roster) cannot cut the shareable prefix short; see ToolPromptMessages.
+        toolPrompt: toolPromptMessages.guidance ? [toolPromptMessages.guidance] : [],
+        toolContext: toolPromptMessages.context ? [toolPromptMessages.context] : [],
         agentDetection: featureContextMessages['agentDetection'], // Add agent system prompts
         questMaster: featureContextMessages['questMaster'],
         organizationPrompt: featureContextMessages['organizationPrompt'], // Add team-wide system prompt
@@ -3579,6 +3783,17 @@ export class ChatCompletionProcess {
       // to translate it (Anthropic-family does, the others ignore it per the field's contract),
       // and the cacheStrategy built later in this method still governs the other breakpoints.
       markShareablePrefixBoundary(admittedContextMessages);
+      // The per-turn sources that ride in the current user turn instead of system (see
+      // PER_TURN_CONTEXT_SOURCES). Not under a promptMode: those callers asked for a request
+      // they can compare against the bare model, and moving their own system messages would alter it.
+      // `extraContext` moves only where the producer flagged it: the same channel carries the real
+      // system prompt of voice, Slack and programmatic launches.
+      const perTurnExtraContext = new Set<IMessage>(extraContextMessages.filter(m => m.perTurn === true) as IMessage[]);
+      const perTurnContextMessages = new Set<IMessage>(
+        promptMode
+          ? []
+          : admittedContextMessages.filter(t => isPerTurnContext(t, perTurnExtraContext)).map(t => t.message)
+      );
       const contextAndSystemMessages: IMessage[] = admittedContextMessages.map(t => t.message);
       // Carries each message's source across into the builder, which sees only an IMessage[] and so
       // could otherwise decide what to drop on array position alone. Keyed by reference, which survives
@@ -3618,6 +3833,9 @@ export class ChatCompletionProcess {
         buildOptions
       );
       let messages = firstBuild.messages;
+      // Where the cache breakpoint belongs: the last message the next turn will reproduce as history.
+      // Reassigned by the overflow-recovery rebuild below, which sheds turns and rebuilds `messages`.
+      let lastHistoryMessage = previousMessages.at(-1);
       const messageTruncationInfo = firstBuild.messageTruncation;
       // Unlike messageTruncationInfo, this DOES get refreshed by the overflow-recovery rebuild below -
       // that rebuild produces fresh message identities, so pinning to the first build would report
@@ -3777,6 +3995,7 @@ export class ChatCompletionProcess {
             const trimmed = dropOldestHistoryTurn(recoveryHistory);
             if (!trimmed) break; // only the most-recent turn left: system/tools/prompt itself is oversized
             recoveryHistory = trimmed;
+            lastHistoryMessage = recoveryHistory.at(-1);
             // messageTruncationInfo is deliberately not refreshed here - it stays pinned to the first build.
             // Reserve toolSchemaTokens up front: this loop recomputes inputTokens as effectiveTotalTokens
             // + toolSchemaTokens at the bottom of every iteration, so budgeting this rebuild on the raw
@@ -3897,6 +4116,16 @@ export class ChatCompletionProcess {
           `📊 System prompts dropped to fit the input budget (${shedSourceNames.length}): ${shedSourceNames.join(', ')}`
         );
       }
+      // Forced retrieval published its citation chips before the budget ran. Its lake prompt and its
+      // passages are separate messages of one source, and the source-level map above ORs them, so read
+      // delivery per message: a kept lake prompt must not mask a dropped passages block. The feature
+      // then decides what actually justifies withdrawing, since it alone knows which message is which.
+      const knowledgeRetrievalMessageShed = admittedContextMessages.some(
+        t => t.source === 'knowledgeRetrieval' && t.message.role === 'system' && !deliveredMessages.has(t.message)
+      );
+      if (knowledgeRetrievalMessageShed) {
+        this.features.get('knowledgeRetrieval')?.onContextDropped?.(quest, deliveredMessages);
+      }
 
       const countSystemBlockTokens = (content: string) =>
         calculateTotalTokenLength([{ role: 'system' as const, content }], tokenCalcOptions);
@@ -3972,7 +4201,8 @@ export class ChatCompletionProcess {
             admittedContextMessages,
             deliveredMessages,
             undefined,
-            injectedBlocks
+            injectedBlocks,
+            perTurnContextMessages
           );
         } catch (promptTextError) {
           logger.warn(`📊 Failed to itemize the effective system prompt:`, promptTextError);
@@ -4073,11 +4303,44 @@ export class ChatCompletionProcess {
         // model usually stops far short of, and holding it would gate the turn on a cost
         // it will not incur. See reservationOutputTokens for the under-reservation
         // tradeoff this accepts; settlement below charges actual usage either way.
-        const usdCost = getTextModelCost(
-          modelInfo,
-          inputTokens,
-          reservationOutputTokens(safeMaxTokens, reasonsWithinOutputBudget(modelInfo))
-        );
+        //
+        // The Anthropic adapters raise the max_tokens they send past safeMaxTokens for thinking
+        // (buildThinkingParams), so the hold and the member cap below are priced on the ceiling
+        // actually sent, and a turn that thinks is held like one that reasons inside its output budget.
+        const sentMaxTokens = sentMaxTokensFor(modelInfo, thinking, safeMaxTokens);
+        // Research mode runs every enabled configuration instead of the primary, so it holds each of
+        // them at the output ceiling it runs with (researchConfigMaxTokens), and the cap below too.
+        // Each configuration inherits the turn's thinking options (gated on the primary's can_think,
+        // as `options` below is), so its ceiling is raised for thinking the same way.
+        const researchThinking = modelInfo.can_think ? thinking : undefined;
+        const researchCosts = isResearchMode
+          ? researchMode.configurations
+              .filter(config => config.enabled)
+              .map(config => {
+                const configModel = models.find(m => m.id === config.model);
+                if (!configModel) throw new BadRequestError(`Invalid model: "${config.model}" is not available`);
+                const requested = researchConfigMaxTokens(config.parameters?.maxTokens, safeMaxTokens, configModel);
+                const ceiling = sentMaxTokensFor(configModel, researchThinking, requested);
+                return {
+                  hold: getTextModelCost(
+                    configModel,
+                    inputTokens,
+                    reservationOutputTokens(ceiling, ceiling > requested || reasonsWithinOutputBudget(configModel))
+                  ),
+                  ceiling: getTextModelCost(configModel, inputTokens, ceiling),
+                };
+              })
+          : null;
+        const usdCost = researchCosts
+          ? researchCosts.reduce((sum, cost) => sum + cost.hold, 0)
+          : getTextModelCost(
+              modelInfo,
+              inputTokens,
+              reservationOutputTokens(
+                sentMaxTokens,
+                sentMaxTokens > safeMaxTokens || reasonsWithinOutputBudget(modelInfo)
+              )
+            );
         const requiredCredits = usdToCredits(usdCost);
 
         // Determine credit holder (user or org)
@@ -4100,7 +4363,11 @@ export class ChatCompletionProcess {
           // an upper bound on the turn - it prices one round at the uncached input rate on
           // the primary model, so a tool loop, a cache-write turn, or a fallback hop onto
           // pricier pricing can each settle above it.
-          const capCheckCredits = usdToCredits(getTextModelCost(modelInfo, inputTokens, safeMaxTokens));
+          const capCheckCredits = usdToCredits(
+            researchCosts
+              ? researchCosts.reduce((sum, cost) => sum + cost.ceiling, 0)
+              : getTextModelCost(modelInfo, inputTokens, sentMaxTokens)
+          );
           if (isMemberCreditCapExceeded(organization, this.user.id, capCheckCredits)) {
             throw new InsufficientCreditsError(
               buildMemberCreditCapMessage({
@@ -4175,6 +4442,7 @@ export class ChatCompletionProcess {
         this.reservedCreditsOwnerId = reservationOwnerId;
         this.reservedCreditsOwnerType = reservationOwnerType;
         this.reservedCreditHolder = holderAfterReservation;
+        this.reservationBasis = { modelInfo, inputTokens, organization };
 
         logger.info(
           `⏱️ [${Date.now() - processStartTime}ms] Credit pre-reservation completed in ${
@@ -4271,6 +4539,7 @@ export class ChatCompletionProcess {
         turnUsage: undefined,
         stopReason: undefined,
       };
+      if (this.reservationBasis) this.reservationBasis.reported = actualTokenUsage;
 
       if (THROTTLE_INTERVAL) {
         logger.info(`🚫 [STREAMING] Server throttling DISABLED for maximum TTFVT in ${process.env.NODE_ENV} mode`);
@@ -4306,6 +4575,7 @@ export class ChatCompletionProcess {
         quest.promptMeta!.performance!.firstChunkTime = undefined;
         quest.promptMeta!.performance!.firstTokenTime = undefined;
         webSearchBudget.reset();
+        toolFailureGuard.reset();
       };
 
       logger.info(`⏱️ [${Date.now() - processStartTime}ms] === LLM STREAMING PHASE START ===`);
@@ -4355,6 +4625,9 @@ export class ChatCompletionProcess {
       const abortController = new AbortController();
       // Make the signal available to subagents via the closure captured by buildTools
       abortSignalHolder.signal = abortController.signal;
+      // Plain abort(), not abort(reason): a custom reason would surface as a non-abort error.
+      if (abortSignal?.aborted) abortController.abort();
+      else abortSignal?.addEventListener('abort', () => abortController.abort(), { once: true });
 
       // Store reference to the AbortController in a map using questId as key
       // This is used for actual request cancellation when a quest is stopped
@@ -4416,6 +4689,21 @@ export class ChatCompletionProcess {
       // Start the cancellation watcher
       startCancellationWatcher();
 
+      // The request body. Per-turn context moves from the system prompt into the front of the current
+      // user message here, last: budgeting, delivery telemetry and overflow recovery above all work
+      // on the system-role form, and `messages` stays that form for everything persisted from it.
+      // The history breakpoint is flagged on the message itself, before relocation, so both the
+      // adapter's same-role merge and the tool rounds below see the same object.
+      const anchoredMessages = markHistoryCacheAnchor(messages, lastHistoryMessage);
+      const turnContext = relocatePerTurnContext(
+        anchoredMessages,
+        perTurnContextMessages,
+        currentUserPromptMessages[0]
+      );
+      let outboundMessages = turnContext.messages;
+      // The adapter's own end-of-array anchor would only add a breakpoint on the volatile current turn.
+      const historyAnchorMarked = anchoredMessages !== messages;
+
       // Check if Research Mode is enabled and handle parallel processing
       if (isResearchMode) {
         logger.info(
@@ -4427,7 +4715,7 @@ export class ChatCompletionProcess {
         // Handle Research Mode parallel processing
         const researchResults = await researchModeService.processResearchMode(
           researchMode,
-          messages,
+          outboundMessages,
           options as ICompletionOptions,
           async (configId: string, streamedTexts: (string | null | undefined)[], completionInfo?: unknown) => {
             // Handle streaming for each configuration
@@ -4440,7 +4728,23 @@ export class ChatCompletionProcess {
         // abort the controller, so the terminal status has to reflect that rather than
         // unconditionally claiming the turn finished.
         quest.researchModeResults = researchResults;
-        quest.status = successStatus();
+        setTerminalQuestStatus(quest, successStatus());
+
+        // This branch returns before the normal settlement, so each configuration's usage settles
+        // the hold here; one that streamed nothing (failed or cancelled up front) costs nothing.
+        if (adminSettingsEnforceCredits && this.reservedCreditsOwnerId) {
+          // The results already streamed, so a settlement failure is logged rather than failing the turn.
+          await this.settleReservation(
+            quest,
+            researchModeUsages(researchResults, models, inputTokens),
+            processStartTime,
+            logger
+          ).catch(settleError =>
+            logger.error(`Failed to settle research mode credits for quest ${questId}; refunding its hold`, settleError)
+          );
+          // A no-op once settled; a settlement that failed before moving the balance refunds the hold.
+          await this.releaseReservedCredits(questId, logger);
+        }
 
         // This early return skips the normal-path cleanup below, so drop the controller entry
         // and the watcher here; the outer finally only clears the interval.
@@ -4460,6 +4764,9 @@ export class ChatCompletionProcess {
           })),
         });
 
+        // This path skips the normal finalize below, so end the record here: the reply is done
+        // and its Answer diagnosis would otherwise show "still running" permanently.
+        turnTiming.finish();
         await saveQuest(quest);
 
         // Send final status update to complete the Research Mode processing
@@ -4478,6 +4785,7 @@ export class ChatCompletionProcess {
       );
 
       timer.phase('llm_completion');
+      turnTiming.markLlmRequestStarted();
       logger.info(`⏱️ [${Date.now() - processStartTime}ms] === LLM STREAMING PHASE START ===`);
 
       // Bounded multi-hop fallback: a provider-wide outage walks the preference chain one
@@ -4619,21 +4927,23 @@ export class ChatCompletionProcess {
             });
 
             // Determine cache strategy (enable for multi-turn conversations with 2+ messages)
-            const messageCount = messages.length;
+            const messageCount = outboundMessages.length;
             const hasTools = !!options.tools?.length;
 
             // Count message types for debugging
             const messageBreakdown = {
-              system: messages.filter(m => m.role === 'system').length,
-              user: messages.filter(m => m.role === 'user').length,
-              assistant: messages.filter(m => m.role === 'assistant').length,
+              system: outboundMessages.filter(m => m.role === 'system').length,
+              user: outboundMessages.filter(m => m.role === 'user').length,
+              assistant: outboundMessages.filter(m => m.role === 'assistant').length,
             };
 
             const cacheStrategy: ICacheStrategy = {
               enableCaching: messageCount >= 2, // Enable caching for multi-turn conversations
               cacheSystemPrompt: true, // Always cache system prompts
               cacheTools: hasTools, // Cache tools if present
-              cacheConversationHistory: messageCount >= 2, // Cache history for multi-turn
+              // A flagged history message already closes the cached prefix; asking the adapter for
+              // its own end-of-array anchor would cache the current turn as well.
+              cacheConversationHistory: !historyAnchorMarked && messageCount >= 2, // Cache history for multi-turn
               cacheTTL: '5m', // Use 5-minute TTL for active conversations
               conversationId: quest.id, // Use quest ID for xAI cache affinity
             };
@@ -4668,7 +4978,7 @@ export class ChatCompletionProcess {
             if (
               process.env.E2E_ENDPOINTS_ENABLED === 'true' &&
               (currentModel.backend === ModelBackend.Bedrock || currentModel.backend === ModelBackend.Anthropic) &&
-              JSON.stringify(messages).includes(FORCE_FALLBACK_TEST_MARKER)
+              JSON.stringify(outboundMessages).includes(FORCE_FALLBACK_TEST_MARKER)
             ) {
               const forced = new Error(
                 `ServiceUnavailableException: simulated ${currentModel.backend} outage for fallback testing (preview only)`
@@ -4679,17 +4989,24 @@ export class ChatCompletionProcess {
 
             await currentLlm.complete(
               currentModel.id,
-              messages,
+              outboundMessages,
               {
                 ...options,
+                // Per attempt: a fallback hop must name the model that actually serves it.
+                modelDisplayName: currentModel.name,
                 // The preference is set from a selector shown only for OpenAI-style reasoning models, so
                 // it must not retune Claude, whose adapters honour reasoningEffort for the completions API.
                 // Checked per attempt: a fallback can swap a GPT model for a Claude one (and back).
+                // Claude still follows the auto-classified `complexity` below, which the adapters map
+                // to a low effort on simple/contextual queries.
                 reasoningEffort: isClaudeModelId(currentModel.id) ? undefined : options.reasoningEffort,
+                // Per attempt too: the explicit think-off is Ollama's alone, and a fallback can change backend.
+                thinking: withOllamaThinkingDefault(options.thinking, currentModel),
                 abortSignal: abortController.signal,
                 cacheStrategy,
                 _internal: {
                   ...options._internal,
+                  turnTelemetry: turnTiming.sink,
                   enableIdleTimeout,
                   enableRequestTimeout: enableIdleTimeout,
                   idleTimeoutMs: idleTimeoutSeconds * 1000,
@@ -4697,7 +5014,10 @@ export class ChatCompletionProcess {
                   // (strips tools after N rounds so an eager model can't keep re-emitting
                   // capped search/retrieve calls). Set by product surfaces at session
                   // create; the legacy product-flag fallback was retired in M0.5.
-                  ...(session.maxToolCalls != null ? { maxToolCalls: session.maxToolCalls } : {}),
+                  // Clamped as well as schema-bounded: a session stored or cloned before the bound existed.
+                  ...(session.maxToolCalls != null
+                    ? { maxToolCalls: Math.min(session.maxToolCalls, MAX_TOOL_CALLS_CEILING) }
+                    : {}),
                 },
               },
               async (streamedTexts, completionInfo) => {
@@ -4726,19 +5046,11 @@ export class ChatCompletionProcess {
                     this.sendStatusUpdate(quest, 'First model response', { statusAt: new Date(), silent: true });
 
                     logger.info(`⏱️ [${Date.now() - processStartTime}ms] Time to first chunk: ${timeToFirstChunk}ms`);
-                    logger.info(
-                      `🔍 [DEBUG] First content chunk: ${JSON.stringify(streamedTexts.slice(0, 2))} (Model: ${
-                        currentModel.id
-                      })`
-                    );
+                    logger.info('First content chunk received', { modelId: currentModel.id });
                   }
                 } else if (chunkCount === 0 && streamedTexts.some(text => text != null)) {
                   // Some models might send empty or whitespace-only first chunks
-                  logger.info(
-                    `⚠️ [DEBUG] Empty first chunk received for ${currentModel.id}: ${JSON.stringify(
-                      streamedTexts.slice(0, 2)
-                    )}`
-                  );
+                  logger.info('Empty first chunk received', { modelId: currentModel.id });
                 }
 
                 chunkCount++;
@@ -4773,7 +5085,7 @@ export class ChatCompletionProcess {
                   transitionMode = rapidReplySettings?.transitionMode || 'replace';
 
                   logger.info(
-                    `🔍 [TRANSITION_DEBUG] Query complexity: ${queryComplexity}, Transition mode: ${transitionMode}, Rapid reply content: "${rapidReplyContent}"`
+                    `[TRANSITION_DEBUG] Query complexity: ${queryComplexity}, Transition mode: ${transitionMode}, Rapid reply length: ${rapidReplyContent.length}`
                   );
 
                   // Handle transition based on mode
@@ -4874,7 +5186,11 @@ export class ChatCompletionProcess {
             // the last error-severity log on the abort path; the backends and the
             // formatted summary below were already downgraded. Real failures still dump
             // at error with the full stack.
-            if (isAbortError(lastError)) {
+            if (
+              isAbortError(lastError) ||
+              isStreamIdleTimeoutError(lastError) ||
+              lastError instanceof ResponsesStreamTruncatedError
+            ) {
               logger.warn(lastError);
             } else {
               logger.error(lastError);
@@ -4927,6 +5243,8 @@ export class ChatCompletionProcess {
                 `🔧 [Tool Pairing Recovery] Detected tool pairing error, stripping tool blocks from history and retrying`
               );
               messages = stripAllToolBlocks(messages, logger);
+              outboundMessages = stripAllToolBlocks(outboundMessages, logger);
+              turnTiming.recordRetry(lastError, 0, currentModel.id);
 
               resetStreamStateForRetry();
 
@@ -4961,6 +5279,7 @@ export class ChatCompletionProcess {
                   { statusAt: new Date() }
                 );
 
+                turnTiming.recordRetry(lastError, totalDelay, currentModel.id);
                 await new Promise(resolve => setTimeout(resolve, totalDelay));
 
                 resetStreamStateForRetry();
@@ -4986,6 +5305,7 @@ export class ChatCompletionProcess {
 
               this.sendStatusUpdate(quest, 'AI service is slow, retrying...', { statusAt: new Date() });
 
+              turnTiming.recordRetry(lastError, TIMEOUT_RETRY_DELAY_MS + jitter, currentModel.id);
               await new Promise(resolve => setTimeout(resolve, TIMEOUT_RETRY_DELAY_MS + jitter));
 
               resetStreamStateForRetry();
@@ -5007,6 +5327,7 @@ export class ChatCompletionProcess {
 
               this.sendStatusUpdate(quest, 'AI service is slow, retrying...', { statusAt: new Date() });
 
+              turnTiming.recordRetry(lastError, STREAM_IDLE_RETRY_DELAY_MS + jitter, currentModel.id);
               await new Promise(resolve => setTimeout(resolve, STREAM_IDLE_RETRY_DELAY_MS + jitter));
 
               resetStreamStateForRetry();
@@ -5054,9 +5375,13 @@ export class ChatCompletionProcess {
               // Update to the fallback model
               currentModel = fallbackResult.model;
               currentLlm = fallbackResult.backend;
+              if (this.reservationBasis) this.reservationBasis.modelInfo = currentModel;
               primaryFailureReason ??= sanitizeTelemetryError(lastError);
               fallbackAttempt++;
               triedModelIds.add(currentModel.id);
+              // The failure that caused the hop is a retry too, on another model.
+              turnTiming.recordRetry(lastError, 0, failedModel.id);
+              turnTiming.recordFallbackHop();
 
               logger.info(`🔄 [Fallback] Switching to fallback model: ${currentModel.id} (attempt ${fallbackAttempt})`);
 
@@ -5125,8 +5450,23 @@ export class ChatCompletionProcess {
         }
 
         // Mark quest as done when all the replies are received
-        quest.status = successStatus();
+        const finalStatus = successStatus();
+        setTerminalQuestStatus(quest, finalStatus);
         clearStaleFallbackInfoIfNoAnswer();
+        const visibleCharsBeforeStrip = countVisibleChars(quest.replies);
+        // A Stop that resolves ends the stream wherever it was, same as the rejecting Stop below.
+        const narratedStrip = applyNarratedToolCallStrip(quest, turnOfferedToolNames, {
+          truncated: finalStatus === 'stopped',
+        });
+        flagNarratedToolCalls(narratedStrip.toolNames);
+        // The snapshot counted blocks the strip just removed. Taking their size off it keeps a short
+        // answer after the last real tool call from reading as no answer; a block stripped after
+        // the call is covered by endsOnCall instead. The clamp only bites when blocks stripped after
+        // the call outweigh the visible text before it, which overstates the answer, never hides one.
+        visibleCharsAtLastToolCall = Math.max(
+          0,
+          visibleCharsAtLastToolCall - (visibleCharsBeforeStrip - countVisibleChars(quest.replies))
+        );
         // Before the incomplete-answer notice below appends its own slot, so the block is still trailing.
         const replyChoicesOutcome = applyReplyChoices(quest);
         // The system-prompt budget can evict the guidance after it was requested (lowest priority in
@@ -5150,8 +5490,11 @@ export class ChatCompletionProcess {
           });
         }
 
+        // Widen explicitly: the terminal flip happens inside setTerminalQuestStatus, so control
+        // flow analysis still believes status is 'running' at this point.
+        const statusAtEnd = quest.status as IChatHistoryItemDocument['status'];
         const incompleteAnswerNotice = buildIncompleteAnswerNotice({
-          stopped: quest.status === 'stopped',
+          stopped: statusAtEnd === 'stopped',
           toolCallCount: toolCallsSeen,
           visibleCharsAfterLastToolCall: countVisibleChars(quest.replies) - visibleCharsAtLastToolCall,
           stopReason: actualTokenUsage.stopReason,
@@ -5165,19 +5508,25 @@ export class ChatCompletionProcess {
             echoToolsUsed.length > 0 &&
             isTurnEndingTool(echoToolsUsed[echoToolsUsed.length - 1].name, allTools),
         });
-        if (incompleteAnswerNotice) {
+        // When the reply ended on a stripped call, say why in place of the generic notice. An answer
+        // written after the call gets no notice: "try again" next to it would read as "you got nothing".
+        const narratedCallLeftNoAnswer = narratedStrip.endsOnCall && statusAtEnd !== 'stopped';
+        const turnNotice = narratedCallLeftNoAnswer ? NARRATED_TOOL_CALL_NOTICE : incompleteAnswerNotice;
+        if (incompleteAnswerNotice && !narratedCallLeftNoAnswer) {
           logger.warn('[IncompleteAnswer] Turn ended without an answer after its last tool call', {
             questId,
             model: currentModel.id,
             stopReason: actualTokenUsage.stopReason,
             toolCallCount: toolCallsSeen,
           });
-          // Same shape as setErrorReply in the catch below: the notice is its own slot and
-          // quest.reply carries the visible text. Visible only, because the client's
-          // extractThinking reads reply AND replies, so raw slots here would show the
-          // reasoning twice. The leading break keeps it off the preamble's line, since
-          // extractReplies joins slots with ''.
-          quest.replies = [...(quest.replies ?? []), `\n\n${incompleteAnswerNotice}`];
+        }
+        // Same shape as setErrorReply in the catch below: the notice is its own slot and
+        // quest.reply carries the visible text. Visible only, because the client's
+        // extractThinking reads reply AND replies, so raw slots here would show the
+        // reasoning twice. The leading break keeps it off the preamble's line, since
+        // extractReplies joins slots with ''.
+        if (turnNotice) {
+          quest.replies = [...(quest.replies ?? []), `\n\n${turnNotice}`];
           quest.reply = quest.replies.map(slot => visibleReplyText(slot)).join('');
         }
 
@@ -5563,7 +5912,8 @@ export class ChatCompletionProcess {
                 settledInputTokens,
                 settledOutputTokens,
                 cacheReadInputTokens,
-                cacheCreationInputTokens
+                cacheCreationInputTokens,
+                settledInputTokens + cacheReadInputTokens + cacheCreationInputTokens
               )
           : getTextModelCost(
               currentModel,
@@ -5728,19 +6078,24 @@ export class ChatCompletionProcess {
           // Clamp computed BEFORE the usage event so the event can carry the
           // written-off portion; summing creditsCharged alone would over-count
           // collected revenue whenever the clamp fires.
+          // Claim the reservation before any await: releaseReservedCredits (a caller abandoning a
+          // stuck turn) must not refund what this settlement already accounts for.
+          const reservedAtSettlement = this.reservedCredits;
+          this.reservedCredits = 0;
+          this.reservationBasis = null;
           const { delta: settlementDelta, writtenOffCredits } = this.reservedCreditsOwnerId
             ? computeSettlementDelta(
-                this.reservedCredits,
+                reservedAtSettlement,
                 totalCreditsUsed,
                 this.reservedCreditHolder?.currentCredits ?? 0
               )
-            : { delta: this.reservedCredits - totalCreditsUsed, writtenOffCredits: 0 };
+            : { delta: reservedAtSettlement - totalCreditsUsed, writtenOffCredits: 0 };
           if (writtenOffCredits > 0) {
             logger.warn('[BILLING_SHORTFALL_CLAMP] Settlement exceeds balance; flooring at zero', {
               questId: quest.id,
               ownerId: this.reservedCreditsOwnerId,
               ownerType: this.reservedCreditsOwnerType,
-              shortfall: totalCreditsUsed - this.reservedCredits,
+              shortfall: totalCreditsUsed - reservedAtSettlement,
               available: Math.max(0, this.reservedCreditHolder?.currentCredits ?? 0),
               writtenOff: writtenOffCredits,
             });
@@ -5800,7 +6155,7 @@ export class ChatCompletionProcess {
                 this.reservedCreditsOwnerType === CreditHolderType.Organization ? this.db.organizations : this.db.users;
               reconciledHolder = await reconcileMethod.incrementCredits(this.reservedCreditsOwnerId, delta);
               logger.info(
-                `⚖️ Credits reconciled for quest ${quest.id}: reserved=${this.reservedCredits}, actual=${totalCreditsUsed}, delta=${delta}`
+                `Credits reconciled for quest ${quest.id}: reserved=${reservedAtSettlement}, actual=${totalCreditsUsed}, delta=${delta}`
               );
             }
 
@@ -5865,12 +6220,10 @@ export class ChatCompletionProcess {
               }
             );
 
-            // Reset reservation state after successful reconciliation
-            this.reservedCredits = 0;
             this.reservedCreditHolder = null;
           } catch (creditError) {
             logger.error(
-              `🚨 Credits reconciliation failed for quest ${quest.id} (${totalCreditsUsed} credits used, ${this.reservedCredits} reserved). Manual reconciliation needed.`,
+              `Credits reconciliation failed for quest ${quest.id} (${totalCreditsUsed} credits used, ${reservedAtSettlement} reserved). Manual reconciliation needed.`,
               creditError
             );
             // Do not re-throw: balance already adjusted at reservation time
@@ -5949,7 +6302,7 @@ export class ChatCompletionProcess {
           quest.promptMeta.warnings = [...(quest.promptMeta.warnings ?? []), earlyStopStamp.warning];
         }
 
-        quest.status = successStatus();
+        setTerminalQuestStatus(quest, successStatus());
         clearStaleFallbackInfoIfNoAnswer();
 
         // Context Telemetry: Finalize and attach to promptMeta
@@ -6000,63 +6353,10 @@ export class ChatCompletionProcess {
 
             // M4: Tool execution telemetry
             if (toolHealthData.size > 0 || (quest.promptMeta?.functionCalls?.length ?? 0) > 0) {
-              const toolTelemetryMap = new Map<string, ToolTelemetry>();
-
-              // Populate from function calls (invocations)
-              for (const fc of quest.promptMeta?.functionCalls ?? []) {
-                const toolName = fc.name ?? 'unknown';
-                const existing = toolTelemetryMap.get(toolName);
-                if (existing) {
-                  existing.invocationCount++;
-                  existing.successCount++; // Assume success if no error
-                } else {
-                  toolTelemetryMap.set(toolName, {
-                    toolName,
-                    isMcpTool: toolName.includes(':') || toolName.startsWith('mcp_'),
-                    mcpServerName: toolName.includes(':') ? toolName.split(':')[0] : undefined,
-                    invocationCount: 1,
-                    successCount: 1,
-                    failureCount: 0,
-                    totalDurationMs: 0, // Not tracked per-call yet
-                    maxDurationMs: 0,
-                    retryCount: 0,
-                  });
-                }
-              }
-
-              // Merge with tool health data (failures, errors)
-              for (const [toolName, health] of toolHealthData) {
-                const existing = toolTelemetryMap.get(toolName);
-                if (existing) {
-                  existing.failureCount = health.failureCount;
-                  if (!health.available) {
-                    existing.successCount = Math.max(0, existing.invocationCount - health.failureCount);
-                  }
-                  if (health.lastError) {
-                    existing.lastError = sanitizeTelemetryError(health.lastError, 200);
-                    const errorCategory = categorizeToolError(health.lastError);
-                    existing.errorCategories = [errorCategory];
-                  }
-                } else if (health.failureCount > 0) {
-                  // Tool failed without successful invocation
-                  const errorCategories: ToolErrorCategory[] = health.lastError
-                    ? [categorizeToolError(health.lastError)]
-                    : [];
-                  toolTelemetryMap.set(toolName, {
-                    toolName,
-                    isMcpTool: toolName.includes(':') || toolName.startsWith('mcp_'),
-                    mcpServerName: toolName.includes(':') ? toolName.split(':')[0] : undefined,
-                    invocationCount: health.failureCount,
-                    successCount: 0,
-                    failureCount: health.failureCount,
-                    totalDurationMs: 0,
-                    maxDurationMs: 0,
-                    retryCount: 0,
-                    lastError: health.lastError ? sanitizeTelemetryError(health.lastError, 200) : undefined,
-                    errorCategories: errorCategories.length > 0 ? errorCategories : undefined,
-                  });
-                }
-              }
+              const toolTelemetryMap = buildToolInvocationTelemetry(
+                quest.promptMeta?.functionCalls ?? [],
+                toolHealthData
+              );
 
               // Enrich web_fetch with content-size + truncation metrics aggregated from the
               // citables it emitted. Silent truncation is invisible in invocation/success counts alone.
@@ -6206,10 +6506,13 @@ export class ChatCompletionProcess {
           }
         }
 
-        quest.status = successStatus();
+        setTerminalQuestStatus(quest, successStatus());
         clearStaleFallbackInfoIfNoAnswer();
 
         timer.phase('save');
+        // Before the terminal frame, so totalMs rides it and the awaited save below rather than
+        // only the fire-and-forget final save.
+        turnTiming.finish();
 
         // P4-b: Fire-and-forget status update, don't block on WebSocket delivery
         this.sendStatusUpdate(quest, `Completed Quest`, { statusAt: new Date(), silent: true });
@@ -6312,29 +6615,42 @@ export class ChatCompletionProcess {
         // Post-streaming processing failed, but the reply is already streamed.
         // Do NOT overwrite quest.reply, quest.replies, or quest.status - keep status as 'done'.
         logger.error(`❌ [POST_PROCESS] Error in post-streaming processing for quest ${questId}:`, postProcessError);
-        quest.status = successStatus();
+        setTerminalQuestStatus(quest, successStatus());
         clearStaleFallbackInfoIfNoAnswer();
+        turnTiming.finish();
         // Ensure quest is persisted as 'done' even if the error occurred before the normal save
         await saveQuest(quest);
       }
     } catch (err) {
       const totalResponseTime = Date.now() - processStartTime;
+      // Every branch below that saves the quest keeps the failed turn's timing too.
+      turnTiming.finish();
+
+      // A Stop or disconnect that threw, or a later tool call refused for credits, still bills what
+      // streamed and the tools already delivered; the rollback below then has nothing left to refund.
+      // Any other failure refunds the whole hold. Keyed on the basis, not the hold: a hold the caller
+      // already released (a stuck turn) still bills the full actual.
+      if (
+        this.reservationBasis &&
+        this.reservedCreditsOwnerId &&
+        (isAbortError(err) || resolveQuestErrorCode(err) === 'insufficient_credits')
+      ) {
+        await this.settleAbortedReservation(quest, processStartTime, logger).catch(settleError =>
+          logger.error(`Failed to settle the aborted turn for quest ${questId}; refunding its hold`, settleError)
+        );
+      }
 
       // Rollback reserved credits if we never completed reconciliation
-      if (this.reservedCredits > 0 && this.reservedCreditsOwnerId) {
-        try {
-          const rollbackMethod =
-            this.reservedCreditsOwnerType === CreditHolderType.Organization ? this.db.organizations : this.db.users;
-          await rollbackMethod.incrementCredits(this.reservedCreditsOwnerId, this.reservedCredits);
-          logger.info(`💰 Rolled back ${this.reservedCredits} reserved credits for quest ${questId} due to error`);
-          this.reservedCredits = 0;
-          this.reservedCreditHolder = null;
-        } catch (rollbackError) {
-          logger.error(
-            `🚨 CRITICAL: Failed to rollback ${this.reservedCredits} reserved credits for quest ${questId} (ownerType=${this.reservedCreditsOwnerType}). Manual reconciliation required.`,
-            rollbackError
-          );
-        }
+      await this.releaseReservedCredits(questId, logger);
+      if (abortSignal?.aborted) {
+        // Drain any in-flight save before handing the quest's terminal state to the caller: a
+        // heartbeat that cleared the fence just before the abort would otherwise write `running`
+        // back over the caller's settle. Every save after this returns early (still fenced).
+        await questSaveMutex.runExclusive(async () => {});
+        // The caller ended the turn and settles the quest from what streamed; an error reply
+        // written here would be kept as content (and saveQuest is fenced anyway).
+        logger.warn(`Quest ${questId} ended by caller abort`, { error: err });
+        return;
       }
 
       quest.promptMeta!.performance!.totalResponseTime = totalResponseTime;
@@ -6364,18 +6680,24 @@ export class ChatCompletionProcess {
         isAbortError(err) && (await this.db.quests.findByIdWithStatus(questId).catch(() => null))?.status === 'stopped';
       if (stoppedByUser) {
         logger.log(`Chat completion was stopped by user for quest ${questId}`);
-        quest.status = 'stopped';
-        // Same rule as the success path, so an abort that rejects and one that resolves persist alike.
+        setTerminalQuestStatus(quest, 'stopped');
+        // Same rules as the success path, so an abort that rejects and one that resolves persist alike.
+        flagNarratedToolCalls(applyNarratedToolCallStrip(quest, turnOfferedToolNames, { truncated: true }).toolNames);
         clearStaleFallbackInfoIfNoAnswer();
         finalQuest = await saveQuest(quest);
         return;
       }
+      const narratedStripped = stripNarratedToolCallsFromReplies(streamedRepliesBeforeError ?? [], {
+        offeredToolNames: turnOfferedToolNames,
+        truncated: true,
+      });
+      flagNarratedToolCalls(narratedStripped.toolNames);
       const setErrorReply = (message: string) => {
         // Strip a trailing choices block (closed or cut mid-stream) before the error joins the
         // slot with no separator - otherwise an unterminated block swallows the appended error as
         // "part of the block", and once the error is the last slot the client no longer reads the
         // earlier slot's block at all, leaking the raw JSON.
-        const choicesStripped = stripChoicesFromReplies(streamedRepliesBeforeError ?? []).replies;
+        const choicesStripped = stripChoicesFromReplies(narratedStripped.replies).replies;
         const visiblePartial = choicesStripped.map(r => visibleReplyText(r)).filter(text => text.length > 0);
         const combined = [...visiblePartial, message];
         quest.replies = combined;
@@ -6383,7 +6705,7 @@ export class ChatCompletionProcess {
       };
       setErrorReply((err as Error).message);
       quest.type = 'error';
-      quest.status = 'done';
+      setTerminalQuestStatus(quest, 'done');
       // A turn can switch models and still fail; no model answered it, so it must not claim one did.
       quest.fallbackInfo = null;
       // Classifier for the client's "Add Credits" CTA. Chat reservation throws
@@ -6409,7 +6731,16 @@ export class ChatCompletionProcess {
         logger.log(`Chat completion was stopped by user for quest ${questId}: ${err.message}`);
         setErrorReply('The request was interrupted. Please try sending your message again.');
         quest.type = 'error';
-        quest.status = 'done';
+        setTerminalQuestStatus(quest, 'done');
+        finalQuest = await saveQuest(quest);
+        return;
+      } else if (err instanceof ResponsesStreamTruncatedError) {
+        // WARN, not error: an upstream close mid-stream is recoverable by resending, and error
+        // severity would trip the CloudWatch ERROR alert path.
+        logger.warn(`[Truncated] Quest ${questId}: ${err.message}`);
+        setErrorReply('The request was interrupted. Please try sending your message again.');
+        quest.type = 'error';
+        setTerminalQuestStatus(quest, 'done');
         finalQuest = await saveQuest(quest);
         return;
       } else if (
@@ -6424,7 +6755,7 @@ export class ChatCompletionProcess {
         logger.warn(`[Timeout] Quest ${questId}: ${err.message}`);
         setErrorReply('The AI service is currently experiencing high demand. Please try again in a few minutes.');
         quest.type = 'error';
-        quest.status = 'done';
+        setTerminalQuestStatus(quest, 'done');
         finalQuest = await saveQuest(quest);
         return;
       } else if (err instanceof Error && isToolPairingError(err)) {
@@ -6432,14 +6763,14 @@ export class ChatCompletionProcess {
         logger.error(`[Tool Pairing Error] Quest ${questId}: ${err.message}`);
         setErrorReply('I encountered an issue with the conversation history. Please try again or start a new session.');
         quest.type = 'error';
-        quest.status = 'done';
+        setTerminalQuestStatus(quest, 'done');
         finalQuest = await saveQuest(quest);
         return;
       } else if (err instanceof Error && isOverloadedError(err)) {
         logger.error(`[Overloaded Error] Quest ${questId}: ${err.message}`);
         setErrorReply('The AI service is currently experiencing high demand. Please try again in a few minutes.');
         quest.type = 'error';
-        quest.status = 'done';
+        setTerminalQuestStatus(quest, 'done');
         finalQuest = await saveQuest(quest);
         return;
       } else if (err instanceof Error && err.message.startsWith('Your request is too large for')) {
@@ -6449,6 +6780,9 @@ export class ChatCompletionProcess {
       }
       throw err;
     } finally {
+      // A throw inside the catch can reach here before any terminal write, so the pending
+      // trailing send is dropped here too - the publish below is the only terminal frame.
+      cancelPendingStreamingSend?.();
       if (cancelWatcherInterval) {
         clearInterval(cancelWatcherInterval);
       }
@@ -6526,6 +6860,190 @@ export class ChatCompletionProcess {
     }
 
     return this.statusManager.sendStatusUpdate(q, status, options);
+  }
+
+  /**
+   * Settle the turn's credit reservation against `usages` (plus `toolCredits`, the tool charges the
+   * turn reserved) outside the normal completion path (a Research-mode turn, or one ended by a thrown
+   * abort): the balance moves by the reservation's difference from the usage, floored at zero like
+   * the main settlement (computeSettlementDelta), and each usage gets its ledger row and usage event.
+   * The reservation is claimed before the first await, like the main settlement, so a caller's
+   * releaseReservedCredits cannot refund it as well; a hold that was already released settles at
+   * the full actual. A failed balance update restores the claim for the caller's rollback to refund.
+   */
+  private async settleReservation(
+    quest: { id: string; sessionId: string; creditsUsed?: number | null },
+    usages: ReservationUsage[],
+    processStartTime: number,
+    logger: Logger,
+    status: 'ok' | 'error' = 'ok',
+    toolCredits = 0
+  ): Promise<void> {
+    const reserved = this.reservedCredits;
+    const basis = this.reservationBasis;
+    this.reservedCredits = 0;
+    this.reservationBasis = null;
+    const ownerId = this.reservedCreditsOwnerId;
+    const ownerType = this.reservedCreditsOwnerType;
+    const organization = basis?.organization ?? null;
+    const priced = usages.map(usage => {
+      const costUsd = getTextModelCost(
+        usage.modelInfo,
+        usage.inputTokens,
+        usage.outputTokens,
+        usage.cacheReadInputTokens ?? 0,
+        usage.cacheCreationInputTokens ?? 0
+      );
+      return { ...usage, costUsd, credits: usdToCreditsStochastic(costUsd) };
+    });
+    const totalCredits = priced.reduce((sum, usage) => sum + usage.credits, 0) + toolCredits;
+    const { delta, writtenOffCredits } = computeSettlementDelta(
+      reserved,
+      totalCredits,
+      this.reservedCreditHolder?.currentCredits ?? 0
+    );
+    const holderMethods = ownerType === CreditHolderType.Organization ? this.db.organizations : this.db.users;
+    let holder = this.reservedCreditHolder;
+    if (delta !== 0) {
+      try {
+        holder = await holderMethods.incrementCredits(ownerId, delta);
+      } catch (error) {
+        this.reservedCredits += reserved;
+        this.reservationBasis ??= basis;
+        throw error;
+      }
+    }
+    logger.info(`Credits settled for quest ${quest.id}: reserved=${reserved}, actual=${totalCredits}, delta=${delta}`);
+    this.reservedCreditHolder = null;
+    quest.creditsUsed = totalCredits;
+
+    for (const usage of priced) {
+      this.db.usageEvents
+        ?.record({
+          requestId: quest.id,
+          userId: this.user.id,
+          ownerId,
+          ownerType,
+          sessionId: quest.sessionId,
+          feature: 'chat',
+          provider: usage.modelInfo.backend,
+          model: usage.modelInfo.id,
+          source: 'web',
+          inputTokens: usage.inputTokens,
+          outputTokens: usage.outputTokens,
+          cachedInputTokens: usage.cacheReadInputTokens ?? 0,
+          cacheWriteTokens: usage.cacheCreationInputTokens ?? 0,
+          costUsd: usage.costUsd,
+          creditsCharged: usage.credits,
+          writtenOffCredits: writtenOffCredits > 0 && usage === priced[0] ? writtenOffCredits : undefined,
+          status,
+          latencyMs: Date.now() - processStartTime,
+        })
+        .catch((usageEventError: unknown) => logger.warn('Failed to record usage event', usageEventError));
+      if (usage.credits <= 0 || !this.db.creditTransactions) continue;
+      await deductCreditsWithOrgSupport(
+        {
+          type: 'text_generation_usage',
+          user: this.user,
+          organization,
+          credits: usage.credits,
+          sessionId: quest.sessionId,
+          questId: quest.id,
+          model: usage.modelInfo.id,
+          inputTokens: usage.inputTokens,
+          outputTokens: usage.outputTokens,
+        },
+        {
+          db: {
+            creditTransactions: this.db.creditTransactions,
+            users: this.db.users,
+            organizations: this.db.organizations,
+          },
+        },
+        { skipBalanceUpdate: true, currentCreditHolder: holder ?? undefined }
+      );
+    }
+
+    // The same aggregate tool_usage row the main settlement writes; each tool's own usage event was
+    // recorded when it ran (ToolBuilder).
+    if (toolCredits > 0 && this.db.creditTransactions) {
+      await subtractCredits(
+        {
+          type: 'tool_usage',
+          model: resolveAggregateToolModel(this.toolCreditModels),
+          sessionId: quest.sessionId,
+          questId: quest.id,
+          ownerId: ownerId || this.user.id,
+          ownerType,
+          credits: toolCredits,
+          description: `Tool usage: ${Array.from(this.toolCreditsMap.keys()).join(', ')}`,
+          source: 'web',
+        },
+        {
+          db: { creditTransactions: this.db.creditTransactions },
+          creditHolderMethods: holderMethods,
+          skipBalanceUpdate: true,
+          currentCreditHolder: holder ?? undefined,
+        }
+      );
+    }
+  }
+
+  /**
+   * A turn ended by a thrown abort (a Stop, a disconnect) still spent what it streamed: settle the
+   * reservation on the answering model, at the larger of the provider-reported counts and the input
+   * estimate plus the streamed replies, the same for every adapter, so a throwing adapter is billed
+   * like one that resolves on abort. Provider counts keep their cache split, priced and recorded as
+   * the main settlement does. Tools that already ran (image, audio, ...) bill their reserved charges
+   * (toolCreditsMap) as the main settlement does. Nothing streamed, reported or charged means nothing
+   * billable, and the caller's rollback refunds the whole hold.
+   */
+  private async settleAbortedReservation(
+    quest: IChatHistoryItemDocument,
+    processStartTime: number,
+    logger: Logger
+  ): Promise<void> {
+    const basis = this.reservationBasis;
+    if (!basis) return;
+    const streamedChars = (quest.replies?.length ? quest.replies : [quest.reply ?? '']).reduce(
+      (sum, reply) => sum + (reply?.length ?? 0),
+      0
+    );
+    const reported = basis.reported ?? {};
+    const cacheReadInputTokens = reported.cacheReadInputTokens ?? 0;
+    const cacheCreationInputTokens = reported.cacheCreationInputTokens ?? 0;
+    const reportedInput = (reported.inputTokens ?? 0) + cacheReadInputTokens + cacheCreationInputTokens;
+    const outputTokens = Math.max(
+      reported.outputTokens ?? 0,
+      streamedChars > 0 ? estimateStreamedOutputTokens(streamedChars, basis.modelInfo.id) : 0
+    );
+    let toolCredits = 0;
+    for (const charges of this.toolCreditsMap.values()) {
+      toolCredits += charges.reduce((sum, credits) => sum + credits, 0);
+    }
+    if (outputTokens === 0 && toolCredits === 0) return;
+    const usage: ReservationUsage =
+      reportedInput > basis.inputTokens
+        ? {
+            modelInfo: basis.modelInfo,
+            inputTokens: reported.inputTokens ?? 0,
+            outputTokens,
+            cacheReadInputTokens,
+            cacheCreationInputTokens,
+          }
+        : { modelInfo: basis.modelInfo, inputTokens: basis.inputTokens, outputTokens };
+    if (quest.promptMeta) {
+      const calls = [...(quest.promptMeta.functionCalls ?? [])];
+      // A thrown tool call may prevent the backend's final toolsUsed callback. Keep delivered charges visible.
+      for (const [name, charges] of this.toolCreditsMap) {
+        const recordedCalls = calls.filter(call => call.name === name).length;
+        for (let index = recordedCalls; index < charges.length; index++) {
+          calls.push({ name, parameters: {} });
+        }
+      }
+      quest.promptMeta.functionCalls = settleToolCallCredits(calls, this.toolCreditsMap);
+    }
+    await this.settleReservation(quest, [usage], processStartTime, logger, 'error', toolCredits);
   }
 
   /**
@@ -6687,6 +7205,36 @@ When using tools that require file IDs (like edit_image), use the ID shown above
   }
 
   /**
+   * The models a chat-delegated subagent may run on: the user's runnable catalog under the rule
+   * ChatCompletionInvoke admits the turn's model by (`filterRunnableModels`), plus the turn's own
+   * model, which a subagent pinned to anything else falls back to. Fails closed to the turn's
+   * model alone when the model configurations cannot be read.
+   */
+  private async loadSubagentModels(
+    models: ModelInfo[],
+    turnModel: ModelInfo,
+    entitlementKeys: string[],
+    logger: Logger
+  ): Promise<ModelInfo[]> {
+    let configurations: LLMModelConfig[];
+    try {
+      const setting = await this.db.adminSettings.findOne({ settingName: 'llmModelConfigurations' });
+      configurations = Array.isArray(setting?.settingValue) ? (setting.settingValue as LLMModelConfig[]) : [];
+    } catch (err) {
+      logger.warn('[Delegation] failed to read model configurations; subagents run on the turn model only', err);
+      return [turnModel];
+    }
+    const runnable = filterRunnableModels(
+      models,
+      configurations,
+      this.user.tags ?? [],
+      this.user.isAdmin ?? false,
+      entitlementKeys
+    );
+    return runnable.includes(turnModel) ? runnable : [turnModel, ...runnable];
+  }
+
+  /**
    * Load admin settings in background (non-blocking).
    * Returns a promise that resolves when real settings are available.
    */
@@ -6696,7 +7244,9 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     try {
       logger.info(`⏱️ [${Date.now() - processStartTime}ms] Background admin settings fetch started`);
 
-      const adminSettings = await getSettingsMap(this.db, { logger });
+      // skipCache: the billing/access flags in this map gate money, and this process outlives an
+      // admin write made by another one. One read here, once per turn - not per chunk.
+      const adminSettings = await getSettingsMap(this.db, { logger, skipCache: true });
 
       const fetchTime = Date.now() - adminSettingsStartTime;
       logger.info(`⏱️ [${Date.now() - processStartTime}ms] Background admin settings completed in ${fetchTime}ms`);
@@ -6704,19 +7254,16 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       return adminSettings;
     } catch (error) {
       logger.warn(`Background admin settings fetch failed after ${Date.now() - adminSettingsStartTime}ms:`, error);
-      // Return defaults if background fetch fails
-      return this.getDefaultAdminSettings();
+      // A stale-but-real map beats fabricated defaults here: getDefaultAdminSettings() hardcodes
+      // enforceCredits 'true', which would charge a deployment whose admin turned metering off.
+      // Fall back to the cached map, and to the defaults only when there is no cached map either.
+      try {
+        return await getSettingsMap(this.db, { logger });
+      } catch (cacheError) {
+        logger.warn('Cached admin settings fallback failed too; using defaults:', cacheError);
+        return this.getDefaultAdminSettings();
+      }
     }
-  }
-
-  /**
-   * Get setting value with default fallback.
-   * Works with both default settings and real admin settings.
-   */
-  private getDefaultSettingValue(key: string, settings: Record<string, string | number | boolean>): boolean {
-    const value = settings[key];
-    if (!value) return false;
-    return value.toString().toLowerCase() === 'true' || value.toString() === '1';
   }
 
   private async buildOptimizedFeatures(

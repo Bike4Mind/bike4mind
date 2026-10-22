@@ -52,12 +52,12 @@ const RATE_LIMIT_HEADERS = {
 };
 
 // --- AWS edges (mocked) ---
-vi.mock('@server/utils/sqs', () => ({ sendBatchToQueue: (...a: unknown[]) => mockSendBatch(...a) }));
-vi.mock('@server/utils/cloudwatch', () => ({
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendBatchToQueue: (...a: unknown[]) => mockSendBatch(...a) }));
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   emitMetric: (...a: unknown[]) => mockEmitMetric(...a),
   emitMetrics: (...a: unknown[]) => mockEmitMetrics(...a),
 }));
-vi.mock('@server/utils/dlqRegistry', () => ({
+vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({
   getSourceQueueUrl: () => 'https://sqs.us-east-2.amazonaws.com/123/overwatch',
 }));
 
@@ -102,7 +102,7 @@ vi.mock('@bike4mind/database', async orig => {
 
 import handler, { config } from '../events';
 import { ApiKeyScope } from '@bike4mind/common';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 
 const VALID_KEY = 'sk-test-valid-key';
 

@@ -14,6 +14,7 @@ import { generateImageContract, GenerateImageIvokeParams, redactSessionForClient
 import { getOrCreateSession } from '@server/managers/sessionManager';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import { resolveMediaBillingOrgId } from '@server/billing/resolveMediaBillingOrgId';
+import { assertNoStrayBillingOrgKeys, resolveBillingOrgInput } from '@server/utils/orgAccess';
 import { questRepository } from '@bike4mind/database';
 import { resolveImagePrompt, HISTORY_LOOKBACK, type PromptResolution } from '@server/utils/resolveImagePrompt';
 import { armGenerationCallback, resolveGenerationCallback } from '@server/generationCallback/armGenerationCallback';
@@ -44,18 +45,25 @@ const handler = nextRouteForContract(generateImageContract).post(async (req, res
 
   assertReferenceImagesSupported(body.model, body.referenceImageFabFileIds);
 
+  // Loud rejection before any session or billing work: the schemas strip unknown keys, so a
+  // billing-org-shaped stray would otherwise vanish and bill the caller's home org.
+  assertNoStrayBillingOrgKeys(req.body);
+  // organization_id is the request alias; only the mapped value goes on to the queue.
+  const requestedOrgId = resolveBillingOrgInput(body);
+
   const {
     sessionId: reqSessionId,
     sessionName,
     callbackUrl,
     prompt_resolution: resolutionMode,
+    organization_id: _orgAlias,
     ...invokeParams
   } = body;
   const callback = await resolveGenerationCallback(req, callbackUrl);
 
   // Before getOrCreateSession, so a refused payer never leaves behind a new, empty notebook.
   // An org-billed API key bills its org; otherwise null = personal, undefined = the caller's own org.
-  const effectiveOrgId = await resolveMediaBillingOrgId(req, invokeParams.organizationId);
+  const effectiveOrgId = await resolveMediaBillingOrgId(req, requestedOrgId);
 
   const { sessionId, asyncPromises, session } = await getOrCreateSession({
     sessionId: reqSessionId,

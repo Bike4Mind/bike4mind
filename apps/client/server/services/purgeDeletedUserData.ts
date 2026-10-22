@@ -6,6 +6,7 @@ import {
 } from '@bike4mind/database';
 import type { IUserDocument } from '@bike4mind/common';
 import { purgeUserPublishedArtifacts } from '@server/services/publish/purgeUserPublishedArtifacts';
+import { withdrawAuthorListings } from '@server/skillMarket/market';
 import { decryptStoredToken, revokeDriveGrant } from '@server/integrations/google/drive/common';
 import { flagConnectionsStoppedByDisconnect } from '@server/integrations/google/drive/flagConnectionsStoppedByDisconnect';
 import { revokeAtlassianGrant } from '@server/integrations/jira/revokeAtlassianGrant';
@@ -61,6 +62,14 @@ export async function purgeDeletedUserData(
     await purgeUserPublishedArtifacts(userId, { deletedBy, logger });
   } catch (err) {
     logger.error(`Failed to purge published artifacts for deleted user ${userId}: ${String(err)}`);
+  }
+
+  // Importers keep their copies, as with an author's own withdraw; the listings just leave the market.
+  try {
+    const withdrawn = await withdrawAuthorListings(userId);
+    logger.info(`Withdrew ${withdrawn} Skill Market listing(s) of deleted user ${userId}`);
+  } catch (err) {
+    logger.error(`Failed to withdraw Skill Market listings for deleted user ${userId}: ${String(err)}`);
   }
 
   // After the artifact purge, so this only catches what the user wrote on pages that stay live.

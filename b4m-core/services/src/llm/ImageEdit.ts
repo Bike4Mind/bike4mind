@@ -24,6 +24,7 @@ import {
   ImageOutputFormatSchema,
   AttachmentLakeAccess,
   IFabFileDocument,
+  usdToCreditsStochastic,
 } from '@bike4mind/common';
 import {
   isImageServeable,
@@ -487,7 +488,9 @@ export class ImageEditService {
     ]);
     if (!user) throw new NotFoundError('User not found');
 
-    const settings = await getSettingsMap(this.db);
+    // skipCache: enforceCredits gates money (and ModerationEnabled below gates content safety),
+    // and this host may outlive the admin's write to either.
+    const settings = await getSettingsMap(this.db, { skipCache: true });
     const adminSettingsEnforceCredits = getSettingsValue('enforceCredits', settings);
 
     const parseQuestToStreamPayload = (quest: IChatHistoryItemDocument) => {
@@ -617,8 +620,6 @@ export class ImageEditService {
         quest: parseQuestToStreamPayload(quest),
         statusMessage: 'Preparing to paint...',
       });
-
-      const settings = await getSettingsMap(this.db);
 
       if (getSettingsValue('ModerationEnabled', settings)) {
         await clientMessageSender.sendToClient(userId, wsEndpoint, {
@@ -810,6 +811,7 @@ export class ImageEditService {
           questId,
           provider,
           model,
+          surface: 'edit',
         },
         logger,
       });
@@ -842,6 +844,15 @@ export class ImageEditService {
         model,
       });
 
+      // Per-image prices are exact, so the final debit is the unbiased draw on usageCostUsd
+      // (may be 0), replacing the rounded-up pre-flight figure.
+      const creditTransactions = this.db.creditTransactions;
+      const settlement =
+        adminSettingsEnforceCredits && typeof quest.creditsUsed === 'number' && creditTransactions
+          ? { creditTransactions, credits: usdToCreditsStochastic(usageCostUsd) }
+          : undefined;
+      if (settlement) quest.creditsUsed = settlement.credits;
+
       quest.reply = '';
       quest.replies = [];
       quest.images = [path];
@@ -864,26 +875,28 @@ export class ImageEditService {
         statusMessage: null,
       });
 
-      // Deduct credits after successful edit
-      if (adminSettingsEnforceCredits && typeof quest.creditsUsed === 'number' && this.db.creditTransactions) {
-        await deductCreditsWithOrgSupport(
-          {
-            type: 'image_edit_usage',
-            user,
-            organization,
-            credits: quest.creditsUsed,
-            sessionId,
-            questId,
-            model,
-          },
-          {
-            db: {
-              creditTransactions: this.db.creditTransactions,
-              users: this.db.users,
-              organizations: this.db.organizations,
+      // Deduct credits after successful edit. A zero draw writes no ledger row; the usage event still lands.
+      if (settlement) {
+        if (settlement.credits > 0) {
+          await deductCreditsWithOrgSupport(
+            {
+              type: 'image_edit_usage',
+              user,
+              organization,
+              credits: settlement.credits,
+              sessionId,
+              questId,
+              model,
             },
-          }
-        );
+            {
+              db: {
+                creditTransactions: settlement.creditTransactions,
+                users: this.db.users,
+                organizations: this.db.organizations,
+              },
+            }
+          );
+        }
 
         // Dual-write usage event: analytics only, never billing. Awaited because a write still in
         // flight when the Lambda handler returns can be frozen and never land; the catch keeps it
@@ -907,7 +920,7 @@ export class ImageEditService {
             cacheWriteTokens: 0,
             units: IMAGES_PER_EDIT_REQUEST,
             costUsd: usageCostUsd,
-            creditsCharged: quest.creditsUsed,
+            creditsCharged: settlement.credits,
             status: 'ok',
           })
           .catch(err => logger.warn('Failed to record usage event', err));

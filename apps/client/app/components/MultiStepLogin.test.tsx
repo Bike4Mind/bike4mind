@@ -7,7 +7,11 @@ import { getThemeConfig } from '@client/app/utils/themes';
 import { CURRENT_POLICY_VERSION, USERNAME_RULES_MESSAGE } from '@bike4mind/common';
 import en from '@client/app/locales/en.json';
 import { ExternalLinks } from '@client/app/utils/externalLinks';
+import { FIRST_SIGNUP_SESSION_KEY } from '@client/app/utils/firstSignupSession';
 import { useCookieSettings } from '@client/app/components/CookieConsentBanner';
+
+const mockLogEvent = vi.hoisted(() => vi.fn());
+vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => ({ mutate: mockLogEvent }) }));
 import MultiStepLogin from './MultiStepLogin';
 
 type MfaHookOptions = {
@@ -118,8 +122,8 @@ const checkboxIn = (testId: string) => within(screen.getByTestId(testId)).getByR
 
 // Drives the flow from the email step to the register-username step (email -> code ->
 // registrationRequired). Assumes mocks.verifyOTC's FIRST call resolves registrationRequired.
-const advanceToUsernameStep = async (user: ReturnType<typeof userEvent.setup>) => {
-  await user.type(textboxIn('login-email-input'), 'new@test.com');
+const advanceToUsernameStep = async (user: ReturnType<typeof userEvent.setup>, email = 'new@test.com') => {
+  await user.type(textboxIn('login-email-input'), email);
   await user.click(screen.getByTestId('login-continue-btn'));
   const otcInput = within(await screen.findByTestId('login-otc-input')).getByRole('textbox');
   await user.type(otcInput, '12345678');
@@ -135,6 +139,7 @@ const acceptInlinePolicies = async (user: ReturnType<typeof userEvent.setup>) =>
 
 describe('MultiStepLogin — inline registration (new-user branch)', () => {
   beforeEach(() => {
+    localStorage.clear();
     vi.clearAllMocks();
     mocks.userState.currentUser = null;
     mocks.accessTokenState.accessToken = null;
@@ -190,6 +195,8 @@ describe('MultiStepLogin — inline registration (new-user branch)', () => {
     );
     // Ad-conversion signal fires exactly once for the freshly created account.
     expect(mocks.trackSignupConversion).toHaveBeenCalledTimes(1);
+    expect(mockLogEvent).toHaveBeenCalledWith({ type: 'policies_accepted', metadata: { path: 'inline_registration' } });
+    expect(JSON.parse(localStorage.getItem(FIRST_SIGNUP_SESSION_KEY) as string).userId).toBe('new-1');
   });
 
   it('keeps Create account disabled until BOTH acceptance checkboxes are checked', async () => {
@@ -365,29 +372,98 @@ describe('MultiStepLogin — inline registration (new-user branch)', () => {
     await waitFor(() => expect(mocks.verifyOTC).toHaveBeenCalledWith(expect.objectContaining({ code: '123456' })));
   });
 
-  it('does not advance to the username step when open registration is disabled', async () => {
+  it('completes partner signup when the server admits the verified email on an invite-only instance', async () => {
     const user = userEvent.setup();
-    mocks.verifyOTC.mockResolvedValueOnce({
-      registrationRequired: true,
-      email: 'new@test.com',
-      pendingToken: 'ptok-2',
-    });
+    const email = 'new@partner.example';
+    mocks.verifyOTC
+      .mockResolvedValueOnce({
+        registrationRequired: true,
+        registrationAllowed: true,
+        email,
+        pendingToken: 'ptok-partner',
+      })
+      .mockResolvedValueOnce({ user: { id: 'partner-user', email, username: 'partner-user' }, accessToken: 'atk' });
 
     renderLogin({ enableRegister: false });
+    await advanceToUsernameStep(user, email);
+    await user.type(textboxIn('login-register-username-input'), 'partner-user');
+    await acceptInlinePolicies(user);
+    await user.click(screen.getByTestId('login-register-username-btn'));
 
-    await user.type(textboxIn('login-email-input'), 'new@test.com');
+    await waitFor(() => expect(mocks.setCurrentUser).toHaveBeenCalled());
+    expect(mocks.verifyOTC).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        email,
+        username: 'partner-user',
+        pendingToken: 'ptok-partner',
+        acceptedPolicyVersion: CURRENT_POLICY_VERSION,
+        ageAttestation: true,
+      })
+    );
+    expect(mocks.accessTokenState.setVerifiedSession).toHaveBeenCalledWith('atk');
+    expect(mocks.toast.error).not.toHaveBeenCalled();
+  });
+
+  it('retries with the rotated token after registration is denied and a partner rule is enabled', async () => {
+    const user = userEvent.setup();
+    mocks.verifyOTC
+      .mockResolvedValueOnce({
+        registrationRequired: true,
+        registrationAllowed: false,
+        email: 'new@partner.example',
+        pendingToken: 'ptok-denied',
+      })
+      .mockResolvedValueOnce({
+        registrationRequired: true,
+        registrationAllowed: true,
+        email: 'new@partner.example',
+        pendingToken: 'ptok-admitted',
+      });
+    renderLogin({ enableRegister: false });
+
+    await user.type(textboxIn('login-email-input'), 'new@partner.example');
     await user.click(screen.getByTestId('login-continue-btn'));
+    await user.type(within(await screen.findByTestId('login-otc-input')).getByRole('textbox'), '12345678');
+    await user.click(screen.getByTestId('login-verify-btn'));
+    await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith('auth.registrationClosed'));
 
-    const otcInput = within(await screen.findByTestId('login-otc-input')).getByRole('textbox');
-    await user.type(otcInput, '12345678');
     await user.click(screen.getByTestId('login-verify-btn'));
 
-    await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith('auth.registrationClosed'));
-    expect(mocks.toast.dismiss).toHaveBeenCalledWith('otc-code-sent');
-    // Must NOT strand the user on the username step, and must not create a session.
-    expect(screen.queryByTestId('login-register-username-input')).not.toBeInTheDocument();
-    expect(mocks.setCurrentUser).not.toHaveBeenCalled();
+    expect(await screen.findByTestId('login-register-username-input')).toBeInTheDocument();
+    expect(mocks.verifyOTC).toHaveBeenLastCalledWith(expect.objectContaining({ pendingToken: 'ptok-denied' }));
   });
+
+  it.each([
+    [false, undefined],
+    [false, false],
+    [true, false],
+  ])(
+    'refuses username entry with enableRegister=%s and server admission=%s',
+    async (enableRegister, registrationAllowed) => {
+      const user = userEvent.setup();
+      mocks.verifyOTC.mockResolvedValueOnce({
+        registrationRequired: true,
+        registrationAllowed,
+        email: 'new@test.com',
+        pendingToken: 'ptok-2',
+      });
+
+      renderLogin({ enableRegister });
+
+      await user.type(textboxIn('login-email-input'), 'new@test.com');
+      await user.click(screen.getByTestId('login-continue-btn'));
+
+      const otcInput = within(await screen.findByTestId('login-otc-input')).getByRole('textbox');
+      await user.type(otcInput, '12345678');
+      await user.click(screen.getByTestId('login-verify-btn'));
+
+      await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith('auth.registrationClosed'));
+      expect(mocks.toast.dismiss).toHaveBeenCalledWith('otc-code-sent');
+      // Must NOT strand the user on the username step, and must not create a session.
+      expect(screen.queryByTestId('login-register-username-input')).not.toBeInTheDocument();
+      expect(mocks.setCurrentUser).not.toHaveBeenCalled();
+    }
+  );
 });
 
 // The "already logged in" bounce must gate on a LIVE session (currentUser + token), not on a
@@ -395,6 +471,7 @@ describe('MultiStepLogin — inline registration (new-user branch)', () => {
 // /accept-policies loop (issue #386). See the isLoggedIn guard in MultiStepLogin.
 describe('MultiStepLogin — already-logged-in redirect guard', () => {
   beforeEach(() => {
+    localStorage.clear();
     vi.clearAllMocks();
     mocks.userState.currentUser = null;
     mocks.accessTokenState.accessToken = null;
@@ -430,6 +507,7 @@ describe('MultiStepLogin - Cookie settings link', () => {
   const TRACKER_ENV = ['NEXT_PUBLIC_GA_MEASUREMENT_ID', 'NEXT_PUBLIC_REDDIT_PIXEL_ID', 'NEXT_PUBLIC_META_PIXEL_ID'];
 
   beforeEach(() => {
+    localStorage.clear();
     vi.clearAllMocks();
     mocks.userState.currentUser = null;
     mocks.accessTokenState.accessToken = null;
@@ -484,6 +562,7 @@ describe('MultiStepLogin - Cookie settings link', () => {
 // looking for a password field or a forgot-password link that this flow does not have.
 describe('MultiStepLogin - passwordless email step copy', () => {
   beforeEach(() => {
+    localStorage.clear();
     vi.clearAllMocks();
     mocks.userState.currentUser = null;
     mocks.accessTokenState.accessToken = null;
@@ -496,9 +575,10 @@ describe('MultiStepLogin - passwordless email step copy', () => {
     // the key proves the email step still renders auth.signInOrCreate; the value is checked below.
     expect(screen.getByText('auth.signInOrCreate')).toBeInTheDocument();
 
-    // The copy behind that key names the emailed code and claims no password.
+    // The copy behind that key names the emailed code and says no password is needed.
     expect(en.auth.signInOrCreate).toMatch(/one-time code/i);
-    expect(en.auth.signInOrCreate).not.toMatch(/password|forgot/i);
+    expect(en.auth.signInOrCreate).toMatch(/no password required/i);
+    expect(en.auth.signInOrCreate).not.toMatch(/forgot/i);
 
     // The email step exposes no password field and no forgot-password link.
     expect(document.querySelector('input[type="password"]')).toBeNull();
@@ -511,6 +591,7 @@ describe('MultiStepLogin - passwordless email step copy', () => {
 
 describe('MultiStepLogin - email step guidance and code-request errors', () => {
   beforeEach(() => {
+    localStorage.clear();
     vi.clearAllMocks();
     mocks.userState.currentUser = null;
     mocks.accessTokenState.accessToken = null;
@@ -518,13 +599,6 @@ describe('MultiStepLogin - email step guidance and code-request errors', () => {
       ok: true,
       json: async () => ({ requiresRedirect: false }),
     }) as unknown as typeof fetch;
-  });
-
-  it('tells returning users sign-in is passwordless and a code is emailed', () => {
-    renderLogin();
-
-    expect(screen.getByTestId('login-passwordless-hint')).toHaveTextContent('auth.passwordlessHint');
-    expect(screen.getByTestId('login-no-password-hint')).toHaveTextContent('auth.noPasswordNeeded');
   });
 
   it('ties an invalid-email error to the input and announces it', async () => {
@@ -540,6 +614,20 @@ describe('MultiStepLogin - email step guidance and code-request errors', () => {
     expect(alert).toHaveTextContent('auth.fieldErrors.invalidEmail');
     expect(input).toHaveAttribute('aria-invalid', 'true');
     expect(input.getAttribute('aria-describedby')).toContain(alert.id);
+  });
+
+  it('clears the email error once the user types again', async () => {
+    const user = userEvent.setup();
+    renderLogin();
+
+    const input = textboxIn('login-email-input');
+    await user.type(input, 'not-an-email');
+    fireEvent.submit(input.closest('form')!);
+    await screen.findByTestId('login-email-error');
+
+    await user.type(input, 'x');
+    expect(screen.queryByTestId('login-email-error')).not.toBeInTheDocument();
+    expect(input).toHaveAttribute('aria-invalid', 'false');
   });
 
   it('shows an alert and a Continue countdown when the code request is rate limited', async () => {
@@ -596,6 +684,7 @@ describe('MultiStepLogin - email step guidance and code-request errors', () => {
 
 describe('MultiStepLogin - second-factor handoff', () => {
   beforeEach(() => {
+    localStorage.clear();
     vi.clearAllMocks();
     mocks.userState.currentUser = null;
     mocks.accessTokenState.accessToken = null;

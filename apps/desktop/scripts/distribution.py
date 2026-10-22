@@ -75,13 +75,16 @@ def assemble(folder, version, repository, source, mac_mode='signed'):
     dmg = f'Bike4Mind-{version}-arm64.dmg'
     zip_name = f'Bike4Mind-{version}-arm64.zip'
     image = f'Bike4Mind-{version}-x64.AppImage'
-    required = {dmg, zip_name, image, zip_name + '.blockmap'}
-    optional = {dmg + '.blockmap', image + '.blockmap'}
+    # The mac updater downloads the zip; the dmg blockmap is never read and the AppImage embeds its own.
+    required = {dmg, image, 'install.sh'} | (set() if mac_mode == 'adhoc' else {zip_name, zip_name + '.blockmap'})
+    unpublished = {zip_name, zip_name + '.blockmap', dmg + '.blockmap', image + '.blockmap'} - required
     manifests = {'latest-mac.yml', 'latest-linux.yml', 'SHA256SUMS.txt'}
     actual = {p.name for p in folder.iterdir()}
-    if not required <= actual or actual - required - optional - manifests:
+    if not required <= actual or actual - required - unpublished - manifests:
         raise ValueError(f'Incomplete or unexpected distribution assets: {sorted(actual)}')
-    assets = sorted(actual - manifests)
+    for name in actual & unpublished:
+        (folder / name).unlink()
+    assets = sorted(required)
     if any(not (folder / name).is_file() or (folder / name).is_symlink()
            or (folder / name).stat().st_size == 0 for name in assets):
         raise ValueError('Empty or invalid distribution asset')
@@ -105,12 +108,23 @@ def assemble(folder, version, repository, source, mac_mode='signed'):
         f'{hashlib.sha256((folder / name).read_bytes()).hexdigest()}  {name}\n' for name in checksummed))
 
 
+def prune(folder):
+    """Drop build outputs that the assembled checksum list does not publish."""
+    folder = Path(folder)
+    keep = {line.split('  ', 1)[1] for line in (folder / 'SHA256SUMS.txt').read_text().splitlines() if line}
+    for path in folder.iterdir():
+        if path.name != 'SHA256SUMS.txt' and path.name not in keep:
+            path.unlink()
+
+
 if __name__ == '__main__':
     repository = os.environ.get('DESKTOP_RELEASE_REPOSITORY', '')
     source = os.environ['GITHUB_REPOSITORY']
     if sys.argv[1] == 'verify-linux':
         verify_linux(sys.argv[2])
         print('Builder Linux metadata matches embedded AppImage metadata')
+    elif sys.argv[1] == 'prune':
+        prune(sys.argv[2])
     elif sys.argv[1] == 'feed':
         url = feed_url(repository, source)
         with open(os.environ['GITHUB_OUTPUT'], 'a') as output:

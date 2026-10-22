@@ -131,7 +131,7 @@ describe('@bike4mind/services barrel closure', () => {
     ['llm/reranker/index.ts', 'apps/client pages/api/sessions/semantic-search.ts'],
     ['llm/intentClassifier.ts', 'apps/client pages/api/ai/classify-intent.ts'],
     ['llm/refineText.ts', 'apps/client pages/api/ai/refineText.ts'],
-    ['llm/artifactGating.ts', 'apps/client server/utils/artifactGate.ts'],
+    ['llm/artifactGating.ts', 'packages/server-utils utils/artifactGate.ts'],
     ['llm/agents/ServerAgentStore.ts', 'apps/client pages/api/admin/model-deprecation-status.ts'],
   ])('keeps %s free of the tool registry', module => {
     const closure = traceFrom(path.join(SRC, module));

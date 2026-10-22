@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { Logger } from '@bike4mind/observability';
 import { classifyStage, isPlaceholderValue } from '@bike4mind/common';
 import type {
@@ -9,14 +9,17 @@ import type {
 } from '@bike4mind/common';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
-import { buildEmailMirrorMessage, type EmailMirrorPayload } from './emailMirror';
+import {
+  buildEmailMirrorMessage,
+  type EmailMirrorPayload,
+} from '@bike4mind/server-utils/integrations/slack/emailMirror';
 import { buildFeedbackSlackMessage, type FeedbackPromptMetaInput } from './feedbackMessage';
-import type { FeedbackDeepLinks } from '@server/utils/feedbackDeepLinks';
+import type { FeedbackDeepLinks } from '@bike4mind/server-utils/utils/feedbackDeepLinks';
 import {
   recordFeedbackDeliverySuccess,
   recordFeedbackDeliveryFailure,
   recordFeedbackDeliverySkipped,
-} from '@server/utils/cloudwatch';
+} from '@bike4mind/server-utils/utils/cloudwatch';
 
 /** Channel-specific Slack incoming-webhook settings (each maps to a dedicated Slack channel). */
 type SlackChannelSettingKey =
@@ -216,7 +219,7 @@ export const EMAIL_MIRROR_TIMEOUT_MS = 5_000;
 export async function postEmailMirrorToSlack(payload: EmailMirrorPayload): Promise<void> {
   try {
     const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
-    const slackWebhookUrl = resolveSlackWebhookUrl('SlackEmailAuditWebhookUrl', settings);
+    const slackWebhookUrl = getSettingsValue('SlackEmailAuditWebhookUrl', settings);
 
     // Unconfigured is the expected default - stay silent (debug only) so we don't
     // spam error logs on every email when the mirror channel isn't set up yet.

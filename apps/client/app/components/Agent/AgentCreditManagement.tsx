@@ -45,7 +45,9 @@ const AgentCreditManagement: React.FC<AgentCreditManagementProps> = ({
   const [transferAmount, setTransferAmount] = useState(0);
   const [previousIsTransferring, setPreviousIsTransferring] = useState(false);
   const [internalIsTransferring, setInternalIsTransferring] = useState(false);
-  const [isUpdatingCreditSource, setIsUpdatingCreditSource] = useState(false);
+  // The credit source is chosen at creation (the agent update API does not accept it), so it is
+  // fixed once the agent exists.
+  const sourceLocked = readOnly || !!agentId;
 
   // Store the initial credits value to prevent it from changing when typing in the input
   const [displayedCredits, setDisplayedCredits] = useState(currentCredits);
@@ -81,39 +83,7 @@ const AgentCreditManagement: React.FC<AgentCreditManagementProps> = ({
     }
   }, [useOwnCredits, onTransferCredits]);
 
-  const handleCreditSourceChange = async (value: string) => {
-    // Prevent double calls
-    if (isUpdatingCreditSource) {
-      return;
-    }
-
-    const newUseOwnCredits = value === CREDIT_SOURCE.AGENT;
-
-    setIsUpdatingCreditSource(true);
-
-    try {
-      // Call the parent callback if provided
-      if (onCreditSourceChange) {
-        await onCreditSourceChange(value);
-      }
-
-      // Also handle server update if agentId is provided (edit mode)
-      if (agentId) {
-        await api.put(`/api/agents/${agentId}`, {
-          useOwnCredits: newUseOwnCredits,
-        });
-
-        toast.success(`Agent credit source updated to ${newUseOwnCredits ? "agent's own credits" : "user's credits"}`, {
-          duration: 2500,
-        });
-      }
-    } catch (error: any) {
-      console.error('Error updating agent credit source:', error);
-      toast.error(error.response?.data?.message || 'Failed to update agent credit source');
-    } finally {
-      setIsUpdatingCreditSource(false);
-    }
-  };
+  const handleCreditSourceChange = (value: string) => onCreditSourceChange?.(value);
 
   // Internal transfer credits handler
   const handleTransferCredits = useCallback(
@@ -188,18 +158,11 @@ const AgentCreditManagement: React.FC<AgentCreditManagementProps> = ({
         ...sx,
       }}
     >
-      <RadioGroup
-        value={useOwnCredits ? CREDIT_SOURCE.AGENT : CREDIT_SOURCE.USER}
-        sx={{
-          opacity: isUpdatingCreditSource ? 0.6 : 1,
-          pointerEvents: isUpdatingCreditSource ? 'none' : 'auto',
-          transition: 'opacity 0.2s ease-in-out',
-        }}
-      >
+      <RadioGroup value={useOwnCredits ? CREDIT_SOURCE.AGENT : CREDIT_SOURCE.USER}>
         {/* First Option - Use User Account Credits */}
         <FormControl
           size="sm"
-          onClick={readOnly || !useOwnCredits ? undefined : () => handleCreditSourceChange(CREDIT_SOURCE.USER)}
+          onClick={sourceLocked || !useOwnCredits ? undefined : () => handleCreditSourceChange(CREDIT_SOURCE.USER)}
           sx={{
             display: 'flex',
             flexDirection: 'row',
@@ -208,22 +171,22 @@ const AgentCreditManagement: React.FC<AgentCreditManagementProps> = ({
             p: 0,
             mb: 1.5,
             gap: '12px',
-            cursor: readOnly ? 'default' : 'pointer',
+            cursor: sourceLocked ? 'default' : 'pointer',
             transition: 'all 0.2s ease-in-out',
           }}
         >
-          <Radio value={CREDIT_SOURCE.USER} disabled={readOnly || isUpdatingCreditSource} />
+          <Radio value={CREDIT_SOURCE.USER} disabled={sourceLocked} />
           <Box
             sx={{
               display: 'flex',
               flexDirection: { xs: 'column', sm: 'row' },
               gap: { xs: '4px', sm: '12px' },
               flexGrow: 1,
-              pointerEvents: readOnly ? 'none' : 'auto',
+              pointerEvents: sourceLocked ? 'none' : 'auto',
             }}
           >
             <FormLabel
-              sx={{ cursor: readOnly ? 'default' : 'pointer', mb: 0, color: 'text.tertiary', fontSize: '14px' }}
+              sx={{ cursor: sourceLocked ? 'default' : 'pointer', mb: 0, color: 'text.tertiary', fontSize: '14px' }}
             >
               Your account credits balance:
             </FormLabel>
@@ -276,7 +239,7 @@ const AgentCreditManagement: React.FC<AgentCreditManagementProps> = ({
         {/* Second Option - Use Agent's Own Credits */}
         <FormControl
           size="sm"
-          onClick={readOnly || useOwnCredits ? undefined : () => handleCreditSourceChange(CREDIT_SOURCE.AGENT)}
+          onClick={sourceLocked || useOwnCredits ? undefined : () => handleCreditSourceChange(CREDIT_SOURCE.AGENT)}
           sx={{
             display: 'flex',
             flexDirection: 'row',
@@ -284,22 +247,22 @@ const AgentCreditManagement: React.FC<AgentCreditManagementProps> = ({
             border: 'none',
             p: 0,
             gap: '12px',
-            cursor: readOnly ? 'default' : 'pointer',
+            cursor: sourceLocked ? 'default' : 'pointer',
             transition: 'all 0.2s ease-in-out',
           }}
         >
-          <Radio value={CREDIT_SOURCE.AGENT} disabled={readOnly || isUpdatingCreditSource} />
+          <Radio value={CREDIT_SOURCE.AGENT} disabled={sourceLocked} />
           <Box
             sx={{
               display: 'flex',
               flexDirection: { xs: 'column', sm: 'row' },
               gap: { xs: '4px', sm: '12px' },
               flexGrow: 1,
-              pointerEvents: readOnly ? 'none' : 'auto',
+              pointerEvents: sourceLocked ? 'none' : 'auto',
             }}
           >
             <FormLabel
-              sx={{ cursor: readOnly ? 'default' : 'pointer', mb: 0, color: 'text.tertiary', fontSize: '14px' }}
+              sx={{ cursor: sourceLocked ? 'default' : 'pointer', mb: 0, color: 'text.tertiary', fontSize: '14px' }}
             >
               Agent&apos;s own credits balance:
             </FormLabel>
@@ -352,12 +315,6 @@ const AgentCreditManagement: React.FC<AgentCreditManagementProps> = ({
           </Box>
         </FormControl>
       </RadioGroup>
-
-      {/* {isUpdatingCreditSource && (
-        <Typography level="body-sm" sx={{ mt: 1, color: 'text.primary50', textAlign: 'left', fontSize: '10px' }}>
-          Updating credit source...
-        </Typography>
-      )} */}
 
       {useOwnCredits && (
         <>
@@ -465,7 +422,9 @@ const AgentCreditManagement: React.FC<AgentCreditManagementProps> = ({
           <Typography sx={{ fontSize: '12px', fontWeight: 500, color: 'primary.solidBg' }}>
             {useOwnCredits
               ? 'This agent will use its own credits for all operations instead of deducting from your account.'
-              : "Currently using YOUR credits for this agent's operations. Switch to \"Agent's own credits balance\" above to use the agent's credits instead."}
+              : sourceLocked
+                ? 'This agent uses your account credits. The credit source is fixed when the agent is created.'
+                : 'This agent will use your account credits. Select "Agent\'s own credits balance" above to use the agent\'s credits instead.'}
           </Typography>
         </Box>
       )}

@@ -20,9 +20,16 @@ import {
 } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
 import { triggerTelemetryDeletion } from '@server/utils/telemetryDeletion';
-import { getClientIp, truncateIp } from '@server/utils/ip';
+import { getClientIp, truncateIp } from '@bike4mind/server-utils/utils/ip';
 import * as z from 'zod';
 import { requireStepUp } from '@server/auth/stepUp';
+import {
+  denySelfAdminAction,
+  isSameUserId,
+  isSelfOrImpersonator,
+  parseAdminActionReason,
+  recordAdminActionFromRequest,
+} from '@server/utils/adminAudit';
 
 const idParamSchema = z.object({ id: z.string() });
 
@@ -118,6 +125,26 @@ type AccountStateSnapshot = Parameters<typeof userService.entersBlockedState>[0]
   email?: string | null;
 };
 
+type AuditTargetSnapshot = {
+  isAdmin?: boolean;
+  currentCredits?: number;
+  name?: string;
+  username?: string;
+  email?: string | null;
+};
+
+const userAuditTarget = (userId: string, user: AuditTargetSnapshot | null) => ({
+  kind: 'user' as const,
+  id: userId,
+  displayName: user?.name || user?.username || user?.email || userId,
+});
+
+/** Whether an admin update body asks to move the balance; mirrors adminUpdateUser's delta rule. */
+const requestsCreditChange = (body: userService.AdminUpdateUserParameters, currentCredits: number | undefined) =>
+  body.creditDelta !== undefined
+    ? body.creditDelta !== 0
+    : body.currentCredits !== undefined && body.currentCredits !== (currentCredits ?? 0);
+
 /**
  * Why an admin edit must sign the target out everywhere, if it must. Entering a blocked state wins
  * so the audit names the strongest cause when one edit does several things.
@@ -139,8 +166,7 @@ const handler = baseApi().put(
     const { id: userId } = idParamSchema.parse(req.query);
     const currentUser = req.user;
 
-    // Ids compare case-insensitively: Mongo resolves an upper-case hex id to the same user.
-    const isSelf = currentUser.id.toLowerCase() === userId.toLowerCase();
+    const isSelf = isSameUserId(currentUser.id, userId);
 
     // Non-admin users can only update their own profile
     if (!currentUser.isAdmin && !isSelf) {
@@ -195,21 +221,40 @@ const handler = baseApi().put(
       // id comes from the route param; the spread ensures it wins over any id in the body.
       const body = userService.adminUpdateUserSchema.parse({ ...rawBody, id: userId });
 
-      // Lockout guard: an explicit demote (isAdmin -> false) must not remove the
-      // ONLY remaining Super Admin, and an admin must not remove their OWN Super
-      // Admin role (self-demote). The old checkbox UI allowed both - a pre-existing
-      // footgun the Roles radio (admin-roles-product-access-redesign M1) closes here,
-      // at the actual write path, not just in the UI.
-      if (body.isAdmin === false) {
-        const targetUser = (await User.findById(userId).select('isAdmin').lean()) as Record<string, unknown> | null;
-        if (targetUser?.isAdmin) {
-          if (isSelf) {
-            return res.status(400).json({ error: 'You cannot remove your own Super Admin role.' });
-          }
-          const adminCount = await userRepository.count({ isAdmin: true });
-          if (adminCount <= 1) {
-            return res.status(400).json({ error: 'Cannot remove the last remaining Super Admin.' });
-          }
+      const targetBefore = (await User.findById(userId)
+        .select('isAdmin currentCredits name username email')
+        .lean()) as AuditTargetSnapshot | null;
+      const auditTarget = userAuditTarget(userId, targetBefore);
+      const changesRole = body.isAdmin !== undefined && body.isAdmin !== !!targetBefore?.isAdmin;
+      const changesCredits = requestsCreditChange(body, targetBefore?.currentCredits);
+
+      // No self-service privilege: an admin cannot move their own balance or change their own
+      // admin flag. The attempt is recorded as a critical denied entry and answered with a 403.
+      const deniesSelf = isSelfOrImpersonator(currentUser, userId);
+      if (deniesSelf && changesRole) {
+        await denySelfAdminAction(req, {
+          action: 'user.role.denied',
+          attempted: body.isAdmin ? 'user.role.admin_granted' : 'user.role.admin_revoked',
+          target: auditTarget,
+        });
+      }
+      if (deniesSelf && changesCredits) {
+        await denySelfAdminAction(req, {
+          action: 'user.credits.denied',
+          attempted: 'user.credits.adjusted',
+          target: auditTarget,
+        });
+      }
+
+      // Validated before any write so a missing reason never leaves a half-applied update.
+      const roleChangeReason = changesRole ? parseAdminActionReason(body.roleChangeReason) : undefined;
+      const creditReason = changesCredits ? parseAdminActionReason(body.creditReason) : undefined;
+
+      // Lockout guard: an explicit demote must not remove the ONLY remaining Super Admin.
+      if (changesRole && body.isAdmin === false) {
+        const adminCount = await userRepository.count({ isAdmin: true });
+        if (adminCount <= 1) {
+          return res.status(400).json({ error: 'Cannot remove the last remaining Super Admin.' });
         }
       }
 
@@ -218,7 +263,7 @@ const handler = baseApi().put(
         ? await getPreviousConsentLevel(userId, incomingTelemetryLevel, body.preferences)
         : undefined;
 
-      req.logger.updateMetadata({ body: req.body });
+      req.logger.updateMetadata({ updatedFields: Object.keys(body) });
       await commitWithSessionEnd(
         req,
         async () => {
@@ -227,17 +272,43 @@ const handler = baseApi().put(
           const snapshot = (await User.findById(userId)
             .select('isAdmin email isBanned disputePending moderation')
             .lean()) as AccountStateSnapshot | null;
-          const updated = await userService.adminUpdateUser(currentUser.id, body, {
-            db: {
-              users: userRepository,
-              organizations: Organization,
-              friendship: friendshipRepository,
-              userApiKeys: userApiKeyRepository,
-              realtimeConnections: realtimeConnectionRepository,
-              // Audits admin `currentCredits` changes as CreditTransactions.
-              creditTransactions: creditTransactionRepository,
-            },
-          });
+          const { user: updated, creditAdjustment } = await userService.adminUpdateUser(
+            currentUser.id,
+            changesCredits ? { ...body, creditReason } : { ...body, currentCredits: undefined, creditReason },
+            {
+              db: {
+                users: userRepository,
+                organizations: Organization,
+                friendship: friendshipRepository,
+                userApiKeys: userApiKeyRepository,
+                realtimeConnections: realtimeConnectionRepository,
+                creditTransactions: creditTransactionRepository,
+              },
+            }
+          );
+
+          // Both entries are strict: a failed audit write aborts this transaction, so neither the
+          // role change nor the balance change can commit without its record.
+          if (changesRole && snapshot?.isAdmin !== updated?.isAdmin) {
+            await recordAdminActionFromRequest(req, {
+              action: updated?.isAdmin ? 'user.role.admin_granted' : 'user.role.admin_revoked',
+              target: auditTarget,
+              summary: updated?.isAdmin ? 'granted the admin role' : 'revoked the admin role',
+              reason: roleChangeReason,
+              changes: [{ field: 'isAdmin', before: !!snapshot?.isAdmin, after: !!updated?.isAdmin }],
+            });
+          }
+          if (creditAdjustment) {
+            const { credits, previousBalance, resultingBalance } = creditAdjustment;
+            await recordAdminActionFromRequest(req, {
+              action: 'user.credits.adjusted',
+              target: auditTarget,
+              summary: `${credits > 0 ? 'granted' : 'deducted'} ${Math.abs(credits)} credits`,
+              reason: creditAdjustment.note,
+              changes: [{ field: 'currentCredits', before: previousBalance, after: resultingBalance }],
+              details: { credits },
+            });
+          }
           return { snapshot, updated };
         },
         // adminUpdateUser returns the user as written, read inside the same transaction.

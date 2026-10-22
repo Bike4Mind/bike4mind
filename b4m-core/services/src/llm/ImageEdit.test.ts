@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { z } from 'zod';
 import {
+  CREDITS_PER_USD_COST,
   EditImageRequestBodySchema,
   ImageModels,
   IMAGES_PER_EDIT_REQUEST,
@@ -10,11 +11,30 @@ import {
 } from '@bike4mind/common';
 import { silentLogger } from '../__tests__/utils/testUtils';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
-import { aiImageService, getSettingsValue } from '@bike4mind/utils';
+import { aiImageService, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { estimateImageCredits } from '../imageCost';
 import { deductCreditsWithOrgSupport } from '../creditService';
 import { ImageEditService, type ImageEditBody } from './ImageEdit';
 import type { SaveGeneratedAssetFn } from './saveGeneratedImage';
+
+// The real stochastic rounding, with its draw pinned so the final debit is assertable.
+const { settlementDraw } = vi.hoisted(() => ({ settlementDraw: vi.fn(() => 0.5) }));
+vi.mock('@bike4mind/common', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/common')>();
+  return {
+    ...actual,
+    usdToCreditsStochastic: (usd: number) => actual.usdToCreditsStochastic(usd, () => settlementDraw()),
+  };
+});
+beforeEach(() => {
+  settlementDraw.mockReturnValue(0.5);
+});
+
+// What a draw of 0.5 settles for an exact USD cost: the floor, plus 1 when the fraction exceeds the draw.
+const settledAtHalf = (usdCost: number) => {
+  const raw = usdCost * CREDITS_PER_USD_COST;
+  return Math.floor(raw) + (0.5 < raw - Math.floor(raw) ? 1 : 0);
+};
 
 vi.mock('@bike4mind/llm-adapters', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/llm-adapters')>();
@@ -198,6 +218,20 @@ describe('ImageEditService.process model dispatch', () => {
     vi.mocked(getAvailableModels).mockResolvedValue([]);
   });
 
+  it('passes skipCache once per edit so an admin toggle applies on the next edit', async () => {
+    vi.mocked(getSettingsMap).mockClear();
+
+    try {
+      await run(ImageModels.GPT_IMAGE_2);
+    } catch {
+      // The beforeEach edit spy rejects to stop after dispatch; the read happened before that.
+    }
+
+    const calls = vi.mocked(getSettingsMap).mock.calls;
+    expect(calls.length).toBe(1);
+    expect(calls[0][1]).toEqual({ skipCache: true });
+  });
+
   it('sends the selected BFL model to BFL instead of a hardcoded one', async () => {
     await run(ImageModels.FLUX_PRO_FILL);
 
@@ -310,6 +344,7 @@ describe('ImageEditService.process model dispatch', () => {
       const plain = await runBilled({});
       const withRefs = await runBilled({ referenceImageFabFileIds: ['a', 'a', 'b'] });
 
+      // Dispatch is stubbed to fail, so nothing settles: creditsUsed is still the round-up the gate held.
       expect(plain.creditsUsed).toBe(
         estimateImageCredits(gptImage, IMAGES_PER_EDIT_REQUEST, { model: gptImage.id, inputImageCount: 1 })
           .requiredCredits
@@ -366,13 +401,59 @@ describe('ImageEditService.process model dispatch', () => {
           requestId: 'quest1',
           feature: 'image_edit',
           // The rendered image plus the primary image sent as input.
-          creditsCharged: estimateImageCredits(gptImage, IMAGES_PER_EDIT_REQUEST, {
-            model: gptImage.id,
-            inputImageCount: 1,
-          }).requiredCredits,
+          creditsCharged: settledAtHalf(
+            estimateImageCredits(gptImage, IMAGES_PER_EDIT_REQUEST, { model: gptImage.id, inputImageCount: 1 }).usdCost
+          ),
         })
       );
       expect(landed).toBe(true);
+    });
+
+    describe('final debit rounding', () => {
+      const withValidatedCost = (cost: { requiredCredits: number; usdCost: number }) =>
+        vi
+          .spyOn(
+            ImageEditService.prototype as unknown as { validateUserCredits: () => Promise<unknown> },
+            'validateUserCredits'
+          )
+          .mockResolvedValue(cost);
+
+      afterEach(() => {
+        vi.restoreAllMocks();
+      });
+
+      it.each([
+        [0.25, 41],
+        [0.75, 40],
+      ])('debits N or N+1 for a cost of N + 0.5 credits (draw %s -> %s)', async (draw, expected) => {
+        withValidatedCost({ requiredCredits: 41, usdCost: 40.5 / CREDITS_PER_USD_COST });
+        settlementDraw.mockReturnValue(draw);
+        const record = vi.fn(async () => undefined);
+
+        const quest = await runCharged(record);
+
+        expect(quest.creditsUsed).toBe(expected);
+        expect(deductCreditsWithOrgSupport).toHaveBeenCalledWith(
+          expect.objectContaining({ type: 'image_edit_usage', credits: expected }),
+          expect.anything()
+        );
+        expect(record).toHaveBeenCalledWith(expect.objectContaining({ creditsCharged: expected }));
+      });
+
+      it('debits 0 for a tiny cost: no ledger row, but the usage event still records the edit', async () => {
+        withValidatedCost({ requiredCredits: 1, usdCost: 0.00001 });
+        settlementDraw.mockReturnValue(0.5);
+        const record = vi.fn(async () => undefined);
+
+        const quest = await runCharged(record);
+
+        expect(quest.status).toBe('done');
+        expect(quest.creditsUsed).toBe(0);
+        expect(deductCreditsWithOrgSupport).not.toHaveBeenCalled();
+        expect(record).toHaveBeenCalledWith(
+          expect.objectContaining({ feature: 'image_edit', creditsCharged: 0, costUsd: 0.00001 })
+        );
+      });
     });
 
     it('still completes the edit when the usage-event write fails', async () => {
@@ -1170,6 +1251,55 @@ describe('ImageEditService quest partial writes', () => {
       images: ['stored/out.png'],
       status: 'done',
       creditsUsed: undefined,
+    });
+  });
+
+  describe('settled credits persistence', () => {
+    const withValidatedCost = (cost: { requiredCredits: number; usdCost: number }) =>
+      vi
+        .spyOn(
+          ImageEditService.prototype as unknown as { validateUserCredits: () => Promise<unknown> },
+          'validateUserCredits'
+        )
+        .mockResolvedValue(cost);
+
+    const arrangeBilled = () => {
+      editSpy.mockResolvedValue({ type: 'success', dataUrl: 'https://example.invalid/out.png' });
+      return makeService('session1', undefined, { creditTransactions: { create: vi.fn() } });
+    };
+
+    const doneWrite = (update: ReturnType<typeof vi.fn>) =>
+      update.mock.calls.map(c => c[0] as Record<string, unknown>).find(arg => arg.status === 'done');
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('persists the settled draw rather than the round-up pre-flight figure', async () => {
+      // The gate reserved 7; settlement draws on 6.5 credits and must persist 6.
+      withValidatedCost({ requiredCredits: 7, usdCost: 6.5 / CREDITS_PER_USD_COST });
+      vi.mocked(getSettingsValue).mockImplementation(key => (key === 'enforceCredits' ? true : undefined));
+      settlementDraw.mockReturnValue(0.75);
+      const { service, update } = arrangeBilled();
+
+      await process(service);
+
+      expect(doneWrite(update)?.creditsUsed).toBe(6);
+    });
+
+    it('draws and debits nothing when credit enforcement is off', async () => {
+      const { service, update, quest } = arrangeBilled();
+      // A quest that already carries a pre-flight figure: without the enforcement term the
+      // settlement would draw and debit it even though billing is off.
+      quest.creditsUsed = 7;
+      settlementDraw.mockClear();
+      vi.mocked(deductCreditsWithOrgSupport).mockClear();
+
+      await process(service);
+
+      expect(settlementDraw).not.toHaveBeenCalled();
+      expect(deductCreditsWithOrgSupport).not.toHaveBeenCalled();
+      expect(doneWrite(update)?.creditsUsed).toBe(7);
     });
   });
 

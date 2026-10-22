@@ -1,6 +1,8 @@
 import {
   AuthenticatedApiClient,
   DeviceFlowClient,
+  NotAuthenticatedError,
+  SessionRevokedError,
   type AuthLogger,
   type AuthTokens,
   type TokenStore,
@@ -61,8 +63,16 @@ export interface AuthServiceDeps {
   profilePhotos?: ProfilePhotoCache;
   /** Overridable so tests can drive the flow without a network. */
   createDeviceFlowClient?: (baseUrl: string) => DeviceFlowClient;
-  createApiClient?: (baseUrl: string, tokenStore: TokenStore) => AuthenticatedApiClient;
+  createApiClient?: (
+    baseUrl: string,
+    tokenStore: TokenStore,
+    onTokensCleared: (reason: string) => void
+  ) => AuthenticatedApiClient;
 }
+
+/** What the panel says when the session ended without the user signing out. */
+const SESSION_EXPIRED_MESSAGE = 'This session has expired. Sign in again.';
+const SIGNED_OUT_ELSEWHERE_MESSAGE = 'You were signed out in another window. Sign in again.';
 
 /**
  * Owns the whole device-authorization flow and every token, in the main process.
@@ -201,7 +211,10 @@ export class AuthService {
       this.deps.logger.warn(`AUTH: logout request failed: ${err instanceof Error ? err.message : 'unknown'}`);
     }
 
-    if (url) await this.deps.vault.clearTokens(url);
+    if (url) {
+      this.deps.logger.warn('AUTH: clearing stored tokens: the user signed out');
+      await this.deps.vault.clearTokens(url);
+    }
     // The picture goes with the session: dropping `user` clears it from the panel, and this
     // clears it from disk, so the next account does not inherit the last one's face.
     await this.forgetProfilePhoto();
@@ -460,47 +473,80 @@ export class AuthService {
     }, delay);
   }
 
+  /**
+   * The proactive refresh. It goes through the API client's {@link AuthenticatedApiClient.refreshSession}
+   * rather than calling the token endpoint itself, so it shares one in-flight exchange with the
+   * client's refresh-on-401 and inherits its rules: the refresh token presented is the one on disk
+   * (another instance may have rotated it), a newer stored token is never overwritten, and tokens
+   * are cleared only when the server rejects the refresh token.
+   */
   private async refreshNow(): Promise<void> {
     this.refreshTimer = null;
-    const device = this.device;
+    const api = this.api;
+    const generation = this.signInGeneration;
     const tokens = await this.currentTokens();
-    if (!device || !tokens) return;
+    if (!api || generation !== this.signInGeneration) return;
+    if (!tokens) {
+      // Still signed-in, but the vault no longer holds this environment's tokens: another
+      // instance sharing it signed out. Show signed-out rather than stopping the timer over
+      // nothing, which would leave the UI signed-in until restart.
+      this.endSession('the stored tokens were removed by another process', SIGNED_OUT_ELSEWHERE_MESSAGE);
+      return;
+    }
 
     try {
-      const refreshed = await device.refreshToken(tokens.refreshToken);
-      const url = this.endpointUrl();
-      if (!url) return;
-
-      await this.deps.vault.setTokens(url, {
-        accessToken: refreshed.access_token,
-        // Absent means the server did not rotate the chain (RFC 6749 s6); keep the one we
-        // presented rather than erasing the credential.
-        refreshToken: refreshed.refresh_token ?? tokens.refreshToken,
-        expiresAt: new Date(Date.now() + refreshed.expires_in * 1000).toISOString(),
-        userId: tokens.userId,
-      });
-
+      await api.refreshSession(tokens.accessToken);
+      if (api !== this.api || generation !== this.signInGeneration) return;
       this.refreshAttempt = 0;
       await this.scheduleProactiveRefresh();
     } catch (err) {
-      const status = httpStatus(err);
-      if (status === 400 || status === 401) {
-        // The refresh token itself was rejected: genuinely revoked, not a blip.
-        await this.deps.vault.clearTokens(this.endpointUrl());
-        this.patch({
-          status: 'signed-out',
-          user: undefined,
-          error: { message: 'This session has expired. Sign in again.', remedy: 'retry-sign-in' },
-        });
+      // A sign-out during the exchange is the user's own doing, not a session that ended.
+      if (api !== this.api || generation !== this.signInGeneration) return;
+      // Revoked. When the server rejects the refresh token the client clears the vault and
+      // reports it through handleTokensCleared itself. An empty vault with no such report means
+      // another instance removed the tokens - a sign-out elsewhere that nothing else announces.
+      if (err instanceof SessionRevokedError) {
+        if (this.state.status === 'signed-in' && !(await this.currentTokens())) {
+          this.endSession('the stored tokens were removed by another process', SIGNED_OUT_ELSEWHERE_MESSAGE);
+        }
+        return;
+      }
+      if (err instanceof NotAuthenticatedError) {
+        // The vault emptied under this refresh - a sign-out in another instance sharing it.
+        this.endSession('the stored tokens were removed by another process', SIGNED_OUT_ELSEWHERE_MESSAGE);
         return;
       }
 
       this.refreshAttempt += 1;
-      this.deps.logger.warn(`AUTH: proactive refresh failed (attempt ${this.refreshAttempt})`);
+      this.deps.logger.warn(`AUTH: proactive refresh failed (attempt ${this.refreshAttempt}): ${describeFailure(err)}`);
       this.refreshTimer = setTimeout(() => {
         void this.refreshNow();
       }, msUntilRefreshRetry(this.refreshAttempt));
     }
+  }
+
+  /** The API client cleared the stored tokens because the server rejected the refresh token. */
+  private handleTokensCleared(baseUrl: string, reason: string): void {
+    // A client built for an environment the user has since left says nothing about this one.
+    if (baseUrl !== this.endpointUrl()) return;
+    this.endSession(reason);
+  }
+
+  /** Show signed-out after the session ended on its own, rather than staying signed-in over an empty vault. */
+  private endSession(reason: string, message: string = SESSION_EXPIRED_MESSAGE): void {
+    this.deps.logger.warn(`AUTH: signed out: ${reason}`);
+    this.clearRefreshTimer();
+    // A device flow already under way is the way back in; leave it to finish.
+    if (this.state.busy === 'signing-in') return;
+    this.photoGeneration++;
+    void this.forgetProfilePhoto();
+    this.patch({
+      status: 'signed-out',
+      busy: 'idle',
+      user: undefined,
+      pending: undefined,
+      error: { message, remedy: 'retry-sign-in' },
+    });
   }
 
   private clearRefreshTimer(): void {
@@ -528,11 +574,13 @@ export class AuthService {
   }
 
   private buildApiClient(baseUrl: string, tokenStore: TokenStore): AuthenticatedApiClient {
-    if (this.deps.createApiClient) return this.deps.createApiClient(baseUrl, tokenStore);
+    const onTokensCleared = (reason: string) => this.handleTokensCleared(baseUrl, reason);
+    if (this.deps.createApiClient) return this.deps.createApiClient(baseUrl, tokenStore, onTokensCleared);
 
     return new AuthenticatedApiClient({
       baseUrl,
       tokenStore,
+      onTokensCleared,
       oauthClient: this.buildDeviceFlowClient(baseUrl),
       logger: this.deps.logger,
       timeoutMs: 30_000,
@@ -615,6 +663,17 @@ function signInErrorMessage(err: unknown): string {
   if (message === 'User denied the authorization request') return 'The sign-in request was denied in the browser.';
   if (message === 'Authorization code has expired') return 'The sign-in code expired. Start again.';
   return message || 'Sign-in failed. Try again.';
+}
+
+/** Enough to diagnose a failed refresh from the log: the HTTP status or the error's own name. Never a token. */
+function describeFailure(err: unknown): string {
+  const status = httpStatus(err);
+  if (status !== undefined) return `HTTP ${status}`;
+  if (err instanceof Error) {
+    const code = (err as { code?: unknown }).code;
+    return typeof code === 'string' ? `${err.name} ${code}` : err.name;
+  }
+  return 'unknown';
 }
 
 function httpStatus(err: unknown): number | undefined {

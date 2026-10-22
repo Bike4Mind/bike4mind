@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { CREDITS_PER_USD_COST } from '../pricing';
+import { CREDITS_PER_USD_COST, formatUsdPerCredit, MIN_PRICE_PER_CREDIT_USD } from '../pricing';
+import { CustomMcpPrivateCidrSchema, McpHostPatternListSchema } from './customMcpHosts';
 import {
   DEFAULT_PASSAGE_TOKEN_TARGET,
   MIN_PASSAGE_TOKEN_TARGET,
@@ -37,6 +38,10 @@ import {
   KB_SEARCH_RESULT_TOKEN_BUDGET_DEFAULT,
 } from '../constants/knowledgeBaseSearch';
 import { BULK_CHANGE_SHARE_PCT_DEFAULT } from '../constants/lakeConvergence';
+import {
+  ADMIN_AUDIT_DEFAULT_CRITICAL_GRANT_CREDITS,
+  ADMIN_AUDIT_DEFAULT_DAILY_GRANT_CREDITS,
+} from '../types/entities/adminAuditCatalogue';
 import {
   ORGANIZATION_SUBSCRIPTION_CREDITS_PER_SEAT,
   ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
@@ -156,8 +161,11 @@ If the full deliverable genuinely will not fit, do NOT stub the difference. REDU
  * public "Help Center" data lake, so when the knowledge-base search tool is available the model
  * can GROUND its answer in the real docs; the prompt still forbids inventing UI paths it can't
  * verify (relevant when that tool isn't enabled for the session).
+ *
+ * Ships in open-core builds too, so it names only host surfaces, never an overlay feature. A quoted
+ * name in a sentence about the sidebar must be a real sidenav row: SidenavNav.test.tsx enforces it.
  */
-export const HELP_CENTER_PROMPT = `HELP CENTER: Bike4Mind has a built-in Help Center that documents how to use the app. Users reach it from the "Help Center" item in the left sidebar, the help (?) icons beside feature titles, or the ? keyboard shortcut. When the user is clearly asking how to DO something in Bike4Mind itself (navigation, settings, files, the data lake, OptiHashi, agents, projects, sharing, billing, etc.) — as opposed to asking you to perform a task — give a brief, helpful answer and point them to the Help Center for full, up-to-date steps. If a knowledge-base/help search tool is available, use it to ground your answer in the actual help docs first. Do NOT invent menu paths, button names, or features you are not sure exist; if unsure, say so and direct them to the Help Center rather than guessing.`;
+export const HELP_CENTER_PROMPT = `HELP CENTER: Bike4Mind has a built-in Help Center that documents how to use the app. Users reach it from the Help Center button on the "Gears" page (open "Gears" in the left sidebar), the help (?) icons beside feature titles, or the ? keyboard shortcut. When the user is clearly asking how to DO something in Bike4Mind itself (navigation, settings, files, the data lake, agents, projects, sharing, billing, etc.) - as opposed to asking you to perform a task - give a brief, helpful answer and point them to the Help Center for full, up-to-date steps. If a knowledge-base/help search tool is available, use it to ground your answer in the actual help docs first. Do NOT invent menu paths, button names, or features you are not sure exist; if unsure, say so and direct them to the Help Center rather than guessing.`;
 
 /**
  * Default text for the abstention licence. Single source of truth used BOTH as the
@@ -227,9 +235,10 @@ When you report a time-sensitive fact, state what it is as of - the date of the 
  * forced retrieval already shows on out-of-corpus questions, reached by a different route. Three of
  * its clauses are load-bearing for a specific co-resident path, not general hedging:
  * - "from an attached document" - a small attached corpus is INLINED rather than deferred to
- *   retrieval (`shouldDeferCorpusToRetrieval`), and forced retrieval deliberately steps aside on
- *   an attached-files turn (`forcedRetrievalAbstention` emits nothing there). Without this clause
- *   the section tells the model to go searching for content already sitting in its context.
+ *   retrieval (`shouldDeferCorpusToRetrieval`), and forced retrieval steps aside on an
+ *   attached-files turn in a chat with no chosen lake (`forcedRetrievalAbstention` emits nothing
+ *   there). Without this clause the section tells the model to go searching for content already
+ *   sitting in its context.
  * - "already been searched on this turn" - on a forced turn that found nothing,
  *   `forcedRetrievalNoContextPrompt` instructs the model to say the library does not cover the
  *   question. A nudge to search then invites a second identical query - a billed query embedding,
@@ -339,6 +348,7 @@ export const SettingKeySchema = z.enum([
   'BedrockGuardrailId',
   'BedrockGuardrailVersion',
   'ImageModerationEnabled',
+  'ImageModerationReviewerEmails',
   'tagLineMain',
   'tagLineSub',
   'defaultTags',
@@ -382,6 +392,9 @@ export const SettingKeySchema = z.enum([
   'MaxActiveDungeons',
   'DungeonSpawnIntervalHeartbeats',
   'DungeonTTLMinutes',
+  'EnableStudioCreateV2',
+  'EnableStudioImage',
+  'EnableStudioProductions',
   'VectorThreshold',
   'bflApiKey',
   'EnableMCPServer',
@@ -391,6 +404,11 @@ export const SettingKeySchema = z.enum([
   'atlassianClientSecret',
   'notionClientId',
   'notionClientSecret',
+  'EnableCustomMcpConnectors',
+  'customMcpPolicy',
+  'customMcpBlockedHosts',
+  'customMcpPresetClients',
+  'customMcpAllowPrivateNetworks',
   'qWorkUrl',
   'qWorkToken',
 
@@ -462,6 +480,17 @@ export const SettingKeySchema = z.enum([
   // Knowledge
   'enableAutoChunk',
 
+  // Skill Market moderation
+  'SkillMarketHighRiskTools',
+  'SkillMarketUrlAllowlist',
+  'SkillMarketClassifierMinConfidence',
+  'SkillMarketAuditSampleRate',
+  'SkillMarketReviewSlaHours',
+  'SkillMarketDailySubmitLimit',
+  'SkillMarketMaxListingsPerUser',
+  'SkillMarketPublicMinAccountAgeDays',
+  'SkillMarketReportAutoHideThreshold',
+
   // Slack Webhook URL settings
   'SlackDefaultWebhookUrl',
   'SlackGeneralWebhookUrl',
@@ -470,6 +499,11 @@ export const SettingKeySchema = z.enum([
   'SlackFeedbackWebhookUrl',
   'SlackNonProdFeedbackWebhookUrl',
   'SlackEmailAuditWebhookUrl',
+  'SlackSecurityAlertsWebhookUrl',
+
+  // Admin Audit Log alerting
+  'AdminAuditCriticalGrantCredits',
+  'AdminAuditDailyGrantCredits',
 
   // Slack Analytics Bot (existing production bot - DO NOT CHANGE)
   'slackSigningSecret',
@@ -1046,16 +1080,22 @@ function makeNumberSetting(config: { defaultValue?: number; min?: number; max?: 
   };
 }
 
-function makeBooleanSetting(config: { defaultValue?: boolean } & BaseSetting) {
+function makeBooleanSetting({
+  acceptNumeric = false,
+  ...config
+}: { defaultValue?: boolean; acceptNumeric?: boolean } & BaseSetting) {
   return {
     ...config,
     type: 'boolean' as const,
     schema: z
       .preprocess(val => {
         if (typeof val === 'string') {
-          if (val.toLowerCase() === 'true') return true;
-          if (val.toLowerCase() === 'false') return false;
+          if (val.toLowerCase() === 'true' || (acceptNumeric && val === '1')) return true;
+          if (val.toLowerCase() === 'false' || (acceptNumeric && val === '0')) return false;
         }
+        // Numeric compatibility is opt-in so existing billing and security defaults cannot flip.
+        if (acceptNumeric && val === 1) return true;
+        if (acceptNumeric && val === 0) return false;
         return val;
       }, z.boolean())
       .prefault(config.defaultValue ?? false),
@@ -1098,6 +1138,111 @@ export enum ServerStatusEnum {
   Live = 'live',
   Maintenance = 'maintenance',
   Offline = 'offline',
+}
+
+/** Platform cap on custom MCP connections per user (design #4845). */
+export const CUSTOM_MCP_MAX_CONNECTIONS_PER_USER = 20;
+
+export const CUSTOM_MCP_POLICY_MODES = ['off', 'presets_only', 'allowlist', 'any'] as const;
+export type CustomMcpPolicyMode = (typeof CUSTOM_MCP_POLICY_MODES)[number];
+
+/**
+ * Org policy for custom remote MCP connectors, evaluated on create, OAuth start, offering and every
+ * call (design #4845 section 8). The platform row is the default for users with no org override,
+ * so `presets_only` keeps arbitrary URLs closed until an operator or org opts in to `allowlist`/`any`.
+ */
+export const CustomMcpPolicySchema = z.object({
+  mode: z.enum(CUSTOM_MCP_POLICY_MODES).default('presets_only'),
+  /** Host patterns (`example.com`, `*.example.com`) a URL must match when `mode` is `allowlist`. */
+  allowedHostPatterns: McpHostPatternListSchema.default([]),
+  /** Checked in every mode, after the platform `customMcpBlockedHosts`. */
+  blockedHostPatterns: McpHostPatternListSchema.default([]),
+  allowUnauthenticated: z.boolean().default(true),
+  /** false drops every tool not annotated read-only at offering time. */
+  allowWriteTools: z.boolean().default(true),
+  requireApprovalForAll: z.boolean().default(false),
+  /** Capped at the platform limit; an org can only lower it. */
+  maxConnectionsPerUser: z
+    .number()
+    .int()
+    .min(0)
+    .max(CUSTOM_MCP_MAX_CONNECTIONS_PER_USER)
+    .default(CUSTOM_MCP_MAX_CONNECTIONS_PER_USER),
+});
+
+export type CustomMcpPolicy = z.infer<typeof CustomMcpPolicySchema>;
+
+/**
+ * Effective enablement: the platform `EnableCustomMcpConnectors` flag (operator master switch, never
+ * org-settable) AND the resolved org `customMcpPolicy.mode` not being `off`. An org can only close
+ * custom connectors for its members, never open them past a platform off.
+ */
+export function isCustomMcpEnabled(
+  platformFlag: boolean | undefined,
+  orgPolicy: Pick<CustomMcpPolicy, 'mode'> | undefined
+): boolean {
+  return platformFlag === true && orgPolicy?.mode !== 'off';
+}
+
+export const CustomMcpBlockedHostsSchema = z.object({
+  hosts: McpHostPatternListSchema.default([]),
+});
+
+export type CustomMcpBlockedHosts = z.infer<typeof CustomMcpBlockedHostsSchema>;
+
+/**
+ * Self-host only; hosted deployments never reach private networks regardless of this value. Each
+ * CIDR is strictly parsed, at least /8 (IPv4) or /16 (IPv6), and never overlaps a network the fetch
+ * path refuses anyway (NEVER_ADMITTED_NETWORKS in customMcpHosts.ts).
+ */
+export const CustomMcpAllowPrivateNetworksSchema = z.object({
+  cidrs: z.array(CustomMcpPrivateCidrSchema).max(100).default([]),
+  allowHttp: z.boolean().default(false),
+});
+
+export type CustomMcpAllowPrivateNetworks = z.infer<typeof CustomMcpAllowPrivateNetworksSchema>;
+
+/**
+ * Shape of the `customMcpPresetClients` value: `{ [presetId]: { clientId, clientSecret? } }`. The
+ * setting itself is a sensitive plain string (the masking protocol only supports strings), so the
+ * JSON is parsed here at the point of use.
+ */
+export const CustomMcpPresetClientsSchema = z.record(
+  z.string(),
+  z.object({ clientId: z.string().min(1), clientSecret: z.string().optional() })
+);
+
+export type CustomMcpPresetClients = z.infer<typeof CustomMcpPresetClientsSchema>;
+
+export type CustomMcpPresetClientsParse =
+  { ok: true; clients: CustomMcpPresetClients } | { ok: false; clients: CustomMcpPresetClients; error: string };
+
+/**
+ * Parse the stored `customMcpPresetClients` string. Blank is `ok` with no clients. Malformed JSON or
+ * a wrong shape is `ok: false` with an empty map and a reason: common has no logger, so the caller
+ * logs it (otherwise every preset OAuth flow fails with no diagnostic).
+ */
+export function parseCustomMcpPresetClients(raw: unknown): CustomMcpPresetClientsParse {
+  if (raw === undefined || raw === null || (typeof raw === 'string' && raw.trim() === '')) {
+    return { ok: true, clients: {} };
+  }
+  if (typeof raw !== 'string') return { ok: false, clients: {}, error: `Expected a JSON string, got ${typeof raw}` };
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch (error) {
+    return { ok: false, clients: {}, error: `Invalid JSON: ${error instanceof Error ? error.message : String(error)}` };
+  }
+  const parsed = CustomMcpPresetClientsSchema.safeParse(json);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    return {
+      ok: false,
+      clients: {},
+      error: `Invalid shape at ${issue?.path.join('.') || '(root)'}: ${issue?.message}`,
+    };
+  }
+  return { ok: true, clients: parsed.data };
 }
 
 // Logo Settings Schema
@@ -1793,6 +1938,11 @@ export const API_SERVICE_GROUPS = {
       { key: 'atlassianClientSecret', order: 5 },
       { key: 'notionClientId', order: 6 },
       { key: 'notionClientSecret', order: 7 },
+      { key: 'EnableCustomMcpConnectors', order: 8 },
+      { key: 'customMcpPolicy', order: 9 },
+      { key: 'customMcpBlockedHosts', order: 10 },
+      { key: 'customMcpPresetClients', order: 11 },
+      { key: 'customMcpAllowPrivateNetworks', order: 12 },
     ],
   },
   Q_WORK: {
@@ -1924,6 +2074,10 @@ export const API_SERVICE_GROUPS = {
       { key: 'MaxActiveDungeons', order: 291 },
       { key: 'DungeonSpawnIntervalHeartbeats', order: 292 },
       { key: 'DungeonTTLMinutes', order: 293 },
+      // Studio rebuild, admin-only until the reveal (see studioFeatureFlags.ts)
+      { key: 'EnableStudioCreateV2', order: 300 },
+      { key: 'EnableStudioImage', order: 301 },
+      { key: 'EnableStudioProductions', order: 302 },
     ],
   },
   NOTEBOOK: {
@@ -2737,6 +2891,98 @@ export const settingsMap = {
       'Whether to run generated images through content moderation (Rekognition) and block explicit content. Legal-safety control (#9776) — default ON.',
     category: 'AI Moderation',
   }),
+  ImageModerationReviewerEmails: makeObjectSetting<string[]>({
+    key: 'ImageModerationReviewerEmails',
+    name: 'Image Moderation Reviewer Emails',
+    defaultValue: [],
+    description:
+      'Email addresses alerted when an image moderation incident needs review, one per line. The alert carries incident metadata and an admin link only, never the image or user content. Empty sends no alert.',
+    category: 'AI Moderation',
+    // Plain strings, not z.email(): one malformed stored entry must not fail the whole list and
+    // silence every reviewer. The update route refuses invalid entries; readers filter with
+    // partitionEmailList.
+    schema: z.array(z.string()),
+  }),
+  SkillMarketHighRiskTools: makeStringSetting({
+    key: 'SkillMarketHighRiskTools',
+    name: 'Skill Market High-Risk Tools',
+    defaultValue: '',
+    description:
+      'Comma-separated tool names that force a Skill Market listing into human review, in addition to the built-in list (outbound fetch, file edit, publishing, data-lake writes, agent delegation). Tools not in the built-in catalog are always high-risk.',
+    category: 'AI Moderation',
+  }),
+  SkillMarketUrlAllowlist: makeStringSetting({
+    key: 'SkillMarketUrlAllowlist',
+    name: 'Skill Market URL Allowlist',
+    defaultValue: '',
+    description:
+      'Comma-separated host names a Skill Market skill may reference without a finding (subdomains included). Any other URL holds a listing for review at every visibility.',
+    category: 'AI Moderation',
+  }),
+  SkillMarketClassifierMinConfidence: makeNumberSetting({
+    key: 'SkillMarketClassifierMinConfidence',
+    name: 'Skill Market Classifier Min Confidence',
+    defaultValue: 0.8,
+    min: 0,
+    max: 1,
+    description: 'Below this classifier confidence a passing skill lands in the review tier instead of clean.',
+    category: 'AI Moderation',
+  }),
+  SkillMarketAuditSampleRate: makeNumberSetting({
+    key: 'SkillMarketAuditSampleRate',
+    name: 'Skill Market Audit Sample Rate',
+    defaultValue: 0.1,
+    min: 0,
+    max: 1,
+    description: 'Share of auto-approved Skill Market versions sent to the admin audit queue.',
+    category: 'AI Moderation',
+  }),
+  SkillMarketReviewSlaHours: makeNumberSetting({
+    key: 'SkillMarketReviewSlaHours',
+    name: 'Skill Market Review SLA (hours)',
+    defaultValue: 72,
+    min: 1,
+    int: true,
+    description:
+      'A held Skill Market version waiting longer than this triggers a daily reminder to the author and reviewers. It is never auto-approved.',
+    category: 'AI Moderation',
+  }),
+  SkillMarketDailySubmitLimit: makeNumberSetting({
+    key: 'SkillMarketDailySubmitLimit',
+    name: 'Skill Market Daily Submit Limit',
+    defaultValue: 20,
+    min: 1,
+    int: true,
+    description: 'Max Skill Market submissions (new listings plus new versions) per user per 24 hours.',
+    category: 'AI Moderation',
+  }),
+  SkillMarketMaxListingsPerUser: makeNumberSetting({
+    key: 'SkillMarketMaxListingsPerUser',
+    name: 'Skill Market Max Listings Per User',
+    defaultValue: 25,
+    min: 1,
+    int: true,
+    description: 'Max live (not withdrawn or delisted) Skill Market listings one author may hold.',
+    category: 'AI Moderation',
+  }),
+  SkillMarketPublicMinAccountAgeDays: makeNumberSetting({
+    key: 'SkillMarketPublicMinAccountAgeDays',
+    name: 'Skill Market Public Min Account Age (days)',
+    defaultValue: 3,
+    min: 0,
+    description: 'Accounts younger than this cannot publish Public listings (Organization and Unlisted are allowed).',
+    category: 'AI Moderation',
+  }),
+  SkillMarketReportAutoHideThreshold: makeNumberSetting({
+    key: 'SkillMarketReportAutoHideThreshold',
+    name: 'Skill Market Report Auto-Hide Threshold',
+    defaultValue: 3,
+    min: 1,
+    int: true,
+    description:
+      'Open reports from this many distinct users hide a listing from the market until an admin restores or delists it.',
+    category: 'AI Moderation',
+  }),
   FormatPromptTemplate: makeStringSetting({
     key: 'FormatPromptTemplate',
     name: 'Format Prompt Template',
@@ -2812,7 +3058,7 @@ export const settingsMap = {
     userReadable: true,
     name: 'Price Per Credit',
     defaultValue: 50,
-    description: 'The price per credit for purchasing credits.',
+    description: `The price in USD of one credit bought pay-as-you-go. Cannot be set below ${formatUsdPerCredit(MIN_PRICE_PER_CREDIT_USD)}, the per-credit sale price including markup.`,
     category: 'Users',
     group: API_SERVICE_GROUPS.CREDITS.id,
     order: 1,
@@ -3034,6 +3280,35 @@ export const settingsMap = {
     order: 8,
     isSensitive: true,
   }),
+  SlackSecurityAlertsWebhookUrl: makeStringSetting({
+    key: 'SlackSecurityAlertsWebhookUrl',
+    name: 'Security Alerts Channel Webhook URL',
+    defaultValue: '',
+    description:
+      'Incoming-webhook URL for the security Slack channel that receives critical Admin Audit Log entries and credit-grant bursts. Leave empty to turn alerts off; the Audit Log page then shows a banner. It never falls back to the default webhook.',
+    category: 'SecOps',
+    isSensitive: true,
+  }),
+  AdminAuditCriticalGrantCredits: makeNumberSetting({
+    key: 'AdminAuditCriticalGrantCredits',
+    name: 'Critical Single Credit Grant',
+    defaultValue: ADMIN_AUDIT_DEFAULT_CRITICAL_GRANT_CREDITS,
+    min: 1,
+    int: true,
+    description:
+      'An admin credit grant above this many credits is recorded as critical in the Admin Audit Log and alerts the security channel.',
+    category: 'SecOps',
+  }),
+  AdminAuditDailyGrantCredits: makeNumberSetting({
+    key: 'AdminAuditDailyGrantCredits',
+    name: 'Critical Daily Credit Grants per Admin',
+    defaultValue: ADMIN_AUDIT_DEFAULT_DAILY_GRANT_CREDITS,
+    min: 1,
+    int: true,
+    description:
+      'A grant that takes one admin past this many credits granted in the last 24 hours is recorded as critical in the Admin Audit Log and alerts the security channel.',
+    category: 'SecOps',
+  }),
   liveFeedbackEmail: makeStringSetting({
     key: 'liveFeedbackEmail',
     name: 'Live Feedback Email',
@@ -3240,6 +3515,7 @@ export const settingsMap = {
     category: 'Users',
   }),
   enableTeamPlan: makeBooleanSetting({
+    acceptNumeric: true,
     key: 'enableTeamPlan',
     userReadable: true,
     name: 'Enable Team Plan',
@@ -3272,7 +3548,8 @@ export const settingsMap = {
     userReadable: true,
     name: 'Default Free Credits',
     defaultValue: 0,
-    description: `Credits granted to a user who registers WITHOUT an invite code (only applies when Allow Open Registration is ON). Granted after the user verifies their email, NOT at signup - an unverified throwaway account gets 0 credits (anti-spam). A free user can never spend more than this - their hard ceiling of real model cost is roughly credits / ${CREDITS_PER_USD_COST} USD.`,
+    description:
+      'Base credits granted after email verification to a user who registers WITHOUT an invite code, including eligible partner signups when Allow Open Registration is OFF. Partner-rule credits are added on top of this amount. An unverified account receives no credits. A free user cannot spend beyond their total granted balance.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -3504,6 +3781,37 @@ export const settingsMap = {
     order: 4,
     isSensitive: true,
   }),
+  EnableStudioCreateV2: makeBooleanSetting({
+    key: 'EnableStudioCreateV2',
+    name: 'Enable Studio Create v2',
+    defaultValue: false,
+    description:
+      'Admin-only preview of the restructured Studio Create area. Non-admins never see it, whatever this is set to.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 300,
+  }),
+  EnableStudioImage: makeBooleanSetting({
+    key: 'EnableStudioImage',
+    name: 'Enable Image in Studio',
+    defaultValue: false,
+    description: 'Admin-only preview of the Image tab in Studio. Non-admins never see it, whatever this is set to.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 301,
+    dependsOn: 'EnableStudioCreateV2',
+  }),
+  EnableStudioProductions: makeBooleanSetting({
+    key: 'EnableStudioProductions',
+    name: 'Enable Studio Productions',
+    defaultValue: false,
+    description:
+      'Admin-only preview of Studio Productions (assembling many assets into one piece). Non-admins never see it, whatever this is set to.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 302,
+    dependsOn: 'EnableStudioCreateV2',
+  }),
   EnablePotionQuest: makeBooleanSetting({
     key: 'EnablePotionQuest',
     name: 'Enable PotionQuest Tools',
@@ -3687,6 +3995,77 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.MCP.id,
     order: 7,
     isSensitive: true,
+  }),
+  EnableCustomMcpConnectors: makeBooleanSetting({
+    key: 'EnableCustomMcpConnectors',
+    name: 'Enable Custom MCP Connectors',
+    defaultValue: false,
+    description:
+      'Platform master switch for custom remote MCP connectors (beta). Off: no custom connector tools ' +
+      'are offered and new connections cannot be created; existing ones can still be disconnected. ' +
+      'Orgs cannot override it; an org closes connectors for its members with customMcpPolicy mode off.',
+    category: 'Tools',
+    group: API_SERVICE_GROUPS.MCP.id,
+    order: 8,
+    dependsOn: 'EnableMCPServer',
+    // The Integrations page derives the custom connector card's status from it.
+    userReadable: true,
+  }),
+  customMcpPolicy: makeObjectSetting({
+    key: 'customMcpPolicy',
+    name: 'Custom MCP Connector Policy',
+    defaultValue: CustomMcpPolicySchema.parse({}),
+    description:
+      'Which custom MCP servers members may connect. mode: off (org kill switch; ANDed with the platform ' +
+      'flag), presets_only (catalog presets only), ' +
+      'allowlist (allowedHostPatterns only) or any. blockedHostPatterns apply in every mode. ' +
+      'allowUnauthenticated permits servers with no sign-in; allowWriteTools false hides tools not ' +
+      'marked read-only; requireApprovalForAll asks before every tool call. Overridable per org.',
+    category: 'Tools',
+    group: API_SERVICE_GROUPS.MCP.id,
+    order: 9,
+    dependsOn: 'EnableCustomMcpConnectors',
+    schema: CustomMcpPolicySchema,
+    scope: { settableAt: [SettingScopeLevel.Organization] },
+  }),
+  customMcpBlockedHosts: makeObjectSetting({
+    key: 'customMcpBlockedHosts',
+    name: 'Custom MCP Blocked Hosts',
+    defaultValue: CustomMcpBlockedHostsSchema.parse({}),
+    description:
+      'Platform kill switch per host: custom MCP connections to these hosts are blocked for every ' +
+      'org and user on their next use. Exact hosts or *.example.com patterns.',
+    category: 'Tools',
+    group: API_SERVICE_GROUPS.MCP.id,
+    order: 10,
+    // No dependsOn: the operator kill switch must stay visible and editable while the flag is off.
+    schema: CustomMcpBlockedHostsSchema,
+  }),
+  customMcpPresetClients: makeStringSetting({
+    key: 'customMcpPresetClients',
+    name: 'Custom MCP Preset OAuth Clients',
+    defaultValue: '',
+    description:
+      'JSON map of pre-registered OAuth clients for connector presets whose vendor offers no dynamic ' +
+      'registration: {"<presetId>": {"clientId": "...", "clientSecret": "..."}}.',
+    category: 'Tools',
+    group: API_SERVICE_GROUPS.MCP.id,
+    order: 11,
+    isSensitive: true,
+  }),
+  customMcpAllowPrivateNetworks: makeObjectSetting({
+    key: 'customMcpAllowPrivateNetworks',
+    name: 'Custom MCP Private Networks (self-host)',
+    defaultValue: CustomMcpAllowPrivateNetworksSchema.parse({}),
+    description:
+      'Self-host only, ignored on hosted deployments. CIDRs that custom MCP connections may reach even ' +
+      'though they are private, and whether plain http is allowed. Empty (the default) blocks every ' +
+      'private address.',
+    category: 'Tools',
+    group: API_SERVICE_GROUPS.MCP.id,
+    order: 12,
+    dependsOn: 'EnableCustomMcpConnectors',
+    schema: CustomMcpAllowPrivateNetworksSchema,
   }),
   qWorkUrl: makeStringSetting({
     key: 'qWorkUrl',
@@ -4029,7 +4408,8 @@ export const settingsMap = {
       `applies). While unset the field is blank; ${FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT} is the ada-002 value. Any value you save, ` +
       `${FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT} included, is used exactly, in every space, which is yours to get right: 75 ` +
       'against text-embedding-3-small sits above that band entirely and returns nothing on every ' +
-      'query. To go back to the per-model floor, clear the field and save. Where this floor lands ' +
+      'query, so a value above the floor measured for the default model needs confirmation ' +
+      'to save. To go back to the per-model floor, clear the field and save. Where this floor lands ' +
       'inside your band decides a lot - on one measured corpus 74 / 75 / 76 swung recall 91% / 65% / ' +
       '40% - and the same 75 that is a cliff on one lake rejects nothing at all on another. ' +
       'Re-measure after changing the embedding model.',
@@ -4824,16 +5204,13 @@ export const settingsMap = {
     // HardwareComputeMaxUsdPerUserPerDay so one large run can be admitted by raising both.
     max: 100_000,
     description:
-      'Defense-in-depth spend ceiling for a single eligible hybrid compute job run on real external ' +
-      'compute hardware (see EnableHardwareCompute): any target whose advertised minimum cost exceeds ' +
-      'this is rejected before submission, independent of the live device roster. Bounds worst-case ' +
-      'per-run spend without maintaining a hardcoded device allowlist. Raised from $100 to $300 (Quest 6, ' +
-      '2026-07-21) as a conservative default that admits the High-fidelity quality tier (which applies a 16x ' +
-      'error-mitigation/debias multiplier, ~10x the Standard tier reservation after margins) for SMALL/sparse ' +
-      'briefs only; larger 16-qubit High-fidelity runs reserve well past $300 and are rejected here by design. ' +
-      'Raise further without a deploy (up to $100k) to admit pricier briefs; bounded per-run exposure is the ' +
-      'deliberate tradeoff over universal High-fidelity. A run above the per-user daily cap is still ' +
-      'rejected, so raise HardwareComputeMaxUsdPerUserPerDay alongside this.',
+      'Runaway brake on a single eligible hybrid compute job run on real external compute hardware ' +
+      '(see EnableHardwareCompute): a run whose reserved worst-case cost exceeds this is rejected before ' +
+      'submission, independent of the live device roster. It exists to stop a looping run or a client ' +
+      'retry bug, not to set a spending budget. The default suits a deployment that pays for hardware ' +
+      'out of its own funds; where hardware spend is funded and metered separately, size it so the ' +
+      'largest planned run fits under it (up to $100k, no deploy needed). A run above the per-user daily ' +
+      'cap is still rejected, so raise HardwareComputeMaxUsdPerUserPerDay alongside this.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 87,
@@ -4862,13 +5239,12 @@ export const settingsMap = {
     min: 1,
     max: 100_000,
     description:
-      "Rolling 24h per-user spend ceiling (in USD, measured against each run's reserved worst-case cost, " +
+      "Rolling 24h per-user ceiling (in USD, measured against each run's reserved worst-case cost, " +
       'not the flat per-run credit reservation) for eligible hybrid compute jobs on real external compute ' +
-      'hardware (see EnableHardwareCompute). A second, cumulative brake alongside the per-run cost ceiling ' +
-      'and the concurrent-run cap. Raised from $200 to $600 (Quest 6, 2026-07-21): enough for a couple of ' +
-      'small High-fidelity-tier runs per day (each reserves ~$275 at the small-brief scale the $300 per-run ' +
-      'cap admits), fewer or none for larger briefs; raise further here without a deploy as real usage ' +
-      'patterns emerge.',
+      'hardware (see EnableHardwareCompute). A cumulative runaway brake alongside the per-run cost ceiling ' +
+      'and the concurrent-run cap, not a spending budget. The default suits a deployment that pays for ' +
+      'hardware out of its own funds; where hardware spend is funded and metered separately, size it to a ' +
+      'heavy day of planned runs. Raise it here without a deploy.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 89,

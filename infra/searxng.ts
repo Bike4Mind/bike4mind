@@ -21,6 +21,9 @@ import { cluster, resolvedVpcId } from './vpc';
  * the image is missing: search still works on SerpAPI alone, so a missing image skips the
  * service instead of failing the whole deploy.
  *
+ * Every function that can run web_search must receive SEARXNG_BASE_URL; the list is pinned by
+ * infra/__tests__/searxngWiring.test.ts.
+ *
  * Deployed only on the two real hosted stages (production, dev/staging) -- PRODUCTION_STAGES,
  * not merely "not a preview and not sst dev". That excludes shared-dev (a router-only stage,
  * infra/router.ts) and any ad-hoc personal `sst deploy --stage <name>`, which a broader check

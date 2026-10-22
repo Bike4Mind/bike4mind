@@ -5,6 +5,10 @@ import nc from 'next-connect';
 import { ApiErrorSchema } from '@bike4mind/common';
 
 // auth.ts wires every strategy at import time; none of those collaborators are exercised here.
+// Pulled in transitively by signupDomainGrant; these tests never reach a rule with a subscription.
+vi.mock('@server/subscriptions/grantIndividualAdminSubscription', () => ({
+  grantIndividualAdminSubscription: vi.fn(),
+}));
 vi.mock('@bike4mind/database', () => ({
   User: { findOne: vi.fn(), updateOne: vi.fn(), create: vi.fn() },
   SamlRequestId: { findOne: vi.fn(), updateOne: vi.fn(), findOneAndDelete: vi.fn() },
@@ -14,7 +18,7 @@ vi.mock('@bike4mind/database/infra', () => ({
   secretRotationRepository: { findBySecretName: vi.fn() },
 }));
 vi.mock('@server/auth/ability', () => ({ default: vi.fn() }));
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { GOOGLE_CLIENT_ID: '', GITHUB_CLIENT_ID: '', JWT_SECRET: 'test-secret' },
 }));
 

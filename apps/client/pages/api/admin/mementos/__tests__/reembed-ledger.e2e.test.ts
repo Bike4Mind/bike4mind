@@ -10,8 +10,8 @@ import {
   createMongoServer,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../../../packages/database/src/__test__/createMongoServer';
-import { createKeyProvider, decryptFact, encryptVector } from '@server/memory/factCipher';
-import { appendMemoryEvent, createLedgerMemoryStore } from '@server/memory/ledgerMemoryStore';
+import { createKeyProvider, decryptFact, encryptVector } from '@bike4mind/server-utils/memory/factCipher';
+import { appendMemoryEvent, createLedgerMemoryStore } from '@bike4mind/server-utils/memory/ledgerMemoryStore';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 

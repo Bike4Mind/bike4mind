@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
-import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import {
   dataLakeAccessGrantRepository,
   dataLakeBatchRepository,
@@ -11,7 +11,7 @@ import { dataLakeService } from '@bike4mind/services';
 import { BATCH_TERMINAL_STATUSES, type BatchStatus, type IDataLakeBatchDocument } from '@bike4mind/common';
 import { Request } from 'express';
 import { z } from 'zod';
-import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 
 const UpdateBatchInput = z.object({
   status: z.enum(['preparing', 'uploading', 'processing', 'completed', 'completed_with_errors', 'failed', 'cancelled']),

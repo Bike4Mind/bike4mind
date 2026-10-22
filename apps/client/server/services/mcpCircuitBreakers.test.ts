@@ -6,9 +6,10 @@
  */
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
+import { recordCircuitBreakerTransition } from '@bike4mind/server-utils/utils/cloudwatch';
 
 // Mock CloudWatch to avoid real AWS calls
-vi.mock('@server/utils/cloudwatch', () => ({
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   recordCircuitBreakerTransition: vi.fn().mockResolvedValue(undefined),
   recordCircuitBreakerRejection: vi.fn().mockResolvedValue(undefined),
 }));
@@ -21,6 +22,7 @@ import {
   classifyOperation,
   MAX_TRACKED_BREAKERS,
   CircuitBreakerError,
+  flushBreakerMetrics,
 } from './mcpCircuitBreakers';
 import type { CircuitBreaker } from '@bike4mind/utils';
 import { AxiosError } from 'axios';
@@ -534,6 +536,34 @@ describe('mcpCircuitBreakers', () => {
         }
       }
       expect(readBreaker.getState().state).toBe('OPEN');
+    });
+  });
+
+  describe('flushBreakerMetrics', () => {
+    it('resolves immediately when no transition metric is pending', async () => {
+      await expect(flushBreakerMetrics()).resolves.toBeUndefined();
+    });
+
+    // A Lambda freezes once its handler returns, so callers drain transition metrics first.
+    it('does not resolve while a transition metric is pending, and resolves once it settles', async () => {
+      let releaseMetric: () => void = () => {};
+      vi.mocked(recordCircuitBreakerTransition).mockReturnValueOnce(
+        new Promise<void>(resolve => {
+          releaseMetric = resolve;
+        })
+      );
+      await tripBreaker(getBreaker('tenant-flush', 'flush-server', 'read'));
+      let flushed = false;
+
+      const flush = flushBreakerMetrics().then(() => {
+        flushed = true;
+      });
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(flushed).toBe(false);
+
+      releaseMetric();
+      await flush;
+      expect(flushed).toBe(true);
     });
   });
 });

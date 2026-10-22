@@ -139,6 +139,21 @@ describe('AnthropicCachingAdapter', () => {
       expect(tools[1].cache_control).toEqual(cacheControl);
     });
 
+    it('marks the last tool that can carry cache_control, skipping deferred and server tools', () => {
+      const params = {
+        tools: [
+          { name: 'a', input_schema: {} },
+          { name: 'b', input_schema: {}, defer_loading: true },
+          { type: 'tool_search_tool_regex_20251119', name: 'tool_search_tool_regex' },
+        ],
+      };
+      const tools = adapter.applyCaching(params, { enableCaching: true, cacheTools: true }).tools as Record<
+        string,
+        unknown
+      >[];
+      expect(tools.map(t => t.cache_control)).toEqual([cacheControl, undefined, undefined]);
+    });
+
     it('marks the last system block when cacheSystemPrompt is set', () => {
       const params = {
         system: [
@@ -240,6 +255,27 @@ describe('AnthropicCachingAdapter', () => {
       expect(messages[2].content).toBe('volatile reminder, rebuilt every iteration');
       // ...and the breakpoint lands on the message before it instead.
       const anchorContent = messages[1].content as Record<string, unknown>[];
+      expect(anchorContent[0].cache_control).toEqual(cacheControl);
+    });
+
+    it('anchors the history breakpoint before a trailing tool change message, which takes no cache_control', () => {
+      const toolChange = {
+        role: 'system',
+        content: [{ type: 'tool_addition', tool: { type: 'tool_reference', name: 'get_weather' } }],
+      };
+      const params = {
+        messages: [
+          { role: 'user', content: 'turn 1' },
+          { role: 'assistant', content: 'reply 1' },
+          { role: 'user', content: 'turn 2' },
+          toolChange,
+        ],
+      };
+      const result = adapter.applyCaching(params, { enableCaching: true, cacheConversationHistory: true });
+
+      const messages = result.messages as Record<string, unknown>[];
+      expect(messages[3]).toEqual(toolChange);
+      const anchorContent = messages[2].content as Record<string, unknown>[];
       expect(anchorContent[0].cache_control).toEqual(cacheControl);
     });
 

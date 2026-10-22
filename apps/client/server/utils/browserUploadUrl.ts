@@ -36,11 +36,16 @@ export const resolveBrowserAppFileUploadUrl = (appFileId: string, directPresigne
  * load-bearing: server/s3/historyUploadComplete.ts parses the userId and source back OUT of the
  * key to decide whose import this is, so a client-supplied key would let a caller attribute an
  * import to another user. The proxy therefore takes only the source and recomputes the key from
- * the authenticated request; nothing about the destination is client-controlled.
+ * the authenticated request; nothing about the destination is client-controlled. `size` is the
+ * declared byte length the proxy holds the body to, as the hosted presign's signature does.
  */
-export const resolveBrowserHistoryImportUploadUrl = (source: string, directPresignedUrl: string): string =>
+export const resolveBrowserHistoryImportUploadUrl = (
+  source: string,
+  size: number,
+  directPresignedUrl: string
+): string =>
   process.env.B4M_SELF_HOST === 'true'
-    ? `/api/import-history/upload?source=${encodeURIComponent(source)}`
+    ? `/api/import-history/upload?source=${encodeURIComponent(source)}&size=${size}`
     : directPresignedUrl;
 
 /**
@@ -52,9 +57,13 @@ export const resolveBrowserHistoryImportUploadUrl = (source: string, directPresi
  * comes from the authenticated request, so a caller can only ever write under their own prefix.
  * importId exists solely to pair this data object with the server-written
  * `<importId>.options.json` sibling that pages/api/notebooks/import.ts already wrote - it is an
- * identifier, not a permission.
+ * identifier, not a permission. `size` is the declared byte length the proxy holds the body to.
  */
-export const resolveBrowserNotebookImportUploadUrl = (importId: string, directPresignedUrl: string): string =>
+export const resolveBrowserNotebookImportUploadUrl = (
+  importId: string,
+  size: number,
+  directPresignedUrl: string
+): string =>
   process.env.B4M_SELF_HOST === 'true'
-    ? `/api/notebooks/import/upload?importId=${encodeURIComponent(importId)}`
+    ? `/api/notebooks/import/upload?importId=${encodeURIComponent(importId)}&size=${size}`
     : directPresignedUrl;

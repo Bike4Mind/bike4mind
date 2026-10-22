@@ -1,10 +1,13 @@
 import { useCallback, useState } from 'react';
 import { Box, Button, Card, Chip, LinearProgress, Stack, Typography, type ColorPaletteProp } from '@mui/joy';
-import type { GenerationJobState, MusicGeneration } from '@bike4mind/common';
+import { extensionFromMimeType, type GenerationJobState, type MusicGeneration } from '@bike4mind/common';
 import { useFileBrowser } from '@client/app/components/Files/fileBrowserStore';
 import { STATE_COLORS, useStablePlayerSrc } from '@client/app/hooks/data/generationJobCard';
+import { formatSecondsClock, stripLyricTimestamps } from '@client/app/components/Media/generationFormat';
+import { MediaPlayer, type MediaPlayerFile } from '@client/app/components/Media/MediaPlayer';
 import { isTerminalGenerationState } from '@client/app/hooks/data/generationJobPolling';
 import { useCancelMusicGeneration, useMusicGeneration } from '@client/app/hooks/data/musicGenerations';
+import { formatCredits } from '@client/app/utils/formatUsd';
 
 const STATE_LABELS: Record<GenerationJobState, string> = {
   pending: 'Queued',
@@ -23,8 +26,32 @@ const FAILURE_FALLBACK: Partial<Record<GenerationJobState, string>> = {
   cancelled: 'The generation was cancelled.',
 };
 
-// The server refuses to cancel a storing job: the provider has already produced, and charged for, the song.
-const CANCELLABLE_STATES: readonly GenerationJobState[] = ['pending', 'running'];
+type MusicOutput = NonNullable<MusicGeneration['output']>;
+
+// Saved songs play from their Files copy, so the player re-signs through the file like every other file player.
+const toPlayerFile = (jobId: string, fileId: string, output: MusicOutput): MediaPlayerFile => ({
+  id: fileId,
+  fileName: `song-${jobId}.${extensionFromMimeType(output.content_type) ?? 'mp3'}`,
+  mimeType: output.content_type,
+  fileUrl: output.url ?? undefined,
+  fileUrlExpireAt: output.expires_at ? new Date(output.expires_at) : undefined,
+});
+
+// Settled once the song is billed; until then the hold, which is the most the song can cost. A terminal job never
+// settles afterwards, so a hold it still shows was released - do not present it as a possible charge.
+const creditsLabel = (job: Pick<MusicGeneration, 'credits' | 'state'>): string | null => {
+  const { reserved, settled } = job.credits;
+  if (settled !== null) return `${formatCredits(settled)} credits`;
+  if (reserved === null || isTerminalGenerationState(job.state)) return null;
+  return `up to ${formatCredits(reserved)} credits`;
+};
+
+// Only a queued song can be cancelled: once composing, the provider call is under way and billed whatever happens.
+// Must stay in sync with the server's rule, `GenerationJobModel.requestCancel` (only `pending` with `submitAttemptedAt`
+// null for a before-submit job, chosen by the handler's submitMode in engine.requestCancel). The server reports a
+// composing song as `running`; a cancel that still races the start is refused with 409 not_cancellable (handled in
+// useCancelMusicGeneration).
+const CANCELLABLE_STATES: readonly GenerationJobState[] = ['pending'];
 
 const MusicJobCard = ({ jobId }: { jobId: string }) => {
   const { data: job, isPending, refetch } = useMusicGeneration(jobId);
@@ -32,7 +59,9 @@ const MusicJobCard = ({ jobId }: { jobId: string }) => {
   const openFiles = useFileBrowser(state => state.setOpen);
   const [lyricsOpen, setLyricsOpen] = useState(false);
   const refresh = useCallback(() => void refetch(), [refetch]);
-  const readyUrl = job?.state === 'succeeded' && job.output?.availability === 'ready' ? job.output.url : null;
+  // A song saved to Files plays through MediaPlayer, which re-signs from the file; only the bare-url fallback needs this.
+  const readyUrl =
+    job?.state === 'succeeded' && job.output?.availability === 'ready' && !job.output.file_id ? job.output.url : null;
   const player = useStablePlayerSrc(readyUrl, refresh);
 
   if (isPending) {
@@ -54,7 +83,8 @@ const MusicJobCard = ({ jobId }: { jobId: string }) => {
   const output: MusicGeneration['output'] = job.state === 'succeeded' ? job.output : null;
   const failureMessage = job.error?.message ?? FAILURE_FALLBACK[job.state];
   const isSettling = job.state === 'succeeded' && (!job.output || job.output.availability === 'pending_scan');
-  const lyrics = output?.lyrics ?? job.lyrics;
+  // Only the provider's lyrics carry line timings; the requested lyrics are shown as typed.
+  const lyrics = output?.lyrics ? stripLyricTimestamps(output.lyrics) : job.lyrics;
   const statusLabel = (() => {
     if (cancel.isSuccess && !terminal) return 'Cancelling';
     if (isSettling) return job.output ? 'Checking' : 'Finishing';
@@ -68,8 +98,14 @@ const MusicJobCard = ({ jobId }: { jobId: string }) => {
         <Chip size="sm" variant="soft" color={statusColor} data-testid="music-job-card-status">
           {statusLabel}
         </Chip>
-        <Typography level="body-xs">
-          {output?.duration_seconds ?? job.duration_seconds}s{job.instrumental ? ', Instrumental' : ''}
+        <Typography level="body-xs" data-testid="music-job-card-meta">
+          {[
+            formatSecondsClock(output?.duration_seconds ?? job.duration_seconds),
+            job.instrumental && 'Instrumental',
+            creditsLabel(job),
+          ]
+            .filter(Boolean)
+            .join(', ')}
         </Typography>
       </Stack>
 
@@ -79,7 +115,12 @@ const MusicJobCard = ({ jobId }: { jobId: string }) => {
 
       {(!terminal || isSettling) && <LinearProgress data-testid="music-job-card-progress" />}
 
-      {job.state === 'succeeded' && output?.availability === 'ready' && player.src && (
+      {job.state === 'succeeded' && output?.availability === 'ready' && output.file_id && (
+        <Box data-testid="music-job-card-player">
+          <MediaPlayer file={toPlayerFile(job.id, output.file_id, output)} />
+        </Box>
+      )}
+      {job.state === 'succeeded' && output?.availability === 'ready' && !output.file_id && player.src && (
         <Box
           component="audio"
           controls

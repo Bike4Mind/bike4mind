@@ -1,10 +1,16 @@
 import mongoose, { Document, Model, model, Schema } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 
-/**
- * Entity types for integration audit logging
- */
-export type IntegrationAuditEntityType = 'oauth' | 'webhook' | 'mcp_tool' | 'token_refresh';
+/** Entity types for integration audit logging; one const feeds both the TS type and the schema enum. */
+export const INTEGRATION_AUDIT_ENTITY_TYPES = [
+  'oauth',
+  'webhook',
+  'mcp_tool',
+  'token_refresh',
+  'mcp_connection',
+] as const;
+
+export type IntegrationAuditEntityType = (typeof INTEGRATION_AUDIT_ENTITY_TYPES)[number];
 
 /**
  * Supported integration names. Single source of truth for BOTH the TS type and
@@ -19,9 +25,31 @@ export const INTEGRATION_AUDIT_INTEGRATION_NAMES = [
   'linear',
   'notion',
   'optihashi',
+  'custom_mcp',
 ] as const;
 
 export type IntegrationAuditIntegrationName = (typeof INTEGRATION_AUDIT_INTEGRATION_NAMES)[number];
+
+/**
+ * Metadata for `integrationName: 'custom_mcp'` entries. Identifiers, sizes and hashes only: argument
+ * and result bodies are never logged, since they can carry user data to and from a third party.
+ */
+export interface CustomMcpAuditMetadata {
+  connectionId: string;
+  host: string;
+  slug: string;
+  toolName?: string;
+  argsSha256?: string;
+  argsBytes?: number;
+  resultBytes?: number;
+  durationMs?: number;
+  approval?: 'auto' | 'user' | 'remembered';
+  policyVerdict?: string;
+  /** Discovery: tools kept, tools refused (bad name, duplicate, over a cap), tools new or changed. */
+  toolCount?: number;
+  droppedCount?: number;
+  changedCount?: number;
+}
 
 /**
  * Outcome of the audited operation
@@ -88,7 +116,7 @@ const IntegrationAuditLogSchema = new Schema<IIntegrationAuditLogDocument>(
     entityType: {
       type: String,
       required: true,
-      enum: ['oauth', 'webhook', 'mcp_tool', 'token_refresh'],
+      enum: [...INTEGRATION_AUDIT_ENTITY_TYPES],
     },
     integrationName: {
       type: String,
@@ -144,11 +172,15 @@ IntegrationAuditLogSchema.index({ userId: 1, createdAt: -1 });
 IntegrationAuditLogSchema.index({ workspaceId: 1, createdAt: -1 });
 IntegrationAuditLogSchema.index({ requestId: 1 });
 
-// TTL index to auto-delete old audit logs after 90 days (consistent with other audit logs)
-IntegrationAuditLogSchema.index(
-  { createdAt: 1 },
-  { expireAfterSeconds: 90 * 24 * 60 * 60 } // 90 days
-);
+/**
+ * TTL on createdAt: these audit logs are kept for 12 months.
+ *
+ * Mongo does not apply a changed expireAfterSeconds to an index that already exists, so changing
+ * this value needs a collMod migration (see 20260921235951_set-integration-audit-log-retention).
+ */
+export const INTEGRATION_AUDIT_LOG_RETENTION_SECONDS = 365 * 24 * 60 * 60;
+
+IntegrationAuditLogSchema.index({ createdAt: 1 }, { expireAfterSeconds: INTEGRATION_AUDIT_LOG_RETENTION_SECONDS });
 
 class IntegrationAuditLogRepository
   extends BaseRepository<IIntegrationAuditLogDocument>

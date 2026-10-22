@@ -1,7 +1,7 @@
 import { appFilesBucket, fabFileBucket, generatedImagesBucket } from './buckets';
-import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
+import { DEFAULT_LAMBDA_ENVIRONMENT, TEST_GENERATION_PROVIDER_ENVIRONMENT } from './constants';
 import { eventBus } from './eventBus';
-import { slackEventBus } from './bus';
+import { generationJobQueue } from './queues';
 import { imageProcessor } from './imageProcessor';
 import { mcpHandler } from './mcp';
 import { allSecrets } from './secrets';
@@ -9,6 +9,7 @@ import { websocketApi } from './websocket';
 import { lambdaVpc } from './vpc';
 import { cdnUrlForLambdaEnv } from './router';
 import { toolRuntimeAssets } from './toolRuntimeAssets';
+import { searxngUrl } from './searxng';
 
 // Re-export imageProcessor for other files that import from functions.ts
 export { imageProcessor };
@@ -16,7 +17,7 @@ export { imageProcessor };
 /**
  * Slack Quest Processor Lambda Function
  *
- * Handles Slack-originated completion requests routed via SlackEventBus.
+ * Handles Slack-originated completion requests ('slack.completion.started' on AppEventBus).
  * Owns all Slack-specific logic (tools, pending actions, async notification).
  * Web-originated completions are handled by the always-on ChatCompletion
  * (infra/chatCompletion.ts), not a Lambda.
@@ -39,13 +40,15 @@ export const slackQuestProcessor = new sst.aws.Function('SlackQuestProcessor', {
     websocketApi,
     mcpHandler,
     eventBus,
-    slackEventBus,
     imageProcessor,
+    generationJobQueue,
   ],
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
+    ...TEST_GENERATION_PROVIDER_ENVIRONMENT,
     // Personal sst dev stages serve files via the local proxy (apps/client/pages/api/app-files/serve); deployed stages use the real distribution.
     NEXT_PUBLIC_CDN_URL: cdnUrlForLambdaEnv(),
+    ...(searxngUrl ? { SEARXNG_BASE_URL: searxngUrl } : {}),
   },
   permissions: [
     { actions: ['bedrock:*'], resources: ['*'] },

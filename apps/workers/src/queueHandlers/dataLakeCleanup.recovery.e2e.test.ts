@@ -15,6 +15,7 @@ import {
 } from '@bike4mind/database';
 import {
   createMongoReplSet,
+  settleAutoIndexBuilds,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../packages/database/src/__test__/createMongoServer';
 
@@ -33,13 +34,13 @@ const storage = {
     objects.delete(key);
   },
 };
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => storage }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: () => storage }));
 vi.mock('@server/integrations/google/drive/common', () => ({ releaseDriveConnectionForLake: async () => false }));
 vi.mock('@server/integrations/github/dataLake/githubLakeConnection', () => ({
   releaseGitHubLakeConnectionForLake: async () => null,
 }));
-vi.mock('@server/memory/ledgerMemoryStore', () => ({ shredPrincipalMemory: async () => {} }));
-vi.mock('@server/memory/factCipher', () => ({ createKeyProvider: () => ({}) }));
+vi.mock('@bike4mind/server-utils/memory/ledgerMemoryStore', () => ({ shredPrincipalMemory: async () => {} }));
+vi.mock('@bike4mind/server-utils/memory/factCipher', () => ({ createKeyProvider: () => ({}) }));
 import { dispatch } from './dataLakeCleanup';
 
 describe('cleanup handler recovery with real replica-set Mongo', () => {
@@ -48,6 +49,7 @@ describe('cleanup handler recovery with real replica-set Mongo', () => {
   beforeAll(async () => {
     mongo = await createMongoReplSet();
     await mongoose.connect(mongo.getUri(), { autoIndex: false });
+    await settleAutoIndexBuilds(mongoose);
   });
   afterEach(() => {
     vi.restoreAllMocks();

@@ -2,12 +2,13 @@ import {
   adminSettingsRepository,
   dataLakeRepository,
   fabFileRepository,
+  organizationRepository,
   scopedSettingsRepository,
   User,
 } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import { saveGeneratedAsset, type SaveGeneratedAssetParams, type SaveGeneratedAssetResult } from '@bike4mind/services';
-import { getFilesStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 
 /** saveGeneratedAsset wired to the FabFile bucket and repositories, for server routes and job handlers. */
 export function saveGeneratedAssetToFiles(
@@ -23,6 +24,7 @@ export function saveGeneratedAssetToFiles(
       // override would silently not apply on this door.
       scopedSettings: scopedSettingsRepository,
       users: User,
+      organizations: organizationRepository,
       dataLakes: dataLakeRepository,
     },
     storage: {

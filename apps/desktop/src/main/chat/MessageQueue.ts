@@ -74,12 +74,18 @@ export class MessageQueue {
    * `queuedAt` matters: the row above the composer stays the same row rather than being
    * replaced, and one cancel still takes back everything typed during this turn.
    */
-  enqueue(sessionId: string, text: string, attachments: readonly ChatAttachment[] = []): ChatQueuedMessage {
+  enqueue(
+    sessionId: string,
+    text: string,
+    attachments: readonly ChatAttachment[] = [],
+    notes: readonly string[] = []
+  ): ChatQueuedMessage {
     const messages = this.list(sessionId);
     // The tail, and only if it is the user's own: a relay is never merged into, so typing
     // behind one starts a fresh entry rather than appending to another agent's words.
     const last = messages[messages.length - 1];
     const pending = last && !last.relay && !last.automatic ? last : undefined;
+    const mergedNotes = [...(pending?.notes ?? []), ...notes];
     const merged: ChatQueuedMessage = pending
       ? {
           ...pending,
@@ -94,6 +100,7 @@ export class MessageQueue {
           ...(attachments.length > 0 ? { attachments: [...attachments] } : {}),
         };
 
+    if (mergedNotes.length > 0) merged.notes = mergedNotes;
     this.replace(sessionId, pending ? [...messages.slice(0, -1), merged] : [...messages, merged]);
     this.announce(sessionId);
     return merged;

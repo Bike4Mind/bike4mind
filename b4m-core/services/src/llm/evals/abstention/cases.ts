@@ -2,7 +2,8 @@
  * Behaviour cases for the forced-retrieval abstention block.
  *
  * The block in `forcedRetrievalAbstention.ts` is injected on EVERY ungrounded forced-retrieval turn;
- * the code-level skips are exactly two (an empty prompt, and a turn carrying attached files).
+ * the code-level skips are four (an empty prompt, a turn carrying attached files in a chat with no
+ * chosen lake, a session scoped to no lake, and a personal-only corpus).
  * Everything else gets the block and is trusted to no-op it via the wording - "For any part of the
  * answer that depends on that library". That is a prompt-behaviour claim, so it wants an eval rather
  * than an argument: forced retrieval is a per-session toggle on ordinary chats, and the failure mode
@@ -85,6 +86,19 @@ export const ABSTENTION_CASES: AbstentionCase[] = [
     expectation: {
       kind: 'mustNotMentionCoverage',
       why: 'Self-contained arithmetic. The partial-coverage hedge is the wordiest of the three, so it is the likeliest to bleed.',
+    },
+  },
+  {
+    id: 'attachment-turn/no_match',
+    finding: 'no_match',
+    history: [
+      { role: 'user', content: 'Take a look at this draft.' },
+      { role: 'assistant', content: 'I have it in front of me.' },
+    ],
+    message: 'summarize the attached figure',
+    expectation: {
+      kind: 'mustNotMentionCoverage',
+      why: 'A lake-chosen chat now gets the block on an attachment turn too. The question is about the attachment, so an unprompted line about library coverage is the false positive to catch.',
     },
   },
   {

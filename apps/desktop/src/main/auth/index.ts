@@ -1,7 +1,7 @@
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { app, ipcMain, safeStorage, shell } from 'electron';
-import type { AccountPage, EnvironmentSelection } from '@shared/auth';
+import type { AccountPage, AuthState, EnvironmentSelection } from '@shared/auth';
 import { IPC_CHANNELS } from '@shared/ipc';
 import { MediaStore } from '../chat/media/MediaStore';
 import { createMainLogger } from '../logger';
@@ -30,7 +30,8 @@ function vaultFile(path: string): VaultFile {
       await mkdir(dirname(path), { recursive: true });
       // Write-then-rename: a crash mid-write would otherwise leave a truncated vault, which
       // reads back as corrupt and silently signs the user out of every environment at once.
-      const temporary = `${path}.tmp`;
+      // Per process: two instances sharing this userData must not rename each other's half-written file.
+      const temporary = `${path}.${process.pid}.tmp`;
       await writeFile(temporary, contents, { encoding: 'utf8', mode: 0o600 });
       await rename(temporary, path);
     },
@@ -63,6 +64,14 @@ function photoRecordFile(path: string): PhotoRecordFile {
  * returns an access token, refresh token or device code - anything needing a credential is a
  * main-process job, and a "just for convenience" getter would undo the whole arrangement.
  */
+const mainListeners = new Set<(state: AuthState) => void>();
+
+/** Main-process work that follows the signed-in account; returns the unsubscribe. */
+export function onAuthStateChanged(listener: (state: AuthState) => void): () => void {
+  mainListeners.add(listener);
+  return () => mainListeners.delete(listener);
+}
+
 export function registerAuth(): AuthService {
   const logger = createMainLogger(VERBOSE);
   const userData = app.getPath('userData');
@@ -87,6 +96,7 @@ export function registerAuth(): AuthService {
       for (const window of appWindows()) {
         window.webContents.send(IPC_CHANNELS.authStateChanged, state);
       }
+      for (const listener of mainListeners) listener(state);
     },
   });
 

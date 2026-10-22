@@ -501,7 +501,7 @@ export const buildAccessibleQuery = (
   // Org-admin arm (#2005): a lake in an org the caller holds ADMIN rights in, reachable by those
   // rights alone - the analog of the owner arm, for the same reason (the gate admits them via
   // canManageLake before it ever reaches the org prerequisite). Keyed off `administeredOrgIds`
-  // (billing owner OR managerId OR adminUserIds), deliberately a DIFFERENT set from the
+  // (billing owner OR adminUserIds), deliberately a DIFFERENT set from the
   // `organizationIds` membership the org arm above uses: membership also decides what the account
   // switcher offers as a write target (see `orgMembershipFilter`), so widening membership to fix
   // this would have handed a team manager the org as somewhere to write as. The two sets are meant
@@ -1271,15 +1271,15 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
 
   async findPendingPlaceholderLake(
     userId: string,
-    organizationId: string,
+    organizationId: string | undefined,
     connector: DataLakePendingConnector,
     placeholder: string
   ): Promise<IDataLakeDocument | null> {
-    if (!userId || !organizationId) return null;
+    if (!userId) return null;
     return this.dataLakeModel
       .findOne({
         createdByUserId: userId,
-        organizationId,
+        organizationId: organizationId || { $in: [null, ''] },
         pendingConnector: connector,
         name: placeholder,
         status: 'draft',
@@ -1724,6 +1724,23 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
       { $set: { 'files.$.status': to } }
     );
     return res.modifiedCount === 1;
+  }
+
+  /** Claim and count a rejected landing together, so redelivery cannot lose or double its failure. */
+  async rejectPendingUpload(batchId: string, fabFileId: string, error: string): Promise<IDataLakeBatchDocument | null> {
+    const doc = await this.batchModel.findOneAndUpdate(
+      {
+        _id: batchId,
+        status: { $in: BATCH_NON_TERMINAL_STATUSES },
+        files: { $elemMatch: { fabFileId, status: 'pending' } },
+      },
+      {
+        $set: { 'files.$.status': 'failed', 'files.$.failureCounted': true, 'files.$.error': error },
+        $inc: { failedFiles: 1 },
+      },
+      { new: true }
+    );
+    return (doc?.toJSON() as IDataLakeBatchDocument) ?? null;
   }
 
   /**

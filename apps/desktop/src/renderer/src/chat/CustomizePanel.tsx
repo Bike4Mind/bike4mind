@@ -1,4 +1,7 @@
+import { useEffect, useState } from 'react';
+import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
+import Button from '@mui/joy/Button';
 import Chip from '@mui/joy/Chip';
 import IconButton from '@mui/joy/IconButton';
 import List from '@mui/joy/List';
@@ -10,20 +13,43 @@ import TabList from '@mui/joy/TabList';
 import TabPanel from '@mui/joy/TabPanel';
 import Tabs from '@mui/joy/Tabs';
 import Typography from '@mui/joy/Typography';
+import type { SkillMarketImport, SkillMarketListingRef } from '@shared/skillMarket';
 import type { SkillSummary } from '@shared/skills';
 import { entryAttentionChip, EntrySection, type ConfigEntry } from './ConfigEntry';
-import { CloseIcon, ServerIcon, SlidersIcon, SparkIcon } from './icons';
+import { CloseIcon, ExternalLinkIcon, ServerIcon, SlidersIcon, SparkIcon } from './icons';
 import { McpServersSettings } from './McpServersSettings';
 import { NavItem } from './SessionList';
 import { skillChipColor, skillSourceLabel } from './skillMenu';
 import { columnStackSx, contentColumnSx, scrollingColumnHostSx } from './layout';
 import { useMcpServers, type McpServersController } from './useMcpServers';
 import { useSkills } from './useSkills';
+import { useSkillUpload } from './SkillUploadDialog';
 
 /** What this screen is for, said on the screen so it does not have to be inferred from a name. */
 const CUSTOMIZE_INTRO = 'What tools the app can reach.';
 
-function SkillGroup({ title, skills, empty }: { title: string; skills: SkillSummary[]; empty: string }) {
+/** An account skill's server id, out of the `b4m:/api/skills/<id>` path SkillCatalog gives it. */
+function accountSkillId(skill: SkillSummary): string | null {
+  return skill.source === 'account' ? (/^b4m:\/api\/skills\/(.+)$/.exec(skill.filePath)?.[1] ?? null) : null;
+}
+
+function SkillGroup({
+  title,
+  skills,
+  empty,
+  imports,
+  onOpenListing,
+  onUpload,
+}: {
+  title: string;
+  skills: SkillSummary[];
+  empty: string;
+  /** Market imports by skill id, for the update badge. Only the account group passes it. */
+  imports?: ReadonlyMap<string, SkillMarketImport>;
+  onOpenListing?: (listing: SkillMarketListingRef) => void;
+  /** Upload a local skill to the account. Account rows never offer it. */
+  onUpload?: (skill: SkillSummary) => void;
+}) {
   return (
     <Box component="section" data-testid="skill-group">
       <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.75 }}>
@@ -47,49 +73,93 @@ function SkillGroup({ title, skills, empty }: { title: string; skills: SkillSumm
             '& > li + li': { borderTop: '1px solid', borderColor: 'divider' },
           }}
         >
-          {skills.map(skill => (
-            <ListItem key={`${skill.source}:${skill.name}`} sx={{ py: 1.25 }} data-testid="customize-skill-row">
-              <Stack direction="row" spacing={1.25} sx={{ minWidth: 0, width: '100%', alignItems: 'center' }}>
-                <Sheet
-                  variant="outlined"
-                  sx={{
-                    width: 34,
-                    height: 34,
-                    borderRadius: 'sm',
-                    flexShrink: 0,
-                    display: 'grid',
-                    placeItems: 'center',
-                    color: 'text.tertiary',
-                  }}
-                >
-                  <SparkIcon />
-                </Sheet>
-                <Box sx={{ minWidth: 0, flex: 1 }}>
-                  <Stack direction="row" spacing={0.75} alignItems="baseline" sx={{ minWidth: 0 }}>
-                    <Typography level="title-sm" noWrap>
-                      /{skill.name}
-                    </Typography>
-                    {skill.argumentHint && (
-                      <Typography level="body-xs" textColor="text.tertiary" noWrap>
-                        {skill.argumentHint}
+          {skills.map(skill => {
+            const id = accountSkillId(skill);
+            const imported = id ? imports?.get(id) : undefined;
+            return (
+              <ListItem key={`${skill.source}:${skill.name}`} sx={{ py: 1.25 }} data-testid="customize-skill-row">
+                <Stack direction="row" spacing={1.25} sx={{ minWidth: 0, width: '100%', alignItems: 'center' }}>
+                  <Sheet
+                    variant="outlined"
+                    sx={{
+                      width: 34,
+                      height: 34,
+                      borderRadius: 'sm',
+                      flexShrink: 0,
+                      display: 'grid',
+                      placeItems: 'center',
+                      color: 'text.tertiary',
+                    }}
+                  >
+                    <SparkIcon />
+                  </Sheet>
+                  <Box sx={{ minWidth: 0, flex: 1 }}>
+                    <Stack direction="row" spacing={0.75} alignItems="baseline" sx={{ minWidth: 0 }}>
+                      <Typography level="title-sm" noWrap>
+                        /{skill.name}
                       </Typography>
-                    )}
-                  </Stack>
-                  <Typography level="body-sm" textColor="text.secondary" noWrap title={skill.description}>
-                    {skill.description}
-                  </Typography>
-                </Box>
-                <Chip
-                  size="sm"
-                  variant="plain"
-                  color={skillChipColor(skill.source)}
-                  data-testid="customize-skill-chip"
-                >
-                  {skillSourceLabel(skill.source)}
-                </Chip>
-              </Stack>
-            </ListItem>
-          ))}
+                      {skill.argumentHint && (
+                        <Typography level="body-xs" textColor="text.tertiary" noWrap>
+                          {skill.argumentHint}
+                        </Typography>
+                      )}
+                    </Stack>
+                    <Typography level="body-sm" textColor="text.secondary" noWrap title={skill.description}>
+                      {skill.description}
+                    </Typography>
+                  </Box>
+                  {imported?.updateAvailable && onOpenListing && (
+                    <Button
+                      size="sm"
+                      variant="soft"
+                      color="primary"
+                      onClick={() => onOpenListing({ id: imported.listingId })}
+                      data-testid="customize-skill-update-btn"
+                    >
+                      Update available
+                    </Button>
+                  )}
+                  {skill.imported && (
+                    <Chip size="sm" variant="soft" color="warning" data-testid="customize-skill-imported-chip">
+                      Imported
+                    </Chip>
+                  )}
+                  <Chip
+                    size="sm"
+                    variant="plain"
+                    color={skillChipColor(skill.source)}
+                    data-testid="customize-skill-chip"
+                  >
+                    {skillSourceLabel(skill.source)}
+                  </Chip>
+                  {onUpload && skill.source !== 'account' && (
+                    <Button
+                      size="sm"
+                      variant="plain"
+                      color="neutral"
+                      onClick={() => onUpload(skill)}
+                      data-testid="skill-row-upload-btn"
+                    >
+                      Upload
+                    </Button>
+                  )}
+                  {id && (
+                    <IconButton
+                      size="sm"
+                      variant="plain"
+                      color="neutral"
+                      aria-label={`Open /${skill.name} on the web`}
+                      title="Edit, share or delete on the web"
+                      onClick={() => void window.b4m.skillMarket.openOnWeb({ kind: 'skill', id })}
+                      data-testid="customize-skill-web-btn"
+                    >
+                      <ExternalLinkIcon />
+                    </IconButton>
+                  )}
+                </Stack>
+              </ListItem>
+            );
+          })}
         </List>
       )}
     </Box>
@@ -103,8 +173,27 @@ function skillScope(filePath: string): string | null {
   return parts[claudeIndex + 2] ?? null;
 }
 
-function SkillsSettings({ sessionId }: { sessionId: string | null }) {
-  const { skills } = useSkills(sessionId);
+function SkillsSettings({
+  sessionId,
+  onOpenSkillMarket,
+}: {
+  sessionId: string | null;
+  onOpenSkillMarket?: (listing?: SkillMarketListingRef) => void;
+}) {
+  const { skills, refresh } = useSkills(sessionId);
+  const upload = useSkillUpload(() => void refresh(), sessionId);
+  const uploadRow = (skill: SkillSummary) =>
+    void upload.start(() => window.b4m.skillMarket.readLocalSkill({ sessionId, name: skill.name }));
+  const [imports, setImports] = useState<ReadonlyMap<string, SkillMarketImport>>(new Map());
+  useEffect(() => {
+    let live = true;
+    void window.b4m.skillMarket.imports().then(result => {
+      if (live) setImports(new Map(result.imports.map(row => [row.skillId, row])));
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
   const userSkillScopes = new Map<string, SkillSummary[]>();
   for (const skill of skills) {
     if (skill.source !== 'global') continue;
@@ -132,7 +221,7 @@ function SkillsSettings({ sessionId }: { sessionId: string | null }) {
         ) : (
           <Stack spacing={2}>
             {[...userSkillScopes].map(([scope, scopedSkills]) => (
-              <SkillGroup key={scope} title={scope} skills={scopedSkills} empty="" />
+              <SkillGroup key={scope} title={scope} skills={scopedSkills} empty="" onUpload={uploadRow} />
             ))}
           </Stack>
         )}
@@ -141,7 +230,30 @@ function SkillsSettings({ sessionId }: { sessionId: string | null }) {
         title="Bike4Mind skills"
         skills={skills.filter(skill => skill.source === 'account')}
         empty="No Bike4Mind account skills loaded."
+        imports={imports}
+        onOpenListing={onOpenSkillMarket}
       />
+      {upload.error && (
+        <Alert color="danger" data-testid="skill-upload-pick-error">
+          {upload.error}
+        </Alert>
+      )}
+      <Stack direction="row" spacing={1}>
+        {onOpenSkillMarket && (
+          <Button variant="outlined" onClick={() => onOpenSkillMarket()} data-testid="customize-skill-market-btn">
+            Browse Skill Market
+          </Button>
+        )}
+        <Button
+          variant="outlined"
+          color="neutral"
+          onClick={() => void upload.start(() => window.b4m.skillMarket.pickUploadSource())}
+          data-testid="skill-upload-pick-btn"
+        >
+          Upload a skill...
+        </Button>
+      </Stack>
+      {upload.dialog}
     </Stack>
   );
 }
@@ -220,7 +332,15 @@ export function CustomizeNavItem({ onOpen }: { onOpen: () => void }) {
  * App preferences, the server and updates are Settings. The two screens say which half they own
  * under their titles, so neither has to be searched for the other's half.
  */
-export function CustomizeScreen({ onClose, sessionId = null }: { onClose: () => void; sessionId?: string | null }) {
+export function CustomizeScreen({
+  onClose,
+  sessionId = null,
+  onOpenSkillMarket,
+}: {
+  onClose: () => void;
+  sessionId?: string | null;
+  onOpenSkillMarket?: (listing?: SkillMarketListingRef) => void;
+}) {
   const entries = useCustomizeEntries();
 
   return (
@@ -264,7 +384,7 @@ export function CustomizeScreen({ onClose, sessionId = null }: { onClose: () => 
         </Box>
         <TabPanel value={0} sx={{ p: 0, flex: 1, ...scrollingColumnHostSx }}>
           <Box sx={{ ...contentColumnSx, py: 2 }}>
-            <SkillsSettings sessionId={sessionId} />
+            <SkillsSettings sessionId={sessionId} onOpenSkillMarket={onOpenSkillMarket} />
           </Box>
         </TabPanel>
         <TabPanel value={1} sx={{ p: 0, flex: 1, ...scrollingColumnHostSx }}>

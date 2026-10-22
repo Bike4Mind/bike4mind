@@ -2,9 +2,9 @@ import { Box, Button, Chip, Stack, Tooltip } from '@mui/joy';
 import AddIcon from '@mui/icons-material/Add';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import LakeSourceConnectActions from '@client/app/components/DataLakeWizard/steps/LakeSourceConnectActions';
-import { canConnectLakeDrive, lakeVisibilityLabel } from '@client/app/components/datalake/lakeVisibility';
+import { canConnectLakeConnector, lakeVisibilityLabel } from '@client/app/components/datalake/lakeVisibility';
 import { toWizardTargetLake, useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
-import type { RetrievabilityLabeledDataLake } from '@bike4mind/common';
+import { isGeneratedLakeTagPrefix, type RetrievabilityLabeledDataLake } from '@bike4mind/common';
 
 /**
  * What the scoped lake is and the lake-level actions on it - the home those actions never had
@@ -26,10 +26,10 @@ export default function SelectedLakeHeader({ lake }: { lake: RetrievabilityLabel
   const openWizardForLake = useDataLakeWizardStore(s => s.openWizardForLake);
   const openManager = useDataLakeWizardStore(s => s.openManager);
 
-  // Drive connect needs an org manager on an org lake and the creator on a personal one server-side
+  // Drive and GitHub connect need an org manager on an org lake and the creator on a personal one server-side
   // (the status route 404s otherwise). Gating on the same condition keeps a permanently disabled
   // button off every header the caller cannot connect, rather than an action that can only fail.
-  const canConnectDrive = canConnectLakeDrive(lake);
+  const canConnectSource = canConnectLakeConnector(lake);
 
   return (
     <Box
@@ -46,15 +46,17 @@ export default function SelectedLakeHeader({ lake }: { lake: RetrievabilityLabel
         >
           {lakeVisibilityLabel(lake)}
         </Chip>
-        <Chip
-          size="sm"
-          variant="soft"
-          color="neutral"
-          sx={{ fontSize: '11px' }}
-          data-testid="datalake-selected-lake-prefix"
-        >
-          {lake.fileTagPrefix}
-        </Chip>
+        {!isGeneratedLakeTagPrefix(lake) && (
+          <Chip
+            size="sm"
+            variant="soft"
+            color="neutral"
+            sx={{ fontSize: '11px' }}
+            data-testid="datalake-selected-lake-prefix"
+          >
+            {lake.fileTagPrefix}
+          </Chip>
+        )}
       </Stack>
 
       <Stack direction="row" gap={0.5} flexWrap="wrap">
@@ -84,10 +86,10 @@ export default function SelectedLakeHeader({ lake }: { lake: RetrievabilityLabel
         </Tooltip>
       </Stack>
 
-      {/* The source row: for an org lake this is the whole connect/re-sync/disconnect control, so
+      {/* The source row: for a lake the caller can connect this is the whole connect/re-sync/disconnect control, so
           attaching a Drive folder or GitHub repository is one step from the chat instead of three. Its own controls
           wrap, which is what keeps it inside the tree card's width. */}
-      {canConnectDrive && (
+      {canConnectSource && (
         <Box data-testid="datalake-selected-lake-source">
           <LakeSourceConnectActions lake={lake} />
         </Box>

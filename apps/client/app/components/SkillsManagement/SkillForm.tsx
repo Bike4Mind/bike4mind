@@ -1,5 +1,6 @@
-import React, { FC, useState } from 'react';
+import React, { FC, useRef, useState } from 'react';
 import {
+  Alert,
   Box,
   Button,
   Checkbox,
@@ -7,10 +8,12 @@ import {
   FormHelperText,
   FormLabel,
   Input,
+  Link,
   Stack,
   Textarea,
   Typography,
 } from '@mui/joy';
+import { parseSkillMd, type ParseSkillMdResult } from '@bike4mind/common/utils/skillMd';
 import { SkillFormInput } from '@client/app/hooks/data/skills';
 
 export interface SkillFormProps {
@@ -19,9 +22,23 @@ export interface SkillFormProps {
   submitLabel: string;
   onSubmit: (input: SkillFormInput) => void;
   onCancel: () => void;
+  /** Show the "Import SKILL.md" strip (create mode only; it prefills the fields). */
+  enableSkillMdImport?: boolean;
 }
 
 const SKILL_NAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+
+/** Bounds a local file read; the server accepts 50k characters, so this is already generous. */
+const MAX_IMPORT_BYTES = 200_000;
+
+/** Only a same-origin export gets a clickable provenance link; anything else stays plain text. */
+const isSameOrigin = (url: string): boolean => {
+  try {
+    return new URL(url).origin === window.location.origin;
+  } catch {
+    return false;
+  }
+};
 
 /**
  * Single MUI Joy form reused by `/skills/new` and `/skills/$id/edit`.
@@ -34,12 +51,61 @@ export const SkillForm: FC<SkillFormProps> = ({
   submitLabel,
   onSubmit,
   onCancel,
+  enableSkillMdImport = false,
 }) => {
   const [name, setName] = useState(initialValue?.name ?? '');
   const [description, setDescription] = useState(initialValue?.description ?? '');
   const [body, setBody] = useState(initialValue?.body ?? '');
   const [argumentHint, setArgumentHint] = useState(initialValue?.argumentHint ?? '');
   const [disableModelInvocation, setDisableModelInvocation] = useState(Boolean(initialValue?.disableModelInvocation));
+  const [importResult, setImportResult] = useState<ParseSkillMdResult | null>(null);
+  const [pasteOpen, setPasteOpen] = useState(false);
+  const [pasteText, setPasteText] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  // Bumped by every import so a slow earlier file read cannot overwrite a newer one.
+  const importReadId = useRef(0);
+
+  // Replaces argument hint and model-invocation flag with the file's values; other fields change only if the file sets them. A malformed file touches nothing.
+  const applySkillMd = (text: string) => {
+    const result = parseSkillMd(text);
+    setImportResult(result);
+    if (!result.ok) return;
+    const { fields } = result;
+    if (fields.name !== undefined) setName(fields.name);
+    if (fields.description !== undefined) setDescription(fields.description);
+    setArgumentHint(fields.argumentHint ?? '');
+    if (fields.body !== undefined) setBody(fields.body);
+    setDisableModelInvocation(fields.disableModelInvocation ?? false);
+    setPasteOpen(false);
+    setPasteText('');
+  };
+
+  const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    const readId = ++importReadId.current;
+    if (file.size > MAX_IMPORT_BYTES) {
+      setImportResult({ ok: false, error: 'The file is too large to import (200 KB maximum).' });
+      return;
+    }
+    file
+      .text()
+      .then(text => {
+        if (readId === importReadId.current) applySkillMd(text);
+      })
+      .catch(() => {
+        if (readId === importReadId.current) setImportResult({ ok: false, error: 'The file could not be read.' });
+      });
+  };
+
+  const applyPasted = () => {
+    importReadId.current += 1;
+    applySkillMd(pasteText);
+  };
+
+  const source = importResult?.ok ? importResult.source : undefined;
+  const sourceIsSameOrigin = source ? isSameOrigin(source.url) : false;
 
   const nameError =
     name.length === 0
@@ -81,6 +147,90 @@ export const SkillForm: FC<SkillFormProps> = ({
   return (
     <Box component="form" onSubmit={handleSubmit} data-testid="skill-form">
       <Stack spacing={3}>
+        {enableSkillMdImport ? (
+          <Stack spacing={1.5} data-testid="skill-form-import-skillmd">
+            <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+              <Typography level="title-sm">Import SKILL.md</Typography>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".md,text/markdown"
+                hidden
+                onChange={handleFile}
+                data-testid="skill-form-import-file"
+              />
+              <Button size="sm" variant="outlined" onClick={() => fileInputRef.current?.click()} disabled={submitting}>
+                Choose file
+              </Button>
+              <Button
+                size="sm"
+                variant="plain"
+                onClick={() => setPasteOpen(open => !open)}
+                disabled={submitting}
+                data-testid="skill-form-import-paste-toggle"
+              >
+                Paste
+              </Button>
+            </Stack>
+            <Typography level="body-xs" textColor="text.tertiary" data-testid="skill-form-import-file-limitations">
+              Only SKILL.md is imported. Supporting files next to it, such as scripts or reference documents,
+              aren&apos;t imported.
+            </Typography>
+            {pasteOpen ? (
+              <Stack spacing={1}>
+                <Textarea
+                  value={pasteText}
+                  onChange={e => setPasteText(e.target.value)}
+                  placeholder={'---\nname: my-skill\ndescription: ...\n---\n\nInstructions'}
+                  minRows={4}
+                  slotProps={{ textarea: { 'data-testid': 'skill-form-import-paste-input' } }}
+                />
+                <Button
+                  size="sm"
+                  sx={{ alignSelf: 'flex-start' }}
+                  onClick={applyPasted}
+                  disabled={!pasteText.trim()}
+                  data-testid="skill-form-import-paste-apply"
+                >
+                  Apply
+                </Button>
+              </Stack>
+            ) : null}
+            {importResult && !importResult.ok ? (
+              <Alert color="danger" variant="soft" data-testid="skill-form-import-error">
+                Couldn&apos;t read that SKILL.md: {importResult.error}
+              </Alert>
+            ) : null}
+            {source ? (
+              <Alert
+                color={source.thirdParty || !sourceIsSameOrigin ? 'warning' : 'primary'}
+                variant="soft"
+                data-testid="skill-form-import-from-b4m"
+              >
+                <span>
+                  {!sourceIsSameOrigin
+                    ? 'This file has a Bike4Mind source stamp from another site: '
+                    : source.thirdParty
+                      ? "This is another author's Skill Market skill; import it from the market to keep updates and attribution: "
+                      : 'This skill came from Bike4Mind - open the original instead of making a copy: '}
+                  {sourceIsSameOrigin ? (
+                    <Link href={source.url} target="_blank" rel="noopener noreferrer">
+                      {source.url}
+                    </Link>
+                  ) : (
+                    source.url
+                  )}
+                </span>
+              </Alert>
+            ) : null}
+            {importResult?.ok && importResult.dropped.length ? (
+              <Alert color="warning" variant="soft" data-testid="skill-form-import-dropped">
+                Not supported in Bike4Mind skills: {importResult.dropped.join(', ')}. These were ignored.
+              </Alert>
+            ) : null}
+          </Stack>
+        ) : null}
+
         <FormControl error={Boolean(nameError && name.length > 0)} required>
           <FormLabel>Name</FormLabel>
           <Input

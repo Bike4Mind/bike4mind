@@ -1,5 +1,5 @@
 import { signBrowserFileResponse } from '@server/files/signBrowserFileResponse';
-import { IFabFile, KnowledgeType } from '@bike4mind/common';
+import { ApiKeyScope, IFabFile, KnowledgeType } from '@bike4mind/common';
 import {
   dataLakeRepository,
   dataLakeAccessGrantRepository,
@@ -14,20 +14,29 @@ import { loadAccessibleFabFile } from '@server/files/loadAccessibleFabFile';
 import {
   assertFilesReadScope,
   assertFilesWriteScope,
-  FILES_READ_OR_WRITE_SCOPES,
+  FILES_READ_OR_WRITE_OR_GENERATE_SCOPES,
   FILES_READ_SCOPES,
+  isBareGenerateUpload,
 } from '@server/files/fileScopes';
+import { loadGenerateUploadFile } from '@server/files/loadGenerateUploadFile';
+import { assertGenerateUploadDeletable } from '@server/files/assertGenerateUploadDeletable';
 import { holdsApiKeyScope } from '@server/middlewares/apiKeyScopeGate';
 import { Request } from 'express';
-import { isValidObjectId } from '@server/utils/objectId';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { assertDataLakeTagWriteScope } from '@server/dataLakes/dataLakeScopes';
 
-// baseApi's scope gate is per route, so it admits either files scope and each method asserts its own.
-const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_SCOPES })
+// baseApi's scope gate is per route, so it admits either files scope (and ai:generate, for the
+// narrow GET and DELETE below) and each method asserts its own.
+const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_OR_GENERATE_SCOPES })
   .get(async (req: Request<{}, unknown, unknown, { id: string }>, res) => {
-    assertFilesReadScope(req);
     req.logger.updateMetadata({ userId: req.user.id, fileId: req.query.id });
+    if (!holdsApiKeyScope(req, FILES_READ_SCOPES) && holdsApiKeyScope(req, [ApiKeyScope.AI_GENERATE])) {
+      const extraQuery = Object.keys(req.query).some(k => k !== 'id');
+      if (extraQuery || typeof req.query.id !== 'string') assertFilesReadScope(req);
+      return res.json(await loadGenerateUploadFile(req, req.query.id));
+    }
+    assertFilesReadScope(req);
     return res.json(await loadAccessibleFabFile(req, req.query.id));
   })
   /**
@@ -109,7 +118,8 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_SCOPES })
    * Delete FabFile by ID
    */
   .delete(async (req: Request<{}, {}, {}, { id: string }>, res) => {
-    assertFilesWriteScope(req);
+    const bare = isBareGenerateUpload(req);
+    if (!bare) assertFilesWriteScope(req);
     const userId = req.user.id;
     const fabFileId = req.query.id;
 
@@ -118,6 +128,9 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_SCOPES })
     if (!isValidObjectId(fabFileId)) {
       return res.status(404).json({ msg: 'File not found' });
     }
+
+    // A bare ai:generate key may remove only its own marked staging uploads, never library files.
+    if (bare) await assertGenerateUploadDeletable(req, fabFileId);
 
     const deleteAction = await deleteFileForUser(req, fabFileId);
 

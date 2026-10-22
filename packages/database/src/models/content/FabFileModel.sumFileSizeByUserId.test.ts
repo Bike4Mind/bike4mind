@@ -94,3 +94,22 @@ describe('FabFileRepository.sumFileSizeByUserId', () => {
     expect(total).toBe(0);
   });
 });
+
+// The owner split (storageOwnerOf): an org-stamped row is the org's, never also its uploader's.
+describe('FabFileRepository charged-storage owner split', () => {
+  it('counts a personal row toward the user and an org-stamped row toward the org only', async () => {
+    await makeFile('u1', 'personal.txt', 100);
+    await makeFile('u1', 'org.txt', 40, { organizationId: 'o1' });
+
+    expect(await fabFileRepository.sumFileSizeByUserId('u1')).toBe(100);
+    expect(await fabFileRepository.sumFileSizeByOrganizationId('o1')).toBe(40);
+  });
+
+  // storageOwnerOf bills a falsy organizationId to the uploader, so the user truth must count it.
+  it('counts an empty-string organizationId as personal', async () => {
+    await makeFile('u1', 'personal.txt', 100);
+    await makeFile('u1', 'empty-org.txt', 7, { organizationId: '' });
+
+    expect(await fabFileRepository.sumFileSizeByUserId('u1')).toBe(107);
+  });
+});

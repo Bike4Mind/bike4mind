@@ -1,3 +1,4 @@
+import { ReplyMarkdownImage } from './ReplyMarkdownImage';
 import ImageContainer from '@client/app/components/Session/ImageContainer';
 import VideoContainer from '@client/app/components/Session/VideoContainer';
 import { GeneratedAudioPlayer } from '@client/app/components/Session/GeneratedAudioPlayer';
@@ -60,6 +61,7 @@ import {
 } from '@bike4mind/common';
 import { ArtifactElisionBanner } from './ArtifactElisionBanner';
 import { RetrievalCoverageBanner } from './RetrievalCoverageBanner';
+import { RetrievalFloorBanner } from './RetrievalFloorBanner';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import { isAxiosError } from 'axios';
@@ -73,7 +75,7 @@ import {
 import RechartsRenderer from '../Charts/RechartsRenderer';
 import ChessBoard from '../Chess/ChessBoard';
 import { useSessions } from '@client/app/contexts/SessionsContext';
-import { extractReplies, extractThinking } from '@client/shared/replyUtils';
+import { extractReplies, extractThinking } from '@bike4mind/server-utils/shared/replyUtils';
 import DeepResearchProgress from '../GenAI/DeepResearchProgress';
 import PromptEnhancementBanner from './PromptEnhancementBanner';
 import { extractCodeBlockTitle } from '@client/app/utils/codeBlockTitleExtractor';
@@ -84,10 +86,18 @@ import ReplyChoiceButtons from './ReplyChoiceButtons';
 import ReplyAccessories from './ReplyAccessories';
 import EnableWebSearchAction from './EnableWebSearchAction';
 import AttachmentNotices from './AttachmentNotices';
+import { TurnTimingNotice } from './TurnTimingNotice';
 import { NotebookExecutionButtons } from './NotebookExecutionButtons';
 import type { UiSideEffect } from '@bike4mind/common';
-import { dispatchUiSideEffects } from '@client/app/utils/uiSideEffectDispatcher';
+import {
+  claimLiveDispatch,
+  claimReplayDispatch,
+  dispatchUiSideEffects,
+  noteReplyInFlight,
+  settleReplyInFlight,
+} from '@client/app/utils/uiSideEffectDispatcher';
 import { getReplyTruncationState, repairTruncatedArtifact } from '@client/app/utils/replyTruncation';
+import { GitHubProjectActionTarget } from './GitHubProjectActionTarget';
 
 import SearchResultCards from './SearchResultCards';
 import { SEARCH_RESULT_CARDS_LANGUAGE } from './parseSearchResultCards';
@@ -636,7 +646,9 @@ const PromptReplies: FC<PromptReplyProps> = ({
         suggestedChoices={messageData.suggestedChoices}
         attachmentNotices={messageData.attachmentNotices}
         attachmentDelivery={messageData.attachmentDelivery}
+        turnTiming={messageData.turnTiming}
         uiSideEffects={messageData.uiSideEffects}
+        replySessionId={messageData.sessionId}
         jupyterNotebook={messageData.jupyterNotebook}
         notebookContent={notebookContent}
       />
@@ -903,6 +915,7 @@ const PendingActionButtonsContent: FC<PendingActionButtonsProps> = ({ pendingAct
       <Typography level="body-sm" sx={{ mb: 1.5, fontWeight: 'md' }}>
         Ready to execute: {toolDisplayName}
       </Typography>
+      <GitHubProjectActionTarget tool={pendingAction.tool} params={pendingAction.params} />
       <Stack direction="row" spacing={1}>
         <Button
           size="sm"
@@ -1051,10 +1064,7 @@ const AttachmentDownloadButtons: FC<AttachmentDownloadButtonsProps> = ({ attachm
     try {
       const response = await api.post('/api/mcp/delete-attachment', {
         sessionId,
-        source: attachmentList.source,
         attachmentId: attachment.id,
-        filename: attachment.filename,
-        ...(attachmentList.pageId && { pageId: attachmentList.pageId }),
       });
 
       if (response.data?.success) {
@@ -1174,21 +1184,29 @@ const AttachmentDownloadButtons: FC<AttachmentDownloadButtonsProps> = ({ attachm
 
 // UiSideEffectDispatcher
 
-const UiSideEffectDispatcher: FC<{ effects: UiSideEffect[]; completed: boolean; dedupeKey?: string }> = ({
-  effects,
-  completed,
-  dedupeKey,
-}) => {
-  const hasDispatched = useRef(false);
-
+const UiSideEffectDispatcher: FC<{
+  effects?: UiSideEffect[];
+  completed: boolean;
+  dedupeKey: string;
+  sessionId?: string;
+}> = ({ effects, completed, dedupeKey, sessionId }) => {
   useEffect(() => {
-    if (!completed || hasDispatched.current) return;
-    hasDispatched.current = true;
-    // Live arrival from a just-completed reply - auto-apply the brief and follow
-    // the AI to its console. dedupeKey ensures the streaming path and this render
-    // path apply the same quest only once (the later one is a no-op).
-    dispatchUiSideEffects(effects, { live: true, dedupeKey });
-  }, [completed, effects, dedupeKey]);
+    if (!completed) {
+      noteReplyInFlight(dedupeKey, sessionId);
+      return;
+    }
+    if (!effects?.length) {
+      settleReplyInFlight(dedupeKey);
+      return;
+    }
+    // Live only for the first dispatch of a reply this client watched finish; anything else
+    // is a replay, once per view of the session. See claimLiveDispatch / claimReplayDispatch.
+    if (claimLiveDispatch(dedupeKey, sessionId)) {
+      dispatchUiSideEffects(effects, { live: true, dedupeKey });
+    } else if (claimReplayDispatch(dedupeKey, sessionId)) {
+      dispatchUiSideEffects(effects, { dedupeKey });
+    }
+  }, [completed, effects, dedupeKey, sessionId]);
 
   return null;
 };
@@ -1225,7 +1243,9 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   suggestedChoices,
   attachmentNotices,
   attachmentDelivery,
+  turnTiming,
   uiSideEffects,
+  replySessionId,
   jupyterNotebook,
   notebookContent,
 }) => {
@@ -1320,6 +1340,12 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   const markdownComponents = useMemo(() => createMarkdownComponents({ highlightText }), [highlightText]);
 
   const codeComponent = useMemo(() => createCodeComponent(), []);
+  const markdownImage = useCallback(
+    ({ alt, src }: ComponentProps<'img'>) => (
+      <ReplyMarkdownImage src={typeof src === 'string' ? src : ''} alt={alt} onSendMessage={onSendMessage} />
+    ),
+    [onSendMessage]
+  );
   const placesById = useMemo(() => placesFromCitables(promptMeta?.citables), [promptMeta?.citables]);
   // Off until the reply is done and the markers can link, so any other reply keeps its `[N]` as ordinary text (search
   // highlighting matches across it) rather than one element per marker.
@@ -1588,6 +1614,11 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
         <RetrievalCoverageBanner reasons={promptMeta.retrievalCoverage.reasons} />
       )}
 
+      {/* A knowledge tool can still ground the turn after forced retrieval came back empty. */}
+      {promptMeta?.retrievalFloorRejection && !promptMeta.citables?.length && (
+        <RetrievalFloorBanner {...promptMeta.retrievalFloorRejection} />
+      )}
+
       {showSyntaxHighlight ? (
         <>
           <HighlightedCode code={processedContent || cleanReply} />
@@ -1640,6 +1671,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                   }}
                 >
                   <Typography
+                    data-testid="ai-response-body"
                     // plain, not soft: the reply body is unframed, and Joy's soft
                     // variant would paint its own background once the explicit one
                     // below is gone. The user's prompt keeps its bubble.
@@ -1820,32 +1852,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                                     components={{
                                       ...markdownComponents,
                                       code: codeComponent,
-                                      img: ({ alt, src, title }) => {
-                                        if (!src) {
-                                          return null;
-                                        }
-
-                                        const srcStr = typeof src === 'string' ? src : '';
-                                        if (
-                                          srcStr.startsWith('/mnt/') ||
-                                          srcStr.startsWith('/tmp/') ||
-                                          srcStr.startsWith('file://') ||
-                                          srcStr.startsWith('sandbox:') ||
-                                          srcStr.includes('/mnt/data/')
-                                        ) {
-                                          return null;
-                                        }
-
-                                        return (
-                                          <ImageContainer
-                                            src={srcStr}
-                                            index={0}
-                                            totalImages={1}
-                                            images={[srcStr]}
-                                            onSendMessage={onSendMessage}
-                                          />
-                                        );
-                                      },
+                                      img: markdownImage,
                                       a: link,
                                       [CITATION_MARKER_TAG]: CitationMarker,
                                     }}
@@ -1883,7 +1890,12 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
 
           After the expand control, which belongs to the reply body it truncates, and before
           artifacts, so a tall chart cannot separate a source from the marker that cites it. */}
-      {promptMeta?.citables && promptMeta.citables.length > 0 && <CitableSources citables={promptMeta.citables} />}
+      {promptMeta?.citables && promptMeta.citables.length > 0 && (
+        // The reply only once done, so chips do not reshuffle under the reader as citations stream in.
+        // processedContent, not cleanReply: an artifact body the reader never sees must not count as
+        // citing a source. Not displayContent either, which is cut to the collapsed view.
+        <CitableSources citables={promptMeta.citables} reply={completed ? processedContent : undefined} />
+      )}
 
       {/* Artifacts sit between the reply and the footer. This Stack owns ALL of their
           spacing - 24px above, 8px below, 16px between cards - so individual artifact
@@ -1920,8 +1932,16 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
           starts, and waiting hides it for exactly as long as the model is answering without it. */}
       <AttachmentNotices attachmentNotices={attachmentNotices} attachmentDelivery={attachmentDelivery} />
 
-      {uiSideEffects && uiSideEffects.length > 0 && completed && (
-        <UiSideEffectDispatcher effects={uiSideEffects} completed={completed} dedupeKey={messageId} />
+      {/* Not gated on `completed` either: during a stall the retries are the one thing worth reporting. */}
+      <TurnTimingNotice questId={messageId} timing={turnTiming} />
+
+      {messageId && (
+        <UiSideEffectDispatcher
+          effects={uiSideEffects}
+          completed={completed}
+          dedupeKey={messageId}
+          sessionId={replySessionId}
+        />
       )}
 
       {notebookContent && completed && (

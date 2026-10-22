@@ -8,13 +8,19 @@ import {
   WarningAmberRounded as TruncatedIcon,
   CompareArrowsRounded as ConflictIcon,
 } from '@mui/icons-material';
-import { CitableSource, CitableSourceType } from '@bike4mind/common';
+import { CitableSource, CitableSourceType, findCitationMarkers, sourceNamedIn } from '@bike4mind/common';
 import { DATA_LAKE, PERSONAL_LIBRARY, SHARED_LIBRARY } from '@client/app/components/datalake/dataLakeBranding';
 import { useCitableSourceClick } from './useCitableSourceClick';
 import { ExpandCollapseButton } from './ExpandCollapseButton';
+import { citationMarkersLinkable, replyProse } from './markdown/inlineCitations';
 
 interface CitableSourcesProps {
   citables: CitableSource[];
+  /**
+   * The finished reply's rendered markdown (artifacts already stripped), used to put the sources it
+   * cites first. Omit while streaming.
+   */
+  reply?: string;
 }
 
 /** Sources shown before the reader asks for the rest. Enough to see the list has substance. */
@@ -103,6 +109,45 @@ export const conflictPlacementOf = (
   const ids = conflictIdsOf(source);
   const isPartner = (chip: CitableSource | undefined) => !!chip?.id && ids.includes(chip.id);
   return isPartner(above) && !isPartner(below) ? 'bottom' : 'top';
+};
+
+const identityOf = (source: CitableSource): string | undefined => source.id || source.url || source.title;
+
+/**
+ * Identities of the sources `prose` cites (replyProse: what the reader sees, no code or artifacts).
+ * On a turn whose `[N]` markers resolve to `citables[N-1]` (citationMarkersLinkable) a marker is the
+ * citation; on any other turn a source counts when the reply names it the way the lake RAG eval
+ * grades a named citation (sourceNamedIn), or links its URL.
+ */
+const citedIdentities = (citables: readonly CitableSource[], prose: string): Set<string> => {
+  const sources = citationMarkersLinkable(citables)
+    ? findCitationMarkers(prose).flatMap(marker => marker.numbers.map(n => citables[n.value - 1]))
+    : citables.filter(source => sourceNamedIn(prose, source.title) || (!!source.url && prose.includes(source.url)));
+  const ids = new Set<string>();
+  for (const source of sources) {
+    // An out-of-range marker resolves to undefined.
+    const identity = source && identityOf(source);
+    if (identity) ids.add(identity);
+  }
+  return ids;
+};
+
+/**
+ * Cited sources first, then the rest, each group in retrieval order. A reply that cites nothing
+ * detectably keeps retrieval order: the match is lexical, so "none found" is not proof none was used.
+ * Safe to reorder: the chips carry no number, and an inline `[N]` resolves against the reply's own
+ * `citables`, not this list (inlineCitations.tsx).
+ */
+export const citedFirst = (
+  unique: CitableSource[],
+  citables: readonly CitableSource[],
+  prose: string | undefined
+): CitableSource[] => {
+  if (!prose) return unique;
+  const cited = citedIdentities(citables, prose);
+  if (cited.size === 0) return unique;
+  const isCited = (source: CitableSource) => cited.has(identityOf(source) ?? '');
+  return [...unique.filter(isCited), ...unique.filter(source => !isCited(source))];
 };
 
 /**
@@ -383,7 +428,7 @@ const CitableSourceItem: FC<CitableSourceItemProps> = ({
  * Show More pill, not the bare control a code card carries - that one sits INSIDE an
  * artifact frame, and this list has no frame of its own to sit in.
  */
-const CitableSources: FC<CitableSourcesProps> = ({ citables }) => {
+const CitableSources: FC<CitableSourcesProps> = ({ citables, reply }) => {
   const [expanded, setExpanded] = useState(false);
   // Partners of the conflict badge whose tooltip is open, keyed by that chip so a late close from
   // the badge just left cannot clear the highlight of the one just entered.
@@ -396,13 +441,13 @@ const CitableSources: FC<CitableSourcesProps> = ({ citables }) => {
     const seen = new Set<string>();
     const out: CitableSource[] = [];
     for (const source of citables ?? []) {
-      const identity = source.id || source.url || source.title;
+      const identity = identityOf(source);
       if (identity && seen.has(identity)) continue;
       if (identity) seen.add(identity);
       out.push(source);
     }
-    return out;
-  }, [citables]);
+    return citedFirst(out, citables ?? [], reply && replyProse(reply));
+  }, [citables, reply]);
 
   // Built off the DEDUPED list so a title resolves to the chip actually rendered for that id.
   const titleById = useMemo(() => {

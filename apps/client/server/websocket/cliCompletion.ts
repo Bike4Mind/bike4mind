@@ -1,6 +1,7 @@
+import { createCompletionCreditHolds } from '@server/billing/completionCreditHolds';
 import {
   CliCompletionRequestAction,
-  buildSSEEvent,
+  buildCompletionStreamEvent,
   IMessage,
   type CompletionSource,
   type TurnUsage,
@@ -26,8 +27,9 @@ import {
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
 import { withWebSocketContext, sendToConnection } from '@server/websocket/utils';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
-import { sanitizeErrorMessage } from '@server/utils/errorSanitization';
-import { TooManyRequestsError } from '@server/utils/errors';
+import { cliCompletionErrorFields } from '@server/utils/errorSanitization';
+import { TooManyRequestsError } from '@bike4mind/server-utils/utils/errors';
+import { isAuthInfraFailure } from '@server/auth/apiKeyAuthFailure';
 
 const AUTH_FAILED_MESSAGE = 'Authentication failed. Provide a valid API key or JWT token.';
 
@@ -36,8 +38,10 @@ const AUTH_FAILED_MESSAGE = 'Authentication failed. Provide a valid API key or J
  * The message is built by the limiter itself, so it is passed through as-is: sanitizeErrorMessage matches
  * a lowercase "rate limit" and would turn "Rate limit exceeded" into a generic internal error.
  */
-function rateLimitOrAuthError(requestId: string, error: unknown) {
-  if (error instanceof TooManyRequestsError) {
+function authFailureFrame(requestId: string, error: unknown) {
+  // A rate limit or a failed auth check (database unreachable) is retryable: relay its message and
+  // retryAfter rather than the bad-credential message.
+  if (error instanceof TooManyRequestsError || isAuthInfraFailure(error)) {
     const retryAfter = error.additionalInfo?.retryAfter;
     return {
       action: 'cli_completion_error' as const,
@@ -101,6 +105,12 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       method: 'WS',
     });
   } catch (apiKeyError) {
+    // The key check itself failed (database unreachable): report that, not a JWT verdict.
+    if (isAuthInfraFailure(apiKeyError)) {
+      logger.error('[CLI_WS] API key check failed', { error: apiKeyError.message });
+      await sendToConnection(connectionId, endpoint, authFailureFrame(requestId, apiKeyError));
+      return { statusCode: 200 };
+    }
     // A present-but-rate-limited key reports its own limit rather than falling through to JWT.
     if (apiKeyInfo) {
       if (!(apiKeyError instanceof TooManyRequestsError)) {
@@ -109,7 +119,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
           error: apiKeyError instanceof Error ? apiKeyError.message : String(apiKeyError),
         });
       }
-      await sendToConnection(connectionId, endpoint, rateLimitOrAuthError(requestId, apiKeyError));
+      await sendToConnection(connectionId, endpoint, authFailureFrame(requestId, apiKeyError));
       return { statusCode: 200 };
     }
     try {
@@ -123,7 +133,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
           error: jwtError instanceof Error ? jwtError.message : String(jwtError),
         });
       }
-      await sendToConnection(connectionId, endpoint, rateLimitOrAuthError(requestId, jwtError));
+      await sendToConnection(connectionId, endpoint, authFailureFrame(requestId, jwtError));
       return { statusCode: 200 };
     }
   }
@@ -137,6 +147,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   let finalCacheReadTokens = 0;
   let finalCacheWriteTokens = 0;
   let finalTurnUsage: TurnUsage[] | undefined;
+  let finalCreditsUsed: number | undefined;
   let hasToolCalls = false;
 
   // Resolve API key name for analytics logging
@@ -149,8 +160,9 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
 
   try {
     // Execute completion - same function as SSE handler
-    // Cast: Zod parses content/tools as unknown[], but executeCompletion expects typed arrays
+    // Cast: Zod parses message content as unknown[], but executeCompletion expects typed arrays
     await executeCompletion({
+      creditHolds: createCompletionCreditHolds(logger),
       userId,
       model,
       messages: messages as IMessage[],
@@ -176,9 +188,10 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
         if (info?.cacheReadInputTokens) finalCacheReadTokens = info.cacheReadInputTokens;
         if (info?.cacheCreationInputTokens) finalCacheWriteTokens = info.cacheCreationInputTokens;
         if (info?.turnUsage?.length) finalTurnUsage = info.turnUsage;
+        if (typeof info?.creditsUsed === 'number') finalCreditsUsed = info.creditsUsed;
         if (info?.toolsUsed && info.toolsUsed.length > 0) hasToolCalls = true;
 
-        const chunk = buildSSEEvent(text, info);
+        const chunk = buildCompletionStreamEvent(text, info);
         await sendToConnection(connectionId, endpoint, {
           action: 'cli_completion_chunk' as const,
           requestId,
@@ -199,7 +212,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     await logCompletionAnalytics({
       type: 'success',
       userId,
-      // WS variant accepts a looser tools shape (z.array(z.unknown())) than
+      // WS variant accepts a looser message content shape (z.array(z.unknown())) than
       // CompletionRequestSchema. Cast - analytics only reads model/messages.
       body: { model, messages, options } as Parameters<typeof logCompletionAnalytics>[0]['body'],
       apiKeyInfo: apiKeyInfoForCompletion,
@@ -212,6 +225,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       finalCacheReadTokens,
       finalCacheWriteTokens,
       finalTurnUsage,
+      finalCreditsUsed,
       hasToolCalls,
       db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
       logger: logger as unknown as Logger,
@@ -223,14 +237,14 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     await sendToConnection(connectionId, endpoint, {
       action: 'cli_completion_error' as const,
       requestId,
-      error: sanitizeErrorMessage(error),
+      ...cliCompletionErrorFields(error),
     });
 
     // Log failed analytics
     await logCompletionAnalytics({
       type: 'failure',
       userId,
-      // WS variant accepts a looser tools shape (z.array(z.unknown())) than
+      // WS variant accepts a looser message content shape (z.array(z.unknown())) than
       // CompletionRequestSchema. Cast - analytics only reads model/messages.
       body: { model, messages, options } as Parameters<typeof logCompletionAnalytics>[0]['body'],
       apiKeyInfo: apiKeyInfoForCompletion,

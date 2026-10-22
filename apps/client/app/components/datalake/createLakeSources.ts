@@ -14,7 +14,6 @@ import { createLakeOrigin } from '@client/app/components/datalake/createLakeSour
 import {
   GITHUB_LAKE_ADMIN_FLAG,
   GITHUB_ORG_MANAGER_ONLY_REASON,
-  GITHUB_ORG_ONLY_REASON,
   orgIdOfAccount,
 } from '@client/app/components/datalake/lakeSourceShared';
 
@@ -30,7 +29,6 @@ export type { CreateLakeSourceKind } from '@client/app/components/datalake/creat
  * lake yet and must resolve from the account scope the lake will be born into. Upload has no entry
  * there at all, since appending files needs no source declaration.
  */
-export const GITHUB_CREATE_ORG_ONLY_REASON = GITHUB_ORG_ONLY_REASON;
 export const GITHUB_CREATE_ORG_MANAGER_ONLY_REASON = GITHUB_ORG_MANAGER_ONLY_REASON;
 
 /** The account scope a create lands in, which is what decides a source's availability. */
@@ -90,10 +88,10 @@ const github: CreateLakeSource = {
   Icon: GitHubIcon,
   origin: createLakeOrigin('github'),
   adminFlag: GITHUB_LAKE_ADMIN_FLAG,
-  unavailableReason: scope => {
-    if (!scope.organizationId) return GITHUB_CREATE_ORG_ONLY_REASON;
-    return scope.isOrgOwnerOrManager ? undefined : GITHUB_CREATE_ORG_MANAGER_ONLY_REASON;
-  },
+  // A personal create is always allowed: github-connect makes the caller the new lake's creator, the one
+  // person its connect gate admits. An org create needs an owner/manager, as the server checks.
+  unavailableReason: scope =>
+    !scope.organizationId || scope.isOrgOwnerOrManager ? undefined : GITHUB_CREATE_ORG_MANAGER_ONLY_REASON,
 };
 
 /** Every source a new lake can be fed by, in display order. */
@@ -130,7 +128,10 @@ export function useCreateLakeScope(): CreateLakeScope {
   const organizationId = orgIdOfAccount(selectedAccount);
   const { data: organizations } = useGetUserOrganizations(currentUser?.id);
   const org = organizationId ? organizations?.find(o => o.id === organizationId) : undefined;
-  return { organizationId, isOrgOwnerOrManager: hasOrgUpdateAccess(currentUser, org) };
+  return {
+    organizationId,
+    isOrgOwnerOrManager: hasOrgUpdateAccess(currentUser, org),
+  };
 }
 
 /** The sources to offer a create, in display order: every flagged-on source, available or disabled. */

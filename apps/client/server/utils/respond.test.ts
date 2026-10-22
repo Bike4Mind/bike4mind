@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import * as z from 'zod';
 import type { Response } from 'express';
-import { InternalServerError } from '@bike4mind/common';
+import mongoose from 'mongoose';
+import { InternalServerError, passthroughShape } from '@bike4mind/common';
 import { respond } from './respond';
 
 /** Minimal Express Response double capturing status + json. */
@@ -63,5 +64,33 @@ describe('respond', () => {
     // The ZodError rides along as `cause` for server-side logging, never echoed.
     expect((thrown as Error).cause).toBeDefined();
     expect(res.json).not.toHaveBeenCalled();
+  });
+
+  it('reads a hydrated mongoose document through its getters and virtuals', () => {
+    // Several repo methods (findOneAndUpdate, find) hand back hydrated documents, not plain
+    // objects. The schema must still see the `id` virtual and drop `_id`/`__v`.
+    const Plan = mongoose.model(
+      'RespondHydrationProbe',
+      new mongoose.Schema(
+        { goal: String, quests: [{ title: String }], metrics: { lastProgress: Date } },
+        { toJSON: { virtuals: true } }
+      )
+    );
+    const _id = new mongoose.Types.ObjectId();
+    const lastProgress = new Date('2026-01-02T03:04:05Z');
+    const doc = Plan.hydrate({ _id, __v: 3, goal: 'ship', quests: [{ title: 'q1' }], metrics: { lastProgress } });
+    const res = mockRes();
+
+    respond(res, z.object(passthroughShape({ id: true, goal: true, quests: true, metrics: true })), doc);
+
+    const body = JSON.parse(JSON.stringify(res.body)) as Record<string, unknown>;
+    expect(body).toMatchObject({
+      id: _id.toString(),
+      goal: 'ship',
+      metrics: { lastProgress: lastProgress.toISOString() },
+    });
+    expect(body.quests).toEqual([expect.objectContaining({ title: 'q1' })]);
+    expect(body).not.toHaveProperty('_id');
+    expect(body).not.toHaveProperty('__v');
   });
 });

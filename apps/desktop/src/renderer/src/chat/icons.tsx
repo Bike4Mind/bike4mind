@@ -301,6 +301,15 @@ export function GlobeIcon() {
   );
 }
 
+export function TerminalIcon() {
+  return (
+    <Glyph>
+      <rect x="2" y="3" width="12" height="10" rx="1.5" />
+      <path d="M4.75 6.25 6.75 8l-2 1.75M8.25 10h3" />
+    </Glyph>
+  );
+}
+
 /** The browser pane's url bar: back, forward, and a reload that is the same arc both ways. */
 export function ArrowLeftIcon() {
   return (
@@ -405,6 +414,16 @@ export function ExternalLinkIcon() {
   return (
     <Glyph>
       <path d="M9.5 2.5h4v4M13.5 2.5 8 8M12 9.5v3a1 1 0 01-1 1H3.5a1 1 0 01-1-1V5a1 1 0 011-1h3" />
+    </Glyph>
+  );
+}
+
+/** A file with a plus over a minus: uncommitted or unshipped changes. */
+export function FileDiffIcon() {
+  return (
+    <Glyph>
+      <rect x="2.5" y="2" width="11" height="12" rx="2" />
+      <path d="M8 4.75v4M6 6.75h4M6 11.25h4" />
     </Glyph>
   );
 }

@@ -26,8 +26,14 @@ import { Logger } from '@bike4mind/observability';
 import { BaseBedrockBackend } from './base';
 import { capCacheControlMarkers, getCachingAdapter } from '../caching/adapters';
 import { systemContentToText } from '../systemContent';
+import { sortToolsForStableCacheKey } from '../caching/stableToolOrder';
 import { DispatchModel } from '../dispatchModel';
-import { buildThinkingParams, planReasoningEffort, resolveAnthropicEffort } from '../thinkingParams';
+import {
+  buildThinkingParams,
+  effortForComplexity,
+  planReasoningEffort,
+  resolveAnthropicEffort,
+} from '../thinkingParams';
 import { toAnthropicContent } from '../anthropicContent';
 import { appendIdentityReminder, buildIdentityReminder } from '../identityReminder';
 
@@ -501,10 +507,11 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         max_tokens: 64000,
         can_stream: true,
         can_think: true,
+        // us. is a regional endpoint: AWS bills a 10% premium over the global rate ($3 / $15).
         pricing: {
           200000: {
-            input: 3 / 1000000, // $3 per 1M input tokens same with  sonnet4
-            output: 15 / 1000000, // $15 per 1M output tokens
+            input: 3.3e-6, // $3.30 per 1M input tokens
+            output: 16.5 / 1000000, // $16.50 per 1M output tokens
           },
         },
         supportsVision: true,
@@ -514,6 +521,9 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         rank: 2,
         trainingCutoff: '2025-07-01',
         releaseDate: '2025-09-30',
+        // Bedrock reports it LEGACY; the static redirect in resolveDeprecatedModel.ts already serves it as 4.6,
+        // so hide it from the picker even before discovery has written the lifecycle.
+        deprecationDate: '2026-10-08',
         description:
           "Anthropic's most intelligent model hosted in AWS Bedrock. Delivers exceptional performance across coding, analysis, and complex reasoning tasks with improved speed and efficiency. Ideal for production workloads requiring both power and reliability.",
       },
@@ -526,8 +536,9 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         max_tokens: 64000,
         can_stream: true,
         can_think: true,
+        // us. is a regional endpoint: AWS bills a 10% premium over the global rate ($1 / $5).
         pricing: {
-          200000: { input: 1 / 1_000_000, output: 5 / 1_000_000 },
+          200000: { input: 1.1 / 1_000_000, output: 5.5 / 1_000_000 },
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',
@@ -598,8 +609,8 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         thinkingStyle: 'adaptive',
         pricing: {
           1_000_000: {
-            input: 3 / 1000000, // $3 per 1M input tokens
-            output: 15 / 1000000, // $15 per 1M output tokens
+            input: 2 / 1000000, // $2 per 1M input tokens
+            output: 10 / 1000000, // $10 per 1M output tokens
           },
         },
         supportsVision: true,
@@ -906,7 +917,9 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
     // Append model identity so the model correctly identifies itself when asked.
     // Skipped for bare-completion callers (API promptMode raw) - must stay in sync
     // with the same flag in anthropicBackend.
-    const identityReminder = options.omitIdentityReminder ? null : buildIdentityReminder(model);
+    const identityReminder = options.omitIdentityReminder
+      ? null
+      : buildIdentityReminder(model, options.modelDisplayName);
 
     let systemMessage = systemBlocks.map(block => block.text).join('\n');
     if (identityReminder) {
@@ -934,18 +947,41 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
     // makes the flag a silent no-op. Gated on the same two checks as applyCaching below so a model
     // that rejects cache_control never sees one. Must stay in sync with anthropicBackend, which
     // makes the same string-vs-blocks choice.
-    const cacheStrategy = options.cacheStrategy;
+    // A tool round appends the previous round's tool_use/tool_result, which the next round re-sends
+    // verbatim, so the end of the array is history again - unlike the first call, where it is the
+    // volatile current turn the caller anchors ahead of itself. See the same override in
+    // anthropicBackend.
+    const cacheStrategy =
+      (options._internal?.toolCallCount ?? 0) > 0 && options.cacheStrategy
+        ? { ...options.cacheStrategy, cacheConversationHistory: true }
+        : options.cacheStrategy;
     const modelSupportsCaching = !BEDROCK_NO_PROMPT_CACHING_MODELS.has(modelId);
-    const emitSystemCacheBreakpoint =
-      Boolean(cacheStrategy?.enableCaching) && modelSupportsCaching && systemBlocks.some(block => block.cache);
+    const emitCaching = Boolean(cacheStrategy?.enableCaching) && modelSupportsCaching;
+    const emitSystemCacheBreakpoint = emitCaching && systemBlocks.some(block => block.cache);
+    // Same TTL as applyCaching gives the other breakpoints: Anthropic constrains how
+    // mixed-TTL breakpoints may be ordered, and matching sidesteps that entirely.
+    const cacheControl = {
+      type: 'ephemeral' as const,
+      ...(cacheStrategy?.cacheTTL === '1h' ? { ttl: cacheStrategy.cacheTTL } : {}),
+    };
+
+    // A `cache: true` user/assistant message declares a mid-history breakpoint (see
+    // markHistoryCacheAnchor in @bike4mind/services). This backend forwards IMessage objects into
+    // the request body, so the control flag has to become cache_control on the message's last
+    // content block - and must never be serialized, since the wire has no such field.
+    body.messages = filteredMessages.map(message => {
+      const { cache, ...wire } = message;
+      if (!emitCaching || cache !== true) return wire;
+      const content =
+        typeof wire.content === 'string'
+          ? [{ type: 'text' as const, text: wire.content }]
+          : [...(wire.content as Array<Record<string, unknown>>)];
+      if (content.length === 0) return wire;
+      content[content.length - 1] = { ...content[content.length - 1], cache_control: cacheControl };
+      return { ...wire, content };
+    });
 
     if (emitSystemCacheBreakpoint) {
-      // Same TTL as applyCaching gives the other breakpoints: Anthropic constrains how
-      // mixed-TTL breakpoints may be ordered, and matching sidesteps that entirely.
-      const cacheControl = {
-        type: 'ephemeral' as const,
-        ...(cacheStrategy?.cacheTTL === '1h' ? { ttl: cacheStrategy.cacheTTL } : {}),
-      };
       const blocks: Array<Record<string, unknown>> = systemBlocks.map(block =>
         block.cache
           ? { type: 'text', text: block.text, cache_control: cacheControl }
@@ -992,6 +1028,8 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       // questMaster is an Anthropic-specific extra not on the generic ICompletionOptions;
       // cast locally for that one field (thinking is already declared on the type).
       const isQuestMaster = (options as { questMaster?: boolean }).questMaster === true;
+      const reasoningEffort =
+        options.reasoningEffort ?? effortForComplexity(model, currentModelInfo, options.complexity);
       const userThinkingEnabled = options.thinking?.enabled === true;
 
       if (userThinkingEnabled || isQuestMaster) {
@@ -1020,8 +1058,8 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
           body.temperature = result.temperature;
         }
         delete body.top_p;
-      } else if (options.reasoningEffort) {
-        const plan = planReasoningEffort(model, currentModelInfo, options.reasoningEffort, maxTokens);
+      } else if (reasoningEffort) {
+        const plan = planReasoningEffort(model, currentModelInfo, reasoningEffort, maxTokens);
         if (plan.kind !== 'default') body.thinking = plan.thinking;
         if (plan.kind === 'adaptive') body.output_config = plan.output_config;
         if (plan.kind === 'budget') {
@@ -1080,11 +1118,6 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
 
     Object.assign(body, capCacheControlMarkers(body));
 
-    // Log the actual body being sent (first 1000 chars)
-    const bodyStr = JSON.stringify(body);
-    console.log(
-      `[AnthropicBedrockBackend] Request body: ${bodyStr.substring(0, 1000)}${bodyStr.length > 1000 ? '...' : ''}`
-    );
     return {
       modelId: modelId,
       contentType: 'application/json',
@@ -1419,7 +1452,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
   }
 
   formatTools(tools: ICompletionOptionTools[] = []) {
-    return tools.map(tool => {
+    return sortToolsForStableCacheKey(tools).map(tool => {
       const { parameters, ...rest } = tool.toolSchema;
       // `strict` is an OpenAI-only tool field. Anthropic rejects it with
       // "tools.N.custom.strict: Extra inputs are not permitted", so strip it from the

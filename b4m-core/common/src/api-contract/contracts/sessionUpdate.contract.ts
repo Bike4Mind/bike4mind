@@ -23,8 +23,9 @@ export const sessionUpdateContract = defineEndpoint({
     'files, tags, or retrieval settings. Set `knowledgeIds` and `forceKnowledgeRetrieval: true` ' +
     'together to enable grounded retrieval for `POST /api/chat` against this session - retrieval ' +
     'is gated by these session fields, not by the chat request. `lakeScope` narrows that ' +
-    'retrieval to a chosen set of data lakes; omit it to leave the current choice unchanged, or ' +
-    'send `null` to clear it so retrieval reaches every lake you can access. `includeLibraryFiles` ' +
+    'retrieval to a chosen set of data lakes, and a non-empty list also turns forced retrieval on ' +
+    'for a session that has never set it; omit it to leave the current choice unchanged, or send ' +
+    '`null` to clear it so retrieval reaches every lake you can access. `includeLibraryFiles` ' +
     'sets whether the session grounds on your own library alongside its lakes; `false` confines it to ' +
     'lake content even when every lake is in scope (files attached to the session still reach the ' +
     'model and its knowledge-base tools), and is set aside (library ' +

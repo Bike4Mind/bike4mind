@@ -8,6 +8,7 @@ import { resolveCatalogRecords } from '@bike4mind/llm-adapters';
 import { describe, expect, it } from 'vitest';
 import { testCredentials } from './__fixtures__/fakes';
 import { DISCOVERY_CONTRIBUTOR, planCatalogWrites, type CatalogWriteInput } from './catalogWrite';
+import { planLifecycleSignals } from './lifecyclePlan';
 import {
   normalizeBedrockModels,
   type BedrockAvailability,
@@ -46,6 +47,7 @@ const plan = (overrides: Partial<CatalogWriteInput> = {}) =>
     // The default is a healthy run: every fixture is OpenAI-backed, so the
     // aggregator enrich-only rule is off unless a test asks for it.
     coveredBackends: new Set<string>([ModelBackend.OpenAI]),
+    providerSourceNames: new Set(['openai', 'elevenlabs']),
     operatorOwnedModelIds: new Set(),
     credentials: testCredentials(),
     policy: 'priced',
@@ -563,6 +565,15 @@ describe('planCatalogWrites', () => {
         resolved: { status: 'deprecated', deprecationDate: '2026-05-01' },
       },
       {
+        name: 'clamps a held later deprecation with a typed earlier legacy date',
+        held: { status: 'deprecated', deprecationDate: '2027-03-30' },
+        contributions: typed({ status: 'legacy', deprecationDate: '2026-09-30', retirementDate: '2027-03-30' }),
+        source: 'openai',
+        appended: [{ status: 'deprecated', deprecationDate: '2026-09-30', retirementDate: '2027-03-30' }],
+        reasons: [statusDrop('step back', 'legacy', 'deprecated')],
+        resolved: { status: 'deprecated', deprecationDate: '2026-09-30', retirementDate: '2027-03-30' },
+      },
+      {
         name: 'keeps a held retired status over a typed deprecated claim',
         held: { status: 'retired', retirementDate: '2026-06-01' },
         contributions: typed({ status: 'deprecated' }),
@@ -688,7 +699,7 @@ describe('planCatalogWrites', () => {
         ]
       );
     const priorDiscoveryGroups = new Map([['gpt-6', GROUPS as never]]);
-    const providerUndated = new Map([['gpt-6', 'openai']]);
+    const providerUndated = new Map([['gpt-6', ['openai']]]);
     const litellmDate = {
       name: 'litellm',
       kind: 'aggregator' as const,
@@ -727,6 +738,139 @@ describe('planCatalogWrites', () => {
         modelId: 'gpt-6',
         reason: `deprecationDate ${FUTURE} refused: openai reports the model "active" with no deprecation date`,
       });
+    });
+
+    /** One run as runModelDiscovery drives it: signals first, then the plan over what the last run left. */
+    const run = (
+      contributions: CatalogWriteInput['contributions'],
+      previous: { rows: IModelCatalogRowInput[]; base?: ReturnType<typeof asBase> },
+      providerSourceNames: ReadonlySet<string> = new Set(['openai', 'azure', 'bedrock'])
+    ) => {
+      const signals = planLifecycleSignals({ contributions });
+      const last = previous.rows[0];
+      return plan({
+        contributions: signals.contributions,
+        base: previous.base ?? asBase(previous.rows),
+        priorDiscoveryGroups: new Map([['gpt-6', (last?.ownedGroups ?? GROUPS) as never]]),
+        priorContributors: new Map([['gpt-6', last?.contributors ?? []]]),
+        providerUndated: signals.providerUndated,
+        providerSourceNames,
+      });
+    };
+    const seeded = { rows: [], base: held({ status: 'active' }) };
+    const typedProvider = (name: string, lifecycle: Record<string, unknown>) => ({
+      name,
+      kind: 'provider' as const,
+      records: [{ ...gpt6({ lifecycle }), lifecycleEvidence: 'typed' as const }],
+    });
+    const openaiDated = typedProvider('openai', { status: 'active', deprecationDate: FUTURE });
+    const openaiUndated = typedProvider('openai', { status: 'active' });
+    /** A discovery row whose lifecycle group an earlier run credited to `source`, holding no date. */
+    const creditedTo = (source: string) => ({
+      rows: [
+        { ownedGroups: GROUPS, contributors: [{ group: 'lifecycle', source }] } as unknown as IModelCatalogRowInput,
+      ],
+      base: held({ status: 'active' }),
+    });
+
+    it('keeps a date one provider supplied when a different provider later reports the model undated', () => {
+      const dated = run([openaiDated], seeded);
+      expect(dated.rows[0].patch.lifecycle).toEqual({ status: 'active', deprecationDate: FUTURE });
+
+      const next = run([typedProvider('azure', { status: 'active' })], dated);
+
+      expect(next.rows).toEqual([]);
+      expect(dated.rows[0].contributors).toContainEqual({ group: 'lifecycle', source: 'openai' });
+      expect(next.dropped).toEqual([
+        {
+          source: 'azure',
+          modelId: 'gpt-6',
+          reason: `held deprecationDate ${FUTURE} kept: supplied by openai, azure reports the model "active" undated`,
+        },
+      ]);
+    });
+
+    it.each([
+      ['azure first', ['azure', 'openai']],
+      ['openai first', ['openai', 'azure']],
+    ])(
+      'lets the supplying provider clear its date when another provider also reports the model undated (%s)',
+      (_label, order) => {
+        const dated = run([openaiDated], seeded);
+        const next = run(
+          order.map(name => typedProvider(name, { status: 'active' })),
+          dated
+        );
+
+        expect(next.rows).toHaveLength(1);
+        expect(next.rows[0].patch.lifecycle).toEqual({ status: 'active' });
+        expect(next.rows[0].contributors).toContainEqual({ group: 'lifecycle', source: 'openai' });
+      }
+    );
+
+    it('lets the provider that supplied a date clear it by later reporting the model undated', () => {
+      const dated = run([openaiDated], seeded);
+      const next = run([openaiUndated], dated);
+
+      expect(next.rows).toHaveLength(1);
+      expect(next.rows[0].patch.lifecycle).toEqual({ status: 'active' });
+      expect(next.rows[0].contributors).toContainEqual({ group: 'lifecycle', source: 'openai' });
+    });
+
+    it('does not bring a cleared date back on a run where the provider source is down', () => {
+      const models = { ...litellmDate, name: 'models.dev' };
+      const held0 = { rows: [], base: held({ status: 'active', deprecationDate: FUTURE }) };
+
+      const cleared = run([openaiUndated, models], held0);
+      expect(cleared.rows[0].patch.lifecycle).toEqual({ status: 'active' });
+
+      const providerDown = run([models], { rows: cleared.rows });
+      expect(providerDown.rows).toEqual([]);
+      expect(providerDown.dropped).toContainEqual({
+        source: 'models.dev',
+        modelId: 'gpt-6',
+        reason:
+          `deprecationDate ${FUTURE} refused: openai reported the model "active" with no deprecation date ` +
+          'on an earlier run and is not reporting this run',
+      });
+
+      const providerBack = run([openaiUndated, models], { rows: cleared.rows });
+      expect(providerBack.rows).toEqual([]);
+    });
+
+    it('keeps a held date the down provider supplied when an aggregator repeats a future date', () => {
+      const dated = run([openaiDated], seeded);
+      const next = run([litellmDate], dated);
+
+      expect(next.rows).toEqual([]);
+      expect(next.dropped.filter(d => d.reason.includes('earlier run'))).toEqual([]);
+    });
+
+    const silent = { name: 'openai', kind: 'provider' as const, records: [] };
+    it.each([
+      {
+        name: 'does not extend a down aggregator undated word to another aggregator with no provider this run',
+        contributions: [litellmDate],
+        previous: creditedTo('models.dev'),
+        providerSourceNames: undefined,
+      },
+      {
+        name: 'lets an aggregator date through when the credited provider is not configured',
+        contributions: [litellmDate],
+        previous: creditedTo('openai'),
+        providerSourceNames: new Set<string>(),
+      },
+      {
+        name: 'does not apply the down-provider fallback when the provider ran but did not list the model',
+        contributions: [silent, litellmDate],
+        previous: creditedTo('openai'),
+        providerSourceNames: undefined,
+      },
+    ])('$name', ({ contributions, previous, providerSourceNames }) => {
+      const result = run(contributions, previous, providerSourceNames);
+
+      expect(result.dropped.filter(d => d.reason.includes('earlier run'))).toEqual([]);
+      expect(result.rows[0].patch.lifecycle).toEqual({ status: 'active', deprecationDate: FUTURE });
     });
 
     it('keeps the date when only an aggregator speaks to the lifecycle', () => {

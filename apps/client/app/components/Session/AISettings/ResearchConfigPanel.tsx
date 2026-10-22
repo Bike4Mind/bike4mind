@@ -107,7 +107,9 @@ export const ResearchConfigPanel: FC<ResearchConfigPanelProps> = ({ index, confi
             onClick={() =>
               onUpdate({
                 enabled: true,
-                model: (textModels[0]?.id as ChatModels) || ChatModels.GPT4_1,
+                // Cast is safe today: the catalog has no row for the dated gpt-5.4-mini snapshot, so
+                // it never reaches textModels. Add a supportedChatModels.safeParse here if one is added.
+                model: (textModels[0]?.id as ChatModelName) || ChatModels.GPT4_1,
                 parameters: {
                   temperature: 0.7,
                   maxTokens: 4096,

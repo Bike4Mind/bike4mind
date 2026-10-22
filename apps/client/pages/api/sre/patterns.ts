@@ -4,7 +4,7 @@
 
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { sreErrorPatternRepository } from '@bike4mind/database';
 
 const handler = baseApi().get(

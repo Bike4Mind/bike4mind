@@ -26,6 +26,18 @@ export interface IPartnerSignupRule {
    * deleting the rule stops future auto-adds but never evicts existing members.
    */
   organizationId?: string | null;
+  /**
+   * User tags stamped onto a verified signup on this domain, merged into the user's existing
+   * tags. Unlike `entitlements` (derived on read, so disabling the rule revokes them), tags are
+   * written once and stay on the user after the rule is disabled or deleted.
+   */
+  tags?: string[];
+  /**
+   * Optional individual subscription granted at signup through the admin-grant path (no Stripe).
+   * Written once like `tags`: disabling or deleting the rule never revokes a granted subscription.
+   * `null`/absent = no subscription.
+   */
+  subscription?: { priceId: string; durationMonths: number } | null;
   /** Soft on/off without deleting the row. Disabled rules confer nothing. */
   enabled: boolean;
   /** Admin-facing display name (e.g. the partner's name). */

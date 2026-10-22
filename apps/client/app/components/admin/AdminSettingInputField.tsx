@@ -1,4 +1,4 @@
-import { useUpdateSettings } from '@client/app/hooks/data/settings';
+import { useFloorAboveMeasuredWarning, useUpdateSettings } from '@client/app/hooks/data/settings';
 import { getErrorMessage } from '@client/app/utils/error';
 import { isMaskedSensitiveSettingValue, settingsMap } from '@bike4mind/common';
 import SaveIcon from '@mui/icons-material/Save';
@@ -135,6 +135,7 @@ const AdminSettingInputField = ({
   // Save button simply stops spinning.
   const saveError = updateSettings.error ? getErrorMessage(updateSettings.error) : undefined;
   const fieldError = rangeError ?? saveError;
+  const floorWarning = useFloorAboveMeasuredWarning(setting.key, value);
 
   const saveValue = (next: string | number | boolean) => {
     // Backstop, intentionally unreachable while isDirty excludes the untouched-empty state
@@ -149,7 +150,12 @@ const AdminSettingInputField = ({
     updateSettings.mutate(
       // An empty value on a sensitive setting destroys a live credential, so the server
       // requires the intent to be explicit rather than inferred from an absent value.
-      { key: setting.key, value: next, ...(setting.isSensitive && next === '' ? { confirmClear: true } : {}) },
+      {
+        key: setting.key,
+        value: next,
+        ...(setting.isSensitive && next === '' ? { confirmClear: true } : {}),
+        ...(floorWarning ? { confirmAboveMeasuredFloor: true } : {}),
+      },
       {
         // Drop the typed plaintext as soon as it is stored: the server answers a sensitive
         // write with the mask, which is all this field should ever hold afterwards.
@@ -269,7 +275,10 @@ const AdminSettingInputField = ({
               ) : null}
 
               <FormHelperText data-testid={`admin-setting-${setting.key}-helper`}>
-                {fieldError ?? setting.description}
+                {/* The floor warning outranks a stale save error: `saveValue` sends the confirm flag
+                    whenever `floorWarning` is truthy, so the warning must be the line the admin sees
+                    before that save, not one hidden behind a previous failure's message. */}
+                {rangeError ?? floorWarning ?? saveError ?? setting.description}
               </FormHelperText>
             </FormControl>
           </Grid>

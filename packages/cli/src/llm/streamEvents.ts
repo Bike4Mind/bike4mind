@@ -28,6 +28,7 @@ export const usageSchema = z
   .object({
     inputTokens: z.number().optional(),
     outputTokens: z.number().optional(),
+    reasoningTokens: z.number().optional(),
     cacheReadInputTokens: z.number().optional(),
     cacheCreationInputTokens: z.number().optional(),
   })

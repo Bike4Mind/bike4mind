@@ -1,7 +1,8 @@
 name: OpenNext Build Guard
 
 # Runs the OpenNext build that sst.aws.Nextjs runs for apps/client, and checks
-# the server bundle against Lambda's 250 MiB unzipped limit.
+# the server bundle against Lambda's 250 MiB unzipped limit, then enforces the
+# 90% budget from check-server-bundle-size.mjs on the same build output.
 #
 # On a deploy this build runs inside `sst deploy`, after the infra the Nextjs
 # component depends on exists, so an infra PR otherwise needs a full preview to
@@ -9,7 +10,15 @@ name: OpenNext Build Guard
 # this needs no stage, no SST_RESOURCE_* env and no AWS credentials.
 #
 # Runs without premium overlays, as the self-host image build does: the overlay
-# glue codegen emits empty registries when packages/premium/ is empty.
+# glue codegen emits empty registries when packages/premium/ is empty. So this
+# build is smaller than the deployed one, and the 90% budget is judged on the
+# measured size plus the BUNDLE_SIZE_OVERLAY_RESERVE_MIB repository variable. With
+# that variable unset the step warns and judges the open-core size alone, which
+# can pass a change that pushes the deployed bundle past the hard limit.
+#
+# The path filter covers what can move traced bytes without a source edit. A
+# server-side source change that newly imports an already-installed dependency
+# also moves them and does not trigger this job; the deploy is the backstop.
 #
 # Path-filtered, so it is NOT eligible to be a required check (see
 # lambda-bundle-guard.yml). It also skips merge_group: path filters do not
@@ -24,12 +33,13 @@ on:
       - sst.config.ts
       - 'apps/client/next.config.*'
       - apps/client/open-next.config.ts
-      - apps/client/package.json
-      - package.json
+      - '**/package.json'
       - pnpm-workspace.yaml
       - pnpm-lock.yaml
       - scripts/check-opennext-build.mjs
       - scripts/__tests__/check-opennext-build.test.mjs
+      # Its tests run in the client unit suite, so only the script itself is listed.
+      - apps/client/scripts/check-server-bundle-size.mjs
       - .github/workflows/opennext-build-guard.yml
 
 env:
@@ -74,3 +84,8 @@ jobs:
 
       - name: OpenNext build and bundle size
         run: node scripts/check-opennext-build.mjs
+
+      - name: Enforce server bundle budget
+        env:
+          OVERLAY_RESERVE_MIB: ${{ vars.BUNDLE_SIZE_OVERLAY_RESERVE_MIB }}
+        run: node apps/client/scripts/check-server-bundle-size.mjs --enforce --reserve-mib="$OVERLAY_RESERVE_MIB"

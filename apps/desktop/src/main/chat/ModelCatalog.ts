@@ -42,6 +42,7 @@ interface WireModel {
   max_tokens?: unknown;
   supportsTools?: unknown;
   supportsVision?: unknown;
+  can_think?: unknown;
 }
 
 export interface ModelCatalogLogger {
@@ -83,6 +84,13 @@ export class ModelCatalog {
     return entry.models;
   }
 
+  /** Retain a known thinking preference through a failed refresh, without offering stale models. */
+  lastKnownThinkingToggle(modelId: string): boolean | undefined {
+    const entry = this.cache;
+    if (!entry || entry.environmentUrl !== this.deps.getEnvironmentUrl()) return undefined;
+    return entry.models.find(model => model.id === modelId)?.thinkingToggle;
+  }
+
   async list(force = false): Promise<ChatModelCatalog> {
     if (!force) {
       const hit = this.cached();
@@ -103,6 +111,7 @@ export class ModelCatalog {
     }
 
     if (models.length === 0) {
+      this.cache = null;
       this.deps.logger.warn('CHAT: server returned no tool-capable text models');
       return { models: [] };
     }
@@ -212,6 +221,7 @@ export function selectUsableModels(wire: unknown): ChatModelOption[] {
       // Decided here rather than read off the wire: the catalog does not report it, and the
       // renderer has to disable the effort picker on a model that would ignore the field.
       supportsReasoningEffort: supportsReasoningEffort(model.id as string),
+      ...(model.backend === 'ollama' && model.can_think === true ? { thinkingToggle: true } : {}),
     }));
 }
 

@@ -40,6 +40,7 @@ const h = vi.hoisted(() => ({
   sendToQueue: vi.fn(async () => 'msg-2'),
 }));
 vi.mock('@bike4mind/database', () => ({
+  organizationRepository: {},
   dataLakeRepository: { findById: h.dlFindById },
   orgGoogleDriveConnectionRepository: {
     findByDataLakeIdAny: h.connFindByDataLakeIdAny,
@@ -76,13 +77,13 @@ vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: () => false })
 vi.mock('sst', () => ({ Resource: { driveDisconnectPurgeQueue: { url: 'purge-queue-url' } } }));
 vi.mock('@server/integrations/google/drive/common', () => ({ releaseDriveConnection: h.releaseDriveConnection }));
 vi.mock('@server/dataLakes/shredMemoryForLakeTags', () => ({ shredMemoryForLakeTags: h.shredMemoryForLakeTags }));
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ delete: vi.fn() }) }));
-vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: () => ({ delete: vi.fn() }) }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 
 import { dispatch } from './driveDisconnectPurge';
-import type { DriveConnectionOwner } from '@bike4mind/common';
+import type { LakeConnectionOwner } from '@bike4mind/common';
 
-const orgAOwner: DriveConnectionOwner = { kind: 'organization', organizationId: 'orgA' };
+const orgAOwner: LakeConnectionOwner = { kind: 'organization', organizationId: 'orgA' };
 const logger = { warn: vi.fn(), error: vi.fn(), info: vi.fn(), updateMetadata: vi.fn() } as never;
 const payload = { connectionId: 'conn1', dataLakeId: 'lake1', organizationId: 'orgA' };
 const makeEvent = (body: unknown) => ({ Records: [{ body: JSON.stringify(body) }] }) as never;
@@ -140,7 +141,7 @@ describe('driveDisconnectPurge consumer', () => {
 
     await run(personalPayload);
 
-    const userOwner: DriveConnectionOwner = { kind: 'user', userId: 'user1' };
+    const userOwner: LakeConnectionOwner = { kind: 'user', userId: 'user1' };
     expect(h.connMarkDisconnecting).toHaveBeenCalledWith('conn1', userOwner);
     expect(h.releaseDriveConnection).toHaveBeenCalledWith('conn1', userOwner);
   });

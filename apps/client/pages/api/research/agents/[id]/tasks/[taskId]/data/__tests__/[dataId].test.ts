@@ -23,7 +23,7 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
   asyncHandler: (fn: any) => fn,
 }));
 
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ delete: vi.fn() }),
 }));
 
@@ -33,12 +33,15 @@ vi.mock('@bike4mind/services', () => ({
 }));
 
 const mockIncrementUserStorage = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const mockIncrementOrganizationStorage = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@bike4mind/database', () => ({
+  organizationRepository: { incrementCurrentStorage: (...a: unknown[]) => mockIncrementOrganizationStorage(...a) },
   FabFile: {},
   FabFileChunk: {},
   fabFileRepository: {},
   researchAgentRepository: {},
   researchDataRepository: {},
+  projectRepository: {},
   Session: {},
   sessionRepository: {},
   User: {},
@@ -57,6 +60,7 @@ describe('DELETE /api/research/agents/[id]/tasks/[taskId]/data/[dataId]', () => 
   beforeEach(() => {
     mockRemove.mockClear();
     mockIncrementUserStorage.mockClear();
+    mockIncrementOrganizationStorage.mockClear();
   });
 
   it('removes the research data by URL ids for the requesting user', async () => {
@@ -67,14 +71,15 @@ describe('DELETE /api/research/agents/[id]/tasks/[taskId]/data/[dataId]', () => 
     expect(res._getStatusCode()).toBe(200);
   });
 
-  it('refunds storage to the user only, with no organization adapter', async () => {
+  it('wires both the user and the organization storage counters', async () => {
     const { req, res } = del({ id: 'agent-1', taskId: 'task-1', dataId: 'data-1' });
     await mockRefs.deleteHandler!(req, res);
 
     const [, , adapters] = mockRemove.mock.calls[0];
-    expect(adapters.db).not.toHaveProperty('organizations');
-
     await adapters.db.users.incrementCurrentStorage('owner-1', -1024);
     expect(mockIncrementUserStorage).toHaveBeenCalledWith('owner-1', -1024);
+
+    await adapters.db.organizations.incrementCurrentStorage('org-1', -2048);
+    expect(mockIncrementOrganizationStorage).toHaveBeenCalledWith('org-1', -2048);
   });
 });

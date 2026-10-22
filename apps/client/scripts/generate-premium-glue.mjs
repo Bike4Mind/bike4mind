@@ -14,9 +14,12 @@
  *   server/premium-generated/<stub>.ts (per-package)   - SST Lambda handler stubs
  *   server/premium-generated/premiumLlmTools.generated.ts - LLM tool contributions
  *   server/premium-generated/premiumSystemPrompts.generated.ts - system prompt contributions
+ *   server/premium-generated/premiumPartnerSignupHooks.generated.ts - post-signup partner-rule hooks
  *   app/premium-generated/premiumLocalStorageKeys.generated.ts - owned LS key prefixes
  *   app/premium-generated/premiumWorkspaceCopyEntitlements.generated.ts - workspace copy grants
  *   app/premium-generated/premiumWorkspaceGrantDisplays.generated.ts - how a grant shows its workspace
+ *   server/premium-generated/premiumWorkspaceDeniedTools.generated.ts - tools denied per workspace
+ *   server/premium-generated/premiumWorkspaceSessionSettings.generated.ts - session fields owned per workspace
  *   app/premium-generated/premiumToolDisplayLabels.generated.ts - overlay tool display names
  *   server/premium-generated/premiumContracts.generated.ts - API contract contributions
  *   server/premium-generated/deploymentOpenApi.generated.ts - deployment spec (null form)
@@ -42,7 +45,16 @@
  * are unaffected because both link states typecheck clean.
  */
 
-import { readdirSync, readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, renameSync, realpathSync } from 'node:fs';
+import {
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+  mkdirSync,
+  existsSync,
+  rmSync,
+  renameSync,
+  realpathSync,
+} from 'node:fs';
 import { resolve, dirname, join, sep, basename, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -112,9 +124,7 @@ function isLinkedIntoClient(pkgName) {
   const segments = pkgName.split('/');
   // Check for package.json, not just the dir: an empty/broken dir would satisfy
   // existsSync while still failing real module resolution.
-  return [CLIENT_ROOT, REPO_ROOT].some(root =>
-    existsSync(join(root, 'node_modules', ...segments, 'package.json'))
-  );
+  return [CLIENT_ROOT, REPO_ROOT].some(root => existsSync(join(root, 'node_modules', ...segments, 'package.json')));
 }
 
 // --- Generate helpers ---
@@ -273,9 +283,7 @@ function generateRouteIndexing(packages) {
   const typeImport = `import type { PremiumRouteIndexing } from '../premiumContract';`;
 
   const contributors = packages.filter(p => p.contributions.routeIndexingExport);
-  contributors.forEach(p =>
-    assertModuleSpecifier(p.contributions.routeIndexingExport, p.name, 'routeIndexingExport')
-  );
+  contributors.forEach(p => assertModuleSpecifier(p.contributions.routeIndexingExport, p.name, 'routeIndexingExport'));
 
   if (contributors.length === 0) {
     writeFile(
@@ -286,9 +294,7 @@ function generateRouteIndexing(packages) {
   }
 
   const imports = contributors
-    .map(
-      (p, i) => `import { routeIndexing as indexing${i} } from '${p.contributions.routeIndexingExport}';`
-    )
+    .map((p, i) => `import { routeIndexing as indexing${i} } from '${p.contributions.routeIndexingExport}';`)
     .join('\n');
 
   const exports = contributors.map((_, i) => `  indexing${i}`).join(',\n');
@@ -336,7 +342,11 @@ const LEGACY_SIDENAV_PATH = '/opti';
 const ROUTE_PATH_RE = /^\/[a-z0-9._-]+(\/[a-z0-9._-]+)*$/;
 
 function assertRoutePath(value, pkgName, field) {
-  if (typeof value !== 'string' || !ROUTE_PATH_RE.test(value) || value.split('/').some(seg => seg === '..' || seg === '.')) {
+  if (
+    typeof value !== 'string' ||
+    !ROUTE_PATH_RE.test(value) ||
+    value.split('/').some(seg => seg === '..' || seg === '.')
+  ) {
     throw new Error(
       `[codegen] invalid ${field} path from package "${pkgName}": ` +
         `${JSON.stringify(value)} is not an origin-relative route path of lower-case [a-z0-9/._-]`
@@ -371,9 +381,7 @@ function generateNotebookSidenavs(packages) {
   rmSync(join(GENERATED_DIR, 'premiumNotebookSidenav.generated.ts'), { force: true });
   const typeImport = `import type { PremiumNotebookSidenavEntry } from '../premiumContract';`;
 
-  const contributors = packages
-    .map(p => ({ pkg: p, sidenav: readSidenavContribution(p) }))
-    .filter(c => c.sidenav);
+  const contributors = packages.map(p => ({ pkg: p, sidenav: readSidenavContribution(p) })).filter(c => c.sidenav);
 
   if (contributors.length === 0) {
     writeFile(
@@ -403,8 +411,9 @@ function generateNotebookSidenavs(packages) {
   }
 
   const imports = chosen
-    .map(({ sidenav }, i) =>
-      `const Sidenav${i} = dynamic(() => import('${sidenav.spec}').then(m => ({ default: m.default })), { ssr: false });`
+    .map(
+      ({ sidenav }, i) =>
+        `const Sidenav${i} = dynamic(() => import('${sidenav.spec}').then(m => ({ default: m.default })), { ssr: false });`
     )
     .join('\n');
 
@@ -493,6 +502,11 @@ ${entries},
 // missing or narrower declaration fails the build rather than passing on trust.
 const WORKSPACE_ID_RE = /^[a-z0-9][a-z0-9_-]*$/i;
 const ENTITLEMENT_KEY_RE = /^[a-z0-9][a-z0-9:_.-]*$/i;
+
+// Open workspace ids from WORKSPACE_SURFACES (b4m-core/common/src/surfaces.ts). Mirrored
+// because install-time codegen only has apps/client/scripts; the test reads the source registry.
+// Guarded ids stay in their owning package's workspaceSurfaceIds contribution.
+const REGISTERED_WORKSPACE_IDS = ['opti'];
 
 // A grant entry may instead be `{ "key", "label", "sessionHref"? }`: the same grant, plus how the
 // workspace is named and opened for a user who reaches it only through that key, in place of the
@@ -596,6 +610,67 @@ function readWorkspaceKeyTable(pkg, field, { allowDisplay = false } = {}) {
     if (shown.length > 0) displays.set(workspaceId, shown);
   }
   return { table, displays };
+}
+
+// Tools a workspace denies to every session whose surface matches (b4mContributions.workspaceDeniedTools,
+// `{ "<workspace id>": ["<tool name>"] }`). Pure data, applied at read time and never written onto sessions.
+// Native tool names are lowercase, but an MCP id is `${serverName.toLowerCase()}__${originalToolName}`
+// (see toolGenerators.ts), so the tool half of a `server__tool` entry keeps the upstream server's case.
+// The prefix stays lowercase; the MCP runtime lowercases it. Read-time matching is exact, so a mixed-case
+// workspace id (whose surface is compared verbatim) is still rejected below.
+const TOOL_NAME_RE = /^[a-z0-9][a-z0-9_.:-]*(__[A-Za-z0-9_.:-]+)?$/;
+
+function generateWorkspaceDeniedTools(packages) {
+  const outPath = join(CLIENT_ROOT, 'server/premium-generated/premiumWorkspaceDeniedTools.generated.ts');
+  const typeImport = `import type { WorkspaceDeniedToolsTable } from '@bike4mind/common';`;
+  const field = 'workspaceDeniedTools';
+
+  const merged = new Map();
+  for (const pkg of packages) {
+    const declared = pkg.contributions[field];
+    if (declared === undefined) continue;
+    if (!isPlainObject(declared)) {
+      throw new Error(
+        `[codegen] invalid ${field} from package "${pkg.name}": ` +
+          `expected an object of workspace id -> tool names, got ${JSON.stringify(declared)}`
+      );
+    }
+    for (const [workspaceId, tools] of Object.entries(declared)) {
+      if (!WORKSPACE_ID_RE.test(workspaceId)) {
+        throw new Error(
+          `[codegen] invalid ${field} workspace id from package "${pkg.name}": ` +
+            `${JSON.stringify(workspaceId)} is not of [A-Za-z0-9_-]`
+        );
+      }
+      if (workspaceId !== workspaceId.toLowerCase()) {
+        throw new Error(
+          `[codegen] invalid ${field} workspace id from package "${pkg.name}": ` +
+            `${JSON.stringify(workspaceId)} must be lowercase, because surface ids are matched exactly`
+        );
+      }
+      if (!Array.isArray(tools) || !tools.every(tool => typeof tool === 'string' && TOOL_NAME_RE.test(tool))) {
+        throw new Error(
+          `[codegen] invalid ${field} tools for "${workspaceId}" from package "${pkg.name}": ` +
+            `expected an array of lowercase tool names or \`server__tool\` MCP ids, got ${JSON.stringify(tools)}`
+        );
+      }
+      const list = merged.get(workspaceId) ?? [];
+      for (const tool of tools) {
+        if (!list.includes(tool)) list.push(tool);
+      }
+      merged.set(workspaceId, list);
+    }
+  }
+
+  const entries = [...merged].map(
+    ([workspaceId, tools]) =>
+      `  ${JSON.stringify(workspaceId)}: [${tools.map(tool => JSON.stringify(tool)).join(', ')}],`
+  );
+  const body = entries.length === 0 ? '{}' : `{\n${entries.join('\n')}\n}`;
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumWorkspaceDeniedTools: WorkspaceDeniedToolsTable = ${body};\n`
+  );
 }
 
 function generateWorkspaceCopyEntitlements(packages) {
@@ -1029,9 +1104,7 @@ function generateSystemPrompts(packages) {
     return;
   }
 
-  contributors.forEach(p =>
-    assertModuleSpecifier(p.contributions.systemPromptsExport, p.name, 'systemPromptsExport')
-  );
+  contributors.forEach(p => assertModuleSpecifier(p.contributions.systemPromptsExport, p.name, 'systemPromptsExport'));
 
   const imports = contributors
     .map((p, i) => `import { systemPrompts as prompts${i} } from '${p.contributions.systemPromptsExport}';`)
@@ -1042,6 +1115,124 @@ function generateSystemPrompts(packages) {
   writeFile(
     outPath,
     `${GENERATED_BANNER}\n${typeImport}\n${imports}\n\nexport const premiumSystemPrompts: DefaultSystemPrompt[] = [\n${spreads}\n];\n`
+  );
+}
+
+// Premium packages can run their own grant after a partner signup rule matches
+// (b4mContributions.partnerSignupHooksExport -> a module exporting `partnerSignupHooks:
+// PartnerSignupHook[]`). server/entitlements/signupDomainGrant.ts statically imports this
+// file, so like the LLM tools it must exist in BOTH forms.
+function generatePartnerSignupHooks(packages) {
+  const outPath = join(CLIENT_ROOT, 'server/premium-generated/premiumPartnerSignupHooks.generated.ts');
+  const typeImport = `import type { PartnerSignupHook } from '@server/entitlements/partnerSignupHooks';`;
+
+  const contributors = packages.filter(p => p.contributions.partnerSignupHooksExport);
+
+  if (contributors.length === 0) {
+    writeFile(
+      outPath,
+      `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumPartnerSignupHooks: PartnerSignupHook[] = [];\n`
+    );
+    return;
+  }
+
+  contributors.forEach(p =>
+    assertModuleSpecifier(p.contributions.partnerSignupHooksExport, p.name, 'partnerSignupHooksExport')
+  );
+
+  const imports = contributors
+    .map((p, i) => `import { partnerSignupHooks as hooks${i} } from '${p.contributions.partnerSignupHooksExport}';`)
+    .join('\n');
+
+  const spreads = contributors.map((_, i) => `  ...hooks${i}`).join(',\n');
+
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\n${typeImport}\n${imports}\n\nexport const premiumPartnerSignupHooks: PartnerSignupHook[] = [\n${spreads}\n];\n`
+  );
+}
+
+const RESERVED_OBJECT_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+// Session fields a workspace owns, resolved at read time. Each id must name an open
+// workspace or be registered by the same package via workspaceSurfaceIds. Both generated
+// forms must exist so builds without overlays never import an absent package.
+function generateWorkspaceSessionSettings(packages) {
+  const outPath = join(CLIENT_ROOT, 'server/premium-generated/premiumWorkspaceSessionSettings.generated.ts');
+  const typeImport = `import type { WorkspaceSessionSettingsTable } from '@bike4mind/common';`;
+  const field = 'workspaceSessionSettingsExport';
+
+  const merged = new Map();
+  for (const pkg of packages) {
+    const surfaceIds = pkg.contributions.workspaceSurfaceIds === undefined ? [] : pkg.contributions.workspaceSurfaceIds;
+    if (
+      !Array.isArray(surfaceIds) ||
+      !surfaceIds.every(
+        id =>
+          typeof id === 'string' && WORKSPACE_ID_RE.test(id) && id === id.toLowerCase() && !RESERVED_OBJECT_KEYS.has(id)
+      )
+    ) {
+      throw new Error(
+        `[codegen] invalid workspaceSurfaceIds from package "${pkg.name}": ` +
+          'expected an array of lowercase workspace ids [a-z0-9_-] with no reserved object keys'
+      );
+    }
+    const registeredIds = [...new Set([...REGISTERED_WORKSPACE_IDS, ...surfaceIds])];
+    const declared = pkg.contributions[field];
+    if (declared === undefined) continue;
+    if (!isPlainObject(declared)) {
+      throw new Error(
+        `[codegen] invalid ${field} from package "${pkg.name}": ` +
+          `expected an object of workspace id -> module specifier, got ${JSON.stringify(declared)}`
+      );
+    }
+    for (const [workspaceId, specifier] of Object.entries(declared)) {
+      if (
+        !WORKSPACE_ID_RE.test(workspaceId) ||
+        workspaceId !== workspaceId.toLowerCase() ||
+        RESERVED_OBJECT_KEYS.has(workspaceId)
+      ) {
+        throw new Error(
+          `[codegen] invalid ${field} workspace id from package "${pkg.name}": ` +
+            `${JSON.stringify(workspaceId)} must be lowercase [a-z0-9_-], because surface ids are matched exactly`
+        );
+      }
+      if (!registeredIds.includes(workspaceId)) {
+        throw new Error(
+          `[codegen] invalid ${field} workspace id from package "${pkg.name}": ` +
+            `${JSON.stringify(workspaceId)} is not a registered workspace surface id ` +
+            `(${registeredIds.join(', ')}); register guarded ids in this package's workspaceSurfaceIds`
+        );
+      }
+      if (merged.has(workspaceId)) {
+        throw new Error(
+          `[codegen] duplicate ${field} workspace id "${workspaceId}": declared by both ` +
+            `"${merged.get(workspaceId).pkgName}" and "${pkg.name}"`
+        );
+      }
+      assertModuleSpecifier(specifier, pkg.name, field);
+      merged.set(workspaceId, { pkgName: pkg.name, specifier });
+    }
+  }
+
+  if (merged.size === 0) {
+    writeFile(
+      outPath,
+      `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumWorkspaceSessionSettings: WorkspaceSessionSettingsTable = {};\n`
+    );
+    return;
+  }
+
+  const contributions = [...merged];
+  const imports = contributions
+    .map(([, { specifier }], i) => `import { workspaceSessionSettings as settings${i} } from '${specifier}';`)
+    .join('\n');
+  const entries = contributions.map(([workspaceId], i) => `  ${JSON.stringify(workspaceId)}: settings${i},`).join('\n');
+
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\n${typeImport}\nimport { defineWorkspaceSessionSettingsTable } from '@bike4mind/common';\n${imports}\n\n` +
+      `export const premiumWorkspaceSessionSettings: WorkspaceSessionSettingsTable = defineWorkspaceSessionSettingsTable({\n${entries}\n});\n`
   );
 }
 
@@ -1068,10 +1259,7 @@ function generateMigrations(packages) {
   const contributors = packages.filter(p => p.contributions.migrationsExport);
 
   if (contributors.length === 0) {
-    writeFile(
-      outPath,
-      `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumMigrations: MigrationFile[] = [];\n`
-    );
+    writeFile(outPath, `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumMigrations: MigrationFile[] = [];\n`);
     return;
   }
 
@@ -1104,9 +1292,7 @@ function generateMigrations(packages) {
     return rel;
   });
 
-  const imports = relSpecs
-    .map((spec, i) => `import { migrations as migrations${i} } from '${spec}';`)
-    .join('\n');
+  const imports = relSpecs.map((spec, i) => `import { migrations as migrations${i} } from '${spec}';`).join('\n');
 
   const spreads = contributors.map((_, i) => `  ...migrations${i}`).join(',\n');
 
@@ -1259,8 +1445,8 @@ export function contributeInfra(_params: Record<string, unknown>): void {}
     if (!expectedDirs.includes(dir)) {
       console.warn(
         `[codegen] WARNING: packages/premium/${dir} declares b4mContributions.infra ` +
-        `but sst.config.ts has no matching import — infra contributions will not be wired. ` +
-        `Add: await import('./infra/premium-generated/${dir}-infra.generated')`
+          `but sst.config.ts has no matching import — infra contributions will not be wired. ` +
+          `Add: await import('./infra/premium-generated/${dir}-infra.generated')`
       );
     }
   }
@@ -1269,14 +1455,19 @@ export function contributeInfra(_params: Record<string, unknown>): void {}
 // --- Main ---
 
 const packages = discoverPremiumPackages();
-console.log(`[codegen] found ${packages.length} premium package(s): ${packages.map(p => p.name).join(', ') || '(none)'}`);
+console.log(
+  `[codegen] found ${packages.length} premium package(s): ${packages.map(p => p.name).join(', ') || '(none)'}`
+);
 
 // Bare-specifier glue only for packages that will actually resolve. Unlinked
 // packages get the absent form so a hydrated-but-unlinked tree still typechecks,
 // instead of failing every build with cannot-find-module errors.
 const linkedPackages = [];
 for (const pkg of packages) {
-  if (isLinkedIntoClient(pkg.name)) { linkedPackages.push(pkg); continue; }
+  if (isLinkedIntoClient(pkg.name)) {
+    linkedPackages.push(pkg);
+    continue;
+  }
   console.warn(
     `[codegen] WARNING: packages/premium/${pkg.dir} is hydrated but "${pkg.name}" is not ` +
       `resolvable from apps/client (no node_modules link). Emitting the ABSENT form for its ` +
@@ -1305,6 +1496,8 @@ generateApiStubs(linkedPackages);
 generateServerHandlerStubs(linkedPackages);
 generateLlmTools(linkedPackages);
 generateSystemPrompts(linkedPackages);
+generatePartnerSignupHooks(linkedPackages);
+generateWorkspaceSessionSettings(linkedPackages);
 // Relative-import glue: needs no node_modules link, so it gets the full list.
 // Any NEW generator goes in whichever group matches how it imports the overlay.
 generateMigrations(packages);
@@ -1314,6 +1507,7 @@ generateInfraGlue(packages);
 // not at all and is link-independent for an even simpler reason than the group above.
 generateLocalStorageKeyPrefixes(packages);
 generateWorkspaceCopyEntitlements(packages);
+generateWorkspaceDeniedTools(packages);
 generateToolDisplayLabels(packages);
 
 console.log('[codegen] done.');

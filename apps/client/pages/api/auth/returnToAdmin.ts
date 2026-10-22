@@ -1,7 +1,7 @@
 import { userRepository, authSessionRepository, realtimeConnectionRepository } from '@bike4mind/database';
 import { authSessionService } from '@bike4mind/services';
 import { redactUserSecretsForSelf } from '@bike4mind/common';
-import { UnauthorizedError } from '@server/utils/errors';
+import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { requireNonSystemUser } from '@server/auth/requireNonSystemUser';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
@@ -12,10 +12,11 @@ import {
   readAdminReturnCookie,
   readRefreshCookie,
   setRefreshCookie,
-} from '@server/auth/refreshCookie';
+} from '@bike4mind/server-utils/auth/refreshCookie';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { respond } from '@server/utils/respond';
 import { selfSessionResponseSchema } from '@server/auth/selfSessionResponseSchema';
+import { recordAdminActionForActor, toUserActor } from '@server/utils/adminAudit';
 
 /**
  * End an impersonation and restore the admin's own session ("Return to safety").
@@ -73,6 +74,25 @@ const handler = baseApi({ auth: false })
           { sid: impersonatedSid },
           { db: { realtimeConnections: realtimeConnectionRepository }, logger: req.logger }
         );
+        // Only the request that rotated records the end, so a double-clicked return writes one entry.
+        if (restored.status === 'rotated') {
+          const impersonatedUser = await userRepository.findById(impersonated.userId).catch(() => null);
+          // Best-effort by catalogue: a failed write is logged and never strands the admin.
+          await recordAdminActionForActor(
+            req,
+            { ...toUserActor(restored.user, 'platform'), impersonatedUserId: impersonated.userId },
+            {
+              action: 'user.impersonation.ended',
+              target: {
+                kind: 'user',
+                id: impersonated.userId,
+                displayName: impersonatedUser?.name || impersonatedUser?.username || impersonated.userId,
+              },
+              summary: 'stopped impersonating the user',
+              related: { impersonationSessionId: impersonatedSid },
+            }
+          );
+        }
       }
     }
 

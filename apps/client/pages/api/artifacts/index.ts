@@ -8,9 +8,9 @@ import {
 } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { resolveUserArtifactGate } from '@server/utils/artifactGate';
+import { resolveUserArtifactGate } from '@bike4mind/server-utils/utils/artifactGate';
 import { createArtifactSourceRefsGuard } from '@server/utils/artifactSourceRefsGuards';
-import { resolveActiveOrg } from '@server/utils/resolveActiveOrg';
+import { resolveActiveOrg } from '@bike4mind/server-utils/utils/resolveActiveOrg';
 import type { Request } from 'express';
 import { z } from 'zod';
 import qs from 'qs';

@@ -45,13 +45,26 @@ type LimitMusicTracksOptions = {
   logger: Logger;
 };
 
-/** Wraps `createJob` so a call past the cap returns a tool error instead of starting a song (see limitJobsPerRun). */
+/**
+ * Wraps `createJob` so a call past the cap returns a tool error instead of starting a song (see limitJobsPerRun),
+ * and gives back the slot of a song the tool discarded for a rephrase, so the rephrased song still fits the cap.
+ */
 export function limitMusicTracksPerRun(
   config: MusicToolConfig,
   { questId, limit, slots, logger }: LimitMusicTracksOptions
 ): MusicToolConfig {
   return {
     ...config,
+    releaseDiscardedJob: async jobId => {
+      await config.releaseDiscardedJob?.(jobId);
+      await slots.release(questId).catch(error =>
+        logger.warn('[AgentMusic] failed to release a discarded song slot; the run keeps one fewer', {
+          questId,
+          jobId,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      );
+    },
     createJob: limitJobsPerRun(config.createJob, {
       questId,
       limit,

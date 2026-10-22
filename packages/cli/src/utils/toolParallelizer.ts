@@ -1,15 +1,12 @@
 /**
  * Enables parallel execution of independent (read-only) tools; write tools
- * (prompt_always category) always run sequentially for safety.
+ * (not read-only per the tool catalog) always run sequentially for safety.
  *
  * Primarily used for testing the CLI-specific tool safety integration. The
  * actual parallel execution logic lives in @bike4mind/agents.
  */
 
-import { isReadOnlyTool, type ToolCategory } from '../config/toolSafety.js';
-
-// Re-export isReadOnlyTool for backward compatibility with tests
-export { isReadOnlyTool };
+import type { ToolCatalog } from '../tools/gateway/toolCatalog.js';
 
 /**
  * Information about a tool call from the LLM
@@ -45,13 +42,10 @@ export interface ToolExecutionPlan {
  * Categorize tools into parallel (read-only) and sequential (write) batches.
  *
  * @param toolsUsed - Array of tool calls from the LLM
- * @param customCategories - Optional custom category overrides
+ * @param catalog - Resolves whether each tool is read-only
  * @returns Execution plan with parallel and sequential batches
  */
-export function categorizeTools(
-  toolsUsed: ToolUseInfo[],
-  customCategories?: Record<string, ToolCategory>
-): ToolExecutionPlan {
+export function categorizeTools(toolsUsed: ToolUseInfo[], catalog: ToolCatalog): ToolExecutionPlan {
   const parallelBatch: ToolUseInfo[] = [];
   const sequentialBatch: ToolUseInfo[] = [];
   const originalOrder: string[] = [];
@@ -61,7 +55,7 @@ export function categorizeTools(
     const toolId = `${tool.name}_${JSON.stringify(tool.arguments)}`;
     originalOrder.push(toolId);
 
-    if (isReadOnlyTool(tool.name, customCategories)) {
+    if (catalog.isReadOnly(tool.name)) {
       parallelBatch.push(tool);
     } else {
       sequentialBatch.push(tool);
@@ -206,18 +200,15 @@ export function getResultsInOrder(results: Map<string, ToolResult>, originalOrde
  * from parallel execution.
  *
  * @param toolsUsed - Array of tool calls
- * @param customCategories - Optional custom category overrides
+ * @param catalog - Resolves whether each tool is read-only
  * @returns true if parallel execution would be beneficial
  */
-export function shouldUseParallelExecution(
-  toolsUsed: ToolUseInfo[],
-  customCategories?: Record<string, ToolCategory>
-): boolean {
+export function shouldUseParallelExecution(toolsUsed: ToolUseInfo[], catalog: ToolCatalog): boolean {
   if (toolsUsed.length < 2) {
     return false; // No benefit for single tool
   }
 
-  const readOnlyCount = toolsUsed.filter(tool => isReadOnlyTool(tool.name, customCategories)).length;
+  const readOnlyCount = toolsUsed.filter(tool => catalog.isReadOnly(tool.name)).length;
 
   // Only parallelize if we have 2+ read-only tools
   return readOnlyCount >= 2;

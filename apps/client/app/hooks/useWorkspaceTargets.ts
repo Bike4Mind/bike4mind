@@ -3,6 +3,8 @@ import {
   canCopyWithinSurface,
   canUseSurface,
   getWorkspaceSurface,
+  isSurfaceHidden,
+  OPTI_SURFACE,
   WORKSPACE_SURFACES,
   type ISessionDocument,
   type SurfaceAccessUser,
@@ -14,6 +16,8 @@ import { premiumRoutes } from '@client/app/premium-generated/premiumRoutes.gener
 import { premiumWorkspaceCopyEntitlements } from '@client/app/premium-generated/premiumWorkspaceCopyEntitlements.generated';
 import { premiumWorkspaceGrantDisplays } from '@client/app/premium-generated/premiumWorkspaceGrantDisplays.generated';
 import { useEntitlements } from '@client/app/hooks/data/entitlements';
+import { useHiddenSurfaceIds } from '@client/app/hooks/useHiddenSurfaces';
+import { useOptiAccess } from '@client/app/hooks/data/opti';
 
 // A product surface ships only in builds that carry its route; offering one without it dead-ends.
 export const surfaceRouteExists = (surface: WorkspaceSurface): boolean =>
@@ -63,10 +67,35 @@ export function useWorkspacePresenter(): (surface: WorkspaceSurface) => Workspac
   return useCallback((surface: WorkspaceSurface) => presentWorkspace(surface, accessUser), [accessUser]);
 }
 
+/**
+ * Hideable workspaces the current user can actually open (entitled, and the build ships the route):
+ * what the Settings visibility switches list. Empty for a user without access to any of them.
+ * Opti is gated by `useOptiAccess`, the predicate its sidebar row uses (it also honours the legacy
+ * tag), so every user who sees that row gets a switch for it.
+ */
+export function useHideableWorkspaces(): WorkspaceSurface[] {
+  const accessUser = useSurfaceAccessUser();
+  const hasOptiAccess = useOptiAccess();
+  return useMemo(
+    () =>
+      WORKSPACE_SURFACES.filter(
+        surface =>
+          surface.hideable &&
+          surfaceRouteExists(surface) &&
+          (surface.id === OPTI_SURFACE ? hasOptiAccess : canUseSurface(accessUser, surface.id))
+      ),
+    [accessUser, hasOptiAccess]
+  );
+}
+
 export interface WorkspaceTargets {
   /** The session's registered workspace as the user sees it; undefined for a surface this repo does not register. */
   current: WorkspaceSurface | undefined;
-  /** Copy (clone/fork) destinations, current first. Empty when the session's surface is not movable. */
+  /**
+   * Copy (clone/fork) destinations, current first. Empty when the session's surface is not movable.
+   * A workspace the user hid is never offered as a destination, except as `current`: a session
+   * already there was opened on purpose, so copying it in place stays available.
+   */
   copyTargets: WorkspaceSurface[];
   /** Move destinations, excluding the current one. Empty unless the caller owns a movable session. */
   moveTargets: WorkspaceSurface[];
@@ -79,6 +108,7 @@ export interface WorkspaceTargets {
 export function useWorkspaceTargets(session: Pick<ISessionDocument, 'surface' | 'userId'> | null | undefined) {
   const currentUser = useUser(s => s.currentUser);
   const accessUser = useSurfaceAccessUser();
+  const hiddenSurfaces = useHiddenSurfaceIds();
 
   return useMemo<WorkspaceTargets>(() => {
     const registered = session ? getWorkspaceSurface(session.surface) : undefined;
@@ -92,7 +122,8 @@ export function useWorkspaceTargets(session: Pick<ISessionDocument, 'surface' | 
         surface.id !== current.id &&
         surface.movable &&
         surfaceRouteExists(surface) &&
-        canUseSurface(accessUser, surface.id)
+        canUseSurface(accessUser, surface.id) &&
+        !isSurfaceHidden(hiddenSurfaces, surface.id)
     );
     const isOwner = !!currentUser && session.userId === currentUser.id;
     // A copy into "current" is sent as a plain clone/fork (no explicit targetSurface), which the
@@ -101,5 +132,5 @@ export function useWorkspaceTargets(session: Pick<ISessionDocument, 'surface' | 
     // main list instead. Omit it in that case.
     const copyTargets = canCopyWithinSurface(accessUser, current.id) ? [current, ...others] : others;
     return { current, copyTargets, moveTargets: isOwner ? others : [] };
-  }, [session, currentUser, accessUser]);
+  }, [session, currentUser, accessUser, hiddenSurfaces]);
 }

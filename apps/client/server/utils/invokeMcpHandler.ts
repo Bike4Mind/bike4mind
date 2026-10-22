@@ -1,14 +1,19 @@
 import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
 import { Buffer } from 'node:buffer';
 import { handler as localMcpHandler } from '@server/utils/mcpCall';
-import { isMcpServerAvailable } from '@server/services/integrationCircuitBreaker';
-import { getBreaker, classifyOperation, CircuitBreakerError } from '@server/services/mcpCircuitBreakers';
+import { isMcpServerAvailable } from '@bike4mind/server-utils/services/integrationCircuitBreaker';
+import {
+  getBreaker,
+  classifyOperation,
+  CircuitBreakerError,
+  flushBreakerMetrics,
+} from '@server/services/mcpCircuitBreakers';
 import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
 import type { IntegrationAuditIntegrationName } from '@bike4mind/database';
 import { INTEGRATION_AUDIT_INTEGRATION_NAMES } from '@bike4mind/database';
-import { recordCircuitBreakerRejection } from '@server/utils/cloudwatch';
+import { recordCircuitBreakerRejection } from '@bike4mind/server-utils/utils/cloudwatch';
 import { persistRateLimitEvents, throttleIfNearRateLimit } from '@server/utils/mcpRateLimitSnapshots';
-import { resolveMcpTenantKey, UNATTRIBUTED_MCP_TENANT } from '@server/utils/mcpTenantKey';
+import { resolveMcpTenantKey, UNATTRIBUTED_MCP_TENANT } from '@bike4mind/server-utils/utils/mcpTenantKey';
 import { randomUUID } from 'crypto';
 import { Resource } from 'sst';
 
@@ -136,9 +141,8 @@ export async function invokeMcpHandler<T = unknown>(payload: InvokeMcpHandlerPay
     // Convert CircuitBreakerError to a user-friendly message
     if (error instanceof CircuitBreakerError) {
       console.warn(`[CircuitBreaker] Rejected call to ${name} (${opType}) — breaker is ${error.state}`);
-      recordCircuitBreakerRejection(name).catch(err => {
-        console.error(`[CircuitBreaker] Failed to record rejection metric for ${name}:`, err);
-      });
+      // Awaited: the throw ends the invocation, and a frozen Lambda loses a pending emit.
+      await recordCircuitBreakerRejection(name);
       const userError = new Error(
         `${name} integration is temporarily unavailable due to repeated failures. The system will automatically retry shortly.`
       );
@@ -163,6 +167,8 @@ export async function invokeMcpHandler<T = unknown>(payload: InvokeMcpHandlerPay
     }
 
     throw error;
+  } finally {
+    await flushBreakerMetrics();
   }
 }
 

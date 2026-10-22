@@ -1,0 +1,227 @@
+name: Verify Docs Build (Reusable)
+
+on:
+  workflow_call:
+
+env:
+  NODE_VERSION: '24'
+
+jobs:
+  verify-docs-build:
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+    # Docs reach production on merge, so the build is checked on the PR and again in the merge queue.
+    if: |
+      github.repository == (vars.CANONICAL_REPO || 'bike4mind/bike4mind') &&
+      (github.event_name == 'pull_request' || github.event_name == 'merge_group')
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      # ci.yml's docs-changed gate also fires for the help tooling, which does not affect the site, so the build
+      # runs only when the PR touches docs-site/. The listing comes from the PR files API: a git diff against a
+      # shallow clone cannot find the merge base once main has been merged into the branch and skipped the build.
+      # Anything unresolved (merge queue, API error) builds.
+      - name: List docs changes
+        id: docs-changes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          HAS=true
+          DOCS_CHANGED=""
+          if [ -n "$PR" ]; then
+            if FILES=$(gh api --paginate "repos/${REPO}/pulls/${PR}/files" --jq '.[].filename' 2>/dev/null); then
+              DOCS_CHANGED=$(printf '%s\n' "$FILES" | grep '^docs-site/' || true)
+              [ -n "$DOCS_CHANGED" ] || HAS=false
+            fi
+          fi
+          echo "has_changes=${HAS}" >> "$GITHUB_OUTPUT"
+          TOTAL=$(printf '%s' "$DOCS_CHANGED" | grep -c . || true)
+          DISPLAY=$(printf '%s\n' "$DOCS_CHANGED" | head -5)
+          if [ "$TOTAL" -gt 5 ]; then
+            DISPLAY=$(printf '%s\n...and %d more' "$DISPLAY" "$((TOTAL - 5))")
+          fi
+          {
+            echo "changed_files<<EOF"
+            echo "$DISPLAY"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "docs-site files changed: ${TOTAL}, build: ${HAS}"
+
+      - name: Skip message
+        if: steps.docs-changes.outputs.has_changes == 'false'
+        run: echo "::notice::No docs-site files in this PR, build skipped"
+
+      - name: Setup pnpm
+        if: steps.docs-changes.outputs.has_changes == 'true'
+        uses: pnpm/action-setup@v5
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        if: steps.docs-changes.outputs.has_changes == 'true'
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+          cache-dependency-path: 'docs-site/pnpm-lock.yaml'
+
+      - name: Check docs content guard
+        if: steps.docs-changes.outputs.has_changes == 'true'
+        working-directory: docs-site
+        run: |
+          node --test scripts/*.test.mjs
+          node scripts/check-docs-content.mjs
+
+      - name: Install dependencies
+        if: steps.docs-changes.outputs.has_changes == 'true'
+        working-directory: docs-site
+        run: pnpm install --frozen-lockfile --ignore-workspace
+
+      - name: Typecheck docs site
+        if: steps.docs-changes.outputs.has_changes == 'true'
+        working-directory: docs-site
+        run: pnpm typecheck
+
+      - name: Build Docusaurus site
+        if: steps.docs-changes.outputs.has_changes == 'true'
+        working-directory: docs-site
+        env:
+          DOCS_URL: 'https://docs.preview.bike4mind.com'
+          NODE_ENV: 'production'
+        run: pnpm build
+
+      - name: Verify build output
+        if: steps.docs-changes.outputs.has_changes == 'true'
+        working-directory: docs-site
+        run: |
+          if [ ! -d "build" ]; then
+            echo "❌ Build directory not found!"
+            exit 1
+          fi
+          
+          if [ ! -f "build/index.html" ]; then
+            echo "❌ index.html not found in build output!"
+            exit 1
+          fi
+          
+          echo "✅ Build output verified"
+          du -sh build/
+
+      - name: Comment PR with build success
+        if: success() && github.event_name == 'pull_request' && steps.docs-changes.outputs.has_changes == 'true'
+        # Fork PRs get a read-only GITHUB_TOKEN, so createComment 403s. Non-fatal:
+        # never let a cosmetic PR comment fail the required CI Complete check on forks.
+        continue-on-error: true
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('fs');
+            const buildSize = require('child_process')
+              .execSync('du -sh docs-site/build/')
+              .toString()
+              .split('\t')[0];
+            
+            const changedFiles = process.env.CHANGED_FILES || '';
+            const filesList = changedFiles.split('\n').filter(Boolean).map(f => `- \`${f}\``).join('\n');
+
+            const comment = `✅ **Docs Build Verification Passed!**
+
+            Docusaurus build completed successfully.
+            - **Build size**: ${buildSize}
+            - **Preview locally**: \`cd docs-site && pnpm start\`
+
+            **Changed files:**
+            ${filesList}
+
+            Once merged to \`main\`, your changes deploy automatically to production (\`docs.bike4mind.com\`) within about 15 minutes. There is no staging.`;
+            
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            
+            const botComment = comments.find(comment => 
+              comment.user.type === 'Bot' && 
+              comment.body.includes('Docs Build Verification')
+            );
+            
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: comment
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: comment
+              });
+            }
+        env:
+          CHANGED_FILES: ${{ steps.docs-changes.outputs.changed_files }}
+
+      - name: Comment PR with build failure
+        if: failure() && github.event_name == 'pull_request' && steps.docs-changes.outputs.has_changes == 'true'
+        # Fork PRs get a read-only GITHUB_TOKEN, so createComment 403s. Non-fatal:
+        # never let a cosmetic PR comment fail the required CI Complete check on forks.
+        continue-on-error: true
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const comment = `❌ **Docs Build Verification Failed!**
+            
+            The docs content check or the Docusaurus build failed. Please check the workflow logs for details.
+            
+            **Common issues**:
+            - Content guard hit (a real-looking account id, email, token or hostname in a page)
+            - Broken MDX syntax
+            - Missing imported components
+            - Invalid frontmatter
+            - Broken internal links
+            
+            **To fix**:
+            1. Run \`cd docs-site && pnpm install --ignore-workspace\`
+            2. Run \`pnpm build\` to reproduce the error locally
+            3. Fix the build errors
+            4. Test with \`pnpm start\` to verify
+            5. Push your fixes
+            
+            See \`docs-site/CLAUDE.md\` and \`docs-site/README.md\` for more help.`;
+            
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            
+            const botComment = comments.find(comment => 
+              comment.user.type === 'Bot' && 
+              comment.body.includes('Docs Build Verification')
+            );
+            
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: comment
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: comment
+              });
+            }

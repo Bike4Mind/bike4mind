@@ -25,6 +25,17 @@ describe('resolveRequestClient', () => {
 });
 
 describe('resolveApiCompletionSource', () => {
+  it('recognizes the Desktop AuthService headers without treating them as CLI', () => {
+    expect(resolveApiCompletionSource({ 'User-Agent': 'b4m-desktop/1.2.3', 'X-B4M-Client': 'b4m-desktop/1.2.3' })).toBe(
+      'desktop'
+    );
+    expect(resolveApiCompletionSource({ 'X-B4M-Client': 'B4M-DESKTOP/1.2.3' })).toBe('desktop');
+    for (const client of ['b4m-desktop/', 'wrapper b4m-desktop/1', 'b4m-desktop/1 extra']) {
+      expect(resolveApiCompletionSource({ 'user-agent': client })).toBe('api');
+    }
+    expect(resolveApiCompletionSource({ 'user-agent': 'curl/8', 'x-b4m-client': 'b4m-desktop/1' })).toBe('api');
+  });
+
   it('returns "cli" for the b4m-cli User-Agent', () => {
     expect(resolveApiCompletionSource({ 'user-agent': 'b4m-cli/0.9.3' })).toBe('cli');
   });

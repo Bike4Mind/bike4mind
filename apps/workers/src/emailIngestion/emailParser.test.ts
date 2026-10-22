@@ -10,6 +10,7 @@ vi.mock('sst', () => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
+  organizationRepository: {},
   connectDB: vi.fn().mockResolvedValue(undefined),
   userRepository: {},
   ingestedEmailRepository: {},
@@ -47,11 +48,11 @@ vi.mock('@aws-sdk/client-s3', () => ({
   },
 }));
 
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: vi.fn(),
 }));
 
-vi.mock('@server/utils/sqs', () => ({
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({
   sendToQueue: vi.fn(),
 }));
 

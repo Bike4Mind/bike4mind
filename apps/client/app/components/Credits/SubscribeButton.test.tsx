@@ -8,11 +8,12 @@ import type { IUserSubscription } from '@client/lib/userSubscriptions/types';
 import SubscribeButton from './SubscribeButton';
 
 const cancelMutate = vi.fn();
+const changeMutate = vi.fn();
 
 vi.mock('@client/app/hooks/data/subscriptions', () => ({
   useSubscribePlan: () => ({ mutate: vi.fn(), isPending: false }),
   useCancelSubscription: () => ({ mutate: (...args: unknown[]) => cancelMutate(...args), isPending: false }),
-  useChangeSubscription: () => ({ mutate: vi.fn(), isPending: false }),
+  useChangeSubscription: () => ({ mutate: (...args: unknown[]) => changeMutate(...args), isPending: false }),
 }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -48,6 +49,7 @@ const renderButton = (subscriptions: IUserSubscription[], priceId = 'price_pro',
 describe('SubscribeButton', () => {
   beforeEach(() => {
     cancelMutate.mockReset();
+    changeMutate.mockReset();
   });
 
   it.each([
@@ -77,6 +79,40 @@ describe('SubscribeButton', () => {
     renderButton([]);
 
     expect(screen.getByRole('button', { name: 'Subscribe' })).toBeEnabled();
+  });
+
+  it('does not report a cancellation as a subscription purchase', async () => {
+    const onSubscriptionChanged = vi.fn();
+    render(
+      <TestWrapper>
+        <SubscribeButton
+          priceId="price_pro"
+          cancellableSubscriptions={[subRow()]}
+          onSubscriptionChanged={onSubscriptionChanged}
+        />
+      </TestWrapper>
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel Subscription' }));
+    expect(cancelMutate).toHaveBeenCalledWith('price_pro');
+    expect(onSubscriptionChanged).not.toHaveBeenCalled();
+  });
+
+  it('notifies an in-place subscription change only after success', async () => {
+    const onSubscriptionChanged = vi.fn();
+    render(
+      <TestWrapper>
+        <SubscribeButton
+          priceId="price_other"
+          cancellableSubscriptions={[subRow()]}
+          onSubscriptionChanged={onSubscriptionChanged}
+        />
+      </TestWrapper>
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Change Subscription' }));
+    expect(onSubscriptionChanged).not.toHaveBeenCalled();
+    const options = changeMutate.mock.calls[0][1] as { onSuccess: () => void };
+    options.onSuccess();
+    expect(onSubscriptionChanged).toHaveBeenCalledTimes(1);
   });
 
   it('offers Change for another plan while the user keeps theirs', () => {

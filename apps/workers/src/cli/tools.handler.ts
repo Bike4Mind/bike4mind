@@ -1,5 +1,5 @@
 import { handleToolRequest } from './tools';
-import { internalErrorResult } from '@server/cli/defineLambdaRoute';
+import { internalErrorResult } from '@workers/cli/defineLambdaRoute';
 import { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
 import { registerLambdaErrorHandlers } from '@bike4mind/utils';
 import { LEGACY_REQUEST_ID_HEADER, REQUEST_ID_HEADER, resolveRequestId } from '@bike4mind/common';

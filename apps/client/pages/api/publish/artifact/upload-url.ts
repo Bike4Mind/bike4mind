@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { v4 as uuidv4 } from 'uuid';
-import { getPublishedArtifactsStorage } from '@server/utils/storage';
+import { getPublishedArtifactsStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { PublishedArtifact } from '@bike4mind/database';
 import {
   UploadUrlRequestSchema,
@@ -175,6 +175,7 @@ const handler = baseApi().post(async (req, res) => {
         draftId,
         path: file.path,
         mimeType: file.mimeType,
+        size: file.size,
         expiresIn: PRESIGNED_URL_EXPIRY_SECONDS,
       });
       return { path: file.path, url, expiresAt };

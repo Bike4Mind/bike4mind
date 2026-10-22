@@ -36,11 +36,11 @@ const renderPanel = (onBack = vi.fn()) => {
 
 /** Drive the mutation's callbacks the way react-query would. */
 const resolveBegin = (response: { dataLakeId: string; authorizeUrl: string }) =>
-  h.beginMutate.mockImplementation((_orgId: string, opts: { onSuccess: (r: unknown) => void }) =>
+  h.beginMutate.mockImplementation((_orgId: string | undefined, opts: { onSuccess: (r: unknown) => void }) =>
     opts.onSuccess(response)
   );
 const rejectBegin = (error: unknown) =>
-  h.beginMutate.mockImplementation((_orgId: string, opts: { onError: (e: unknown) => void }) => opts.onError(error));
+  h.beginMutate.mockImplementation((_orgId: string | undefined, opts: { onError: (e: unknown) => void }) => opts.onError(error));
 
 /** getServerErrorField reads this through axios's own isAxiosError guard, so the flag is required. */
 const serverRefusal = (message: string) => ({ isAxiosError: true, response: { data: { error: message } } });
@@ -120,6 +120,17 @@ describe('GitHubCreatePanel - Continue', () => {
     // The handoff has to be saved BEFORE the redirect, or the callback page lands nowhere.
     expect(h.saveHandoff).toHaveBeenCalledWith({ dataLakeId: 'lake-1' });
     await waitFor(() => expect(assign).toHaveBeenCalledWith('https://github.com/login/oauth/authorize?state=s1'));
+  });
+
+  it('starts a personal lake without an organization when none is given', async () => {
+    resolveBegin({ dataLakeId: 'lake-p', authorizeUrl: 'https://github.com/login/oauth/authorize?state=sp' });
+    wrap(<GitHubCreatePanel onBack={vi.fn()} />);
+
+    fireEvent.click(screen.getByTestId('github-create-continue-btn'));
+
+    expect(h.beginMutate).toHaveBeenCalledWith(undefined, expect.anything());
+    expect(h.saveHandoff).toHaveBeenCalledWith({ dataLakeId: 'lake-p' });
+    await waitFor(() => expect(assign).toHaveBeenCalledWith('https://github.com/login/oauth/authorize?state=sp'));
   });
 
   it('goes back to the cards without starting anything', () => {

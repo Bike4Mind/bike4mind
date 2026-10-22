@@ -1,13 +1,15 @@
 import { QueryClient } from '@tanstack/react-query';
 import type { VideoGeneration } from '@bike4mind/common';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { listOf, videoJob } from './__test__/videoGenerationFixtures';
+import { shouldReplaceGenerationJob } from './generationJobPolling';
 import {
   isTerminalVideoState,
   patchVideoGeneration,
   prependVideoGeneration,
+  reconcileFetchedVideoGeneration,
+  reconcileFetchedVideoGenerationPage,
   seedVideoGeneration,
-  shouldReplaceVideoGeneration,
   upsertVideoGeneration,
   type VideoGenerationList,
 } from './videoGenerationCache';
@@ -38,24 +40,44 @@ describe('isTerminalVideoState', () => {
   });
 });
 
-describe('shouldReplaceVideoGeneration', () => {
+describe('shouldReplaceGenerationJob (video shape)', () => {
   it('replaces when nothing is cached', () => {
-    expect(shouldReplaceVideoGeneration(undefined, videoJob())).toBe(true);
+    expect(shouldReplaceGenerationJob(undefined, videoJob())).toBe(true);
   });
   it('replaces with a newer or equally new snapshot', () => {
-    expect(shouldReplaceVideoGeneration(videoJob(), videoJob({ updated_at: LATER }))).toBe(true);
-    expect(shouldReplaceVideoGeneration(videoJob(), videoJob())).toBe(true);
+    expect(shouldReplaceGenerationJob(videoJob(), videoJob({ updated_at: LATER }))).toBe(true);
+    expect(shouldReplaceGenerationJob(videoJob(), videoJob())).toBe(true);
   });
   it('keeps the cached job when the incoming one is older', () => {
-    expect(shouldReplaceVideoGeneration(videoJob({ updated_at: LATER }), videoJob())).toBe(false);
+    expect(shouldReplaceGenerationJob(videoJob({ updated_at: LATER }), videoJob())).toBe(false);
   });
   it('keeps a storing job when a same-timestamp row says running, and takes a forward one', () => {
-    expect(shouldReplaceVideoGeneration(videoJob({ state: 'storing' }), videoJob({ state: 'running' }))).toBe(false);
-    expect(shouldReplaceVideoGeneration(videoJob({ state: 'running' }), videoJob({ state: 'storing' }))).toBe(true);
+    expect(shouldReplaceGenerationJob(videoJob({ state: 'storing' }), videoJob({ state: 'running' }))).toBe(false);
+    expect(shouldReplaceGenerationJob(videoJob({ state: 'running' }), videoJob({ state: 'storing' }))).toBe(true);
   });
   it('never replaces a terminal job with a non-terminal one', () => {
     const cached = videoJob({ state: 'succeeded' });
-    expect(shouldReplaceVideoGeneration(cached, videoJob({ state: 'running', updated_at: LATER }))).toBe(false);
+    expect(shouldReplaceGenerationJob(cached, videoJob({ state: 'running', updated_at: LATER }))).toBe(false);
+  });
+  it('never steps a live job back, even for a newer-stamped snapshot read before a frame', () => {
+    expect(
+      shouldReplaceGenerationJob(videoJob({ state: 'storing' }), videoJob({ state: 'running', updated_at: LATER }))
+    ).toBe(false);
+  });
+});
+
+describe('reconcileFetchedVideoGeneration', () => {
+  it('keeps a job a frame finished over a detail fetch read before it', () => {
+    queryClient.setQueryData(videoGenerationKeys.detail('job-1'), videoJob({ state: 'succeeded' }));
+    const fetched = videoJob({ state: 'running', updated_at: LATER });
+    expect(reconcileFetchedVideoGeneration(queryClient, fetched).state).toBe('succeeded');
+  });
+
+  it('takes a fetch that is newer, or has nothing cached to compare with', () => {
+    const fetched = videoJob({ state: 'succeeded', updated_at: LATER });
+    expect(reconcileFetchedVideoGeneration(queryClient, fetched)).toBe(fetched);
+    queryClient.setQueryData(videoGenerationKeys.detail('job-1'), videoJob({ state: 'running' }));
+    expect(reconcileFetchedVideoGeneration(queryClient, fetched)).toBe(fetched);
   });
 });
 
@@ -95,8 +117,10 @@ describe('prependVideoGeneration', () => {
     expect(detail('new')?.state).toBe('running');
   });
 
-  it('leaves an unloaded list alone', () => {
+  it('refetches, rather than writes, a list that has not loaded', () => {
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
     prependVideoGeneration(queryClient, videoJob({ id: 'new' }));
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: videoGenerationKeys.list });
     expect(queryClient.getQueryData(videoGenerationKeys.list)).toBeUndefined();
   });
 });
@@ -171,5 +195,36 @@ describe('patchVideoGeneration', () => {
   it('reports a job it has never seen', () => {
     queryClient.setQueryData(videoGenerationKeys.list, listOf([videoJob()]));
     expect(patchVideoGeneration(queryClient, { id: 'elsewhere', state: 'pending' })).toBe(false);
+  });
+});
+
+describe('reconcileFetchedVideoGenerationPage', () => {
+  it('keeps a listed row a frame finished over a list refetch read before it', () => {
+    queryClient.setQueryData(videoGenerationKeys.list, listOf([videoJob({ state: 'running' })]));
+    patchVideoGeneration(queryClient, { id: 'job-1', state: 'succeeded' });
+    const page = reconcileFetchedVideoGenerationPage(queryClient, {
+      data: [videoJob({ state: 'running' })],
+      next_cursor: null,
+    });
+    expect(page.data[0].state).toBe('succeeded');
+    expect(detail('job-1')?.state).toBe('succeeded');
+  });
+
+  it('keeps a detail entry a frame finished over a stale row', () => {
+    queryClient.setQueryData(videoGenerationKeys.detail('job-1'), videoJob({ state: 'running' }));
+    patchVideoGeneration(queryClient, { id: 'job-1', state: 'succeeded' });
+    const page = reconcileFetchedVideoGenerationPage(queryClient, {
+      data: [videoJob({ state: 'running' })],
+      next_cursor: null,
+    });
+    expect(page.data[0].state).toBe('succeeded');
+  });
+
+  it('takes newer rows, seeds them, and keeps the cursor', () => {
+    queryClient.setQueryData(videoGenerationKeys.list, listOf([videoJob({ state: 'running' })]));
+    const fresh = videoJob({ state: 'succeeded', updated_at: LATER });
+    const page = reconcileFetchedVideoGenerationPage(queryClient, { data: [fresh], next_cursor: 'cursor-1' });
+    expect(page).toEqual({ data: [fresh], next_cursor: 'cursor-1' });
+    expect(detail('job-1')).toEqual(fresh);
   });
 });

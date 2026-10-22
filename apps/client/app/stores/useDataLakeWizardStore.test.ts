@@ -308,6 +308,28 @@ describe('useDataLakeWizardStore - GitHub repository picker', () => {
   });
 });
 
+describe('useDataLakeWizardStore - GitHub connect failure', () => {
+  afterEach(() => useDataLakeWizardStore.setState({ gitHubConnectFailure: null }));
+
+  it('records the failed lake and its reason, and clears back to null', () => {
+    expect(useDataLakeWizardStore.getState().gitHubConnectFailure).toBeNull();
+
+    useDataLakeWizardStore.getState().setGitHubConnectFailure({ lakeId: 'lake1', message: 'Cancelled.' });
+    expect(useDataLakeWizardStore.getState().gitHubConnectFailure).toEqual({ lakeId: 'lake1', message: 'Cancelled.' });
+
+    useDataLakeWizardStore.getState().setGitHubConnectFailure(null);
+    expect(useDataLakeWizardStore.getState().gitHubConnectFailure).toBeNull();
+  });
+
+  // Left set, a stale reason would reappear on the lake the next time the manager opens.
+  it('clears with the manager', () => {
+    useDataLakeWizardStore.getState().openManager('mine', 'lake1');
+    useDataLakeWizardStore.getState().setGitHubConnectFailure({ lakeId: 'lake1', message: 'Cancelled.' });
+    useDataLakeWizardStore.getState().closeManager();
+    expect(useDataLakeWizardStore.getState().gitHubConnectFailure).toBeNull();
+  });
+});
+
 describe('toWizardTargetLake', () => {
   const lake = { id: 'lake1', slug: 'docs', name: 'Docs', fileTagPrefix: 'docs', isCreator: false };
 

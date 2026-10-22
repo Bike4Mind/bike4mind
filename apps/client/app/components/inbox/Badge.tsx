@@ -4,16 +4,21 @@ import { useGetUserInvites } from '@client/app/hooks/data/invites';
 import { Badge } from '@mui/joy';
 import { FC, ReactNode, useMemo } from 'react';
 
-const InboxBadge: FC<{ children: ReactNode }> = ({ children }) => {
+/**
+ * Whether the inbox has an unread message or a pending invite. Reads the same cached inbox and invites
+ * queries as the inbox itself, so calling it from several places adds no requests.
+ */
+export function useInboxHasUnread(): boolean {
   const { currentUser } = useUser();
   const userEmail = currentUser?.email;
 
   const { data: inbox } = useGetInbox(currentUser?.id || '');
   // Kept fresh by InboxProvider's debounced invalidate of ['invites', 'inbox'] (contexts/InboxContext.tsx);
-  // its mounts (via ProfileMenu) sit inside that provider, so the badge holds no invites subscription of its own.
+  // its callers (the sidenav header's Inbox bell) sit inside that provider, so this holds no invites
+  // subscription of its own.
   const { data: invites } = useGetUserInvites(currentUser?.id || '');
 
-  const hasUnread = useMemo(() => {
+  return useMemo(() => {
     const unreadInbox = inbox?.some(item => {
       // Only count messages that would actually be displayed in the message list
       // Skip messages without sender data (except SYSTEM messages)
@@ -23,8 +28,12 @@ const InboxBadge: FC<{ children: ReactNode }> = ({ children }) => {
       return !item.readAt;
     });
     const pendingInvites = invites?.filter(invite => invite?.recipients?.pending?.includes(userEmail || ''));
-    return unreadInbox || (pendingInvites && pendingInvites.length > 0);
+    return !!unreadInbox || (!!pendingInvites && pendingInvites.length > 0);
   }, [inbox, invites, userEmail]);
+}
+
+const InboxBadge: FC<{ children: ReactNode }> = ({ children }) => {
+  const hasUnread = useInboxHasUnread();
 
   return (
     <Badge

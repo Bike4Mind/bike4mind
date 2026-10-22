@@ -105,6 +105,7 @@ import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { useQuestExport } from '@client/app/hooks/data/useQuestExport';
 import ErrorBoundary from '@client/app/components/common/ErrorBoundary';
 import { extractMermaidFence } from '@client/app/utils/mermaidFence';
+import { serverStorageLimitMessage } from '@client/app/utils/storageQuota';
 
 // Dynamic imports for artifact viewers
 const ReactArtifactViewer = dynamic(() => import('./ReactArtifactViewer'), {
@@ -909,27 +910,8 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
       const streamedMsg = msg as z.infer<typeof StreamedChatCompletionAction>;
       setIsLoading(!!streamedMsg.statusMessage);
 
-      if (streamedMsg.quest?.id && currentArtifactData.type === 'questmaster' && currentArtifactData.id) {
-        const questData: QuestMasterData = {
-          id: streamedMsg.quest.id,
-          title: streamedMsg.quest.questMasterReply || 'Quest',
-          description: streamedMsg.quest.reply || '',
-          complexity: 'medium',
-          subQuests: [],
-        };
-
-        // Only update if content actually changed, to avoid an infinite loop.
-        const currentContent = currentArtifactData.content as QuestMasterData;
-        if (!currentContent || currentContent.description !== questData.description) {
-          setSessionLayout({
-            layout: useSessionLayout.getState().layout,
-            artifactData: {
-              ...currentArtifactData,
-              content: questData,
-            },
-          });
-        }
-      }
+      // A questmaster item's content is its plan id, which QuestMasterReply fetches and
+      // subscribes by, so a streamed reply must never rewrite it.
 
       if (currentArtifactData.type === 'code' && currentArtifactData.id) {
         // Code artifacts need no update during streaming; a no-op here avoids a loop.
@@ -1015,7 +997,7 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
       }
     } catch (error) {
       console.error('Edit failed:', error);
-      toast.error('Failed to generate edit');
+      toast.error(serverStorageLimitMessage(error) ?? 'Failed to generate edit');
       throw error; // Re-throw to let EditFileDialog handle it
     }
   };
@@ -1048,7 +1030,7 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
       setFileRefreshKey(prev => prev + 1);
     } catch (error) {
       console.error('Apply edit failed:', error);
-      toast.error('Failed to apply changes');
+      toast.error(serverStorageLimitMessage(error) ?? 'Failed to apply changes');
     }
   };
 
@@ -1349,9 +1331,6 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
         }
         break;
       case 'questmaster':
-        // The plan id lives on the item's id, not its content: a streamed quest completion
-        // overwrites the content with a QuestMasterData object (see the streamed_chat_completion
-        // subscription above), and the export route only accepts an id.
         questExport.startExport(currentItem.id);
         break;
       case 'code':

@@ -4,7 +4,7 @@ import { BadRequestError, InternalServerError } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { MAX_CONCURRENT_EXECUTIONS_PER_USER, STALE_ACTIVE_MS } from '@server/utils/executionLimits';
 import { credentialExecutionFields, type ApiKeyCredential } from '@server/dataLakes/dataLakeScopes';
-import { settleStrandedQuests } from '@server/utils/settleStrandedQuests';
+import { settleStrandedQuests } from '@bike4mind/server-utils/utils/settleStrandedQuests';
 import {
   dispatchAgentExecution,
   resolveAgentExecutorTarget,

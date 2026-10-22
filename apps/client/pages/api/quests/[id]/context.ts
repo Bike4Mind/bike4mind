@@ -1,5 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { questRepository, sessionRepository } from '@bike4mind/database';
 import { redactPromptMetaForViewer } from '@bike4mind/common';
 import { buildContextBreakdown } from '@bike4mind/services';

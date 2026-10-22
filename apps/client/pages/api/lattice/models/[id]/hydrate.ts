@@ -8,7 +8,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { latticeModelService } from '@bike4mind/services';
 import { latticeModelRepository } from '@bike4mind/database';
-import { NotFoundError, BadRequestError } from '@server/utils/errors';
+import { NotFoundError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
 const handler = baseApi({ auth: true }).post(
   asyncHandler(async (req, res) => {

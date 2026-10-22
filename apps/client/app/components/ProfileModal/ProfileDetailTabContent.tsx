@@ -4,6 +4,7 @@ import SectionContainer from '@client/app/components/ProfileModal/SectionContain
 import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import SubscriptionModal from '@client/app/components/subscription/SubscriptionModal';
 import CreditsModal from '@client/app/components/subscription/CreditsModal';
+import StorageBreakdown from '@client/app/components/common/StorageBreakdown';
 import { useUser } from '@client/app/contexts/UserContext';
 import { Box, Typography, IconButton, Tooltip, CircularProgress, Button } from '@mui/joy';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
@@ -138,14 +139,14 @@ const AboutTabContent = () => {
               display: 'flex',
               alignItems: 'top',
               gap: '15px',
-              height: '144px',
+              minHeight: '144px',
             }}
           >
             <Box sx={{ flexShrink: 1 }}>
               <Storage sx={{ fontSize: '38px', color: theme.palette.fileBrowser.fileSizeColor }} />
             </Box>
 
-            <Box display="flex" flexDirection="column" justifyContent="space-between">
+            <Box display="flex" flexDirection="column" justifyContent="space-between" sx={{ flex: 1, minWidth: 0 }}>
               <Box>
                 <Typography
                   className="profile-detail-tab-subscription-label"
@@ -160,6 +161,7 @@ const AboutTabContent = () => {
                   {prettyBytes(currentUser?.currentStorageSize ?? 0)} /{' '}
                   {prettyBytes(storageLimitToBytes(currentUser?.storageLimit ?? 0))}
                 </Typography>
+                <StorageBreakdown />
               </Box>
             </Box>
           </Box>

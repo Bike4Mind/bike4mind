@@ -30,7 +30,8 @@
     "title": "변경 로그"
   },
   "feedback": {
-    "send": "피드백 보내기"
+    "send": "피드백 보내기",
+    "rollupTitle": "내 피드백"
   },
   "terms_policies": "약관 및 정책",
   "login": "로그인",
@@ -166,7 +167,8 @@
     "messages": "메시지",
     "invites": "초대",
     "sendMessage": "메시지 보내기",
-    "noMessages": "메시지가 없습니다"
+    "noMessages": "메시지가 없습니다",
+    "title_unread": "받은편지함, 읽지 않은 항목 있음"
   },
   "addSomething": "{{ name }} 추가하기",
   "deleteAllSomething": "모든 {{ name }} 삭제하기",
@@ -286,7 +288,30 @@
     "renews_on": "갱신 날짜 {{ date }}"
   },
   "billing": {
-    "title": "청구"
+    "title": "청구",
+    "balance": "잔액",
+    "credits_heading": "크레딧 충전",
+    "credits_sub": "잔액에 더해지는 1회성 팩입니다. 구독이 필요 없습니다.",
+    "credits_sub_with_plan": "월간 제공량에 더해지는 1회성 팩입니다.",
+    "free_plan": "무료",
+    "free_plan_detail": "크레딧 팩으로 사용한 만큼 결제",
+    "low_org": "조직 관리자가 이 계정에 크레딧을 추가할 수 있습니다.",
+    "low_with_plan": "제공량이 갱신될 때까지 계속 작업하려면 충전하세요.",
+    "low_without_plan": "플랜은 매달 크레딧을 제공하고, 팩은 지금 바로 충전합니다.",
+    "payment_failed": "결제 실패",
+    "plan": "플랜",
+    "plan_fallback": "구독",
+    "plan_unavailable": "사용할 수 없음",
+    "plan_unavailable_detail": "플랜을 불러오지 못했습니다.",
+    "plans_change": "내 플랜",
+    "plans_change_sub": "구독을 관리, 변경 또는 취소하세요.",
+    "plans_heading": "플랜",
+    "plans_heading_sub": "크레딧 제공량이 포함된 월간 플랜입니다.",
+    "plans_upgrade": "업그레이드",
+    "plans_upgrade_sub": "직접 충전하는 대신 매달 크레딧을 받으세요.",
+    "retry": "다시 시도",
+    "see_plans": "플랜 보기",
+    "top_up": "충전"
   },
   "credits": {
     "title": "크레딧",
@@ -314,7 +339,8 @@
     "usage_pattern": "지난 {{days}}일 동안의 사용 패턴에 기반함",
     "credits_used": "사용된 크레딧",
     "credits_purchased": "구매한 크레딧",
-    "net_credits": "순 크레딧"
+    "net_credits": "순 크레딧",
+    "unit": "크레딧"
   },
   "time": {
     "last_7_days": "지난 7일",
@@ -362,7 +388,15 @@
       "completed": "완료",
       "pending": "보류 중",
       "failed": "실패"
-    }
+    },
+    "buy_pack": "{{price}}에 {{credits}} 크레딧 구매",
+    "choose_pack": "크레딧 팩 선택",
+    "history_usage_hint": "여기에는 구매 내역만 표시됩니다.",
+    "organization_credits_active": "조직 크레딧 사용 중",
+    "rate_per_thousand": "1,000 크레딧당 {{rate}}",
+    "see_usage": "사용량 보기",
+    "shared_rate": "모든 팩의 단가가 같습니다: 1,000 크레딧당 {{rate}}.",
+    "switch_to_personal": "개인용 크레딧을 구매하려면 개인 계정으로 전환하세요."
   },
   "settings": {
     "title": "설정",
@@ -543,7 +577,9 @@
     "personal": "개인",
     "business": "비즈니스",
     "team": "팀",
-    "enterprise": "기업"
+    "enterprise": "기업",
+    "audience_label": "플랜 유형",
+    "includes": "포함 사항"
   },
   "agents": {
     "title": "에이전트",
@@ -572,5 +608,13 @@
   "skills": {
     "title": "기술",
     "command_palette_description": "재사용 가능한 지침 템플릿 관리"
+  },
+  "apiKeys": {
+    "title": "API 키"
+  },
+  "connections": {
+    "menuTooltip": "Google Drive, Slack 같은 연동과 내 코드용 API 키",
+    "sections": "연결 섹션",
+    "title": "연결"
   }
 }

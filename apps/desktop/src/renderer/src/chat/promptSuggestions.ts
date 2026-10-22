@@ -22,8 +22,9 @@ export function parseStoredPreference(raw: string | null): boolean {
 }
 
 /** One line for the Customize row, which is the only place the setting is described. */
-export function promptSuggestionsSummary(enabled: boolean): string {
-  return enabled ? 'On' : 'Off';
+export function promptSuggestionsSummary(enabled: boolean, model: string | null = null): string {
+  if (!enabled) return 'Off';
+  return model ? `On, ${model}` : 'On';
 }
 
 let enabled = readStored();
@@ -66,4 +67,48 @@ export function usePromptSuggestions(): [boolean, () => void] {
   const value = useSyncExternalStore(subscribe, promptSuggestionsEnabled, promptSuggestionsEnabled);
   const toggle = useCallback(() => setPromptSuggestionsEnabled(!promptSuggestionsEnabled()), []);
   return [value, toggle];
+}
+
+/**
+ * Which model writes the hint, by id, or null for automatic (main's pick of a small hosted
+ * model). Same storage and the same reasons as the switch above; main validates the id against
+ * the catalog on every call, so a stale one only means no hint.
+ */
+const MODEL_STORAGE_KEY = 'b4m.composer.promptSuggestionModel';
+
+let model = readStoredModel();
+const modelListeners = new Set<() => void>();
+
+function readStoredModel(): string | null {
+  try {
+    return window.localStorage.getItem(MODEL_STORAGE_KEY) || null;
+  } catch {
+    return null;
+  }
+}
+
+function subscribeModel(listener: () => void): () => void {
+  modelListeners.add(listener);
+  return () => modelListeners.delete(listener);
+}
+
+export function promptSuggestionModel(): string | null {
+  return model;
+}
+
+export function setPromptSuggestionModel(next: string | null): void {
+  if (next === model) return;
+  model = next;
+  try {
+    if (next) window.localStorage.setItem(MODEL_STORAGE_KEY, next);
+    else window.localStorage.removeItem(MODEL_STORAGE_KEY);
+  } catch {
+    // Kept for this run, as with the switch.
+  }
+  for (const listener of modelListeners) listener();
+}
+
+export function usePromptSuggestionModel(): [string | null, (next: string | null) => void] {
+  const value = useSyncExternalStore(subscribeModel, promptSuggestionModel, promptSuggestionModel);
+  return [value, setPromptSuggestionModel];
 }

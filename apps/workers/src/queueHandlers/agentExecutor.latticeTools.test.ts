@@ -99,4 +99,17 @@ describe('buildSubagentLatticeToolPool', () => {
     buildSharedToolsMock.mockReturnValue(undefined);
     expect(buildSubagentLatticeToolPool(deps, callbacks, undefined)).toEqual([]);
   });
+
+  // The pool is granted from the subagent's own `allowedTools`, so it never passes through the
+  // parent's name filter - a session denial has to be applied here or a delegated agent gets the
+  // tool anyway.
+  it('drops the session-denied tools from the pool', () => {
+    buildSharedToolsMock.mockReturnValue(LATTICE_TOOL_NAMES.map(tool));
+    const [denied] = LATTICE_TOOL_NAMES;
+
+    const pool = buildSubagentLatticeToolPool(deps, callbacks, undefined, undefined, [denied]);
+
+    expect(pool.map(t => t.toolSchema.name)).not.toContain(denied);
+    expect(pool).toHaveLength(LATTICE_TOOL_NAMES.length - 1);
+  });
 });

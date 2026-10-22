@@ -6,7 +6,7 @@ vi.mock('@bike4mind/database/auth', () => ({
   userApiKeyRepository: { findById: findByIdMock },
   apiKeyAlertRepository: { createAlert: createAlertMock },
 }));
-vi.mock('./apiKeyUsageManager', () => ({
+vi.mock('@bike4mind/server-utils/managers/apiKeyUsageManager', () => ({
   ApiKeyUsageManager: { getRecentRequestsPerMinute: vi.fn().mockResolvedValue(0) },
 }));
 

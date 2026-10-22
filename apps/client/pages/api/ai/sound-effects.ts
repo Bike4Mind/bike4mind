@@ -1,27 +1,22 @@
 import { randomUUID } from 'crypto';
 import {
-  ApiKeyType,
   isSupportedElevenLabsFormat,
   UnprocessableEntityError,
   shouldPersistGeneratedAudio,
   generateSoundEffectContract,
   SoundGenerationVendor,
+  usdToCreditsStochastic,
 } from '@bike4mind/common';
 import { adminSettingsRepository, apiKeyRepository, usageEventRepository } from '@bike4mind/database';
 import { apiKeyService, estimateSoundCredits } from '@bike4mind/services';
 import { aiSoundService, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { reserveRequestCredits } from '@server/billing/reserveRequestCredits';
+import { resolveAudioBillingOrgId } from '@server/billing/resolveAudioBillingOrgId';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { saveGeneratedAssetToFiles } from '@server/utils/saveGeneratedAssetToFiles';
 import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
 import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
-
-// The stored key type each vendor needs. Resolved per-user first, then falling
-// back to the admin-configured key (getEffectiveApiKey), so the feature works
-// out of the box on platforms that provide a shared provider key.
-const PROVIDER_API_KEY_TYPE: Record<SoundGenerationVendor, ApiKeyType> = {
-  elevenlabs: ApiKeyType.elevenlabs,
-};
+import { AUDIO_VENDOR_API_KEY_TYPE } from '@server/utils/audioVendorApiKeyType';
 
 // Each vendor's output-format check. Run before the reservation: an unmapped codec would be generated and
 // billed, then could be neither labelled nor saved.
@@ -30,8 +25,8 @@ const SUPPORTS_OUTPUT_FORMAT: Record<SoundGenerationVendor, (format: string) => 
 };
 
 // Provider-agnostic sound-effects generation. Meters usage: because the cost is
-// deterministic (duration-driven), it RESERVES the exact charge before calling
-// the provider and settles it on success / refunds it on failure - so a charge
+// deterministic (duration-driven), it RESERVES the rounded-up charge before
+// calling the provider and settles the exact cost on success / refunds it on failure - so a charge
 // can never fail after the audio is produced. Bills the organization's shared
 // pool for org-billed API keys and for org-seat members; otherwise the user. All
 // billing is gated on the enforceCredits admin setting, so self-host /
@@ -42,7 +37,8 @@ const SUPPORTS_OUTPUT_FORMAT: Record<SoundGenerationVendor, (format: string) => 
 // generateSoundEffectContract (the same source of truth that drives the OpenAPI
 // spec); `req.validated` is the parsed, typed body.
 const handler = nextRouteForContract(generateSoundEffectContract).post(async (req, res) => {
-  const { provider, text, durationSeconds, promptInfluence, format, encoding, preview } = req.validated;
+  const { provider, text, durationSeconds, promptInfluence, format, encoding, preview, organization_id } =
+    req.validated;
   const userId = req.user?.id;
 
   // Undefined falls back to the vendor's mp3 default, which every vendor supports. An empty string is
@@ -53,7 +49,7 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
 
   const apiKey = await apiKeyService.getEffectiveApiKey(
     userId,
-    { type: PROVIDER_API_KEY_TYPE[provider] },
+    { type: AUDIO_VENDOR_API_KEY_TYPE[provider] },
     { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository } }
   );
 
@@ -65,7 +61,10 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
     return res.status(503).json({ error: `No ${provider} API key configured` });
   }
 
-  const settings = await getSettingsMap({ adminSettings: adminSettingsRepository }, { names: ['enforceCredits'] });
+  const settings = await getSettingsMap(
+    { adminSettings: adminSettingsRepository },
+    { names: ['enforceCredits'], skipCache: true }
+  );
   const enforceCredits = getSettingsValue('enforceCredits', settings);
 
   // Cost is deterministic from the request (duration-driven), so the same
@@ -74,11 +73,16 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
   // cost even on credits-off / self-host deployments.
   const { requiredCredits, usdCost, billedSeconds } = estimateSoundCredits(provider, { durationSeconds });
 
+  // Omitted keeps the home-org default. A key bills its own account (resolveAudioBillingOrgId 403s any
+  // other target), so only the JWT caller's value changes the payer.
+  const billingOrganizationId = await resolveAudioBillingOrgId(req, organization_id, 'home-org');
+
   const reservation = await reserveRequestCredits({
     req,
     requiredCredits,
     enforceCredits,
     featureLabel: 'sound generation',
+    billingOrganizationId,
   });
   const { ownerId: creditOwnerId, ownerType: creditOwnerType } = reservation;
 
@@ -131,8 +135,9 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
     return res.status(502).json({ error: 'Sound generation failed' });
   }
 
-  // Settle the full reservation: the provider generates exactly the billed duration.
-  const creditsCharged = await reservation.settle(reservation.reservedCredits, {
+  // The provider generates exactly the billed duration, so settle that exact cost; the round-up held at
+  // reservation is refunded.
+  const creditsCharged = await reservation.settle(usdToCreditsStochastic(usdCost), {
     type: 'sound_effects_usage',
     sessionId,
     model: provider,
@@ -155,6 +160,7 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
               provider,
               prompt: text,
               ...(durationSeconds !== undefined && { durationSeconds }),
+              ...(promptInfluence !== undefined && { promptInfluence }),
             },
           },
           req.logger

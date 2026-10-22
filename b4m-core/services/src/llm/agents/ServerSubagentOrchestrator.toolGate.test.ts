@@ -82,8 +82,13 @@ function makeTool(name: string): ICompletionOptionTools {
   };
 }
 
-async function runGated(name: string, approvedTools: string[], deniedTools: string[]): Promise<string> {
-  const [tool] = gateSubagentTools([makeTool(name)], { approvedTools, deniedTools }, makeLogger());
+async function runGated(
+  name: string,
+  approvedTools: string[],
+  deniedTools: string[],
+  claimedServers: string[] = []
+): Promise<string> {
+  const [tool] = gateSubagentTools([makeTool(name)], { approvedTools, deniedTools }, makeLogger(), claimedServers);
   return tool.toolFn({});
 }
 
@@ -109,12 +114,64 @@ describe('gateSubagentTools', () => {
     expect(ran).toEqual([]);
   });
 
+  it('does not let an empty-string claim exempt a tool that belongs to no confirming server', async () => {
+    expect(await runGated('notion__create_page', [], [], [''])).toMatch(/needs the user's approval/);
+    expect(await runGated('mcp__github__create_issue', [], [], [''])).toMatch(/needs the user's approval/);
+    expect(await runGated('send_slack_message', [], [], [''])).toMatch(/needs the user's approval/);
+    expect(ran).toEqual([]);
+  });
+
   it('runs an external tool the parent approved', async () => {
     expect(await runGated('send_slack_message', ['send_slack_message'], [])).toBe('send_slack_message ok');
   });
 
   it('refuses a tool the parent denied, even one that is otherwise allowed', async () => {
     expect(await runGated('web_search', [], ['web_search'])).toMatch(/the user denied it for this session/);
+    expect(ran).toEqual([]);
+  });
+
+  it('runs a confirming MCP server tool the parent never approved, since its writes only preview', async () => {
+    const claimed = ['github', 'atlassian'];
+    expect(await runGated('github__list_issues', [], [], claimed)).toBe('github__list_issues ok');
+    expect(await runGated('atlassian__jira_create_issue', [], [], claimed)).toBe('atlassian__jira_create_issue ok');
+    expect(ran).toEqual(['github__list_issues', 'atlassian__jira_create_issue']);
+  });
+
+  it('refuses a confirming MCP server tool when the agent does not claim that server', async () => {
+    expect(await runGated('github__list_issues', [], [])).toMatch(/needs the user's approval/);
+    expect(await runGated('atlassian__jira_create_issue', [], [], ['github'])).toMatch(/needs the user's approval/);
+    expect(ran).toEqual([]);
+  });
+
+  it('rewrites a confirming tool write preview so the model is not sent to a Confirm button', async () => {
+    const preview = JSON.stringify({
+      action: 'preview',
+      next_step: 'Click the Confirm button below.',
+      _confirmToken: 't',
+    });
+    const tool: ICompletionOptionTools = { ...makeTool('github__create_issue'), toolFn: async () => preview };
+    const [gated] = gateSubagentTools([tool], { approvedTools: [], deniedTools: [] }, makeLogger(), ['github']);
+
+    const forModel = JSON.parse(await gated.toolFn({}));
+    expect(forModel).not.toHaveProperty('_confirmToken');
+    expect(forModel.next_step).toMatch(/^Not executed/);
+  });
+
+  it('runs a confirming server tool for an agent that claims only that server', async () => {
+    expect(await runGated('github__list_issues', [], [], ['github'])).toBe('github__list_issues ok');
+  });
+
+  it('still refuses a confirming MCP server tool the user denied', async () => {
+    expect(await runGated('github__create_issue', [], ['github__create_issue'], ['github'])).toMatch(
+      /the user denied it/
+    );
+    expect(ran).toEqual([]);
+  });
+
+  it('refuses an unapproved tool from any other MCP server, including one merely named like a confirming server', async () => {
+    expect(await runGated('notion__create_page', [], [])).toMatch(/needs the user's approval/);
+    expect(await runGated('githubx__create_issue', [], [])).toMatch(/needs the user's approval/);
+    expect(await runGated('mcp__github__create_issue', [], [])).toMatch(/needs the user's approval/);
     expect(ran).toEqual([]);
   });
 
@@ -146,6 +203,40 @@ describe('ServerSubagentOrchestrator in-process child tool gate', () => {
 
     expect(ran).toEqual(['web_search']);
     expect(childCalls.find(c => c.name === 'send_slack_message')?.result).toMatch(/^Error:/);
+  });
+
+  it('runs an unapproved confirming-server tool for an agent whose exclusiveMcpServers claims it', async () => {
+    const orchestrator = new ServerSubagentOrchestrator({
+      userId: 'u1',
+      llm: makeLlm(),
+      logger: makeLogger(),
+      parentTools: [makeTool('github__list_issues')],
+      toolPermissions: { approvedTools: [], deniedTools: [] },
+    });
+
+    await orchestrator.delegateToAgent({
+      task: 't',
+      agentDef: { ...makeAgentDef(), exclusiveMcpServers: ['github'] },
+      thoroughness: 'quick',
+    });
+
+    expect(ran).toEqual(['github__list_issues']);
+    expect(childCalls.find(c => c.name === 'github__list_issues')?.result).toBe('github__list_issues ok');
+  });
+
+  it('refuses the same tool for an agent without exclusiveMcpServers', async () => {
+    const orchestrator = new ServerSubagentOrchestrator({
+      userId: 'u1',
+      llm: makeLlm(),
+      logger: makeLogger(),
+      parentTools: [makeTool('github__list_issues')],
+      toolPermissions: { approvedTools: [], deniedTools: [] },
+    });
+
+    await orchestrator.delegateToAgent({ task: 't', agentDef: makeAgentDef(), thoroughness: 'quick' });
+
+    expect(ran).toEqual([]);
+    expect(childCalls.find(c => c.name === 'github__list_issues')?.result).toMatch(/needs the user's approval/);
   });
 
   it('leaves the child ungated when the parent is ungated (no toolPermissions)', async () => {

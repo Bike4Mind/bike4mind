@@ -28,7 +28,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ upload: vi.fn(), getSignedUrl: vi.fn(), getMetadata: vi.fn() }),
 }));
 vi.mock('@server/dataLakes', () => ({
@@ -86,8 +86,8 @@ beforeEach(() => {
 });
 
 describe('GET /api/files/:id - scope gate', () => {
-  it('requires files:read or files:write at the baseApi route gate', () => {
-    expect(h.baseApiOptions).toEqual({ requiredScopes: ['files:read', 'files:write'] });
+  it('admits files:read, files:write and ai:generate at the baseApi route gate', () => {
+    expect(h.baseApiOptions).toEqual({ requiredScopes: ['files:read', 'files:write', 'ai:generate'] });
   });
 
   it('rejects a files:write-only key with a 403 before loading the file', async () => {

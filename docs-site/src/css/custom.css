@@ -1,0 +1,35 @@
+/**
+ * Global styles. Infima variable overrides below match the Bike4Mind app
+ * brand palette (app.bike4mind.com): primary interactive blue #0B6BCB,
+ * hover #0959AA, accent #3b82f6, dark navy #0A3D50.
+ */
+
+:root {
+  --ifm-color-primary: #0b6bcb;
+  --ifm-color-primary-dark: #0a60b7;
+  --ifm-color-primary-darker: #0959aa;
+  --ifm-color-primary-darkest: #074a8e;
+  --ifm-color-primary-light: #1e79d6;
+  --ifm-color-primary-lighter: #2b82db;
+  --ifm-color-primary-lightest: #3b82f6;
+  --ifm-code-font-size: 95%;
+  --ifm-footer-background-color: #0a3d50;
+  --docusaurus-highlighted-code-line-bg: rgba(11, 107, 203, 0.1);
+}
+
+/* Lighter blues in dark mode for contrast on dark backgrounds. */
+[data-theme='dark'] {
+  --ifm-color-primary: #5ba1f0;
+  --ifm-color-primary-dark: #3b82f6;
+  --ifm-color-primary-darker: #2e7de8;
+  --ifm-color-primary-darkest: #0b6bcb;
+  --ifm-color-primary-light: #74b1f4;
+  --ifm-color-primary-lighter: #86bbf6;
+  --ifm-color-primary-lightest: #a9cff9;
+  --docusaurus-highlighted-code-line-bg: rgba(91, 161, 240, 0.15);
+}
+
+/* Keep the footer navy in both themes (its text is already light). */
+[data-theme='dark'] .footer--dark {
+  --ifm-footer-background-color: #0a2e40;
+}

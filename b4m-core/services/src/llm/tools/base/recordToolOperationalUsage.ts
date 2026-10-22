@@ -63,7 +63,14 @@ export async function recordToolOperationalUsage(
       ? 0
       : turnUsage?.length
         ? getTurnsCost(modelInfo, turnUsage)
-        : getTextModelCost(modelInfo, inputTokens, outputTokens, cachedInputTokens, cacheWriteTokens);
+        : getTextModelCost(
+            modelInfo,
+            inputTokens,
+            outputTokens,
+            cachedInputTokens,
+            cacheWriteTokens,
+            inputTokens + cachedInputTokens + cacheWriteTokens
+          );
 
     // Report the spend to a billing host (e.g. the agent executor) so nested tool
     // generation is folded into its ledger rather than billed at zero (#630). Fired

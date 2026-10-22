@@ -6,13 +6,14 @@ import {
   scopedSettingsRepository,
   User,
   withTransaction,
+  organizationRepository,
 } from '@bike4mind/database';
 import { Permission } from '@bike4mind/common';
 import { fabFilesService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError } from '@server/utils/errors';
-import { getFilesStorage } from '@server/utils/storage';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { logEvent } from '@server/utils/analyticsLog';
 import { FileEvents } from '@bike4mind/common';
 import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
@@ -43,6 +44,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
               // enforcement override would silently not apply on this door.
               scopedSettings: scopedSettingsRepository,
               users: User,
+              organizations: organizationRepository,
               dataLakes: dataLakeRepository,
             },
             storage: {

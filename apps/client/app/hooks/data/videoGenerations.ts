@@ -2,18 +2,24 @@ import { isAxiosError } from 'axios';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import type { CreateVideoGenerationBody, VideoGeneration, VideoModel } from '@bike4mind/common';
-import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { api } from '@client/app/contexts/ApiContext';
 import { ReadyState, useWebsocket } from '@client/app/contexts/WebsocketContext';
-import { CREDITS_BALANCE_KEY } from './credits';
+import { hasGenerationCreditSettlementChanged, invalidateGenerationCreditBalances } from './generationCreditBalances';
+import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
+import { switcherBillingTarget } from './generationBillingTarget';
 import {
   prependVideoGeneration,
-  seedVideoGeneration,
+  reconcileFetchedVideoGeneration,
+  reconcileFetchedVideoGenerationPage,
   upsertVideoGeneration,
   type VideoGenerationList,
   type VideoGenerationPage,
 } from './videoGenerationCache';
-import { LIST_URL_REFRESH_LEAD_MS, generationJobPollInterval, msUntil } from './generationJobPolling';
+import {
+  generationJobPollInterval,
+  generationListRefreshInterval,
+  isTerminalGenerationState,
+} from './generationJobPolling';
 import { describeVideoGenerationError } from './videoGenerationErrors';
 import { videoGenerationKeys } from './videoGenerationKeys';
 
@@ -36,14 +42,8 @@ export const videoGenerationPollInterval = (
   now: number
 ): number | false => generationJobPollInterval(job, socketOpen, now);
 
-export function videoListRefreshInterval(list: VideoGenerationList | undefined, now: number): number | false {
-  const expiries = (list?.pages ?? [])
-    .flatMap(page => page.data)
-    .flatMap(job => (job.output?.availability === 'ready' && job.output.expires_at ? [job.output.expires_at] : []));
-  if (expiries.length === 0) return false;
-  const earliest = expiries.reduce((a, b) => (Date.parse(a) <= Date.parse(b) ? a : b));
-  return msUntil(earliest, LIST_URL_REFRESH_LEAD_MS, now);
-}
+export const videoListRefreshInterval = (list: VideoGenerationList | undefined, now: number): number | false =>
+  generationListRefreshInterval(list, now);
 
 export function useVideoModels() {
   return useQuery({
@@ -61,8 +61,17 @@ export function useVideoGenerations() {
       const response = await api.get<VideoGenerationPage>('/api/v1/video-generations', {
         params: { limit: VIDEO_GALLERY_PAGE_SIZE, ...(pageParam && { cursor: pageParam }) },
       });
-      response.data.data.forEach(job => seedVideoGeneration(queryClient, job));
-      return response.data;
+      const previousJobs = new Map(
+        response.data.data.map(job => [
+          job.id,
+          queryClient.getQueryData<VideoGeneration>(videoGenerationKeys.detail(job.id)),
+        ])
+      );
+      const page = reconcileFetchedVideoGenerationPage(queryClient, response.data);
+      if (page.data.some(job => hasGenerationCreditSettlementChanged(previousJobs.get(job.id), job))) {
+        void invalidateGenerationCreditBalances(queryClient);
+      }
+      return page;
     },
     initialPageParam: undefined as string | undefined,
     getNextPageParam: lastPage => lastPage.next_cursor ?? undefined,
@@ -72,11 +81,21 @@ export function useVideoGenerations() {
 
 export function useVideoGeneration(jobId: string) {
   const { readyState } = useWebsocket();
+  const queryClient = useQueryClient();
   const socketOpen = readyState === ReadyState.OPEN;
   return useQuery({
     queryKey: videoGenerationKeys.detail(jobId),
-    queryFn: async () =>
-      (await api.get<VideoGeneration>(`/api/v1/video-generations/${encodeURIComponent(jobId)}`)).data,
+    queryFn: async () => {
+      const previous = queryClient.getQueryData<VideoGeneration>(videoGenerationKeys.detail(jobId));
+      const job = reconcileFetchedVideoGeneration(
+        queryClient,
+        (await api.get<VideoGeneration>(`/api/v1/video-generations/${encodeURIComponent(jobId)}`)).data
+      );
+      if (hasGenerationCreditSettlementChanged(previous, job)) {
+        void invalidateGenerationCreditBalances(queryClient);
+      }
+      return job;
+    },
     enabled: jobId.length > 0,
     // List seeds and websocket patches keep this fresh; a mount right after a seed must not refetch.
     staleTime: 30_000,
@@ -90,16 +109,6 @@ export function useVideoGeneration(jobId: string) {
   });
 }
 
-// Bills the account the switcher shows, read at submit so a later switch is honoured. Read from the switcher's
-// own store, not useLLM's organizationId mirror: login clears the mirror to null (personal) while the switcher
-// keeps the team, and only a mounted sidenav re-syncs them. With no selection yet the field is omitted so the
-// server falls back to the home org rather than billing personal credits by accident.
-function switcherBillingTarget(): Pick<CreateVideoGenerationBody, 'organization_id'> {
-  const { selectedAccount } = useSelectedAccount.getState();
-  if (!selectedAccount) return {};
-  return { organization_id: selectedAccount.personal ? null : selectedAccount.id };
-}
-
 export function useCreateVideoGeneration() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -107,10 +116,15 @@ export function useCreateVideoGeneration() {
       (await api.post<VideoGeneration>('/api/v1/video-generations', { ...body, ...switcherBillingTarget() })).data,
     onSuccess: job => {
       prependVideoGeneration(queryClient, job);
-      void queryClient.invalidateQueries({ queryKey: CREDITS_BALANCE_KEY });
+      void invalidateGenerationCreditBalances(queryClient);
       toast.success('Video generation started');
     },
-    onError: error => toast.error(describeVideoGenerationError(error, 'Could not start the video. Try again.')),
+    // Snapshot the billed account at submit so an error names who was charged even if the switcher moves meanwhile.
+    onMutate: () => ({ billingAccount: useSelectedAccount.getState().selectedAccount }),
+    onError: (error, _body, context) =>
+      toast.error(
+        describeVideoGenerationError(error, 'Could not start the video. Try again.', context?.billingAccount ?? null)
+      ),
   });
 }
 
@@ -120,7 +134,13 @@ export function useCancelVideoGeneration() {
     mutationFn: async (jobId: string) =>
       (await api.post<VideoGeneration>(`/api/v1/video-generations/${encodeURIComponent(jobId)}/cancel`)).data,
     // The job usually comes back still running with the cancel queued; the websocket delivers `cancelled`.
-    onSuccess: job => upsertVideoGeneration(queryClient, job),
+    onSuccess: job => {
+      upsertVideoGeneration(queryClient, job);
+      const latest = queryClient.getQueryData<VideoGeneration>(videoGenerationKeys.detail(job.id));
+      if (latest && isTerminalGenerationState(latest.state) && latest.credits.settled !== null) {
+        void invalidateGenerationCreditBalances(queryClient);
+      }
+    },
     onError: error => toast.error(describeVideoGenerationError(error, 'Could not cancel the video. Try again.')),
   });
 }

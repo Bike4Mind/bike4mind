@@ -138,11 +138,11 @@ const Bike4MindUserDetails: React.FC<Bike4MindUserDetailsProps> = React.memo(
                 data-testid="admin-credit-reason-input"
                 minRows={2}
                 maxRows={4}
-                placeholder="Reason for credit adjustment (optional)"
+                placeholder="Reason for credit adjustment (required, min 5 characters)"
                 value={creditReason}
                 onChange={e => onCreditReasonChange(e.target.value)}
               />
-              <FormHelperText>Recorded on the credit audit trail.</FormHelperText>
+              <FormHelperText>Required to save. Recorded on the credit audit trail.</FormHelperText>
             </Box>
           </Stack>
         )}

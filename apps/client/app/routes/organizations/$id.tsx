@@ -1,4 +1,10 @@
-import { IOrganizationDocument, Permission, WithId, isOrgOwnerOrCurrentAdmin } from '@bike4mind/common';
+import {
+  IOrganizationDocument,
+  Permission,
+  WithId,
+  isOrgOwnerOrCurrentAdmin,
+  isOrgOwnerOrPlatformAdmin,
+} from '@bike4mind/common';
 import Breadcrumbs from '@client/app/components/common/Breadcrumbs';
 import OrganizationMembers from '@client/app/components/organizations/Member';
 import OrganizationGroups from '@client/app/components/organizations/OrganizationGroups';
@@ -47,6 +53,8 @@ import ExtensionOutlinedIcon from '@mui/icons-material/ExtensionOutlined';
 import InsightsOutlinedIcon from '@mui/icons-material/InsightsOutlined';
 import RateReviewOutlinedIcon from '@mui/icons-material/RateReviewOutlined';
 import {
+  canManageOrgIntegrations,
+  canViewOrgAnalysis,
   canViewOrgBilling,
   canViewOrgUsage,
   OrganizationTabs,
@@ -92,9 +100,14 @@ const OrganizationPage: FC = () => {
     return userPermissions.includes(Permission.share) || userPermissions.includes(Permission.update);
   }, [userPermissions]);
 
-  // Gates both the Usage and the Analysis tab - see canViewOrgUsage for why it is not the
-  // permission set.
+  // Usage (credit spend) and the Integrations / GitHub API / Webhooks tabs are owner-only;
+  // Analysis is open to managers. None of them follows the permission set - see orgTabAccess.ts.
   const canViewUsage = useMemo(() => canViewOrgUsage(currentUser, organization), [currentUser, organization]);
+  const canViewAnalysis = useMemo(() => canViewOrgAnalysis(currentUser, organization), [currentUser, organization]);
+  const canManageIntegrations = useMemo(
+    () => canManageOrgIntegrations(currentUser, organization),
+    [currentUser, organization]
+  );
 
   // Who may manage group instances + membership: the same isOrgOwnerOrCurrentAdmin rule
   // assertCanManageOrgGroups enforces, so a stale adminUserIds entry is never shown a surface whose
@@ -108,10 +121,10 @@ const OrganizationPage: FC = () => {
   // why a platform admin is not admitted here either.
   const canViewBilling = useMemo(() => canViewOrgBilling(currentUser, organization), [currentUser, organization]);
 
-  // Only the billing owner or a platform admin may appoint org admins (admins route authz).
+  // Only the billing owner or a platform admin may add or remove managers (admins route authz).
   const canSetAdmins = useMemo(() => {
     if (!currentUser || !organization) return false;
-    return currentUser.isAdmin || currentUser.id === organization.userId;
+    return isOrgOwnerOrPlatformAdmin(currentUser, organization);
   }, [currentUser, organization]);
 
   // A ?tab= deep link can ask for a tab this caller never gets rendered, so the request is sent
@@ -124,6 +137,8 @@ const OrganizationPage: FC = () => {
   const selectedTab = resolveAccessibleTab(requestedTab, {
     canManageOrg,
     canViewUsage,
+    canViewAnalysis,
+    canManageIntegrations,
     canManageGroups,
     canViewBilling,
   });
@@ -209,16 +224,16 @@ const OrganizationPage: FC = () => {
               </Tab>
             )}
             {canViewUsage && (
-              <>
-                <Tab value={OrganizationTabs.Usage} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <InsightsOutlinedIcon sx={{ fontSize: 16 }} />
-                  Usage
-                </Tab>
-                <Tab value={OrganizationTabs.Analysis} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <RateReviewOutlinedIcon sx={{ fontSize: 16 }} />
-                  Analysis
-                </Tab>
-              </>
+              <Tab value={OrganizationTabs.Usage} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <InsightsOutlinedIcon sx={{ fontSize: 16 }} />
+                Usage
+              </Tab>
+            )}
+            {canViewAnalysis && (
+              <Tab value={OrganizationTabs.Analysis} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <RateReviewOutlinedIcon sx={{ fontSize: 16 }} />
+                Analysis
+              </Tab>
             )}
             {canViewBilling && (
               <Tab value={OrganizationTabs.Billing} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -226,7 +241,7 @@ const OrganizationPage: FC = () => {
                 Billing
               </Tab>
             )}
-            {canManageOrg && (
+            {canManageIntegrations && (
               <>
                 <Tab value={OrganizationTabs.Integrations} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                   <ExtensionOutlinedIcon sx={{ fontSize: 16 }} />
@@ -240,11 +255,13 @@ const OrganizationPage: FC = () => {
                   <GitHubIcon sx={{ fontSize: 16 }} />
                   Webhooks
                 </Tab>
-                <Tab value={OrganizationTabs.Settings} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <SettingsOutlinedIcon sx={{ fontSize: 16 }} />
-                  Settings
-                </Tab>
               </>
+            )}
+            {canManageOrg && (
+              <Tab value={OrganizationTabs.Settings} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <SettingsOutlinedIcon sx={{ fontSize: 16 }} />
+                Settings
+              </Tab>
             )}
           </TabList>
 
@@ -267,20 +284,20 @@ const OrganizationPage: FC = () => {
               </TabPanel>
             )}
             {canViewUsage && (
-              <>
-                <TabPanel value={OrganizationTabs.Usage}>
-                  <Typography level="title-lg" startDecorator={<InsightsOutlinedIcon />} sx={{ mb: 3 }}>
-                    Usage & Spend
-                  </Typography>
-                  <OrganizationUsageSection organization={organization} />
-                </TabPanel>
-                <TabPanel value={OrganizationTabs.Analysis}>
-                  <Typography level="title-lg" startDecorator={<RateReviewOutlinedIcon />} sx={{ mb: 3 }}>
-                    Feedback Analysis
-                  </Typography>
-                  <OrganizationAnalysisSection organization={organization} />
-                </TabPanel>
-              </>
+              <TabPanel value={OrganizationTabs.Usage}>
+                <Typography level="title-lg" startDecorator={<InsightsOutlinedIcon />} sx={{ mb: 3 }}>
+                  Usage & Spend
+                </Typography>
+                <OrganizationUsageSection organization={organization} />
+              </TabPanel>
+            )}
+            {canViewAnalysis && (
+              <TabPanel value={OrganizationTabs.Analysis}>
+                <Typography level="title-lg" startDecorator={<RateReviewOutlinedIcon />} sx={{ mb: 3 }}>
+                  Feedback Analysis
+                </Typography>
+                <OrganizationAnalysisSection organization={organization} />
+              </TabPanel>
             )}
             {canViewBilling && (
               <TabPanel value={OrganizationTabs.Billing}>
@@ -290,7 +307,7 @@ const OrganizationPage: FC = () => {
                 <OrganizationBillingSection organization={organization} />
               </TabPanel>
             )}
-            {canManageOrg && (
+            {canManageIntegrations && (
               <>
                 <TabPanel value={OrganizationTabs.Integrations}>
                   <Typography level="title-lg" startDecorator={<ExtensionOutlinedIcon />} sx={{ mb: 3 }}>
@@ -307,13 +324,15 @@ const OrganizationPage: FC = () => {
                   </Typography>
                   <OrgWebhookConfig organization={organization} />
                 </TabPanel>
-                <TabPanel value={OrganizationTabs.Settings}>
-                  <Typography level="title-lg" startDecorator={<SettingsOutlinedIcon />} sx={{ mb: 3 }}>
-                    Team Settings
-                  </Typography>
-                  <OrganizationSettingsSection organization={organization} />
-                </TabPanel>
               </>
+            )}
+            {canManageOrg && (
+              <TabPanel value={OrganizationTabs.Settings}>
+                <Typography level="title-lg" startDecorator={<SettingsOutlinedIcon />} sx={{ mb: 3 }}>
+                  Team Settings
+                </Typography>
+                <OrganizationSettingsSection organization={organization} />
+              </TabPanel>
             )}
           </Box>
         </Tabs>

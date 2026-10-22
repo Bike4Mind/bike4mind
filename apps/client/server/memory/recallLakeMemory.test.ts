@@ -25,11 +25,11 @@ vi.mock('@bike4mind/database', () => ({
   memoryLedgerRepository: {},
   memoryPrincipalKeyRepository: {},
 }));
-vi.mock('./factCipher', () => ({ createKeyProvider: () => ({}) }));
-vi.mock('./ledgerMemoryStore', () => ({
+vi.mock('@bike4mind/server-utils/memory/factCipher', () => ({ createKeyProvider: () => ({}) }));
+vi.mock('@bike4mind/server-utils/memory/ledgerMemoryStore', () => ({
   createLedgerMemoryStore: () => ({ readProfile: mocks.readProfile }),
 }));
-vi.mock('./mementoQueryEmbedding', () => ({ embedMementoQuery: mocks.embedMementoQuery }));
+vi.mock('@bike4mind/server-utils/memory/mementoQueryEmbedding', () => ({ embedMementoQuery: mocks.embedMementoQuery }));
 
 const belief = (id: string) => ({ id, fact: `fact ${id}`, sources: ['doc-1'], shredded: false });
 
@@ -39,6 +39,7 @@ const run = (k: number) =>
     query: 'when does acme ship',
     lakes: [{ datalakeTag: 'datalake:acme', ownerUserId: 'creator-1' }],
     resolveReachableSources: async ids => new Set(ids),
+    resolveMemberSources: async (_tag, ids) => new Set(ids),
     k,
   });
 
@@ -105,6 +106,7 @@ describe('recallLakeMemory source dates', () => {
       query: 'what is the uptime',
       lakes: [{ datalakeTag: 'datalake:acme', ownerUserId: 'creator-1' }],
       resolveReachableSources: async ids => new Set(ids),
+      resolveMemberSources: async (_tag, ids) => new Set(ids),
       resolveSourceDates: input.resolveSourceDates,
       k: 24,
     });
@@ -186,5 +188,72 @@ describe('recallLakeMemory source dates', () => {
     expect(recalled[0].sourceDate).toBeUndefined();
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
+  });
+});
+
+/**
+ * Membership is re-checked on READ because removing a source does not delete the beliefs distilled
+ * from it: a late extractor write, or a document that still exists in another lake, would otherwise
+ * keep surfacing content this lake no longer holds.
+ */
+describe('recallLakeMemory membership filter', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.embeddingScorer.mockReturnValue(() => 1);
+    mocks.embedMementoQuery.mockResolvedValue({ vector: [1, 0], model: 'text-embedding-ada-002' });
+    mocks.recall.mockImplementation((beliefs: Array<{ fact: string }>, _q: string, opts: { k: number }) =>
+      beliefs.slice(0, opts.k).map(b => ({ belief: b, relevance: 0.9 }))
+    );
+  });
+
+  it('drops a belief whose only source has left the lake', async () => {
+    const sourced = (id: string, sources: string[]) => ({ id, fact: `fact ${id}`, sources, shredded: false });
+    mocks.readProfile.mockResolvedValue({ beliefs: [sourced('in', ['doc-in']), sourced('out', ['doc-removed'])] });
+    const resolveMemberSources = vi.fn(async () => new Set(['doc-in']));
+
+    const recalled = await recallLakeMemory({
+      userId: 'u1',
+      query: 'what is the uptime',
+      lakes: [{ datalakeTag: 'datalake:acme', ownerUserId: 'creator-1' }],
+      resolveReachableSources: async ids => new Set(ids),
+      resolveMemberSources,
+      k: 24,
+    });
+
+    expect(recalled.map(r => r.fact)).toEqual(['fact in']);
+    // The lake is addressed by its datalakeTag, which is the ledger key, not by a URL id.
+    expect(resolveMemberSources).toHaveBeenCalledWith('datalake:acme', ['doc-in', 'doc-removed']);
+  });
+
+  it('keeps a belief with one surviving source among several that left', async () => {
+    mocks.readProfile.mockResolvedValue({
+      beliefs: [{ id: 'partial', fact: 'fact partial', sources: ['doc-removed', 'doc-in'], shredded: false }],
+    });
+
+    const recalled = await recallLakeMemory({
+      userId: 'u1',
+      query: 'what is the uptime',
+      lakes: [{ datalakeTag: 'datalake:acme', ownerUserId: 'creator-1' }],
+      resolveReachableSources: async ids => new Set(ids),
+      resolveMemberSources: async () => new Set(['doc-in']),
+      k: 24,
+    });
+
+    expect(recalled.map(r => r.fact)).toEqual(['fact partial']);
+  });
+
+  it('requires the resolver at the call site', () => {
+    // @ts-expect-error resolveMemberSources is required: a caller that omits it would recall
+    // beliefs sourced from documents that have left the lake.
+    const forgotten = () =>
+      recallLakeMemory({
+        userId: 'u1',
+        query: 'q',
+        lakes: [{ datalakeTag: 'datalake:acme', ownerUserId: 'creator-1' }],
+        resolveReachableSources: async ids => new Set(ids),
+        k: 4,
+      });
+
+    expect(typeof forgotten).toBe('function');
   });
 });

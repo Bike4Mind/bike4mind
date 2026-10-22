@@ -168,4 +168,29 @@ describe('enforceCheckpointDepth', () => {
 
     expect(order).toEqual(['markFailed', 'sendWs']);
   });
+
+  // The terminate path returns straight out of the Lambda handler, which freezes the container:
+  // an emit still in flight then is lost or sent later with an expired SigV4 signature.
+  it.each([
+    ['warn', CHECKPOINT_DEPTH_WARNING, 1],
+    ['terminate', MAX_CHECKPOINT_DEPTH, 2],
+  ])('does not resolve on %s while a metric emit is still pending', async (_verdict, depth, emitCount) => {
+    const deps = makeDeps();
+    const pendingEmits: Array<() => void> = [];
+    deps.emitMetric.mockImplementation(() => new Promise<void>(resolve => pendingEmits.push(resolve)));
+    const flush = () => new Promise(resolve => setTimeout(resolve, 0));
+
+    let settled = false;
+    const guard = enforceCheckpointDepth(depth, deps).then(() => {
+      settled = true;
+    });
+
+    for (let emit = 0; emit < emitCount; emit++) {
+      await flush();
+      expect(settled).toBe(false);
+      pendingEmits.shift()?.();
+    }
+    await guard;
+    expect(settled).toBe(true);
+  });
 });

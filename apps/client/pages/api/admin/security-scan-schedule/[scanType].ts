@@ -2,11 +2,11 @@ import { Request, Response } from 'express';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { ForbiddenError, BadRequestError } from '@server/utils/errors';
+import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { securityScanScheduleRepository, SecurityScanType } from '@bike4mind/database';
-import { resolveStage } from '@server/security/resolveStage';
-import { calculateNextRunTime } from '@server/utils/scheduleCalculator';
-import { logAuditEvent, AdminConfigAuditEvents } from '@server/utils/auditLog';
+import { resolveStage } from '@bike4mind/server-utils/security/resolveStage';
+import { calculateNextRunTime } from '@bike4mind/server-utils/utils/scheduleCalculator';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { z } from 'zod';
 
 // Production schedule: Every Sunday at 2:00 AM UTC
@@ -132,18 +132,16 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
           nextRunAt: nextRunAt ?? undefined,
         });
 
-        await logAuditEvent({
-          userId: req.user.id,
-          action: enabled
-            ? AdminConfigAuditEvents.SECURITY_SCAN_SCHEDULE_ENABLED
-            : AdminConfigAuditEvents.SECURITY_SCAN_SCHEDULE_DISABLED,
-          metadata: {
-            scanType,
-            stage,
-            nextRunAt: nextRunAt?.toISOString() || null,
-            previouslyEnabled: existing.enabled,
-            scheduleId,
+        await recordAdminActionFromRequest(req, {
+          action: enabled ? 'settings.security_scan.enabled' : 'settings.security_scan.disabled',
+          target: {
+            kind: 'settings',
+            id: `security-scan-schedule:${scanType}`,
+            displayName: `${scanType} scan schedule`,
           },
+          summary: enabled ? 'enabled the weekly scan' : 'disabled the weekly scan',
+          changes: [{ field: 'enabled', before: existing.enabled, after: enabled }],
+          details: { stage, nextRunAt: nextRunAt?.toISOString() || null, scheduleId },
         });
       } else {
         await securityScanScheduleRepository.create({
@@ -157,15 +155,15 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
           createdBy: req.user.id,
         });
 
-        await logAuditEvent({
-          userId: req.user.id,
-          action: AdminConfigAuditEvents.SECURITY_SCAN_SCHEDULE_ENABLED,
-          metadata: {
-            scanType,
-            stage,
-            nextRunAt: nextRunAt?.toISOString() || null,
-            newSchedule: true,
+        await recordAdminActionFromRequest(req, {
+          action: enabled ? 'settings.security_scan.enabled' : 'settings.security_scan.disabled',
+          target: {
+            kind: 'settings',
+            id: `security-scan-schedule:${scanType}`,
+            displayName: `${scanType} scan schedule`,
           },
+          summary: enabled ? 'created and enabled the weekly scan' : 'created the weekly scan disabled',
+          details: { stage, nextRunAt: nextRunAt?.toISOString() || null, newSchedule: true },
         });
       }
 

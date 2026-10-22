@@ -1,3 +1,4 @@
+import type { WorkspaceDeniedToolsTable, WorkspaceSessionSettingsTable } from '@bike4mind/common';
 import type { ComponentType } from 'react';
 
 /**
@@ -25,6 +26,14 @@ import type { ComponentType } from 'react';
 export interface PremiumRouteDescriptor {
   path: string;
   lazyImport: () => Promise<{ default: ComponentType }>;
+  /**
+   * STRUCTURAL field: optional card on the admin landing page, linking to the literal `path`.
+   * `partitionPremiumRoutes` throws when it is set on a path with a `$param` segment.
+   */
+  adminDashboard?: {
+    label: string;
+    description: string;
+  };
   /**
    * STRUCTURAL field (like `path`/`lazyImport`, NOT a gating prop - the
    * "gating fields map 1:1 to RestrictedPage" rule above does not apply to it).
@@ -248,6 +257,27 @@ export type PremiumLocalStorageKeyPrefixes = string[];
  * only the keys; the display half lands in `premiumWorkspaceGrantDisplays.generated.ts`.
  */
 export type PremiumWorkspaceCopyEntitlements = Readonly<Record<string, readonly string[]>>;
+
+/**
+ * Tools denied, per workspace id, to every session whose current `surface` matches. Contributed as
+ * literal data in `b4mContributions.workspaceDeniedTools` (`{ "<surface id>": ["<tool name>"] }`) and
+ * unioned with the session's own `disabledTools` at read time, on the server and in the client alike.
+ * Nothing is written onto the session, so a copy or move takes on its destination's denials.
+ * Entries from several overlays are merged.
+ */
+export type PremiumWorkspaceDeniedTools = WorkspaceDeniedToolsTable;
+
+/**
+ * Session fields owned, per workspace id, by the workspace a session is in, resolved at read time.
+ * Contributed via `b4mContributions.workspaceSessionSettingsExport` (`{ "<surface id>": "<module>" }`,
+ * each module exporting `workspaceSessionSettings: WorkspaceSessionSettingsEntry`). A fork, clone or
+ * snip drops the owned fields and a move unsets them, so a session takes on its current workspace's
+ * values. One overlay per workspace id. The id must be registered in `WORKSPACE_SURFACES` or in
+ * the same package's `b4mContributions.workspaceSurfaceIds` (an array of lowercase surface ids).
+ * Guarded workspaces declare their ids there so their identity stays out of shared core.
+ * Unknown ids fail codegen rather than silently emitting an entry no session can match.
+ */
+export type PremiumWorkspaceSessionSettings = WorkspaceSessionSettingsTable;
 
 /**
  * How a workspace is named and opened for a user whose access to it comes through a copy grant: one

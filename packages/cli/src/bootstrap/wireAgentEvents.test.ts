@@ -21,7 +21,7 @@ vi.mock('../features/bridgePresence/index.js', () => ({
 import { wireAgentEvents } from './wireAgentEvents.js';
 
 function createFakeAgent() {
-  return { on: vi.fn(), observationQueue: undefined as unknown };
+  return { on: vi.fn() };
 }
 function createFakeSubagent(tokens = 0, credits = 0) {
   return {
@@ -38,7 +38,6 @@ function createFakeOrchestrator() {
 describe('wireAgentEvents', () => {
   let agent: ReturnType<typeof createFakeAgent>;
   let orchestrator: ReturnType<typeof createFakeOrchestrator>;
-  let agentContext: { currentAgent: unknown; observationQueue: unknown[] };
 
   const getBeforeRun = () => {
     const calls = orchestrator.setBeforeRunCallback.mock.calls;
@@ -53,16 +52,10 @@ describe('wireAgentEvents', () => {
     vi.clearAllMocks();
     agent = createFakeAgent();
     orchestrator = createFakeOrchestrator();
-    agentContext = { currentAgent: null, observationQueue: [{ toolId: 't', toolName: 'x', result: 1 }] };
     wireAgentEvents({
       agent: agent as never,
-      agentContext: agentContext as never,
       orchestrator: orchestrator as never,
     });
-  });
-
-  it('shares the observation queue reference onto the agent', () => {
-    expect(agent.observationQueue).toBe(agentContext.observationQueue);
   });
 
   it('subscribes the step, live-text and tavern handlers to the main agent', () => {

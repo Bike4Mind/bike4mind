@@ -34,4 +34,27 @@ describe('SessionBottom - blocked-send gate is scoped to reply-choice sends', ()
     const sendPromptCallback = source.slice(source.indexOf('const sendPromptCallback ='));
     expect(sendPromptCallback).toContain('shouldToastBlockedSend: shouldToastBlockedClick,');
   });
+
+  it('logs blocked sends through their own every-reason limiter, not the toast gates', () => {
+    expect(source).toContain(
+      'const [shouldLogBlockedSend] = useState(() => createBlockedSendToastGate({ toastEveryReason: true }));'
+    );
+    const handleEditorSubmit = source.slice(
+      source.indexOf('const handleEditorSubmit ='),
+      source.indexOf('const sendPromptCallback =')
+    );
+    expect(handleEditorSubmit).toContain('onBlocked: logBlockedSend,');
+    const sendPromptCallback = source.slice(source.indexOf('const sendPromptCallback ='));
+    expect(sendPromptCallback).toContain('onBlocked: logBlockedSend,');
+  });
+
+  it('feeds the socket first-open latch into the gate, so a first connect is not labelled reconnecting', () => {
+    const websocketDestructure = source.split('\n').find(line => line.includes('= useWebsocket()'));
+    expect(websocketDestructure).toContain('hasEverOpened: hasSocketEverOpened');
+    const gateCall = source.slice(
+      source.indexOf('getSendBlockedReason({'),
+      source.indexOf('});', source.indexOf('getSendBlockedReason({'))
+    );
+    expect(gateCall).toMatch(/^\s*hasSocketEverOpened,$/m);
+  });
 });

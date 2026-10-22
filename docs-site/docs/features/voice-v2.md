@@ -95,7 +95,7 @@ Voice agents are deleted via the trash icon next to each row — that removes bo
 
 ## Cost & credits
 
-- Each session reserves a pessimistic credit hold up to **5 minutes** of voice time (`MAX_SESSION_SECONDS` in `apps/client/server/voice/voiceSessionLimits.ts`).
+- Each session reserves a pessimistic credit hold up to **5 minutes** of voice time (`MAX_SESSION_SECONDS` in `packages/server-utils/src/voice/voiceSessionLimits.ts`).
 - Reservation is skipped when `enforceCredits` is disabled.
 - On call end the browser calls `POST /api/voice/v2/sessions/:id/end`, which **reconciles the hold down to the actual call duration and refunds the unused portion** (`creditsForElapsed`). The endpoint is owner-scoped and idempotent. It fires from both the user-initiated end and a natural disconnect.
 - A user may hold at most **2 concurrent voice sessions** (`MAX_CONCURRENT_VOICE_SESSIONS`), matching v1.
@@ -132,7 +132,7 @@ Voice agents are deleted via the trash icon next to each row — that removes bo
 
 - Server: `apps/client/pages/api/v1/voice/sessions/index.ts`, `apps/client/pages/api/v1/voice/sessions/[id]/end.ts` (credit reconciliation), `apps/client/pages/api/v1/voice/voices.ts` (the `voice/v2` files of the same names re-export these), `apps/client/pages/api/voice/v2/llm-proxy/chat/completions.ts`, `apps/client/pages/api/voice/v2/agents.ts`
 - Contracts: `b4m-core/common/src/api-contract/contracts/voice.contract.ts`, schemas in `b4m-core/common/src/schemas/voiceApi.ts`
-- Session auth & limits: `apps/client/server/voice/voiceSessionToken.ts` (sign/verify JWT), `apps/client/server/voice/voiceSessionLimits.ts` (`MAX_SESSION_SECONDS`, `creditsForElapsed`)
+- Session auth & limits: `apps/client/server/voice/voiceSessionToken.ts` (sign/verify JWT), `packages/server-utils/src/voice/voiceSessionLimits.ts` (`MAX_SESSION_SECONDS`, `creditsForElapsed`)
 - Admin endpoints: `apps/client/pages/api/admin/voice-agents/index.ts`, `apps/client/pages/api/admin/voice-agents/[id].ts`
 - Transport: `b4m-core/voice/src/transports/elevenlabsConversational.ts`
 - ElevenLabs REST helpers: `b4m-core/voice/src/elevenLabsAgentsApi.ts`, `b4m-core/voice/src/voicesCache.ts`

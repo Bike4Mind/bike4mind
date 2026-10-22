@@ -140,7 +140,9 @@ use to build a typed client). They are deliberately not repeated here, so the tw
 - Completions, embeddings and tools: \`/api/ai/v1/*\`, \`/api/v1/embeddings\`
 - Decisions (typed questions answered with probabilities): \`/api/v1/decisions\`, \`/api/v1/decision-models\`
 - Account and models: \`/api/v1/me\`, \`/api/v1/credits\`, \`/api/v1/models\`
-- Release notes: \`/api/v1/whats-new\` (public, no key needed)
+- Skill Market as a Claude Code plugin marketplace: \`/api/v1/skills/market/claude-marketplace.json\`,
+  \`/api/v1/skills/market/{id}/claude-plugin.zip\`
+- Release notes: \`/api/v1/whats-new\`, \`/api/v1/whats-new/media/*\` (public, no key needed)
 
 Image, video, music and chat work is asynchronous; the Async jobs section of the
 [generated API docs](/api/v1/docs) says what to poll for each kind of job and when it is terminal.
@@ -228,8 +230,8 @@ DELETE /api/v1/agents/[id]
 
 #### List Agents (existing app route)
 
-\`GET /api/agents\` is paginated and accepts \`query\`, \`page\`, \`limit\`, \`orderBy\` (\`createdAt\` or
-\`updatedAt\`) and \`orderDirection\`.
+\`GET /api/agents\` is paginated and accepts \`query\`, \`page\`, \`limit\`, \`orderBy\` (\`createdAt\`,
+\`updatedAt\`, or \`name\`) and \`orderDirection\`.
 
 #### Agent Endpoints Summary
 
@@ -318,7 +320,7 @@ Real-time updates are delivered via WebSocket. Connect to the WebSocket endpoint
 
 ## Tips for Development
 
-1. **Poll quests, don&apos;t block on chat.** By default \`POST /api/chat\` returns immediately with a queued ACK whose \`id\` is the quest id. Poll \`GET /api/v1/quests/{id}\` until it is terminal to get the response, or pass \`wait: true\` to block and receive the completed turn inline.
+1. **Poll quests, don&apos;t block on chat.** By default \`POST /api/chat\` returns immediately with a queued ACK whose \`id\` is the quest id. Poll \`GET /api/v1/quests/{id}\` until it is terminal to get the response, or pass \`wait: true\` to block and receive the completed turn inline. A \`wait: true\` turn is bounded at about 45 seconds; a longer one is ended and answered with a 504 carrying its \`quest_id\`, so send long or tool-heavy turns async.
 
 2. **Use streaming for better UX.** Pass \`stream: true\` in chat requests and listen for \`streamed_chat_completion\` WebSocket actions to display the reply as it arrives.
 

@@ -33,8 +33,14 @@ const mockApplyGrants = vi.hoisted(() => vi.fn());
 vi.mock('@server/auth/emailVerifiedGrants', () => ({
   applyEmailVerifiedGrants: (...a: unknown[]) => mockApplyGrants(...a),
 }));
+const mockEmitVerifiedFunnel = vi.hoisted(() => vi.fn());
+vi.mock('@server/analytics/funnel', () => ({
+  emitEmailVerifiedFunnelEvents: (...a: unknown[]) => mockEmitVerifiedFunnel(...a),
+}));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
-vi.mock('@server/utils/auditLog', () => ({ logAuditEvent: vi.fn(), EmailAuditEvents: {} }));
+vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn().mockResolvedValue(null) }));
+
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 await import('../verify-email');
 
@@ -48,6 +54,7 @@ const makeReq = () => ({
 describe('POST /api/admin/users/[userId]/verify-email', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockApplyGrants.mockResolvedValue({ creditsGranted: 100, subscriptionCreditsGranted: 20 });
   });
 
   it('writes exactly the verification fields, clearing the single-use token', async () => {
@@ -57,6 +64,13 @@ describe('POST /api/admin/users/[userId]/verify-email', () => {
     await h.handler!(makeReq(), { json });
 
     expect(h.update).toHaveBeenCalledTimes(1);
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'user.email.verified',
+        target: expect.objectContaining({ kind: 'user', id: 'user-1' }),
+      })
+    );
     expect(h.update).toHaveBeenCalledWith({
       id: 'user-1',
       emailVerified: true,
@@ -66,6 +80,15 @@ describe('POST /api/admin/users/[userId]/verify-email', () => {
       emailVerificationSentAt: null,
     });
     expect(json).toHaveBeenCalledWith({ message: 'Email verified successfully' });
+  });
+
+  it('reports email_verified with the plan credits included in the amount', async () => {
+    const user = { id: 'user-1', username: 'u', emailVerified: false, email: 'a@b.test' };
+    h.findById.mockResolvedValue(user);
+
+    await h.handler!(makeReq(), { json: vi.fn() });
+
+    expect(mockEmitVerifiedFunnel).toHaveBeenCalledWith({ user, method: 'admin', creditsGranted: 120 });
   });
 
   it('applies the email-verified grants after the verification write', async () => {

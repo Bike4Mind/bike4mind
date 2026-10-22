@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { adminSettingsRepository, slackDevWorkspaceRepository } from '@bike4mind/database';
 import { GitHubService } from '@server/services/githubService';
 import { ApiKeyScope, ContextTelemetryAlertsSchema, CHAT_MODELS } from '@bike4mind/common';
@@ -142,7 +142,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
     }
 
     if (config?.modelId) {
-      const isValidModel = (CHAT_MODELS as readonly string[]).includes(config.modelId);
+      const isValidModel = CHAT_MODELS.includes(config.modelId);
       if (isValidModel) {
         checks.push({
           name: 'LLM Analysis',
@@ -153,7 +153,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
         checks.push({
           name: 'LLM Analysis',
           status: 'warning',
-          message: `Unknown model: ${config.modelId}`,
+          message: `Model not servable: ${config.modelId}`,
         });
       }
     } else {

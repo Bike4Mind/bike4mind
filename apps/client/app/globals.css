@@ -538,10 +538,11 @@ ul.custom-mentions-menu-upward > li[aria-selected="true"] {
   /* border: 1px solid #1fb84b !important; */
 }
 
+/* No width/height here: Joy stretches this invisible input over the whole radio (label included,
+   and the whole card for an `overlay` radio) to make it clickable. Pinning it to 20px left only a
+   corner clickable, so a click on a label or a card did nothing. */
 [class*='MuiRadio-input'] {
   appearance: none !important;
-  width: 20px !important;
-  height: 20px !important;
   border: 1px solid var(--joy-palette-border-input) !important;
   border-radius: 50% !important;
   background-color: transparent !important;

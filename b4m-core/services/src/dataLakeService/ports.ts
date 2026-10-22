@@ -1,9 +1,12 @@
-import type {
-  DataLakeMembershipScope,
-  DataLakeSweptFile,
-  IFabFileChunkRepository,
-  IUserRepository,
+import {
+  storageOwnerOf,
+  sumStorageDeltaByOwner,
+  type DataLakeMembershipScope,
+  type DataLakeSweptFile,
+  type IFabFileChunkRepository,
+  type StorageOwner,
 } from '@bike4mind/common';
+import { ownerStorageCounter, type OwnerStorageCounters } from '../fabFileService/ownerStorage';
 
 /**
  * What a lifecycle sweep hands the index: the lake it ran on, and the member ids it resolved.
@@ -147,50 +150,47 @@ export async function strictIndexRemove(
 }
 
 /**
- * Sums `swept[].fileSize` (charged bytes - callers map rows through `chargedBytes`) per `userId`
- * and signs the total by `sign` (-1 on soft delete, since those files leave the owner's counted
- * set; +1 on restore, since they re-enter it). Grouped by owner, never collapsed to one id,
- * because lake membership carries no ownership conjunct on the meta-tag arm - a contributor's
- * own file is a full member of someone else's lake and is billed to its own uploader (see
- * `DataLakeSweptFile`). Zero-size files are dropped rather than emitting a
- * no-op delta.
+ * Sums `swept[].fileSize` (charged bytes - callers map rows through `chargedBytes`) per OWNER
+ * (storageOwnerOf: the stamped org, else the uploader) and signs the total by `sign` (-1 on soft
+ * delete, since those files leave the owner's counted set; +1 on restore, since they re-enter it).
+ * Grouped by owner, never collapsed to the lake's creator, because lake membership carries no
+ * ownership conjunct on the meta-tag arm - a contributor's own file is a full member of someone
+ * else's lake and is billed to its own owner (see `DataLakeSweptFile`). Zero totals are dropped.
  */
-export function groupStorageDeltaByOwner(swept: DataLakeSweptFile[], sign: 1 | -1): Map<string, number> {
-  const totals = new Map<string, number>();
-  for (const file of swept) {
-    const size = file.fileSize;
-    if (!size) continue;
-    totals.set(file.userId, (totals.get(file.userId) ?? 0) + sign * size);
-  }
-  return totals;
+export function groupStorageDeltaByOwner(
+  swept: ReadonlyArray<Pick<DataLakeSweptFile, 'userId' | 'organizationId' | 'fileSize'>>,
+  sign: 1 | -1
+): Array<{ owner: StorageOwner; bytes: number }> {
+  return sumStorageDeltaByOwner(swept.map(file => ({ owner: storageOwnerOf(file), bytes: sign * file.fileSize })));
 }
 
 /**
- * Apply a per-owner storage delta after a delete/restore sweep - one atomic
- * `incrementCurrentStorage` per owner rather than a single aggregate write, since a sweep can
- * span several owners' files (see `groupStorageDeltaByOwner`). Best-effort like
- * `bestEffortSetConnectionEnabled` below and for the same reason: failing an
- * otherwise-successful lifecycle transition over a quota-accounting hiccup would be worse than a
- * counter briefly out of sync, and the admin recalculate-storage endpoint
- * (`recalculateUserStorage`) is the existing backstop for exactly that drift.
+ * Apply a per-owner storage delta after a delete/restore sweep - one atomic write per owner
+ * (adjustOwnerStorage) rather than a single aggregate write, since a sweep can span several owners'
+ * files (see `groupStorageDeltaByOwner`). Best-effort like `bestEffortSetConnectionEnabled` below and
+ * for the same reason: failing an otherwise-successful lifecycle transition over a quota-accounting
+ * hiccup would be worse than a counter out of sync. The scheduled storage reconciliation (user and org
+ * passes) records and alerts on that drift, and repairs it only where repair is enabled.
  *
- * `users` takes `| undefined` even though the service-level adapter type declares it required -
- * same split as `recordLakeConfigChange`'s `lakeConfigChangeEvents` (see its own
- * `NonNullable<...>` wrapping on each service's adapter type): required at the real API door so a
- * route cannot forget it, tolerated here so a caller with no reason to exercise storage accounting
- * (a script, a test) simply gets no adjustment rather than a crash.
+ * Each counter is optional: required at the real API door so a route cannot forget it, tolerated here
+ * so a caller with no reason to exercise storage accounting (a script, a test) simply gets no
+ * adjustment rather than a crash. A delta whose owner's counter is not wired is skipped with a warning.
  */
 export async function bestEffortAdjustOwnerStorage(
-  users: Pick<IUserRepository, 'incrementCurrentStorage'> | undefined,
-  deltasByOwner: Map<string, number>,
+  counters: Partial<OwnerStorageCounters>,
+  deltas: ReadonlyArray<{ owner: StorageOwner; bytes: number }>,
   logger?: { warn?: (msg: string, ...args: unknown[]) => void }
 ): Promise<void> {
-  if (!users) return;
-  for (const [userId, deltaBytes] of deltasByOwner) {
+  for (const { owner, bytes } of deltas) {
+    const counter = ownerStorageCounter(counters, owner);
+    if (!counter) {
+      logger?.warn?.(`No ${owner.type} storage counter wired; skipped a ${bytes}-byte adjustment for ${owner.id}`);
+      continue;
+    }
     try {
-      await users.incrementCurrentStorage(userId, deltaBytes);
+      await counter.incrementCurrentStorage(owner.id, bytes);
     } catch (error) {
-      logger?.warn?.(`Failed to adjust storage for user ${userId} after a file lifecycle change:`, error);
+      logger?.warn?.(`Failed to adjust storage for ${owner.type} ${owner.id} after a file lifecycle change:`, error);
     }
   }
 }

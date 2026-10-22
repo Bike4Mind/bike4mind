@@ -34,32 +34,34 @@ import {
   latticeModelRepository,
   slackDevWorkspaceRepository,
   usageEventRepository,
-  imageModerationIncidentRepository,
   lakeAccessEventRepository,
   scopedSettingsRepository,
 } from '@bike4mind/database';
+import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
 import { lakeWriteToolDb } from '@server/dataLakes/lakeWriteToolDb';
 import { NotFoundError, registerLambdaErrorHandlers } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 
 // Register global error handlers for enhanced observability of network errors
 registerLambdaErrorHandlers();
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { getUserEntitlements } from '@server/entitlements';
 import { z } from 'zod';
 import { QuestStartBodySchema, ChatCompletionProcess } from '@bike4mind/services/llm';
 import type { ToolDefinition } from '@bike4mind/services/llm/tools';
-import { withLatticeTools } from '@server/queueHandlers/latticeChatTools';
+import { withLatticeTools } from '@bike4mind/server-utils/queueHandlers/latticeChatTools';
 import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
+import { premiumWorkspaceDeniedTools } from '@server/premium-generated/premiumWorkspaceDeniedTools.generated';
+import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';
 import { Resource } from 'sst';
-import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
+import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { logEvent } from '@server/utils/analyticsLog';
 import { summarizeSession, contextSummarizeSession } from '@server/managers/sessionManager';
 import { accessibleBy } from '@casl/mongoose';
 import { IUserDocument, Permission, stripSearchResultCardFences } from '@bike4mind/common';
 import { getMcpClientAdapter } from '@server/utils/getMcpClientAdapter';
 import { LLMEvents, SessionEvents } from '@server/utils/eventBus';
-import { withEventContext } from '@server/utils/eventContext';
+import { withEventContext } from '@workers/utils/eventContext';
 import {
   slackToolDefinitions,
   createPendingActionToolDefs,
@@ -69,12 +71,18 @@ import {
   splitTextIntoBlocks,
 } from '@bike4mind/slack';
 import { cancelPendingActionOnQuest } from '@server/utils/pendingActionExecutor';
-import { buildPendingActionButtons } from '@server/integrations/slack/pendingActionButtons';
+import { buildPendingActionButtons } from '@bike4mind/server-utils/integrations/slack/pendingActionButtons';
 import { getSharedTokenizer, publishTelemetryAlertCallback } from '@server/utils/chatCompletionDefaults';
 import { recallMementosV2 } from '@server/memory/recallMementosV2';
 import { recallLakeMemoryForSession } from '@server/memory/lakeMemoryRecall';
 import { loadSystemPromptById } from '@server/utils/sessionSystemPromptResolver';
 import { decryptToken } from '@server/security/tokenEncryption';
+import { buildVideoToolConfig } from '@server/videoGenerations/buildVideoToolConfig';
+import {
+  buildSlackVideoToolConfig,
+  type PendingSlackNotification,
+} from '@server/videoGenerations/slackVideoToolConfig';
+import { getCreateVideoJobDeps, getVideoJobDeps } from '@server/generationJobs/wiring';
 
 // Cache static ChatCompletion options that don't change between invocations
 type ChatCompletionOptions = ConstructorParameters<typeof ChatCompletionProcess>[0];
@@ -150,7 +158,7 @@ export const getStaticOptions = () => {
       // Audit trail for images blocked by the image_generation/edit_image tools'
       // moderation gate. The gate itself is unconditional (constructed inline
       // in the tool) - this only wires the incident record, not the block.
-      imageModerationIncidents: imageModerationIncidentRepository,
+      imageModerationIncidents,
       lakeAccessEvents: lakeAccessEventRepository,
       scopedSettings: scopedSettingsRepository,
       ...lakeWriteToolDb,
@@ -161,6 +169,8 @@ export const getStaticOptions = () => {
     wsHttpsUrl: Resource.websocket.managementEndpoint,
     slackWebhookUrl: Config.SLACK_WEBHOOK_URL,
     abilityGetter: defineAbilitiesFor,
+    workspaceDeniedTools: premiumWorkspaceDeniedTools,
+    workspaceSessionSettings: premiumWorkspaceSessionSettings,
     getScopeFilter: (user: IUserDocument, permission: Permission, modelName: string) =>
       accessibleBy(defineAbilitiesFor(user), permission).ofType(mongoose.models[modelName]),
     // Entitlement-aware lake retrieval parity with questProcessor (see note there).
@@ -279,6 +289,16 @@ async function resolveSlackClient(workspaceId: string, questId: string, logger: 
   return new SlackClient(decryptedToken, logger);
 }
 
+export const getSlackVideoToolConfigResolver = (questId: string, userId: string) => () =>
+  buildSlackVideoToolConfig(questId, userId, {
+    findSlackNotification: async id => {
+      const quest = await Quest.findById(id);
+      return (quest?.slackNotification as PendingSlackNotification | undefined) ?? null;
+    },
+    buildConfig: id =>
+      buildVideoToolConfig(id, { availability: getVideoJobDeps(), createDeps: getCreateVideoJobDeps() }),
+  });
+
 const SLACK_PROCESSING_FAILURE_TEXT = 'Sorry, something went wrong while processing your request. Please try again.';
 
 /**
@@ -343,7 +363,7 @@ async function deliverSlackProcessingFailure(questId: string, logger: Logger): P
 /**
  * Slack Quest Processor Lambda Handler
  *
- * Handles Slack-originated completion requests routed via SlackEventBus.
+ * Handles Slack-originated completion requests ('slack.completion.started' on AppEventBus).
  * Always enables Slack tools (no enableSlackTools flag check needed).
  * Delivers the final AI response directly to Slack after processing,
  * replacing the async notification EventBridge hop.
@@ -442,6 +462,7 @@ export const handler = withEventContext(async (event, logger) => {
       body: requestBody,
       logger,
       externalTools,
+      videoToolConfigResolver: getSlackVideoToolConfigResolver(params.questId, user.id),
     });
   } catch (processError) {
     logger.error('[SLACK-NOTIFY] Chat processing failed before a reply was delivered', {

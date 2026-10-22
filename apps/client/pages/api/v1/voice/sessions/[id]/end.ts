@@ -8,8 +8,8 @@
 import { sessionRepository } from '@bike4mind/database';
 import { endVoiceSessionContract } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { NotFoundError } from '@server/utils/errors';
-import { isValidObjectId } from '@server/utils/objectId';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { settleVoiceHold } from '@server/voice/settleVoiceHold';
 
 const handler = nextRouteForContract(endVoiceSessionContract).post(async (req, res) => {
@@ -30,11 +30,9 @@ const handler = nextRouteForContract(endVoiceSessionContract).post(async (req, r
   // Already reconciled (no hold left) or nothing was reserved (enforceCredits off):
   // clear any stale marker so the session stops counting as an active voice call. The realtime
   // billed-credits marker goes too, or the sweep would price a later ElevenLabs hold as realtime.
+  // Claimed on the start read above, so a hold a concurrent bootstrap opened since is left alone.
   if (reserved <= 0 || !startedAt) {
-    await sessionRepository.update(
-      { id: session.id, voiceReservedCredits: null, voiceSessionStartedAt: null },
-      { unset: ['voiceBilledCredits'] }
-    );
+    if (startedAt) await sessionRepository.claimVoiceHold(session.id, startedAt);
     return res.status(200).json({ refunded: 0, alreadyReconciled: true });
   }
 
@@ -45,7 +43,6 @@ const handler = nextRouteForContract(endVoiceSessionContract).post(async (req, r
       voiceReservedCredits: reserved,
       voiceSessionStartedAt: startedAt,
       voiceConnectedAt: session.voiceConnectedAt ?? null,
-      // Carried for the restore if the refund fails; settleVoiceHold advances it to the end time.
       voiceLastActivityAt: session.voiceLastActivityAt ?? null,
     },
     // Ending the call is itself the call's last activity.

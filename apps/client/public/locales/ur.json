@@ -30,7 +30,8 @@
     "title": "تبدیلیوں کا ریکارڈ"
   },
   "feedback": {
-    "send": "آراء بھیجیں"
+    "send": "آراء بھیجیں",
+    "rollupTitle": "آپ کی رائے"
   },
   "terms_policies": "شرائط اور پالیسیاں",
   "login": "لاگ ان",
@@ -166,7 +167,8 @@
     "messages": "پیغامات",
     "invites": "دعوت نامے",
     "sendMessage": "ایک پیغام بھیجیں",
-    "noMessages": "کوئی پیغامات نہیں ہیں"
+    "noMessages": "کوئی پیغامات نہیں ہیں",
+    "title_unread": "ان باکس، نہ پڑھے گئے آئٹمز"
   },
   "addSomething": "{{ name }} شامل کریں",
   "deleteAllSomething": "سب {{ name }} حذف کریں",
@@ -286,7 +288,30 @@
     "renews_on": "تاریخ کی تجدید {{ date }}"
   },
   "billing": {
-    "title": "بلنگ"
+    "title": "بلنگ",
+    "balance": "بیلنس",
+    "credits_heading": "کریڈٹس ٹاپ اپ کریں",
+    "credits_sub": "ایک بار کے پیک، آپ کے بیلنس میں شامل ہوتے ہیں۔ سبسکرپشن کی ضرورت نہیں۔",
+    "credits_sub_with_plan": "ایک بار کے پیک، آپ کے ماہانہ کوٹے کے علاوہ۔",
+    "free_plan": "مفت",
+    "free_plan_detail": "کریڈٹ پیکس کے ساتھ جتنا استعمال اتنی ادائیگی",
+    "low_org": "تنظیم کا کوئی ایڈمن اس اکاؤنٹ میں کریڈٹس شامل کر سکتا ہے۔",
+    "low_with_plan": "کوٹہ تجدید ہونے تک کام جاری رکھنے کے لیے ٹاپ اپ کریں۔",
+    "low_without_plan": "پلان ہر مہینے کریڈٹس شامل کرتا ہے؛ پیک ابھی ٹاپ اپ کرتا ہے۔",
+    "payment_failed": "ادائیگی ناکام ہو گئی",
+    "plan": "پلان",
+    "plan_fallback": "سبسکرپشن",
+    "plan_unavailable": "دستیاب نہیں",
+    "plan_unavailable_detail": "ہم آپ کا پلان لوڈ نہیں کر سکے۔",
+    "plans_change": "آپ کا پلان",
+    "plans_change_sub": "اپنی سبسکرپشن کا انتظام کریں، تبدیل کریں یا منسوخ کریں۔",
+    "plans_heading": "پلانز",
+    "plans_heading_sub": "کریڈٹ کوٹے والے ماہانہ پلانز۔",
+    "plans_upgrade": "اپ گریڈ کریں",
+    "plans_upgrade_sub": "ہاتھ سے ٹاپ اپ کرنے کے بجائے ماہانہ کریڈٹ کوٹہ حاصل کریں۔",
+    "retry": "دوبارہ کوشش کریں",
+    "see_plans": "پلانز دیکھیں",
+    "top_up": "ٹاپ اپ کریں"
   },
   "credits": {
     "title": "کریڈٹس",
@@ -314,7 +339,8 @@
     "usage_pattern": "آپ کے استعمال کے پیٹرن کی بنیاد پر پچھلے {{days}} دنوں سے",
     "credits_used": "استعمال شدہ کریڈٹس",
     "credits_purchased": "خریدے گئے کریڈٹس",
-    "net_credits": "نیٹ کریڈٹس"
+    "net_credits": "نیٹ کریڈٹس",
+    "unit": "کریڈٹس"
   },
   "time": {
     "last_7_days": "آخری 7 دن",
@@ -362,7 +388,15 @@
       "completed": "مکمل",
       "pending": "زیر التواء",
       "failed": "ناکام"
-    }
+    },
+    "buy_pack": "{{price}} میں {{credits}} کریڈٹس خریدیں",
+    "choose_pack": "کریڈٹ پیک منتخب کریں",
+    "history_usage_hint": "یہاں صرف خریداریاں درج ہیں۔",
+    "organization_credits_active": "تنظیم کے کریڈٹس فعال ہیں",
+    "rate_per_thousand": "فی 1,000 کریڈٹس {{rate}}",
+    "see_usage": "استعمال دیکھیں",
+    "shared_rate": "ہر پیک کی قیمت ایک جیسی ہے: فی 1,000 کریڈٹس {{rate}}۔",
+    "switch_to_personal": "ذاتی استعمال کے لیے کریڈٹس خریدنے کو اپنے ذاتی اکاؤنٹ پر جائیں۔"
   },
   "settings": {
     "title": "ترتیبات",
@@ -543,7 +577,9 @@
     "personal": "ذاتی",
     "business": "کاروبار",
     "team": "ٹیم",
-    "enterprise": "اداری"
+    "enterprise": "اداری",
+    "audience_label": "پلان کی قسم",
+    "includes": "شامل ہے"
   },
   "agents": {
     "title": "ایجنٹس",
@@ -572,5 +608,13 @@
   "skills": {
     "title": "مہارتیں",
     "command_palette_description": "دوبارہ استعمال ہونے والے ہدایت نامہ ٹیمپلیٹس کا انتظام کریں"
+  },
+  "apiKeys": {
+    "title": "API کلیدیں"
+  },
+  "connections": {
+    "menuTooltip": "Google Drive اور Slack جیسی انٹیگریشنز، اور آپ کے اپنے کوڈ کے لیے API کلیدیں",
+    "sections": "کنکشنز کے حصے",
+    "title": "کنکشنز"
   }
 }

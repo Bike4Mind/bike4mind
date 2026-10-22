@@ -147,7 +147,13 @@ re-deciding per endpoint:
 | Provider rejected *our* credentials | `401` | `provider_rejected` |
 | Provider failed to generate (upstream error) | `502` | - |
 | Model id unknown or not available to the caller | `400` | `unknown_model` |
-| The model's provider is not configured on this deployment | `503` | `provider_not_configured` |
+| Tool search server tool, `tool_reference` or tool search block sent for a model that cannot serve it on this route | `400` | `tool_search_unsupported` |
+| Every tool is `defer_loading: true` and no tool search server tool is sent (native tool search models only) | `400` | `all_tools_deferred` |
+| A deferred tool also carries `cache_control` (native tool search models only) | `400` | `deferred_tool_cache_control` |
+| A `tool_reference` (native tool search models only) or a `tool_addition` / `tool_removal` block (native tool changes models only) names a tool absent from the request's `tools`, or a `tool_reference` carries no string `tool_name` | `400` | `unknown_tool_reference` |
+| A `tool_addition` / `tool_removal` system message is sent for a model that cannot serve it on this route | `400` | `tool_changes_unsupported` |
+| A `tool_addition` / `tool_removal` message is malformed (not strictly typed `tool_reference` blocks only) or misplaced | `400` | `invalid_tool_change` |
+| The model's provider is not configured on this deployment, or the self-hosted model server that lists it (Ollama, local image) is unreachable | `503` | `provider_not_configured` |
 | Insufficient credits | `422` | `insufficient_credits` |
 | Spend cap exceeded | `422` | `spend_cap_exceeded` |
 | Per-user active API key cap reached | `400` | `api_key_user_cap` |
@@ -156,6 +162,8 @@ re-deciding per endpoint:
 | Organization per-file storage ceiling exceeded | `400` | `org_storage_limit_exceeded` |
 | Per-file size cap exceeded | `400` | `file_too_large` |
 | Rate limit exceeded | `429` | - |
+| Database unreachable while authenticating the credential | `503` | - (`Retry-After`; the credential was not judged, so retry rather than re-prompt for a key) |
+| A blocking request ran past its server-side deadline (the work is ended, not left running) | `504` | `request_timeout` |
 | Generated payload exceeds the platform ceiling, raw-bytes response | `303` | - (`Location` is a signed URL for the payload) |
 | Generated payload exceeds the platform ceiling and could not be offloaded | `413` | - |
 | Referenced resource does not exist | `404` | - |
@@ -165,9 +173,11 @@ re-deciding per endpoint:
 | Org-billed API key's organization is gone, or its holder has left it | `400` | - (re-mint the key) |
 | Cancel of a job the provider is already rendering and billing | `409` | `not_cancellable` (do not retry; the job runs to its end and is charged if it produces output) |
 
+The four tool search rows are `400`, not the `422` used for schema failures: the body is well-formed and passes the schema, and whether it is acceptable depends on the requested model (`tool_search_unsupported`, like `unknown_model`) or on how the request's tools relate to each other, which is request semantics rather than body shape.
+
 **[gated]** A contract may only declare statuses from the allowed set (`200`, `201`,
 `202`, `204`, `303`, `400`, `401`, `403`, `404`, `409`, `413`, `422`, `429`, `500`, `502`,
-`503`).
+`503`, `504`).
 
 A **malformed** resource id is a `404`, not a `400`: a string that is not an ObjectId names a
 resource that cannot exist, and telling a caller apart-from-404 that their id was the wrong

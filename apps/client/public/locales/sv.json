@@ -30,7 +30,8 @@
     "title": "Ändringslogg"
   },
   "feedback": {
-    "send": "Skicka Feedback"
+    "send": "Skicka Feedback",
+    "rollupTitle": "Din feedback"
   },
   "terms_policies": "Villkor & Policys",
   "login": "Logga in",
@@ -166,7 +167,8 @@
     "messages": "Meddelanden",
     "invites": "Inbjudningar",
     "sendMessage": "Skicka ett meddelande",
-    "noMessages": "Inga meddelanden"
+    "noMessages": "Inga meddelanden",
+    "title_unread": "Inkorg, olästa objekt"
   },
   "addSomething": "Lägg till {{ name }}",
   "deleteAllSomething": "Ta bort alla {{ name }}",
@@ -286,7 +288,30 @@
     "renews_on": "Förnyas den {{ date }}"
   },
   "billing": {
-    "title": "Fakturering"
+    "title": "Fakturering",
+    "balance": "Saldo",
+    "credits_heading": "Fyll på krediter",
+    "credits_sub": "Engångspaket som läggs till ditt saldo. Inget abonnemang behövs.",
+    "credits_sub_with_plan": "Engångspaket utöver din månatliga kvot.",
+    "free_plan": "Gratis",
+    "free_plan_detail": "Betala efter användning med kreditpaket",
+    "low_org": "En administratör i organisationen kan lägga till krediter på det här kontot.",
+    "low_with_plan": "Fyll på för att fortsätta arbeta tills din kvot förnyas.",
+    "low_without_plan": "Ett abonnemang ger krediter varje månad; ett paket fyller på nu.",
+    "payment_failed": "Betalningen misslyckades",
+    "plan": "Abonnemang",
+    "plan_fallback": "Abonnemang",
+    "plan_unavailable": "Inte tillgänglig",
+    "plan_unavailable_detail": "Vi kunde inte läsa in ditt abonnemang.",
+    "plans_change": "Ditt abonnemang",
+    "plans_change_sub": "Hantera, ändra eller avsluta ditt abonnemang.",
+    "plans_heading": "Abonnemang",
+    "plans_heading_sub": "Månadsabonnemang med en kreditkvot.",
+    "plans_upgrade": "Uppgradera",
+    "plans_upgrade_sub": "Få en månatlig kreditkvot i stället för att fylla på manuellt.",
+    "retry": "Försök igen",
+    "see_plans": "Se abonnemang",
+    "top_up": "Fyll på"
   },
   "credits": {
     "title": "Krediter",
@@ -314,7 +339,8 @@
     "usage_pattern": "Baserat på din användningsmönster från de senaste {{days}} dagarna",
     "credits_used": "Använda krediter",
     "credits_purchased": "Inköpta krediter",
-    "net_credits": "Nettokrediter"
+    "net_credits": "Nettokrediter",
+    "unit": "krediter"
   },
   "time": {
     "last_7_days": "Senaste 7 dagarna",
@@ -362,7 +388,15 @@
       "completed": "Genomförd",
       "pending": "I väntan",
       "failed": "Misslyckades"
-    }
+    },
+    "buy_pack": "Köp {{credits}} krediter för {{price}}",
+    "choose_pack": "Välj ett kreditpaket",
+    "history_usage_hint": "Här visas bara köp.",
+    "organization_credits_active": "Organisationens krediter är aktiva",
+    "rate_per_thousand": "{{rate}} per 1 000 krediter",
+    "see_usage": "Se användning",
+    "shared_rate": "Alla paket har samma pris: {{rate}} per 1 000 krediter.",
+    "switch_to_personal": "Byt till ditt personliga konto för att köpa krediter för personligt bruk."
   },
   "settings": {
     "title": "Inställningar",
@@ -543,7 +577,9 @@
     "personal": "Personlig",
     "business": "Företag",
     "team": "Team",
-    "enterprise": "Företag"
+    "enterprise": "Företag",
+    "audience_label": "Abonnemangstyp",
+    "includes": "Ingår"
   },
   "agents": {
     "title": "Agenter",
@@ -572,5 +608,13 @@
   "skills": {
     "title": "Färdigheter",
     "command_palette_description": "Hantera återanvändbara instruktionsmallar"
+  },
+  "apiKeys": {
+    "title": "API-nycklar"
+  },
+  "connections": {
+    "menuTooltip": "Integrationer som Google Drive och Slack, plus API-nycklar för din egen kod",
+    "sections": "Avsnitt för anslutningar",
+    "title": "Anslutningar"
   }
 }

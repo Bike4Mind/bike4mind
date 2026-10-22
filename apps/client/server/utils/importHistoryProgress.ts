@@ -45,7 +45,7 @@ export async function updateImportProgress(
 export async function markImportComplete(
   importHistoryJobId: string,
   userId: string,
-  stats: { processedItems: number; skippedItems: number }
+  stats: { processedItems: number; skippedItems: number; totalItems?: number }
 ): Promise<void> {
   await importHistoryJobRepository.markComplete(importHistoryJobId, stats);
 
@@ -56,6 +56,7 @@ export async function markImportComplete(
     progress: 100,
     currentStep: 'Import completed successfully',
     processedItems: stats.processedItems,
+    ...(stats.totalItems !== undefined && { totalItems: stats.totalItems }),
   });
 }
 

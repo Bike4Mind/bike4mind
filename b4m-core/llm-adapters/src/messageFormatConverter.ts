@@ -149,10 +149,11 @@ export function convertMessageToOpenAIFormat(
 
   // No conversion needed. This is the one branch that hands an IMessage straight to the provider
   // rather than rebuilding it, so a control-only field has to come off here or it rides along in the
-  // request body (OpenAI, xAI and Kimi all share this converter). Copied only when the field is
-  // actually set, so the usual message keeps its identity and no request pays for a needless clone.
-  if (msg.requiresTool !== undefined) {
-    const { requiresTool: _requiresTool, ...providerSafe } = msg;
+  // request body (OpenAI, xAI, Kimi and DeepSeek all share this converter). Copied only when one of
+  // the fields is actually set, so the usual message keeps its identity and no request pays for a
+  // needless clone.
+  if (msg.requiresTool !== undefined || msg.cache !== undefined || msg.perTurn !== undefined) {
+    const { requiresTool: _requiresTool, cache: _cache, perTurn: _perTurn, ...providerSafe } = msg;
     return [providerSafe];
   }
   return [msg];

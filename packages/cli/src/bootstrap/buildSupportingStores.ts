@@ -6,7 +6,8 @@ import type { ConfigStore } from '../storage';
 import type { CustomCommandStore } from '../storage/CustomCommandStore.js';
 import type { ApiClient } from '../auth/ApiClient';
 import type { SandboxOrchestrator } from '../sandbox/SandboxOrchestrator.js';
-import { generateCliTools, wrapTools, loadContextFiles, type AgentContext, type PermissionManager } from '../utils';
+import { generateCliTools, loadContextFiles, type AgentContext, type PermissionManager } from '../utils';
+import { wrapTools } from '../tools/gateway/index.js';
 import { McpManager } from '../utils/mcpAdapter';
 import { AgentStore } from '../agents/AgentStore.js';
 import { buildProjectAgentStore, loadProjectContext } from './projectStores.js';
@@ -16,7 +17,7 @@ import { AgentHistoryStore } from '../agents/AgentHistoryStore.js';
 import { DEFAULT_SUBAGENT_HISTORY_TTL_MS } from '../config/constants.js';
 import { deferredToolRegistry } from '../tools/deferredToolRegistry.js';
 import type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/services/llm';
-import type { PermissionResponse } from '../components';
+import type { ShowPermissionPrompt } from '../tools/gateway/gatewayTypes.js';
 import type { SilentLogger } from './types.js';
 
 /** B4M tool list shape returned by generateCliTools (carries `.toolSchema.name`). */
@@ -35,7 +36,7 @@ export interface BuildSupportingStoresInput {
   sandboxOrchestrator: SandboxOrchestrator;
   additionalDirectories: string[];
   agentContext: AgentContext;
-  promptFn: (toolName: string, args: unknown, preview?: string) => Promise<{ action: PermissionResponse }>;
+  promptFn: ShowPermissionPrompt;
   userQuestionFn: (payload: UserQuestionPayload) => Promise<UserQuestionResponse>;
   /** Startup log collected for the two-column banner; pushed into, not owned. */
   startupLog: string[];
@@ -152,7 +153,7 @@ export async function buildSupportingStores(input: BuildSupportingStoresInput): 
   // and "deferred" (rarely used - load on demand via tool_search). The
   // deferred set saves ~500-800 tokens of schema per turn for sessions
   // that don't use them. Same mechanism as MCP tools - see
-  // packages/cli/src/tools/deferredToolRegistry.ts.
+  // b4m-core/agents/src/toolSearch.
   const deferredB4mToolNames = new Set([
     'math_evaluate',
     'dice_roll',

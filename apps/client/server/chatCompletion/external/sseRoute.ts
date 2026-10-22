@@ -1,3 +1,4 @@
+import { createCompletionCreditHolds } from '@server/billing/completionCreditHolds';
 import express, { type Request, type Response, type Express, type NextFunction } from 'express';
 import {
   CompletionRequestSchema,
@@ -8,7 +9,7 @@ import {
   UnauthorizedError,
   UnprocessableEntityError,
   buildMetaEvent,
-  buildSSEEvent,
+  buildCompletionStreamEvent,
   createCompletionContract,
   formatSSEError,
   normalizeCompletionRequest,
@@ -41,10 +42,10 @@ import {
 import { checkRateLimit, checkApiKeyRateLimitOrThrow, type ApiKeyInfo } from '@server/cli/auth';
 import { resolveContractAuth } from '@server/cli/resolveContractAuth';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { flattenHeaders } from '@server/utils/flattenHeaders';
-import { serializeError } from '@server/utils/serializeError';
-import { createMethodGuard } from '@server/utils/allowedMethods';
+import { serializeError } from '@bike4mind/server-utils/utils/serializeError';
+import { createMethodGuard } from '@bike4mind/server-utils/utils/allowedMethods';
 import { buildErrorBody, httpErrorToResponse } from '@server/middlewares/errorHandler';
 import { emitProcessingFailed } from '../processingFailedMetric';
 import { fromZodError } from 'zod-validation-error';
@@ -105,7 +106,9 @@ function toStreamErrorFrame(error: unknown, requestId: string): SSEErrorEvent {
       frameError = new Error('The model declined this request');
       code = 'content_blocked';
     } else if (status === 401 || status === 403) {
-      frameError = new Error('Model provider rejected our credentials');
+      frameError = new Error(
+        status === 401 ? 'Model provider rejected our credentials' : 'Model provider denied access to this model'
+      );
       code = 'provider_rejected';
     } else {
       const upstream = status === undefined ? '' : ` (upstream ${status})`;
@@ -263,10 +266,12 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       let finalCacheReadTokens = 0;
       let finalCacheWriteTokens = 0;
       let finalTurnUsage: TurnUsage[] | undefined;
+      let finalCreditsUsed: number | undefined;
       let hasToolCalls = false;
 
       timing?.phase('completionStarted');
       await executeCompletion({
+        creditHolds: createCompletionCreditHolds(logger),
         userId,
         model: body.model,
         messages: body.messages,
@@ -298,9 +303,10 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
           if (info?.cacheReadInputTokens) finalCacheReadTokens = info.cacheReadInputTokens;
           if (info?.cacheCreationInputTokens) finalCacheWriteTokens = info.cacheCreationInputTokens;
           if (info?.turnUsage?.length) finalTurnUsage = info.turnUsage;
+          if (typeof info?.creditsUsed === 'number') finalCreditsUsed = info.creditsUsed;
           if (info?.toolsUsed && info.toolsUsed.length > 0) hasToolCalls = true;
           timing?.chunk(classifyChunk(text, info));
-          write(serializeSSEEvent(buildSSEEvent(text, info)));
+          write(serializeSSEEvent(buildCompletionStreamEvent(text, info)));
         },
       });
 
@@ -325,6 +331,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
         finalCacheReadTokens,
         finalCacheWriteTokens,
         finalTurnUsage,
+        finalCreditsUsed,
         hasToolCalls,
         db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
         logger,
@@ -332,7 +339,8 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
     } catch (error) {
       const jsonError = toJsonError(error, requestId);
       const level = jsonError.status < 500 ? 'warn' : 'error';
-      logger[level]('[CLI_LLM] Handler error', { requestId, error: serializeError(error) });
+      const upstreamStatus = error instanceof Error ? getHttpStatus(error) : undefined;
+      logger[level]('[CLI_LLM] Handler error', { requestId, upstreamStatus, error: serializeError(error) });
       track(emitProcessingFailed('cli-sse', error));
 
       try {

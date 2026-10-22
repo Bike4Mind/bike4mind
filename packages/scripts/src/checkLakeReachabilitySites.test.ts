@@ -69,7 +69,7 @@ const SITES: { path: string; matches: number; note: string }[] = [
     note: 'Corpus defer gate: may this doc be dropped from the prompt because retrieval can fetch it',
   },
   {
-    path: 'apps/client/server/memory/lakeSourceReachability.ts',
+    path: 'packages/server-utils/src/memory/lakeSourceReachability.ts',
     matches: 1,
     note: 'isFabFileCitable: may a lake belief lean on this doc without dangling its citation',
   },

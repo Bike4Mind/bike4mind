@@ -27,10 +27,10 @@ import { Logger } from '@bike4mind/observability';
 import { dataLakeResearchService } from '@bike4mind/services';
 import { getSettingByName } from '@bike4mind/utils';
 import { Resource } from 'sst';
-import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { queueResearchRun } from '@server/dataLakes/queueResearchRun';
-import { isSettingEnabled } from '@server/middlewares/featureFlag';
-import { Config } from '@server/utils/config';
+import { isSettingEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
+import { Config } from '@bike4mind/server-utils/utils/config';
 
 const logger = new Logger({ metadata: { service: 'dataLakeResearchSchedule' } });
 

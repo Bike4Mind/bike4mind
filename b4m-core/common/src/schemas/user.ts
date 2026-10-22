@@ -1,6 +1,7 @@
 import * as z from 'zod';
 import type { IUserDocument } from '../types/entities/UserTypes';
 import type { USER_SECRET_FIELDS } from '../serializers/toSafeUser';
+import { passthroughField, passthroughShape } from './responseShape';
 
 export const VALID_USER_TAGS = [
   '',
@@ -213,15 +214,6 @@ const SELF_VIEW_PASSTHROUGH_FIELDS = {
   lastCreditsPurchasedAt: true,
 } as const satisfies Record<SelfViewPassthroughField, true>;
 
-const passthroughField = z.unknown().optional();
-
-function passthroughShape<K extends string>(fields: Record<K, true>): Record<K, typeof passthroughField> {
-  return Object.fromEntries(Object.keys(fields).map(field => [field, passthroughField])) as Record<
-    K,
-    typeof passthroughField
-  >;
-}
-
 /** A redacted integration object: only the named non-secret subfields survive. */
 function redactedSubdocument<K extends string>(fields: readonly K[]) {
   return z
@@ -280,11 +272,14 @@ export type SelfUser = z.infer<typeof selfUserResponseSchema>;
 
 /**
  * The self-view plus the opt-in fields of the profile endpoints (users/[id] and its
- * update), which pass `keep: ['securityQuestions']` and, for an admin viewer,
+ * update), which return question text with blank answers and, for an admin viewer,
  * `keepAdminOnly: ['userNotes']`. The redactor still owns the viewer gate; this only
  * stops every OTHER self-view endpoint from being able to emit these at all.
  */
 export const selfUserProfileResponseSchema = selfUserResponseSchema.extend({
-  securityQuestions: passthroughField,
+  securityQuestions: z
+    .array(z.object({ question: z.string(), answer: z.literal('') }))
+    .nullable()
+    .optional(),
   userNotes: passthroughField,
 });

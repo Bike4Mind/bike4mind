@@ -7,8 +7,10 @@ const { connect, find, update, calculate } = vi.hoisted(() => ({
   calculate: vi.fn(),
 }));
 vi.mock('@bike4mind/database', () => ({ connectDB: connect, userApiKeyRepository: { find, updateBaseline: update } }));
-vi.mock('@server/managers/apiKeyUsageManager', () => ({ ApiKeyUsageManager: { calculateBaseline: calculate } }));
-vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://localhost/%STAGE%' } }));
+vi.mock('@bike4mind/server-utils/managers/apiKeyUsageManager', () => ({
+  ApiKeyUsageManager: { calculateBaseline: calculate },
+}));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://localhost/%STAGE%' } }));
 vi.mock('sst', () => ({ Resource: { App: { stage: 'test' } } }));
 import { handler, runApiKeyBaselineCalculation } from './apiKeyBaselineCalculation';
 const context = { awsRequestId: 'local', functionName: 'baseline', functionVersion: '1' } as Context;

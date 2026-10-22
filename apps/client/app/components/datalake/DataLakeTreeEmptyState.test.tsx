@@ -9,6 +9,7 @@ const h = vi.hoisted(() => ({
   gitHubFlag: { current: true },
   connection: { current: null as LakeGitHubConnection | null },
   useLakeGitHubConnection: vi.fn(),
+  gitHubPanelProps: [] as { startChatForLake?: unknown }[],
 }));
 
 // ConnectSourceMenu reads the GitHub flag from the admin settings cache; its items are its own suite's.
@@ -29,7 +30,10 @@ vi.mock('@client/app/components/DataLakeWizard/steps/DriveConnectAction', () => 
   default: () => <div data-testid="drive-connect-action" />,
 }));
 vi.mock('@client/app/components/DataLakeWizard/steps/GitHubConnectAction', () => ({
-  default: () => <div data-testid="github-connect-action" />,
+  default: (props: { startChatForLake?: unknown }) => {
+    h.gitHubPanelProps.push(props);
+    return <div data-testid="github-connect-action" />;
+  },
 }));
 
 import DataLakeTreeEmptyState from './DataLakeTreeEmptyState';
@@ -63,6 +67,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.gitHubFlag.current = true;
   h.connection.current = null;
+  h.gitHubPanelProps.length = 0;
 });
 
 describe('DataLakeTreeEmptyState - connecting a source', () => {
@@ -116,12 +121,13 @@ describe('DataLakeTreeEmptyState - connecting a source', () => {
   });
 
   describe('choosing a source', () => {
-    const renderEmptyLake = (onAddFiles: () => void) => {
+    const renderEmptyLake = (onAddFiles: () => void, startChatForLake?: (dataLakeId: string) => Promise<void>) => {
       wrap(
         <DataLakeTreeEmptyState
           variant="lake-empty"
           onAddFiles={onAddFiles}
           sourceLake={{ id: 'lake1', organizationId: 'org-1', canManage: true, isCreator: false }}
+          startChatForLake={startChatForLake}
         />
       );
       fireEvent.click(screen.getByTestId('datalake-connect-source-btn'));
@@ -129,13 +135,15 @@ describe('DataLakeTreeEmptyState - connecting a source', () => {
 
     it('opens the GitHub connect panel in a modal, without starting the add-files wizard', () => {
       const onAddFiles = vi.fn();
-      renderEmptyLake(onAddFiles);
+      const startChatForLake = vi.fn().mockResolvedValue(undefined);
+      renderEmptyLake(onAddFiles, startChatForLake);
       expect(screen.queryByTestId('lake-source-connect-modal')).toBeNull();
 
       fireEvent.click(screen.getByTestId('datalake-connect-source-github-item'));
 
       const modal = screen.getByTestId('lake-source-connect-modal');
       expect(within(modal).getByTestId('github-connect-action')).toBeInTheDocument();
+      expect(h.gitHubPanelProps).toEqual([expect.objectContaining({ startChatForLake })]);
       expect(onAddFiles).not.toHaveBeenCalled();
     });
 
@@ -184,9 +192,17 @@ describe('DataLakeTreeEmptyState - GitHub first sync', () => {
     expect(h.useLakeGitHubConnection).toHaveBeenCalledWith('lake1', true);
   });
 
-  it('does not watch the connection for a lake without an organization', () => {
+  it('watches the connection, and shows the syncing state, for the creator of a personal lake', () => {
     h.connection.current = gitHubConnection();
-    renderEmptyLake({ ...orgLake, organizationId: null });
+    renderEmptyLake({ ...orgLake, organizationId: null, canManage: true, isCreator: true });
+
+    expect(h.useLakeGitHubConnection).toHaveBeenCalledWith('lake1', true);
+    expect(screen.getByTestId('datalake-tree-empty')).toHaveAttribute('data-variant', 'github-syncing');
+  });
+
+  it('does not watch the connection for a non-creator of a personal lake', () => {
+    h.connection.current = gitHubConnection();
+    renderEmptyLake({ ...orgLake, organizationId: null, canManage: true, isCreator: false });
 
     expect(h.useLakeGitHubConnection).toHaveBeenCalledWith('lake1', false);
     expect(screen.getByTestId('datalake-tree-empty')).toHaveAttribute('data-variant', 'lake-empty');

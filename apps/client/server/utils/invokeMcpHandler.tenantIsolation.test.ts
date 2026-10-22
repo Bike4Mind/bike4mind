@@ -18,7 +18,7 @@ const { snapshots, mockLocalMcpHandler } = vi.hoisted(() => ({
   mockLocalMcpHandler: vi.fn(),
 }));
 
-vi.mock('@server/services/integrationCircuitBreaker', () => ({
+vi.mock('@bike4mind/server-utils/services/integrationCircuitBreaker', () => ({
   isMcpServerAvailable: vi.fn().mockResolvedValue({ available: true, reason: null }),
 }));
 
@@ -44,7 +44,7 @@ vi.mock('@bike4mind/database', () => ({
   INTEGRATION_AUDIT_INTEGRATION_NAMES: [],
 }));
 
-vi.mock('@server/utils/cloudwatch', () => ({
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   recordRateLimitEvent: vi.fn().mockResolvedValue(undefined),
   recordCircuitBreakerRejection: vi.fn().mockResolvedValue(undefined),
   recordCircuitBreakerTransition: vi.fn().mockResolvedValue(undefined),
@@ -57,7 +57,7 @@ vi.mock('@server/integrations/integrationAuditLogger', () => ({
 vi.stubEnv('IS_LOCAL', 'true');
 
 import { invokeMcpHandler } from './invokeMcpHandler';
-import { UNATTRIBUTED_MCP_TENANT } from './mcpTenantKey';
+import { UNATTRIBUTED_MCP_TENANT } from '@bike4mind/server-utils/utils/mcpTenantKey';
 
 type Payload = Parameters<typeof invokeMcpHandler>[0];
 

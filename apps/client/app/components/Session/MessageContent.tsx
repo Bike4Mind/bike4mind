@@ -62,6 +62,8 @@ import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import { usePromptMetaInspector } from '@client/app/components/Session/PromptMetaInspector';
 import { AnswerFeedbackPrompt } from '@client/app/components/Session/AnswerFeedbackPrompt';
 import HiveIcon from '@mui/icons-material/Hive';
+import FingerprintIcon from '@mui/icons-material/Fingerprint';
+import { copyTextWithToast } from '@client/app/utils/copyToClipboard';
 import ContextBreakdownModal from '@client/app/components/Session/ContextBreakdownModal';
 import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
 import DonutSmallIcon from '@mui/icons-material/DonutSmall';
@@ -88,37 +90,49 @@ import { useGetQuest, useUpdateQuest } from '@client/app/hooks/data/quests';
 import { useWebsocket } from '@client/app/contexts/WebsocketContext';
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { extractReplies } from '@client/shared/replyUtils';
+import { extractReplies } from '@bike4mind/server-utils/shared/replyUtils';
 import { detectChatContentType } from '@client/app/utils/contentTypes';
 import { saveToFileAndWorkbench } from '@client/app/utils/fabFileUtils';
 import ToolsUsed from '@client/app/components/Session/ToolsUsed';
 import { useMessageEditMode } from '@client/app/hooks/useMessageEditMode';
+import { answeringModelLabel } from '@client/app/utils/answeringModel';
 
-const ModelChip: React.FC<{ displayName: string }> = ({ displayName }) => (
+const ModelChip: React.FC<{ displayName: string; replaces?: string }> = ({ displayName, replaces }) => {
   // The only item in the footer with no natural width limit: model names run from "GPT-4.1"
   // to a long vendor string, and on a phone one of those pushes the row onto a second line
-  // or crowds out the actions opposite it. Capped and ellipsized; no tooltip, since real
-  // names fit the desktop cap and a phone has no hover to show one.
-  <Chip
-    className="model-chip-web"
-    size="sm"
-    variant="soft"
-    sx={theme => ({
-      ...messageMetaChipSx(theme),
-      minWidth: 0,
-      maxWidth: { xs: '110px', sm: '220px' },
-      '& .MuiChip-label': {
-        display: 'block',
+  // or crowds out the actions opposite it. Capped and ellipsized. The tooltip appears only on a
+  // redirected reply, to name the model it replaced; a phone has no hover, but the label itself
+  // already names the model that answered.
+  const chip = (
+    <Chip
+      data-testid="message-model-chip"
+      className="model-chip-web"
+      size="sm"
+      variant="soft"
+      sx={theme => ({
+        ...messageMetaChipSx(theme),
         minWidth: 0,
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
-        whiteSpace: 'nowrap',
-      },
-    })}
-  >
-    {displayName}
-  </Chip>
-);
+        maxWidth: { xs: '110px', sm: '220px' },
+        '& .MuiChip-label': {
+          display: 'block',
+          minWidth: 0,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        },
+      })}
+    >
+      {displayName}
+    </Chip>
+  );
+  return replaces ? (
+    <Tooltip data-testid="message-model-chip-replaces-tooltip" title={`Replaces ${replaces}`}>
+      {chip}
+    </Tooltip>
+  ) : (
+    chip
+  );
+};
 
 // The phone actions sheet: rows tall enough for a finger, no frame of their own inside the sheet.
 // Icon slot, icon and text sizes match the plus menu's sheet (AttachFileButton plusMenuListSx).
@@ -416,6 +430,7 @@ const MessageContent: React.FC<ContentProps> = memo(
           ...fetchedQuest.promptMeta,
           createdAt: fetchedQuest.createdAt,
           updatedAt: fetchedQuest.updatedAt,
+          turnTiming: fetchedQuest.turnTiming,
         };
         openPromptMetaInspector(promptMetaWithTimestamps, fetchedQuest.replies || null);
         return;
@@ -443,6 +458,7 @@ const MessageContent: React.FC<ContentProps> = memo(
           creditsUsed: fetchedQuest.creditsUsed,
           createdAt: fetchedQuest.createdAt,
           updatedAt: fetchedQuest.updatedAt,
+          turnTiming: fetchedQuest.turnTiming,
         };
         openPromptMetaInspector(questPromptMeta, fetchedQuest.replies || null);
       }
@@ -478,6 +494,7 @@ const MessageContent: React.FC<ContentProps> = memo(
             ...fetchedQuest.promptMeta,
             createdAt: fetchedQuest.createdAt,
             updatedAt: fetchedQuest.updatedAt,
+            turnTiming: fetchedQuest.turnTiming,
           };
           openPromptMetaInspector(promptMetaWithTimestamps, fetchedQuest.replies || null);
         } else {
@@ -496,6 +513,7 @@ const MessageContent: React.FC<ContentProps> = memo(
             creditsUsed: fetchedQuest.creditsUsed,
             createdAt: fetchedQuest.createdAt,
             updatedAt: fetchedQuest.updatedAt,
+            turnTiming: fetchedQuest.turnTiming,
           };
           openPromptMetaInspector(questPromptMeta, fetchedQuest.replies || null);
         }
@@ -706,6 +724,11 @@ const MessageContent: React.FC<ContentProps> = memo(
     };
 
     const costParts = answerCostBreakdown(messageData.promptMeta, getToolDisplayName);
+    const answeringModel = answeringModelLabel(
+      messageData.promptMeta,
+      getModelDisplayName,
+      messageData.type === 'error'
+    );
 
     // The More options entries, shared by the desktop menu and the phone actions sheet so the two
     // cannot drift. Delete stays apart: the sheet lists Report before it.
@@ -734,6 +757,18 @@ const MessageContent: React.FC<ContentProps> = memo(
           </ListItemDecorator>
           {ANSWER_DIAGNOSIS_TITLE}
         </MenuItem>
+        {/* An optimistic id names no quest, so there is nothing for support to look up. */}
+        {messageData.id && isPersistedMessage && (
+          <MenuItem
+            data-testid="message-copy-turn-id-btn"
+            onClick={() => messageData.id && copyTextWithToast(messageData.id, 'Turn ID copied')}
+          >
+            <ListItemDecorator>
+              <FingerprintIcon />
+            </ListItemDecorator>
+            Copy turn ID
+          </MenuItem>
+        )}
         {contextBreakdownAvailable && (
           <MenuItem data-testid="message-context-breakdown-btn" onClick={() => setShowContextBreakdown(true)}>
             <ListItemDecorator>
@@ -1400,9 +1435,9 @@ const MessageContent: React.FC<ContentProps> = memo(
             ) : null}
 
             {!isProcessingPrompt &&
-              messageData.promptMeta?.model?.name &&
+              answeringModel &&
               !(messageData.researchModeResults && messageData.researchModeResults.length > 0) && (
-                <ModelChip displayName={getModelDisplayName(messageData.promptMeta.model.name)} />
+                <ModelChip displayName={answeringModel.label} replaces={answeringModel.replaces} />
               )}
 
             {messageData.correctsQuestId && (

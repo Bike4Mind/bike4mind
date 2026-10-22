@@ -163,6 +163,19 @@ Every request to a `baseApi` route that authenticates with an API key writes one
 | Client IP      | `ipAddress`, resolved server-side | 90 days (TTL index) | Abuse and security investigation, anomaly alerts |
 | Key and owner  | `keyId` and `userId`              | 90 days (TTL index) | Attribute usage to a key and its owner           |
 
+## Chat turn timing
+
+Each chat reply records where its wall-clock time went, so a slow or retried reply can be diagnosed from the reply itself. The record holds durations, counts and provider metadata only: no prompt or reply text. It is shown in the reply's Answer diagnosis panel, and a short summary with a copyable turn ID appears under replies that retried, switched model or took a minute or more.
+
+| Data           | Storage                                                                                         | Lifetime             | Purpose                                                                      |
+| -------------- | ----------------------------------------------------------------------------------------------- | -------------------- | ---------------------------------------------------------------------------- |
+| Durations      | `turnTiming` on the reply: queue, context build, concurrency wait and total, in ms              | Lives with the reply | Find which phase made a reply slow                                           |
+| Retries        | `turnTiming.retries`: reason, HTTP status, Retry-After, provider request id, delay, model, time | Lives with the reply | Tell provider load from stalls; cite a provider request id in a support case |
+| Model switches | `turnTiming.fallbackHops`: a count                                                              | Lives with the reply | Show that a reply moved to a fallback model                                  |
+| Retry metric   | CloudWatch metric `ChatRetry`, dimensioned by stage, reason and model; no user or reply id      | CloudWatch retention | Retry rate by cause and model                                                |
+
+The record also ships to clients: on the live reply frames and in the `GET /api/v1/quests/{id}` poll body. It is not redacted for people a session is shared with, matching the session message API they can already call, which returns the same fields: the record carries no prompt or reply text, and the model and provider request ids appear there too.
+
 ## Integrations gallery usage
 
 The `/integrations` page records first-party `IntegrationsEvents` through the existing `/api/analytics/log-event` route. They are stored like every other counter event (`CounterLog` and the per-user `UserActivityCounter`), tied to the signed-in user, and sent to no third party. Like the rest of first-party usage analytics, they are not behind the attribution consent banner.
@@ -179,3 +192,22 @@ The `/integrations` page records first-party `IntegrationsEvents` through the ex
 The search query is free text, so it is trimmed, lowercased and capped at 64 characters before it is sent. A query containing an `@` is most likely an email address typed into the wrong box, so its text is never sent: the event carries `redacted: true` with the result count and tab instead. The entry point is named `entryPoint`, not `source`, because counter reports read `metadata.source` as the client a request came from.
 
 Integration requests themselves ("request this integration") are product data, not telemetry. Signed-in users see only per-integration counts and their own requests. Requester identity (name, email, organization) is readable only by admins, through `/api/admin/integrations/demand/*`, and an account's requests are removed when the account is deleted.
+
+## Bike4Mind Desktop activity to Fleet
+
+Bike4Mind Desktop can send aggregate activity to a team's Fleet. It sends nothing until two things are true: Fleet's installer has written `~/.claude/fleet/bike4mind-desktop.json` on the machine (mode 0600; Desktop ignores a copy other users can read), and the user has turned on "Share activity with Fleet" in Desktop's Profile. Turning the switch off deletes everything not yet sent. Desktop posts OTLP/HTTP JSON logs to the Fleet origin in that file, at `/v1/logs`, from the main process, with the team telemetry key the file holds. The key never reaches the renderer and is never logged.
+
+| Data       | Sent as                                                                               | Purpose                                      |
+| ---------- | ------------------------------------------------------------------------------------- | -------------------------------------------- |
+| Who        | `user.email` and `fleet.install.id`, from the installer file                          | Attribute activity to a person in Fleet      |
+| App        | `service.name` `bike4mind-desktop`, `service.version`                                 | Tell Desktop apart from other tools          |
+| Reply      | `bike4mind_desktop.session`: event id, conversation id, duration in ms                | Replies and active time per person and day   |
+| Usage      | On the reply record: `model`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `credits_milli` (credits x 1000) | Which models a person uses and what they use |
+| Tool call  | `bike4mind_desktop.tool`: the above plus a category only                              | Tool use by category                         |
+| Repository | `bike4mind_desktop.repository`: owner/name from the `origin` remote, `view` or `edit` | Which repositories a person works in         |
+
+The model id is the one the conversation is set to, for example `claude-opus-5`. Token counts and credits are the server's own figures for that reply, as the reply shows them. A reply that was resumed reports only what was added since the earlier part. A reply record names one model, so what the `explore` sub-agent spends is counted under the conversation's own model rather than the one that sub-agent ran on. None of it is message content.
+
+The tool category is one of `shell`, `editor`, `browser`, `mcp`, `agent` or `other`; a tool's name, its input and its output are never sent. Messages, prompts, model output, file contents, commands and paths are never sent. Unsent events wait in `fleet-activity-queue.json` (mode 0600) under the app's data folder and keep their event ids, so a retried batch is counted once.
+
+Repository identity uses the last two components of a supported network remote. The host and any earlier namespace components are omitted: a GitLab `group/subgroup/project` is reported as `subgroup/project`, and matching owner/name pairs on different hosts are combined. This is an activity label, not a globally unique repository identifier.

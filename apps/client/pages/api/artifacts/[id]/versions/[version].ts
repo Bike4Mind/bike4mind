@@ -2,7 +2,7 @@ import { artifactService } from '@bike4mind/services';
 import { artifactRepository, artifactVersionRepository, artifactContentRepository } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { NotFoundError } from '@server/utils/errors';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 
 const handler = baseApi()
   /**

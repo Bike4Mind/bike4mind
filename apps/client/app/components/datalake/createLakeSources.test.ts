@@ -3,7 +3,6 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   CREATE_LAKE_SOURCES,
   GITHUB_CREATE_ORG_MANAGER_ONLY_REASON,
-  GITHUB_CREATE_ORG_ONLY_REASON,
   createLakeOrigin,
   createSourceRequiresUpload,
   getCreateLakeSource,
@@ -61,11 +60,9 @@ describe('resolveCreateLakeSourceAvailability', () => {
     expect(isEnabled).toHaveBeenCalledWith('EnableDataLakeGitHub');
   });
 
-  it('disables GitHub in a personal workspace, with the reason', () => {
-    expect(availability('github', personal)).toEqual({
-      status: 'disabled',
-      reason: GITHUB_CREATE_ORG_ONLY_REASON,
-    });
+  // github-connect makes the caller the new personal lake's creator, whom its connect gate admits.
+  it('offers GitHub in a personal workspace', () => {
+    expect(availability('github', personal)).toEqual({ status: 'available' });
   });
 
   it('disables GitHub for an org member who cannot manage the org', () => {
@@ -79,8 +76,8 @@ describe('resolveCreateLakeSourceAvailability', () => {
     expect(availability('github', orgManager)).toEqual({ status: 'available' });
   });
 
-  // Unlike GitHub's, drive-sync accepts a personal lake from its creator - the caller here - so the
-  // card must not be gated on an org the server does not require.
+  // drive-sync accepts a personal lake from its creator - the caller here - so the card must not be
+  // gated on an org the server does not require.
   it('offers upload and Drive in every scope', () => {
     for (const scope of [orgManager, orgMember, personal]) {
       expect(availability('upload', scope)).toEqual({ status: 'available' });

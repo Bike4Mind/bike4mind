@@ -12,6 +12,8 @@ import { buildVideoToolSchema, type VideoToolArgs } from './buildSchema';
 export type VideoToolConfig = {
   usableModels: readonly VideoModelId[];
   createJob: (input: CreateVideoJobInput) => Promise<CreateVideoJobResult>;
+  /** Surfaces with no progress UI use this to tell the model how the finished clip reaches the user. */
+  deliveryNote?: string;
 };
 
 type PopulatedVideoToolConfig = VideoToolConfig & { usableModels: readonly [VideoModelId, ...VideoModelId[]] };
@@ -69,6 +71,7 @@ export const videoGenerationTool: ToolDefinition = {
         return JSON.stringify({
           jobId: result.job.id,
           estimatedSeconds: VIDEO_MODEL_CATALOG[args.model].typicalRenderSeconds,
+          ...(config.deliveryNote && { note: config.deliveryNote }),
         });
       },
       toolSchema: { name: 'video_generation', description, parameters: toToolParameters(schema) },

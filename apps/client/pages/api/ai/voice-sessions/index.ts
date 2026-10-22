@@ -27,8 +27,13 @@ import {
 } from '@bike4mind/utils';
 import { logEvent } from '@server/utils/analyticsLog';
 import { baseApi } from '@server/middlewares/baseApi';
-import { refundLostVoiceHoldReserve, settlePriorVoiceHold } from '@server/voice/settleVoiceHold';
-import { REALTIME_VOICE_RESERVE_USD, shouldReuseVoiceHold } from '@server/voice/voiceSessionLimits';
+import { reserveVoiceHold, settlePriorVoiceHold } from '@server/voice/settleVoiceHold';
+import {
+  REALTIME_VOICE_RESERVE_USD,
+  REALTIME_VOICE_HOLD_SECONDS,
+  realtimeClientSecretTtlSeconds,
+  shouldReuseVoiceHold,
+} from '@bike4mind/server-utils/voice/voiceSessionLimits';
 import { VOICE_SESSION_ERROR, VOICE_SESSION_UNAVAILABLE_MESSAGE } from '@client/shared/voiceSessionErrors';
 import axios from 'axios';
 import { z } from 'zod';
@@ -39,6 +44,11 @@ const CreateSessionBodySchema = z.object({
   // Set by the client when re-establishing a dropped connection. Lets the handler
   // reuse the existing credit hold instead of reserving (and charging) a second time.
   isReconnect: z.boolean().optional(),
+});
+
+const RealtimeClientSecretSchema = z.object({
+  value: z.string().min(1),
+  expires_at: z.number().int().positive(),
 });
 
 // Marked expected so errorHandler logs it at warn: an error-level log reaches the LiveOps alert filter,
@@ -65,8 +75,12 @@ const handler = baseApi().post(async (req, res) => {
         'voiceSessionAiVoice',
         'voiceSessionVadType',
         'voiceSessionVadEagerness',
+        'voiceSessionTranscriptionModel',
         'enforceCredits',
       ],
+      // Every key this handler reads must be named above: under skipCache an unlisted key comes
+      // back absent and silently reverts to its coded default (e.g. whisper-1 for the model).
+      skipCache: true,
     }
   );
   const enableVoiceSession = getSettingsValue('enableVoiceSession', settings);
@@ -98,15 +112,6 @@ const handler = baseApi().post(async (req, res) => {
   // Pre-reserve credits for max session duration (60 min x ~$0.77/hr audio)
   // Reservation prevents unbounded post-facto billing for long sessions.
   const reservedCredits = usdToCredits(REALTIME_VOICE_RESERVE_USD);
-  if (enforceCredits && !isReconnect) {
-    const currentCredits = req.user?.currentCredits ?? 0;
-    if (currentCredits < reservedCredits) {
-      throw new ForbiddenError(`Insufficient credits for voice session (requires ~${reservedCredits} credits)`);
-    }
-    // Credit deduction happens below, immediately before the OpenAI API call.
-    // Deferring it until after API key fetch and session creation ensures any pre-flight
-    // error (missing key, session not found) cannot strand reserved credits.
-  }
 
   const realtimeModel = 'gpt-realtime-1.5';
 
@@ -173,6 +178,22 @@ const handler = baseApi().post(async (req, res) => {
   // Realtime: only a hold carrying the realtime marker.
   const reuseHold = shouldReuseVoiceHold(isReconnect, session, true);
 
+  // The hold read before any credit moves; the new hold is written only over it (or over none).
+  const priorHoldStartedAt = session?.voiceSessionStartedAt ? new Date(session.voiceSessionStartedAt) : null;
+  // A fresh call writes its hold over this session's, so an earlier call left open is settled first.
+  if (!reuseHold && session) {
+    await settlePriorVoiceHold(session);
+  }
+
+  // Settlement may refund the prior reserve. Read the committed balance before minting a new key;
+  // reserveVoiceHold checks it again atomically after the provider call.
+  if (enforceCredits && !reuseHold) {
+    const currentUser = await userRepository.findById(req.user.id);
+    if ((currentUser?.currentCredits ?? 0) < reservedCredits) {
+      throw new ForbiddenError(`Insufficient credits for voice session (requires ~${reservedCredits} credits)`);
+    }
+  }
+
   // Build voice instructions with conversation history context
   const brand = process.env.APP_NAME || '';
   const baseInstructions = `You are a helpful AI assistant engaged in a voice conversation.
@@ -233,7 +254,11 @@ When you get the tool result back, summarize it conversationally for voice.`;
     }
   }
 
+  // The call's hold window: the reused hold's, or the one this request opens below.
+  const holdStartedAt =
+    reuseHold && session?.voiceSessionStartedAt ? new Date(session.voiceSessionStartedAt) : new Date();
   const requestBody = {
+    expires_after: { anchor: 'created_at', seconds: realtimeClientSecretTtlSeconds(holdStartedAt) },
     session: {
       type: 'realtime',
       model: realtimeModel,
@@ -365,33 +390,15 @@ When you get the tool result back, summarize it conversationally for voice.`;
     },
   };
 
-  // The hold read before any credit moves; the new hold is written only over it (or over none).
-  const priorHoldStartedAt = session?.voiceSessionStartedAt ? new Date(session.voiceSessionStartedAt) : null;
-  // A fresh call writes its hold over this session's, so an earlier call left open is settled first.
-  if (!reuseHold && session) {
-    await settlePriorVoiceHold(session);
-  }
-
-  // Deduct credits immediately before the API call - all pre-flight checks have passed.
-  // Deferral from the original position ensures no pre-flight throw can strand credits.
-  // A reconnect reuses the original hold (reuseHold), so it must not deduct again.
-  if (enforceCredits && !reuseHold) {
-    await userRepository.incrementCredits(req.user.id, -reservedCredits);
-  }
-
   let result;
   try {
-    result = await axios.post('https://api.openai.com/v1/realtime/client_secrets', requestBody, {
+    result = await axios.post<unknown>('https://api.openai.com/v1/realtime/client_secrets', requestBody, {
       headers: {
         Authorization: `Bearer ${openaiApiKey}`,
         'Content-Type': 'application/json',
       },
     });
   } catch (error: unknown) {
-    // Refund reservation on any API failure - credits were pre-deducted and no session started
-    if (enforceCredits && !reuseHold) {
-      await userRepository.incrementCredits(req.user.id, reservedCredits);
-    }
     if (axios.isAxiosError(error)) {
       const responseData = error.response?.data;
       const status = error.response?.status;
@@ -403,33 +410,39 @@ When you get the tool result back, summarize it conversationally for voice.`;
     throw error;
   }
 
+  const clientSecret = RealtimeClientSecretSchema.safeParse(result.data);
+  if (!clientSecret.success) {
+    req.logger.warn('[Voice Session] OpenAI returned an invalid client secret');
+    throw voiceUnavailableError();
+  }
+  const expiresAtMs = clientSecret.data.expires_at * 1000;
+  const holdExpiresAtMs = holdStartedAt.getTime() + REALTIME_VOICE_HOLD_SECONDS * 1000;
+  // The provider starts the TTL after our request leaves; its returned deadline is authoritative.
+  if (expiresAtMs <= Date.now() || (reuseHold && expiresAtMs > holdExpiresAtMs)) {
+    req.logger.warn('[Voice Session] OpenAI client secret falls outside its voice hold window');
+    throw voiceUnavailableError();
+  }
+
   if (!session) {
-    // Refund reservation if session creation failed
-    if (enforceCredits && !reuseHold) {
-      await userRepository.incrementCredits(req.user.id, reservedCredits);
-    }
     return res.status(500).json({ error: 'Failed to create or retrieve session' });
   }
 
-  // Record reservation and start time on session for reconciliation at session end.
-  // A reconnect leaves the original reservation record untouched so end-reconciliation
-  // measures the full call duration, not just the post-reconnect segment.
+  // The reserve and the hold that records it commit together, after the provider call, so a
+  // failure anywhere before this point has nothing to refund. A reconnect keeps the original hold
+  // so end-reconciliation measures the full call duration, not just the post-reconnect segment.
   if (!reuseHold) {
-    const opened = await sessionRepository.openVoiceHold(session.id, priorHoldStartedAt, {
-      voiceReservedCredits: enforceCredits ? reservedCredits : null,
-      voiceSessionStartedAt: new Date(),
+    const opened = await reserveVoiceHold({
+      userId: req.user.id,
+      sessionId: session.id,
+      priorStartedAt: priorHoldStartedAt,
+      reservedCredits: enforceCredits ? reservedCredits : null,
+      startedAt: new Date(),
       // Billed per response against this hold (server/websocket/voiceSessionEnded.ts).
       realtime: true,
+      unaffordable: () =>
+        new ForbiddenError(`Insufficient credits for voice session (requires ~${reservedCredits} credits)`),
     });
     if (!opened) {
-      // A concurrent bootstrap of this session wrote its hold first; this one's reserve is not held.
-      if (enforceCredits) {
-        await refundLostVoiceHoldReserve(req.logger, {
-          userId: req.user.id,
-          sessionId: String(session.id),
-          refund: reservedCredits,
-        });
-      }
       throw new ConflictError('Another voice call on this session started at the same time; retry');
     }
   }
@@ -447,7 +460,7 @@ When you get the tool result back, summarize it conversationally for voice.`;
     session: redactSessionForClient(session),
     model: realtimeModel,
     voice: voiceSessionAiVoice || 'alloy',
-    ephemeralKey: result.data.value,
+    ephemeralKey: clientSecret.data.value,
   });
 });
 

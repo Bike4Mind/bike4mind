@@ -5,7 +5,7 @@ import {
   ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
   ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
   ORGANIZATION_SUBSCRIPTION_PRICE_ID,
-} from '@client/lib/subscriptions/constants';
+} from '@bike4mind/server-utils/lib/subscriptions/constants';
 import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
 
 // baseApi: unwrap the chain so handler.post(fn) just returns fn, and .use() is a no-op.
@@ -69,13 +69,13 @@ vi.mock('@server/integrations/stripe/callbackUrl', async importOriginal => {
   const actual = await importOriginal<typeof import('@server/integrations/stripe/callbackUrl')>();
   return { ...actual, isAllowedCallbackOrigin: (...args: unknown[]) => mockIsAllowedCallbackOrigin(...args) };
 });
-vi.mock('@server/utils/config', () => ({ Config: { STAGE: 'test' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { STAGE: 'test' } }));
 
 const mockGetTeamPlanSettings = vi.hoisted(() =>
   vi.fn(async () => ({ minSeats: 4, maxSeats: 100, creditsPerSeat: 50000 }))
 );
-vi.mock('@server/services/teamPlanSettings', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/services/teamPlanSettings')>()),
+vi.mock('@bike4mind/server-utils/services/teamPlanSettings', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/services/teamPlanSettings')>()),
   getTeamPlanSettings: mockGetTeamPlanSettings,
 }));
 

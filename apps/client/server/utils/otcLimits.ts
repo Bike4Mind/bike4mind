@@ -2,8 +2,8 @@ import { createHash } from 'crypto';
 import { cacheRepository } from '@bike4mind/database';
 import { TooManyRequestsError } from '@bike4mind/utils';
 import type { RequestHandler } from 'express';
-import { isE2EEnabled } from '@server/utils/config';
-import { getClientIp } from '@server/utils/ip';
+import { isE2EEnabled } from '@bike4mind/server-utils/utils/config';
+import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 
 const MINUTE_MS = 60_000;
 const DAY_MS = 24 * 60 * MINUTE_MS;

@@ -3,8 +3,8 @@ import { AppFile } from '@bike4mind/database/content';
 import { logEvent } from '@server/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { NotFoundError } from '@server/utils/errors';
-import { isValidObjectId } from '@server/utils/objectId';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { z } from 'zod';
 
 const AppFileUpdateTagsRequestInput = z.object({

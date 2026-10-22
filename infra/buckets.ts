@@ -116,7 +116,7 @@ const fabFileBucketLifecycle = new aws.s3.BucketLifecycleConfigurationV2('fabFil
     },
     {
       // Pre-overwrite backups from a text AI edit (apply-edit.ts); nothing reads them back.
-      // Prefix must stay in sync with TEXT_EDIT_BACKUP_PREFIX (apps/client/server/utils/textEditBackupPrefix.ts).
+      // Prefix must stay in sync with TEXT_EDIT_BACKUP_PREFIX (packages/server-utils/src/utils/textEditBackupPrefix.ts).
       id: 'expire-text-edit-backups',
       status: 'Enabled',
       filter: {
@@ -127,6 +127,21 @@ const fabFileBucketLifecycle = new aws.s3.BucketLifecycleConfigurationV2('fabFil
       },
       noncurrentVersionExpiration: {
         noncurrentDays: 1,
+      },
+    },
+    {
+      // Without this, on a stage with ENABLE_BUCKET_VERSIONING every delete or overwrite under files/
+      // (file delete, version trim, sweep:orphaned-storage) keeps its bytes forever as a noncurrent
+      // version. 30 days is the rollback window for an overwritten or deleted object. A no-op on an
+      // unversioned bucket; the prefixed rules above still apply their shorter noncurrent expiry.
+      id: 'expire-noncurrent-versions',
+      status: 'Enabled',
+      filter: {},
+      noncurrentVersionExpiration: {
+        noncurrentDays: 30,
+      },
+      expiration: {
+        expiredObjectDeleteMarker: true,
       },
     },
   ],
@@ -162,7 +177,7 @@ const generatedImagesBucket = new sst.aws.Bucket(
 );
 
 // PARITY: these routeBucket prefixes are mirrored by resolveProxyTarget in
-// apps/client/server/utils/appFileProxy.ts (the dev local-proxy path) and by
+// packages/server-utils/src/utils/appFileProxy.ts (the dev local-proxy path) and by
 // toCdnPath in apps/client/app/utils/s3.ts. If you add/remove/rewrite a prefix
 // here, update both in lockstep.
 if (router && !isSharedRouterConsumer) {

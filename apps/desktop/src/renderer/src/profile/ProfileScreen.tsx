@@ -13,6 +13,7 @@ import type { AuthState } from '@shared/auth';
 import type { AccountUsage, UsageWindowId } from '@shared/usage';
 import { ArrowLeftIcon, ReloadIcon } from '../chat/icons';
 import { columnStackSx, contentColumnSx, scrollingColumnHostSx } from '../chat/layout';
+import { FleetIntegrationCard } from './FleetIntegrationCard';
 import { UsageBarChart } from './UsageBarChart';
 import { UsageBreakdown } from './UsageBreakdown';
 import { useAccountProfile } from './useAccountProfile';
@@ -192,6 +193,7 @@ export function ProfileScreen({ state, onClose }: { state: AuthState; onClose: (
       <Box sx={{ flex: 1, ...scrollingColumnHostSx }}>
         <Box sx={{ ...contentColumnSx, py: 2 }}>
           <AccountSummary state={state} profile={profile} usage={usage} windowId={windowId} />
+          <FleetIntegrationCard />
 
           <Stack direction="row" spacing={1} sx={{ mb: 1.5 }} data-testid="profile-window-group">
             {WINDOWS.map(id => (

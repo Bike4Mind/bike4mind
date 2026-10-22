@@ -35,12 +35,12 @@ vi.mock('@server/security/tokenEncryption', () => ({
   decryptToken: (value: string | null | undefined) => value ?? null,
 }));
 
-vi.mock('@server/security/secretEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({
   isEncrypted: (value: string) => value.startsWith('enc:'),
   decryptSecret: (value: string) => value.replace(/^enc:/, ''),
 }));
 
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { SECRET_ENCRYPTION_KEY: 'test-key' },
 }));
 

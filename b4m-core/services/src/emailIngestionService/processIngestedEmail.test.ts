@@ -48,6 +48,7 @@ describe('emailIngestionService - processIngestedEmail', () => {
           delete: vi.fn(),
           count: vi.fn(),
         },
+        organizations: { findById: vi.fn() },
         ingestedEmails: {
           findByMessageId: vi.fn().mockResolvedValue(null), // No duplicate by default
           findByThreadId: vi.fn(),
@@ -350,13 +351,7 @@ describe('emailIngestionService - processIngestedEmail', () => {
 
       const result = await processIngestedEmail(mockParsedEmail, 's3://bucket/email.eml', mockAdapters);
 
-      expect(processAttachments).toHaveBeenCalledWith(
-        mockParsedEmail,
-        'user123',
-        'Test Email',
-        expect.anything(),
-        undefined
-      );
+      expect(processAttachments).toHaveBeenCalledWith(mockParsedEmail, 'user123', 'Test Email', expect.anything());
       expect(result.attachments).toEqual(attachments);
     });
 
@@ -380,8 +375,7 @@ describe('emailIngestionService - processIngestedEmail', () => {
             adminSettings: expect.anything(),
             users: expect.anything(),
           }),
-        }),
-        undefined
+        })
       );
       expect(result.bodyFabFileCreated).toBe(true);
     });
@@ -401,8 +395,7 @@ describe('emailIngestionService - processIngestedEmail', () => {
             adminSettings: expect.anything(),
             users: expect.anything(),
           }),
-        }),
-        undefined
+        })
       );
     });
 

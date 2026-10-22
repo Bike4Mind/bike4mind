@@ -161,14 +161,11 @@ export function resolveRequestClient(headers: Record<string, string | undefined>
 }
 
 /**
- * Resolves source for the /api/ai/v1/completions endpoint. This endpoint is
- * called only by first-party clients (CLI, Desktop) and 3rd-party API users
- * (never by web chat - that uses a different pipeline). We tell them apart by
- * the `b4m-cli/` / `b4m-desktop/` client signal their HTTP clients set.
+ * First-party HTTP client attribution, not an authorization signal. Only new
+ * writes use this classifier; stored source values are never inferred again.
  */
 export function resolveApiCompletionSource(headers: Record<string, string | undefined>): ApiKeyCompletionSource {
   const client = resolveRequestClient(headers) ?? '';
-  if (/^b4m-cli\//i.test(client)) return 'cli';
-  if (/^b4m-desktop\//i.test(client)) return 'desktop';
-  return 'api';
+  if (/^b4m-desktop\/\S+$/i.test(client)) return 'desktop';
+  return /^b4m-cli\//i.test(client) ? 'cli' : 'api';
 }

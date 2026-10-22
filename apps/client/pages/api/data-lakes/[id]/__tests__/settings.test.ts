@@ -24,7 +24,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/featureFlag', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({
   requireFeatureEnabled: (flag: string) => h.requireFeatureEnabled(flag),
 }));
 vi.mock('@bike4mind/services', () => ({
@@ -34,7 +34,7 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: {},
   dataLakeAccessGrantRepository: {},
   fallbackLakeSettingsRepository: {},
-  // Reached via @server/dataLakes/lakeConfigAuditDb, which this route spreads into the service's
+  // Reached via @bike4mind/server-utils/dataLakes/lakeConfigAuditDb, which this route spreads into the service's
   // db - the module fails to load without them even though the service itself is mocked here.
   lakeConfigChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
   adminSettingsRepository: {
@@ -65,7 +65,9 @@ const makeRes = () => {
 beforeEach(() => {
   vi.clearAllMocks();
   h.toAccessContext.mockResolvedValue({ userId: 'admin-1', isAdmin: true });
-  h.updateFallbackLakeSettings.mockResolvedValue(LAKE);
+  // The `_id`/`__v` ride along so the `toHaveBeenCalledWith(LAKE)` assertions below pin the
+  // response boundary: without it the service's own keys would reach the client.
+  h.updateFallbackLakeSettings.mockResolvedValue({ ...LAKE, _id: 'oid', __v: 1 });
 });
 
 describe('PUT /api/data-lakes/:id/settings', () => {

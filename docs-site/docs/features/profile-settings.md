@@ -75,6 +75,12 @@ Connect with other Bike4Mind users.
 | **Help Interface** | Show/hide help tooltips |
 | **Voice** | Text-to-speech preferences |
 
+### Workspaces
+
+If your account has access to an additional workspace, the **Workspaces** card lists it with a **Show in sidebar** switch. Turning the switch off hides that workspace from your sidebar, the logo link, the move and copy menus, automatic tool suggestions, and suggested navigation.
+
+Hiding is a display preference only. Your access does not change: a direct link to the workspace still opens it, notebooks already in that workspace keep working, and turning the switch back on shows it again. The card does not appear if you have no workspace you can hide.
+
 ### Experimental Features
 
 Bike4Mind offers several cutting-edge features that are opt-in. **You must enable each feature here before it appears in your sidebar or UI.** For example, if you don't see "Agents" in your left navigation, it's because the Agents toggle hasn't been turned on yet.
@@ -91,8 +97,6 @@ Bike4Mind offers several cutting-edge features that are opt-in. **You must enabl
 | **[Rapid Reply](./rapid-reply.md)** | Get instant acknowledgments from fast mini models while your full response is being prepared | Quick-reply indicators in chat |
 | **[Private Model Hub](./private-model-hub.md)** | Access privately hosted cutting-edge models including DeepSeek, Qwen, and other frontier models | Additional models in model selector |
 | **[Research Engine](./research-engine.md)** | Search the web for information during AI conversations | Web search and deep research tools in chat |
-| **[B4M Pi](./b4m-pi.md)** | Repository analysis, task scheduling, Gantt charts, and team activity dashboards | **B4M Pi in the sidebar**, full project intelligence dashboard |
-| **OptiHashi** | AI-driven optimization across advanced solvers | **OptiHashi in the sidebar**, optimization dashboard and chat tools |
 | **[Lattice](./lattice.md)** | Create and manipulate financial pro-forma models using natural language | Lattice model artifacts in notebooks |
 
 ### Data Management
@@ -253,7 +257,6 @@ Connect your Slack workspace:
 Connect GitHub for:
 - Repository references and code search in chat
 - Issue tracking and pull request tools
-- Activity data for [B4M Pi](./b4m-pi.md) project intelligence dashboards
 
 ### Webhooks
 
@@ -461,5 +464,3 @@ Manage email-to-notebook functionality.
 - [AI Models](./ai-models.md) - Model selection and availability
 - [Agents](./agents.md) - Custom AI assistants
 - [Quest Master](./quest-master.md) - Autonomous task planning
-- OptiHashi - Optimization engine
-- [B4M Pi](./b4m-pi.md) - Project intelligence

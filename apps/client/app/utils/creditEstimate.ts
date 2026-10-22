@@ -1,13 +1,19 @@
 import {
   ABSTENTION_PROMPT,
   ARTIFACT_EMISSION_PROMPT,
-  ChatModels,
+  CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS,
+  getTextModelCost,
   getTextModelCreditsPer1M,
   HELP_CENTER_PROMPT,
+  isModelDeprecated,
   REPLY_CHOICES_GUIDANCE,
+  reservationOutputTokens,
   tokenEstimateMultiplier,
   type ModelInfo,
+  usdToCredits,
 } from '@bike4mind/common';
+import { sentMaxTokensFor, reasonsWithinOutputBudget } from '@bike4mind/llm-adapters/model-sizing';
+import { computeDefaultMaxTokens } from './aiSettingsUtils';
 
 // ~4.3 chars per cl100k token measured on the blocks below; 4 rounds the overhead up, never down.
 const CHARS_PER_TOKEN = 4;
@@ -31,33 +37,27 @@ export const TYPICAL_PROMPT_TOKENS = 1_000;
 export const TYPICAL_ANSWER_INPUT_TOKENS = APP_PROMPT_TOKENS + TYPICAL_PROMPT_TOKENS;
 export const TYPICAL_ANSWER_OUTPUT_TOKENS = 1_000;
 
-// The costly end of the range: mid-tier (Sonnet-class) models, most preferred first.
-export const PREMIUM_REFERENCE_MODEL_IDS: readonly string[] = [
-  ChatModels.CLAUDE_5_5_SONNET_BEDROCK,
-  ChatModels.CLAUDE_5_SONNET_BEDROCK,
-  ChatModels.CLAUDE_5_SONNET,
-];
-
-// The cheap end of the range: everyday small models, most preferred first.
-export const BUDGET_REFERENCE_MODEL_IDS: readonly string[] = [
-  ChatModels.GPT5_4_MINI,
-  ChatModels.CLAUDE_5_5_HAIKU_BEDROCK,
-  ChatModels.CLAUDE_5_5_HAIKU,
-];
+/** Recent context in the selected model's token units plus a conservative draft estimate. */
+export function estimateNextInputTokens(
+  previousInputTokens: number | undefined,
+  draft: string,
+  selectedModelId?: string,
+  previousModelId?: string
+): number {
+  const selectedMultiplier = tokenEstimateMultiplier(selectedModelId);
+  const previousMultiplier = tokenEstimateMultiplier(previousModelId ?? selectedModelId);
+  const previousTokens = ((previousInputTokens ?? 0) / previousMultiplier) * selectedMultiplier;
+  return Math.ceil(Math.max(previousTokens, TYPICAL_ANSWER_INPUT_TOKENS * selectedMultiplier) + draft.length);
+}
 
 export interface ModelAnswerCost {
   modelName: string;
   creditsPerAnswer: number;
 }
 
-/** The two ends an estimate is quoted between; either may be missing from a given catalog. */
-export interface AnswerCostReference {
-  premium: ModelAnswerCost | null;
-  budget: ModelAnswerCost | null;
-}
-
 /** Credits a typical answer costs on `model`, at the rates billing charges; null when unpriced or free. */
 export function typicalAnswerCredits(model: ModelInfo): number | null {
+  if (model.freeToRun) return null;
   const rates = getTextModelCreditsPer1M(model);
   if (!rates) return null;
   const multiplier = tokenEstimateMultiplier(model.id);
@@ -68,20 +68,84 @@ export function typicalAnswerCredits(model: ModelInfo): number | null {
   return credits > 0 ? credits : null;
 }
 
-function pickModelAnswerCost(models: readonly ModelInfo[], ids: readonly string[]): ModelAnswerCost | null {
-  for (const id of ids) {
-    const model = models.find(m => m.id === id && !m.disabled);
-    const creditsPerAnswer = model ? typicalAnswerCredits(model) : null;
-    if (model && creditsPerAnswer) return { modelName: model.name, creditsPerAnswer };
-  }
-  return null;
+type PreflightThinking = {
+  enabled?: boolean;
+  budget_tokens?: number;
+};
+
+/** Credits the chat admission hold needs for this model, context size and output ceiling. */
+export function preflightAnswerCredits(
+  model: ModelInfo,
+  inputTokens: number,
+  maxTokens: number,
+  thinking?: PreflightThinking
+): number | null {
+  if (model.freeToRun) return 0;
+  if (!model.pricing || Object.keys(model.pricing).length === 0) return null;
+  const sentMaxTokens = sentMaxTokensFor(model, thinking, maxTokens);
+  const outputTokens = reservationOutputTokens(
+    sentMaxTokens,
+    sentMaxTokens > maxTokens || reasonsWithinOutputBudget(model)
+  );
+  return usdToCredits(getTextModelCost(model, inputTokens, outputTokens));
 }
 
-/** The premium and budget models the estimate is quoted between; null when neither is priced. */
-export function pickAnswerCostReference(models: readonly ModelInfo[]): AnswerCostReference | null {
-  const premium = pickModelAnswerCost(models, PREMIUM_REFERENCE_MODEL_IDS);
-  const budget = pickModelAnswerCost(models, BUDGET_REFERENCE_MODEL_IDS);
-  return premium || budget ? { premium, budget } : null;
+export interface AffordableModelOffer {
+  current: ModelAnswerCost;
+  affordable: ModelInfo;
+  affordableCredits: number;
+}
+
+/** Cheapest accessible text model whose estimated admission hold fits the balance. */
+export function findAffordableModelOffer(
+  models: readonly ModelInfo[],
+  selectedModelId: string,
+  credits: number,
+  inputTokens: number,
+  selectedMaxTokens: number,
+  thinking?: PreflightThinking
+): AffordableModelOffer | null {
+  // The composer blocks a zero balance even on free models, so a switch cannot help there.
+  if (!(credits > 0)) return null;
+  const selected = models.find(model => model.id === selectedModelId);
+  if (!selected || selected.type !== 'text') return null;
+  const selectedCredits = preflightAnswerCredits(selected, inputTokens, selectedMaxTokens, thinking);
+  if (selectedCredits === null || selectedCredits <= credits) return null;
+
+  const affordable = models
+    .filter(
+      model => model.type === 'text' && model.id !== selectedModelId && !model.disabled && !isModelDeprecated(model)
+    )
+    .map(model => {
+      // The current estimate uses the selected model's tokenizer; candidates may count it differently.
+      const candidateInputTokens = Math.ceil(
+        (inputTokens / tokenEstimateMultiplier(selected.id)) * tokenEstimateMultiplier(model.id)
+      );
+      const maxTokens = computeDefaultMaxTokens(model);
+      const sentMaxTokens = sentMaxTokensFor(model, thinking, maxTokens);
+      const fitsContext =
+        candidateInputTokens + sentMaxTokens + CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS <= model.contextWindow;
+      return {
+        model,
+        credits: fitsContext ? preflightAnswerCredits(model, candidateInputTokens, maxTokens, thinking) : null,
+      };
+    })
+    .filter((candidate): candidate is { model: ModelInfo; credits: number } => candidate.credits !== null)
+    .filter(candidate => candidate.credits <= credits && candidate.credits < selectedCredits)
+    .sort((a, b) => a.credits - b.credits)[0];
+
+  if (!affordable) return null;
+  return {
+    current: { modelName: selected.name, creditsPerAnswer: selectedCredits },
+    affordable: affordable.model,
+    affordableCredits: affordable.credits,
+  };
+}
+
+/** What a typical answer costs on `model`; null when the model is unpriced or free to run. */
+export function modelAnswerCost(model: ModelInfo): ModelAnswerCost | null {
+  const creditsPerAnswer = typicalAnswerCredits(model);
+  return creditsPerAnswer ? { modelName: model.name, creditsPerAnswer } : null;
 }
 
 /** Answers `credits` buys, rounded DOWN to two significant figures so the estimate never oversells. */
@@ -94,27 +158,13 @@ export function estimateAnswerCount(credits: number, creditsPerAnswer: number): 
 
 const formatCount = (n: number) => n.toLocaleString('en-US');
 
-/** One-sentence estimate for a credit amount, or null when there is nothing honest to say. */
-export function formatAnswersEstimate(credits: number, reference: AnswerCostReference | null): string | null {
-  if (!reference || !(credits > 0)) return null;
-  const ends = [reference.premium, reference.budget]
-    .filter((end): end is ModelAnswerCost => end !== null)
-    .map(end => ({ ...end, answers: estimateAnswerCount(credits, end.creditsPerAnswer) }))
-    .filter(end => end.answers >= 1)
-    .sort((a, b) => a.answers - b.answers);
-  if (ends.length === 0) return null;
-
-  const low = ends[0];
-  const high = ends[ends.length - 1];
-  const answers =
-    low.answers === high.answers
-      ? `about ${formatCount(low.answers)} ${low.answers === 1 ? 'answer' : 'answers'} on ${low.modelName}`
-      : `about ${formatCount(low.answers)} to ${formatCount(high.answers)} answers, depending on the model ` +
-        `(${low.modelName} to ${high.modelName})`;
-  const inputTokens = Math.round(TYPICAL_ANSWER_INPUT_TOKENS / 100) * 100;
+/** One-sentence estimate for a credit amount on one model, or null when there is nothing honest to say. */
+export function formatAnswersEstimate(credits: number, cost: ModelAnswerCost | null): string | null {
+  if (!cost || !(credits > 0)) return null;
+  const answers = estimateAnswerCount(credits, cost.creditsPerAnswer);
+  if (answers < 1) return null;
   return (
-    `Estimate: ${answers}, at about ${formatCount(inputTokens)} tokens in, including the app's instructions, ` +
-    `and ${formatCount(TYPICAL_ANSWER_OUTPUT_TOKENS)} out per answer. ` +
+    `Estimate: about ${formatCount(answers)} ${answers === 1 ? 'answer' : 'answers'} on ${cost.modelName}. ` +
     'Long chats, files, images and larger models use more.'
   );
 }

@@ -1,10 +1,11 @@
 import { Logger } from '@bike4mind/observability';
 import { IUserDocument } from '@bike4mind/common';
 import { Quest, Session } from '@bike4mind/database';
-import { isValidObjectId } from '@server/utils/objectId';
-import { isFeatureEnabled } from '@server/middlewares/featureFlag';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
+import { downloadAttachmentUrl } from '@server/utils/downloadAttachmentUrl';
+import { isFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
-import { getSelectedRepositoriesForMcp } from '@server/integrations/github/github-repo-helper';
+import { getSelectedRepositoriesForMcp } from '@bike4mind/server-utils/integrations/github/github-repo-helper';
 import { loadFabFileAttachment, resolvePendingActionTarget } from '@server/utils/pendingActionTarget';
 import { TOKEN_EXPIRATION_MS } from '@bike4mind/slack';
 import { JIRA_UPLOAD_ATTACHMENT, CONFLUENCE_UPLOAD_ATTACHMENT } from '@bike4mind/mcp/atlassian/constants';
@@ -160,12 +161,7 @@ export async function executePendingAction(
       });
 
       try {
-        const response = await fetch(slackFileUrl);
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
-        const arrayBuffer = await response.arrayBuffer();
-        const fileBuffer = Buffer.from(arrayBuffer);
+        const fileBuffer = await downloadAttachmentUrl(slackFileUrl);
         toolParams.content = fileBuffer.toString('base64');
         logger.info('[PendingActionExecutor] Downloaded file from URL', {
           filename: toolParams.filename,
@@ -177,7 +173,9 @@ export async function executePendingAction(
         });
         return {
           success: false,
-          message: `Failed to download file: ${fileError instanceof Error ? fileError.message : 'Unknown error'}`,
+          // Generic on purpose: the guard's detail (e.g. what a hostname resolved to) is logged above,
+          // not echoed into Slack.
+          message: 'Failed to download file',
         };
       }
     }

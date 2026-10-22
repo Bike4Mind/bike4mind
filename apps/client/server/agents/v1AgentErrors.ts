@@ -1,5 +1,5 @@
 import { AgentValidationError } from '@server/utils/agentValidation';
-import { UnprocessableEntityError } from '@server/utils/errors';
+import { UnprocessableEntityError } from '@bike4mind/server-utils/utils/errors';
 
 /**
  * The shared agent validators (createAgent, server/utils/agentValidation) reject an invalid body field

@@ -1,8 +1,15 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import type { Request, Response, NextFunction } from 'express';
-import { ApiKeyScope, CreditHolderType, ForbiddenError } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  CreditHolderType,
+  ForbiddenError,
+  InternalServerError,
+  ServiceUnavailableError,
+  UnauthorizedError,
+} from '@bike4mind/common';
 import { SCOPE_STAGING_ENV_VAR } from './apiKeyScopeGate';
-import { ApiKeyUsageManager } from '@server/managers/apiKeyUsageManager';
+import { ApiKeyUsageManager } from '@bike4mind/server-utils/managers/apiKeyUsageManager';
 import { logEvent } from '@server/utils/analyticsLog';
 
 const { validateUserApiKeyMock, findByIdMock } = vi.hoisted(() => ({
@@ -20,7 +27,7 @@ vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: {} }));
 vi.mock('@bike4mind/database', () => ({ User: { findById: findByIdMock } }));
 vi.mock('@server/auth/ability', () => ({ default: () => ({}) }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
-vi.mock('@server/managers/apiKeyUsageManager', () => ({
+vi.mock('@bike4mind/server-utils/managers/apiKeyUsageManager', () => ({
   ApiKeyUsageManager: { logUsage: vi.fn().mockResolvedValue(undefined) },
 }));
 
@@ -33,7 +40,7 @@ const makeReq = () =>
     headers: { 'x-api-key': KEY },
     method: 'GET',
     originalUrl: '/api/v1/sessions',
-    logger: { warn: vi.fn(), info: vi.fn() },
+    logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn() },
   }) as unknown as Request & { logger: { warn: ReturnType<typeof vi.fn> } };
 
 const makeRes = () => ({ once: vi.fn(), statusCode: 200 }) as unknown as Response;
@@ -324,5 +331,54 @@ describe('apiKeyAuth blocked owner log', () => {
     const req = makeReq();
     expect((await run(undefined, req)).passed).toBe(true);
     expect(req.logger.warn).not.toHaveBeenCalledWith('API key rejected: owner account blocked', expect.anything());
+  });
+});
+
+describe('apiKeyAuth infrastructure failures', () => {
+  /** The driver's shape for a dropped socket, matched by name like the real one. */
+  const networkError = () =>
+    Object.assign(new Error('This socket has been ended by the other party'), { name: 'MongoNetworkError' });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    validateUserApiKeyMock.mockResolvedValue({
+      isValid: true,
+      keyId: 'key-1',
+      userId: 'user-1',
+      scopes: [ApiKeyScope.AI_CHAT],
+      rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+    });
+    findByIdMock.mockResolvedValue({ id: 'user-1', isBanned: false });
+  });
+
+  it('503s when the key lookup loses its database connection', async () => {
+    validateUserApiKeyMock.mockRejectedValue(networkError());
+    const { error } = await run(undefined, makeReq());
+    expect(error).toBeInstanceOf(ServiceUnavailableError);
+    expect((error as ServiceUnavailableError).additionalInfo).toMatchObject({ retryAfter: expect.any(Number) });
+  });
+
+  it('503s when the owner lookup loses its database connection', async () => {
+    findByIdMock.mockRejectedValue(networkError());
+    const { error } = await run(undefined, makeReq());
+    expect(error).toBeInstanceOf(ServiceUnavailableError);
+  });
+
+  it('500s any other unexpected error without echoing its message to the caller', async () => {
+    const unexpected = Object.assign(new Error('unexpected'), { name: 'MongoServerError' });
+    validateUserApiKeyMock.mockRejectedValue(unexpected);
+    const req = makeReq();
+    const { error } = await run(undefined, req);
+    expect(error).toBeInstanceOf(InternalServerError);
+    expect(error?.message).toBe('Authentication failed');
+    expect(req.logger.warn).toHaveBeenCalledWith('API key authentication error', unexpected);
+    expect(req.logger.error).not.toHaveBeenCalled();
+  });
+
+  it('still 401s an unknown key', async () => {
+    validateUserApiKeyMock.mockResolvedValue({ isValid: false, reason: 'not_found' });
+    const { error } = await run(undefined, makeReq());
+    expect(error).toBeInstanceOf(UnauthorizedError);
+    expect(error?.message).toBe('Invalid API key');
   });
 });

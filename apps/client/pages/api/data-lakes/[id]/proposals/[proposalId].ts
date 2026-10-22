@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_WRITE_SCOPES } from '@server/dataLakes/dataLakeScopes';
-import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import {
   withTransaction,
@@ -14,7 +14,7 @@ import { z } from 'zod';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { admitProposedSource } from '@server/dataLakes/proposalAdmissionDeps';
 import { serializeLakeClaim } from '@server/dataLakes/serializeLakeClaim';
-import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 
 const ReviewInput = z.object({

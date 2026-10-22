@@ -1,7 +1,7 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { BadRequestError, ensureAdmin } from '@server/utils/errors';
+import { BadRequestError, ensureAdmin } from '@bike4mind/server-utils/utils/errors';
 import { loadTeamPlanSettings, NotFoundError } from '@bike4mind/utils';
 import {
   adminSettingsRepository,
@@ -97,7 +97,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
 
     // `seatRaised` counts adds that also lifted the org's seat ceiling (#1239): a full non-Stripe org
     // raises to fit rather than rejecting; a full Stripe-billed org keeps its ceiling and the candidate
-    // is counted in `atCapacity`. Each raise still writes a durable ORG_SEAT_CEILING_RAISED audit event
+    // is counted in `atCapacity`. Each raise still writes a durable org.seats.ceiling_raised admin audit log entry
     // (actor = the admin running the backfill); the per-candidate Slack ping is skipped for a deliberate
     // bulk action, replaced by one summary post after the loop.
     const actingAdminId = req.user?.id;

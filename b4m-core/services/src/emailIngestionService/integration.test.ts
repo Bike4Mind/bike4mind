@@ -66,6 +66,7 @@ describe('emailIngestionService - Integration Tests (End-to-End)', () => {
           delete: vi.fn(),
           count: vi.fn(),
         },
+        organizations: { findById: vi.fn() },
         ingestedEmails: {
           findByMessageId: vi.fn().mockResolvedValue(null),
           findByThreadId: vi.fn(),
@@ -236,8 +237,7 @@ Content-Type: text/html; charset=utf-8
         'user123',
         'email123',
         false,
-        expect.anything(),
-        'org123'
+        expect.anything()
       );
 
       expect(result.emailId).toBe('email123');
@@ -312,8 +312,7 @@ This is the content of the attached file.
         }),
         'user123',
         'Email with Attachment',
-        expect.anything(),
-        'org123'
+        expect.anything()
       );
 
       expect(result.attachments).toHaveLength(1);
@@ -385,8 +384,7 @@ Content-Type: text/html; charset=utf-8
         'user123',
         'email123',
         false,
-        expect.anything(),
-        'org123'
+        expect.anything()
       );
 
       expect(result.emailId).toBe('email123');
@@ -441,8 +439,7 @@ Content-Type: text/html; charset=utf-8
         'user123',
         'email123',
         false,
-        expect.anything(),
-        'org123'
+        expect.anything()
       );
 
       // In real usage, processEmailBody -> cleanEmailHtml -> removes <script> and <style>

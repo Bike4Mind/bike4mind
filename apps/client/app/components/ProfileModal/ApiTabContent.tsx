@@ -5,7 +5,9 @@ import UserApiKeysSection from '@client/app/components/ProfileModal/SettingsTabC
 import AgentConnectSection from '@client/app/components/ProfileModal/AgentConnectSection';
 
 // Spend for these keys is shown only on the Usage tab, so usage has one home; this tab links to it.
-const ApiTabContent = () => {
+// `replaceHistory`: replace the entry when this sits on /profile (a tab switch), push it when hosted
+// on another page, so Back returns there.
+const ApiTabContent = ({ replaceHistory = true }: { replaceHistory?: boolean }) => {
   const navigate = useNavigate();
 
   return (
@@ -16,7 +18,7 @@ const ApiTabContent = () => {
         Spend by key, model, feature and source is on the{' '}
         <Link
           component="button"
-          onClick={() => navigate({ to: '/profile', search: { tab: 'usage' }, replace: true })}
+          onClick={() => navigate({ to: '/profile', search: { tab: 'usage' }, replace: replaceHistory })}
           data-testid="api-keys-usage-link-btn"
         >
           Usage tab

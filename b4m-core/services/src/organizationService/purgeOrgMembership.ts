@@ -24,13 +24,10 @@ export interface PurgeOrgMembershipAdapters extends LapseDepartedMemberLakeAcces
 
 /**
  * The org fields a purge prunes. Callers persist them via `organizations.removeMember`, which
- * computes the same pull + manager vacate atomically; assign these onto the in-memory org only for
- * the returned value.
+ * computes the same pull atomically; assign these onto the in-memory org only for the returned value.
  */
 export interface PurgedOrgMembershipFields {
   adminUserIds: string[];
-  /** `null` when the departing member held the appointment, otherwise unchanged. */
-  managerId: string | null | undefined;
 }
 
 /**
@@ -44,7 +41,7 @@ export interface PurgedOrgMembershipFields {
  *   - pull the org's live group ids from the member's `user.groups[]` (a real DB write),
  *   - end the member's data-lake access on this org's lakes, passing on ownership of any lake they
  *     created so it does not fall back to them (a real DB write), AND
- *   - compute `adminUserIds` and `managerId` with the member removed and RETURN them.
+ *   - compute `adminUserIds` with the member removed and RETURN it.
  *
  * Neither `user.groups[]` nor `adminUserIds` carries an org qualifier, so a member who keeps them
  * after removal retains both group-shared data access and org-admin authority. (`assertCanManageOrgGroups`
@@ -52,13 +49,9 @@ export interface PurgedOrgMembershipFields {
  * `organization.users`, which THIS purge doesn't touch, so it is not a substitute for pruning
  * `adminUserIds` here.)
  *
- * `managerId` is cleared here for the same reason and was previously the hole in it: the appointment
- * is a SECOND org-admin rung that neither departure path cleared, so a departing manager kept it.
- * `findIdsWithAdminRights` (`OrganizationModel.ts:443`) matches `{ managerId: userId }`, which feeds
- * `administeredOrgIds` and therefore `canManageLake`'s org rung - so their own grants lapsed below
- * while their authority over every lake in the org survived, and "the purge ends a departing
- * member's lake access" was false for exactly that one class of member. Both rungs now end in the
- * same place, so they cannot drift apart the way they had.
+ * The same goes for lake authority: `findIdsWithAdminRights` matches `{ adminUserIds: userId }`, which
+ * feeds `administeredOrgIds` and therefore `canManageLake`'s org rung, so a manager who kept their
+ * entry would keep authority over every lake in the org after their own grants lapsed below.
  *
  * Lake access belongs here for the same reason: grants carry no membership qualifier either, so a
  * role held on one of this org's lakes outlived the membership it was issued for. Putting the step
@@ -70,7 +63,7 @@ export interface PurgedOrgMembershipFields {
  * (`organization.userId`) as the successor for a lake the departing member created.
  *
  * Returns the pruned fields rather than mutating in place and returning void. The caller MUST pair
- * this with `organizations.removeMember` (which persists the admin/manager half), so a future caller
+ * this with `organizations.removeMember` (which persists the admin half), so a future caller
  * cannot silently get the unsafe half (group access dropped, admin authority retained). Idempotent - safe under a withTransaction
  * retry, including both halves of the lake step - by two different mechanisms, so both are worth
  * stating: a retry's `listByPrincipal(..., { activeAsOf })` no longer matches the row phase 1 just
@@ -84,7 +77,7 @@ export interface PurgedOrgMembershipFields {
  */
 export async function purgeOrgMembershipArtifacts(
   targetUserId: string,
-  organization: LapsingOrganization & { adminUserIds?: string[]; managerId?: string | null },
+  organization: LapsingOrganization & { adminUserIds?: string[] },
   triggeredBy: LakeAccessLapseTrigger,
   adapters: PurgeOrgMembershipAdapters
 ): Promise<PurgedOrgMembershipFields> {
@@ -101,6 +94,5 @@ export async function purgeOrgMembershipArtifacts(
   );
   return {
     adminUserIds: (organization.adminUserIds ?? []).filter(id => id !== targetUserId),
-    managerId: organization.managerId === targetUserId ? null : organization.managerId,
   };
 }

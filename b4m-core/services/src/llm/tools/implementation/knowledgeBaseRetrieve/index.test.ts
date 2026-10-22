@@ -1901,3 +1901,62 @@ describe('retrieve_knowledge_content with the library off', () => {
     });
   });
 });
+
+describe('retrieve_knowledge_content turn-wide citation numbering', () => {
+  const INDEXED_RULE = 'Cite each of these sources ONLY by the bracketed number';
+
+  async function runTwoFiles(numberCitables?: ToolContext['numberCitables']) {
+    const chunkRepo = {
+      findTextsByFabFileId: vi.fn(async (id: string, opts?: { afterChunkId?: string }) =>
+        opts?.afterChunkId ? [] : [{ id: `${id}-c1`, text: `body of ${id}` }]
+      ),
+      countByFabFileId: vi.fn(async () => 1),
+    };
+    const ctx = makeContext({
+      retrievalFilter: undefined,
+      numberCitables,
+      db: {
+        fabfiles: { findByIdAndUserId: vi.fn(), findById: vi.fn(), search: vi.fn() },
+        fabfilechunks: chunkRepo,
+      } as never,
+    });
+    (ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>).mockResolvedValue({
+      data: ['file-a', 'file-b'].map(id => makeFile({ id, fileName: `${id}.pdf` })),
+    });
+    const out = (await knowledgeBaseRetrieveTool.implementation(ctx, undefined).toolFn({ query: 'notes' })) as string;
+    const shipped = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls.find(
+      ([payload]) => payload?.promptMeta?.citables
+    );
+    return { out, citables: (shipped?.[0].promptMeta.citables ?? []) as CitableSource[] };
+  }
+
+  const stampFromThree: NonNullable<ToolContext['numberCitables']> = citables =>
+    citables.map((citable, position) => ({
+      ...citable,
+      metadata: { ...citable.metadata, citationIndex: position + 3 },
+    }));
+
+  it('labels each section with its turn number, ships numbered chips and adds the citation rule', async () => {
+    const { out, citables } = await runTwoFiles(stampFromThree);
+
+    expect(out).toContain('### [3] file-a.pdf (ID: file-a)');
+    expect(out).toContain('### [4] file-b.pdf (ID: file-b)');
+    expect(out).toContain(INDEXED_RULE);
+    expect(out.indexOf(GROUNDED_NO_INVENTION_RULE)).toBeLessThan(out.indexOf(INDEXED_RULE));
+    expect(citables.map(c => c.metadata?.citationIndex)).toEqual([3, 4]);
+  });
+
+  it.each([
+    ['numberCitables returns undefined', vi.fn(() => undefined)],
+    ['numberCitables is absent', undefined],
+  ])('leaves output unnumbered when %s', async (_label, numberCitables) => {
+    const { out, citables } = await runTwoFiles(numberCitables);
+
+    expect(out).not.toContain('[3]');
+    expect(out).not.toContain(INDEXED_RULE);
+    expect(out).toContain('### file-a.pdf (ID: file-a)');
+    expect(out).toContain('### file-b.pdf (ID: file-b)');
+    expect(citables).toHaveLength(2);
+    for (const citable of citables) expect(citable.metadata?.citationIndex).toBeUndefined();
+  });
+});

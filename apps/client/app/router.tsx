@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState } from 'react';
+import { FC, lazy, LazyExoticComponent, Suspense, useState } from 'react';
 import { captureUtmParams } from '@client/app/utils/utmCapture';
 import { beaconVisit } from '@client/app/utils/visitBeacon';
 import type { GitHubLakeCallbackSearch } from '@client/app/utils/githubLakeCallbackStep';
@@ -34,6 +34,8 @@ import { defaultFeedbackRollupWindow } from './utils/feedbackRollupWindow';
 import { lazyWithPreload } from './utils/lazyWithPreload';
 import { parseStudioModality } from './components/Studio/studioModality';
 import { parseQaStatusSearch } from './hooks/data/qaStatus';
+import { parseAdminSearch } from './components/admin/adminTabParams';
+import { optionalStringSearchValue } from './utils/optionalStringSearchValue';
 import { isIntegrationsPageSource, type IntegrationsPageSource } from '@bike4mind/common';
 
 // Lazy load all route components for code splitting
@@ -55,6 +57,11 @@ const SkillsPage = lazy(() => import('./routes/skills'));
 const NewSkillPage = lazy(() => import('./routes/skills/new'));
 const SkillDetailPage = lazy(() => import('./routes/skills/$id'));
 const EditSkillPage = lazy(() => import('./routes/skills/$id/edit'));
+const SkillMarketPage = lazy(() => import('./routes/skills/market'));
+const SkillListingPage = lazy(() => import('./routes/skills/market/$listingId'));
+const UnlistedSkillListingPage = lazy(() => import('./routes/skills/market/u/$token'));
+const MySkillListingsPage = lazy(() => import('./routes/skills/market/mine'));
+const SkillReviewQueuePage = lazy(() => import('./routes/skills/market/review'));
 const AgentExecutionHistoryPage = lazy(() => import('./routes/agent-executions'));
 const FeedbackRollupPage = lazy(() => import('./routes/feedback/rollup'));
 const MissionDossierPage = lazy(() => import('./routes/agents/$id/missions/$missionId'));
@@ -94,11 +101,10 @@ const StudioPage = lazy(() => import('./routes/studio/$modality'));
 const QuestMasterV5Page = lazy(() => import('./routes/quests-v5'));
 
 // Shared coercion for the optional string search params nearly every route declares.
-// Identical to the inline form it replaces: falsy (missing or empty) becomes undefined,
-// anything else is String()-coerced. A few routes below deliberately keep a stricter
-// `typeof === 'string'` guard instead, which is not the same thing - do not fold those in.
+// A few routes below deliberately keep a stricter `typeof === 'string'` guard instead,
+// which is not the same thing - do not fold those in.
 const optionalStringParam = (search: Record<string, unknown>, key: string): string | undefined =>
-  search[key] ? String(search[key]) : undefined;
+  optionalStringSearchValue(search[key]);
 
 // AI-themed loading messages for route transitions
 const loadingMessages = [
@@ -368,11 +374,15 @@ const gearsRoute = createRoute({
 
 // Integrations - the directory of every integration and model provider, with roadmap requests.
 // Exported so the page reads `?source=` (its analytics entry point) with integrationsRoute.useSearch().
+export const CONNECTIONS_TABS = ['integrations', 'api-keys'] as const;
+export type ConnectionsTab = (typeof CONNECTIONS_TABS)[number];
+
 export const integrationsRoute = createRoute({
   getParentRoute: () => layoutRoute,
   path: '/integrations',
-  validateSearch: (search: Record<string, unknown>): { source?: IntegrationsPageSource } => ({
+  validateSearch: (search: Record<string, unknown>): { source?: IntegrationsPageSource; tab?: ConnectionsTab } => ({
     source: isIntegrationsPageSource(search.source) ? search.source : undefined,
+    tab: CONNECTIONS_TABS.find(t => t === search.tab),
   }),
   component: () => (
     <Suspense fallback={<RouteLoadingFallback />}>
@@ -622,6 +632,24 @@ const newSkillRoute = createRoute({
     </Suspense>
   ),
 });
+
+// Skill Market. Static `market` segments outrank the `/skills/$id` param route in Tanstack's
+// ranking, so /skills/market never resolves as a skill id.
+const marketRoute = <TPath extends string>(path: TPath, Page: LazyExoticComponent<FC>) =>
+  createRoute({
+    getParentRoute: () => layoutRoute,
+    path,
+    component: () => (
+      <Suspense fallback={<RouteLoadingFallback />}>
+        <Page />
+      </Suspense>
+    ),
+  });
+const skillMarketRoute = marketRoute('/skills/market', SkillMarketPage);
+const mySkillListingsRoute = marketRoute('/skills/market/mine', MySkillListingsPage);
+const skillReviewQueueRoute = marketRoute('/skills/market/review', SkillReviewQueuePage);
+const unlistedSkillListingRoute = marketRoute('/skills/market/u/$token', UnlistedSkillListingPage);
+const skillListingRoute = marketRoute('/skills/market/$listingId', SkillListingPage);
 
 const skillDetailRoute = createRoute({
   getParentRoute: () => layoutRoute,
@@ -1141,7 +1169,7 @@ const activateRoute = createRoute({
 });
 
 // Admin route (replaces /admin/index.tsx)
-const adminRoute = createRoute({
+export const adminRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/admin',
   beforeLoad: ({ location }) => enforceConsentRedirect(location),
@@ -1155,18 +1183,10 @@ const adminRoute = createRoute({
       </ProviderBundle>
     </RestrictedPage>
   ),
-  // `tab` and `feedbackId` make the console addressable: a feedback deep link opens the Feedback
-  // tab focused on one record. `tab` is a stable slug, never the positional AdminTab enum value -
-  // see common/utils/deepLinks for why, and adminTabSlugs.ts for the slug <-> enum mapping.
-  validateSearch: (
-    search: Record<string, unknown>
-  ): { emergency_access?: string; tab?: string; feedbackId?: string } => {
-    return {
-      emergency_access: optionalStringParam(search, 'emergency_access'),
-      tab: optionalStringParam(search, 'tab'),
-      feedbackId: optionalStringParam(search, 'feedbackId'),
-    };
-  },
+  // `tab` (a stable slug, never the positional AdminTab enum value - see common/utils/deepLinks)
+  // makes the console addressable, and each tab's own params come from the registry in
+  // adminTabParams.ts, which the tab-sync hook rebuilds the URL from too.
+  validateSearch: parseAdminSearch,
 });
 
 // Email unsubscribe route - public page for managing email preferences
@@ -1243,6 +1263,11 @@ const routeTree = rootRoute.addChildren([
     newSkillRoute,
     skillDetailRoute,
     editSkillRoute,
+    skillMarketRoute,
+    mySkillListingsRoute,
+    skillReviewQueueRoute,
+    unlistedSkillListingRoute,
+    skillListingRoute,
     agentExecutionHistoryRoute,
     agentMissionRoute,
     deepAgentsRoute,

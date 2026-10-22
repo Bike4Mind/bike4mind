@@ -146,8 +146,10 @@ vi.mock('@bike4mind/services', () => ({
     admissionDoorLabel: (sourceType: string | undefined) => sourceType ?? 'unknown',
   },
 }));
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: vi.fn(() => ({ getContentAsBuffer: vi.fn() })) }));
-vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
+  getFilesStorage: vi.fn(() => ({ getContentAsBuffer: vi.fn() })),
+}));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: (...a: unknown[]) => h.sendToClient(...a) }));
 vi.mock('@server/dataLakes/dataLakeBatchProgress', () => ({
   finalizeBatchIfComplete: (...a: unknown[]) => h.finalizeBatchIfComplete(...a),
@@ -197,7 +199,7 @@ vi.mock('sst', () => ({
 
 const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn(), updateMetadata: vi.fn() } as never;
 
-import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from '@server/utils/sqsDelivery';
+import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from '@bike4mind/server-utils/utils/sqsDelivery';
 import { dispatch } from './fabFileChunk';
 import { ChunkClaimLostError } from '@bike4mind/common';
 
@@ -832,6 +834,18 @@ describe('fabFileChunk handler - chunk computation runs outside the transaction 
       { phase: 'prepare', insideTransaction: false },
       { phase: 'commit', insideTransaction: true },
     ]);
+  });
+
+  // A long prepare can outlast the database connection. Recovering it inside the commit's own
+  // transaction retries the writes alone instead of failing the delivery and redoing the prepare.
+  it('asks the commit transaction to recover a lost connection', async () => {
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.prepareFabFileChunks).toHaveBeenCalledTimes(1);
+    expect(h.withTransaction).toHaveBeenCalledWith(
+      expect.any(Function),
+      expect.objectContaining({ retryOnConnectionLoss: true })
+    );
   });
 
   // A prepare-phase throw is no longer wrapped by withTransaction, so it reaches a DIFFERENT catch

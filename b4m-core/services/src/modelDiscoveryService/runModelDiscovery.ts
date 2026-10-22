@@ -279,6 +279,7 @@ async function executeRun(
 
   const skippedSources: Array<{ name: string; reason: SourceSkipReason }> = [];
   const attempts: DiscoverySource[] = [];
+  const providerSourceNames = new Set<string>();
   for (const source of sources) {
     const reason = skipReasonFor(source, {
       credentials,
@@ -291,6 +292,9 @@ async function executeRun(
     });
     if (reason) skippedSources.push({ name: source.name, reason });
     else attempts.push(source);
+    if (source.kind === 'provider' && reason !== 'not-configured') {
+      providerSourceNames.add(source.name);
+    }
   }
 
   const globalDeadline = deadlineSignal(ctx.globalDeadlineMs);
@@ -384,6 +388,7 @@ async function executeRun(
         options,
         runId,
         credentials,
+        providerSourceNames,
         probedProfiles,
         succeeded: succeeded(),
         results,
@@ -715,6 +720,7 @@ interface PassInput {
   options: RunModelDiscoveryOptions;
   runId: string;
   credentials: DiscoveryCredentials;
+  providerSourceNames: ReadonlySet<string>;
   /** The sources whose fetch succeeded, in registration order. */
   succeeded: readonly DiscoverySource[];
   results: ReadonlyMap<string, { report: IDiscoverySourceReport; result: SourceResult }>;
@@ -826,6 +832,7 @@ async function planPass(input: PassInput): Promise<PassPlan> {
     priorDiscoveryGroups,
     priorContributors,
     providerUndated: signals.providerUndated,
+    providerSourceNames: input.providerSourceNames,
     operatorOwnedModelIds,
     presentationOwnedElsewhere,
     credentials,
@@ -835,6 +842,11 @@ async function planPass(input: PassInput): Promise<PassPlan> {
     runStartedAt: effectiveAt,
     runId,
   });
+
+  for (const source of succeeded) {
+    const r = results.get(source.name)?.result;
+    if (r?.ok) catalog.dropped.push(...(r.dropped ?? []));
+  }
 
   const priceRowsAtRunStart = input.priceRowsAtRunStart ?? priceRowsInForce;
   const prices = planPriceWrites({

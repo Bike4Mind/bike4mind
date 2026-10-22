@@ -55,9 +55,9 @@ import { buildSlackLakeIngestDeps } from '@server/slack/dataLakeIngestDeps';
 import { logEvent } from '@server/utils/analyticsLog';
 import { slackChannelConfigRepository } from '@bike4mind/database';
 import { decryptToken } from '@server/security/tokenEncryption';
-import { getGeneratedImageStorage } from '@server/utils/storage';
-import { buildPendingActionButtons } from '@server/integrations/slack/pendingActionButtons';
-import { getClientIp } from '@server/utils/ip';
+import { getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { buildPendingActionButtons } from '@bike4mind/server-utils/integrations/slack/pendingActionButtons';
+import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 
 // Slack event schemas
 const SlackEventSchema = z.object({

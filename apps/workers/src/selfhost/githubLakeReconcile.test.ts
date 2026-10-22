@@ -3,7 +3,7 @@ import type { Logger } from '@bike4mind/observability';
 
 const { run } = vi.hoisted(() => ({ run: vi.fn() }));
 vi.mock('@workers/cron/githubLakeReconcile', () => ({ runGitHubLakeReconcile: run }));
-vi.mock('@server/utils/sqs', () => ({ receiveFromQueue: vi.fn(), deleteFromQueue: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ receiveFromQueue: vi.fn(), deleteFromQueue: vi.fn() }));
 
 const { SelfHostWorker } = await import('./selfHostWorker');
 const { registerGitHubLakeReconcile, GITHUB_LAKE_RECONCILE_INTERVAL_MS } = await import('./githubLakeReconcile');

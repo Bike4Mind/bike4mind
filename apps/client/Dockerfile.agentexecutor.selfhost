@@ -25,10 +25,23 @@ COPY patches ./patches
 # 2) Install the client and workers workspaces + all workspace deps INCLUDING devDeps (tsx).
 #    No --prod. The service and the queue handler it runs live in apps/workers/src; client stays
 #    because that handler still reaches shared server code through @server/*.
-RUN pnpm install --frozen-lockfile --filter @bike4mind/client... --filter @bike4mind/workers...
+#    A hydrated premium overlay is absent from the tracked lockfile, so it is linked and the
+#    install runs unfrozen (which needs git); without one the install stays frozen.
+COPY scripts/link-premium-overlays.mjs ./scripts/
+RUN if ls packages/premium/*/package.json >/dev/null 2>&1; then \
+      apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/* \
+      && B4M_SELF_HOST=true node scripts/link-premium-overlays.mjs && pnpm install --no-frozen-lockfile --filter @bike4mind/client... --filter @bike4mind/workers...; \
+    else \
+      pnpm install --frozen-lockfile --filter @bike4mind/client... --filter @bike4mind/workers...; \
+    fi
 
-# 3) Source.
+# 3) Source. The copy restores apps/client/package.json, so declare the overlay again for turbo.
+#    It also brings back the gitignored premium glue, which a build host that only ran a local
+#    install holds in the ABSENT form (the overlay is not linked there), so regenerate it from
+#    the linked state - otherwise the overlay's LLM tools and system prompts silently drop.
 COPY . .
+RUN B4M_SELF_HOST=true node scripts/link-premium-overlays.mjs \
+    && node apps/client/scripts/generate-premium-glue.mjs
 
 # 4) Build the client's upstream @bike4mind/* packages (incl. @bike4mind/resource, the shim
 #    the alias hook redirects to). `^...` builds the client's deps without the Next.js app.

@@ -2,10 +2,13 @@ import {
   ANTHROPIC_OUTPUT_CONFIG_EFFORT_MODELS,
   ChatModels,
   CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS,
+  ModelBackend,
   NO_TEMPERATURE_MODELS,
   REASONING_SUPPORTED_MODELS,
   type ModelInfo,
+  type QueryComplexityType,
   type ReasoningEffort,
+  MAX_THINKING_BUDGET_TOKENS,
 } from '@bike4mind/common';
 
 /**
@@ -193,6 +196,8 @@ export function reasonsWithinOutputBudget(modelInfo: ModelInfo): boolean {
  * bump is neither harmless nor invisible. Explicit values are still clamped down
  * to the model's own cap, since over-requesting 400s the whole turn.
  *
+ * Thinking Gemini models with a declared cap default to that cap when unset.
+ *
  * Models that reason inside the output budget default to
  * ADAPTIVE_THINKING_MAX_TOKENS_FLOOR, clamped to their own cap: a small default can
  * be consumed entirely by reasoning, leaving an empty visible reply. "Their own cap"
@@ -222,9 +227,18 @@ export function resolveOutputMaxTokens({
   modelMaxOutputTokens: number | undefined;
 }): number {
   const reasonsWithinBudget = reasonsWithinOutputBudget(modelInfo);
-  const preferred =
-    usableTokenCount(requested) ?? (reasonsWithinBudget ? ADAPTIVE_THINKING_MAX_TOKENS_FLOOR : fallback);
   const cap = usableTokenCount(modelMaxOutputTokens);
+  // Gemini counts thinking inside maxOutputTokens; keep in sync with geminiBackend.getGenerationConfig,
+  // which only bounds thinking when the cap binds. The web client sends the model max too.
+  const unsetDefault =
+    modelInfo.backend === ModelBackend.Gemini &&
+    modelInfo.can_think === true &&
+    cap !== undefined &&
+    modelInfo.maxOutputTokensDerived !== true
+      ? cap
+      : fallback;
+  const preferred =
+    usableTokenCount(requested) ?? (reasonsWithinBudget ? ADAPTIVE_THINKING_MAX_TOKENS_FLOOR : unsetDefault);
   // An unusable cap must not clamp. `Math.min(n, undefined)` is NaN, and this result sizes
   // a credit reservation downstream, so the resolver has to be total or a malformed catalog
   // row puts NaN on a money path. Substituting `fallback` instead would be a sizing decision
@@ -318,12 +332,14 @@ export function buildThinkingParams(
     };
   }
 
-  // Legacy models: explicit budget_tokens, inflate max_tokens to fit
-  const maxTokens = Math.max(currentMaxTokens, budgetTokens + THINKING_ANSWER_HEADROOM_TOKENS);
+  // Legacy models: explicit budget_tokens, inflate max_tokens to fit. The budget is clamped here as
+  // well as at the request schemas, so no path can send (and bill) a larger one.
+  const budget = Math.min(budgetTokens, MAX_THINKING_BUDGET_TOKENS);
+  const maxTokens = Math.max(currentMaxTokens, budget + THINKING_ANSWER_HEADROOM_TOKENS);
 
   return {
     thinkingConfig: {
-      thinking: { type: 'enabled', budget_tokens: budgetTokens },
+      thinking: { type: 'enabled', budget_tokens: budget },
     },
     maxTokens,
     temperature: rejectsTemperature ? 'delete' : 1,
@@ -350,6 +366,27 @@ const ADAPTIVE_THINKING_OFF_SWITCH: ReadonlyMap<string, 'disabled' | 'between_to
   [ChatModels.CLAUDE_5_5_HAIKU_BEDROCK, 'disabled'],
   // Sonnet 5.5 rejects `disabled`; `between_tools` is its off switch.
   [ChatModels.CLAUDE_5_5_SONNET_BEDROCK, 'between_tools'],
+]);
+
+/**
+ * Adaptive models that think when `thinking` is omitted. Opus 4.7 and 4.8 are adaptive and
+ * can be switched off, but they do NOT think unless `thinking: {type: "adaptive"}` is sent:
+ * defaulting their effort would turn thinking on for a caller who never asked for it, so
+ * they are absent. A new adaptive model belongs here only if it thinks unasked.
+ */
+const ADAPTIVE_THINKING_BY_DEFAULT: ReadonlySet<string> = new Set([
+  ChatModels.CLAUDE_5_SONNET,
+  ChatModels.CLAUDE_5_SONNET_BEDROCK,
+  ChatModels.CLAUDE_5_5_SONNET_BEDROCK,
+  ChatModels.CLAUDE_FABLE_5,
+  ChatModels.CLAUDE_FABLE_5_BEDROCK,
+  ChatModels.CLAUDE_FABLE_5_1_BEDROCK,
+  ChatModels.CLAUDE_5_OPUS,
+  ChatModels.CLAUDE_5_OPUS_BEDROCK,
+  ChatModels.CLAUDE_5_5_OPUS,
+  ChatModels.CLAUDE_5_5_OPUS_BEDROCK,
+  ChatModels.CLAUDE_5_5_HAIKU,
+  ChatModels.CLAUDE_5_5_HAIKU_BEDROCK,
 ]);
 
 /** Legacy `budget_tokens` per effort; `high` matches the chat path's 16K default. */
@@ -430,4 +467,28 @@ export function planReasoningEffort(
     thinking: { type: 'enabled', budget_tokens: budgetTokens },
     temperature: NO_TEMPERATURE_MODELS.has(model) ? 'delete' : 1,
   };
+}
+
+/** Whether `model` thinks adaptively, at the provider default effort, on a request that names no thinking. */
+export function isAdaptiveThinkingByDefault(model: string, modelInfo: ModelInfo): boolean {
+  return (
+    modelInfo.can_think === true && modelInfo.thinkingStyle === 'adaptive' && ADAPTIVE_THINKING_BY_DEFAULT.has(model)
+  );
+}
+
+/**
+ * The effort an adaptive model runs at when the caller named none, from the auto-classified
+ * query complexity. An adaptive model that thinks unasked does so on every request (and every
+ * tool round) at the provider default effort, so a simple lookup would pay for deep reasoning
+ * that GPT-5 skips at `low` (openaiBackend's effortMap). `complex` keeps the provider default.
+ * Legacy models, and adaptive models that only think when asked, return undefined: naming an
+ * effort there would turn their thinking on.
+ */
+export function effortForComplexity(
+  model: string,
+  modelInfo: ModelInfo,
+  complexity: QueryComplexityType | undefined
+): ReasoningEffort | undefined {
+  if (!isAdaptiveThinkingByDefault(model, modelInfo)) return undefined;
+  return complexity === 'simple' || complexity === 'contextual' ? 'low' : undefined;
 }

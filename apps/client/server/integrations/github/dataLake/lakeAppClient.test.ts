@@ -5,7 +5,7 @@ const h = vi.hoisted(() => ({
 }));
 
 const mockConfig: Record<string, string | undefined> = {};
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: new Proxy({}, { get: (_, key: string) => mockConfig[key] }),
 }));
 

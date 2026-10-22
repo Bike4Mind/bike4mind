@@ -26,8 +26,8 @@ import {
   canManageConfig,
   ROTATION_WINDOW_MS,
 } from '@server/integrations/jira/webhookUtils';
-import { encryptSecret, decryptSecret } from '@server/security/secretEncryption';
-import { Config } from '@server/utils/config';
+import { encryptSecret, decryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { BadRequestError, ForbiddenError, NotFoundError, UnauthorizedError } from '@bike4mind/utils';
 import {
   IJiraWebhookConfigRequest,

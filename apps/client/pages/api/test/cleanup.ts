@@ -1,6 +1,6 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { isE2EEnabled } from '@server/utils/config';
+import { isE2EEnabled } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
 import {
   User,
@@ -34,6 +34,7 @@ import {
   PublishedArtifactReport,
   PublishedArtifactViewAuditModel,
   Annotation,
+  Skill,
 } from '@bike4mind/database';
 import mongoose from 'mongoose';
 import {
@@ -241,6 +242,8 @@ const handler = baseApi({ auth: false }).delete(
       deleteFrom('apiKeys', ApiKey.collection.deleteMany({ userId: { $in: userIdStrings } })),
       deleteFrom('artifacts', Artifact.collection.deleteMany({ userId: { $in: userIdStrings } })),
       deleteFrom('tools', Tool.collection.deleteMany({ userId: { $in: userIds } })),
+      // A swept user's global-read skill is visible to every user on the stage, so it must not outlive them.
+      deleteFrom('skills', Skill.collection.deleteMany({ userId: { $in: userIdStrings } })),
       deleteFrom(
         'registrationInvites',
         RegistrationInvite.collection.deleteMany({

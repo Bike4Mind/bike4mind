@@ -28,7 +28,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@bike4mind/services', async () => ({
   dataLakeService: {
     assertLakeAccess: h.assertLakeAccess,
@@ -61,7 +61,9 @@ vi.mock('@bike4mind/database', () => ({
   lakeAccessEventRepository: { record: h.record },
 }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ getSignedUrl: browserSigner }) }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
+  getFilesStorage: () => ({ getSignedUrl: browserSigner }),
+}));
 
 import handler from '../articles';
 

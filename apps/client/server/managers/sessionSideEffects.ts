@@ -9,7 +9,7 @@ import {
 import { ClientMessageSender } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { logEvent } from '@server/utils/analyticsLog';
-import { ActivityType } from '@client/config/activityType';
+import { ActivityType } from '@bike4mind/server-utils/config/activityType';
 import { Ability } from '@server/auth/ability';
 import { Resource } from 'sst';
 
@@ -106,11 +106,13 @@ export function recordNotebookAddedToProjectActivity(projectId: string, userId: 
 }
 
 /**
- * Publishes a session-summarization request to EventBridge for async processing.
+ * Publishes a session-summarization request to EventBridge for async processing, billed to
+ * `payerId` (the user whose turn triggered it).
  */
 export async function publishSummarizeSession(
   sessionId: string,
-  trigger: PersistedSessionSummaryTrigger
+  trigger: PersistedSessionSummaryTrigger,
+  payerId: string
 ): Promise<void> {
   // Imported lazily to publish to EventBridge instead of SQS.
   const { SessionEvents } = await import('@server/utils/eventBus');
@@ -118,6 +120,7 @@ export async function publishSummarizeSession(
     sessionId,
     callTagging: true,
     trigger,
+    payerId,
   });
 }
 

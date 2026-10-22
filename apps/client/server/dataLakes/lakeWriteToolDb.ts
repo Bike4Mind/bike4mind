@@ -1,6 +1,6 @@
 import { lakeMembershipRemovalRepository } from '@bike4mind/database';
-import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
-import { lakeMembershipAuditDb } from '@server/dataLakes/lakeMembershipAuditDb';
+import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
+import { lakeMembershipAuditDb } from '@bike4mind/server-utils/dataLakes/lakeMembershipAuditDb';
 
 /**
  * The tool-host `db` adapters the lake-writing tools (save_content_to_data_lake, create_data_lake)
@@ -10,6 +10,7 @@ import { lakeMembershipAuditDb } from '@server/dataLakes/lakeMembershipAuditDb';
  * drift apart; embedRoute.ts does not, since no embed opt-in tool writes a lake (embedToolResolver.ts).
  */
 export const lakeWriteToolDb = Object.freeze({
+  memoryLedger: lakeMembershipAuditDb.memoryLedger,
   lakeMembershipRemovals: lakeMembershipRemovalRepository,
   lakeConfigChangeEvents: lakeConfigAuditDb.lakeConfigChangeEvents,
   lakeMembershipChangeEvents: lakeMembershipAuditDb.lakeMembershipChangeEvents,

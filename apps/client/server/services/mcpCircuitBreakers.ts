@@ -5,7 +5,7 @@ import {
   type CircuitBreakerSnapshot,
 } from '@bike4mind/utils';
 import { isAxiosError } from 'axios';
-import { recordCircuitBreakerTransition } from '@server/utils/cloudwatch';
+import { recordCircuitBreakerTransition } from '@bike4mind/server-utils/utils/cloudwatch';
 
 export type OperationType = 'read' | 'write';
 
@@ -128,6 +128,16 @@ export function isCircuitBreakerFailure(error: Error): boolean {
   return true;
 }
 
+// Transition metrics start inside the breaker's synchronous onStateChange, so they cannot be awaited
+// there. Every caller that can trip a transition drains them with flushBreakerMetrics before its
+// Lambda invocation returns; a frozen container loses a pending emit.
+const pendingTransitionMetrics = new Set<Promise<void>>();
+
+/** Waits for every transition metric started so far. Never rejects. */
+export async function flushBreakerMetrics(): Promise<void> {
+  await Promise.all(pendingTransitionMetrics);
+}
+
 function createBreaker(tenantKey: string, mcpServerName: string, operationType: OperationType): CircuitBreaker {
   const serverOverrides = CONFIG_OVERRIDES[mcpServerName] ?? {};
   const opOverrides = OP_TYPE_OVERRIDES[operationType];
@@ -142,9 +152,9 @@ function createBreaker(tenantKey: string, mcpServerName: string, operationType: 
       console.log(
         `[CircuitBreaker] ${event.name} (tenant ${tenantKey}): ${event.from} -> ${event.to} (${event.reason})`
       );
-      recordCircuitBreakerTransition(event.name, event.from, event.to, operationType).catch(err => {
-        console.error(`[CircuitBreaker] Failed to record CloudWatch transition metric for ${event.name}:`, err);
-      });
+      const emit = recordCircuitBreakerTransition(event.name, event.from, event.to, operationType);
+      pendingTransitionMetrics.add(emit);
+      void emit.finally(() => pendingTransitionMetrics.delete(emit));
     },
   });
 }

@@ -76,6 +76,60 @@ describe('redactSecrets', () => {
     expect(out).toContain('[REDACTED]');
   });
 
+  it('leaves a schema property or type annotation that only names a credential field', () => {
+    const schema = '{"github_token":{"type":"string"},"api_key":["a"]}';
+    expect(redactSecrets(schema)).toBe(schema);
+    const code = 'accessToken: string; getToken: () => Promise<string>; password: unknown';
+    expect(redactSecrets(code)).toBe(code);
+  });
+
+  it.each([
+    'token: string[]',
+    '"apiKey": "string"',
+    "apiKey: 'string'",
+    'token: string|undefined',
+    'token: string | undefined',
+    '"token":"null"',
+  ])('leaves a type annotation or quoted placeholder unredacted: %s', text => {
+    // The keyword exemption is terminated by what can follow a type in an annotation
+    // or schema - an array `[`, a union `|`, a closing quote - so those shapes stay
+    // intact instead of falling back to the generic assignment rule.
+    expect(redactSecrets(text)).toBe(text);
+  });
+
+  it('still redacts a value that merely starts with a type keyword', () => {
+    const out = redactSecrets('DB_PASSWORD=stringent-pass-9');
+    expect(out).not.toContain('stringent-pass-9');
+    expect(out).toContain('[REDACTED]');
+  });
+
+  it.each([
+    ['password: null-Xk9#hunter2', 'null-Xk9#hunter2'],
+    ['apiKey: any.Zq8sK2long', 'any.Zq8sK2long'],
+  ])('still redacts a colon assignment whose value only resembles a type keyword: %s', (text, value) => {
+    // The type-keyword exemption requires a whole token, so `null-abc` / `any.abc`
+    // carry no terminator punctuation and are values, not annotations - redact them on
+    // `:` too, not just `=`.
+    const out = redactSecrets(text);
+    expect(out).not.toContain(value);
+    expect(out).toContain('[REDACTED]');
+  });
+
+  it.each([
+    ['DB_PASSWORD=null-Xk9#hunter2', 'null-Xk9#hunter2'],
+    ['API_KEY=any.Zq8sK2longsecret', 'any.Zq8sK2longsecret'],
+    ['TOKEN=(s3cr3tvalue)', '(s3cr3tvalue)'],
+    ['password=[hunter2]', '[hunter2]'],
+    ['SECRET=string/abc123secret', 'string/abc123secret'],
+  ])('still redacts an assignment whose value only resembles a type or a structure: %s', (text, value) => {
+    // `=` is an assignment, not a schema: neither the type-keyword exemption nor the
+    // structure exemption applies, so a value that merely starts with `null`/`any`/
+    // `string` or a bracket is a value and must be redacted.
+    const out = redactSecrets(text);
+    expect(out).not.toContain(value);
+    expect(out).toContain('[REDACTED]');
+  });
+
   it('leaves ordinary tool output untouched', () => {
     const content = 'export function add(a: number, b: number) { return a + b; }\n/Users/dev/project/src/add.ts:1';
     expect(redactSecrets(content)).toBe(content);

@@ -37,7 +37,7 @@ vi.mock('@aws-sdk/client-apigatewaymanagementapi', () => ({
   },
 }));
 
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: vi.fn(() => ({ __mock: 'filesStorage' })),
   getGeneratedImageStorage: vi.fn(() => ({ __mock: 'generatedImageStorage' })),
 }));
@@ -127,6 +127,7 @@ vi.mock('@bike4mind/database', async () => {
   // Gates the artifact-emission-prompt lookup right before orchestrator construction;
   // `false` skips the second (ArtifactEmissionPrompt) read entirely.
   vi.spyOn(actual.adminSettingsRepository, 'getSettingsValue').mockResolvedValue(false as never);
+  vi.spyOn(actual.adminSettingsRepository, 'findOne').mockResolvedValue(null as never);
   return { ...actual, connectDB: vi.fn().mockResolvedValue(undefined) };
 });
 

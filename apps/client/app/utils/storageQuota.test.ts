@@ -85,6 +85,13 @@ describe('serverStorageLimitMessage', () => {
     expect(serverStorageLimitMessage(axiosError(400, { error: 'x', ...info('file_too_large') }))).toBeUndefined();
   });
 
+  it("describes a share editor's refusal from its code alone, with no byte counts", () => {
+    const body = { error: 'x', errorCode: 'storage_limit_exceeded', owner: 'user' };
+    expect(serverStorageLimitMessage(axiosError(400, body))).toBe(
+      "This change would exceed the file owner's storage limit."
+    );
+  });
+
   // Deprecated fallback for a server that predates the code on storage refusals; remove with
   // LEGACY_SERVER_STORAGE_LIMIT_MESSAGE after 2026-11-15.
   it('still surfaces a legacy refusal that carries no code, verbatim', () => {

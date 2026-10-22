@@ -5,7 +5,7 @@ import { logEvent } from '@server/utils/analyticsLog';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { baseApi } from '@server/middlewares/baseApi';
 import { isApiKeyAuth } from '@server/middlewares/apiKeyAuth';
-import { clearSessionCookies } from '@server/auth/refreshCookie';
+import { clearSessionCookies } from '@bike4mind/server-utils/auth/refreshCookie';
 
 const handler = baseApi().get(async (req, res) => {
   const user = req.user;

@@ -26,8 +26,8 @@ import { Subscription } from '@server/models/Subscription';
 import { inviteSubscriptionScope, questMasterPlanSubscriptionScope } from '@server/websocket/subscriptionScopes';
 import { sendToConnection, withWebSocketContext } from '@server/websocket/utils';
 import { verifyWsAccessToken } from '@server/websocket/verifyWsAccessToken';
-import { closeConnection } from '@server/websocket/closeConnection';
-import { UnauthorizedError } from '@server/utils/errors';
+import { closeConnection } from '@bike4mind/server-utils/websocket/closeConnection';
+import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import crypto from 'crypto';
 import { pickBy } from 'lodash';
 import pLimit from 'p-limit';
@@ -55,9 +55,9 @@ function extractRawSubscriptionId(rawBody: unknown): string | undefined {
  * Notifies the client that its `subscribe_query` frame was refused or its initial fetch was
  * aborted - the two failure modes on this path that are content-dependent rather than auth- or
  * infra-dependent, so they can fire for a caller whose frame is otherwise well-formed. Neither
- * throws an UnauthorizedError/JsonWebTokenError, so withWebSocketContext's status code never
- * reaches the client as a frame; without this, the caller sees silence and the surface just
- * never updates. Deliberately not used for auth failures - those keep their existing behavior.
+ * throws an UnauthorizedError/JsonWebTokenError/ForbiddenError, so withWebSocketContext's status
+ * code never reaches the client as a frame; without this, the caller sees silence and the surface
+ * just never updates. Deliberately not used for auth failures - those keep their existing behavior.
  * Best-effort: a failure here must not mask the original error from withWebSocketContext's log.
  */
 async function notifySubscribeError(
@@ -313,7 +313,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   if (!(await Connection.findOne({ connectionId }, { _id: 1 }).lean())) {
     await realtimeConnectionRepository
       .removeConnectionSubscribers(connectionId)
-      .catch(error =>
+      .catch((error: unknown) =>
         logger.warn(`[dataSubscribeRequest] Failed to remove subscribers of ended connection ${connectionId}`, error)
       );
     await closeConnection(connectionId, endpoint).catch(error =>

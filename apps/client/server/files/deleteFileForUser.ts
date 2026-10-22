@@ -1,14 +1,13 @@
-import { FileEvents } from '@bike4mind/common';
+import { FileEvents, storageOwnerOf, type StorageOwner } from '@bike4mind/common';
 import {
-  changeStorageSize,
   dataLakeRepository,
   fabFileChunkRepository,
   fabFileRepository,
   fileTagRepository,
+  projectRepository,
   sessionRepository,
   userRepository,
   withTransaction,
-  User,
 } from '@bike4mind/database';
 import { fabFilesService } from '@bike4mind/services';
 import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
@@ -16,9 +15,10 @@ import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { logEvent } from '@server/utils/analyticsLog';
 import { recomputeStatsForLakeTags } from '@server/dataLakes/recomputeStatsForLakeTags';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
-import { lakeMembershipAuditDb } from '@server/dataLakes/lakeMembershipAuditDb';
-import { getFilesStorage } from '@server/utils/storage';
+import { lakeMembershipAuditDb } from '@bike4mind/server-utils/dataLakes/lakeMembershipAuditDb';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { getGeneratedCopyStore } from '@server/files/generatedCopyStore';
+import { adjustOwnerStorageInSession } from '@bike4mind/server-utils/s3/storageCharge';
 import type { Request } from 'express';
 
 /**
@@ -48,9 +48,9 @@ export async function deleteFileForUser(req: Request, fabFileId: string) {
     }
   }
 
-  let sizeToDeduct = 0;
+  let refund: { owner: StorageOwner; bytes: number } | undefined;
 
-  const deleteAction = await withTransaction(async session => {
+  const { action: deleteAction, references } = await withTransaction(async session => {
     const result = await fabFilesService.deleteFabFile(
       userId,
       { id: fabFileId },
@@ -65,8 +65,8 @@ export async function deleteFileForUser(req: Request, fabFileId: string) {
         },
         storage: getFilesStorage(),
         generatedCopies: getGeneratedCopyStore(),
-        onDeleteComplete: async (_fabFile, size) => {
-          sizeToDeduct = size;
+        onDeleteComplete: async (deleted, size) => {
+          refund = { owner: storageOwnerOf(deleted), bytes: size };
         },
         searchIndex: selfHostOpenSearchEnabled() ? FabFileChunkSearchIndex : undefined,
         logger: req.logger,
@@ -92,23 +92,28 @@ export async function deleteFileForUser(req: Request, fabFileId: string) {
       );
     }
 
-    return result.action;
+    return result;
   });
 
-  // Deduct storage size after successful deletion
-  if (sizeToDeduct > 0) {
+  // After the commit, outside the transaction's session (see cleanUpDeletedFileReferences).
+  if (references) {
+    await fabFilesService.cleanUpDeletedFileReferences(
+      references,
+      { users: userRepository, projects: projectRepository },
+      req.logger
+    );
+  }
+
+  // Refund the file's owner (its org, or its uploader), not the caller, after a successful deletion.
+  if (refund && refund.bytes > 0) {
+    const { owner, bytes } = refund;
     try {
-      await withTransaction(async session => {
-        const user = await User.findById(userId).session(session);
-        if (user) {
-          await changeStorageSize(user, -sizeToDeduct);
-          await user.save({ session });
-        }
-      });
+      await withTransaction(session => adjustOwnerStorageInSession(owner, -bytes, session));
     } catch (error) {
-      req.logger.error('Error updating user storage size after single file delete:', {
+      req.logger.error('Error updating owner storage size after single file delete:', {
         error: error instanceof Error ? error.message : 'Unknown error',
-        sizeToDeduct,
+        owner,
+        sizeToDeduct: bytes,
       });
     }
   }

@@ -430,10 +430,18 @@ export async function shellApproval(
     detail: [detail, ...reasons].join('\n\n'),
     key,
     ...(reasons.length > 0 ? { askInAuto: true as const } : {}),
+    ...(scan.contained ? { contained: true as const } : {}),
     always: {
       namespace: tool,
-      commands: scan.commands.map(({ text, always, coverable }) => ({ text, pattern: always, coverable })),
+      commands: scan.commands.map(({ text, always, coverable, words, opaque }) => ({
+        text,
+        pattern: always,
+        coverable,
+        words,
+        ...(opaque ? { opaque } : {}),
+      })),
       directories: [...new Set([...directories, ...scan.directories])],
+      paths: scan.paths ?? [],
     },
   };
 }

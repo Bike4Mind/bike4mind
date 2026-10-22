@@ -2,12 +2,18 @@ import { type ChunkStallReason } from '../../constants/chunking';
 import type { MembershipArm } from '../../constants/lakeMembershipHealth';
 import { IBaseRepository, type IMongoDocument } from '.';
 import { IShareableStaticMethods, type IShareableDocument } from './ShareableDocumentTypes';
+import type { StorageUsageGroup } from '../../storageBreakdown';
+import type { OrganizationStorageUploaderGroup } from '../../organizationStorage';
 
 // Define a type for the MIME types
 export type MimeType =
   'text/plain' | 'application/pdf' | 'text/csv' | 'application/json' | 'text/markdown' | 'text/html';
 
 export const MimeTypes: MimeType[] = ['text/plain', 'text/markdown', 'application/pdf', 'application/json'];
+
+// Per-request cap on /api/files/tags/toggle. The route runs the whole batch in one transaction, one file
+// at a time, so an unbounded selection can outlive Mongo's 60s transaction lifetime; clients chunk.
+export const MAX_TOGGLE_TAGS_FILE_IDS = 100;
 
 // The Files type filter. getMimeTypeFilter (packages/database/src/queries/fabFileSearchQuery.ts) maps every value
 // to a query and FILE_TYPE_OPTIONS (apps/client/app/components/Files/Browser/constants.ts) labels every value.
@@ -261,7 +267,11 @@ export interface IFabFile {
   mimeType: string;
 
   /**
-   * The organization ID that the file is associated with
+   * The organization that OWNS this file for storage accounting and file-owner scoped settings
+   * (scopeForFileOwner); absent means the uploading user owns it. Stamped at creation from the
+   * org-owned lakes the file is created into (pickOwnerOrganizationId) - never from a
+   * caller-supplied or "currently selected" org, which is a display preference, not ownership.
+   * Later lake membership changes do not re-stamp it.
    */
   organizationId?: string;
 
@@ -466,9 +476,30 @@ export interface IFabFile {
   moderationClaimedAt?: Date;
 
   /**
+   * ETag of the stored object version the moderation verdict covers, recorded before the bytes are
+   * read, so a verdict always covers that version or a newer one. A landing with a different ETag
+   * (the object was overwritten) resets the verdict to `pending` for a rescan. Opaque: a multipart
+   * upload's ETag has a `-N` suffix and is never compared as a hash.
+   */
+  moderationETag?: string;
+
+  /** Monotonic identity of moderation-version writes; distinguishes A -> B -> A from unchanged A. */
+  moderationRevision?: number;
+
+  /**
+   * Set by the doors that hand a client a URL to PUT this row's bytes to (a presign, or the self-host
+   * proxy). Only such a row's landing is judged by the measured-size gate (apps/client/server/s3/uploadSizeGate.ts):
+   * a server-side door writes bytes it already holds, and judging those would discard its file.
+   */
+  clientUpload?: boolean;
+
+  /** Keeps rejected upload tombstones discoverable for object cleanup on event redelivery. */
+  uploadRejectedAt?: Date;
+
+  /**
    * Compare-only watermark for charging `currentStorageSize`: an S3 event is charged only if its
    * time is newer. Advanced by compare-and-set, so an upload is charged once whether the ObjectCreated
-   * handler or a notebook import charges it (apps/client/server/s3/storageCharge.ts). Imported rows
+   * handler or a notebook import charges it (packages/server-utils/src/s3/storageCharge.ts). Imported rows
    * store the import's stamp time, not the upload time, so do not read it as one. Absent on rows that
    * predate it or were never charged - whether a row counts as charged is `isStorageCharged`
    * (common/src/storageCharge.ts), which also covers the pre-stamp legacy rows.
@@ -972,9 +1003,21 @@ export type DataLakeMembershipScope =
  * conjunct on the meta-tag arm (a contributor's file is a full member of someone else's lake), so
  * a sweep spanning several owners' files cannot be billed to one user.
  */
+/** A row's owner and charge fields: what findChargeState and commitContentRewrite's pre-image return. */
+export type FabFileChargeState = {
+  userId: string;
+  organizationId?: string;
+  fileSize?: number;
+  storageChargedAt?: Date;
+  status?: string;
+  createdAt?: Date;
+};
+
 export interface DataLakeSweptFile {
   id: string;
   userId: string;
+  /** The owning org (FabFile.organizationId); absent = personal. Routes the delta via storageOwnerOf. */
+  organizationId?: string;
   /** Charged bytes (`chargedBytes`), not the raw `fileSize`: 0 for a row that was never charged. */
   fileSize: number;
 }
@@ -1130,12 +1173,47 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   ): Promise<{ data: IFabFileDocument[]; hasMore: boolean }>;
 
   /**
-   * Sum the `fileSize` of every non-deleted file a user owns, via an aggregate
-   * so no documents are hydrated. A missing or null `fileSize` counts as 0.
+   * Sum the charged `fileSize` of a user's non-deleted PERSONAL files (no `organizationId`; org-owned
+   * rows count toward the org, see storageOwner.ts), via an aggregate so no documents are hydrated.
+   * A missing or null `fileSize` counts as 0.
    * @param userId - The ID of the user.
    * @returns A promise that resolves to the total size in bytes.
    */
   sumFileSizeByUserId(userId: string): Promise<number>;
+
+  /** The org counter's truth: charged `fileSize` of the non-deleted rows stamped with `organizationId`. */
+  sumFileSizeByOrganizationId(organizationId: string): Promise<number>;
+
+  /**
+   * The same charged rows `sumFileSizeByUserId` sums, grouped by provenance (see StorageUsageGroup).
+   * `maxTimeMS` bounds the aggregate for users with very large file counts.
+   */
+  summarizeChargedStorageByUserId(userId: string, options?: { maxTimeMS?: number }): Promise<StorageUsageGroup[]>;
+
+  /**
+   * The rows `sumFileSizeByOrganizationId` sums, grouped by uploader (`userId`), largest first and
+   * capped at `limit` groups. `maxTimeMS` bounds the aggregate for orgs with very large file counts.
+   */
+  summarizeChargedStorageByOrganizationId(
+    organizationId: string,
+    options: { limit: number; maxTimeMS?: number }
+  ): Promise<OrganizationStorageUploaderGroup[]>;
+
+  /**
+   * The live row's stored charge fields (see isStorageCharged in storageCharge.ts). Null when gone.
+   */
+  findChargeState(id: string): Promise<FabFileChargeState | null>;
+
+  /**
+   * The atomic write of a content rewrite: `$set`s `set` plus `storageChargedAt = now` on the live
+   * row matching `{ _id: id, ...filter }`, and returns the PRE-image's charge fields, or null when
+   * the filter missed. Accounting lives in fabFileService/rewriteStorage.ts; call it, not this.
+   */
+  commitContentRewrite(
+    id: string,
+    set: Record<string, unknown>,
+    filter?: Record<string, unknown>
+  ): Promise<FabFileChargeState | null>;
 
   /**
    * Find a file by its ID and the user's ID.
@@ -1477,6 +1555,20 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * trail does, to tell a real removal from the losing half of two concurrent ones.
    */
   pullTagsByFabFileId(fabFileId: string, tagNames: string[]): Promise<number>;
+
+  /**
+   * Restamps a live file's owning org (unset when `nextOrganizationId` is undefined, so the file
+   * bills its uploader again), but only while the stamp, the fields `chargedBytes` reads, and the set
+   * of stored tag names the owner was derived from still equal `expected`. Returns false when a
+   * concurrent write moved any of them, so the caller can re-read instead of moving a stale byte
+   * count between counters or stamping an owner a concurrent tag write already changed. See
+   * reassignStorageOwner in b4m-core/services/src/fabFileService/reassignStorageOwner.ts.
+   */
+  setOwnerOrganizationIfUnchanged(
+    fabFileId: string,
+    expected: Pick<IFabFileDocument, 'organizationId' | 'fileSize' | 'storageChargedAt' | 'status' | 'tags'>,
+    nextOrganizationId: string | undefined
+  ): Promise<boolean>;
 
   /**
    * Atomically add each of `tagNames` to one file's tags array, skipping any already present.
@@ -1946,6 +2038,8 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
     scope: DataLakeMembershipScope,
     embeddingModel: string
   ): Promise<{ id: string; userId: string }[]>;
+  /** Whether any live file on the deployment carries vectors labelled with `embeddingModel`. */
+  hasVectorizedFileInEmbeddingSpace(embeddingModel: string): Promise<boolean>;
   /**
    * The lake's files whose passages a HALTED convergence wave deleted, as {id, userId}. Chunkless
    * with no error, so they match neither `findChunkedFilesByScope` (needs chunked:true) nor
@@ -1995,6 +2089,12 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * "rebuild done" from "some files gave up".
    */
   countFailedFilesByScope(scope: DataLakeMembershipScope): Promise<number>;
+  /**
+   * Count the lake's files whose passages were reset for a rebuild that has not committed yet and
+   * is still inside REBUILD_PENDING_STALE_MS. They have no passages and no error, so without this
+   * a lake mid-rebuild reports nothing to rebuild and nothing failed.
+   */
+  countRebuildingFilesByScope(scope: DataLakeMembershipScope): Promise<number>;
   /**
    * Distinct live file counts per lake, keyed by `datalakeTag`. Same predicate as
    * computeDataLakeStats, so what a browse surface displays cannot disagree with a lake's
@@ -2141,9 +2241,16 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * already soft-deleted, and `findById` hides those rows behind the soft-delete plugin.
    *
    * Optional for the same source-compatibility reason as `setLakeSupersession` above; the purge
-   * requires it locally.
+   * requires it locally. Moderation state rides along so the purge can keep an evidence-held
+   * file's bytes (see isModerationEvidenceHold).
    */
-  findStorageKeysByIds?(
-    fabFileIds: string[]
-  ): Promise<Array<{ id: string; filePath?: string; versions?: Array<Pick<IFabFileVersion, 'filePath'>> }>>;
+  findStorageKeysByIds?(fabFileIds: string[]): Promise<
+    Array<
+      {
+        id: string;
+        filePath?: string;
+        versions?: Array<Pick<IFabFileVersion, 'filePath'>>;
+      } & Pick<IFabFile, 'moderationStatus' | 'blockReason'>
+    >
+  >;
 }

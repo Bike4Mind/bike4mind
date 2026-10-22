@@ -30,7 +30,8 @@
     "title": "Änderungsprotokoll"
   },
   "feedback": {
-    "send": "Feedback senden"
+    "send": "Feedback senden",
+    "rollupTitle": "Dein Feedback"
   },
   "terms_policies": "Bedingungen & Richtlinien",
   "login": "Anmelden",
@@ -166,7 +167,8 @@
     "messages": "Nachrichten",
     "invites": "Einladungen",
     "sendMessage": "Eine Nachricht senden",
-    "noMessages": "Keine Nachrichten"
+    "noMessages": "Keine Nachrichten",
+    "title_unread": "Posteingang, ungelesene Einträge"
   },
   "addSomething": "{{ name }} hinzufügen",
   "deleteAllSomething": "Alle {{ name }} löschen",
@@ -286,7 +288,30 @@
     "renews_on": "Wird erneuert am {{ date }}"
   },
   "billing": {
-    "title": "Abrechnung"
+    "title": "Abrechnung",
+    "balance": "Guthaben",
+    "credits_heading": "Credits aufladen",
+    "credits_sub": "Einmalige Pakete, die deinem Guthaben gutgeschrieben werden. Kein Abo nötig.",
+    "credits_sub_with_plan": "Einmalige Pakete, zusätzlich zu deinem monatlichen Kontingent.",
+    "free_plan": "Kostenlos",
+    "free_plan_detail": "Bezahle nach Bedarf mit Credit-Paketen",
+    "low_org": "Ein Organisationsadmin kann diesem Konto Credits hinzufügen.",
+    "low_with_plan": "Lade auf, um bis zur Erneuerung deines Kontingents weiterzuarbeiten.",
+    "low_without_plan": "Ein Abo bringt jeden Monat Credits; ein Paket lädt sofort auf.",
+    "payment_failed": "Zahlung fehlgeschlagen",
+    "plan": "Abo",
+    "plan_fallback": "Abonnement",
+    "plan_unavailable": "Nicht verfügbar",
+    "plan_unavailable_detail": "Dein Abo konnte nicht geladen werden.",
+    "plans_change": "Dein Abo",
+    "plans_change_sub": "Abo verwalten, ändern oder kündigen.",
+    "plans_heading": "Abos",
+    "plans_heading_sub": "Monatliche Abos mit Credit-Kontingent.",
+    "plans_upgrade": "Upgrade",
+    "plans_upgrade_sub": "Erhalte ein monatliches Credit-Kontingent, statt manuell aufzuladen.",
+    "retry": "Erneut versuchen",
+    "see_plans": "Abos ansehen",
+    "top_up": "Aufladen"
   },
   "credits": {
     "title": "Guthaben",
@@ -314,7 +339,8 @@
     "usage_pattern": "Basierend auf Ihrem Nutzungsverhalten der letzten {{days}} Tage",
     "credits_used": "Verwendete Credits",
     "credits_purchased": "Gekaufte Credits",
-    "net_credits": "Netto-Credits"
+    "net_credits": "Netto-Credits",
+    "unit": "Credits"
   },
   "time": {
     "last_7_days": "Letzte 7 Tage",
@@ -362,7 +388,15 @@
       "completed": "Abgeschlossen",
       "pending": "Ausstehend",
       "failed": "Gescheitert"
-    }
+    },
+    "buy_pack": "{{credits}} Credits für {{price}} kaufen",
+    "choose_pack": "Wähle ein Credit-Paket",
+    "history_usage_hint": "Hier werden nur Käufe aufgeführt.",
+    "organization_credits_active": "Organisations-Credits aktiv",
+    "rate_per_thousand": "{{rate}} pro 1.000 Credits",
+    "see_usage": "Verbrauch ansehen",
+    "shared_rate": "Jedes Paket hat denselben Preis: {{rate}} pro 1.000 Credits.",
+    "switch_to_personal": "Wechsle zu deinem persönlichen Konto, um Credits für den persönlichen Gebrauch zu kaufen."
   },
   "settings": {
     "title": "Einstellungen",
@@ -543,7 +577,9 @@
     "personal": "Persönlich",
     "business": "Geschäftlich",
     "team": "Team",
-    "enterprise": "Unternehmen"
+    "enterprise": "Unternehmen",
+    "audience_label": "Abo-Typ",
+    "includes": "Enthält"
   },
   "agents": {
     "title": "Agenten",
@@ -572,5 +608,13 @@
   "skills": {
     "title": "Fähigkeiten",
     "command_palette_description": "Verwalten Sie wiederverwendbare Anweisungsvorlagen"
+  },
+  "apiKeys": {
+    "title": "API-Schlüssel"
+  },
+  "connections": {
+    "menuTooltip": "Integrationen wie Google Drive und Slack sowie API-Schlüssel für deinen eigenen Code",
+    "sections": "Bereiche der Verbindungen",
+    "title": "Verbindungen"
   }
 }

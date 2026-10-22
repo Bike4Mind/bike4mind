@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { estimateElevenLabsConversationalCost } from '@bike4mind/voice';
-import { MAX_SESSION_SECONDS } from '@server/voice/voiceSessionLimits';
+import { MAX_SESSION_SECONDS } from '@bike4mind/server-utils/voice/voiceSessionLimits';
 import { getThemeConfig } from '@client/app/utils/themes';
 
 const settings: Record<string, boolean> = { voiceV2Enabled: true, enforceCredits: true };

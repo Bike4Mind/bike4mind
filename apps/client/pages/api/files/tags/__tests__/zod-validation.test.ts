@@ -33,7 +33,7 @@ vi.mock('@bike4mind/common', () => ({
   ApiKeyScope: { READ_FILES: 'files:read', WRITE_FILES: 'files:write' },
   CONFINED_API_KEY_SCOPES: [],
 }));
-vi.mock('@server/utils/errors', () => ({
+vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   ForbiddenError: class extends Error {},
 }));
 vi.mock('@server/utils/userFileScope', () => ({

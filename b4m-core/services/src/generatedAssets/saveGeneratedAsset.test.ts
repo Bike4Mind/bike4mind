@@ -1,4 +1,10 @@
-import { FabFileSourceType, KnowledgeType, StorageLimitError, type GeneratedAssetMetadata } from '@bike4mind/common';
+import {
+  FabFileSourceType,
+  GENERATED_ASSET_MAX_STORED_TEXT_CHARS as CAP,
+  KnowledgeType,
+  StorageLimitError,
+  type GeneratedAssetMetadata,
+} from '@bike4mind/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { saveGeneratedAsset, type SaveGeneratedAssetDeps, type SaveGeneratedAssetParams } from './saveGeneratedAsset';
 
@@ -65,24 +71,52 @@ describe('saveGeneratedAsset', () => {
     expect(adapters.mimeTypePrecedence).toBe('claim-first');
     expect(adapters.provenance).toEqual({
       sourceType: FabFileSourceType.TOOL_GENERATED,
-      sourceMetadata: { sessionId: 's1', questId: 'q1', generation: music },
+      sourceMetadata: { sessionId: 's1', questId: 'q1', generation: { ...music, promptTruncated: false } },
     });
     expect(findOne).not.toHaveBeenCalled();
   });
 
   it('caps the stored prompt and lyrics', async () => {
-    const long = 'x'.repeat(5_000);
+    const long = 'x'.repeat(CAP * 2);
     await saveGeneratedAsset(params({ generation: { ...music, prompt: long, lyrics: long } }), deps);
 
     const { generation } = createFabFile.mock.calls[0][2].provenance.sourceMetadata;
-    expect(generation.prompt).toHaveLength(2_000);
-    expect(generation.lyrics).toHaveLength(2_000);
+    expect(generation.prompt).toHaveLength(CAP);
+    expect(generation.lyrics).toHaveLength(CAP);
+    // Marks the prefix incomplete, so a surface reusing the text can say so instead of generating
+    // from half of it.
+    expect(generation.promptTruncated).toBe(true);
+  });
+
+  it('marks a prompt it kept whole as not truncated', async () => {
+    await saveGeneratedAsset(params(), deps);
+
+    const { generation } = createFabFile.mock.calls[0][2].provenance.sourceMetadata;
+    expect(generation.promptTruncated).toBe(false);
+  });
+
+  it('treats a prompt of exactly the cap as kept whole', async () => {
+    await saveGeneratedAsset(params({ generation: { ...music, prompt: 'x'.repeat(CAP) } }), deps);
+
+    const { generation } = createFabFile.mock.calls[0][2].provenance.sourceMetadata;
+    expect(generation.prompt).toHaveLength(CAP);
+    expect(generation.promptTruncated).toBe(false);
+  });
+
+  it('truncates and flags a prompt one character over the cap', async () => {
+    await saveGeneratedAsset(params({ generation: { ...music, prompt: 'x'.repeat(CAP) + 'y' } }), deps);
+
+    const { generation } = createFabFile.mock.calls[0][2].provenance.sourceMetadata;
+    expect(generation.prompt).toBe('x'.repeat(CAP));
+    expect(generation.promptTruncated).toBe(true);
   });
 
   it('omits the notebook link when there is no session', async () => {
     await saveGeneratedAsset(params(), deps);
 
-    expect(createFabFile.mock.calls[0][2].provenance.sourceMetadata).toEqual({ generation: music });
+    expect(createFabFile.mock.calls[0][2].provenance.sourceMetadata).toEqual({
+      generation: { ...music, promptTruncated: false },
+    });
   });
 
   it('records the inline-playback copy key so a delete can remove that copy too', async () => {
@@ -91,7 +125,7 @@ describe('saveGeneratedAsset', () => {
     expect(createFabFile.mock.calls[0][2].provenance.sourceMetadata).toEqual({
       sessionId: 's1',
       generatedCopyKey: 'abc.mp3',
-      generation: music,
+      generation: { ...music, promptTruncated: false },
     });
   });
 

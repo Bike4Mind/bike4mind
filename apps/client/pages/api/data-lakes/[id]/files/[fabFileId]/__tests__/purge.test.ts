@@ -13,6 +13,7 @@ const h = vi.hoisted(() => ({
   changeStorageSize: vi.fn(async () => {}),
   userSave: vi.fn(async () => {}),
   userFindById: vi.fn(),
+  incrementCurrentStorage: vi.fn(async () => {}),
   storageDelete: vi.fn(async () => {}),
   shredMemoryFromSource: vi.fn(async () => 2),
   findingsDeleteForPurgedDocument: vi.fn(async () => 0),
@@ -50,7 +51,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
     assertLakeAccessById: h.assertLakeAccessById,
@@ -71,6 +72,7 @@ vi.mock('@bike4mind/database', () => ({
   memoryLedgerRepository: {},
   lakeConfigChangeEventRepository: {},
   adminSettingsRepository: {},
+  organizationRepository: { incrementCurrentStorage: h.incrementCurrentStorage },
   changeStorageSize: h.changeStorageSize,
   withTransaction: (fn: (session: unknown) => unknown) => fn({}),
   User: { findById: h.userFindById },
@@ -78,7 +80,9 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/fab-pipeline', () => ({ FabFileChunkSearchIndex: {} }));
 vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: h.selfHostOpenSearchEnabled }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ delete: h.storageDelete }) }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
+  getFilesStorage: () => ({ delete: h.storageDelete }),
+}));
 vi.mock('@server/utils/auditLog', () => ({
   logAuditEvent: h.logAuditEvent,
   DataLakeAuditEvents: { LAKE_DOCUMENT_PURGED: 'LAKE_DOCUMENT_PURGED' },
@@ -86,7 +90,7 @@ vi.mock('@server/utils/auditLog', () => ({
 vi.mock('@server/dataLakes/recomputeStatsForLakeTags', () => ({
   recomputeStatsForLakeTags: h.recomputeStatsForLakeTags,
 }));
-vi.mock('@server/memory/ledgerMemoryStore', () => ({ shredMemoryFromSource: h.shredMemoryFromSource }));
+vi.mock('@bike4mind/server-utils/memory/ledgerMemoryStore', () => ({ shredMemoryFromSource: h.shredMemoryFromSource }));
 vi.mock('sst', () => ({ Resource: { SECRET_ENCRYPTION_KEY: { value: 'test-secret-encryption-key' } } }));
 
 import handler from '../purge';
@@ -107,6 +111,7 @@ const RECEIPT = {
   storageObjectDeleted: true,
   storageObjectsTotal: 1,
   storageObjectsRemaining: 0,
+  heldForModeration: false,
   retrievalIndexOutcome: 'collocated',
   verified: true,
   purgedAt: '2026-01-01T00:00:00.000Z',
@@ -147,7 +152,7 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
 
   /** Drive the service's post-destruction hook the way the service itself would. */
   const runOnPurged = async (
-    purged: { ownerUserId: string; fileSize: number; tagNames: string[] },
+    purged: { ownerUserId: string; ownerOrganizationId?: string; fileSize: number; tagNames: string[] },
     auth?: { user?: { id: string }; apiKeyInfo?: { keyId: string } }
   ) => {
     const { res } = makeRes();
@@ -218,6 +223,14 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
 
     expect(h.userFindById).toHaveBeenCalledWith('owner-9');
     expect(h.changeStorageSize).toHaveBeenCalledWith(expect.anything(), -27707);
+  });
+
+  it("returns an org-stamped file's bytes to the ORG counter, not the uploader's", async () => {
+    await runOnPurged({ ownerUserId: 'u', ownerOrganizationId: 'org1', fileSize: 10, tagNames: [] });
+
+    expect(h.incrementCurrentStorage).toHaveBeenCalledWith('org1', -10, expect.anything());
+    expect(h.userFindById).not.toHaveBeenCalled();
+    expect(h.changeStorageSize).not.toHaveBeenCalled();
   });
 
   it('touches no quota when the row stored no bytes', async () => {

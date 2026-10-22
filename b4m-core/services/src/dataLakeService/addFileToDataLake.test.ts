@@ -11,6 +11,7 @@ const h = vi.hoisted(() => ({
 vi.mock('./lakeAdmissionGate', () => ({ assertLakeAdmission: h.assertLakeAdmission }));
 
 import { addFileToDataLake } from './addFileToDataLake';
+import { withStorageOwnerFakes } from '../__tests__/utils/storageOwnerTransferFakes';
 
 const lake = {
   id: 'lake1',
@@ -86,7 +87,7 @@ function makeAdapters(opts: {
 }) {
   const fabFiles = makeFabFilesAdapter(opts.file);
   const dataLakes = makeDataLakesAdapter(opts.lakeDoc ?? lake);
-  const db = {
+  const db = withStorageOwnerFakes({
     dataLakes,
     fabFiles,
     dataLakeAccessGrants: { listByLake: vi.fn().mockResolvedValue(opts.grants ?? []) },
@@ -97,7 +98,7 @@ function makeAdapters(opts: {
       }),
     },
     adminSettings: { findAll: vi.fn().mockResolvedValue([]), findBySettingNames: vi.fn().mockResolvedValue([]) },
-  };
+  });
   const logger = { warn: vi.fn(), error: vi.fn(), log: vi.fn() };
   return { db, logger, fabFiles, dataLakes };
 }

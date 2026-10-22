@@ -1,8 +1,18 @@
 import { describe, it, expect, vi } from 'vitest';
+
+vi.mock('@server/premium-generated/premiumWorkspaceDeniedTools.generated', () => ({
+  premiumWorkspaceDeniedTools: {
+    'example-workspace': ['tool_denied_by_surface'],
+    // A surface that denies a delegation tool. Names cannot gate these two (they are pushed as
+    // objects), so the offer has to withhold the dependency instead - see `delegationOffer`.
+    'no-delegate': ['delegate_to_agent'],
+  },
+}));
 import {
   applySessionToolPolicy,
   delegationOffer,
   runHasAttachments,
+  sessionDeniedTools,
   DELEGATION_TOOLS,
   type SessionToolPolicyInput,
 } from './agentExecutor.sessionToolPolicy';
@@ -264,5 +274,51 @@ describe('delegationOffer -- profile and session denials reach the dependency ga
     expect(
       delegationOffer({ profileDeniedTools: ['image_generation'], session: { disabledTools: ['web_search'] } })
     ).toEqual({ offerDelegate: true, offerDag: true });
+  });
+});
+
+describe('workspace denied tools', () => {
+  it('unions the surface denials with the session disabledTools', () => {
+    expect(sessionDeniedTools({ disabledTools: ['web_search'], surface: 'example-workspace' }).sort()).toEqual([
+      'tool_denied_by_surface',
+      'web_search',
+    ]);
+    expect(sessionDeniedTools({ disabledTools: ['web_search'], surface: null })).toEqual(['web_search']);
+  });
+
+  it('removes a surface-denied tool from the toolbelt', () => {
+    const result = applySessionToolPolicy({
+      toolNames: ['tool_denied_by_surface', 'web_search'],
+      session: { surface: 'example-workspace' },
+      hasAttachments: false,
+    });
+
+    expect(result).toEqual(['web_search']);
+  });
+
+  it('keeps the tool for a session on another surface', () => {
+    const result = applySessionToolPolicy({
+      toolNames: ['tool_denied_by_surface', 'web_search'],
+      session: { surface: 'elsewhere' },
+      hasAttachments: false,
+    });
+
+    expect(result).toEqual(['tool_denied_by_surface', 'web_search']);
+  });
+
+  // The surface arm of the gate is the only thing withholding `agentStore` / `dagDispatcher` for a
+  // curated surface, so assert the offer itself rather than a downstream consequence.
+  it('withholds delegation when the surface denies a delegation tool', () => {
+    expect(delegationOffer({ session: { surface: 'no-delegate' } })).toEqual({
+      offerDelegate: false,
+      offerDag: false,
+    });
+  });
+
+  it('keeps delegation for a surface that denies some other tool', () => {
+    expect(delegationOffer({ session: { surface: 'example-workspace' } })).toEqual({
+      offerDelegate: true,
+      offerDag: true,
+    });
   });
 });

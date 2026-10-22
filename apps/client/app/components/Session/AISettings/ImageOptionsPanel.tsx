@@ -5,6 +5,7 @@ import { useLLM } from '@client/app/contexts/LLMContext';
 import { useSessions } from '@client/app/contexts/SessionsContext';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { isToolDenied } from '@client/app/utils/toolMapping';
+import { effectiveDisabledTools } from '@client/app/utils/effectiveDisabledTools';
 import { ImageTemplateControls } from '../ImageTemplates/ImageTemplateControls';
 import { isImageGenerationModel } from '../PromptBuilder/models';
 import { usePromptBuilderFirstRun } from '../PromptBuilder/usePromptBuilderFirstRun';
@@ -42,7 +43,7 @@ const ImageOptionsPanel: FC<{
   const showPromptBuilder =
     isPromptBuilderEnabled &&
     isImageGenerationModel(model) &&
-    !isToolDenied('image_generation', currentSession?.disabledTools);
+    !isToolDenied('image_generation', effectiveDisabledTools(currentSession));
 
   const handleCountChange = (e: ChangeEvent<HTMLInputElement>) => {
     const next = parseInt(e.target.value, 10);

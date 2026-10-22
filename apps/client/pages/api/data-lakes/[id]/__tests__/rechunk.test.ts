@@ -10,6 +10,7 @@ const h = vi.hoisted(() => ({
   detectUnderChunkedFiles: vi.fn(),
   detectStaleEmbeddingSpaceFiles: vi.fn(),
   countFailedLakeFiles: vi.fn(),
+  countRebuildingLakeFiles: vi.fn(),
   resolveEffectiveEmbeddingModel: vi.fn(),
   resetChunkStateByIds: vi.fn(),
   sendToQueue: vi.fn(),
@@ -29,7 +30,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
     assertLakeAccess: h.assertLakeAccess,
@@ -38,11 +39,12 @@ vi.mock('@bike4mind/services', () => ({
     detectUnderChunkedFiles: h.detectUnderChunkedFiles,
     detectStaleEmbeddingSpaceFiles: h.detectStaleEmbeddingSpaceFiles,
     countFailedLakeFiles: h.countFailedLakeFiles,
+    countRebuildingLakeFiles: h.countRebuildingLakeFiles,
     DEFAULT_REBUILD_WAVE: 50,
     MAX_REBUILD_WAVE: 200,
   },
 }));
-vi.mock('@server/embeddings/effectiveEmbeddingModel', () => ({
+vi.mock('@bike4mind/server-utils/embeddings/effectiveEmbeddingModel', () => ({
   resolveEffectiveEmbeddingModel: h.resolveEffectiveEmbeddingModel,
 }));
 vi.mock('@bike4mind/database', () => ({
@@ -64,9 +66,11 @@ vi.mock('@bike4mind/database', () => ({
   scopedSettingsRepository: {},
 }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
-vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
-vi.mock('@server/utils/dlqRegistry', () => ({ getSourceQueueUrl: h.getSourceQueueUrl }));
-vi.mock('@server/dataLakes/convergenceKillSwitch', () => ({ isConvergenceHalted: h.isConvergenceHalted }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
+vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({ getSourceQueueUrl: h.getSourceQueueUrl }));
+vi.mock('@bike4mind/server-utils/dataLakes/convergenceKillSwitch', () => ({
+  isConvergenceHalted: h.isConvergenceHalted,
+}));
 
 import handler from '../rechunk';
 
@@ -98,6 +102,7 @@ beforeEach(() => {
   h.assertLakeRebuildAccess.mockImplementation(async () => (h.tx.push('gate'), lake));
   h.touchIfStable.mockImplementation(async () => void h.tx.push('touch'));
   h.countFailedLakeFiles.mockResolvedValue(0);
+  h.countRebuildingLakeFiles.mockResolvedValue(0);
   h.detectStaleEmbeddingSpaceFiles.mockResolvedValue([]);
   // A deployment whose space IS resolvable, so the refusal arm is opt-in rather than the default.
   h.resolveEffectiveEmbeddingModel.mockResolvedValue('text-embedding-3-small');
@@ -111,17 +116,19 @@ beforeEach(() => {
 });
 
 describe('GET /api/data-lakes/[id]/rechunk', () => {
-  it('returns the under-chunked count and the failed count (read access, no writes)', async () => {
+  it('returns the under-chunked, failed and rebuilding counts (read access, no writes)', async () => {
     h.detectUnderChunkedFiles.mockResolvedValue([
       { fabFileId: 'f1', userId: 'u1' },
       { fabFileId: 'f2', userId: 'u1' },
     ]);
     h.countFailedLakeFiles.mockResolvedValue(1);
+    h.countRebuildingLakeFiles.mockResolvedValue(3);
     h.detectStaleEmbeddingSpaceFiles.mockResolvedValue([{ fabFileId: 'f9', userId: 'u1' }]);
     const { json } = await invoke('GET');
     expect(json).toHaveBeenCalledWith({
       underChunkedCount: 2,
       failedCount: 1,
+      rebuildingCount: 3,
       staleEmbeddingSpaceCount: 1,
       embeddingSpaceResolved: true,
     });
@@ -144,6 +151,7 @@ describe('GET /api/data-lakes/[id]/rechunk', () => {
     expect(json).toHaveBeenCalledWith({
       underChunkedCount: 0,
       failedCount: 0,
+      rebuildingCount: 0,
       staleEmbeddingSpaceCount: null,
       embeddingSpaceResolved: false,
     });
@@ -160,6 +168,7 @@ describe('GET /api/data-lakes/[id]/rechunk', () => {
     expect(json).toHaveBeenCalledWith({
       underChunkedCount: 0,
       failedCount: 0,
+      rebuildingCount: 0,
       staleEmbeddingSpaceCount: 0,
       embeddingSpaceResolved: true,
     });

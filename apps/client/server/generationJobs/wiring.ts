@@ -2,6 +2,7 @@ import { Resource } from 'sst';
 import { apiKeyService } from '@bike4mind/auth';
 import {
   ApiKeyType,
+  hasStorageUsage,
   isImageServeable,
   isPlaceholderApiKey,
   isStorageLimitError,
@@ -55,11 +56,13 @@ import {
   XaiVideoProvider,
   type VideoProvider,
 } from '@bike4mind/utils/videoProviders';
-import { isValidObjectId } from '@server/utils/objectId';
-import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
-import { sendToQueue } from '@server/utils/sqs';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
+import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { saveGeneratedAssetToFiles } from '@server/utils/saveGeneratedAssetToFiles';
-import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
+import { deliverJobToSlack } from './slackJobDelivery';
+import { createSlackJobDeliveryDeps } from './slackJobDeliveryDeps';
+import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 
 // Must outlive the worker timeout (5 min, infra/queues.ts generationJobQueue) so two workers never overlap on
 // one job, and stay under the queue visibility timeout (6 min).
@@ -145,7 +148,7 @@ export const toJobUpdate = (job: IGenerationJobDocument): IGenerationJobUpdatedA
 };
 
 // Gemini, xAI and Veo are registered everywhere; whether a caller can use one depends on a resolvable key
-// (hasUsableKey in server/videoGenerations/listUsableVideoModels.ts).
+// (hasUsableKey in packages/server-utils/src/videoGenerations/listUsableVideoModels.ts).
 export const buildProviders = (): VideoProvider[] => {
   const providers: VideoProvider[] = [new GeminiOmniVideoProvider(), new XaiVideoProvider(), new VeoVideoProvider()];
   // Set only on non-production stages by infra (TEST_GENERATION_PROVIDER_ENVIRONMENT); never registered in production.
@@ -263,8 +266,13 @@ const saveToGeneratedBucket: VideoJobDeps['saveToGeneratedBucket'] = async ({ ke
   return { s3Key: key };
 };
 
+// Both are read once per job on a long-lived queue host, and decide whether the job debits, so
+// they bypass the process cache (names lists must stay complete under skipCache).
 const getSettings: VideoJobDeps['getSettings'] = async () => {
-  const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
+  const settings = await getSettingsMap(
+    { adminSettings: adminSettingsRepository },
+    { names: ['enforceCredits', 'videoGeneration'], skipCache: true }
+  );
   return {
     enforceCredits: Boolean(getSettingsValue('enforceCredits', settings)),
     videoGeneration: getSettingsValue('videoGeneration', settings),
@@ -272,7 +280,10 @@ const getSettings: VideoJobDeps['getSettings'] = async () => {
 };
 
 const getMusicSettings: MusicJobDeps['getSettings'] = async () => {
-  const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
+  const settings = await getSettingsMap(
+    { adminSettings: adminSettingsRepository },
+    { names: ['enforceCredits', 'musicGeneration'], skipCache: true }
+  );
   return {
     enforceCredits: Boolean(getSettingsValue('enforceCredits', settings)),
     musicGeneration: getSettingsValue('musicGeneration', settings),
@@ -287,7 +298,8 @@ export const checkStorageFor: CreateMusicJobDeps['checkStorageFor'] = async (use
     await checkStorageLimit(user, bytes);
     return undefined;
   } catch (error) {
-    if (isStorageLimitError(error)) return error.info;
+    // checkStorageLimit on the user's own quota always carries the byte counts.
+    if (isStorageLimitError(error) && hasStorageUsage(error.info)) return error.info;
     throw error;
   }
 };
@@ -353,7 +365,14 @@ const recordUsage: VideoJobDeps['recordUsage'] = async ({ job, creditsCharged, c
 
 const notify = async (job: IGenerationJobDocument): Promise<void> => {
   const sender = new ClientMessageSender({ connections: Connection }, logger);
-  await sender.sendToClient(job.requestedBy, Resource.websocket.managementEndpoint, toJobUpdate(job));
+  // Independent channels: a websocket failure must not swallow the Slack post, nor the reverse.
+  const results = await Promise.allSettled([
+    sender.sendToClient(job.requestedBy, Resource.websocket.managementEndpoint, toJobUpdate(job)),
+    deliverJobToSlack(job, createSlackJobDeliveryDeps(logger)),
+  ]);
+  for (const result of results) {
+    if (result.status === 'rejected') throw result.reason;
+  }
 };
 
 let videoJobDeps: VideoJobDeps | undefined;

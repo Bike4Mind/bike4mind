@@ -36,3 +36,33 @@ export const findCitationMarkers = (text: string): CitationMarkerMatch[] =>
       offset,
     })),
   }));
+
+/**
+ * Whether `text` names the source `name` the way a named-style reply cites one: `galilean-moons.md`
+ * matches "galilean-moons.md", "galilean-moons" or "Galilean Moons". Shared by the lake RAG eval
+ * that grades a named citation and the Sources list that puts cited sources first, so the two
+ * agree on what counts as citing a source by name. A name with no words matches nothing.
+ */
+export const sourceNamedIn = (text: string, name: string): boolean => {
+  // Typed as a string, but citables are read back from stored documents; a malformed one must not
+  // throw while rendering a reply.
+  if (typeof name !== 'string') return false;
+  const words = name
+    .replace(/\.[a-z0-9]+$/i, '')
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map(word => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  if (words.length === 0) return false;
+  // Lookarounds, not `\b`: a name that starts or ends in punctuation, e.g. `notes (v2).md`, has no
+  // word boundary there.
+  return new RegExp(`(?<!\\w)${words.join('[\\s_-]+')}(?!\\w)`, 'i').test(text);
+};
+
+/**
+ * Whether every citable carries the stamp of its own position (`metadata.citationIndex`), which is
+ * what lets `[N]` mean `citables[N-1]`. An empty list counts as numbered. The one definition shared
+ * by the server, which keeps or strips a turn's stamps on that basis (citationNumbering.ts), and
+ * the reply renderer, which links the markers only when it holds.
+ */
+export const areCitablesNumbered = (citables: readonly { metadata?: { citationIndex?: number } }[]): boolean =>
+  citables.every((citable, position) => citable.metadata?.citationIndex === position + 1);

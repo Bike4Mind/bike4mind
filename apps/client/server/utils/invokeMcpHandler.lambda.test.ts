@@ -31,13 +31,14 @@ vi.mock('@aws-sdk/client-lambda', () => ({
   },
 }));
 
-vi.mock('@server/services/integrationCircuitBreaker', () => ({
+vi.mock('@bike4mind/server-utils/services/integrationCircuitBreaker', () => ({
   isMcpServerAvailable: mockIsMcpServerAvailable,
 }));
 
 vi.mock('@server/services/mcpCircuitBreakers', () => ({
   getBreaker: mockGetBreaker,
   classifyOperation: mockClassifyOperation,
+  flushBreakerMetrics: vi.fn().mockResolvedValue(undefined),
   CircuitBreakerError,
 }));
 
@@ -60,7 +61,7 @@ vi.mock('@bike4mind/database', () => ({
   INTEGRATION_AUDIT_INTEGRATION_NAMES: ['github', 'atlassian', 'notion'],
 }));
 
-vi.mock('@server/utils/cloudwatch', () => ({
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   recordRateLimitEvent: vi.fn(),
   recordCircuitBreakerRejection: vi.fn(),
 }));

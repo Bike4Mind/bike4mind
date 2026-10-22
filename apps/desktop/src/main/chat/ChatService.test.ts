@@ -29,14 +29,17 @@ describe('ChatService', () => {
 
   beforeEach(async () => {
     store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-chat-')), 'test-model');
-    events = [];
+    // Bound per test: a previous service replying late must not push into this test's events.
+    const emitted: ChatStreamEvent[] = [];
+    events = emitted;
     stream = new PassThrough();
-    post = vi.fn().mockResolvedValue({ data: stream, status: 200 });
+    const boundPost = vi.fn().mockResolvedValue({ data: stream, status: 200 });
+    post = boundPost;
     get = vi.fn().mockResolvedValue({ sseCompletionsUrl: '' });
 
     apiClient = {
       get,
-      getAxiosInstance: () => ({ post }),
+      getAxiosInstance: () => ({ post: boundPost }),
     } as unknown as AuthenticatedApiClient;
 
     service = new ChatService({
@@ -46,7 +49,7 @@ describe('ChatService', () => {
       logger: { debug: vi.fn(), warn: vi.fn() },
       getApiClient: () => apiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
-      emit: event => events.push(event),
+      emit: event => emitted.push(event),
     });
   });
 

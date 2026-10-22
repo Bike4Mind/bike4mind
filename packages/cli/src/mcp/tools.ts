@@ -1,23 +1,37 @@
+import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult, ServerNotification } from '@modelcontextprotocol/sdk/types.js';
 import {
+  ArtifactTypeSchema,
+  CreateArtifactRequestSchema,
   DEFAULT_TTS_PROVIDER,
   GENERATED_IMAGE_EXTENSION_RE,
   ImageModels,
   ImagePromptResolutionSchema,
   joinReplySlots,
   PROMPT_TEXT_MAX,
+  PublishVisibilitySchema,
   questReplyText,
+  SLUG_OWNED_BY_OTHER,
   ttsRequestSchema,
   type GeneratedAudioResponse,
   type TTSRequest,
+  type UploadUrlRequest,
+  type UploadUrlResponse,
 } from '@bike4mind/common';
 import {
+  apiErrorCode,
   apiErrorRetryAfterSeconds,
   apiErrorStatus,
   B4mApiClient,
   mapApiError,
+  mapBobApiError,
+  type BobAgentComparison,
+  type BobAgentRun,
+  type BobOrganizationId,
+  type BobRecentRow,
+  type CreateArtifactArgs,
   type QuestResponse,
   type RawDataLake,
   type RawNotebook,
@@ -140,6 +154,70 @@ export const TOOL_META: ToolMeta[] = [
     description:
       "Generate an image from a text prompt and wait for the render. Returns the quest and notebook ids plus each image's file name and download URL. Image names are not file ids and do not work with get_file.",
     scope: 'ai:generate',
+  },
+  {
+    name: 'create_artifact',
+    title: 'Create artifact',
+    description:
+      "Create a private artifact (diagram, chart, code, page) and return its id. There is no markdown type: put a written document in type 'html'. Pass the returned id to publish_artifact to share it.",
+    scope: 'notebooks:write',
+  },
+  {
+    name: 'publish_artifact',
+    title: 'Publish artifact',
+    description:
+      "Publish an artifact you own to a shareable /p/... link and return its absolute URL. Republishing an artifact updates its existing page and keeps that page's visibility unless you pass one; a first publish defaults to public.",
+    // The publish routes declare no required scope; this is only the hint a 403 names.
+    scope: 'files:write',
+  },
+  {
+    name: 'bob_read_site',
+    title: 'Read a site with Bob',
+    description:
+      "Have Bob read a website: a panel of synthetic personas reads it and reports where visitors get lost. Spends the key owner's credits and publishes the report as them, as a run started in the app does. Waits for the report, reporting progress, and returns it as Markdown with links to the in-app and published reports; fails with Bob's reason when the read fails. If Bob is still reading when waitSeconds runs out, returns the runId to pass to get_bob_report later.",
+    scope: 'bob:run',
+  },
+  {
+    name: 'bob_compare_sites',
+    title: 'Compare two sites with Bob',
+    description:
+      "Have Bob read your site and another one side by side. Spends the key owner's credits for both reads and publishes each report as them. Waits for both, reporting progress, and returns the comparison summary as Markdown with each side's status and links, plus each side's full report when includeReports is true. If Bob is still reading when waitSeconds runs out, returns the comparisonId to pass to get_bob_comparison later.",
+    scope: 'bob:run',
+  },
+  {
+    name: 'bob_recheck',
+    title: 'Re-check a Bob finding',
+    description:
+      'Re-scan one check from a Bob report against the live site, e.g. after a fix, and return the new reading. Costs no credits and adds the reading to the existing report beside the original; no new report is published. checkId is the id the report shows in backticks beside the check. Re-checks are rate-limited, and a refusal says how long to wait.',
+    scope: 'bob:run',
+  },
+  {
+    name: 'get_bob_report',
+    title: 'Get a Bob report',
+    description:
+      'Fetch one Bob run by runId: its status (reading, ok or failed), its progress while reading, and once it is ok the report as Markdown with links to the in-app and published reports.',
+    scope: 'bob:read',
+  },
+  {
+    name: 'get_bob_comparison',
+    title: 'Get a Bob comparison',
+    description:
+      "Fetch one Bob comparison by comparisonId: its status, the summary as Markdown once both sides are read, and each side's status and links. Pass a side's runId to get_bob_report for its full report.",
+    scope: 'bob:read',
+  },
+  {
+    name: 'list_bob_reports',
+    title: 'List Bob reports',
+    description:
+      "List the key owner's recent finished Bob reports, newest first: single-site runs (kind 'run') and two-site comparisons (kind 'comparison'), each with its in-app link. Read a run with get_bob_report and its runId, and a comparison with get_bob_comparison and its comparisonId.",
+    scope: 'bob:read',
+  },
+  {
+    name: 'bob_runs_left',
+    title: 'Bob runs left',
+    description:
+      "How many Bob runs the key owner can start now under the daily limit, when the next one frees up, and whether the account's credits cover a full read. A comparison uses two runs.",
+    scope: 'bob:read',
   },
 ];
 
@@ -266,11 +344,102 @@ const generateImageShape = {
   ),
 };
 
+// A new page publishes at the user tier, where 'project' is not allowed (SCOPE_POLICY.user)
+// and 'organization' would 403 every member but the owner (checkVisibility matches the org
+// against the user-tier scopeId), so only the two that work there are offered.
+const publishVisibilitySchema = PublishVisibilitySchema.extract(['public', 'private']);
+
+const publishArtifactShape = {
+  artifactId: z.string().min(1).describe('The artifact id'),
+  visibility: publishVisibilitySchema
+    .optional()
+    .describe(
+      "Who can open the link: 'public' (anyone) or 'private' (only you); omit to keep an existing page's visibility (a first publish is public)"
+    ),
+  title: z.string().min(1).max(200).optional().describe("Page title; defaults to the artifact's title"),
+};
+
+// Derived from the v1 route's strict body schema so the limits cannot drift from the server's.
+const createArtifactShape = {
+  type: CreateArtifactRequestSchema.shape.type.describe(
+    "Artifact type: 'html' for a written document or web page, 'mermaid' for a diagram, 'recharts' for a chart, 'svg', 'react', 'python' or 'code' for source"
+  ),
+  title: CreateArtifactRequestSchema.shape.title.describe('Artifact title'),
+  content: CreateArtifactRequestSchema.shape.content.describe(
+    "The artifact's source: HTML, Mermaid, SVG, code and so on, matching type"
+  ),
+  description: CreateArtifactRequestSchema.shape.description.describe('Short description'),
+  notebookId: notebookId('A notebook (session) you can edit, to file the artifact under').optional(),
+  projectId: CreateArtifactRequestSchema.shape.project_id.describe(
+    'A project you can read, to file the artifact under'
+  ),
+  tags: CreateArtifactRequestSchema.shape.tags.describe('Up to 20 tags'),
+};
+
 const textToSpeechShape = {
   ...ttsRequestSchema.omit({ encoding: true }).shape,
   text: ttsRequestSchema.shape.text.describe('Text to speak'),
   provider: ttsRequestSchema.shape.provider.describe(`Speech provider; defaults to ${DEFAULT_TTS_PROVIDER}`),
   preview: ttsRequestSchema.shape.preview.describe('Skip saving a copy to the file browser'),
+};
+
+// The shape Bob's routes accept for a run or comparison id, so a malformed one fails here.
+const BOB_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const BOB_WAIT_DEFAULT_SECONDS = 600;
+const BOB_WAIT_MAX_SECONDS = 900;
+
+const bobId = (description: string) => z.string().regex(BOB_ID_PATTERN, 'must be a UUID').describe(description);
+
+const bobOrganizationId = z
+  .string()
+  .min(1)
+  .nullable()
+  .optional()
+  .describe(
+    "Organization whose credits pay for the run: an organization id, or null for the key owner's personal account; omit for their home organization"
+  );
+
+const bobWaitSeconds = z
+  .number()
+  .int()
+  .min(0)
+  .max(BOB_WAIT_MAX_SECONDS)
+  .default(BOB_WAIT_DEFAULT_SECONDS)
+  .describe(
+    `How long to wait for the result, in seconds (0-${BOB_WAIT_MAX_SECONDS}, default ${BOB_WAIT_DEFAULT_SECONDS}); a read takes about 1 to 5 minutes and Bob keeps reading after the wait ends`
+  );
+
+const bobReadSiteShape = {
+  url: z.string().min(1).describe('The site to read, e.g. acme.io or acme.io/pricing'),
+  organizationId: bobOrganizationId,
+  waitSeconds: bobWaitSeconds,
+};
+
+const bobCompareSitesShape = {
+  yourUrl: z.string().min(1).describe('Your site, e.g. acme.io'),
+  theirUrl: z.string().min(1).describe('The site to compare yours with'),
+  organizationId: bobOrganizationId,
+  waitSeconds: bobWaitSeconds,
+  includeReports: z.boolean().default(false).describe("Also return each side's full report as Markdown"),
+};
+
+const bobRecheckShape = {
+  runId: bobId('The run the check belongs to'),
+  checkId: z.string().min(1).describe('The check id, as the report shows it in backticks beside the check'),
+};
+
+const getBobReportShape = { runId: bobId('The run id') };
+
+const getBobComparisonShape = { comparisonId: bobId('The comparison id') };
+
+const listBobReportsShape = {
+  limit: z.number().int().min(1).max(100).optional().describe('Maximum reports to return; the server caps the list'),
+};
+
+const bobRunsLeftShape = {
+  organizationId: bobOrganizationId.describe(
+    "Account whose credits to check: an organization id, or null for the key owner's personal account; omit for their home organization"
+  ),
 };
 
 function notebookSummary(n: RawNotebook) {
@@ -436,17 +605,17 @@ export async function generateSoundEffect(
   return generatedAudioResult(response, { provider: args.provider });
 }
 
-export interface PollOptions {
+export interface PollOptions<T = QuestResponse> {
   intervalMs?: number;
   timeoutMs?: number;
   sleep?: (ms: number) => Promise<void>;
   /** Aborts the poll when the MCP client cancels the call. */
   signal?: AbortSignal;
   /**
-   * Called after each non-terminal poll with the quest it read (absent when that poll failed), so
-   * the tool can keep the client's request alive and report how far the quest has got.
+   * Called after each non-terminal poll with what it read (absent when that poll failed), so the
+   * tool can keep the client's request alive and report how far the work has got.
    */
-  onProgress?: (elapsedMs: number, quest?: QuestResponse) => Promise<void> | void;
+  onProgress?: (elapsedMs: number, latest?: T) => Promise<void> | void;
   /** Named in poll-failure messages, e.g. an unreachable server. */
   baseURL?: string;
 }
@@ -506,56 +675,89 @@ interface QuestPoll {
   isFinished: (q: QuestResponse) => boolean;
 }
 
-/** Poll a queued quest until `isFinished`, the timeout, a permanent poll failure, or an abort. */
-async function pollQuest(
-  client: B4mApiClient,
-  { questId, ref, task, scope, isFinished }: QuestPoll,
-  {
-    interval,
-    timeoutMs,
-    sleep = defaultSleep,
-    signal,
-    onProgress,
-    baseURL = '',
-  }: Omit<PollOptions, 'intervalMs'> & { interval: (elapsedMs: number) => number; timeoutMs: number }
-): Promise<QuestResponse> {
+type PollTiming<T> = Omit<PollOptions<T>, 'intervalMs'> & {
+  interval: (elapsedMs: number) => number;
+  timeoutMs: number;
+};
+
+interface PollTarget<T> {
+  read: () => Promise<T>;
+  /** Identifies the work in error messages, so the caller can find it afterwards. */
+  ref: string;
+  /** What the work is, e.g. "image generation"; names it in a poll-failure message. */
+  task: string;
+  isFinished: (value: T) => boolean;
+  /** The message a poll failure reports, before the ref is appended. */
+  describeError: (err: unknown) => string;
+}
+
+/** `finished: false` is a timeout, carrying the last value read when any poll succeeded. */
+type PollOutcome<T> = { finished: true; value: T } | { finished: false; latest?: T };
+
+/** Poll `read` until `isFinished`, the timeout, a permanent poll failure, or an abort. */
+async function pollUntil<T>(
+  { read, ref, task, isFinished, describeError }: PollTarget<T>,
+  { interval, timeoutMs, sleep = defaultSleep, signal, onProgress }: PollTiming<T>
+): Promise<PollOutcome<T>> {
   const started = Date.now();
   let failures = 0;
   let retryAfterMs = 0;
+  let latest: T | undefined;
   for (;;) {
     signal?.throwIfAborted();
-    let quest: QuestResponse | undefined;
+    let value: T | undefined;
     try {
-      quest = await client.getQuest(questId);
+      value = await read();
+      latest = value;
       failures = 0;
-      if (isFinished(quest)) return quest;
+      if (isFinished(value)) return { finished: true, value };
     } catch (err) {
-      // The per-minute key limit is shared with other calls, so a 429 says nothing about the quest.
+      // The per-minute key limit is shared with other calls, so a 429 says nothing about the work.
       if (isRateLimited(err)) {
         retryAfterMs = (apiErrorRetryAfterSeconds(err) ?? 0) * 1000;
       } else {
         failures += 1;
         if (isPermanentApiError(err) || failures >= MAX_CONSECUTIVE_POLL_FAILURES) {
-          throw new Error(`${mapApiError(err, baseURL, scope)} (${ref}; the ${task} may still complete)`);
+          throw new Error(`${describeError(err)} (${ref}; the ${task} may still complete)`);
         }
       }
     }
     const elapsed = Date.now() - started;
-    if (elapsed >= timeoutMs) {
-      throw new Error(`${task} did not finish within ${Math.round(timeoutMs / 1000)}s (${ref})`);
-    }
-    // A cancel can land while getQuest is in flight; report nothing for a request the client dropped.
+    if (elapsed >= timeoutMs) return { finished: false, latest };
+    // A cancel can land while the read is in flight; report nothing for a request the client dropped.
     signal?.throwIfAborted();
     try {
-      await onProgress?.(elapsed, quest);
+      await onProgress?.(elapsed, value);
     } catch (err) {
-      // Progress is advisory: a lost notification must not fail a quest that is still running.
+      // Progress is advisory: a lost notification must not fail work that is still running.
       logger.warn(`mcp: progress notification failed (${ref}): ${err instanceof Error ? err.message : String(err)}`);
     }
     const intervalMs = interval(elapsed);
     await sleep(Math.min(Math.max(intervalMs, retryAfterMs), Math.max(timeoutMs - elapsed, intervalMs)));
     retryAfterMs = 0;
   }
+}
+
+/** Poll a queued quest until `isFinished`, the timeout, a permanent poll failure, or an abort. */
+async function pollQuest(
+  client: B4mApiClient,
+  { questId, ref, task, scope, isFinished }: QuestPoll,
+  { baseURL = '', ...timing }: PollTiming<QuestResponse>
+): Promise<QuestResponse> {
+  const outcome = await pollUntil(
+    {
+      read: () => client.getQuest(questId),
+      ref,
+      task,
+      isFinished,
+      describeError: err => mapApiError(err, baseURL, scope),
+    },
+    timing
+  );
+  if (!outcome.finished) {
+    throw new Error(`${task} did not finish within ${Math.round(timing.timeoutMs / 1000)}s (${ref})`);
+  }
+  return outcome.value;
 }
 
 /**
@@ -604,7 +806,108 @@ export async function generateImage(
   };
 }
 
-function toResult(value: unknown): CallToolResult {
+const PUBLISH_INDEX_PATH = 'index.html';
+const PUBLISH_INDEX_MIME = 'text/html';
+const PUBLISH_TITLE_MAX = 200;
+const PUBLISH_FALLBACK_TITLE = 'Shared artifact';
+const PUBLISH_DEFAULT_VISIBILITY = 'public';
+const SLUG_TITLE_MAX = 48;
+const SLUG_ARTIFACT_HASH_LENGTH = 8;
+const SLUG_DISCRIMINATOR_LENGTH = 6;
+
+function slugify(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, SLUG_TITLE_MAX)
+    .replace(/-+$/, '');
+}
+
+/**
+ * Stable per artifact, so republishing updates the same page in place. Artifact
+ * ids all share an `artifact_` prefix, so the suffix hashes the whole id rather
+ * than taking a prefix of it.
+ */
+function artifactSlug(title: string, artifactId: string): string {
+  const hash = createHash('sha256').update(artifactId).digest('hex').slice(0, SLUG_ARTIFACT_HASH_LENGTH);
+  return `${slugify(title) || 'artifact'}-${hash}`;
+}
+
+/** The artifact-content doc carries the body as `content`; anything else has none to publish. */
+function artifactContentText(content: unknown): string | undefined {
+  if (!content || typeof content !== 'object') return undefined;
+  const text = (content as Record<string, unknown>).content;
+  return typeof text === 'string' && text.trim() ? text : undefined;
+}
+
+/**
+ * Open the draft, retrying once under a discriminated slug when the derived slug
+ * already belongs to another publisher (the same fallback the web Share flow uses).
+ */
+async function openPublishDraft(client: B4mApiClient, request: UploadUrlRequest): Promise<UploadUrlResponse> {
+  try {
+    return await client.requestPublishUpload(request);
+  } catch (err) {
+    if (apiErrorCode(err) !== SLUG_OWNED_BY_OTHER) throw err;
+    const discriminator = randomUUID().replace(/-/g, '').slice(0, SLUG_DISCRIMINATOR_LENGTH);
+    return client.requestPublishUpload({ ...request, slug: `${request.slug}-${discriminator}` });
+  }
+}
+
+export async function createArtifact(client: B4mApiClient, args: CreateArtifactArgs) {
+  return client.createArtifact(args);
+}
+
+/**
+ * Publish an artifact: upload its RAW content and let finalize render it
+ * (source.artifactType), so the page matches an in-app publish byte for byte with
+ * no CLI-side renderer. An artifact the caller already published (from the app or
+ * here) is republished in place at its existing tier/scope/slug, as the in-app
+ * update flow does; otherwise it becomes a new user-tier page.
+ */
+export async function publishArtifact(
+  client: B4mApiClient,
+  args: { artifactId: string; visibility?: z.infer<typeof publishVisibilitySchema>; title?: string }
+) {
+  const { artifact, content } = await client.getArtifact(args.artifactId);
+  const body = artifactContentText(content);
+  if (!body) throw new Error(`artifact ${artifact.id} has no content to publish`);
+  const artifactType = ArtifactTypeSchema.safeParse(artifact.type);
+  if (!artifactType.success)
+    throw new Error(`artifact ${artifact.id} has an unsupported type (${String(artifact.type)})`);
+  if (typeof artifact.userId !== 'string') throw new Error(`artifact ${artifact.id} has no owner to publish under`);
+
+  const storedTitle = typeof artifact.title === 'string' ? artifact.title : '';
+  const title = (args.title ?? storedTitle).trim().slice(0, PUBLISH_TITLE_MAX) || PUBLISH_FALLBACK_TITLE;
+  const existing = await client.findPublishedArtifact(artifact.id);
+  const request: UploadUrlRequest = {
+    tier: existing?.tier ?? 'user',
+    scopeId: existing?.scopeId ?? artifact.userId,
+    slug: existing?.slug ?? artifactSlug(title, artifact.id),
+    title,
+    visibility: args.visibility ?? existing?.visibility ?? PUBLISH_DEFAULT_VISIBILITY,
+    ...(existing?.description !== undefined && { description: existing.description }),
+    ...(existing?.commentPolicy !== undefined && { commentPolicy: existing.commentPolicy }),
+    source: { kind: 'bundle', artifactId: artifact.id, artifactType: artifactType.data },
+    files: [{ path: PUBLISH_INDEX_PATH, size: Buffer.byteLength(body), mimeType: PUBLISH_INDEX_MIME }],
+  };
+  // The existing slug is the caller's own, so a collision there is a real error, not a retry.
+  const draft = existing ? await client.requestPublishUpload(request) : await openPublishDraft(client, request);
+
+  const upload = draft.uploadUrls.find(u => u.path === PUBLISH_INDEX_PATH);
+  if (!upload) throw new Error(`publish draft ${draft.draftId} returned no upload URL for ${PUBLISH_INDEX_PATH}`);
+  await client.uploadPublishDraftFile(upload.url, body, PUBLISH_INDEX_MIME);
+
+  const published = await client.finalizePublish(draft.draftId);
+  return {
+    publicId: published.publicId,
+    url: new URL(published.url, client.baseURL).toString(),
+    visibility: published.visibility,
+  };
+}
+
+export function toResult(value: unknown): CallToolResult {
   const structuredContent =
     value && typeof value === 'object' && !Array.isArray(value)
       ? (value as Record<string, unknown>)
@@ -615,7 +918,7 @@ function toResult(value: unknown): CallToolResult {
   };
 }
 
-function errorResult(message: string): CallToolResult {
+export function errorResult(message: string): CallToolResult {
   return { content: [{ type: 'text', text: message }], isError: true };
 }
 
@@ -709,20 +1012,20 @@ interface ProgressContext {
 }
 
 /**
- * Turn a quest poll's progress callback into MCP `notifications/progress`, or nothing when the
- * client sent no progressToken. Progress also lets a client that resets its request timeout on
- * progress wait out a slow quest.
+ * Turn a poll's progress callback into MCP `notifications/progress`, or nothing when the client
+ * sent no progressToken. Progress counts elapsed seconds, so it rises on every poll, and that lets a
+ * client that resets its request timeout on progress wait out slow work.
  */
-function progressReporter(
+function progressReporter<T>(
   { _meta, sendNotification }: ProgressContext,
-  describe: (quest?: QuestResponse) => string
-): PollOptions['onProgress'] {
+  describe: (latest?: T) => string
+): PollOptions<T>['onProgress'] {
   const progressToken = _meta?.progressToken;
   if (progressToken === undefined) return undefined;
-  return (elapsedMs, quest) =>
+  return (elapsedMs, latest) =>
     sendNotification({
       method: 'notifications/progress',
-      params: { progressToken, progress: Math.floor(elapsedMs / 1000), message: describe(quest) },
+      params: { progressToken, progress: Math.floor(elapsedMs / 1000), message: describe(latest) },
     });
 }
 
@@ -732,6 +1035,203 @@ function chatProgress(quest?: QuestResponse): string {
   if (quest?.status !== 'running') return 'waiting for the reply to start';
   const characters = replyText(quest).length;
   return characters > 0 ? `generating reply (${characters} characters so far)` : 'generating reply';
+}
+
+interface BobCount {
+  done: number;
+  total: number;
+}
+
+/**
+ * Bob's own done/total count goes in the progress message, not in `progress`: a count can stay flat
+ * for a while, and MCP needs `progress` to rise on every notification (see {@link progressReporter}).
+ */
+function bobProgressMessage(what: string, count: BobCount | null | undefined): string {
+  return count && count.total > 0 ? `${what} (${count.done} of ${count.total})` : what;
+}
+
+function bobComparisonCount(comparison: BobAgentComparison): BobCount | null {
+  const counts = [comparison.you?.progress, comparison.them?.progress].filter((c): c is BobCount => !!c);
+  if (counts.length === 0) return null;
+  return counts.reduce((sum, c) => ({ done: sum.done + c.done, total: sum.total + c.total }));
+}
+
+type BobPollOptions<T> = Omit<PollOptions<T>, 'timeoutMs' | 'baseURL'>;
+
+/** send_message's cadence (fast for the first 30s, then slower), bounded by the caller's wait. */
+function bobPollTiming<T>(
+  { intervalMs = CHAT_POLL_INTERVAL_MS, ...poll }: BobPollOptions<T>,
+  waitSeconds: number
+): PollTiming<T> {
+  return { ...poll, timeoutMs: waitSeconds * 1000, interval: elapsedMs => chatPollInterval(elapsedMs, intervalMs) };
+}
+
+/** Bob's views carry app paths; a link is the API base URL plus one. */
+const bobLink = (baseURL: string, path: string | null | undefined) =>
+  path ? `${baseURL.replace(/\/+$/, '')}${path}` : null;
+
+function bobRunSummary(run: BobAgentRun, baseURL: string) {
+  return {
+    runId: run.runId,
+    url: run.url,
+    status: run.status,
+    progress: run.progress ?? null,
+    createdAt: run.createdAt,
+    settledAt: run.settledAt ?? null,
+    error: run.error ?? null,
+    scanOnly: run.scanOnly ?? null,
+    appUrl: bobLink(baseURL, run.appPath),
+    publishedUrl: bobLink(baseURL, run.publishedPath),
+    visibility: run.visibility ?? null,
+  };
+}
+
+function bobComparisonSummary(comparison: BobAgentComparison, baseURL: string) {
+  return {
+    comparisonId: comparison.comparisonId,
+    status: comparison.status,
+    you: comparison.you && bobRunSummary(comparison.you, baseURL),
+    them: comparison.them && bobRunSummary(comparison.them, baseURL),
+    appUrl: bobLink(baseURL, comparison.appPath),
+  };
+}
+
+/**
+ * The summary as JSON (and as structuredContent), then each Markdown document as a text block of its
+ * own. The documents stay out of structuredContent so a long report is not sent twice, as the audio
+ * tools keep their bytes out.
+ */
+function bobResult(summary: Record<string, unknown>, documents: (string | null | undefined)[]): CallToolResult {
+  const result = toResult(summary);
+  for (const text of documents) if (text) result.content.push({ type: 'text', text });
+  return result;
+}
+
+function bobComparisonResult(comparison: BobAgentComparison, baseURL: string, includeReports: boolean): CallToolResult {
+  const reports = includeReports
+    ? [comparison.you, comparison.them].map(
+        side => side?.reportMarkdown && `Report for ${side.url}:\n\n${side.reportMarkdown}`
+      )
+    : [];
+  return bobResult(bobComparisonSummary(comparison, baseURL), [comparison.summaryMarkdown, ...reports]);
+}
+
+const bobStillReading = (waitSeconds: number, readBack: string) =>
+  `Bob is still reading after ${waitSeconds}s and carries on without this call; use ${readBack} later.`;
+
+/**
+ * Start a Bob read of one site and poll it until it settles or `waitSeconds` passes. A refusal or a
+ * failed read throws, so the tool reports isError in Bob's words. A read still going at the deadline
+ * is not an error: the result carries the runId to read it back with.
+ */
+export async function bobReadSite(
+  client: B4mApiClient,
+  args: { url: string; organizationId?: BobOrganizationId; waitSeconds: number },
+  poll: BobPollOptions<BobAgentRun> = {}
+): Promise<CallToolResult> {
+  const runId = randomUUID();
+  await client.startBobRun({ url: args.url, runId, organizationId: args.organizationId });
+  const ref = `run ${runId}`;
+  const outcome = await pollUntil(
+    {
+      read: () => client.getBobRun(runId),
+      ref,
+      task: 'site read',
+      isFinished: run => run.status !== 'reading',
+      describeError: err => mapBobApiError(err, client.baseURL, 'bob:run'),
+    },
+    bobPollTiming(poll, args.waitSeconds)
+  );
+  if (!outcome.finished) {
+    const summary = outcome.latest
+      ? bobRunSummary(outcome.latest, client.baseURL)
+      : { runId, url: args.url, status: 'reading' };
+    return toResult({ ...summary, note: bobStillReading(args.waitSeconds, 'get_bob_report with this runId') });
+  }
+  const run = outcome.value;
+  if (run.status === 'failed') {
+    throw new Error(`Bob could not read ${run.url}: ${run.error || 'the read failed'} (${ref})`);
+  }
+  return bobResult(bobRunSummary(run, client.baseURL), [run.reportMarkdown]);
+}
+
+/** {@link bobReadSite} for two sites started as one comparison; fails only when neither side could be read. */
+export async function bobCompareSites(
+  client: B4mApiClient,
+  args: {
+    yourUrl: string;
+    theirUrl: string;
+    organizationId?: BobOrganizationId;
+    waitSeconds: number;
+    includeReports?: boolean;
+  },
+  poll: BobPollOptions<BobAgentComparison> = {}
+): Promise<CallToolResult> {
+  const comparisonId = randomUUID();
+  const you = { url: args.yourUrl, runId: randomUUID() };
+  const them = { url: args.theirUrl, runId: randomUUID() };
+  await client.startBobComparison({ comparisonId, you, them, organizationId: args.organizationId });
+  const ref = `comparison ${comparisonId}`;
+  const outcome = await pollUntil(
+    {
+      read: () => client.getBobComparison(comparisonId),
+      ref,
+      task: 'comparison',
+      isFinished: comparison => comparison.status !== 'reading',
+      describeError: err => mapBobApiError(err, client.baseURL, 'bob:run'),
+    },
+    bobPollTiming(poll, args.waitSeconds)
+  );
+  if (!outcome.finished) {
+    const summary = outcome.latest
+      ? bobComparisonSummary(outcome.latest, client.baseURL)
+      : { comparisonId, status: 'reading', you, them };
+    return toResult({
+      ...summary,
+      note: bobStillReading(args.waitSeconds, 'get_bob_comparison with this comparisonId'),
+    });
+  }
+  const comparison = outcome.value;
+  if (comparison.status === 'failed') {
+    const reasons = [comparison.you, comparison.them]
+      .map(side => (side ? `${side.url}: ${side.error || 'the read failed'}` : 'one side has no run'))
+      .join('; ');
+    throw new Error(`Bob could not read either site: ${reasons} (${ref})`);
+  }
+  return bobComparisonResult(comparison, client.baseURL, args.includeReports === true);
+}
+
+export async function bobRecheck(client: B4mApiClient, args: { runId: string; checkId: string }) {
+  return toResult({ runId: args.runId, recheck: await client.recheckBob(args) });
+}
+
+export async function getBobReport(client: B4mApiClient, args: { runId: string }) {
+  const run = await client.getBobRun(args.runId);
+  return bobResult(bobRunSummary(run, client.baseURL), [run.reportMarkdown]);
+}
+
+export async function getBobComparison(client: B4mApiClient, args: { comparisonId: string }) {
+  return bobComparisonResult(await client.getBobComparison(args.comparisonId), client.baseURL, false);
+}
+
+/** A recent-list row in compact form, with the in-app link its kind opens at. */
+function bobReportRow(row: BobRecentRow, baseURL: string) {
+  if (row.kind === 'comparison') {
+    const { comparisonId, you, them } = row;
+    const appUrl = bobLink(baseURL, `/bob?compare=${encodeURIComponent(comparisonId)}`);
+    return { kind: 'comparison' as const, comparisonId, you, them, createdAt: row.createdAt ?? null, appUrl };
+  }
+  const appUrl = bobLink(baseURL, `/bob?run=${encodeURIComponent(row.runId)}`);
+  return { kind: 'run' as const, runId: row.runId, url: row.url, createdAt: row.createdAt ?? null, appUrl };
+}
+
+export async function listBobReports(client: B4mApiClient, args: { limit?: number }) {
+  const rows = await client.listBobReports(args.limit);
+  return toResult({ reports: rows.map(row => bobReportRow(row, client.baseURL)) });
+}
+
+export async function bobRunsLeft(client: B4mApiClient, args: { organizationId?: BobOrganizationId }) {
+  return toResult(await client.getBobQuota(args.organizationId));
 }
 
 /**
@@ -917,5 +1417,116 @@ export function registerTools(server: McpServer, client: B4mApiClient): void {
           onProgress: progressReporter(extra, () => 'rendering image'),
         })
       )
+  );
+
+  server.registerTool(
+    'create_artifact',
+    {
+      title: meta('create_artifact').title,
+      description: meta('create_artifact').description,
+      inputSchema: createArtifactShape,
+    },
+    args => run('notebooks:write', () => createArtifact(client, args))
+  );
+
+  server.registerTool(
+    'publish_artifact',
+    {
+      title: meta('publish_artifact').title,
+      description: meta('publish_artifact').description,
+      inputSchema: publishArtifactShape,
+    },
+    args => run('files:write', () => publishArtifact(client, args))
+  );
+
+  // Bob's routes enforce their scopes, so these map errors with mapBobApiError.
+  const runBob = async (scope: string, fn: () => Promise<CallToolResult>): Promise<CallToolResult> => {
+    try {
+      return await fn();
+    } catch (err) {
+      return errorResult(mapBobApiError(err, baseURL, scope));
+    }
+  };
+
+  server.registerTool(
+    'bob_read_site',
+    {
+      title: meta('bob_read_site').title,
+      description: meta('bob_read_site').description,
+      inputSchema: bobReadSiteShape,
+    },
+    (args, extra) =>
+      runBob('bob:run', () =>
+        bobReadSite(client, args, {
+          signal: extra.signal,
+          onProgress: progressReporter(extra, (run?: BobAgentRun) =>
+            bobProgressMessage(`reading ${args.url}`, run?.progress)
+          ),
+        })
+      )
+  );
+
+  server.registerTool(
+    'bob_compare_sites',
+    {
+      title: meta('bob_compare_sites').title,
+      description: meta('bob_compare_sites').description,
+      inputSchema: bobCompareSitesShape,
+    },
+    (args, extra) =>
+      runBob('bob:run', () =>
+        bobCompareSites(client, args, {
+          signal: extra.signal,
+          onProgress: progressReporter(extra, (comparison?: BobAgentComparison) =>
+            bobProgressMessage('reading both sites', comparison && bobComparisonCount(comparison))
+          ),
+        })
+      )
+  );
+
+  server.registerTool(
+    'bob_recheck',
+    { title: meta('bob_recheck').title, description: meta('bob_recheck').description, inputSchema: bobRecheckShape },
+    args => runBob('bob:run', () => bobRecheck(client, args))
+  );
+
+  server.registerTool(
+    'get_bob_report',
+    {
+      title: meta('get_bob_report').title,
+      description: meta('get_bob_report').description,
+      inputSchema: getBobReportShape,
+    },
+    args => runBob('bob:read', () => getBobReport(client, args))
+  );
+
+  server.registerTool(
+    'get_bob_comparison',
+    {
+      title: meta('get_bob_comparison').title,
+      description: meta('get_bob_comparison').description,
+      inputSchema: getBobComparisonShape,
+    },
+    args => runBob('bob:read', () => getBobComparison(client, args))
+  );
+
+  server.registerTool(
+    'list_bob_reports',
+    {
+      title: meta('list_bob_reports').title,
+      description: meta('list_bob_reports').description,
+      inputSchema: listBobReportsShape,
+    },
+    args => runBob('bob:read', () => listBobReports(client, args))
+  );
+
+  server.registerTool(
+    'bob_runs_left',
+    {
+      title: meta('bob_runs_left').title,
+      description: meta('bob_runs_left').description,
+      inputSchema: bobRunsLeftShape,
+    },
+    args => runBob('bob:read', () => bobRunsLeft(client, args))
   );
 }

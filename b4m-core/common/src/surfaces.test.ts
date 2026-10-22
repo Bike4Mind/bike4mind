@@ -3,8 +3,11 @@ import {
   canUseSurface,
   checkSurfaceTransition,
   getWorkspaceSurface,
+  isSurfaceHidden,
+  isToolHiddenBySurface,
   normalizeSurfaceId,
   OPTI_SURFACE,
+  resolveWorkspaceDeniedTools,
   WORKSPACE_SURFACES,
 } from './surfaces';
 
@@ -81,5 +84,77 @@ describe('checkSurfaceTransition', () => {
       ok: false,
       status: 400,
     });
+  });
+});
+
+describe('isSurfaceHidden', () => {
+  it('hides a hideable surface the preference lists', () => {
+    expect(isSurfaceHidden([OPTI_SURFACE], OPTI_SURFACE)).toBe(true);
+  });
+
+  it('shows the surface again when the preference no longer lists it', () => {
+    expect(isSurfaceHidden([], OPTI_SURFACE)).toBe(false);
+    expect(isSurfaceHidden(undefined, OPTI_SURFACE)).toBe(false);
+  });
+
+  it('never hides the main list, even when the preference names it', () => {
+    expect(getWorkspaceSurface(null)?.hideable).toBe(false);
+    expect(isSurfaceHidden(['', 'null'], null)).toBe(false);
+  });
+
+  it('ignores ids this repo does not register', () => {
+    expect(isSurfaceHidden(['some-private-surface'], 'some-private-surface')).toBe(false);
+  });
+});
+
+describe('isToolHiddenBySurface', () => {
+  const optiTool = `${getWorkspaceSurface(OPTI_SURFACE)?.toolNamePrefix}schedule`;
+
+  it('hides a hidden surface tool outside that surface', () => {
+    expect(isToolHiddenBySurface(optiTool, [OPTI_SURFACE], null)).toBe(true);
+    expect(isToolHiddenBySurface(optiTool, [OPTI_SURFACE], undefined)).toBe(true);
+  });
+
+  it('keeps the tool available inside the surface it belongs to', () => {
+    expect(isToolHiddenBySurface(optiTool, [OPTI_SURFACE], OPTI_SURFACE)).toBe(false);
+  });
+
+  it('keeps the tool when the surface is not hidden', () => {
+    expect(isToolHiddenBySurface(optiTool, [], null)).toBe(false);
+    expect(isToolHiddenBySurface(optiTool, undefined, null)).toBe(false);
+  });
+
+  it('never hides a tool that no surface contributes', () => {
+    expect(isToolHiddenBySurface('web_search', [OPTI_SURFACE], null)).toBe(false);
+  });
+});
+
+describe('resolveWorkspaceDeniedTools', () => {
+  const table = { 'example-workspace': ['tool_a', 'tool_b'], other: ['tool_c'] };
+
+  it('returns the tools denied for a matching surface', () => {
+    expect(resolveWorkspaceDeniedTools('example-workspace', table)).toEqual(['tool_a', 'tool_b']);
+  });
+
+  it('returns nothing for the main list, whatever its stored form', () => {
+    expect(resolveWorkspaceDeniedTools(undefined, table)).toEqual([]);
+    expect(resolveWorkspaceDeniedTools('', table)).toEqual([]);
+    expect(resolveWorkspaceDeniedTools(null, table)).toEqual([]);
+  });
+
+  it('returns nothing for an unknown surface or a missing table', () => {
+    expect(resolveWorkspaceDeniedTools('unknown', table)).toEqual([]);
+    expect(resolveWorkspaceDeniedTools('example-workspace', undefined)).toEqual([]);
+    expect(resolveWorkspaceDeniedTools('example-workspace', {})).toEqual([]);
+  });
+
+  it('does not read inherited object keys', () => {
+    expect(resolveWorkspaceDeniedTools('constructor', table)).toEqual([]);
+    expect(resolveWorkspaceDeniedTools('toString', table)).toEqual([]);
+  });
+
+  it('returns a copy, so callers cannot mutate the table', () => {
+    resolveWorkspaceDeniedTools('example-workspace', table).push('tool_z');
+    expect(table['example-workspace']).toEqual(['tool_a', 'tool_b']);
   });
 });

@@ -49,6 +49,7 @@ vi.mock('@client/app/components/profile/ChangeEmailCard', () => ({ default: () =
 vi.mock('@client/app/components/subscription/CreditsModal', () => ({ default: () => null }));
 vi.mock('@client/app/components/subscription/SubscriptionModal', () => ({ default: () => null }));
 vi.mock('@client/app/components/SquareSlideToggle', () => ({ default: () => null }));
+vi.mock('@client/app/components/common/StorageBreakdown', () => ({ default: () => null }));
 vi.mock('@client/app/components/ProfileModal/SectionContainer', () => ({
   default: ({ children }: { children: ReactNode }) => <div>{children}</div>,
 }));

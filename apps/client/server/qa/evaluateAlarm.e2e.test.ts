@@ -6,7 +6,7 @@ import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/d
 import { QaRun, QaTestResult } from '@bike4mind/database';
 import type { QaRunInput } from '@bike4mind/common';
 
-vi.mock('@server/utils/config', () => ({ Config: { QA_ALARM_SLACK_WEBHOOKS: undefined } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { QA_ALARM_SLACK_WEBHOOKS: undefined } }));
 
 import { ingestRun } from './ingestRun';
 import { ALARM_CLAIM_STALE_MS, evaluateAlarm, type AlarmDeps } from './evaluateAlarm';

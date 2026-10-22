@@ -3,7 +3,7 @@ import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { AdminSettings } from '@bike4mind/database';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 import { validateHighlightsTemplate } from '@server/whatsNew/whatsNewHighlights.prompt';
 

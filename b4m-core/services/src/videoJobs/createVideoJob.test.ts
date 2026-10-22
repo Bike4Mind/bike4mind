@@ -87,6 +87,20 @@ describe('createVideoJob', () => {
     expect(deps.enqueue).toHaveBeenCalledWith(expect.any(String), 0);
   });
 
+  it('persists the delivery target on the job', async () => {
+    const { deps } = makeDeps();
+    const delivery = { kind: 'slack' as const, workspaceId: 'w1', channelId: 'C1', threadTs: '1700000000.000100' };
+    const result = await createVideoJob({ user, request: validRequest, source: 'agent', delivery }, deps);
+    expect(result).toMatchObject({ ok: true, job: { delivery } });
+  });
+
+  it('leaves delivery unset when none is given', async () => {
+    const { deps } = makeDeps();
+    const result = await createVideoJob({ user, request: validRequest, source: 'studio' }, deps);
+    expect(result).toMatchObject({ ok: true });
+    expect(result.ok && result.job.delivery).toBeUndefined();
+  });
+
   it('invalid request holds no credits', async () => {
     const { deps } = makeDeps();
     const result = await createVideoJob(

@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Box } from '@mui/joy';
+import { toast } from 'sonner';
 import { TREE_SCROLL_SX } from '@client/app/components/datalake/treeChrome';
 import {
   useActiveDataLakeBatches,
@@ -54,6 +55,8 @@ export default function DataLakeManagerPanel() {
   const managerTab = useDataLakeWizardStore(s => s.managerTab);
   const openManager = useDataLakeWizardStore(s => s.openManager);
   const managerLakeId = useDataLakeWizardStore(s => s.managerLakeId);
+  const gitHubConnectFailure = useDataLakeWizardStore(s => s.gitHubConnectFailure);
+  const setGitHubConnectFailure = useDataLakeWizardStore(s => s.setGitHubConnectFailure);
   const { isFeatureEnabled } = useAdminSettingsCache();
 
   // The lakes list projection carries no per-lake file counts. Size a lake by MEMBERSHIP, not
@@ -83,17 +86,36 @@ export default function DataLakeManagerPanel() {
   // Deep-link: a per-lake action elsewhere (the page rail's header) opens the manager already
   // pointed at that lake. Only a non-null id steers; null is the plain "open at root" case and
   // must not wipe a selection the user made inside the panel.
+  const seedPendingLakeId = useRef<string | null>(null);
   useEffect(() => {
     if (!managerLakeId) return;
     setLakeId(managerLakeId);
     setPath([]);
     setSelectedFile(null);
+    seedPendingLakeId.current = managerLakeId;
   }, [managerLakeId]);
 
   // Derived, not effect-synced: when the active lake vanishes from the list (archived or
   // deleted), this goes null and the panel falls back to the root view on its own. The stale
   // path/file are unreachable behind the null and reset on the next lake click.
   const activeLake = useMemo(() => dataLakes?.find(l => l.id === lakeId) ?? null, [dataLakes, lakeId]);
+
+  // A deep-linked lake may not be in the list yet (a GitHub connect lands on a lake created moments
+  // before), so seed past its prefix once it resolves, the same as selectLake does on a click.
+  useEffect(() => {
+    if (!activeLake || seedPendingLakeId.current !== activeLake.id) return;
+    seedPendingLakeId.current = null;
+    setPath(prefixSegments(activeLake.fileTagPrefix));
+  }, [activeLake]);
+
+  // FinishSourceConnectBanner shows a failed GitHub connect's reason, but only inside the lake's own
+  // panel; a lake gone from the list (archived, deleted, access lost mid-connect) never mounts one.
+  useEffect(() => {
+    if (!gitHubConnectFailure || isLoading) return;
+    if (dataLakes?.some(l => l.id === gitHubConnectFailure.lakeId)) return;
+    toast.error(gitHubConnectFailure.message);
+    setGitHubConnectFailure(null);
+  }, [gitHubConnectFailure, dataLakes, isLoading, setGitHubConnectFailure]);
 
   // Derive the lake being edited from the LIVE list (by id) rather than a snapshot, so a
   // visibility mutation's cache refresh flows into the settings modal instead of leaving the

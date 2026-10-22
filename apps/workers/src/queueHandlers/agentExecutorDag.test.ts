@@ -93,6 +93,7 @@ vi.mock('@bike4mind/database', () => ({
 const {
   buildDagResumeReport,
   clampMaxIterationsForOverCapAggregationWake,
+  clampMaxIterationsForUnrunnableAggregationWake,
   isDagAggregationWake,
   makeDagDispatcher,
   onDagNodeTerminal,
@@ -297,6 +298,49 @@ describe('clampMaxIterationsForOverCapAggregationWake', () => {
   });
 });
 
+describe('clampMaxIterationsForUnrunnableAggregationWake', () => {
+  it('caps to the next iteration when the wake is aggregation-only and its model is not runnable', () => {
+    expect(
+      clampMaxIterationsForUnrunnableAggregationWake({
+        isAggregationOnlyWake: true,
+        isRunnable: false,
+        maxIterations: 25,
+        iterationIndex: 7,
+      })
+    ).toBe(8);
+  });
+
+  it('never raises the ceiling above the original maxIterations', () => {
+    expect(
+      clampMaxIterationsForUnrunnableAggregationWake({
+        isAggregationOnlyWake: true,
+        isRunnable: false,
+        maxIterations: 5,
+        iterationIndex: 20,
+      })
+    ).toBe(5);
+  });
+
+  it('leaves maxIterations untouched when the model is runnable or the wake is not aggregation-only', () => {
+    expect(
+      clampMaxIterationsForUnrunnableAggregationWake({
+        isAggregationOnlyWake: true,
+        isRunnable: true,
+        maxIterations: 25,
+        iterationIndex: 7,
+      })
+    ).toBe(25);
+    expect(
+      clampMaxIterationsForUnrunnableAggregationWake({
+        isAggregationOnlyWake: false,
+        isRunnable: false,
+        maxIterations: 25,
+        iterationIndex: 7,
+      })
+    ).toBe(25);
+  });
+});
+
 describe('onDagNodeTerminal', () => {
   beforeEach(() => {
     sqsSendMock.mockClear();
@@ -487,6 +531,24 @@ describe('makeDagDispatcher artifact opt-out inheritance', () => {
       maxIterations: 3,
     });
   }
+
+  it('persists a retired pinned model id as its successor', async () => {
+    createMock.mockClear();
+    const dispatcher = makeDagDispatcher({
+      connectionId: 'c1',
+      nodeDefaults: nodeDefaultsBase,
+      logger: silentLogger,
+    });
+    await dispatcher.createNode({
+      parentExecutionId: 'p1',
+      node,
+      thoroughness: 'quick',
+      agentName: 'worker',
+      model: 'anthropic.claude-3-haiku-20240307-v1:0',
+      maxIterations: 3,
+    });
+    expect(createMock).toHaveBeenCalledWith(expect.objectContaining({ model: 'global.anthropic.claude-haiku-5-5' }));
+  });
 
   it('passes the parent artifact opt-out down to each DAG node', async () => {
     // The PR's headline design claim: the flag is a caller opt-OUT, not a grant, so a delegating

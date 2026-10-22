@@ -2,7 +2,14 @@ import { ComponentProps, createContext, FC, ReactNode, useContext } from 'react'
 import type { ExtraProps } from 'react-markdown';
 import type { Parent, Root, RootContent, Text } from 'mdast';
 import { Link } from '@mui/joy';
-import { findCitationMarkers, type CitableSource, type CitationMarkerMatch } from '@bike4mind/common';
+import remarkParse from 'remark-parse';
+import { unified } from 'unified';
+import {
+  areCitablesNumbered,
+  findCitationMarkers,
+  type CitableSource,
+  type CitationMarkerMatch,
+} from '@bike4mind/common';
 import { useCitableSourceClick } from '../useCitableSourceClick';
 
 /** `<cite>` because markdown never produces one, so the override cannot catch anything else. */
@@ -66,18 +73,39 @@ const markCitations = (parent: Parent): void => {
  */
 export const remarkCitationMarkers = () => (tree: Root) => markCitations(tree);
 
+// Code is never prose, and raw HTML is not shown as text; must stay in step with what
+// remarkCitationMarkers visits (text nodes only).
+const NON_PROSE = new Set(['code', 'inlineCode', 'html']);
+
+/**
+ * The text a reader sees in reply markdown: every text node, including link text, plus each link's
+ * URL (a reference-style link's URL lives on its definition), with code spans, code blocks and raw
+ * HTML left out. What the Sources list scans to decide
+ * which sources a reply cites (CitableSources), so a file name or `[1]` inside code is not a citation.
+ */
+export const replyProse = (markdown: string): string => {
+  const parts: string[] = [];
+  const visit = (node: Root | RootContent): void => {
+    if (NON_PROSE.has(node.type)) return;
+    if (node.type === 'text') parts.push(node.value);
+    if (node.type === 'link' || node.type === 'definition') parts.push(node.url);
+    if ('children' in node) node.children.forEach(visit);
+  };
+  visit(unified().use(remarkParse).parse(markdown));
+  return parts.join(' ');
+};
+
 /** The reply's `promptMeta.citables`, which merge in mid-stream (useStreamingMessageMerge). */
 export const ReplyCitablesContext = createContext<readonly CitableSource[]>([]);
 
 /**
  * Whether this reply's `[N]` markers can be trusted to mean `citables[N-1]`: every citable must
- * carry the stamp of its own position. The server stamps only the forced-retrieval prefix of an
- * indexed-style session, so a named-style reply never qualifies, and neither does a turn where a
- * knowledge or web tool appended sources: those tools number their results `1.`, `2.` too, so a
- * `[1]` there may mean a tool result rather than forced source 1.
+ * carry the stamp of its own position. Only an indexed-style session is stamped, by forced
+ * retrieval and by the tools that label their results with the same numbers. The server strips
+ * every stamp once a source lands that was labelled some other way, so such a turn never qualifies.
  */
 export const citationMarkersLinkable = (citables: readonly CitableSource[]): boolean =>
-  citables.length > 0 && citables.every((source, position) => source.metadata?.citationIndex === position + 1);
+  citables.length > 0 && areCitablesNumbered(citables);
 
 /** Linking waits for the finished reply: a tool citable merging mid-stream would pull the links back out. */
 export const shouldLinkCitationMarkers = (citables: readonly CitableSource[], completed: boolean): boolean =>

@@ -17,9 +17,15 @@ const {
   getMetadataMock,
   userFindByIdMock,
   userDoc,
+  admitMock,
+  recordLandedMock,
+  recordRejectedBatchMock,
 } = vi.hoisted(() => {
   const deps = { claim: vi.fn(), persist: vi.fn(), release: vi.fn() };
   return {
+    admitMock: vi.fn(),
+    recordRejectedBatchMock: vi.fn(),
+    recordLandedMock: vi.fn(),
     chargeMock: vi.fn(),
     getMetadataMock: vi.fn(),
     userFindByIdMock: vi.fn(),
@@ -45,13 +51,21 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: getSettingsValueMock },
   withTransaction: <T>(fn: (session: unknown) => Promise<T>) => fn({}),
 }));
-vi.mock('@server/s3/storageCharge', () => ({ chargeUploadedObject: chargeMock }));
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ getMetadata: getMetadataMock }) }));
+vi.mock('@bike4mind/server-utils/s3/storageCharge', () => ({ chargeUploadedObject: chargeMock }));
+vi.mock('@server/s3/uploadSizeGate', () => ({ admitLandedUpload: admitMock }));
+vi.mock('@server/s3/recordRejectedUploadBatch', () => ({ recordRejectedUploadBatch: recordRejectedBatchMock }));
+vi.mock('@server/s3/moderationScan', () => ({
+  normalizeETag: (eTag?: string) => eTag?.replace(/^"|"$/g, '') || undefined,
+  recordLandedObject: recordLandedMock,
+}));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
+  getFilesStorage: () => ({ getMetadata: getMetadataMock }),
+}));
 vi.mock('@server/s3/utils', () => ({
   decodeS3Key: (k: string) => decodeURIComponent(k.replace(/\+/g, ' ')),
   findWithRetry: <T>(fn: () => Promise<T>) => fn(),
 }));
-vi.mock('@server/utils/sqs', () => ({ sendToQueue: sendToQueueMock }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: sendToQueueMock }));
 vi.mock('@server/dataLakes/recomputeStatsForUploadedFile', () => ({
   recomputeStatsForUploadedFile: recomputeUploadedMock,
 }));
@@ -82,14 +96,24 @@ const makeRes = () => {
   return res;
 };
 
-const makeReq = (authorization: string | undefined, key: string, extra: { size?: number; eventTime?: string } = {}) =>
+const makeReq = (
+  authorization: string | undefined,
+  key: string,
+  extra: { size?: number; eventTime?: string; eTag?: string } = {}
+) =>
   ({
     headers: authorization === undefined ? {} : { authorization },
     body: {
       Records: [
         {
           ...(extra.eventTime ? { eventTime: extra.eventTime } : {}),
-          s3: { object: { key, ...(extra.size !== undefined ? { size: extra.size } : {}) } },
+          s3: {
+            object: {
+              key,
+              ...(extra.size !== undefined ? { size: extra.size } : {}),
+              ...(extra.eTag ? { eTag: extra.eTag } : {}),
+            },
+          },
         },
       ],
     },
@@ -107,6 +131,7 @@ describe('POST /api/internal/s3/object-created', () => {
     userFindByIdMock.mockReturnValue({ session: () => Promise.resolve(userDoc) });
     chargeMock.mockResolvedValue(true);
     getMetadataMock.mockResolvedValue({ size: 42 });
+    admitMock.mockResolvedValue(true);
   });
   afterEach(() => {
     delete process.env.B4M_SELF_HOST;
@@ -178,7 +203,9 @@ describe('POST /api/internal/s3/object-created', () => {
       findOneMock.mockResolvedValue(null);
       const res = makeRes();
       await handler(makeReq('secret-token', key), res);
-      expect(findOneMock).toHaveBeenCalledWith({ filePath: key });
+      expect(findOneMock).toHaveBeenCalledWith(expect.objectContaining({ filePath: key }), null, {
+        includeDeleted: true,
+      });
     }
   );
 
@@ -186,12 +213,56 @@ describe('POST /api/internal/s3/object-created', () => {
     const res = makeRes();
     await handler(makeReq('secret-token', 'uploads/report.pdf'), res);
 
-    expect(findOneMock).toHaveBeenCalledWith({ filePath: 'uploads/report.pdf' });
+    expect(findOneMock).toHaveBeenCalledWith(
+      { filePath: 'uploads/report.pdf', $or: [{ deletedAt: null }, { uploadRejectedAt: { $ne: null } }] },
+      null,
+      { includeDeleted: true }
+    );
     expect(saveMock).toHaveBeenCalledTimes(1);
     expect(sendToQueueMock).toHaveBeenCalledWith('http://sqs/fabFileChunkQueue', {
       fabFileId: 'ff1',
       userId: 'u1',
     });
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('withdraws an upload the size gate rejects, without completing, charging or chunking it', async () => {
+    admitMock.mockResolvedValue(false);
+    const res = makeRes();
+    await handler(makeReq('secret-token', 'uploads/report.pdf', { size: 999 }), res);
+
+    expect(admitMock).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'pending' }),
+      999,
+      'uploads/report.pdf',
+      expect.anything()
+    );
+    expect(saveMock).not.toHaveBeenCalled();
+    expect(chargeMock).not.toHaveBeenCalled();
+    expect(sendToQueueMock).not.toHaveBeenCalled();
+    expect(recordRejectedBatchMock).toHaveBeenCalledWith(expect.objectContaining({ id: 'ff1' }), expect.anything());
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('retries a rejected landing even when its already-deleted object has no HEAD metadata', async () => {
+    findOneMock.mockResolvedValue({
+      id: 'ff1',
+      _id: 'ff1',
+      userId: 'u1',
+      status: 'pending',
+      batchId: 'b1',
+      uploadRejectedAt: new Date(),
+      save: saveMock,
+    });
+    admitMock.mockResolvedValue(false);
+    getMetadataMock.mockRejectedValue(new Error('NoSuchKey'));
+    const res = makeRes();
+
+    await handler(makeReq('secret-token', 'uploads/report.pdf'), res);
+
+    expect(getMetadataMock).not.toHaveBeenCalled();
+    expect(recordRejectedBatchMock).toHaveBeenCalledWith(expect.objectContaining({ batchId: 'b1' }), expect.anything());
+    expect(saveMock).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(200);
   });
 
@@ -277,6 +348,31 @@ describe('POST /api/internal/s3/object-created', () => {
     expect(req.logger.error).toHaveBeenCalledWith(expect.stringContaining('storage client misconfigured'));
   });
 
+  it('records the landed ETag before the scan, so an overwrite of a judged file is rescanned', async () => {
+    await handler(makeReq('secret-token', 'uploads/a.pdf', { size: 5, eTag: 'etag-b' }), makeRes());
+    await vi.waitFor(() => expect(moderateFilesMock).toHaveBeenCalled());
+
+    expect(recordLandedMock).toHaveBeenCalledWith('ff1', 'uploads/a.pdf');
+    expect(recordLandedMock.mock.invocationCallOrder[0]).toBeLessThan(moderateFilesMock.mock.invocationCallOrder[0]);
+  });
+
+  it('reconciles the current storage version when the notification omits its ETag', async () => {
+    getMetadataMock.mockResolvedValue({ size: 5, etag: '"etag-c"' });
+    await handler(makeReq('secret-token', 'uploads/a.pdf', { size: 5 }), makeRes());
+
+    expect(recordLandedMock).toHaveBeenCalledWith('ff1', 'uploads/a.pdf');
+  });
+
+  it('retries before scanning or charging when current-version reconciliation fails', async () => {
+    recordLandedMock.mockRejectedValueOnce(new Error('head unavailable'));
+    await expect(handler(makeReq('secret-token', 'uploads/a.pdf', { size: 5 }), makeRes())).rejects.toThrow(
+      'head unavailable'
+    );
+    expect(chargeMock).not.toHaveBeenCalled();
+    expect(moderateFilesMock).not.toHaveBeenCalled();
+    expect(sendToQueueMock).not.toHaveBeenCalled();
+  });
+
   it('does not scan or charge when the file has no metadata row', async () => {
     findOneMock.mockResolvedValue(null);
     await handler(makeReq('secret-token', 'uploads/orphan.mp4'), makeRes());
@@ -289,32 +385,36 @@ describe('POST /api/internal/s3/object-created', () => {
     const EVENT_TIME = '2026-10-13T12:00:00.000Z';
 
     it("charges the owner the payload's object size, stamped with the event time", async () => {
-      await handler(makeReq('secret-token', 'uploads/a.pdf', { size: 1234, eventTime: EVENT_TIME }), makeRes());
+      await handler(
+        makeReq('secret-token', 'uploads/a.pdf', { size: 1234, eventTime: EVENT_TIME, eTag: 'etag-a' }),
+        makeRes()
+      );
 
       expect(userFindByIdMock).toHaveBeenCalledWith('u1');
-      expect(chargeMock).toHaveBeenCalledWith('ff1', userDoc, 1234, new Date(EVENT_TIME), {});
+      expect(chargeMock).toHaveBeenCalledWith('ff1', userDoc, 1234, new Date(EVENT_TIME), 'pending', {});
       expect(getMetadataMock).not.toHaveBeenCalled();
       expect(userDoc.save).toHaveBeenCalledWith({ session: {} });
     });
 
-    it('records the measured object size on the row, matching what the charge used', async () => {
+    it('judges the charge by the status the row had before this webhook marked it complete', async () => {
+      findOneMock.mockResolvedValue({ id: 'ff1', _id: 'ff1', userId: 'u1', save: saveMock });
       await handler(makeReq('secret-token', 'uploads/a.pdf', { size: 1234, eventTime: EVENT_TIME }), makeRes());
 
-      expect(updateOneMock).toHaveBeenCalledWith({ _id: 'ff1' }, { $set: { fileSize: 1234 } }, { session: {} });
+      expect(chargeMock).toHaveBeenCalledWith('ff1', userDoc, 1234, new Date(EVENT_TIME), undefined, {});
     });
 
     it('falls back to the stored object size when the payload has none', async () => {
       await handler(makeReq('secret-token', 'uploads/a.pdf'), makeRes());
 
       expect(getMetadataMock).toHaveBeenCalledWith('uploads/a.pdf');
-      expect(chargeMock).toHaveBeenCalledWith('ff1', userDoc, 42, expect.any(Date), {});
+      expect(chargeMock).toHaveBeenCalledWith('ff1', userDoc, 42, expect.any(Date), 'pending', {});
     });
 
     it('falls back to the stored object size when the payload size is invalid', async () => {
       await handler(makeReq('secret-token', 'uploads/a.pdf', { size: -1 }), makeRes());
 
       expect(getMetadataMock).toHaveBeenCalledWith('uploads/a.pdf');
-      expect(chargeMock).toHaveBeenCalledWith('ff1', userDoc, 42, expect.any(Date), {});
+      expect(chargeMock).toHaveBeenCalledWith('ff1', userDoc, 42, expect.any(Date), 'pending', {});
     });
 
     it('stamps the current time when the event time does not parse', async () => {
@@ -324,13 +424,17 @@ describe('POST /api/internal/s3/object-created', () => {
       expect(Number.isNaN(uploadedAt.getTime())).toBe(false);
     });
 
-    it('charges nothing and warns when neither source has a size', async () => {
+    // An unmeasured landing cannot be judged by the size gate, so it fails for MinIO to redeliver.
+    it('fails without completing, charging or chunking when neither source has a size', async () => {
       getMetadataMock.mockResolvedValue({});
-      const req = makeReq('secret-token', 'uploads/a.pdf');
-      await handler(req, makeRes());
+      await expect(handler(makeReq('secret-token', 'uploads/a.pdf'), makeRes())).rejects.toThrow(
+        'No object size for uploads/a.pdf'
+      );
 
+      expect(admitMock).not.toHaveBeenCalled();
+      expect(saveMock).not.toHaveBeenCalled();
       expect(chargeMock).not.toHaveBeenCalled();
-      expect(req.logger.warn).toHaveBeenCalledWith(expect.stringContaining('storage not charged'));
+      expect(sendToQueueMock).not.toHaveBeenCalled();
     });
 
     it('charges nothing when the owner no longer exists', async () => {
@@ -340,15 +444,12 @@ describe('POST /api/internal/s3/object-created', () => {
       expect(chargeMock).not.toHaveBeenCalled();
     });
 
-    it('does not save the owner or rewrite the row size when a redelivery loses the claim', async () => {
+    it('does not save the owner when a redelivery loses the claim', async () => {
       chargeMock.mockResolvedValue(false);
       await handler(makeReq('secret-token', 'uploads/a.pdf', { size: 10, eventTime: EVENT_TIME }), makeRes());
 
       expect(chargeMock).toHaveBeenCalledTimes(1);
       expect(userDoc.save).not.toHaveBeenCalled();
-      // The newer write already recorded its own size; rewriting it from this stale event would
-      // make the counter's truth disagree with the bytes charged.
-      expect(updateOneMock).not.toHaveBeenCalledWith({ _id: 'ff1' }, { $set: { fileSize: 10 } }, expect.anything());
     });
 
     it('still answers 200 and enqueues chunking when the charge throws', async () => {

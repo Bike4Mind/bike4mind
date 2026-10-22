@@ -8,12 +8,14 @@ import {
   hearthEventOriginSchema,
 } from '@bike4mind/hearth';
 import { FallbackInfoSchema } from './llm';
+import { TurnTimingSchema } from './turnTiming';
 import { supportedChatModels } from '../models';
 import { shareableDocumentSchema, QUEST_ERROR_CODES, CHAT_HISTORY_ITEM_TYPES } from '../types';
 import { AGENT_EXECUTION_STATUSES, type AgentExecutionStatus } from '../constants/agentExecutionStatus';
 import { PERSISTED_SESSION_SUMMARY_TRIGGERS } from '../constants/sessionSummary';
 import { GENERATION_JOB_KINDS, GENERATION_JOB_STATES } from '../types/entities/GenerationJobTypes';
 import { findDisallowedSubscriptionFilterKeys } from './subscriptionQueryFilter';
+import { CompletionProviderBlockEventSchema, CompletionToolSchema, ResponseFormatSchema } from './cliCompletions';
 
 // Schemas for actions sent over the WebSocket connection.
 
@@ -101,24 +103,8 @@ export const CliCompletionRequestAction = z.object({
       temperature: z.number().optional(),
       maxTokens: z.number().optional(),
       stream: z.boolean().optional(),
-      tools: z.array(z.unknown()).optional(),
-      // structured-output contract. Mirrors ResponseFormatSchema in
-      // schemas/cliCompletions.ts. Defined inline here to avoid an import cycle
-      // between actions.ts and cliCompletions.ts.
-      response_format: z
-        .discriminatedUnion('type', [
-          z.object({ type: z.literal('text') }),
-          z.object({
-            type: z.literal('json_schema'),
-            json_schema: z.object({
-              name: z.string(),
-              description: z.string().optional(),
-              schema: z.record(z.string(), z.any()),
-              strict: z.boolean().optional().default(true),
-            }),
-          }),
-        ])
-        .optional(),
+      tools: z.array(CompletionToolSchema).optional(),
+      response_format: ResponseFormatSchema.optional(),
     })
     .optional(),
 });
@@ -467,6 +453,7 @@ export const StreamedChatCompletionAction = z.object({
       // Add fallback info to support backend fallback mechanism. Nullish: a whole-quest payload
       // carries the null that clears a stale value (see IChatHistoryItem.fallbackInfo).
       fallbackInfo: FallbackInfoSchema.nullish(),
+      turnTiming: TurnTimingSchema.optional(),
       // MCP confirmation action awaiting user approval (confirm/cancel buttons)
       pendingAction: z
         .object({
@@ -617,19 +604,22 @@ export type IVoiceCreditsExhaustedAction = z.infer<typeof VoiceCreditsExhaustedA
 export const CliCompletionChunkAction = z.object({
   action: z.literal('cli_completion_chunk'),
   requestId: z.string(),
-  chunk: z.object({
-    type: z.enum(['content', 'tool_use']),
-    text: z.string(),
-    toolStarted: z.object({ name: z.string(), id: z.string().optional() }).optional(),
-    tools: z.array(z.unknown()).optional(),
-    usage: z
-      .object({
-        inputTokens: z.number().optional(),
-        outputTokens: z.number().optional(),
-      })
-      .optional(),
-    thinking: z.array(z.unknown()).optional(),
-  }),
+  chunk: z.union([
+    z.object({
+      type: z.enum(['content', 'tool_use']),
+      text: z.string(),
+      toolStarted: z.object({ name: z.string(), id: z.string().optional() }).optional(),
+      tools: z.array(z.unknown()).optional(),
+      usage: z
+        .object({
+          inputTokens: z.number().optional(),
+          outputTokens: z.number().optional(),
+        })
+        .optional(),
+      thinking: z.array(z.unknown()).optional(),
+    }),
+    CompletionProviderBlockEventSchema,
+  ]),
 });
 export type ICliCompletionChunkAction = z.infer<typeof CliCompletionChunkAction>;
 
@@ -651,6 +641,8 @@ export const CliCompletionErrorAction = z.object({
   error: z.string(),
   /** Seconds until the caller's rate-limit window reopens; present only on a rate-limit refusal. */
   retryAfter: z.number().optional(),
+  /** Machine-readable reason on a request the caller must fix (a 4xx), e.g. `tool_search_unsupported`. */
+  errorCode: z.string().optional(),
 });
 export type ICliCompletionErrorAction = z.infer<typeof CliCompletionErrorAction>;
 
@@ -1343,6 +1335,11 @@ export const AgentProgressAction = z.object({
   status: z.string().optional(),
   creditsUsed: z.number().optional(),
   iteration: z.number().optional(),
+  // Jobs a tool just started, or a write preview awaiting confirmation, so the client can render
+  // their cards on the run's quest mid-run. questId is only set together with generationJobs or pendingAction.
+  questId: z.string().optional(),
+  generationJobs: z.array(z.object({ id: z.string(), kind: z.enum(GENERATION_JOB_KINDS) })).optional(),
+  pendingAction: z.object({ tool: z.string(), params: z.record(z.string(), z.unknown()), ts: z.number() }).optional(),
 });
 
 export const AgentCompletedAction = z.object({
@@ -1480,6 +1477,17 @@ export const PermissionRequestAction = z.object({
   toolCallId: z.string().optional(),
 });
 
+export const ConfidenceGateAction = z.object({
+  action: z.literal('confidence_gate'),
+  executionId: z.string(),
+  /** 0-indexed wire convention, matching `permission_request` and `IterationStream`. */
+  iteration: z.number(),
+  /** 0..1, the agent's reported confidence for the paused iteration. */
+  confidence: z.number(),
+  /** Pre-formatted server copy, e.g. "Iteration confidence 42% below threshold 60%". */
+  reason: z.string(),
+});
+
 /**
  * Persisted snapshot of a non-background child subagent execution. Replayed on
  * reconnect so `SubagentStepNest` can re-render the nested iteration
@@ -1538,6 +1546,7 @@ export const ChildExecutionSnapshotSchema: z.ZodType<ChildExecutionSnapshotShape
 
 export const ReconnectResultAction = z.object({
   action: z.literal('reconnect_result'),
+  requestId: z.string().optional(),
   found: z.boolean(),
   executionId: z.string().optional(),
   // The session the found run belongs to, so the client stamps it from the
@@ -1556,6 +1565,17 @@ export const ReconnectResultAction = z.object({
       // Carried through reconnect so a client that refreshes mid-pause still
       // has the identity `permission_response` needs - see `PermissionRequestAction`.
       toolCallId: z.string().optional(),
+    })
+    .optional(),
+  // Written atomically with `status: 'paused'` by the executor, so a reconnect
+  // to a gate-paused run gets both and can re-render the gate card.
+  pendingGate: z
+    .object({
+      /** 0-indexed wire convention, matching `ConfidenceGateAction` and `IterationStream`. */
+      iteration: z.number(),
+      confidence: z.number(),
+      reason: z.string(),
+      requestedAt: z.union([z.string(), z.date()]),
     })
     .optional(),
   totalCreditsUsed: z.number().optional(),
@@ -1666,6 +1686,7 @@ export const MessageDataToClient = z.discriminatedUnion('action', [
   SubagentFailedAction,
   SubagentProgressAction,
   PermissionRequestAction,
+  ConfidenceGateAction,
   ReconnectResultAction,
 ]);
 export type IMessageDataToClient = z.infer<typeof MessageDataToClient>;

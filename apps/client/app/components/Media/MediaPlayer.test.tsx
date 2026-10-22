@@ -3,7 +3,7 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
-import MediaPlayer, { type MediaPlayerFile } from './MediaPlayer';
+import MediaPlayer, { SCAN_POLL_INTERVAL_MS, SCAN_WAIT_MS, type MediaPlayerFile } from './MediaPlayer';
 
 const { getFabFileByIdFromServer, downloadData, toastError } = vi.hoisted(() => ({
   getFabFileByIdFromServer: vi.fn(),
@@ -226,6 +226,66 @@ describe('MediaPlayer', () => {
       getFabFileByIdFromServer.mockResolvedValueOnce({ fileUrl: NEW_URL });
       fireEvent.click(screen.getByTestId('media-player-retry-btn'));
       await waitFor(() => expect(srcOf(audio())).toBe(NEW_URL));
+    });
+  });
+
+  describe('a file still in its moderation scan', () => {
+    // A just-saved file (a fresh Studio speech clip) is 'pending' until the S3 upload event scans it, about a
+    // second later, and every read withholds its URL until then.
+    const pendingFile = () => makeFile({ fileUrl: undefined, fileUrlExpireAt: undefined, moderationStatus: 'pending' });
+
+    it('waits for the scan to clear, then plays the signed URL', async () => {
+      vi.useFakeTimers();
+      getFabFileByIdFromServer
+        .mockResolvedValueOnce({ fileUrl: undefined, moderationStatus: 'pending' })
+        .mockResolvedValueOnce({ fileUrl: undefined, moderationStatus: 'scanning' })
+        .mockResolvedValueOnce({ fileUrl: NEW_URL, moderationStatus: 'clean' });
+      renderPlayer(pendingFile());
+
+      await act(() => vi.advanceTimersByTimeAsync(2 * SCAN_POLL_INTERVAL_MS));
+
+      expect(srcOf(audio())).toBe(NEW_URL);
+      expect(screen.queryByTestId('media-player-error')).toBeNull();
+      expect(getFabFileByIdFromServer).toHaveBeenCalledTimes(3);
+    });
+
+    it('gives up once the scan has not cleared within the wait window', async () => {
+      vi.useFakeTimers();
+      getFabFileByIdFromServer.mockResolvedValue({ fileUrl: undefined, moderationStatus: 'pending' });
+      renderPlayer(pendingFile());
+
+      await act(() => vi.advanceTimersByTimeAsync(SCAN_WAIT_MS - SCAN_POLL_INTERVAL_MS));
+      expect(screen.queryByTestId('media-player-error')).toBeNull();
+      await act(() => vi.advanceTimersByTimeAsync(2 * SCAN_POLL_INTERVAL_MS));
+
+      expect(screen.getByTestId('media-player-error')).toBeTruthy();
+      const calls = getFabFileByIdFromServer.mock.calls.length;
+      await act(() => vi.advanceTimersByTimeAsync(10 * SCAN_POLL_INTERVAL_MS));
+      expect(getFabFileByIdFromServer).toHaveBeenCalledTimes(calls);
+    });
+
+    it('fails at once, without polling, for a file the scan blocked', async () => {
+      vi.useFakeTimers();
+      getFabFileByIdFromServer.mockResolvedValue({ fileUrl: undefined, moderationStatus: 'blocked' });
+      renderPlayer(pendingFile());
+
+      await act(() => vi.advanceTimersByTimeAsync(5 * SCAN_POLL_INTERVAL_MS));
+
+      expect(screen.getByTestId('media-player-error')).toBeTruthy();
+      expect(getFabFileByIdFromServer).toHaveBeenCalledTimes(1);
+    });
+
+    it('stops polling once unmounted', async () => {
+      vi.useFakeTimers();
+      getFabFileByIdFromServer.mockResolvedValue({ fileUrl: undefined, moderationStatus: 'pending' });
+      const { unmount } = renderPlayer(pendingFile());
+      await act(() => vi.advanceTimersByTimeAsync(SCAN_POLL_INTERVAL_MS));
+      const calls = getFabFileByIdFromServer.mock.calls.length;
+
+      unmount();
+      await vi.advanceTimersByTimeAsync(10 * SCAN_POLL_INTERVAL_MS);
+
+      expect(getFabFileByIdFromServer).toHaveBeenCalledTimes(calls);
     });
   });
 

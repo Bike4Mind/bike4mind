@@ -177,8 +177,8 @@ export function useGetUserActivityCounters(userId?: string | null) {
 export function useDeleteUser() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ id }: { id: string }) => {
-      const { data } = await api.delete(`/api/users/${id}/delete`);
+    mutationFn: async ({ id, reason }: { id: string; reason: string }) => {
+      const { data } = await api.delete(`/api/users/${id}/delete`, { data: { reason } });
       return data;
     },
     onSuccess: () => {
@@ -425,9 +425,10 @@ export function useLoginAsUser() {
   const { setCurrentUser } = useUser();
 
   return useMutation({
-    mutationFn: async ({ id, mfaToken }: { id: string; mfaToken: string }) => {
+    mutationFn: async ({ id, mfaToken, reason }: { id: string; mfaToken: string; reason: string }) => {
       const { data } = await api.post<{ user: IUserDocument; accessToken: string }>(`/api/users/${id}/loginAs`, {
         mfaToken,
+        reason,
       });
       return data;
     },

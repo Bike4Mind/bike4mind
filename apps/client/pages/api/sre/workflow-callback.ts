@@ -20,17 +20,17 @@ import {
   resolveFullConfig,
   SRE_DEFAULT_REPO_SLUG,
 } from '@bike4mind/common';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { Logger } from '@bike4mind/observability';
-import { decryptSecret } from '@server/security/secretEncryption';
+import { decryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
 import {
   postSreFixSuccessMessage,
   postSreFixFailureMessage,
   postSreAlreadyFixedMessage,
   postSreCiRetryMessage,
 } from '@server/integrations/slack/sreSlackApproval';
-import { sendToQueue } from '@server/utils/sqs';
-import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
+import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import type { SreRevisionRequest, SreJobType } from '@bike4mind/common';
 import { SreSourceType } from '@bike4mind/common';
 import { GitHubService } from '@server/services/githubService';

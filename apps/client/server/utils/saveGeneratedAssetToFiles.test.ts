@@ -10,13 +10,14 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@bike4mind/services', () => ({ saveGeneratedAsset: mocks.saveGeneratedAsset }));
 vi.mock('@bike4mind/database', () => ({
+  organizationRepository: {},
   adminSettingsRepository: {},
   dataLakeRepository: {},
   fabFileRepository: {},
   scopedSettingsRepository: mocks.scopedSettingsRepository,
   User: {},
 }));
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ upload: mocks.upload, getSignedUrl: mocks.getSignedUrl }),
 }));
 

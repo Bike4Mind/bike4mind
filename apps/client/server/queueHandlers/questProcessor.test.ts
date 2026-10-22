@@ -1,4 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
+// The same module instance the handler imports, so the assertion below pins identity, not a copy.
+import { premiumWorkspaceDeniedTools } from '@server/premium-generated/premiumWorkspaceDeniedTools.generated';
+import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';
 
 const mockProcess = vi.hoisted(() => vi.fn());
 
@@ -22,7 +25,7 @@ vi.mock('sst', () => ({
   }),
 }));
 
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: new Proxy({} as Record<string, unknown>, {
     get: (_, key) => `mock-${String(key)}`,
   }),
@@ -33,7 +36,7 @@ vi.mock('@server/utils/eventBus', () => ({
   SessionEvents: { AutoName: { publish: vi.fn() } },
 }));
 
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({}),
   getGeneratedImageStorage: () => ({ download: vi.fn() }),
 }));
@@ -121,6 +124,15 @@ describe('questProcessor getStaticOptions', () => {
     expect(db.lakeMembershipRemovals).toBeDefined();
     expect(db.lakeConfigChangeEvents).toBeDefined();
     expect(db.lakeMembershipChangeEvents).toBeDefined();
+  }, 120_000);
+
+  // This factory is hand-maintained (unlike the shared defaults), so losing the table here
+  // silently re-opens every surface denial on this route only.
+  it('carries the contributed surface denials into the options', async () => {
+    const { getStaticOptions } = await import('./questProcessor');
+
+    expect(getStaticOptions().workspaceDeniedTools).toBe(premiumWorkspaceDeniedTools);
+    expect(getStaticOptions().workspaceSessionSettings).toBe(premiumWorkspaceSessionSettings);
   }, 120_000);
 });
 

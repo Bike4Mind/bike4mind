@@ -1,8 +1,13 @@
 import { Logger } from '@bike4mind/observability';
+import type { ServerToolExecutors } from '@bike4mind/services';
+import { buildDecideExecutor } from '@server/decisions/cliDecideExecutor';
 import { executeToolContract } from '@bike4mind/common';
 import { checkRateLimit } from '@server/cli/auth';
-import { executeToolWithLogging } from '@server/cli/toolsHandler.shared';
-import { defineLambdaRoute } from '@server/cli/defineLambdaRoute';
+import { executeToolWithLogging } from '@bike4mind/server-utils/cli/toolsHandler.shared';
+import { defineLambdaRoute } from '@workers/cli/defineLambdaRoute';
+
+/** The app-tier decision runner, billed to the calling CLI user - see cliDecideExecutor. */
+const buildExecutors = (logger: Logger): ServerToolExecutors => ({ decide: buildDecideExecutor(logger) });
 
 /**
  * Route logic for CLI server-side tool execution (production & preview). The Lambda
@@ -34,6 +39,7 @@ export const handleToolRequest = defineLambdaRoute(
         info: msg => logger.info(`[CLI_TOOLS] ${msg}`),
         error: (msg, err) => logger.error(`[CLI_TOOLS] ${msg}`, err),
       },
+      executors: buildExecutors(logger),
     });
 
     // Echo request_id in the body so it matches the X-Request-ID header on the

@@ -126,6 +126,25 @@ describe('notebook export', () => {
     expect(promptMeta.context.contextWindowUsage.actualInputTokens).toBe(900);
   });
 
+  it('carries redirectedFrom so a redirected turn still shows the model the user asked for', async () => {
+    const payload = await exportOnce({
+      chatHistoryRepository: {
+        find: vi
+          .fn()
+          .mockResolvedValueOnce([
+            {
+              id: 'msg-1',
+              timestamp: new Date('2026-01-01T00:00:00Z'),
+              promptMeta: { ...PROMPT_META, redirectedFrom: 'gemini-2.5-pro' },
+            },
+          ])
+          .mockResolvedValue([]),
+      },
+    });
+
+    expect(payload.notebooks[0].chatHistory[0].promptMeta.redirectedFrom).toBe('gemini-2.5-pro');
+  });
+
   it('keeps citables even with "Include Usage Metadata" off, so a b4m_map fence still resolves', async () => {
     // citables resolve b4m_map place ids in reply text this export always includes, unlike the
     // rest of promptMeta which is opt-in metadata about the reply - so it must not vanish along
