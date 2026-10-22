@@ -37,7 +37,10 @@ describe('video_generation tool', () => {
     const createJob = vi.fn().mockResolvedValue(okJob);
     const { tool } = build(createJob);
     await tool.toolFn({ model: 'test-video', prompt: 'x', inputImageFileId: 'f1' });
-    expect(createJob.mock.calls[0][0].request).toMatchObject({ mode: 'image_to_video', inputImageFileId: 'f1' });
+    expect(createJob.mock.calls[0][0].request).toMatchObject({
+      mode: 'image_to_video',
+      inputs: [{ role: 'first_frame', fileId: 'f1' }],
+    });
   });
 
   it('sends image-to-video with the generated key when one is given', async () => {
@@ -46,8 +49,12 @@ describe('video_generation tool', () => {
     const key = '86cdc650-43d2-416e-aca6-23ff4fe23081.png';
     await tool.toolFn({ model: 'test-video', prompt: 'x', inputGeneratedImageKey: key });
     const { request } = createJob.mock.calls[0][0];
-    expect(request).toMatchObject({ mode: 'image_to_video', inputGeneratedImageKey: key });
+    expect(request).toMatchObject({
+      mode: 'image_to_video',
+      inputs: [{ role: 'first_frame', generatedImageKey: key }],
+    });
     expect(request).not.toHaveProperty('inputImageFileId');
+    expect(request).not.toHaveProperty('inputGeneratedImageKey');
   });
 
   it('refuses a file id and a generated key together without starting a job', async () => {

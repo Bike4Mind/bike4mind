@@ -1,4 +1,4 @@
-import { VIDEO_MODEL_CATALOG, type VideoModelId } from '@bike4mind/common';
+import { VIDEO_MODEL_CATALOG, type VideoInput, type VideoModelId } from '@bike4mind/common';
 import type { CreateVideoJobInput, CreateVideoJobResult } from '../../../../videoJobs/types';
 import type { ToolContext, ToolDefinition } from '../../base/types';
 import {
@@ -27,17 +27,24 @@ export const isVideoToolConfig = (value: unknown): value is PopulatedVideoToolCo
   Array.isArray(value.usableModels) &&
   value.usableModels.length > 0;
 
+// The tool offers one image to animate, so it is always the first frame.
+const toFirstFrame = (args: VideoToolArgs): VideoInput | null => {
+  if (args.inputImageFileId) return { role: 'first_frame', fileId: args.inputImageFileId };
+  if (args.inputGeneratedImageKey) return { role: 'first_frame', generatedImageKey: args.inputGeneratedImageKey };
+  return null;
+};
+
 const toRequest = (args: VideoToolArgs) => {
   const caps = VIDEO_MODEL_CATALOG[args.model];
+  const firstFrame = toFirstFrame(args);
   return {
     model: args.model,
-    mode: args.inputImageFileId || args.inputGeneratedImageKey ? 'image_to_video' : 'text_to_video',
+    mode: firstFrame ? 'image_to_video' : 'text_to_video',
     prompt: args.prompt,
     durationSeconds: args.durationSeconds ?? caps.defaults.durationSeconds,
     aspectRatio: args.aspectRatio ?? caps.defaults.aspectRatio,
     resolution: args.resolution ?? caps.defaults.resolution,
-    ...(args.inputImageFileId ? { inputImageFileId: args.inputImageFileId } : {}),
-    ...(args.inputGeneratedImageKey ? { inputGeneratedImageKey: args.inputGeneratedImageKey } : {}),
+    ...(firstFrame && { inputs: [firstFrame] }),
   };
 };
 

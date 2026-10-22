@@ -124,6 +124,60 @@ describe('POST /api/v1/video-generations', () => {
     expect(h.createVideoJob.mock.calls[0][0].request).toMatchObject({ mode: 'image_to_video', inputImageFileId: 'f1' });
   });
 
+  it('maps role-tagged inputs to the domain and infers image_to_video from a first_frame', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    h.createVideoJob.mockResolvedValue({ ok: true, job: videoJob(), created: true });
+    const { req, res } = post({
+      model: 'test-video',
+      prompt: 'p',
+      inputs: [
+        { file_id: 'f1', role: 'first_frame' },
+        { file_id: 'r1', role: 'reference' },
+      ],
+    });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(202);
+    const { request } = h.createVideoJob.mock.calls[0][0];
+    expect(request).toMatchObject({
+      mode: 'image_to_video',
+      inputs: [
+        { role: 'first_frame', fileId: 'f1' },
+        { role: 'reference', fileId: 'r1' },
+      ],
+    });
+    expect(request).not.toHaveProperty('inputImageFileId');
+  });
+
+  it('keeps text_to_video when the inputs carry no first_frame', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    h.createVideoJob.mockResolvedValue({ ok: true, job: videoJob(), created: true });
+    const { req, res } = post({ model: 'test-video', prompt: 'p', inputs: [{ file_id: 'r1', role: 'reference' }] });
+    await handler(req, res);
+    expect(h.createVideoJob.mock.calls[0][0].request).toMatchObject({ mode: 'text_to_video' });
+  });
+
+  it('rejects inputs combined with input_image_file_id (422) before the domain', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    const { req, res } = post({
+      model: 'test-video',
+      prompt: 'p',
+      input_image_file_id: 'f1',
+      inputs: [{ file_id: 'f1', role: 'first_frame' }],
+    });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(422);
+    expect(res._getJSONData()).toMatchObject({ errorCode: 'unexpected_input_image' });
+    expect(h.createVideoJob).not.toHaveBeenCalled();
+  });
+
+  it('rejects an input role the API does not define (422) before the domain', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    const { req, res } = post({ model: 'test-video', prompt: 'p', inputs: [{ file_id: 'f1', role: 'mask' }] });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(422);
+    expect(h.createVideoJob).not.toHaveBeenCalled();
+  });
+
   it('namespaces the Idempotency-Key per user and returns 202 on replay', async () => {
     validateWithScopes([ApiKeyScope.AI_GENERATE]);
     h.createVideoJob.mockResolvedValue({ ok: true, job: videoJob(), created: false });
