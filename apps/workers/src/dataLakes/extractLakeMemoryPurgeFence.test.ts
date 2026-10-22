@@ -67,7 +67,7 @@ vi.mock('@bike4mind/fab-pipeline', () => ({
   resolveEmbeddingConfig: () => ({ config: undefined, missing: true }),
 }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
-vi.mock('@server/memory/mementoLedgerMirror', () => ({
+vi.mock('@bike4mind/server-utils/memory/mementoLedgerMirror', () => ({
   createLedgerAppendSession: async (...a: unknown[]) => {
     sessionParamsMock(...a);
     return { append: (...b: unknown[]) => appendMock(...b) };

@@ -62,7 +62,11 @@ function OptionRow({
         '&:hover': { bgcolor: checked ? 'primary.softActiveBg' : 'background.level1' },
       }}
     >
-      <Typography level="body-xs" textColor="text.tertiary" sx={{ minWidth: 14, pt: '1px' }}>
+      <Typography
+        level="body-xs"
+        textColor={checked ? 'text.secondary' : 'text.tertiary'}
+        sx={{ minWidth: 14, pt: '1px' }}
+      >
         {index}
       </Typography>
       <Box

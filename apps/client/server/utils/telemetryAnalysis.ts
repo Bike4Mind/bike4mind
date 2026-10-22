@@ -15,7 +15,7 @@ import {
   formatFingerprintComment,
   formatSemanticFingerprintComment,
   formatPrimaryAnomaly,
-} from '@server/services/telemetryFingerprint';
+} from '@bike4mind/server-utils/services/telemetryFingerprint';
 import { escapeMarkdown } from '@bike4mind/server-utils/utils/markdownEscape';
 import { type IssueForDedup } from '@bike4mind/server-utils/services/issueDedup';
 import { type Priority } from '@bike4mind/server-utils/services/issueLabels';

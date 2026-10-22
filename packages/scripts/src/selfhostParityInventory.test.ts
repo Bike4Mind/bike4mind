@@ -427,6 +427,17 @@ describe('portable declaration inventory', () => {
       expect.arrayContaining([`Reason required: ${inventory[0].id}`, `AWS signals changed: ${inventory[0].id}`])
     );
   });
+
+  it('rejects an excluded entry with an empty reason', () => {
+    const inventory = discoverParityInventory(sources(queue));
+    const excluded = { ...inventory[0], disposition: 'excluded' as const, issue: 'Bike4Mind/bike4mind#2693' };
+    expect(validateParityPolicy(inventory, [{ ...excluded, reason: '' }], {})).toContain(
+      `Reason required: ${inventory[0].id}`
+    );
+    expect(validateParityPolicy(inventory, [{ ...excluded, reason: 'Hosted-only analytics' }], {})).not.toContain(
+      `Reason required: ${inventory[0].id}`
+    );
+  });
 });
 
 describe('background trigger shapes', () => {

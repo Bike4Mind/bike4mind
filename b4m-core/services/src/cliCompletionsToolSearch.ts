@@ -5,8 +5,6 @@ import {
   isCompletionServerTool,
   isToolChangeMessage,
   isToolChangeBlockType,
-  ModelBackend,
-  supportsToolSearch,
   TOOL_SEARCH_BLOCK_TYPES,
   type CompletionCustomTool,
   type CompletionTool,
@@ -190,12 +188,8 @@ export function prepareWireTools(
 
   if (!native) {
     if (serverTools.length > 0 || referencedTools.length > 0 || echoesToolSearchBlocks) {
-      const reason =
-        model && model.backend === ModelBackend.Bedrock && supportsToolSearch(model)
-          ? `is served through Bedrock, where this endpoint does not support tool search yet; use a direct Anthropic model id`
-          : `does not support tool search on this endpoint (see supports_tool_search and backend in GET /api/v1/models)`;
       throw toolSearchError(
-        `Model '${model?.id ?? 'unknown'}' ${reason}. Remove the serverTool entry, tool_reference blocks and echoed tool search blocks.`,
+        `Model '${model?.id ?? 'unknown'}' does not support tool search on this endpoint (see supports_tool_search in GET /api/v1/models). Remove the serverTool entry, tool_reference blocks and echoed tool search blocks.`,
         'tool_search_unsupported'
       );
     }

@@ -13,7 +13,10 @@ import {
   buildEmailMirrorMessage,
   type EmailMirrorPayload,
 } from '@bike4mind/server-utils/integrations/slack/emailMirror';
-import { buildFeedbackSlackMessage, type FeedbackPromptMetaInput } from './feedbackMessage';
+import {
+  buildFeedbackSlackMessage,
+  type FeedbackPromptMetaInput,
+} from '@bike4mind/server-utils/integrations/slack/feedbackMessage';
 import type { FeedbackDeepLinks } from '@bike4mind/server-utils/utils/feedbackDeepLinks';
 import {
   recordFeedbackDeliverySuccess,

@@ -2537,7 +2537,13 @@ importers:
       '@aws-sdk/client-bedrock':
         specifier: ^3.1150.0
         version: 3.1151.0
+      '@aws-sdk/client-cloudfront':
+        specifier: ^3.1150.0
+        version: 3.1151.0
       '@aws-sdk/client-cloudwatch':
+        specifier: ^3.1150.0
+        version: 3.1151.0
+      '@aws-sdk/client-s3':
         specifier: ^3.1150.0
         version: 3.1151.0
       '@aws-sdk/client-sqs':
@@ -2552,6 +2558,9 @@ importers:
       '@bike4mind/database':
         specifier: workspace:*
         version: link:../database
+      '@bike4mind/db-core':
+        specifier: workspace:*
+        version: link:../../b4m-core/db-core
       '@bike4mind/fab-pipeline':
         specifier: workspace:*
         version: link:../../b4m-core/fab-pipeline
@@ -2579,12 +2588,27 @@ importers:
       '@bike4mind/utils':
         specifier: workspace:*
         version: link:../../b4m-core/utils
+      '@googleapis/drive':
+        specifier: ^22.0.0
+        version: 22.0.0
+      '@octokit/auth-app':
+        specifier: ^8.2.0
+        version: 8.2.0
+      '@octokit/rest':
+        specifier: ^22.0.1
+        version: 22.0.1
+      '@slack/web-api':
+        specifier: ^7.19.0
+        version: 7.19.0
       axios:
         specifier: 1.20.0
         version: 1.20.0
       file-type:
         specifier: ^22.1.0
         version: 22.1.0
+      handlebars:
+        specifier: ^4.7.10
+        version: 4.7.10
       mongoose:
         specifier: ^8.24.1
         version: 8.24.1(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)
@@ -2594,6 +2618,9 @@ importers:
       sst:
         specifier: 4.17.1
         version: 4.17.1
+      stripe:
+        specifier: ^22.6.2
+        version: 22.6.2(@types/node@24.12.3)
       zod:
         specifier: ^4.6.6
         version: 4.6.6
@@ -2613,6 +2640,12 @@ importers:
       '@types/node':
         specifier: ^24.0.0
         version: 24.12.3
+      aws-sdk-client-mock:
+        specifier: ^4.1.0
+        version: 4.1.0
+      mongodb-memory-server:
+        specifier: ^11.3.0
+        version: 11.3.0(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)
       typescript:
         specifier: ^5.9.3
         version: 5.9.3

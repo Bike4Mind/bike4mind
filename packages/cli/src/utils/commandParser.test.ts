@@ -31,3 +31,27 @@ describe('parseCommandFile frontmatter is inert', () => {
     expect(cmd.description).toBe('a real skill');
   });
 });
+
+describe('parseCommandFile model-invocation opt-out', () => {
+  const parse = (frontmatter: string) =>
+    parseCommandFile(`---\ndescription: d\n${frontmatter}\n---\n\nbody`, '/proj/x.md', 'x', 'global');
+
+  it("honours Claude Code's disable-model-invocation", () => {
+    expect(parse('disable-model-invocation: true').disableModelInvocation).toBe(true);
+  });
+
+  it("honours opencode's autoinvoke: false", () => {
+    expect(parse('autoinvoke: false').disableModelInvocation).toBe(true);
+    expect(parse('autoinvoke: true').disableModelInvocation).toBe(false);
+  });
+
+  it('ignores a malformed autoinvoke rather than discarding the rest of the frontmatter', () => {
+    const command = parse('autoinvoke: "off"');
+    expect(command.description).toBe('d');
+    expect(command.disableModelInvocation).toBe(false);
+  });
+
+  it('leaves a skill model-invocable by default', () => {
+    expect(parse('').disableModelInvocation).toBe(false);
+  });
+});

@@ -13,7 +13,7 @@ import {
   serializeCharter,
   serializeHandoff,
 } from '@bike4mind/database';
-import { enrollDeepAgent } from './enroll';
+import { enrollDeepAgent } from '@bike4mind/server-utils/deepAgent/enroll';
 import type { AgentRosterItem } from '@bike4mind/server-utils/deepAgent/consoleReads';
 
 /**

@@ -15,7 +15,7 @@ import {
   buildHighlightsPrompt,
   createSlackBlocks,
   formatHighlightsForSlack,
-} from '@server/whatsNew/whatsNewHighlights.prompt';
+} from '@bike4mind/server-utils/whatsNew/whatsNewHighlights.prompt';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';

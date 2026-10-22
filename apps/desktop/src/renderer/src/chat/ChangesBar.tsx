@@ -10,7 +10,13 @@ import type { ChangedFile, WorkspaceChanges } from '@shared/workspaceChanges';
 import { changesStateLabel, filesChangedLabel } from './changesBarModel';
 import { DiffCount } from './DiffCount';
 import { CaretDownIcon, FileDiffIcon, PullRequestIcon } from './icons';
-import { contentColumnSx } from './layout';
+import {
+  COMPOSER_BAR_BORDER,
+  COMPOSER_BAR_HEIGHT,
+  COMPOSER_BAR_INSET,
+  composerBarControlSx,
+  contentColumnSx,
+} from './layout';
 import { middleTruncate } from './prBarModel';
 
 const PATH_MAX_CHARS = 56;
@@ -67,9 +73,9 @@ export function ChangesBar({
         alignItems="center"
         spacing={1}
         sx={{
-          minHeight: 32,
-          px: 1.25,
-          border: '1px solid',
+          minHeight: COMPOSER_BAR_HEIGHT,
+          px: `${COMPOSER_BAR_INSET}px`,
+          border: `${COMPOSER_BAR_BORDER}px solid`,
           borderColor: 'neutral.outlinedBorder',
           borderRadius: 'md',
           bgcolor: 'background.surface',
@@ -86,10 +92,12 @@ export function ChangesBar({
             variant="plain"
             color="neutral"
             endDecorator={<CaretDownIcon />}
-            sx={{ fontWeight: 'md', minHeight: 26, px: 0.75, '--Button-gap': '6px' }}
+            sx={{ ...composerBarControlSx, px: 0.75, minWidth: 0 }}
             slotProps={{ root: { 'data-testid': 'changes-bar-files-btn' } }}
           >
-            {filesChangedLabel(changes)}
+            <Box component="span" sx={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {filesChangedLabel(changes)}
+            </Box>
           </MenuButton>
           <Menu
             size="sm"
@@ -122,7 +130,8 @@ export function ChangesBar({
             level="body-xs"
             textColor="text.tertiary"
             noWrap
-            sx={{ minWidth: 0 }}
+            // Weighted far above the files label so this gives way first in a narrow window.
+            sx={{ minWidth: 0, flexShrink: 1000 }}
             data-testid="changes-bar-state"
           >
             {state}
@@ -141,15 +150,19 @@ export function ChangesBar({
           variant="soft"
           placement="top-end"
         >
-          <Box component="span" sx={{ display: 'inline-flex' }}>
+          <Box component="span" sx={{ display: 'inline-flex', flexShrink: 0 }}>
             <Button
               size="sm"
-              variant="soft"
-              color="primary"
+              variant="outlined"
+              color="neutral"
               disabled={busy}
               startDecorator={<PullRequestIcon />}
               onClick={() => onCreatePullRequest(changes)}
-              sx={{ minHeight: 26, px: 1 }}
+              sx={{
+                ...composerBarControlSx,
+                px: 1,
+                '&:hover, &:focus-visible': { color: 'primary.plainColor', borderColor: 'primary.outlinedBorder' },
+              }}
               data-testid="changes-bar-create-pr-btn"
             >
               Create PR

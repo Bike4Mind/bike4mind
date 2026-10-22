@@ -42,7 +42,7 @@ vi.mock('@server/utils/cacheExternalImage', () => ({
   cacheExternalImages: vi.fn(async (images: unknown[]) => images),
 }));
 
-vi.mock('@server/services/whatsNewDistribution', () => ({
+vi.mock('@bike4mind/server-utils/services/whatsNewDistribution', () => ({
   WhatsNewDistributionService: {
     updateExistingModal: vi.fn(async (...args: unknown[]) => {
       mockRefs.updateExistingModalCall = args;
@@ -62,7 +62,7 @@ vi.mock('@bike4mind/services', () => ({
   MODAL_SAFE_DEFAULT_KEY: 'customer',
 }));
 
-import { WhatsNewDistributionService } from '@server/services/whatsNewDistribution';
+import { WhatsNewDistributionService } from '@bike4mind/server-utils/services/whatsNewDistribution';
 import { emitModalGenerationMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
 import '@pages/api/modals/[id]/update';
 

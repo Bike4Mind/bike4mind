@@ -94,7 +94,7 @@ vi.mock('@server/security/tokenEncryption', () => ({
   encryptToken: (value: string | null | undefined) => (value ? `enc:${Buffer.from(value).toString('base64')}` : null),
   decryptToken: (value: string | null | undefined) => value,
 }));
-vi.mock('@server/integrations/integrationAuditLogger', () => ({
+vi.mock('@bike4mind/server-utils/integrations/integrationAuditLogger', () => ({
   IntegrationAuditLogger: {
     create: (context: { action: string }) => ({
       success: () => h.audits.push({ action: context.action, outcome: 'success' }),

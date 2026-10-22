@@ -38,7 +38,7 @@ import {
   scopedSettingsRepository,
 } from '@bike4mind/database';
 import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
-import { lakeWriteToolDb } from '@server/dataLakes/lakeWriteToolDb';
+import { lakeWriteToolDb } from '@bike4mind/server-utils/dataLakes/lakeWriteToolDb';
 import { NotFoundError, registerLambdaErrorHandlers } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 
@@ -78,7 +78,7 @@ import { recallLakeMemoryForSession } from '@server/memory/lakeMemoryRecall';
 import { loadSystemPromptById } from '@server/utils/sessionSystemPromptResolver';
 import { decryptToken } from '@server/security/tokenEncryption';
 import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
-import { buildVideoToolConfig } from '@server/videoGenerations/buildVideoToolConfig';
+import { buildVideoToolConfig } from '@bike4mind/server-utils/videoGenerations/buildVideoToolConfig';
 import {
   buildSlackVideoToolConfig,
   type PendingSlackNotification,
