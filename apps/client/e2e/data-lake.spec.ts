@@ -1002,7 +1002,10 @@ test.describe('Data Lake - asking a large lake', () => {
 
       await test.step('the whole lake was in scope', async () => {
         // Checked before the answer so a by-name cut fails with the server's own reason, not as a
-        // missing passphrase.
+        // missing passphrase. retrievalCoverage is not in the stream frames and only lands with a
+        // delayed quest refetch (RetrievalCoverageBanner.tsx), so reload to read the persisted quest.
+        await page.reload({ waitUntil: 'domcontentloaded' });
+        await expect(chatPage.aiResponseRoot.last()).toBeVisible({ timeout: 30_000 });
         const warning = page.getByTestId('retrieval-coverage-warning');
         const reasons = (await warning.count()) > 0 ? await warning.innerText() : '';
         expect(reasons, 'retrieval-coverage-warning was shown').toBe('');
