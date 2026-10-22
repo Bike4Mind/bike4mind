@@ -48,6 +48,8 @@ function buildSettingsStore(initial: string) {
   const rows: Record<string, string> = { enforceCredits: initial };
   const toRow = (settingName: string) => ({ settingName, settingValue: rows[settingName] });
   return {
+    // Model configurations are read with findOne; none are stored here.
+    findOne: vi.fn(async () => null),
     findAll: vi.fn(async () => Object.keys(rows).map(toRow)),
     findBySettingNames: vi.fn(async (names: string[]) => names.filter(name => name in rows).map(toRow)),
     adminFlipsTo(value: string) {
@@ -122,7 +124,7 @@ describe('executeCompletion - admin settings are read fresh', () => {
 
     await executeCompletion({ ...baseParams, db });
 
-    expect(adminSettings.findBySettingNames).toHaveBeenCalledWith(['enforceCredits']);
+    expect(adminSettings.findBySettingNames).toHaveBeenCalledExactlyOnceWith(['enforceCredits']);
     expect(adminSettings.findAll).not.toHaveBeenCalled();
   });
 });
