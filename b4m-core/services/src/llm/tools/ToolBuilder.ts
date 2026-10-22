@@ -12,6 +12,7 @@ import {
   type GenerationJobRef,
   type CitableSource,
   usdToCreditsStochastic,
+  type UsagePriceStamp,
 } from '@bike4mind/common';
 import type { SoundGenerationVendor, VoiceGenerationVendor } from '@bike4mind/common';
 import { type ApiKeyTable, type ICompletionBackend, type ICompletionOptionTools } from '@bike4mind/llm-adapters';
@@ -65,6 +66,8 @@ export function buildToolUsageEvent(params: {
   cacheWriteTokens?: number;
   /** Provider stop reason of the underlying completion, when the tool wraps one (e.g. delegate_to_agent). */
   finishReason?: string;
+  /** Rate provenance for costUsd (buildUsagePriceStamp), from a caller that priced a text model. */
+  priceStamp?: UsagePriceStamp;
   /**
    * Defaults to 'tool'. The audio tool passes the feature its direct endpoint
    * writes (sound_effects, text_to_speech), so a track counts as a track
@@ -89,6 +92,7 @@ export function buildToolUsageEvent(params: {
     units: params.units,
     costUsd: params.costUsd,
     creditsCharged: params.creditsCharged,
+    ...params.priceStamp,
     // Same refund key the chat/CLI completion paths record: see usageEventStatusForFinish.
     status: usageEventStatusForFinish(params.finishReason),
   };
@@ -1102,7 +1106,10 @@ export class ToolBuilder {
           });
         },
         onPendingAction: async action => {
-          quest.pendingAction = action;
+          // Monotonic so a Confirm button's ts always identifies the action it was rendered for.
+          quest.pendingAction = quest.pendingAction
+            ? { ...action, ts: Math.max(action.ts, quest.pendingAction.ts + 1) }
+            : action;
           await saveQuest(quest);
           this.deps.logger.debug(`[MCP] pendingAction saved to quest ${quest.id}`);
         },
@@ -1113,6 +1120,13 @@ export class ToolBuilder {
         },
         sessionId: quest.sessionId,
         questId: quest.id,
+        slackDestination: quest.slackNotification
+          ? {
+              workspaceId: quest.slackNotification.workspaceId,
+              channelId: quest.slackNotification.channelId,
+              threadTs: quest.slackNotification.threadTs,
+            }
+          : undefined,
         // Synchronous so parallel tool calls cannot claim the same numbers: the stamped citables
         // land on the live quest before the next call reads its length.
         numberCitables:
@@ -1150,6 +1164,7 @@ export class ToolBuilder {
                 cachedInputTokens: meta.cacheReadTokens,
                 cacheWriteTokens: meta.cacheWriteTokens,
                 finishReason: meta.finishReason,
+                priceStamp: meta.priceStamp,
               })
             );
           }

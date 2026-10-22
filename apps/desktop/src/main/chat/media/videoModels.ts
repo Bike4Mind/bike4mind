@@ -3,6 +3,7 @@ import {
   estimateVideoCostCredits,
   RESOLUTION_TIERS,
   validateAgainstCapabilities,
+  VIDEO_INPUT_ROLES,
   VIDEO_MODEL_CATALOG,
   VIDEO_MODEL_IDS,
   VIDEO_PROMPT_MAX_LENGTH,
@@ -10,6 +11,7 @@ import {
   type AspectRatio,
   type ResolutionTier,
   type VideoGenerationRequest,
+  type VideoInputRole,
   type VideoModel,
   type VideoModelCapabilities,
   type VideoModelId,
@@ -35,6 +37,18 @@ function catalogEntry(id: string): VideoModelCapabilities | undefined {
   return (VIDEO_MODEL_IDS as readonly string[]).includes(id) ? VIDEO_MODEL_CATALOG[id as VideoModelId] : undefined;
 }
 
+const isKnownInputRole = (role: string): role is VideoInputRole =>
+  (VIDEO_INPUT_ROLES as readonly string[]).includes(role);
+
+// A server from before input_roles existed sends none; it took exactly one first frame for image_to_video. A role
+// this build does not know is skipped: it could never send one.
+const inputsOf = (model: VideoModel): VideoModelCapabilities['inputs'] => {
+  if (!model.input_roles) return model.modes.includes('image_to_video') ? { first_frame: { max: 1 } } : {};
+  return Object.fromEntries(
+    model.input_roles.flatMap(({ role, max }) => (isKnownInputRole(role) ? [[role, { max }]] : []))
+  );
+};
+
 /**
  * The server's description of a model in the shape the shared validator reads.
  *
@@ -48,6 +62,7 @@ export function capabilitiesOf(model: VideoModel): VideoModelCapabilities {
     provider: (local?.provider ?? model.provider) as VideoModelCapabilities['provider'],
     displayName: model.display_name,
     modes: model.modes,
+    inputs: inputsOf(model),
     duration: model.duration,
     aspectRatios: model.aspect_ratios,
     resolutions: model.resolutions,

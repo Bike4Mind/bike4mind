@@ -2,6 +2,7 @@ import { estimateVideoCostCredits, VIDEO_MODEL_CATALOG, type VideoModel } from '
 import { describe, expect, it } from 'vitest';
 import { publicVideoModel } from './__fixtures__/videoModels';
 import {
+  capabilitiesOf,
   estimateVideoCredits,
   parseVideoModels,
   planVideoRequest,
@@ -105,5 +106,20 @@ describe('parseVideoModels', () => {
   it('keeps the models it can read and drops one it cannot', () => {
     expect(parseVideoModels({ models: [gemini, { id: 'broken' }] }).map(model => model.id)).toEqual([gemini.id]);
     expect(parseVideoModels(null)).toEqual([]);
+  });
+});
+
+describe('input roles across server versions', () => {
+  const { input_roles: _dropped, ...fromOldServer } = gemini;
+
+  it('keeps a model from a server that predates input_roles and assumes one first frame', () => {
+    const parsed = parseVideoModels({ models: [fromOldServer] });
+    expect(parsed.map(model => capabilitiesOf(model).inputs)).toEqual([{ first_frame: { max: 1 } }]);
+  });
+
+  it('keeps a model offering a role this build does not know, and skips that role', () => {
+    const withNewRole = { ...gemini, input_roles: [...(gemini.input_roles ?? []), { role: 'mask', max: 1 }] };
+    const parsed = parseVideoModels({ models: [withNewRole] });
+    expect(parsed.map(model => capabilitiesOf(model).inputs)).toEqual([{ first_frame: { max: 1 } }]);
   });
 });

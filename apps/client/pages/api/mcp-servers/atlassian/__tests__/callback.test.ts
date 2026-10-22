@@ -36,7 +36,7 @@ vi.mock('@server/auth/oauthFlowCookie', () => ({
   readStateNonceHash: (...a: unknown[]) => mockReadStateNonceHash(...a),
   clearStateNonce: (...a: unknown[]) => mockClearStateNonce(...a),
 }));
-vi.mock('@server/integrations/integrationAuditLogger', () => ({
+vi.mock('@bike4mind/server-utils/integrations/integrationAuditLogger', () => ({
   IntegrationAuditLogger: {
     create: () => ({
       setUserId: vi.fn(),

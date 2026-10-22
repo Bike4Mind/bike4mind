@@ -80,7 +80,9 @@ vi.mock('@bike4mind/observability', () => ({ Logger: class {} }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsMap: vi.fn(), getSettingsValue: vi.fn() }));
 vi.mock('@bike4mind/utils/imageModeration', () => ({ RekognitionImageModerationService: class {} }));
 vi.mock('@bike4mind/server-utils/s3/moderateUploadedFile', () => ({ moderateUploadedFile: vi.fn() }));
-vi.mock('@server/s3/moderateImportedKnowledgeFiles', () => ({ moderateImportedKnowledgeFiles: vi.fn() }));
+vi.mock('@bike4mind/server-utils/s3/moderateImportedKnowledgeFiles', () => ({
+  moderateImportedKnowledgeFiles: vi.fn(),
+}));
 vi.mock('@bike4mind/server-utils/s3/storageCharge', () => ({
   stampImportedKnowledgeRows: h.stampImportedKnowledgeRows,
   chargeStampedKnowledgeStorage: h.chargeStampedKnowledgeStorage,
@@ -96,7 +98,7 @@ vi.mock('@server/utils/importHistoryProgress', () => ({
 vi.mock('uuid', () => ({ v4: () => 'test-uuid' }));
 
 import { dispatch, discardUploadedKnowledgeFiles } from './notebookImportComplete';
-import { moderateImportedKnowledgeFiles } from '@server/s3/moderateImportedKnowledgeFiles';
+import { moderateImportedKnowledgeFiles } from '@bike4mind/server-utils/s3/moderateImportedKnowledgeFiles';
 import { markImportComplete } from '@server/utils/importHistoryProgress';
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };

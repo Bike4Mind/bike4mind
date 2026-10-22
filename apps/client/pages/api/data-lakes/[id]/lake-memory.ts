@@ -22,7 +22,7 @@ import {
   lakeMemoryRateLimitKey,
 } from '@bike4mind/server-utils/dataLakes/lakeMemoryRateLimit';
 import { DataLakeAuditEvents, logAuditEvent } from '@server/utils/auditLog';
-import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
+import { resolveAuditPrincipal } from '@bike4mind/server-utils/dataLakes/resolveAuditPrincipal';
 
 /**
  * GET  /api/data-lakes/:id/lake-memory  -> LakeMemoryHealth (the build door's own state, so the UI

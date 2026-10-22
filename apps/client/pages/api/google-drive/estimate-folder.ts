@@ -10,7 +10,7 @@ import {
   createDriveClient,
   isValidDriveFolderId,
   withDriveReconnectOnAuthError,
-} from '@server/integrations/google/drive/driveClient';
+} from '@bike4mind/server-utils/integrations/google/drive/driveClient';
 import { estimateFolder } from '@server/integrations/google/drive/driveContent';
 import { MAX_INGEST_CANDIDATES } from '@bike4mind/server-utils/integrations/google/drive/driveIngestLimits';
 

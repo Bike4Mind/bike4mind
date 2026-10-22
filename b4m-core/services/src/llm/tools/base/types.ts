@@ -116,6 +116,8 @@ export interface ToolContext {
    * consumer - see its own doc comment.
    */
   questId?: string;
+  requestConfirmation?: (action: { tool: string; params: Record<string, unknown>; ts: number }) => Promise<void>;
+  slackDestination?: { workspaceId: string; channelId: string; threadTs: string };
   logger: Logger;
   db: GetEffectiveApiKeyAdapters['db'] & {
     latticeModels?: {

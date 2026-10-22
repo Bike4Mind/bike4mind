@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { PrSummaryEvent } from '@shared/pullRequest';
+import type { PrMonitorDeps } from './PrMonitor';
 import { REF, TrackedMonitor, collector, fakeGithub, quietLogger, snapshot, tempStore } from './prTestSupport';
 
 const SESSION = 'session-1';
@@ -9,7 +10,7 @@ function setup() {
   const fake = fakeGithub();
   const out = collector();
   const pushed: PrSummaryEvent[] = [];
-  const monitor = new TrackedMonitor({
+  const deps: PrMonitorDeps = {
     store,
     github: fake.github,
     chat: {
@@ -23,8 +24,9 @@ function setup() {
     emitSummary: event => pushed.push(event),
     logger: quietLogger,
     batchWindowMs: 0,
-  });
-  return { store, fake, out, monitor, pushed };
+  };
+  const monitor = new TrackedMonitor(deps);
+  return { store, fake, out, monitor, pushed, deps };
 }
 
 const bound = { ...REF, source: 'shell' as const, boundAt: '' };
@@ -103,5 +105,39 @@ describe('PrMonitor sidebar summaries', () => {
     await monitor.idle();
     expect(await store.get(SESSION)).toMatchObject({ lastState: 'OPEN', lastDraft: true });
     monitor.dispose();
+  });
+
+  it('shows a PR in the merge queue as queued, open again once it leaves, and merged when it lands', async () => {
+    const { fake, out, monitor, pushed } = setup();
+    const inQueue = { enabled: true, entry: { state: 'QUEUED', position: 1 } };
+    fake.answer(snapshot({ mergeQueue: inQueue }));
+    await monitor.bindManual(SESSION, REF.url);
+    await monitor.idle();
+    expect(out.last()?.autoMerge.queued).toEqual({ position: 1 });
+    expect(pushed[pushed.length - 1]?.summary?.state).toBe('queued');
+
+    fake.answer(snapshot({ mergeQueue: { enabled: true } }));
+    await monitor.refresh(SESSION);
+    expect(pushed[pushed.length - 1]?.summary?.state).toBe('open');
+
+    fake.answer(snapshot({ mergeQueue: inQueue }));
+    await monitor.refresh(SESSION);
+    fake.answer(snapshot({ state: 'MERGED', mergeQueue: inQueue }));
+    await monitor.refresh(SESSION);
+    expect(pushed.slice(-2).map(event => event.summary?.state)).toEqual(['queued', 'merged']);
+    monitor.dispose();
+  });
+
+  it('never shows queued from the binding file: only a read this launch says a PR is in the queue', async () => {
+    const first = setup();
+    first.fake.answer(snapshot({ mergeQueue: { enabled: true, entry: { state: 'QUEUED', position: 1 } } }));
+    await first.monitor.bindManual(SESSION, REF.url);
+    await first.monitor.idle();
+    expect((await first.monitor.summaries())[0]?.summary?.state).toBe('queued');
+    first.monitor.dispose();
+
+    const relaunched = new TrackedMonitor(first.deps);
+    expect(await relaunched.summaries()).toEqual([{ sessionId: SESSION, summary: { number: 611, state: 'open' } }]);
+    relaunched.dispose();
   });
 });

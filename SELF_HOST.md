@@ -1316,9 +1316,12 @@ resource/provider configuration and outcome proof remain separate. `pending` is 
 capability decision linked to a shared roadmap epic (one for schedules, one for every other
 kind), not a per-gap issue. A
 `pending` queue or schedule that a self-host file now registers under the hosted name is
-reported as `Gap now has local wiring - review`. The infrastructure records excluded as
-separate workflows still require the associated consumer's broker configuration and recovery
-proof.
+reported as `Gap now has local wiring - review`. `excluded` records carry a one-line reason
+that the guard requires. Dead-letter infrastructure is excluded as a separate workflow, but
+still requires the associated consumer's broker configuration and recovery proof. A schedule
+that only serves the hosted deployment (production analytics, hosted announcements, hosted
+cloud-account scans, hosted error triage) is excluded as not applicable to a portable
+deployment, and needs no local registration.
 
 A hosted handler whose source file is missing fails the guard by name and path. The only
 accepted absence is a handler generated from a private overlay into the gitignored

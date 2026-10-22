@@ -1430,7 +1430,7 @@ const overwatchAnalyticsQueueSubscription = overwatchAnalyticsQueue.subscribe(
 //   2. Publishes a continuation message to this queue with `checkpointDepth` incremented
 //   3. A new Lambda invocation CAS-claims the execution and resumes from the checkpoint
 //
-// Self-dispatch safety constraints (see agentExecutor.ts for constants):
+// Self-dispatch safety constraints (see agentExecutor.checkpointDepth.ts for constants):
 //   - CHECKPOINT_DEPTH_WARNING = 25: emits `CheckpointDepthWarning` metric to catch runaway agents early
 //   - MAX_CHECKPOINT_DEPTH    = 50: hard ceiling; Lambda refuses to process and marks the execution failed
 //
@@ -1460,7 +1460,7 @@ const agentContinuationQueue = new sst.aws.Queue('agentContinuationQueue', {
 // where the Agent Executor Lambda is defined, since it needs a reference to that Lambda.
 
 // OptiHashi Run Completion Queue
-// Handles async credit settlement when OptiHashi reports run completion/failure
+// Handles async follow-up work, including credit settlement, when OptiHashi reports run completion/failure
 const optihashiRunCompletionQueueDLQ = new sst.aws.Queue('optihashiRunCompletionQueueDLQ', {
   transform: {
     queue: {
@@ -1493,6 +1493,8 @@ const optihashiRunCompletionQueueSubscription = optihashiRunCompletionQueue.subs
   permissions: [
     { actions: ['cloudwatch:PutMetricData'], resources: ['*'] },
     { actions: ['execute-api:ManageConnections'], resources: ['*'] },
+    // Model calls follow the user's model choice, which can be a Bedrock provider outside the anthropic/amazon ARNs used elsewhere.
+    { actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'], resources: ['*'] },
   ],
 });
 

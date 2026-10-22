@@ -2,7 +2,8 @@ import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import type { ApprovalPrompt } from '../tools/types';
 import { requiresExactShellRule } from '../tools/shellScan';
-import { CLAUDE_CODE_TOOLS, type CompiledRule, type PermissionSubject, cleanToolName } from './rules';
+import { MCP_TOOL_PREFIX } from '../mcp/names';
+import { CLAUDE_CODE_TOOLS, type CompiledRule, NATIVE_NAME, type PermissionSubject, cleanToolName } from './rules';
 
 const SHELL_TOOLS = new Set(CLAUDE_CODE_TOOLS.Bash.tools);
 const READ_TOOLS = new Set(CLAUDE_CODE_TOOLS.Read.tools);
@@ -85,15 +86,17 @@ export function permissionSubject(
 }
 
 /**
- * The rules "Always, in every session" would save for this call, in the same syntax as Claude
- * Code's settings; empty when the call has no rule as narrow as what the card shows.
+ * The rules the card's "Always allow" would save for this call, in the same syntax as Claude
+ * Code's settings; empty when no rule can say what the card shows.
  *
- * Never for an irreversible call or a card with a choice, and never for a shell command reaching
- * outside the shared folders or one the scan cannot read: a rule for those would either not cover
- * the next identical call or cover far more than the user was shown.
+ * Never for an irreversible call, a card with a choice or one asked in every mode, and never for
+ * a shell command reaching outside the shared folders or one the scan cannot read: a rule for
+ * those would either not cover the next identical call or cover far more than the user was shown.
+ * A fetch saves the bare `WebFetch` (every site) and a desktop tool its bare name: the user is
+ * consenting to the tool, since a per-site or per-message rule would ask again on the next call.
  */
 export function everySessionRules(subject: PermissionSubject, prompt: ApprovalPrompt): string[] {
-  if (prompt.irreversible || prompt.choice) return [];
+  if (prompt.irreversible || prompt.choice || prompt.askInFull) return [];
   if (subject.mcp) return [`mcp__${subject.mcp.server}__${cleanToolName(subject.mcp.tool)}`];
   if (subject.shell) {
     const { commands, directories } = subject.shell;
@@ -112,8 +115,14 @@ export function everySessionRules(subject: PermissionSubject, prompt: ApprovalPr
     const tool = EDIT_TOOLS.has(subject.tool) ? 'Edit' : 'Read';
     return [...new Set(subject.paths.map(path => `${tool}(/${path})`))];
   }
-  if (subject.host) return [`WebFetch(domain:${subject.host})`];
-  return [];
+  if (FETCH_TOOLS.has(subject.tool)) return ['WebFetch'];
+  if (SHELL_TOOLS.has(subject.tool) || READ_TOOLS.has(subject.tool) || EDIT_TOOLS.has(subject.tool)) return [];
+  // An MCP call that reached here has no server to name, and `mcp__x` would read as a whole server.
+  if (subject.tool.startsWith(MCP_TOOL_PREFIX) || !NATIVE_NAME.test(subject.tool)) return [];
+  // A browser card is per site, and a bare rule saved from an ordinary one would also skip the
+  // card for acting as the user on a signed-in site: an allow rule outranks askInFull.
+  if (subject.tool.startsWith('browser_')) return [];
+  return [subject.tool];
 }
 
 /** "Bash(rm:*) in Claude Code user (~/.claude/settings.json)", for a refusal or an ask. */

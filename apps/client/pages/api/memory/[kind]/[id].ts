@@ -35,7 +35,7 @@ import { createUserMementoMemoryStore } from '@bike4mind/server-utils/memory/use
 import { createLakeMemberSourcesResolver } from '@bike4mind/server-utils/memory/lakeSourceReachability';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { DataLakeAuditEvents, logAuditEvent } from '@server/utils/auditLog';
-import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
+import { resolveAuditPrincipal } from '@bike4mind/server-utils/dataLakes/resolveAuditPrincipal';
 import type { EntitlementRequest } from '@server/entitlements';
 
 // The kinds this endpoint reads/deletes. `lake` differs from the owner-scoped kinds: a lake is

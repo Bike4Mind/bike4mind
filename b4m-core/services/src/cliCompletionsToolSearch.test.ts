@@ -6,6 +6,7 @@ const DIRECT = { id: ChatModels.CLAUDE_5_5_OPUS, backend: ModelBackend.Anthropic
 const BEDROCK = { id: ChatModels.CLAUDE_5_5_OPUS_BEDROCK, backend: ModelBackend.Bedrock };
 const OPENAI = { id: ChatModels.GPT5, backend: ModelBackend.OpenAI };
 const OLD_CLAUDE = { id: ChatModels.CLAUDE_4_1_OPUS, backend: ModelBackend.Anthropic };
+const OLD_BEDROCK_CLAUDE = { id: ChatModels.CLAUDE_4_1_OPUS_BEDROCK, backend: ModelBackend.Bedrock };
 
 const hi: IMessage[] = [{ role: 'user', content: 'hi' }];
 const searchTool: CompletionTool = {
@@ -45,8 +46,11 @@ describe('prepareWireTools', () => {
     expect(prepareWireTools(undefined, hi, DIRECT)).toEqual({ tools: [], providerTools: [] });
   });
 
-  it('splits server tools out and keeps defer_loading on a direct Anthropic model', () => {
-    const prepared = prepareWireTools([custom('a', { defer_loading: true }), custom('b'), searchTool], hi, DIRECT);
+  it.each([
+    ['a direct Anthropic model', DIRECT],
+    ['a Bedrock-served Claude model', BEDROCK],
+  ])('splits server tools out and keeps defer_loading on %s', (_label, model) => {
+    const prepared = prepareWireTools([custom('a', { defer_loading: true }), custom('b'), searchTool], hi, model);
     expect(prepared.tools.map(t => t.toolSchema)).toEqual([
       expect.objectContaining({ name: 'a', defer_loading: true }),
       expect.not.objectContaining({ defer_loading: expect.anything() }),
@@ -61,8 +65,8 @@ describe('prepareWireTools', () => {
 
   it.each([
     ['a non-Anthropic model', OPENAI],
-    ['a Bedrock-served Claude model', BEDROCK],
     ['a Claude model without tool search', OLD_CLAUDE],
+    ['a Bedrock Claude model without tool search', OLD_BEDROCK_CLAUDE],
   ])('ignores defer_loading on %s', (_label, model) => {
     const prepared = prepareWireTools(
       [custom('a', { defer_loading: true }), custom('b', { defer_loading: true })],
@@ -75,8 +79,8 @@ describe('prepareWireTools', () => {
 
   it.each([
     ['a non-Anthropic model', OPENAI],
-    ['a Bedrock-served Claude model', BEDROCK],
     ['a Claude model without tool search', OLD_CLAUDE],
+    ['a Bedrock Claude model without tool search', OLD_BEDROCK_CLAUDE],
     ['an unresolved model', undefined],
   ])('refuses a server tool on %s', (_label, model) => {
     expect(refusal(() => prepareWireTools([custom('a'), searchTool], hi, model))).toEqual({
@@ -85,13 +89,34 @@ describe('prepareWireTools', () => {
     });
   });
 
-  it('points a Bedrock caller at the direct model', () => {
-    expect(() => prepareWireTools([searchTool], hi, BEDROCK)).toThrow(/Bedrock/);
+  it('accepts tool_reference blocks and echoed tool search blocks on a Bedrock-served Claude model', () => {
+    const references = withToolResult([{ type: 'tool_reference', tool_name: 'a' }]);
+    expect(() => prepareWireTools([custom('a')], references, BEDROCK)).not.toThrow();
+    const echoed = [
+      { role: 'user', content: 'weather?' },
+      {
+        role: 'assistant',
+        content: [{ type: 'server_tool_use', id: 'srvtoolu_1', name: 'tool_search_tool_regex', input: {} }],
+      },
+      { role: 'user', content: 'go on' },
+    ] as IMessage[];
+    expect(() => prepareWireTools([custom('a')], echoed, BEDROCK)).not.toThrow();
+    const undeclared = withToolResult([{ type: 'tool_reference', tool_name: 'nope' }]);
+    expect(refusal(() => prepareWireTools([custom('a')], undeclared, BEDROCK)).errorCode).toBe(
+      'unknown_tool_reference'
+    );
+  });
+
+  it.each([
+    ['all_tools_deferred', [custom('a', { defer_loading: true })]],
+    ['deferred_tool_cache_control', [custom('a'), custom('b', { defer_loading: true, cache_control: {} }), searchTool]],
+  ])('applies the %s rule on a Bedrock-served Claude model', (errorCode, tools) => {
+    expect(refusal(() => prepareWireTools(tools as CompletionTool[], hi, BEDROCK)).errorCode).toBe(errorCode);
   });
 
   it('refuses tool_reference blocks and echoed tool search blocks where tool search is unsupported', () => {
     const references = withToolResult([{ type: 'tool_reference', tool_name: 'a' }]);
-    expect(refusal(() => prepareWireTools([custom('a')], references, BEDROCK)).errorCode).toBe(
+    expect(refusal(() => prepareWireTools([custom('a')], references, OLD_BEDROCK_CLAUDE)).errorCode).toBe(
       'tool_search_unsupported'
     );
 

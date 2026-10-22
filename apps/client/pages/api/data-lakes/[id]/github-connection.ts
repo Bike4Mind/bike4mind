@@ -13,7 +13,7 @@ import { z } from 'zod';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
-import { getGitHubLakeAppConfig } from '@server/integrations/github/dataLake/lakeAppClient';
+import { getGitHubLakeAppConfig } from '@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient';
 import {
   buildGitHubLakeAuthorizeUrl,
   requestGitHubLakeDisconnect,
