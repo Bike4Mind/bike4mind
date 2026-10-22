@@ -4117,15 +4117,14 @@ export class ChatService {
           ...(standing.value === undefined ? {} : { value: standing.value }),
         };
       }
-      if (currentlyTainted) return null;
-
       // A shell command whose every sub-command was allowed before, by prefix, runs - but not
-      // past a directory outside the project that the user has not allowed too.
+      // past a directory outside the project that the user has not allowed too. Over a tainted
+      // reply, only prefixes the user allowed on a card that already named the taint count.
       const always = prompt.always;
       if (
         always &&
         !prompt.askInAuto &&
-        gate.coversCommands(sessionId, always) &&
+        gate.coversCommands(sessionId, always, currentlyTainted) &&
         gate.uncoveredDirectories(sessionId, always.directories).length === 0
       ) {
         return { decision: 'once' };
@@ -4598,8 +4597,8 @@ export class ChatService {
    * 'auto' follows opencode: everything runs except a call that names a reason to stop - a
    * repeat of the last two calls, a read of a `.env` file, a script that does not parse, a
    * command that can send data out, an outbound call after the reply read untrusted content
-   * (see DirectoryTurn.untrusted) unless it is a contained shell command, or a path outside the
-   * project the user has not allowed.
+   * (see DirectoryTurn.untrusted) unless it is a contained shell command - which includes local
+   * test, typecheck, lint and build runs - or a path outside the project the user has not allowed.
    */
   private autoApproves(
     mode: ChatApprovalMode,

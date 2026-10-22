@@ -538,9 +538,9 @@ export interface ApprovalPrompt {
    */
   askInAuto?: true;
   /**
-   * Proven by the shell scan to keep to this computer or only read from GitHub (see
-   * shellScan's `containedCommand`), so untrusted content read earlier in the reply is no reason
-   * to ask: steered or not, the call has nowhere to send what it reads.
+   * Proven by the shell scan to keep to this computer, only read from GitHub, or be a local
+   * toolchain run (see shellScan's `containedCommand`), so untrusted content read earlier in the
+   * reply is no reason to ask: steered or not, the call has nowhere of its own to send what it reads.
    */
   contained?: true;
   /**

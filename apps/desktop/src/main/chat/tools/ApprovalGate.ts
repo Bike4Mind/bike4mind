@@ -71,6 +71,8 @@ function withinDirectory(directory: string, candidate: string): boolean {
 
 interface StandingShell {
   patterns: Set<string>;
+  /** The patterns answered on a card that said the reply had read untrusted content. */
+  overTaint: Set<string>;
   directories: Set<string>;
 }
 
@@ -150,15 +152,19 @@ export class ApprovalGate {
     return null;
   }
 
-  /** Whether every sub-command of this script has been allowed before. */
-  coversCommands(sessionId: string, always: ApprovalAlways): boolean {
+  /**
+   * Whether every sub-command of this script has been allowed before. Over a tainted reply only
+   * patterns answered over taint count, and never for a command that runs code the scan cannot read.
+   */
+  coversCommands(sessionId: string, always: ApprovalAlways, tainted = false): boolean {
     const standing = this.standingShell.get(sessionId);
     if (!standing || always.commands.length === 0) return false;
-    const own = [...standing.patterns]
+    const own = [...(tainted ? standing.overTaint : standing.patterns)]
       .filter(entry => entry.startsWith(`${always.namespace}\x00`))
       .map(entry => entry.slice(always.namespace.length + 1));
     return always.commands.every(
-      ({ text, coverable }) => coverable && own.some(pattern => patternMatches(pattern, text))
+      ({ text, coverable, opaque }) =>
+        coverable && !(tainted && opaque) && own.some(pattern => patternMatches(pattern, text))
     );
   }
 
@@ -204,7 +210,7 @@ export class ApprovalGate {
           (!options.rememberable || (!!answer.optionId && options.rememberable.includes(answer.optionId)));
         if (keep) {
           this.remember(sessionId, standingKey(key, answer.optionId), answer, options.tainted === true);
-          if (options.always) this.rememberShell(sessionId, options.always);
+          if (options.always) this.rememberShell(sessionId, options.always, options.tainted === true);
         }
         if (announced) this.listener?.settled(sessionId);
         resolve({
@@ -289,9 +295,17 @@ export class ApprovalGate {
     this.standingShell.clear();
   }
 
-  private rememberShell(sessionId: string, always: ApprovalAlways): void {
-    const standing = this.standingShell.get(sessionId) ?? { patterns: new Set(), directories: new Set() };
-    for (const { pattern } of always.commands) standing.patterns.add(`${always.namespace}\x00${pattern}`);
+  private rememberShell(sessionId: string, always: ApprovalAlways, overTaint: boolean): void {
+    const standing = this.standingShell.get(sessionId) ?? {
+      patterns: new Set(),
+      overTaint: new Set(),
+      directories: new Set(),
+    };
+    for (const { pattern } of always.commands) {
+      const entry = `${always.namespace}\x00${pattern}`;
+      standing.patterns.add(entry);
+      if (overTaint) standing.overTaint.add(entry);
+    }
     for (const directory of always.directories) standing.directories.add(directory);
     this.standingShell.set(sessionId, standing);
   }

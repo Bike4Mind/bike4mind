@@ -160,10 +160,13 @@ describe('ApprovalGate', () => {
       directories,
     });
 
-    async function allow(gate: ApprovalGate, remembered: ApprovalAlways) {
+    async function allow(gate: ApprovalGate, remembered: ApprovalAlways, tainted = false) {
       const controller = new AbortController();
       let approvalId = '';
-      const answer = gate.request('s', 'key', controller.signal, id => (approvalId = id), { always: remembered });
+      const answer = gate.request('s', 'key', controller.signal, id => (approvalId = id), {
+        always: remembered,
+        tainted,
+      });
       gate.resolve(approvalId, { decision: 'always' });
       await answer;
     }
@@ -210,6 +213,30 @@ describe('ApprovalGate', () => {
       expect(
         gate.coversCommands('s', { ...stripped, commands: stripped.commands.map(c => ({ ...c, coverable: false })) })
       ).toBe(false);
+    });
+
+    it('covers a tainted reply only with prefixes answered over taint', async () => {
+      const gate = new ApprovalGate();
+      await allow(gate, always(['git status *'], ['git status']));
+      const later = always(['git status *'], ['git status --short']);
+      expect(gate.coversCommands('s', later)).toBe(true);
+      expect(gate.coversCommands('s', later, true)).toBe(false);
+
+      await allow(gate, always(['git diff *', 'git status *'], ['git diff', 'git status']), true);
+      expect(gate.coversCommands('s', later, true)).toBe(true);
+      expect(gate.coversCommands('s', always(['git diff *'], ['git diff --stat']), true)).toBe(true);
+    });
+
+    it('never covers an opaque command over taint, whatever was answered', async () => {
+      const gate = new ApprovalGate();
+      await allow(gate, always(['node *'], ['node -e x']), true);
+      const opaque: ApprovalAlways = {
+        namespace: 'bash_execute',
+        commands: [{ pattern: 'node *', text: 'node -e y', coverable: true, opaque: 'node -e' }],
+        directories: [],
+      };
+      expect(gate.coversCommands('s', opaque)).toBe(true);
+      expect(gate.coversCommands('s', opaque, true)).toBe(false);
     });
 
     it('keeps the two shell tools apart', async () => {
