@@ -86,6 +86,13 @@ const projectTest = {
   // mask a real bug. Guarded by vitest.config.test.ts: this gate only changes behaviour on
   // failure, so nothing else would catch it silently widening into the unit lane.
   ...(INTEGRATION_LANE ? { retry: 2 } : {}),
+  // @bike4mind/common's dist is one ~2MB bundle. As a symlinked workspace package vitest inlines
+  // it, re-running it through the module runner in every file (~150ms each, ~460 files a shard);
+  // loading it natively is markedly cheaper. Safe for common because it sits at the bottom of the
+  // graph: mocking '@bike4mind/common' itself still works, but a vi.mock cannot reach the modules
+  // it imports (zod, axios, dayjs, @bike4mind/hearth). Not extended to services/utils/database for
+  // exactly that reason: suites mock @bike4mind/utils and expect services' internal calls to see it.
+  server: { deps: { external: [/\/b4m-core\/common\/dist\//] } },
 };
 
 // Vite-level options both projects share. A factory, not a constant: each project gets its own
