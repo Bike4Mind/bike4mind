@@ -34,9 +34,24 @@ describe.skipIf(process.platform === 'win32')('resolveUserPath', () => {
     expect(path.split(delimiter)).toContain('/opt/homebrew/bin');
   });
 
-  it('keeps the inherited PATH and common locations when the shell cannot start', async () => {
+  it('kills a slow probe with SIGKILL, which an interactive shell cannot ignore like SIGTERM', async () => {
+    const actual = await vi.importActual<typeof import('node:child_process')>('node:child_process');
+    const execFile = vi.fn(actual.execFile);
+    vi.doMock('node:child_process', () => ({ ...actual, execFile }));
+    vi.stubEnv('SHELL', join(directory, 'missing-shell'));
+    const { resolveUserPath } = await import('./userPath');
+
+    await resolveUserPath();
+
+    expect(execFile.mock.calls[0][2]).toMatchObject({ killSignal: 'SIGKILL' });
+    vi.doUnmock('node:child_process');
+  });
+
+  it('keeps the inherited PATH plus Homebrew and Nix locations when the shell cannot start', async () => {
     vi.stubEnv('SHELL', join(directory, 'missing-shell'));
     vi.stubEnv('PATH', '/custom/bin:/usr/bin');
+    vi.stubEnv('HOME', '/Users/test');
+    vi.stubEnv('USER', 'test');
     const { resolveUserPath } = await import('./userPath');
 
     const path = await resolveUserPath();
@@ -47,6 +62,10 @@ describe.skipIf(process.platform === 'win32')('resolveUserPath', () => {
       '/opt/homebrew/bin',
       '/opt/homebrew/sbin',
       '/usr/local/bin',
+      '/Users/test/.nix-profile/bin',
+      '/etc/profiles/per-user/test/bin',
+      '/run/current-system/sw/bin',
+      '/nix/var/nix/profiles/default/bin',
     ]);
   });
 });
