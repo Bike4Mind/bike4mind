@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { chmod, mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -283,6 +284,16 @@ describe('ChatService untrusted content in a reply', () => {
 
     await awaitCall('bash_execute', 'done');
     expect(calls('bash_execute', 'awaiting-approval')).toHaveLength(0);
+  });
+
+  it("asks before a push to the folder's own origin once the reply is tainted", async () => {
+    execFileSync('git', ['-C', root, 'init', '-q', '-b', 'feat/x']);
+    execFileSync('git', ['-C', root, 'remote', 'add', 'origin', 'git@github.com:acme/app.git']);
+    const id = await session('auto');
+    await reply(id, [fetch, ['bash_execute', { command: 'git push -u origin feat/x', cwd: root }]]);
+
+    const asked = await awaitCall('bash_execute', 'awaiting-approval');
+    expect(asked.approvalDetail).toContain('read content from the web (web_fetch).');
   });
 
   it('does not let an exact "always" skip the question once the reply is tainted', async () => {

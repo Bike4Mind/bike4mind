@@ -57,7 +57,7 @@ vi.mock('@bike4mind/common', async importOriginal => ({
   redactUserSecretsForSelf: (user: unknown) => user,
 }));
 
-import { SECRET_USER_FIELDS, expectSelfUserStripped } from '@server/auth/__tests__/sessionUserSecrets';
+import { secretUserFields, expectSelfUserStripped } from '@server/auth/__tests__/sessionUserSecrets';
 import authenticateHandler from '@pages/api/auth/mfa/passkey/authenticate';
 import registerHandler from '@pages/api/auth/mfa/passkey/register';
 import registerOptionsHandler from '@pages/api/auth/mfa/passkey/register-options';
@@ -113,7 +113,7 @@ describe('/api/auth/mfa/passkey/authenticate', () => {
   });
 
   it('strips secrets and undeclared fields from the user in the response', async () => {
-    mockFinishAuthentication.mockResolvedValue({ user: { id: 'user-1', ...SECRET_USER_FIELDS }, credentialId: 'pk-1' });
+    mockFinishAuthentication.mockResolvedValue({ user: { id: 'user-1', ...secretUserFields() }, credentialId: 'pk-1' });
     const { req, res } = makeReqRes({ response: assertion });
 
     await authenticateHandler(
@@ -123,7 +123,7 @@ describe('/api/auth/mfa/passkey/authenticate', () => {
 
     const body = res._getJSONData();
     expect(body.accessToken).toBe('full-access');
-    expectSelfUserStripped(body.user, body);
+    expectSelfUserStripped(body.user, body, 'user-1');
   });
 
   it('honours the shared MFA lockout before verifying anything', async () => {

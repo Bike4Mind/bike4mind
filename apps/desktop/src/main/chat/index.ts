@@ -95,6 +95,7 @@ import {
 import { readWorkspaceChanges } from './project/workspaceChanges';
 import { accountSkillsProvider } from './skills/accountSkills';
 import { ProjectTrustStore } from './skills/ProjectTrustStore';
+import { ApprovalLog } from './permissions/ApprovalLog';
 import { ClaudeCodeSettings, MANAGED_SETTINGS_PATH } from './permissions/ClaudeCodeSettings';
 import { PermissionRuleStore } from './permissions/PermissionRuleStore';
 import { PermissionService } from './permissions/PermissionService';
@@ -483,6 +484,8 @@ export function registerChat(
     modelMemory: modelPreference,
     approvals,
     permissions,
+    // App-wide like approval-mode.json: a record of decisions, kept after their conversations.
+    approvalLog: new ApprovalLog(join(userData, 'approval-log.jsonl'), message => logger.warn(message)),
     background,
     foreground,
     dependencies: new DependencyInstaller(background),
