@@ -186,6 +186,7 @@ export class S3Storage extends BaseStorage {
       ACL,
       ContentType,
       ContentLength,
+      ResponseContentType,
       ResponseContentDisposition,
     }: {
       expiresIn?: number;
@@ -197,6 +198,11 @@ export class S3Storage extends BaseStorage {
        * This is what makes a declared upload size, and the size and quota checks run on it, binding.
        */
       ContentLength?: number;
+      /**
+       * GET only: the Content-Type S3 answers with, regardless of the type stored on the object.
+       * Lets a caller pin what a browser may render from a signed link.
+       */
+      ResponseContentType?: string;
       ResponseContentDisposition?: string;
     } = {}
   ): Promise<string> {
@@ -214,6 +220,7 @@ export class S3Storage extends BaseStorage {
         : new GetObjectCommand({
             Bucket: this.bucketName,
             Key: path,
+            ResponseContentType,
             ResponseContentDisposition,
           }),
       {

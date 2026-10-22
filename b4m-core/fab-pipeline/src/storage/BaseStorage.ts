@@ -11,6 +11,11 @@ export abstract class BaseStorage {
       ACL?: any;
       /** PUT only: the exact byte length the upload must have (see S3Storage.getSignedUrl). */
       ContentLength?: number;
+      audience?: 'browser';
+      /** GET only: overrides the stored object's Content-Type on the signed response. */
+      ResponseContentType?: string;
+      /** GET only: overrides the stored object's Content-Disposition on the signed response. */
+      ResponseContentDisposition?: string;
     }
   ): Promise<string>;
   abstract getPublicUrl(path: string): string;

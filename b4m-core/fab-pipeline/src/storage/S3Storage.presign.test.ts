@@ -67,6 +67,20 @@ describe('S3Storage browser-facing signing endpoint', () => {
     expect(url.searchParams.get('X-Amz-Signature')).not.toBe(expectedGetSignature(url, 'wrong-secret'));
   });
 
+  it('signs a pinned response Content-Type into a GET capability', async () => {
+    vi.stubEnv('S3_PRESIGN_ENDPOINT', 'https://objects.example.invalid:9443');
+    const url = new URL(
+      await new S3Storage('exports-bucket', 'us-east-2').getSignedUrl('bundle/report.pdf', 'get', {
+        audience: 'browser',
+        ResponseContentType: 'application/pdf',
+        ResponseContentDisposition: 'inline',
+      })
+    );
+    expect(url.searchParams.get('response-content-type')).toBe('application/pdf');
+    expect(url.searchParams.get('response-content-disposition')).toBe('inline');
+    expect(url.searchParams.get('X-Amz-Signature')).toBe(expectedGetSignature(url));
+  });
+
   it('uses the configured signing origin for PUT capabilities too', async () => {
     vi.stubEnv('S3_PRESIGN_ENDPOINT', 'http://localhost:19000');
     const url = new URL(
