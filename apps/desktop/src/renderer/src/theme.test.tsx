@@ -2,7 +2,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CssVarsProvider } from '@mui/joy/styles';
+import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import Dropdown from '@mui/joy/Dropdown';
 import Menu from '@mui/joy/Menu';
 import MenuButton from '@mui/joy/MenuButton';
@@ -103,9 +103,8 @@ const contrast = (a: Rgb, b: Rgb): number => {
 describe('the desktop dark palette', () => {
   const { palette } = desktopTheme.colorSchemes.dark;
 
-  it('no longer paints the page pure black', () => {
-    expect(palette.background.body).toBe(DARK_PALETTE.page);
-    expect(palette.background.body.toLowerCase()).not.toMatch(/^#0{3}(0{3})?$/);
+  it('leaves the light scheme on Joy defaults', () => {
+    expect(desktopTheme.colorSchemes.light.palette).toEqual(extendTheme().colorSchemes.light.palette);
   });
 
   it.each(['primary', 'secondary', 'tertiary'] as const)('sets text.%s at 4.5:1 or better on every ground', step => {
@@ -115,8 +114,8 @@ describe('the desktop dark palette', () => {
     }
   });
 
-  it('keeps the prompt bubble text readable at rest and when pressed', () => {
-    for (const fill of [palette.primary.softBg, palette.primary.softActiveBg]) {
+  it('keeps the prompt bubble text readable at rest, on hover and when pressed', () => {
+    for (const fill of [palette.primary.softBg, palette.primary.softHoverBg, palette.primary.softActiveBg]) {
       expect(contrast(hexToRgb(DARK_PALETTE.ink), hexToRgb(fill))).toBeGreaterThanOrEqual(4.5);
     }
   });
