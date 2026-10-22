@@ -136,7 +136,14 @@ describe('settings helpers over contributed definitions', () => {
       isSensitive: true,
       group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     });
-    registerContributedSettings([plain, experimentalSecret]);
+    const experimentalFlag = makeContributedBooleanSetting({
+      key: 'extensionExperimentalFlag',
+      name: 'x',
+      description: 'x',
+      group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    });
+    registerContributedSettings([plain, experimentalSecret, experimentalFlag]);
+    expect(userReadableSettingKeys()).toContain('extensionExperimentalFlag');
     expect(getExperimentalFeatureSettingKeys()).toContain('extensionExperimentalSecret');
     expect(userReadableSettingKeys()).not.toContain('extensionExperimentalSecret');
     expect(userReadableSettingKeys()).not.toContain('extensionPlain');

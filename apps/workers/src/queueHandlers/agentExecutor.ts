@@ -1,4 +1,3 @@
-import '@client/lib/settings/registerContributedSettings';
 /**
  * Agent Executor Lambda Handler
  *
@@ -16,6 +15,7 @@ import '@client/lib/settings/registerContributedSettings';
  * 3. Direct Lambda invocation with ContinuationSchema - resumes after permission response
  */
 
+import '@client/lib/settings/registerContributedSettings';
 import {
   connectDB,
   sessionRepository,
