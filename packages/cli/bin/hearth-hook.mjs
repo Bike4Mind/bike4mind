@@ -51,9 +51,20 @@ const DEBUG = Boolean(B4M_HEARTH_DEBUG) && B4M_HEARTH_DEBUG !== '0';
 process.stderr.on('error', () => {});
 
 // Resolves once the line is flushed: stderr to a pipe is async on macOS, so
-// exiting straight after a bare write can drop it.
+// exiting straight after a bare write can drop it. Bounded, because a full pipe
+// with a stalled reader never calls back - and a diagnostic must not be the
+// thing that holds the session open.
+const FLUSH_DEADLINE_MS = 250;
 const debug = line =>
-  DEBUG ? new Promise(done => process.stderr.write(`hearth-hook: ${line}\n`, () => done())) : Promise.resolve();
+  DEBUG
+    ? new Promise(done => {
+        const deadline = setTimeout(done, FLUSH_DEADLINE_MS).unref();
+        process.stderr.write(`hearth-hook: ${line}\n`, () => {
+          clearTimeout(deadline);
+          done();
+        });
+      })
+    : Promise.resolve();
 
 const DEFAULT_DISCLOSURE = 2;
 const MAX_DISCLOSURE = 2;

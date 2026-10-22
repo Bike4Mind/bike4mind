@@ -47,24 +47,43 @@ const STDIN_ERROR_PRELOAD =
   "data:text/javascript,setTimeout(()=>process.stdin.destroy(Object.assign(new Error('EIO'),{code:'EIO'})),100)";
 
 /**
+ * Preload that fills the stderr pipe and queues a write that never lands, so the
+ * hook's own line cannot be flushed until someone reads. Paired with a parent
+ * that never drains.
+ */
+const STALLED_STDERR_PRELOAD = "data:text/javascript,process.stderr.write('x'.repeat(1<<20))";
+
+/**
  * Spawns the hook with stderr captured. `injectStdinError` leaves stdin open and
- * breaks it; `closedStderr` closes the read end so the child's writes hit EPIPE.
+ * breaks it; `closedStderr` closes the read end so the child's writes hit EPIPE;
+ * `stalledStderr` leaves a full pipe undrained and kills the child if it has not
+ * exited on its own, so a hang fails the assertion instead of the test timeout.
  */
 function runHookCapturing(
   env: Record<string, string>,
-  opts: { injectStdinError?: boolean; closedStderr?: boolean } = {}
+  opts: { injectStdinError?: boolean; closedStderr?: boolean; stalledStderr?: boolean } = {}
 ) {
   return new Promise<{ code: number; stderr: string }>((resolve, reject) => {
-    const child = spawn(
-      process.execPath,
-      [...(opts.injectStdinError ? ['--import', STDIN_ERROR_PRELOAD] : []), HOOK_PATH],
-      { env: { ...ambientHookEnv(), ...env }, stdio: ['pipe', 'ignore', 'pipe'] }
-    );
+    const preloads = [
+      opts.injectStdinError ? STDIN_ERROR_PRELOAD : '',
+      opts.stalledStderr ? STALLED_STDERR_PRELOAD : '',
+    ]
+      .filter(Boolean)
+      .flatMap(source => ['--import', source]);
+    const child = spawn(process.execPath, [...preloads, HOOK_PATH], {
+      env: { ...ambientHookEnv(), ...env },
+      stdio: ['pipe', 'ignore', 'pipe'],
+    });
     let stderr = '';
     if (opts.closedStderr) child.stderr.destroy();
+    else if (opts.stalledStderr) child.stderr.pause();
     else child.stderr.on('data', c => (stderr += c));
+    const watchdog = opts.stalledStderr ? setTimeout(() => child.kill('SIGKILL'), 4000) : undefined;
     child.on('error', reject);
-    child.on('close', code => resolve({ code: code ?? -1, stderr }));
+    child.on('close', code => {
+      clearTimeout(watchdog);
+      resolve({ code: code ?? -1, stderr });
+    });
     if (!opts.injectStdinError) {
       child.stdin.write(JSON.stringify(HOOK_INPUT));
       child.stdin.end();
@@ -566,6 +585,17 @@ describe('bin/hearth-hook.mjs privacy contract', () => {
       }
     }, 15000);
 
+    it('stays silent on a non-2xx with B4M_HEARTH_DEBUG=0', async () => {
+      const { port, close } = await startCaptureServer(401);
+      try {
+        const { code, stderr } = await runHookCapturing({ ...HOOK_ENV(port), B4M_HEARTH_DEBUG: '0' });
+        expect(code).toBe(0);
+        expect(stderr).toBe('');
+      } finally {
+        close();
+      }
+    }, 15000);
+
     it('stays silent on a 2xx even with the debug flag', async () => {
       const { port, close } = await startCaptureServer(201);
       try {
@@ -597,6 +627,36 @@ describe('bin/hearth-hook.mjs privacy contract', () => {
       try {
         const { code } = await runHookCapturing({ ...HOOK_ENV(port), B4M_HEARTH_DEBUG: '1' }, { closedStderr: true });
         expect(code).toBe(0);
+      } finally {
+        close();
+      }
+    }, 15000);
+
+    // The flush is awaited so the line survives, but it must never be the exit's
+    // slowest input: a full pipe with nobody reading would otherwise hold the
+    // session open for as long as the reader stays away.
+    it('exits promptly when the debug line cannot be flushed to a stalled stderr', async () => {
+      const { port, close } = await startCaptureServer(401);
+      try {
+        const started = Date.now();
+        const { code } = await runHookCapturing({ ...HOOK_ENV(port), B4M_HEARTH_DEBUG: '1' }, { stalledStderr: true });
+        expect(code).toBe(0);
+        expect(Date.now() - started).toBeLessThan(2000);
+      } finally {
+        close();
+      }
+    }, 15000);
+
+    it('exits promptly on a stdin error when stderr is stalled', async () => {
+      const { port, close } = await startCaptureServer(201);
+      try {
+        const started = Date.now();
+        const { code } = await runHookCapturing(
+          { ...HOOK_ENV(port), B4M_HEARTH_DEBUG: '1' },
+          { injectStdinError: true, stalledStderr: true }
+        );
+        expect(code).toBe(0);
+        expect(Date.now() - started).toBeLessThan(2000);
       } finally {
         close();
       }
