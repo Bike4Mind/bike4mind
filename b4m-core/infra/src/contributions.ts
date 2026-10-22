@@ -32,7 +32,19 @@ export const EMPTY_INFRA_RESOURCE_CONTRIBUTIONS: InfraResourceContributions = { 
 // 'MongodbUri' would read MONGODB_URI.
 const RESOURCE_NAME_PATTERN = /^[A-Z][A-Z0-9_]*$/;
 // Variables the runtime, the platform or core already own; a contribution must not set or read them.
-const RESERVED_ENV_PREFIXES = ['AWS_', 'AMAZON_', 'LAMBDA_', 'ECS_', 'LD_', 'NODE_', 'NPM_', 'SST_', 'NEXT_', 'B4M_'];
+const RESERVED_ENV_PREFIXES = [
+  'AWS_',
+  'AMAZON_',
+  'LAMBDA_',
+  'ECS_',
+  'LD_',
+  'NODE_',
+  'NPM_',
+  'SST_',
+  'NEXT_',
+  'B4M_',
+  'OPENSSL_',
+];
 const RESERVED_ENV_NAMES = new Set([
   'PATH',
   'HOME',
@@ -44,6 +56,13 @@ const RESERVED_ENV_NAMES = new Set([
   'TZ',
   'TMPDIR',
   'PORT',
+  // Outbound HTTP clients read these, so setting one reroutes or re-trusts every request.
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'ALL_PROXY',
+  'NO_PROXY',
+  'SSL_CERT_FILE',
+  'SSL_CERT_DIR',
 ]);
 
 export function isValidContributedResourceName(name: unknown): name is string {
