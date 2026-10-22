@@ -388,6 +388,19 @@ export function resolveOpenAiBareModelAlias(modelId: string): string {
   return OPENAI_BARE_MODEL_ALIASES.get(modelId) ?? modelId;
 }
 
+const EMPTY_CONVERSATION_MESSAGE = 'request must contain at least one non-empty user or assistant message';
+
+function hasEffectiveConversationMessage(messages: IMessage[]): boolean {
+  return messages.some(message => {
+    if (message.role !== 'user' && message.role !== 'assistant') return false;
+    if ('tool_calls' in message && Array.isArray(message.tool_calls) && message.tool_calls.length > 0) return true;
+    if (typeof message.content === 'string') return message.content.trim().length > 0;
+    return Array.isArray(message.content)
+      ? message.content.some(block => block.type !== 'text' || Boolean(block.text?.trim()))
+      : false;
+  });
+}
+
 /**
  * Shared LLM completion logic for the SSE, WebSocket and embed completion routes.
  */
@@ -400,6 +413,10 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   const messages = normalizeMultimodalMessages(params.messages);
   const source: CompletionSource = params.source ?? 'api';
   const completionStartTime = Date.now();
+
+  if (!hasEffectiveConversationMessage(messages)) {
+    throw new BadRequestError(EMPTY_CONVERSATION_MESSAGE);
+  }
 
   // Fail-closed before any credit reservation: wire tools (client-executed, executeTools
   // false) and server tools (executeTools true) imply opposite loop semantics - silently
