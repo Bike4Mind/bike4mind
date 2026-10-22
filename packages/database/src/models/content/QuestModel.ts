@@ -137,6 +137,26 @@ const NotServingLakesSchema = subSchema({
   reason: { type: String, required: true },
 });
 
+// ITurnTiming. No enum on `reason`, per the file header's rule: TURN_RETRY_REASONS is the contract.
+const TurnRetrySchema = subSchema({
+  reason: { type: String, required: true },
+  status: { type: Number, required: false },
+  retryAfterMs: { type: Number, required: false },
+  requestId: { type: String, required: false },
+  delayMs: { type: Number, required: true },
+  model: { type: String, required: true },
+  at: { type: Date, required: true },
+});
+
+const TurnTimingSchema = subSchema({
+  queueMs: { type: Number, required: true },
+  contextBuildMs: { type: Number, required: false },
+  semaphoreWaitMs: { type: Number, required: true },
+  totalMs: { type: Number, required: false },
+  retries: { type: [TurnRetrySchema], required: true },
+  fallbackHops: { type: Number, required: true },
+});
+
 // Same rationale as LakeMemorySchema above (subSchema + default:undefined to suppress
 // auto-vivification of `surfaces`/`dataLakeTags` as empty arrays, which would fail the Zod
 // re-parse since `attempted` is required). Top-level on promptMeta, not nested under
@@ -828,6 +848,8 @@ export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
       required: false,
       _id: false,
     },
+    // Same projection requirement as attachmentNotices.
+    turnTiming: { type: TurnTimingSchema, required: false },
     // Generalized UI side-effects extracted from tool __uiSideEffect sentinels
     uiSideEffects: {
       type: [
@@ -1022,7 +1044,7 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     const result = await this.model
       .find({ sessionId, deletedAt: null })
       .select(
-        'sessionId timestamp type status errorCode prompt reply replies fabFileIds images promptMeta creditsUsed attachmentNotices attachmentDelivery suggestedChoices pinned'
+        'sessionId timestamp type status errorCode prompt reply replies fabFileIds images promptMeta creditsUsed attachmentNotices attachmentDelivery turnTiming suggestedChoices pinned'
       )
       .sort({ timestamp: sort, _id: sort })
       .skip(limit * (page - 1))
@@ -1348,6 +1370,16 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     if (!image) return [];
     const docs = await this.model.find({ images: image }, { sessionId: 1 }).setOptions({ includeDeleted: true });
     return [...new Set(docs.map(d => d.sessionId))];
+  }
+
+  // Every organization a user's quests were recorded under, soft-deleted ones included: a DSAR
+  // export or deletion has to reach rows the user can no longer see, and telemetry hashes are keyed
+  // by that organization. One full scan of the user's quests, which is why it is not on a read path.
+  async findOrganizationIdsForUser(userId: string): Promise<string[]> {
+    const orgIds: unknown[] = await this.model
+      .distinct('promptMeta.session.organizationId', { 'promptMeta.session.userId': userId })
+      .setOptions({ includeDeleted: true });
+    return orgIds.filter(Boolean).map(String);
   }
 
   // The subset of `keys` that some quest in this session references as generated media (`images`

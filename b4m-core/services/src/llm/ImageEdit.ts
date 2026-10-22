@@ -488,7 +488,9 @@ export class ImageEditService {
     ]);
     if (!user) throw new NotFoundError('User not found');
 
-    const settings = await getSettingsMap(this.db);
+    // skipCache: enforceCredits gates money (and ModerationEnabled below gates content safety),
+    // and this host may outlive the admin's write to either.
+    const settings = await getSettingsMap(this.db, { skipCache: true });
     const adminSettingsEnforceCredits = getSettingsValue('enforceCredits', settings);
 
     const parseQuestToStreamPayload = (quest: IChatHistoryItemDocument) => {
@@ -618,8 +620,6 @@ export class ImageEditService {
         quest: parseQuestToStreamPayload(quest),
         statusMessage: 'Preparing to paint...',
       });
-
-      const settings = await getSettingsMap(this.db);
 
       if (getSettingsValue('ModerationEnabled', settings)) {
         await clientMessageSender.sendToClient(userId, wsEndpoint, {

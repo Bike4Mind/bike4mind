@@ -11,6 +11,7 @@ import type {
   ChatDiff,
   ChatMedia,
   ChatMessage,
+  ChatApprovalAnswer,
   ChatMessageSkill,
   ChatModelCatalog,
   ChatModelOption,
@@ -37,6 +38,7 @@ import type {
   StartSpawnSuggestionRequest,
   UpdateProjectRequest,
   UpdateProjectResult,
+  WorkspacePreparation,
 } from '@shared/chat';
 import { awaitsWorktree, branchHolder, isTurnBudgetStop, messagesSinceBoundary } from '@shared/chat';
 import { shouldAutoCompact } from '@shared/contextLimit';
@@ -78,7 +80,7 @@ import type { DependencyInstaller } from './project/dependencyInstall';
 import { defaultUserInstructionsRoot } from './project/instructions';
 import { type MemoryStore, memoryStoreFor } from './project/memory';
 import { ProjectContextCache } from './project/projectContext';
-import { resolveWorkspace, type WorkspaceOutcome } from './project/workspace';
+import { prefetchBase, resolveWorkspace, type SpareWorktrees, type WorkspaceOutcome } from './project/workspace';
 import { MAX_ATTACHMENTS_PER_TURN, textAttachmentBlock } from './attachments';
 import type { AttachmentStore } from './AttachmentStore';
 import type { SidebarSectionStore } from './SidebarSectionStore';
@@ -105,6 +107,7 @@ import type { MediaStore } from './media/MediaStore';
 import type { VideoJobScheduler } from './media/VideoJobScheduler';
 import type { MessageQueue } from './MessageQueue';
 import { resolveDefaultModel, type ModelCatalog } from './ModelCatalog';
+import { PhaseTimer } from './PhaseTimer';
 import type { ModelMemory } from './ModelPreference';
 import { createThinkFilter, type ThinkSplit } from './thinkFilter';
 import { readableThinking } from './thinkingBlocks';
@@ -137,7 +140,7 @@ import { webContextFor } from './tools/webTools';
 import { DoomLoopTracker } from './tools/doomLoop';
 import { WEB_SEARCH_TURN_BUDGET, WebSearchLimiter } from './tools/webSearchLimits';
 import { INTERRUPTED_MESSAGE, STOPPED_BEFORE_CHANGE, untilStopped } from './tools/interruptible';
-import { spendsCredits, readsUntrusted, sendsOut } from './tools/riskAssessment';
+import { alwaysOverridesTaint, spendsCredits, readsUntrusted, sendsOut } from './tools/riskAssessment';
 import { MCP_TOOL_PREFIX } from './mcp/names';
 import type { PermissionScopeKey, PermissionService } from './permissions/PermissionService';
 import { describeRule, everySessionRules, permissionSubject } from './permissions/subject';
@@ -229,6 +232,8 @@ const TURN_LIMITS: TurnLimits = {
 type TurnOutcome = 'completed' | 'aborted' | 'failed';
 
 type SendOptions = {
+  /** Only launchSpawned may consume the initial-turn reservation. */
+  spawnSeed?: true;
   /** A taken queue entry must never fall back into the queue. */
   released?: ChatQueuedMessage;
   /** A spawned session inherits its parent's relay depth. */
@@ -347,7 +352,7 @@ export interface ChatServiceDeps {
   approvals?: ApprovalGate;
   /**
    * Standing allow, ask and deny rules - the desktop's and Claude Code's. Read here, and written
-   * only by the approval card's "Always, in every session"; no tool can reach it.
+   * only by the approval card's "Always allow"; no tool can reach it.
    */
   permissions?: Pick<PermissionService, 'rulesFor' | 'rememberAllows' | 'invalidate'> &
     Partial<Pick<PermissionService, 'dispose'>>;
@@ -357,6 +362,8 @@ export interface ChatServiceDeps {
   foreground?: ForegroundCommandRegistry;
   /** Installs a new worktree's dependencies. Absent in tests, which then never install. */
   dependencies?: DependencyInstaller;
+  /** A checkout kept ready per recently used project, so cutting a worktree is a switch. */
+  spareWorktrees?: SpareWorktrees;
   /** Where generated images and audio land. Absent in tests, which then have no generation tools. */
   media?: MediaStore;
   /**
@@ -414,7 +421,7 @@ export interface ChatServiceDeps {
   getEnvironmentUrl(): string;
   emit(event: ChatStreamEvent): void;
   /**
-   * A session's stored summary changed outside any reply - today only its generated title.
+   * A session's stored summary changed outside any reply, such as its title or worktree binding.
    *
    * Separate from `emit` because that union is per-reply progress: this lands after the turn it
    * belongs to has been accepted, can land after the reply has finished, and matters to a
@@ -484,8 +491,16 @@ export class ChatService {
    */
   private readonly compacting = new Set<string>();
 
-  /** Sessions cutting a worktree ahead of a first turn (ensureWorkspace); busy as `compacting` is. */
-  private readonly preparing = new Set<string>();
+  /**
+   * Sessions cutting a worktree ahead of a first turn (ensureWorkspace); busy as `compacting` is.
+   * The progress is kept so a window that opens one mid-cut can draw the same status line.
+   */
+  private readonly preparing = new Map<string, WorkspacePreparation>();
+
+  private readonly launching = new Set<string>();
+
+  /** Startup has failed; no new input may race its preservation or deletion. */
+  private readonly abandoning = new Set<string>();
 
   /**
    * A queued message the user promoted past the live turn with "send now", held between the
@@ -761,13 +776,14 @@ export class ChatService {
    * that creating a session never depends on the user completing a native dialog - cancelling
    * one used to produce nothing at all.
    *
-   * The workspace is resolved BEFORE the session is written, so a worktree that cannot be
-   * created leaves nothing behind: there is no session whose tools would then fall back to
-   * some other folder.
+   * The project choice is stored now; the first accepted turn prepares its worktree before
+   * any tools can run there. See ensureWorkspace.
    */
   async createCodeSession(request: CreateCodeSessionRequest): Promise<CreateCodeSessionResult> {
+    const timer = new PhaseTimer();
     const catalog = await this.listModels();
     const model = (await this.pickModel(catalog.models)) ?? undefined;
+    timer.lap('model');
 
     if (!request.directory) {
       return { ok: true, session: await this.deps.store.create(model, { mode: 'code' }) };
@@ -780,6 +796,7 @@ export class ChatService {
     const base = await this.resolveWorkspaceBase(directory, (request.branch ?? '').trim(), request.workspace === true);
     if ('error' in base) return { ok: false, error: base.error };
     const branch = base.branch;
+    timer.lap('checks');
 
     const session = await this.deps.store.create(model, {
       project: {
@@ -791,6 +808,9 @@ export class ChatService {
         contextDirectories: (request.contextDirectories ?? []).map(entry => resolve(entry)),
       },
     });
+    timer.lap('create');
+    this.deps.logger.debug(`CHAT: code session ${session.id} timing ${timer.summary()}`);
+    if (awaitsWorktree(session.project)) prefetchBase(directory, branch);
 
     return { ok: true, session };
   }
@@ -890,6 +910,8 @@ export class ChatService {
       contextDirectories: movedProject ? [] : (current?.contextDirectories ?? []),
     });
     if (!updated) return { ok: false, error: 'This conversation is no longer available.' };
+    // The first message will cut the worktree; its fetch can start while that is being typed.
+    if (awaitsWorktree(updated.project)) prefetchBase(directory, branch);
     return { ok: true, session: updated };
   }
 
@@ -961,7 +983,7 @@ export class ChatService {
     const ids = new Set([
       ...this.active.keys(),
       ...this.compacting,
-      ...this.preparing,
+      ...this.preparing.keys(),
       ...this.sending.keys(),
       ...(this.deps.background?.sessionsWithRunning() ?? []),
     ]);
@@ -993,24 +1015,38 @@ export class ChatService {
    * Idempotent, and free once done: a session already in its worktree is a field comparison
    * rather than a git call, which is what keeps this off the cost of every later turn.
    */
-  private async ensureWorkspace(session: ChatSession, name: string): Promise<{ error: string } | null> {
+  private async ensureWorkspace(
+    session: Pick<ChatSession, 'id' | 'project'>,
+    name: string,
+    timer?: PhaseTimer
+  ): Promise<{ error: string } | null> {
     const project = session.project;
     if (!project || !awaitsWorktree(project)) return null;
 
     const sessionId = session.id;
     const base = project.branch;
-    this.preparing.add(sessionId);
+    // Synchronous up to here, so a caller that does not await is already busy when it returns.
+    this.preparing.set(sessionId, { since: Date.now(), base });
     this.emit({ type: 'workspace', sessionId, running: true, base });
     try {
       const resolved = await resolveWorkspace(project.directory, {
         base,
-        name,
-        onBranch: branch => this.emit({ type: 'workspace', sessionId, running: true, base, branch }),
+        // A branch already named - a spawn's, as the user approved it - is cut as named.
+        ...(project.workspaceBranch ? { branch: project.workspaceBranch } : { name }),
+        timer,
+        spares: this.deps.spareWorktrees,
+        onBranch: branch => {
+          this.preparing.set(sessionId, { since: this.preparing.get(sessionId)?.since ?? Date.now(), base, branch });
+          this.emit({ type: 'workspace', sessionId, running: true, base, branch });
+        },
       });
       const workspace = { workspaceBranch: resolved.branch, workingDirectory: resolved.workingDirectory };
-      await this.deps.store.updateProjectWorkspace(session.id, workspace);
-      // Re-read: a folder shared while the worktree was being cut lives in the store, not in `project`.
-      session.project = (await this.deps.store.get(session.id))?.project ?? { ...project, ...workspace };
+      const summary = await this.deps.store.updateProjectWorkspace(session.id, workspace);
+      if (!summary) return { error: 'That conversation no longer exists.' };
+      // The sidebar row says "Preparing worktree..." off this project until it hears otherwise.
+      this.deps.summaryChanged?.(summary);
+      // A folder shared while the worktree was being cut lives in the store, not in `project`.
+      session.project = summary.project;
       this.startDependencyInstall(session.id, resolved.workingDirectory, resolved.outcome);
       return null;
     } catch (err) {
@@ -1216,6 +1252,8 @@ export class ChatService {
    */
   async getSession(sessionId: string): Promise<ChatSession | null> {
     const session = await this.deps.store.get(sessionId);
+    const preparing = this.preparing.get(sessionId);
+    if (session && preparing) return { ...session, preparingWorkspace: { ...preparing } };
     const live = this.live.get(sessionId);
     if (!session || !live) return session;
     let messages = session.messages;
@@ -1338,6 +1376,7 @@ export class ChatService {
     this.deps.approvals?.dispose();
     this.deps.videoJobs?.dispose();
     this.deps.permissions?.dispose?.();
+    this.deps.skills?.dispose();
   }
 
   /**
@@ -1452,7 +1491,10 @@ export class ChatService {
      * against the server's catalog at the moment the turn actually goes out. A queued message
      * refused then comes back to the composer - see flushQueue.
      */
-    if (this.isBusy(sessionId)) {
+    if (this.abandoning.has(sessionId)) {
+      return { ok: false, error: 'This conversation could not start. Wait for startup cleanup to finish.' };
+    }
+    if (this.isBusy(sessionId, options.spawnSeed === true)) {
       if (!this.deps.queue || released) return { ok: false, error: 'This conversation is still replying.' };
       // A card the model is parked on would hold this message behind the turn forever; the new
       // message is the user moving on, so it closes the question rather than waiting on it.
@@ -1474,6 +1516,9 @@ export class ChatService {
     // awaits below (two session_sends in one round each flushing the queue) queues behind this
     // one instead of starting a reply of its own.
     this.accepting.add(sessionId);
+    // Held past startReply for the reason launchSpawned holds its own: no 'done' blink between.
+    const cutsWorktree = awaitsWorktree(existing.project);
+    if (cutsWorktree) this.deps.activity?.preparingStarted(sessionId);
     try {
       return await this.startAcceptedTurn(
         sessionId,
@@ -1486,6 +1531,7 @@ export class ChatService {
       );
     } finally {
       this.accepting.delete(sessionId);
+      if (cutsWorktree) this.deps.activity?.preparingEnded(sessionId);
     }
   }
 
@@ -1503,10 +1549,14 @@ export class ChatService {
     const notes = released?.notes ?? options.notes;
     const api = this.deps.getApiClient();
     if (!api) return { ok: false, error: 'Sign in to send a message.' };
+    // First turns only: they are where a session start spends its time.
+    const timer = existing.messages.length === 0 ? new PhaseTimer() : undefined;
 
     const { session: reconciled, notice } = await this.reconcileModel(existing);
+    timer?.lap('reconcileModel');
 
     const attached = await this.resolveAttachments(sessionId, attachments);
+    timer?.lap('attachments');
     const refusal = this.refuseUnreadableImages(reconciled.model, attached);
     if (refusal) return { ok: false, error: refusal };
 
@@ -1518,7 +1568,8 @@ export class ChatService {
     // still ahead of the prompt being stored, for the reason createCodeSession resolved before
     // writing the session: a worktree that cannot be made must refuse the turn rather than
     // leave a prompt in the thread with no reply coming.
-    const workspaceFailure = await this.ensureWorkspace(existing, prompt);
+    const workspaceFailure = await this.ensureWorkspace(existing, prompt, timer);
+    timer?.lap('workspace');
     if (workspaceFailure) return { ok: false, error: workspaceFailure.error };
 
     // The skill's body becomes the turn, and `skill` records which one so the thread can show
@@ -1536,12 +1587,14 @@ export class ChatService {
         ...(invocation.args ? { args: invocation.args } : {}),
         ...(skillCommand.untrusted ? { imported: true as const } : {}),
       };
+      timer?.lap('skill');
     }
 
     // Last before the prompt is stored, so the boundary lands above it and the summary covers
     // everything the prompt follows on from. Every refusal above has already had its say: a
     // turn that will not go out must not cost a summary.
     await this.autoCompact(reconciled);
+    timer?.lap('autoCompact');
 
     // A relay carries `role: 'user'` because that is the only role out-of-band text can reach a
     // stateless completions endpoint under - the same compromise the spawned-session report
@@ -1570,6 +1623,7 @@ export class ChatService {
       !existing.titleLocked && !existing.messages.some(message => message.role === 'user' && !message.system);
 
     const session = await this.deps.store.appendMessage(sessionId, userMessage);
+    timer?.lap('append');
     if (!session) return { ok: false, error: 'That conversation no longer exists.' };
 
     // Now that the conversation's attachments are settled, anything on disk it does not
@@ -1596,6 +1650,8 @@ export class ChatService {
     // rephrase a list of files the user recognises as written.
     if (isFirstPrompt && prompt) void this.nameSession(session, api, prompt);
 
+    timer?.lap('startReply');
+    if (timer) this.deps.logger.debug(`CHAT: first turn ${sessionId} timing ${timer.summary()}`);
     return { ok: true, messageId: replyId, ...(notice ? { notice } : {}) };
   }
 
@@ -1718,12 +1774,13 @@ export class ChatService {
     }
   }
 
-  private isBusy(sessionId: string): boolean {
+  private isBusy(sessionId: string, spawnSeed = false): boolean {
     return (
       this.active.has(sessionId) ||
       this.accepting.has(sessionId) ||
       this.compacting.has(sessionId) ||
-      this.preparing.has(sessionId)
+      this.preparing.has(sessionId) ||
+      (!spawnSeed && this.launching.has(sessionId))
     );
   }
 
@@ -2951,7 +3008,13 @@ export class ChatService {
     return {
       spawn: (prompt, title, placement) => this.spawnSession(session, prompt, title, placement),
 
-      spawnBase: () => spawnBaseFor(project),
+      // Asked for only to draw a spawn card, so the fetch a start would wait on begins here, while
+      // the user reads it.
+      spawnBase: async () => {
+        const base = await spawnBaseFor(project);
+        prefetchBase(project.directory, base);
+        return base;
+      },
 
       listSessions: async ({ includeArchived }) => {
         const all = await this.deps.store.list();
@@ -3027,6 +3090,7 @@ export class ChatService {
           spawnBaseFor(project),
           isGitRepository(project.workingDirectory),
         ]);
+        if (repository) prefetchBase(project.directory, base);
         const suggestion: ChatSpawnSuggestion = {
           // Short because the model has to type it back to revise the card.
           id: randomUUID().slice(0, 8),
@@ -3082,6 +3146,10 @@ export class ChatService {
     const key = `${sessionId}:${suggestionId}`;
     if (this.startingSuggestions.has(key)) return { ok: false, error: 'It is already starting.' };
     this.startingSuggestions.add(key);
+    // A start that fails in the background waits for the card to be marked started below, so
+    // reopening it cannot be overwritten by the very write it is undoing.
+    let marked: () => void = () => undefined;
+    const markedStarted = new Promise<void>(resolve => (marked = resolve));
     try {
       const parent = await this.deps.store.get(sessionId);
       if (!parent) return { ok: false, error: 'That conversation no longer exists.' };
@@ -3099,7 +3167,10 @@ export class ChatService {
         request.placement === 'worktree' ? { kind: 'worktree', branch, base: suggestion.base } : { kind: 'local' };
 
       const named = suggestion.derivedTitle && title === suggestion.title ? undefined : title;
-      const outcome = await this.spawnSession(parent, prompt, named, placement);
+      const outcome = await this.spawnSession(parent, prompt, named, placement, async () => {
+        await markedStarted;
+        await this.reopenSuggestion(sessionId, suggestionId);
+      });
       if (!outcome.ok) return { ok: false, error: outcome.message };
 
       let started: ChatSpawnSuggestion | null = null;
@@ -3127,8 +3198,21 @@ export class ChatService {
       // The child runs either way; only the card is gone with a parent deleted mid-start.
       return started ? { ok: true, suggestion: started } : { ok: false, error: 'That conversation no longer exists.' };
     } finally {
+      marked();
       this.startingSuggestions.delete(key);
     }
+  }
+
+  /** Put a card whose session could not start back as it was, as the user edited it, to try again. */
+  private async reopenSuggestion(sessionId: string, suggestionId: string): Promise<void> {
+    const stored = await this.deps.store.changeSpawnSuggestions(sessionId, current =>
+      current.map(entry => {
+        if (entry.id !== suggestionId || entry.status !== 'started') return entry;
+        const { started: _started, unreported: _unreported, ...rest } = entry;
+        return { ...rest, status: 'pending' };
+      })
+    );
+    if (stored) this.emitSuggestions(sessionId, stored);
   }
 
   /** Reserve the suggestion before sending; its reminder travels with the task, even when queued. */
@@ -3251,6 +3335,14 @@ export class ChatService {
       };
     }
 
+    if (this.abandoning.has(targetId)) {
+      return {
+        ok: false,
+        reason: 'unavailable',
+        message: 'That conversation could not start and is being cleaned up.',
+      };
+    }
+
     const budget = this.turnRelay.get(from.id) ?? { hops: 0, sends: 0 };
     if (budget.hops >= MAX_MESSAGE_HOPS) {
       return {
@@ -3350,15 +3442,20 @@ export class ChatService {
    *
    * The child is created with the parent's model and the parent's project, and `placement` says
    * where its tools run: in the parent's own working directory, or in a worktree made for it on a
-   * branch of its own. Nothing here ever moves the PARENT's checkout. A failure after the
-   * reservation releases it; a success hands it to `spawnWatch`, which releases it when the
-   * seeded run ends.
+   * branch of its own. Nothing here ever moves the PARENT's checkout.
+   *
+   * Resolves as soon as the session exists. Its worktree and seed turn follow in the background
+   * (launchSpawned): cutting a worktree means a fetch and a checkout, seconds the row used to
+   * wait on. A failure removes an untouched session and calls `onFailed`; accepted queued input
+   * instead keeps its session for retry. The slot passes to `spawnWatch` before this returns,
+   * which releases it when the seeded run ends.
    */
   private async spawnSession(
     parent: ChatSession,
     prompt: string,
     title: string | undefined,
-    placement: SpawnPlacement
+    placement: SpawnPlacement,
+    onFailed?: (message: string) => Promise<void>
   ): Promise<SpawnOutcome> {
     const project = parent.project;
     if (!project) {
@@ -3391,33 +3488,40 @@ export class ChatService {
       };
     }
     this.spawnReservations++;
+    const timer = new PhaseTimer();
 
     try {
-      // Resolved BEFORE the session is written, for the reason createCodeSession gives: a
-      // worktree that cannot be made must leave nothing behind, rather than a session whose
-      // tools then quietly run in the parent's checkout after the user asked for isolation.
-      let workspace: { branch: string; base: string; workingDirectory: string } | null = null;
+      // Checked before the session is written, so a name the user or the model can fix is
+      // refused while they can still answer with another, rather than after a row appeared.
+      let worktree: { branch: string; base: string } | null = null;
       if (placement.kind === 'worktree') {
-        const prepared = await this.prepareSpawnWorkspace(project, placement.branch, placement.base);
-        if (!prepared.ok) return prepared;
-        workspace = prepared;
+        const checked = await this.checkSpawnBranch(project, placement.branch);
+        if (!checked.ok) return checked;
+        worktree = { branch: checked.branch, base: placement.base };
       }
+      timer.lap('branchCheck');
 
+      const named = title?.trim();
       const child = await this.deps.store.create(parent.model, {
+        ...(named ? { title: named } : {}),
         // Copied field by field rather than spread, so a field added to ChatProject later has
         // to be considered here: this object IS the child access to the filesystem.
         project: {
           directory: project.directory,
           name: project.name,
-          branch: workspace?.branch ?? project.branch,
+          // With a worktree to cut this is its BASE, as a toggle session records one, and
+          // `workspaceBranch` is the branch the card showed: ensureWorkspace cuts that from this.
+          branch: worktree?.base ?? project.branch,
           // Local placement carries the parent's flag across unchanged: a child sharing a parent
           // that is itself in a worktree IS in a worktree, and the chip must not say otherwise.
-          workspace: workspace !== null || project.workspace,
+          workspace: worktree !== null || project.workspace,
           // Its own worktree branch, or the parent's when it shares the parent's checkout.
           // Without it a re-resolution would cut a second branch rather than find this one.
-          ...(workspace ? { workspaceBranch: workspace.branch } : {}),
-          ...(!workspace && project.workspaceBranch ? { workspaceBranch: project.workspaceBranch } : {}),
-          workingDirectory: workspace?.workingDirectory ?? project.workingDirectory,
+          ...(worktree ? { workspaceBranch: worktree.branch } : {}),
+          ...(!worktree && project.workspaceBranch ? { workspaceBranch: project.workspaceBranch } : {}),
+          // The repository folder until the worktree exists, which is what awaitsWorktree reads
+          // as pending - and a pending session starts no turn, so nothing runs here meanwhile.
+          workingDirectory: worktree ? project.directory : project.workingDirectory,
           contextDirectories: [...project.contextDirectories],
         },
         // Copied with the context directories, for the same reason: a child is the parent's work
@@ -3432,39 +3536,156 @@ export class ChatService {
         // deliberately no argument on session_spawn through which a mode could be named.
         approvalMode: parent.approvalMode === 'full' ? 'auto' : parent.approvalMode,
       });
+      timer.lap('create');
 
-      const named = title?.trim() ? await this.deps.store.rename(child.id, title.trim()) : null;
-
-      // A fresh worktree has no node_modules, and on this monorepo restoring them takes minutes.
-      // Started before the seed so the child's very first turn already carries the "dependencies
-      // are installing" line rather than discovering a broken command and guessing at why.
-      if (workspace) this.startDependencyInstall(child.id, workspace.workingDirectory, 'created');
-
-      // Registered before the seed is sent: `send` resolves once the turn is accepted, and the
-      // reply can finish - and look for its watch entry - before the await below returns.
+      // Registered before anything is sent: `send` resolves once the turn is accepted, and the
+      // reply can finish - and look for its watch entry - before launchSpawned sees it return.
       this.spawnWatch.set(child.id, { parentSessionId: parent.id });
-
-      const sent = await this.send(
-        child.id,
-        workspace ? `${worktreePreamble(project.directory, workspace)}\n\n${seed}` : seed,
-        [],
-        { seedHops: this.turnRelay.get(parent.id)?.hops ?? 0 }
-      );
-      if (!sent.ok) {
-        this.spawnWatch.delete(child.id);
-        await this.deleteSession(child.id);
-        return { ok: false, reason: 'no-project', message: `The new session could not start: ${sent.error}` };
-      }
-
-      this.deps.logger.debug(`CHAT: spawned ${child.id} from ${parent.id} at depth ${depth}`);
-      return { ok: true, session: named ?? child };
+      const seedHops = this.turnRelay.get(parent.id)?.hops ?? 0;
+      void this.launchSpawned(parent.id, project.directory, child, seed, worktree, { seedHops, timer, onFailed });
+      return { ok: true, session: child };
     } finally {
       this.spawnReservations--;
     }
   }
 
   /**
-   * A worktree of the parent's repository for a spawned session to run in, or why there is none.
+   * The half of a spawn that happens after its row is drawn: cut the worktree, then send the seed.
+   *
+   * The session is marked preparing BEFORE the first await, so it reads as busy - and its row as
+   * working - the moment spawnSession returns; anything sent to it meanwhile queues behind the
+   * seed. The mark is dropped only once `send` has started the reply, so the status goes from
+   * preparing to replying without a 'done' in between.
+   */
+  private async launchSpawned(
+    parentId: string,
+    projectDirectory: string,
+    child: ChatSessionSummary,
+    seed: string,
+    worktree: { branch: string; base: string } | null,
+    {
+      seedHops,
+      timer,
+      onFailed,
+    }: { seedHops: number; timer: PhaseTimer; onFailed?: (message: string) => Promise<void> }
+  ): Promise<void> {
+    this.launching.add(child.id);
+    this.deps.activity?.preparingStarted(child.id);
+    let failure: string | null = null;
+    try {
+      let text = seed;
+      if (worktree) {
+        const unprepared = await this.ensureWorkspace(child, seed, timer);
+        if (unprepared) failure = `The worktree could not be created: ${unprepared.error}`;
+        else if (child.project) {
+          const workingDirectory = child.project.workingDirectory;
+          text = `${worktreePreamble(projectDirectory, { ...worktree, workingDirectory })}\n\n${seed}`;
+        }
+      }
+      if (!failure) {
+        const sent = await this.send(child.id, text, [], { seedHops, spawnSeed: true });
+        timer.lap('send');
+        if (!sent.ok) failure = `The new session could not start: ${sent.error}`;
+      }
+    } catch (err) {
+      failure = `The new session could not start: ${err instanceof Error ? err.message : 'unknown error'}`;
+    }
+
+    try {
+      this.deps.logger.debug(`CHAT: spawn ${child.id} timing ${timer.summary()}`);
+      if (!failure) {
+        this.deps.logger.debug(`CHAT: spawned ${child.id} from ${parentId}`);
+        return;
+      }
+      await this.abandonSpawn(parentId, child, failure, onFailed).catch((err: unknown) => {
+        this.deps.logger.warn(`CHAT: could not clean up ${child.id}: ${err instanceof Error ? err.message : err}`);
+      });
+    } finally {
+      this.launching.delete(child.id);
+      this.deps.activity?.preparingEnded(child.id);
+      if (!failure) this.flushQueue(child.id);
+    }
+  }
+
+  /**
+   * Remove an empty failed spawn, or retain accepted input and its files for retry.
+   * Only a removed child reopens its suggestion: a retained child is the retry destination.
+   */
+  private async abandonSpawn(
+    parentId: string,
+    child: ChatSessionSummary,
+    reason: string,
+    onFailed?: (message: string) => Promise<void>
+  ): Promise<void> {
+    this.abandoning.add(child.id);
+    try {
+      this.spawnWatch.delete(child.id);
+      // Deleted by the user while it was preparing: that was their call, not a failure to report.
+      const stored = await this.deps.store.get(child.id);
+      if (!stored) return;
+      const pending = this.deps.queue?.list(child.id) ?? [];
+      const retained = pending.some(message => !message.automatic);
+      if (retained) {
+        // Accepted input belongs to the user. Keep its session and attachment bytes rather
+        // than treating an automatic startup failure as a deliberate conversation deletion.
+        const seed: ChatQueuedMessage[] = stored.messages.some(message => message.role === 'user' && !message.system)
+          ? []
+          : [
+              {
+                id: randomUUID(),
+                sessionId: child.id,
+                text: stored.origin?.seedPrompt ?? '',
+                queuedAt: new Date().toISOString(),
+              },
+            ];
+        // Queue return events only reach an open composer. Save an explicit unsent copy as
+        // well, so switching away before startup fails cannot lose the task or its files.
+        for (const message of [...seed, ...pending.filter(entry => !entry.relay && !entry.automatic)]) {
+          const recovery: ChatMessage = {
+            id: randomUUID(),
+            role: 'user',
+            system: true,
+            content: `Startup failed before this queued task could run. Unsent input saved for retry:\n\n${message.text}`,
+            display: `Unsent input saved after startup failed:\n\n${message.text}`,
+            createdAt: new Date().toISOString(),
+            ...(message.attachments?.length ? { attachments: message.attachments } : {}),
+          };
+          const recovered = await this.deps.store.appendMessage(child.id, recovery);
+          if (!recovered) return; // A deliberate deletion during recovery wins.
+          this.emit({ type: 'message', sessionId: child.id, message: recovery });
+        }
+        await this.strandRelay(
+          child.id,
+          pending.filter(message => message.relay)
+        );
+        this.deps.queue?.giveBack(child.id, seed, 'failed', reason);
+      } else {
+        await this.deleteSession(child.id);
+      }
+      const outcome = retained ? 'was kept with its unsent input saved for retry' : 'was removed';
+      this.deps.logger.warn(`CHAT: ${child.id} could not start and ${outcome}: ${reason}`);
+      this.emit({
+        type: 'spawn-failed',
+        sessionId: parentId,
+        title: child.title,
+        message: `${reason} The conversation ${outcome}.`,
+      });
+      if (!retained) await onFailed?.(reason);
+      await this.deliverChildReport(parentId, {
+        content:
+          `The session you started, "${child.title}" (${child.id}), could not start and ${outcome}: ${reason} ` +
+          (retained
+            ? 'Nothing is running for it. Retry in that conversation.'
+            : 'Nothing is running for it. Start it again, or do the work in this conversation.'),
+        display: `The session "${child.title}" could not start and ${outcome}. ${reason}`,
+      });
+    } finally {
+      this.abandoning.delete(child.id);
+    }
+  }
+
+  /**
+   * The branch a spawned session's worktree will be cut on, or why it cannot be.
    *
    * An EXISTING branch is refused rather than used, which is the opposite of what the sidebar's
    * worktree toggle does. The reason is the keying: `resolveWorkspace` hands back whatever
@@ -3473,14 +3694,13 @@ export class ChatService {
    * and the chip both claimed isolation. Refusing puts the collision in front of the user, who
    * can answer again with a different name; adopting would hide it.
    *
-   * The new branch is cut from `base`, the parent's branch as the card showed it (see
+   * Only reads: the cut itself happens in launchSpawned, from the base the card showed (see
    * spawnBaseFor), so the child starts on the parent's commits rather than on main.
    */
-  private async prepareSpawnWorkspace(
+  private async checkSpawnBranch(
     project: ChatProject,
-    branch: string,
-    base: string
-  ): Promise<({ ok: true } & { branch: string; base: string; workingDirectory: string }) | SpawnRejected> {
+    branch: string
+  ): Promise<{ ok: true; branch: string } | SpawnRejected> {
     const wanted = branch.trim();
     if (!isValidBranchName(wanted)) {
       return {
@@ -3504,21 +3724,18 @@ export class ChatService {
     }
 
     try {
-      const taken =
-        (await branchExists(project.directory, wanted)) ||
-        (await listWorktrees(project.directory)).some(entry => entry.branch === wanted);
-      if (taken) {
+      const [exists, worktrees] = await Promise.all([
+        branchExists(project.directory, wanted),
+        listWorktrees(project.directory),
+      ]);
+      if (exists || worktrees.some(entry => entry.branch === wanted)) {
         return {
           ok: false,
           reason: 'branch',
           message: `The branch ${wanted} already exists, so no worktree was made and no session started.`,
         };
       }
-
-      // Named exactly, not derived: the approval card showed this name to the user and the row
-      // reports it back, so the branch the child lands on has to be the one they approved.
-      const resolved = await resolveWorkspace(project.directory, { branch: wanted, base });
-      return { ok: true, branch: resolved.branch, base, workingDirectory: resolved.workingDirectory };
+      return { ok: true, branch: wanted };
     } catch (err) {
       const detail = err instanceof Error ? err.message : 'unknown error';
       return { ok: false, reason: 'branch', message: `The worktree could not be created: ${detail}` };
@@ -3751,13 +3968,24 @@ export class ChatService {
     // An irreversible tool is asked every time, whatever was answered before: the standing set
     // is keyed on what a call WOULD do, and for something with no undo that is not a good
     // enough reason to skip asking. The gate refuses to record one for these either.
-    if (!prompt.irreversible && !stuck && !tainted && !askedByRule) {
+    const standingAnswer = (): ChatApprovalAnswer | null => {
+      if (prompt.irreversible || stuck || askedByRule) return null;
+      const currentlyTainted = mode === 'auto' && sendsOut(call.name) && !prompt.contained && !!directories.untrusted;
       const standing = gate.isStanding(
         sessionId,
         prompt.key,
         runnable.map(option => option.id)
       );
-      if (standing) return { input: applyOption(call.input, findOption(prompt, standing.optionId), standing.value) };
+      // Over a tainted reply only an answer given knowing about the taint, or one for a tool
+      // whose "always" already accepted whatever the content could steer it to, still stands.
+      if (standing && (!currentlyTainted || standing.overTaint || alwaysOverridesTaint(call.name))) {
+        return {
+          decision: 'once',
+          ...(standing.optionId ? { optionId: standing.optionId } : {}),
+          ...(standing.value === undefined ? {} : { value: standing.value }),
+        };
+      }
+      if (currentlyTainted) return null;
 
       // A shell command whose every sub-command was allowed before, by prefix, runs - but not
       // past a directory outside the project that the user has not allowed too.
@@ -3768,9 +3996,12 @@ export class ChatService {
         gate.coversCommands(sessionId, always) &&
         gate.uncoveredDirectories(sessionId, always.directories).length === 0
       ) {
-        return { input: call.input };
+        return { decision: 'once' };
       }
-    }
+      return null;
+    };
+    const standing = standingAnswer();
+    if (standing) return { input: applyOption(call.input, findOption(prompt, standing.optionId), standing.value) };
 
     // Consulted AFTER tool.approval() ran, so a call that is refused outright - a path outside
     // every granted root - is still refused rather than waved through by a loose mode. A mode
@@ -3781,7 +4012,11 @@ export class ChatService {
     }
 
     const choice = prompt.choice ? { options: prompt.choice.options.map(toWireOption) } : undefined;
-    const alwaysScope = prompt.always ? describeAlways(prompt.always, context.workingDirectory) : undefined;
+    const alwaysScope = prompt.always
+      ? describeAlways(prompt.always, context.workingDirectory)
+      : prompt.alwaysCovers
+        ? { shown: prompt.alwaysCovers, full: prompt.alwaysCovers }
+        : undefined;
     // An ask rule outranks any allow, so a rule saved from its card would never apply.
     const everywhere = this.deps.permissions && !askedByRule ? everySessionRules(subject, prompt) : [];
     const answer = await gate.request(
@@ -3814,6 +4049,25 @@ export class ChatService {
       },
       {
         remember: !prompt.irreversible,
+        tainted: !!tainted,
+        // Another card's "always", or a rule saved from it, may cover this one while it waits.
+        recheck: async () => {
+          try {
+            const fresh = await this.deps.permissions?.rulesFor(permissionScope);
+            // Rules may have appeared since this card opened, and a symlink may have changed.
+            const currentSubject = fresh?.size
+              ? await resolveSubject(permissionSubject(call, gatedPrompt, context))
+              : subject;
+            const decision = fresh?.size ? fresh.evaluate(currentSubject).decision : null;
+            if (decision === 'deny') return { decision: 'deny' };
+            if (prompt.irreversible || stuck || askedByRule || decision === 'ask') return null;
+            if (decision === 'allow') return { decision: 'once', ...(runnable[0] ? { optionId: runnable[0].id } : {}) };
+            return standingAnswer();
+          } catch (error) {
+            this.deps.logger.warn(`PERMISSIONS: could not recheck ${call.name}: ${String(error)}`);
+            return null;
+          }
+        },
         ...(prompt.always ? { always: prompt.always } : {}),
         // Only the options that RUN the call may become standing. The card offers no "always"
         // beside a redirect, and this is the second lock on that door: a redirect is an
@@ -3824,13 +4078,20 @@ export class ChatService {
 
     // The rules saved are the ones main derived and showed; the renderer only says yes to them.
     if (answer.decision === 'always' && answer.everywhere && everywhere.length > 0) {
-      await this.deps.permissions?.rememberAllows(everywhere).catch(error => {
-        this.deps.logger.warn(`PERMISSIONS: could not save ${everywhere.join(', ')}: ${String(error)}`);
-        context.report?.notice({
-          kind: 'permissions-save-failed',
-          text: `The rule could not be saved for every session: ${String(error)}. This conversation's approval still applies. Retry in Settings > Permissions.`,
-        });
-      });
+      const saved = await this.deps.permissions?.rememberAllows(everywhere).then(
+        () => true,
+        error => {
+          this.deps.logger.warn(`PERMISSIONS: could not save ${everywhere.join(', ')}: ${String(error)}`);
+          context.report?.notice({
+            kind: 'permissions-save-failed',
+            text: `The rule could not be saved for every session: ${String(error)}. This conversation's approval still applies. Retry in Settings > Permissions.`,
+          });
+          return false;
+        }
+      );
+      await gate.settleCovered(saved ? undefined : sessionId);
+    } else if (answer.decision === 'always') {
+      await gate.settleCovered(sessionId);
     }
 
     const picked = findOption(prompt, answer.optionId);

@@ -104,7 +104,17 @@ const handler = baseApi({ auth: 'jwtOnly' })
           code: 'local_changes',
         });
       }
-      skill = await skillRepository.update({ id: target.id, ...content }, { new: true });
+      // Both writes must notice a concurrent change, or unscanned content can land on a global skill:
+      // into a global copy (super-admin only) the write is guarded on the read `__v`, so it and a
+      // racing scanned PUT can't combine; into a non-global copy it 409s if the copy went global.
+      const isGlobal = Boolean(target.isGlobalRead || target.isGlobalWrite);
+      skill = isGlobal
+        ? await skillRepository.updateGuarded(
+            { id: target.id, __v: (target as { __v?: number }).__v, ...content } as Partial<ISkillDocument>,
+            { new: true }
+          )
+        : await skillRepository.updateIfNonGlobal({ id: target.id, ...content }, { new: true });
+      if (!skill) throw new NotFoundError('Imported copy not found');
     } else {
       const name = body.name !== undefined ? validateSkillName(body.name) : snap.name;
       try {

@@ -39,7 +39,7 @@ import {
   verifyGitHubPayloadTimestamp,
 } from '@server/integrations/github/webhookUtils';
 import { WebhookAuditLogger, extractWebhookMetadata } from '@server/integrations/github/WebhookAuditLogger';
-import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
+import { IntegrationAuditLogger } from '@bike4mind/server-utils/integrations/integrationAuditLogger';
 import { decryptToken } from '@server/security/tokenEncryption';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { serializeError } from '@bike4mind/server-utils/utils/serializeError';

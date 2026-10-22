@@ -761,6 +761,7 @@ export function SessionChips({
   binding,
   settledTurns,
   inUse = false,
+  preparing = false,
 }: {
   project: ChatProject | null;
   /** Folders added from a `request_directory` card while the session had no project to hold them. */
@@ -774,6 +775,8 @@ export function SessionChips({
    * every streamed chunk, and a length is the only thing about them it needs.
    */
   inUse?: boolean;
+  /** Its worktree is being cut now; see describeChipRow. */
+  preparing?: boolean;
 }) {
   const { branches, elsewhere, isRepository, checkedOut, refresh } = useBranches(
     project?.directory ?? null,
@@ -791,9 +794,10 @@ export function SessionChips({
         project,
         { isRepository, count: branches.length, checkedOut, pickedExists, elsewhereCount },
         inUse,
-        home
+        home,
+        preparing
       ),
-    [project, isRepository, branches.length, checkedOut, pickedExists, elsewhereCount, inUse, home]
+    [project, isRepository, branches.length, checkedOut, pickedExists, elsewhereCount, inUse, home, preparing]
   );
   // A toggle-off pick switches HEAD without changing either folder useBranches is keyed on, so
   // nothing else would re-read it before the next focus; a created branch also joins the list.

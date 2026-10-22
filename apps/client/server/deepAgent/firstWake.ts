@@ -2,10 +2,10 @@ import { randomUUID } from 'crypto';
 import type { Logger } from '@bike4mind/observability';
 import { createReActRunAct, noopRunAct, runWakeCycle, type WakeDeps, type WakeOutcome } from '@bike4mind/agents';
 import { MongoDeepAgentStore } from '@bike4mind/server-utils/deepAgent/store';
-import { LlmWakeSteps } from './llmSteps';
+import { LlmWakeSteps } from '@bike4mind/server-utils/deepAgent/llmSteps';
 import { createDeepAgentToolMaterializer } from './toolMaterializer';
 import { loadLinkedAgentContext } from './missions';
-import { bridgeWakeToSession } from './missionSessionBridge';
+import { bridgeWakeToSession } from '@bike4mind/server-utils/deepAgent/missionSessionBridge';
 import { DEFAULT_WAKE_MODEL_ID, resolveDeepAgentBackend } from '@bike4mind/server-utils/deepAgent/resolveBackend';
 
 /**

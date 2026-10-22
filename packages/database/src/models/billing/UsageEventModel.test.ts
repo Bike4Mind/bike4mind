@@ -71,6 +71,48 @@ describe('UsageEventRepository', () => {
       expect(doc!.apiKeyId).toBeUndefined();
     });
 
+    it('round-trips the price stamp: source, string row id, rates and per-turn usage', async () => {
+      // A string like every other id on this document, so a lean read matches what the type
+      // promises and a fixture id that is not hex still records.
+      const priceRowId = 'price-row-4';
+      const doc = await record({
+        priceSource: 'catalog',
+        priceRowId,
+        rates: { tierKey: 200_000, input: 2e-6, output: 12e-6, cacheRead: 2e-7, cacheWrite: 2.5e-6 },
+        turnUsage: [
+          { inputTokens: 900, outputTokens: 40, cacheReadTokens: 100, tierKey: 200_000 },
+          { inputTokens: 250_000, outputTokens: 10, tierKey: 2_097_152 },
+        ],
+        turnUsageTruncated: true,
+      });
+
+      const stored = await UsageEvent.findById(doc!.id).lean();
+      expect(stored!.priceSource).toBe('catalog');
+      expect(stored!.priceRowId).toBe(priceRowId);
+      expect(stored!.rates).toEqual({
+        tierKey: 200_000,
+        input: 2e-6,
+        output: 12e-6,
+        cacheRead: 2e-7,
+        cacheWrite: 2.5e-6,
+      });
+      expect(stored!.turnUsage).toEqual([
+        { inputTokens: 900, outputTokens: 40, cacheReadTokens: 100, tierKey: 200_000 },
+        { inputTokens: 250_000, outputTokens: 10, tierKey: 2_097_152 },
+      ]);
+      expect(stored!.turnUsageTruncated).toBe(true);
+    });
+
+    it('leaves the price stamp absent on a row written without it (no empty turnUsage array)', async () => {
+      const doc = await record();
+      const stored = await UsageEvent.findById(doc!.id).lean();
+      expect(stored!.priceSource).toBeUndefined();
+      expect(stored!.priceRowId).toBeUndefined();
+      expect(stored!.rates).toBeUndefined();
+      expect(stored!.turnUsage).toBeUndefined();
+      expect(stored!.turnUsageTruncated).toBeUndefined();
+    });
+
     it('persists dataLakeId when provided (ingestion spend attribution)', async () => {
       const doc = await record({ feature: 'embedding', dataLakeId: 'lake-1' });
       expect(doc!.dataLakeId).toBe('lake-1');

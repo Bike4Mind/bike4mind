@@ -1,3 +1,4 @@
+import { cpuUsage } from 'node:process';
 import { beforeAll, describe, it, expect } from 'vitest';
 import {
   convertCodeBlocksToArtifacts as coreConvertCodeBlocksToArtifacts,
@@ -41,27 +42,31 @@ beforeAll(async () => {
   }
 });
 
-// The baseline-vs-SMALL_INPUT_MS_CEILING check below is the real regression guard: it
-// fails fast instead of letting a hang run out the clock. The ratio check is secondary
-// and, in practice, close to a fixed budget rather than a true ratio: every baseline
-// measured here lands under this floor, so flooring the denominator reduces
-// `ratio < GROWTH_RATIO_CEILING` to `doubledMs < GROWTH_RATIO_CEILING * MIN_BASELINE_MS`.
 // The floor exists because a near-instant call is noise-dominated - without it, timer
-// jitter alone could inflate the ratio past the ceiling.
+// jitter alone could inflate the ratio past the ceiling. Once a baseline lands under it,
+// the ratio check reduces to a fixed budget on the scaled call, which a loaded shared
+// runner can blow on its own: a call whose current cost is not near-instant should pass
+// a floor below its baseline, so the ratio stays a true ratio.
 const MIN_BASELINE_MS = 25;
-// Headroom over linear scaling (~2x) while staying clear of quadratic (~4x) and cubic
-// (~8x) - see MIN_BASELINE_MS above for why this is a secondary check in practice.
-const GROWTH_RATIO_CEILING = 3;
+// One scaled call is timed against GROWTH_FACTOR back-to-back small calls, so both sides
+// do the same work under linear scaling (ratio ~1) and a quadratic scan costs
+// GROWTH_FACTOR times more on the scaled side (ratio ~4). Equal work also means equally
+// long timing windows: timing one small call against one scaled call let CPU contention
+// preempt the longer window more often, which on its own pushed a linear parser's 4x
+// step past 10x on a loaded host.
+const GROWTH_FACTOR = 4;
+const GROWTH_RATIO_CEILING = 2;
 const BASELINE_ATTEMPTS = 3;
 const MEASUREMENT_ATTEMPTS = 5;
 // Generous on purpose: this only exists to catch a genuine wedge, not to pin steady-state timing.
 const SMALL_INPUT_MS_CEILING = 500;
 
 /**
- * Asserts near-linear scaling from `small` to `small * 2` input size, in place of a
- * fixed time budget: a budget only fails once the synchronous scan already returned,
- * so a real quadratic regression hangs the test runner instead of failing it. Both
- * sizes stay small enough to run fast even on a quadratic (or worse) implementation.
+ * Asserts near-linear scaling from `small` to `small * GROWTH_FACTOR` input size, in
+ * place of a fixed time budget: a budget only fails once the synchronous scan already
+ * returned, so a real quadratic regression hangs the test runner instead of failing it.
+ * The baseline-vs-SMALL_INPUT_MS_CEILING check fails fast on a baseline that is already
+ * far too slow, before the scaled input is tried.
  */
 function assertLinearGrowth(
   build: (n: number) => string,
@@ -71,32 +76,40 @@ function assertLinearGrowth(
   minBaselineMs: number = MIN_BASELINE_MS
 ) {
   const smallInput = build(small);
-  const doubledInput = build(small * 2);
-  const timeOnce = (input: string, verifyOutput: boolean) => {
-    const startedAt = performance.now();
-    const out = run(input);
-    const elapsedMs = performance.now() - startedAt;
+  const scaledInput = build(small * GROWTH_FACTOR);
+  const timeRuns = (input: string, runs: number, verifyOutput: boolean) => {
+    let out = '';
+    // Measure parser CPU work, excluding time the shared runner deschedules this worker.
+    const startedAt = cpuUsage();
+    for (let i = 0; i < runs; i++) out = run(input);
+    const elapsedCpu = cpuUsage(startedAt);
+    const elapsedMs = (elapsedCpu.user + elapsedCpu.system) / 1000;
     if (verifyOutput) checkOutput(out, input);
     return elapsedMs;
   };
 
-  // Reject a slow baseline before trying a potentially much slower doubled input.
-  let baselineMs = Infinity;
+  // Reject a slow baseline before trying a potentially much slower scaled input.
+  let singleMs = Infinity;
   for (let attempt = 0; attempt < BASELINE_ATTEMPTS; attempt++) {
-    baselineMs = Math.min(baselineMs, timeOnce(smallInput, attempt === 0));
+    singleMs = Math.min(singleMs, timeRuns(smallInput, 1, attempt === 0));
   }
-  expect(baselineMs).toBeLessThan(SMALL_INPUT_MS_CEILING);
+  expect(singleMs).toBeLessThan(SMALL_INPUT_MS_CEILING);
 
-  // Interleave sizes so GC and CPU contention do not affect only the doubled series.
-  // A super-linear scan remains slow across every attempt.
-  let doubledMs = Infinity;
+  // Interleave sizes so GC and CPU contention do not affect only the scaled series, and
+  // keep the minimum of each: noise only ever adds time, while a super-linear scan stays
+  // slow across every attempt.
+  let baselineMs = Infinity;
+  let scaledMs = Infinity;
   for (let attempt = 0; attempt < MEASUREMENT_ATTEMPTS; attempt++) {
-    baselineMs = Math.min(baselineMs, timeOnce(smallInput, false));
-    doubledMs = Math.min(doubledMs, timeOnce(doubledInput, attempt === 0));
+    baselineMs = Math.min(baselineMs, timeRuns(smallInput, GROWTH_FACTOR, false));
+    scaledMs = Math.min(scaledMs, timeRuns(scaledInput, 1, attempt === 0));
   }
 
-  const ratio = doubledMs / Math.max(baselineMs, minBaselineMs);
-  expect(ratio).toBeLessThan(GROWTH_RATIO_CEILING);
+  const ratio = scaledMs / Math.max(baselineMs, GROWTH_FACTOR * minBaselineMs);
+  expect(
+    ratio,
+    `${scaledMs.toFixed(2)}ms at ${GROWTH_FACTOR}x vs ${baselineMs.toFixed(2)}ms for ${GROWTH_FACTOR} small runs`
+  ).toBeLessThan(GROWTH_RATIO_CEILING);
 }
 
 describe('extractReactDependencies', () => {
@@ -1035,8 +1048,9 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
     // follows the result field the tail fails and the match walks the ambiguous
     // [^"]* / \\" alternation over the whole run: quadratic in its length. Sized so the
     // pre-fix baseline clears MIN_BASELINE_MS, leaving the growth ratio as the real
-    // check: measured in-suite at 3.97 against the block, versus a 2ms total without
-    // it. 'mermaid' is required to clear the hasTargetType gate on the whole function.
+    // check: measured in-suite at 3.97 per doubling against the block (quadratic, so
+    // about GROWTH_FACTOR on the helper's ratio), versus a 2ms total without it.
+    // 'mermaid' is required to clear the hasTargetType gate on the whole function.
     assertLinearGrowth(n => '{"result":"mermaid ' + '\\"word\\" '.repeat(n), 4000);
   });
 });
@@ -1088,20 +1102,17 @@ describe('convertCodeBlocksToArtifacts - bare html document promotion', () => {
     // openings inside an unterminated fence. This test only cares about growth, not
     // the output shape (the first two get promoted, the third stays a code block
     // since its fence never closes), so it skips the output equality check.
-    // Every size is set so pre-fix breaches the 500ms small-input ceiling outright
-    // instead of a ratio a loaded runner's noise can flip: at a size where pre-fix is
-    // merely slow, the current parser's own cost is a few milliseconds, so an unraised
-    // floor turns the ratio into an absolute ~75ms budget on the doubled run that a
-    // loaded shared runner can miss on noise alone. These run the client parser
-    // (assertLinearGrowth's run param defaults to it, not the core parser exercised
-    // below); measured in-suite on a quiet host, pre-fix breaches the ceiling by about
-    // 2.21x at n=28000 alone on the first shape (the call aborts at the first shape, so
-    // the other two sizes are not independently measured here), against 4.9/12.8ms,
-    // 0.3/0.5ms and 0.05/0.10ms now. The raised floor is
-    // belt and braces once the ceiling is the real guard - the first shape needs it
-    // most, since it promotes every document and its output allocation is what costs.
+    // The first shape promotes every document, so its own cost is far from near-instant:
+    // it runs at a modest size with a 1ms floor, keeping the ratio a true ratio rather than
+    // a fixed budget a loaded shared runner can miss on noise alone. With the fence count
+    // re-read over the whole prefix per document (the pre-fix shape) it measured 3.3-4.1
+    // in-suite at n=4000, against 0.8-1.6 now, both on a host at load average 18-50. The
+    // other two shapes cost well under the 150ms floor now, so their real guard is the
+    // 500ms small-input ceiling these sizes were picked to make pre-fix breach. These run
+    // the client parser (assertLinearGrowth's run param defaults to it, not the core
+    // parser exercised below).
     const noOutputCheck = () => {};
-    assertLinearGrowth(n => '<html></html>\n'.repeat(n), 28000, noOutputCheck, convertCodeBlocksToArtifacts, 150);
+    assertLinearGrowth(n => '<html></html>\n'.repeat(n), 4000, noOutputCheck, convertCodeBlocksToArtifacts, 1);
     assertLinearGrowth(n => '<html>\n'.repeat(n), 32000, noOutputCheck, convertCodeBlocksToArtifacts, 150);
     assertLinearGrowth(
       n => '```html\n' + '<!DOCTYPE html>\n'.repeat(n),

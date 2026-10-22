@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatProject } from '@shared/chat';
-import { describeChipRow, displayPath, type BranchLookup, type ChipRowState } from './chipState';
+import { describeChipRow, displayPath, PREPARING_WORKTREE, type BranchLookup, type ChipRowState } from './chipState';
 
 const project: ChatProject = {
   directory: '/Users/someone/code/thing',
@@ -70,6 +70,15 @@ describe('describeChipRow with a project', () => {
 
   it('distinguishes an empty repository from one that is not a repository', () => {
     expect(describeChipRow(project, { isRepository: true, count: 0 }).branchNotice).toMatch(/no branches yet/i);
+  });
+
+  it('says the worktree is being made, and fixes the row, while a started session waits on it', () => {
+    const pending = { ...project, workspace: true, workspaceBranch: 'agent/the-thing' };
+    const row = describeChipRow(pending, { isRepository: true, count: 2, checkedOut: 'main' }, false, '', true);
+    expect(row.worktree).toMatchObject({ label: PREPARING_WORKTREE, enabled: false });
+    expect(row.worktree.tooltip).toContain('agent/the-thing from main');
+    expect(row.branch.label).toBe('agent/the-thing');
+    expect(row.locked).toBe(true);
   });
 
   it('names the worktree in the toggle tooltip once the session has moved into one', () => {

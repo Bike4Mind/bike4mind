@@ -22,6 +22,7 @@ import { mergeCatalog } from './mergeCatalog';
 import { alignRouteTwinNames } from './routeTwinNames';
 import { buildSupersededIndex, catalogSuccessors, updateReplacedByOverlay } from './resolveDeprecatedModel';
 import AnthropicBedrockBackend from './bedrockBackend/anthropic';
+import ConverseBedrockBackend, { isConverseBedrockModel } from './bedrockBackend/converse';
 import DeepSeekBedrockBackend from './bedrockBackend/deepseek';
 import JurassicTwoBedrockBackend from './bedrockBackend/jurassicTwo';
 import LlamaBedrockBackend from './bedrockBackend/llama';
@@ -85,7 +86,7 @@ export function getLlmByModel(
   // changes behavior. The family path is the only one that can fail loudly:
   // an unknown family throws instead of returning the null that would be
   // indistinguishable from a missing credential (sec 9 item 3).
-  // MUST STAY IN SYNC WITH completionsForwardsNativeTools in @bike4mind/common
+  // MUST STAY IN SYNC WITH servedByDirectAnthropic and servedByClaudeAdapter in @bike4mind/common
   // (claudeToolCapabilities.ts), which restates this family-then-backend routing.
   if (modelInfo.adapterFamily) {
     backend = backendForAdapterFamily(modelInfo.adapterFamily, {
@@ -152,7 +153,7 @@ export function getLlmByModel(
           backend = new MoonshotBedrockBackend();
           break;
         default:
-          backend = null;
+          backend = isConverseBedrockModel(String(modelInfo.id)) ? new ConverseBedrockBackend() : null;
       }
       break;
     case 'anthropic':
@@ -216,6 +217,9 @@ const MODEL_CACHE_TTL_MS = 5 * 60_000;
 // only briefly: a transient blip or a missed perBackendTimeoutMs should cost
 // seconds of a short list or superseded prices, not a full TTL window.
 const MODEL_CACHE_RETRY_TTL_MS = 30_000;
+// Default listing deadline for runtime-discovered backends; matches LocalImageBackend's axios
+// timeout and bounds an Ollama host that drops packets (undici's connect timeout is ~10s).
+const RUNTIME_LISTING_DEFAULT_TIMEOUT_MS = 4_000;
 // preFilterModels keeps the merged list from before the deprecation filter. It is
 // never returned to a caller; getSupersededModels reads it to put a display name
 // on a pin the filter has already hidden.
@@ -306,7 +310,8 @@ export interface GetAvailableModelsOptions {
   /**
    * Deadline for one backend's listing call, in ms. A backend that misses it
    * contributes nothing instead of holding up the whole fan-out. Omitted means no
-   * deadline, which is what every caller but the picker route wants.
+   * deadline for static backends; runtime-discovered ones (RUNTIME_DISCOVERED_BACKENDS)
+   * then get RUNTIME_LISTING_DEFAULT_TIMEOUT_MS.
    */
   perBackendTimeoutMs?: number;
   /**
@@ -439,14 +444,13 @@ export const getAvailableModels = async (
   const backendPromises = Object.entries(backends).map(async ([backendName, backend]) => {
     if (!backend) return { backendName, models: [] };
 
+    const live = RUNTIME_DISCOVERED_BACKENDS.includes(backendName as ModelBackend);
+    const timeoutMs = perBackendTimeoutMs || (live ? RUNTIME_LISTING_DEFAULT_TIMEOUT_MS : 0);
     try {
       const listing = backend.getModelInfo();
-      const models = await (perBackendTimeoutMs
-        ? withListingTimeout(listing, perBackendTimeoutMs, backendName)
-        : listing);
+      const models = await (timeoutMs ? withListingTimeout(listing, timeoutMs, backendName) : listing);
       return { backendName, models };
     } catch (error) {
-      const live = RUNTIME_DISCOVERED_BACKENDS.includes(backendName as ModelBackend);
       const message = `[getAvailableModels] Error fetching models from ${backendName}:`;
       if (live) Logger.globalInstance.warn(message, error instanceof Error ? error.message : error);
       else Logger.globalInstance.error(message, error);
@@ -576,6 +580,7 @@ export * from './anthropicBackend';
 export * from './anthropicBatchService';
 export * from './awsBackend';
 export * from './bedrockBackend/base';
+export * from './bedrockBackend/converse';
 export * from './bedrockBackend/undifferentiated';
 export * from './bflBackend';
 export * from './geminiBackend';

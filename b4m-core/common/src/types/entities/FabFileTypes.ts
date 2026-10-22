@@ -488,7 +488,7 @@ export interface IFabFile {
 
   /**
    * Set by the doors that hand a client a URL to PUT this row's bytes to (a presign, or the self-host
-   * proxy). Only such a row's landing is judged by the measured-size gate (apps/client/server/s3/uploadSizeGate.ts):
+   * proxy). Only such a row's landing is judged by the measured-size gate (packages/server-utils/src/s3/uploadSizeGate.ts):
    * a server-side door writes bytes it already holds, and judging those would discard its file.
    */
   clientUpload?: boolean;

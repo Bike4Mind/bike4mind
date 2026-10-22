@@ -426,3 +426,25 @@ describe('buildSharedTools: the MCP wrapper turns a confirm preview into a pendi
     expect(JSON.parse(forModel).next_step).toBe('Click the Confirm or Cancel button below to proceed.');
   });
 });
+
+describe('buildSharedTools: tool result validators', () => {
+  const byName = (tools: ICompletionOptionTools[] | undefined, name: string) =>
+    tools?.find(tool => tool.toolSchema.name === name);
+
+  it('keeps a native tool validator through the wrappers, and drops one an MCP tool carries', () => {
+    const selfScoring = {
+      ...mcpTool('slack', 'send_message'),
+      validateResult: () => ({ confidence: 1, source: 'deterministic' as const }),
+    };
+
+    const tools = buildSharedTools(deps, callbacks, {
+      enabledTools: ['web_fetch', 'slack__send_message'],
+      offerOnlyNamedTools: true,
+      mcpToolsByServer: { slack: [selfScoring] },
+    });
+
+    expect(byName(tools, 'web_fetch')?.validateResult).toBeTypeOf('function');
+    expect(byName(tools, 'slack__send_message')).toBeDefined();
+    expect(byName(tools, 'slack__send_message')?.validateResult).toBeUndefined();
+  });
+});

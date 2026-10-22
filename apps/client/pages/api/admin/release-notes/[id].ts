@@ -12,11 +12,11 @@ import { deploymentMediaOrigins } from '@server/utils/deploymentMediaOrigins';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import {
-  isReleaseNotesWriteOnlyKey,
   loadDenylistOrThrow,
   noteOrThrow,
   toAdminReleaseNote,
-} from '@server/releaseNotes/adminReleaseNotes';
+} from '@bike4mind/server-utils/releaseNotes/adminReleaseNotes';
+import { isReleaseNotesWriteOnlyKey } from '@server/releaseNotes/releaseNotesWriteOnlyKey';
 
 const EditSchema = z
   .object({

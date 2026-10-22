@@ -1,4 +1,6 @@
+import type { ToolResultValidator } from '@bike4mind/llm-adapters';
 import { ToolDefinition, type CodeMinifier } from '../../base/types';
+import { EMPTY_RESULT_SCORE, FAILED_RESULT_SCORE } from '../../base/resultValidators';
 import { promises as fs } from 'fs';
 import { existsSync, statSync } from 'fs';
 import { assertPathAllowed, isPathAllowed } from '../../utils/pathValidation';
@@ -13,6 +15,10 @@ interface FileReadParams {
 }
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB limit
+const READ_ERROR_PREFIX = 'Error reading file: ';
+const NO_CONTENT_PREFIX = 'No content to show.';
+// A paginated read whose selected lines are all blank: only the "... Showing lines" footer is left.
+const BLANK_PAGE_PATTERN = /^\s*\.\.\. Showing lines \d+-\d+ of \d+ total lines/;
 
 async function readFileContent(
   params: FileReadParams,
@@ -74,7 +80,7 @@ async function readFileContent(
     }
 
     if (offset >= totalLines) {
-      return `No content to show. File has ${totalLines} lines, but offset is ${offset}.\n(offset is 0-based, so valid range is 0-${Math.max(0, totalLines - 1)})`;
+      return `${NO_CONTENT_PREFIX} File has ${totalLines} lines, but offset is ${offset}.\n(offset is 0-based, so valid range is 0-${Math.max(0, totalLines - 1)})`;
     }
 
     if (limit !== undefined && limit > 0) {
@@ -118,6 +124,15 @@ async function checkIfBinary(filePath: string): Promise<boolean> {
   }
 }
 
+/** Scores a failed read, and a read that returned no text (empty file, offset past the end, blank page). */
+export const validateFileReadResult: ToolResultValidator = result => {
+  if (result.startsWith(READ_ERROR_PREFIX)) return FAILED_RESULT_SCORE;
+  if (result.trim().length === 0 || result.startsWith(NO_CONTENT_PREFIX) || BLANK_PAGE_PATTERN.test(result)) {
+    return EMPTY_RESULT_SCORE;
+  }
+  return undefined;
+};
+
 export const fileReadTool: ToolDefinition = {
   name: 'file_read',
   implementation: context => ({
@@ -142,9 +157,10 @@ export const fileReadTool: ToolDefinition = {
         context.logger.error('❌ FileRead: Failed', error);
         // Return the error as the tool result so the agent can see and handle it.
         const errorMessage = error instanceof Error ? error.message : String(error);
-        return `Error reading file: ${errorMessage}`;
+        return `${READ_ERROR_PREFIX}${errorMessage}`;
       }
     },
+    validateResult: validateFileReadResult,
     toolSchema: {
       name: 'file_read',
       description:

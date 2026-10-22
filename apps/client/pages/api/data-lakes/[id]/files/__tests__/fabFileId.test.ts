@@ -35,6 +35,7 @@ vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatu
 // The whole module is replaced, so every repo the route (or lakeConfigAuditDb) names must be
 // present - a missing export is an import-time failure, not a silent undefined.
 vi.mock('@bike4mind/database', () => ({
+  memoryLedgerRepository: { markSourceShredded: vi.fn().mockResolvedValue(0) },
   withTransaction: async (fn: () => unknown) => fn(),
   dataLakeRepository: { touchIfStable: h.touchIfStable, findByDatalakeTags: vi.fn().mockResolvedValue([]) },
   dataLakeAccessGrantRepository: {},

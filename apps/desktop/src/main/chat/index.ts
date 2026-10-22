@@ -92,6 +92,7 @@ import {
   projectDisplayName,
   unusableProjectReason,
 } from './project/git';
+import { readWorkspaceChanges } from './project/workspaceChanges';
 import { accountSkillsProvider } from './skills/accountSkills';
 import { ProjectTrustStore } from './skills/ProjectTrustStore';
 import { ClaudeCodeSettings, MANAGED_SETTINGS_PATH } from './permissions/ClaudeCodeSettings';
@@ -102,6 +103,7 @@ import { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
 import { DependencyInstaller } from './project/dependencyInstall';
 import { RecentFolderStore } from './project/RecentFolderStore';
+import { SpareWorktrees } from './project/workspace';
 import { folderToRemember } from './project/recentFolderToRecord';
 import { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 import { parseReasoningEffortSetting, storedReasoningEffortSetting } from './reasoningEffort';
@@ -209,6 +211,8 @@ export interface RegisteredChat {
   pullRequests: PrMonitor;
   /** Import from Claude; started once the window is up so it never delays launch. */
   claudeImport: ClaudeImportService;
+  /** Spare checkouts, removed on the quit pass that can wait for git. */
+  spareWorktrees: SpareWorktrees;
 }
 
 /**
@@ -337,10 +341,11 @@ export function registerChat(
   // App-wide like approval-mode.json; see SidebarSectionStore.
   const sidebarSections = new SidebarSectionStore(join(userData, 'sidebar-sections.json'));
   const recentFolders = new RecentFolderStore(join(userData, 'recent-folders.json'));
+  const spareWorktrees = new SpareWorktrees();
   // The trust file is its own file beside tool-access.json, and for the same reason: both record
   // a consent the user gave once and should not be asked for again on every launch.
   const projectTrust = new ProjectTrustStore(join(userData, 'project-skill-trust.json'));
-  const skills = new SkillCatalog(projectTrust, accountSkillsProvider(auth, userData));
+  const skills = new SkillCatalog(projectTrust, accountSkillsProvider(auth, userData), logger);
   // App-wide like approval-mode.json. Claude Code's files are only ever read; the protected roots
   // are folders no allow rule may cover, since a call writing there would grant itself more.
   const home = app.getPath('home');
@@ -481,6 +486,7 @@ export function registerChat(
     background,
     foreground,
     dependencies: new DependencyInstaller(background),
+    spareWorktrees,
     media,
     videoJobs,
     activity,
@@ -576,11 +582,14 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatListSessions, () => service.listSessions());
   ipcMain.handle(IPC_CHANNELS.permissionsGetState, () => permissions.state());
   // Shapes checked here: this is the only door a rule comes in by besides the approval card.
-  ipcMain.handle(IPC_CHANNELS.permissionsSetRules, (_event, scope: unknown, lists: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.permissionsSetRules, async (_event, scope: unknown, lists: unknown) => {
     const parsedScope = permissionScope(scope);
     const parsedLists = permissionLists(lists);
     if (!parsedScope || !parsedLists) return { ok: false, error: 'Not a permission rule list.' };
-    return permissions.setRules(parsedScope, parsedLists);
+    const result = await permissions.setRules(parsedScope, parsedLists);
+    // An allow typed here answers any card it now covers, in every session.
+    if (result.ok) void approvals.settleCovered();
+    return result;
   });
   ipcMain.handle(IPC_CHANNELS.permissionsSetSharing, (_event, share: unknown) =>
     permissions.setShareClaudeCode(share === true)
@@ -611,7 +620,10 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatPickProjectDirectory, (event): Promise<string | null> => pickDirectory(event.sender));
   ipcMain.handle(IPC_CHANNELS.chatListRecentFolders, () => recentFolders.list());
   ipcMain.handle(IPC_CHANNELS.chatRemoveRecentFolder, async (_event, directory: unknown) => {
-    if (typeof directory === 'string') await recentFolders.remove(directory);
+    if (typeof directory === 'string') {
+      await recentFolders.remove(directory);
+      void spareWorktrees.forget(directory);
+    }
     return recentFolders.list();
   });
 
@@ -666,6 +678,19 @@ export function registerChat(
     service.removeContextDirectory(sessionId, directory)
   );
   ipcMain.handle(IPC_CHANNELS.chatGetSession, (_event, sessionId: string) => service.getSession(sessionId));
+  // Keyed by session rather than by a path from the renderer, so this only ever reads the folder
+  // the session's own tools run in. A failure is logged, not shown: the bar is a passive readout,
+  // and a repository git cannot read already says so on the branch chip beside it.
+  ipcMain.handle(IPC_CHANNELS.chatWorkspaceChanges, async (_event, sessionId: unknown) => {
+    if (typeof sessionId !== 'string') return null;
+    const session = await store.get(sessionId);
+    try {
+      return await readWorkspaceChanges(session?.project);
+    } catch (err) {
+      logger.warn(`CHAT: could not read workspace changes for ${sessionId}: ${String(err)}`);
+      return null;
+    }
+  });
   ipcMain.handle(IPC_CHANNELS.chatRenameSession, (_event, sessionId: string, title: string) =>
     service.renameSession(sessionId, title)
   );
@@ -944,7 +969,7 @@ export function registerChat(
     logger,
   });
 
-  return { service, background, mcp, browser, pullRequests, claudeImport };
+  return { service, background, mcp, browser, pullRequests, claudeImport, spareWorktrees };
 }
 
 export { ChatService } from './ChatService';

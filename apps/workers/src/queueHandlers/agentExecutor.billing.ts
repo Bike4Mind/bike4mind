@@ -14,9 +14,9 @@
  * the caller across iterations (mirrors the in-place-mutation contract the call
  * site relies on).
  */
-import { getTurnsCost, reservationOutputTokens, usdToCredits, type ModelInfo, type TurnUsage } from '@bike4mind/common';
+import { buildUsagePriceStamp, getTurnsCost, reservationOutputTokens, usdToCredits, type ModelInfo, type TurnUsage } from '@bike4mind/common';
 import type { IIterationBilling } from '@bike4mind/database';
-import type { UsageEventStatus } from '@bike4mind/common';
+import type { UsageEventStatus, UsagePriceStamp } from '@bike4mind/common';
 import { buildEarlyStopStamp } from '@bike4mind/services/llm';
 
 type BalanceRepository = {
@@ -225,16 +225,18 @@ export function takeToolUsage(pending: PendingToolUsage): ToolUsageTotals {
  */
 export type IterationBillingEffects = {
   deductCredits: (deltas: IterationTokenDeltas & { credits: number }) => Promise<void>;
-  recordUsageEvent: (event: {
-    inputTokens: number;
-    outputTokens: number;
-    cachedInputTokens: number;
-    cacheWriteTokens: number;
-    costUsd: number;
-    creditsCharged: number;
-    status: UsageEventStatus;
-    latencyMs: number;
-  }) => void;
+  recordUsageEvent: (
+    event: UsagePriceStamp & {
+      inputTokens: number;
+      outputTokens: number;
+      cachedInputTokens: number;
+      cacheWriteTokens: number;
+      costUsd: number;
+      creditsCharged: number;
+      status: UsageEventStatus;
+      latencyMs: number;
+    }
+  ) => void;
   addIterationBilling: (billing: IIterationBilling) => Promise<void>;
   sendProgress: (creditsUsed: number, iterationIndex: number) => Promise<void>;
   logGuardTrip: (details: { requestInputTokens: number; contextWindow: number }) => void;
@@ -528,6 +530,9 @@ export async function billIteration(params: BillIterationParams): Promise<void> 
     cacheWriteTokens: chargedCacheWriteTokens,
     costUsd: costDelta,
     creditsCharged: credits,
+    // The agent model's rates for the requests priced above; tool spend in costUsd is priced
+    // at the tools' own models and is not part of this stamp.
+    ...buildUsagePriceStamp(modelInfo, { turns }),
     status: buildEarlyStopStamp(checkpoint.finishReason)?.usageEventStatus ?? 'ok',
     latencyMs: effects.now() - startTime,
   });

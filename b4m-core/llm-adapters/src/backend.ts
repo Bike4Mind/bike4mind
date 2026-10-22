@@ -99,8 +99,24 @@ export type IChoiceEnd = IChoiceEndStop | IChoiceEndComplete | IChoiceEndToolUse
 
 export type IChoice = IChoiceStream | IChoiceEnd;
 
+/**
+ * A tool's own judgment of one of its results, fed to the agent confidence gate.
+ * `deterministic` when the tool recognizes a result it produced itself (a known failure
+ * message, a schema failure); `heuristic` when it is inferring quality from the content.
+ */
+export type ToolResultScore = {
+  /** 0-1; the agent gate pauses a run when an iteration's average falls below its threshold. */
+  confidence: number;
+  source: 'deterministic' | 'heuristic';
+};
+
+/** Returns `undefined` for a result it has no opinion on, deferring to the agent's default scoring. */
+export type ToolResultValidator = (result: string) => ToolResultScore | undefined;
+
 export interface ICompletionOptionTools {
   toolFn: (parameters?: unknown, apiKey?: string) => Promise<string>;
+  /** Scores this tool's results for the agent confidence gate (ReActAgent.scoreToolResult). */
+  validateResult?: ToolResultValidator;
   toolSchema: {
     name: string;
     description: string;
@@ -139,6 +155,17 @@ export interface ICompletionOptionTools {
   endsTurnAfterText?: boolean;
 }
 
+/**
+ * Receives the timing a backend observes inside one chat turn. Both calls are synchronous
+ * and must not throw - a telemetry fault must never fail the completion.
+ */
+export interface TurnTelemetrySink {
+  /** Time spent waiting for a provider concurrency slot before one API request, in ms. */
+  onSemaphoreWait: (waitMs: number) => void;
+  /** A retry the backend scheduled for a failed API request, before its backoff sleep. */
+  onRetry: (event: { error: Error; delayMs: number; model: string }) => void;
+}
+
 export interface ICompletionOptions {
   maxTokens?: number;
   temperature?: number;
@@ -161,7 +188,7 @@ export interface ICompletionOptions {
   logitBias?: { [key: string]: number };
   tools: ICompletionOptionTools[];
   /**
-   * Provider-run tools sent verbatim after `tools` (direct Anthropic only; see completionsSupportsToolSearch).
+   * Provider-run tools sent verbatim after `tools` (Claude adapters only; see completionsSupportsToolSearch).
    * Never executed locally: their blocks come back as CompletionInfo.providerBlock.
    */
   providerTools?: ToolSearchServerTool[];
@@ -304,6 +331,12 @@ export interface ICompletionOptions {
      * Internal - do not set manually.
      */
     downgradedToolChoice?: DowngradedToolChoice;
+    /**
+     * Per-turn timing sink, set by ChatCompletionProcess and threaded unchanged through recursive
+     * tool rounds so every round's semaphore wait and transport retry lands on one turn record.
+     * Anthropic and OpenAI only so far. Internal - do not set manually.
+     */
+    turnTelemetry?: TurnTelemetrySink;
   };
   /** Provider-agnostic caching strategy configuration */
   cacheStrategy?: ICacheStrategy;
@@ -362,6 +395,11 @@ export interface ICompletionResponseChunk {
    * complete() derives stopReason from the raw provider response leave this unset.
    */
   stopReason?: string;
+  /**
+   * Provider-run blocks to surface as CompletionInfo.providerBlock, in response order. A stream chunk's blocks
+   * go out where they arrive; `textOffset` places each one within a whole-message chunk's text.
+   */
+  providerBlocks?: Array<{ providerBlock: ProviderBlock; textOffset: number }>;
 }
 
 export type CompletionCallback = (done: boolean, chunk?: ICompletionResponseChunk) => Promise<void>;

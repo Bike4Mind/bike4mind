@@ -10,7 +10,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError, NotFoundError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { sreErrorTrackingRepository } from '@bike4mind/database';
-import { parseIssueNumberFromUrl } from '@server/integrations/github/sreWebhookDispatch';
+import { parseIssueNumberFromUrl } from '@bike4mind/server-utils/integrations/github/sreWebhookDispatch';
 import { SRE_DEFAULT_REPO_SLUG } from '@bike4mind/common';
 import { GitHubService } from '@server/services/githubService';
 import { Logger } from '@bike4mind/observability';

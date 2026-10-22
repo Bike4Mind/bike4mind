@@ -4,7 +4,12 @@ import { createS3Client } from '@bike4mind/fab-pipeline';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { assertUrlAllowed, safeFetch, SsrfError } from '@bike4mind/server-utils/utils/ssrfProtection';
+import {
+  assertUrlAllowed,
+  isResponseTooLargeError,
+  safeFetch,
+  SsrfError,
+} from '@bike4mind/server-utils/utils/ssrfProtection';
 import { streamWithSizeLimit } from '@server/utils/streamWithSizeLimit';
 import { Resource } from 'sst';
 import crypto from 'crypto';
@@ -91,17 +96,24 @@ const handler = baseApi().get(
       // re-validating its Location through the SSRF guard, so legitimate CDN redirects
       // (Gravatar, GitHub avatars, Cloudinary) still work while a redirect to a private
       // host is blocked.
-      response = await safeFetch(parsed.toString(), {
-        headers: {
-          'User-Agent': `Lumina5-ImageProxy/1.0${brand ? ` (${brand})` : ''}`,
-          Accept: 'image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+      response = await safeFetch(
+        parsed.toString(),
+        {
+          headers: {
+            'User-Agent': `Lumina5-ImageProxy/1.0${brand ? ` (${brand})` : ''}`,
+            Accept: 'image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+          },
+          signal: controller.signal,
         },
-        signal: controller.signal,
-      });
+        { maxBodyBytes: MAX_IMAGE_BYTES }
+      );
     } catch (fetchError) {
       if (fetchError instanceof SsrfError) {
         req.logger.warn('Blocked SSRF on external image fetch', { url: rawUrl, reason: fetchError.message });
         throw new BadRequestError(fetchError.message);
+      }
+      if (isResponseTooLargeError(fetchError)) {
+        throw new BadRequestError('Image too large');
       }
       if (fetchError instanceof Error && fetchError.name === 'AbortError') {
         throw new BadRequestError('Image fetch timed out');

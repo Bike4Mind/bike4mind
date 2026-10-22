@@ -7,7 +7,7 @@ import { createModalVideoSchema, WHATS_NEW_DEFAULT_REPOSITORY } from '@bike4mind
 import { deploymentMediaOrigins } from '@server/utils/deploymentMediaOrigins';
 import { cacheExternalImage, cacheExternalImages } from '@server/utils/cacheExternalImage';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
-import { WhatsNewDistributionService } from '@server/services/whatsNewDistribution';
+import { WhatsNewDistributionService } from '@bike4mind/server-utils/services/whatsNewDistribution';
 import { emitModalGenerationMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
 import { Logger } from '@bike4mind/observability';
 import { extractVariantForViewer, viewerClassifier, MODAL_SAFE_DEFAULT_KEY } from '@bike4mind/services';

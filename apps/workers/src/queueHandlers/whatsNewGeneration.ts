@@ -31,7 +31,7 @@ import {
   extractJsonFromResponse,
   createWhatsNewModalSchema,
 } from '@server/whatsNew/whatsNewGeneration.utils';
-import { WhatsNewDistributionService } from '@server/services/whatsNewDistribution';
+import { WhatsNewDistributionService } from '@bike4mind/server-utils/services/whatsNewDistribution';
 
 // Token estimation constants
 const CHARS_PER_TOKEN = 4; // Rough estimate: 1 token ≈ 4 characters

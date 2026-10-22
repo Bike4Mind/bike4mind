@@ -22,7 +22,7 @@ vi.mock('@server/dataLakes', async () => ({
   // asserts on the actual predicate rather than a reimplementation. Imported from its own
   // lightweight file, not `importOriginal` of this whole barrel - the barrel pulls in
   // toAccessContext's entitlements/Subscription-model chain, which this test does not mock.
-  grantingLakes: (await import('../../../../server/dataLakes/grantingLakes')).grantingLakes,
+  grantingLakes: (await import('@bike4mind/server-utils/dataLakes/grantingLakes')).grantingLakes,
 }));
 vi.mock('@bike4mind/database', () => ({
   lakeAccessEventRepository: { record: mockRecord },

@@ -18,14 +18,14 @@ vi.mock('@client/server/middlewares/baseApi', () => ({
 }));
 
 const mockFindById = vi.fn();
-const mockUpdate = vi.fn();
+const mockUpdateIfNonGlobal = vi.fn();
 const mockUpdateGuarded = vi.fn();
 const mockDelete = vi.fn();
 const mockRateLimit = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   skillRepository: {
     findById: (...a: unknown[]) => mockFindById(...a),
-    update: (...a: unknown[]) => mockUpdate(...a),
+    updateIfNonGlobal: (...a: unknown[]) => mockUpdateIfNonGlobal(...a),
     updateGuarded: (...a: unknown[]) => mockUpdateGuarded(...a),
     delete: (...a: unknown[]) => mockDelete(...a),
   },
@@ -90,21 +90,21 @@ describe('/api/skills/[id] PUT — edit permission', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockFindById.mockResolvedValue(skillDoc());
-    mockUpdate.mockImplementation(async (patch: Record<string, unknown>) => ({ ...skillDoc(), ...patch }));
+    mockUpdateIfNonGlobal.mockImplementation(async (patch: Record<string, unknown>) => ({ ...skillDoc(), ...patch }));
   });
 
   it('allows the owner to edit', async () => {
     const { req, res } = makeReqRes('PUT', OWNER, { description: 'new' });
     await handler(req, res);
     expect(res._getStatusCode()).toBe(200);
-    expect(mockUpdate).toHaveBeenCalled();
+    expect(mockUpdateIfNonGlobal).toHaveBeenCalled();
   });
 
   it('explicitly unsets a null argument hint', async () => {
     mockFindById.mockResolvedValue(skillDoc({ argumentHint: '<previous>' }));
     const { req, res } = makeReqRes('PUT', OWNER, { argumentHint: null });
     await handler(req, res);
-    expect(mockUpdate).toHaveBeenCalledWith(
+    expect(mockUpdateIfNonGlobal).toHaveBeenCalledWith(
       { id: 'skill-1', argumentHint: undefined },
       { new: true, unset: ['argumentHint'] }
     );
@@ -114,7 +114,7 @@ describe('/api/skills/[id] PUT — edit permission', () => {
     mockFindById.mockResolvedValue(skillDoc({ argumentHint: '<previous>' }));
     const { req, res } = makeReqRes('PUT', OWNER, { argumentHint: '' });
     await handler(req, res);
-    expect(mockUpdate).toHaveBeenCalledWith({ id: 'skill-1', argumentHint: '' }, { new: true });
+    expect(mockUpdateIfNonGlobal).toHaveBeenCalledWith({ id: 'skill-1', argumentHint: '' }, { new: true });
     expect(res._getJSONData()).toMatchObject({ argumentHint: '' });
   });
 
@@ -122,13 +122,13 @@ describe('/api/skills/[id] PUT — edit permission', () => {
     mockFindById.mockResolvedValue(skillDoc({ argumentHint: '<previous>' }));
     const { req, res } = makeReqRes('PUT', OWNER, { description: 'new' });
     await handler(req, res);
-    expect(mockUpdate).toHaveBeenCalledWith({ id: 'skill-1', description: 'new' }, { new: true });
+    expect(mockUpdateIfNonGlobal).toHaveBeenCalledWith({ id: 'skill-1', description: 'new' }, { new: true });
   });
 
   it('allows a share-recipient with update permission to edit', async () => {
     const { req, res } = makeReqRes('PUT', SHARED_UPDATE, { description: 'new' });
     await handler(req, res);
-    expect(mockUpdate).toHaveBeenCalled();
+    expect(mockUpdateIfNonGlobal).toHaveBeenCalled();
   });
 
   it('allows editing when the skill is globally writable', async () => {
@@ -141,7 +141,7 @@ describe('/api/skills/[id] PUT — edit permission', () => {
   it('rejects a recipient with only delete permission', async () => {
     const { req, res } = makeReqRes('PUT', SHARED_DELETE, { description: 'new' });
     await expect(handler(req, res)).rejects.toBeInstanceOf(ForbiddenError);
-    expect(mockUpdate).not.toHaveBeenCalled();
+    expect(mockUpdateIfNonGlobal).not.toHaveBeenCalled();
   });
 
   it('rejects an outsider', async () => {
@@ -409,9 +409,12 @@ describe('/api/skills/[id] PUT - global skill content changes go through the Ski
     const { req, res } = makeReqRes('PUT', OWNER, { body: 'changed', allowedTools: ['web_fetch'] });
     await handler(req, res);
     expect(mockClassify).not.toHaveBeenCalled();
-    expect(mockUpdate).toHaveBeenCalledWith(expect.objectContaining({ body: 'changed', allowedTools: ['web_fetch'] }), {
-      new: true,
-    });
+    expect(mockUpdateIfNonGlobal).toHaveBeenCalledWith(
+      expect.objectContaining({ body: 'changed', allowedTools: ['web_fetch'] }),
+      {
+        new: true,
+      }
+    );
   });
 });
 

@@ -83,7 +83,7 @@ vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   recordCircuitBreakerRejection: vi.fn(async () => undefined),
   recordCircuitBreakerTransition: vi.fn(async () => undefined),
 }));
-vi.mock('@server/integrations/integrationAuditLogger', () => ({
+vi.mock('@bike4mind/server-utils/integrations/integrationAuditLogger', () => ({
   IntegrationAuditLogger: {
     create: (context: Record<string, unknown>) => ({
       success: (extra?: unknown) => state.audits.push({ context, outcome: 'success', extra }),

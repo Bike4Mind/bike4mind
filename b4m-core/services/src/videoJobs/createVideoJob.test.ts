@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { CreditHolderType, insufficientCreditsError } from '@bike4mind/common';
+import { CreditHolderType, insufficientCreditsError, type VideoInput } from '@bike4mind/common';
 import { createVideoProviderRegistry, TestVideoProvider } from '@bike4mind/utils/videoProviders';
 import { Logger } from '@bike4mind/observability';
 import { createInMemoryGenerationJobRepository } from '../generationJobs/__test__/inMemoryGenerationJobRepository';
@@ -223,6 +223,40 @@ describe('createVideoJob', () => {
     );
     expect(result).toMatchObject({ ok: false, status: 422, code: 'unexpected_input_image' });
     expect(loadInputImage).not.toHaveBeenCalled();
+  });
+
+  it('checks every role-tagged input and names the role that is missing', async () => {
+    const loadInputImage = vi
+      .fn<VideoJobDeps['loadInputImage']>()
+      .mockResolvedValueOnce({ bytes: Buffer.from('img'), mimeType: 'image/png' })
+      .mockResolvedValue(null);
+    const { deps } = makeDeps({ loadInputImage });
+    const inputs: VideoInput[] = [
+      { role: 'first_frame', fileId: 'f1' },
+      { role: 'last_frame', fileId: 'f2' },
+    ];
+    const result = await createVideoJob(
+      { user, request: { ...validRequest, mode: 'image_to_video', inputs }, source: 'api' },
+      deps
+    );
+    expect(result).toEqual({
+      ok: false,
+      status: 404,
+      code: 'input_image_not_found',
+      message: 'Input image not found (last_frame)',
+    });
+    expect(loadInputImage).toHaveBeenNthCalledWith(2, user.id, { kind: 'file', id: 'f2' });
+    expect(holdCredits).not.toHaveBeenCalled();
+  });
+
+  it('stores role-tagged inputs on the job as sent', async () => {
+    const { deps } = makeDeps();
+    const inputs: VideoInput[] = [{ role: 'first_frame', fileId: 'f1' }];
+    const result = await createVideoJob(
+      { user, request: { ...validRequest, mode: 'image_to_video', inputs }, source: 'api' },
+      deps
+    );
+    expect(result).toMatchObject({ ok: true, job: { payload: { request: { inputs } } } });
   });
 
   it('maps insufficient credits to 402', async () => {

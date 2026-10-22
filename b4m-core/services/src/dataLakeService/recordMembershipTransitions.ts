@@ -1,4 +1,9 @@
-import { satisfiesMembershipScope, type MembershipActor, type MembershipLake } from './lakeMembership';
+import {
+  satisfiesMembershipScope,
+  type MembershipActor,
+  type MembershipLake,
+  type LakeSourceShredDb,
+} from './lakeMembership';
 import { resolveLakeMembershipScope } from './lakeMembershipScope';
 import { recordLakeMembershipChange, type LakeMembershipAuditAdapters } from './recordLakeMembershipChange';
 import type { LakeMembershipChangeOrigin } from '@bike4mind/common';
@@ -33,8 +38,9 @@ export interface MembershipTransitionFile {
  * carries the lake's `datalake:` meta-tag is still a member after losing its prefix tag, and a
  * prefix-only diff would wrongly report it as having left.
  *
- * Best-effort throughout, like `recordLakeMembershipChange` itself: the tag write has already
- * landed by the time this runs, so a failed audit must not surface as a failed rename. Recorded
+ * Audit is best-effort, like `recordLakeMembershipChange` itself: the tag write has already
+ * landed by the time this runs, so a failed audit must not surface as a failed rename.
+ * Source-memory shredding is required and its failures propagate. Recorded
  * one at a time rather than fanned out - a bulk door can reach thousands of pairs, and the events
  * are independent, so there is nothing to win by opening that many concurrent writes.
  */
@@ -42,11 +48,12 @@ export const recordMembershipTransitions = async (
   actor: MembershipActor,
   lakes: readonly MembershipLake[],
   files: readonly MembershipTransitionFile[],
-  { db, logger }: LakeMembershipAuditAdapters,
+  {
+    db,
+    logger,
+  }: { db: LakeMembershipAuditAdapters['db'] & LakeSourceShredDb; logger?: LakeMembershipAuditAdapters['logger'] },
   { origin }: { origin: LakeMembershipChangeOrigin }
 ): Promise<void> => {
-  if (!db.lakeMembershipChangeEvents) return;
-
   for (const lake of lakes) {
     // `resolveLakeMembershipScope`, not `lakeMembershipScope`: a static registry lake has no
     // creator, and an owned scope over one fails closed to the meta-tag arm - silently dropping
@@ -62,6 +69,9 @@ export const recordMembershipTransitions = async (
       const before = satisfiesMembershipScope(scope, asFile(file.beforeTagNames));
       const after = satisfiesMembershipScope(scope, asFile(file.afterTagNames));
       if (before === after) continue;
+      if (!after && lake.createdByUserId && lake.datalakeTag) {
+        await db.memoryLedger.markSourceShredded('lake', lake.datalakeTag, lake.createdByUserId, file.fabFileId);
+      }
       await recordLakeMembershipChange(
         { actor, lake, fabFileId: file.fabFileId, action: after ? 'added' : 'removed', origin },
         { db, logger }

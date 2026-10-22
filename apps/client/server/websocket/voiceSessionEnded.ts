@@ -27,7 +27,11 @@ import {
 import { sessionService } from '@bike4mind/services';
 import { connectionHoldsScope } from '@server/websocket/connectionScope';
 import { REALTIME_VOICE_RESERVE_USD, realtimeCreditsFloor } from '@bike4mind/server-utils/voice/voiceSessionLimits';
-import { isVoiceLedgerKeyTaken, recordVoiceUsage, VOICE_TRANSACTION_OPTIONS } from '@server/voice/settleVoiceHold';
+import {
+  isVoiceLedgerKeyTaken,
+  recordVoiceUsage,
+  VOICE_TRANSACTION_OPTIONS,
+} from '@bike4mind/server-utils/voice/settleVoiceHold';
 
 export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async (event, context, logger) => {
   const { userId, sessionId, model, usage, responseId } = VoiceSessionEndedAction.parse(JSON.parse(event.body ?? ''));
@@ -101,7 +105,10 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   // Usage the balance could not cover: debits are floored at zero, so this is logged, not charged.
   let shortfall = 0;
 
-  const settings = await getSettingsMap({ adminSettings: adminSettingsRepository }, { names: ['enforceCredits'] });
+  const settings = await getSettingsMap(
+    { adminSettings: adminSettingsRepository },
+    { names: ['enforceCredits'], skipCache: true }
+  );
   const enforceCredits = getSettingsValue('enforceCredits', settings);
   // Returns the shortfall. Floored only under enforcement: with credits off a balance tracks usage
   // and may go negative, as before.

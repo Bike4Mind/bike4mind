@@ -22,7 +22,11 @@
  * host passes its own authenticated client and cache path, and does all HTTP in its own process.
  */
 
-export { CustomCommandStore, type CustomCommandStoreOptions } from '../storage/CustomCommandStore.js';
+export {
+  CustomCommandStore,
+  type CachedCommandFile,
+  type CustomCommandStoreOptions,
+} from '../storage/CustomCommandStore.js';
 export { RemoteSkillSource, type RemoteSkillSourceOptions } from '../storage/RemoteSkillSource.js';
 export type { AgentConfig, CustomCommand, CustomCommandFrontmatter, SkillHooks } from '../storage/types.js';
 export { extractCommandName, isValidCommandName, parseCommandFile } from '../utils/commandParser.js';

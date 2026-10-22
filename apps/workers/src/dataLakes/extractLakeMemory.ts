@@ -4,6 +4,7 @@ import {
   dataLakeRepository,
   fabFileChunkRepository,
   fabFileRepository,
+  memoryLedgerRepository,
 } from '@bike4mind/database';
 import { LAKE_MEMORY_EXTRACTION_LEASE_MS } from '@bike4mind/common';
 import { apiKeyService, dataLakeService } from '@bike4mind/services';
@@ -11,7 +12,7 @@ import { LakeMemoryExtractionService } from '@bike4mind/services/llm';
 import { getSettingsByNames } from '@bike4mind/utils';
 import type { EvidenceTier } from '@bike4mind/memory';
 import type { Logger } from '@bike4mind/observability';
-import { createLedgerAppendSession } from '@server/memory/mementoLedgerMirror';
+import { createLedgerAppendSession } from '@bike4mind/server-utils/memory/mementoLedgerMirror';
 import { createMementoEmbedder } from '@bike4mind/server-utils/memory/mementoEmbedder';
 
 /**
@@ -339,6 +340,11 @@ export async function extractLakeMemoryForBatch(
           // report erased facts as written.
           if (!written) {
             factsRefused++;
+            break;
+          }
+          const current = await fabFileRepository.findById(doc.fabFileId);
+          if (!current || !dataLakeService.lakeMembershipSignals(lake, current).inLake) {
+            await memoryLedgerRepository.markSourceShredded('lake', datalakeTag, ownerUserId, doc.fabFileId);
             break;
           }
           factsWritten++;

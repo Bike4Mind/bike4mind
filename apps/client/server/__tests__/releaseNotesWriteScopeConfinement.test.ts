@@ -14,6 +14,7 @@ import { stripComments, tsFiles } from './scopeCoverageHelpers';
  */
 const PAGES_API = path.join(__dirname, '..', '..', 'pages', 'api');
 const SERVER = path.join(__dirname, '..');
+const SERVER_UTILS = path.join(__dirname, '..', '..', '..', '..', 'packages', 'server-utils', 'src');
 
 const EXPECTED_REFERENCES = [
   'pages/api/admin/release-notes/[id].ts',
@@ -36,7 +37,7 @@ describe('release-notes:write reach', () => {
   });
 
   it('is named only by the release-note routes, the createFabFile gate, the admin mint and anomaly detection', () => {
-    const referencing = [...tsFiles(PAGES_API), ...tsFiles(SERVER)]
+    const referencing = [...tsFiles(PAGES_API), ...tsFiles(SERVER), ...tsFiles(SERVER_UTILS)]
       .filter(f => !/\.test\.tsx?$/.test(f) && !f.includes(`${path.sep}__tests__${path.sep}`))
       .filter(f => /ApiKeyScope\.RELEASE_NOTES_WRITE\b/.test(stripComments(readFileSync(f, 'utf8'))))
       .map(rel)
