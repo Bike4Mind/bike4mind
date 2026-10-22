@@ -107,8 +107,10 @@ describe('untrusted text render sites', () => {
     ],
     'components/FolderTrustPrompt.tsx': ['escapeTerminalControlChars(projectRoot)'],
     'components/McpApprovalPrompt.tsx': ['escapeTerminalControlChars(s)'],
-    'components/UserQuestionPrompt.tsx': ['escapeTerminalControlChars(currentQuestion.question)'],
-    'components/ReviewGatePrompt.tsx': ['escapeTerminalControlChars(description)'],
+    'components/UserQuestionPrompt.tsx': [
+      'escapeTerminalControlChars(currentQuestion.question, { keepBidiMarks: true })',
+    ],
+    'components/ReviewGatePrompt.tsx': ['escapeTerminalControlChars(description, { keepBidiMarks: true })'],
     'components/McpViewer.tsx': ['sanitizeTerminalText(server.name)', 'sanitizeTerminalText(Object.keys(server.env)'],
     'components/SessionSelector.tsx': [
       'sanitizeTerminalText(lastUserMessage.content)',

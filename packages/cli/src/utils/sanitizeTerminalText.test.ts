@@ -94,6 +94,12 @@ describe('escapeTerminalControlChars', () => {
     expect(escaped).toBe('a\\x9b2Kb\\x85c');
   });
 
+  it('keeps bidi marks only when keepBidiMarks is set, and still escapes overrides', () => {
+    expect(escapeTerminalControlChars('a\u200Fb', { keepBidiMarks: true })).toBe('a\u200Fb');
+    expect(escapeTerminalControlChars('a\u202Eb', { keepBidiMarks: true })).toBe('a\\u202eb');
+    expect(escapeTerminalControlChars('a\u200Fb')).toBe('a\\u200fb');
+  });
+
   it('leaves ordinary text, tabs and newlines intact', () => {
     const text = 'line one\n\tindented\nline two';
     expect(escapeTerminalControlChars(text)).toBe(text);

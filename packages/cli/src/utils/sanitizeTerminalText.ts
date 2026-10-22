@@ -44,6 +44,10 @@ const ESCAPE_SEQUENCE =
 // eslint-disable-next-line no-control-regex
 const CONTROL_CHAR = /[\x00-\x08\x0b-\x1f\x7f-\x9f\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/g;
 
+// Same set minus the three bidi marks, for prose where legitimate RTL text carries them.
+// eslint-disable-next-line no-control-regex
+const PROSE_CONTROL_CHAR = /[\x00-\x08\x0b-\x1f\x7f-\x9f\u202A-\u202E\u2066-\u2069]/g;
+
 /** Strip terminal control sequences and characters from untrusted text for display. */
 export function sanitizeTerminalText(text: string): string {
   return text.replace(/\r\n/g, '\n').replace(ESCAPE_SEQUENCE, '').replace(CONTROL_CHAR, '');
@@ -54,8 +58,8 @@ export function sanitizeTerminalText(text: string): string {
  * them. ESC becomes `\x1b`, so a whole sequence reads as e.g. `\x1b[2K` and
  * cannot act. Tab and newline are left intact.
  */
-export function escapeTerminalControlChars(text: string): string {
-  return text.replace(CONTROL_CHAR, ch => {
+export function escapeTerminalControlChars(text: string, opts: { keepBidiMarks?: boolean } = {}): string {
+  return text.replace(opts.keepBidiMarks ? PROSE_CONTROL_CHAR : CONTROL_CHAR, ch => {
     const code = ch.charCodeAt(0);
     return code > 0xff ? `\\u${code.toString(16).padStart(4, '0')}` : `\\x${code.toString(16).padStart(2, '0')}`;
   });

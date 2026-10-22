@@ -129,7 +129,7 @@ function renderBanner(startupLog: string[] = []): void {
     const right = startupLog[i] || '';
     const coloredLeft = leftText ? `${leftAnsi}${leftText}\x1b[0m` : '';
     const gap = ' '.repeat(bannerWidth - leftText.length + 2);
-    console.log(coloredLeft + gap + truncate(right, rightColWidth));
+    console.log(coloredLeft + gap + truncate(sanitizeTerminalText(right), rightColWidth));
   }
 }
 
@@ -2227,12 +2227,12 @@ function CliApp() {
 
         // Log any file reference errors
         if (processed.errors.length > 0) {
-          processed.errors.forEach(error => console.warn(`Warning: ${error}`));
+          processed.errors.forEach(error => console.warn(`Warning: ${sanitizeTerminalText(String(error))}`));
         }
 
         // Show the expanded command in verbose mode
         if (process.env.B4M_VERBOSE === '1') {
-          console.log('📝 Expanded command:\n', substitutedBody);
+          console.log('📝 Expanded command:\n', sanitizeTerminalText(substitutedBody));
         }
 
         // Create a concise display message for the user
@@ -2245,12 +2245,12 @@ function CliApp() {
           // Validate agent exists
           if (!state.agentStore.hasAgent(agentName)) {
             const available = state.agentStore.getAgentNames().join(', ');
-            console.error(`❌ Unknown agent "${agentName}" specified in command.`);
-            console.error(`   Available agents: ${available}`);
+            console.error(`❌ Unknown agent "${sanitizeTerminalText(agentName)}" specified in command.`);
+            console.error(`   Available agents: ${sanitizeTerminalText(available)}`);
             return;
           }
 
-          console.log(`🤖 Delegating to ${agentName} agent...\n`);
+          console.log(`🤖 Delegating to ${sanitizeTerminalText(agentName)} agent...\n`);
 
           // Delegate to the specified agent
           const result = await state.orchestrator.delegateToAgent({
@@ -2262,13 +2262,13 @@ function CliApp() {
           });
 
           // Display the agent result summary
-          console.log('\n' + result.summary + '\n');
+          console.log('\n' + sanitizeTerminalText(result.summary) + '\n');
           return;
         }
 
         // Apply model override if specified
         if (customCommand.model && state.agent) {
-          console.log(`🔄 Using model override: ${customCommand.model}`);
+          console.log(`🔄 Using model override: ${sanitizeTerminalText(customCommand.model)}`);
 
           // Execute the command - send full template to agent but show concise message to user
           await runWithModelOverride(
@@ -3071,7 +3071,7 @@ function CliApp() {
           console.log('\nMCP Tools (deferred):');
           console.log(`  Schemas:           load on demand via tool_search (${mcpTools.length} tools available)`);
           for (const { serverName, count } of mcpToolCount) {
-            console.log(`    ${serverName}: ${count} tools`);
+            console.log(`    ${sanitizeTerminalText(serverName)}: ${count} tools`);
           }
         }
         if (agentTools.length > 0) {
