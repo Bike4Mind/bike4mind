@@ -31,6 +31,7 @@ import {
   SparkIcon,
 } from './icons';
 import { columnStackSx, contentColumnSx, thinScrollbarSx } from './layout';
+import { useCostDisplayPreference } from './costDisplay';
 import { PermissionsSettings, permissionsSummary, usePermissions } from './PermissionsSettings';
 import { promptSuggestionsSummary, usePromptSuggestionModel, usePromptSuggestions } from './promptSuggestions';
 import { SuggestionModelPicker } from './SuggestionModelPicker';
@@ -118,6 +119,23 @@ function worktreeEntry(enabled: boolean, toggle: () => void): ConfigEntry {
           }}
         />
       </Stack>
+    ),
+  };
+}
+
+function dollarCostsEntry(enabled: boolean, setEnabled: (enabled: boolean) => void): ConfigEntry {
+  return {
+    id: 'dollar-costs',
+    icon: <ContrastIcon />,
+    label: 'Show dollar costs',
+    summary: 'Development only. Show dollars while streaming and in usage details.',
+    control: (
+      <Switch
+        size="sm"
+        checked={enabled}
+        onChange={event => setEnabled(event.target.checked)}
+        slotProps={{ input: { 'aria-label': 'Show dollar costs', 'data-testid': 'settings-dollar-costs-switch' } }}
+      />
     ),
   };
 }
@@ -226,6 +244,8 @@ const SECTION_ICON: Record<SettingsSection, ReactNode> = {
  * is one string, which the account strip reads for itself - see `useSettingsAttention`.
  */
 function useSettingsEntries(auth: AuthState | null): Record<SettingsSection, ConfigEntry[]> {
+  const showDollarCosts = useCostDisplayPreference(state => state.showDollarCosts);
+  const setShowDollarCosts = useCostDisplayPreference(state => state.setShowDollarCosts);
   const update = useAppUpdate();
   const { mode, setMode } = useColorScheme();
   const theme = useTheme();
@@ -240,6 +260,7 @@ function useSettingsEntries(auth: AuthState | null): Record<SettingsSection, Con
       appearanceEntry(mode, setMode, theme.palette.mode),
       suggestionsEntry(suggestions, toggleSuggestions, suggestionModel),
       worktreeEntry(worktreeDefault, toggleWorktreeDefault),
+      ...(import.meta.env.DEV ? [dollarCostsEntry(showDollarCosts, setShowDollarCosts)] : []),
       ...(auth ? [serverEntry(auth)] : []),
       updatesEntry(update),
     ],

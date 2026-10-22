@@ -3778,6 +3778,35 @@
       }
     },
     {
+      "modelId": "us.amazon.nova-pro-v1:0",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "us.amazon.nova-pro-v1:0",
+        "vendor": "amazon",
+        "backend": "bedrock",
+        "type": "text",
+        "name": "Amazon Nova Pro",
+        "contextWindow": 300000,
+        "maxOutputTokens": 10000,
+        "canStream": true,
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Amazon's Nova Pro via AWS Bedrock - multimodal (text and images), tool use, and a 300K-token context window.",
+        "rank": 5,
+        "releaseDate": "2024-12-03"
+      }
+    },
+    {
       "modelId": "us.anthropic.claude-3-5-haiku-20241022-v1:0",
       "ownedGroups": [
         "identity",

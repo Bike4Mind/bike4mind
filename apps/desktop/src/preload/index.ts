@@ -48,6 +48,7 @@ const api: DesktopApi = {
     getState: () => ipcRenderer.invoke(IPC_CHANNELS.updateGetState),
     check: () => ipcRenderer.invoke(IPC_CHANNELS.updateCheck),
     download: () => ipcRenderer.invoke(IPC_CHANNELS.updateDownload),
+    dismiss: (version: string) => ipcRenderer.invoke(IPC_CHANNELS.updateDismiss, version),
     install: (force: boolean) => ipcRenderer.invoke(IPC_CHANNELS.updateInstall, force),
     onStateChanged: listener => {
       const handler = (_event: unknown, state: UpdateState) => listener(state);
@@ -112,6 +113,7 @@ const api: DesktopApi = {
     listRecentFolders: () => ipcRenderer.invoke(IPC_CHANNELS.chatListRecentFolders),
     removeRecentFolder: (directory: string) => ipcRenderer.invoke(IPC_CHANNELS.chatRemoveRecentFolder, directory),
     inspectProject: (directory: string) => ipcRenderer.invoke(IPC_CHANNELS.chatInspectProject, directory),
+    workspaceChanges: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatWorkspaceChanges, sessionId),
     addContextDirectory: (sessionId: string, path?: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatAddContextDirectory, sessionId, path),
     removeContextDirectory: (sessionId: string, directory: string) =>

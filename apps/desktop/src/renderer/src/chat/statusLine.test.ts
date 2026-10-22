@@ -84,11 +84,14 @@ describe('totalTokens with caching', () => {
 });
 
 describe('formatCost', () => {
-  it('prefers the server dollar figure and falls back to credits', () => {
-    expect(formatCost({ usdCost: 3.2 })).toBe('$3.20');
-    expect(formatCost({ usdCost: 0.004 })).toBe('$0.0040');
+  it('defaults to credits and only shows dollars when explicitly enabled', () => {
+    expect(formatCost({ usdCost: 3.2 })).toBeNull();
+    expect(formatCost({ usdCost: 3.2 }, true)).toBe('$3.20');
+    expect(formatCost({ usdCost: 0.004 }, true)).toBe('$0.0040');
     expect(formatCost({ creditsUsed: 1234.4 })).toBe('1,234 credits');
-    expect(formatCost({ usdCost: 1, creditsUsed: 9 })).toBe('$1.00');
+    expect(formatCost({ usdCost: 1, creditsUsed: 9 })).toBe('9 credits');
+    expect(formatCost({ usdCost: 1, creditsUsed: 9 }, true)).toBe('$1.00');
+    expect(formatCost({ creditsUsed: 0.4 })).toBe('<1 credit');
   });
 
   it('is null when the server sent no cost', () => {
@@ -116,10 +119,15 @@ describe('formatCreditsSpent', () => {
 
 describe('describeReplyCost', () => {
   it('adds the split and the dollar figure, and never repeats the credits headline', () => {
-    expect(describeReplyCost({ inputTokens: 1200, outputTokens: 300, creditsUsed: 9, usdCost: 0.004 })).toBe(
+    expect(describeReplyCost({ inputTokens: 1200, outputTokens: 300, creditsUsed: 9, usdCost: 0.004 }, true)).toBe(
       '1.2k new input, 300 output\n$0.0040'
     );
     expect(describeReplyCost({ inputTokens: 1200, creditsUsed: 9 })).toBe('1.2k new input');
+  });
+
+  it('hides dollars by default even when the server reports them', () => {
+    expect(describeReplyCost({ inputTokens: 1200, usdCost: 0.004 })).toBe('1.2k new input');
+    expect(describeReplyCost({ usdCost: 0.004 })).toBeNull();
   });
 
   it('is null when there is nothing to add', () => {
@@ -146,11 +154,11 @@ describe('describeSplit', () => {
 
 describe('statusFields with usage', () => {
   it('shows the total without cache reads, and the cost, when there is one', () => {
-    const usage = { inputTokens: 100, cacheReadInputTokens: 5000, outputTokens: 50, usdCost: 0.5 };
+    const usage = { inputTokens: 100, cacheReadInputTokens: 5000, outputTokens: 50, usdCost: 0.5, creditsUsed: 9 };
     expect(statusFields({ startedAt: 0, tokens: totalTokens(usage), usage }, 12_000, 'Thinking...')).toEqual([
       '12s',
       '150 tokens',
-      '$0.50',
+      '9 credits',
       'Thinking...',
     ]);
   });
@@ -700,11 +708,11 @@ describe('describeUsage', () => {
       contextTokens: 44_000,
       contextLimit: 200_000,
       credits: 31_667,
-      lastTurn: { inputTokens: 2000, cacheReadInputTokens: 120_000, outputTokens: 500, usdCost: 0.42 },
+      lastTurn: { inputTokens: 2000, cacheReadInputTokens: 120_000, outputTokens: 500, usdCost: 0.42, creditsUsed: 84 },
     });
     expect(detail).toContain('Context 44k / 200k (22%)');
     expect(detail).toContain('Credits 31,667 personal balance');
-    expect(detail).toContain('Last turn 2.0k new input, 120k cached, 500 output - $0.42');
+    expect(detail).toContain('Last turn 2.0k new input, 120k cached, 500 output - 84 credits');
   });
 
   it('measures against the capped limit, and says where it compacts and what the model allows', () => {

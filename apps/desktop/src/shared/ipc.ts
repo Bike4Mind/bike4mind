@@ -50,6 +50,7 @@ import type { DevLogRecord, DevLogSnapshot } from './devLog';
 import type { ShareDirectoryResult } from './directoryRequest';
 import type { PrActionResult, PrBarState, PrOption, PrSummaryEvent } from './pullRequest';
 import type { SidebarSectionsState } from './sidebarSections';
+import type { WorkspaceChanges } from './workspaceChanges';
 import type { SkillsState } from './skills';
 import type { PermissionMutationResult, PermissionRuleLists, PermissionScope, PermissionsState } from './permissions';
 import type {
@@ -132,6 +133,7 @@ export const IPC_CHANNELS = {
   chatListRecentFolders: 'chat:list-recent-folders',
   chatRemoveRecentFolder: 'chat:remove-recent-folder',
   chatInspectProject: 'chat:inspect-project',
+  chatWorkspaceChanges: 'chat:workspace-changes',
   chatAddContextDirectory: 'chat:add-context-directory',
   chatRemoveContextDirectory: 'chat:remove-context-directory',
   chatGetSession: 'chat:get-session',
@@ -250,6 +252,8 @@ export const IPC_CHANNELS = {
   updateGetState: 'update:get-state',
   updateCheck: 'update:check',
   updateDownload: 'update:download',
+  /** Hide the floating update notice for one version; main persists it. */
+  updateDismiss: 'update:dismiss',
   /** The one channel that can end this process. Main gates it on work in flight. */
   updateInstall: 'update:install',
   /** main -> renderer push; a check, a download or an install offer changed state. */
@@ -490,6 +494,8 @@ export interface DesktopApi {
     /** Resolves when the check finishes; the OUTCOME arrives on onStateChanged. */
     check(): Promise<void>;
     download(): Promise<void>;
+    /** Hide the "update available" notice for this version only. Arrives back on onStateChanged. */
+    dismiss(version: string): Promise<void>;
     /**
      * Restart into the new version. Without `force` this reports what is still running and
      * does nothing, so the renderer can put that to the user before anything is lost.
@@ -587,6 +593,11 @@ export interface DesktopApi {
     removeRecentFolder(directory: string): Promise<RecentFolder[]>;
     /** Read a directory's branches, for the branch chip. */
     inspectProject(directory: string): Promise<ProjectInspection>;
+    /**
+     * What this Code session's working directory has changed against its base branch, for the
+     * changes bar above the composer. Null when there is nothing to show or git cannot answer.
+     */
+    workspaceChanges(sessionId: string): Promise<WorkspaceChanges | null>;
     /**
      * Share one more folder with this conversation: `path` when given (`/add-dir <path>`), the
      * folder picker otherwise. Allowed at any point in the session, a running turn included.

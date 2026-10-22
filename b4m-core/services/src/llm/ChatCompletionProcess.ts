@@ -14,6 +14,7 @@ import {
   QueryComplexityType,
   getTextModelCost,
   getTurnsCost,
+  buildUsagePriceStamp,
   CACHE_READ_MULTIPLIER,
   ModelInfo,
   ModelBackend,
@@ -6101,6 +6102,15 @@ export class ChatCompletionProcess {
             });
           }
 
+          // Same turns / tier basis the estimatedCost branches above priced on.
+          const priceStamp = buildUsagePriceStamp(currentModel, {
+            turns: hasProviderUsage ? actualTokenUsage.turnUsage : undefined,
+            tierBasisTokens: hasProviderUsage
+              ? settledInputTokens + cacheReadInputTokens + cacheCreationInputTokens
+              : localInputTokens,
+            localEstimate: !hasProviderUsage,
+          });
+
           // Dual-write usage event: ties frozen COGS to credits debited
           // for margin reporting. Fire-and-forget - must never affect billing.
           this.db.usageEvents
@@ -6129,6 +6139,7 @@ export class ChatCompletionProcess {
               providerOutputTokens: actualTokenUsage?.outputTokens,
               costUsd: estimatedCost,
               creditsCharged: textCreditsUsed,
+              ...priceStamp,
               // Quest-level write-off (uncollected part of the whole settlement,
               // tools included), recorded on the chat settlement event so
               // collected revenue = sum(creditsCharged) - sum(writtenOffCredits).
@@ -6935,6 +6946,8 @@ export class ChatCompletionProcess {
           cacheWriteTokens: usage.cacheCreationInputTokens ?? 0,
           costUsd: usage.costUsd,
           creditsCharged: usage.credits,
+          // getTextModelCost above tiered on inputTokens (its default basis).
+          ...buildUsagePriceStamp(usage.modelInfo, { tierBasisTokens: usage.inputTokens }),
           writtenOffCredits: writtenOffCredits > 0 && usage === priced[0] ? writtenOffCredits : undefined,
           status,
           latencyMs: Date.now() - processStartTime,

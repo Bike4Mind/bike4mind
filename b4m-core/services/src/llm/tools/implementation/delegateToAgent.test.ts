@@ -477,6 +477,63 @@ describe('createDelegateToAgentTool — usage-event cost basis (#151)', () => {
     expect(captured!.usdCost).toBeLessThan(getTextModelCost(tiered, 301_000, 1_200));
   });
 
+  it('stamps the per-request tiers and rates onto the usage meta when the agent reports per-request usage', async () => {
+    mockDelegation(makeResult({ totalInputTokens: 301_000, totalOutputTokens: 1_200, turnUsage }));
+
+    let captured: SubagentUsageMeta | undefined;
+    const tool = createDelegateToAgentTool({
+      userId: 'u1',
+      llm: makeLlm(),
+      logger: makeLogger(),
+      parentTools: [],
+      agentStore: makeStore(),
+      availableModels: [tiered],
+      onCredits: (_credits, meta) => {
+        captured = meta;
+      },
+    });
+
+    await tool.toolFn({ task: 'research', agent: 'researcher' });
+
+    const stamp = captured!.priceStamp!;
+    expect(stamp.priceSource).toBe('literal');
+    expect(stamp.rates).toMatchObject({ tierKey: 200_000, input: 0.000003, output: 0.000015 });
+    expect(stamp.turnUsage).toEqual([
+      { inputTokens: 150_000, outputTokens: 500, tierKey: 200_000 },
+      { inputTokens: 151_000, outputTokens: 700, tierKey: 200_000 },
+    ]);
+  });
+
+  it('stamps the rates of the whole-prompt tier in the totals fallback', async () => {
+    mockDelegation(
+      makeResult({
+        totalInputTokens: 20_000,
+        totalOutputTokens: 100,
+        totalCacheReadTokens: 190_000,
+        totalCacheWriteTokens: 0,
+      })
+    );
+
+    let captured: SubagentUsageMeta | undefined;
+    const tool = createDelegateToAgentTool({
+      userId: 'u1',
+      llm: makeLlm(),
+      logger: makeLogger(),
+      parentTools: [],
+      agentStore: makeStore(),
+      availableModels: [tiered],
+      onCredits: (_credits, meta) => {
+        captured = meta;
+      },
+    });
+
+    await tool.toolFn({ task: 'research', agent: 'researcher' });
+
+    // 210K prompt crosses the 200K threshold, so the stamped rates are the long-context ones.
+    expect(captured!.priceStamp!.rates).toMatchObject({ tierKey: 1_000_000, input: 0.000006, output: 0.0000225 });
+    expect(captured!.priceStamp).not.toHaveProperty('turnUsage');
+  });
+
   it('prices a cached long prompt in the totals fallback on the tier its whole prompt falls in', async () => {
     mockDelegation(
       makeResult({

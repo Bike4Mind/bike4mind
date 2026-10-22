@@ -97,6 +97,7 @@ async function postAction(
     type: 'block_actions',
     user: { id: 'U123' },
     team: { id: 'T123', domain: 'test-workspace' },
+    channel: { id: 'C123' },
     actions: [{ action_id: actionId, value, ...extraAction }],
     ...(responseUrl ? { response_url: responseUrl } : {}),
     ...extraPayload,
@@ -165,7 +166,8 @@ describe('POST /api/slack/interactive confirmation buttons', () => {
           QUEST_ID,
           expect.objectContaining({ id: 'user-1' }),
           expect.anything(),
-          PENDING_ACTION_TS
+          PENDING_ACTION_TS,
+          { slackTeamId: 'T123', channelId: 'C123' }
         );
         expect(cancelPendingActionOnQuest).not.toHaveBeenCalled();
       } else {
@@ -190,7 +192,8 @@ describe('POST /api/slack/interactive confirmation buttons', () => {
         QUEST_ID,
         expect.objectContaining({ id: 'user-1' }),
         expect.anything(),
-        PENDING_ACTION_TS
+        PENDING_ACTION_TS,
+        { slackTeamId: 'T123', channelId: 'C123' }
       );
       expect(cancelPendingActionOnQuest).not.toHaveBeenCalled();
       return;

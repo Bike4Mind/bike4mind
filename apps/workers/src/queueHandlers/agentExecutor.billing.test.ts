@@ -1367,3 +1367,94 @@ describe('readPayerBalance', () => {
     expect(users.findById).not.toHaveBeenCalled();
   });
 });
+
+describe('billIteration (UsageEvent price stamp)', () => {
+  const perM = (usd: number) => usd / 1_000_000;
+  const tiered = {
+    ...makeModelInfo(1_048_576),
+    priceSource: 'catalog',
+    priceRowId: 'price-row-9',
+    pricing: {
+      200_000: { input: perM(2), output: perM(12) },
+      1_048_576: { input: perM(4), output: perM(18) },
+    },
+  } as ModelInfo;
+
+  const billOnce = async (cp: BillingCheckpoint, modelInfo: ModelInfo = tiered) => {
+    const { effects, spies } = makeEffects();
+    await billIteration({
+      iterationIndex: 1,
+      checkpoint: cp,
+      counters: makeCounters(),
+      modelInfo,
+      model: 'test-model',
+      startTime: 0,
+      effects,
+    });
+    return spies.recordUsageEvent.mock.calls[0]?.[0];
+  };
+
+  it('stamps the catalog source, row id and tier of a single-request iteration, with no turnUsage', async () => {
+    const event = await billOnce(checkpoint(150_000, { output: 1_000 }));
+    expect(event).toMatchObject({ priceSource: 'catalog', priceRowId: 'price-row-9' });
+    expect(event.rates).toMatchObject({ tierKey: 200_000, input: perM(2), output: perM(12) });
+    expect(event).not.toHaveProperty('turnUsage');
+  });
+
+  it('puts an iteration whose prompt is 200,001 tokens on the upper tier', async () => {
+    const event = await billOnce(checkpoint(200_001, { output: 1 }));
+    expect(event.rates).toMatchObject({ tierKey: 1_048_576, input: perM(4), output: perM(18) });
+  });
+
+  it('stamps the literal source for a model the catalog never priced', async () => {
+    const literal = { ...tiered, priceSource: undefined, priceRowId: undefined } as ModelInfo;
+    const event = await billOnce(checkpoint(1_000, { output: 10 }), literal);
+    expect(event.priceSource).toBe('literal');
+    expect(event).not.toHaveProperty('priceRowId');
+  });
+
+  it('writes turnUsage for a bill covering several requests, one entry per priced turn', async () => {
+    const event = await billOnce({
+      ...checkpoint(350_000, { output: 2_000 }),
+      turnUsage: [
+        { inputTokens: 150_000, outputTokens: 1_000 },
+        { inputTokens: 200_000, outputTokens: 1_000 },
+      ],
+    });
+    expect(event.turnUsage).toEqual([
+      { inputTokens: 150_000, outputTokens: 1_000, tierKey: 200_000 },
+      { inputTokens: 200_000, outputTokens: 1_000, tierKey: 200_000 },
+    ]);
+    expect(event.rates).toMatchObject({ tierKey: 200_000 });
+  });
+
+  it('carries the largest turn tier in rates when turns straddle the boundary', async () => {
+    const event = await billOnce({
+      ...checkpoint(280_000, { output: 2_000 }),
+      turnUsage: [
+        { inputTokens: 80_000, outputTokens: 1_000 },
+        { inputTokens: 200_000, outputTokens: 1_000, cacheReadInputTokens: 0 },
+      ],
+    });
+    expect(event.turnUsage.map((turn: { tierKey: number }) => turn.tierKey)).toEqual([200_000, 200_000]);
+
+    const crossing = await billOnce({
+      ...checkpoint(280_001, { output: 2_000 }),
+      turnUsage: [
+        { inputTokens: 80_000, outputTokens: 1_000 },
+        { inputTokens: 200_001, outputTokens: 1_000 },
+      ],
+    });
+    expect(crossing.turnUsage.map((turn: { tierKey: number }) => turn.tierKey)).toEqual([200_000, 1_048_576]);
+    expect(crossing.rates).toMatchObject({ tierKey: 1_048_576 });
+  });
+
+  it('stamps nothing on the zeroed anomaly marker a guard trip records', async () => {
+    const event = await billOnce({ ...checkpoint(2_000_000, { output: 1 }) }, {
+      ...tiered,
+      contextWindow: 1_000,
+    } as ModelInfo);
+    expect(event).toMatchObject({ status: 'error', costUsd: 0 });
+    expect(event).not.toHaveProperty('priceSource');
+  });
+});

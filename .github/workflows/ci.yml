@@ -85,7 +85,7 @@ jobs:
       - name: Check for API files missing baseApi()
         run: bash scripts/check-no-baseapi.sh
 
-      - name: Check v1 public endpoints use the contract abstraction
+      - name: Check v1 endpoints use the contract abstraction and non-v1 handlers are jwtOnly
         run: bash scripts/check-contract-gate.sh
 
       - name: Check user $lookup field projections
@@ -283,7 +283,7 @@ jobs:
         run: pnpm --filter @bike4mind/client run codegen
 
       - name: Generate SST types
-        run: pnpm sst install
+        run: bash scripts/ci-sst-install.sh
         env:
           CI: 'true'
 
@@ -359,7 +359,7 @@ jobs:
         run: pnpm --filter @bike4mind/client run codegen
 
       - name: Generate SST types
-        run: pnpm sst install
+        run: bash scripts/ci-sst-install.sh
         env:
           CI: 'true'
 
@@ -620,7 +620,7 @@ jobs:
         run: pnpm --filter @bike4mind/client run codegen
 
       - name: Generate SST types
-        run: pnpm sst install
+        run: bash scripts/ci-sst-install.sh
         env:
           CI: 'true'
 
@@ -858,7 +858,7 @@ jobs:
         run: pnpm --filter @bike4mind/client run codegen
 
       - name: Generate SST types
-        run: pnpm sst install
+        run: bash scripts/ci-sst-install.sh
         env:
           CI: 'true'
 

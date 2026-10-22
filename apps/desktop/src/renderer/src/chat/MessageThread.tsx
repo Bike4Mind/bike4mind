@@ -17,6 +17,7 @@ import { ReplyMarkdown } from './markdown/ReplyMarkdown';
 import { automaticSummary, displayText, relaySummary } from './relayRows';
 import { callsIn, roundsOf } from './replyRounds';
 import { skillChipColor, skillSourceLabel } from './skillMenu';
+import { useShowDollarCosts } from './costDisplay';
 import { describeReplyCost, formatCreditsSpent } from './statusLine';
 import { clampWindow, extendWindow, initialWindow, WINDOW_STEP, type ThreadWindow } from './threadWindow';
 import { ToolCallList, type MoveCallToBackground, type RespondToApproval } from './ToolCallList';
@@ -113,12 +114,7 @@ const UserTurn = memo(function UserTurn({ message, sessionId }: { message: ChatM
                 /{skill.name}
                 {skill.args ? ` ${skill.args}` : ''}
               </Typography>
-              <Chip
-                size="sm"
-                variant="soft"
-                color={skillChipColor(skill.source)}
-                data-testid="chat-message-skill-chip"
-              >
+              <Chip size="sm" variant="soft" color={skillChipColor(skill.source)} data-testid="chat-message-skill-chip">
                 {skillSourceLabel(skill.source)} skill
               </Chip>
             </Stack>
@@ -175,6 +171,7 @@ const REPLY_COST_CLASS = 'b4m-reply-cost';
  * and every reply stored before this was captured, would otherwise claim to have been free.
  */
 function ReplyCost({ usage }: { usage?: ChatUsage }) {
+  const showDollars = useShowDollarCosts();
   const credits = formatCreditsSpent(usage);
   if (!credits) return null;
 
@@ -185,7 +182,7 @@ function ReplyCost({ usage }: { usage?: ChatUsage }) {
       className={REPLY_COST_CLASS}
       // Native, like the turn status line's own split: a Joy tooltip per reply would mount a
       // popper for every turn in the thread to serve the one the pointer is over.
-      title={describeReplyCost(usage) ?? undefined}
+      title={describeReplyCost(usage, showDollars) ?? undefined}
       sx={{ position: 'absolute', top: '100%', right: 0, mt: 0.5, whiteSpace: 'nowrap' }}
       data-testid="chat-message-cost"
     >

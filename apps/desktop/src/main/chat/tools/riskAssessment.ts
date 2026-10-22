@@ -68,3 +68,15 @@ const SENDS_OUT: ReadonlySet<string> = new Set([
 export function sendsOut(toolName: string): boolean {
   return SENDS_OUT.has(toolName) || toolName.startsWith(MCP_TOOL_PREFIX);
 }
+
+/**
+ * Tools whose "Allow in this chat" covers them over a tainted reply too, as an allow
+ * rule does. Taint makes web_fetch ask because an injected page could pick the URL; a user who
+ * answered "always" for every site has already accepted any URL, so asking per site in a
+ * tainted reply only stacks a card for each parallel fetch.
+ */
+const ALWAYS_OVERRIDES_TAINT: ReadonlySet<string> = new Set([WEB_FETCH_TOOL_NAME]);
+
+export function alwaysOverridesTaint(toolName: string): boolean {
+  return ALWAYS_OVERRIDES_TAINT.has(toolName);
+}

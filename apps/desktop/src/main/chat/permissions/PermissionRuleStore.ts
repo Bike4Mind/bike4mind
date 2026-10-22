@@ -91,7 +91,7 @@ export class PermissionRuleStore {
     return this.update(current => ({ ...current, shareClaudeCode: share }));
   }
 
-  /** The card's "Always, in every session": user-level allows, added once each. */
+  /** The card's "Always allow": user-level allows, added once each. */
   async addUserAllows(rules: readonly string[]): Promise<StoredPermissions> {
     return this.update(current => {
       const allow = [...current.user.allow];

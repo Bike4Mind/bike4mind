@@ -1,3 +1,4 @@
+import { VERIFIED_SLACK_IDENTITY_FILTER } from '@bike4mind/common';
 import {
   AuthStrategy,
   CollectionType,
@@ -688,6 +689,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
    * concurrent change to either field is not reverted. Two writes: a pipeline update can't use
    * `$addToSet`, and pipeline values skip Mongoose's ObjectId casting. The invites are recorded
    * first so a failure between the writes under-charges rather than spending quota with no invite.
+   * @deprecated Use reserveReferrals before side effects and settleReferrals afterward.
    */
   async recordReferrals(userId: string, count: number, newInviteIds: string[]): Promise<void> {
     if (newInviteIds.length > 0) {
@@ -700,6 +702,32 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
         },
       },
     ]);
+  }
+
+  async reserveReferrals(userId: string, count: number): Promise<boolean> {
+    if (!Number.isSafeInteger(count) || count < 0) throw new Error('Invalid referral reservation count');
+    const result = await this.model.updateOne(
+      { _id: userId, numReferralsAvailable: { $gte: count } },
+      { $inc: { numReferralsAvailable: -count } }
+    );
+    return result.matchedCount === 1;
+  }
+
+  /**
+   * Refund only failures before a usable invite exists; delivery failures retain their charge.
+   * The refund is a relative $inc not bounded by the current allowance, and it is not idempotent:
+   * callers must not retry it.
+   */
+  async settleReferrals(userId: string, refundCount: number, newInviteIds: string[]): Promise<void> {
+    if (!Number.isSafeInteger(refundCount) || refundCount < 0) throw new Error('Invalid referral refund count');
+    const result = await this.model.updateOne(
+      { _id: userId },
+      {
+        $inc: { numReferralsAvailable: refundCount },
+        $addToSet: { regInvites: { $each: newInviteIds } },
+      }
+    );
+    if (result.matchedCount !== 1) throw new NotFoundError(`User ${userId} not found`);
   }
 
   async incrementTokenVersion(userId: string): Promise<number> {
@@ -778,6 +806,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   async findBySlackUserId(slackUserId: string): Promise<IUserDocument | null> {
     const result = await this.model.findOne({
       'slackSettings.slackUserId': slackUserId,
+      ...VERIFIED_SLACK_IDENTITY_FILTER,
       deletedAt: { $exists: false },
     });
     return result?.toJSON() ?? null;
@@ -998,6 +1027,7 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     // Slack integration settings
     slackSettings: {
       slackUserId: { type: String, required: false },
+      slackTeamId: { type: String, required: false },
       slackUserToken: { type: String, required: false, select: false }, // User token for reminders API (protected by select: false)
       slackUserScopes: { type: [String], required: false, default: [] }, // OAuth scopes granted by user
       defaultNotebookId: { type: String, required: false },

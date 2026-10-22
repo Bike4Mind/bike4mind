@@ -92,6 +92,7 @@ import {
   projectDisplayName,
   unusableProjectReason,
 } from './project/git';
+import { readWorkspaceChanges } from './project/workspaceChanges';
 import { accountSkillsProvider } from './skills/accountSkills';
 import { ProjectTrustStore } from './skills/ProjectTrustStore';
 import { ClaudeCodeSettings, MANAGED_SETTINGS_PATH } from './permissions/ClaudeCodeSettings';
@@ -581,11 +582,14 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatListSessions, () => service.listSessions());
   ipcMain.handle(IPC_CHANNELS.permissionsGetState, () => permissions.state());
   // Shapes checked here: this is the only door a rule comes in by besides the approval card.
-  ipcMain.handle(IPC_CHANNELS.permissionsSetRules, (_event, scope: unknown, lists: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.permissionsSetRules, async (_event, scope: unknown, lists: unknown) => {
     const parsedScope = permissionScope(scope);
     const parsedLists = permissionLists(lists);
     if (!parsedScope || !parsedLists) return { ok: false, error: 'Not a permission rule list.' };
-    return permissions.setRules(parsedScope, parsedLists);
+    const result = await permissions.setRules(parsedScope, parsedLists);
+    // An allow typed here answers any card it now covers, in every session.
+    if (result.ok) void approvals.settleCovered();
+    return result;
   });
   ipcMain.handle(IPC_CHANNELS.permissionsSetSharing, (_event, share: unknown) =>
     permissions.setShareClaudeCode(share === true)
@@ -674,6 +678,19 @@ export function registerChat(
     service.removeContextDirectory(sessionId, directory)
   );
   ipcMain.handle(IPC_CHANNELS.chatGetSession, (_event, sessionId: string) => service.getSession(sessionId));
+  // Keyed by session rather than by a path from the renderer, so this only ever reads the folder
+  // the session's own tools run in. A failure is logged, not shown: the bar is a passive readout,
+  // and a repository git cannot read already says so on the branch chip beside it.
+  ipcMain.handle(IPC_CHANNELS.chatWorkspaceChanges, async (_event, sessionId: unknown) => {
+    if (typeof sessionId !== 'string') return null;
+    const session = await store.get(sessionId);
+    try {
+      return await readWorkspaceChanges(session?.project);
+    } catch (err) {
+      logger.warn(`CHAT: could not read workspace changes for ${sessionId}: ${String(err)}`);
+      return null;
+    }
+  });
   ipcMain.handle(IPC_CHANNELS.chatRenameSession, (_event, sessionId: string, title: string) =>
     service.renameSession(sessionId, title)
   );

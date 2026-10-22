@@ -22,6 +22,7 @@ import { mergeCatalog } from './mergeCatalog';
 import { alignRouteTwinNames } from './routeTwinNames';
 import { buildSupersededIndex, catalogSuccessors, updateReplacedByOverlay } from './resolveDeprecatedModel';
 import AnthropicBedrockBackend from './bedrockBackend/anthropic';
+import ConverseBedrockBackend, { isConverseBedrockModel } from './bedrockBackend/converse';
 import DeepSeekBedrockBackend from './bedrockBackend/deepseek';
 import JurassicTwoBedrockBackend from './bedrockBackend/jurassicTwo';
 import LlamaBedrockBackend from './bedrockBackend/llama';
@@ -152,7 +153,7 @@ export function getLlmByModel(
           backend = new MoonshotBedrockBackend();
           break;
         default:
-          backend = null;
+          backend = isConverseBedrockModel(String(modelInfo.id)) ? new ConverseBedrockBackend() : null;
       }
       break;
     case 'anthropic':
@@ -579,6 +580,7 @@ export * from './anthropicBackend';
 export * from './anthropicBatchService';
 export * from './awsBackend';
 export * from './bedrockBackend/base';
+export * from './bedrockBackend/converse';
 export * from './bedrockBackend/undifferentiated';
 export * from './bflBackend';
 export * from './geminiBackend';

@@ -30,6 +30,8 @@ export const ADAPTER_FAMILIES = [
   'bedrock-moonshot',
   'bedrock-jurassic',
   'bedrock-titan',
+  // Any Converse-compatible Bedrock model; request shaping reads the record, not the id.
+  'bedrock-converse',
   'gemini',
   'xai',
   // Moonshot direct. Not 'openai-chat': the envelope matches but the reasoning
@@ -328,10 +330,11 @@ export const FIELD_GROUP_OF: Record<keyof ModelRecord, FieldGroup> = {
 /**
  * ModelInfo fields that never come from a catalog row. `pricing` is supplied by
  * applyModelPriceCatalog from the ModelPrice collection; a catalog row carrying
- * a price is a spec violation the write schema rejects. `image` is derived from the
+ * a price is a spec violation the write schema rejects. `priceSource` and `priceRowId`
+ * are the provenance of that overlay, stamped by the same call. `image` is derived from the
  * model id by getImageModelCapabilities when GET /api/models lists the model.
  */
-export const MODEL_INFO_FIELDS_NOT_IN_CATALOG = ['pricing', 'image'] as const;
+export const MODEL_INFO_FIELDS_NOT_IN_CATALOG = ['pricing', 'priceSource', 'priceRowId', 'image'] as const;
 
 /**
  * Which record group each ModelInfo field is derived from. Exhaustive by

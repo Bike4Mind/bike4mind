@@ -327,12 +327,12 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
     // the reactive ValidationException catches below remain the safety net for those cases.
     const contextWindow = this.getModelContextWindow(model);
     if (contextWindow > 0) {
-      const baseOutputTokens = this.getEffectiveMaxOutputTokens(options);
+      const baseOutputTokens = this.getEffectiveMaxOutputTokens(options, model);
       // Extended thinking reserves additional tokens on top of max_tokens in the actual payload.
       const thinkingBudget = options.thinking?.budget_tokens ?? 0;
       const reservedOutputTokens = baseOutputTokens + thinkingBudget;
       const maxInputTokens = contextWindow - reservedOutputTokens;
-      let estimatedInputTokens = Math.ceil(input.body.length / 4);
+      let estimatedInputTokens = this.estimateInputTokens(input.body);
 
       if (estimatedInputTokens > maxInputTokens) {
         // Graceful degradation: rather than failing the completion outright,
@@ -364,7 +364,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
           prunedMessages = next;
           formattedMessages = this.formatMessages(prunedMessages);
           input = this.getPayload(model, formattedMessages, options);
-          estimatedInputTokens = Math.ceil(input.body.length / 4);
+          estimatedInputTokens = this.estimateInputTokens(input.body);
         }
 
         if (estimatedInputTokens > maxInputTokens) {
@@ -1150,8 +1150,13 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
   }
 
   /** Output reservation must match any provider-specific limit applied to the payload. */
-  protected getEffectiveMaxOutputTokens(options: Partial<ICompletionOptions>): number {
+  protected getEffectiveMaxOutputTokens(options: Partial<ICompletionOptions>, _model?: string): number {
     return typeof options.maxTokens === 'number' ? options.maxTokens : 4096;
+  }
+
+  /** Provider payloads may contain binary data that is not tokenized as text. */
+  protected estimateInputTokens(body: string): number {
+    return Math.ceil(body.length / 4);
   }
 
   /**

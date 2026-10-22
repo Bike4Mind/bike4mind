@@ -31,6 +31,7 @@ import {
   IUserMargin,
   USAGE_EVENT_FEATURES,
   USAGE_EVENT_STATUSES,
+  USAGE_PRICE_SOURCES,
 } from '@bike4mind/common';
 
 export type IUsageEventDocument = IUsageEvent & IMongoDocument;
@@ -83,6 +84,41 @@ const UsageEventSchema = new Schema<IUsageEventDocument>(
     // into the UNCLASSIFIED_SOURCE bucket in aggregation.
     source: { type: String, required: false, enum: [...COMPLETION_SOURCES] },
     apiKeyId: { type: String, required: false },
+
+    // Price stamp (see UsageEventTypes). All optional: older rows and non-text features leave
+    // them unset. turnUsage defaults to undefined, not [], so a single-turn row stays without it.
+    priceSource: { type: String, required: false, enum: [...USAGE_PRICE_SOURCES] },
+    priceRowId: { type: String, required: false },
+    rates: {
+      type: new Schema(
+        {
+          tierKey: { type: Number, required: true },
+          input: { type: Number, required: true },
+          output: { type: Number, required: true },
+          cacheRead: { type: Number, required: false },
+          cacheWrite: { type: Number, required: false },
+        },
+        { _id: false }
+      ),
+      required: false,
+    },
+    turnUsage: {
+      type: [
+        new Schema(
+          {
+            inputTokens: { type: Number, required: true },
+            outputTokens: { type: Number, required: true },
+            cacheReadTokens: { type: Number, required: false },
+            cacheWriteTokens: { type: Number, required: false },
+            tierKey: { type: Number, required: true },
+          },
+          { _id: false }
+        ),
+      ],
+      required: false,
+      default: undefined,
+    },
+    turnUsageTruncated: { type: Boolean, required: false },
   },
   {
     timestamps: true,

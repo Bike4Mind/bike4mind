@@ -29,6 +29,9 @@ import { ModelPicker } from './ModelPicker';
 import { ReasoningEffortPicker } from './ReasoningEffortPicker';
 import { GrantedFolderChips, SessionChips } from './SessionChips';
 import { PrStatusBar } from './PrStatusBar';
+import { ChangesBar } from './ChangesBar';
+import { createPullRequestPrompt } from './changesBarModel';
+import { useWorkspaceChanges } from './useWorkspaceChanges';
 import { openInSessionBrowser } from './prLinks';
 import { usePrSummaries, usePullRequest } from './usePullRequest';
 import { SessionList } from './SessionList';
@@ -351,6 +354,15 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
   const sessionStatus = activeId ? statuses.get(activeId) : undefined;
   const turnOpen = conversation.streaming || sessionStatus === 'processing' || sessionStatus === 'needs-action';
   const plan = useMemo(() => activeTodos(conversation.messages, turnOpen), [conversation.messages, turnOpen]);
+
+  const workspaceChanges = useWorkspaceChanges(
+    screen === 'conversation' ? activeId : null,
+    conversation.session?.project,
+    conversation.settledTurns
+  );
+  // The sidebar summary as well as the bar: a dismissed PR bar reports no binding, but the PR is
+  // still this session's, and offering to open a second one for the same branch would be wrong.
+  const hasPullRequest = !!pullRequest?.binding || (!!activeId && prSummaries.has(activeId));
 
   /**
    * What the composer's usage indicator reports: how full the window is, and what is left.
@@ -818,6 +830,16 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
                 {codeError}
               </Alert>
             </Box>
+          )}
+
+          {!hasPullRequest && (
+            <ChangesBar
+              changes={workspaceChanges}
+              busy={turnOpen}
+              // Straight to the conversation, not through onSend: that one also sends whatever
+              // is attached in the composer, which the user staged for a different message.
+              onCreatePullRequest={changes => void conversation.send(createPullRequestPrompt(changes))}
+            />
           )}
 
           <PrStatusBar
