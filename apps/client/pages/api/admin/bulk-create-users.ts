@@ -17,6 +17,9 @@ import { getLogoUrl, buildEmailLogoImg, escapeHtml } from '@bike4mind/server-uti
 import { randomUUID } from 'crypto';
 import { z } from 'zod';
 import { emitSignupFunnelEvents, recordSyntheticIdentity } from '@server/analytics/funnel';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+
+const AUDITED_USER_ID_LIMIT = 100;
 
 const userImportSchema = z.object({
   email: z.email('Invalid email format'),
@@ -59,6 +62,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
       throw new BadRequestError('Invalid input: users array is required and must not be empty');
     }
 
+    const createdUserIds: string[] = [];
     const results = await Promise.all(
       users.map(async userData => {
         try {
@@ -105,6 +109,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
           }
 
           await userRepository.update({ id: newUser.id, storageLimit: newUser.storageLimit, tags: newUser.tags });
+          createdUserIds.push(newUser.id);
 
           const brand = process.env.APP_NAME || '';
           const logoUrl = getLogoUrl();
@@ -177,6 +182,21 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
         }
       })
     );
+
+    // Rows commit independently and their invites are already sent, so there is no single write to
+    // wrap; one best-effort entry covers the batch so a failed audit write cannot 500 a created batch.
+    if (createdUserIds.length > 0) {
+      await recordAdminActionFromRequest(req, {
+        action: 'user.bulk_created',
+        target: { kind: 'system', id: 'bulk-create-users', displayName: 'Bulk user import' },
+        summary: `bulk created ${createdUserIds.length} user(s)`,
+        details: {
+          count: createdUserIds.length,
+          failedCount: results.length - createdUserIds.length,
+          createdUserIds: createdUserIds.slice(0, AUDITED_USER_ID_LIMIT),
+        },
+      });
+    }
 
     // Validates after users are created and invites sent: a bad success row would 500 a batch that
     // succeeded and a retry would hit duplicates, so keep the row schema permissive.

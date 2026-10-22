@@ -14,7 +14,17 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 
+let inTransaction = false;
+let insideTransactionAtAudit: boolean | undefined;
 vi.mock('@bike4mind/database', () => ({
+  withTransaction: async (fn: () => Promise<unknown>) => {
+    inTransaction = true;
+    try {
+      return await fn();
+    } finally {
+      inTransaction = false;
+    }
+  },
   userRepository: {},
   pendingOtcTokenRepository: {
     storeNonce: (...args: unknown[]) => mockStoreNonce(...args),
@@ -58,6 +68,14 @@ vi.mock('@server/analytics/funnel', () => ({
 
 vi.mock('jsonwebtoken', () => ({ default: { sign: () => 'signed-token' } }));
 
+const mockRecordAdminAction = vi.fn();
+vi.mock('@server/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: (...args: unknown[]) => {
+    insideTransactionAtAudit = inTransaction;
+    return mockRecordAdminAction(...args);
+  },
+}));
+
 import handler from '../create-user';
 
 const runHandler = handler as unknown as (req: unknown, res: unknown) => Promise<void>;
@@ -80,6 +98,59 @@ describe('admin/create-user', () => {
     vi.clearAllMocks();
     mockSendOTC.mockResolvedValue({ nonce: null });
     mockRecordSyntheticIdentity.mockResolvedValue(false);
+    mockRecordAdminAction.mockResolvedValue(null);
+    insideTransactionAtAudit = undefined;
+  });
+
+  describe('admin audit', () => {
+    const body = { username: 'audited', email: 'audited@example.com', name: 'Audited', initialCredits: 25 };
+
+    it('records user.created against the new user inside the creating transaction', async () => {
+      mockCreateUser.mockResolvedValue({ id: 'u-new', email: 'audited@example.com', username: 'audited' });
+      const res = makeRes();
+
+      await runHandler(makeReq(body), res);
+
+      expect(mockRecordAdminAction).toHaveBeenCalledTimes(1);
+      expect(mockRecordAdminAction).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          action: 'user.created',
+          target: { kind: 'user', id: 'u-new', displayName: 'audited@example.com' },
+          details: expect.objectContaining({ isAdmin: false, initialCredits: 25 }),
+        })
+      );
+      expect(insideTransactionAtAudit).toBe(true);
+      expect(res.status).toHaveBeenCalledWith(201);
+    });
+
+    it('never records the supplied password', async () => {
+      mockCreateUser.mockResolvedValue({ id: 'u-pw', email: 'audited@example.com', username: 'audited' });
+
+      await runHandler(makeReq({ ...body, password: 'hunter2secret' }), makeRes());
+
+      expect(JSON.stringify(mockRecordAdminAction.mock.calls[0][1])).not.toContain('hunter2secret');
+    });
+
+    it('fails the request and sends no welcome email when the audit write fails', async () => {
+      mockCreateUser.mockResolvedValue({ id: 'u-fail', email: 'audited@example.com', username: 'audited' });
+      mockRecordAdminAction.mockRejectedValueOnce(new Error('audit down'));
+      const res = makeRes();
+
+      await expect(runHandler(makeReq(body), res)).rejects.toThrow('audit down');
+
+      expect(res.status).not.toHaveBeenCalled();
+      expect(mockSendOTC).not.toHaveBeenCalled();
+      expect(mockEmitSignupFunnelEvents).not.toHaveBeenCalled();
+    });
+
+    it('does not record when the user cannot be created', async () => {
+      mockCreateUser.mockRejectedValueOnce(new Error('Email already in use'));
+
+      await expect(runHandler(makeReq(body), makeRes())).rejects.toThrow('Email already in use');
+
+      expect(mockRecordAdminAction).not.toHaveBeenCalled();
+    });
   });
 
   it('stores password: null + hasUsablePassword: false for a passwordless shell account', async () => {

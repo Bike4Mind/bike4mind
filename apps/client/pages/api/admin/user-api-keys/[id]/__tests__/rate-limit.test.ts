@@ -54,6 +54,9 @@ vi.mock('@bike4mind/services', () => ({ userApiKeyService: { updateApiKeyRateLim
 const logEventSafe = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe }));
 
+const recordAdminActionFromRequest = vi.hoisted(() => vi.fn().mockResolvedValue(null));
+vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest }));
+
 import '@pages/api/admin/user-api-keys/[id]/rate-limit';
 
 const storedKey = { id: 'key-1', userId: 'owner-1', name: 'wedged key' };
@@ -132,6 +135,32 @@ describe('PATCH /api/admin/user-api-keys/[id]/rate-limit', () => {
       (req as any).logger,
       'API key key-1'
     );
+  });
+
+  it('records user.api_key.rate_limit_updated against the key with a before/after diff', async () => {
+    findById.mockResolvedValue({ ...storedKey, rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 } });
+    const { req, res } = patch({ id: 'key-1' }, { requestsPerMinute: 600 }, admin);
+    await mockRefs.patchHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(recordAdminActionFromRequest).toHaveBeenCalledTimes(1);
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({
+        action: 'user.api_key.rate_limit_updated',
+        target: { kind: 'apiKey', id: 'key-1', displayName: 'wedged key' },
+        changes: expect.arrayContaining([{ field: 'rateLimit.requestsPerMinute', before: 60, after: 600 }]),
+        details: { ownerUserId: 'owner-1' },
+      })
+    );
+  });
+
+  it('records nothing when the key is not found', async () => {
+    findById.mockResolvedValue(null);
+    const { req, res } = patch({ id: 'key-1' }, { requestsPerMinute: 600 }, admin);
+    await expect(mockRefs.patchHandler!(req, res)).rejects.toThrow();
+
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
   });
 
   it('registers PATCH only, so next-connect 405s every other verb', () => {

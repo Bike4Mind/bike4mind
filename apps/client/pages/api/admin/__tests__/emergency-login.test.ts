@@ -38,6 +38,11 @@ vi.mock('@server/auth/signInSecondFactor', () => ({
   resolveSecondFactor: (...a: any[]) => mockResolveSecondFactor(...a),
 }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+const mockRecordForActor = vi.fn();
+vi.mock('@server/utils/adminAudit', () => ({
+  recordAdminActionForActor: (...a: unknown[]) => mockRecordForActor(...a),
+  toUserActor: (user: { id: string }, scope: string) => ({ kind: 'user', scope, userId: user.id }),
+}));
 
 import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import '@pages/api/admin/emergency-login';
@@ -57,6 +62,64 @@ describe('POST /api/admin/emergency-login', () => {
     vi.clearAllMocks();
     mockRefs.userDoc = { id: 'u1', name: 'Admin', isAdmin: true, password: 'hash', mfa: { totpEnabled: true } };
     mockResolveSecondFactor.mockResolvedValue({ kind: 'challenge', mfaToken: 'pending-tok', passkeyAvailable: true });
+    mockRecordForActor.mockResolvedValue(null);
+  });
+
+  describe('admin audit', () => {
+    it('records user.emergency_login.succeeded with the matched account as actor and target', async () => {
+      const { res } = await callHandler();
+
+      expect(res.statusCode).toBe(200);
+      expect(mockRecordForActor).toHaveBeenCalledTimes(1);
+      expect(mockRecordForActor).toHaveBeenCalledWith(
+        expect.anything(),
+        { kind: 'user', scope: 'platform', userId: 'u1' },
+        expect.objectContaining({
+          action: 'user.emergency_login.succeeded',
+          target: expect.objectContaining({ kind: 'user', id: 'u1' }),
+        })
+      );
+      expect(JSON.stringify(mockRecordForActor.mock.calls[0])).not.toContain('pending-tok');
+    });
+
+    it('denies the login without returning the pending token when the audit write fails', async () => {
+      mockRecordForActor.mockRejectedValueOnce(new Error('audit down'));
+
+      const { res, outcome } = await callHandler();
+
+      expect((outcome as Error).message).toBe('audit down');
+      expect(res._getData()).toBe('');
+      expect(res.getHeader('X-Emergency-Access')).toBeUndefined();
+    });
+
+    it.each([
+      ['no_second_factor', { mfa: { totpEnabled: false } }],
+      ['not_admin', { isAdmin: false }],
+      ['banned', { isBanned: true }],
+      ['no_password', { password: undefined }],
+    ])('records user.emergency_login.denied (%s) and still answers generically', async (reason, overrides) => {
+      mockRefs.userDoc = { ...mockRefs.userDoc, ...overrides };
+
+      const { outcome } = await callHandler();
+
+      expect(outcome).toBeInstanceOf(UnauthorizedError);
+      expect((outcome as Error).message).toBe('Invalid credentials');
+      expect(mockRecordForActor).toHaveBeenCalledTimes(1);
+      expect(mockRecordForActor).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ userId: 'u1' }),
+        expect.objectContaining({ action: 'user.emergency_login.denied', details: { reason } })
+      );
+    });
+
+    it('records nothing when no account matches', async () => {
+      mockRefs.userDoc = null;
+
+      const { outcome } = await callHandler();
+
+      expect(outcome).toBeInstanceOf(UnauthorizedError);
+      expect(mockRecordForActor).not.toHaveBeenCalled();
+    });
   });
 
   it('refuses an admin with no second factor enrolled, generically, without a session or challenge', async () => {

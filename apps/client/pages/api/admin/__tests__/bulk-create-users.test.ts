@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { ADMIN_AUDIT_CATALOGUE } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   handler: null as null | ((req: unknown, res: unknown) => Promise<unknown>),
@@ -7,6 +8,7 @@ const h = vi.hoisted(() => ({
   publish: vi.fn(),
   emitSignupFunnelEvents: vi.fn(),
   recordSyntheticIdentity: vi.fn(),
+  recordAdminAction: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -32,6 +34,10 @@ vi.mock('@bike4mind/server-utils/utils/mailer/emailHelpers', async importOrigina
   buildEmailLogoImg: () => '',
 }));
 
+vi.mock('@server/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: (...args: unknown[]) => h.recordAdminAction(...args),
+}));
+
 await import('../bulk-create-users');
 
 const makeReq = (users: unknown[]) => ({
@@ -45,6 +51,56 @@ describe('POST /api/admin/bulk-create-users', () => {
     vi.clearAllMocks();
     h.createUser.mockResolvedValue({ id: 'new-1', email: 'a@b.test', name: 'a@b.test', storageLimit: 1000 });
     h.recordSyntheticIdentity.mockResolvedValue(false);
+    h.recordAdminAction.mockResolvedValue(null);
+  });
+
+  describe('admin audit', () => {
+    const okRes = () => ({ status: vi.fn().mockReturnThis(), json: vi.fn() });
+
+    it('records one user.bulk_created entry for the batch with the created ids and counts', async () => {
+      h.createUser
+        .mockResolvedValueOnce({ id: 'new-1', email: 'a@b.test', name: 'a', storageLimit: 1000 })
+        .mockResolvedValueOnce({ id: 'new-2', email: 'c@b.test', name: 'c', storageLimit: 1000 });
+
+      await h.handler!(makeReq([{ email: 'a@b.test' }, { email: 'c@b.test' }, { first: 'no-email' }]), okRes());
+
+      expect(h.recordAdminAction).toHaveBeenCalledTimes(1);
+      expect(h.recordAdminAction).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          action: 'user.bulk_created',
+          target: expect.objectContaining({ kind: 'system', id: 'bulk-create-users' }),
+          details: { count: 2, failedCount: 1, createdUserIds: expect.arrayContaining(['new-1', 'new-2']) },
+        })
+      );
+    });
+
+    it('caps the recorded user ids at the first 100', async () => {
+      let next = 0;
+      h.createUser.mockImplementation(async () => {
+        next += 1;
+        return { id: `new-${next}`, email: `u${next}@b.test`, name: 'u', storageLimit: 1000 };
+      });
+      const rows = Array.from({ length: 101 }, (_, index) => ({ email: `u${index}@b.test` }));
+
+      await h.handler!(makeReq(rows), okRes());
+
+      const { details } = h.recordAdminAction.mock.calls[0][1] as {
+        details: { count: number; createdUserIds: string[] };
+      };
+      expect(details.count).toBe(101);
+      expect(details.createdUserIds).toHaveLength(100);
+    });
+
+    it('records nothing when no row was created', async () => {
+      await h.handler!(makeReq([{ first: 'no-email' }]), okRes());
+
+      expect(h.recordAdminAction).not.toHaveBeenCalled();
+    });
+
+    it('records the batch best-effort, since the rows and invites cannot be rolled back', () => {
+      expect(ADMIN_AUDIT_CATALOGUE['user.bulk_created'].write).toBe('bestEffort');
+    });
   });
 
   it('writes exactly the storage limit and tags when both are given', async () => {

@@ -1,6 +1,6 @@
 import { ApiKeyScope, usernameSchema } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { userRepository, pendingOtcTokenRepository } from '@bike4mind/database';
+import { userRepository, pendingOtcTokenRepository, withTransaction } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
@@ -11,6 +11,7 @@ import { Config } from '@bike4mind/server-utils/utils/config';
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 import { emitSignupFunnelEvents, recordSyntheticIdentity } from '@server/analytics/funnel';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 const createUserSchema = z.object({
   username: usernameSchema,
@@ -27,6 +28,16 @@ const createUserSchema = z.object({
 });
 
 type CreateUserInput = z.infer<typeof createUserSchema>;
+
+const toCreateUserError = (error: unknown) => {
+  if (error instanceof Error) {
+    if (error.message.includes('already in use')) {
+      return new BadRequestError(error.message);
+    }
+    return new BadRequestError(`Failed to create user: ${error.message}`);
+  }
+  return new BadRequestError('Failed to create user');
+};
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
   asyncHandler<{}, unknown, CreateUserInput>(async (req, res) => {
@@ -60,35 +71,56 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
       await requireStepUp(req);
     }
 
-    try {
-      const newUser = await userService.createUser(
-        {
-          username: validatedData.username,
-          email: validatedData.email,
-          name: validatedData.name,
+    // The audit row commits with the account, so a failed audit write leaves no unaudited user behind.
+    const newUser = await withTransaction(async () => {
+      const created = await userService
+        .createUser(
+          {
+            username: validatedData.username,
+            email: validatedData.email,
+            name: validatedData.name,
+            isAdmin: validatedData.isAdmin,
+            level: validatedData.level,
+            initialCredits: validatedData.initialCredits,
+            // Pass tags through as-is (zod prefaults to []); createUser stores []
+            // rather than null so a tag-less user isn't stuck "Loading AI models...".
+            tags: validatedData.tags,
+            record: {
+              // Passwordless mode: store null rather than a fake password when the
+              // admin doesn't supply one, so `password` presence stays a truthful
+              // signal. The user signs in via OTC. hasUsablePassword mirrors whether
+              // a real password was supplied.
+              password: validatedData.password ?? null,
+              hasUsablePassword: !!validatedData.password,
+              storageLimit: validatedData.storageLimit,
+            },
+          },
+          {
+            db: {
+              users: userRepository,
+            },
+          }
+        )
+        .catch((error: unknown) => {
+          throw toCreateUserError(error);
+        });
+
+      await recordAdminActionFromRequest(req, {
+        action: 'user.created',
+        target: { kind: 'user', id: created.id, displayName: created.email ?? created.username },
+        summary: `created ${validatedData.isAdmin ? 'admin ' : ''}user ${created.username}`,
+        details: {
           isAdmin: validatedData.isAdmin,
           level: validatedData.level,
           initialCredits: validatedData.initialCredits,
-          // Pass tags through as-is (zod prefaults to []); createUser stores []
-          // rather than null so a tag-less user isn't stuck "Loading AI models...".
+          storageLimit: validatedData.storageLimit,
           tags: validatedData.tags,
-          record: {
-            // Passwordless mode: store null rather than a fake password when the
-            // admin doesn't supply one, so `password` presence stays a truthful
-            // signal. The user signs in via OTC. hasUsablePassword mirrors whether
-            // a real password was supplied.
-            password: validatedData.password ?? null,
-            hasUsablePassword: !!validatedData.password,
-            storageLimit: validatedData.storageLimit,
-          },
         },
-        {
-          db: {
-            users: userRepository,
-          },
-        }
-      );
+      });
+      return created;
+    });
 
+    try {
       const isSynthetic = await recordSyntheticIdentity(newUser);
       await emitSignupFunnelEvents({
         user: { id: newUser.id, isSynthetic },
@@ -162,13 +194,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
         },
       });
     } catch (error) {
-      if (error instanceof Error) {
-        if (error.message.includes('already in use')) {
-          throw new BadRequestError(error.message);
-        }
-        throw new BadRequestError(`Failed to create user: ${error.message}`);
-      }
-      throw new BadRequestError('Failed to create user');
+      throw toCreateUserError(error);
     }
   })
 );
