@@ -9,7 +9,7 @@ import { useTheme } from '@mui/joy/styles';
 import { prDisplayState, type PrActionResult, type PrBarState, type PrOption } from '@shared/pullRequest';
 import { DiffCount } from './DiffCount';
 import { CloseIcon, ExternalLinkIcon, PullRequestIcon, ReloadIcon } from './icons';
-import { contentColumnSx } from './layout';
+import { COMPOSER_BAR_INSET, contentColumnSx } from './layout';
 import { ghFixLine, lifecycleLabel, middleTruncate, timeAgo } from './prBarModel';
 import { PrAutomations, autoFixDescription, autoMergeDescription } from './PrAutomations';
 import { PrCiMenu } from './PrCiMenu';
@@ -60,7 +60,7 @@ export function PrStatusBar({
         spacing={1}
         sx={{
           minHeight: 32,
-          px: 1.25,
+          px: `${COMPOSER_BAR_INSET}px`,
           border: '1px solid',
           borderColor: merged ? `color-mix(in srgb, ${mergedColor} 40%, transparent)` : 'neutral.outlinedBorder',
           borderRadius: 'md',

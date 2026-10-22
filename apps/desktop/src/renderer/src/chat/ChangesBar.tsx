@@ -10,7 +10,7 @@ import type { ChangedFile, WorkspaceChanges } from '@shared/workspaceChanges';
 import { changesStateLabel, filesChangedLabel } from './changesBarModel';
 import { DiffCount } from './DiffCount';
 import { CaretDownIcon, FileDiffIcon, PullRequestIcon } from './icons';
-import { contentColumnSx } from './layout';
+import { COMPOSER_BAR_INSET, contentColumnSx } from './layout';
 import { middleTruncate } from './prBarModel';
 
 const PATH_MAX_CHARS = 56;
@@ -19,7 +19,7 @@ const BAR_HEIGHT = 32;
 const BAR_BORDER = 1;
 // The bar's controls sit this far inside its border on top, bottom and the far end, and the bar's
 // own side padding matches, so every edge has the same gap.
-const BAR_INSET = 4;
+const BAR_INSET = COMPOSER_BAR_INSET;
 
 const BAR_CONTROL_HEIGHT = BAR_HEIGHT - 2 * (BAR_BORDER + BAR_INSET);
 

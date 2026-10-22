@@ -41,6 +41,13 @@ export const contentColumnSx: SxProps = {
 };
 
 /**
+ * Side padding, in px, of the slim bars above the composer: ChangesBar and the PrStatusBar that
+ * replaces it once a PR exists. Shared so the leading icon stays put when one bar swaps for the
+ * other.
+ */
+export const COMPOSER_BAR_INSET = 4;
+
+/**
  * The thin scrollbar the sidebar, the transcript and the scrollers in and beside it share.
  *
  * The shape lives in scrollbars.css, loaded before the gutter is measured. Keep the standard
