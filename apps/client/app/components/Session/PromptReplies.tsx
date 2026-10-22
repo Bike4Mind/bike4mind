@@ -1522,6 +1522,12 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
     completed && suggestedChoices?.options.length && messageId && currentSessionId ? (
       <ReplyChoiceButtons questId={messageId} sessionId={currentSessionId} suggestedChoices={suggestedChoices} />
     ) : null;
+  // Partial grounding coverage: the knowledge-base scan behind this reply stopped short of the
+  // library. Under the reply, as a quiet line, so it reads as a note rather than a fault; shared by
+  // the two render paths below so they cannot drift.
+  const retrievalCoverageNotice = promptMeta?.retrievalCoverage?.partial ? (
+    <RetrievalCoverageBanner reasons={promptMeta.retrievalCoverage.reasons} />
+  ) : null;
   // One row for both, shared by the two render paths below so they cannot drift.
   const replyActions =
     navSuggestions || choiceButtons ? (
@@ -1606,14 +1612,6 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
           and the artifact below is shown exactly as generated. */}
       {isElidedArtifact && <ArtifactElisionBanner />}
 
-      {/* Partial grounding coverage: the knowledge-base scan behind this reply stopped short of
-          the library (a candidate cap, a per-turn chunk budget, or documents excluded for an
-          embedding-model mismatch). Sits with the banners above because it reports the same class
-          of fact - the output is less complete than it looks. */}
-      {promptMeta?.retrievalCoverage?.partial && (
-        <RetrievalCoverageBanner reasons={promptMeta.retrievalCoverage.reasons} />
-      )}
-
       {/* A knowledge tool can still ground the turn after forced retrieval came back empty. */}
       {promptMeta?.retrievalFloorRejection && !promptMeta.citables?.length && (
         <RetrievalFloorBanner {...promptMeta.retrievalFloorRejection} />
@@ -1625,6 +1623,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
           {/* Repeated rather than hoisted above the branch: the suggestions read as part of
               the reply, so they follow whichever body this view rendered. Edit mode is the
               one body they are deliberately left out of. */}
+          {retrievalCoverageNotice}
           {completed && <ReplyAccessories questId={messageId} sessionId={currentSessionId ?? undefined} />}
           {replyActions}
         </>
@@ -1870,6 +1869,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                       </>
                     )}
 
+                    {retrievalCoverageNotice}
                     {completed && <ReplyAccessories questId={messageId} sessionId={currentSessionId ?? undefined} />}
                     {completed && <EnableWebSearchAction reply={cleanReply} />}
                     {replyActions}
