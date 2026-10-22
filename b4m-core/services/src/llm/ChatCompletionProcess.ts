@@ -129,7 +129,7 @@ import {
   resolveDeprecatedModelId,
   isTurnEndingTool,
   ResponsesStreamTruncatedError,
-  createAnthropicStreamTimeoutError,
+  LlmTimeoutError,
 } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { ToolCacheManager } from './tools/ToolCacheManager';
@@ -585,7 +585,8 @@ export function isOperatorFault(error: unknown): boolean {
   return !(
     isAbortError(error) ||
     isRequestTimeoutError(error) ||
-    isStreamIdleTimeoutError(error) ||
+    isTruncatedStreamError(error) ||
+    isSlowModelTimeoutError(error) ||
     error instanceof ResponsesStreamTruncatedError ||
     isToolPairingError(error) ||
     isOverloadedError(error) ||
@@ -5005,7 +5006,11 @@ export class ChatCompletionProcess {
             }
             // Same gate; the real typed timeout the backend raises, so the loop takes the slow path.
             if (previewTestMarkerActive(FORCE_STREAM_STALL_TEST_MARKER)) {
-              throw createAnthropicStreamTimeoutError('stream_idle', idleTimeoutSeconds * 1000);
+              throw new LlmTimeoutError(
+                'stream_idle',
+                idleTimeoutSeconds * 1000,
+                `stream timeout - simulated ${currentModel.backend} stall (preview only)`
+              );
             }
 
             await currentLlm.complete(
