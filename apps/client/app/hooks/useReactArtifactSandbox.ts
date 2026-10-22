@@ -16,6 +16,8 @@ import { useExperimentalFeatureSettings } from '@client/app/hooks/data/settings'
  * `mode` is 'inert' (inline-script execution, no eval) when the EnableInertArtifactRender
  * flag is on, else 'eval' (Function constructor). `files` (sibling file name -> source) lets
  * relative imports in `code` resolve; `dependencies` must then cover every file's npm imports.
+ * Pass `{}` rather than omitting it when the caller grouped the reply and found no siblings: the
+ * sandbox then names the unresolved import instead of rejecting multi-file artifacts outright.
  *
  * `event.source === iframeRef.current?.contentWindow` scopes messages to THIS iframe, so
  * two concurrently-mounted viewers never cross-talk (works without allow-same-origin).
@@ -41,11 +43,10 @@ interface SandboxPayload {
   files?: Record<string, string>;
 }
 
-/** Content key for `files`, so a new-but-equal object does not remount the sandbox. */
+/** Content key for `files`, so a new-but-equal object does not remount the sandbox; '' when absent. */
 function filesContentKey(files: Record<string, string> | undefined): string {
   if (!files) return '';
-  const entries = Object.entries(files).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-  return entries.length ? JSON.stringify(entries) : '';
+  return JSON.stringify(Object.entries(files).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
 }
 
 export function useReactArtifactSandbox(

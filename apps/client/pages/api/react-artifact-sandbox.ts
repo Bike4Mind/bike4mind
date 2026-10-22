@@ -34,8 +34,9 @@ import { IMPORT_SCANNER_FACTORY_SRC } from '@client/app/utils/importStatements';
  * after receiving `react-sandbox-ready`. `mode` is 'eval' or 'inert'. `files` optionally maps
  * sibling file names to their source: a relative import in `code` resolves against it by
  * basename (directories, a JS/TS extension and case ignored), and `dependencies` must cover the
- * npm imports of every file. Without `files`, a relative import is rejected. Errors are posted
- * back as `{ type: 'react-sandbox-error', message }`.
+ * npm imports of every file. An empty `files` still opts in, so an unmatched import is named;
+ * without `files`, a relative import is rejected outright. Errors are posted back as
+ * `{ type: 'react-sandbox-error', message }`.
  *
  * NOTE: this route still relies on in-browser eval (Babel + new Function). Milestone 3
  * moves transpilation to an on-demand server endpoint and drops `'unsafe-eval'`
@@ -238,15 +239,16 @@ const SANDBOX_HTML = `<!DOCTYPE html>
         .replace(/export\\s*\\{\\s*([A-Za-z_$][\\w$]*)\\s+as\\s+default\\s*\\}/g, 'const __DEFAULT_EXPORT__ = $1');
     }
 
-    // The render message's files map with non-string entries dropped, or null when none remain.
+    // The render message's files map with non-string entries dropped, or null when it carries none.
+    // An empty map still takes the module path: the caller knows the whole reply, so a relative
+    // import it could not match gets the "cannot resolve" error naming what is missing.
     function siblingFiles(files) {
       if (!files || typeof files !== 'object' || Array.isArray(files)) return null;
       var out = Object.create(null);
-      var count = 0;
       Object.keys(files).forEach(function (key) {
-        if (typeof files[key] === 'string') { out[key] = files[key]; count++; }
+        if (typeof files[key] === 'string') out[key] = files[key];
       });
-      return count ? out : null;
+      return out;
     }
 
     // Links a multi-file artifact at run time. The program from buildModuleProgram calls it by this
@@ -292,7 +294,7 @@ const SANDBOX_HTML = `<!DOCTYPE html>
         var matches = keysByName[name];
         if (!matches) {
           throw new Error('Cannot resolve "' + specifier + '": no artifact file is named "' + name +
-            '". Available files: ' + keys.join(', ') + '.');
+            '". Available files: ' + (keys.length ? keys.join(', ') : 'none') + '.');
         }
         if (matches.length > 1) {
           throw new Error('Cannot resolve "' + specifier + '": files ' + matches.join(', ') + ' all match "' + name +
@@ -354,7 +356,7 @@ const SANDBOX_HTML = `<!DOCTYPE html>
       var withoutTypeImports = importScanner.stripTypeOnlyImports(code);
 
       // Any relative reference (import-from, export-from, side-effect import, require() of a "./"
-      // or "../" path) needs sibling files to resolve against. With none supplied, say so up front
+      // or "../" path) needs sibling files to resolve against. With no files map, say so up front
       // instead of a cryptic "Cannot use import statement" / "Module not available" further down.
       // Run on the type-stripped view so a type-only relative import is already gone. An entry with
       // no relative import stays on the single-file path even when files are supplied.

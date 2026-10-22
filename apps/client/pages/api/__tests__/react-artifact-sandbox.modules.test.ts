@@ -293,12 +293,22 @@ describe.each(MODES)('multi-file react artifacts (%s mode)', mode => {
     expect(unused.markup).toBe('<div><span>tick3</span></div>');
   });
 
-  it('keeps rejecting a relative import with the existing message when no files are supplied', async () => {
-    for (const files of [undefined, {}, { NotSource: 42 }]) {
+  it('keeps rejecting a relative import with the existing message when no files map is supplied', async () => {
+    for (const files of [undefined, null, ['Chronosphere']]) {
       const result = await render(mode, { code: ENTRY, files });
       expect(result.markup).toBeNull();
       expect(result.errors).toEqual([RELATIVE_REJECTION]);
       expect(result.babelOptions).toEqual([]);
+    }
+  });
+
+  it('names the missing file when an empty files map opts in, listing the available files as none', async () => {
+    for (const files of [{}, { NotSource: 42 }]) {
+      const result = await render(mode, { code: ENTRY, files });
+      expect(result.markup).toBeNull();
+      expect(result.errors).toEqual([
+        'Cannot resolve "./Chronosphere": no artifact file is named "chronosphere". Available files: none.',
+      ]);
     }
   });
 

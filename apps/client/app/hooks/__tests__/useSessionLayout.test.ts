@@ -227,6 +227,26 @@ describe('useSessionLayout - LRU Cache Functions', () => {
       expect(state.recentArtifacts[0].id).toBe('test-1'); // Moved to front
       expect(state.recentArtifacts[1].id).toBe('test-2');
     });
+
+    it('keeps a React group in memory but leaves its sibling sources out of the persisted state', () => {
+      const reactGroup = {
+        role: 'entry' as const,
+        files: { Panel: 'export default () => null; // sibling-source' },
+        dependencies: ['react'],
+        siblings: [{ identifier: 'Panel', title: 'Panel' }],
+      };
+      const artifact = createMockArtifact({ id: 'react-entry', type: 'react', reactGroup });
+
+      setSessionLayout({ layout: 'vertical', artifactData: artifact });
+
+      const state = useSessionLayout.getState();
+      expect(state.artifactData?.reactGroup).toBe(reactGroup);
+      expect(state.recentArtifacts[0].reactGroup).toBe(reactGroup);
+
+      const persisted = JSON.parse(window.localStorage.getItem('layout-control') ?? '{}');
+      expect(persisted.state.artifactData).toMatchObject({ id: 'react-entry', type: 'react' });
+      expect(persisted.state.artifactData).not.toHaveProperty('reactGroup');
+    });
   });
 
   describe('setSessionLayout layout changes', () => {
