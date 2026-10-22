@@ -63,7 +63,7 @@ export const describeDerivedValue = (key: SettingKey, value: unknown): string | 
     case 'defaultFreeCredits':
     case 'ReferralCreditsAmount':
       if (!Number.isFinite(amount)) return null;
-      return `${amount.toLocaleString()} credits = ${formatUsdAmount(creditsToUsdAtFloor(amount))} at the ${floor}`;
+      return `${amount.toLocaleString('en-US')} credits = ${formatUsdAmount(creditsToUsdAtFloor(amount))} at the ${floor}`;
     case 'pricePerCredit':
       return Number.isFinite(amount)
         ? `${formatUsdPerCredit(amount)} per credit (USD) - ${floor}`
