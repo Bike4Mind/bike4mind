@@ -66,6 +66,9 @@ const run = ({ user, userId = 'u1' }: { user?: unknown; userId?: string | string
   return { res, promise: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res) };
 };
 
+// Stands in for a hydrated document: the handler reads keys through toJSON.
+const hydrate = <T extends Record<string, unknown>>(fields: T) => ({ ...fields, toJSON: () => fields });
+
 beforeEach(() => {
   mockUserFind.mockReset();
   mockListKeys.mockReset();
@@ -122,7 +125,7 @@ describe('GET /api/admin/users/:userId/user-api-keys', () => {
       { id: 'k2', name: 'old', status: 'disabled' },
     ];
     mockUserFind.mockResolvedValue({ id: 'u1' });
-    mockListKeys.mockResolvedValue(keys);
+    mockListKeys.mockResolvedValue(keys.map(hydrate));
     mockGetUsage.mockResolvedValueOnce({ minute: 60, day: 300 }).mockResolvedValueOnce({ minute: 0, day: 0 });
 
     const { res, promise } = run({ user: ADMIN });
@@ -154,7 +157,7 @@ describe('GET /api/admin/users/:userId/user-api-keys', () => {
       somethingUndeclared: 'x',
     };
     mockUserFind.mockResolvedValue({ id: 'u1' });
-    mockListKeys.mockResolvedValue([leaky]);
+    mockListKeys.mockResolvedValue([hydrate(leaky)]);
 
     const { res, promise } = run({ user: ADMIN });
     await promise;
