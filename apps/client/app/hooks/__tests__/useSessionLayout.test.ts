@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import useSessionLayout, {
   addArtifactToRecent,
   setSessionLayout,
+  saveOpenArtifactContent,
   clearRecentArtifacts,
   openFileInChatViewer,
   getSelectedArtifactVersion,
@@ -246,6 +247,62 @@ describe('useSessionLayout - LRU Cache Functions', () => {
       const persisted = JSON.parse(window.localStorage.getItem('layout-control') ?? '{}');
       expect(persisted.state.artifactData).toMatchObject({ id: 'react-entry', type: 'react' });
       expect(persisted.state.artifactData).not.toHaveProperty('reactGroup');
+    });
+  });
+
+  describe('saveOpenArtifactContent', () => {
+    const reactGroup = {
+      role: 'entry' as const,
+      files: { Panel: 'export default () => null;' },
+      dependencies: ['react'],
+      siblings: [{ identifier: 'Panel', title: 'Panel' }],
+    };
+
+    it('saves into the tab even when artifactData was cleared, and reopens that tab', () => {
+      const entry = createMockArtifact({ id: 'entry', type: 'react', reactGroup });
+      setSessionLayout({ layout: 'vertical', artifactData: entry });
+      setSessionLayout({ artifactData: undefined, selectedArtifactId: undefined });
+
+      saveOpenArtifactContent('entry', 'saved');
+
+      const state = useSessionLayout.getState();
+      expect(state.recentArtifacts).toHaveLength(1);
+      expect(state.recentArtifacts[0]).toEqual({ ...entry, content: 'saved' });
+      expect(state.artifactData).toEqual({ ...entry, content: 'saved' });
+      expect(state.selectedArtifactId).toBe('entry');
+    });
+
+    it('leaves the open artifact alone when the saved tab is a different one', () => {
+      const entry = createMockArtifact({ id: 'entry', type: 'react', reactGroup });
+      const sibling = createMockArtifact({ id: 'sibling', type: 'react' });
+      setSessionLayout({ layout: 'vertical', artifactData: entry });
+      setSessionLayout({ layout: 'vertical', artifactData: sibling });
+
+      saveOpenArtifactContent('entry', 'saved');
+
+      const state = useSessionLayout.getState();
+      expect(state.recentArtifacts.find(a => a.id === 'sibling')).toBe(sibling);
+      expect(state.recentArtifacts.find(a => a.id === 'entry')).toEqual({ ...entry, content: 'saved' });
+      expect(state.artifactData?.id).toBe('entry');
+    });
+
+    it('stores a re-created artifact under its new id', () => {
+      const legacy = createMockArtifact({ id: 'legacy', type: 'react' });
+      setSessionLayout({ layout: 'vertical', artifactData: legacy });
+
+      saveOpenArtifactContent('legacy', 'saved', 'artifact_react_new_1_0');
+
+      const state = useSessionLayout.getState();
+      expect(state.artifactData).toEqual({ ...legacy, content: 'saved', id: 'artifact_react_new_1_0' });
+      expect(state.selectedArtifactId).toBe('artifact_react_new_1_0');
+    });
+
+    it('does nothing when the id has no open tab', () => {
+      const before = useSessionLayout.getState();
+
+      saveOpenArtifactContent('missing', 'saved');
+
+      expect(useSessionLayout.getState()).toBe(before);
     });
   });
 

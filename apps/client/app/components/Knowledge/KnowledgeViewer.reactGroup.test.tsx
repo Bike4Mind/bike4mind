@@ -21,10 +21,11 @@ const h = vi.hoisted(() => ({
   // Props of every next/dynamic viewer KnowledgeViewer renders, in render order.
   viewerProps: [] as Record<string, unknown>[],
   latest: undefined as LatestArtifact | undefined,
+  api: { get: vi.fn(), post: vi.fn(), put: vi.fn() },
 }));
 
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
-vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: vi.fn(), post: vi.fn(), put: vi.fn() } }));
+vi.mock('@client/app/contexts/ApiContext', () => ({ api: h.api }));
 vi.mock('@client/app/contexts/SessionsContext', () => ({
   useSessions: () => ({ currentSession: { id: SESSION_ID }, currentSessionId: SESSION_ID }),
   useWorkBenchFiles: () => [],
@@ -106,7 +107,21 @@ const latestVersion = (version: number, content: string): LatestArtifact => ({
   content: { content },
 });
 
+const SIBLING_ID = 'artifact_react_panel_1700000000000_1';
+const SIBLING_CODE = ENTRY_GROUP.files.Panel;
+const sibling: ReactArtifact = { ...entry, id: SIBLING_ID, title: 'Panel', content: SIBLING_CODE } as ReactArtifact;
+const EDITED_CODE = ENTRY_CODE.replace('<Panel />', '<section><Panel /></section>');
+
 const reactViewerProps = () => h.viewerProps.filter(p => (p.artifact as ReactArtifact | undefined)?.id === ENTRY_ID);
+
+/** Saves through the entry viewer's onSave, as its Save button does, with the PUT answering v2. */
+async function saveEntry(code: string) {
+  h.api.put.mockResolvedValueOnce({ data: { artifact: { id: ENTRY_ID, version: 2 } } });
+  const onSave = reactViewerProps().at(-1)?.onSave as (content: string) => Promise<unknown>;
+  await act(async () => {
+    await onSave(code);
+  });
+}
 
 const viewerTree = () => (
   <CssVarsProvider theme={appTheme}>
@@ -119,6 +134,7 @@ const viewerTree = () => (
 describe('KnowledgeViewer with a multi-file React entry', () => {
   beforeEach(() => {
     h.viewerProps.length = 0;
+    h.api.put.mockReset();
     h.latest = latestVersion(1, ENTRY_CODE);
     setKnowledgeViewer({ selectedTabIndex: 0, showLineNumbers: false });
     useSessionLayout.setState({
@@ -166,5 +182,52 @@ describe('KnowledgeViewer with a multi-file React entry', () => {
     const props = reactViewerProps().at(-1);
     expect((props?.artifact as ReactArtifact).content).toBe(newer);
     expect(props?.group).toBe(ENTRY_GROUP);
+  });
+
+  it('saves the entry after a sent message cleared artifactData while its tab stayed open', async () => {
+    render(viewerTree());
+    await act(async () => {});
+    // What useSendMessage does on send: the open artifact is cleared, its tab is not.
+    act(() => setSessionLayout({ selectedArtifactId: undefined, artifactData: undefined }));
+
+    await saveEntry(EDITED_CODE);
+
+    const state = useSessionLayout.getState();
+    expect(state.recentArtifacts.map(a => a.id)).toEqual([ENTRY_ID]);
+    expect(state.artifactData).toMatchObject({
+      id: ENTRY_ID,
+      reactGroup: ENTRY_GROUP,
+      content: { content: EDITED_CODE },
+    });
+    expect(state.selectedArtifactId).toBe(ENTRY_ID);
+    const props = reactViewerProps().at(-1);
+    expect((props?.artifact as ReactArtifact).content).toBe(EDITED_CODE);
+    expect(props?.group).toBe(ENTRY_GROUP);
+  });
+
+  it('saves the entry into its own tab while its sibling is the open artifact', async () => {
+    const siblingTab = {
+      type: 'react' as const,
+      content: sibling,
+      mimeType: 'application/vnd.ant.react',
+      id: SIBLING_ID,
+      reactGroup: { role: 'sibling' as const, entryTitle: entry.title },
+    };
+    setSessionLayout({ layout: 'vertical', artifactData: siblingTab, selectedArtifactId: SIBLING_ID });
+    // Picking the entry's tab in the viewer moves the selection, not artifactData.
+    setSessionLayout({ selectedArtifactId: ENTRY_ID });
+    render(viewerTree());
+    await act(async () => {});
+
+    await saveEntry(EDITED_CODE);
+
+    const state = useSessionLayout.getState();
+    expect(state.recentArtifacts.find(a => a.id === SIBLING_ID)).toBe(siblingTab);
+    expect(state.recentArtifacts.find(a => a.id === ENTRY_ID)).toMatchObject({
+      reactGroup: ENTRY_GROUP,
+      content: { id: ENTRY_ID, content: EDITED_CODE },
+    });
+    expect(state.artifactData?.id).toBe(ENTRY_ID);
+    expect(state.selectedArtifactId).toBe(ENTRY_ID);
   });
 });

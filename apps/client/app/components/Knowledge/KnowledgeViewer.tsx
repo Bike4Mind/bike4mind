@@ -58,6 +58,7 @@ import {
   setSessionLayout,
   clearRecentArtifacts,
   clearSessionScopedViewerState,
+  saveOpenArtifactContent,
 } from '@client/app/hooks/useSessionLayout';
 import { getContentFromFabfile } from '@client/app/utils/fabFileUtils';
 import useSessionLayout from '@client/app/hooks/useSessionLayout';
@@ -1887,13 +1888,7 @@ const KnowledgeContent: React.FC<{
         version: currentArtifact.version || 1,
       };
 
-      setSessionLayout({
-        layout: useSessionLayout.getState().layout,
-        artifactData: {
-          ...useSessionLayout.getState().artifactData!,
-          content: updatedArtifact,
-        },
-      });
+      saveOpenArtifactContent(item.id, updatedArtifact);
 
       try {
         const updatePayload = {
@@ -1954,15 +1949,7 @@ const KnowledgeContent: React.FC<{
             version: 1,
           };
 
-          setSessionLayout({
-            layout: useSessionLayout.getState().layout,
-            artifactData: {
-              ...useSessionLayout.getState().artifactData!,
-              content: updatedArtifactWithNewId,
-              id: newArtifactId,
-            },
-            selectedArtifactId: newArtifactId,
-          });
+          saveOpenArtifactContent(item.id, updatedArtifactWithNewId, newArtifactId);
 
           if (currentSession) {
             try {
@@ -2010,13 +1997,7 @@ const KnowledgeContent: React.FC<{
         version: currentArtifact.version || 1,
       };
 
-      setSessionLayout({
-        layout: useSessionLayout.getState().layout,
-        artifactData: {
-          ...useSessionLayout.getState().artifactData!,
-          content: updatedArtifact,
-        },
-      });
+      saveOpenArtifactContent(item.id, updatedArtifact);
 
       try {
         const updatePayload = {
@@ -2067,15 +2048,7 @@ const KnowledgeContent: React.FC<{
             version: 1,
           };
 
-          setSessionLayout({
-            layout: useSessionLayout.getState().layout,
-            artifactData: {
-              ...useSessionLayout.getState().artifactData!,
-              content: updatedArtifactWithNewId,
-              id: newArtifactId,
-            },
-            selectedArtifactId: newArtifactId,
-          });
+          saveOpenArtifactContent(item.id, updatedArtifactWithNewId, newArtifactId);
 
           if (currentSession) {
             try {
