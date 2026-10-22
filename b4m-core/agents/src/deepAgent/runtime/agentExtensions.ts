@@ -138,16 +138,23 @@ interface Stored<T> {
   source: AgentExtensionSource;
 }
 
-// The executor reads these fields straight off the profile, so a contributed build must supply them.
+const THOROUGHNESS_LEVELS = ['quick', 'medium', 'very_thorough'] as const;
+
+// The executor reads these fields straight off the profile, and its iteration ceiling is
+// `maxIterations[defaultThoroughness]`, so a contributed build must supply every one of them.
 function isProfileShaped(value: unknown): value is ResolvedOrchestrationProfile {
   if (value === null || typeof value !== 'object') return false;
   const p = value as Partial<ResolvedOrchestrationProfile>;
+  const ceilings = p.maxIterations as Record<string, unknown> | null | undefined;
   return (
     typeof p.id === 'string' &&
+    typeof p.name === 'string' &&
     Array.isArray(p.allowedTools) &&
     Array.isArray(p.deniedTools) &&
-    p.maxIterations !== null &&
-    typeof p.maxIterations === 'object'
+    ceilings !== null &&
+    typeof ceilings === 'object' &&
+    THOROUGHNESS_LEVELS.every(level => Number.isInteger(ceilings[level]) && (ceilings[level] as number) > 0) &&
+    THOROUGHNESS_LEVELS.includes(p.defaultThoroughness as (typeof THOROUGHNESS_LEVELS)[number])
   );
 }
 
