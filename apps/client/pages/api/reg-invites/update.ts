@@ -5,7 +5,8 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { RegInviteEvents } from '@bike4mind/common';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
-import { registrationInviteRepository } from '@bike4mind/database';
+import { registrationInviteRepository, withTransaction } from '@bike4mind/database';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 // Placeholder schema; only status is currently used.
 const UpdateRegisterInviteSchema = z.object({
@@ -24,7 +25,19 @@ const handler = baseApi().post(
       throw new ForbiddenError('Permission denied');
     }
 
-    const updatedInvites = await registrationInviteRepository.formatRegInvites(validatedData, ids);
+    const updatedInvites = await withTransaction(async () => {
+      const invites = await registrationInviteRepository.formatRegInvites(validatedData, ids);
+      await recordAdminActionFromRequest(req, {
+        action: 'user.reg_invite.updated',
+        target:
+          ids.length === 1
+            ? { kind: 'settings', id: ids[0], displayName: 'registration invite' }
+            : { kind: 'system', id: 'registration_invites', displayName: `${ids.length} registration invites` },
+        summary: `updated ${ids.length} registration invite${ids.length === 1 ? '' : 's'}`,
+        details: { ids, status: validatedData.status ?? null },
+      });
+      return invites;
+    });
 
     await logEvent(
       {

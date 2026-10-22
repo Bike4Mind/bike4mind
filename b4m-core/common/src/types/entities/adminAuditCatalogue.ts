@@ -132,6 +132,17 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'support.inbox.message_sent': { category: 'support', severity: 'notice', write: 'bestEffort' },
   'support.pr_report.sent': { category: 'support', severity: 'info', write: 'bestEffort' },
 
+  // Handler coverage: signup and org access
+  'org.partner_signup_rule.created': { category: 'access', severity: 'notice', write: 'strict' },
+  'org.partner_signup_rule.updated': { category: 'access', severity: 'notice', write: 'strict' },
+  'org.partner_signup_rule.deleted': { category: 'access', severity: 'notice', write: 'strict' },
+  'org.partner_signup_rule.backfilled': { category: 'access', severity: 'notice', write: 'bestEffort' },
+  'user.reg_invite.migrated': { category: 'account', severity: 'critical', write: 'bestEffort' },
+  'user.reg_invite.updated': { category: 'access', severity: 'notice', write: 'strict' },
+  'user.reg_invite.created': { category: 'access', severity: 'notice', write: 'strict' },
+  'user.waitlist_subscriber.deleted': { category: 'support', severity: 'info', write: 'bestEffort' },
+  'org.created': { category: 'org', severity: 'notice', write: 'bestEffort' },
+
   'audit.exported': { category: 'support', severity: 'info', write: 'bestEffort' },
 } as const satisfies Record<string, AdminAuditCatalogueEntry>;
 
