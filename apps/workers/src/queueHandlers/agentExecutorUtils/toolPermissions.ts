@@ -12,7 +12,7 @@
 import type { GatedToolCall } from '@bike4mind/agents';
 import { classifyToolPermission } from '@bike4mind/common';
 import { isHeadlessConnection } from '@bike4mind/server-utils/utils/headlessConnection';
-import { formatConfidenceGateReason, isPausingLowConfidenceStreak } from './confidenceGate';
+import { formatConfidenceGateReason, recordAndDecideConfidencePause } from './confidenceGate';
 
 export { classifyToolPermission, type ToolPermissionResult } from '@bike4mind/common';
 
@@ -237,14 +237,15 @@ export async function gateReplayConfidence(
 
   // Telemetry parity with the ordinary per-iteration gate check: every evaluated
   // iteration is recorded, not just the ones that pause.
-  const lowConfidenceStreak = await deps.recordIterationConfidence(executionId, confidence, {
-    belowThreshold: confidence < confidenceGateThreshold,
-  });
-  if (!isPausingLowConfidenceStreak(lowConfidenceStreak)) return { status: 'proceed' };
+  const decision = await recordAndDecideConfidencePause(
+    { iteration: iterationIndex, confidence, belowThreshold: confidence < confidenceGateThreshold, pausable: true },
+    (c, options) => deps.recordIterationConfidence(executionId, c, options)
+  );
+  if (!decision.pause) return { status: 'proceed' };
 
   // Same 0-indexed wire convention as `settleGatedCall`'s `permission_request` emit.
   const wireIteration = Math.max(0, iterationIndex - 1);
-  const reason = formatConfidenceGateReason(confidence, confidenceGateThreshold, lowConfidenceStreak);
+  const reason = formatConfidenceGateReason(confidence, confidenceGateThreshold, decision.lowConfidenceStreak);
   const gatePayload = { iteration: wireIteration, confidence, reason };
   deps.logger.info('[ConfidenceGate] Pausing execution for human review after a replayed approval', {
     executionId,
