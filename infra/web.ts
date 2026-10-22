@@ -115,7 +115,7 @@ import {
   appUrlForLambdaEnv,
   originVerifySecret,
 } from './router';
-import { secrets } from './secrets';
+import { allSecrets } from './secrets';
 import { migratorInvocation } from './database';
 import { websocketApi } from './websocket';
 import { lambdaVpc } from './vpc';
@@ -254,7 +254,7 @@ export const web = new sst.aws.Nextjs(
       memory: '2048 MB',
     },
     link: [
-      ...Object.values(secrets),
+      ...allSecrets,
       websocketApi,
       historyImportBucket,
       // Linked so the frontend can resolve Resource.ChatCompletion.url to POST quests.

@@ -1775,6 +1775,71 @@ export function contributeInfra(_params: Record<string, unknown>): void {}
   }
 }
 
+// Infra resources an overlay declares as plain data (b4mContributions.infraResources).
+// The same literal goes to infra/ (deploy side) and to server-utils (runtime side), so
+// the two can never register different lists. Name rules (collisions with core,
+// duplicates, bad characters) are applied by both consumers via @bike4mind/infra's
+// partitionContributed; this only checks shape, since the values become TS literals.
+const INFRA_RESOURCE_TARGETS = [
+  join(INFRA_GENERATED_DIR, 'infraResources.generated.ts'),
+  join(REPO_ROOT, 'packages/server-utils/src/premium-generated/infraResources.generated.ts'),
+];
+
+function readInfraResources(pkg) {
+  const raw = pkg.contributions.infraResources;
+  const fail = msg => {
+    throw new Error(`[codegen] invalid b4mContributions.infraResources from package "${pkg.name}": ${msg}`);
+  };
+  if (!isPlainObject(raw)) fail('must be an object');
+  const list = field => {
+    const value = raw[field] ?? [];
+    if (!Array.isArray(value) || !value.every(isPlainObject)) fail(`${field} must be an array of objects`);
+    return value;
+  };
+  const secrets = list('secrets').map(s => {
+    if (typeof s.name !== 'string') fail('secret name must be a string');
+    if (s.placeholder !== undefined && typeof s.placeholder !== 'string') fail(`${s.name}.placeholder must be a string`);
+    if (s.env !== undefined && typeof s.env !== 'boolean') fail(`${s.name}.env must be a boolean`);
+    return { name: s.name, placeholder: s.placeholder, env: s.env };
+  });
+  const rotations = list('rotations').map(r => {
+    if (typeof r.secret !== 'string') fail('rotation secret must be a string');
+    if (typeof r.description !== 'string' || typeof r.rotationProcess !== 'string') {
+      fail(`${r.secret} rotation needs string description and rotationProcess`);
+    }
+    if (!Number.isInteger(r.rotationIntervalDays) || r.rotationIntervalDays <= 0) {
+      fail(`${r.secret}.rotationIntervalDays must be a positive integer`);
+    }
+    if (typeof r.isAutomatic !== 'boolean') fail(`${r.secret}.isAutomatic must be a boolean`);
+    const { secret, description, rotationIntervalDays, isAutomatic, rotationProcess } = r;
+    return { secret, description, rotationIntervalDays, isAutomatic, rotationProcess };
+  });
+  return { secrets, rotations };
+}
+
+// Core secret names, read from infra/secrets.ts so the runtime can refuse a contribution
+// that shadows one without a hand-kept copy of the list.
+function readCoreSecretNames() {
+  const path = join(REPO_ROOT, 'infra/secrets.ts');
+  if (!existsSync(path)) return [];
+  return [...readFileSync(path, 'utf8').matchAll(/new sst\.Secret\(\s*'([A-Za-z0-9_]+)'/g)].map(m => m[1]);
+}
+
+function generateInfraResources(packages) {
+  const merged = { secrets: [], rotations: [] };
+  for (const pkg of packages) {
+    if (pkg.contributions.infraResources === undefined) continue;
+    const { secrets, rotations } = readInfraResources(pkg);
+    merged.secrets.push(...secrets);
+    merged.rotations.push(...rotations);
+  }
+  const content =
+    `${GENERATED_BANNER}import type { InfraResourceContributions } from '@bike4mind/infra';\n\n` +
+    `export const contributedInfraResources: InfraResourceContributions = ${JSON.stringify(merged, null, 2)};\n\n` +
+    `export const coreSecretNames: readonly string[] = ${JSON.stringify(readCoreSecretNames())};\n`;
+  for (const target of INFRA_RESOURCE_TARGETS) writeFile(target, content);
+}
+
 // --- Main ---
 
 const packages = discoverPremiumPackages();
@@ -1836,5 +1901,6 @@ generateWorkspaceDeniedTools(packages);
 generateToolDisplayLabels(packages);
 generateEntitlementGrants(packages);
 generateApiKeyScopes(packages);
+generateInfraResources(packages);
 
 console.log('[codegen] done.');
