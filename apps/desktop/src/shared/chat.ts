@@ -1189,9 +1189,9 @@ export type ChatStreamEvent =
    */
   | { type: 'workspace'; sessionId: string; running: boolean; base: string; branch?: string }
   /**
-   * A session started from this one (a card or session_spawn) was removed again because its
-   * worktree or first turn could not be made; `title` is the removed session's. The parent's
-   * transcript gets a report as well, this is what puts it in front of the user at once.
+   * A session started from this one (a card or session_spawn) could not prepare its worktree
+   * or first turn. Empty sessions are removed; accepted input keeps its session for retry.
+   * The parent's transcript gets a report too; `title` identifies the failed session.
    */
   | { type: 'spawn-failed'; sessionId: string; title: string; message: string }
   /** The conversation's spawn suggestions changed; carries the whole list. No reply in flight. */

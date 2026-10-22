@@ -45,6 +45,61 @@ afterEach(async () => {
 });
 
 describe('CustomCommandStore file cache', () => {
+  it('retries a transient file read failure without requiring a file edit', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const file = await writeSkill('recover', '---\ndescription: recovered\n---\nBody\n');
+    const originalRead = fs.readFile.bind(fs);
+    let failed = false;
+    const read = vi.spyOn(fs, 'readFile').mockImplementation(async (...args) => {
+      if (args[0] === file && !failed) {
+        failed = true;
+        throw new Error('Temporary I/O failure');
+      }
+      return originalRead(...args);
+    });
+    const fileCache = new Map<string, CachedCommandFile>();
+
+    expect((await scan(fileCache)).hasCommand('recover')).toBe(false);
+    expect((await scan(fileCache)).getCommand('recover')?.description).toBe('recovered');
+    expect(read.mock.calls.filter(call => call[0] === file)).toHaveLength(2);
+  });
+
+  it('preserves a newer cache entry when an older read fails after a file edit', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const file = await writeSkill('updated', '---\ndescription: old\n---\nBody\n');
+    const originalRead = fs.readFile.bind(fs);
+    let releaseRead!: () => void;
+    const paused = new Promise<void>(resolve => {
+      releaseRead = resolve;
+    });
+    let announceRead!: () => void;
+    const started = new Promise<void>(resolve => {
+      announceRead = resolve;
+    });
+    let firstRead = true;
+    const read = vi.spyOn(fs, 'readFile').mockImplementation(async (...args) => {
+      if (args[0] === file && firstRead) {
+        firstRead = false;
+        announceRead();
+        await paused;
+        throw new Error('Older read failed');
+      }
+      return originalRead(...args);
+    });
+    const fileCache = new Map<string, CachedCommandFile>();
+    const olderScan = scan(fileCache);
+    await started;
+
+    // Different size guarantees this scan does not share the older pending read.
+    await fs.writeFile(file, '---\ndescription: updated successfully\n---\nBody\n');
+    expect((await scan(fileCache)).getCommand('updated')?.description).toBe('updated successfully');
+    releaseRead();
+    await olderScan;
+
+    expect((await scan(fileCache)).getCommand('updated')?.description).toBe('updated successfully');
+    expect(read.mock.calls.filter(call => call[0] === file)).toHaveLength(2);
+  });
+
   it('shares a pending parse without treating it as a skipped file', async () => {
     const file = await writeSkill('shared', '---\ndescription: shared\n---\nBody\n');
     const originalRead = fs.readFile.bind(fs);

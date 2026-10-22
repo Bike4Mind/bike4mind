@@ -24,8 +24,8 @@ export interface CustomCommandStoreOptions {
   fileCache?: Map<string, CachedCommandFile>;
 }
 
-/** One file's parse, valid while its mtime and size hold. `command` is null when it was skipped
- *  or failed, so a broken file is reported once per change rather than once per scan. */
+/** One file's parse, valid while its mtime and size hold. `command` is null when it was skipped.
+ *  Rejected reads or parses are evicted so a transient failure can recover on the next scan. */
 export interface CachedCommandFile {
   source: 'global' | 'project';
   mtimeMs: number;
@@ -306,9 +306,12 @@ export class CustomCommandStore {
     // Other stores share this cache; an unfinished parse is not a skipped file.
     entry.pending = parsing.catch(() => null);
     cache.set(filePath, entry);
-    // Rethrown once for the caller's warning; the null entry keeps later scans quiet until the file changes.
     try {
       entry.command = await parsing;
+    } catch (error) {
+      // A newer scan may already own this path after a file edit; leave its result intact.
+      if (cache.get(filePath) === entry) cache.delete(filePath);
+      throw error;
     } finally {
       delete entry.pending;
     }

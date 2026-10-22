@@ -8,9 +8,8 @@ interface SpawnFailure {
 }
 
 /**
- * Says so when a session the user just watched appear is removed again because it could not
- * start (ChatService.abandonSpawn). Shown whichever conversation is open: the row vanishing
- * from the sidebar with no word would read as the app losing it.
+ * Reports a startup failure whichever conversation is open. The message explains whether
+ * the failed session was removed or kept to preserve accepted input (ChatService.abandonSpawn).
  */
 export function SpawnFailureToast() {
   const [failure, setFailure] = useState<SpawnFailure | null>(null);

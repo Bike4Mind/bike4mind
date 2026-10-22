@@ -3,10 +3,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
-import { awaitsWorktree, type ChatSessionSummary, type ChatSpawnSuggestion, type ChatStreamEvent } from '@shared/chat';
+import {
+  awaitsWorktree,
+  type ChatSessionSummary,
+  type ChatSpawnSuggestion,
+  type ChatStreamEvent,
+  type ChatQueueEvent,
+} from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
 import { SessionStore } from './SessionStore';
+import { AttachmentStore } from './AttachmentStore';
 import { MessageQueue } from './MessageQueue';
 import { git, listWorktrees } from './project/git';
 import { appWorktreeRoot, prefetchBase } from './project/workspace';
@@ -56,6 +63,8 @@ describe('ChatService spawn placement', () => {
   let main: string;
   let queue: MessageQueue;
   let dependencies: DependencyInstaller;
+  let attachments: AttachmentStore;
+  let queueEvents: ChatQueueEvent[];
 
   /** A repository in the user's layout: a bare dir plus one folder per branch beside it. */
   async function repository(): Promise<void> {
@@ -93,13 +102,19 @@ describe('ChatService spawn placement', () => {
       return Promise.resolve({ data: stream, status: 200 });
     });
     post = boundPost;
-    queue = new MessageQueue(() => {});
+    queueEvents = [];
+    queue = new MessageQueue(event => queueEvents.push(event));
+    attachments = new AttachmentStore(await mkdtemp(join(tmpdir(), 'b4m-place-attachments-')), {
+      debug: vi.fn(),
+      warn: vi.fn(),
+    });
     dependencies = new DependencyInstaller(new BackgroundProcessRegistry({ output: () => {}, status: () => {} }));
     vi.spyOn(dependencies, 'maybeStart').mockResolvedValue(undefined);
 
     service = new ChatService({
       store,
       queue,
+      attachments,
       dependencies,
       approvals: new ApprovalGate(),
       access: { list: async () => [] } as unknown as AccessStore,
@@ -157,6 +172,30 @@ describe('ChatService spawn placement', () => {
       .filter(event => event.type === 'tool-end')
       .map(event => (event.type === 'tool-end' ? event.call : null))
       .filter(call => call?.name === 'session_spawn');
+  }
+
+  async function relayFromParent(parentId: string, targetId: string, text: string) {
+    await store.setApprovalMode(parentId, 'auto');
+    const stream = await vi.waitUntil(() => streams[1], { timeout: 5000, interval: 5 });
+    stream.write(
+      frame({
+        type: 'tool_use',
+        tools: [
+          {
+            id: 'relay-input',
+            name: 'session_send',
+            arguments: JSON.stringify({ session_id: targetId, message: text }),
+          },
+        ],
+      })
+    );
+    stream.write(frame('[DONE]'));
+    const ended = await vi.waitUntil(
+      () => events.find(event => event.type === 'tool-end' && event.call.id === 'relay-input'),
+      { timeout: 5000, interval: 5 }
+    );
+    if (ended.type !== 'tool-end') throw new Error('Relay did not settle');
+    return ended.call;
   }
 
   function awaitSettled(count: number) {
@@ -424,17 +463,94 @@ describe('ChatService spawn placement', () => {
       return originalDelete(sessionId);
     });
 
-    await spawnWith({ placement: 'worktree', branch: 'agent/cleanup' });
+    const { parent } = await spawnWith({ placement: 'worktree', branch: 'agent/cleanup' });
     await vi.waitUntil(() => deletingId, { timeout: 10000, interval: 5 });
     if (!deletingId) throw new Error('Deletion did not start');
 
     expect(service.isSessionBusy(deletingId)).toBe(true);
-    expect(await service.send(deletingId, 'must not run')).toMatchObject({ ok: true, queued: true });
+    expect(await service.send(deletingId, 'must not run')).toMatchObject({ ok: false });
     expect(seedPosted('must not run')).toBe(false);
+    const relay = await relayFromParent(parent.id, deletingId, 'must not relay');
+    expect(relay.status).toBe('error');
+    expect(queue.list(deletingId)).toEqual([]);
     releaseDelete();
     await vi.waitUntil(() => events.some(event => event.type === 'spawn-failed'), { timeout: 5000, interval: 5 });
     expect(await store.get(deletingId)).toBeNull();
     expect(queue.list(deletingId)).toEqual([]);
+  });
+
+  it('preserves queued input and attachment bytes when background startup fails', async () => {
+    const release = holdWorktrees();
+    const { parent, suggestion } = await spawnWith({ placement: 'worktree', branch: 'agent/preserve-input' });
+    const spawned = await child();
+    if (!spawned) throw new Error('Child missing');
+    const added = await attachments.add(spawned.id, [
+      { source: 'bytes', name: 'notes.txt', data: new Uint8Array(Buffer.from('keep these notes')) },
+    ]);
+    expect(added.attachments).toHaveLength(1);
+    expect(await service.send(spawned.id, 'also check these notes', added.attachments)).toMatchObject({
+      ok: true,
+      queued: true,
+    });
+    expect((await relayFromParent(parent.id, spawned.id, 'keep this relay')).status).toBe('done');
+    await mkdir(join(appWorktreeRoot(container), 'agent+preserve-input'), { recursive: true });
+    await writeFile(join(appWorktreeRoot(container), 'agent+preserve-input', 'stray.txt'), 'not mine\n', 'utf8');
+    release();
+    await vi.waitUntil(() => events.some(event => event.type === 'spawn-failed'), { timeout: 10000, interval: 5 });
+    await vi.waitUntil(() => !service.isSessionBusy(spawned.id), { timeout: 5000, interval: 5 });
+
+    const retained = await store.get(spawned.id);
+    expect(retained).not.toBeNull();
+    expect(retained?.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          content: expect.stringContaining('also check these notes'),
+          attachments: added.attachments,
+        }),
+        expect.objectContaining({ content: expect.stringContaining('do the thing') }),
+      ])
+    );
+    expect(retained?.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          content: 'keep this relay',
+          relay: expect.objectContaining({ fromSessionId: parent.id }),
+        }),
+      ])
+    );
+    const returned = queueEvents.findLast(event => event.sessionId === spawned.id && event.returned)?.returned;
+    expect(returned?.messages.map(message => message.text)).toEqual(['do the thing', 'also check these notes']);
+    expect(returned?.messages[1].attachments).toEqual(added.attachments);
+    expect(await attachments.read(spawned.id, added.attachments[0].id)).toEqual(Buffer.from('keep these notes'));
+    expect(queue.list(spawned.id)).toEqual([]);
+    expect(seedPosted('do the thing')).toBe(false);
+    expect(events.findLast(event => event.type === 'spawn-failed')).toMatchObject({
+      message: expect.stringMatching(/kept|retained/i),
+    });
+    expect((await store.get(parent.id))?.spawnSuggestions?.find(entry => entry.id === suggestion.id)?.status).toBe(
+      'started'
+    );
+  });
+
+  it('keeps accepted input queued if saving startup recovery fails', async () => {
+    const release = holdWorktrees();
+    await spawnWith({ placement: 'worktree', branch: 'agent/recovery-error' });
+    const spawned = await child();
+    if (!spawned) throw new Error('Child missing');
+    expect(await service.send(spawned.id, 'do not lose this')).toMatchObject({ ok: true, queued: true });
+    await mkdir(join(appWorktreeRoot(container), 'agent+recovery-error'), { recursive: true });
+    await writeFile(join(appWorktreeRoot(container), 'agent+recovery-error', 'stray.txt'), 'not mine\n', 'utf8');
+    const appendMessage = store.appendMessage.bind(store);
+    vi.spyOn(store, 'appendMessage').mockImplementation(async (sessionId, message) => {
+      if (sessionId === spawned.id) throw new Error('disk full');
+      return appendMessage(sessionId, message);
+    });
+    release();
+    await vi.waitUntil(() => !service.isSessionBusy(spawned.id), { timeout: 10000, interval: 5 });
+    expect(await store.get(spawned.id)).not.toBeNull();
+    expect(queue.list(spawned.id).map(message => message.text)).toEqual(['do not lose this']);
+    expect(queueEvents.some(event => event.sessionId === spawned.id && event.returned)).toBe(false);
+    expect(seedPosted('do the thing')).toBe(false);
   });
 
   it.each(['local', 'worktree'] as const)('reserves the seed ahead of other turns for a %s spawn', async placement => {

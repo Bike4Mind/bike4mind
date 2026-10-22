@@ -10,7 +10,7 @@
 
 ## Unreleased
 
-- Show spawned sessions immediately while their worktrees prepare, with queued messages and visible startup failures.
+- Show spawned sessions immediately while their worktrees prepare, with queued messages and visible startup failures; preserve accepted input and attachments if startup fails.
 - Reuse base-branch fetches and spare checkouts, and invalidate the skill catalog when its files change.
 - Show artifact thumbnails in a searchable grid with a full-panel detail view, and reload cached bodies on Refresh.
 

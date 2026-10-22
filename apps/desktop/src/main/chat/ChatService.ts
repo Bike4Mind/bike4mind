@@ -497,6 +497,9 @@ export class ChatService {
 
   private readonly launching = new Set<string>();
 
+  /** Startup has failed; no new input may race its preservation or deletion. */
+  private readonly abandoning = new Set<string>();
+
   /**
    * A queued message the user promoted past the live turn with "send now", held between the
    * interrupt and the moment the interrupted reply settles.
@@ -1475,6 +1478,9 @@ export class ChatService {
      * against the server's catalog at the moment the turn actually goes out. A queued message
      * refused then comes back to the composer - see flushQueue.
      */
+    if (this.abandoning.has(sessionId)) {
+      return { ok: false, error: 'This conversation could not start. Wait for startup cleanup to finish.' };
+    }
     if (this.isBusy(sessionId, options.spawnSeed === true)) {
       if (!this.deps.queue || released) return { ok: false, error: 'This conversation is still replying.' };
       // A card the model is parked on would hold this message behind the turn forever; the new
@@ -3308,6 +3314,14 @@ export class ChatService {
       };
     }
 
+    if (this.abandoning.has(targetId)) {
+      return {
+        ok: false,
+        reason: 'unavailable',
+        message: 'That conversation could not start and is being cleaned up.',
+      };
+    }
+
     const budget = this.turnRelay.get(from.id) ?? { hops: 0, sends: 0 };
     if (budget.hops >= MAX_MESSAGE_HOPS) {
       return {
@@ -3411,8 +3425,9 @@ export class ChatService {
    *
    * Resolves as soon as the session exists. Its worktree and seed turn follow in the background
    * (launchSpawned): cutting a worktree means a fetch and a checkout, seconds the row used to
-   * wait on. A failure there removes the session again and `onFailed` hears why. The slot passes
-   * to `spawnWatch` before this returns, which releases it when the seeded run ends.
+   * wait on. A failure removes an untouched session and calls `onFailed`; accepted queued input
+   * instead keeps its session for retry. The slot passes to `spawnWatch` before this returns,
+   * which releases it when the seeded run ends.
    */
   private async spawnSession(
     parent: ChatSession,
@@ -3572,12 +3587,8 @@ export class ChatService {
   }
 
   /**
-   * Remove a spawned session that never got going, and say so where both readers will see it.
-   *
-   * Removed rather than kept with an error and a retry: a started session that could not be made
-   * then leaves nothing behind, exactly as when the worktree was cut before the row existed. The
-   * retry already exists one step back - the card comes back as pending, the model can call
-   * session_spawn again - so a second, persisted error state would only duplicate it.
+   * Remove an empty failed spawn, or retain accepted input and its files for retry.
+   * Only a removed child reopens its suggestion: a retained child is the retry destination.
    */
   private async abandonSpawn(
     parentId: string,
@@ -3585,19 +3596,71 @@ export class ChatService {
     reason: string,
     onFailed?: (message: string) => Promise<void>
   ): Promise<void> {
-    this.spawnWatch.delete(child.id);
-    // Deleted by the user while it was preparing: that was their call, not a failure to report.
-    if (!(await this.deps.store.get(child.id))) return;
-    await this.deleteSession(child.id);
-    this.deps.logger.warn(`CHAT: removed ${child.id}, which could not start: ${reason}`);
-    this.emit({ type: 'spawn-failed', sessionId: parentId, title: child.title, message: reason });
-    await onFailed?.(reason);
-    await this.deliverChildReport(parentId, {
-      content:
-        `The session you started, "${child.title}" (${child.id}), could not start and was removed: ${reason} ` +
-        'Nothing is running for it. Start it again, or do the work in this conversation.',
-      display: `The session "${child.title}" could not start and was removed. ${reason}`,
-    });
+    this.abandoning.add(child.id);
+    try {
+      this.spawnWatch.delete(child.id);
+      // Deleted by the user while it was preparing: that was their call, not a failure to report.
+      const stored = await this.deps.store.get(child.id);
+      if (!stored) return;
+      const pending = this.deps.queue?.list(child.id) ?? [];
+      const retained = pending.some(message => !message.automatic);
+      if (retained) {
+        // Accepted input belongs to the user. Keep its session and attachment bytes rather
+        // than treating an automatic startup failure as a deliberate conversation deletion.
+        const seed: ChatQueuedMessage[] = stored.messages.some(message => message.role === 'user' && !message.system)
+          ? []
+          : [
+              {
+                id: randomUUID(),
+                sessionId: child.id,
+                text: stored.origin?.seedPrompt ?? '',
+                queuedAt: new Date().toISOString(),
+              },
+            ];
+        // Queue return events only reach an open composer. Save an explicit unsent copy as
+        // well, so switching away before startup fails cannot lose the task or its files.
+        for (const message of [...seed, ...pending.filter(entry => !entry.relay && !entry.automatic)]) {
+          const recovery: ChatMessage = {
+            id: randomUUID(),
+            role: 'user',
+            system: true,
+            content: `Startup failed before this queued task could run. Unsent input saved for retry:\n\n${message.text}`,
+            display: `Unsent input saved after startup failed:\n\n${message.text}`,
+            createdAt: new Date().toISOString(),
+            ...(message.attachments?.length ? { attachments: message.attachments } : {}),
+          };
+          const recovered = await this.deps.store.appendMessage(child.id, recovery);
+          if (!recovered) return; // A deliberate deletion during recovery wins.
+          this.emit({ type: 'message', sessionId: child.id, message: recovery });
+        }
+        await this.strandRelay(
+          child.id,
+          pending.filter(message => message.relay)
+        );
+        this.deps.queue?.giveBack(child.id, seed, 'failed', reason);
+      } else {
+        await this.deleteSession(child.id);
+      }
+      const outcome = retained ? 'was kept with its unsent input saved for retry' : 'was removed';
+      this.deps.logger.warn(`CHAT: ${child.id} could not start and ${outcome}: ${reason}`);
+      this.emit({
+        type: 'spawn-failed',
+        sessionId: parentId,
+        title: child.title,
+        message: `${reason} The conversation ${outcome}.`,
+      });
+      if (!retained) await onFailed?.(reason);
+      await this.deliverChildReport(parentId, {
+        content:
+          `The session you started, "${child.title}" (${child.id}), could not start and ${outcome}: ${reason} ` +
+          (retained
+            ? 'Nothing is running for it. Retry in that conversation.'
+            : 'Nothing is running for it. Start it again, or do the work in this conversation.'),
+        display: `The session "${child.title}" could not start and ${outcome}. ${reason}`,
+      });
+    } finally {
+      this.abandoning.delete(child.id);
+    }
   }
 
   /**
