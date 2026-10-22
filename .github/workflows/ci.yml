@@ -60,8 +60,8 @@ jobs:
   # three gating jobs below (typecheck, lint, test) each restore this artifact
   # instead of rebuilding, then run in parallel — cutting wall clock from the
   # old sequential ~14 min (typecheck + lint + test in one runner) to ~max of
-  # the three legs (~10 min). The repo-boundary checks live here because they
-  # only need the checked-out source.
+  # the three legs (~10 min). The repo-boundary checks run beside it in
+  # `repo-guards`, not before the build, so they stay off the path every test leg waits on.
   core-build:
     needs: changes
     if: needs.changes.outputs.deployable == 'true'
@@ -73,6 +73,81 @@ jobs:
 
     outputs:
       core-content-hash: ${{ steps.core-hash.outputs.content_hash }}
+
+    steps:
+      # Shallow: the content hash reads only HEAD's tree. History is for repo-guards' ASCII checks.
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Calculate core packages content hash
+        id: core-hash
+        run: |
+          TREE_HASH_B4M=$(git ls-tree -r HEAD b4m-core packages/database packages/sdk | awk '{print $3}' | sort | md5sum | awk '{print $1}')
+          CONFIG_HASH=$(git ls-tree HEAD package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.json 2>/dev/null | awk '{print $3}' | sort | md5sum | awk '{print $1}')
+          CONTENT_HASH=$(echo "${TREE_HASH_B4M}${CONFIG_HASH}" | md5sum | awk '{print $1}')
+          echo "content_hash=$CONTENT_HASH" >> $GITHUB_OUTPUT
+          echo "Core packages content hash: $CONTENT_HASH"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v5
+
+      - name: Cache pnpm dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.pnpm-store
+            node_modules
+            */*/node_modules
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --recursive
+
+      - name: Build bike4mind core packages
+        run: pnpm core:build
+
+      - name: Upload core build artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: core-build-${{ steps.core-hash.outputs.content_hash }}
+          path: |
+            b4m-core/*/dist
+            packages/database/dist
+            packages/sdk/dist
+          # Intra-run handoff only: the jobs that consume this all `needs:
+          # core-build`, so it is dead weight the moment the run ends. It was on
+          # 7 days, which at ~1.8 GiB/day of CI artifacts overran the org's 2 GB
+          # Actions+Packages storage pool on 2026-07-25 and blocked EVERY deploy
+          # (staging, previews and production promotion) with "Failed to
+          # CreateArtifact: Artifact storage quota has been hit" for four days.
+          # Storage is billed regardless of repo visibility - public repos get
+          # free minutes, not free storage. Same content hash re-uploads once per
+          # run anyway, so this is not a cross-run cache and 1 day costs nothing.
+          retention-days: 1
+          if-no-files-found: error
+
+  # Repo-boundary and hygiene checks that need only the checked-out source (plus the runner's own
+  # bash, python3 and node). They ran inside core-build ahead of the build until it became clear
+  # they put ~40s (mostly the account-ID scan) in front of every test leg; here they run in
+  # parallel and still gate merges through `CI Complete`.
+  repo-guards:
+    needs: changes
+    if: needs.changes.outputs.deployable == 'true'
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    name: Repo Guards
+    timeout-minutes: 10
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout code
@@ -169,60 +244,6 @@ jobs:
           else
             echo "check-export-ignore.sh absent (post-cut snapshot) — skipping"
           fi
-
-      - name: Calculate core packages content hash
-        id: core-hash
-        run: |
-          TREE_HASH_B4M=$(git ls-tree -r HEAD b4m-core packages/database packages/sdk | awk '{print $3}' | sort | md5sum | awk '{print $1}')
-          CONFIG_HASH=$(git ls-tree HEAD package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.json 2>/dev/null | awk '{print $3}' | sort | md5sum | awk '{print $1}')
-          CONTENT_HASH=$(echo "${TREE_HASH_B4M}${CONFIG_HASH}" | md5sum | awk '{print $1}')
-          echo "content_hash=$CONTENT_HASH" >> $GITHUB_OUTPUT
-          echo "Core packages content hash: $CONTENT_HASH"
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v5
-
-      - name: Cache pnpm dependencies
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.pnpm-store
-            node_modules
-            */*/node_modules
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile --recursive
-
-      - name: Build bike4mind core packages
-        run: pnpm core:build
-
-      - name: Upload core build artifacts
-        uses: actions/upload-artifact@v6
-        with:
-          name: core-build-${{ steps.core-hash.outputs.content_hash }}
-          path: |
-            b4m-core/*/dist
-            packages/database/dist
-            packages/sdk/dist
-          # Intra-run handoff only: the jobs that consume this all `needs:
-          # core-build`, so it is dead weight the moment the run ends. It was on
-          # 7 days, which at ~1.8 GiB/day of CI artifacts overran the org's 2 GB
-          # Actions+Packages storage pool on 2026-07-25 and blocked EVERY deploy
-          # (staging, previews and production promotion) with "Failed to
-          # CreateArtifact: Artifact storage quota has been hit" for four days.
-          # Storage is billed regardless of repo visibility - public repos get
-          # free minutes, not free storage. Same content hash re-uploads once per
-          # run anyway, so this is not a cross-run cache and 1 day costs nothing.
-          retention-days: 1
-          if-no-files-found: error
 
   typecheck:
     needs: core-build
@@ -444,13 +465,13 @@ jobs:
   #     nothing runs twice and nothing is dropped.
   #   - services: by far the heaviest remaining package (test-file count and
   #     Mongo-backed setup cost), alone so it doesn't drag down a shared bucket.
-  #   - cli-slack, data: hand-grouped buckets of the next-heaviest packages. Their
+  #   - cli-desktop-workers, data: hand-grouped buckets of the next-heaviest packages. Their
   #     packages run one at a time (see the workspace-concurrency note on the test
   #     step), each with the whole runner's worker pool.
   #   - misc: a NEGATION catch-all (every non-client package minus the ones
   #     explicitly placed above) instead of an explicit include list. This makes
   #     bucket coverage complete by construction: a package with a `test` script
-  #     that isn't named in services/cli-slack/data always lands in misc, so it
+  #     that isn't named in services/cli-desktop-workers/data always lands in misc, so it
   #     can never be silently dropped from the matrix. Moving a package into one
   #     of the named buckets requires adding it there AND excluding it here, or it
   #     will run twice; there's no automated guard against that, so update both
@@ -500,18 +521,31 @@ jobs:
           # IGNORED and the leg runs the whole suite - measured, it is not a theory. Nothing
           # errors, so all three legs would quietly do the full suite at 3x the cost. Keep the
           # args bare. SHARD_SOFT_BUDGET_SECONDS above is the backstop if this regresses.
+          #
+          # `mongod: 'skip'` and `sst: 'skip'` drop setup the unit lane never uses, on the legs that
+          # are the workflow's critical path: its real-Mongo suites are all `*.e2e.test.ts` (in the
+          # integration lane, enforced by apps/client/__tests__/mongoTestTimeoutBudget.test.ts), and
+          # vitest neither typechecks nor reads the generated SST types (`sst` is mocked in
+          # apps/client/vitest.setup.ts). Together ~45s per leg, mostly the mongod cache's restore
+          # and post-job save. Unset on every other leg, which keeps the full setup.
           - name: client 1/3
             filter: '--filter @bike4mind/client'
             workers: ''
             args: '--shard=1/3'
+            mongod: 'skip'
+            sst: 'skip'
           - name: client 2/3
             filter: '--filter @bike4mind/client'
             workers: ''
             args: '--shard=2/3'
+            mongod: 'skip'
+            sst: 'skip'
           - name: client 3/3
             filter: '--filter @bike4mind/client'
             workers: ''
             args: '--shard=3/3'
+            mongod: 'skip'
+            sst: 'skip'
           # The client package's ~60 real-Mongo suites (`*.e2e.test.ts`), split off
           # the shard above. Each boots a mongod, and inline they pushed that job
           # past `timeout-minutes` even on runs where the suite itself passed - the
@@ -554,19 +588,24 @@ jobs:
             workers: ''
           # The buckets below hold several packages, but the step runs them one at a time, so
           # each still owns the runner and needs no per-package cap.
-          - name: cli-slack
-            filter: '--filter @bike4mind/cli --filter @bike4mind/slack --filter @bike4mind/voice'
+          # apps/desktop and apps/workers (~145s and ~90s) ride here rather than in `misc`, which
+          # otherwise ran ~10 minutes serially and would be the matrix's longest leg once the client
+          # shards got faster. This leg was ~90s on its own.
+          - name: cli-desktop-workers
+            filter: '--filter @bike4mind/cli --filter @bike4mind/slack --filter @bike4mind/voice --filter @bike4mind/desktop --filter @bike4mind/workers'
             workers: ''
           - name: data
             filter: '--filter @bike4mind/common --filter @bike4mind/database --filter @bike4mind/db-core --filter @bike4mind/core'
             workers: ''
+            # packages/database's ~160 suites each boot a mongod; see TMPDIR on the test step.
+            tmpfs: 'true'
           # The catch-all: every workspace package the buckets above do not name. A `filter`
           # value reaches the step as an env var and is split on whitespace into argv, so the
           # tokens here must be BARE. Quotes around a pattern are not shell quoting at this
           # point, they are characters inside the argument pnpm receives, and pnpm then matches
           # nothing. `!` needs no quoting either: history expansion is interactive-only.
           - name: misc
-            filter: '--filter !@bike4mind/client --filter !@bike4mind/services --filter !@bike4mind/cli --filter !@bike4mind/slack --filter !@bike4mind/voice --filter !@bike4mind/common --filter !@bike4mind/database --filter !@bike4mind/db-core --filter !@bike4mind/core'
+            filter: '--filter !@bike4mind/client --filter !@bike4mind/services --filter !@bike4mind/cli --filter !@bike4mind/slack --filter !@bike4mind/voice --filter !@bike4mind/desktop --filter !@bike4mind/workers --filter !@bike4mind/common --filter !@bike4mind/database --filter !@bike4mind/db-core --filter !@bike4mind/core'
             workers: ''
 
     steps:
@@ -625,6 +664,7 @@ jobs:
         run: pnpm --filter @bike4mind/client run codegen
 
       - name: Generate SST types
+        if: matrix.shard.sst != 'skip'
         run: bash scripts/ci-sst-install.sh
         env:
           CI: 'true'
@@ -633,6 +673,7 @@ jobs:
       # no-op restore. restore-keys lets a lockfile bump reuse the prior binary (the pre-warm
       # then tops up any new version) instead of a cold download every time.
       - name: Cache mongodb-memory-server binary
+        if: matrix.shard.mongod != 'skip'
         uses: actions/cache@v5
         with:
           path: ~/.cache/mongodb-binaries
@@ -646,6 +687,7 @@ jobs:
       # the #1 flake in #1098. Fail-soft: tests still download on demand if this misses. Uses
       # the same package + default version as createMongoServer, so the same binary is cached.
       - name: Pre-warm mongodb-memory-server binary
+        if: matrix.shard.mongod != 'skip'
         continue-on-error: true
         run: >-
           pnpm --filter @bike4mind/database exec node -e
@@ -671,9 +713,10 @@ jobs:
           # ~200 collections plus their indexes on connect, which is fsync-bound: on a slow runner
           # disk that phase alone ran 5x long while CPU-bound import time did not move, and the
           # lane's timeouts followed it. mongodb-memory-server puts dbPath under os.tmpdir().
-          # Scoped to this lane because unit suites write and exec scripts under the tmpdir, and
-          # an empty value falls back to /tmp.
-          TMPDIR: ${{ matrix.shard.script == 'test:integration' && '/dev/shm' || '' }}
+          # Scoped to these legs (the integration lanes plus `tmpfs: 'true'`, the data leg's
+          # packages/database suites) because unit suites write and exec scripts under the tmpdir,
+          # and an empty value falls back to /tmp.
+          TMPDIR: ${{ (matrix.shard.script == 'test:integration' || matrix.shard.tmpfs == 'true') && '/dev/shm' || '' }}
           SHARD_NAME: ${{ matrix.shard.name }}
           SHARD_FILTER: ${{ matrix.shard.filter }}
           SHARD_SCRIPT: ${{ matrix.shard.script || 'test' }}
@@ -1101,10 +1144,10 @@ jobs:
   # of this repo to the internal deployer, so there is no deploy to gate; this
   # job re-exposes one stable check that turns red if any CI leg failed.
   #
-  # Red when ANY CI leg (changes/core-build/typecheck/lint/test/cli-e2e/help-docs/
+  # Red when ANY CI leg (changes/core-build/repo-guards/typecheck/lint/test/cli-e2e/help-docs/
   # verify-docs-build/docs-scan-gate/published-dts)
   # genuinely FAILED. Green when everything succeeded OR was legitimately
-  # skipped (a non-deployable change skips core-build..cli-e2e, and a skipped
+  # skipped (a non-deployable change skips core-build..cli-e2e and repo-guards, and a skipped
   # required check counts as passing). This surfaces typecheck/lint/cli-e2e
   # failures (none of which are individually required checks) through the one
   # required "CI Complete" check instead of letting them pass silently.
@@ -1119,7 +1162,19 @@ jobs:
   # ============================================================
   ci-complete:
     name: CI Complete
-    needs: [changes, core-build, typecheck, lint, openapi, test, cli-e2e, help-docs, verify-docs-build, docs-scan-gate, published-dts]
+    needs:
+      - changes
+      - core-build
+      - repo-guards
+      - typecheck
+      - lint
+      - openapi
+      - test
+      - cli-e2e
+      - help-docs
+      - verify-docs-build
+      - docs-scan-gate
+      - published-dts
     if: ${{ !cancelled() }}
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     steps:
@@ -1127,6 +1182,7 @@ jobs:
         env:
           CHANGES: ${{ needs.changes.result }}
           CORE_BUILD: ${{ needs.core-build.result }}
+          REPO_GUARDS: ${{ needs.repo-guards.result }}
           TYPECHECK: ${{ needs.typecheck.result }}
           LINT: ${{ needs.lint.result }}
           OPENAPI: ${{ needs.openapi.result }}
@@ -1137,14 +1193,13 @@ jobs:
           DOCS_SCAN: ${{ needs.docs-scan-gate.result }}
           PUBLISHED_DTS: ${{ needs.published-dts.result }}
         run: |
-          echo "results: changes=$CHANGES core-build=$CORE_BUILD typecheck=$TYPECHECK lint=$LINT openapi=$OPENAPI test=$TEST cli-e2e=$CLI_E2E help-docs=$HELP_DOCS verify-docs-build=$VERIFY_DOCS docs-scan=$DOCS_SCAN published-dts=$PUBLISHED_DTS"
+          echo "results: changes=$CHANGES core-build=$CORE_BUILD repo-guards=$REPO_GUARDS typecheck=$TYPECHECK lint=$LINT openapi=$OPENAPI test=$TEST cli-e2e=$CLI_E2E help-docs=$HELP_DOCS verify-docs-build=$VERIFY_DOCS docs-scan=$DOCS_SCAN published-dts=$PUBLISHED_DTS"
           # A CI leg that genuinely failed flips the check red. Skipped
           # (non-deployable change) is treated as passing.
-          for r in "$CHANGES" "$CORE_BUILD" "$TYPECHECK" "$LINT" "$OPENAPI" "$TEST" "$CLI_E2E" "$HELP_DOCS" "$VERIFY_DOCS" "$DOCS_SCAN" "$PUBLISHED_DTS"; do
+          for r in "$CHANGES" "$CORE_BUILD" "$REPO_GUARDS" "$TYPECHECK" "$LINT" "$OPENAPI" "$TEST" "$CLI_E2E" "$HELP_DOCS" "$VERIFY_DOCS" "$DOCS_SCAN" "$PUBLISHED_DTS"; do
             if [ "$r" = "failure" ]; then
               echo "::error::A CI gate failed; failing the required check."
               exit 1
             fi
           done
           echo "CI succeeded or was legitimately skipped."
-
