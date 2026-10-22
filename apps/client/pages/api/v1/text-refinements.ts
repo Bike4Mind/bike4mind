@@ -28,7 +28,8 @@ const handler = nextRouteForContract(createTextRefinementContract).post(async (r
     return res.status(502).json({ error: 'Text refinement failed' });
   }
 
-  // Never answer 200 with no body text: the legacy route can, a typed public client cannot parse it.
+  // The helper throws on an empty refinement, so this only catches one cached before that
+  // change. A typed public client cannot parse an empty 200.
   if (!refined) {
     return res.status(502).json({ error: 'The model returned no refined text' });
   }
