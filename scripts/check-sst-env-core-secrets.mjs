@@ -20,11 +20,24 @@ const git = args => execFileSync('git', args, { encoding: 'utf8' });
 // next regenerated. Remove an entry once the file drops it.
 const RETIRED_CORE_SECRETS = ['PDFJS_EXPRESS_VIEWER_KEY'];
 
-// Same pattern generate-premium-glue.mjs uses to read the core resource names.
+// Consume comments and string/template literals as whole tokens, so constructor-shaped
+// examples in prose or a string cannot authorize a secret declaration.
+const secretDeclarationTokens =
+  /\/\/[^\r\n]*|\/\*[\s\S]*?\*\/|'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|`(?:\\.|[^`\\])*`|new\s+sst\.Secret\s*\(\s*'([A-Za-z0-9_]+)'/g;
 const coreSecrets = new Set(RETIRED_CORE_SECRETS);
-for (const file of readdirSync('infra').filter(f => f.endsWith('.ts'))) {
-  for (const m of readFileSync(join('infra', file), 'utf8').matchAll(/new sst\.Secret\(\s*'([A-Za-z0-9_]+)'/g)) {
-    coreSecrets.add(m[1]);
+const coreFiles = staged
+  ? git(['ls-files', '--cached', '--', 'infra'])
+      .split('\n')
+      .filter(file => /^infra\/[^/]+\.ts$/.test(file))
+  : readdirSync('infra')
+      .filter(file => file.endsWith('.ts'))
+      .map(file => join('infra', file));
+for (const file of coreFiles) {
+  // Both inventories must describe the same snapshot: an unstaged constructor must
+  // never authorize a secret name that the pending commit would otherwise leak.
+  const source = staged ? git(['show', `:${file}`]) : readFileSync(file, 'utf8');
+  for (const match of source.matchAll(secretDeclarationTokens)) {
+    if (match[1]) coreSecrets.add(match[1]);
   }
 }
 
