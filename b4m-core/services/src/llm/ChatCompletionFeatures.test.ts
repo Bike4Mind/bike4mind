@@ -1283,6 +1283,10 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       expect(annDb.vectorSearch).not.toHaveBeenCalled();
       expect(content).not.toContain(targetHeading);
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('selected alphabetically by file name'));
+      expect(recordForcedRetrievalCutMetricsMock).toHaveBeenCalledWith(
+        { selection: 'fileName', reason: 'not-queryable', annPickMs: null },
+        expect.anything()
+      );
     });
 
     it('falls back, and reports the by-name cut, when a queryable index returns no hits', async () => {
@@ -1296,6 +1300,10 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('vector index returned no hits'));
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('selected alphabetically by file name'));
       expect((quest.promptMeta as { retrievalCoverage?: { partial: boolean } }).retrievalCoverage?.partial).toBe(true);
+      expect(recordForcedRetrievalCutMetricsMock).toHaveBeenCalledWith(
+        { selection: 'fileName', reason: 'no-hits', annPickMs: expect.any(Number) },
+        expect.anything()
+      );
     });
 
     it('applies no score floor: a weak hit still ranks its file into the pick', async () => {
@@ -1548,6 +1556,10 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       expect(scanned.size).toBe(100);
       expect([...scanned].filter(id => id.startsWith('a'))).toHaveLength(0);
       expect([...scanned].filter(id => id.startsWith('n'))).toHaveLength(10);
+      expect(recordForcedRetrievalCutMetricsMock).toHaveBeenCalledWith(
+        { selection: 'fileName', reason: 'relevance-unavailable', annPickMs: null },
+        expect.anything()
+      );
     });
 
     it('keeps library files in the fair share of a multi-lake session that never asked for "+ My files"', async () => {
@@ -1628,6 +1640,10 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       expect(annDb.vectorSearch).not.toHaveBeenCalled();
       expect(content).not.toContain(targetHeading);
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('no candidate file is vector-index ready'));
+      expect(recordForcedRetrievalCutMetricsMock).toHaveBeenCalledWith(
+        { selection: 'fileName', reason: 'no-ready-file', annPickMs: null },
+        expect.anything()
+      );
     });
 
     it('still reports the by-name cut when the listing the relevance pick ranks overflowed', async () => {

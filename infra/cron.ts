@@ -372,8 +372,8 @@ const adminAuditAlertsCron = runsScheduledJobs
     })
   : undefined;
 
-// Data Lake Vector Index Keep-Warm - one wide $vectorSearch on the default embedding model's Atlas
-// index, so forced retrieval's 3s ANN candidate pick does not hit a cold index after an idle stretch
+// Data Lake Vector Index Keep-Warm - one wide $vectorSearch per queryable per-model Atlas index, so
+// forced retrieval's 3s ANN candidate pick does not hit a cold index after an idle stretch
 // and fall back to picking files by name. Skips itself while EnableDataLakeVectorSearch is off.
 // No self-host twin: self-host retrieval runs on OpenSearch.
 const dataLakeVectorIndexKeepWarmCron = runsScheduledJobs

@@ -2578,7 +2578,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         this.logger.warn(
           `🔒 Forced retrieval: ${embeddingModel} vector index not queryable - picking candidates by name`
         );
-        return { ranked: null, reason: 'not-queryable', annPickMs: elapsedMs() };
+        // Only the status read ran, so there is no query time to report.
+        return { ranked: null, reason: 'not-queryable', annPickMs: null };
       }
       // An empty answer is not a ranking: ranking on it would return the input (by-name) order
       // while reporting 'relevance', hiding the cut. Seen in the mongot lag window, where the
