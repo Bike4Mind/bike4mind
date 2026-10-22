@@ -333,8 +333,11 @@ export interface PremiumEntitlementGrants {
  * constants/apiKeyScopes.ts. Literal data, so the client bundle never imports overlay code. The value
  * is `<resource>:<action>`; the `admin`, `cc-bridge`, `embed` and `datalake` resources are reserved.
  * A contributed scope is never confined and is always self-mintable: the contract has no field for
- * either. With `requiredEntitlement` set, the scope is offered only to a user holding that key. Two
- * overlays giving one value different rows fail the build; an identical repeat collapses.
+ * either. With `requiredEntitlement` set, the scope is offered to a user holding that key, and to
+ * every admin and developer-tagged user regardless (the bypass in isApiKeyScopeOffered, wider than
+ * requestHasEntitlement's admin-only one), so a route serving a paid feature must also check the
+ * entitlement itself. Two overlays giving one value different rows fail the build; an identical
+ * repeat collapses.
  */
 export interface PremiumApiKeyScope {
   readonly value: string;
