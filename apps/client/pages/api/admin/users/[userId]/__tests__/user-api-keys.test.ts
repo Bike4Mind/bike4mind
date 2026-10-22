@@ -129,9 +129,8 @@ describe('GET /api/admin/users/:userId/user-api-keys', () => {
     await promise;
 
     expect(res._getStatusCode()).toBe(200);
-    // The body is a passthrough of what the service returned; keyHash
-    // redaction is the model toJSON transform's job (pinned in
-    // UserApiKeyModel.embed.test.ts), not this route's.
+    // Listed fields pass through unchanged; the secret fields are the schema's job to withhold
+    // (see the strip tests below).
     expect(res._getJSONData()).toEqual({
       apiKeys: keys,
       liveUsage: { k1: { minute: 60, day: 300 }, k2: { minute: 0, day: 0 } },
@@ -143,5 +142,35 @@ describe('GET /api/admin/users/:userId/user-api-keys', () => {
     );
     expect(mockGetUsage).toHaveBeenCalledWith('k1');
     expect(mockGetUsage).toHaveBeenCalledWith('k2');
+  });
+  it('strips the secret and undeclared fields from a key', async () => {
+    const leaky = {
+      id: 'k1',
+      name: 'wedged',
+      status: 'active',
+      keyHash: '$2b$bcrypt',
+      keyDigest: 'sha256hex',
+      callbackSigningSecret: 'enc:secret',
+      somethingUndeclared: 'x',
+    };
+    mockUserFind.mockResolvedValue({ id: 'u1' });
+    mockListKeys.mockResolvedValue([leaky]);
+
+    const { res, promise } = run({ user: ADMIN });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().apiKeys).toEqual([{ id: 'k1', name: 'wedged', status: 'active' }]);
+  });
+
+  it('serializes hydrated documents through toJSON before the schema runs', async () => {
+    const hydrated = { id: 'k1', toJSON: () => ({ id: 'k1', name: 'from-toJSON', keyHash: '$2b$bcrypt' }) };
+    mockUserFind.mockResolvedValue({ id: 'u1' });
+    mockListKeys.mockResolvedValue([hydrated]);
+
+    const { res, promise } = run({ user: ADMIN });
+    await promise;
+
+    expect(res._getJSONData().apiKeys).toEqual([{ id: 'k1', name: 'from-toJSON' }]);
   });
 });
