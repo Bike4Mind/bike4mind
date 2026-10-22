@@ -26,7 +26,10 @@ describe('startQuestHeartbeat', () => {
     const quest = { id: 'q1', status: 'running' };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- structural test double for the repo
     const stop = await startQuestHeartbeat(db as any, quest, makeLogger(), 'test');
-    expect(db.quests.updateMany).toHaveBeenCalledWith({ _id: 'q1', status: { $ne: 'done' } }, { status: 'running' });
+    expect(db.quests.updateMany).toHaveBeenCalledWith(
+      { _id: 'q1', status: { $nin: ['done', 'stopped'] } },
+      { status: 'running' }
+    );
     stop();
   });
 

@@ -73,7 +73,8 @@ vi.mock('../creditService', async importOriginal => {
 
 vi.mock('./imageModerationGate', () => ({ moderateImageOrThrow: vi.fn(async () => undefined) }));
 
-vi.mock('./questHeartbeat', () => ({
+vi.mock('./questHeartbeat', async importOriginal => ({
+  ...(await importOriginal<typeof import('./questHeartbeat')>()),
   startQuestHeartbeat: vi.fn().mockResolvedValue(() => undefined),
 }));
 
@@ -2009,9 +2010,9 @@ describe('ImageGenerationService.process (terminal state on early failure)', () 
     );
   });
 
-  it('does nothing when the quest is already done (duplicate delivery)', async () => {
+  it.each(['done', 'stopped'])('does nothing when the quest is already %s', async status => {
     const users = vi.fn();
-    const { service, update } = makeService('done', users);
+    const { service, update } = makeService(status, users);
 
     await service.process({ body, logger: silentLogger });
 

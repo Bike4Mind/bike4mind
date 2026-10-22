@@ -13,6 +13,12 @@ export const QUEST_HEARTBEAT_INTERVAL_MS = 10_000;
 // counter resets on the next successful write.
 const HEARTBEAT_FAILURE_ESCALATE_AFTER = 3;
 
+// Terminal quest statuses; must stay in sync with updateIfUnfinished (QuestTypes.ts).
+export const SETTLED_QUEST_STATUSES = ['done', 'stopped'] as const;
+
+export const isSettledQuestStatus = (status: string | undefined): boolean =>
+  (SETTLED_QUEST_STATUSES as readonly (string | undefined)[]).includes(status);
+
 type QuestHeartbeatDb = { quests: Pick<IChatHistoryItemRepository, 'update' | 'updateMany'> };
 type QuestHeartbeatQuest = Pick<IChatHistoryItemDocument, 'id' | 'status'>;
 
@@ -41,7 +47,7 @@ export async function startQuestHeartbeat(
   tag: string
 ): Promise<() => void> {
   // Conditional so a redelivered job cannot flip a settled quest back to 'running'.
-  await db.quests.updateMany({ _id: quest.id, status: { $ne: 'done' } }, { status: 'running' });
+  await db.quests.updateMany({ _id: quest.id, status: { $nin: [...SETTLED_QUEST_STATUSES] } }, { status: 'running' });
 
   let consecutiveFailures = 0;
   const interval = setInterval(() => {

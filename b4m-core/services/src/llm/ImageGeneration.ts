@@ -96,7 +96,7 @@ import { CostInput } from './imageCostCalculator/types';
 import { deductCreditsWithOrgSupport, isMemberCreditCapExceeded } from '../creditService';
 import { shouldSummarizeSession } from './ChatCompletionFeatures';
 import { moderateImageOrThrow } from './imageModerationGate';
-import { startQuestHeartbeat } from './questHeartbeat';
+import { isSettledQuestStatus, startQuestHeartbeat } from './questHeartbeat';
 
 /**
  * The tier a GPT-Image request is both billed at and rendered at: standard -> medium,
@@ -843,8 +843,8 @@ export class ImageGenerationService {
     const quest = await this.db.quests.findById(questId);
     if (!quest) throw new NotFoundError('Quest not found');
     // A duplicate delivery of an already-settled job must not flip it back to running.
-    if (quest.status === 'done') {
-      logger.warn('Image generation skipped: quest already done', { questId });
+    if (isSettledQuestStatus(quest.status)) {
+      logger.warn('Image generation skipped: quest already settled', { questId, status: quest.status });
       return;
     }
     quest.status = 'running';
