@@ -2,7 +2,12 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { connectTestDB, disconnectTestDB, cleanupTestDB } from './utils';
 import { CcAgentStatus } from '@bike4mind/common';
-import { HearthPresence, presenceStateForReason, PRESENCE_STATE_RANK } from '../models/hearth/HearthPresenceModel';
+import {
+  HearthPresence,
+  presenceStateForReason,
+  PRESENCE_STALE_AFTER_MS,
+  PRESENCE_STATE_RANK,
+} from '../models/hearth/HearthPresenceModel';
 import { hearthRepository, MAX_ROSTER_ROWS } from '../models/hearth/MongoHearthStore';
 
 describe('Hearth presence projection', () => {
@@ -198,7 +203,11 @@ describe('Hearth presence projection', () => {
       presence(channelId, blockedNew, new Date('2026-07-27T10:00:10Z'), 'agent_needs_input')
     );
 
-    const roster = await hearthRepository.presenceForChannel(USER, channelId);
+    // Pinned a minute after the events so every row is inside the stale window:
+    // this test is about the fresh tier, not about demotion by age.
+    const roster = await hearthRepository.presenceForChannel(USER, channelId, {
+      now: new Date('2026-07-27T10:01:00Z'),
+    });
     // Both blocked actors outrank the more recently seen running and idle rows,
     // AND the permission block outranks the question despite being seen EARLIER -
     // state ranking dominates recency, because a halted session is the thing
@@ -243,6 +252,47 @@ describe('Hearth presence projection', () => {
 
     const roster = await hearthRepository.presenceForChannel(USER, channelId, { now });
     expect(roster.map(r => r.actorId.toString())).toEqual([blocked, idle]);
+  });
+
+  it('keeps the most-blocked session first among fresh rows', async () => {
+    const channel = await hearthRepository.createChannel(USER, 'general');
+    const channelId = channel._id.toString();
+    const [blocked, working] = (
+      await Promise.all(['fresh-blocked', 'fresh-working'].map(n => hearthRepository.ensureActor(USER, 'agent', n)))
+    ).map(a => a._id.toString());
+    const now = new Date('2026-07-27T10:20:00Z');
+
+    await hearthRepository.upsertPresence(
+      presence(channelId, blocked, new Date(now.getTime() - 20_000), 'permission_prompt')
+    );
+    await hearthRepository.upsertPresence(presence(channelId, working, new Date(now.getTime() - 5_000), 'tool_use'));
+
+    const roster = await hearthRepository.presenceForChannel(USER, channelId, { now });
+    // Both fresh, so state rank still decides - freshness only demotes rows
+    // that stopped reporting.
+    expect(roster.map(r => r.actorId.toString())).toEqual([blocked, working]);
+  });
+
+  it('counts a row exactly at the stale window as fresh, one ms older as stale', async () => {
+    const channel = await hearthRepository.createChannel(USER, 'general');
+    const channelId = channel._id.toString();
+    const [atWindow, justPast] = (
+      await Promise.all(['at-window', 'just-past'].map(n => hearthRepository.ensureActor(USER, 'agent', n)))
+    ).map(a => a._id.toString());
+    const now = new Date('2026-07-27T10:20:00Z');
+    const boundary = new Date(now.getTime() - PRESENCE_STALE_AFTER_MS);
+
+    // The boundary row deliberately holds the LOWER-priority state, so it can
+    // only lead while it counts as fresh. If the comparison became inclusive,
+    // both rows would be stale and state rank would put the permission row
+    // first - this assertion is the one that pins the strict `$lt`.
+    await hearthRepository.upsertPresence(presence(channelId, atWindow, boundary, 'tool_use'));
+    await hearthRepository.upsertPresence(
+      presence(channelId, justPast, new Date(boundary.getTime() - 1), 'permission_prompt')
+    );
+
+    const roster = await hearthRepository.presenceForChannel(USER, channelId, { now });
+    expect(roster.map(r => r.actorId.toString())).toEqual([atWindow, justPast]);
   });
 
   it('scopes the roster to the owning user', async () => {

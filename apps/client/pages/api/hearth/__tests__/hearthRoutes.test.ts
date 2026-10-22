@@ -96,10 +96,12 @@ vi.mock('@server/middlewares/requireUser', () => ({ requireUser: vi.fn() }));
 vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: featureGateMock }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: sendToClientMock }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'wss://test' } } }));
-vi.mock('@bike4mind/database', () => ({
+// Real constants (not re-declared literals) so the route is pinned to the same
+// window the roster sort uses; only the repository is faked.
+vi.mock('@bike4mind/database', async importOriginal => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   MAX_PRESENCE_FIELD_LENGTH: 200,
   MAX_ROSTER_ROWS: 200,
-  PRESENCE_STALE_AFTER_MS: 5 * 60 * 1000,
   hearthRepository: {
     store: storeMock,
     getOwnedChannel: getOwnedChannelMock,
@@ -624,7 +626,13 @@ describe('GET /api/hearth/presence', () => {
       reason: 'permission_prompt',
       lastSeen: '2026-07-27T10:00:05.000Z',
     });
-    expect(body.staleAfterMs).toBeGreaterThan(0);
+    // The published hint and the roster sort's window are one value: a local
+    // literal reintroduced in the route would make the panel's dimming and the
+    // server's ordering disagree near the boundary.
+    const { PRESENCE_STALE_AFTER_MS } = await vi.importActual<{ PRESENCE_STALE_AFTER_MS: number }>(
+      '@bike4mind/database'
+    );
+    expect(body.staleAfterMs).toBe(PRESENCE_STALE_AFTER_MS);
   });
 
   it('requires a channelId', async () => {

@@ -22,10 +22,10 @@ const GetPresenceSchema = z.object({
 const presenceRateLimit = rateLimit({ limit: 120, windowMs: 60000 });
 
 /**
- * GET the presence roster for a channel: one row per actor, ordered
- * needs-you-first by the repository. Read-only by construction - it advances no
- * cursor and consumes nothing - so read scope is sufficient and there is no
- * write-scope assertion here.
+ * GET the presence roster for a channel: one row per actor, ordered fresh rows
+ * first and needs-you-first within them by the repository. Read-only by
+ * construction - it advances no cursor and consumes nothing - so read scope is
+ * sufficient and there is no write-scope assertion here.
  */
 const handler = baseApi({
   requiredScopes: [ApiKeyScope.HEARTH_READ, ApiKeyScope.HEARTH_WRITE, ApiKeyScope.ADMIN],
@@ -47,8 +47,9 @@ const handler = baseApi({
       presence: rows.map(row => toWireHearthPresence(row, actors.get(row.actorId.toString()))),
       staleAfterMs: PRESENCE_STALE_AFTER_MS,
       // Published so a full page reads as "capped" rather than "that is everyone".
-      // Rows are ranked before the cap applies, so a truncated roster still leads
-      // with whoever is most blocked on the human.
+      // Rows are ranked before the cap applies, so a truncated roster keeps the
+      // fresh rows - and within them whoever is most blocked on the human. Stale
+      // rows are the first to be dropped.
       maxRows: MAX_ROSTER_ROWS,
     });
   });
