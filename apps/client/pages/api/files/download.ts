@@ -17,9 +17,13 @@ const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(
     const exportable = accessibleBy(req.ability, 'export').ofType(FabFile);
     const knowledges = await FabFile.find(exportable);
     const files: string[] = [];
-    const outputZipPath = path.join(os.tmpdir(), 'knowledges.zip');
+    let tempDir: string | undefined;
 
     try {
+      tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'knowledges-'));
+      const outputZipPath = path.join(tempDir, 'knowledges.zip');
+      let index = 0;
+
       for (const knowledge of knowledges) {
         // Never bundle a held (pending scan) or blocked uploaded image into the
         // export zip - non-images and clean images are unaffected.
@@ -29,10 +33,7 @@ const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(
           fileUrl: knowledge.fileUrl,
           mimeType: knowledge.mimeType,
         });
-        const file = await createTempFile(
-          `${Math.floor(Math.random() * 10000)}_${knowledge.fileName}`,
-          content as string
-        );
+        const file = await createTempFile(`${index++}_${knowledge.fileName}`, content as string, tempDir);
         files.push(file);
       }
 
@@ -46,11 +47,9 @@ const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(
       res.setHeader('Content-Disposition', 'attachment; filename="knowledges.zip"');
       res.status(200).send(zipBuffer);
     } finally {
-      // Clean up temp inputs + output zip on both the success and error paths.
-      for (const file of files) {
-        fs.rmSync(file, { force: true });
+      if (tempDir) {
+        await fs.promises.rm(tempDir, { recursive: true, force: true });
       }
-      fs.rmSync(outputZipPath, { force: true });
     }
   })
 );
