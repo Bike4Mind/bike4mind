@@ -58,6 +58,9 @@ export function isEmbedOriginAllowed(
  * Origin is a non-browser caller and is left to the credential. The opaque literal
  * `null` is denied when the key restricts origins, and otherwise treated as absent.
  * Any other Origin goes through isEmbedOriginAllowed.
+ * `null` is not treated as absent: a browser cannot omit Origin, so the
+ * server-to-server argument does not cover it, and allowing it would let any
+ * page use a restricted key.
  */
 export function resolveEmbedOriginDecision(
   rawOrigin: string | undefined,
