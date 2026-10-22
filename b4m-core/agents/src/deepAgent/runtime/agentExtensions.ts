@@ -138,6 +138,19 @@ interface Stored<T> {
   source: AgentExtensionSource;
 }
 
+// The executor reads these fields straight off the profile, so a contributed build must supply them.
+function isProfileShaped(value: unknown): value is ResolvedOrchestrationProfile {
+  if (value === null || typeof value !== 'object') return false;
+  const p = value as Partial<ResolvedOrchestrationProfile>;
+  return (
+    typeof p.id === 'string' &&
+    Array.isArray(p.allowedTools) &&
+    Array.isArray(p.deniedTools) &&
+    p.maxIterations !== null &&
+    typeof p.maxIterations === 'object'
+  );
+}
+
 export function createAgentExtensionRegistry<TTools, TState>(
   options: { logger?: Pick<AgentExtensionLogger, 'warn'> } = {}
 ): AgentExtensionRegistry<TTools, TState> {
@@ -222,8 +235,9 @@ export function createAgentExtensionRegistry<TTools, TState>(
       const stored = profilesBySurface.get(surface);
       if (!stored) return undefined;
       if (stored.source === 'builtin') return stored.entry.build(ctx);
+      let built: ResolvedOrchestrationProfile | undefined;
       try {
-        return stored.entry.build(ctx) ?? undefined;
+        built = stored.entry.build(ctx);
       } catch (err) {
         ctx.logger.warn(`[agent-extensions] skipped surface profile "${stored.entry.id}": build threw`, {
           id: stored.entry.id,
@@ -231,6 +245,13 @@ export function createAgentExtensionRegistry<TTools, TState>(
         });
         return undefined;
       }
+      if (!isProfileShaped(built)) {
+        ctx.logger.warn(`[agent-extensions] skipped surface profile "${stored.entry.id}": build returned no profile`, {
+          id: stored.entry.id,
+        });
+        return undefined;
+      }
+      return built;
     },
     applyToolMapGuards(tools, ctx) {
       return sortedGuards().reduce((acc, { entry, source }) => {
@@ -245,7 +266,7 @@ export function createAgentExtensionRegistry<TTools, TState>(
           });
           return acc;
         }
-        if (next === null || typeof next !== 'object') {
+        if (next === null || typeof next !== 'object' || typeof (next as { then?: unknown }).then === 'function') {
           ctx.logger.warn(`[agent-extensions] skipped tool-map guard "${entry.id}": apply returned no tool map`, {
             id: entry.id,
           });
