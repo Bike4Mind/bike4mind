@@ -397,8 +397,19 @@ describe('ChatCompletion /api/ai/v1/completions', () => {
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
 
-  it('returns 422 JSON on an invalid request body (no execution)', async () => {
-    const res = await postCompletion({ messages: [] }); // missing required `model`
+  it('returns 400 JSON for an empty conversation (no execution)', async () => {
+    const res = await postCompletion({ model: 'claude-test', messages: [] });
+    expect(res.status).toBe(400);
+    expect(res.headers.get('content-type')).toContain('application/json');
+    const body = (await res.json()) as { error: string; request_id: string };
+    expect(body.error).toMatch(/^Validation error/);
+    expect(body.error).toContain('messages');
+    expect(body.request_id).toBe(res.headers.get('x-request-id'));
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('returns 422 JSON on another invalid request body (no execution)', async () => {
+    const res = await postCompletion({ messages: [{ role: 'user', content: 'hi' }] }); // missing required `model`
     expect(res.status).toBe(422);
     expect(res.headers.get('content-type')).toContain('application/json');
     const body = (await res.json()) as { error: string; request_id: string };
