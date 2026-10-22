@@ -55,13 +55,21 @@ export const identityProviderResponseSchema = z.object({
   oktaConfig: z.object(passthroughShape(OKTA_CONFIG_RESPONSE_FIELDS)).nullish(),
 });
 
-/** The admin list row: the provider plus which credentials are stored (flags, never values). */
+/**
+ * Which credentials an identity provider has stored: flags, never values. The single source for
+ * the repository that computes them and the admin UI that reads them.
+ */
+export const identityProviderSecretPresenceSchema = z.object({
+  decryptionPvk: z.boolean(),
+  privateCert: z.boolean(),
+  clientSecret: z.boolean(),
+});
+
+export type IdentityProviderSecretPresence = z.infer<typeof identityProviderSecretPresenceSchema>;
+
+/** The admin list row: the provider plus which credentials are stored. */
 export const identityProviderListItemResponseSchema = identityProviderResponseSchema.extend({
-  hasSecrets: z.object({
-    decryptionPvk: z.boolean(),
-    privateCert: z.boolean(),
-    clientSecret: z.boolean(),
-  }),
+  hasSecrets: identityProviderSecretPresenceSchema,
 });
 
 export const identityProviderListResponseSchema = z.array(identityProviderListItemResponseSchema);

@@ -1,9 +1,9 @@
 import * as z from 'zod';
 import { passthroughShape } from './responseShape';
 
-// Mirrors the `.select()` in pages/api/admin/users/email-verification.ts. The rows are lean
-// documents, so the key is `_id` rather than `id`; the verification token is not selected and
-// stays out of the response.
+// pages/api/admin/users/email-verification.ts projects exactly these keys, so the query and the
+// contract cannot drift. The rows are lean documents, so the key is `_id` rather than `id`; the
+// verification token is not listed, so it is neither selected nor returned.
 const EMAIL_VERIFICATION_USER_RESPONSE_FIELDS = {
   _id: true,
   username: true,
@@ -19,9 +19,11 @@ const EMAIL_VERIFICATION_USER_RESPONSE_FIELDS = {
   createdAt: true,
 } as const;
 
+export const emailVerificationUserResponseSchema = z.object(passthroughShape(EMAIL_VERIFICATION_USER_RESPONSE_FIELDS));
+
 /** GET /api/admin/users/email-verification */
 export const emailVerificationResponseSchema = z.object({
-  users: z.array(z.object(passthroughShape(EMAIL_VERIFICATION_USER_RESPONSE_FIELDS))),
+  users: z.array(emailVerificationUserResponseSchema),
   pagination: z.object({
     page: z.number(),
     limit: z.number(),

@@ -1,5 +1,10 @@
 import { cacheRepository } from '@bike4mind/database';
-import { UserApiKeyEvents, IUserApiKeyRateLimit, type ApiKeyRateLimitHeader } from '@bike4mind/common';
+import {
+  UserApiKeyEvents,
+  IUserApiKeyRateLimit,
+  type ApiKeyRateLimitHeader,
+  type ApiKeyRateLimitUsage,
+} from '@bike4mind/common';
 import { logEvent } from '@server/utils/analyticsLog';
 
 const MINUTE_IN_MS = 60_000;
@@ -87,14 +92,9 @@ export function buildRateLimitKeys(
   };
 }
 
-export interface RateLimitUsage {
-  minute: number;
-  day: number;
-  /** Epoch seconds when the current minute window ends; undefined when no window is open (count 0). */
-  minuteResetAt?: number;
-  /** Epoch seconds when the current day window ends; undefined when no window is open (count 0). */
-  dayResetAt?: number;
-}
+// Defined by the admin response schema (apiKeyRateLimitUsageSchema), so the producer, the response
+// contract and the admin UI share one shape.
+export type RateLimitUsage = ApiKeyRateLimitUsage;
 
 export interface ResetApiKeyRateLimitResult {
   /**

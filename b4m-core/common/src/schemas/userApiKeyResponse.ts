@@ -44,15 +44,24 @@ const USER_API_KEY_RESPONSE_FIELDS = {
 /** An API key as the admin routes return it: everything but the secret material. */
 export const userApiKeyResponseSchema = z.object(passthroughShape(USER_API_KEY_RESPONSE_FIELDS));
 
-const rateLimitUsageResponseSchema = z.object({
+/**
+ * A key's live minute/day rate-limit counters. The single source for the server's
+ * `RateLimitUsage` and the admin client's response type, so a new field cannot be stripped here
+ * while the producer and the UI both expect it.
+ */
+export const apiKeyRateLimitUsageSchema = z.object({
   minute: z.number(),
   day: z.number(),
+  /** Epoch seconds when the current minute window ends; undefined when no window is open (count 0). */
   minuteResetAt: z.number().optional(),
+  /** Epoch seconds when the current day window ends; undefined when no window is open (count 0). */
   dayResetAt: z.number().optional(),
 });
+
+export type ApiKeyRateLimitUsage = z.infer<typeof apiKeyRateLimitUsageSchema>;
 
 /** GET /api/admin/users/[userId]/user-api-keys */
 export const adminUserApiKeysResponseSchema = z.object({
   apiKeys: z.array(userApiKeyResponseSchema),
-  liveUsage: z.record(z.string(), rateLimitUsageResponseSchema),
+  liveUsage: z.record(z.string(), apiKeyRateLimitUsageSchema),
 });
