@@ -17,6 +17,7 @@ import { OPTI_SURFACE } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import type { IOptiPlanState } from '@bike4mind/database';
 import type { ToolDefinition } from '@bike4mind/services/llm';
+import { premiumAgentExtensions } from '@server/premium-generated/premiumAgentExtensions.generated';
 import { buildOptiOrchestrationProfile } from './agentExecutor.optiProfile';
 import { guardDecomposeOnce } from './agentExecutorUtils/decomposeGuard';
 import { guardPlanCompletion } from './agentExecutorUtils/planCompletionGuard';
@@ -87,7 +88,9 @@ export function createExecutorAgentExtensions(
   return registry;
 }
 
+// The generated module is typed against the registry's default generics; a contribution's guards
+// receive and return this executor's tool map at runtime.
 export const executorAgentExtensions: ExecutorAgentExtensions = createExecutorAgentExtensions(
-  [],
+  premiumAgentExtensions as unknown as readonly ExecutorAgentExtensionContribution[],
   new Logger({ metadata: { handler: 'agentExtensions' } })
 );

@@ -18,8 +18,15 @@ const { order, tag } = vi.hoisted(() => {
 vi.mock('./agentExecutorUtils/decomposeGuard', () => ({ guardDecomposeOnce: vi.fn(tag('decompose-once')) }));
 vi.mock('./agentExecutorUtils/planCompletionGuard', () => ({ guardPlanCompletion: vi.fn(tag('plan-completion')) }));
 vi.mock('./agentExecutorUtils/briefContextInjector', () => ({ injectBriefContext: vi.fn(tag('brief-context')) }));
+vi.mock('@server/premium-generated/premiumAgentExtensions.generated', () => ({
+  premiumAgentExtensions: [{ toolMapGuards: [{ id: 'fixture-guard', priority: 10, apply: tag('fixture-guard') }] }],
+}));
 
-import { createExecutorAgentExtensions, type ExecutorToolMap } from './agentExecutor.agentExtensions';
+import {
+  createExecutorAgentExtensions,
+  executorAgentExtensions,
+  type ExecutorToolMap,
+} from './agentExecutor.agentExtensions';
 import { buildOptiOrchestrationProfile } from './agentExecutor.optiProfile';
 
 const logger = { info: vi.fn(), warn: vi.fn() };
@@ -89,6 +96,15 @@ describe('executor agent extensions', () => {
     expect(warn).toHaveBeenCalledTimes(1);
     registry.applyToolMapGuards({} as ExecutorToolMap, { executionId: 'e', logger, runState: {} as IOptiPlanState });
     expect(order).toEqual(['fixture-guard', 'decompose-once', 'plan-completion', 'brief-context']);
+  });
+
+  it('builds the shared registry from the generated contributions', () => {
+    expect(executorAgentExtensions.list().toolMapGuards).toEqual([
+      { id: 'fixture-guard', priority: 10, source: 'contribution' },
+      { id: 'decompose-once', priority: 100, source: 'builtin' },
+      { id: 'plan-completion', priority: 200, source: 'builtin' },
+      { id: 'brief-context', priority: 300, source: 'builtin' },
+    ]);
   });
 
   it('is frozen after construction', () => {
