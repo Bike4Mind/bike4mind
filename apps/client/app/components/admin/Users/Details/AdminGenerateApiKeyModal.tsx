@@ -42,9 +42,11 @@ const confinedScopeValues = new Set<ApiKeyScopeValue>(CONFINED_API_KEY_SCOPES);
 
 export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminGenerateApiKeyModalProps) {
   // Embed keys are minted through the dedicated embed flow, not this generic modal, so
-  // embed:chat is excluded from the offered scopes. Premium scopes gate on the admin's own
-  // access, which useOptiAccess grants admins whenever the overlay is mounted, so they are
-  // hidden only in builds without the overlay, not per target user.
+  // embed:chat is excluded from the offered scopes. Built-in premium scopes gate on the admin's
+  // own access, which useOptiAccess grants admins whenever the overlay is mounted, so they are
+  // hidden only in builds without the overlay, not per target user. A contributed scope with a
+  // requiredEntitlement is also listed under the admin's bypass, but the mint route checks it
+  // against the TARGET user, so it is marked and left out of Select All.
   const scopeOptions = useGenericApiKeyScopes();
   const [formData, setFormData] = useState<AdminCreateUserApiKeyRequest>({
     name: '',
@@ -108,7 +110,8 @@ export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminG
     });
   };
 
-  const allScopesSelected = scopeOptions.every(s => formData.scopes.includes(s.value));
+  const selectAllScopeOptions = useMemo(() => scopeOptions.filter(s => !s.requiredEntitlement), [scopeOptions]);
+  const allScopesSelected = selectAllScopeOptions.every(s => formData.scopes.includes(s.value));
   const genericSelectedCount = formData.scopes.filter(s => !confinedScopeValues.has(s)).length;
 
   const toggleScope = (value: ApiKeyScopeValue, checked: boolean) => {
@@ -130,11 +133,21 @@ export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminG
       <Typography level="body-xs" color="neutral" sx={{ ml: 4 }}>
         {scope.description}
       </Typography>
+      {scope.requiredEntitlement && (
+        <Typography
+          level="body-xs"
+          color="warning"
+          sx={{ ml: 4 }}
+          data-testid={`admin-generate-key-scope-${scope.value}-entitlement`}
+        >
+          Requires the {scope.requiredEntitlement} entitlement on this account.
+        </Typography>
+      )}
     </Box>
   );
 
   const toggleAllScopes = () => {
-    setFormData({ ...formData, scopes: allScopesSelected ? [] : scopeOptions.map(s => s.value) });
+    setFormData({ ...formData, scopes: allScopesSelected ? [] : selectAllScopeOptions.map(s => s.value) });
   };
 
   if (generatedKey) {

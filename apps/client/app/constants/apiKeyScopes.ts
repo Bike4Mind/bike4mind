@@ -335,7 +335,8 @@ export interface MergeContributedScopesOptions {
 }
 
 // Same list as the codegen's RESERVED_API_KEY_SCOPE_RESOURCES (scripts/generate-premium-glue.mjs),
-// re-checked here so a hand-edited generated file cannot add a scope under them.
+// re-checked here so a hand-edited generated file cannot add a scope under them. Only the checks
+// that guard escalation repeat at load; text length caps and endpoint format are codegen-only.
 const RESERVED_API_KEY_SCOPE_RESOURCES: ReadonlySet<string> = new Set(['admin', 'cc-bridge', 'embed', 'datalake']);
 
 const sameEndpoints = (a: readonly string[], b: readonly string[]) =>

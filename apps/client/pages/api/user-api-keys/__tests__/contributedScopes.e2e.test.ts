@@ -11,11 +11,11 @@ import {
 import { UserApiKey } from '@bike4mind/database/auth';
 
 /**
- * A contributed scope end to end: the codegen output feeds the real merged catalog, the real mint
- * route screens against it through the real access resolver, the real createUserApiKey validates
- * with the route's predicate, the key is saved through the real model, and the minted key is then
- * presented to the real apiKeyAuth gate. The request plumbing, analytics and the minting user's
- * entitlement lookup are stubbed.
+ * A contributed scope end to end: a literal in the generated module's shape feeds the real merged
+ * catalog, the real mint route screens against it through the real access resolver, the real
+ * createUserApiKey validates with the route's predicate, the key is saved through the real model,
+ * and the minted key is then presented to the real apiKeyAuth gate. The request plumbing,
+ * analytics and the minting user's entitlement lookup are stubbed.
  */
 
 const mockRefs = vi.hoisted(() => ({ postHandler: null as null | ((req: any, res: any) => unknown) }));
