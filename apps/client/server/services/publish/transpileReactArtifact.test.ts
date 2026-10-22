@@ -247,11 +247,11 @@ export default function C() {
     expect(validateBundle({ indexHtml, manifest: INDEX_MANIFEST }).valid).toBe(true);
   });
 
-  it('rejects a multi-file (relative import) artifact', async () => {
+  it('rejects a relative import with no sibling files as a missing file', async () => {
     const src = `import Foo from './foo';\nexport default function C() { return <Foo />; }`;
-    await expect(buildReactArtifactBundle({ source: src, title: 'x' })).rejects.toBeInstanceOf(
-      ReactArtifactTranspileError
-    );
+    const err = await buildReactArtifactBundle({ source: src, title: 'x' }).catch(e => e);
+    expect(err).toBeInstanceOf(ReactArtifactTranspileError);
+    expect(err.message).toBe('Cannot resolve "./foo": no artifact file is named "foo". Available files: none.');
   });
 
   it('rejects a component with no default export', async () => {

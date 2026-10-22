@@ -31,6 +31,7 @@ import {
   SLUG_OWNED_BY_OTHER,
   type PublishUser,
 } from '@server/services/publish';
+import { decodeReactPublishUpload } from '@client/app/utils/reactArtifactPublish';
 
 /**
  * POST /api/publish/artifact/finalize - step 3 of the 3-step publish flow.
@@ -66,10 +67,21 @@ const DraftManifestSchema = z.object({
     // transpiles to an inert bundle (issue #21); every other type is wrapped by
     // renderArtifactIndexHtml. Absent means the bytes are already the final page.
     artifactType: ArtifactTypeSchema.optional(),
+    // With artifactType 'react': index.html is a JSON { entry, files } upload of a multi-file app.
+    reactSiblings: z.array(z.string()).optional(),
   }),
   files: z.array(z.object({ path: z.string(), size: z.number(), mimeType: z.string() })),
 });
 type DraftManifest = z.infer<typeof DraftManifestSchema>;
+
+function decodeReactUpload(raw: string, siblings: string[]): { source: string; files: Record<string, string> } {
+  try {
+    const { entry, files } = decodeReactPublishUpload(raw, siblings);
+    return { source: entry, files };
+  } catch (err) {
+    throw new ReactArtifactTranspileError((err as Error).message);
+  }
+}
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -169,14 +181,17 @@ const handler = baseApi().post(async (req, res) => {
 
   // 4a. React artifacts upload raw JSX as index.html; transpile it into a self-contained inert
   // HTML bundle here (issue #21) so the size caps, validateBundle, and promote below all operate
-  // on the FINAL served bytes. Rejectable input (unsupported dep / bad JSX / multi-file) becomes
-  // a clean 422 violation rather than a broken published page.
+  // on the FINAL served bytes. Rejectable input (unsupported dep / bad JSX / unresolvable import)
+  // becomes a clean 422 violation rather than a broken published page.
   if (manifest.source.artifactType === 'react') {
     try {
-      const { indexHtml: bundled } = await buildReactArtifactBundle({
-        source: bufferCache.get('index.html')!.toString('utf-8'),
-        title: manifest.title,
-      });
+      const uploaded = bufferCache.get('index.html')!.toString('utf-8');
+      const siblings = manifest.source.reactSiblings;
+      const { indexHtml: bundled } = await buildReactArtifactBundle(
+        siblings
+          ? { ...decodeReactUpload(uploaded, siblings), title: manifest.title }
+          : { source: uploaded, title: manifest.title }
+      );
       const buf = Buffer.from(bundled, 'utf-8');
       bufferCache.set('index.html', buf);
       indexEntry.size = buf.length;

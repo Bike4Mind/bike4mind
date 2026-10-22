@@ -113,6 +113,7 @@ import { extractMermaidFence } from '@client/app/utils/mermaidFence';
 import { serverStorageLimitMessage } from '@client/app/utils/storageQuota';
 import type { ReactArtifactGroupRole } from '@client/app/utils/reactArtifactGroup';
 import { getInsufficientCreditsMessage } from '@client/app/utils/error';
+import { reactPublishFiles } from '@client/app/utils/reactArtifactPublish';
 
 // Dynamic imports for artifact viewers
 const ReactArtifactViewer = dynamic(() => import('./ReactArtifactViewer'), {
@@ -1197,6 +1198,7 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
         title,
         userId: String(shareUser.id),
         orgId: teamOrg?.id,
+        reactFiles: item.type === 'react' ? reactPublishFiles(item.reactGroup) : null,
       }),
     });
   };

@@ -3,11 +3,17 @@ import { checkHasDefaultExport } from '@client/app/utils/artifactParser';
 import {
   braceSpan,
   findRelativeImport,
+  findRelativeImports,
+  moduleBaseName,
   scanImportStatements,
   stripTypeOnlyImports,
   type ImportStatement,
 } from '@client/app/utils/importStatements';
 import { LUCIDE_WRAPPER_FN } from '@client/app/utils/reactArtifactDeps';
+import {
+  ARTIFACT_MODULE_RUNTIME_FACTORY_SRC,
+  createArtifactModuleResolver,
+} from '@client/app/utils/reactArtifactModules';
 import { PUBLISH_HOST } from './validateBundle';
 
 /**
@@ -24,7 +30,9 @@ import { PUBLISH_HOST } from './validateBundle';
  * blessed `<script src>` for the React runtime, so it passes `validateBundle` and renders on the
  * isolated serve origin (whose CSP is `script-src 'unsafe-inline' 'self' <blessed>`).
  *
- * Scope: SINGLE-FILE artifacts only (multi-file is rejected up front, matching the sandbox).
+ * Multi-file apps (an entry plus sibling files it imports relatively) link through the module
+ * runtime the sandbox uses (app/utils/reactArtifactModules.ts), all inside the same one inline
+ * script; a source with no relative import takes the original single-file path unchanged.
  */
 
 /**
@@ -50,7 +58,7 @@ export class UnsupportedReactDependencyError extends Error {
   }
 }
 
-/** Thrown when the source is multi-file, has no default export, or fails to transpile. */
+/** Thrown when a relative import cannot be resolved, there is no default export, or a transpile fails. */
 export class ReactArtifactTranspileError extends Error {
   constructor(message: string) {
     super(message);
@@ -123,7 +131,7 @@ const HOOK_GLOBAL_NAMES: readonly string[] = [
  * Statement boundaries come from scanImportStatements, so adjacent semicolon-less imports (valid
  * via ASI) are not conflated into one broken match. Exported for unit tests.
  */
-export function rewriteImportsToRequire(rawSource: string): string {
+export function rewriteImportsToRequire(rawSource: string, opts: { keepRelative?: boolean } = {}): string {
   const source = stripTypeOnlyImports(rawSource); // TS type imports have no runtime binding
   // Convert ESM `X as Y` renames in a named-imports clause to valid destructuring `X: Y`
   // (a raw `const { X as Y } = ...` is a syntax error that would blank the published page).
@@ -137,7 +145,9 @@ export function rewriteImportsToRequire(rawSource: string): string {
         return m ? `${m[1]}: ${m[2]}` : spec;
       })
       .join(', ');
-  const rewritten = replaceImportStatements(source, {}, ({ clause: clauseRaw, specifier: mod }) => {
+  const rewritten = replaceImportStatements(source, {}, ({ clause: clauseRaw, specifier: mod }, text) => {
+    // Sibling imports are left for Babel's CommonJS transform, which gives them ESM interop.
+    if (opts.keepRelative && RELATIVE_SPECIFIER.test(mod)) return text;
     const clause = clauseRaw.trim();
     const named = braceSpan(clause, true);
     const namedRaw = named ? clause.slice(named.open + 1, named.close).trim() : '';
@@ -171,13 +181,20 @@ export function rewriteImportsToRequire(rawSource: string): string {
 
   // The shape above is always rewritable, so a survivor means the scanner missed one. Failing the
   // publish beats serving a page that dies with "Cannot use import statement outside a module".
-  const survivor = findSurvivingEsmImport(rewritten);
+  // With keepRelative the caller runs this check on the CommonJS output instead.
+  if (!opts.keepRelative) assertNoSurvivingEsmImport(rewritten);
+  return rewritten;
+}
+
+const RELATIVE_SPECIFIER = /^\.\.?\//;
+
+function assertNoSurvivingEsmImport(code: string): void {
+  const survivor = findSurvivingEsmImport(code);
   if (survivor) {
     throw new ReactArtifactTranspileError(
       `Could not rewrite an ESM import for a script bundle: ${JSON.stringify(survivor.slice(0, 120))}`
     );
   }
-  return rewritten;
 }
 
 /**
@@ -283,15 +300,10 @@ export function unwrapDefaultExport(transformed: string): string {
  * bootstrap reads. Output contains no import/export statements and no eval.
  */
 export async function transpileReactSource(source: string): Promise<string> {
-  // Strip type-only imports first so a type-only relative import isn't misread as a multi-file ref.
+  // Strip type-only imports first so a type-only relative import isn't misread as a sibling file.
+  // This path has no sibling files, so any relative import gets the missing-file error.
   const cleaned = stripTypeOnlyImports(source);
-  const relImport = findRelativeImport(cleaned);
-  if (relImport) {
-    throw new ReactArtifactTranspileError(
-      `Multi-file artifacts are not supported: this one references "${relImport}" from a separate file. ` +
-        `Provide a single self-contained component (one file, one default export).`
-    );
-  }
+  resolveReactArtifactFiles(cleaned, {});
 
   const Babel = await getBabel();
   const withRequires = rewriteImportsToRequire(cleaned);
@@ -329,6 +341,89 @@ export async function transpileReactSource(source: string): Promise<string> {
     );
   }
   return unwrapped;
+}
+
+/**
+ * The keys of `files` the entry reaches through its relative imports, transitively, in `files`
+ * order. Throws the module runtime's own "Cannot resolve" error, as a ReactArtifactTranspileError,
+ * for an import that matches no file or several, so publish rejects what the page would fail on.
+ */
+export function resolveReactArtifactFiles(entry: string, files: Record<string, string>): string[] {
+  const keys = Object.keys(files);
+  const resolve = createArtifactModuleResolver(moduleBaseName, keys);
+  const reached = new Set<string>();
+  const queue = [entry];
+  while (queue.length > 0) {
+    for (const specifier of findRelativeImports(stripTypeOnlyImports(queue.shift() as string))) {
+      let key: string;
+      try {
+        key = resolve(specifier);
+      } catch (e) {
+        throw new ReactArtifactTranspileError((e as Error).message);
+      }
+      if (!reached.has(key)) {
+        reached.add(key);
+        queue.push(files[key]);
+      }
+    }
+  }
+  return keys.filter(key => reached.has(key));
+}
+
+/** One file as a CommonJS module body: npm imports bound like the single-file path, sibling
+ *  imports and exports converted by Babel's `transform-modules-commonjs`. */
+async function transpileReactModule(source: string, filename: string): Promise<string> {
+  const Babel = await getBabel();
+  const withRequires = rewriteImportsToRequire(stripTypeOnlyImports(source), { keepRelative: true });
+  let transformed: string | null | undefined;
+  try {
+    // The sandbox's module transform (react-artifact-sandbox.ts transpileModule): same presets and plugin.
+    transformed = Babel.transform(withRequires, {
+      presets: [['react', { runtime: 'classic' }], 'typescript'],
+      plugins: ['transform-modules-commonjs'],
+      filename,
+    }).code;
+  } catch (e) {
+    throw new ReactArtifactTranspileError(`JSX transform failed: ${(e as Error).message}`);
+  }
+  if (!transformed) {
+    throw new ReactArtifactTranspileError(`JSX transform produced no output for ${filename}.`);
+  }
+  assertNoSurvivingEsmImport(transformed);
+  return transformed;
+}
+
+function moduleFactory(body: string): string {
+  return `function (module, exports, require) {\n${body}\n}`;
+}
+
+/**
+ * The entry and its reached sibling files as ONE program for the bundle's inline script: each file
+ * becomes a CommonJS factory, linked by the shared module runtime, and the entry's default export
+ * lands in the `__DEFAULT_EXPORT__` local the bootstrap mounts. Does not check that imports
+ * resolve (resolveReactArtifactFiles does); the runtime throws its own error for one that does not.
+ */
+export async function transpileReactModuleProgram(entry: string, files: Record<string, string>): Promise<string> {
+  const siblings: string[] = [];
+  for (const key of Object.keys(files)) {
+    // Always .tsx so every file gets TS + JSX like the entry, matching the sandbox's file names.
+    const filename = `${key
+      .split('/')
+      .pop()!
+      .replace(/\.[cm]?[jt]sx?$/i, '')}.tsx`;
+    siblings.push(`[${JSON.stringify(key)}, ${moduleFactory(await transpileReactModule(files[key], filename))}]`);
+  }
+  const entryBody = await transpileReactModule(entry, 'component.tsx');
+  // The CommonJS counterpart of transpileReactSource's authoritative default-export check.
+  if (!/\bexports\.default\b/.test(entryBody)) {
+    throw new ReactArtifactTranspileError(
+      'React artifact must export a component as its default export (e.g. `export default MyComponent`).'
+    );
+  }
+  return (
+    `var __DEFAULT_EXPORT__ = (${ARTIFACT_MODULE_RUNTIME_FACTORY_SRC})().run(${String(moduleBaseName)}, require, [\n` +
+    `${siblings.join(',\n')}\n], ${moduleFactory(entryBody)});`
+  );
 }
 
 const HOOK_GLOBALS = `var ${HOOK_GLOBAL_NAMES.map(h => `${h}=React.${h}`).join(',')};`;
@@ -429,10 +524,15 @@ ${reactRuntimeScriptTags()}${depScriptTags ? '\n' + depScriptTags : ''}
  * Top-level entry: validate deps, transpile, and assemble the inert HTML bundle for a React
  * artifact. Throws UnsupportedReactDependencyError / ReactArtifactTranspileError on rejectable
  * input so the finalize handler can surface a clean validation violation.
+ *
+ * `files` maps sibling identifiers to their source for an entry that imports them relatively. An
+ * entry with no relative import ignores it and builds exactly as a single file; one with a
+ * relative import resolves it against `files` (none given means none available).
  */
 export async function buildReactArtifactBundle(input: {
   source: string;
   title: string;
+  files?: Record<string, string>;
 }): Promise<{ indexHtml: string }> {
   if (!checkHasDefaultExport(input.source)) {
     // Reject at publish time rather than shipping a bundle that only errors once rendered.
@@ -440,10 +540,23 @@ export async function buildReactArtifactBundle(input: {
       'React artifact must export a component as its default export (e.g. `export default MyComponent`).'
     );
   }
-  assertPublishableDependencies(input.source);
-  const dependencies = extractImportedModules(input.source).filter(m =>
+  if (findRelativeImport(stripTypeOnlyImports(input.source)) === null) {
+    assertPublishableDependencies(input.source);
+    const dependencies = extractImportedModules(input.source).filter(m =>
+      Object.prototype.hasOwnProperty.call(PUBLISH_REACT_DEP_SCRIPTS, m)
+    );
+    const transpiledCode = await transpileReactSource(input.source);
+    return { indexHtml: assembleReactBundleHtml({ title: input.title, transpiledCode, dependencies }) };
+  }
+
+  const files = input.files ?? {};
+  const reached: Record<string, string> = Object.create(null);
+  for (const key of resolveReactArtifactFiles(input.source, files)) reached[key] = files[key];
+  const sources = [input.source, ...Object.values(reached)];
+  sources.forEach(assertPublishableDependencies);
+  const dependencies = [...new Set(sources.flatMap(extractImportedModules))].filter(m =>
     Object.prototype.hasOwnProperty.call(PUBLISH_REACT_DEP_SCRIPTS, m)
   );
-  const transpiledCode = await transpileReactSource(input.source);
+  const transpiledCode = await transpileReactModuleProgram(input.source, reached);
   return { indexHtml: assembleReactBundleHtml({ title: input.title, transpiledCode, dependencies }) };
 }
