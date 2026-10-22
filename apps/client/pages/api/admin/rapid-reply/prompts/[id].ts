@@ -2,6 +2,7 @@ import { rapidReplyPromptRepository } from '@bike4mind/database/ai';
 import { rapidReplyAuditLogRepository } from '@bike4mind/database/ai';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { BadRequestError, NotFoundError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
@@ -63,6 +64,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
     let updatedPrompt;
     let auditAction: 'create' | 'update' = 'update';
+    let auditSummary = `updated rapid reply prompt ${currentPrompt.name}`;
+    let auditChangedFields: string[] = [];
 
     if (createNewVersion && (content !== currentPrompt.content || name !== currentPrompt.name)) {
       // Create a new version instead of updating
@@ -79,6 +82,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         createdBy: req.user!.id,
       });
       auditAction = 'create';
+      auditSummary = `created new version of rapid reply prompt ${currentPrompt.name}`;
+      auditChangedFields = ['version'];
     } else {
       // Regular update
       const updateData: any = {};
@@ -138,7 +143,20 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
           metadata: createNewVersion ? { newVersion: true } : undefined,
         });
       }
+      auditChangedFields = Object.keys(changes);
     }
+
+    // A new version is its own row; the parent's id keeps the whole version chain under one target.
+    await recordAdminActionFromRequest(req, {
+      action: 'settings.rapid_reply_prompt.updated',
+      target: { kind: 'settings', id, displayName: `Rapid reply prompt ${currentPrompt.name}` },
+      summary: auditSummary,
+      details: {
+        changedFields: auditChangedFields,
+        newVersion: auditAction === 'create',
+        ...(auditAction === 'create' && { newVersionId: updatedPrompt?.id }),
+      },
+    });
 
     return res.json(updatedPrompt);
   })
@@ -176,6 +194,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       userEmail: req.user!.email || undefined,
       ipAddress: req.ip,
       userAgent: req.headers['user-agent'],
+    });
+
+    await recordAdminActionFromRequest(req, {
+      action: 'settings.rapid_reply_prompt.deleted',
+      target: { kind: 'settings', id, displayName: `Rapid reply prompt ${currentPrompt.name}` },
+      summary: `deleted rapid reply prompt ${currentPrompt.name}`,
+      details: { name: currentPrompt.name, wasActive: currentPrompt.isActive },
     });
 
     return res.json({ success: true, message: 'Rapid reply prompt deleted successfully' });
