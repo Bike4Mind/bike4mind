@@ -34,8 +34,7 @@ const handler = baseApi().post(
     const newReferralData = CreateReferralRequestSchema.parse(req.body);
     const user = req.user;
     const { userName, emailTitle, emailBody } = newReferralData;
-    // Dedup before the quota guard below, not after - otherwise a duplicated address counts
-    // once against numReferralsAvailable but is still charged once per copy further down.
+    // Dedup before reserveReferrals so a duplicated address is charged once.
     const friendEmail = Array.from(new Set(newReferralData.friendEmail));
     const userId = user.id;
 
@@ -96,7 +95,7 @@ const handler = baseApi().post(
     for (const target of friendEmail) {
       let hasUsableInvite = false;
       try {
-        // Already-account emails were resolved up front (drives the sendable guard above).
+        // Already-account emails were resolved up front.
         if (existingAccountEmails.has(target)) {
           // Reported to Slack only -- admin-side. The caller's response must not say which
           // addresses landed here (see `accepted` below).
@@ -190,6 +189,8 @@ const handler = baseApi().post(
       }
     }
 
+    // No app-level retry of settleReferrals: the refund is a non-idempotent $inc, so retrying after
+    // an ambiguous failure (write applied, ack lost) would refund twice; retryWrites is off on DocumentDB.
     // Settle before deciding the outcome, then await every delivery that already started. A
     // settle failure is the only one that fails the request: the reservation has been charged
     // and the caller must know. A delivery failure does not - the invite exists and the charge

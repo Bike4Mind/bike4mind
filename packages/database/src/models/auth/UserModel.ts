@@ -712,7 +712,11 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     return result.matchedCount === 1;
   }
 
-  /** Refund only failures before a usable invite exists; delivery failures retain their charge. */
+  /**
+   * Refund only failures before a usable invite exists; delivery failures retain their charge.
+   * The refund is a relative $inc not bounded by the current allowance, and it is not idempotent:
+   * callers must not retry it.
+   */
   async settleReferrals(userId: string, refundCount: number, newInviteIds: string[]): Promise<void> {
     if (!Number.isSafeInteger(refundCount) || refundCount < 0) throw new Error('Invalid referral refund count');
     const result = await this.model.updateOne(

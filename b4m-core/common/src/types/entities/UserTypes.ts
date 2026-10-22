@@ -708,6 +708,10 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
    * `reserveReferrals` before side effects and `settleReferrals` afterward.
    */
   recordReferrals: (userId: string, count: number, newInviteIds: string[]) => Promise<void>;
+  /** Atomically charge `count` referrals; resolves false when the allowance is below `count`. */
+  reserveReferrals: (userId: string, count: number) => Promise<boolean>;
+  /** Refund `refundCount` failed referrals and add `newInviteIds` to `regInvites`; not idempotent, do not retry. */
+  settleReferrals: (userId: string, refundCount: number, newInviteIds: string[]) => Promise<void>;
   /**
    * Remove several group ids from ONE user's `groups[]` (idempotent $pull). Used when a member
    * leaves or is removed from an org, to strip that org's group ids from just that member.
