@@ -12,7 +12,7 @@ import { MODEL_PRICE_UNITS } from './ModelPriceTypes';
  * ones - the read schemas below are lenient precisely so a version skew shortens
  * nobody's model list.
  */
-export const CATALOG_SCHEMA_VERSION = 1;
+export const CATALOG_SCHEMA_VERSION = 2;
 
 /**
  * How a model's request is built and which backend constructor serves it.
@@ -124,6 +124,8 @@ export const lifecycleStatusRank = (status: unknown): number | undefined => {
 };
 
 const LifecycleWrite = z.strictObject({
+  /** Absent on v1 rows means current; true folds the model without disabling it. */
+  isSuperseded: z.boolean().optional(),
   status: z.enum(LIFECYCLE_STATUSES),
   deprecationDate: CALENDAR_DATE.optional(),
   retirementDate: CALENDAR_DATE.optional(),
@@ -363,6 +365,7 @@ export const MODEL_INFO_FIELD_GROUP_OF: Record<
   supportsImageVariation: 'modalities',
   supportsSafetyTolerance: 'modalities',
 
+  isSuperseded: 'lifecycle',
   deprecationDate: 'lifecycle',
   replacedBy: 'lifecycle',
 

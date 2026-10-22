@@ -309,7 +309,7 @@ function displacesStatus(held: unknown, candidate: string): boolean {
 
 /**
  * Below operator, lifecycle only moves toward sunset: across the non-operator rows and the adapter
- * literal, the earliest dates and the furthest ranked status win. replacedBy stays the winner's.
+ * literal, the earliest dates, furthest ranked status and superseded marker win. replacedBy stays the winner's.
  */
 function foldLifecycle(
   draft: Record<string, unknown>,
@@ -326,6 +326,7 @@ function foldLifecycle(
 
   const folded: Record<string, unknown> = isRecord(draft.lifecycle) ? { ...draft.lifecycle } : {};
   for (const lifecycle of lifecycles) {
+    if (lifecycle.isSuperseded === true) folded.isSuperseded = true;
     for (const key of LIFECYCLE_DATE_KEYS) {
       const date = lifecycle[key];
       const current = folded[key];
