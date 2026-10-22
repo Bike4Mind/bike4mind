@@ -8,10 +8,13 @@ name: Lake RAG Eval (staging)
 # its model FROM the baseline file rather than from an input: the two cannot drift apart.
 # A `record_baseline` dispatch skips the gate and uploads the report; commit that file as
 # BASELINE_PATH to (re)set the baseline.
+#
+# Every run posts to Slack, pass or fail, so a week with no post stands out.
 
 on:
   schedule:
-    - cron: '0 7 * * 1' # Mondays 07:00 UTC
+    # Mondays 08:00 UTC: two hours clear of another weekly eval that hits staging at 06:00 UTC.
+    - cron: '0 8 * * 1'
   workflow_dispatch:
     inputs:
       record_baseline:
@@ -141,6 +144,7 @@ jobs:
           echo "Model: $MODEL"
 
       - name: Run the live eval against staging
+        id: eval
         env:
           LAKE_RAG_EVAL_BASE_URL: https://app.${{ vars.STAGING_SERVER_DOMAIN }}
           LAKE_RAG_EVAL_MODEL: ${{ steps.resolve.outputs.model }}
@@ -188,3 +192,80 @@ jobs:
             ${{ runner.temp }}/baseline.staging.json
           if-no-files-found: ignore
           retention-days: 30
+
+      - name: Summarize for Slack
+        id: slack_summary
+        if: ${{ always() }}
+        run: |
+          REPORT="$RUNNER_TEMP/lakerag-report.json"
+          if [ -f "$REPORT" ]; then
+            # Literal \n separators: the Slack payload is JSON, as in e2e-run.yml's spec_summary.
+            SUMMARY=$(jq -r '
+              def pct: (.rate * 1000 | round / 10 | tostring) + "%";
+              [ .arms | to_entries[]
+                | "\(.key): pass \(.value.pass | pct) (\(.value.pass.passed)/\(.value.pass.total)), retrieval \(.value.retrieval | pct)"
+              ] | join("\\n")' "$REPORT")
+            VERDICT=$(sed -n 's/^  baseline: //p' "$RUNNER_TEMP/lakerag-output.txt" 2>/dev/null | head -n 1)
+            if [ -n "$VERDICT" ]; then
+              SUMMARY="$SUMMARY\\nBaseline: $VERDICT"
+            fi
+          else
+            SUMMARY='_No report: the run failed before scoring._'
+          fi
+          # Keep the payload valid JSON: the verdict line can carry quotes from a metric name.
+          SUMMARY=$(printf '%s' "$SUMMARY" | tr -d '"')
+          echo "text=$SUMMARY" >> "$GITHUB_OUTPUT"
+
+      # always(), not !cancelled() as in e2e-run.yml: nothing here supersedes a run, so a
+      # cancel is a timeout or a manual stop, and it should post rather than go quiet.
+      - name: Notify Slack
+        if: ${{ always() }}
+        uses: slackapi/slack-github-action@v2
+        with:
+          webhook: ${{ secrets.SLACK_E2E_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
+          payload: |
+            {
+              "text": "Lake RAG eval (staging) - ${{ job.status == 'cancelled' && ':x: Cancelled or timed out' || steps.eval.outcome == 'success' && inputs.record_baseline && ':memo: Baseline recorded (gate skipped)' || steps.eval.outcome == 'success' && ':white_check_mark: Passed' || steps.eval.outcome == 'failure' && ':x: Failed' || ':x: Failed before the eval ran' }}",
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": { "type": "plain_text", "text": "Lake RAG eval (staging)" }
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Status*\n${{ job.status == 'cancelled' && ':x: Cancelled or timed out' || steps.eval.outcome == 'success' && inputs.record_baseline && ':memo: Baseline recorded (gate skipped)' || steps.eval.outcome == 'success' && ':white_check_mark: Passed' || steps.eval.outcome == 'failure' && ':x: Failed' || ':x: Failed before the eval ran' }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Model*\n`${{ steps.resolve.outputs.model || 'unresolved' }}`"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Trigger*\n${{ github.event_name }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Branch*\n`${{ github.ref_name }}`"
+                    }
+                  ]
+                },
+                {
+                  "type": "section",
+                  "text": { "type": "mrkdwn", "text": "*Results*\n${{ steps.slack_summary.outputs.text }}" }
+                },
+                {
+                  "type": "actions",
+                  "elements": [
+                    {
+                      "type": "button",
+                      "text": { "type": "plain_text", "text": "View Run" },
+                      "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                    }
+                  ]
+                }
+              ]
+            }

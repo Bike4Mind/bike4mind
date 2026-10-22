@@ -124,8 +124,9 @@ Run it twice with the same model before reading a change as signal. The noise ba
 
 ## Scheduled run
 
-`.github/workflows/lake-rag-eval.yml` runs the live half against staging every Monday at 07:00 UTC and fails when a banded metric leaves the noise band above, relative to `baseline.staging.json` in this directory.
+`.github/workflows/lake-rag-eval.yml` runs the live half against staging every Monday at 08:00 UTC and fails when a banded metric leaves the noise band above, relative to `baseline.staging.json` in this directory.
 
 - **Model.** A gated run uses the model named in the baseline file. `compareLakeRagReports` does not check the model, so taking it from the file is what keeps a baseline from being compared against a different model's run.
+- **Alerting.** Every run, pass or fail, posts to Slack through the `SLACK_E2E_WEBHOOK_URL` repo secret that `e2e-run.yml` uses, with the status, model, pass and retrieval rate per arm, and the baseline verdict. A Monday with no post means the run did not happen.
 - **Credential.** The `LAKE_RAG_EVAL_API_KEY` repo secret when set (scopes as listed above), else a throwaway user minted with the `E2E_CLEANUP_SECRET` repo secret. A run with neither fails instead of skipping.
 - **Setting or moving the baseline.** Dispatch the workflow with `record_baseline` (and a `model`, or the `LAKE_RAG_EVAL_MODEL` repo variable), download the `lakerag-report` artifact, and commit its `baseline.staging.json` (the report minus each turn's `questId`, which the account-id guard rejects). Record twice and keep a run whose numbers agree with the other inside the band, and say in the PR which runs they were.
