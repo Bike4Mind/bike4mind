@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { AgentStep } from '@bike4mind/agents';
 import {
+  decideIterationConfidencePause,
   evaluateConfidenceGate,
   formatConfidenceGateReason,
   isPausingLowConfidenceStreak,
@@ -148,5 +149,29 @@ describe('recordAndDecideConfidencePause', () => {
       vi.fn(async () => 2)
     );
     expect(decision.pause).toBe(false);
+  });
+});
+
+describe('decideIterationConfidencePause', () => {
+  const evaluation = (overrides: Partial<ConfidenceGateEvaluation> = {}): ConfidenceGateEvaluation => ({
+    iteration: 2,
+    confidence: 0.3,
+    belowThreshold: true,
+    pausable: true,
+    ...overrides,
+  });
+
+  it('a single low iteration does not pause', async () => {
+    const record = vi.fn(async () => 1);
+    const low = evaluation({ belowThreshold: true, pausable: true });
+    expect(await decideIterationConfidencePause(low, record)).toEqual({ pause: false, lowConfidenceStreak: 1 });
+    expect(record).toHaveBeenCalledTimes(1);
+    expect(record).toHaveBeenCalledWith(low.confidence, { belowThreshold: true });
+  });
+
+  it('a gate-skipped iteration leaves the streak alone', async () => {
+    const record = vi.fn(async () => 5);
+    expect(await decideIterationConfidencePause(null, record)).toBeNull();
+    expect(record).not.toHaveBeenCalled();
   });
 });

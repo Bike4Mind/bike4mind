@@ -100,6 +100,14 @@ export async function recordAndDecideConfidencePause(
   return { pause: evaluation.pausable && isPausingLowConfidenceStreak(lowConfidenceStreak), lowConfidenceStreak };
 }
 
+/** Per-iteration gate site: a skipped iteration (null evaluation) is not recorded, so it neither extends nor breaks the streak. */
+export async function decideIterationConfidencePause(
+  evaluation: ConfidenceGateEvaluation | null,
+  recordIterationConfidence: (confidence: number, options: { belowThreshold: boolean }) => Promise<number>
+): Promise<{ pause: boolean; lowConfidenceStreak: number } | null> {
+  return evaluation === null ? null : recordAndDecideConfidencePause(evaluation, recordIterationConfidence);
+}
+
 /** The human-facing `pendingGate.reason`, shared by the per-iteration and replay gate sites. */
 export function formatConfidenceGateReason(confidence: number, threshold: number, lowConfidenceStreak: number): string {
   const pct = (value: number) => (value * 100).toFixed(0);

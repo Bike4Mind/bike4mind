@@ -134,7 +134,7 @@ import { resolveDisplayAnswer } from './agentExecutorUtils/truncatedReply';
 import {
   evaluateConfidenceGate,
   formatConfidenceGateReason,
-  recordAndDecideConfidencePause,
+  decideIterationConfidencePause,
 } from './agentExecutorUtils/confidenceGate';
 import { guardPlanCompletion } from './agentExecutorUtils/planCompletionGuard';
 import { injectBriefContext } from './agentExecutorUtils/briefContextInjector';
@@ -3196,12 +3196,9 @@ async function processExecution(
       // clear the threshold - so `evaluatedCount` is the true denominator for
       // fire rate. `recordGateEmitted` below increments the numerator only on
       // a real pause. Baseline observability before touching signal quality.
-      const decision =
-        gate === null
-          ? null
-          : await recordAndDecideConfidencePause(gate, (confidence, options) =>
-              agentExecutionRepository.recordIterationConfidence(executionId, confidence, options)
-            );
+      const decision = await decideIterationConfidencePause(gate, (confidence, options) =>
+        agentExecutionRepository.recordIterationConfidence(executionId, confidence, options)
+      );
       if (gate !== null && decision?.pause) {
         // 0-indexed wire convention: the agent reports 1-indexed
         // `this.iterations`, but the client's `IterationStream` and
