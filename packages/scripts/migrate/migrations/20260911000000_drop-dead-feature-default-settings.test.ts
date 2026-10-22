@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { settingsMap } from '@bike4mind/common';
 
+import { premiumAdminSettings } from '../../../../apps/client/app/premium-generated/premiumAdminSettings.generated';
 import { DEAD_SETTING_NAMES } from './20260911000000_drop-dead-feature-default-settings';
 
 /**
@@ -16,5 +17,10 @@ describe('drop-dead-feature-default-settings', () => {
 
   it.each(DEAD_SETTING_NAMES)('%s is not a live setting key', name => {
     expect(settingsMap).not.toHaveProperty(name);
+  });
+
+  // Contributed settings never enter settingsMap, so check the mounted contribution list as well.
+  it.each(DEAD_SETTING_NAMES)('%s is not a contributed setting key', name => {
+    expect(premiumAdminSettings.map(s => s.key)).not.toContain(name);
   });
 });

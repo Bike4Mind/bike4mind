@@ -1442,7 +1442,8 @@ function generateAgentExtensions(packages) {
 // Premium packages can contribute admin setting definitions (b4mContributions.adminSettingsExport ->
 // a module exporting `adminSettings: SettingDefinition<string>[]`, built with core's make*Setting
 // factories). lib/settings/registerContributedSettings.ts imports this file for its side effect on
-// both the server and the client, so it must exist in BOTH forms and stay serializable data.
+// both the server and the client, so it must exist in BOTH forms and stay serializable data. Whatever the
+// export module imports reaches the client bundle: no server-only imports, and no secret defaults.
 const ADMIN_SETTINGS_REGISTER_MODULE = join(CLIENT_ROOT, 'lib/settings/registerContributedSettings');
 
 function generateAdminSettings(packages) {

@@ -4,6 +4,7 @@ import {
   IAdminSettings,
   IAdminSettingsRepository,
   redactSettingSecrets,
+  resolveSettingDefinition,
   SettingKey,
   settingsMap,
   SettingValue,
@@ -24,8 +25,7 @@ function decryptSettingInPlace<T extends { settingName?: string; settingValue?: 
 function decryptSettingInPlace<T extends { settingName?: string; settingValue?: unknown }>(setting: T | null): T | null;
 function decryptSettingInPlace(setting: { settingName?: string; settingValue?: unknown } | null) {
   if (!setting || typeof setting.settingValue !== 'string') return setting;
-  const definition = settingsMap[setting.settingName as SettingKey] as { isSensitive?: boolean } | undefined;
-  if (definition?.isSensitive) {
+  if (typeof setting.settingName === 'string' && resolveSettingDefinition(setting.settingName)?.isSensitive) {
     setting.settingValue = decryptAtRest(setting.settingValue);
   }
   return setting;

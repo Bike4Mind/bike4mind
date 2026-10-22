@@ -5748,8 +5748,7 @@ export const experimentalNonGroupSettingKeys: readonly SettingKey[] = ['EnableCo
  * experimental flag added to `settingsMap` is surfaced automatically - there is
  * no second hand-maintained allowlist in the client to forget - plus
  * `experimentalNonGroupSettingKeys`.
- */
-/**
+ *
  * Core keys only, computed at import time. Code that must also see contributed experimental
  * settings calls `getExperimentalFeatureSettingKeys()`, since registration happens after import.
  */
@@ -5785,6 +5784,9 @@ export function getExperimentalFeatureSettingKeys(): string[] {
  * `ollamaBackend` sits in that group carrying an internal backend URL. The subtraction is
  * belt-and-braces next to `redactSettingSecrets` on the response -- that masks the VALUE,
  * this keeps the key out of a non-admin's payload at all.
+ *
+ * Contributed settings go through the same three arms, so one placed in the EXPERIMENTAL group is
+ * readable by any signed-in user unless it is `isSensitive`.
  *
  * Admins bypass this entirely and read the full catalog.
  */
@@ -5823,6 +5825,9 @@ export function buildPublicSettingsProjection(settings: AdminSettingDoc[]): Publ
 // `SettingKeySchema`. Registration is a side effect of importing the generated contribution module
 // (apps/client: premiumAdminSettings.generated.ts, via lib/settings/registerContributedSettings.ts),
 // so a read that runs before that import sees only the core catalog.
+//
+// The contribution module also ships in the client bundle, so a sensitive contributed setting may not
+// carry a default. Contributed settings are platform-level: scoped overrides accept core keys only.
 
 const contributedSettings = new Map<string, SettingDefinition<string>>();
 
@@ -5838,7 +5843,7 @@ export interface ContributedSettingsRegistration {
   coreCollisions: string[];
   /** Keys an earlier contribution already registered; the first one is kept. */
   duplicates: string[];
-  /** Reserved object keys and definitions with no key or schema. */
+  /** Reserved object keys, definitions with no key or schema, and sensitive ones with a default. */
   rejected: string[];
 }
 
@@ -5853,7 +5858,8 @@ export function registerContributedSettings(
       typeof key !== 'string' ||
       key.trim() === '' ||
       RESERVED_SETTING_NAMES.has(key) ||
-      typeof definition.schema?.safeParse !== 'function'
+      typeof definition.schema?.safeParse !== 'function' ||
+      (definition.isSensitive === true && definition.defaultValue !== undefined && definition.defaultValue !== '')
     ) {
       result.rejected.push(String(key));
     } else if (isCoreSettingKey(key)) {
