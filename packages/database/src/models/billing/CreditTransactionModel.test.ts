@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMongoServer } from '../../__test__/createMongoServer';
 import { CreditTransaction, creditTransactionRepository } from './CreditTransactionModel';
-import { CreditHolderType } from '@bike4mind/common';
+import { CreditHolderType, GenericCreditDeductTransaction, GenericDeductReasons } from '@bike4mind/common';
 
 let mongod: MongoMemoryServer;
 
@@ -414,5 +414,29 @@ describe('CreditTransactionRepository.findAdminAdjustmentsForUser', () => {
     const rows = await creditTransactionRepository.findAdminAdjustmentsForUser('user-1', day(2), day(6), 2);
 
     expect(rows.map(row => row.credits)).toEqual([-20, 10]);
+  });
+});
+
+describe('generic_deduct rows with built-in reasons', () => {
+  it('read back through the per-owner ledger query and still satisfy the transaction schema', async () => {
+    await seed(
+      GenericDeductReasons.map((reason, i) => ({
+        type: 'generic_deduct',
+        reason,
+        credits: -1,
+        createdAt: day(i + 1),
+        updatedAt: day(i + 1),
+      }))
+    );
+
+    const rows = await creditTransactionRepository.findByOwnerWithFilters(ORG, CreditHolderType.Organization, {
+      transactionTypes: ['generic_deduct'],
+    });
+
+    expect(rows.map(r => r.reason).sort()).toEqual([...GenericDeductReasons].sort());
+    for (const row of rows) {
+      const parsed = GenericCreditDeductTransaction.safeParse(row.toObject());
+      expect(parsed.success, `${row.reason}: ${parsed.error?.message}`).toBe(true);
+    }
   });
 });

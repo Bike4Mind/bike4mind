@@ -52,7 +52,7 @@ vi.mock('@workers/integrations/github/handlers', () => ({
 // Import after mocking
 import { dispatch } from './githubWebhook';
 import { mcpServerRepository, cacheRepository } from '@bike4mind/database';
-import { getHandler } from '@workers/integrations/github/handlers';
+import { createHandlerRegistry, getHandler } from '@workers/integrations/github/handlers';
 
 describe('GitHub Webhook Queue Handler', () => {
   const createSQSEvent = (body: Record<string, unknown>): SQSEvent => ({
@@ -139,6 +139,7 @@ describe('GitHub Webhook Queue Handler', () => {
 
       expect(mcpServerRepository.findById).toHaveBeenCalledWith('mcp-server-id');
       expect(mockHandler.handle).toHaveBeenCalledWith(validPayload.payload, mockMcpServer);
+      expect(createHandlerRegistry).toHaveBeenCalledWith(expect.anything(), 'user-id');
       expect(cacheRepository.createOrUpdate).toHaveBeenCalledWith(
         expect.objectContaining({
           key: 'github-webhook-processed-test-delivery-123',
@@ -181,6 +182,13 @@ describe('GitHub Webhook Queue Handler', () => {
   });
 
   describe('MCP server validation', () => {
+    it.each([{ userId: 'another-owner' }, { enabled: false }])('rejects an unusable MCP binding: %j', async binding => {
+      vi.mocked(mcpServerRepository.findById).mockResolvedValue({ ...mockMcpServer, ...binding } as never);
+      await dispatch(createSQSEvent(validPayload), mockContext);
+      expect(mockHandler.handle).not.toHaveBeenCalled();
+      expect(createHandlerRegistry).not.toHaveBeenCalled();
+    });
+
     it('should skip if MCP server not found', async () => {
       vi.mocked(mcpServerRepository.findById).mockResolvedValue(null);
 

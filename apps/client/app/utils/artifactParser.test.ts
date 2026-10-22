@@ -1,3 +1,4 @@
+import { cpuUsage } from 'node:process';
 import { beforeAll, describe, it, expect } from 'vitest';
 import {
   convertCodeBlocksToArtifacts as coreConvertCodeBlocksToArtifacts,
@@ -73,9 +74,11 @@ function assertLinearGrowth(
   const smallInput = build(small);
   const doubledInput = build(small * 2);
   const timeOnce = (input: string, verifyOutput: boolean) => {
-    const startedAt = performance.now();
+    // Measure parser CPU work, excluding time the shared runner deschedules this worker.
+    const startedAt = cpuUsage();
     const out = run(input);
-    const elapsedMs = performance.now() - startedAt;
+    const elapsedCpu = cpuUsage(startedAt);
+    const elapsedMs = (elapsedCpu.user + elapsedCpu.system) / 1000;
     if (verifyOutput) checkOutput(out, input);
     return elapsedMs;
   };

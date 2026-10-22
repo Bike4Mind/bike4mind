@@ -33,6 +33,7 @@ import {
   isAttachChord,
   shownSuggestion,
 } from './composerInput';
+import { useShowDollarCosts } from './costDisplay';
 import { ArrowUpIcon, StopIcon } from './icons';
 import { contentColumnSx } from './layout';
 import { isMac } from './platform';
@@ -179,6 +180,7 @@ export function Composer({
    */
   onSuggestionDismissed?: () => void;
 }) {
+  const showDollars = useShowDollarCosts();
   const [text, setText] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   // Where the caret is, so the `/` menu answers the token being typed wherever it sits in the draft.
@@ -222,7 +224,7 @@ export function Composer({
    */
   const shownUsage = !disabled && !notReady ? (usage ?? null) : null;
   const usageText = shownUsage && usageLabel(shownUsage);
-  const usageDetail = shownUsage && usageText ? describeUsage(shownUsage) : null;
+  const usageDetail = shownUsage && usageText ? describeUsage(shownUsage, showDollars) : null;
   const occupancy = shownUsage ? contextPercent(shownUsage.contextTokens, shownUsage.contextLimit) : null;
 
   // See composerInput.ts for what wins here and why.

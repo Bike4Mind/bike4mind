@@ -54,7 +54,7 @@ interface GitHubRepository {
 
 const GitHubIntegrationSection = ({ userId }: GitHubIntegrationProps) => {
   const { currentUser } = useUser();
-  const isSlackLinked = Boolean(currentUser?.slackSettings?.slackUserId);
+  const isSlackLinked = Boolean(currentUser?.slackSettings?.slackUserId && currentUser?.slackSettings?.slackTeamId);
   const [status, setStatus] = useState<GitHubStatus>({ connected: false });
   const [connecting, setConnecting] = useState(false);
   const [showDisconnectModal, setShowDisconnectModal] = useState(false);
