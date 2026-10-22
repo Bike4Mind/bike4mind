@@ -46,6 +46,10 @@ const { B4M_API_URL, B4M_API_KEY, B4M_HEARTH_CHANNEL, B4M_HEARTH_DISCLOSURE, B4M
 
 const DEBUG = Boolean(B4M_HEARTH_DEBUG) && B4M_HEARTH_DEBUG !== '0';
 
+// The diagnostic is best-effort: with the reader gone, an unhandled EPIPE here
+// would kill the process and decide the exit code, which this hook must never do.
+process.stderr.on('error', () => {});
+
 // Resolves once the line is flushed: stderr to a pipe is async on macOS, so
 // exiting straight after a bare write can drop it.
 const debug = line =>

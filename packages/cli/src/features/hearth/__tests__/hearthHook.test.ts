@@ -46,8 +46,14 @@ function runHook(env: Record<string, string>, stdinPayload: unknown) {
 const STDIN_ERROR_PRELOAD =
   "data:text/javascript,setTimeout(()=>process.stdin.destroy(Object.assign(new Error('EIO'),{code:'EIO'})),100)";
 
-/** Spawns the hook with stderr captured; `injectStdinError` leaves stdin open and breaks it. */
-function runHookCapturing(env: Record<string, string>, opts: { injectStdinError?: boolean } = {}) {
+/**
+ * Spawns the hook with stderr captured. `injectStdinError` leaves stdin open and
+ * breaks it; `closedStderr` closes the read end so the child's writes hit EPIPE.
+ */
+function runHookCapturing(
+  env: Record<string, string>,
+  opts: { injectStdinError?: boolean; closedStderr?: boolean } = {}
+) {
   return new Promise<{ code: number; stderr: string }>((resolve, reject) => {
     const child = spawn(
       process.execPath,
@@ -55,7 +61,8 @@ function runHookCapturing(env: Record<string, string>, opts: { injectStdinError?
       { env: { ...ambientHookEnv(), ...env }, stdio: ['pipe', 'ignore', 'pipe'] }
     );
     let stderr = '';
-    child.stderr.on('data', c => (stderr += c));
+    if (opts.closedStderr) child.stderr.destroy();
+    else child.stderr.on('data', c => (stderr += c));
     child.on('error', reject);
     child.on('close', code => resolve({ code: code ?? -1, stderr }));
     if (!opts.injectStdinError) {
@@ -65,7 +72,9 @@ function runHookCapturing(env: Record<string, string>, opts: { injectStdinError?
   });
 }
 
-function startCaptureServer(status = 201): Promise<{ port: number; captured: { current?: CapturedRequest }; close: () => void }> {
+function startCaptureServer(
+  status = 201
+): Promise<{ port: number; captured: { current?: CapturedRequest }; close: () => void }> {
   const captured: { current?: CapturedRequest } = {};
   return new Promise(resolve => {
     const server = createServer((req: IncomingMessage, res: ServerResponse) => {
@@ -563,6 +572,31 @@ describe('bin/hearth-hook.mjs privacy contract', () => {
         const { code, stderr } = await runHookCapturing({ ...HOOK_ENV(port), B4M_HEARTH_DEBUG: '1' });
         expect(code).toBe(0);
         expect(stderr).toBe('');
+      } finally {
+        close();
+      }
+    }, 15000);
+
+    // Port 1 needs no listener of ours and is never in use, so fetch rejects instead of answering.
+    it('reports a thrown fetch error once under B4M_HEARTH_DEBUG and still exits 0', async () => {
+      const { code, stderr } = await runHookCapturing({ ...HOOK_ENV(1), B4M_HEARTH_DEBUG: '1' });
+      expect(code).toBe(0);
+      expect(stderr.trim().split('\n')).toEqual([
+        expect.stringMatching(/^hearth-hook: POST \/api\/hearth\/events error: \w+$/),
+      ]);
+    }, 15000);
+
+    it('stays silent on a thrown fetch error without the debug flag', async () => {
+      const { code, stderr } = await runHookCapturing(HOOK_ENV(1));
+      expect(code).toBe(0);
+      expect(stderr).toBe('');
+    }, 15000);
+
+    it('exits 0 when a debug line is written to a closed stderr', async () => {
+      const { port, close } = await startCaptureServer(401);
+      try {
+        const { code } = await runHookCapturing({ ...HOOK_ENV(port), B4M_HEARTH_DEBUG: '1' }, { closedStderr: true });
+        expect(code).toBe(0);
       } finally {
         close();
       }
