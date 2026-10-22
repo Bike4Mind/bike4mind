@@ -5,6 +5,7 @@ import { agentOpsSettingsRepository, apiKeyRepository, adminSettingsRepository }
 import { apiKeyService } from '@bike4mind/services';
 import { buildApiKeyTable, getAvailableModels } from '@bike4mind/llm-adapters';
 import { ForbiddenError, BadRequestError, InternalServerError, getSettingsByNames } from '@bike4mind/utils';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { agentOpsModelRejection } from '@client/app/utils/agentOpsModels';
 import { modelCatalogListingOptions } from '@client/server/utils/modelCatalogOptions';
 
@@ -101,6 +102,17 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     if (isEnabled !== undefined) updateData.isEnabled = isEnabled;
 
     const updatedSettings = await agentOpsSettingsRepository.createOrUpdateSettings(updateData);
+
+    const changes = (['generationLlmModel', 'rateLimitSeconds', 'isEnabled'] as const)
+      .filter(field => updateData[field] !== undefined && updateData[field] !== current?.[field])
+      .map(field => ({ field, before: current?.[field] ?? null, after: updateData[field] }));
+    await recordAdminActionFromRequest(req, {
+      action: 'settings.agent_ops.updated',
+      target: { kind: 'settings', id: 'agent_ops', displayName: 'Agent Ops settings' },
+      summary: 'updated Agent Ops settings',
+      changes,
+    });
+
     res.json(updatedSettings);
   })
   .post<Request<{}, {}, AddVersionRequest>>(async (req, res) => {
@@ -137,6 +149,14 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       description?.trim() || '',
       req.user!.id
     );
+
+    const addedVersion = updatedSettings.versions.reduce((max, v) => Math.max(max, v.versionNumber), 0);
+    await recordAdminActionFromRequest(req, {
+      action: 'settings.agent_ops.version_added',
+      target: { kind: 'settings', id: 'agent_ops', displayName: 'Agent Ops settings' },
+      summary: `added Agent Ops meta-prompt version ${addedVersion}`,
+      details: { version: addedVersion },
+    });
 
     // Auto-activate the first version
     if (updatedSettings.versions.length === 1) {
