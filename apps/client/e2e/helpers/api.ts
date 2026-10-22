@@ -522,29 +522,23 @@ export async function apiGetDataLakeArticlesStatus(
   return response.status();
 }
 
-/** The per-file index fields the forced-retrieval readiness check reads (retrievalUnavailable.ts). */
-export interface DataLakeArticle {
-  id: string;
-  fileName: string;
-  chunkCount?: number | null;
-  vectorizedChunkCount?: number | null;
-  error?: string | null;
+/** The slice of GET /api/data-lakes/:id/health (LakeHealthApiResponse) the readiness poll reads. */
+export interface DataLakeHealth {
+  /** P3 per member, graded by the server's own reachability rule; an in-flight file is not `fail`. */
+  predicates: { fullyVectorized: { pass: number; fail: number; unknown: number } };
 }
 
-/** One page (at most 100) of a lake's articles, sorted by file name. */
-export async function apiListDataLakeArticles(
+export async function apiGetDataLakeHealth(
   request: APIRequestContext,
   token: string,
-  dataLakeId: string,
-  page = 1
-): Promise<{ data: DataLakeArticle[]; total: number; hasMore: boolean }> {
+  dataLakeId: string
+): Promise<DataLakeHealth> {
   const baseURL = process.env.API_URL || 'http://localhost:3000';
-  const response = await request.get(`${baseURL}/api/data-lakes/${dataLakeId}/articles`, {
+  const response = await request.get(`${baseURL}/api/data-lakes/${dataLakeId}/health`, {
     headers: { Authorization: `Bearer ${token}` },
-    params: { page, limit: 100 },
   });
   if (!response.ok()) {
-    throw new Error(`List data lake articles failed: ${response.status()} ${response.statusText()}`);
+    throw new Error(`Get data lake health failed: ${response.status()} ${response.statusText()}`);
   }
   return response.json();
 }

@@ -11,7 +11,7 @@ import {
   apiListDataLakesStatus,
   apiCreateSession,
   apiLakeLifecycle,
-  apiListDataLakeArticles,
+  apiGetDataLakeHealth,
   apiSeedLakeArticle,
   apiUpdateDataLake,
   apiSetDataLakeVisibility,
@@ -907,25 +907,27 @@ test.describe('Data Lake - asking a large lake', () => {
 
     await test.step('wait until every file is embedded', async () => {
       // Asking earlier gets the unindexed files withheld (retrievalUnavailable.ts), which shows the
-      // coverage notice for a reason this test is not about.
+      // coverage notice for a reason this test is not about. Reads the server's health grading rather
+      // than comparing the counters here, which would be another copy of the reachability rule
+      // (packages/scripts/src/checkLakeReachabilitySites.test.ts).
       await expect
         .poll(
           async () => {
-            const pages = [await apiListDataLakeArticles(request, token, lake.id, 1)];
-            while (pages[pages.length - 1].hasMore) {
-              pages.push(await apiListDataLakeArticles(request, token, lake.id, pages.length + 1));
-            }
-            const articles = pages.flatMap(p => p.data);
-            const failed = articles.find(a => a.error && !a.vectorizedChunkCount);
-            if (failed) throw new Error(`${failed.fileName} failed to index: ${failed.error}`);
-            const ready = articles.filter(
-              a => (a.chunkCount ?? 0) > 0 && (a.vectorizedChunkCount ?? 0) >= (a.chunkCount ?? 0)
-            );
-            return ready.length;
+            const { fullyVectorized } = (await apiGetDataLakeHealth(request, token, lake.id)).predicates;
+            if (fullyVectorized.fail > 0) throw new Error(`${fullyVectorized.fail} seeded file(s) failed to index`);
+            return fullyVectorized.pass;
           },
           { message: 'every seeded file is chunked and embedded', timeout: 6 * 60_000, intervals: [5_000] }
         )
         .toBe(lake.fileCount);
+    });
+
+    await test.step('wait out the vector index lag', async () => {
+      // A file joins the relevance ranking only VECTOR_SEARCH_READY_LAG_MS (60s,
+      // vectorSearchEligibility.ts) after its embedding is stamped; until then it ranks below every
+      // file with a hit and is cut at the cap with no coverage notice. The answer file is seeded last,
+      // so asking straight away tests that lag, not the selection this test is about.
+      await page.waitForTimeout(75_000);
     });
 
     const reply = await test.step('ask the lake a question only the late file answers', async () => {
