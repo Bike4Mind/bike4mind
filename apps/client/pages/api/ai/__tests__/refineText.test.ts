@@ -38,6 +38,7 @@ vi.mock('@client/services/operationsModelService', async orig => ({
 
 import handler from '@pages/api/ai/refineText';
 import { CacheKeys } from '@server/utils/cacheKeys';
+import { OperationsModelUnavailableError } from '@client/services/operationsModelService';
 
 describe('POST /api/ai/refineText', () => {
   beforeEach(() => {
@@ -85,6 +86,21 @@ describe('POST /api/ai/refineText', () => {
     // maxTokens is finite (not Infinity) - the whole point of the hardening.
     expect(complete.mock.calls[0][2].maxTokens).toBe(800);
     expect(res._getJSONData()).toEqual({ text: 'refined output' });
+  });
+
+  it('answers 500 (not 503) when the deployment has no operations text model', async () => {
+    mockGetCachedData.mockImplementation(async (_key: string, cb: () => Promise<string>) => cb());
+    mockGetOperationsModel.mockRejectedValue(
+      new OperationsModelUnavailableError('No text models available for operations')
+    );
+
+    const { req, res } = createMocks({ method: 'POST', body: { text: 'hello' } });
+    // The helper's translation, not the typed service error: a plain Error with no statusCode,
+    // so errorHandler's default 500. The v1 route is the one that maps it to 503.
+    const error = await handler(req as any, res as any).catch((e: unknown) => e);
+    expect(error).toMatchObject({ name: 'RefineProviderUnavailableError' });
+    expect((error as { statusCode?: number }).statusCode).toBeUndefined();
+    expect(mockRefineText).not.toHaveBeenCalled();
   });
 
   it('serves a cached refinement without recomputing', async () => {
