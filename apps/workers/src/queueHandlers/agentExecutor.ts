@@ -131,7 +131,11 @@ import {
 } from './agentExecutorUtils/toolPermissions';
 import { guardDecomposeOnce } from './agentExecutorUtils/decomposeGuard';
 import { resolveDisplayAnswer } from './agentExecutorUtils/truncatedReply';
-import { evaluateConfidenceGate } from './agentExecutorUtils/confidenceGate';
+import {
+  evaluateConfidenceGate,
+  formatConfidenceGateReason,
+  isPausingLowConfidenceStreak,
+} from './agentExecutorUtils/confidenceGate';
 import { guardPlanCompletion } from './agentExecutorUtils/planCompletionGuard';
 import { injectBriefContext } from './agentExecutorUtils/briefContextInjector';
 import { rehydrateOptiPlanState, ledgerForWrite } from './agentExecutorUtils/optiPlanLedger';
@@ -2700,8 +2704,8 @@ async function processExecution(
           // call, and the next one clears `iterationConfidences` at its own start
           // regardless - see `ReActAgent.takeIterationConfidence`.
           takeIterationConfidence: () => agent.takeIterationConfidence(),
-          recordIterationConfidence: (id, confidence) =>
-            agentExecutionRepository.recordIterationConfidence(id, confidence),
+          recordIterationConfidence: (id, confidence, options) =>
+            agentExecutionRepository.recordIterationConfidence(id, confidence, options),
           setPendingGate: (id, gate) => agentExecutionRepository.setPendingGate(id, gate),
           recordGateEmitted: id => agentExecutionRepository.recordGateEmitted(id),
         }
@@ -3175,6 +3179,8 @@ async function processExecution(
       // checked on non-terminal iterations (a final_answer iteration is
       // complete by definition; pausing it would discard the answer).
       // Failed tool calls do not count toward it - see `evaluateConfidenceGate`.
+      // It pauses on a streak of low iterations, not one (`LOW_CONFIDENCE_STREAK_TO_PAUSE`);
+      // the streak is persisted on the execution doc so it survives continuations.
       // Per-profile override wins over the global default; a profile threshold of 0
       // disables the gate entirely (confidence is never < 0) for unattended loops.
       const confidenceGateThreshold = orchestrationProfile?.confidenceGateThreshold ?? CONFIDENCE_GATE_THRESHOLD;
@@ -3185,15 +3191,18 @@ async function processExecution(
         threshold: confidenceGateThreshold,
         iterationSteps: iterationResult.allSteps,
       });
+      let lowConfidenceStreak = 0;
       if (gate !== null) {
         // Telemetry (#56 M1.1): record every iteration the gate evaluates -
         // including ones that complete in the same turn (isComplete=true) or
         // clear the threshold - so `evaluatedCount` is the true denominator for
         // fire rate. `recordGateEmitted` below increments the numerator only on
         // a real pause. Baseline observability before touching signal quality.
-        await agentExecutionRepository.recordIterationConfidence(executionId, gate.confidence);
+        lowConfidenceStreak = await agentExecutionRepository.recordIterationConfidence(executionId, gate.confidence, {
+          belowThreshold: gate.belowThreshold,
+        });
       }
-      if (gate?.pause) {
+      if (gate?.pausable && isPausingLowConfidenceStreak(lowConfidenceStreak)) {
         // 0-indexed wire convention: the agent reports 1-indexed
         // `this.iterations`, but the client's `IterationStream` and
         // `permission_request` use 0-indexed (see the matching subtraction
@@ -3201,7 +3210,7 @@ async function processExecution(
         // consistent so the eventual gate UI doesn't render an off-by-one
         // iteration label relative to the permission card.
         const wireIteration = Math.max(0, gate.iteration - 1);
-        const reason = `Iteration confidence ${(gate.confidence * 100).toFixed(0)}% below threshold ${(confidenceGateThreshold * 100).toFixed(0)}%`;
+        const reason = formatConfidenceGateReason(gate.confidence, confidenceGateThreshold, lowConfidenceStreak);
         const gatePayload = { iteration: wireIteration, confidence: gate.confidence, reason };
         logger.info('[ConfidenceGate] Pausing execution for human review', { executionId, ...gatePayload });
         // `updateCheckpoint` above already persisted the current iteration's
