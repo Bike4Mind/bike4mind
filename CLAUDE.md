@@ -163,7 +163,7 @@ Guardrails for new serverless resources in `infra/`:
 6. Per-dev stages bill 24/7 - design for teardown.
 7. Memory tuning beats consolidation for cost - use Lambda Power Tuning on hot paths.
 
-Agent continuation queue depth limits (self-dispatch): warn at 25, hard stop at 50. The constants live in `apps/workers/src/queueHandlers/agentExecutor.checkpointDepth.ts`.
+Agent continuation queue depth limits (self-dispatch): a warning tier (`CHECKPOINT_DEPTH_WARNING`) and a hard stop (`MAX_CHECKPOINT_DEPTH`), both defined in `apps/workers/src/queueHandlers/agentExecutor.checkpointDepth.ts`.
 
 ## Dependency management
 
