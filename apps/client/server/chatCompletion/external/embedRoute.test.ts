@@ -394,6 +394,12 @@ describe('POST /api/embed/chat', () => {
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
 
+  it('rejects a whitespace-only message (400)', async () => {
+    const res = await post({ messages: [{ role: 'user', content: '   ' }] });
+    expect(res.status).toBe(400);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
   it('returns 403 when the embed key organization no longer exists', async () => {
     mockOrgFindById.mockResolvedValue(null);
     const res = await post(CHAT);

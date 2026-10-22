@@ -1,7 +1,6 @@
 import { createCompletionCreditHolds } from '@server/billing/completionCreditHolds';
 import express, { type Request, type Response, type Express, type NextFunction } from 'express';
 import {
-  BadRequestError,
   CompletionRequestSchema,
   BadRequestError,
   HTTPError,

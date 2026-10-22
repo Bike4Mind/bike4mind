@@ -90,14 +90,16 @@ export const CliCompletionRequestAction = z.object({
   accessToken: z.string(),
   requestId: z.uuid(),
   model: z.string(),
-  messages: z.array(
-    z.object({
-      role: z.enum(['user', 'assistant', 'system']),
-      content: z.union([z.string(), z.array(z.unknown())]),
-      // per-message cache flag (Anthropic only - silently ignored elsewhere)
-      cache: z.boolean().optional(),
-    })
-  ),
+  messages: z
+    .array(
+      z.object({
+        role: z.enum(['user', 'assistant', 'system']),
+        content: z.union([z.string(), z.array(z.unknown())]),
+        // per-message cache flag (Anthropic only - silently ignored elsewhere)
+        cache: z.boolean().optional(),
+      })
+    )
+    .min(1),
   options: z
     .object({
       temperature: z.number().optional(),
