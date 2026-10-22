@@ -148,6 +148,7 @@ import { runBangCommand, killRunningBangCommands } from './utils/runBangCommand.
 import { whenTurnIdle } from './session/whenTurnIdle.js';
 import { isAxiosError } from 'axios';
 import { logger } from './utils/Logger';
+import { sanitizeTerminalText } from './utils/sanitizeTerminalText.js';
 import { startPeonNotifier, emitPeonSessionEnd } from './utils/peonNotifier';
 import packageJson from '../package.json';
 import type { ICreditTransactionResponse, ModelInfo } from '@bike4mind/common';
@@ -1915,11 +1916,9 @@ function CliApp() {
       const prefixWidth = 2 + nameWidth + 3; // "  " + name + " - "
       const maxDescLength = Math.max(20, terminalWidth - prefixWidth);
       agents.forEach(agent => {
-        const desc =
-          agent.description.length > maxDescLength
-            ? agent.description.slice(0, maxDescLength - 3) + '...'
-            : agent.description;
-        console.log(`  ${agent.name.padEnd(nameWidth)} - ${desc}`);
+        const description = sanitizeTerminalText(agent.description);
+        const desc = description.length > maxDescLength ? description.slice(0, maxDescLength - 3) + '...' : description;
+        console.log(`  ${sanitizeTerminalText(agent.name).padEnd(nameWidth)} - ${desc}`);
       });
       console.log('');
     }
@@ -2890,10 +2889,10 @@ function CliApp() {
               } else if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
                 console.log('\n❌ Cannot connect to server. Check your API configuration with /api-info\n');
               } else {
-                console.log(`\n❌ Error fetching usage data: ${error.message}\n`);
+                console.log(`\n\u274C Error fetching usage data: ${sanitizeTerminalText(error.message)}\n`);
               }
             } else if (error instanceof Error) {
-              console.log(`\n❌ Error: ${error.message}\n`);
+              console.log(`\n\u274C Error: ${sanitizeTerminalText(error.message)}\n`);
             } else {
               console.log('\n❌ Unexpected error fetching usage data. Please try again.\n');
             }
@@ -3130,7 +3129,9 @@ function CliApp() {
               console.log(`  Denied Tools: ${projectConfig.tools.denied.join(', ')}`);
             }
             if (projectConfig.mcpServers && projectConfig.mcpServers.length > 0) {
-              console.log(`  MCP Servers: ${projectConfig.mcpServers.map(s => s.name).join(', ')}`);
+              console.log(
+                `  MCP Servers: ${sanitizeTerminalText(projectConfig.mcpServers.map(s => s.name).join(', '))}`
+              );
             }
             console.log('');
           }
@@ -3141,7 +3142,7 @@ function CliApp() {
               console.log(`  Trusted Tools: ${localConfig.trustedTools.join(', ')}`);
             }
             if (localConfig.mcpServers && localConfig.mcpServers.length > 0) {
-              console.log(`  MCP Servers: ${localConfig.mcpServers.map(s => s.name).join(', ')}`);
+              console.log(`  MCP Servers: ${sanitizeTerminalText(localConfig.mcpServers.map(s => s.name).join(', '))}`);
             }
             console.log('');
           }
@@ -3624,10 +3625,12 @@ function CliApp() {
           const time = new Date(v.timestamp).toLocaleTimeString();
           const typeColor = v.type === 'filesystem' ? '\x1b[33m' : '\x1b[36m';
           const typeLabel = v.type === 'filesystem' ? 'FS ' : 'NET';
-          const target = v.path ?? v.domain ?? '';
-          console.log(`  ${typeColor}${typeLabel}\x1b[0m ${time} \x1b[90m${v.blockedBy}\x1b[0m ${target}`);
+          const target = sanitizeTerminalText(v.path ?? v.domain ?? '');
+          console.log(
+            `  ${typeColor}${typeLabel}\x1b[0m ${time} \x1b[90m${sanitizeTerminalText(v.blockedBy)}\x1b[0m ${target}`
+          );
           if (v.detail) {
-            console.log(`       \x1b[90m${v.detail.slice(0, 120)}\x1b[0m`);
+            console.log(`       \x1b[90m${sanitizeTerminalText(v.detail).slice(0, 120)}\x1b[0m`);
           }
         }
         console.log('');
@@ -3746,7 +3749,9 @@ function CliApp() {
       rewireReservedNames(state, rebuiltRegistry);
 
       for (const skippedPlugin of rebuilt.skipped) {
-        console.error(`\n\x1b[33m⚠️ Plugin ${skippedPlugin.name} skipped: ${skippedPlugin.reason}\x1b[0m`);
+        console.error(
+          `\n\x1b[33m\u26A0\uFE0F Plugin ${sanitizeTerminalText(skippedPlugin.name)} skipped: ${sanitizeTerminalText(skippedPlugin.reason)}\x1b[0m`
+        );
       }
 
       // Register new WS handlers. The feature-event socket is only opened at

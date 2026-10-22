@@ -1,4 +1,5 @@
 import type { AgentStep } from '@bike4mind/agents';
+import { sanitizeTerminalText } from '../utils/sanitizeTerminalText.js';
 
 /**
  * Bounds the height of the agent step trace while it is being rendered in
@@ -45,7 +46,8 @@ export const OBSERVATION_LIMIT = 200;
  * Appends '...' if truncated.
  */
 export function truncateValue(value: unknown, maxLength: number): string {
-  const str = typeof value === 'string' ? value : JSON.stringify(value);
+  // Sanitize before measuring so escape bytes neither count toward the limit nor get cut mid-sequence.
+  const str = sanitizeTerminalText(typeof value === 'string' ? value : JSON.stringify(value));
   if (str.length <= maxLength) {
     return str;
   }

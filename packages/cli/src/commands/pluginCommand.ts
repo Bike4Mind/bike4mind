@@ -11,6 +11,7 @@ import path from 'path';
 import { ConfigStore } from '../storage/ConfigStore.js';
 import type { CliConfig } from '../storage/types.js';
 import { PluginStore, getDefaultPluginsDir, isFeatureEnabled, type PluginDescriptor } from '../plugins/PluginStore.js';
+import { sanitizeTerminalText } from '../utils/sanitizeTerminalText.js';
 
 interface PluginCommandArgs {
   _: (string | number)[];
@@ -204,7 +205,9 @@ export async function handleAdd(spec: string, pluginsDir: string, configStore: C
 
   for (const descriptor of added) {
     if (!descriptor.valid) {
-      console.warn(`⚠️ ${descriptor.name} installed, but its manifest is invalid: ${descriptor.reason}`);
+      console.warn(
+        `\u26A0\uFE0F ${sanitizeTerminalText(descriptor.name)} installed, but its manifest is invalid: ${sanitizeTerminalText(descriptor.reason)}`
+      );
       console.warn('It will not load until the manifest is fixed.');
       continue;
     }

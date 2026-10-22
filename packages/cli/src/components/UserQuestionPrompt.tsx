@@ -2,7 +2,7 @@ import React, { useState, useCallback } from 'react';
 import { Box, Text, useInput } from 'ink';
 import TextInput from 'ink-text-input';
 import type { UserQuestionPayload, UserQuestionResponse, UserQuestionAnswer } from '@bike4mind/services/llm';
-import { escapeTerminalControlChars } from './PermissionPrompt';
+import { escapeTerminalControlChars } from '../utils/sanitizeTerminalText.js';
 
 export interface UserQuestionPromptProps {
   payload: UserQuestionPayload;
