@@ -2,16 +2,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { z } from 'zod';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
-import { getAvailableTimeSlots } from '@server/integrations/google/calendar/common';
-
-const isValidTimeZone = (tz: string) => {
-  try {
-    new Intl.DateTimeFormat('en-US', { timeZone: tz });
-    return true;
-  } catch {
-    return false;
-  }
-};
+import { getAvailableTimeSlots, isValidTimeZone } from '@server/integrations/google/calendar/common';
 
 const AvailableRequestSchema = z.object({
   year: z.number().int().min(2000).max(2100),

@@ -41,6 +41,15 @@ dayjs.extend(timezone);
 dayjs.extend(isBetween);
 dayjs.extend(weekOfYear);
 
+export const isValidTimeZone = (tz: string) => {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 export async function getAvailableTimeSlots(year: number, week: number, timeZone: string) {
   const currentDate = dayjs().year(year);
 

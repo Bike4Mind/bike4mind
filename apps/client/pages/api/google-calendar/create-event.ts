@@ -2,16 +2,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { z } from 'zod';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
-import { createEvent } from '@server/integrations/google/calendar/common';
-
-const isValidTimeZone = (tz: string) => {
-  try {
-    new Intl.DateTimeFormat('en-US', { timeZone: tz });
-    return true;
-  } catch {
-    return false;
-  }
-};
+import { createEvent, isValidTimeZone } from '@server/integrations/google/calendar/common';
 
 export const CreateEventRequestSchema = z.object({
   objective: z.string().min(1).max(2000),
