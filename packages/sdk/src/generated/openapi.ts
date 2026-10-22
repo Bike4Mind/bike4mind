@@ -3436,6 +3436,32 @@ export interface components {
       attachmentDelivery?: {
         [key: string]: unknown;
       };
+      turnTiming?: {
+        queueMs: number;
+        contextBuildMs?: number;
+        semaphoreWaitMs: number;
+        totalMs?: number;
+        fallbackHops: number;
+        retries: {
+          /** @enum {string} */
+          reason:
+            | 'stream_idle_timeout'
+            | 'stream_truncated'
+            | 'request_timeout'
+            | 'rate_limit'
+            | 'overloaded'
+            | 'server_error'
+            | 'transport'
+            | 'tool_pairing'
+            | 'other';
+          status?: number;
+          retryAfterMs?: number;
+          requestId?: string;
+          delayMs: number;
+          model: string;
+          at: string;
+        }[];
+      };
       executionTracking?: unknown;
     };
     /**

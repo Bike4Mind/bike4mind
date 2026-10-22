@@ -96,6 +96,8 @@ import {
   safeInputWindow,
   withTokenEstimateMultiplier,
 } from '@bike4mind/utils';
+import { isRequestTimeoutError, isStreamIdleTimeoutError, isToolPairingError } from './llmErrorPredicates';
+import { TurnTimingRecorder } from './turnTiming';
 import type { FabFileNotice, EmbeddingCredential } from '@bike4mind/utils';
 import { buildAttachmentNoticePrompt, toAttachmentNoticeStrings } from './attachmentNotices';
 import { buildPromptMetaModel } from './buildPromptMetaModel';
@@ -532,19 +534,7 @@ export function resolveQuestErrorCode(error: unknown): QuestErrorCode | undefine
  */
 export const FORCE_FALLBACK_TEST_MARKER = '[[force-provider-fallback]]';
 
-function isToolPairingError(error: Error): boolean {
-  const msg = error.message.toLowerCase();
-  // Match known Anthropic tool-pairing failure patterns:
-  // - messages mentioning both "tool_use" and "tool_result"
-  // - messages mentioning "tool_use_id" (e.g., "unexpected tool_use_id")
-  const hasToolUseAndResult = msg.includes('tool_use') && msg.includes('tool_result');
-  const hasToolUseIdVariant = msg.includes('tool_use_id');
-  return hasToolUseAndResult || hasToolUseIdVariant;
-}
-
-export function isRequestTimeoutError(error: Error): boolean {
-  return error.message.includes('request timeout') || error.message.includes('Request timeout');
-}
+export { isRequestTimeoutError, isStreamIdleTimeoutError };
 
 /**
  * True when an error is a request abort/cancellation (user stop, client
@@ -560,10 +550,6 @@ export function isAbortError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
   if (error.name === 'AbortError') return true;
   return error.message.toLowerCase().includes('aborted');
-}
-
-export function isStreamIdleTimeoutError(error: Error): boolean {
-  return error.message.includes('stream timeout') || error.message.includes('Stream timeout');
 }
 
 /**
@@ -1886,6 +1872,14 @@ export class ChatCompletionProcess {
     const enableMementos = initialEnableMementos;
     let enableAgents = initialEnableAgents;
     const { questId, sessionId, promptMode } = parsedBody;
+    // From the attempt's timestamp, not createdAt: a user retry reuses the quest doc. The snapshot
+    // replaces any record a previous attempt left, before the first frame streams it. Backend-
+    // reported retries and slot waits land through `onChange`, so live frames and a last save
+    // (a Lambda that dies mid-turn) carry them too, not only the sites below that record directly.
+    const turnTiming = new TurnTimingRecorder(quest.timestamp, processStartTime, logger, snapshot => {
+      quest.turnTiming = snapshot;
+    });
+    quest.turnTiming = turnTiming.snapshot();
 
     // Variables to store actual timing durations
     let actualArtifactProcessingDuration = 0;
@@ -2108,6 +2102,7 @@ export class ChatCompletionProcess {
         // Try to clean up the quest if session doesn't exist
         setTerminalQuestStatus(quest, 'stopped');
         quest.replies = ['Session not found. Please create a new session or refresh the page.'];
+        turnTiming.finish();
         await saveQuest(quest);
         return;
       }
@@ -2124,6 +2119,9 @@ export class ChatCompletionProcess {
       if (latestQuestStatus?.status === 'stopped') {
         logger.info(`Quest ${questId} was stopped before processing started`);
         setTerminalQuestStatus(quest, 'stopped');
+        // The finally block's terminal frame carries the record, so end it here rather than
+        // leaving a total-less record that would read as "still running" forever.
+        turnTiming.finish();
         return;
       }
       quest.status = 'running';
@@ -2677,6 +2675,14 @@ export class ChatCompletionProcess {
       const takeoverFeature = featureResults.find(({ result }) => result?.shouldContinue === false);
       if (takeoverFeature) {
         logger.log(`✅ Feature '${takeoverFeature.name}' has taken over processing`);
+        // The feature finishes the turn outside this flow, so this partial record (no total, only
+        // the queue wait) would render as "still running" on a reply it never tracked. Drop it
+        // rather than have the Answer diagnosis claim coverage the turn did not get. The setup save
+        // already persisted it, and a `$set` of `undefined` is dropped, so unset it in the DB too.
+        quest.turnTiming = undefined;
+        void this.db.quests
+          .update({ id: quest.id }, { unset: ['turnTiming'] })
+          .catch(error => logger.warn('Failed to drop turnTiming after feature takeover:', error));
         this.sendStatusUpdate(quest, null, { immediate: true });
         return;
       }
@@ -4758,6 +4764,9 @@ export class ChatCompletionProcess {
           })),
         });
 
+        // This path skips the normal finalize below, so end the record here: the reply is done
+        // and its Answer diagnosis would otherwise show "still running" permanently.
+        turnTiming.finish();
         await saveQuest(quest);
 
         // Send final status update to complete the Research Mode processing
@@ -4776,6 +4785,7 @@ export class ChatCompletionProcess {
       );
 
       timer.phase('llm_completion');
+      turnTiming.markLlmRequestStarted();
       logger.info(`⏱️ [${Date.now() - processStartTime}ms] === LLM STREAMING PHASE START ===`);
 
       // Bounded multi-hop fallback: a provider-wide outage walks the preference chain one
@@ -4996,6 +5006,7 @@ export class ChatCompletionProcess {
                 cacheStrategy,
                 _internal: {
                   ...options._internal,
+                  turnTelemetry: turnTiming.sink,
                   enableIdleTimeout,
                   enableRequestTimeout: enableIdleTimeout,
                   idleTimeoutMs: idleTimeoutSeconds * 1000,
@@ -5241,6 +5252,7 @@ export class ChatCompletionProcess {
               );
               messages = stripAllToolBlocks(messages, logger);
               outboundMessages = stripAllToolBlocks(outboundMessages, logger);
+              turnTiming.recordRetry(lastError, 0, currentModel.id);
 
               resetStreamStateForRetry();
 
@@ -5275,6 +5287,7 @@ export class ChatCompletionProcess {
                   { statusAt: new Date() }
                 );
 
+                turnTiming.recordRetry(lastError, totalDelay, currentModel.id);
                 await new Promise(resolve => setTimeout(resolve, totalDelay));
 
                 resetStreamStateForRetry();
@@ -5300,6 +5313,7 @@ export class ChatCompletionProcess {
 
               this.sendStatusUpdate(quest, 'AI service is slow, retrying...', { statusAt: new Date() });
 
+              turnTiming.recordRetry(lastError, TIMEOUT_RETRY_DELAY_MS + jitter, currentModel.id);
               await new Promise(resolve => setTimeout(resolve, TIMEOUT_RETRY_DELAY_MS + jitter));
 
               resetStreamStateForRetry();
@@ -5321,6 +5335,7 @@ export class ChatCompletionProcess {
 
               this.sendStatusUpdate(quest, 'AI service is slow, retrying...', { statusAt: new Date() });
 
+              turnTiming.recordRetry(lastError, STREAM_IDLE_RETRY_DELAY_MS + jitter, currentModel.id);
               await new Promise(resolve => setTimeout(resolve, STREAM_IDLE_RETRY_DELAY_MS + jitter));
 
               resetStreamStateForRetry();
@@ -5372,6 +5387,9 @@ export class ChatCompletionProcess {
               primaryFailureReason ??= sanitizeTelemetryError(lastError);
               fallbackAttempt++;
               triedModelIds.add(currentModel.id);
+              // The failure that caused the hop is a retry too, on another model.
+              turnTiming.recordRetry(lastError, 0, failedModel.id);
+              turnTiming.recordFallbackHop();
 
               logger.info(`🔄 [Fallback] Switching to fallback model: ${currentModel.id} (attempt ${fallbackAttempt})`);
 
@@ -6500,6 +6518,9 @@ export class ChatCompletionProcess {
         clearStaleFallbackInfoIfNoAnswer();
 
         timer.phase('save');
+        // Before the terminal frame, so totalMs rides it and the awaited save below rather than
+        // only the fire-and-forget final save.
+        turnTiming.finish();
 
         // P4-b: Fire-and-forget status update, don't block on WebSocket delivery
         this.sendStatusUpdate(quest, `Completed Quest`, { statusAt: new Date(), silent: true });
@@ -6604,11 +6625,14 @@ export class ChatCompletionProcess {
         logger.error(`❌ [POST_PROCESS] Error in post-streaming processing for quest ${questId}:`, postProcessError);
         setTerminalQuestStatus(quest, successStatus());
         clearStaleFallbackInfoIfNoAnswer();
+        turnTiming.finish();
         // Ensure quest is persisted as 'done' even if the error occurred before the normal save
         await saveQuest(quest);
       }
     } catch (err) {
       const totalResponseTime = Date.now() - processStartTime;
+      // Every branch below that saves the quest keeps the failed turn's timing too.
+      turnTiming.finish();
 
       // A Stop or disconnect that threw, or a later tool call refused for credits, still bills what
       // streamed and the tools already delivered; the rollback below then has nothing left to refund.

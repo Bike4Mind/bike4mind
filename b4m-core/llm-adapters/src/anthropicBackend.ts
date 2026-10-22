@@ -1096,8 +1096,9 @@ export class AnthropicBackend implements ICompletionBackend {
       // a PRIOR turn that had tools, even when THIS turn offers none (e.g. toolMode switched off
       // between turns) - Anthropic rejects any tool_use/tool_result block when `tools` is absent
       // from the request regardless of pairing, and a balanced count means the mismatch repair
-      // below never fires. Strip proactively instead of relying on the post-400 retry in
-      // ChatCompletionProcess's isToolPairingError net to recover a request we can predict fails.
+      // below never fires. Strip proactively instead of relying on the post-400 retry in the
+      // completion loop's isToolPairingError net (services/src/llm/llmErrorPredicates.ts) to
+      // recover a request we can predict fails.
       if (!options.tools?.length) {
         this.logger.warn(
           `[Pre-API #6181] Tool blocks present (tool_use: ${toolUseCount}, tool_result: ${toolResultCount}, server: ${serverBlockCount}) but no tools offered this turn. Stripping all tool blocks.`
@@ -1494,7 +1495,9 @@ export class AnthropicBackend implements ICompletionBackend {
             // aborts leaves the queue instead of consuming a slot it can no longer use.
             let release: SlotRelease | undefined;
             try {
+              const slotRequestedAt = Date.now();
               release = await acquireSlot({ tenantKey: this._endUserId, signal: combinedSignal });
+              options._internal?.turnTelemetry?.onSemaphoreWait(Date.now() - slotRequestedAt);
               // Diagnostic logging: Capture payload size to help debug hanging issues
               const payloadForSize = { ...apiParams, stream: true };
               const payloadSizeBytes = Buffer.byteLength(JSON.stringify(payloadForSize), 'utf8');
@@ -1535,6 +1538,7 @@ export class AnthropicBackend implements ICompletionBackend {
                   isRetryable: err => isRetryableError(err) && !isUserInitiatedAbort(err, options.abortSignal),
                   logger: this.logger,
                   abortSignal: combinedSignal,
+                  onRetry: ({ error, delayMs }) => options._internal?.turnTelemetry?.onRetry({ error, delayMs, model }),
                 }
               ).then(r => r.result);
 
@@ -1956,8 +1960,9 @@ export class AnthropicBackend implements ICompletionBackend {
                   lastEventType,
                   funcEntries: func.filter(f => f?.name).length,
                 });
-                // Worded to include "stream timeout" so ChatCompletionProcess's
-                // isStreamIdleTimeoutError retries once and then falls back, the same as
+                // Worded to include "stream timeout" so the completion loop's
+                // isStreamIdleTimeoutError (services/src/llm/llmErrorPredicates.ts) retries once and
+                // then falls back, the same as
                 // the Bedrock truncation error in bedrockBackend/base.ts. Must not say
                 // "aborted": isAbortError would then treat it as a benign cancel.
                 reject(
@@ -2552,8 +2557,10 @@ export class AnthropicBackend implements ICompletionBackend {
         let roundStart = Date.now();
         let release: SlotRelease | undefined;
         try {
+          const slotRequestedAt = Date.now();
           release = await acquireSlot({ tenantKey: this._endUserId, signal: options.abortSignal });
           roundStart = Date.now();
+          options._internal?.turnTelemetry?.onSemaphoreWait(roundStart - slotRequestedAt);
           // Wrap with retry for transient network errors (TLS abort, fetch terminated)
           response = await withRetry(
             () =>
@@ -2569,6 +2576,7 @@ export class AnthropicBackend implements ICompletionBackend {
               isRetryable: err => isRetryableError(err) && !isUserInitiatedAbort(err, options.abortSignal),
               logger: this.logger,
               abortSignal: options.abortSignal,
+              onRetry: ({ error, delayMs }) => options._internal?.turnTelemetry?.onRetry({ error, delayMs, model }),
             }
           ).then(r => r.result);
         } finally {

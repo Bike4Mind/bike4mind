@@ -6205,6 +6205,87 @@
             "type": "object",
             "additionalProperties": {}
           },
+          "turnTiming": {
+            "type": "object",
+            "properties": {
+              "queueMs": {
+                "type": "number"
+              },
+              "contextBuildMs": {
+                "type": "number"
+              },
+              "semaphoreWaitMs": {
+                "type": "number"
+              },
+              "totalMs": {
+                "type": "number"
+              },
+              "fallbackHops": {
+                "type": "number"
+              },
+              "retries": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "stream_idle_timeout",
+                        "stream_truncated",
+                        "request_timeout",
+                        "rate_limit",
+                        "overloaded",
+                        "server_error",
+                        "transport",
+                        "tool_pairing",
+                        "other"
+                      ]
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "retryAfterMs": {
+                      "type": "number"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "delayMs": {
+                      "type": "number"
+                    },
+                    "model": {
+                      "type": "string"
+                    },
+                    "at": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        {
+                          "type": "string",
+                          "format": "date-time"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "delayMs",
+                    "model",
+                    "at"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "queueMs",
+              "semaphoreWaitMs",
+              "fallbackHops",
+              "retries"
+            ]
+          },
           "executionTracking": {}
         },
         "required": [
