@@ -180,6 +180,19 @@ const handler = baseApi({ auth: false })
         return res.status(403).json({ error: 'This account has been suspended.' });
       }
 
+      // A configured bootstrap admin whose account was created but never promoted (a write failed
+      // after creation) is promoted on this sign-in, so the install is not left without an admin.
+      if (
+        process.env.B4M_SELF_HOST === 'true' &&
+        !existingUser.isAdmin &&
+        normalizedEmail === configuredBootstrapAdminEmail() &&
+        (await userRepository.count({ isAdmin: true })) === 0
+      ) {
+        existingUser.isAdmin = true;
+        await userRepository.update({ id: existingUser.id, isAdmin: true });
+        req.logger.info('Self-host bootstrap: configured admin promoted on sign-in', { userId: existingUser.id });
+      }
+
       // OTC proves email ownership - mark verified on first successful sign-in.
       // Best-effort: the nonce is already rotated, so a transient write failure on this
       // bookkeeping must not 500 a proven login (the retry would dead-end as "Invalid
@@ -340,15 +353,17 @@ const handler = baseApi({ auth: false })
     }
 
     // Only the claim winner is the bootstrap user; anyone else registers under the normal rules.
-    const bootstrapClaimId = bootstrap.eligible ? await claimBootstrapAdmin() : null;
-    const isBootstrapUser = bootstrapClaimId !== null;
-    const partnerDomainAllowed = !isBootstrapUser && (await isPartnerDomainSignupAllowed(normalizedEmail, true));
+    let bootstrapClaimId: string | null = null;
 
     // Register + finalize (email-verified state, deferred free-credit grant) in one
     // service call. registerViaOTC grants credits BEFORE dropping the pending tag, so
     // a grant failure leaves a retry breadcrumb rather than losing credits.
     let newUser: Awaited<ReturnType<typeof userService.registerViaOTC>>;
     try {
+      // Inside the try so a claim or lookup failure still re-issues the token (the nonce is spent).
+      bootstrapClaimId = bootstrap.eligible ? await claimBootstrapAdmin() : null;
+      const partnerDomainAllowed =
+        bootstrapClaimId === null && (await isPartnerDomainSignupAllowed(normalizedEmail, true));
       newUser = await userService.registerViaOTC(
         {
           username: username.trim(),
@@ -388,7 +403,7 @@ const handler = baseApi({ auth: false })
             creditLots: creditLotRepository,
           },
           logger: req.logger,
-          skipInviteCheck: isBootstrapUser || partnerDomainAllowed,
+          skipInviteCheck: bootstrapClaimId !== null || partnerDomainAllowed,
         }
       );
     } catch (err) {
@@ -420,6 +435,8 @@ const handler = baseApi({ auth: false })
       req.logger.error('OTC inline registration failed', err);
       throw new InternalServerError('Registration failed. Please try again.', { pendingToken: reissuedToken });
     }
+
+    const isBootstrapUser = bootstrapClaimId !== null;
 
     // Promote the self-host bootstrap account so the instance has an admin from day one.
     if (isBootstrapUser && newUser?.id) {

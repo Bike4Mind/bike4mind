@@ -1010,6 +1010,7 @@ describe('/api/otc/verify - partner-domain invite bypass', () => {
 
   it('admits the self-host bootstrap user to username entry without a partner rule', async () => {
     vi.stubEnv('B4M_SELF_HOST', 'true');
+    vi.stubEnv('B4M_BOOTSTRAP_ADMIN_EMAIL', '');
     const { userRepository } = await import('@bike4mind/database');
     vi.mocked(userRepository.count).mockResolvedValue(0);
     const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
@@ -1057,6 +1058,7 @@ describe('/api/otc/verify - partner-domain invite bypass', () => {
 
   it('leaves the self-host bootstrap bypass unchanged', async () => {
     vi.stubEnv('B4M_SELF_HOST', 'true');
+    vi.stubEnv('B4M_BOOTSTRAP_ADMIN_EMAIL', '');
     const { userRepository } = await import('@bike4mind/database');
     vi.mocked(userRepository.count).mockResolvedValue(0);
     mockUserUpdate.mockResolvedValue({ id: 'user-1', tokenVersion: 0, currentCredits: 0, isAdmin: true });
@@ -1073,6 +1075,7 @@ describe('/api/otc/verify - self-host bootstrap admin', () => {
   const OTHER_EMAIL = 'someone@example.com';
   const skipInviteCheckArg = (call = 0) => mockRegisterViaOTC.mock.calls[call][1].skipInviteCheck;
   const warnOf = (req: object) => (req as { logger: { warn: ReturnType<typeof vi.fn> } }).logger.warn;
+  const errorOf = (req: object) => (req as { logger: { error: ReturnType<typeof vi.fn> } }).logger.error;
   const adminPromotions = () => mockUserUpdate.mock.calls.filter(([update]) => update.isAdmin === true);
 
   beforeEach(async () => {
@@ -1195,16 +1198,104 @@ describe('/api/otc/verify - self-host bootstrap admin', () => {
     expect([skipInviteCheckArg(0), skipInviteCheckArg(1)].sort()).toEqual([false, true]);
   });
 
-  it('frees the claim when the bootstrap registration fails', async () => {
+  it('passes the stale-claim window to the claim', async () => {
+    vi.stubEnv('B4M_BOOTSTRAP_ADMIN_EMAIL', ADMIN_EMAIL);
+    const { req, res } = makeReqRes(ADMIN_EMAIL);
+
+    await handler(req, res);
+
+    expect(mockClaimOnce).toHaveBeenCalledWith('selfHostBootstrap', expect.any(String), 300_000);
+  });
+
+  it('frees the winning claim when the bootstrap registration fails', async () => {
     vi.stubEnv('B4M_BOOTSTRAP_ADMIN_EMAIL', ADMIN_EMAIL);
     mockRegisterViaOTC.mockRejectedValueOnce(new Error('db down'));
     const failed = makeReqRes(ADMIN_EMAIL);
     await handler(failed.req, failed.res).catch(() => undefined);
     expect(mockReleaseClaim).toHaveBeenCalledTimes(1);
+    expect(mockReleaseClaim).toHaveBeenCalledWith('selfHostBootstrap', mockClaimOnce.mock.calls[0][1]);
 
     const retry = makeReqRes(ADMIN_EMAIL);
     await handler(retry.req, retry.res);
 
     expect(adminPromotions()).toHaveLength(1);
+  });
+
+  it('still returns the registration error and a fresh token when releasing the claim fails', async () => {
+    vi.stubEnv('B4M_BOOTSTRAP_ADMIN_EMAIL', ADMIN_EMAIL);
+    mockRegisterViaOTC.mockRejectedValueOnce(new Error('db down'));
+    mockReleaseClaim.mockRejectedValueOnce(new Error('release down'));
+    const { req, res } = makeReqRes(ADMIN_EMAIL);
+
+    const err = await handler(req, res).catch((e: unknown) => e);
+
+    expect(err).toMatchObject({ additionalInfo: { pendingToken: expect.any(String) } });
+    expect(errorOf(req)).toHaveBeenCalledWith('Self-host bootstrap claim release failed', expect.any(Error));
+  });
+
+  it('does not release a claim it lost when its own registration fails', async () => {
+    vi.stubEnv('B4M_BOOTSTRAP_ADMIN_EMAIL', '');
+    claims.set('selfHostBootstrap', 'someone-elses-claim');
+    mockRegisterViaOTC.mockRejectedValueOnce(new Error('db down'));
+    const { req, res } = makeReqRes(OTHER_EMAIL);
+
+    await handler(req, res).catch(() => undefined);
+
+    expect(mockReleaseClaim).not.toHaveBeenCalled();
+    expect(claims.get('selfHostBootstrap')).toBe('someone-elses-claim');
+  });
+
+  it('re-issues the token when the claim itself fails', async () => {
+    vi.stubEnv('B4M_BOOTSTRAP_ADMIN_EMAIL', ADMIN_EMAIL);
+    mockClaimOnce.mockRejectedValueOnce(new Error('db down'));
+    const { req, res } = makeReqRes(ADMIN_EMAIL);
+
+    const err = await handler(req, res).catch((e: unknown) => e);
+
+    expect(err).toMatchObject({ additionalInfo: { pendingToken: expect.any(String) } });
+    expect(mockRegisterViaOTC).not.toHaveBeenCalled();
+    expect(mockReleaseClaim).not.toHaveBeenCalled();
+  });
+
+  describe('configured admin whose account exists without admin rights', () => {
+    const existing = { id: 'user-existing', email: ADMIN_EMAIL, emailVerified: true, tokenVersion: 0 };
+
+    beforeEach(async () => {
+      vi.stubEnv('B4M_BOOTSTRAP_ADMIN_EMAIL', ADMIN_EMAIL);
+      mockFindByEmail.mockResolvedValue({ ...existing });
+      const { userRepository } = await import('@bike4mind/database');
+      vi.mocked(userRepository.count).mockResolvedValue(0);
+    });
+
+    it('promotes on sign-in when the install has no admin', async () => {
+      const { userRepository } = await import('@bike4mind/database');
+      vi.mocked(userRepository.count).mockImplementation(async (filter?: object) =>
+        filter && 'isAdmin' in filter ? 0 : 1
+      );
+      const { req, res } = makeReqRes(ADMIN_EMAIL);
+
+      await handler(req, res);
+
+      expect(adminPromotions()).toEqual([[{ id: 'user-existing', isAdmin: true }]]);
+    });
+
+    it('does not promote when the install already has an admin', async () => {
+      const { userRepository } = await import('@bike4mind/database');
+      vi.mocked(userRepository.count).mockResolvedValue(1);
+      const { req, res } = makeReqRes(ADMIN_EMAIL);
+
+      await handler(req, res);
+
+      expect(adminPromotions()).toHaveLength(0);
+    });
+
+    it('does not promote an account that is not the configured email', async () => {
+      mockFindByEmail.mockResolvedValue({ ...existing, email: OTHER_EMAIL });
+      const { req, res } = makeReqRes(OTHER_EMAIL);
+
+      await handler(req, res);
+
+      expect(adminPromotions()).toHaveLength(0);
+    });
   });
 });
