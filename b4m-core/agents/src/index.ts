@@ -196,6 +196,10 @@ export {
   buildReferenceOrientPrompt,
   buildReferenceReflectPrompt,
   buildReferenceGroomPrompt,
+  // Agent-extension registry: contributed surface profiles + tool-map guards.
+  createAgentExtensionRegistry,
+  CONTRIBUTED_GUARD_PRIORITY_MIN,
+  CONTRIBUTED_GUARD_PRIORITY_MAX,
 } from './deepAgent/runtime';
 export type {
   DeepAgentStore,
@@ -214,6 +218,16 @@ export type {
   ReActRunActConfig,
   LinkedAgentContext,
   BackendWakeStepsConfig,
+  AgentExtensionContribution,
+  AgentExtensionListing,
+  AgentExtensionLogger,
+  AgentExtensionRegistry,
+  AgentExtensionSource,
+  ResolvedOrchestrationProfile,
+  SurfaceProfileContext,
+  SurfaceProfileEntry,
+  ToolMapGuardContext,
+  ToolMapGuardEntry,
 } from './deepAgent/runtime';
 
 // -- Persistent REPL substrate (RLM pattern) --
