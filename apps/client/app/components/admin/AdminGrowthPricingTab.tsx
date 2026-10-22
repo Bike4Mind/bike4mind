@@ -1,7 +1,15 @@
 import { useMemo } from 'react';
 import { Alert, Card, CardContent, Divider, LinearProgress, Stack, Typography } from '@mui/joy';
 import WarningIcon from '@mui/icons-material/Warning';
-import { resolveTeamPlanSettings, settingsMap, type SettingKey } from '@bike4mind/common';
+import {
+  creditsToUsdAtFloor,
+  formatUsd,
+  formatUsdPerCredit,
+  MIN_PRICE_PER_CREDIT_USD,
+  resolveTeamPlanSettings,
+  settingsMap,
+  type SettingKey,
+} from '@bike4mind/common';
 import { useSettingsFromServer } from '@client/app/hooks/data/settings';
 import AdminSettingInputField from './AdminSettingInputField';
 
@@ -40,6 +48,28 @@ const formatValue = (value: unknown): string => {
   if (value === undefined || value === null || value === '') return 'not set';
   if (typeof value === 'number') return value.toLocaleString();
   return String(value);
+};
+
+/**
+ * Unit and derived value shown under a setting's current value, so a bare number reads as money.
+ * Credit grants are valued at the floor rate because that is what credit packs sell at
+ * (apps/client/lib/credits/constants.ts).
+ */
+export const describeDerivedValue = (key: SettingKey, value: unknown): string | null => {
+  const amount = typeof value === 'number' ? value : Number(value);
+  const floor = `floor ${formatUsdPerCredit(MIN_PRICE_PER_CREDIT_USD)} per credit`;
+  switch (key) {
+    case 'defaultFreeCredits':
+    case 'ReferralCreditsAmount':
+      if (!Number.isFinite(amount)) return null;
+      return `${amount.toLocaleString()} credits = ${formatUsd(creditsToUsdAtFloor(amount))} at the ${floor}`;
+    case 'pricePerCredit':
+      return Number.isFinite(amount)
+        ? `${formatUsdPerCredit(amount)} per credit (USD) - ${floor}`
+        : `USD per credit - ${floor}`;
+    default:
+      return null;
+  }
 };
 
 const AdminGrowthPricingTab = () => {
@@ -112,6 +142,7 @@ const AdminGrowthPricingTab = () => {
                 const setting = settingsMap[key];
                 const stored = storedByKey.get(key);
                 const current = stored ?? setting.defaultValue;
+                const derived = describeDerivedValue(key, current);
                 return (
                   <div key={key}>
                     <Typography
@@ -122,6 +153,15 @@ const AdminGrowthPricingTab = () => {
                       Current: {formatValue(current)}
                       {stored === undefined ? ' (default)' : ` - default ${formatValue(setting.defaultValue)}`}
                     </Typography>
+                    {derived && (
+                      <Typography
+                        level="body-xs"
+                        sx={{ color: 'text.tertiary', mb: 0.5 }}
+                        data-testid={`admin-growth-pricing-derived-${key}`}
+                      >
+                        {derived}
+                      </Typography>
+                    )}
                     <AdminSettingInputField
                       // Remount when the stored value changes so the editor never shows a stale draft.
                       key={`${key}-${JSON.stringify(stored ?? null)}`}
