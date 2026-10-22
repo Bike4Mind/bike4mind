@@ -77,13 +77,22 @@ const checkCompletionsMethod = createMethodGuard([createCompletionContract.metho
 // connection during a token-less gap (e.g. extended thinking). Matches the v1 cadence.
 const HEARTBEAT_INTERVAL_MS = 10_000;
 const UPSTREAM_CALLER_ERROR_STATUSES = new Set([400, 404, 413, 422]);
+// Provider 4xx that are our deployment's fault (a retired or unreachable model, our provider
+// credit balance), not the caller's input: they stay provider_error at error level. The model
+// phrases mirror shouldTriggerFallback in b4m-core/utils/src/adminSettings/fallback.ts.
+const OPERATOR_SIDE_4XX_MESSAGES = [
+  'no longer available',
+  'is not available',
+  'does not exist or you do not have access',
+  'model not found',
+  'credit balance',
+];
 
 function isUpstreamCallerError(error: unknown): error is Error {
-  return (
-    error instanceof Error &&
-    !(error instanceof HTTPError) &&
-    UPSTREAM_CALLER_ERROR_STATUSES.has(getHttpStatus(error) ?? 0)
-  );
+  if (!(error instanceof Error) || error instanceof HTTPError) return false;
+  if (!UPSTREAM_CALLER_ERROR_STATUSES.has(getHttpStatus(error) ?? 0)) return false;
+  const message = error.message.toLowerCase();
+  return !OPERATOR_SIDE_4XX_MESSAGES.some(phrase => message.includes(phrase));
 }
 
 function requestIdFrom(headers: Record<string, string | undefined>): string {

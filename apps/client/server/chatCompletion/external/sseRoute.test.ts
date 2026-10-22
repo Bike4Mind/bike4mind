@@ -429,6 +429,8 @@ describe('POST /api/ai/v1/completions - stream', () => {
 
   const RAW_UPSTREAM =
     '{"error":{"code":404,"message":"models/gemini-2.5-flash is no longer available to new users","status":"NOT_FOUND"}}';
+  const RAW_CALLER_UPSTREAM =
+    '{"type":"error","error":{"type":"invalid_request_error","message":"messages: at least one message is required"}}';
 
   it.each([
     [401, 'provider_rejected', 'Model provider rejected our credentials'],
@@ -459,7 +461,7 @@ describe('POST /api/ai/v1/completions - stream', () => {
   it.each(UPSTREAM_CALLER_ERRORS)(
     'classifies an upstream $name after the stream opened as a sanitized, non-retryable caller error',
     async ({ status, properties }) => {
-      const upstream = Object.assign(new Error(RAW_UPSTREAM), properties);
+      const upstream = Object.assign(new Error(RAW_CALLER_UPSTREAM), properties);
       mockExecuteCompletion.mockImplementationOnce(failAfterReady(upstream));
 
       const text = await (await post()).text();
@@ -467,13 +469,34 @@ describe('POST /api/ai/v1/completions - stream', () => {
         code: 'invalid_request',
         message: 'The model provider rejected the request',
       });
-      expect(text).not.toContain('no longer available');
+      expect(text).not.toContain('at least one message');
       expect(mockLoggerWarn).toHaveBeenCalledWith(
         '[CLI_LLM] Handler error',
         expect.objectContaining({ upstreamStatus: status })
       );
       expect(mockLoggerError).not.toHaveBeenCalled();
       expect(mockEmitProcessingFailed).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([
+    [404, RAW_UPSTREAM],
+    [404, 'The model `gpt-x` does not exist or you do not have access to it.'],
+    [404, 'Claude Fable 5 is not available. Please use Opus 4.8'],
+    [400, 'Your credit balance is too low to access the Anthropic API.'],
+  ] as const)(
+    'keeps an operator-side upstream %s (%s) after the stream opened as provider_error at error',
+    async (status, raw) => {
+      const upstream = Object.assign(new Error(raw), { status });
+      mockExecuteCompletion.mockImplementationOnce(failAfterReady(upstream));
+
+      const text = await (await post()).text();
+      expect(errorFrame(text)).toMatchObject({
+        code: 'provider_error',
+        message: `Model provider returned an error (upstream ${status})`,
+      });
+      expect(mockLoggerError).toHaveBeenCalledWith('[CLI_LLM] Handler error', expect.anything());
+      expect(mockEmitProcessingFailed).toHaveBeenCalledWith('cli-sse', upstream);
     }
   );
 
@@ -603,6 +626,21 @@ describe('POST /api/ai/v1/completions - pre-stream failures are JSON with a real
       expect(mockEmitProcessingFailed).not.toHaveBeenCalled();
     }
   );
+
+  it.each([
+    [404, 'models/gemini-2.5-flash is no longer available to new users'],
+    [400, 'Your credit balance is too low to access the Anthropic API.'],
+  ] as const)('keeps an operator-side upstream %s (%s) as a 500 and logs it at error', async (status, raw) => {
+    mockExecuteCompletion.mockRejectedValueOnce(Object.assign(new Error(raw), { status }));
+
+    const body = await expectJsonError(await post(), 500);
+    expect(body.error).toBe('Internal error');
+    expect(mockLoggerError).toHaveBeenCalledWith(
+      '[CLI_LLM] Handler error',
+      expect.objectContaining({ upstreamStatus: status })
+    );
+    expect(mockEmitProcessingFailed).toHaveBeenCalledWith('cli-sse', expect.objectContaining({ status }));
+  });
 
   it.each([429, 500, 503])('keeps an upstream %s as a 500 and logs it at error', async status => {
     mockExecuteCompletion.mockRejectedValueOnce(Object.assign(new Error('provider failed'), { status }));
