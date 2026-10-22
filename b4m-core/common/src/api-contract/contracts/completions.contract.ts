@@ -50,11 +50,13 @@ export const createCompletionContract = defineEndpoint({
     'tool is sent as usual) and a server tool, a `tool_reference` or an echoed tool search block is refused with a ' +
     '`400` rather than run without it.\n\n' +
     'ERRORS. Everything checked before the model provider is called fails with a JSON error body and ' +
-    'a real HTTP status, before any stream opens: a malformed or otherwise invalid request or an unknown `model` `400` (`errorCode: "invalid_request"` when the provider rejects caller input, `errorCode: "unknown_model"` for an unknown model), a bad ' +
+    'a real HTTP status, before any stream opens: a malformed or otherwise invalid request or an unknown `model` `400` (`errorCode: "unknown_model"` for an unknown model), a bad ' +
     'credential `401`, a key without a required scope `403` (with `required_scopes`), a body over 25 MB ' +
     '`413`, a body that fails schema validation `422`, insufficient credits `422` with ' +
     '`errorCode: "insufficient_credits"` (personal or org balance, or an org per-member credit cap), a rate limit `429` with `Retry-After`, and a catalogued model ' +
     'whose provider is not configured on this deployment, or a model that could only come from a self-hosted model server (Ollama, local image) that is currently unreachable, `503` with `errorCode: "provider_not_configured"` (retryable). ' +
+    'A provider rejection of caller input that happens before the stream opens is also a JSON `400`, with ' +
+    '`errorCode: "invalid_request"` (do not retry it unchanged). ' +
     'Once the stream has opened the status stays `200` and a failure arrives as one terminal in-band ' +
     "`error` event. Branch on that event's `code`, never on `message`, which is prose and may change: " +
     '`insufficient_credits` (buy credits) when credits run out mid-generation, `invalid_request` when the provider rejects caller input (do not retry it unchanged), `provider_rejected` when the model provider ' +
