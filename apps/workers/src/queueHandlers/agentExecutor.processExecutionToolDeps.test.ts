@@ -760,9 +760,11 @@ describe('processExecution tool deps', () => {
       const { sessionRepository, agentRepository, agentExecutionRepository, adminSettingsRepository } =
         await import('@bike4mind/database');
       vi.mocked(sessionRepository.findById).mockResolvedValue({ ...baseSession, surface: OPTI_SURFACE } as never);
-      vi.spyOn(agentRepository, 'findById').mockResolvedValue(null as never);
+      const findAgent = vi.spyOn(agentRepository, 'findById').mockResolvedValue(null as never);
       // Only a new execution resolves memento gates; the continuation-only harness never mocked it.
-      vi.spyOn(agentExecutionRepository, 'persistResolvedMementoGates').mockResolvedValue(undefined as never);
+      const persistGates = vi
+        .spyOn(agentExecutionRepository, 'persistResolvedMementoGates')
+        .mockResolvedValue(undefined as never);
       vi.mocked(adminSettingsRepository.getSettingsValue).mockImplementation((async (key: string) =>
         key === 'orchestrationDefaults' ? undefined : false) as never);
       const { handler } = await import('./agentExecutor');
@@ -777,6 +779,8 @@ describe('processExecution tool deps', () => {
       };
       await handler(start as never, lambdaContext).catch(() => undefined);
       vi.mocked(adminSettingsRepository.getSettingsValue).mockResolvedValue(false as never);
+      findAgent.mockRestore();
+      persistGates.mockRestore();
 
       expect(buildSharedToolsMock).toHaveBeenCalledTimes(1);
       expect(resolve).not.toHaveBeenCalled();
