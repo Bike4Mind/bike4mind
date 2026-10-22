@@ -6,23 +6,34 @@ import isBetween from 'dayjs/plugin/isBetween';
 import weekOfYear from 'dayjs/plugin/weekOfYear';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
+import { ServiceUnavailableError } from '@bike4mind/server-utils/utils/errors';
 
 const scopes = ['https://www.googleapis.com/auth/calendar'];
 
-export const calendarClient = async () => {
+const getCalendarConfig = async () => {
   const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
   const serviceAccountEmail = getSettingsValue('googleCalendarServiceAccountEmail', settings);
   const serviceAccountKey = getSettingsValue('googleCalendarServiceAccountSecret', settings);
   const organizerEmail = getSettingsValue('googleCalendarOrganizerEmail', settings);
 
+  if (!serviceAccountEmail || !serviceAccountKey || !organizerEmail) {
+    throw new ServiceUnavailableError('Google Calendar is not configured');
+  }
+  return { serviceAccountEmail, serviceAccountKey, organizerEmail };
+};
+
+// The organizer's primary calendar id is their email address.
+export const calendarClient = async () => {
+  const { serviceAccountEmail, serviceAccountKey, organizerEmail } = await getCalendarConfig();
+
   const authClient = new googleAuth.JWT({
     email: serviceAccountEmail,
-    key: Buffer.from(serviceAccountKey!, 'base64').toString('utf-8'),
+    key: Buffer.from(serviceAccountKey, 'base64').toString('utf-8'),
     scopes,
     subject: organizerEmail,
   });
 
-  return calendarApi({ version: 'v3', auth: authClient });
+  return { client: calendarApi({ version: 'v3', auth: authClient }), calendarId: organizerEmail };
 };
 
 dayjs.extend(utc);
@@ -30,14 +41,14 @@ dayjs.extend(timezone);
 dayjs.extend(isBetween);
 dayjs.extend(weekOfYear);
 
-export async function getAvailableTimeSlots(calendarId: string, year: number, week: number, timeZone: string) {
+export async function getAvailableTimeSlots(year: number, week: number, timeZone: string) {
   const currentDate = dayjs().year(year);
 
   const startOfWeek = currentDate.week(week).startOf('week').add(1, 'day'); // Monday
 
   const endOfWeek = startOfWeek.add(6, 'days').endOf('day'); // Sunday
 
-  const client = await calendarClient();
+  const { client, calendarId } = await calendarClient();
 
   const res = await client.freebusy.query({
     requestBody: {
@@ -98,14 +109,12 @@ export async function getAvailableTimeSlots(calendarId: string, year: number, we
 }
 
 export async function createEvent({
-  calendarId,
   summary,
   description,
   date,
   timeZone,
   attendees,
 }: {
-  calendarId: string;
   summary: string;
   description: string;
   date: string; // date in format 'YYYY-MM-DD HH:mm:ss'
@@ -114,7 +123,7 @@ export async function createEvent({
 }) {
   const startDateTime = dayjs.tz(date, timeZone).format(); // ISO format with timezone offset
   const endDateTime = dayjs.tz(date, timeZone).add(1, 'hour').format();
-  const client = await calendarClient();
+  const { client, calendarId } = await calendarClient();
 
   const res = await client.events.insert({
     calendarId,
