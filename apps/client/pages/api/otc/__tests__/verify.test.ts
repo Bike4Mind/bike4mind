@@ -1279,6 +1279,20 @@ describe('/api/otc/verify - self-host bootstrap admin', () => {
       expect(adminPromotions()).toEqual([[{ id: 'user-existing', isAdmin: true }]]);
     });
 
+    it('still signs in when the promotion write fails', async () => {
+      const { userRepository } = await import('@bike4mind/database');
+      vi.mocked(userRepository.count).mockImplementation(async (filter?: object) =>
+        filter && 'isAdmin' in filter ? 0 : 1
+      );
+      mockUserUpdate.mockRejectedValueOnce(new Error('write failed'));
+      const { req, res } = makeReqRes(ADMIN_EMAIL);
+
+      await handler(req, res);
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(warnOf(req)).toHaveBeenCalledWith(expect.stringContaining('promotion failed'), expect.anything());
+    });
+
     it('does not promote when the install already has an admin', async () => {
       const { userRepository } = await import('@bike4mind/database');
       vi.mocked(userRepository.count).mockResolvedValue(1);

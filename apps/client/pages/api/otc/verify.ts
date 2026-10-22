@@ -188,9 +188,14 @@ const handler = baseApi({ auth: false })
         normalizedEmail === configuredBootstrapAdminEmail() &&
         (await userRepository.count({ isAdmin: true })) === 0
       ) {
-        existingUser.isAdmin = true;
-        await userRepository.update({ id: existingUser.id, isAdmin: true });
-        req.logger.info('Self-host bootstrap: configured admin promoted on sign-in', { userId: existingUser.id });
+        try {
+          await userRepository.update({ id: existingUser.id, isAdmin: true });
+          existingUser.isAdmin = true;
+          req.logger.info('Self-host bootstrap: configured admin promoted on sign-in', { userId: existingUser.id });
+        } catch (err) {
+          // Best-effort like the verified flag below: the nonce is already rotated, and the next sign-in retries.
+          req.logger.warn('Self-host bootstrap: sign-in promotion failed', { userId: existingUser.id, err });
+        }
       }
 
       // OTC proves email ownership - mark verified on first successful sign-in.
