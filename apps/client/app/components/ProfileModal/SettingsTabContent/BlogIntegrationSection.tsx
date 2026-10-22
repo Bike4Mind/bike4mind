@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Typography, Button, Input, Stack, FormControl, FormLabel, Alert, Box, Grid } from '@mui/joy';
-import { Article as BlogIcon, AutoAwesome } from '@mui/icons-material';
+import BlogIcon from '@mui/icons-material/Article';
+import AutoAwesome from '@mui/icons-material/AutoAwesome';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';

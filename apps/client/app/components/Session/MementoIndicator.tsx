@@ -1,6 +1,7 @@
 import { FC, useState } from 'react';
 import { Box, Chip, IconButton, Modal, ModalDialog, Stack, Typography, Tooltip, CircularProgress } from '@mui/joy';
-import { Lightbulb as MementoIcon, Close as CloseIcon } from '@mui/icons-material';
+import MementoIcon from '@mui/icons-material/Lightbulb';
+import CloseIcon from '@mui/icons-material/Close';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import { IMementoDocument } from '@bike4mind/common';

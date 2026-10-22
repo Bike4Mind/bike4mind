@@ -16,7 +16,7 @@ import {
   Alert,
   useTheme,
 } from '@mui/joy';
-import { Settings as SettingsIcon } from '@mui/icons-material';
+import SettingsIcon from '@mui/icons-material/Settings';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useShallow } from 'zustand/react/shallow';
 import ModelSelection from '../ModelSelection';

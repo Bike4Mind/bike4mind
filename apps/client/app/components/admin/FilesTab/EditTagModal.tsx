@@ -20,7 +20,7 @@ import {
   Typography,
 } from '@mui/joy';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { uniq } from 'lodash';
+import uniq from 'lodash/uniq';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import { useCallback, useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';

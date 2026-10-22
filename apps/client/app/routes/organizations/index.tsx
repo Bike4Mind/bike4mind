@@ -10,7 +10,9 @@ import {
   isDelinquentSubscriptionStatus,
   pickDisplayedSubscription,
 } from '@client/lib/subscriptions/types';
-import { Add as AddIcon, Business as BusinessIcon, Search as SearchIcon } from '@mui/icons-material';
+import AddIcon from '@mui/icons-material/Add';
+import BusinessIcon from '@mui/icons-material/Business';
+import SearchIcon from '@mui/icons-material/Search';
 import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
 import {
   AspectRatio,

@@ -22,7 +22,12 @@ import {
   Textarea,
   IconButton,
 } from '@mui/joy';
-import { Add, Edit, Delete, Info, Visibility, VisibilityOff } from '@mui/icons-material';
+import Add from '@mui/icons-material/Add';
+import Edit from '@mui/icons-material/Edit';
+import Delete from '@mui/icons-material/Delete';
+import Info from '@mui/icons-material/Info';
+import Visibility from '@mui/icons-material/Visibility';
+import VisibilityOff from '@mui/icons-material/VisibilityOff';
 import { toast } from 'sonner';
 import { api } from '@client/app/contexts/ApiContext';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';

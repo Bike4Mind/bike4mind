@@ -38,7 +38,7 @@ import { useForkSession, useGetSession, useSnipSession } from '@client/app/hooks
 import { getWorkspaceSurface, type WorkspaceSurface } from '@bike4mind/common';
 import { surfaceRouteExists, useWorkspacePresenter, useWorkspaceTargets } from '@client/app/hooks/useWorkspaceTargets';
 import WorkspaceTargetMenuItems from '@client/app/components/Session/WorkspaceTargetMenuItems';
-import { Refresh } from '@mui/icons-material';
+import Refresh from '@mui/icons-material/Refresh';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import CodeIcon from '@mui/icons-material/Code';
 import ForkRightIcon from '@mui/icons-material/ForkRight';
@@ -55,7 +55,8 @@ import { useGetFabFilesByQuestId } from '@client/app/hooks/data/fabFiles';
 import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 import { feedbackSessionQueryKey, useGetFeedbackBySessionId } from '@client/app/hooks/data/feedback';
 import { isOptimisticId, SendMessageOptions } from '@client/app/utils/llm';
-import { Save as SaveIcon, Add as AddIcon } from '@mui/icons-material';
+import SaveIcon from '@mui/icons-material/Save';
+import AddIcon from '@mui/icons-material/Add';
 import { DataLakeIcon, DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
 import { useSendToDataLakeStore } from '@client/app/stores/useSendToDataLakeStore';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
@@ -68,7 +69,7 @@ import ContextBreakdownModal from '@client/app/components/Session/ContextBreakdo
 import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
 import DonutSmallIcon from '@mui/icons-material/DonutSmall';
 import ContentPreviewModal from '@client/app/components/ProfileModal/ContentPreviewModal';
-import { Article as ArticleIcon } from '@mui/icons-material';
+import ArticleIcon from '@mui/icons-material/Article';
 import { useSettingsFromServer } from '@client/app/hooks/data/settings';
 import EditIcon from '@mui/icons-material/Edit';
 import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';

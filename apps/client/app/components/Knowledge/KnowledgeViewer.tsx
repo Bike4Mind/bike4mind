@@ -51,7 +51,10 @@ import FileDownloadOutlinedIcon from '@mui/icons-material/FileDownloadOutlined';
 import CheckIcon from '@mui/icons-material/Check';
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import SendIcon from '@mui/icons-material/Send';
-import { ExpandMore, ExtensionOff, Splitscreen, FormatListNumbered } from '@mui/icons-material';
+import ExpandMore from '@mui/icons-material/ExpandMore';
+import ExtensionOff from '@mui/icons-material/ExtensionOff';
+import Splitscreen from '@mui/icons-material/Splitscreen';
+import FormatListNumbered from '@mui/icons-material/FormatListNumbered';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
 import { create } from 'zustand';
 import {

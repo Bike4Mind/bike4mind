@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Box, Typography, LinearProgress, Tabs, TabList, Tab, TabPanel, Alert, Button } from '@mui/joy';
-import { Warning } from '@mui/icons-material';
+import Warning from '@mui/icons-material/Warning';
 
 import { useEventMetrics } from './hooks/useEventMetrics';
 import { useEventMetricsState } from './hooks/useEventMetricsState';

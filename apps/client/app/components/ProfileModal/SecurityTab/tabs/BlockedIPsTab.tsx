@@ -1,6 +1,7 @@
 import React from 'react';
 import { Box, Chip, CircularProgress, Sheet, Stack, Typography, useTheme } from '@mui/joy';
-import { Block as BlockIcon, CheckCircle } from '@mui/icons-material';
+import BlockIcon from '@mui/icons-material/Block';
+import CheckCircle from '@mui/icons-material/CheckCircle';
 import { useGetBlockedIPs } from '@client/app/hooks/data/admin';
 
 const BlockedIPsTab: React.FC = () => {
