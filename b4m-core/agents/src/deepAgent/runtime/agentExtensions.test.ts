@@ -183,6 +183,26 @@ describe('createAgentExtensionRegistry', () => {
     expect(runLogger.warn).toHaveBeenCalledTimes(2);
   });
 
+  it('resolves no profile when a contributed build leaves the iteration ceiling unresolvable', () => {
+    const { registry } = newRegistry();
+    const runLogger = { info: vi.fn(), warn: vi.fn() };
+    const base = profile('p0', 's0').build(profileCtx);
+    registry.registerContribution({
+      surfaceProfiles: [
+        { id: 'p1', surface: 's1', build: () => ({ ...base, maxIterations: {} }) as never },
+        { id: 'p2', surface: 's2', build: () => ({ ...base, defaultThoroughness: undefined }) as never },
+        { id: 'p3', surface: 's3', build: () => ({ ...base, maxIterations: { ...base.maxIterations, medium: 0 } }) },
+        { id: 'p4', surface: 's4', build: () => ({ ...base, name: undefined }) as never },
+        { id: 'p5', surface: 's5', build: () => base },
+      ],
+    });
+    for (const surface of ['s1', 's2', 's3', 's4']) {
+      expect(registry.resolveSurfaceProfile(surface, { ...profileCtx, logger: runLogger })).toBeUndefined();
+    }
+    expect(runLogger.warn).toHaveBeenCalledTimes(4);
+    expect(registry.resolveSurfaceProfile('s5', { ...profileCtx, logger: runLogger })).toBe(base);
+  });
+
   it('skips a contributed guard that returns a promise instead of a map', () => {
     const { registry } = newRegistry();
     const runLogger = { info: vi.fn(), warn: vi.fn() };

@@ -76,16 +76,30 @@ export const TOOLBELT_PROFILES: Record<string, ToolbeltProfile> = {
 // contribution can add a role but never redefine a built-in one.
 const contributedToolbelts = new Map<string, ToolbeltProfile>();
 
+// The act step reads these on every wake, so a profile missing one would fail each wake of its role.
+function isToolbeltShaped(profile: ToolbeltProfile): boolean {
+  return (
+    typeof profile.role === 'string' &&
+    profile.role.length > 0 &&
+    Array.isArray(profile.enabledToolNames) &&
+    profile.enabledToolNames.every(name => typeof name === 'string') &&
+    Number.isInteger(profile.maxIterations) &&
+    profile.maxIterations > 0 &&
+    Number.isFinite(profile.maxTotalTokens) &&
+    Number.isFinite(profile.temperature)
+  );
+}
+
 /**
  * Add toolbelt profiles for new roles. A profile whose role is already taken (built-in or
- * contributed earlier) is dropped, not merged, and so is one with no role; both are returned for
+ * contributed earlier) is dropped, not merged, and so is a malformed one; both are returned for
  * the host to log.
  */
 export function registerToolbelts(profiles: readonly ToolbeltProfile[]): { taken: string[]; invalid: number } {
   const taken: string[] = [];
   let invalid = 0;
   for (const profile of profiles) {
-    if (!profile || typeof profile.role !== 'string' || !profile.role) {
+    if (!profile || typeof profile !== 'object' || !isToolbeltShaped(profile)) {
       invalid++;
       continue;
     }

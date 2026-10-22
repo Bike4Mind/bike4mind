@@ -30,11 +30,19 @@ describe('contributed toolbelts', () => {
     expect(resolveToolbeltProfile(DEFAULT_TOOLBELT_ROLE).maxIterations).not.toBe(99);
   });
 
-  it('warns about a contribution with no role separately from a taken one', () => {
+  it('warns about malformed contributions separately from a taken role, without throwing', () => {
     const logger = { warn: vi.fn() };
-    registerContributedToolbelts([{ toolbelts: [fixture('')] }], logger);
+    registerContributedToolbelts(
+      [
+        null as never,
+        { toolbelts: [fixture(''), { ...fixture('no-tools'), enabledToolNames: undefined as never }] },
+        { toolbelts: 'not-a-list' as never },
+      ],
+      logger
+    );
 
     expect(logger.warn).toHaveBeenCalledTimes(1);
-    expect(logger.warn).toHaveBeenCalledWith('Dropped contributed toolbelts with no role', { count: 1 });
+    expect(logger.warn).toHaveBeenCalledWith('Dropped malformed contributed toolbelts', { count: 3 });
+    expect(resolveToolbeltProfile('no-tools').role).toBe(DEFAULT_TOOLBELT_ROLE);
   });
 });
