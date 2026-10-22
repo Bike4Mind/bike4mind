@@ -116,7 +116,22 @@ describe('the desktop dark palette', () => {
 
   it('keeps the prompt bubble text readable at rest, on hover and when pressed', () => {
     for (const fill of [palette.primary.softBg, palette.primary.softHoverBg, palette.primary.softActiveBg]) {
-      expect(contrast(hexToRgb(DARK_PALETTE.ink), hexToRgb(fill))).toBeGreaterThanOrEqual(4.5);
+      const ground = hexToRgb(fill);
+      expect(contrast(composite(palette.primary.softColor, ground), ground)).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it('keeps the checked option index readable on the selected fill', () => {
+    const ground = hexToRgb(DARK_PALETTE.selected);
+    expect(contrast(composite(palette.text.secondary, ground), ground)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it('keeps the selected state and the hover tint visible against their grounds', () => {
+    // Floors rather than ratios: below these the state flattens into the fill it sits on.
+    expect(contrast(hexToRgb(DARK_PALETTE.selected), hexToRgb(DARK_PALETTE.stroke))).toBeGreaterThan(1.4);
+    for (const ground of [DARK_PALETTE.panel, DARK_PALETTE.raised]) {
+      const base = hexToRgb(ground);
+      expect(contrast(composite(palette.neutral.plainHoverBg, base), base)).toBeGreaterThan(1.1);
     }
   });
 });
