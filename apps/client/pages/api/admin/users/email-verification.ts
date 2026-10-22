@@ -1,7 +1,8 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { User } from '@bike4mind/database';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, emailVerificationResponseSchema } from '@bike4mind/common';
+import { respond } from '@server/utils/respond';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
@@ -61,7 +62,7 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] }).get
     const totalCount = await User.countDocuments(filter);
     const totalPages = Math.ceil(totalCount / limit);
 
-    return res.json({
+    return respond(res, emailVerificationResponseSchema, {
       users,
       pagination: {
         page,
