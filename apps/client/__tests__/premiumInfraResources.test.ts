@@ -94,14 +94,21 @@ describe('infra resource glue', () => {
     expect(result.stderr).toContain('b4mContributions.infraResources');
   });
 
-  it('lists the core secret names infra/secrets.ts declares', () => {
+  it('lists every core resource name infra/ declares', () => {
     mkdirSync(join(sandbox, 'infra'), { recursive: true });
     writeFileSync(
       join(sandbox, 'infra/secrets.ts'),
       "export const secrets = {\n  A: new sst.Secret('CORE_A', 'x'),\n  B: new sst.Secret(\n    'CORE_B',\n    'y'\n  ),\n};\n"
     );
+    writeFileSync(join(sandbox, 'infra/web.ts'), "export const web = new sst.aws.Nextjs('Web', {});\n");
     expect(runCodegen().status).toBe(0);
-    expect(readTargets()[1]).toContain('coreSecretNames: readonly string[] = ["CORE_A","CORE_B"]');
+    expect(readTargets()[1]).toContain('coreResourceNames: readonly string[] | null = ["App","CORE_A","CORE_B","Web"]');
+  });
+
+  it('emits null core names without infra/, so the runtime registers nothing', () => {
+    writeOverlay({ secrets: [{ name: 'EXAMPLE_API_TOKEN' }] });
+    expect(runCodegen().status).toBe(0);
+    expect(readTargets()[1]).toContain('coreResourceNames: readonly string[] | null = null');
   });
 
   it('leaves unchanged files alone on a second run', () => {

@@ -11,8 +11,8 @@ describe('partitionContributed', () => {
   const core = new Set(['MONGODB_URI']);
 
   it('registers valid unique names in declaration order', () => {
-    const result = partitionContributed([{ name: 'EXAMPLE_API_TOKEN' }, { name: 'ExampleUrl' }], byName, core);
-    expect(result.registered.map(byName)).toEqual(['EXAMPLE_API_TOKEN', 'ExampleUrl']);
+    const result = partitionContributed([{ name: 'EXAMPLE_API_TOKEN' }, { name: 'EXAMPLE_URL' }], byName, core);
+    expect(result.registered.map(byName)).toEqual(['EXAMPLE_API_TOKEN', 'EXAMPLE_URL']);
     expect(result.coreCollisions).toEqual([]);
     expect(result.duplicates).toEqual([]);
     expect(result.rejected).toEqual([]);
@@ -31,11 +31,19 @@ describe('partitionContributed', () => {
     expect(result.duplicates).toEqual(['EXAMPLE_API_TOKEN']);
   });
 
-  it.each(['', '1ABC', 'has-dash', 'has space', '__proto__', '_LEADING', 'constructor', 'prototype'])(
+  it.each(['', '1ABC', 'HAS-DASH', 'HAS SPACE', '__proto__', '_LEADING', 'constructor', 'prototype'])(
     'rejects the invalid name %j',
     name => {
       expect(isValidContributedResourceName(name)).toBe(false);
       expect(partitionContributed([{ name }], byName, core).rejected).toEqual([name]);
+    }
+  );
+
+  // Each of these would alias a core or platform variable through the env var it maps to.
+  it.each(['MongodbUri', 'mongodb_uri', 'ExampleUrl', 'NODE_OPTIONS', 'AWS_SECRET_ACCESS_KEY', 'LD_PRELOAD', 'PATH'])(
+    'rejects %j, which names or aliases a variable a contribution must not own',
+    name => {
+      expect(isValidContributedResourceName(name)).toBe(false);
     }
   );
 

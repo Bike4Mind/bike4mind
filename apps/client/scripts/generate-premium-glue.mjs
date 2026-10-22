@@ -1780,6 +1780,7 @@ export function contributeInfra(_params: Record<string, unknown>): void {}
 // the two can never register different lists. Name rules (collisions with core,
 // duplicates, bad characters) are applied by both consumers via @bike4mind/infra's
 // partitionContributed; this only checks shape, since the values become TS literals.
+// The core name list is read from infra/, so it is only as complete as that tree.
 const INFRA_RESOURCE_TARGETS = [
   join(INFRA_GENERATED_DIR, 'infraResources.generated.ts'),
   join(REPO_ROOT, 'packages/server-utils/src/premium-generated/infraResources.generated.ts'),
@@ -1798,7 +1799,8 @@ function readInfraResources(pkg) {
   };
   const secrets = list('secrets').map(s => {
     if (typeof s.name !== 'string') fail('secret name must be a string');
-    if (s.placeholder !== undefined && typeof s.placeholder !== 'string') fail(`${s.name}.placeholder must be a string`);
+    if (s.placeholder !== undefined && typeof s.placeholder !== 'string')
+      fail(`${s.name}.placeholder must be a string`);
     if (s.env !== undefined && typeof s.env !== 'boolean') fail(`${s.name}.env must be a boolean`);
     return { name: s.name, placeholder: s.placeholder, env: s.env };
   });
@@ -1817,12 +1819,21 @@ function readInfraResources(pkg) {
   return { secrets, rotations };
 }
 
-// Core secret names, read from infra/secrets.ts so the runtime can refuse a contribution
-// that shadows one without a hand-kept copy of the list.
-function readCoreSecretNames() {
-  const path = join(REPO_ROOT, 'infra/secrets.ts');
-  if (!existsSync(path)) return [];
-  return [...readFileSync(path, 'utf8').matchAll(/new sst\.Secret\(\s*'([A-Za-z0-9_]+)'/g)].map(m => m[1]);
+// Every name core links into Resource: its secrets plus the other SST components declared
+// in infra/*.ts, and the built-in App. Null when infra/ is absent (an image install step
+// that runs before the source copy): the runtime then registers no contributed secret
+// rather than one that might shadow a core name, until a later run sees infra/.
+function readCoreResourceNames() {
+  const infraDir = join(REPO_ROOT, 'infra');
+  if (!existsSync(join(infraDir, 'secrets.ts'))) return null;
+  const names = new Set(['App']);
+  for (const file of readdirSync(infraDir)
+    .filter(f => f.endsWith('.ts'))
+    .sort()) {
+    const source = readFileSync(join(infraDir, file), 'utf8');
+    for (const m of source.matchAll(/new sst\.[A-Za-z.]+\(\s*'([A-Za-z0-9_]+)'/g)) names.add(m[1]);
+  }
+  return [...names];
 }
 
 function generateInfraResources(packages) {
@@ -1836,7 +1847,7 @@ function generateInfraResources(packages) {
   const content =
     `${GENERATED_BANNER}import type { InfraResourceContributions } from '@bike4mind/infra';\n\n` +
     `export const contributedInfraResources: InfraResourceContributions = ${JSON.stringify(merged, null, 2)};\n\n` +
-    `export const coreSecretNames: readonly string[] = ${JSON.stringify(readCoreSecretNames())};\n`;
+    `export const coreResourceNames: readonly string[] | null = ${JSON.stringify(readCoreResourceNames())};\n`;
   for (const target of INFRA_RESOURCE_TARGETS) writeFile(target, content);
 }
 

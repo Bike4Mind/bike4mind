@@ -17,7 +17,7 @@ function mockResource(linked: Record<string, { value: string }>) {
 async function load(declared = DECLARED) {
   vi.doMock('../premium-generated/infraResources.generated', () => ({
     contributedInfraResources: declared,
-    coreSecretNames: ['MONGODB_URI'],
+    coreResourceNames: ['MONGODB_URI'],
   }));
   return import('./contributedSecrets');
 }
@@ -59,6 +59,18 @@ describe('contributed secret registry', () => {
     const result = registerContributedSecrets([{ name: 'MONGODB_URI' }]);
     expect(result.coreCollisions).toEqual(['MONGODB_URI']);
     expect(readContributedSecret('MONGODB_URI')).toBeUndefined();
+  });
+
+  it('never resolves a name whose env var form is a core secret', async () => {
+    mockResource({});
+    process.env.MONGODB_URI_TEST_ALIAS = 'core-credential';
+    const { registerContributedSecrets, readContributedSecret } = await load({
+      secrets: [{ name: 'MongodbUriTestAlias' }],
+      rotations: [],
+    });
+    expect(registerContributedSecrets([{ name: 'MongodbUri' }]).rejected).toEqual(['MongodbUri']);
+    expect(readContributedSecret('MongodbUriTestAlias')).toBeUndefined();
+    delete process.env.MONGODB_URI_TEST_ALIAS;
   });
 
   it('keeps the first registration of a duplicate and drops empty names', async () => {

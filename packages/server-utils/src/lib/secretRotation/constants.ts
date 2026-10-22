@@ -329,6 +329,11 @@ export function getUnregisteredContributedRotations(): string[] {
   return contributedInfraResources.rotations.map(r => r.secret).filter(name => !(name in config));
 }
 
+/** False in a tree where no package declares a rotation, e.g. a clone without overlays. */
+export function declaresContributedRotations(): boolean {
+  return contributedInfraResources.rotations.length > 0;
+}
+
 export function resetContributedSecretRotationsForTests(): void {
   contributedRotations.clear();
   contributedRotationsLoaded = false;

@@ -5,7 +5,7 @@ import {
   partitionContributed,
   type Tier1SecretStatus,
 } from '@bike4mind/infra';
-import { contributedInfraResources, coreSecretNames } from './premium-generated/infraResources.generated';
+import { contributedInfraResources, coreResourceNames } from './premium-generated/infraResources.generated';
 import { PRODUCTION_STAGES } from './constants';
 
 export const secrets = {
@@ -209,7 +209,7 @@ export const secrets = {
 const contributedSecretPartition = partitionContributed(
   contributedInfraResources.secrets,
   spec => spec.name,
-  new Set([...coreSecretNames, ...Object.keys(secrets)])
+  new Set([...(coreResourceNames ?? []), ...Object.keys(secrets)])
 );
 for (const line of describeDroppedContributions('contributed secret', contributedSecretPartition)) {
   console.warn(`[infra] ${line}`);
