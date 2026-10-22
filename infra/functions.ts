@@ -1,6 +1,6 @@
 import { appFilesBucket, fabFileBucket, generatedImagesBucket } from './buckets';
 import { DEFAULT_LAMBDA_ENVIRONMENT, TEST_GENERATION_PROVIDER_ENVIRONMENT } from './constants';
-import { eventBus } from './eventBus';
+import { completionEventsDeadLetter, eventBus } from './eventBus';
 import { generationJobQueue } from './queues';
 import { imageProcessor } from './imageProcessor';
 import { mcpHandler } from './mcp';
@@ -74,6 +74,10 @@ export const slackQuestProcessor = new sst.aws.Function('SlackQuestProcessor', {
       resources: ['*'],
     },
     { actions: ['events:PutEvents'], resources: ['*'] },
+    completionEventsDeadLetter.sendPermission,
   ],
+  // Invoked asynchronously by the slack-completion-start rule (infra/llm.ts); see
+  // infra/eventBusDeadLetter.ts for why the function needs its own dead letter.
+  transform: completionEventsDeadLetter.functionTarget,
   copyFiles: toolRuntimeAssets(),
 });
