@@ -1,5 +1,5 @@
 import { videoRequestInputs, type VideoGenerationRequest, type ValidatedVideoRequest } from './request';
-import { VIDEO_INPUT_ROLES, type DurationCapability, type VideoModelCapabilities } from './types';
+import { VIDEO_INPUT_ROLES, type DurationCapability, type VideoInputRole, type VideoModelCapabilities } from './types';
 
 export const VIDEO_VALIDATION_ERROR_CODES = [
   'unsupported_duration',
@@ -31,7 +31,7 @@ const describeDuration = (duration: DurationCapability): string =>
     ? `allowed: ${duration.values.join(', ')}s`
     : `allowed: ${duration.min}-${duration.max}s in ${duration.step}s steps`;
 
-const FRAME_ROLES = new Set(['first_frame', 'last_frame']);
+const FRAME_ROLES = new Set<VideoInputRole>(['first_frame', 'last_frame']);
 
 const describeAcceptedRoles = (caps: VideoModelCapabilities): string => {
   const accepted = VIDEO_INPUT_ROLES.filter(role => caps.inputs[role]);

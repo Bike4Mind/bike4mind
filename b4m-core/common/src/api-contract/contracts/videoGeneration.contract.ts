@@ -105,14 +105,15 @@ export const createVideoGenerationContract = defineEndpoint({
     404: {
       description:
         'An `inputs` file (or `input_image_file_id`) does not name an image you own ' +
-        '(`errorCode: input_image_not_found`). A ' +
-        'nonexistent `organization_id` is `404` only for an admin caller; for anyone else it is `403`.',
+        '(`errorCode: input_image_not_found`). A nonexistent `organization_id` is `404` only for an admin ' +
+        'caller; for anyone else it is `403`.',
       schema: VideoGenerationErrorResponseSchema,
     },
     422: {
       description:
         'The request cannot run: a body or capability violation (`errorCode` names it, e.g. ' +
-        '`unsupported_duration`, or `unsupported_input_role` for an input role the model does not take), an unknown or unavailable model (`model_unavailable`), a model your ' +
+        '`unsupported_duration`, or `unsupported_input_role` for an input role the model does not take), an ' +
+        'unknown or unavailable model (`model_unavailable`), a model your ' +
         'administrator disabled (`model_disabled`), too few credits (`insufficient_credits`), or an ' +
         'Idempotency-Key problem (`invalid_idempotency_key`, `idempotency_key_reused`).',
       schema: VideoGenerationErrorResponseSchema,
