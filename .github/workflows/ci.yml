@@ -1097,7 +1097,7 @@ jobs:
 
   # ============================================================
   # CI gate aggregation. The main branch ruleset (main-protection)
-  # require a single status check named exactly "CI Complete". Deploy moved out
+  # requires a single status check named exactly "CI Complete". Deploy moved out
   # of this repo to the internal deployer, so there is no deploy to gate; this
   # job re-exposes one stable check that turns red if any CI leg failed.
   #

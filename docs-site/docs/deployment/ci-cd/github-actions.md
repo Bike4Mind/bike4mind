@@ -75,6 +75,8 @@ The deployment workflow follows a clear branching strategy that maps branches to
   - Deploys to staging environment
   - Uses `STAGING_*` variables or falls back to common variables
 
+#### Production (Promoted)
+
 - **Production**: promoted from a `main` commit by the deployment pipeline
   - Maps to `production` stage in prod account
   - Uses production infrastructure (VPC, hosted zone, ECR)
