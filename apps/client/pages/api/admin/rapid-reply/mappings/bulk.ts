@@ -2,6 +2,7 @@ import { rapidReplyMappingRepository } from '@bike4mind/database/ai';
 import { rapidReplyAuditLogRepository } from '@bike4mind/database/ai';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
 interface BulkOperation {
@@ -145,6 +146,18 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
 
   const successCount = results.filter(r => r.success).length;
   const failureCount = results.length - successCount;
+
+  await recordAdminActionFromRequest(req, {
+    action: 'settings.rapid_reply_mapping.bulk_updated',
+    target: { kind: 'settings', id: 'rapid-reply-mappings', displayName: 'Rapid reply mappings' },
+    summary: `bulk updated rapid reply mappings (${successCount} succeeded, ${failureCount} failed)`,
+    details: {
+      total: results.length,
+      successful: successCount,
+      failed: failureCount,
+      operations: results.map(({ id, action, success }) => ({ id, action, success })),
+    },
+  });
 
   return res.json({
     success: true,

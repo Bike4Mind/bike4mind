@@ -2,6 +2,7 @@ import { rapidReplyPromptRepository } from '@bike4mind/database/ai';
 import { rapidReplyAuditLogRepository } from '@bike4mind/database/ai';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { BadRequestError, NotFoundError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
@@ -45,6 +46,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
       parentId: currentPrompt.parentId || currentPrompt.id,
       version: currentPrompt.version,
     },
+  });
+
+  await recordAdminActionFromRequest(req, {
+    action: 'settings.rapid_reply_prompt.activated',
+    target: { kind: 'settings', id, displayName: `Rapid reply prompt ${currentPrompt.name}` },
+    summary: `activated rapid reply prompt ${currentPrompt.name} v${currentPrompt.version}`,
+    details: { parentId: currentPrompt.parentId || currentPrompt.id, version: currentPrompt.version },
   });
 
   return res.json({

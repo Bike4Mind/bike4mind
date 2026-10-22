@@ -4,6 +4,7 @@ import { adminSettingsRepository } from '@bike4mind/database/infra';
 import { rapidReplyAuditLogRepository } from '@bike4mind/database/ai';
 import { ChatCompletionProcess, featureNames, ChatCompletionFeature } from '@bike4mind/services/llm';
 import { baseApi } from '@server/middlewares/baseApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { requestTurnAuth } from '@server/auth/turnAuth';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
@@ -568,6 +569,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     });
 
     const testSuccess = !errorMessage && !!rapidReplyResponse;
+
+    await recordAdminActionFromRequest(req, {
+      action: 'settings.rapid_reply.test_run',
+      target: { kind: 'settings', id: mainModelId, displayName: `Rapid reply test for ${mainModelId}` },
+      summary: `ran rapid reply test for ${mainModelId}`,
+      details: { mainModelId, success: testSuccess, simulatedLatency: simulateLatency },
+    });
 
     console.log(
       `${testSuccess ? '✅' : '❌'} Test ${testSuccess ? 'completed' : 'failed'} for ${mainModelId} - TTFVT: ${rapidReplyTtfvt}ms, Latency: ${actualRapidReplyLatency}ms, Length: ${actualResponseLength}`
