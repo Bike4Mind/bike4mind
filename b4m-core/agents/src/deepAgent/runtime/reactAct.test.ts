@@ -4,7 +4,7 @@ import type { AgentResult } from '../../types';
 import type { Charter, DriveVector } from '../schemas';
 import { agentResultToActResult, applyAgentToolPolicy, createReActRunAct } from './reactAct';
 import type { ActContext } from './types';
-import { resolveToolbeltProfile, DEFAULT_TOOLBELT_ROLE } from './toolbelts';
+import { resolveToolbeltProfile, registerToolbelts, DEFAULT_TOOLBELT_ROLE, TOOLBELT_PROFILES } from './toolbelts';
 
 // Hoisted so the vi.mock factories (hoisted above imports) can reference them.
 const {
@@ -127,6 +127,19 @@ describe('resolveToolbeltProfile', () => {
     // Default is a capable general web toolbelt (web-safe tools only).
     expect(profile.enabledToolNames).toContain('web_search');
     expect(profile.enabledToolNames).not.toContain('bash_execute');
+  });
+
+  it('resolves a contributed role and drops one whose role is taken', () => {
+    const contributed = { ...TOOLBELT_PROFILES[DEFAULT_TOOLBELT_ROLE], role: 'contributed-role', maxIterations: 4 };
+    const clash = { ...TOOLBELT_PROFILES['paper-repro'], maxIterations: 1 };
+
+    expect(registerToolbelts([contributed, clash, { ...contributed, maxIterations: 9 }])).toEqual([
+      'paper-repro',
+      'contributed-role',
+    ]);
+    expect(resolveToolbeltProfile('contributed-role').maxIterations).toBe(4);
+    expect(resolveToolbeltProfile('paper-repro')).toBe(TOOLBELT_PROFILES['paper-repro']);
+    expect(resolveToolbeltProfile('paper-repro').enabledToolNames).toContain('wolfram_alpha');
   });
 });
 

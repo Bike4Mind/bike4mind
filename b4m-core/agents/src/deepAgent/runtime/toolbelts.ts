@@ -72,7 +72,31 @@ export const TOOLBELT_PROFILES: Record<string, ToolbeltProfile> = {
   },
 };
 
-/** Resolve the toolbelt profile for a role, falling back to the default. */
+// Roles a mounted package adds at host startup. Kept apart from TOOLBELT_PROFILES so a
+// contribution can add a role but never redefine a built-in one.
+const contributedToolbelts = new Map<string, ToolbeltProfile>();
+
+/**
+ * Add toolbelt profiles for new roles. A profile whose role is already taken (built-in or
+ * contributed earlier) is dropped, not merged; the dropped roles are returned for the host to log.
+ */
+export function registerToolbelts(profiles: readonly ToolbeltProfile[]): string[] {
+  const dropped: string[] = [];
+  for (const profile of profiles) {
+    const taken = Object.hasOwn(TOOLBELT_PROFILES, profile.role) || contributedToolbelts.has(profile.role);
+    if (!profile.role || taken) {
+      dropped.push(profile.role);
+      continue;
+    }
+    contributedToolbelts.set(profile.role, profile);
+  }
+  return dropped;
+}
+
+/** Resolve the toolbelt profile for a role (built-in, then contributed), falling back to the default. */
 export function resolveToolbeltProfile(role: string): ToolbeltProfile {
-  return TOOLBELT_PROFILES[role] ?? TOOLBELT_PROFILES[DEFAULT_TOOLBELT_ROLE];
+  return (
+    (Object.hasOwn(TOOLBELT_PROFILES, role) ? TOOLBELT_PROFILES[role] : contributedToolbelts.get(role)) ??
+    TOOLBELT_PROFILES[DEFAULT_TOOLBELT_ROLE]
+  );
 }
