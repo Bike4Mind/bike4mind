@@ -59,8 +59,9 @@ describe('steering', () => {
     expect(useCliStore.getState().inputValue).toBe('draft');
 
     store.enqueueMessage('s1');
-    store.enqueueMessage('f1', 'followUp');
+    store.enqueueMessage('see @a.ts\n--- File: a.ts ---\n...', 'followUp', 'see @a.ts');
     store.restoreQueueToInput();
-    expect(useCliStore.getState()).toMatchObject({ messageQueue: [], inputValue: 's1\nf1\ndraft' });
+    // The typed form is restored, so a resend expands `@a.ts` once rather than carrying the old expansion.
+    expect(useCliStore.getState()).toMatchObject({ messageQueue: [], inputValue: 's1\nsee @a.ts\ndraft' });
   });
 });

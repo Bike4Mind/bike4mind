@@ -66,7 +66,7 @@ describe('App mid-turn message queue', () => {
   });
 
   it('queues Enter as a steer and Tab as a follow-up while a turn runs, and shows both', async () => {
-    useCliStore.setState({ isThinking: true });
+    useCliStore.setState({ isThinking: true, turnInFlight: true });
     const onMessage = vi.fn(asyncNoop);
     const { stdin, lastFrame, unmount } = renderApp(onMessage);
 
@@ -99,6 +99,16 @@ describe('App mid-turn message queue', () => {
 
     await vi.waitFor(() => expect(useCliStore.getState().messageQueue).toEqual([{ text: 'after esc', kind: 'steer' }]));
     expect(onMessage).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it('queues Enter as a follow-up while busy without a turn to steer (e.g. a custom command)', async () => {
+    useCliStore.setState({ isThinking: true, turnInFlight: false });
+    const { stdin, unmount } = renderApp();
+
+    await submit(stdin, 'next', '\r');
+
+    await vi.waitFor(() => expect(useCliStore.getState().messageQueue).toEqual([{ text: 'next', kind: 'followUp' }]));
     unmount();
   });
 

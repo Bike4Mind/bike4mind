@@ -14,7 +14,13 @@ import type { ReviewGateResponse } from '../tools/reviewGateTool.js';
  */
 export type QueuedMessageKind = 'steer' | 'followUp';
 
-export type QueuedMessage = { text: string; kind: QueuedMessageKind };
+export type QueuedMessage = {
+  /** What is sent: the input with any `@file` references already expanded. */
+  text: string;
+  kind: QueuedMessageKind;
+  /** What the user typed, when it differs from `text`; shown in the queue and restored on cancel. */
+  typed?: string;
+};
 
 /** Active job statuses (jobs still in progress) */
 const ACTIVE_STATUSES: ReadonlySet<BackgroundAgentStatus> = new Set(['running', 'queued']);
@@ -102,7 +108,7 @@ interface CliStore {
   // that never reached a request boundary - runs as one combined next turn
   // (session/turnController.ts). Entries keep submission order across kinds.
   messageQueue: QueuedMessage[];
-  enqueueMessage: (text: string, kind?: QueuedMessageKind) => void;
+  enqueueMessage: (text: string, kind?: QueuedMessageKind, typed?: string) => void;
   /** Remove and return the queued steers, in submission order. */
   takeSteerMessages: () => string[];
   /** Remove and return every queued entry's text, in submission order. */
@@ -304,7 +310,13 @@ export const useCliStore = create<CliStore>(set => ({
 
   // User-message queue
   messageQueue: [],
-  enqueueMessage: (text, kind = 'steer') => set(state => ({ messageQueue: [...state.messageQueue, { text, kind }] })),
+  enqueueMessage: (text, kind = 'steer', typed) =>
+    set(state => ({
+      messageQueue: [
+        ...state.messageQueue,
+        { text, kind, ...(typed !== undefined && typed !== text ? { typed } : {}) },
+      ],
+    })),
   takeSteerMessages: () => {
     let steers: string[] = [];
     set(state => {
@@ -326,7 +338,7 @@ export const useCliStore = create<CliStore>(set => ({
   restoreQueueToInput: () =>
     set(state => {
       if (state.messageQueue.length === 0) return state;
-      const restored = state.messageQueue.map(entry => entry.text);
+      const restored = state.messageQueue.map(entry => entry.typed ?? entry.text);
       if (state.inputValue) restored.push(state.inputValue);
       return { messageQueue: [], inputValue: restored.join('\n') };
     }),

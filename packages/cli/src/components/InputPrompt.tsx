@@ -221,7 +221,14 @@ export function InputPrompt({
       }
 
       // Tab while a turn runs queues the input as a follow-up turn; Enter would steer the running turn.
-      if (key.tab && !key.shift && turnBusy && !isBashMode && !shouldShowCommandAutocomplete) {
+      if (
+        key.tab &&
+        !key.shift &&
+        turnBusy &&
+        !isBashMode &&
+        !shouldShowCommandAutocomplete &&
+        !fileAutocomplete?.active
+      ) {
         const content = pastedContent ?? value;
         if (!content.trim()) return;
         if (pastedContent) clearPaste();

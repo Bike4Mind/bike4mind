@@ -57,7 +57,9 @@ Terminal Setup:
 
 Keyboard Shortcuts:
   Ctrl+C          - Press twice to exit
-  Esc             - Abort current operation
+  Esc             - Abort current operation (queued messages return to the input)
+  Enter (busy)    - Steer the running turn with the message
+  Tab (busy)      - Queue the message to run as the next turn
   Shift+Tab       - Toggle auto-accept edits
   Ctrl+U          - Clear current line
   Ctrl+K          - Clear from cursor to end of line

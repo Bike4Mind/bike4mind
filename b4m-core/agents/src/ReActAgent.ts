@@ -858,7 +858,12 @@ export class ReActAgent extends EventEmitter {
         // After tools complete, nudge the agent to provide the final answer
         // This prevents the agent from forgetting the user's specific requirements (e.g., "list in detail")
         if (!iterationComplete && hadToolCalls) {
-          const feedback = await drainHostFeedback(options.drainFeedback, 'turn', this.context.logger, options.signal);
+          // Drained only when another request will carry it: the host treats a drain as delivery.
+          const requestFollows =
+            iterations < maxIterations && !(maxTotalTokens !== undefined && this.totalTokens >= maxTotalTokens);
+          const feedback = requestFollows
+            ? await drainHostFeedback(options.drainFeedback, 'turn', this.context.logger, options.signal)
+            : null;
           messages.push({ role: 'user', content: buildToolResultsNudge(feedback) });
         }
 
@@ -1679,7 +1684,12 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
 
       // Add nudge for next iteration if tools were called but no final answer
       if (!iterationComplete && hadToolCalls) {
-        const feedback = await drainHostFeedback(options.drainFeedback, 'turn', this.context.logger, options.signal);
+        // Drained only when another request will carry it: the host treats a drain as delivery.
+        const requestFollows =
+          this.iterations < maxIterations && !(maxTotalTokens !== undefined && this.totalTokens >= maxTotalTokens);
+        const feedback = requestFollows
+          ? await drainHostFeedback(options.drainFeedback, 'turn', this.context.logger, options.signal)
+          : null;
         this.messages.push({ role: 'user', content: buildToolResultsNudge(feedback) });
       }
 

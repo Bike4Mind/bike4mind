@@ -111,17 +111,18 @@ export function App({
   const exitRequested = useCliStore(state => state.exitRequested);
   const setIsThinking = useCliStore(state => state.setIsThinking);
   const pendingBackgroundTrigger = useCliStore(state => state.pendingBackgroundTrigger);
+  const turnInFlight = useCliStore(state => state.turnInFlight);
   const setPendingBackgroundTrigger = useCliStore(state => state.setPendingBackgroundTrigger);
 
   // Auto-trigger agent when background tasks complete while idle
   useEffect(() => {
-    if (pendingBackgroundTrigger && !isThinking && onBackgroundCompletion) {
+    if (pendingBackgroundTrigger && !isThinking && !turnInFlight && onBackgroundCompletion) {
       // Clear the trigger immediately to prevent re-triggering
       setPendingBackgroundTrigger(false);
       // Trigger silent handler to process background results (no user message added)
       onBackgroundCompletion();
     }
-  }, [pendingBackgroundTrigger, isThinking, setPendingBackgroundTrigger, onBackgroundCompletion]);
+  }, [pendingBackgroundTrigger, isThinking, turnInFlight, setPendingBackgroundTrigger, onBackgroundCompletion]);
 
   // Interaction mode cycle (normal -> auto-accept -> plan -> normal)
   const cycleInteractionMode = useCliStore(state => state.cycleInteractionMode);
@@ -172,6 +173,7 @@ export function App({
   // (see liveStepWindow.ts), so the trace and streaming reply only get the rows
   // left over. On a terminal too short to have any left over they drop out
   // entirely - keeping scrollback usable matters more than a two-line trace.
+  // One row per entry (multi-line entries show their first line) plus the hint.
   const queueRows = messageQueue.length > 0 ? messageQueue.length + 1 : 0;
   const liveRows = Math.max(0, terminalRows - LIVE_CHROME_ROWS - queueRows - promptRows);
 
@@ -212,9 +214,12 @@ export function App({
       // Mid-turn input is queued, never run as a parallel turn. Enter steers
       // the running turn (delivered at its next model request); Tab queues a
       // follow-up turn. turnInFlight covers the unwind after an eager ESC.
+      // Busy without a turn (a custom command, background results) there is
+      // nothing to steer, so the input waits as a follow-up.
       const store = useCliStore.getState();
       if (store.isThinking || store.turnInFlight) {
-        store.enqueueMessage(messageToSend, options?.followUp ? 'followUp' : 'steer');
+        const kind = options?.followUp || !store.turnInFlight ? 'followUp' : 'steer';
+        store.enqueueMessage(messageToSend, kind, trimmed);
         return;
       }
 
@@ -366,7 +371,8 @@ export function App({
               <Box flexDirection="column" paddingX={1} marginBottom={1}>
                 {messageQueue.map((queuedMessage, idx) => {
                   const label = queuedMessage.kind === 'followUp' ? '[next turn] ' : '';
-                  const rowText = `\u276F ${label}${queuedMessage.text}`;
+                  const [firstLine, ...moreLines] = (queuedMessage.typed ?? queuedMessage.text).split('\n');
+                  const rowText = `\u276F ${label}${firstLine}${moreLines.length > 0 ? ' ...' : ''}`;
                   const padded = rowText.length >= terminalCols - 2 ? rowText : rowText.padEnd(terminalCols - 2);
                   return (
                     <Text key={idx} backgroundColor="gray" color="white" wrap="truncate-end">

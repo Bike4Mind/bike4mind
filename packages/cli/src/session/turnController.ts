@@ -94,9 +94,11 @@ export interface TurnContext {
  * throws: transport, auth, and abort errors are handled and surfaced to the
  * console.
  *
- * Only one turn is ever in flight. A call that arrives while one is (a tavern
- * prompt, a bash-command drain, a submit during an ESC unwind) is queued as a
- * follow-up rather than run as a second agent loop over the same agent. After
+ * Only one runTurn turn is in flight at a time. A call that arrives while one
+ * is (a tavern prompt, a bash-command drain, a submit during an ESC unwind) is
+ * queued as a follow-up rather than run as a second agent loop over the same
+ * agent. Other agent runs (custom commands, background results) gate on
+ * `turnInFlight` themselves. After
  * each turn settles - completed, failed, or cancelled - everything still queued
  * runs as one combined next turn: follow-ups, steers that never reached a
  * request boundary, and input submitted after a cancel (ESC moves what was
@@ -117,6 +119,10 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
       const releaseSession = useCliStore.getState().holdSession();
       try {
         await runHeldTurn(next, ctx);
+      } catch (error) {
+        // Surfaced like runHeldTurn's own errors, so the follow-ups behind this turn still run.
+        console.error(`\n\u274C ${error instanceof Error ? error.message : String(error)}\n`);
+        logger.debug(`Turn failed outside its error handling: ${error instanceof Error ? error.stack : String(error)}`);
       } finally {
         releaseSession();
       }

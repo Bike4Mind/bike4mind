@@ -167,6 +167,29 @@ describe('ReActAgent drainFeedback', () => {
     expect(result.step).toMatchObject({ type: 'final_answer', content: 'fixed answer' });
   });
 
+  it('does not drain turn feedback after the last allowed iteration, when no request would carry it', async () => {
+    const { llm, callMessages } = createScriptedLlm([TOOL_CALL, TOOL_CALL]);
+    const agent = new ReActAgent(createContext(llm, { maxIterations: 2 }));
+    const drainFeedback = createDrain({ turn: ['first', 'too late'] });
+
+    await agent.run('edit the file', { drainFeedback });
+
+    expect(callMessages).toHaveLength(2);
+    expect(drainFeedback).toHaveBeenCalledOnce();
+    expect(String(lastMessage(callMessages[1]).content)).toMatch(/\n\nfirst$/);
+  });
+
+  it('does not drain turn feedback once the token ceiling ends the run', async () => {
+    const { llm, callMessages } = createScriptedLlm([TOOL_CALL, 'done']);
+    const agent = new ReActAgent(createContext(llm));
+    const drainFeedback = createDrain({ turn: ['too late'] });
+
+    await agent.run('edit the file', { drainFeedback, maxTotalTokens: 5 });
+
+    expect(callMessages).toHaveLength(1);
+    expect(drainFeedback).not.toHaveBeenCalled();
+  });
+
   describe('after the run is cancelled', () => {
     /** A tool that cancels the run while it executes, standing in for the user pressing Esc mid-tool. */
     function abortingTool(controller: AbortController) {

@@ -833,6 +833,26 @@ describe('runTurn', () => {
       expect(save).toHaveBeenCalledTimes(2);
     });
 
+    it('keeps running queued follow-ups after a turn throws outside its error handling', async () => {
+      seedSession([]);
+      const { ctx, run } = queueCtx(async () => makeResult());
+      let historyCalls = 0;
+      ctx.commandHistoryStore = {
+        add: vi.fn(async () => {
+          if (historyCalls++ === 0) {
+            useCliStore.getState().enqueueMessage('next', 'followUp');
+            throw new Error('history file locked');
+          }
+        }),
+        list: vi.fn(async () => [] as string[]),
+      } as unknown as CommandHistoryStore;
+
+      await runTurn('first', ctx);
+
+      expect(run.mock.calls.map(c => c[0])).toEqual(['next']);
+      expect(useCliStore.getState().turnInFlight).toBe(false);
+    });
+
     it('queues a turn started while one is in flight instead of running two agent loops at once', async () => {
       seedSession([]);
       let active = 0;
