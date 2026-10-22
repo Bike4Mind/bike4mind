@@ -60,7 +60,7 @@ function syncSourceFilter(collectionName: string): Record<string, unknown> {
   if (collectionName === 'adminsettings') {
     return {
       settingName: { $nin: Array.from(SENSITIVE_ADMIN_SETTING_NAMES) },
-      settingValue: { $not: { $regex: ciphertextPatternSource, $options: 'i' } },
+      settingValue: { $not: new RegExp(ciphertextPatternSource, 'i') },
     };
   }
   return {};
