@@ -41,7 +41,7 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { MONGODB_URI: 'mongodb://x/%STAGE%', STAGE: 'test', SECRET_ENCRYPTION_KEY: 'key' },
 }));
 vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({ decryptSecret: () => TOKEN }));
-vi.mock('@server/integrations/slack/sreSlackApproval', () => ({
+vi.mock('@bike4mind/server-utils/integrations/slack/sreSlackApproval', () => ({
   postSreFixSuccessMessage: mocks.postSreFixSuccessMessage,
   postSreFixFailureMessage: vi.fn(),
   postSreAlreadyFixedMessage: vi.fn(),

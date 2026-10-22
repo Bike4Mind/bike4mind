@@ -49,7 +49,7 @@ vi.mock('@bike4mind/server-utils/chatCompletion/questTimeoutRecovery', async () 
 });
 
 const dispatchQuestCallback = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-vi.mock('@server/generationCallback/dispatchQuestCallback', () => ({ dispatchQuestCallback }));
+vi.mock('@bike4mind/server-utils/generationCallback/dispatchQuestCallback', () => ({ dispatchQuestCallback }));
 
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { STUCK_QUEST_RECOVERED_LOG } from '@bike4mind/server-utils/chatCompletion/questTimeoutRecovery';

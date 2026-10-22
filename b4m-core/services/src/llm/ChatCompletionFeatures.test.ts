@@ -52,6 +52,12 @@ vi.mock('../mementoService', async importOriginal => ({
   getRelevantMementos: getRelevantMementosMock,
 }));
 
+// The emitter no-ops without SEED_STAGE_NAME anyway; the spy pins which cut each turn reports.
+const recordForcedRetrievalCutMetricsMock = vi.hoisted(() => vi.fn());
+vi.mock('./forcedRetrievalSelectionMetrics', () => ({
+  recordForcedRetrievalCutMetrics: recordForcedRetrievalCutMetricsMock,
+}));
+
 // Spy that KEEPS the real implementation - the reader opt-in tests below assert on the literal
 // options object this call site passes (including readerConsentDatalakeTags), which an outcome-only
 // assertion cannot pin: a resolver that quietly derived consent from something else could still
@@ -101,6 +107,7 @@ const makeArgs = (overrides: Record<string, unknown> = {}) => ({
 // getSettingsByNames caches process-wide; each test's fixture must not see the last one's rows.
 beforeEach(() => {
   invalidateSettingsCache();
+  recordForcedRetrievalCutMetricsMock.mockClear();
 });
 describe('ContextSummarizationFeature', () => {
   let contextSummarizeSession: ReturnType<typeof vi.fn>;
@@ -1231,6 +1238,8 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       expect(annDb.vectorSearch).not.toHaveBeenCalled();
       expect(content).not.toContain(targetHeading);
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('selected alphabetically by file name'));
+      // The listing page itself is the cap here, so no candidate pick ran to report on.
+      expect(recordForcedRetrievalCutMetricsMock).not.toHaveBeenCalled();
     });
 
     it('with vector search, picks candidates by relevance and serves the late-sorting answer', async () => {
@@ -1251,6 +1260,10 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       // Exactly the cap's worth of files reached the chunk scan.
       const scanned = new Set(ctx.db.fabfilechunks.findVectorsByFabFileIds.mock.calls.flatMap(c => c[0] as string[]));
       expect(scanned.size).toBe(100);
+      expect(recordForcedRetrievalCutMetricsMock).toHaveBeenCalledWith(
+        { selection: 'relevance', annPickMs: expect.any(Number) },
+        expect.anything()
+      );
     });
 
     it('falls back to the alphabetical pick, and says so, when the ANN query fails', async () => {
@@ -1260,6 +1273,10 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       expect(content).not.toContain(targetHeading);
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('ANN candidate pick failed'), expect.any(Error));
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('selected alphabetically by file name'));
+      expect(recordForcedRetrievalCutMetricsMock).toHaveBeenCalledWith(
+        { selection: 'fileName', reason: 'error', annPickMs: expect.any(Number) },
+        expect.anything()
+      );
     });
 
     it('falls back without querying when the index is not queryable', async () => {
@@ -1269,6 +1286,10 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       expect(annDb.vectorSearch).not.toHaveBeenCalled();
       expect(content).not.toContain(targetHeading);
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('selected alphabetically by file name'));
+      expect(recordForcedRetrievalCutMetricsMock).toHaveBeenCalledWith(
+        { selection: 'fileName', reason: 'not-queryable', annPickMs: null },
+        expect.anything()
+      );
     });
 
     it('falls back, and reports the by-name cut, when a queryable index returns no hits', async () => {
@@ -1282,6 +1303,10 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('vector index returned no hits'));
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('selected alphabetically by file name'));
       expect((quest.promptMeta as { retrievalCoverage?: { partial: boolean } }).retrievalCoverage?.partial).toBe(true);
+      expect(recordForcedRetrievalCutMetricsMock).toHaveBeenCalledWith(
+        { selection: 'fileName', reason: 'no-hits', annPickMs: expect.any(Number) },
+        expect.anything()
+      );
     });
 
     it('applies no score floor: a weak hit still ranks its file into the pick', async () => {
@@ -1534,6 +1559,10 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       expect(scanned.size).toBe(100);
       expect([...scanned].filter(id => id.startsWith('a'))).toHaveLength(0);
       expect([...scanned].filter(id => id.startsWith('n'))).toHaveLength(10);
+      expect(recordForcedRetrievalCutMetricsMock).toHaveBeenCalledWith(
+        { selection: 'fileName', reason: 'relevance-unavailable', annPickMs: null },
+        expect.anything()
+      );
     });
 
     it('keeps library files in the fair share of a multi-lake session that never asked for "+ My files"', async () => {
@@ -1614,6 +1643,10 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       expect(annDb.vectorSearch).not.toHaveBeenCalled();
       expect(content).not.toContain(targetHeading);
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('no candidate file is vector-index ready'));
+      expect(recordForcedRetrievalCutMetricsMock).toHaveBeenCalledWith(
+        { selection: 'fileName', reason: 'no-ready-file', annPickMs: null },
+        expect.anything()
+      );
     });
 
     it('still reports the by-name cut when the listing the relevance pick ranks overflowed', async () => {
@@ -1638,6 +1671,10 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
         expect(content).not.toContain(targetHeading);
         expect(warn).toHaveBeenCalledWith(expect.stringContaining('ANN candidate pick ran past 3000ms'));
         expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('ANN candidate pick failed'), expect.anything());
+        expect(recordForcedRetrievalCutMetricsMock).toHaveBeenCalledWith(
+          { selection: 'fileName', reason: 'deadline', annPickMs: expect.any(Number) },
+          expect.anything()
+        );
       } finally {
         vi.useRealTimers();
       }

@@ -74,7 +74,7 @@ import {
 import { Logger } from '@bike4mind/observability';
 import { Permission, OPTI_SURFACE } from '@bike4mind/common';
 import { accessibleBy } from '@casl/mongoose';
-import { lakeWriteToolDb } from '@server/dataLakes/lakeWriteToolDb';
+import { lakeWriteToolDb } from '@bike4mind/server-utils/dataLakes/lakeWriteToolDb';
 import { getUserEntitlements } from '@server/entitlements';
 import { runDecisionTool } from '@server/decisions/runDecisionTool';
 import { executionTurnAuth } from '@server/auth/turnAuth';

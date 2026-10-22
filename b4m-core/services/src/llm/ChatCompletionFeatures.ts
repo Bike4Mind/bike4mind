@@ -117,7 +117,9 @@ import {
   rankCandidateFilesByRelevance,
   withDeadline,
   type ForcedRetrievalCandidateSelection,
+  type ForcedRetrievalFallbackReason,
 } from './forcedRetrievalCandidateSelection';
+import { recordForcedRetrievalCutMetrics } from './forcedRetrievalSelectionMetrics';
 import { blendFollowUpQueryVector, forcedRetrievalFollowUpContext } from './forcedRetrievalQuery';
 import {
   buildSupersessionReport,
@@ -1844,6 +1846,10 @@ type ForcedRetrievalCandidateFile = VectorSearchReadinessFile & {
   tags?: { name: string }[];
   documentDate?: Date | null;
 };
+// The ANN candidate pick's outcome. annPickMs is null when no query was sent.
+type AnnCandidatePick<T> =
+  | { ranked: T[]; annPickMs: number }
+  | { ranked: null; reason: ForcedRetrievalFallbackReason; annPickMs: number | null };
 // File ids per chunk query, and chunk rows per query - together these bound how many vectors
 // are resident at once instead of loading every candidate file's chunks up front.
 const FORCED_RETRIEVAL_FILE_BATCH_SIZE = 10;
@@ -2524,6 +2530,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    * A relevance pick ranks them with one ANN query (see rankCandidateFilesByRelevance); anything
    * that stops it - index not queryable, no index-ready file, an error, or the deadline - falls
    * back to the prefix of the given order, which reportCoverage then flags as the by-name cut it is.
+   * A scope over the cap also publishes how it was cut (recordForcedRetrievalCutMetrics).
    */
   private async selectForcedRetrievalCandidates<T extends ForcedRetrievalCandidateFile>(
     files: T[],
@@ -2532,30 +2539,41 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     relevanceSelectionAvailable: boolean
   ): Promise<{ files: T[]; selection: ForcedRetrievalCandidateSelection }> {
     if (files.length <= FORCED_RETRIEVAL_MAX_CANDIDATE_FILES) return { files, selection: 'all' };
-    const ranked = relevanceSelectionAvailable
+    const pick: AnnCandidatePick<T> = relevanceSelectionAvailable
       ? await this.rankCandidatesByAnn(files, queryVector, embeddingModel)
-      : null;
-    if (ranked) return { files: ranked.slice(0, FORCED_RETRIEVAL_MAX_CANDIDATE_FILES), selection: 'relevance' };
+      : { ranked: null, reason: 'relevance-unavailable', annPickMs: null };
+    if (pick.ranked) {
+      await recordForcedRetrievalCutMetrics({ selection: 'relevance', annPickMs: pick.annPickMs }, this.logger);
+      return { files: pick.ranked.slice(0, FORCED_RETRIEVAL_MAX_CANDIDATE_FILES), selection: 'relevance' };
+    }
+    await recordForcedRetrievalCutMetrics(
+      { selection: 'fileName', reason: pick.reason, annPickMs: pick.annPickMs },
+      this.logger
+    );
     return { files: files.slice(0, FORCED_RETRIEVAL_MAX_CANDIDATE_FILES), selection: 'fileName' };
   }
 
   /**
    * The ANN half of selectForcedRetrievalCandidates, run through the same atlasVectorSearch seam
-   * as semanticDataLakeSearch. `null` means "fall back"; never throws.
+   * as semanticDataLakeSearch. `ranked: null` means "fall back by name", with the reason; never throws.
    */
   private async rankCandidatesByAnn<T extends ForcedRetrievalCandidateFile>(
     files: T[],
     queryVector: number[],
     embeddingModel: SupportedEmbeddingModel
-  ): Promise<T[] | null> {
+  ): Promise<AnnCandidatePick<T>> {
     const { fabfilechunks } = this.chatCompletion.db;
-    if (!isAtlasVectorSearchAvailable(fabfilechunks)) return null;
+    if (!isAtlasVectorSearchAvailable(fabfilechunks)) {
+      return { ranked: null, reason: 'relevance-unavailable', annPickMs: null };
+    }
     const now = new Date();
     const annReadyIds = files.filter(f => isVectorSearchReady(f, now)).map(f => f.id);
     if (annReadyIds.length === 0) {
       this.logger.warn('🔒 Forced retrieval: no candidate file is vector-index ready yet - picking candidates by name');
-      return null;
+      return { ranked: null, reason: 'no-ready-file', annPickMs: null };
     }
+    const startedAt = Date.now();
+    const elapsedMs = () => Date.now() - startedAt;
     try {
       // One deadline across both calls: the status read is cached but a cold miss is a round trip.
       const ann = await withDeadline(
@@ -2593,7 +2611,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         this.logger.warn(
           `🔒 Forced retrieval: ${embeddingModel} vector index not queryable - picking candidates by name`
         );
-        return null;
+        // Only the status read ran, so there is no query time to report.
+        return { ranked: null, reason: 'not-queryable', annPickMs: null };
       }
       // An empty answer is not a ranking: ranking on it would return the input (by-name) order
       // while reporting 'relevance', hiding the cut. Seen in the mongot lag window, where the
@@ -2603,22 +2622,23 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         this.logger.warn(
           `🔒 Forced retrieval: ${embeddingModel} vector index returned no hits - picking candidates by name`
         );
-        return null;
+        return { ranked: null, reason: 'no-hits', annPickMs: elapsedMs() };
       }
-      return rankCandidateFilesByRelevance(
+      const ranked = rankCandidateFilesByRelevance(
         files,
         ann.results.map(r => ({ fabFileId: r.fileId, score: r.score })),
         now
       );
+      return { ranked, annPickMs: elapsedMs() };
     } catch (error) {
       if (error instanceof DeadlineExceededError) {
         this.logger.warn(
           `🔒 Forced retrieval: ANN candidate pick ran past ${FORCED_RETRIEVAL_ANN_DEADLINE_MS}ms - picking candidates by name`
         );
-      } else {
-        this.logger.warn('🔒 Forced retrieval: ANN candidate pick failed - picking candidates by name', error);
+        return { ranked: null, reason: 'deadline', annPickMs: elapsedMs() };
       }
-      return null;
+      this.logger.warn('🔒 Forced retrieval: ANN candidate pick failed - picking candidates by name', error);
+      return { ranked: null, reason: 'error', annPickMs: elapsedMs() };
     }
   }
 

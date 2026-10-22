@@ -214,7 +214,7 @@ Create a key in the app under **Settings > API Keys** with the scopes for the to
 - **stdio (default)**: `b4m mcp serve`. For local clients like Claude Desktop that spawn the process and speak JSON-RPC over stdin/stdout.
 - **streamable HTTP**: `b4m mcp serve --http --port 7000`. A stateless endpoint at `http://127.0.0.1:<port>/mcp` for clients that connect over HTTP.
 
-HTTP mode binds **loopback only** (`127.0.0.1`) by design: it has no per-request auth of its own, so it must not be exposed on a routable interface. There is no flag to change the bind address. Only the `/mcp` path is served (any other path is a 404).
+HTTP mode binds **loopback only** (`127.0.0.1`) and requires an `Authorization: Bearer <token>` header on every request. The token is `--token`, else `B4M_MCP_TOKEN`, else generated at startup and printed to stderr. There is no flag to change the bind address. Only the `/mcp` path is served (any other path is a 404).
 
 ### Claude Desktop
 

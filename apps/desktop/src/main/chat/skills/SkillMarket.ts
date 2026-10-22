@@ -29,7 +29,7 @@ import type {
   SkillUploadPreview,
   SkillWriteCode,
 } from '@shared/skillMarket';
-import { isExternallyOpenable } from '../../externalLinks';
+import { isExternallyOpenable } from '@shared/externalLinks';
 import { buildDiff } from '../tools/diff';
 import type { SkillCatalog } from './SkillCatalog';
 import { readSkillSource } from './readSkillSource';

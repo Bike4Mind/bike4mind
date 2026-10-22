@@ -47,8 +47,9 @@ const h = vi.hoisted(() => ({
   consumeGitHubLakeAuthGrant: vi.fn(),
 }));
 
-vi.mock('./lakeAppClient', async importOriginal => {
-  const actual = await importOriginal<typeof import('./lakeAppClient')>();
+vi.mock('@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient', async importOriginal => {
+  const actual =
+    await importOriginal<typeof import('@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient')>();
   return {
     ...actual,
     exchangeInstallerCode: h.exchangeInstallerCode,
@@ -147,13 +148,13 @@ import {
   REVOKE_PURGE_SLICE_SIZE,
   requireGitHubLakeAppConfig,
 } from './githubLakeConnection';
-import { CLAIM_GRACE_MS } from '@server/dataLakes/assertLakeConnectorFree';
+import { CLAIM_GRACE_MS } from '@bike4mind/server-utils/dataLakes/assertLakeConnectorFree';
 import type {
   GitHubLakeAppConfig,
   GitHubLakeInstallation,
   GitHubLakeRepository,
   GitHubLakeUserInstallation,
-} from './lakeAppClient';
+} from '@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient';
 import {
   GITHUB_DISCONNECT_STALL_MS,
   GITHUB_LAKE_PLACEHOLDER_NAME,

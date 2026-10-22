@@ -10,11 +10,12 @@
  * `isPrivateIP` and `isPrivateOrInternalHostname` are re-exported from `@bike4mind/fab-pipeline`
  * rather than reimplemented here - this file used to carry its own per-hextet IPv6 prefix list that
  * drifted out of sync with the hardened one there (#1969). The fetch-call-site helpers below
- * (assertUrlAllowed, safeFetch) add what fab-pipeline's node-http/https agents cannot provide for
- * the global fetch() these routes use: an https-only assert and a redirect-revalidating fetch.
+ * (assertUrlAllowed, safeFetch, fetchPinned) add an https-only assert, a redirect-revalidating fetch,
+ * and a shared fetch client from fab-pipeline's createPinnedFetch.
  */
 
 import { isPrivateIP, isPrivateOrInternalHostname } from '@bike4mind/fab-pipeline';
+import { PinnedFetchError, createPinnedFetch, type PinnedFetch } from '@bike4mind/fab-pipeline/ssrf';
 import dns from 'dns';
 import { promisify } from 'util';
 
@@ -26,13 +27,8 @@ export { isPrivateIP, isPrivateOrInternalHostname };
 /**
  * Validate a URL for webhook delivery.
  * Blocks internal/private networks to prevent SSRF attacks.
- * Resolves DNS and validates resolved IPs to prevent DNS rebinding attacks.
- *
- * TOCTOU assumption: DNS is resolved here, then Node resolves independently in fetch().
- * A DNS rebinding attack could serve different IPs on the two lookups. In practice this
- * requires compromising the authoritative DNS of the target domain - acceptable risk for
- * first-party API endpoints (googleapis.com, linkedin.com) but worth noting for future
- * callers that add untrusted user-supplied URLs.
+ * Resolves DNS and validates resolved IPs. This lookup is separate from the one a later fetch makes;
+ * use {@link fetchPinned} or {@link safeFetch} so the connection uses an address that passed validation.
  *
  * @param url - The URL to validate
  * @returns Object with valid flag and optional error message
@@ -52,7 +48,7 @@ export async function validateTargetUrl(url: string): Promise<{ valid: boolean; 
     }
 
     // For non-IP hostnames, resolve DNS and validate all resolved IPs
-    // This prevents DNS rebinding attacks where hostname resolves to private IP
+    // so a public name that resolves to a private IP is refused
     const isIPv4Address = /^(\d{1,3}\.){3}\d{1,3}$/.test(parsed.hostname);
     const isIPv6Address = parsed.hostname.includes(':');
 
@@ -132,7 +128,7 @@ export function validateTargetUrlSync(url: string): { valid: boolean; error?: st
   }
 }
 
-/** Thrown by {@link safeFetch} when a target, or its redirect target, is unsafe to fetch. */
+/** Thrown by {@link safeFetch} and {@link fetchPinned} when a target, or a redirect target, is unsafe to fetch. */
 export class SsrfError extends Error {
   constructor(message: string) {
     super(message);
@@ -165,40 +161,88 @@ export async function assertUrlAllowed(url: string): Promise<void> {
   }
 }
 
+export interface FetchPinnedOptions {
+  /** Permit plain http (webhook targets may use it). Default false. */
+  allowHttp?: boolean;
+  /** Cap on decoded response body bytes. Default 2 MiB (createPinnedFetch's default). */
+  maxBodyBytes?: number;
+  /**
+   * For callers that read only the status: no body cap, so a large reply cannot fail the request. The
+   * caller must cancel `response.body` to release the connection. Overrides `maxBodyBytes`.
+   */
+  discardBody?: boolean;
+}
+
+const pinnedClients = new Map<string, PinnedFetch>();
+
+function getPinnedClient({ allowHttp = false, maxBodyBytes, discardBody = false }: FetchPinnedOptions): PinnedFetch {
+  const cap = discardBody ? Infinity : maxBodyBytes;
+  const key = `${allowHttp}:${cap ?? 'default'}`;
+  let client = pinnedClients.get(key);
+  if (!client) {
+    client = createPinnedFetch({ allowHttp, maxBodyBytes: cap });
+    pinnedClients.set(key, client);
+  }
+  return client;
+}
+
+/** True when a response body exceeded the `maxBodyBytes` cap of {@link fetchPinned}. */
+export function isResponseTooLargeError(error: unknown): boolean {
+  return error instanceof PinnedFetchError && error.code === 'size_cap';
+}
+
+/**
+ * fetch() for a URL that already passed {@link validateTargetUrl} or {@link assertUrlAllowed}. Each
+ * connection re-checks the address it dials, so the connection uses an address that passed validation.
+ * Redirects follow the caller's `redirect` mode and are revalidated per hop.
+ *
+ * @throws SsrfError when the target or a redirect hop resolves to a blocked address or scheme.
+ */
+export async function fetchPinned(
+  url: string,
+  init: RequestInit = {},
+  options: FetchPinnedOptions = {}
+): Promise<Response> {
+  try {
+    return await getPinnedClient(options)(url, init);
+  } catch (error) {
+    if (error instanceof PinnedFetchError && (error.code === 'ssrf_blocked' || error.code === 'scheme_blocked')) {
+      throw new SsrfError(error.message);
+    }
+    throw error;
+  }
+}
+
 /**
  * Fetch a caller/user-influenced URL with SSRF protection on BOTH the initial host and a single
  * redirect hop. A plain fetch defaults to redirect:'follow', so a guard on the initial URL alone is
  * bypassed by a public host that 3xx-redirects to an internal one. This validates up front
  * (assertUrlAllowed, DNS-resolving), fetches with redirect:'manual', re-validates the Location the
  * same way, and follows at most one hop with redirect:'error'. Callers keep their own
- * timeout/size/content-type handling via `init` and the returned Response. Callers may reject a
+ * timeout/content-type handling via `init` and the returned Response. Callers may reject a
  * redirect target before the second fetch when their own routing rules make it unsafe.
  *
- * TOCTOU residual: validateTargetUrl resolves DNS here, but global fetch() (undici) resolves the name
- * again at connect time and cannot install fab-pipeline's connect-time ssrfSafeLookup, which is built
- * for the node-http/axios agents. So for a user-supplied host whose authoritative DNS an attacker
- * controls, this leaves a blind connect oracle rather than an internal read - and what keeps it a
- * blind oracle is that every safeFetch caller bounds the bytes an upstream response can return:
- * blog/publish.ts, blog/presign-image-upload.ts, blog-integration/index.ts, and external-image.ts
- * (the riskiest - an open admin-supplied URL streamed up to a 10MB cap). Same residual the repo
- * already accepts for its other fetch()-based SSRF guards.
+ * Both hops go through {@link fetchPinned}, so the connection uses the address that passed validation.
+ * The response body is capped at `maxBodyBytes` (2 MiB by default); see {@link isResponseTooLargeError}.
  *
  * @throws SsrfError if the target or its redirect target is unsafe.
  */
 export async function safeFetch(
   url: string,
   init: RequestInit = {},
-  options: { assertRedirectAllowed?: (target: URL) => void } = {}
+  options: { assertRedirectAllowed?: (target: URL) => void; maxBodyBytes?: number } = {}
 ): Promise<Response> {
   await assertUrlAllowed(url);
+  const pinnedOptions = { maxBodyBytes: options.maxBodyBytes };
 
-  const response = await fetch(url, { ...init, redirect: 'manual' });
+  const response = await fetchPinned(url, { ...init, redirect: 'manual' }, pinnedOptions);
   const isRedirect = response.status >= 300 && response.status < 400;
   if (!isRedirect) {
     return response;
   }
 
   const location = response.headers.get('location');
+  await response.body?.cancel().catch(() => undefined);
   if (!location) {
     throw new SsrfError('redirect without a Location header');
   }
@@ -206,12 +250,12 @@ export async function safeFetch(
   try {
     options.assertRedirectAllowed?.(new URL(target));
     await assertUrlAllowed(target);
+    // One extra hop only: redirect:'error' rejects any further redirect from the target.
+    return await fetchPinned(target, { ...init, redirect: 'error' }, pinnedOptions);
   } catch (e) {
     if (e instanceof SsrfError) {
       throw new SsrfError(`blocked redirect: ${e.message}`);
     }
     throw e;
   }
-  // One extra hop only: redirect:'error' rejects any further redirect from the target.
-  return fetch(target, { ...init, redirect: 'error' });
 }

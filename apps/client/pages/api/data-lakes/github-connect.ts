@@ -14,7 +14,7 @@ import {
   HTTPError,
   type IDataLakeDocument,
 } from '@bike4mind/common';
-import { getGitHubLakeAppConfig } from '@server/integrations/github/dataLake/lakeAppClient';
+import { getGitHubLakeAppConfig } from '@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient';
 import {
   buildGitHubLakeAuthorizeUrl,
   requireGitHubLakeAppConfig,
@@ -23,7 +23,7 @@ import {
 import { clearStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
 import { verifyOrgAccess } from '@server/utils/orgAccess';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
-import { assertLakeConnectorFree } from '@server/dataLakes/assertLakeConnectorFree';
+import { assertLakeConnectorFree } from '@bike4mind/server-utils/dataLakes/assertLakeConnectorFree';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { serializeError } from '@bike4mind/server-utils/utils/serializeError';
 

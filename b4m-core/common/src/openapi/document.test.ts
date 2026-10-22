@@ -130,6 +130,7 @@ describe('buildOpenApiDocument', () => {
     const json = (status: string) => completions.responses[status].content['application/json'].schema;
     expect(json('400')).toEqual(ref('createCompletionResponse400'));
     expect(doc.components.schemas.createCompletionResponse400.properties.errorCode.enum).toEqual([
+      'invalid_request',
       'unknown_model',
       'tool_search_unsupported',
       'all_tools_deferred',

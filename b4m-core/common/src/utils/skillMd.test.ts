@@ -93,6 +93,17 @@ describe('parseSkillMd', () => {
   });
 
   it.each([
+    ['autoinvoke: false\n', true],
+    ['autoinvoke: "false"\n', true],
+    ['autoinvoke: true\n', false],
+    ['autoinvoke: false\ndisable-model-invocation: false\n', true],
+    ['disable-model-invocation: true\nautoinvoke: true\n', true],
+  ])('maps autoinvoke %j to disableModelInvocation %s', (frontmatter, expected) => {
+    const result = parseSkillMd(`---\nname: x\n${frontmatter}---\n\nbody\n`);
+    expect(result).toMatchObject({ ok: true, fields: { disableModelInvocation: expected }, dropped: [] });
+  });
+
+  it.each([
     ['[pr]', '[pr]'],
     ['[pr-number] [priority] [assignee]', '[pr-number] [priority] [assignee]'],
     ['[a, b]  ', '[a, b]'],
