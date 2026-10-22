@@ -90,6 +90,7 @@ describe('infra resource glue', () => {
     ['a non-boolean env flag', { secrets: [{ name: 'A', env: 'yes' }] }],
     ['a single-character Lambda env key', { secrets: [{ name: 'A', env: true }] }],
     ['a non-positive rotation interval', { rotations: [{ ...ROTATION, rotationIntervalDays: 0 }] }],
+    ['a rotation interval past the admin limit', { rotations: [{ ...ROTATION, rotationIntervalDays: 366 }] }],
     ['an unrepresentable rotation date', { rotations: [{ ...ROTATION, rotationIntervalDays: 1e308 }] }],
   ])('fails codegen on %s', (_label, value) => {
     writeOverlay(value);

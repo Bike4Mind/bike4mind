@@ -1813,9 +1813,8 @@ function readInfraResources(pkg) {
     if (!Number.isInteger(r.rotationIntervalDays) || r.rotationIntervalDays <= 0) {
       fail(`${r.secret}.rotationIntervalDays must be a positive integer`);
     }
-    const nextRotation = new Date();
-    nextRotation.setDate(nextRotation.getDate() + r.rotationIntervalDays);
-    if (Number.isNaN(nextRotation.getTime())) fail(`${r.secret}.rotationIntervalDays exceeds the supported date range`);
+    // Same ceiling as the admin rotation PATCH (apps/client/pages/api/secret-rotations/[id]).
+    if (r.rotationIntervalDays > 365) fail(`${r.secret}.rotationIntervalDays must be at most 365`);
     if (typeof r.isAutomatic !== 'boolean') fail(`${r.secret}.isAutomatic must be a boolean`);
     const { secret, description, rotationIntervalDays, isAutomatic, rotationProcess } = r;
     return { secret, description, rotationIntervalDays, isAutomatic, rotationProcess };

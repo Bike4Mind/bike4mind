@@ -48,6 +48,11 @@ and notifier use `getSecretRotationConfig()` from
 
 Before deactivating stale rotation records, regenerate the glue with every package
 used by the target stage mounted. Preview the cleanup script with `--dry-run`,
-then pass `--confirm-complete-rotation-inventory` to confirm that inventory for a
-write. Use `--no-contributed-rotations` only when the stage has no contributed
-rotations. Missing packages otherwise make live reminders appear stale.
+then pass `--confirm-complete-rotation-inventory` for a write, or
+`--no-contributed-rotations` when the stage has no contributed rotations. The flags
+are not the safeguard. Run under `sst shell`, the script also checks the stage: it
+refuses when a stale record names a non-core secret that the stage still deploys,
+because that record belongs to a package missing from the local tree. It also
+refuses when the shell does not link every core secret (as under `sst shell
+--target`), and when the glue was generated without `infra/`, since core and
+package names cannot then be told apart.

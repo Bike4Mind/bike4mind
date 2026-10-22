@@ -215,6 +215,14 @@ export const secrets = {
   QA_ALARM_SLACK_WEBHOOKS: new sst.Secret('QA_ALARM_SLACK_WEBHOOKS', 'not-configured'),
 };
 
+// Without core names, nothing stops a contribution from shadowing a core resource or env var.
+if ((coreResourceNames === null || coreEnvNames === null) && contributedInfraResources.secrets.length > 0) {
+  throw new Error(
+    '[infra] core resource names unknown (codegen ran without infra/); refusing to register contributed secrets. ' +
+      'Re-run pnpm codegen with infra/ present.'
+  );
+}
+
 const contributedSecretPartition = partitionContributed(
   contributedInfraResources.secrets,
   spec => spec.name,
