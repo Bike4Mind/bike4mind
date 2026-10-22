@@ -70,9 +70,9 @@ describe('LakeMemoryExtractionService.evaluate', () => {
     expect(facts?.every(f => f.importance === 9)).toBe(true); // the low tail was dropped by the sort+cap
   });
 
-  it('returns null when the document yields no facts', async () => {
+  it('returns an empty array when the document yields no facts', async () => {
     nextResponse = JSON.stringify({ facts: [] });
-    expect(await run('a table of contents')).toBeNull();
+    expect(await run('a table of contents')).toEqual([]);
   });
 
   it('returns null (fail-soft) on a malformed response', async () => {
@@ -81,7 +81,7 @@ describe('LakeMemoryExtractionService.evaluate', () => {
   });
 
   it('skips the LLM call entirely for empty document text', async () => {
-    expect(await run('   ')).toBeNull();
+    expect(await run('   ')).toEqual([]);
     expect(completeCalls).toBe(0);
   });
 

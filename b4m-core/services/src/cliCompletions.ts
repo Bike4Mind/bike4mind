@@ -209,7 +209,7 @@ export function estimateInputTokens(messages: IMessage[]): number {
  * the tool is sent in full. Decided here rather than trusting prepareWireTools to have stripped
  * the flag, because `serverTools` never pass through it.
  */
-function estimateToolTokens(tools: ICompletionOptionTools[], deferralHonoured: boolean): number {
+export function estimateToolTokens(tools: ICompletionOptionTools[], deferralHonoured = false): number {
   const totalChars = tools.reduce(
     (sum, tool) =>
       deferralHonoured && tool.toolSchema.defer_loading === true ? sum : sum + JSON.stringify(tool.toolSchema).length,

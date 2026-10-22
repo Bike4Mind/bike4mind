@@ -2,7 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { transformBatchRepository, usageEventRepository } from '@bike4mind/database';
 import { NotFoundError, usdToCreditsStochastic } from '@bike4mind/utils';
-import { getTextModelCost } from '@bike4mind/common';
+import { anthropicBatchCost } from '@server/billing/anthropicBatchPricing';
 import { AnthropicBatchService, getAvailableModels } from '@bike4mind/llm-adapters';
 import { settleHeldCredits } from '@server/billing/reserveRequestCredits';
 
@@ -99,7 +99,7 @@ const handler = baseApi().get(async (req, res) => {
           erroredCount: status.counts.errored + status.counts.canceled + status.counts.expired,
         });
   if (claimed?.creditHold) {
-    // Failed items are free. Standard rate, as reserved at submit (no Batches discount in pricing).
+    // Failed items are free. Each successful item uses the same batch/cache rates as its hold.
     const modelByCustomId = new Map(claimed.customIdMap.map(m => [m.customId, m.model]));
     let usd = 0;
     let inputTokens = 0;
@@ -116,13 +116,7 @@ const handler = baseApi().get(async (req, res) => {
       }
       if (r.status !== 'done' || !r.tokenUsage || !modelInfo) continue;
       const u = r.tokenUsage;
-      usd += getTextModelCost(
-        modelInfo,
-        u.inputTokens,
-        u.outputTokens,
-        u.cacheReadInputTokens ?? 0,
-        u.cacheCreationInputTokens ?? 0
-      );
+      usd += anthropicBatchCost(modelInfo, u);
       inputTokens += u.inputTokens;
       outputTokens += u.outputTokens;
       cacheReadTokens += u.cacheReadInputTokens ?? 0;

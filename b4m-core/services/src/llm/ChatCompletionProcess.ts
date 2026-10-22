@@ -2431,7 +2431,7 @@ export class ChatCompletionProcess {
         configs: await loadModelConfigurations(this.db.adminSettings),
         getEntitlements: async () => (await this.resolveEntitlementKeys()).keys,
         models,
-        enforceCredits: this.getDefaultSettingValue('enforceCredits', defaultAdminSettings),
+        enforceCredits: getSettingsValue('enforceCredits', defaultAdminSettings) === true,
       });
       // Always the final id, remapped or not: /api/chat admits the requested model in
       // ChatCompletionInvoke, but the quest/Slack queue handlers construct this class directly.

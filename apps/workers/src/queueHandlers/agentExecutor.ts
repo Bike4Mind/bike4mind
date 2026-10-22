@@ -3798,12 +3798,12 @@ async function processSubagentDispatch(
     llm.currentModel = childModel;
 
     const modelAdmission = await createModelAdmission(user as IUserDocument, models);
-    const refusal = await modelAdmission.assert(childModel).then(
+    const admissionRefusal = await modelAdmission.assert(childModel).then(
       () => null,
       (err: Error) => err
     );
-    if (refusal) {
-      await agentExecutionRepository.markFailed(childExecutionId, { message: refusal.message });
+    if (admissionRefusal) {
+      await agentExecutionRepository.markFailed(childExecutionId, { message: admissionRefusal.message });
       await sendWs('subagent_failed', {
         executionId: parentId,
         childExecutionId,

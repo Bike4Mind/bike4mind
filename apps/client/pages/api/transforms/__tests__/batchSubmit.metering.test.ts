@@ -32,7 +32,7 @@ vi.mock('@server/middlewares/baseApi', () => {
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { ANTHROPIC_API_KEY: 'sk-test' } }));
 vi.mock('@bike4mind/database', () => ({ transformBatchRepository: { create: m.create } }));
 vi.mock('@bike4mind/llm-adapters', () => ({
-  getAvailableModels: async () => [{ id: 'claude-opus-4-6' }],
+  getAvailableModels: async () => [{ id: 'claude-opus-4-6', pricing: { 200_000: { input: 1e-6, output: 2e-6 } } }],
   AnthropicBatchService: { fromApiKey: () => ({ submitBatch: m.submitBatch }) },
 }));
 vi.mock('@anthropic-ai/sdk', () => ({
@@ -105,7 +105,7 @@ describe('POST /api/transforms/batch metering', () => {
     const res = await submit([item('a'), item('b')]);
 
     expect(res._getStatusCode()).toBe(202);
-    expect(m.reserve.mock.calls[0][1]).toBe(4);
+    expect(m.reserve.mock.calls[0][1]).toBe(2);
     // Outlives Anthropic's 29-day results window, so the sweep cannot refund a batch a late poll can still bill.
     expect(m.reserve.mock.calls[0][3]).toEqual({ holdTtlMs: 29 * 24 * 60 * 60_000 });
     expect(m.reserve).toHaveBeenCalledBefore(m.submitBatch);
@@ -172,6 +172,17 @@ describe('POST /api/transforms/batch metering', () => {
     await submit([item('a'), cached]);
 
     expect(m.ceiling.mock.calls.map(c => c[3])).toEqual([false, true]);
+  });
+
+  it('reserves one-hour cache writes at twice the input rate, with the batch discount', async () => {
+    await submit([{
+      ...item('a'),
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'p', cache_control: { type: 'ephemeral', ttl: '1h' } }] }],
+    }]);
+
+    expect(m.ceiling.mock.calls[0][0].pricing[200_000].cache_write).toBe(2e-6);
+    expect(m.ceiling.mock.calls[0][3]).toBe(true);
+    expect(m.reserve.mock.calls[0][1]).toBe(1);
   });
 
   it('400s a model it cannot price while credits are enforced, and passes it through when they are not', async () => {

@@ -7,6 +7,7 @@ import {
   type CompletionInfo,
   type ICompletionBackend,
   type ICompletionOptions,
+  type ICompletionOptionTools,
 } from '@bike4mind/llm-adapters';
 import { BadRequestError, DEFAULT_OUTPUT_MAX_TOKENS } from '@bike4mind/utils';
 
@@ -36,7 +37,9 @@ export type CompletionMeter = (
   maxTokens: number,
   models?: ModelInfo[],
   /** Provider turns the call may run (tool round-trips inside one `complete`); the hold covers each. */
-  turns?: number
+  turns?: number,
+  /** Schemas sent with the first provider request, included in the input hold. */
+  tools?: ICompletionOptionTools[]
 ) => Promise<MeteredCompletion>;
 
 /** Latch each usage field from whichever chunk carries it (same contract as cliCompletions). */
@@ -118,7 +121,7 @@ export function meterCompletionBackend<T extends Pick<ICompletionBackend, 'compl
     const heldMaxTokens = usesGeminiThinkingOutputCap(callModel)
       ? geminiThinkingOutputCap(callModel, maxTokens).maxOutputTokens
       : maxTokens;
-    const metered = await meter(callModel, messages, heldMaxTokens, models, providerTurns(options));
+    const metered = await meter(callModel, messages, heldMaxTokens, models, providerTurns(options), options.tools);
     const usage: CompletionUsage = {};
     return withMeteredCompletion(metered, usage, () =>
       llm.complete(model, messages, { ...options, maxTokens }, async (text, info) => {

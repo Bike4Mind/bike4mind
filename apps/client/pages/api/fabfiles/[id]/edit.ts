@@ -36,7 +36,7 @@ import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { apiKeyService, fabFilesService } from '@bike4mind/services';
 import { OperationsModelService } from '@client/services/operationsModelService';
 import {
-  completionCeilingUsd,
+  completionRequestCeilingUsd,
   completionUsd,
   createModelAdmission,
   hasReportedUsage,
@@ -287,7 +287,7 @@ Return only the edited content without any markdown code blocks or explanations.
           const worstCaseSize = (originalBuffer?.length ?? 0) + maxTokens * MAX_OUTPUT_BYTES_PER_TOKEN;
           await fabFilesService.assertRewriteFits(file, worstCaseSize, rewriteStorageDb, user);
         }
-        const ceilingUsd = completionCeilingUsd(modelInfo, messages, maxTokens);
+        const ceilingUsd = completionRequestCeilingUsd(modelInfo, messages, maxTokens);
         const reservation = await reserveCompletionCredits(req, ceilingUsd, 'AI file editing');
 
         let editedContent = '';

@@ -1,4 +1,4 @@
-import { ForbiddenError, getQuestErrorCode, type IUserDocument } from '@bike4mind/common';
+import { BadRequestError, ForbiddenError, getQuestErrorCode, type IUserDocument } from '@bike4mind/common';
 import { organizationRepository, userRepository } from '@bike4mind/database';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
 import { assertOwnerHasCredits } from '@bike4mind/services';
@@ -41,7 +41,11 @@ export async function missionWakeMeter(
     try {
       return await meter(...args);
     } catch (err) {
-      if (err instanceof ForbiddenError) throw new MissionModelRefusedError(err.message, err.additionalInfo);
+      // This meter runs admission and reservation only; provider errors occur after it returns.
+      // Disabled models use 400, while entitlement and pricing refusals use 403.
+      if (err instanceof ForbiddenError || err instanceof BadRequestError) {
+        throw new MissionModelRefusedError(err.message, err.additionalInfo);
+      }
       throw err;
     }
   };

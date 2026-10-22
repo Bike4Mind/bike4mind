@@ -6,7 +6,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { getEmbeddingModelCost, insufficientCreditsError } from '@bike4mind/common';
+import { getEmbeddingModelCost, getTextModelCost, insufficientCreditsError, usdToCredits } from '@bike4mind/common';
 
 const m = vi.hoisted(() => ({
   enforce: true,
@@ -80,8 +80,16 @@ vi.mock('@server/billing/meterPlatformCompletion', async importOriginal => {
   };
 });
 
-const MODEL = { id: 'ops-model', type: 'text', backend: 'openai', pricing: { 200_000: { input: 1e-6, output: 2e-6 } } };
-vi.mock('@bike4mind/llm-adapters', () => ({
+const MODEL = {
+  id: 'ops-model',
+  type: 'text',
+  backend: 'openai',
+  can_think: false,
+  max_tokens: 65536,
+  pricing: { 200_000: { input: 1e-6, output: 2e-6 } },
+};
+vi.mock('@bike4mind/llm-adapters', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/llm-adapters')>()),
   getAvailableModels: async () => [MODEL],
   getLlmByModel: () => ({ complete: m.complete }),
 }));
@@ -104,6 +112,8 @@ async function call(extra: Record<string, unknown> = {}) {
 beforeEach(() => {
   vi.clearAllMocks();
   m.enforce = true;
+  MODEL.backend = 'openai';
+  MODEL.can_think = false;
   m.hold.mockResolvedValue({ ownerId: 'u1', ownerType: 'user', reservedCredits: 50 });
   m.settleHold.mockImplementation(async (_hold, credits: number) => credits);
   m.search.mockResolvedValue({ context: '## Docs', relevantArticles: [], method: 'keyword' });
@@ -114,6 +124,28 @@ beforeEach(() => {
 });
 
 describe('POST /api/help/chat metering', () => {
+  it('holds the full Gemini thinking output budget before retrieval or completion', async () => {
+    MODEL.backend = 'gemini';
+    MODEL.can_think = true;
+
+    const res = await call();
+
+    expect(res._getStatusCode()).toBe(200);
+    // 1000 base prompt tokens + 4000 retrieved-context tokens, and 1000 + 16000 output tokens.
+    const cost = getTextModelCost(MODEL as never, 5000, 17000);
+    expect(m.hold).toHaveBeenCalledWith(
+      expect.objectContaining({ requiredCredits: usdToCredits(cost) }),
+      expect.anything()
+    );
+    expect(m.hold).toHaveBeenCalledBefore(m.search);
+    expect(m.complete).toHaveBeenCalledWith(
+      MODEL.id,
+      expect.anything(),
+      expect.objectContaining({ maxTokens: 1000 }),
+      expect.any(Function)
+    );
+  });
+
   it.each(['cacheReadInputTokens', 'cacheCreationInputTokens'] as const)(
     'prices cache-only %s usage on a successful response',
     async field => {

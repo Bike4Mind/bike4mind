@@ -333,7 +333,12 @@ export async function extractLakeMemoryForBatch(
           endUserId: ownerUserId,
           meter,
         });
-        if (!facts?.length) continue;
+        if (!facts) throw new Error('Lake memory extraction failed');
+        if (facts.length === 0) {
+          lastCoveredId = doc.fabFileId;
+          consecutiveFailures = 0;
+          continue;
+        }
 
         const tier = evidenceTierForDoc((doc.tags ?? []).map(t => t.name));
         for (const { fact } of facts) {

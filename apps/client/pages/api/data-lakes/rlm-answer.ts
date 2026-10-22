@@ -13,7 +13,12 @@ import {
 import { getSettingsByNames } from '@bike4mind/utils';
 import { BadRequestError, ForbiddenError, getTextModelCost, type IMessage, type ModelInfo } from '@bike4mind/common';
 import { estimateInputTokens } from '@bike4mind/services/cliCompletions';
-import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
+import {
+  geminiThinkingOutputCap,
+  getAvailableModels,
+  getLlmByModel,
+  usesGeminiThinkingOutputCap,
+} from '@bike4mind/llm-adapters';
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_QUERY_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { rateLimit } from '@server/middlewares/rateLimit';
@@ -117,12 +122,15 @@ function rootCeilingUsd(
   maxIterations: number,
   maxExecutions: number
 ): number {
-  const perIterationInput = estimateInputTokens(baseMessages) + ROOT_HISTORY_ITERATIONS * 2 * ROOT_MAX_TOKENS;
+  const providerMaxOutputTokens = usesGeminiThinkingOutputCap(modelInfo)
+    ? geminiThinkingOutputCap(modelInfo, ROOT_MAX_TOKENS).maxOutputTokens
+    : ROOT_MAX_TOKENS;
+  const perIterationInput = estimateInputTokens(baseMessages) + ROOT_HISTORY_ITERATIONS * 2 * providerMaxOutputTokens;
   const observationInput = ROOT_HISTORY_ITERATIONS * maxExecutions * OBSERVATION_TOKEN_CAP;
   return getTextModelCost(
     modelInfo,
     maxIterations * perIterationInput + observationInput,
-    maxIterations * ROOT_MAX_TOKENS
+    maxIterations * providerMaxOutputTokens
   );
 }
 

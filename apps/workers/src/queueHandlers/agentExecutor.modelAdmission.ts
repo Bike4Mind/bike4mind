@@ -1,6 +1,7 @@
 import type { ModelAdmission } from '@bike4mind/services/llm/modelAdmission';
 import type { ServerAgentDefinition } from '@bike4mind/agents';
 import { Logger } from '@bike4mind/observability';
+import { resolveDeprecatedModelId } from '@bike4mind/llm-adapters';
 
 const logger = new Logger({ metadata: { component: 'agentExecutor.modelAdmission' } });
 
@@ -17,7 +18,8 @@ export async function admitAgentDefinitions(
   for (const definition of definitions) {
     const models: string[] = [];
     for (const id of [definition.model, ...(definition.fallbackModels ?? [])]) {
-      if (await admission.admits(id)) models.push(id);
+      const resolvedModelId = resolveDeprecatedModelId(id, 'agentExecutor.modelAdmission');
+      if (await admission.admits(resolvedModelId)) models.push(resolvedModelId);
     }
     if (models.length === 0) {
       logger.warn('agent executor: dropped agent with no admitted model', {

@@ -25,7 +25,7 @@ import { z } from 'zod';
 import { stripFabricatedLinks } from '@server/utils/sanitizeHelpLinks';
 import { searchHelpContext, type RelevantArticle } from '@server/help/retrieval';
 import {
-  completionCeilingUsd,
+  completionRequestCeilingUsd,
   completionUsd,
   createModelAdmission,
   hasReportedUsage,
@@ -171,7 +171,7 @@ const handler = baseApi()
 
       const history: IMessage[] = conversationHistory.map(msg => ({ role: msg.role, content: msg.content }));
       const ceilingUsd =
-        completionCeilingUsd(
+        completionRequestCeilingUsd(
           modelInfo,
           [{ role: 'system', content: buildSystemPrompt('') }, ...history, { role: 'user', content: question }],
           MAX_RESPONSE_TOKENS

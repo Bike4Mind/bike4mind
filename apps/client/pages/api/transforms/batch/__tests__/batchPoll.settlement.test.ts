@@ -97,11 +97,11 @@ describe('GET /api/transforms/batch/:id settlement', () => {
 
     await poll();
 
-    // (100 + 10) input at 1e-3 + (50 + 5) output at 2e-3 = $0.22; the failed item is free.
+    // (100 + 10) input at 1e-3 + (50 + 5) output at 2e-3 = $0.22 standard, $0.11 batch; the failed item is free.
     expect(m.settle).toHaveBeenCalledTimes(1);
     expect(m.settle).toHaveBeenCalledWith(
       hold,
-      220,
+      110,
       {
         type: 'completion_api_usage',
         sessionId: 'msgbatch_1',
@@ -154,7 +154,7 @@ describe('GET /api/transforms/batch/:id settlement', () => {
     // m1: 100 * 1e-3 + 50 * 2e-3 = $0.2; m2: 10 * 4e-3 + 5 * 8e-3 = $0.08.
     expect(m.settle).toHaveBeenCalledWith(
       hold,
-      280,
+      140,
       expect.objectContaining({ model: 'm1,m2', inputTokens: 110, outputTokens: 55 }),
       expect.anything()
     );
@@ -251,7 +251,7 @@ describe('GET /api/transforms/batch/:id settlement', () => {
       m.batch = { ...m.batch, status: 'completed' };
       return claimed;
     });
-    m.settle.mockRejectedValueOnce(new Error('settlement unconfirmed')).mockResolvedValueOnce(220);
+    m.settle.mockRejectedValueOnce(new Error('settlement unconfirmed')).mockResolvedValueOnce(110);
 
     await expect(poll()).rejects.toThrow('settlement unconfirmed');
     expect(m.markSettled).not.toHaveBeenCalled();
@@ -261,7 +261,7 @@ describe('GET /api/transforms/batch/:id settlement', () => {
     expect(m.settle).toHaveBeenCalledTimes(2);
     expect(m.settle).toHaveBeenLastCalledWith(
       durableHold,
-      220,
+      110,
       expect.anything(),
       expect.objectContaining({ throwOnUnconfirmed: true })
     );
@@ -276,7 +276,7 @@ describe('GET /api/transforms/batch/:id settlement', () => {
       creditHold: { ...hold, pendingHoldId: 'pending-1' },
       results: [{ client_ref: 'a', status: 'done', reply: 'x' }],
     };
-    m.settle.mockResolvedValue(220);
+    m.settle.mockResolvedValue(110);
 
     await poll();
 
@@ -287,7 +287,7 @@ describe('GET /api/transforms/batch/:id settlement', () => {
 
   it('recovers after settlement committed but marking the batch settled failed', async () => {
     m.batch = { ...m.batch, status: 'completed', creditHold: { ...hold, pendingHoldId: 'pending-1' } };
-    m.settle.mockResolvedValue(220);
+    m.settle.mockResolvedValue(110);
     m.markSettled.mockRejectedValueOnce(new Error('write failed')).mockResolvedValueOnce(true);
 
     await expect(poll()).rejects.toThrow('write failed');
@@ -300,7 +300,7 @@ describe('GET /api/transforms/batch/:id settlement', () => {
 
   it('does not duplicate usage events when another retry already marked the hold settled', async () => {
     m.batch = { ...m.batch, status: 'completed', creditHold: { ...hold, pendingHoldId: 'pending-1' } };
-    m.settle.mockResolvedValue(220);
+    m.settle.mockResolvedValue(110);
     m.markSettled.mockResolvedValue(false);
 
     await poll();
@@ -350,6 +350,29 @@ describe('GET /api/transforms/batch/:id settlement', () => {
     await poll();
 
     expect(m.record).toHaveBeenCalledWith(expect.objectContaining({ cachedInputTokens: 500, cacheWriteTokens: 40 }));
+  });
+
+  it('settles both cache TTLs at their discounted rates on the whole prompt tier', async () => {
+    m.catalog.mockResolvedValue([{ id: 'm1', pricing: {
+      200_000: { input: 1e-6, output: 5e-6, cache_read: 0.1e-6, cache_write: 1.25e-6 },
+      1_000_000: { input: 2e-6, output: 10e-6, cache_read: 0.2e-6, cache_write: 2.5e-6 },
+    } }]);
+    batchResults.items = [{
+      customId: 'req_0', clientRef: 'a', status: 'done',
+      tokenUsage: {
+        inputTokens: 100_000, outputTokens: 1_000, cacheReadInputTokens: 50_000,
+        cacheCreationInputTokens: 60_000, cacheWrite5mInputTokens: 20_000, cacheWrite1hInputTokens: 40_000,
+      },
+    }];
+    m.claim.mockResolvedValue(m.batch);
+
+    await poll();
+
+    // The whole 210K prompt selects the upper tier: (.2 + .01 + .01 + .05 + .16) / 2.
+    expect(m.settle).toHaveBeenCalledWith(hold, 215, expect.anything(), expect.anything());
+    expect(m.record).toHaveBeenCalledWith(expect.objectContaining({
+      costUsd: expect.closeTo(0.215, 12), cachedInputTokens: 50_000, cacheWriteTokens: 60_000,
+    }));
   });
 
   it('leaves the batch unclaimed when the catalog cannot load, so a retried poll can still settle', async () => {

@@ -5,6 +5,7 @@ import { Resource } from 'sst';
 // routes, and the barrel would trace the tool registry into every one of them.
 import { QuestStartBodySchema } from '@bike4mind/services/llm/questStartBody';
 import {
+  API_KEY_COMPLETION_SOURCES,
   ContextTelemetrySchema,
   ContextTelemetryAlertsSchema,
   PERSISTED_SESSION_SUMMARY_TRIGGERS,
@@ -363,6 +364,13 @@ export const JiraHistoryAnalysisEvents = {
   ),
 };
 
+/** Immutable request payer for a one-off curation; absent on legacy queued work. */
+export const NotebookCurationBillingSchema = z.object({
+  organizationId: z.string().nullable(),
+  apiKeyId: z.string().optional(),
+  source: z.enum(API_KEY_COMPLETION_SOURCES).optional(),
+});
+
 export const NotebookCurationEvents = {
   Start: event(
     'notebook.curation.start',
@@ -381,6 +389,7 @@ export const NotebookCurationEvents = {
         .optional(),
       exportFormat: z.enum(['markdown', 'txt', 'html']).optional(),
       customNotebookName: z.string().optional(),
+      billing: NotebookCurationBillingSchema.optional(),
     })
   ),
   Progress: event(

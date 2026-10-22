@@ -223,4 +223,46 @@ describe('extractLakeMemoryForBatch consecutive-failure breaker', () => {
     expect(result.hasMore).toBe(false);
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('out of credits'));
   });
+
+  it('records a successful extraction without facts before a later credit refusal', async () => {
+    seedLake(2);
+    seedChunks(() => READABLE);
+    evaluateMock
+      .mockResolvedValueOnce([])
+      .mockRejectedValueOnce({ additionalInfo: { errorCode: 'insufficient_credits' } });
+
+    const result = await extractLakeMemoryForBatch({ dataLakeId: 'lake-1' }, makeLogger() as never);
+
+    expect(evaluateMock).toHaveBeenCalledTimes(2);
+    expect(appendMock).not.toHaveBeenCalled();
+    expect(setLakeMemoryCursorIfFenceUnmovedMock).toHaveBeenCalledExactlyOnceWith('lake-1', docId(0), null);
+    expect(result.hasMore).toBe(false);
+  });
+
+  it('leaves a failed extraction uncovered before a later credit refusal', async () => {
+    seedLake(2);
+    seedChunks(() => READABLE);
+    evaluateMock
+      .mockResolvedValueOnce(null)
+      .mockRejectedValueOnce({ additionalInfo: { errorCode: 'insufficient_credits' } });
+
+    const result = await extractLakeMemoryForBatch({ dataLakeId: 'lake-1' }, makeLogger() as never);
+
+    expect(evaluateMock).toHaveBeenCalledTimes(2);
+    expect(setLakeMemoryCursorIfFenceUnmovedMock).not.toHaveBeenCalled();
+    expect(setLakeMemoryCursorMock).not.toHaveBeenCalled();
+    expect(result.hasMore).toBe(false);
+  });
+
+  it('trips the failure breaker when the extractor returns null after a covered prefix', async () => {
+    seedLake(20);
+    seedChunks(() => READABLE);
+    evaluateMock.mockResolvedValue(null).mockResolvedValueOnce([]);
+
+    const result = await extractLakeMemoryForBatch({ dataLakeId: 'lake-1' }, makeLogger() as never);
+
+    expect(evaluateMock).toHaveBeenCalledTimes(6);
+    expect(setLakeMemoryCursorIfFenceUnmovedMock).toHaveBeenCalledExactlyOnceWith('lake-1', docId(0), null);
+    expect(result.hasMore).toBe(false);
+  });
 });

@@ -49,7 +49,8 @@ vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: mockGetEffectiveLLMApiKeys },
 }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
-vi.mock('@bike4mind/llm-adapters', () => ({
+vi.mock('@bike4mind/llm-adapters', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/llm-adapters')>()),
   getAvailableModels: vi.fn(async () => [
     { id: 'global.anthropic.claude-sonnet-4-6', type: 'text', pricing: { 200_000: { input: 3e-6, output: 15e-6 } } },
   ]),
@@ -368,6 +369,26 @@ describe('POST /api/data-lakes/rlm-answer - metering', () => {
     const reservedUsd = meter.reserve.mock.calls[0][1] as number;
     // The reservation is the root ceiling plus the $5 default sub-LLM budget.
     expect(meter.settle).toHaveBeenCalledWith(expect.objectContaining({ usd: reservedUsd - 5 + 0.25 }));
+  });
+
+  it('reserves the root provider output cap including Gemini thinking headroom', async () => {
+    const thinkingModel = {
+      id: 'gemini-test',
+      type: 'text',
+      backend: 'gemini',
+      can_think: true,
+      max_tokens: 65536,
+      pricing: { 200_000: { input: 3e-6, output: 15e-6 } },
+    };
+    vi.mocked(getAvailableModels).mockResolvedValueOnce([thinkingModel as never]);
+
+    await call(
+      { authorization: 'Bearer jwt' },
+      { query: 'Compare the evidence', model: thinkingModel.id, max_iterations: 1 }
+    );
+
+    const rootInputTokens = 1000 + 4 * 2 * (4096 + 16000) + 4 * 25 * 3000;
+    expect(meter.reserve.mock.calls[0][1]).toBeCloseTo(5 + rootInputTokens * 3e-6 + (4096 + 16000) * 15e-6);
   });
 
   it('reserves the root ceiling plus the whole sub-LLM budget', async () => {

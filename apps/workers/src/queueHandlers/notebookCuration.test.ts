@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { CreditHolderType } from '@bike4mind/common';
 
 // Idempotency contract: SQS is at-least-once, so a redelivered curation message
 // must NOT re-run the LLM curation. The handler records a NotebookCurationJob
@@ -12,6 +13,8 @@ const { mockCurateNotebook, mockSendToClient, NotebookCurationJob, Session, User
     opts: undefined as { llmService?: { complete: (...a: unknown[]) => Promise<unknown> } } | undefined,
     meter: vi.fn(),
     providerComplete: vi.fn(),
+    createCompletionMeter: vi.fn(),
+    createRequestCompletionMeter: vi.fn(),
   },
   mockCurateNotebook: vi.fn(),
   mockSendToClient: vi.fn(),
@@ -67,7 +70,10 @@ vi.mock('@bike4mind/services', async () => ({
   },
 }));
 
-vi.mock('@server/billing/meterPlatformCompletion', () => ({ createCompletionMeter: () => curation.meter }));
+vi.mock('@server/billing/meterPlatformCompletion', () => ({
+  createCompletionMeter: curation.createCompletionMeter,
+  createRequestCompletionMeter: curation.createRequestCompletionMeter,
+}));
 vi.mock('@client/services/operationsModelService', () => ({
   OperationsModelService: {
     getOperationsModel: async () => ({
@@ -81,7 +87,9 @@ vi.mock('@server/websocket/utils', () => ({
   sendToClient: (...args: unknown[]) => mockSendToClient(...args),
 }));
 
-vi.mock('@server/utils/eventBus', () => ({
+vi.mock('@server/utils/eventBus', async importOriginal => ({
+  NotebookCurationBillingSchema: (await importOriginal<typeof import('@server/utils/eventBus')>())
+    .NotebookCurationBillingSchema,
   NotebookCurationEvents: {
     Complete: { publish: vi.fn().mockResolvedValue(undefined) },
     Error: { publish: vi.fn().mockResolvedValue(undefined) },
@@ -161,6 +169,8 @@ const basePayload = {
 describe('notebookCuration queue handler idempotency', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    curation.createCompletionMeter.mockReturnValue(curation.meter);
+    curation.createRequestCompletionMeter.mockReturnValue(curation.meter);
     Session.findById.mockResolvedValue({ _id: 'session-123', userId: 'user-456' });
     User.findById.mockResolvedValue({ _id: 'user-456' });
     NotebookCurationJob.findOne.mockReturnValue({ lean: () => Promise.resolve(null) });
@@ -223,6 +233,8 @@ describe('notebookCuration queue handler idempotency', () => {
 describe('notebookCuration queue handler - curateNotebook returning success: false', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    curation.createCompletionMeter.mockReturnValue(curation.meter);
+    curation.createRequestCompletionMeter.mockReturnValue(curation.meter);
     Session.findById.mockResolvedValue({ _id: 'session-123', userId: 'user-456' });
     User.findById.mockResolvedValue({ _id: 'user-456' });
     NotebookCurationJob.findOne.mockReturnValue({ lean: () => Promise.resolve(null) });
@@ -301,5 +313,55 @@ describe('notebookCuration queue handler - curateNotebook returning success: fal
       dispatch(createEvent({ ...basePayload, curationType: 'executive_summary' }), mockContext)
     ).rejects.toThrow();
     expect(curation.providerComplete).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { organizationId: null, apiKeyId: 'user-key', source: 'cli' as const },
+    { organizationId: 'key-org', apiKeyId: 'org-key', source: 'api' as const },
+    { organizationId: 'captured-home-org' },
+  ])('keeps the queued billing owner and API-key attribution: %j', async billing => {
+    curation.meter.mockResolvedValue({ settle: vi.fn().mockResolvedValue(4), refund: vi.fn() });
+    curation.providerComplete.mockImplementation(async (_model, _messages, _options, callback) =>
+      callback(['summary'], { inputTokens: 20 })
+    );
+    mockCurateNotebook.mockImplementation(async () => {
+      await curation.opts!.llmService!.complete('ops-model', [], {}, async () => {});
+      return { success: true, curatedFileId: 'file-1' };
+    });
+
+    await dispatch(createEvent({ ...basePayload, curationType: 'executive_summary', billing }), mockContext);
+
+    expect(curation.createCompletionMeter).not.toHaveBeenCalled();
+    expect(curation.createRequestCompletionMeter).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        user: expect.objectContaining({ _id: 'user-456' }),
+        usageSource: 'source' in billing ? billing.source : undefined,
+        apiKeyInfo:
+          'apiKeyId' in billing
+            ? expect.objectContaining({
+                keyId: billing.apiKeyId,
+                organizationId: billing.organizationId ?? undefined,
+                billingOwnerType: billing.organizationId ? CreditHolderType.Organization : CreditHolderType.User,
+              })
+            : undefined,
+      }),
+      'notebook curation',
+      { sessionId: 'session-123', systemModel: true, organizationId: billing.organizationId }
+    );
+    expect(curation.providerComplete).toHaveBeenCalledOnce();
+  });
+
+  it('preserves owner-based metering for legacy jobs without billing metadata', async () => {
+    mockCurateNotebook.mockResolvedValue({ success: true, curatedFileId: 'file-1' });
+
+    await dispatch(createEvent({ ...basePayload, curationType: 'executive_summary' }), mockContext);
+
+    expect(curation.createRequestCompletionMeter).not.toHaveBeenCalled();
+    expect(curation.createCompletionMeter).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ _id: 'user-456' }),
+      expect.anything(),
+      'notebook curation',
+      { sessionId: 'session-123', systemModel: true }
+    );
   });
 });

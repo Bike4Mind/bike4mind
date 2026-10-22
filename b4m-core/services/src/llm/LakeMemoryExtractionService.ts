@@ -103,8 +103,8 @@ ${LAKE_FACT_GUIDANCE}
  * Extract durable, citable facts from ONE lake reference document (#1440 producer). Mirrors
  * `MementoEvaluationService` structurally - resolve the model, stream a JSON-only completion, parse and
  * validate - but targets reference knowledge rather than personal mementos. Returns the facts, capped
- * and highest-importance-first, or null when the document yields none (or extraction fails - fail-soft,
- * a doc that will not extract simply contributes no beliefs).
+ * and highest-importance-first, an empty array when extraction succeeds without facts, or null on a
+ * failure. Callers can record paid, successful coverage without advancing past a failed extraction.
  */
 export class LakeMemoryExtractionService {
   private logger: Logger;
@@ -130,7 +130,7 @@ export class LakeMemoryExtractionService {
     /** Bills the call to the lake owner; its insufficient_credits refusal is rethrown, not swallowed. */
     meter?: CompletionMeter;
   }): Promise<LakeFact[] | null> {
-    if (!docText.trim()) return null;
+    if (!docText.trim()) return [];
 
     let responseContent = '';
     try {
@@ -152,11 +152,12 @@ export class LakeMemoryExtractionService {
       );
 
       const validJsonStringOnly = responseContent.match(/\{[\s\S]*\}/)?.[0];
-      const parsed = LakeFactResponseSchema.parse(JSON.parse(validJsonStringOnly || '{}'));
+      if (!validJsonStringOnly) throw new BadRequestError('Lake extraction did not return a JSON object');
+      const parsed = LakeFactResponseSchema.parse(JSON.parse(validJsonStringOnly));
 
       if (!parsed.facts || parsed.facts.length === 0) {
         this.logger.info('Lake extraction found no durable facts in document, skipping', { docTitle });
-        return null;
+        return [];
       }
 
       // Cap to the most important, so a huge document cannot flood one lake's profile.

@@ -69,7 +69,7 @@ vi.mock('@server/billing/meterPlatformCompletion', async () => ({
       if (m.denied.has(id)) throw new ForbiddenError(`Model "${id}" is not accessible and no fallback available`);
     },
   }),
-  completionCeilingUsd: () => 1,
+  completionRequestCeilingUsd: () => 1,
   reserveCompletionCredits: (...args: unknown[]) => m.reserve(...args),
   completionUsd: (
     _model: unknown,

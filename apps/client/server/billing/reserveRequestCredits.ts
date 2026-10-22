@@ -159,7 +159,7 @@ export async function reserveRequestCredits({
   };
 }
 
-function holdErrorLogger(logger: Logger, featureLabel: string, hold: CreditHoldRecord, pendingHoldId: string) {
+function holdErrorLogger(logger: ILogger, featureLabel: string, hold: CreditHoldRecord, pendingHoldId: string) {
   return (message: string, err?: unknown) =>
     logger.error(`${featureLabel} ${message}`, {
       holdId: pendingHoldId,
@@ -180,7 +180,7 @@ async function settlePendingHold(
   pendingHoldId: string,
   chargedCredits: number,
   entry: CreditLedgerEntry,
-  { featureLabel, logger, throwOnUnconfirmed }: { featureLabel: string; logger: Logger; throwOnUnconfirmed?: boolean }
+  { featureLabel, logger, throwOnUnconfirmed }: { featureLabel: string; logger: ILogger; throwOnUnconfirmed?: boolean }
 ): Promise<number> {
   const logHoldError = holdErrorLogger(logger, featureLabel, hold, pendingHoldId);
   const charged = Number.isFinite(chargedCredits)
@@ -232,7 +232,7 @@ export function settleHeldCredits(
   entry: CreditLedgerEntry,
   context: {
     featureLabel: string;
-    logger: Logger;
+    logger: ILogger;
     /** Async callers can retry later; keep their durable work unsettled on an unconfirmed outcome. */
     throwOnUnconfirmed?: boolean;
   }

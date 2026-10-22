@@ -15,7 +15,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import {
-  completionCeilingUsd,
+  completionRequestCeilingUsd,
   completionUsd,
   createModelAdmission,
   hasReportedUsage,
@@ -379,8 +379,7 @@ const handler = baseApi({ auth: true }).post(
     ];
 
     const maxTokens = 4096;
-    // Leaves out LATTICE_TOOLS' schemas (~1-2k input tokens); the full maxTokens term dwarfs them.
-    const ceilingUsd = completionCeilingUsd(modelInfo, messages, maxTokens);
+    const ceilingUsd = completionRequestCeilingUsd(modelInfo, messages, maxTokens, LATTICE_TOOLS);
     const reservation = await reserveCompletionCredits(req, ceilingUsd, 'Lattice chat');
 
     let assistantMessage = '';

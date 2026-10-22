@@ -11,16 +11,16 @@ import {
 } from '@bike4mind/database';
 import { secureParameters } from '@bike4mind/utils';
 import { meterCompletionBackend, notebookCurationService } from '@bike4mind/services';
-import { CurationOptions } from '@bike4mind/common';
+import { CreditHolderType, type CurationOptions } from '@bike4mind/common';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { sendToClient } from '@server/websocket/utils';
-import { NotebookCurationEvents } from '@server/utils/eventBus';
+import { NotebookCurationBillingSchema, NotebookCurationEvents } from '@server/utils/eventBus';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { z } from 'zod';
 import { Resource } from 'sst';
 import { createHash } from 'crypto';
 import { createNotebookCommit } from './notebookCurationCommit';
-import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { createCompletionMeter, createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
 
 export const CurateNotebookPayload = z.object({
   sessionId: z.string(),
@@ -37,6 +37,7 @@ export const CurateNotebookPayload = z.object({
     .optional(),
   exportFormat: z.enum(['markdown', 'txt', 'html']).optional(),
   customNotebookName: z.string().optional(),
+  billing: NotebookCurationBillingSchema.optional(),
 });
 
 export const dispatch = dispatchWithLogger(async (event, context, logger) => {
@@ -52,6 +53,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     artifactTypes,
     exportFormat,
     customNotebookName,
+    billing,
   } = secureParameters(JSON.parse(body), CurateNotebookPayload);
 
   logger.updateMetadata({
@@ -141,7 +143,25 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
 
         // Every summary call is reserved and settled against the user's billing owner (org seat when
         // present); the operations model runs on the platform key.
-        const meter = createCompletionMeter(user, logger, 'notebook curation', { sessionId, systemModel: true });
+        const meter = billing
+          ? createRequestCompletionMeter(
+              {
+                user,
+                logger,
+                headers: {},
+                usageSource: billing.source,
+                apiKeyInfo: billing.apiKeyId
+                  ? {
+                      keyId: billing.apiKeyId,
+                      billingOwnerType: billing.organizationId ? CreditHolderType.Organization : CreditHolderType.User,
+                      organizationId: billing.organizationId ?? undefined,
+                    }
+                  : undefined,
+              },
+              'notebook curation',
+              { sessionId, systemModel: true, organizationId: billing.organizationId }
+            )
+          : createCompletionMeter(user, logger, 'notebook curation', { sessionId, systemModel: true });
         llmService = meterCompletionBackend(
           { complete: llm.complete.bind(llm) },
           async (...args) => {

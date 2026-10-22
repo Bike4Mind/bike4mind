@@ -1,4 +1,9 @@
 import { randomUUID } from 'crypto';
+import {
+  geminiThinkingOutputCap,
+  usesGeminiThinkingOutputCap,
+  type ICompletionOptionTools,
+} from '@bike4mind/llm-adapters';
 import { hasReportedUsage } from '@bike4mind/services/billing/completionMeter';
 import type { IncomingHttpHeaders } from 'http';
 import {
@@ -11,7 +16,7 @@ import {
   type ApiKeyCompletionSource,
 } from '@bike4mind/common';
 import { adminSettingsRepository, organizationRepository, usageEventRepository } from '@bike4mind/database';
-import { estimateInputTokens } from '@bike4mind/services/cliCompletions';
+import { estimateInputTokens, estimateToolTokens } from '@bike4mind/services/cliCompletions';
 import {
   assertOwnerHasCredits,
   creditService,
@@ -81,12 +86,26 @@ export function completionCeilingUsd(
   modelInfo: ModelInfo,
   messages: IMessage[],
   maxTokens: number,
-  cacheWrites = false
+  cacheWrites = false,
+  tools: ICompletionOptionTools[] = []
 ): number {
-  const inputTokens = estimateInputTokens(messages);
+  const inputTokens = estimateInputTokens(messages) + (tools.length > 0 ? estimateToolTokens(tools, false) : 0);
   return cacheWrites
     ? getTextModelCost(modelInfo, 0, maxTokens, 0, inputTokens, inputTokens)
     : getTextModelCost(modelInfo, inputTokens, maxTokens);
+}
+
+/** Price a direct backend call's full provider output budget, including Gemini thinking headroom. */
+export function completionRequestCeilingUsd(
+  modelInfo: ModelInfo,
+  messages: IMessage[],
+  maxTokens: number,
+  tools: ICompletionOptionTools[] = []
+): number {
+  const providerMaxTokens = usesGeminiThinkingOutputCap(modelInfo)
+    ? geminiThinkingOutputCap(modelInfo, maxTokens).maxOutputTokens
+    : maxTokens;
+  return completionCeilingUsd(modelInfo, messages, providerMaxTokens, false, tools);
 }
 
 export async function isCreditsEnforced(): Promise<boolean> {
@@ -212,9 +231,9 @@ export function createRequestCompletionMeter(
   featureLabel: string,
   opts: CompletionMeterOptions = {}
 ): CompletionMeter {
-  return async (modelInfo, messages, maxTokens, models, turns = 1) => {
+  return async (modelInfo, messages, maxTokens, models, turns = 1, tools = []) => {
     await (await createModelAdmission(req.user!, models ?? [modelInfo], opts.systemModel)).assert(modelInfo.id);
-    const ceilingUsd = completionCeilingUsd(modelInfo, messages, maxTokens);
+    const ceilingUsd = completionCeilingUsd(modelInfo, messages, maxTokens, false, tools);
     const reservation = await reserveCompletionCredits(req, ceilingUsd * turns, featureLabel, {
       organizationId: opts.organizationId,
     });

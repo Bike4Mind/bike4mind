@@ -40,7 +40,7 @@ describe('meterCompletionBackend', () => {
     });
     const seen: string[] = [];
     await metered.complete('m', [], { maxTokens: 100 }, async (t: string[]) => void seen.push(...t));
-    expect(meter).toHaveBeenCalledWith(modelInfo, [], 100, undefined, 1);
+    expect(meter).toHaveBeenCalledWith(modelInfo, [], 100, undefined, 1, undefined);
     expect(meter.mock.invocationCallOrder[0]).toBeLessThan(llm.complete.mock.invocationCallOrder[0]);
     expect(settle).toHaveBeenCalledExactlyOnceWith({ inputTokens: 10, outputTokens: 5 });
     expect(refund).not.toHaveBeenCalled();
@@ -50,7 +50,7 @@ describe('meterCompletionBackend', () => {
   it('caps the provider at the reserved output budget when the caller names none', async () => {
     const { llm, meter, metered } = setup(async () => {});
     await metered.complete('m', [], {}, async () => {});
-    expect(meter).toHaveBeenCalledWith(modelInfo, [], 4096, undefined, 1);
+    expect(meter).toHaveBeenCalledWith(modelInfo, [], 4096, undefined, 1, undefined);
     expect(llm.complete.mock.calls[0][2]).toMatchObject({ maxTokens: 4096 });
   });
 
@@ -121,6 +121,7 @@ describe('meterCompletionBackend', () => {
     await metered.complete('m', [], { maxTokens: 100, tools, _internal: { maxToolCalls: 3 } } as never, async () => {});
     await metered.complete('m', [], { maxTokens: 100, tools, executeTools: false }, async () => {});
     expect(meter.mock.calls.map(call => call[4])).toEqual([11, 4, 1]);
+    for (const call of meter.mock.calls) expect(call[5]).toBe(tools);
   });
 
   it('never calls the provider when the reservation is refused', async () => {
@@ -155,7 +156,7 @@ describe('meterCompletionBackend', () => {
     const other = { id: 'o', backend: 'openai' } as ModelInfo;
     const { meter, metered } = setup(async () => {}, [modelInfo, other]);
     await metered.complete('o', [], { maxTokens: 10 }, async () => {});
-    expect(meter).toHaveBeenCalledWith(other, [], 10, [modelInfo, other], 1);
+    expect(meter).toHaveBeenCalledWith(other, [], 10, [modelInfo, other], 1, undefined);
   });
 
   it('refuses a model id outside the bound model set without reserving or calling the provider', async () => {

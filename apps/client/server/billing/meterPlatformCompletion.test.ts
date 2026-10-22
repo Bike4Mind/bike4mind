@@ -42,6 +42,7 @@ vi.mock('@server/entitlements', () => ({ getUserEntitlements: m.getUserEntitleme
 
 import {
   completionCeilingUsd,
+  completionRequestCeilingUsd,
   completionUsd,
   assertOwnerCanAfford,
   assertRequestCanAfford,
@@ -393,5 +394,52 @@ describe('assertRequestCanAfford', () => {
     await expect(
       assertRequestCanAfford(keyReq({ billingOwnerType: CreditHolderType.Organization, organizationId: 'key-org' }))
     ).rejects.toMatchObject({ statusCode: 400 });
+  });
+});
+
+describe('direct completion ceilings', () => {
+  it('includes the initial tool schemas in the held input budget', () => {
+    const tools = [
+      {
+        toolFn: async () => '',
+        toolSchema: {
+          name: 'lookup',
+          description: 'x'.repeat(250),
+          parameters: { type: 'object' as const, properties: {} },
+        },
+      },
+    ];
+    const messages = [{ role: 'user' as const, content: 'Explain this' }];
+    const schemaTokens = Math.ceil(JSON.stringify(tools[0].toolSchema).length / 2.5);
+
+    expect(completionRequestCeilingUsd(model, messages, 1000, tools)).toBeCloseTo(
+      completionRequestCeilingUsd(model, messages, 1000) + getTextModelCost(model, schemaTokens, 0)
+    );
+  });
+
+  const messages = [{ role: 'user' as const, content: 'Explain this' }];
+
+  it.each([1000, 4000, 4096])('reserves Gemini thinking headroom for a %i-token direct call', maxTokens => {
+    const thinkingModel = { ...model, backend: 'gemini', can_think: true, max_tokens: 65536 } as ModelInfo;
+
+    expect(completionRequestCeilingUsd(thinkingModel, messages, maxTokens)).toBe(
+      completionCeilingUsd(thinkingModel, messages, maxTokens + 16000)
+    );
+  });
+
+  it('clamps thinking headroom to the declared Gemini output limit', () => {
+    const thinkingModel = { ...model, backend: 'gemini', can_think: true, max_tokens: 16384 } as ModelInfo;
+
+    expect(completionRequestCeilingUsd(thinkingModel, messages, 4000)).toBe(
+      completionCeilingUsd(thinkingModel, messages, 16384)
+    );
+  });
+
+  it.each(['gemini', 'openai', 'anthropic'])('preserves non-thinking %s call ceilings', backend => {
+    const plainModel = { ...model, backend } as ModelInfo;
+
+    expect(completionRequestCeilingUsd(plainModel, messages, 4000)).toBe(
+      completionCeilingUsd(plainModel, messages, 4000)
+    );
   });
 });

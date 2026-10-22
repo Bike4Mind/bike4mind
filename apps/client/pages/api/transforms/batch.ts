@@ -9,6 +9,7 @@ import {
   isCreditsEnforced,
   reserveCompletionCredits,
 } from '@server/billing/meterPlatformCompletion';
+import { ANTHROPIC_BATCH_RATE, batchHoldModel } from '@server/billing/anthropicBatchPricing';
 import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
 import Anthropic from '@anthropic-ai/sdk';
 import type { MessageParam } from '@anthropic-ai/sdk/resources/messages';
@@ -78,8 +79,6 @@ const handler = baseApi({ maxBodySize: 32 * 1024 * 1024 }).post(async (req, res)
   }
 
   const modelIds = [...new Set(body.requests.map(r => r.model))];
-  // Priced at the standard rate: the pricing layer does not model the Batches 50% discount, so the
-  // hold (and the settlement) over-charges rather than under.
   const catalog = await getAvailableModels({ anthropic: apiKey });
   const admission = await createModelAdmission(req.user, catalog);
   for (const modelId of modelIds) await admission.assert(modelId);
@@ -92,7 +91,14 @@ const handler = baseApi({ maxBodySize: 32 * 1024 * 1024 }).post(async (req, res)
     const modelInfo = modelInfos.get(r.model);
     const messages = [{ role: 'system', content: r.system ?? '' }, ...r.messages] as IMessage[];
     const cacheWrites = r.messages.some(msg => Array.isArray(msg.content) && msg.content.some(b => b.cache_control));
-    return modelInfo ? sum + completionCeilingUsd(modelInfo, messages, r.max_tokens, cacheWrites) : sum;
+    const oneHourCache = r.messages.some(
+      msg => Array.isArray(msg.content) && msg.content.some(block => block.cache_control?.ttl === '1h')
+    );
+    return modelInfo
+      ? sum +
+          completionCeilingUsd(batchHoldModel(modelInfo, oneHourCache), messages, r.max_tokens, cacheWrites) *
+            ANTHROPIC_BATCH_RATE
+      : sum;
   }, 0);
   const service = AnthropicBatchService.fromApiKey(apiKey, req.logger);
 

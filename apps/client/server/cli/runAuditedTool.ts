@@ -4,7 +4,7 @@ import { toolExecutionLogRepository } from '@bike4mind/database';
  * Runs one /api/tools/* execution and writes the same toolExecutionLogRepository audit record as
  * executeToolWithLogging (toolsHandler.shared.ts). Those routes keep their own execution (52s
  * Firecrawl cap, page title, weather timeout) instead of cliTools.executeServerTool, so they wrap
- * it here. Errors are rethrown unchanged; the audit write is non-blocking.
+ * it here. Errors are rethrown unchanged; the audit failure never changes the result, and the write finishes before the handler returns.
  */
 export async function runAuditedTool<T>(
   toolName: string,
@@ -20,7 +20,7 @@ export async function runAuditedTool<T>(
     failure = { error };
     throw error;
   } finally {
-    toolExecutionLogRepository
+    await toolExecutionLogRepository
       .create({
         userId,
         toolName,

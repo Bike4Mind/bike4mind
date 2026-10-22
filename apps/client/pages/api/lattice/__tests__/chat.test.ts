@@ -10,6 +10,7 @@ import { ChatModels, ForbiddenError, insufficientCreditsError } from '@bike4mind
 const m = vi.hoisted(() => ({
   denied: new Set<string>(),
   reserve: vi.fn(),
+  ceiling: vi.fn<(...arguments_: unknown[]) => number>(() => 1),
   refund: vi.fn(),
   settle: vi.fn(),
   complete: vi.fn(),
@@ -34,7 +35,7 @@ vi.mock('@server/billing/meterPlatformCompletion', async () => ({
       if (m.denied.has(id)) throw new ForbiddenError(`Model "${id}" is not accessible and no fallback available`);
     },
   }),
-  completionCeilingUsd: () => 1,
+  completionRequestCeilingUsd: (...args: unknown[]) => m.ceiling(...args),
   reserveCompletionCredits: (...args: unknown[]) => m.reserve(...args),
   completionUsd: (
     _model: unknown,
@@ -107,6 +108,14 @@ describe('POST /api/lattice/chat metering', () => {
 
     await expect(call()).rejects.toMatchObject({ statusCode: 422 });
     expect(m.complete).not.toHaveBeenCalled();
+  });
+
+  it('holds the same initial tool schemas it sends to the provider', async () => {
+    await call();
+
+    const heldTools = m.ceiling.mock.calls[0][3];
+    expect(heldTools).toBe(m.complete.mock.calls[0][2].tools);
+    expect(heldTools).toEqual(expect.arrayContaining([expect.objectContaining({ toolSchema: expect.anything() })]));
   });
 
   it('settles a funded call on the provider-reported usage', async () => {
