@@ -582,7 +582,7 @@ describe('gateReplayConfidence', () => {
     expect(deps.setPendingGate).toHaveBeenCalledWith('exec-1', {
       iteration: 2,
       confidence: 0.1,
-      reason: expect.stringContaining('10% below threshold 60% for 2 scored iterations in a row'),
+      reason: expect.stringContaining('2 iterations in a row below the 60% confidence threshold (latest 10%)'),
       requestedAt: expect.any(Date),
     });
     expect(deps.recordGateEmitted).toHaveBeenCalledWith('exec-1');

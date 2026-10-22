@@ -101,7 +101,7 @@ describe('isPausingLowConfidenceStreak', () => {
 describe('formatConfidenceGateReason', () => {
   it('names the confidence, the threshold and the streak length', () => {
     expect(formatConfidenceGateReason(0.3, 0.6, 2)).toBe(
-      'Iteration confidence 30% below threshold 60% for 2 scored iterations in a row'
+      '2 iterations in a row below the 60% confidence threshold (latest 30%)'
     );
   });
 });

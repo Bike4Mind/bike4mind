@@ -102,5 +102,7 @@ export async function recordAndDecideConfidencePause(
 
 /** The human-facing `pendingGate.reason`, shared by the per-iteration and replay gate sites. */
 export function formatConfidenceGateReason(confidence: number, threshold: number, lowConfidenceStreak: number): string {
-  return `Iteration confidence ${(confidence * 100).toFixed(0)}% below threshold ${(threshold * 100).toFixed(0)}% for ${lowConfidenceStreak} scored iterations in a row`;
+  const pct = (value: number) => (value * 100).toFixed(0);
+  const below = `below the ${pct(threshold)}% confidence threshold`;
+  return `${lowConfidenceStreak} iterations in a row ${below} (latest ${pct(confidence)}%)`;
 }
