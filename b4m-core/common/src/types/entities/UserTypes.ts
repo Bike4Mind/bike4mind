@@ -170,7 +170,7 @@ export interface IUserPreferences {
   showFunTools?: boolean;
   /** Whether to show the prompt suggestion cards on the splash screen. Default: false. */
   showSplashCards?: boolean;
-  /** Set once the user closes the floating "Try the desktop app" button; it never shows again. */
+  /** Set once the user closes the "Try the desktop app" pill in the sidebar; it never shows again. */
   desktopPromoDismissed?: boolean;
 }
 

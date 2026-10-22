@@ -124,6 +124,7 @@ describe('DesktopDownloadPage', () => {
     const primary = screen.getByTestId('desktop-download-primary');
     expect(primary).toHaveAttribute('data-platform', 'windows');
     expect(within(primary).getByTestId('desktop-download-unavailable')).toHaveTextContent('no Windows build yet');
+    expect(within(primary).getAllByText(/no Windows build yet/)).toHaveLength(1);
     expect(within(primary).queryByTestId('desktop-download-command')).not.toBeInTheDocument();
     expect(within(primary).queryByRole('link')).not.toBeInTheDocument();
     expect(screen.queryByTestId('desktop-download-platform-windows')).not.toBeInTheDocument();

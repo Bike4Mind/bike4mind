@@ -300,13 +300,16 @@ function HeroDetails({
   detected: DetectedPlatform;
   release: DesktopRelease | undefined;
 }) {
+  // The terminal beside this explains what is missing, so only the platform is named here.
   if (!isAvailable(primary)) {
-    return (
-      <Typography level="body-md">
-        {primary ? `${UNAVAILABLE_REASONS[primary]?.detail} ` : ''}
-        {SUPPORTED_SUMMARY}
-      </Typography>
-    );
+    return primary ? (
+      <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+        <Typography level="title-md">{PLATFORM_LABELS[primary]}</Typography>
+        <Chip size="sm" variant="soft" color="neutral">
+          {UNAVAILABLE_REASONS[primary]?.status}
+        </Chip>
+      </Stack>
+    ) : null;
   }
 
   const macChipUnknown = detected.os === 'mac' && detected.arch === 'unknown';
