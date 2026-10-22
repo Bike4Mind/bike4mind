@@ -26,7 +26,16 @@ export function isStreamIdleTimeoutError(error: Error): boolean {
   return error.message.includes('stream timeout') || error.message.includes('Stream timeout');
 }
 
-/** A timeout our own timers raised, or a truncated stream: the model is slow or the connection dropped, not busy. */
+/**
+ * A stream that ended without its terminal event (Anthropic message_stop, Bedrock's terminal
+ * event). Those rejections are worded "stream timeout" so the retry loop treats them like a stall,
+ * but the cause is a dropped connection, not a slow model.
+ */
+export function isTruncatedStreamError(error: Error): boolean {
+  return error.message.includes('without message_stop') || error.message.includes('without a terminal event');
+}
+
+/** A timeout our own timers raised: the model is slow, not the provider busy. */
 export function isSlowModelTimeoutError(error: Error): boolean {
-  return isRequestTimeoutError(error) || isStreamIdleTimeoutError(error);
+  return !isTruncatedStreamError(error) && (isRequestTimeoutError(error) || isStreamIdleTimeoutError(error));
 }

@@ -17,7 +17,7 @@ export function classifyError(message: string): SreClassification {
   // `new Error('Aborted')` thrown by the shared retry helpers (retry.ts), which the
   // other (phrase-based) alternatives would miss.
   if (
-    /\bAbortError\b|\bAborted\b|Request aborted|operation was aborted|no streaming response received|stream timeout - no response received/i.test(
+    /\bAbortError\b|\bAborted\b|Request aborted|operation was aborted|no streaming response received|stream timeout - no (?:response|event) received/i.test(
       message
     )
   ) {

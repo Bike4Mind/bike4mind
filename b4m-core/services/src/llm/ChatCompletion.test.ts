@@ -10631,6 +10631,29 @@ describe('ChatCompletionProcess', () => {
       );
     });
 
+    it('tells the user a truncated stream was interrupted, not that the model was slow', async () => {
+      setupTimeoutMocks();
+      mockedShouldTriggerFallback.mockReturnValue(false);
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async () => {
+          throw new Error('Anthropic API stream timeout - the stream ended after 4 events without message_stop');
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await service.process({ body, logger: mockLogger });
+
+      expect(mockDb.quests.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          reply: 'The request was interrupted. Please try sending your message again.',
+          type: 'error',
+          status: 'done',
+        })
+      );
+    });
+
     it('overwrites a stale partial replies[] with the error message, not just reply (#3223)', async () => {
       setupTimeoutMocks();
       mockedShouldTriggerFallback.mockReturnValue(false);

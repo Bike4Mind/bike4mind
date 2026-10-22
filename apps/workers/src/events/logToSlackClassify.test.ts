@@ -57,6 +57,14 @@ describe('classifyError', () => {
       expect(classifyError('AbortError: The operation was aborted')).toBe(SreClassification.SKIP);
     });
 
+    it.each([
+      'LlmTimeoutError: Anthropic API stream timeout - no event received for 180 seconds mid-response.\n    at x (a.js:1:1)',
+      'LlmTimeoutError: Anthropic API stream timeout - no event received within 30 seconds of the stream opening.',
+      'Error: Anthropic API stream timeout - no response received within 90 seconds.',
+    ])('skips our own stream idle timeouts: %s', message => {
+      expect(classifyError(message)).toBe(SreClassification.SKIP);
+    });
+
     it('still skips ECONNREFUSED / ETIMEDOUT', () => {
       expect(classifyError('Error: connect ECONNREFUSED 127.0.0.1:5432')).toBe(SreClassification.SKIP);
       expect(classifyError('Error: ETIMEDOUT')).toBe(SreClassification.SKIP);

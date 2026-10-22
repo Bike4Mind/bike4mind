@@ -102,6 +102,7 @@ import {
   isSlowModelTimeoutError,
   isStreamIdleTimeoutError,
   isToolPairingError,
+  isTruncatedStreamError,
 } from './llmErrorPredicates';
 import { TurnTimingRecorder } from './turnTiming';
 import type { FabFileNotice, EmbeddingCredential } from '@bike4mind/utils';
@@ -566,9 +567,8 @@ export function isAbortError(error: unknown): boolean {
  * `ProcessingFailed` metric. Approximates the terminal branches of the quest-level error handler
  * (billing, abort, request/stream timeout, truncated Responses stream, tool pairing, overloaded,
  * context overflow), which resolve the quest without rethrowing and so never reached /process's
- * failure path. It is not an exact mirror: the handler matches timeouts case-sensitively and
- * rethrows 4xx HTTPErrors (so /process counts them), whereas CLI and embed treat 4xx as caller input
- * and skip them. The CLI and embed routes call this; /process does not.
+ * failure path. It is not an exact mirror: the handler rethrows 4xx HTTPErrors (so /process counts
+ * them), whereas CLI and embed treat 4xx as caller input and skip them. The CLI and embed routes call this; /process does not.
  */
 export function isOperatorFault(error: unknown): boolean {
   if (resolveQuestErrorCode(error)) return false;
@@ -5373,7 +5373,8 @@ export class ChatCompletionProcess {
                 apiKeyTable,
                 logger,
                 {
-                  // A timeout that reaches here has spent its one same-model retry.
+                  // A timeout that reaches here has spent its one same-model retry. triedModelIds
+                  // already excludes the failed model; forceSwitch states that intent outright.
                   forceSwitch: overloadRetriesExhausted || isSlowModelTimeout,
                   excludeModelIds: triedModelIds,
                   preferUntriedBackend: isFinalHop,
@@ -6760,7 +6761,10 @@ export class ChatCompletionProcess {
         setTerminalQuestStatus(quest, 'done');
         finalQuest = await saveQuest(quest);
         return;
-      } else if (err instanceof ResponsesStreamTruncatedError) {
+      } else if (
+        err instanceof ResponsesStreamTruncatedError ||
+        (err instanceof Error && isTruncatedStreamError(err))
+      ) {
         // WARN, not error: an upstream close mid-stream is recoverable by resending, and error
         // severity would trip the CloudWatch ERROR alert path.
         logger.warn(`[Truncated] Quest ${questId}: ${err.message}`);

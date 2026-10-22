@@ -4,7 +4,12 @@ import {
   createAnthropicRequestTimeoutError,
   createAnthropicStreamTimeoutError,
 } from '@bike4mind/llm-adapters';
-import { isRequestTimeoutError, isSlowModelTimeoutError, isStreamIdleTimeoutError } from './llmErrorPredicates';
+import {
+  isRequestTimeoutError,
+  isSlowModelTimeoutError,
+  isStreamIdleTimeoutError,
+  isTruncatedStreamError,
+} from './llmErrorPredicates';
 
 describe('timeout predicates', () => {
   it('reads the typed kind rather than the message', () => {
@@ -31,5 +36,16 @@ describe('timeout predicates', () => {
     expect(isSlowModelTimeoutError(createAnthropicStreamTimeoutError('stream_idle', 90_000))).toBe(true);
     expect(isSlowModelTimeoutError(createAnthropicRequestTimeoutError(60_000))).toBe(true);
     expect(isSlowModelTimeoutError(new Error('Anthropic API is overloaded'))).toBe(false);
+  });
+
+  it('tells a truncated stream apart from a slow one', () => {
+    const anthropic = new Error('Anthropic API stream timeout - the stream ended after 3 events without message_stop');
+    const bedrock = new Error('[BaseBedrockBackend] stream timeout - model "m" ended without a terminal event');
+
+    for (const truncated of [anthropic, bedrock]) {
+      expect(isTruncatedStreamError(truncated)).toBe(true);
+      expect(isSlowModelTimeoutError(truncated)).toBe(false);
+    }
+    expect(isTruncatedStreamError(createAnthropicStreamTimeoutError('stream_idle', 90_000))).toBe(false);
   });
 });

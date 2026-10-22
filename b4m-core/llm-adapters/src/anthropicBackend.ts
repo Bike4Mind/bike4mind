@@ -72,7 +72,11 @@ import {
 import { DispatchModel } from './dispatchModel';
 import { logAnthropicLimitResponse, pickRateLimitHeaders } from './anthropicRateLimitLog';
 import { openObservedMessageStream } from './anthropicObservedStream';
-import { createAnthropicRequestTimeoutError, createAnthropicStreamTimeoutError } from './llmTimeoutErrors';
+import {
+  createAnthropicRequestTimeoutError,
+  createAnthropicStreamTimeoutError,
+  type LlmStreamTimeoutKind,
+} from './llmTimeoutErrors';
 import { addReasoningTokens, reasoningTokensField, reasoningTokensFromUsage } from './reasoningTokens';
 import { acquireSlot, type SlotRelease } from './_anthropicSemaphore';
 import { appendIdentityReminder, buildIdentityReminder } from './identityReminder';
@@ -127,6 +131,11 @@ const DEFAULT_IDLE_TIMEOUT_MS = 90000; // 90s between events for standard models
 const THINKING_IDLE_TIMEOUT_MS = 180000; // 180s for thinking models (can pause during extended thinking)
 const REQUEST_TIMEOUT_MS = 60000; // 60s timeout for the initial API request before any streaming starts
 const SLOW_MODEL_REQUEST_TIMEOUT_MS = 120000; // 120s for slow/opus-class models that need longer to begin streaming
+/**
+ * Keepalive pings stretch the idle limit up to this multiple of it, measured from the last real
+ * event, so a generation hung behind a live, still-pinging connection is still cut off.
+ */
+const KEEPALIVE_SILENCE_CEILING_FACTOR = 2;
 
 /**
  * Largest max_tokens the SDK will accept without streaming. It derives a projected
@@ -1480,7 +1489,7 @@ export class AnthropicBackend implements ICompletionBackend {
           // Track idle timeout state at a scope accessible to catch block
           let isIdleTimeout = false;
           let idleTimeoutMsForError = 0; // Store for error message
-          let idleTimeoutKind: 'first_event' | 'stream_idle' = 'stream_idle';
+          let idleTimeoutKind: LlmStreamTimeoutKind = 'stream_idle';
 
           // Degeneration state, also read from the catch block. The idle timer
           // cannot cover this case - it resets on every stream event, and a
@@ -1621,16 +1630,20 @@ export class AnthropicBackend implements ICompletionBackend {
               let idleTimer: ReturnType<typeof setTimeout> | undefined;
               let eventCount = 0;
               let lastEventType = '';
+              let lastEventAt = Date.now();
 
               const resetIdleTimer = () => {
                 if (!enableIdleTimeout) return;
                 if (idleTimer) clearTimeout(idleTimer);
                 // Use shorter timeout for first event (initial connection)
-                const timeoutMs = eventCount === 0 ? INITIAL_TIMEOUT_MS : idleTimeoutMs;
+                const limitMs = eventCount === 0 ? INITIAL_TIMEOUT_MS : idleTimeoutMs;
+                const ceilingRemainingMs = limitMs * KEEPALIVE_SILENCE_CEILING_FACTOR - (Date.now() - lastEventAt);
+                const timeoutMs = Math.max(0, Math.min(limitMs, ceilingRemainingMs));
                 idleTimer = setTimeout(() => {
                   // Mark idle timeout for catch block (must happen before abort)
                   isIdleTimeout = true;
-                  idleTimeoutMsForError = timeoutMs;
+                  // Silence since the last real event, which pings may have stretched past limitMs.
+                  idleTimeoutMsForError = Math.round((Date.now() - lastEventAt) / 1000) * 1000;
                   idleTimeoutKind = eventCount === 0 ? 'first_event' : 'stream_idle';
 
                   // WARN, not error: an idle/streaming timeout is expected and
@@ -1640,7 +1653,8 @@ export class AnthropicBackend implements ICompletionBackend {
                     model,
                     eventCount,
                     lastEventType,
-                    timeoutMs,
+                    timeoutMs: limitMs,
+                    silentMs: idleTimeoutMsForError,
                     toolCount: options.tools?.length || 0,
                     mcpToolCount: options.tools?.filter(t => (t as { _isMcpTool?: boolean })._isMcpTool).length || 0,
                   });
@@ -1652,7 +1666,7 @@ export class AnthropicBackend implements ICompletionBackend {
               };
 
               // Start initial timeout. Raw body bytes also count as activity, so the keepalive pings
-              // a silently thinking model sends hold the timer off the way real events do.
+              // a silently thinking model sends hold the timer off, up to the silence ceiling.
               resetIdleTimer();
               onStreamBytes = resetIdleTimer;
 
@@ -1662,6 +1676,7 @@ export class AnthropicBackend implements ICompletionBackend {
                   // Reset idle timer on each event
                   eventCount++;
                   lastEventType = event.type;
+                  lastEventAt = Date.now();
                   resetIdleTimer();
                   const streamedText: string[] = [];
                   if (event.type === 'content_block_start') {
@@ -1878,7 +1893,9 @@ export class AnthropicBackend implements ICompletionBackend {
                   }
                 }
               } finally {
-                // CRITICAL: Always cleanup idle timer to prevent memory leaks
+                // CRITICAL: Always cleanup idle timer to prevent memory leaks. Unbind the byte hook
+                // first: a chunk the body pipe already read could otherwise re-arm it.
+                onStreamBytes = () => {};
                 if (idleTimer) clearTimeout(idleTimer);
                 modelDoneAt = Date.now();
               }

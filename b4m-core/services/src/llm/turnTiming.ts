@@ -4,7 +4,12 @@ import { MAX_RECORDED_TURN_RETRIES } from '@bike4mind/common';
 import type { TurnTelemetrySink } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import { getHttpStatus, isOverloadedError, isRetryableError } from '@bike4mind/utils';
-import { isRequestTimeoutError, isStreamIdleTimeoutError, isToolPairingError } from './llmErrorPredicates';
+import {
+  isRequestTimeoutError,
+  isStreamIdleTimeoutError,
+  isToolPairingError,
+  isTruncatedStreamError,
+} from './llmErrorPredicates';
 
 /** Same namespace as the backends' StreamIdleTimeoutTriggered, so the two read side by side. */
 export const CHAT_RETRY_NAMESPACE = 'Lumina5/LLMStreaming';
@@ -24,7 +29,7 @@ export const MAX_RECORDED_RETRIES = MAX_RECORDED_TURN_RETRIES;
  */
 export function classifyTurnRetryReason(error: Error): TurnRetryReason {
   // The truncation error shares the idle timeout's "stream timeout" prefix but is not a stall.
-  if (error.message.includes('without message_stop')) return 'stream_truncated';
+  if (isTruncatedStreamError(error)) return 'stream_truncated';
   if (isStreamIdleTimeoutError(error)) return 'stream_idle_timeout';
   if (isRequestTimeoutError(error)) return 'request_timeout';
   if (isToolPairingError(error)) return 'tool_pairing';

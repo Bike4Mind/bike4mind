@@ -125,7 +125,7 @@ const PING = sse('ping', { type: 'ping' });
  * consumed. The test pushes chunks by hand; aborting the request signal errors the body the way
  * a cancelled fetch does.
  */
-function rawSseTurn(model: string) {
+function rawSseTurn(model: string, abortSignal?: AbortSignal) {
   let body: ReadableStreamDefaultController<Uint8Array> | undefined;
   const signalState: { signal?: AbortSignal } = {};
   const backend = new AnthropicBackend('test-key');
@@ -153,7 +153,7 @@ function rawSseTurn(model: string) {
     .complete(
       model,
       [{ role: 'user', content: 'hi' }],
-      { stream: true, _internal: { enableIdleTimeout: true } },
+      { stream: true, abortSignal, _internal: { enableIdleTimeout: true } },
       async () => {}
     )
     .catch((error: unknown) => {
@@ -191,9 +191,9 @@ describe('AnthropicBackend - keepalive pings and the idle timer', () => {
     await vi.advanceTimersByTimeAsync(0);
     turn.push(sse('message_start', messageStart));
 
-    // 240s of silence apart from pings, well past the 90s idle limit.
+    // 160s of silence apart from pings, past the 90s idle limit but under the 180s ceiling.
     for (let i = 0; i < 4; i++) {
-      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.advanceTimersByTimeAsync(40_000);
       turn.push(PING);
     }
     expect(turn.isAborted()).toBe(false);
@@ -203,6 +203,38 @@ describe('AnthropicBackend - keepalive pings and the idle timer', () => {
     await vi.advanceTimersByTimeAsync(0);
     await turn.turn;
 
+    expect(turn.outcome.error).toBeUndefined();
+  });
+
+  it('cuts off a stream that only pings once silence reaches twice the idle limit', async () => {
+    const turn = rawSseTurn(ChatModels.CLAUDE_4_5_SONNET);
+    await vi.advanceTimersByTimeAsync(0);
+    turn.push(sse('message_start', messageStart));
+
+    for (let i = 0; i < 5; i++) {
+      await vi.advanceTimersByTimeAsync(30_000);
+      turn.push(PING);
+    }
+    expect(turn.isAborted()).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(31_000);
+    await turn.turn;
+
+    expect(turn.isAborted()).toBe(true);
+    expect(turn.outcome.error).toMatchObject({ name: 'LlmTimeoutError', kind: 'stream_idle', timeoutMs: 180_000 });
+  });
+
+  it("cancels the request when the caller's abort signal fires", async () => {
+    const userAbort = new AbortController();
+    const turn = rawSseTurn(ChatModels.CLAUDE_4_5_SONNET, userAbort.signal);
+    await vi.advanceTimersByTimeAsync(0);
+    turn.push(sse('message_start', messageStart));
+
+    userAbort.abort();
+    await vi.advanceTimersByTimeAsync(0);
+    await turn.turn;
+
+    expect(turn.isAborted()).toBe(true);
     expect(turn.outcome.error).toBeUndefined();
   });
 

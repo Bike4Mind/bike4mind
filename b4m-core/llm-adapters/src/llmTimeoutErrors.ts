@@ -6,6 +6,8 @@
  */
 export type LlmTimeoutKind = 'first_event' | 'stream_idle' | 'request';
 
+export type LlmStreamTimeoutKind = Exclude<LlmTimeoutKind, 'request'>;
+
 /**
  * A timeout raised by our own timers, not by the provider. The model was slow or the
  * connection stalled; the provider never said it was busy, so this must never be read
@@ -31,7 +33,7 @@ export function isLlmTimeoutError(error: unknown): error is LlmTimeoutError {
   return error instanceof LlmTimeoutError || (error instanceof Error && error.name === 'LlmTimeoutError');
 }
 
-export function createAnthropicStreamTimeoutError(kind: 'first_event' | 'stream_idle', timeoutMs: number) {
+export function createAnthropicStreamTimeoutError(kind: LlmStreamTimeoutKind, timeoutMs: number) {
   const seconds = timeoutMs / 1000;
   const detail =
     kind === 'first_event'
