@@ -542,8 +542,20 @@ if (REJECTED_CONTRIBUTIONS.length > 0) {
   console.warn(`[entitlements] dropped contributed registry rows: ${REJECTED_CONTRIBUTIONS.join('; ')}`);
 }
 
+const CONTRIBUTED_STAFF_KEYS = REGISTRY_ROWS.internalStaffEntitlements.filter(
+  key => !BUILT_IN_ROWS.internalStaffEntitlements.includes(key)
+);
+const INTERNAL_STAFF_DOMAIN_SET = new Set(INTERNAL_STAFF_DOMAINS);
+
 const DOMAIN_GRANT_ROWS: DomainGrantRow[] = [
-  ...EXTERNAL_DOMAIN_GRANT_ROWS,
+  // Preserve external-row precedence for built-in keys, while still applying staff contributions
+  // when a domain is configured in both lists.
+  ...EXTERNAL_DOMAIN_GRANT_ROWS.map(row => ({
+    ...row,
+    entitlements: INTERNAL_STAFF_DOMAIN_SET.has(row.domain)
+      ? [...new Set([...row.entitlements, ...CONTRIBUTED_STAFF_KEYS])]
+      : row.entitlements,
+  })),
   // Internal staff domains -> same grant as external customer staff, sourced from
   // env (above) so no B4M-account-tied literal ships in open-core code. De-duplicated
   // against the external rows (structurally, via EXTERNAL_GRANT_DOMAINS) so an env

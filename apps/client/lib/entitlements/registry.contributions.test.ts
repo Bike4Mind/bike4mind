@@ -82,6 +82,37 @@ describe('registry resolution with contributed rows', () => {
     expect(registry.unknownEntitlementKeys(['example:staff'])).toEqual([]);
   });
 
+  it.each([false, true])(
+    'keeps external grants on an overlapping staff domain (contribution: %s)',
+    async contributed => {
+      vi.stubEnv('NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS', 'staff.example.com');
+      vi.stubEnv(
+        'NEXT_PUBLIC_PREMIUM_DOMAIN_GRANTS',
+        JSON.stringify([{ domain: 'staff.example.com', entitlements: ['external:pro'] }])
+      );
+      const registry = await loadRegistry(contributed ? CONTRIBUTION : {});
+      const expected = contributed ? ['external:pro', 'example:staff'] : ['external:pro'];
+
+      expect([...registry.entitlementsForEmail('a@staff.example.com', true)]).toEqual(expected);
+      expect(registry.entitlementsForEmail('a@staff.example.com', false).size).toBe(0);
+      expect(registry.signupCreditsForKeys(expected)).toBe(contributed ? 1000 : 0);
+      expect(registry.__registryRows.domainGrantRows.filter(row => row.domain === 'staff.example.com')).toHaveLength(1);
+    }
+  );
+
+  it('does not add contributed staff keys to an external-only domain', async () => {
+    vi.stubEnv('NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS', 'staff.example.com');
+    vi.stubEnv(
+      'NEXT_PUBLIC_PREMIUM_DOMAIN_GRANTS',
+      JSON.stringify([{ domain: 'external.example.com', entitlements: ['external:pro'] }])
+    );
+    const registry = await loadRegistry(CONTRIBUTION);
+    const keys = registry.entitlementsForEmail('a@external.example.com', true);
+
+    expect([...keys]).toEqual(['external:pro']);
+    expect(registry.signupCreditsForKeys(keys)).toBe(0);
+  });
+
   it('serves the built-in rows for a malformed contribution', async () => {
     const builtIn = (await loadRegistry({})).__registryRows.builtInRows;
     const registry = await loadRegistry('not an object');
