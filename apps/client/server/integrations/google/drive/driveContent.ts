@@ -10,7 +10,7 @@ import {
   getFileParents,
   DriveListingIncompleteError,
   type DriveFile,
-} from './driveClient';
+} from '@bike4mind/server-utils/integrations/google/drive/driveClient';
 import {
   MAX_INGEST_CANDIDATES,
   driveIngestSkipReason,

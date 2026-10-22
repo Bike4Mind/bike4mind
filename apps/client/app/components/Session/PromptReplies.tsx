@@ -1,3 +1,4 @@
+import { ReplyMarkdownImage } from './ReplyMarkdownImage';
 import ImageContainer from '@client/app/components/Session/ImageContainer';
 import VideoContainer from '@client/app/components/Session/VideoContainer';
 import { GeneratedAudioPlayer } from '@client/app/components/Session/GeneratedAudioPlayer';
@@ -85,6 +86,7 @@ import ReplyChoiceButtons from './ReplyChoiceButtons';
 import ReplyAccessories from './ReplyAccessories';
 import EnableWebSearchAction from './EnableWebSearchAction';
 import AttachmentNotices from './AttachmentNotices';
+import { TurnTimingNotice } from './TurnTimingNotice';
 import { NotebookExecutionButtons } from './NotebookExecutionButtons';
 import type { UiSideEffect } from '@bike4mind/common';
 import {
@@ -644,6 +646,7 @@ const PromptReplies: FC<PromptReplyProps> = ({
         suggestedChoices={messageData.suggestedChoices}
         attachmentNotices={messageData.attachmentNotices}
         attachmentDelivery={messageData.attachmentDelivery}
+        turnTiming={messageData.turnTiming}
         uiSideEffects={messageData.uiSideEffects}
         replySessionId={messageData.sessionId}
         jupyterNotebook={messageData.jupyterNotebook}
@@ -1240,6 +1243,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   suggestedChoices,
   attachmentNotices,
   attachmentDelivery,
+  turnTiming,
   uiSideEffects,
   replySessionId,
   jupyterNotebook,
@@ -1336,6 +1340,12 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   const markdownComponents = useMemo(() => createMarkdownComponents({ highlightText }), [highlightText]);
 
   const codeComponent = useMemo(() => createCodeComponent(), []);
+  const markdownImage = useCallback(
+    ({ alt, src }: ComponentProps<'img'>) => (
+      <ReplyMarkdownImage src={typeof src === 'string' ? src : ''} alt={alt} onSendMessage={onSendMessage} />
+    ),
+    [onSendMessage]
+  );
   const placesById = useMemo(() => placesFromCitables(promptMeta?.citables), [promptMeta?.citables]);
   // Off until the reply is done and the markers can link, so any other reply keeps its `[N]` as ordinary text (search
   // highlighting matches across it) rather than one element per marker.
@@ -1512,6 +1522,12 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
     completed && suggestedChoices?.options.length && messageId && currentSessionId ? (
       <ReplyChoiceButtons questId={messageId} sessionId={currentSessionId} suggestedChoices={suggestedChoices} />
     ) : null;
+  // Partial grounding coverage: the knowledge-base scan behind this reply stopped short of the
+  // library. Under the reply, as a quiet line, so it reads as a note rather than a fault; shared by
+  // the two render paths below so they cannot drift.
+  const retrievalCoverageNotice = promptMeta?.retrievalCoverage?.partial ? (
+    <RetrievalCoverageBanner reasons={promptMeta.retrievalCoverage.reasons} />
+  ) : null;
   // One row for both, shared by the two render paths below so they cannot drift.
   const replyActions =
     navSuggestions || choiceButtons ? (
@@ -1596,14 +1612,6 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
           and the artifact below is shown exactly as generated. */}
       {isElidedArtifact && <ArtifactElisionBanner />}
 
-      {/* Partial grounding coverage: the knowledge-base scan behind this reply stopped short of
-          the library (a candidate cap, a per-turn chunk budget, or documents excluded for an
-          embedding-model mismatch). Sits with the banners above because it reports the same class
-          of fact - the output is less complete than it looks. */}
-      {promptMeta?.retrievalCoverage?.partial && (
-        <RetrievalCoverageBanner reasons={promptMeta.retrievalCoverage.reasons} />
-      )}
-
       {/* A knowledge tool can still ground the turn after forced retrieval came back empty. */}
       {promptMeta?.retrievalFloorRejection && !promptMeta.citables?.length && (
         <RetrievalFloorBanner {...promptMeta.retrievalFloorRejection} />
@@ -1615,6 +1623,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
           {/* Repeated rather than hoisted above the branch: the suggestions read as part of
               the reply, so they follow whichever body this view rendered. Edit mode is the
               one body they are deliberately left out of. */}
+          {retrievalCoverageNotice}
           {completed && <ReplyAccessories questId={messageId} sessionId={currentSessionId ?? undefined} />}
           {replyActions}
         </>
@@ -1654,7 +1663,8 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                 videos.length > 0 ||
                 generationJobs.length > 0 ||
                 audio.length > 0 ||
-                navSuggestions) && (
+                navSuggestions ||
+                retrievalCoverageNotice) && (
                 <Box
                   sx={{
                     position: 'relative',
@@ -1842,32 +1852,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                                     components={{
                                       ...markdownComponents,
                                       code: codeComponent,
-                                      img: ({ alt, src, title }) => {
-                                        if (!src) {
-                                          return null;
-                                        }
-
-                                        const srcStr = typeof src === 'string' ? src : '';
-                                        if (
-                                          srcStr.startsWith('/mnt/') ||
-                                          srcStr.startsWith('/tmp/') ||
-                                          srcStr.startsWith('file://') ||
-                                          srcStr.startsWith('sandbox:') ||
-                                          srcStr.includes('/mnt/data/')
-                                        ) {
-                                          return null;
-                                        }
-
-                                        return (
-                                          <ImageContainer
-                                            src={srcStr}
-                                            index={0}
-                                            totalImages={1}
-                                            images={[srcStr]}
-                                            onSendMessage={onSendMessage}
-                                          />
-                                        );
-                                      },
+                                      img: markdownImage,
                                       a: link,
                                       [CITATION_MARKER_TAG]: CitationMarker,
                                     }}
@@ -1885,6 +1870,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                       </>
                     )}
 
+                    {retrievalCoverageNotice}
                     {completed && <ReplyAccessories questId={messageId} sessionId={currentSessionId ?? undefined} />}
                     {completed && <EnableWebSearchAction reply={cleanReply} />}
                     {replyActions}
@@ -1946,6 +1932,9 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
       {/* Deliberately not gated on `completed`: a failed attachment is known before the reply
           starts, and waiting hides it for exactly as long as the model is answering without it. */}
       <AttachmentNotices attachmentNotices={attachmentNotices} attachmentDelivery={attachmentDelivery} />
+
+      {/* Not gated on `completed` either: during a stall the retries are the one thing worth reporting. */}
+      <TurnTimingNotice questId={messageId} timing={turnTiming} />
 
       {messageId && (
         <UiSideEffectDispatcher

@@ -49,11 +49,9 @@ const VENDOR_FALLBACK_USD_PER_1K: Record<VoiceGenerationVendor, number> = {
  * The model each vendor's service synthesizes and bills with when the caller
  * names none. Read by OpenAIVoiceService / ElevenLabsVoiceService in
  * @bike4mind/utils, so a pre-flight estimate prices the model the charge will use
- * when the requested vendor serves the call. If synthesis falls back to the other
- * vendor, the charge uses that vendor's rate and can exceed the estimate. The
- * pre-flight gate (apps/client/server/utils/creditPreflight.ts) prices the
- * requested vendor, so a cheaper fallback is refused a balance that would have
- * served it - accepted, not resolved.
+ * when the requested vendor serves the call. The TTS route reserves the highest
+ * estimate across its candidate vendors, using these defaults for alternates,
+ * then settles the actual vendor's cost and refunds the difference.
  */
 export const TTS_DEFAULT_MODEL: Record<VoiceGenerationVendor, string> = {
   openai: 'tts-1',

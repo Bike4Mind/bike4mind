@@ -9,6 +9,13 @@ import { isVectorSearchReady, type VectorSearchReadinessFile } from '../dataLake
  */
 export type ForcedRetrievalCandidateSelection = 'all' | 'relevance' | 'fileName';
 
+/**
+ * Why a `fileName` cut happened. Metric dimension value (forcedRetrievalSelectionMetrics.ts), so
+ * keep these stable. `relevance-unavailable` covers vector search off, unreadable, or not Atlas.
+ */
+export type ForcedRetrievalFallbackReason =
+  'relevance-unavailable' | 'no-ready-file' | 'not-queryable' | 'no-hits' | 'deadline' | 'error';
+
 type AnnChunkHit = { fabFileId: string; score: number };
 
 /**

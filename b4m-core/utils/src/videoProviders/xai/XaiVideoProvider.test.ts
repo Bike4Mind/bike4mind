@@ -176,7 +176,7 @@ describe('XaiVideoProvider specifics', () => {
     );
     await new XaiVideoProvider().submit(
       request({ mode: 'image_to_video', inputImageFileId: 'f1' }),
-      { inputImage: { bytes: Buffer.from('png'), mimeType: 'image/png' } },
+      { images: [{ role: 'first_frame', bytes: Buffer.from('png'), mimeType: 'image/png' }] },
       ctx()
     );
     expect(sent.image).toEqual({ url: `data:image/png;base64,${Buffer.from('png').toString('base64')}` });
@@ -187,7 +187,7 @@ describe('XaiVideoProvider specifics', () => {
     const provider = new XaiVideoProvider();
     const handle = await provider.submit(
       request({ mode: 'image_to_video', inputImageFileId: 'f1' }),
-      { inputImage: { bytes: Buffer.from('png'), mimeType: 'image/png' } },
+      { images: [{ role: 'first_frame', bytes: Buffer.from('png'), mimeType: 'image/png' }] },
       ctx()
     );
     expect(await provider.poll(handle, ctx())).toMatchObject({ status: 'running' });

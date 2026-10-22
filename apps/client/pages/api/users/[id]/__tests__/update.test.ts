@@ -778,7 +778,7 @@ describe('PUT /api/users/:id/update - respond() boundary', () => {
     expect(res._getStatusCode()).toBe(200);
     const json = res._getJSONData();
     expect(json.ignoredFields).toEqual(['adminNote']);
-    expect(json.securityQuestions).toEqual(profile.securityQuestions);
+    expect(json.securityQuestions).toEqual([{ question: 'Pet name?', answer: '' }]);
     expect(json.userNotes).toEqual(profile.userNotes);
     expect(json).not.toHaveProperty('notInSchema');
   });
@@ -795,7 +795,7 @@ describe('PUT /api/users/:id/update - respond() boundary', () => {
     expect(res._getStatusCode()).toBe(200);
     const json = res._getJSONData();
     expect(json.ignoredFields).toEqual(['tags']);
-    expect(json.securityQuestions).toEqual(profile.securityQuestions);
+    expect(json.securityQuestions).toEqual([{ question: 'Pet name?', answer: '' }]);
     expect(json).not.toHaveProperty('userNotes');
     expect(json).not.toHaveProperty('notInSchema');
   });

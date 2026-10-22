@@ -1,5 +1,6 @@
 import { KeepCommandRequestAction } from '@bike4mind/common';
 import { verifyJwtToken, checkRateLimit, verifyApiKey, checkApiKeyRateLimitOrThrow } from '@server/cli/auth';
+import { isAuthInfraFailure } from '@server/auth/apiKeyAuthFailure';
 import { withWebSocketContext, sendToClient, sendToConnection } from '@server/websocket/utils';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 
@@ -51,7 +52,17 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       endpoint: 'ws/keep_command_request',
       method: 'WS',
     });
-  } catch {
+  } catch (apiKeyError) {
+    // The key check itself failed (database unreachable): report that, not a JWT verdict.
+    if (isAuthInfraFailure(apiKeyError)) {
+      await sendToConnection(connectionId, endpoint, {
+        action: 'keep_command_result' as const,
+        requestId,
+        success: false,
+        error: apiKeyError.message,
+      });
+      return { statusCode: 200 };
+    }
     try {
       const user = await verifyJwtToken(accessToken);
       userId = user.id;

@@ -10,6 +10,15 @@
 
 ## Unreleased
 
+- Show spawned sessions immediately while their worktrees prepare, with queued messages and visible startup failures; preserve accepted input and attachments if startup fails.
+- Reuse base-branch fetches and spare checkouts, and invalidate the skill catalog when its files change.
+- Make "Always allow" save the displayed permission rule, and settle waiting cards it covers.
+- Let conversation consent for web fetches cover every site, including after reading web content.
+
+- Show artifact thumbnails in a searchable grid with a full-panel detail view, and reload cached bodies on Refresh.
+
+- Add account-scoped Claude Code sync and claude.ai export import, with continued sessions protected from later imports and removal.
+- Move Settings to a dedicated page with General, Permissions and Import sections.
 - Add persistent permission rules and optional sharing of Claude Code rules, with deny and ask precedence.
 - Enforce interactive tool denies and check symlink targets and shell file operands before applying standing allows.
 

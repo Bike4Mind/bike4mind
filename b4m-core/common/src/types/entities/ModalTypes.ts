@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { IMongoDocument } from '.';
 import { ICounter } from './CounterTypes';
 import { VariantContent } from './AudienceVariantTypes';
@@ -7,6 +8,85 @@ export interface ModalImage {
   width?: number;
   height?: number;
 }
+
+export interface ModalVideo {
+  landscapeUrl?: string | null;
+  landscapePosterUrl?: string | null;
+  portraitUrl?: string | null;
+  portraitPosterUrl?: string | null;
+}
+
+export type ModalVideoField = keyof ModalVideo;
+
+// Origins the app CSP allows in media-src and img-src on every deploy (apps/client/proxy.ts); keep in sync
+const MODAL_MEDIA_HOST_SUFFIXES = ['.amazonaws.com', '.cloudfront.net'];
+const MODAL_MEDIA_URL_MAX_LENGTH = 2048;
+
+export const MODAL_MEDIA_URL_HINT = 'Upload the file, or paste an https URL on amazonaws.com or cloudfront.net';
+
+/** What a deployment accepts beyond the static host list. */
+export interface ModalMediaUrlPolicy {
+  /** Exact origins (scheme, host, port), e.g. a self-host object store; an http origin allows http. */
+  extraOrigins?: readonly string[];
+  /** URLs accepted as-is, e.g. ones the admin upload itself produced. */
+  allowedUrls?: ReadonlySet<string>;
+}
+
+export function isAllowedModalMediaUrl(url: string, policy: ModalMediaUrlPolicy = {}): boolean {
+  if (url.length > MODAL_MEDIA_URL_MAX_LENGTH) return false;
+  if (policy.allowedUrls?.has(url)) return true;
+  try {
+    const { protocol, hostname, origin, port } = new URL(url);
+    if (policy.extraOrigins?.includes(origin)) return true;
+    // The CSP source matches the default port only, so a non-default one would never load.
+    return protocol === 'https:' && port === '' && MODAL_MEDIA_HOST_SUFFIXES.some(suffix => hostname.endsWith(suffix));
+  } catch {
+    return false;
+  }
+}
+
+/** Per-field problems with a modal video, empty when it is valid. Shared by the admin form and the API. */
+export function getModalVideoErrors(
+  video: ModalVideo | null | undefined,
+  policy: ModalMediaUrlPolicy = {}
+): Partial<Record<ModalVideoField, string>> {
+  const errors: Partial<Record<ModalVideoField, string>> = {};
+  if (!video) return errors;
+  for (const field of ['landscapeUrl', 'landscapePosterUrl', 'portraitUrl', 'portraitPosterUrl'] as const) {
+    const url = video[field];
+    if (url && !isAllowedModalMediaUrl(url, policy)) errors[field] = MODAL_MEDIA_URL_HINT;
+  }
+  if (video.landscapePosterUrl && !video.landscapeUrl) {
+    errors.landscapePosterUrl ??= 'A 16:9 poster needs its 16:9 video';
+  }
+  if (video.portraitPosterUrl && !video.portraitUrl) {
+    errors.portraitPosterUrl ??= 'A 9:16 poster needs its 9:16 video';
+  }
+  return errors;
+}
+
+/** The video's fields with no host check, for reading stored or upstream data written under another policy. */
+export const ModalVideoShapeSchema = z.object({
+  landscapeUrl: z.string().nullable().optional(),
+  landscapePosterUrl: z.string().nullable().optional(),
+  portraitUrl: z.string().nullable().optional(),
+  portraitPosterUrl: z.string().nullable().optional(),
+});
+
+/**
+ * Product video for a modal slide. Landscape is the 16:9 cut shown on desktop, portrait the 9:16 cut
+ * shown on mobile; the slider falls back to the other orientation when one is missing. The API passes
+ * its deployment's extra origins; the bare `ModalVideoSchema` allows only the static host list.
+ */
+export function createModalVideoSchema(policy: ModalMediaUrlPolicy = {}) {
+  return ModalVideoShapeSchema.superRefine((video, ctx) => {
+    for (const [field, message] of Object.entries(getModalVideoErrors(video, policy))) {
+      ctx.addIssue({ code: 'custom', path: [field], message });
+    }
+  });
+}
+
+export const ModalVideoSchema = createModalVideoSchema();
 
 /**
  * Generation metadata for auto-generated modals (e.g., What's New).
@@ -55,6 +135,7 @@ export interface IModal {
   numberOfViews: ICounter | null;
   imageUrl: string | null;
   images?: ModalImage[] | null;
+  video?: ModalVideo | null;
   textMessage: string | null;
   /** Generation metadata for auto-generated modals (null for manual modals) */
   generationMetadata?: IGenerationMetadata | null;

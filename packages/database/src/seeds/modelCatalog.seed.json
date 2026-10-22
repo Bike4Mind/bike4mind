@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-10-20T14:08:23.950Z",
-  "notice": "Fallback defaults last maintained on 2026-10-20. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
+  "generatedAt": "2026-10-22T05:18:04.841Z",
+  "notice": "Fallback defaults last maintained on 2026-10-22. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
   "entries": [
     {
       "modelId": "anthropic.claude-3-5-sonnet-20240620-v1:0",
@@ -2025,6 +2025,7 @@
         "supportsTools": false,
         "supportsImageVariation": false,
         "lifecycle": {
+          "isSuperseded": true,
           "status": "deprecated",
           "deprecationDate": "2026-10-23"
         },
@@ -2055,6 +2056,7 @@
         "supportsTools": true,
         "supportsImageVariation": false,
         "lifecycle": {
+          "isSuperseded": true,
           "status": "deprecated",
           "deprecationDate": "2026-10-23"
         },
@@ -2085,6 +2087,7 @@
         "supportsTools": true,
         "supportsImageVariation": false,
         "lifecycle": {
+          "isSuperseded": true,
           "status": "active"
         },
         "description": "Reliable for general-purpose text generation and analysis with a standard context window, suitable for a wide range of applications.",
@@ -2115,6 +2118,7 @@
         "supportsTools": true,
         "supportsImageVariation": false,
         "lifecycle": {
+          "isSuperseded": true,
           "status": "active"
         },
         "description": "OpenAI's balanced GPT-4.1 model offering optimal price-performance ratio. Ideal for tasks requiring intelligence and cost efficiency.",
@@ -2145,6 +2149,7 @@
         "supportsTools": true,
         "supportsImageVariation": false,
         "lifecycle": {
+          "isSuperseded": true,
           "status": "deprecated",
           "deprecationDate": "2026-10-23"
         },
@@ -2206,6 +2211,7 @@
         "supportsTools": true,
         "supportsImageVariation": false,
         "lifecycle": {
+          "isSuperseded": true,
           "status": "active"
         },
         "description": "OpenAI's multimodal model with strong vision capabilities and reasoning. Good for tasks requiring image understanding and complex tool use.",
@@ -2235,6 +2241,7 @@
         "supportsTools": true,
         "supportsImageVariation": false,
         "lifecycle": {
+          "isSuperseded": true,
           "status": "active"
         },
         "description": "OpenAI's cost-effective multimodal model with vision capabilities. Good for routine tasks requiring image understanding at lower cost.",
@@ -2268,6 +2275,7 @@
         "supportsTools": true,
         "supportsImageVariation": false,
         "lifecycle": {
+          "isSuperseded": true,
           "status": "active"
         },
         "description": "OpenAI's advanced language model with exceptional reasoning, creativity, and multimodal capabilities. Ideal for complex tasks requiring deep understanding.",
@@ -2340,6 +2348,7 @@
         "supportsTools": true,
         "supportsImageVariation": false,
         "lifecycle": {
+          "isSuperseded": true,
           "status": "active"
         },
         "description": "Efficient multimodal model with vision and tool support, suitable for cost-sensitive tasks requiring image analysis and extended context.",
@@ -2375,6 +2384,7 @@
         "supportsTools": true,
         "supportsImageVariation": false,
         "lifecycle": {
+          "isSuperseded": true,
           "status": "active"
         },
         "description": "Ultra-efficient GPT-5 variant designed for lightweight tasks and edge deployment. Exceptional value for routine operations.",
@@ -2410,6 +2420,7 @@
         "supportsTools": true,
         "supportsImageVariation": false,
         "lifecycle": {
+          "isSuperseded": true,
           "status": "active"
         },
         "description": "Early GPT-5 series model with solid reasoning and vision support. Reliable for general-purpose tasks at competitive pricing.",
@@ -2482,6 +2493,7 @@
         "supportsTools": true,
         "supportsImageVariation": false,
         "lifecycle": {
+          "isSuperseded": true,
           "status": "active"
         },
         "description": "Previous-generation GPT-5 flagship with robust multimodal understanding and deep analytical capabilities.",
@@ -2554,6 +2566,7 @@
         "supportsTools": true,
         "supportsImageVariation": false,
         "lifecycle": {
+          "isSuperseded": true,
           "status": "active"
         },
         "description": "High-performing GPT-5.4 model with strong reasoning, creativity, and vision understanding. A reliable workhorse in the GPT-5 family.",
@@ -2589,6 +2602,7 @@
         "supportsTools": true,
         "supportsImageVariation": false,
         "lifecycle": {
+          "isSuperseded": true,
           "status": "active"
         },
         "description": "Compact GPT-5.4 variant balancing strong performance with lower cost. Great for everyday tasks needing solid reasoning and vision.",
@@ -2624,6 +2638,7 @@
         "supportsTools": true,
         "supportsImageVariation": false,
         "lifecycle": {
+          "isSuperseded": true,
           "status": "active"
         },
         "description": "Ultra-lightweight GPT-5.4 model optimized for speed and cost efficiency. Ideal for high-volume workloads and quick interactions.",
@@ -2659,6 +2674,7 @@
         "supportsTools": true,
         "supportsImageVariation": false,
         "lifecycle": {
+          "isSuperseded": true,
           "status": "active"
         },
         "description": "OpenAI's next-generation flagship GPT-5.5 model. A new class of intelligence for coding and professional work with a 1M+ context window, advanced reasoning, vision, and tool use.",
@@ -2694,6 +2710,7 @@
         "supportsTools": true,
         "supportsImageVariation": false,
         "lifecycle": {
+          "isSuperseded": true,
           "status": "active"
         },
         "description": "GPT-5.6 Luna - the fast, cost-efficient GPT-5.6 variant. Great for high-volume workloads that still need solid reasoning, vision, and tool use.",
@@ -2729,6 +2746,7 @@
         "supportsTools": true,
         "supportsImageVariation": false,
         "lifecycle": {
+          "isSuperseded": true,
           "status": "active"
         },
         "description": "OpenAI's GPT-5.6 Sol - flagship of the 5.6 family. Top-tier reasoning, coding, and vision with a 1M+ context window and native tool use for the most demanding professional work.",
@@ -2764,6 +2782,7 @@
         "supportsTools": true,
         "supportsImageVariation": false,
         "lifecycle": {
+          "isSuperseded": true,
           "status": "active"
         },
         "description": "GPT-5.6 Terra - the balanced GPT-5.6 variant. Strong reasoning and vision, priced between Sol and Luna, a reliable workhorse for everyday professional tasks.",
@@ -3675,6 +3694,7 @@
         "supportsTools": true,
         "supportsImageVariation": false,
         "lifecycle": {
+          "isSuperseded": true,
           "status": "deprecated",
           "deprecationDate": "2026-12-11"
         },
@@ -3775,6 +3795,35 @@
         },
         "description": "Amazon Transcribe - Automatic speech recognition service that converts audio to text with support for multiple languages and formats.",
         "rank": 1
+      }
+    },
+    {
+      "modelId": "us.amazon.nova-pro-v1:0",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "us.amazon.nova-pro-v1:0",
+        "vendor": "amazon",
+        "backend": "bedrock",
+        "type": "text",
+        "name": "Amazon Nova Pro",
+        "contextWindow": 300000,
+        "maxOutputTokens": 10000,
+        "canStream": true,
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Amazon's Nova Pro via AWS Bedrock - multimodal (text and images), tool use, and a 300K-token context window.",
+        "rank": 5,
+        "releaseDate": "2024-12-03"
       }
     },
     {

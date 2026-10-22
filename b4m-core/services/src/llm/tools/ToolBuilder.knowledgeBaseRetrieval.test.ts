@@ -36,7 +36,7 @@ describe('buildToolPrompt knowledge-base retrieval section', () => {
   }
 
   async function build(overrides: { hasKnowledgeBase: boolean; knowledgeBaseGuidance?: string }) {
-    return makeBuilder().buildToolPrompt({
+    const { guidance } = await makeBuilder().buildToolPrompt({
       hasContentTransform: false,
       hasChessEngine: false,
       hasCurrentDateTime: false,
@@ -48,6 +48,7 @@ describe('buildToolPrompt knowledge-base retrieval section', () => {
       processStartTime: Date.now(),
       ...overrides,
     });
+    return guidance;
   }
 
   it('injects the guidance when search_knowledge_base is offered', async () => {

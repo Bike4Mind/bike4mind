@@ -334,6 +334,32 @@ const adminAuditAlertsCron = runsScheduledJobs
     })
   : undefined;
 
+// Data Lake Vector Index Keep-Warm - one wide $vectorSearch per queryable per-model Atlas index, so
+// forced retrieval's 3s ANN candidate pick does not hit a cold index after an idle stretch
+// and fall back to picking files by name. Skips itself while EnableDataLakeVectorSearch is off.
+// No self-host twin: self-host retrieval runs on OpenSearch.
+const dataLakeVectorIndexKeepWarmCron = runsScheduledJobs
+  ? new sst.aws.Cron('dataLakeVectorIndexKeepWarm', {
+      schedule: 'rate(5 minutes)',
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/dataLakeVectorIndexKeepWarm.handler',
+        runtime: 'nodejs24.x',
+        // A query against an index that has already gone cold has taken 49s on production.
+        timeout: '2 minutes',
+        // The next run is the retry; Lambda's async retries would only stack more queries on mongot.
+        retries: 0,
+        link: [...allSecrets],
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
+        },
+        logging: {
+          retention: '1 month',
+        },
+      },
+    })
+  : undefined;
+
 // Credit Hold Sweep - refunds request credit holds whose process died between reserve and settle.
 // Self-host twin: apps/workers/src/selfhost/creditHoldSweep.ts; keep the schedules in step.
 // Overlapping runs are safe: each hold's claim and refund commit in one transaction.
@@ -1155,6 +1181,7 @@ const lakeInconsistencySweepCron = runsScheduledJobs
 
 export {
   adminAuditAlertsCron,
+  dataLakeVectorIndexKeepWarmCron,
   modelDiscoveryCronEnabled,
   dailyUserActivityReport,
   weeklyUserActivityReport,

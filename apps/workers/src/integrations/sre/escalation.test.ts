@@ -30,7 +30,7 @@ vi.mock('@server/services/githubService', () => ({
   },
 }));
 
-vi.mock('@server/integrations/slack/sreSlackApproval', () => ({
+vi.mock('@bike4mind/server-utils/integrations/slack/sreSlackApproval', () => ({
   postSreRecurrenceDetectedMessage: (...args: unknown[]) => mockPostRecurrenceMessage(...args),
 }));
 

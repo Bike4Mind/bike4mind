@@ -5,7 +5,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { MongoDeepAgentStore } from '@bike4mind/server-utils/deepAgent/store';
 import { createLlmReviewStep, runReviewWake } from '@bike4mind/server-utils/deepAgent/reviewWake';
-import { bridgeReviewToSession } from '@server/deepAgent/missionSessionBridge';
+import { bridgeReviewToSession } from '@bike4mind/server-utils/deepAgent/missionSessionBridge';
 import { DEFAULT_WAKE_MODEL_ID, resolveDeepAgentBackend } from '@bike4mind/server-utils/deepAgent/resolveBackend';
 
 /**

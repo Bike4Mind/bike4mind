@@ -7,6 +7,7 @@ import { SignInCard } from '../auth/SignInCard';
 import { SignedInPanel } from '../auth/SignedInPanel';
 import { useAuthState } from '../auth/useAuthState';
 import { ChatShell } from '../chat/ChatShell';
+import { AppUpdateNotice } from '../chat/UpdateNotice';
 
 export function Home() {
   const state = useAuthState();
@@ -14,12 +15,10 @@ export function Home() {
   // Signed in, the window belongs to the conversation; identity moves to the sidebar footer.
   if (state?.status === 'signed-in') {
     return (
-      <ChatShell
-        auth={state}
-        account={(status, openSettings) => (
-          <SignedInPanel state={state} status={status} onOpenSettings={openSettings} />
-        )}
-      />
+      <>
+        <ChatShell auth={state} account={status => <SignedInPanel state={state} status={status} />} />
+        <AppUpdateNotice />
+      </>
     );
   }
 
@@ -37,6 +36,7 @@ export function Home() {
           <SignInCard state={state} />
         )}
       </Card>
+      <AppUpdateNotice />
     </Box>
   );
 }

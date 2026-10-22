@@ -14,6 +14,7 @@
  */
 
 import { withWebSocketContext } from '@server/websocket/utils';
+import { isAuthInfraFailure } from '@server/auth/apiKeyAuthFailure';
 import { adminSettingsRepository, agentExecutionRepository, sessionToolApprovalRepository } from '@bike4mind/database';
 import type { AgentCheckpoint, AgentStep } from '@bike4mind/agents';
 import { buildChildExecutionSnapshots } from '@server/utils/childExecutionSnapshot';
@@ -227,7 +228,12 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       endpoint: 'ws/agent_execute',
       method: 'WS',
     });
-  } catch {
+  } catch (apiKeyError) {
+    // The key check itself failed (database unreachable): report that, not a JWT verdict.
+    if (isAuthInfraFailure(apiKeyError)) {
+      await sendAgentEvent(connectionId, endpoint, { action: 'agent_error', message: apiKeyError.message });
+      return { statusCode: 200 };
+    }
     apiKeyInfo = undefined;
     try {
       const user = await verifyJwtToken(body.accessToken);

@@ -1,4 +1,14 @@
-import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type ReactNode } from 'react';
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ClipboardEvent,
+  type KeyboardEvent,
+  type ReactNode,
+  type SyntheticEvent,
+} from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import CircularProgress from '@mui/joy/CircularProgress';
@@ -9,7 +19,8 @@ import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import type { ChatQueuedMessage, ChatSessionMode } from '@shared/chat';
 import { AttachmentRow } from './Attachments';
-import { matchCommands, type ComposerCommand } from './commands';
+import { findCommand, matchCommands, type ComposerCommand } from './commands';
+import { ComposerHighlight, type HighlightToken } from './ComposerHighlight';
 import {
   attachShortcut,
   COMPOSER_BUTTON_LABELS,
@@ -22,12 +33,13 @@ import {
   isAttachChord,
   shownSuggestion,
 } from './composerInput';
+import { useShowDollarCosts } from './costDisplay';
 import { ArrowUpIcon, StopIcon } from './icons';
 import { contentColumnSx } from './layout';
 import { isMac } from './platform';
 import { QueuedMessageList } from './QueuedMessageList';
 import { mergeIntoDraft } from './queuedMessages';
-import { matchSkills, skillQuery } from './skillMenu';
+import { highlightedTokens, insertSkill, matchSkills, skillChipColor, skillQuery } from './skillMenu';
 import { SkillPicker } from './SkillPicker';
 import {
   contextPercent,
@@ -168,8 +180,27 @@ export function Composer({
    */
   onSuggestionDismissed?: () => void;
 }) {
+  const showDollars = useShowDollarCosts();
   const [text, setText] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  // Where the caret is, so the `/` menu answers the token being typed wherever it sits in the draft.
+  const [caret, setCaret] = useState(0);
+  // A caret position to restore once a programmatic draft change has rendered.
+  const pendingCaret = useRef<number | null>(null);
+
+  /** Replace the draft and put the caret at `at` (the end by default), as typing would have. */
+  const replaceDraft = (next: string, at: number = next.length) => {
+    setText(next);
+    setCaret(at);
+    pendingCaret.current = at;
+  };
+
+  useLayoutEffect(() => {
+    const target = pendingCaret.current;
+    if (target === null) return;
+    pendingCaret.current = null;
+    textareaRef.current?.setSelectionRange(target, target);
+  }, [text]);
 
   const hasContent = text.trim().length > 0 || attachments.attachments.length > 0;
   const blocked = !!blockedReason || !!notReady;
@@ -193,7 +224,7 @@ export function Composer({
    */
   const shownUsage = !disabled && !notReady ? (usage ?? null) : null;
   const usageText = shownUsage && usageLabel(shownUsage);
-  const usageDetail = shownUsage && usageText ? describeUsage(shownUsage) : null;
+  const usageDetail = shownUsage && usageText ? describeUsage(shownUsage, showDollars) : null;
   const occupancy = shownUsage ? contextPercent(shownUsage.contextTokens, shownUsage.contextLimit) : null;
 
   // See composerInput.ts for what wins here and why.
@@ -225,13 +256,13 @@ export function Composer({
     const draft = text.trim();
     const action = composerSubmitAction(draft, sessionMode);
     if (action.kind === 'command' && onRunCommand && !disabled) {
-      setText('');
+      replaceDraft('');
       onSuggestionDismissed?.();
       onRunCommand(action.invocation.command.name, action.invocation.args);
       return;
     }
     if (!canSubmit) return;
-    setText('');
+    replaceDraft('');
     onSuggestionDismissed?.();
     onSend(draft);
   };
@@ -250,21 +281,31 @@ export function Composer({
   /**
    * The `/` menu.
    *
-   * Open is DERIVED from the text rather than stored, so there is no state to get out of step
-   * with what is on screen: the menu is showing exactly when the whole input is a bare `/token`
-   * (see skillQuery). Escape is the one thing that needs memory, and it is remembered against
-   * the text that was dismissed - so typing another character brings the menu back, which is
-   * what makes Escape "not this one" rather than "not until I reload".
+   * Open is DERIVED from the text and caret rather than stored, so there is no state to get out
+   * of step with what is on screen: the menu is showing exactly when the caret ends a bare
+   * `/token`, at the start of the draft or after a space (see skillQuery). Escape is the one
+   * thing that needs memory, and it is remembered against the text that was dismissed - so
+   * typing another character brings the menu back, which is what makes Escape "not this one"
+   * rather than "not until I reload".
+   *
+   * Commands are offered only when the token is the whole draft: running one replaces the turn,
+   * so a command taken from mid-sentence would discard the sentence. Skills go anywhere.
    */
   const [dismissed, setDismissed] = useState<string | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
 
-  const query = (skills || onRunCommand) && !disabled ? skillQuery(text) : null;
+  const token = (skills || onRunCommand) && !disabled ? skillQuery(text, caret) : null;
+  const query = token?.query ?? null;
+  const offerCommands = !!onRunCommand && !!token?.wholeDraft;
   const commandMatches = useMemo(
-    () => (onRunCommand && query !== null ? matchCommands(query, sessionMode) : []),
-    [onRunCommand, query, sessionMode]
+    () => (offerCommands && query !== null ? matchCommands(query, sessionMode) : []),
+    [offerCommands, query, sessionMode]
   );
-  const matches = useMemo(() => (skills && query !== null ? matchSkills(skills.skills, query) : []), [skills, query]);
+  const wholeDraft = token?.wholeDraft;
+  const matches = useMemo(
+    () => (skills && query !== null ? matchSkills(skills.skills, query, !wholeDraft) : []),
+    [skills, query, wholeDraft]
+  );
   // One list for the keyboard: commands first, then skills, which is also the order drawn.
   const menuCount = commandMatches.length + matches.length;
   const pickerOpen = query !== null && dismissed !== text && (menuCount > 0 || !!skills);
@@ -289,12 +330,27 @@ export function Composer({
   }, [pickerOpen, skills]);
 
   const pick = (name: string) => {
-    // The trailing space is what closes the menu (the text is no longer a bare token) and what
-    // leaves the user positioned to type arguments.
-    setText(`/${name} `);
+    if (!token) return;
+    // In place, so a skill picked mid-sentence keeps the words around it. See insertSkill for
+    // the trailing space, which is what closes the menu.
+    const next = insertSkill(text, token, name);
+    replaceDraft(next.text, next.caret);
     setDismissed(null);
     textareaRef.current?.focus();
   };
+
+  /**
+   * The tokens drawn as pills behind the text: known skills anywhere, a command only where it
+   * would run. Coloured like the picker's source chips, so the pill says where a skill came from.
+   */
+  const highlights = useMemo<HighlightToken[]>(() => {
+    const bySkill = new Map((skills?.skills ?? []).map(skill => [skill.name, skill]));
+    const isCommand = (name: string) => !!onRunCommand && !!findCommand(name, sessionMode);
+    return highlightedTokens(text, new Set(bySkill.keys()), isCommand).map(mention => {
+      const skill = bySkill.get(mention.name);
+      return { ...mention, color: skill ? skillChipColor(skill.source) : 'primary' };
+    });
+  }, [text, skills, onRunCommand, sessionMode]);
 
   /**
    * Taking a command out of the menu RUNS it, where taking a skill only fills the draft.
@@ -307,11 +363,11 @@ export function Composer({
   const runCommand = (command: ComposerCommand) => {
     setDismissed(null);
     if (command.requiresArgument) {
-      setText(`/${command.name} `);
+      replaceDraft(`/${command.name} `);
       textareaRef.current?.focus();
       return;
     }
-    setText('');
+    replaceDraft('');
     onRunCommand?.(command.name, '');
     textareaRef.current?.focus();
   };
@@ -366,7 +422,7 @@ export function Composer({
     }
     // Fills the draft and stops. The user still has to press Enter, on text they can now read
     // and edit - which is the whole reason this is a different key from the one that sends.
-    if (shown) setText(shown);
+    if (shown) replaceDraft(shown);
   };
 
   // Read inside the window listener so it is bound once, not rebuilt on every draft keystroke.
@@ -474,7 +530,11 @@ export function Composer({
           value={text}
           // Only hides the hint (see shownSuggestion), never ends it: emptying the box again
           // brings the same guess back, since nothing has been sent and it still fits the reply.
-          onChange={event => setText(event.target.value)}
+          onChange={event => {
+            pendingCaret.current = null;
+            setText(event.target.value);
+            setCaret(event.target.selectionStart);
+          }}
           onKeyDown={onKeyDown}
           placeholder={composerPlaceholder({ disabled, text, suggestion, placeholder, disabledPlaceholder })}
           disabled={disabled}
@@ -490,7 +550,13 @@ export function Composer({
           // fontSize rather than size="sm": the smaller size would also shrink the padding and
           // the min-height, and it is only the text that reads too large here. The inner
           // textarea inherits it, so this sets the placeholder and the suggestion hint too.
-          sx={{ flexDirection: 'row', alignItems: 'flex-end', fontSize: 'sm' }}
+          // `position: relative` anchors the skill highlight, which is laid over the textarea.
+          sx={{ flexDirection: 'row', alignItems: 'flex-end', fontSize: 'sm', position: 'relative' }}
+          startDecorator={
+            highlights.length > 0 ? (
+              <ComposerHighlight text={text} tokens={highlights} textareaRef={textareaRef} />
+            ) : undefined
+          }
           endDecorator={
             /* One button, never two. Stopping this turn and queueing the next one are still
                different intentions - that has not stopped being true - but a pair of buttons in
@@ -535,15 +601,22 @@ export function Composer({
             // wrong axis and the negative start would drag the button over the text. The gap
             // between text and button is the textarea's own paddingInlineEnd.
             endDecorator: { sx: { marginBlockStart: 0, marginInlineStart: 0 } },
+            // The highlight layer, lifted out of the flex row so it takes no width, and under
+            // the textarea (which is raised and transparent) so clicks and text stay its own.
+            startDecorator: {
+              sx: { position: 'absolute', inset: 0, margin: 0, display: 'block', pointerEvents: 'none' },
+            },
             textarea: {
               // Joy stretches the textarea to the flex line, and the button's min-height makes
               // that line taller than one line of text - so the text rendered at the top of the
               // band and every spare pixel fell underneath it (6px above, 13px below). Centring
               // splits them. Only bites while the box is one row; once the text is the tallest
               // item it drives the height itself and this does nothing.
-              sx: { alignSelf: 'center' },
+              sx: { alignSelf: 'center', position: 'relative', zIndex: 1, backgroundColor: 'transparent' },
               'data-testid': 'chat-composer-input',
               onPaste,
+              // Arrow keys and clicks move the caret without a change event; the `/` menu follows it.
+              onSelect: (event: SyntheticEvent<HTMLTextAreaElement>) => setCaret(event.currentTarget.selectionStart),
               // Held so selecting a skill can put focus back where the arguments get typed.
               ref: textareaRef,
               // So the hint is distinguishable from the ordinary placeholder without reading

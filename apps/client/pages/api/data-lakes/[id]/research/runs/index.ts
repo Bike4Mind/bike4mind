@@ -17,7 +17,7 @@ import { z } from 'zod';
 import { assertLakeResearchManage } from '@server/dataLakes/assertLakeResearchManage';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
-import { queueResearchRun } from '@server/dataLakes/queueResearchRun';
+import { queueResearchRun } from '@bike4mind/server-utils/dataLakes/queueResearchRun';
 
 const StartInput = z.object({ configId: z.string() });
 

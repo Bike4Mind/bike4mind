@@ -26,8 +26,8 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 const mockLoadConfig = vi.fn();
-vi.mock('@server/releaseNotes/adminReleaseNotes', async importOriginal => {
-  const actual = await importOriginal<typeof import('@server/releaseNotes/adminReleaseNotes')>();
+vi.mock('@bike4mind/server-utils/releaseNotes/adminReleaseNotes', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/server-utils/releaseNotes/adminReleaseNotes')>();
   return { ...actual, loadReleaseNotesConfig: (...a: unknown[]) => mockLoadConfig(...a) };
 });
 

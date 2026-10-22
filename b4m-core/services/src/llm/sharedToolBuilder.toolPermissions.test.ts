@@ -6,7 +6,7 @@
  */
 import { describe, it, expect, vi } from 'vitest';
 import { Logger } from '@bike4mind/observability';
-import type { ICompletionBackend } from '@bike4mind/llm-adapters';
+import type { ICompletionBackend, ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { IUserDocument } from '@bike4mind/common';
 import { buildSharedTools, type ToolBuilderDeps, type ToolBuilderCallbacks } from './sharedToolBuilder';
 import { ServerAgentStore } from './agents/ServerAgentStore';
@@ -81,5 +81,27 @@ describe('buildSharedTools: subagent permission lists', () => {
 
     expect(createDelegateToAgentTool).toHaveBeenCalledWith(expect.objectContaining({ toolPermissions }));
     expect(createCoordinateTaskTool).toHaveBeenCalledWith(expect.objectContaining({ toolPermissions }));
+  });
+});
+
+describe('buildSharedTools: child tool wrapping', () => {
+  const wrapChildTools = (tools: ICompletionOptionTools[]) => tools.map(tool => ({ ...tool, wrapped: true }));
+  const names = (tools: ICompletionOptionTools[]) => tools.map(tool => tool.toolSchema.name);
+
+  it('applies wrapChildTools to the tools captured by both delegation tools, before the denylist', () => {
+    buildSharedTools(deps, callbacks, {
+      enabledTools: ['image_generation', 'web_search'],
+      sessionDisabledTools: toolPermissions.deniedTools,
+      wrapChildTools,
+    });
+
+    const delegateTools = vi.mocked(createDelegateToAgentTool).mock.calls.at(-1)![0].parentTools;
+    const coordinateTools = vi.mocked(createCoordinateTaskTool).mock.calls.at(-1)![0].parentTools;
+
+    expect(names(delegateTools)).toContain('image_generation');
+    expect(delegateTools.every(tool => 'wrapped' in tool)).toBe(true);
+    expect(names(coordinateTools)).toEqual(names(delegateTools));
+    // A denied tool stays filtered even now that every survivor is a wrapped copy.
+    expect(names(delegateTools)).not.toContain('web_search');
   });
 });

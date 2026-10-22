@@ -205,6 +205,176 @@ describe('triageReleaseNotes / writeReleaseNotes', () => {
   });
 });
 
+// Author notes from release v2026.10.20.1, each of which overstated what its change does.
+const overstatedRelease: ReleaseNotesJobPr[] = [
+  pr(4938, {
+    title: 'feat(storage): org-admin storage usage endpoint and Storage tab',
+    customerNote:
+      "Organization admins can now see how much of the organization's storage is used, and by whom, under Usage > Storage.",
+  }),
+  pr(4994, {
+    title: 'fix(music): ask the model to rephrase once when the provider blocks a song prompt',
+    customerNote:
+      'When a song request is refused because it names a real artist, the assistant now rewrites the request and tries again automatically instead of stopping at a blocked song.',
+  }),
+  pr(5040, {
+    title: 'fix(llm-adapters): run adaptive Claude at low effort for simple queries',
+    customerNote: 'Claude answers everyday questions and quick tool lookups faster.',
+  }),
+];
+
+describe('copy accuracy', () => {
+  it('pairs each title with its author note and includes the accuracy and exclusion rules', async () => {
+    const complete = vi.fn().mockResolvedValueOnce(editorialReply([4938]));
+
+    await generateReleaseNotes(overstatedRelease, complete);
+
+    const prompt: string = complete.mock.calls[0][0];
+    for (const { number, title, customerNote } of overstatedRelease) {
+      expect(prompt).toContain(JSON.stringify({ number, title, note: customerNote }));
+    }
+    expect(prompt).toContain('follow the narrower one');
+    expect(prompt).toContain('Never say which roles can see or use something');
+    expect(prompt).toContain('never "You can now ..."');
+    expect(prompt).toContain('only when the title states that gain');
+    expect(prompt).toContain('Never attach a speed or quality claim to an AI model or provider');
+    expect(prompt).toContain('or a security vulnerability fix');
+    expect(prompt).not.toContain('who it helps');
+  });
+
+  it('includes the accuracy and exclusion rules in triage, without the title-vs-note rule', async () => {
+    const complete = vi.fn().mockResolvedValueOnce(triageReply([{ number: 5075, customerFacing: false, note: '' }]));
+
+    await generateReleaseNotes([pr(5075)], complete);
+
+    const prompt: string = complete.mock.calls[0][0];
+    expect(prompt).toContain('Security vulnerability fixes,');
+    expect(prompt).toContain('what changes for the customer');
+    expect(prompt).toContain('Never say which roles can see or use something');
+    expect(prompt).not.toContain('follow the narrower one');
+  });
+
+  const overLongReply = JSON.stringify({
+    headline: 'Storage usage by uploader',
+    summary: 'Organizations can see storage usage.',
+    items: [{ category: 'new', text: 'x'.repeat(161), importance: 1, sourcePrs: [4938] }],
+  });
+
+  it('asks for a repair when an item runs over the cap', async () => {
+    const complete = vi
+      .fn()
+      .mockResolvedValueOnce(overLongReply)
+      .mockResolvedValueOnce(editorialReply([4938]));
+
+    const { draft } = await writeReleaseNotes(overstatedRelease, new Map([[4938, 'n']]), complete);
+
+    expect(complete.mock.calls[0][0]).toContain('at most 160 characters');
+    expect(complete.mock.calls[1][0]).toContain('items.0.text');
+    expect(draft.headline).toBe('Faster search');
+    expect(draft.items[0].text).toBe('Search is quicker.');
+  });
+
+  it('keeps an over-long item whole when the repair still runs over, so the release gets a note', async () => {
+    const warn = vi.fn();
+    const repairedDraft = {
+      headline: 'Repaired headline',
+      summary: 'Repaired summary.',
+      items: [{ category: 'improved', text: 'y'.repeat(162), importance: 2, sourcePrs: [4938] }],
+    };
+    const complete = vi.fn().mockResolvedValueOnce(overLongReply).mockResolvedValueOnce(JSON.stringify(repairedDraft));
+
+    const { draft } = await writeReleaseNotes(overstatedRelease, new Map([[4938, 'n']]), complete, {
+      logger: { warn },
+    });
+
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(draft).toEqual(repairedDraft);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('over 160 chars'));
+  });
+
+  it('drops a stray sourcePr from the kept first draft, warning once', async () => {
+    const warn = vi.fn();
+    const strayReply = JSON.stringify({
+      headline: 'Storage usage by uploader',
+      summary: 'Organizations can see storage usage.',
+      items: [{ category: 'new', text: 'x'.repeat(161), importance: 1, sourcePrs: [4938, 9999] }],
+    });
+    const complete = vi.fn().mockResolvedValueOnce(strayReply).mockResolvedValueOnce('not json');
+
+    const { draft } = await writeReleaseNotes(overstatedRelease, new Map([[4938, 'n']]), complete, {
+      logger: { warn },
+    });
+
+    expect(draft.items[0].sourcePrs).toEqual([4938]);
+    expect(warn.mock.calls.filter(([message]) => String(message).includes('9999'))).toHaveLength(1);
+  });
+
+  it.each([
+    [
+      'fails schema validation',
+      (c: ReturnType<typeof vi.fn>) => c.mockResolvedValueOnce('{"items":[]}'),
+      'repair invalid',
+    ],
+    [
+      'is malformed',
+      (c: ReturnType<typeof vi.fn>) => c.mockResolvedValueOnce('sorry, here you go: {'),
+      'repair invalid',
+    ],
+    [
+      'times out',
+      (c: ReturnType<typeof vi.fn>) => c.mockRejectedValueOnce(new Error('timed out')),
+      'repair call failed (timed out)',
+    ],
+  ])('keeps the over-long first draft when the repair %s', async (_, secondReply, warning) => {
+    const warn = vi.fn();
+    const complete = secondReply(vi.fn().mockResolvedValueOnce(overLongReply));
+
+    const { draft } = await writeReleaseNotes(overstatedRelease, new Map([[4938, 'n']]), complete, {
+      logger: { warn },
+    });
+
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(draft).toEqual(JSON.parse(overLongReply));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(warning));
+    // The over-length warning fires once, on the draft that is kept.
+    expect(warn).toHaveBeenCalledTimes(2);
+  });
+
+  it('rethrows when the first reply fails and there is no draft to keep', async () => {
+    const complete = vi.fn().mockRejectedValueOnce(new Error('boom'));
+
+    await expect(writeReleaseNotes(overstatedRelease, new Map([[4938, 'n']]), complete)).rejects.toThrow(/boom/);
+    expect(complete).toHaveBeenCalledTimes(1);
+  });
+
+  it('rethrows when a schema-invalid first reply is followed by a failed repair', async () => {
+    const complete = vi
+      .fn()
+      .mockResolvedValueOnce(
+        JSON.stringify({
+          headline: 'x'.repeat(121),
+          summary: 'Organizations can see storage usage.',
+          items: [{ category: 'new', text: 'x'.repeat(161), importance: 1, sourcePrs: [4938] }],
+        })
+      )
+      .mockRejectedValueOnce(new Error('timed out'));
+
+    await expect(writeReleaseNotes(overstatedRelease, new Map([[4938, 'n']]), complete)).rejects.toThrow(/timed out/);
+    expect(complete).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not use an invalid triage response as a fallback when its repair fails', async () => {
+    const complete = vi
+      .fn()
+      .mockResolvedValueOnce(triageReply([{ number: 2, customerFacing: true, note: 'Wrong PR.' }]))
+      .mockRejectedValueOnce(new Error('timed out'));
+
+    await expect(triageReleaseNotes([pr(1)], complete)).rejects.toThrow('timed out');
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(complete.mock.calls[1][0]).toContain('missing entry for pull request 1');
+  });
+});
+
 describe('extractJson', () => {
   it('throws when there is no object', () => {
     expect(() => extractJson('no json here')).toThrow(/no JSON object/);

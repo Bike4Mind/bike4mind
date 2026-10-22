@@ -264,6 +264,27 @@ export class ChatPage extends BasePage {
   }
 
   /**
+   * Whether the newest reply carries an artifact the model built instead of a chat answer: a
+   * mounted html or react renderer, or either pending placeholder. Deliberately not "any
+   * artifact-renderer-*": code fences are promoted into artifact cards after the stream (server
+   * and client convertCodeBlocksToArtifacts), so an ordinary chat answer with a python, mermaid
+   * or recharts snippet renders those cards too. Chat answers that still match: an html fence
+   * (document or fragment) or a bare <html> document, a tsx/jsx fence, a js/ts fence that looks
+   * like React, and any promoted card still showing artifact-loading while its ID resolves.
+   * Model artifacts of other types (code, markdown, svg, ...) are missed once they resolve.
+   *
+   * One-shot: same caveat as waitForArtifactSettled - it only sees what the stream has delivered.
+   */
+  async hasArtifact(): Promise<boolean> {
+    const root = this.aiResponseRoot.last();
+    const artifact = root.locator(
+      '[data-testid="artifact-renderer-html"], [data-testid="artifact-renderer-react"], ' +
+        '[data-testid="generating-artifact-indicator"], [data-testid="artifact-loading"]'
+    );
+    return (await artifact.count()) > 0;
+  }
+
+  /**
    * Waits for the artifact placeholders to clear on the newest reply, so a text scrape reads
    * the resolved content instead of a spinner.
    *

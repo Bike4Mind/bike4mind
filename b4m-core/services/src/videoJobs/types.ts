@@ -1,5 +1,6 @@
 import type {
   GeneratedAssetMetadata,
+  GenerationJobDelivery,
   GenerationJobSource,
   IGenerationJobDocumentOf,
   IGenerationJobRepository,
@@ -72,6 +73,7 @@ export type CreateVideoJobInput = {
   source: GenerationJobSource;
   idempotencyKey?: string;
   questId?: string;
+  delivery?: GenerationJobDelivery;
 };
 
 export type CreateVideoJobErrorCode =

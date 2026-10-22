@@ -28,7 +28,7 @@ const mockRefs = vi.hoisted(() => ({
   findCounterLogs: vi.fn(() => ({ sort: () => ({ limit: () => ({ lean: async () => [] }) }) })),
 }));
 
-vi.mock('@server/services/gears/toolGearObserver', () => ({ registerToolGearObserver: vi.fn() }));
+vi.mock('@bike4mind/server-utils/services/gears/toolGearObserver', () => ({ registerToolGearObserver: vi.fn() }));
 vi.mock('@server/middlewares/logging', () => ({
   logging: (req: Record<string, unknown>, _res: unknown, next: () => void) => {
     // `log` and `debug` matter here: the real cacheService calls them, and a logger without them

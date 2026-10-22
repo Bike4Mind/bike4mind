@@ -20,6 +20,7 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
+  memoryLedgerRepository: { markSourceShredded: vi.fn().mockResolvedValue(0) },
   organizationRepository: {
     findById: async (id: string) => ({ id, currentStorageSize: 0 }),
     incrementCurrentStorage: h.incrementCurrentStorage,

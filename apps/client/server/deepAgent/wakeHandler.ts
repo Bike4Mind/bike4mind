@@ -11,10 +11,10 @@ import {
   type ToolMaterializer,
   type WakeDeps,
 } from '@bike4mind/agents';
-import { LlmWakeSteps } from './llmSteps';
+import { LlmWakeSteps } from '@bike4mind/server-utils/deepAgent/llmSteps';
 import { MongoDeepAgentStore } from '@bike4mind/server-utils/deepAgent/store';
 import { loadLinkedAgentContext } from './missions';
-import { bridgeWakeToSession } from './missionSessionBridge';
+import { bridgeWakeToSession } from '@bike4mind/server-utils/deepAgent/missionSessionBridge';
 import { createDeepAgentToolMaterializer } from './toolMaterializer';
 import { DEFAULT_WAKE_MODEL_ID, resolveDeepAgentBackend } from '@bike4mind/server-utils/deepAgent/resolveBackend';
 

@@ -13,6 +13,7 @@ import { Logger } from '@bike4mind/observability';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { createMethodGuard } from '@bike4mind/server-utils/utils/allowedMethods';
 import { resolveContractAuth, type ContractAuthResult } from '@server/cli/resolveContractAuth';
+import { authInfraFailureHeaders, isAuthInfraFailure } from '@server/auth/apiKeyAuthFailure';
 
 export type LambdaRouteContext<C extends EndpointContract> = {
   validated: RequestBodyOf<C>;
@@ -133,6 +134,14 @@ export function defineLambdaRoute<C extends EndpointContract>(
       try {
         auth = await resolveContractAuth(event.headers ?? {}, contract);
       } catch (error) {
+        // The auth check itself failed (database unreachable): a fixed-message 5xx, never a 401.
+        if (isAuthInfraFailure(error)) {
+          return json(
+            error.statusCode,
+            { error: error.message, request_id: requestId },
+            authInfraFailureHeaders(error)
+          );
+        }
         return json(authFailureStatus(error), {
           error: error instanceof Error ? error.message : 'Authentication failed',
           request_id: requestId,

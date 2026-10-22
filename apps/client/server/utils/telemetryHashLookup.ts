@@ -1,6 +1,6 @@
 import { regenerateHashesForDeletion } from '@bike4mind/common';
 import { createHmac } from 'crypto';
-import { User } from '@bike4mind/database';
+import { User, questRepository, organizationRepository } from '@bike4mind/database';
 import { Resource } from 'sst';
 
 /** Number of days of telemetry to cover when regenerating hashes for DSAR/deletion */
@@ -50,6 +50,11 @@ export async function getUserOrgId(userId: string): Promise<string> {
  */
 export async function regenerateUserTelemetryHashes(userId: string): Promise<string[]> {
   const salts = deriveTelemetrySalts();
-  const orgId = await getUserOrgId(userId);
-  return regenerateHashesForDeletion(userId, orgId, salts);
+  const [currentOrgId, membershipOrgIds, historicalOrgIds] = await Promise.all([
+    getUserOrgId(userId),
+    organizationRepository.findMembershipOrgIds(userId),
+    questRepository.findOrganizationIdsForUser(userId),
+  ]);
+  const orgIds = new Set(['default', currentOrgId, ...membershipOrgIds, ...historicalOrgIds]);
+  return [...orgIds].flatMap(orgId => regenerateHashesForDeletion(userId, orgId, salts));
 }

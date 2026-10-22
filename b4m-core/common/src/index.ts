@@ -9,6 +9,7 @@ export * from './agentQuest';
 export * from './briefcasePromptResolution';
 export * from './models';
 export * from './modelPriceCatalog';
+export * from './usagePriceStamp';
 export * from './modelCatalog';
 export * from './modelIdJoin';
 export * from './claudeModelId';
@@ -30,6 +31,7 @@ export * from './decisions';
 export * from './soundGeneration';
 export * from './soundPricing';
 export * from './musicGeneration';
+export * from './studioFeatureFlags';
 export * from './schemas';
 // Transport-agnostic API endpoint contracts. Pure data (no `.openapi()`), so
 // safe to import in any runtime. The OpenAPI layer (./openapi) is deliberately
@@ -104,6 +106,7 @@ export * from './utils/creditTransactionDisplay';
 export * from './utils/teamPlanSettings';
 export * from './utils/deepLinks';
 export * from './utils/skillMdSource';
+export * from './utils/claudeMarketplace';
 export * from './utils/emailList';
 export * from './utils/requireEnv';
 export * from './utils/bedrockCredentials';
@@ -177,3 +180,5 @@ export * from './storageCharge';
 export * from './storageOwner';
 export * from './storageBreakdown';
 export * from './organizationStorage';
+
+export { VERIFIED_SLACK_IDENTITY_FILTER } from './slackIdentity';

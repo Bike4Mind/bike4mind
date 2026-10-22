@@ -36,6 +36,7 @@ describe('listUsableVideoModels', () => {
     expect(models.map(m => m.id)).toEqual(['gemini-omni-1.1-flash']);
     expect(VideoModelSchema.parse(models[0])).toEqual(models[0]);
     expect(models[0].credits_per_second).toEqual({ '720p': usdToCredits(0.1014) });
+    expect(models[0].input_roles).toEqual([{ role: 'first_frame', max: 1 }]);
   });
 
   it('omits an unregistered provider, a disabled model and a provider without a key', async () => {

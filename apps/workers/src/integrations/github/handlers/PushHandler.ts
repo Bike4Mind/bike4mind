@@ -1,3 +1,4 @@
+import { findVerifiedGitHubAccounts } from '@bike4mind/slack';
 /**
  * GitHub Webhook - Push Event Handler
  *
@@ -20,7 +21,7 @@ import {
   GitHubWebhookPayload,
 } from '@bike4mind/server-utils/integrations/github/types';
 import { GitHubSlackNotifier, buildPushBlocks } from '@bike4mind/slack';
-import { webhookSubscriptionRepository, User } from '@bike4mind/database';
+import { webhookSubscriptionRepository } from '@bike4mind/database';
 import { emptyNotifyResult, toHandlerResult } from './notifyResultUtils';
 
 // Protected branch patterns - only notify for pushes to these branches
@@ -100,18 +101,12 @@ export class PushHandler implements GitHubEventHandler {
         }
 
         const subscriberUserIds = pushSubscribers.map(sub => sub.userId);
-        const users = await User.find({
-          _id: { $in: subscriberUserIds },
-          'slackSettings.githubNotifications.githubUsername': { $exists: true, $ne: '' },
-          'slackSettings.githubNotifications.enabled': true,
-        })
-          .select('slackSettings.githubNotifications.githubUsername')
-          .lean<Array<{ slackSettings?: { githubNotifications?: { githubUsername?: string } } }>>();
+        const accounts = await findVerifiedGitHubAccounts({ userIds: subscriberUserIds });
 
         // Get GitHub usernames and filter out the pusher
         const pusherLower = pusher.toLowerCase();
-        const targetGitHubUsernames = users
-          .map(u => u.slackSettings?.githubNotifications?.githubUsername)
+        const targetGitHubUsernames = accounts
+          .map(account => account.metadata?.githubLogin)
           .filter((username): username is string => username !== undefined && username.toLowerCase() !== pusherLower);
 
         if (targetGitHubUsernames.length === 0) {

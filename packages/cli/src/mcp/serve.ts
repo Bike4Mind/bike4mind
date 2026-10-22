@@ -10,19 +10,19 @@
  * NOTHING else, so all diagnostics are forced to stderr before ANY other work
  * runs (mirrors the acp command's captureStdout - see src/commands/acpCommand.ts).
  *
- * HTTP mode is deliberately loopback-only (binds 127.0.0.1) with no per-request
- * auth of its own - it trusts anything that can reach the socket, so it must not
- * be exposed on a routable interface. DNS-rebinding protection is on as defense
- * in depth against a browser being tricked into posting to the local port.
+ * HTTP mode binds loopback only (127.0.0.1) and requires `Authorization: Bearer
+ * <token>` on every request. Token precedence is `--token` > `B4M_MCP_TOKEN` >
+ * one generated at startup. DNS-rebinding protection (Host/Origin checks) stays on.
  */
 
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { Writable } from 'node:stream';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { ConfigStore } from '../storage/ConfigStore.js';
 import { parseApiUrl, requireApiUrl } from '../utils/apiUrl.js';
-import { buildMcpServer, type BuildServerOptions } from './server.js';
+import { buildMcpServer, buildStdioMcpServer, type BuildServerOptions } from './server.js';
 import { logger } from '../utils/Logger.js';
 
 const HTTP_PATH = '/mcp';
@@ -32,6 +32,7 @@ export interface ServeOptions {
   port?: number;
   apiKey?: string;
   apiUrl?: string;
+  token?: string;
   /** CLI version, reported to the client as the server's `version`. */
   version: string;
 }
@@ -76,7 +77,7 @@ function resolveBaseURL(options: ServeOptions, configStore: ConfigStore): Promis
 }
 
 async function serveStdio(buildOptions: BuildServerOptions, writeFrame: FrameWriter): Promise<void> {
-  const server = buildMcpServer(buildOptions);
+  const server = await buildStdioMcpServer(buildOptions);
 
   const stdout = new Writable({
     write(chunk: Buffer, _encoding, callback) {
@@ -96,6 +97,29 @@ async function serveStdio(buildOptions: BuildServerOptions, writeFrame: FrameWri
     process.stdin.once('end', resolve);
     process.stdin.once('close', resolve);
   });
+}
+
+export interface ResolvedToken {
+  token: string;
+  source: 'flag' | 'env' | 'generated';
+}
+
+export function resolveHttpToken(flag: string | undefined, env: string | undefined): ResolvedToken {
+  if (flag) return { token: flag, source: 'flag' };
+  if (env) return { token: env, source: 'env' };
+  return { token: randomBytes(32).toString('base64url'), source: 'generated' };
+}
+
+export function isAuthorized(header: string | undefined, token: string): boolean {
+  const match = /^Bearer (.+)$/i.exec(header ?? '');
+  if (!match) return false;
+  const given = Buffer.from(match[1]);
+  const expected = Buffer.from(token);
+  return given.length === expected.length && timingSafeEqual(given, expected);
+}
+
+function maskToken(token: string): string {
+  return token.length > 8 ? `${token.slice(0, 4)}...` : '****';
 }
 
 async function handleHttpRequest(
@@ -136,13 +160,23 @@ async function handleHttpRequest(
   await transport.handleRequest(req, res);
 }
 
-async function serveHttp(buildOptions: BuildServerOptions, port: number): Promise<void> {
-  const httpServer = createServer((req, res) => {
+export function createHttpHandler(
+  buildOptions: BuildServerOptions,
+  port: number,
+  token: string
+): (req: IncomingMessage, res: ServerResponse) => void {
+  return (req, res) => {
     // Only the documented endpoint is served; everything else is a 404.
     const pathname = new URL(req.url ?? '/', `http://localhost:${port}`).pathname;
     if (pathname !== HTTP_PATH) {
       res.writeHead(404, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: `Not found. The MCP endpoint is ${HTTP_PATH}.` }));
+      return;
+    }
+
+    if (!isAuthorized(req.headers.authorization, token)) {
+      res.writeHead(401, { 'Content-Type': 'application/json', 'WWW-Authenticate': 'Bearer' });
+      res.end(JSON.stringify({ error: 'Unauthorized. Send an Authorization: Bearer <token> header.' }));
       return;
     }
 
@@ -155,10 +189,13 @@ async function serveHttp(buildOptions: BuildServerOptions, port: number): Promis
         );
       }
     });
-  });
+  };
+}
 
-  // Bind loopback only: this transport has no per-request auth, so it must never
-  // be reachable off the local host.
+async function serveHttp(buildOptions: BuildServerOptions, port: number, resolved: ResolvedToken): Promise<void> {
+  const httpServer = createServer(createHttpHandler(buildOptions, port, resolved.token));
+
+  // Bind loopback only; there is no flag to change the bind address.
   await new Promise<void>((resolve, reject) => {
     httpServer.once('error', reject);
     httpServer.listen(port, '127.0.0.1', () => resolve());
@@ -166,6 +203,9 @@ async function serveHttp(buildOptions: BuildServerOptions, port: number): Promis
 
   // stderr, not stdout: keep parity with stdio mode and any log-scraping wrapper.
   process.stderr.write(`Bike4Mind MCP server listening on http://127.0.0.1:${port}${HTTP_PATH}\n`);
+  const shown = resolved.source === 'generated' ? resolved.token : maskToken(resolved.token);
+  process.stderr.write(`Authorization: Bearer ${shown}\n`);
+  process.stderr.write('Set a fixed token with --token or B4M_MCP_TOKEN.\n');
 
   // Run until a termination signal, then stop accepting connections and let in-flight
   // requests drain so the process exits cleanly instead of being hard-killed.
@@ -191,6 +231,6 @@ export async function handleMcpServeCommand(options: ServeOptions): Promise<void
   if (writeFrame) {
     await serveStdio(buildOptions, writeFrame);
   } else {
-    await serveHttp(buildOptions, options.port ?? 7000);
+    await serveHttp(buildOptions, options.port ?? 7000, resolveHttpToken(options.token, process.env.B4M_MCP_TOKEN));
   }
 }

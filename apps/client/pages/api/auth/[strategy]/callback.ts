@@ -198,8 +198,9 @@ const handler = baseApi({ auth: false })
 
         // isNewUser/signupMethod ride the redirect fragment: /auth/success reads and
         // clears it exactly once, firing the signup ad conversion for new accounts.
-        const signupFragment =
+        const conversionFragment =
           isNewUser && !isSyntheticSignup ? `&isNewUser=1&signupMethod=${encodeURIComponent(strategy)}` : '';
+        const signupFragment = `${conversionFragment}${isNewUser ? '&firstSignupSession=1' : ''}`;
 
         // Only a genuine new provider binding (flagged by verifyCallback) is an account-link.
         // Audited before the second-factor gate: verifyCallback has already persisted it.

@@ -66,7 +66,7 @@ Where a surface both reads state and commissions billable work, give it two scop
 not one. A key that only reads is then *structurally* unable to spend - which is what
 lets an agent hold one. `optihashi:read` / `optihashi:compute` is the reference pair;
 `datalake:read` / `datalake:query` (semantic-search, rlm-answer) is the same split for
-data lakes.
+data lakes, and `bob:read` / `bob:run` (site reads, comparisons and re-checks) for Bob.
 
 Keep the suffix honest: the New-Key modal builds its "Read-only" and "Read & write"
 presets from the `:read` and `:write` suffixes, so a spend scope must carry neither,

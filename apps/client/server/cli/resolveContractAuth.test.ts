@@ -9,6 +9,7 @@ vi.mock('./auth', () => ({
 }));
 
 import { resolveContractAuth } from './resolveContractAuth';
+import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
 
 const headers = { authorization: 'Bearer b4m_live_key' };
 
@@ -57,6 +58,16 @@ describe('resolveContractAuth', () => {
     verifyApiKey.mockRejectedValueOnce(new Error('Invalid or expired API key'));
     verifyJwtToken.mockRejectedValueOnce(jwtError);
     await expect(resolveContractAuth(headers, chatContract)).rejects.toBe(jwtError);
+  });
+
+  it('rethrows an infra failure from the key check without consulting JWT', async () => {
+    const unavailable = toApiKeyAuthError(
+      Object.assign(new Error('connect ECONNREFUSED 10.0.0.1:27017'), { name: 'MongoNetworkError' })
+    );
+    verifyApiKey.mockRejectedValueOnce(unavailable);
+    await expect(resolveContractAuth(headers, chatContract)).rejects.toBe(unavailable);
+    expect(unavailable.statusCode).toBe(503);
+    expect(verifyJwtToken).not.toHaveBeenCalled();
   });
 
   it('runs JWT only for a jwtOnly contract, never touching verifyApiKey', async () => {

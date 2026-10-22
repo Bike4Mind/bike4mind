@@ -54,8 +54,8 @@ export const CompletionCustomToolSchema = z.object({
       .optional()
       .describe(
         'Keep this definition out of the model context until the tool search server tool (or a `tool_reference`) loads it. ' +
-          'Honoured only on models served by the direct Anthropic API whose `supports_tool_search` is true; on every other ' +
-          'model (including Bedrock-served Claude, for now) it is ignored and the tool is sent as usual. At least one tool, ' +
+          'Honoured only on Claude models (direct Anthropic or Bedrock) whose `supports_tool_search` is true; on every other ' +
+          'model it is ignored and the tool is sent as usual. At least one tool, ' +
           'or a `serverTool` entry, must stay non-deferred (`errorCode: "all_tools_deferred"`).'
       ),
     cache_control: z
@@ -81,8 +81,8 @@ export type ToolSearchServerTool = z.infer<typeof ToolSearchServerToolSchema>;
 export const CompletionServerToolSchema = z.object({
   serverTool: ToolSearchServerToolSchema.describe(
     'A provider-run tool, sent to the provider as `{ type, name }`. Only the Anthropic tool search tools exist today, and ' +
-      'only on models served by the direct Anthropic API whose `supports_tool_search` is true; any other model, ' +
-      'Bedrock-served Claude included, is refused with `errorCode: "tool_search_unsupported"` rather than run without it.'
+      'only on Claude models (direct Anthropic or Bedrock) whose `supports_tool_search` is true; any other model is ' +
+      'refused with `errorCode: "tool_search_unsupported"` rather than run without it.'
   ),
 });
 

@@ -132,6 +132,7 @@ export class ChatCompletionInvoke {
       allowedAgents,
       enableSlackTools,
       toolMode,
+      timezone,
     } = ChatCompletionInvokeParamsSchema.parse(body);
 
     // Parallelize independent operations: API keys, session, organization, and the correction
@@ -377,6 +378,7 @@ export class ChatCompletionInvoke {
             // (a `$set` of `undefined` is dropped), which is what the `unset` option below is for.
             // `null` is not an option: ChatAckSchema types errorCode as an optional enum and rejects null.
             q.errorCode = undefined;
+            q.turnTiming = undefined;
             await this.db.quests.update(
               {
                 id: q.id,
@@ -393,7 +395,7 @@ export class ChatCompletionInvoke {
                 promptMeta: q.promptMeta,
                 agentIds: q.agentIds,
               },
-              { unset: ['errorCode'] }
+              { unset: ['errorCode', 'turnTiming'] }
             );
             return q;
           })
@@ -519,6 +521,7 @@ export class ChatCompletionInvoke {
         extraContextMessages,
         allowedAgents,
         enableSlackTools,
+        timezone,
       });
 
       if (this.invokeLambda && this.questStartParams) {

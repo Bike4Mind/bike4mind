@@ -28,10 +28,12 @@ export function stripGateFields(args: ToolArgs | undefined): ToolArgs {
 }
 
 /**
- * Wrap a tool with the gateway: the shell sandbox, the plan-mode, command-risk, fuzzy-edit and
- * permission gates, a checkpoint before an approved file write, and server routing (which
- * redacts and caps the output). Every policy question about the tool is answered from its
- * descriptor in the permission manager's catalog, resolved per call.
+ * Wrap a tool with the gateway. Stages, in order: the shell sandbox; the plan-mode, command-risk,
+ * fuzzy-edit and permission gates; a checkpoint before an approved file write (stages/checkpoint);
+ * execution with server routing, where every run's output is redacted and then capped
+ * (stages/output) before the sandbox-escalation and path-grant retries look at it. Every policy
+ * question about the tool is answered from its descriptor in the permission manager's catalog,
+ * resolved per call.
  */
 export function wrapToolWithPermission(tool: ICompletionOptionTools, deps: WrapToolDeps): ICompletionOptionTools {
   const { permissionManager, showPermissionPrompt, allowedDirectories } = deps;

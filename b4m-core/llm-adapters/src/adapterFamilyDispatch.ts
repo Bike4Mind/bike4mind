@@ -5,6 +5,7 @@ import { AWSBackend } from './awsBackend';
 import type { ICompletionBackend } from './backend';
 import type { ApiKeyTable } from './backendGate';
 import AnthropicBedrockBackend from './bedrockBackend/anthropic';
+import ConverseBedrockBackend from './bedrockBackend/converse';
 import DeepSeekBedrockBackend from './bedrockBackend/deepseek';
 import JurassicTwoBedrockBackend from './bedrockBackend/jurassicTwo';
 import LlamaBedrockBackend from './bedrockBackend/llama';
@@ -61,8 +62,8 @@ function keyOrThrow(value: string | null | undefined, providerLabel: string): st
  * with DISPATCHABLE_ADAPTER_FAMILIES in ./mergeCatalog.ts: the merge promises a
  * catalog-only record in a dispatchable family reaches a real backend, and this
  * is the function that has to keep that promise. Also MUST STAY IN SYNC WITH
- * completionsForwardsNativeTools in @bike4mind/common (claudeToolCapabilities.ts),
- * which restates which family reaches the Anthropic adapter.
+ * servedByDirectAnthropic and servedByClaudeAdapter in @bike4mind/common (claudeToolCapabilities.ts),
+ * which restate which family reaches each Claude adapter.
  */
 export function backendForAdapterFamily(
   family: AdapterFamily,
@@ -108,7 +109,7 @@ export function backendForAdapterFamily(
     }
     case 'local-image': {
       const baseUrl = keyOrThrow(apiKeyTable['local-image'], 'Local image');
-      return baseUrl ? new LocalImageBackend(baseUrl, logger) : null;
+      return baseUrl ? new LocalImageBackend(baseUrl) : null;
     }
     case 'bedrock-anthropic':
       return new AnthropicBedrockBackend();
@@ -122,6 +123,8 @@ export function backendForAdapterFamily(
       return new JurassicTwoBedrockBackend();
     case 'bedrock-titan':
       return new TitanBedrockBackend();
+    case 'bedrock-converse':
+      return new ConverseBedrockBackend();
     case 'aws':
       return new AWSBackend();
     // VoyageAI has no completion backend at all: embeddings go through their own

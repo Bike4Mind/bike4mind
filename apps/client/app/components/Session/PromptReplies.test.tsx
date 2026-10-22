@@ -3,6 +3,7 @@ import { beforeEach, describe, it, expect, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import { TRUNCATED_FINISH_REASON } from '@bike4mind/common';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { getThemeConfig } from '../../utils/themes';
@@ -71,6 +72,64 @@ describe('retrieval-floor banner wiring in a rendered reply', () => {
       citables: [{ id: 'https://example.com/doc', type: 'web_url', title: 'Doc' }],
     });
     expect(screen.queryByTestId('retrieval-floor-warning')).toBeNull();
+  });
+});
+
+describe('retrieval-coverage notice wiring in a rendered reply', () => {
+  const appTheme = extendTheme({ ...getThemeConfig() });
+
+  const renderReply = (reply: string, { partial = true, showSyntaxHighlight = false } = {}) =>
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <CssVarsProvider theme={appTheme}>
+          <PromptReplies
+            messageData={{
+              id: 'coverage-quest',
+              sessionId: 'session-1',
+              type: 'message',
+              timestamp: new Date('2026-01-01T00:00:00Z'),
+              prompt: 'What does the library say?',
+              reply,
+              questMasterReply: reply,
+              status: 'done',
+              promptMeta: {
+                finishReason: TRUNCATED_FINISH_REASON,
+                ...(partial
+                  ? { retrievalCoverage: { partial: true, reasons: ['Some documents could not be searched.'] } }
+                  : {}),
+              },
+            }}
+            showSyntaxHighlight={showSyntaxHighlight}
+            onSendMessage={async () => {}}
+          />
+        </CssVarsProvider>
+      </QueryClientProvider>
+    );
+
+  it.each(['', '<think>Searching the library</think>'])(
+    'keeps the notice when the reply has no visible answer: %j',
+    reply => {
+      renderReply(reply);
+
+      expect(screen.getByTestId('reply-truncated-warning')).toBeInTheDocument();
+      expect(screen.getByTestId('retrieval-coverage-warning')).toBeInTheDocument();
+    }
+  );
+
+  it.each([false, true])('places the notice after the answer with syntax highlighting %s', showSyntaxHighlight => {
+    renderReply('The library answer.', { showSyntaxHighlight });
+
+    const answer = screen.getByText('The library answer.');
+    const notice = screen.getByTestId('retrieval-coverage-warning');
+    expect(answer.compareDocumentPosition(notice) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(notice.querySelector('details')).not.toHaveAttribute('open');
+  });
+
+  it('keeps an empty reply without partial coverage free of a body or coverage notice', () => {
+    renderReply('', { partial: false });
+
+    expect(screen.queryByTestId('retrieval-coverage-warning')).toBeNull();
+    expect(screen.queryByTestId('ai-response-body')).toBeNull();
   });
 });
 

@@ -9,7 +9,7 @@ import {
   postSreFixFailureMessage,
   postSreAlreadyFixedMessage,
   postSreFixLoopMessage,
-} from '../../../server/integrations/slack/sreSlackApproval';
+} from '@bike4mind/server-utils/integrations/slack/sreSlackApproval';
 
 const mockGetSettingsValue = vi.fn();
 const mockFindFullById = vi.fn();
