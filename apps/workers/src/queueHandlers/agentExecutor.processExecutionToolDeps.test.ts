@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 import type { ServerSubagentTracker } from '@bike4mind/services/llm';
+import { OPTI_SURFACE } from '@bike4mind/common';
 
 // Model admission reads admin settings from the real repository; these tests exercise other gates.
 vi.mock('@server/billing/meterPlatformCompletion', () => ({
@@ -149,6 +150,26 @@ vi.mock('@server/premium-generated/premiumWorkspaceSessionSettings.generated', (
     'settings-workspace': { ownedFields: ['disableUserIntegrations'], resolve: resolveWorkspaceSettings },
   },
 }));
+
+vi.mock('@server/premium-generated/premiumLlmTools.generated', () => ({
+  premiumLlmTools: { fixture_tool: { name: 'fixture_tool' } },
+}));
+
+// Pass-through spies, so the real registry still resolves and guards while the calls are observable.
+vi.mock('./agentExecutor.agentExtensions', async () => {
+  const actual = await vi.importActual<typeof import('./agentExecutor.agentExtensions')>(
+    './agentExecutor.agentExtensions'
+  );
+  const real = actual.executorAgentExtensions;
+  return {
+    ...actual,
+    executorAgentExtensions: {
+      ...real,
+      resolveSurfaceProfile: vi.fn(real.resolveSurfaceProfile),
+      applyToolMapGuards: vi.fn(real.applyToolMapGuards),
+    },
+  };
+});
 
 const execDoc = {
   id: 'exec-1',
@@ -693,6 +714,46 @@ describe('processExecution tool deps', () => {
 
       expect(resolveWorkspaceSettings).not.toHaveBeenCalled();
       expect(deps.agentStore).toBeUndefined();
+    });
+  });
+
+  describe('agent extensions', () => {
+    async function registry() {
+      const { executorAgentExtensions } = await import('./agentExecutor.agentExtensions');
+      return {
+        resolve: vi.mocked(executorAgentExtensions.resolveSurfaceProfile),
+        guard: vi.mocked(executorAgentExtensions.applyToolMapGuards),
+      };
+    }
+
+    it('resolves the surface profile on a continuation, then guards the contributed tools', async () => {
+      const { resolve, guard } = await registry();
+      await runWithSession({ ...baseSession, surface: OPTI_SURFACE });
+
+      expect(resolve).toHaveBeenCalledWith(
+        OPTI_SURFACE,
+        expect.objectContaining({ executionId: 'exec-1', contributedToolNames: ['fixture_tool'] })
+      );
+      const profile = resolve.mock.results[0].value;
+      expect(profile.id).toBe('synthetic:opti-orchestration');
+      expect(profile.allowedTools).toContain('fixture_tool');
+
+      expect(guard).toHaveBeenCalledTimes(1);
+      expect(resolve.mock.invocationCallOrder[0]).toBeLessThan(guard.mock.invocationCallOrder[0]);
+      const [tools, ctx] = guard.mock.calls[0];
+      expect(Object.keys(tools)).toEqual(['fixture_tool']);
+      expect(ctx).toEqual(expect.objectContaining({ executionId: 'exec-1', runState: expect.any(Object) }));
+      const guarded = guard.mock.results[0].value;
+      const { externalTools } = buildSharedToolsMock.mock.calls[0][2] as { externalTools: Record<string, unknown> };
+      expect(externalTools.fixture_tool).toBe(guarded.fixture_tool);
+    });
+
+    it('falls through to the default profile on a surface with none registered, still guarding tools', async () => {
+      const { resolve, guard } = await registry();
+      await runWithSession({ ...baseSession, surface: 'unregistered-surface' });
+
+      expect(resolve.mock.results[0].value).toBeUndefined();
+      expect(guard).toHaveBeenCalledTimes(1);
     });
   });
 });
