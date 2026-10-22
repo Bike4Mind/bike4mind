@@ -14,7 +14,7 @@ Run the open core of Bike4Mind on your own hardware - a laptop, a server, or you
 1. Clone the repo and copy the env template.
 2. Generate the three security secrets and set your LLM provider key(s).
 3. `docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d`
-4. Sign in at `http://localhost:3000` with a one-time code read from Mailpit at `http://localhost:8025`. The first account becomes the admin.
+4. Sign in at `http://localhost:3000` with a one-time code read from Mailpit at `http://localhost:8025`. The account whose email matches `B4M_BOOTSTRAP_ADMIN_EMAIL` becomes the admin (if it is unset, the first account to register does).
 5. Create an API key in the app and make your first API call with `curl`.
 
 Prefer to run on AWS instead? See the [Deployment Guide](/deployment) for the full SST-based cloud path. Want to hack on the code? That's a separate flow - see the [Development Setup](/getting-started/development) and the repo's [Contributing Guide](https://github.com/bike4mind/bike4mind/blob/main/CONTRIBUTING.md); this page is about **running** Bike4Mind.
@@ -62,6 +62,12 @@ Compose reads `.env.selfhost` values verbatim - don't add comments on the same l
 
 **Minimum required to boot:** the defaults in the template already point everything (MongoDB, MinIO object storage, ElasticMQ queues, Mailpit mail catcher) at the bundled services - you only need to set the three secrets above.
 
+**Choose the admin account** - set `B4M_BOOTSTRAP_ADMIN_EMAIL` to the email address you will sign in with, before you start the stack for the first time. That account becomes the admin on first sign-in. If you leave it unset, the first account to register becomes the admin.
+
+```bash
+B4M_BOOTSTRAP_ADMIN_EMAIL=you@example.com
+```
+
 **LLM keys** - set the ones you'll use; blank disables that provider. Only models for providers with a key appear in the model picker. You can also add or override keys per-user later, in the app under Settings > API Keys.
 
 ```bash
@@ -94,7 +100,7 @@ Bike4Mind signs you in with a one-time code sent by email. In the self-host stac
 2. Open Mailpit at **`http://localhost:8025`** and read the code from the sign-in email.
 3. Enter the code and pick a username.
 
-**The first account created on a fresh install automatically becomes the admin** (no invite code needed). After that, invite-only registration applies - as admin you can issue invites or enable open registration in the admin settings.
+**On a fresh install, the account whose email matches `B4M_BOOTSTRAP_ADMIN_EMAIL` becomes the admin** (no invite code needed). Set it before the first start. If it is unset, the first account to register becomes the admin instead. After that, invite-only registration applies - as admin you can issue invites or enable open registration in the admin settings.
 
 For production use, point the `MAIL_*` variables at a real SMTP provider instead of Mailpit.
 

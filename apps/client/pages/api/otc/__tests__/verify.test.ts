@@ -73,6 +73,8 @@ vi.mock('@server/entitlements/invalidate', () => ({ pushEntitlementInvalidation:
 
 const mockFindByEmail = vi.fn();
 const mockFindSetting = vi.fn();
+const mockClaimOnce = vi.fn();
+const mockReleaseClaim = vi.fn();
 const mockValidateNonce = vi.fn();
 const mockConsumeOtherCodes = vi.fn();
 const mockUserUpdate = vi.fn();
@@ -95,7 +97,11 @@ vi.mock('@bike4mind/database', () => ({
     decrementCounter: (...a: any[]) => mockDecrement(...a),
     tryAddWithinLimitFixedWindow: (...a: [string, number, number, number]) => mockTryAdd(...a),
   },
-  adminSettingsRepository: { findBySettingName: (...args: unknown[]) => mockFindSetting(...args) },
+  adminSettingsRepository: {
+    findBySettingName: (...args: unknown[]) => mockFindSetting(...args),
+    claimOnce: (...args: unknown[]) => mockClaimOnce(...args),
+    releaseClaim: (...args: unknown[]) => mockReleaseClaim(...args),
+  },
   organizationRepository: {},
   registrationInviteRepository: {},
   subscriberRepository: {},
@@ -139,7 +145,21 @@ import { logEvent } from '@server/utils/analyticsLog';
 import handler from '@pages/api/otc/verify';
 import { OTC_LIMITS, otcEmailKey } from '@server/utils/otcLimits';
 
+// In-memory stand-in for the unique settingName upsert: the first claim per name wins.
+const claims = new Map<string, string>();
 beforeEach(() => {
+  claims.clear();
+  mockClaimOnce.mockImplementation(async (name: string, claimId: string) => {
+    await Promise.resolve();
+    if (claims.has(name)) return false;
+    claims.set(name, claimId);
+    return true;
+  });
+  mockReleaseClaim.mockImplementation(async (name: string, claimId: string) => {
+    if (claims.get(name) !== claimId) return false;
+    claims.delete(name);
+    return true;
+  });
   mockPartnerGrant.mockResolvedValue({ matched: false, entitlements: new Set(), signupCredits: 0, tags: [] });
   mockFindSetting.mockResolvedValue(null);
 });
@@ -1045,5 +1065,146 @@ describe('/api/otc/verify - partner-domain invite bypass', () => {
     await handler(req, res);
 
     expect(skipInviteCheckArg()).toBe(true);
+  });
+});
+
+describe('/api/otc/verify - self-host bootstrap admin', () => {
+  const ADMIN_EMAIL = 'owner@example.com';
+  const OTHER_EMAIL = 'someone@example.com';
+  const skipInviteCheckArg = (call = 0) => mockRegisterViaOTC.mock.calls[call][1].skipInviteCheck;
+  const warnOf = (req: object) => (req as { logger: { warn: ReturnType<typeof vi.fn> } }).logger.warn;
+  const adminPromotions = () => mockUserUpdate.mock.calls.filter(([update]) => update.isAdmin === true);
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    mockTryIncrement.mockResolvedValue({ success: true, count: 1, expiresAt: new Date(Date.now() + 60_000) });
+    mockValidateNonce.mockResolvedValue('hash');
+    mockVerifyPendingOTC.mockResolvedValue(true);
+    mockFindByEmail.mockResolvedValue(null);
+    mockRegisterViaOTC.mockImplementation(async ({ email }: { email: string }) => ({
+      id: `user-${email}`,
+      tokenVersion: 0,
+      currentCredits: 0,
+    }));
+    mockUserUpdate.mockImplementation(async (update: { id: string }) => ({ ...update, tokenVersion: 0 }));
+    const { userRepository } = await import('@bike4mind/database');
+    vi.mocked(userRepository.count).mockResolvedValue(0);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('promotes the account whose email matches the configured bootstrap email', async () => {
+    vi.stubEnv('B4M_BOOTSTRAP_ADMIN_EMAIL', '  Owner@Example.com ');
+    const { req, res } = makeReqRes(ADMIN_EMAIL);
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(skipInviteCheckArg()).toBe(true);
+    expect(adminPromotions()).toEqual([[{ id: `user-${ADMIN_EMAIL}`, isAdmin: true }]]);
+    expect(warnOf(req)).not.toHaveBeenCalled();
+  });
+
+  it('registers any other first account under the normal rules, without admin', async () => {
+    vi.stubEnv('B4M_BOOTSTRAP_ADMIN_EMAIL', ADMIN_EMAIL);
+    const { req, res } = makeReqRes(OTHER_EMAIL);
+
+    await handler(req, res);
+
+    expect(mockClaimOnce).not.toHaveBeenCalled();
+    expect(skipInviteCheckArg()).toBe(false);
+    expect(adminPromotions()).toHaveLength(0);
+  });
+
+  it('reports registration as closed for another email on an invite-only install', async () => {
+    vi.stubEnv('B4M_BOOTSTRAP_ADMIN_EMAIL', ADMIN_EMAIL);
+    const { req, res } = makeReqRes(OTHER_EMAIL);
+    req.body.username = undefined;
+
+    await handler(req, res);
+
+    expect(res._getJSONData()).toMatchObject({ registrationRequired: true, registrationAllowed: false });
+  });
+
+  it('admits the configured email to username entry on an invite-only install', async () => {
+    vi.stubEnv('B4M_BOOTSTRAP_ADMIN_EMAIL', ADMIN_EMAIL);
+    const { req, res } = makeReqRes(ADMIN_EMAIL);
+    req.body.username = undefined;
+
+    await handler(req, res);
+
+    expect(res._getJSONData()).toMatchObject({ registrationRequired: true, registrationAllowed: true });
+    expect(mockClaimOnce).not.toHaveBeenCalled();
+  });
+
+  it('promotes the first account and warns when no bootstrap email is configured', async () => {
+    vi.stubEnv('B4M_BOOTSTRAP_ADMIN_EMAIL', '');
+    const { req, res } = makeReqRes(OTHER_EMAIL);
+
+    await handler(req, res);
+
+    expect(adminPromotions()).toHaveLength(1);
+    expect(warnOf(req)).toHaveBeenCalledWith(expect.stringContaining('B4M_BOOTSTRAP_ADMIN_EMAIL'));
+  });
+
+  it('never promotes once any user exists', async () => {
+    vi.stubEnv('B4M_BOOTSTRAP_ADMIN_EMAIL', ADMIN_EMAIL);
+    const { userRepository } = await import('@bike4mind/database');
+    vi.mocked(userRepository.count).mockResolvedValue(1);
+    const { req, res } = makeReqRes(ADMIN_EMAIL);
+
+    await handler(req, res);
+
+    expect(mockClaimOnce).not.toHaveBeenCalled();
+    expect(skipInviteCheckArg()).toBe(false);
+    expect(adminPromotions()).toHaveLength(0);
+  });
+
+  it('never promotes outside self-host', async () => {
+    vi.stubEnv('B4M_SELF_HOST', '');
+    vi.stubEnv('B4M_BOOTSTRAP_ADMIN_EMAIL', ADMIN_EMAIL);
+    const { req, res } = makeReqRes(ADMIN_EMAIL);
+
+    await handler(req, res);
+
+    expect(mockClaimOnce).not.toHaveBeenCalled();
+    expect(adminPromotions()).toHaveLength(0);
+  });
+
+  it('promotes exactly one of two concurrent first registrations', async () => {
+    vi.stubEnv('B4M_BOOTSTRAP_ADMIN_EMAIL', '');
+    const first = makeReqRes(OTHER_EMAIL);
+    const firstReq = first.req;
+    const second = makeReqRes('another@example.com');
+    // makeReqRes points the shared jwt stub at its own email, so pin each request's payload.
+    mockJwtVerify.mockImplementation((token: string) => ({
+      email: token === 'second-token' ? 'another@example.com' : OTHER_EMAIL,
+      attempts: 0,
+      exp: Math.floor(Date.now() / 1000) + 600,
+      jti: 'jti-1',
+    }));
+    second.req.body.pendingToken = 'second-token';
+
+    await Promise.all([handler(firstReq, first.res), handler(second.req, second.res)]);
+
+    expect(mockClaimOnce).toHaveBeenCalledTimes(2);
+    expect(adminPromotions()).toHaveLength(1);
+    expect([skipInviteCheckArg(0), skipInviteCheckArg(1)].sort()).toEqual([false, true]);
+  });
+
+  it('frees the claim when the bootstrap registration fails', async () => {
+    vi.stubEnv('B4M_BOOTSTRAP_ADMIN_EMAIL', ADMIN_EMAIL);
+    mockRegisterViaOTC.mockRejectedValueOnce(new Error('db down'));
+    const failed = makeReqRes(ADMIN_EMAIL);
+    await handler(failed.req, failed.res).catch(() => undefined);
+    expect(mockReleaseClaim).toHaveBeenCalledTimes(1);
+
+    const retry = makeReqRes(ADMIN_EMAIL);
+    await handler(retry.req, retry.res);
+
+    expect(adminPromotions()).toHaveLength(1);
   });
 });

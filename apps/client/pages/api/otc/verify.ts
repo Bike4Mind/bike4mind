@@ -21,6 +21,13 @@ import { userService, authSessionService } from '@bike4mind/services';
 import { applySignupDomainGrant } from '@server/entitlements/signupDomainGrant';
 import { isPartnerDomainSignupAllowed } from '@server/utils/auth/partnerSignupBypass';
 import { isOpenRegistrationAllowed } from '@server/utils/auth/openRegistration';
+import {
+  BOOTSTRAP_ADMIN_EMAIL_ENV,
+  claimBootstrapAdmin,
+  configuredBootstrapAdminEmail,
+  releaseBootstrapAdminClaim,
+  resolveBootstrapAdmin,
+} from '@server/utils/auth/bootstrapAdmin';
 import { applyEmailVerifiedGrants } from '@server/auth/emailVerifiedGrants';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
@@ -303,9 +310,14 @@ const handler = baseApi({ auth: false })
 
     // --- NEW USER REGISTRATION ---
     // Reached only after a correct code, so this is enumeration-safe.
-    // A fresh self-host install admits its first account and promotes it to admin below.
-    const isBootstrapUser = process.env.B4M_SELF_HOST === 'true' && (await userRepository.count({})) === 0;
-    const partnerDomainAllowed = !isBootstrapUser && (await isPartnerDomainSignupAllowed(normalizedEmail, true));
+    // A fresh self-host install admits its bootstrap account and promotes it to admin below.
+    const isSelfHost = process.env.B4M_SELF_HOST === 'true';
+    const bootstrap = resolveBootstrapAdmin({
+      isSelfHost,
+      userCount: isSelfHost ? await userRepository.count({}) : 0,
+      email: normalizedEmail,
+      bootstrapEmail: configuredBootstrapAdminEmail(),
+    });
 
     // If no username was supplied, this is a login attempt for an email with no account:
     // signal the client to collect a username and finish registration inline. The code is
@@ -314,17 +326,23 @@ const handler = baseApi({ auth: false })
     // registration in one continuous flow with NO second OTC email (same pattern as the
     // wrong-code re-issue above). Only reachable post-verification, so it leaks nothing.
     if (!username || typeof username !== 'string') {
+      const partnerAllowed = !bootstrap.eligible && (await isPartnerDomainSignupAllowed(normalizedEmail, true));
       const registrationToken = jwt.sign({ email: tokenPayload.email, attempts, jti: newNonce }, Config.JWT_SECRET, {
         algorithm: 'HS256',
         expiresIn: Math.max(0, tokenPayload.exp - Math.floor(Date.now() / 1000)),
       });
       return res.status(200).json({
         registrationRequired: true,
-        registrationAllowed: isBootstrapUser || partnerDomainAllowed || (await isOpenRegistrationAllowed()),
+        registrationAllowed: bootstrap.eligible || partnerAllowed || (await isOpenRegistrationAllowed()),
         email: normalizedEmail,
         pendingToken: registrationToken,
       });
     }
+
+    // Only the claim winner is the bootstrap user; anyone else registers under the normal rules.
+    const bootstrapClaimId = bootstrap.eligible ? await claimBootstrapAdmin() : null;
+    const isBootstrapUser = bootstrapClaimId !== null;
+    const partnerDomainAllowed = !isBootstrapUser && (await isPartnerDomainSignupAllowed(normalizedEmail, true));
 
     // Register + finalize (email-verified state, deferred free-credit grant) in one
     // service call. registerViaOTC grants credits BEFORE dropping the pending tag, so
@@ -374,6 +392,11 @@ const handler = baseApi({ auth: false })
         }
       );
     } catch (err) {
+      if (bootstrapClaimId) {
+        await releaseBootstrapAdminClaim(bootstrapClaimId).catch(releaseErr =>
+          req.logger.error('Self-host bootstrap claim release failed', releaseErr)
+        );
+      }
       // Registration failed AFTER the single-use nonce was rotated above, so the token the
       // client is holding can never validate again - without a re-issue every retry dies as a
       // generic "Invalid code." Re-issue with the rotated nonce so the user can fix
@@ -400,6 +423,11 @@ const handler = baseApi({ auth: false })
 
     // Promote the self-host bootstrap account so the instance has an admin from day one.
     if (isBootstrapUser && newUser?.id) {
+      if (bootstrap.unconfigured) {
+        req.logger.warn(
+          `Self-host bootstrap admin email is not configured; set ${BOOTSTRAP_ADMIN_EMAIL_ENV} to choose the first admin. Promoting the first registered user instead.`
+        );
+      }
       const promoted = await userRepository.update({ id: newUser.id, isAdmin: true });
       if (promoted) newUser = promoted;
       req.logger.info('Self-host bootstrap: first registered user promoted to admin', { userId: newUser.id });

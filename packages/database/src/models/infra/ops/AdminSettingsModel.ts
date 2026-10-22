@@ -1,4 +1,4 @@
-import mongoose, { Model, Schema } from 'mongoose';
+import mongoose, { Model, RootFilterQuery, Schema } from 'mongoose';
 import {
   AdminSettingDoc,
   IAdminSettings,
@@ -29,6 +29,10 @@ function decryptSettingInPlace(setting: { settingName?: string; settingValue?: u
     setting.settingValue = decryptAtRest(setting.settingValue);
   }
   return setting;
+}
+
+function isDuplicateKey(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { code?: unknown }).code === 11000;
 }
 
 interface IAdminSettingsMethods {}
@@ -105,6 +109,35 @@ class AdminSettingsRepository extends BaseRepository<IAdminSettings> implements 
   async findOne(filter: Record<string, unknown>) {
     const result = await this.model.findOne(filter).lean({ virtuals: true });
     return decryptSettingInPlace(result as (IAdminSettings & { settingName: string }) | null);
+  }
+
+  /**
+   * Insert-once marker row keyed by settingName: true only for the caller whose upsert created it.
+   * The name is outside settingsMap, so the settings readers mask the row like any unmapped one.
+   */
+  async claimOnce(settingName: string, claimId: string): Promise<boolean> {
+    // autoIndex builds lazily; the unique settingName index must exist before two upserts can race.
+    await this.model.init();
+    try {
+      const res = await this.model.updateOne(
+        { settingName } as RootFilterQuery<IAdminSettings>,
+        { $setOnInsert: { settingValue: { claimId, claimedAt: new Date() } } },
+        { upsert: true }
+      );
+      return res.upsertedCount === 1;
+    } catch (err) {
+      if (isDuplicateKey(err)) return false;
+      throw err;
+    }
+  }
+
+  // Keyed by claimId so a caller can only release the claim it took.
+  async releaseClaim(settingName: string, claimId: string): Promise<boolean> {
+    const res = await this.model.deleteOne(
+      { settingName, 'settingValue.claimId': claimId } as RootFilterQuery<IAdminSettings>,
+      { hardDelete: true }
+    );
+    return (res?.deletedCount ?? 0) > 0;
   }
 
   async getSettingsValue<K extends SettingKey>(settingName: K): Promise<SettingValue<K> | undefined> {

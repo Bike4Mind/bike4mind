@@ -26,6 +26,8 @@ Required variables fail loudly when their feature runs; optional variables may s
 | `SESSION_SECRET` | Session signing key (32-byte hex) |
 | `SECRET_ENCRYPTION_KEY` | Encrypts secrets stored in the database (32-byte hex). **Cannot be rotated after first boot** |
 
+Set `B4M_BOOTSTRAP_ADMIN_EMAIL` to the email of the account that should become the admin on a fresh install. It is optional; if it is unset, the first account to register becomes the admin.
+
 The three secrets are the **only values you must change** - everything else in the template already points at the bundled services.
 
 ## Local infra backends (bundled services)
@@ -69,6 +71,6 @@ Each of these is fully optional; leaving the variables blank disables the integr
 ## Gotchas
 
 - **No inline comments after values.** Docker Compose env files take values verbatim - a trailing `# comment` on the same line becomes part of the value. Keep comments on their own lines.
-- **First registered user becomes admin.** On a fresh install, the first registration skips the invite check and gets admin rights. Do it yourself before exposing the instance. Later signups are invite-gated until the admin enables open registration.
+- **Set the bootstrap admin email.** On a fresh install, the account whose email matches `B4M_BOOTSTRAP_ADMIN_EMAIL` skips the invite check and gets admin rights. Set it before the first start. If it is unset, the first account to register becomes admin instead, so register it yourself before exposing the instance. Later signups are invite-gated until the admin enables open registration.
 - **Replica set is mandatory.** A standalone `mongod` without `--replSet` breaks transactional writes with "no primary" errors.
 - **Local, single-host defaults.** The bundled services are unauthenticated and loopback-bound. Before public exposure: enable Mongo auth, change MinIO credentials, use real SMTP, and front the app with TLS - see the [security notes](/self-host#security-notes) and the `compose.selfhost.yaml` header.
