@@ -2634,18 +2634,23 @@ export class AnthropicBackend implements ICompletionBackend {
           throw new Error(`Anthropic safety classifier refusal for ${model} — falling back to an alternative model`);
         }
 
-        // Populate toolsUsed from func before callback (non-streaming path)
+        // Populate toolsUsed from func (non-streaming path)
         // Include ID for history reconstruction
-        for (const tool of func) {
-          // Allow empty parameters (some tools don't require input)
-          if (tool?.name) {
-            toolsUsed.push({
-              name: tool.name,
-              arguments: tool.parameters || '{}',
-              id: tool.id,
-            });
+        const recordToolCalls = () => {
+          for (const tool of func) {
+            // Allow empty parameters (some tools don't require input)
+            if (tool?.name) {
+              toolsUsed.push({
+                name: tool.name,
+                arguments: tool.parameters || '{}',
+                id: tool.id,
+              });
+            }
           }
-        }
+        };
+        // A reported (not executed) call is recorded only for the [null] send below: every send
+        // carrying toolsUsed becomes its own tool_use frame for the completions API.
+        if (options.executeTools !== false) recordToolCalls();
 
         const usage = 'usage' in response ? response.usage : undefined;
         const usageWithCacheNS = usage as
@@ -2988,6 +2993,7 @@ export class AnthropicBackend implements ICompletionBackend {
             this.logger.debug(
               `[Tool Execution] executeTools=false, passing tool calls to callback with ${thinkingBlocks?.length || 0} thinking blocks`
             );
+            recordToolCalls();
             // Terminal leaf - emit accumulated total plus this turn's tokens.
             // The cb above (gated on isTerminalTurn) already emitted this
             // turn's tokens to streamedText for the executeTools=true branch and

@@ -5,7 +5,13 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { ChatModels, type IMessage, type ProviderBlock, type ToolSearchServerTool } from '@bike4mind/common';
+import {
+  buildCompletionStreamEvent,
+  ChatModels,
+  type IMessage,
+  type ProviderBlock,
+  type ToolSearchServerTool,
+} from '@bike4mind/common';
 import AnthropicBedrockBackend from './anthropic';
 import type { CompletionInfo, ICompletionOptions, ICompletionOptionTools } from '../backend';
 
@@ -786,5 +792,91 @@ describe('AnthropicBedrockBackend tool search (non-streaming)', () => {
     });
     expect(frames).toEqual([{ block: serverToolUse }, { block: SEARCH_RESULT }]);
     expect(last?.stopReason).toBe('pause_turn');
+  });
+});
+
+describe('AnthropicBedrockBackend wire frames on an executeTools:false turn', () => {
+  // Built at callback time, as the completions API does, since toolsUsed is shared and mutated.
+  async function wireFrames(backend: RecordingBedrockBackend, options: Partial<ICompletionOptions>) {
+    const frames: Array<{ type: string; text?: string; tools?: string[] }> = [];
+    await backend.complete(
+      MODEL,
+      [{ role: 'user', content: 'What is the weather in Paris?' }],
+      { maxTokens: 1024, executeTools: false, ...options },
+      async (text, info) => {
+        const event = buildCompletionStreamEvent(text, info);
+        frames.push(
+          event.type === 'provider_block'
+            ? { type: event.type }
+            : { type: event.type, text: event.text, ...(event.tools ? { tools: event.tools.map(t => t.id!) } : {}) }
+        );
+      }
+    );
+    return frames;
+  }
+  const toolUseFrames = (frames: Awaited<ReturnType<typeof wireFrames>>) => frames.filter(f => f.type === 'tool_use');
+  const response = (content: unknown[]) => ({
+    id: 'msg_1',
+    type: 'message',
+    role: 'assistant',
+    model: MODEL,
+    content,
+    stop_reason: 'tool_use',
+    usage: { input_tokens: 1631, output_tokens: 107 },
+  });
+  const serverToolUse = {
+    type: 'server_tool_use',
+    id: SERVER_ID,
+    name: 'tool_search_tool_regex',
+    input: { pattern: 'weather' },
+  };
+  const weatherCall = { type: 'tool_use', id: 'toolu_weather', name: 'get_weather', input: { city: 'Paris' } };
+  const timeCall = { type: 'tool_use', id: 'toolu_time', name: 'get_time', input: { city: 'Paris' } };
+
+  it('emits one tool_use frame, after the provider blocks, on a non-streaming tool search turn', async () => {
+    const backend = new RecordingBedrockBackend([], [response([serverToolUse, SEARCH_RESULT, weatherCall])]);
+    const frames = await wireFrames(backend, {
+      stream: false,
+      tools: [tool('get_weather', { defer_loading: true })],
+      providerTools: [REGEX_TOOL],
+    });
+
+    expect(toolUseFrames(frames)).toEqual([{ type: 'tool_use', text: '', tools: ['toolu_weather'] }]);
+    expect(frames.map(f => f.type)).toEqual(['provider_block', 'provider_block', 'content', 'tool_use']);
+  });
+
+  it('emits intro text as content and the tool call once on a non-streaming turn', async () => {
+    const backend = new RecordingBedrockBackend([], [response([{ type: 'text', text: 'Let me check.' }, weatherCall])]);
+    const frames = await wireFrames(backend, { stream: false, tools: [tool('get_weather')] });
+
+    expect(frames).toEqual([
+      { type: 'content', text: 'Let me check.' },
+      { type: 'tool_use', text: '', tools: ['toolu_weather'] },
+    ]);
+  });
+
+  it('emits parallel tool calls in one tool_use frame on a non-streaming turn', async () => {
+    const backend = new RecordingBedrockBackend(
+      [],
+      [response([{ type: 'text', text: 'Checking both.' }, weatherCall, timeCall])]
+    );
+    const frames = await wireFrames(backend, { stream: false, tools: [tool('get_weather'), tool('get_time')] });
+
+    expect(frames).toEqual([
+      { type: 'content', text: 'Checking both.' },
+      { type: 'tool_use', text: '', tools: ['toolu_weather', 'toolu_time'] },
+    ]);
+  });
+
+  it('emits one tool_use frame on a streaming tool search turn', async () => {
+    const backend = new RecordingBedrockBackend([searchThenToolRound()]);
+    const frames = await wireFrames(backend, {
+      stream: true,
+      tools: [tool('get_weather', { defer_loading: true })],
+      providerTools: [REGEX_TOOL],
+    });
+
+    expect(toolUseFrames(frames)).toEqual([{ type: 'tool_use', text: '', tools: ['toolu_weather'] }]);
+    expect(frames.findIndex(f => f.type === 'tool_use')).toBe(frames.length - 1);
   });
 });

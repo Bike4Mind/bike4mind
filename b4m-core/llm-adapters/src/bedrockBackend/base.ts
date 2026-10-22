@@ -914,12 +914,15 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
 
         if (toolChoices.length > 0) {
           // Track tool usage (including ID for history reconstruction, allow empty parameters)
-          for (const { tool } of toolChoices) {
-            if (tool.name) toolsUsed.push({ name: tool.name, arguments: tool.parameters || '{}', id: tool.id });
-          }
+          const recordToolCalls = () => {
+            for (const { tool } of toolChoices) {
+              if (tool.name) toolsUsed.push({ name: tool.name, arguments: tool.parameters || '{}', id: tool.id });
+            }
+          };
 
           // Check if we should execute tools or just report them
           if (options.executeTools !== false) {
+            recordToolCalls();
             const executable = toolChoices
               .map(tc => tc.tool)
               .filter(tool => tool.id && tool.name && options.tools?.some(o => o.toolSchema.name === tool.name));
@@ -1039,7 +1042,9 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
             Logger.globalInstance.log('[BaseBedrockBackend] executeTools=false, passing tool calls to callback');
             // Same as the executing branch above: the text-only send below is never reached, so
             // intro text sharing this chunk with the reported tool call goes out here.
+            // Recorded after the text, as when streaming: each send carrying toolsUsed is its own tool_use frame.
             if (streamedText.some(Boolean) || providerBlocks.length > 0) await emitResponseText(streamedText);
+            recordToolCalls();
             await callback([null], buildCompletionInfo());
             return; // Exit after passing tools
           }
