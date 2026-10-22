@@ -251,7 +251,11 @@ export class S3Storage extends BaseStorage {
       if (!this.browserPresignable) return '';
       try {
         const url = new URL(await this.getSignedUrl('__origin__', 'get', { audience: 'browser', expiresIn: 60 }));
-        if (this.hasPresignEndpoint) return url.origin;
+        // Any AWS host must be this bucket's own virtual host - including a browser endpoint
+        // configured as a bare regional `s3.<region>.amazonaws.com`, which path-style signing
+        // would turn into an origin shared by every bucket in the region.
+        const onAws = url.hostname.toLowerCase().endsWith('.amazonaws.com');
+        if (this.hasPresignEndpoint && !onAws) return url.origin;
         return url.hostname.startsWith(`${this.bucketName}.`) ? url.origin : '';
       } catch {
         return '';

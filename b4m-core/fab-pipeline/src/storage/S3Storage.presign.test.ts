@@ -190,6 +190,12 @@ describe('S3Storage.browserSigningOrigin', () => {
     );
   });
 
+  it('refuses a browser signing endpoint that is a bare regional AWS endpoint', async () => {
+    vi.stubEnv('AWS_ENDPOINT_URL_S3', '');
+    vi.stubEnv('S3_PRESIGN_ENDPOINT', 'https://s3.us-east-2.amazonaws.com');
+    expect(await new S3Storage('exports-bucket', 'us-east-2').browserSigningOrigin()).toBe('');
+  });
+
   it('refuses a path-style AWS link, whose origin is the shared regional endpoint', async () => {
     vi.stubEnv('AWS_ENDPOINT_URL_S3', '');
     // A dotted bucket name cannot use a virtual host over TLS, so the SDK signs path-style.
