@@ -16,7 +16,9 @@ import {
   recordAdminActionFromRequest,
 } from '@server/utils/adminAudit';
 
-const handler = baseApi().post(
+// jwtOnly: impersonation mints a full session, so an API key must never reach it
+// (see sessionGrantRoutesRejectApiKeys.test.ts).
+const handler = baseApi({ auth: 'jwtOnly' }).post(
   asyncHandler<{}, unknown, unknown, { id: string }>(async (req, res) => {
     const targetUserId = req.query.id;
     const adminUser = req.user;

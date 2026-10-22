@@ -120,6 +120,20 @@ const pillButtonSx: SxProps = {
 /** Chip tooltips put a path on a line of its own; the width cap is in theme.ts. */
 const chipTooltipSx: SxProps = { whiteSpace: 'pre-line' };
 
+/**
+ * Where the chips live: a row above the composer (an unbound Code session, where they are how a
+ * folder gets chosen) or the session panel's Environment section at the top of the window.
+ */
+export type ChipLayout = 'row' | 'panel';
+
+/** Menus and tooltips open away from the edge the chips sit against. */
+type ChipPlacement = { menu: 'top-start' | 'bottom-end'; tooltip: 'top-start' | 'left' };
+
+const PLACEMENT: Record<ChipLayout, ChipPlacement> = {
+  row: { menu: 'top-start', tooltip: 'top-start' },
+  panel: { menu: 'bottom-end', tooltip: 'left' },
+};
+
 function lastSegments(path: string, count = 2): string {
   const parts = path.split('/').filter(Boolean);
   return parts.length <= count ? path : `.../${parts.slice(-count).join('/')}`;
@@ -211,7 +225,15 @@ function RecentFolderItem({
  * list it last read: that list is re-read on every open, so a folder recorded since then (the
  * first pick in this very session, say) shows up the next time without a remount.
  */
-function ProjectChip({ binding, current }: { binding: ChipBinding; current: string | null }) {
+function ProjectChip({
+  binding,
+  current,
+  placement,
+}: {
+  binding: ChipBinding;
+  current: string | null;
+  placement: ChipPlacement;
+}) {
   const { folder, unset } = binding.chips;
   const recent = useRecentFolders();
   const [open, setOpen] = useState(false);
@@ -228,7 +250,7 @@ function ProjectChip({ binding, current }: { binding: ChipBinding; current: stri
 
   return (
     <Dropdown open={open} onOpenChange={onOpenChange}>
-      <Tooltip title={folder.tooltip} size="sm" variant="soft" placement="top-start" sx={chipTooltipSx}>
+      <Tooltip title={folder.tooltip} size="sm" variant="soft" placement={placement.tooltip} sx={chipTooltipSx}>
         {/* Wrapped for the same reason as the worktree toggle below: a disabled button takes no
             pointer events, so the reason it is locked would be unreadable on the chip it is about. */}
         <Box sx={{ display: 'flex' }}>
@@ -250,7 +272,7 @@ function ProjectChip({ binding, current }: { binding: ChipBinding; current: stri
 
       <Menu
         size="sm"
-        placement="top-start"
+        placement={placement.menu}
         sx={{ maxHeight: 360, overflow: 'auto', width: FOLDER_MENU_WIDTH, maxWidth: 'calc(100vw - 32px)' }}
         data-testid="session-chip-project-menu"
       >
@@ -303,12 +325,14 @@ function BranchChip({
   branches,
   elsewhere,
   home,
+  placement,
 }: {
   project: ChatProject | null;
   binding: ChipBinding;
   branches: readonly string[];
   elsewhere: Readonly<Record<string, BranchCheckout>>;
   home: string;
+  placement: ChipPlacement;
 }) {
   const [filter, setFilter] = useState('');
   const { branch: branchChip, worktree, branchNotice, unset, locked } = binding.chips;
@@ -328,7 +352,7 @@ function BranchChip({
   return (
     <Box sx={pillSx} data-testid="session-chip-branch">
       <Dropdown onOpenChange={(_event, open) => open && setFilter('')}>
-        <Tooltip title={branchChip.tooltip} size="sm" variant="soft" placement="top-start" sx={chipTooltipSx}>
+        <Tooltip title={branchChip.tooltip} size="sm" variant="soft" placement={placement.tooltip} sx={chipTooltipSx}>
           {/* Wrapped for the same reason as the worktree toggle: once locked the button is
               disabled, and the tooltip is then the only place its branch and reason are read. */}
           <Box sx={{ display: 'flex' }}>
@@ -350,7 +374,7 @@ function BranchChip({
 
         <Menu
           size="sm"
-          placement="top-start"
+          placement={placement.menu}
           sx={{ maxHeight: 360, overflow: 'auto', width: BRANCH_MENU_WIDTH, maxWidth: 'calc(100vw - 32px)' }}
           data-testid="session-chip-branch-menu"
         >
@@ -450,7 +474,7 @@ function BranchChip({
 
       <Box sx={{ width: '1px', alignSelf: 'stretch', my: 0.5, bgcolor: 'neutral.outlinedBorder' }} />
 
-      <Tooltip title={worktree.tooltip} size="sm" variant="soft" placement="top-start" sx={chipTooltipSx}>
+      <Tooltip title={worktree.tooltip} size="sm" variant="soft" placement={placement.tooltip} sx={chipTooltipSx}>
         {/* The Box, not the Checkbox, carries the tooltip: a disabled input takes no pointer
             events, so the reason it is disabled would be unreadable on the one it applies to. */}
         <Box sx={{ px: 1, display: 'flex', alignItems: 'center' }}>
@@ -561,17 +585,19 @@ function ContextChips({
   project,
   granted,
   binding,
+  placement,
 }: {
   project: ChatProject | null;
   granted: readonly string[];
   binding: ChipBinding;
+  placement: ChipPlacement;
 }) {
   const { addContext } = binding.chips;
   const directories = [...(project?.contextDirectories ?? []), ...granted];
 
   return (
     <>
-      <Tooltip title={addContext.tooltip} size="sm" variant="soft" placement="top-start" sx={chipTooltipSx}>
+      <Tooltip title={addContext.tooltip} size="sm" variant="soft" placement={placement.tooltip} sx={chipTooltipSx}>
         {/* Wrapped for the same reason as the worktree toggle: a disabled button shows no tooltip. */}
         <Box sx={{ display: 'flex' }}>
           <IconButton
@@ -592,14 +618,27 @@ function ContextChips({
       {directories
         .filter((directory, index) => directories.indexOf(directory) === index)
         .map(directory => (
-          <DirectoryChip key={directory} directory={directory} onRemove={binding.removeContextDirectory} />
+          <DirectoryChip
+            key={directory}
+            directory={directory}
+            onRemove={binding.removeContextDirectory}
+            placement={placement}
+          />
         ))}
     </>
   );
 }
 
 /** One granted folder; clicking it takes the grant back. */
-function DirectoryChip({ directory, onRemove }: { directory: string; onRemove: (directory: string) => Promise<void> }) {
+function DirectoryChip({
+  directory,
+  onRemove,
+  placement = PLACEMENT.row,
+}: {
+  directory: string;
+  onRemove: (directory: string) => Promise<void>;
+  placement?: ChipPlacement;
+}) {
   const home = useHomeDirectory();
   return (
     // Not cut in the middle: this is a grant, and the whole of what was granted is the point.
@@ -607,7 +646,7 @@ function DirectoryChip({ directory, onRemove }: { directory: string; onRemove: (
       title={displayPath(directory, home, Number.POSITIVE_INFINITY)}
       size="sm"
       variant="soft"
-      placement="top-start"
+      placement={placement.tooltip}
       sx={chipTooltipSx}
     >
       <Chip
@@ -749,11 +788,12 @@ function keyOf(directory: string | null, workingDirectory: string | null): strin
 }
 
 /**
- * What a Code session is grounded in, above the composer, editable at any point in the session.
+ * What a Code session is grounded in, editable at any point in the session.
  *
  * Drawn for EVERY Code session, including one that has chosen nothing yet - the unset chips are
- * how a project gets chosen, not a readout of a choice already made elsewhere. A Chat session
- * has no project and draws nothing here.
+ * how a project gets chosen, not a readout of a choice already made elsewhere. Unbound, they sit
+ * above the composer; once a folder is chosen they move into the session panel's Environment
+ * section (`layout="panel"`). A Chat session has no project and draws nothing here.
  */
 export function SessionChips({
   project,
@@ -762,6 +802,7 @@ export function SessionChips({
   settledTurns,
   inUse = false,
   preparing = false,
+  layout = 'row',
 }: {
   project: ChatProject | null;
   /** Folders added from a `request_directory` card while the session had no project to hold them. */
@@ -777,6 +818,7 @@ export function SessionChips({
   inUse?: boolean;
   /** Its worktree is being cut now; see describeChipRow. */
   preparing?: boolean;
+  layout?: ChipLayout;
 }) {
   const { branches, elsewhere, isRepository, checkedOut, refresh } = useBranches(
     project?.directory ?? null,
@@ -815,9 +857,10 @@ export function SessionChips({
   const bound = useMemo(() => ({ ...binding, setBranch: pickBranch, chips }), [binding, pickBranch, chips]);
 
   const dismiss = useCallback(() => binding.dismissError(), [binding]);
+  const placement = PLACEMENT[layout];
 
   return (
-    <Box sx={{ ...contentColumnSx, pt: 1 }}>
+    <Box sx={layout === 'row' ? { ...contentColumnSx, pt: 1 } : undefined} data-testid={`session-chips-${layout}`}>
       {binding.error?.elsewhere ? (
         <ElsewhereConfirm message={binding.error.message} elsewhere={binding.error.elsewhere} binding={binding} />
       ) : (
@@ -836,9 +879,16 @@ export function SessionChips({
       )}
 
       <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center', flexWrap: 'wrap', gap: 0.75 }}>
-        <ProjectChip binding={bound} current={project?.directory ?? null} />
-        <BranchChip project={project} binding={bound} branches={branches} elsewhere={elsewhere} home={home} />
-        <ContextChips project={project} granted={grantedDirectories} binding={bound} />
+        <ProjectChip binding={bound} current={project?.directory ?? null} placement={placement} />
+        <BranchChip
+          project={project}
+          binding={bound}
+          branches={branches}
+          elsewhere={elsewhere}
+          home={home}
+          placement={placement}
+        />
+        <ContextChips project={project} granted={grantedDirectories} binding={bound} placement={placement} />
       </Stack>
     </Box>
   );

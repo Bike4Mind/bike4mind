@@ -518,6 +518,7 @@ describe('CompletionSseErrorEventSchema', () => {
     for (const code of [
       'insufficient_credits',
       'spend_cap_exceeded',
+      'invalid_request',
       'provider_error',
       'provider_rejected',
       'content_blocked',
@@ -536,6 +537,7 @@ describe('CompletionSseErrorEventSchema', () => {
     expect([...QUEST_ERROR_CODES]).toEqual(['insufficient_credits', 'spend_cap_exceeded']);
     expect([...COMPLETION_SSE_ERROR_CODES]).toEqual([
       ...QUEST_ERROR_CODES,
+      'invalid_request',
       'provider_error',
       'provider_rejected',
       'content_blocked',

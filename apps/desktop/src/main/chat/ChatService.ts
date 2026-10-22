@@ -3,6 +3,8 @@ import { realpath, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type {
+  ChatApprovalDecidedBy,
+  ChatApprovalSystemReason,
   ChatApprovalMode,
   ChatApprovalOption,
   ChatArtifact,
@@ -25,6 +27,7 @@ import type {
   ChatStreamEvent,
   ChatRoundTiming,
   BranchCheckout,
+  ChatToolApproval,
   ChatToolCall,
   ChatToolDetail,
   ChatToolNotice,
@@ -131,21 +134,27 @@ import type { McpManager, McpToolBinding } from './mcp/McpManager';
 import { desktopAppGuidance, mcpServerLines } from './mcp/prompt';
 import { describeFlags, modelSafeRequest, planMcpServerRequest } from './tools/mcpTools';
 import type { AccessStore } from './tools/AccessStore';
-import { QUESTION_CANCELLED, type ApprovalGate } from './tools/ApprovalGate';
+import {
+  QUESTION_CANCELLED,
+  type ApprovalGate,
+  type ApprovalSettledBy,
+  type ApprovalSettlement,
+} from './tools/ApprovalGate';
 import { inspectDirectory, inspectDirectoryRequest } from './tools/requestDirectoryTool';
 import type { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 import type { ForegroundCommandRegistry } from './tools/ForegroundCommandRegistry';
 import { findTool, isOfferedEditTool, toolsForRequest, usesApplyPatch } from './tools/registry';
 import { webContextFor } from './tools/webTools';
-import { DoomLoopTracker } from './tools/doomLoop';
+import { DoomLoopTracker, THRESHOLD as LOOP_THRESHOLD } from './tools/doomLoop';
 import { WEB_SEARCH_TURN_BUDGET, WebSearchLimiter } from './tools/webSearchLimits';
 import { INTERRUPTED_MESSAGE, STOPPED_BEFORE_CHANGE, untilStopped } from './tools/interruptible';
 import { alwaysOverridesTaint, spendsCredits, readsUntrusted, sendsOut } from './tools/riskAssessment';
 import { MCP_TOOL_PREFIX } from './mcp/names';
 import type { PermissionScopeKey, PermissionService } from './permissions/PermissionService';
 import { describeRule, everySessionRules, permissionSubject } from './permissions/subject';
+import { summarizeToolInput, type ApprovalLog } from './permissions/ApprovalLog';
 import { resolveSubject } from './permissions/resolveSubject';
-import type { PermissionRuleSet } from './permissions/rules';
+import type { CompiledRule, PermissionRuleSet } from './permissions/rules';
 import {
   capOutput,
   outputCapFor,
@@ -356,6 +365,8 @@ export interface ChatServiceDeps {
    */
   permissions?: Pick<PermissionService, 'rulesFor' | 'rememberAllows' | 'invalidate'> &
     Partial<Pick<PermissionService, 'dispose'>>;
+  /** Where each approval decision is appended, across sessions. Absent in tests that do not read it. */
+  approvalLog?: Pick<ApprovalLog, 'append'>;
   /** Owns long-running commands. Absent in tests, which then have no background tools. */
   background?: BackgroundProcessRegistry;
   /** Where a running command offers itself up for moving. Absent in tests, which never move one. */
@@ -1322,8 +1333,9 @@ export class ChatService {
   }
 
   private async cleanupDeletedSession(sessionId: string, deleteStoredSession: boolean): Promise<void> {
-    this.stop(sessionId);
+    // Before the stop, so an open card is recorded as closed by the delete rather than by a stop.
     this.deps.approvals?.forgetSession(sessionId);
+    this.stop(sessionId);
     this.doomLoop.forget(sessionId);
     this.webSearches.forget(sessionId);
     this.scopeVersions.delete(sessionId);
@@ -1371,9 +1383,10 @@ export class ChatService {
     // Dropped BEFORE the aborts, so a promotion still in flight does not start a turn on the
     // way out: each abort settles a reply, and settleQueue would otherwise send it.
     this.promoted.clear();
+    // Before the aborts, so an open card is recorded as closed by the quit rather than by a stop.
+    this.deps.approvals?.dispose();
     for (const controller of this.active.values()) controller.abort();
     this.active.clear();
-    this.deps.approvals?.dispose();
     this.deps.videoJobs?.dispose();
     this.deps.permissions?.dispose?.();
     this.deps.skills?.dispose();
@@ -2927,10 +2940,18 @@ export class ChatService {
           scope.directories,
           scope.permissions
         );
+        // Logged from the input the call settled with: an MCP config call's is masked by then.
+        if (gated.approval) {
+          // The mode the gate decided under, or - on a path no mode can answer - the one in force now.
+          const mode = gated.mode ?? (await this.currentApprovalMode(sessionId));
+          this.logApproval(sessionId, call.name, gated.settled?.input ?? gated.input, gated.approval, mode);
+        }
         if (gated.settled) return gated.settled;
         // The user's choice becomes part of the call, so every later reader of this row - the
         // transcript, the stored session, the model on its next turn - sees what actually ran.
         call.input = gated.input;
+        // Carried by every row built from `call` from here on, the settled one included.
+        if (gated.approval) call.approval = gated.approval;
 
         startedAt = Date.now();
         this.emit({ type: 'tool-start', sessionId, messageId, call });
@@ -3844,6 +3865,48 @@ export class ChatService {
     };
   }
 
+  /** The conversation's approval mode, or undefined (with a warning) when it cannot be read. */
+  private async currentApprovalMode(sessionId: string): Promise<ChatApprovalMode | undefined> {
+    if (!this.deps.approvalLog) return undefined;
+    try {
+      return await this.deps.store.approvalMode(sessionId);
+    } catch (error) {
+      this.deps.logger.warn(`PERMISSIONS: could not read the approval mode to log: ${String(error)}`);
+      return undefined;
+    }
+  }
+
+  /**
+   * Append one decision to the approval log. Not awaited: the log never holds up the turn.
+   * `mode` is the one in force when the decision was made, never re-read here: it may have
+   * changed by the time the session is loaded for its title.
+   */
+  private logApproval(
+    sessionId: string,
+    tool: string,
+    input: Record<string, unknown>,
+    approval: ChatToolApproval,
+    mode: ChatApprovalMode | undefined
+  ): void {
+    const log = this.deps.approvalLog;
+    if (!log) return;
+    void (async () => {
+      const session = await this.deps.store.get(sessionId).catch((error: unknown) => {
+        this.deps.logger.warn(`PERMISSIONS: could not read the session title to log: ${String(error)}`);
+        return null;
+      });
+      await log.append({
+        ts: approval.decidedAt,
+        sessionId,
+        ...(session ? { sessionTitle: session.title } : {}),
+        ...(mode ? { mode } : {}),
+        tool,
+        input: summarizeToolInput(input),
+        approval,
+      });
+    })().catch((error: unknown) => this.deps.logger.warn(`PERMISSIONS: could not log an approval: ${String(error)}`));
+  }
+
   /**
    * Hold a tool at the approval gate, if it declares one.
    *
@@ -3866,16 +3929,25 @@ export class ChatService {
   ): Promise<ApprovalOutcome> {
     const gate = this.deps.approvals;
     if (!gate && !tool.interactive) return { input: call.input };
+    // Settles a call refused before any card was shown, recording what refused it.
+    const refuseUnasked = (
+      status: 'denied' | 'error',
+      error: string,
+      decidedBy: ChatApprovalDecidedBy
+    ): ApprovalOutcome => {
+      const approval = approvalRecord('denied', decidedBy);
+      const refused: ChatToolCall = { ...call, status, error, approval };
+      this.emit({ type: 'tool-start', sessionId, messageId, call });
+      this.emit({ type: 'tool-end', sessionId, messageId, call: refused });
+      return { settled: refused, input: call.input, approval };
+    };
     let rules: PermissionRuleSet | undefined;
     try {
       rules = await this.deps.permissions?.rulesFor(permissionScope);
     } catch (error) {
       const message = `Cannot load permission rules: ${String(error)}`;
       this.deps.logger.warn(`PERMISSIONS: ${message}`);
-      const refused: ChatToolCall = { ...call, status: 'denied', error: message };
-      this.emit({ type: 'tool-start', sessionId, messageId, call });
-      this.emit({ type: 'tool-end', sessionId, messageId, call: refused });
-      return { settled: refused, input: call.input };
+      return refuseUnasked('denied', message, { kind: 'system', reason: 'error', detail: message });
     }
     if (!tool.interactive && !tool.approval && !rules?.size) return { input: call.input };
 
@@ -3891,14 +3963,11 @@ export class ChatService {
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      const refused: ChatToolCall = {
-        ...call,
-        status: err instanceof Error && err.name === 'PathAccessDenied' ? 'denied' : 'error',
-        error: message,
-      };
-      this.emit({ type: 'tool-start', sessionId, messageId, call });
-      this.emit({ type: 'tool-end', sessionId, messageId, call: refused });
-      return { settled: refused, input: call.input };
+      return refuseUnasked(err instanceof Error && err.name === 'PathAccessDenied' ? 'denied' : 'error', message, {
+        kind: 'system',
+        reason: 'error',
+        detail: message,
+      });
     }
 
     // The user's standing rules come before every mode, and a deny applies to a call no tool
@@ -3907,25 +3976,12 @@ export class ChatService {
     try {
       if (rules?.size) subject = await resolveSubject(subject);
     } catch (error) {
-      const refused: ChatToolCall = {
-        ...call,
-        status: 'denied',
-        error: `Cannot resolve permission paths: ${String(error)}`,
-      };
-      this.emit({ type: 'tool-start', sessionId, messageId, call });
-      this.emit({ type: 'tool-end', sessionId, messageId, call: refused });
-      return { settled: refused, input: call.input };
+      const message = `Cannot resolve permission paths: ${String(error)}`;
+      return refuseUnasked('denied', message, { kind: 'system', reason: 'error', detail: message });
     }
     const verdict = rules?.size ? rules.evaluate(subject) : { decision: null };
     if (verdict.decision === 'deny') {
-      const refused: ChatToolCall = {
-        ...call,
-        status: 'denied',
-        error: `Refused by the user's deny rule ${describeRule(verdict.rule)}. Do not try to run it again or work around it; tell the user what you wanted to do.`,
-      };
-      this.emit({ type: 'tool-start', sessionId, messageId, call });
-      this.emit({ type: 'tool-end', sessionId, messageId, call: refused });
-      return { settled: refused, input: call.input };
+      return refuseUnasked('denied', denyRuleMessage(verdict.rule), ruleDecider(verdict.rule));
     }
     // Interactive tools never reach the approval mode below, so no mode - "Approve for me" and
     // full access included - can answer a folder request on the user's behalf.
@@ -3962,7 +4018,13 @@ export class ChatService {
     // A matching allow rule runs the call in every mode, over a tainted reply as well: the user
     // wrote it knowing what the command does. A loop still stops, and the rule set itself keeps
     // the floors (irreversible, opaque commands, outside folders) - see PermissionRuleSet.
-    if (verdict.decision === 'allow' && !stuck) return { input: applyOption(call.input, runnable[0]) };
+    if (verdict.decision === 'allow' && !stuck) {
+      return {
+        input: applyOption(call.input, runnable[0]),
+        approval: approvalRecord('allowed', ruleDecider(verdict.rule)),
+        mode,
+      };
+    }
     if (tainted) prompt = { ...prompt, detail: `${prompt.detail}\n\n${untrustedReason(tainted)}` };
 
     // An irreversible tool is asked every time, whatever was answered before: the standing set
@@ -4001,15 +4063,34 @@ export class ChatService {
       return null;
     };
     const standing = standingAnswer();
-    if (standing) return { input: applyOption(call.input, findOption(prompt, standing.optionId), standing.value) };
+    if (standing) {
+      return {
+        input: applyOption(call.input, findOption(prompt, standing.optionId), standing.value),
+        approval: approvalRecord('allowed', { kind: 'chat-allowance' }),
+        mode,
+      };
+    }
 
     // Consulted AFTER tool.approval() ran, so a call that is refused outright - a path outside
     // every granted root - is still refused rather than waved through by a loose mode. A mode
     // loose enough to skip the question takes the card's primary action, which is the one the
     // user would have been shown pre-selected.
     if (!askedByRule && this.autoApproves(mode, sessionId, call, prompt, stuck || !!tainted)) {
-      return { input: applyOption(call.input, runnable[0]) };
+      return {
+        input: applyOption(call.input, runnable[0]),
+        approval: approvalRecord('allowed', { kind: 'mode', mode }),
+        mode,
+      };
     }
+
+    // Only the reasons beyond the tool's own: an ask rule, untrusted content, a loop.
+    const askedBecause =
+      [askedByRule, tainted ? untrustedReason(tainted) : null, stuck ? LOOP_ASK_REASON : null]
+        .filter((reason): reason is string => !!reason)
+        .join(' ') || undefined;
+    let requestedAt: string | undefined;
+    // What answered this card when another card's "always" or a newly saved rule covered it.
+    let coveredBy: ChatApprovalDecidedBy | undefined;
 
     const choice = prompt.choice ? { options: prompt.choice.options.map(toWireOption) } : undefined;
     const alwaysScope = prompt.always
@@ -4024,6 +4105,7 @@ export class ChatService {
       prompt.key,
       signal,
       approvalId => {
+        requestedAt = new Date().toISOString();
         this.emit({
           type: 'tool-start',
           sessionId,
@@ -4058,11 +4140,20 @@ export class ChatService {
             const currentSubject = fresh?.size
               ? await resolveSubject(permissionSubject(call, gatedPrompt, context))
               : subject;
-            const decision = fresh?.size ? fresh.evaluate(currentSubject).decision : null;
-            if (decision === 'deny') return { decision: 'deny' };
+            const freshVerdict = fresh?.size ? fresh.evaluate(currentSubject) : null;
+            const decision = freshVerdict?.decision ?? null;
+            if (freshVerdict?.decision === 'deny') {
+              coveredBy = ruleDecider(freshVerdict.rule);
+              return { decision: 'deny' };
+            }
             if (prompt.irreversible || stuck || askedByRule || decision === 'ask') return null;
-            if (decision === 'allow') return { decision: 'once', ...(runnable[0] ? { optionId: runnable[0].id } : {}) };
-            return standingAnswer();
+            if (freshVerdict?.decision === 'allow') {
+              coveredBy = ruleDecider(freshVerdict.rule);
+              return { decision: 'once', ...(runnable[0] ? { optionId: runnable[0].id } : {}) };
+            }
+            const covering = standingAnswer();
+            if (covering) coveredBy = { kind: 'chat-allowance' };
+            return covering;
           } catch (error) {
             this.deps.logger.warn(`PERMISSIONS: could not recheck ${call.name}: ${String(error)}`);
             return null;
@@ -4076,6 +4167,8 @@ export class ChatService {
       }
     );
 
+    // Whether "always" actually reached every session; a failed save leaves it this chat's only.
+    let savedEverywhere = false;
     // The rules saved are the ones main derived and showed; the renderer only says yes to them.
     if (answer.decision === 'always' && answer.everywhere && everywhere.length > 0) {
       const saved = await this.deps.permissions?.rememberAllows(everywhere).then(
@@ -4089,12 +4182,15 @@ export class ChatService {
           return false;
         }
       );
+      savedEverywhere = saved === true;
       await gate.settleCovered(saved ? undefined : sessionId);
     } else if (answer.decision === 'always') {
       await gate.settleCovered(sessionId);
     }
 
     const picked = findOption(prompt, answer.optionId);
+    const card = shownCard(answer, requestedAt, askedBecause);
+    const decidedBy = cardDecider(answer.settledBy, { ...answer, everywhere: savedEverywhere }, picked, coveredBy);
 
     // Keyed on the OPTION rather than on the decision, so an answer naming this option can only
     // ever redirect - never run the tool because it arrived with some other decision on it.
@@ -4104,27 +4200,30 @@ export class ChatService {
     // model reads an instruction rather than a failure it should apologise for and back away
     // from - HOST_GUIDANCE trains precisely that reflex on a declined call.
     if (picked?.redirect) {
+      const approval = approvalRecord('denied', decidedBy, card);
       const redirected: ChatToolCall = {
         ...call,
         status: 'done',
         preview: picked.note,
         label: `${picked.label} - no session was started`,
+        approval,
       };
       this.emit({ type: 'tool-end', sessionId, messageId, call: redirected });
-      return { settled: redirected, input: call.input };
+      return { settled: redirected, input: call.input, approval, mode };
     }
 
     if (answer.decision === 'deny' || answer.decision === 'redirect') {
-      const denied: ChatToolCall = {
-        ...call,
-        status: 'denied',
-        error: 'The user declined to run this. Do not try to run it again; ask them what to do instead.',
-      };
+      const approval = approvalRecord('denied', decidedBy, card);
+      const denied: ChatToolCall = { ...call, status: 'denied', error: deniedMessage(decidedBy), approval };
       this.emit({ type: 'tool-end', sessionId, messageId, call: denied });
-      return { settled: denied, input: call.input };
+      return { settled: denied, input: call.input, approval, mode };
     }
 
-    return { input: applyOption(call.input, picked ?? runnable[0], answer.value) };
+    return {
+      input: applyOption(call.input, picked ?? runnable[0], answer.value),
+      approval: approvalRecord('allowed', decidedBy, card),
+      mode,
+    };
   }
 
   /**
@@ -4145,11 +4244,11 @@ export class ChatService {
     turn: DirectoryTurn
   ): Promise<ApprovalOutcome> {
     const { outcome: _ignored, ...rest } = call.input;
-    const settle = (status: 'denied' | 'error', error: string): ApprovalOutcome => {
-      const settled: ChatToolCall = { ...call, input: rest, status, error };
+    const settle = (status: 'denied' | 'error', error: string, approval: ChatToolApproval): ApprovalOutcome => {
+      const settled: ChatToolCall = { ...call, input: rest, status, error, approval };
       this.emit({ type: 'tool-start', sessionId, messageId, call: { ...call, input: rest } });
       this.emit({ type: 'tool-end', sessionId, messageId, call: settled });
-      return { settled, input: rest };
+      return { settled, input: rest, approval };
     };
 
     const inspection = await inspectDirectoryRequest(rest, {
@@ -4158,18 +4257,23 @@ export class ChatService {
       ...(context.protectedPaths ? { protectedPaths: context.protectedPaths } : {}),
       declined: turn.declined,
     });
-    if (inspection.kind === 'refused') return settle('denied', inspection.message);
+    if (inspection.kind === 'refused') {
+      const decidedBy: ChatApprovalDecidedBy = { kind: 'system', reason: 'error', detail: inspection.message };
+      return settle('denied', inspection.message, approvalRecord('denied', decidedBy));
+    }
     const withOutcome = (outcome: DirectoryRequestOutcome) => ({ ...rest, path: inspection.path, outcome });
     if (inspection.kind === 'inside') return { input: withOutcome({ status: 'already' }) };
 
     const gate = this.deps.approvals;
     if (!gate) return { input: rest };
     const input = { ...rest, path: inspection.path, reason: inspection.reason };
+    let requestedAt: string | undefined;
     const answer = await gate.request(
       sessionId,
       `${REQUEST_DIRECTORY_TOOL_NAME}:${call.id}`,
       signal,
       approvalId => {
+        requestedAt = new Date().toISOString();
         this.emit({
           type: 'tool-start',
           sessionId,
@@ -4184,23 +4288,37 @@ export class ChatService {
           },
         });
       },
-      // Untimed like a question, so a new message closes it via cancelQuestions; never remembered,
-      // so no earlier click stands in for this one.
-      { remember: false, untimed: true }
+      // A question card, so a new message closes it via cancelQuestions; never remembered, so no
+      // earlier click stands in for this one.
+      { remember: false, question: true }
     );
+    const answered = (outcome: ChatToolApproval['outcome'], decidedBy: ChatApprovalDecidedBy) =>
+      approvalRecord(outcome, decidedBy, shownCard(answer, requestedAt));
 
     // Checked before the decision: a click racing a stop must not grant to a turn that has ended.
-    if (signal.aborted || answer.optionId === QUESTION_CANCELLED)
-      return { input: withOutcome({ status: 'cancelled' }) };
+    if (signal.aborted || answer.optionId === QUESTION_CANCELLED) {
+      return {
+        input: withOutcome({ status: 'cancelled' }),
+        approval: answered('denied', { kind: 'system', reason: closedBy(answer.settledBy, signal.aborted) }),
+      };
+    }
     if (answer.decision !== 'once') {
       turn.declined.push(inspection.path);
-      return { input: withOutcome({ status: 'declined' }) };
+      return {
+        input: withOutcome({ status: 'declined' }),
+        approval: answered('denied', cardDecider(answer.settledBy, answer, undefined, undefined)),
+      };
     }
+    const granted = answered('allowed', { kind: 'user', answer: 'once' });
     if (!(await this.grantSessionDirectory(sessionId, inspection.path)).ok) {
-      return settle('error', `${inspection.path} changed or disappeared before it could be added; it was not shared.`);
+      return settle(
+        'error',
+        `${inspection.path} changed or disappeared before it could be added; it was not shared.`,
+        granted
+      );
     }
     turn.granted.push(inspection.path);
-    return { input: withOutcome({ status: 'granted' }) };
+    return { input: withOutcome({ status: 'granted' }), approval: granted };
   }
 
   /**
@@ -4222,10 +4340,11 @@ export class ChatService {
     const plan = await planMcpServerRequest(call.name, call.input, this.deps.mcp);
     if (plan.kind === 'refused') {
       // Stored with no input at all: a refused call may be the one carrying values it should not.
-      const settled: ChatToolCall = { ...call, input: {}, status: 'denied', error: plan.message };
+      const approval = approvalRecord('denied', { kind: 'system', reason: 'error', detail: plan.message });
+      const settled: ChatToolCall = { ...call, input: {}, status: 'denied', error: plan.message, approval };
       this.emit({ type: 'tool-start', sessionId, messageId, call: { ...call, input: {} } });
       this.emit({ type: 'tool-end', sessionId, messageId, call: settled });
-      return { settled, input: {} };
+      return { settled, input: {}, approval };
     }
 
     const gate = this.deps.approvals;
@@ -4234,15 +4353,16 @@ export class ChatService {
     // masked, since an update carries args the user may have typed a key into.
     const input: Record<string, unknown> = { ...plan.request };
     const stored = modelSafeRequest(plan.request, plan.flags);
-    const withOutcome = (outcome: McpServerRequestOutcome) => ({ input: { ...stored, outcome } });
     if (!gate || !mcp) return { input: stored };
 
     const warning = describeFlags(plan.flags);
+    let requestedAt: string | undefined;
     const answer = await gate.request(
       sessionId,
       `${call.name}:${call.id}`,
       signal,
       approvalId => {
+        requestedAt = new Date().toISOString();
         this.emit({
           type: 'tool-start',
           sessionId,
@@ -4257,15 +4377,31 @@ export class ChatService {
           },
         });
       },
-      // Never remembered, so no earlier click stands in for this one, and untimed like a question
-      // so a new message closes it rather than leaving a live button on an abandoned turn.
-      { remember: false, untimed: true }
+      // Never remembered, so no earlier click stands in for this one, and a question card so a
+      // new message closes it rather than leaving a live button on an abandoned turn.
+      { remember: false, question: true }
     );
+    const withOutcome = (
+      outcome: McpServerRequestOutcome,
+      decision: ChatToolApproval['outcome'],
+      decidedBy: ChatApprovalDecidedBy
+    ): ApprovalOutcome => ({
+      input: { ...stored, outcome },
+      approval: approvalRecord(decision, decidedBy, shownCard(answer, requestedAt)),
+    });
 
     // Checked before the decision: a click racing a stop must not start a program for a turn
     // that has ended.
-    if (signal.aborted || answer.optionId === QUESTION_CANCELLED) return withOutcome({ status: 'cancelled' });
-    if (answer.decision !== 'once' && answer.decision !== 'always') return withOutcome({ status: 'declined' });
+    if (signal.aborted || answer.optionId === QUESTION_CANCELLED) {
+      return withOutcome({ status: 'cancelled' }, 'denied', {
+        kind: 'system',
+        reason: closedBy(answer.settledBy, signal.aborted),
+      });
+    }
+    if (answer.decision !== 'once' && answer.decision !== 'always') {
+      return withOutcome({ status: 'declined' }, 'denied', cardDecider(answer.settledBy, answer, undefined, undefined));
+    }
+    const approvedBy: ChatApprovalDecidedBy = { kind: 'user', answer: 'once' };
 
     const secrets = {
       env: pickSecrets(answer.secrets?.env, plan.change.envKeys ?? []),
@@ -4291,13 +4427,20 @@ export class ChatService {
         serverId = plan.request.serverId ?? '';
         await mcp.updateFromAssistant(serverId, plan.change, secrets);
       }
-      return withOutcome({ status: 'saved', serverId });
+      return withOutcome({ status: 'saved', serverId }, 'allowed', approvedBy);
     } catch (err) {
       // The store's own messages ("another server is already called ...") never carry a value.
       const message = err instanceof Error ? err.message : String(err);
-      const settled: ChatToolCall = { ...call, input: stored, status: 'error', error: `Nothing was saved: ${message}` };
+      const approval = approvalRecord('allowed', approvedBy, shownCard(answer, requestedAt));
+      const settled: ChatToolCall = {
+        ...call,
+        input: stored,
+        status: 'error',
+        error: `Nothing was saved: ${message}`,
+        approval,
+      };
       this.emit({ type: 'tool-end', sessionId, messageId, call: settled });
-      return { settled, input: stored };
+      return { settled, input: stored, approval };
     }
   }
 
@@ -4358,7 +4501,7 @@ export class ChatService {
           call: { ...call, input, status: 'awaiting-approval', approvalId },
         });
       },
-      { remember: false, untimed: true }
+      { remember: false, question: true }
     );
 
     let outcome: ChatQuestionOutcome;
@@ -5289,6 +5432,95 @@ async function spawnBaseFor(project: ChatProject): Promise<string> {
 interface ApprovalOutcome {
   settled?: ChatToolCall;
   input: Record<string, unknown>;
+  /** The decision, when the call went through approval; already on `settled` when that is set. */
+  approval?: ChatToolApproval;
+  /** The approval mode the decision was made under, when the gate consulted one. */
+  mode?: ChatApprovalMode;
+}
+
+const LOOP_ASK_REASON = `Asked because the same call was repeated ${LOOP_THRESHOLD} times in a row.`;
+
+function approvalRecord(
+  outcome: ChatToolApproval['outcome'],
+  decidedBy: ChatApprovalDecidedBy,
+  card?: { requestedAt: string; askedBecause?: string }
+): ChatToolApproval {
+  return {
+    outcome,
+    decidedBy,
+    asked: card !== undefined,
+    ...(card?.askedBecause ? { askedBecause: card.askedBecause } : {}),
+    ...(card ? { requestedAt: card.requestedAt } : {}),
+    decidedAt: new Date().toISOString(),
+  };
+}
+
+/** The card part of a record, or undefined when the request closed before its card was shown. */
+function shownCard(
+  answer: ApprovalSettlement,
+  requestedAt: string | undefined,
+  askedBecause?: string
+): { requestedAt: string; askedBecause?: string } | undefined {
+  if (!answer.asked || !requestedAt) return undefined;
+  return { requestedAt, ...(askedBecause ? { askedBecause } : {}) };
+}
+
+function ruleDecider(rule: CompiledRule): ChatApprovalDecidedBy {
+  return { kind: 'rule', rule: rule.text, source: rule.source.label };
+}
+
+function denyRuleMessage(rule: CompiledRule): string {
+  return `Refused by the user's deny rule ${describeRule(rule)}. Do not try to run it again or work around it; tell the user what you wanted to do.`;
+}
+
+/**
+ * Who settled an approval card. Only a click is the user's; a card closed by a stop, a delete or
+ * the app quitting is recorded as that, so it never reads as a refusal nobody gave.
+ */
+function cardDecider(
+  settledBy: ApprovalSettledBy,
+  answer: ChatApprovalAnswer,
+  picked: ApprovalOption | undefined,
+  coveredBy: ChatApprovalDecidedBy | undefined
+): ChatApprovalDecidedBy {
+  if (settledBy === 'covered') return coveredBy ?? { kind: 'chat-allowance' };
+  if (settledBy !== 'user') return { kind: 'system', reason: settledBy };
+  const choice = picked ? { option: picked.label } : {};
+  if (picked?.redirect) return { kind: 'user', answer: 'redirect', ...choice };
+  if (answer.decision === 'deny' || answer.decision === 'redirect') return { kind: 'user', answer: 'deny' };
+  if (answer.decision === 'always') {
+    return { kind: 'user', answer: 'always', ...choice, ...(answer.everywhere ? { everywhere: true as const } : {}) };
+  }
+  return { kind: 'user', answer: 'once', ...choice };
+}
+
+/** Why a question-style card was closed unanswered; a racing click or recheck counts as the close. */
+function closedBy(settledBy: ApprovalSettledBy, aborted: boolean): ChatApprovalSystemReason {
+  if (settledBy === 'user' || settledBy === 'covered') return aborted ? 'stopped' : 'moved-on';
+  return settledBy;
+}
+
+/** What the model is told about a call that did not run. Only a user's own click is a refusal. */
+function deniedMessage(decidedBy: ChatApprovalDecidedBy): string {
+  if (decidedBy.kind === 'rule') {
+    const where = decidedBy.source ? ` in ${decidedBy.source}` : '';
+    return `Refused by the user's deny rule ${decidedBy.rule}${where}. Do not try to run it again or work around it; tell the user what you wanted to do.`;
+  }
+  if (decidedBy.kind !== 'system') {
+    return 'The user declined to run this. Do not try to run it again; ask them what to do instead.';
+  }
+  switch (decidedBy.reason) {
+    case 'stopped':
+      return 'Not run: the reply was stopped before this was approved.';
+    case 'conversation-deleted':
+      return 'Not run: the conversation was deleted before this was approved.';
+    case 'app-quit':
+      return 'Not run: the app quit before this was approved.';
+    case 'moved-on':
+      return 'Not run: the user moved on before this was approved.';
+    case 'error':
+      return `Not run: ${decidedBy.detail ?? 'the approval could not be completed'}.`;
+  }
 }
 
 /**

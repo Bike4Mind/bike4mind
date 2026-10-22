@@ -18,6 +18,7 @@ import { isMcpConfigToolName, MCP_UPDATE_SERVER_TOOL_NAME, parseMcpServerRequest
 import { ASK_USER_TOOL_NAME, parseOutcome, parseQuestions } from '@shared/questions';
 import { WEB_FETCH_TOOL_NAME } from '@shared/webSearch';
 import { ApprovalChoiceButtons } from './ApprovalChoice';
+import { describeApproval } from './approvalAttribution';
 import { DiffView } from './DiffView';
 import { DirectoryRequestCard } from './DirectoryRequestCard';
 import { McpServerRequestCard } from './McpServerRequestCard';
@@ -615,6 +616,7 @@ function ToolGroupRow({ group, onMove }: { group: ToolCallGroup; onMove?: MoveCa
         )}
       </Box>
 
+      <ApprovalAttribution calls={group.calls} />
       {/* Outside the <details>, both of them: a generated image nobody can see until they
           expand a collapsed row is not a rendered image, and "out of credits" is not a detail.
           Still inside the rule, because both belong to the call that produced them. */}
@@ -629,6 +631,34 @@ function ToolGroupRow({ group, onMove }: { group: ToolCallGroup; onMove?: MoveCa
         </Box>
       ))}
     </Box>
+  );
+}
+
+/**
+ * Who let the group's calls run, or stopped them, one muted line per distinct answer. A group of
+ * seven commands "Approve for me" ran reads as one line, not seven of the same.
+ */
+function ApprovalAttribution({ calls }: { calls: readonly ChatToolCall[] }) {
+  const decisions = calls.flatMap(call =>
+    call.approval && call.status !== 'awaiting-approval' ? [call.approval] : []
+  );
+  const lines = [...new Map(decisions.map(approval => [describeApproval(approval), approval])).entries()];
+  if (lines.length === 0) return null;
+  return (
+    <>
+      {lines.map(([text, approval]) => (
+        <Typography
+          key={text}
+          level="body-xs"
+          textColor="text.tertiary"
+          title={approval.decidedBy.kind === 'rule' ? approval.decidedBy.source : undefined}
+          sx={{ overflowWrap: 'anywhere' }}
+          data-testid="tool-call-approval-attribution"
+        >
+          {text}
+        </Typography>
+      ))}
+    </>
   );
 }
 
