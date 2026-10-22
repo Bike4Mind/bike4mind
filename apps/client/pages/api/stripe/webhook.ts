@@ -16,7 +16,12 @@ import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { logEventSafe } from '@server/utils/analyticsLog';
 import { StripeEvents } from '@server/utils/eventBus';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
-import { customerExists, CustomerType, isStripeConfigured, stripe } from '@server/integrations/stripe/stripe';
+import {
+  customerExists,
+  CustomerType,
+  isStripeConfigured,
+  stripe,
+} from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { voidOpenSubscriptionInvoices } from '@server/integrations/stripe/dunning';
 import { postMessageToSlack } from '@server/integrations/slack/slack';
 import { sendToClient } from '@server/websocket/utils';

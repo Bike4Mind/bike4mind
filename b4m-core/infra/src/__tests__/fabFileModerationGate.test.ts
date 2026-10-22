@@ -31,6 +31,7 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..'
 const SCAN_ROOTS = [
   'apps/client/pages',
   'apps/client/server',
+  'packages/server-utils/src',
   'apps/workers/src',
   'b4m-core/services/src',
   'b4m-core/slack/src',

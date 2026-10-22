@@ -4,7 +4,8 @@ import {
   isVideoModelEnabled,
   validateAgainstCapabilities,
   VideoGenerationRequestSchema,
-  videoInputImageRef,
+  videoInputRef,
+  videoRequestInputs,
 } from '@bike4mind/common';
 import {
   findIdempotentReplay,
@@ -56,11 +57,17 @@ export async function createVideoJob(
   const validation = validateAgainstCapabilities(request, caps);
   if (!validation.ok) return { ok: false, status: 422, code: validation.code, message: validation.message };
 
-  // Fails fast on someone else's (or a missing) image; the handler loads it again at submit.
-  const inputImage = request.mode === 'image_to_video' ? videoInputImageRef(request) : null;
-  if (inputImage) {
-    const image = await deps.loadInputImage(input.user.id, inputImage);
-    if (!image) return { ok: false, status: 404, code: 'input_image_not_found', message: 'Input image not found' };
+  // Fails fast on someone else's (or a missing) image; the handler loads them again at submit.
+  for (const videoInput of videoRequestInputs(request)) {
+    const image = await deps.loadInputImage(input.user.id, videoInputRef(videoInput));
+    if (!image) {
+      return {
+        ok: false,
+        status: 404,
+        code: 'input_image_not_found',
+        message: `Input image not found (${videoInput.role})`,
+      };
+    }
   }
 
   const owner = resolveJobOwner(input.user);

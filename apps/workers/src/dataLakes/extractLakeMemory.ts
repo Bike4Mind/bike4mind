@@ -12,7 +12,7 @@ import { LakeMemoryExtractionService } from '@bike4mind/services/llm';
 import { getSettingsByNames } from '@bike4mind/utils';
 import type { EvidenceTier } from '@bike4mind/memory';
 import type { Logger } from '@bike4mind/observability';
-import { createLedgerAppendSession } from '@server/memory/mementoLedgerMirror';
+import { createLedgerAppendSession } from '@bike4mind/server-utils/memory/mementoLedgerMirror';
 import { createMementoEmbedder } from '@bike4mind/server-utils/memory/mementoEmbedder';
 
 /**

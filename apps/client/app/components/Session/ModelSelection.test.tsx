@@ -707,3 +707,107 @@ describe('ModelSelection keyboard access', () => {
     );
   });
 });
+
+describe('ModelSelection older models', () => {
+  const olderModel = {
+    ...textModel,
+    id: 'gpt-older',
+    name: 'GPT Previous generation',
+    isSuperseded: true,
+  } as ModelInfo;
+
+  beforeEach(() => {
+    extraTextModels.push(olderModel);
+  });
+
+  afterEach(() => {
+    extraTextModels.length = 0;
+    favoriteModelIds.clear();
+    adminSettings.recommendedModelIds = [];
+  });
+
+  it('folds explicitly superseded models and keeps current models above the group', () => {
+    const setModel = vi.fn();
+    renderSelection({ setModel });
+    const section = screen.getByTestId('older-models-section-OpenAI');
+    const toggle = screen.getByTestId('older-models-toggle-OpenAI');
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByTestId(`model-card-${olderModel.id}`)).not.toBeInTheDocument();
+    expect(
+      screen.getByTestId(`model-card-${textModel.id}`).compareDocumentPosition(section) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+
+    fireEvent.click(toggle);
+    fireEvent.click(screen.getByTestId(`model-card-${olderModel.id}`));
+    expect(setModel).toHaveBeenCalledWith(olderModel.id);
+    fireEvent.click(toggle);
+    expect(screen.queryByTestId(`model-card-${olderModel.id}`)).not.toBeInTheDocument();
+  });
+
+  it('shows an older selection without expanding its group', () => {
+    renderSelection({ model: olderModel.id });
+    expect(screen.getByTestId('older-models-toggle-OpenAI')).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.getByTestId(`model-card-${olderModel.id}`)).toBeInTheDocument();
+  });
+
+  it.each([false, true])(
+    'preserves saved older-group expansion (%s) when its toggle is clicked during search',
+    async initiallyExpanded => {
+      renderSelection({});
+      const toggle = screen.getByTestId('older-models-toggle-OpenAI');
+      if (initiallyExpanded) fireEvent.click(toggle);
+      const input = screen.getByTestId('model-search-input').querySelector('input') as HTMLInputElement;
+      fireEvent.change(input, { target: { value: 'Previous generation' } });
+      await waitFor(() => expect(screen.queryByTestId(`model-card-${textModel.id}`)).not.toBeInTheDocument());
+      expect(screen.getByTestId(`model-card-${olderModel.id}`)).toBeInTheDocument();
+      expect(toggle).toHaveAttribute('aria-expanded', 'true');
+      fireEvent.click(toggle);
+
+      fireEvent.change(input, { target: { value: '' } });
+      await waitFor(() => expect(screen.getByTestId(`model-card-${textModel.id}`)).toBeInTheDocument());
+      expect(toggle).toHaveAttribute('aria-expanded', String(initiallyExpanded));
+      if (initiallyExpanded) expect(screen.getByTestId(`model-card-${olderModel.id}`)).toBeInTheDocument();
+      else expect(screen.queryByTestId(`model-card-${olderModel.id}`)).not.toBeInTheDocument();
+    }
+  );
+
+  it('keeps pinned older models reachable in Favorites and Recommended', () => {
+    favoriteModelIds.add(olderModel.id);
+    adminSettings.recommendedModelIds = [olderModel.id];
+    renderSelection({});
+    expect(
+      within(screen.getByTestId('favorites-section')).getByTestId(`model-card-${olderModel.id}`)
+    ).toBeInTheDocument();
+    expect(
+      within(screen.getByTestId('recommended-section')).getByTestId(`model-card-${olderModel.id}`)
+    ).toBeInTheDocument();
+    expect(screen.getByTestId('older-models-toggle-OpenAI')).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('keeps older groups independent across providers and preserves Bedrock routing inside them', () => {
+    const direct = {
+      ...olderModel,
+      id: 'claude-older',
+      name: 'Claude Previous generation',
+      backend: ModelBackend.Anthropic,
+    } as ModelInfo;
+    const bedrock = { ...direct, id: 'global.anthropic.claude-older', backend: ModelBackend.Bedrock } as ModelInfo;
+    extraTextModels.push(direct, bedrock);
+    renderSelection({});
+    fireEvent.click(screen.getByTestId('older-models-toggle-Anthropic'));
+    expect(screen.getByTestId('older-models-toggle-OpenAI')).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByTestId(`model-card-${olderModel.id}`)).not.toBeInTheDocument();
+    expect(screen.getByTestId(`model-card-${direct.id}`)).toBeInTheDocument();
+    expect(
+      within(screen.getByTestId('bedrock-route-section-Anthropic-older-text')).getByTestId(`model-card-${bedrock.id}`)
+    ).toBeInTheDocument();
+  });
+
+  it('retains the deprecation filter even when a model is marked as superseded', () => {
+    extraTextModels.push({ ...olderModel, id: 'gpt-expired', deprecationDate: '2020-01-01' } as ModelInfo);
+    renderSelection({});
+    fireEvent.click(screen.getByTestId('older-models-toggle-OpenAI'));
+    expect(screen.queryByTestId('model-card-gpt-expired')).not.toBeInTheDocument();
+  });
+});

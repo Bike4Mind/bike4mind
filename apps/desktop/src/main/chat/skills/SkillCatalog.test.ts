@@ -54,6 +54,15 @@ describe('SkillCatalog project trust', () => {
     expect(state.projectDirectory).toBe(project);
   });
 
+  it('hands the model the same list until the catalog rescans, so its prompt is built once', async () => {
+    const store = catalog();
+    await store.setTrusted(project, true);
+    const first = await store.forModel(project);
+    expect(await store.forModel(project)).toBe(first);
+    await store.setTrusted(project, false);
+    expect(await store.forModel(project)).not.toBe(first);
+  });
+
   it('remembers the decision across instances, so the user is asked once', async () => {
     await catalog().setTrusted(project, true);
     await expect(catalog().get(project, 'deploy')).resolves.toBeDefined();
@@ -103,6 +112,25 @@ describe('SkillCatalog project trust', () => {
     // skill tool ask what the MODEL may. This skill is the first and not the second.
     expect((await store.state(project)).skills.some(skill => skill.name === 'private-notes')).toBe(true);
     expect((await store.forModel(project)).some(command => command.name === 'private-notes')).toBe(false);
+  });
+
+  it('offers a skill folder once, never its supporting docs, to the picker and the skill tool alike', async () => {
+    const skillDir = join(project, '.claude', 'skills', 'deploy');
+    await mkdir(join(skillDir, 'references'), { recursive: true });
+    await mkdir(join(skillDir, 'scripts', 'nested'), { recursive: true });
+    await writeFile(join(skillDir, 'references', 'step-1-inspect.md'), '# Step 1', 'utf8');
+    await writeFile(join(skillDir, 'README.md'), '# Readme', 'utf8');
+    await writeFile(join(skillDir, 'scripts', 'nested', 'helper.md'), '# Helper', 'utf8');
+
+    const store = catalog();
+    await store.setTrusted(project, true);
+
+    const picker = (await store.state(project)).skills.filter(skill => skill.source === 'project');
+    const model = (await store.forModel(project)).filter(command => command.source === 'project');
+    expect(picker.map(skill => skill.name)).toEqual(['deploy']);
+    expect(model.map(command => command.name)).toEqual(['deploy']);
+    await expect(store.get(project, 'step-1-inspect')).resolves.toBeUndefined();
+    await expect(store.get(project, 'README')).resolves.toBeUndefined();
   });
 
   it('moves its revision only when trust changes, so a snapshot keyed on it holds otherwise', async () => {

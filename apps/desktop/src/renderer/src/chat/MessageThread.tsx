@@ -9,6 +9,8 @@ import Typography from '@mui/joy/Typography';
 import { isTurnBudgetStop, lastBoundaryIndex, type ChatMessage, type ChatUsage } from '@shared/chat';
 import { ArtifactList } from './ArtifactCard';
 import { presentReply } from './codeStream';
+import { CopyMessageButton, revealCopyButtonSx } from './CopyMessageButton';
+import { LinkifiedText } from './ExternalLink';
 import { ReasoningRow } from './ReasoningRow';
 import { AttachmentRow } from './Attachments';
 import { ChevronIcon } from './icons';
@@ -81,14 +83,19 @@ function StopReasonRow({ reason, onContinue }: { reason?: string; onContinue?: (
 /**
  * The user's own turn: a right-aligned bubble, narrower than the column so the alignment
  * reads as "mine" at a glance even when the text is long.
+ *
+ * Copy takes what the bubble shows: on a skill turn that is the invocation the user typed,
+ * not the expanded body folded away under it.
  */
 const UserTurn = memo(function UserTurn({ message, sessionId }: { message: ChatMessage; sessionId: string | null }) {
   const attachments = message.attachments ?? [];
   const skill = message.skill;
   const [expanded, setExpanded] = useState(false);
+  const copyText = skill ? `/${skill.name}${skill.args ? ` ${skill.args}` : ''}` : message.content;
 
   return (
-    <Stack direction="row" justifyContent="flex-end">
+    <Stack direction="row" justifyContent="flex-end" alignItems="flex-end" spacing={0.5} sx={revealCopyButtonSx}>
+      {copyText && <CopyMessageButton text={copyText} testId="chat-message-user-copy-btn" />}
       <Sheet
         variant="soft"
         color="primary"
@@ -129,7 +136,7 @@ const UserTurn = memo(function UserTurn({ message, sessionId }: { message: ChatM
               </Typography>
               {expanded && (
                 <Typography level="body-xs" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', mt: 0.5 }}>
-                  {message.content}
+                  <LinkifiedText text={message.content} />
                 </Typography>
               )}
             </Box>
@@ -138,10 +145,15 @@ const UserTurn = memo(function UserTurn({ message, sessionId }: { message: ChatM
           /* Literal, where a reply is markdown: this is what the user typed, and rendering it
              would change it. In a Code session they type paths and identifiers, and
              some_file_name would come back as some<em>file</em>name with the underscores eaten.
-             A reply is a model writing markdown on purpose; this is not. */
+             A reply is a model writing markdown on purpose; this is not. Urls are the one
+             thing picked out of it, and only to be made clickable. */
           message.content && (
-            <Typography level="body-sm" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-              {message.content}
+            <Typography
+              level="body-sm"
+              sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+              data-testid="chat-message-user-text"
+            >
+              <LinkifiedText text={message.content} />
             </Typography>
           )
         )}
@@ -201,7 +213,9 @@ function ReplyCost({ usage }: { usage?: ChatUsage }) {
  * that for the whole turn, and a spinner in the thread as well would be the same fact twice.
  *
  * The hover rule for the cost lives here rather than on the row it reveals, because CSS is what
- * keeps it free: see ReplyCost.
+ * keeps it free: see ReplyCost. Copy is revealed the same way and sits opposite it, in the gap
+ * under the turn. It copies `content`, the markdown source of every round's prose, and is not
+ * offered while the reply is still being written.
  *
  * Memoized, as every turn is: a streaming reply re-renders the thread once a frame, and only the
  * last turn's props change on those frames.
@@ -242,6 +256,7 @@ const AssistantTurn = memo(function AssistantTurn({
         position: 'relative',
         [`& .${REPLY_COST_CLASS}`]: { opacity: 0, pointerEvents: 'none', transition: 'opacity 120ms' },
         [`&:hover .${REPLY_COST_CLASS}`]: { opacity: 1, pointerEvents: 'auto' },
+        ...revealCopyButtonSx,
       }}
       data-testid="chat-message-assistant"
     >
@@ -295,6 +310,12 @@ const AssistantTurn = memo(function AssistantTurn({
       {status && <Box sx={{ mt: 1 }}>{status}</Box>}
 
       <ReplyCost {...(message.usage ? { usage: message.usage } : {})} />
+
+      {!live && message.content.trim().length > 0 && (
+        <Box sx={{ position: 'absolute', top: '100%', left: 0 }}>
+          <CopyMessageButton text={message.content} testId="chat-message-assistant-copy-btn" />
+        </Box>
+      )}
     </Box>
   );
 });
@@ -319,7 +340,7 @@ const SystemTurn = memo(function SystemTurn({ message }: { message: ChatMessage 
         From a session you started
       </Typography>
       <Typography level="body-sm" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-        {displayText(message)}
+        <LinkifiedText text={displayText(message)} />
       </Typography>
     </Sheet>
   );
@@ -397,7 +418,7 @@ function CollapsedTurn({
           textColor="text.secondary"
           data-testid={`chat-message-${kind}-body`}
         >
-          {kind === 'automatic' ? message.content : displayText(message)}
+          <LinkifiedText text={kind === 'automatic' ? message.content : displayText(message)} />
         </Typography>
       </Box>
     </Box>

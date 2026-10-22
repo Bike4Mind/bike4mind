@@ -61,7 +61,9 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: vi.fn(),
   getGeneratedImageStorage: vi.fn(),
 }));
-vi.mock('@server/dataLakes/recomputeStatsForLakeTags', () => ({ recomputeStatsForLakeTags: mockRecompute }));
+vi.mock('@bike4mind/server-utils/dataLakes/recomputeStatsForLakeTags', () => ({
+  recomputeStatsForLakeTags: mockRecompute,
+}));
 vi.mock('@server/dataLakes/lakeConfigAuditPrincipal', () => ({ lakeConfigAuditPrincipal: () => undefined }));
 vi.mock('@bike4mind/server-utils/dataLakes/lakeMembershipAuditDb', () => ({ lakeMembershipAuditDb: {} }));
 
