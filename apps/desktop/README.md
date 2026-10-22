@@ -779,9 +779,14 @@ ask, and ask over allow. A shell command needs an allow for every subcommand.
 Native tool rules such as `request_directory` also apply to interactive tools:
 a deny refuses the call, while an allow still requires the tool's interactive response.
 
-The approval card's "Always, in every session" saves the displayed allow rules.
-Irreversible calls cannot save a standing allow. Settings also shows imported Claude
-Code sources read-only. Turn off "Use them here" to stop importing them. An untrusted
+The approval card's "Allow in this chat" remembers consent for this conversation.
+"Always allow" saves the displayed allow rules in Settings -> Permissions, and also
+answers waiting cards those rules cover. For web fetches, both buttons cover every site,
+including after a reply has read web content; the saved rule is `WebFetch`.
+Use a `WebFetch(domain:...)` rule in Settings for a narrower persistent allow.
+Irreversible calls cannot save a standing allow. Browser cards cannot save a rule.
+Settings also shows imported Claude Code sources read-only. Turn off "Use them here"
+to stop importing them. An untrusted
 project contributes ask and deny rules, but cannot grant itself an allow.
 
 If a permission source cannot be read or parsed, tool execution is refused rather than
@@ -789,3 +794,8 @@ dropping its restrictions. Check the path named in the error, repair the JSON or
 permissions, then retry. Claude Code sources reload when their settings change; after
 repairing the desktop rule file, retry the call. A failed Settings save displays an
 error and keeps the previously saved rules active.
+
+If "Always allow" reports that its rule could not be saved, consent still applies in
+this conversation. Retry the save in Settings -> Permissions before relying on it in
+another chat. To restore fetch approval cards, remove the saved `WebFetch` allow and
+start a new chat; existing conversation consent lasts for that conversation.

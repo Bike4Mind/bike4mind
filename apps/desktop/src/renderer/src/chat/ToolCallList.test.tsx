@@ -64,7 +64,7 @@ describe('ToolCallList', () => {
    * The button says the action and nothing else. It used to carry the whole granted scope, so a
    * command touching two directories gave the broadest choice on the card the widest button.
    */
-  it('keeps the always-allow button to a fixed label and puts the scope beside it', () => {
+  it('keeps the allow-in-this-chat button to a fixed label and puts the scope beside it', () => {
     const html = markup([
       awaiting({
         approvalAlways: '`ls *`, `head *`, ~/Javascript/*, ./*',
@@ -72,7 +72,7 @@ describe('ToolCallList', () => {
       }),
     ]);
     const button = html.slice(html.indexOf('data-testid="chat-tool-approve-always"'));
-    expect(button.slice(0, button.indexOf('</button>'))).toContain('Always allow');
+    expect(button.slice(0, button.indexOf('</button>'))).toContain('Allow in this chat');
     expect(button.slice(0, button.indexOf('</button>'))).not.toContain('~/Javascript');
 
     expect(html).toContain('data-testid="chat-tool-approval-scope"');
@@ -90,17 +90,26 @@ describe('ToolCallList', () => {
     expect(html).toContain('applies for the rest of this conversation');
   });
 
-  it('offers "Always, in every session" only when main derived a rule, and names the rule', () => {
+  it('offers the saving "Always allow" only when main derived a rule, and names the rule', () => {
     expect(markup([awaiting()])).not.toContain('data-testid="chat-tool-approve-everywhere"');
 
     const html = markup([awaiting({ approvalRules: ['Bash(gh pr create:*)'] })]);
-    expect(html).toContain('data-testid="chat-tool-approve-everywhere"');
-    expect(html).toContain('Always, in every session');
+    const button = html.slice(html.indexOf('data-testid="chat-tool-approve-everywhere"'));
+    expect(button.slice(0, button.indexOf('</button>'))).toContain('Always allow');
     expect(html).toContain('data-testid="chat-tool-approval-rules"');
-    expect(html).toContain('saves Bash(gh pr create:*) to Settings &gt; Permissions');
+    expect(html).toContain('saves Bash(gh pr create:*) to Settings &gt; Permissions, so no session asks again');
   });
 
-  it('never offers "Always, in every session" on a call that cannot be undone', () => {
+  it('says a bare rule covers every site or every call', () => {
+    const fetch = markup([awaiting({ name: 'web_fetch', approvalAlways: 'every site', approvalRules: ['WebFetch'] })]);
+    expect(fetch).toContain('&quot;Allow in this chat&quot; covers every site for the rest of this conversation');
+    expect(fetch).toContain('saves WebFetch (every site) to Settings');
+    expect(markup([awaiting({ name: 'session_send', approvalRules: ['session_send'] })])).toContain(
+      'saves session_send (every call) to Settings'
+    );
+  });
+
+  it('never offers the saving "Always allow" on a call that cannot be undone', () => {
     const html = markup([awaiting({ approvalIrreversible: true, approvalRules: ['session_delete'] })]);
     expect(html).not.toContain('data-testid="chat-tool-approve-everywhere"');
   });

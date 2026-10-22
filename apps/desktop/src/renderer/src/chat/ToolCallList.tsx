@@ -170,6 +170,12 @@ function NoticeBanner({ notice }: { notice: ChatToolNotice }) {
  * `title` carries the list uncapped and with full paths, because an abbreviated path must not be
  * the only account of what is being granted.
  */
+/** A bare rule allows the tool outright, which its text alone does not say. */
+function ruleScope(rule: string): string {
+  if (rule.includes('(')) return rule;
+  return `${rule} (${rule === 'WebFetch' ? 'every site' : 'every call'})`;
+}
+
 function AlwaysScopeLine({ call }: { call: ChatToolCall }) {
   return (
     <Typography
@@ -180,11 +186,11 @@ function AlwaysScopeLine({ call }: { call: ChatToolCall }) {
       data-testid="chat-tool-approval-scope"
     >
       {call.approvalAlways
-        ? `"Always allow" covers ${call.approvalAlways} for the rest of this conversation.`
-        : '"Always allow" applies for the rest of this conversation.'}
+        ? `"Allow in this chat" covers ${call.approvalAlways} for the rest of this conversation.`
+        : '"Allow in this chat" applies for the rest of this conversation.'}
       {call.approvalRules && call.approvalRules.length > 0 && (
         <span data-testid="chat-tool-approval-rules">
-          {` "In every session" saves ${call.approvalRules.join(', ')} to Settings > Permissions.`}
+          {` "Always allow" saves ${call.approvalRules.map(ruleScope).join(', ')} to Settings > Permissions, so no session asks again.`}
         </span>
       )}
     </Typography>
@@ -300,7 +306,7 @@ function ApprovalPrompt({
                 onClick={() => onRespond(approvalId, { decision: 'always' })}
                 data-testid="chat-tool-approve-always"
               >
-                Always allow
+                Allow in this chat
               </Button>
             )}
             {!irreversible && call.approvalRules && call.approvalRules.length > 0 && (
@@ -312,7 +318,7 @@ function ApprovalPrompt({
                 onClick={() => onRespond(approvalId, { decision: 'always', everywhere: true })}
                 data-testid="chat-tool-approve-everywhere"
               >
-                Always, in every session
+                Always allow
               </Button>
             )}
             <Button

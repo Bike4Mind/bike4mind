@@ -197,7 +197,7 @@ export interface ChatToolCall {
   approvalAlwaysFull?: string;
   /**
    * Set with `approvalId` when the call can be allowed in every session: the permission rules
-   * (Claude Code syntax) that "Always, in every session" saves. Never on an irreversible call.
+   * (Claude Code syntax) that the card's "Always allow" saves. Never on an irreversible call.
    */
   approvalRules?: string[];
   /**
