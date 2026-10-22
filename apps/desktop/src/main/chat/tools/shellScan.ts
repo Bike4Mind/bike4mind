@@ -748,27 +748,16 @@ function readOnlyGh(args: readonly string[]): boolean {
   return GH_READS[sub]?.has(action) === true;
 }
 
-/**
- * Environment variables that can change which program runs, what it loads, or where its traffic
- * goes: the shell's own, the loaders', package-manager and remote-cache config, and any name that
- * reads as a program, a search path, a proxy or a server address.
- */
-const STEERING_VARIABLE = [
-  /^(PATH|HOME|ENV|BASH_ENV|SHELL|SHELLOPTS|BASHOPTS|IFS|PS4|PROMPT_COMMAND|CDPATH|EDITOR|VISUAL|PAGER|BROWSER)$/i,
-  /^NODE_(OPTIONS|EXTRA_CA_CERTS|TLS_REJECT_UNAUTHORIZED|REPL_EXTERNAL_MODULE)$/i,
-  /^(LD|DYLD|XDG|NPM|YARN|PNPM|COREPACK|TURBO|GIT|GH|GITHUB|SSH|SSL|CURL|OPENSSL|BUN|DENO)_/i,
-  /^(PYTHON|PERL|RUBY)/i,
-  /(PATH|_BIN|_BINARY|_EXECUTABLE|_COMMAND|_CMD|_SHELL|_HOME|_PRELOAD|_OPTIONS|_OPTS|_PROXY|_REGISTRY)$/i,
-  /_(URL|URI|HOST|HOSTNAME|ENDPOINT|SERVER|DSN)$/i,
-];
+/** Environment variables that only tune a run's output or parallelism. Any other name in front of a command makes it uncoverable. */
+const TUNING_VARIABLE = /^(CI|NODE_ENV|FORCE_COLOR|NO_COLOR|TZ|DEBUG|LANG|LC_[A-Z]+|VITEST_MAX_WORKERS)$/;
 
 /**
  * Whether a `NAME=value` in front of a command only tunes it (`CI=1`, `VITEST_MAX_WORKERS=25%`):
- * the name steers nothing STEERING_VARIABLE lists and the value is literal, so it neither runs a
+ * the name is in TUNING_VARIABLE and the value is literal, so it neither runs a
  * command substitution nor carries what one read.
  */
 function harmlessAssignment(name: string, value: string): boolean {
-  return !STEERING_VARIABLE.some(pattern => pattern.test(name)) && !isDynamic(value);
+  return TUNING_VARIABLE.test(name) && !isDynamic(value);
 }
 
 /** Task names a package script or turbo pipeline runs under for testing, checking or building. */
@@ -821,14 +810,14 @@ const PACKAGE_FLAGS = new Set([
 ]);
 
 /** Options that open a server or debugger port a page could then talk to. */
-const VITEST_SERVES = /^--(browser\.)?(api|ui|open|inspect|inspect-brk|host)([.=]|$)/;
+const VITEST_SERVES = /^--(browser([.=]|$)|(browser\.)?(api|ui|open|inspect|inspect-brk|host)([.=]|$))/;
 
 /** Turbo options that read from or write to a remote cache. */
 const TURBO_REMOTE = /^--(api|token|team|login|cache|remote-only|remote-cache-read-only|preflight)(=|$)/;
 
 /** Node options that change nothing about what it loads; `--require`, `--import` and `-e` are not here. */
 const NODE_FLAGS =
-  /^--(test|test-only|test-[a-z-]+=.+|enable-source-maps|no-warnings|trace-warnings|trace-uncaught|experimental-(strip-types|transform-types|vm-modules)|max-old-space-size=\d+|stack-size=\d+)$/;
+  /^--(test|test-only|test-(name-pattern|skip-pattern|concurrency|timeout|shard)=.+|enable-source-maps|no-warnings|trace-warnings|trace-uncaught|experimental-(strip-types|transform-types|vm-modules)|max-old-space-size=\d+|stack-size=\d+)$/;
 
 /** A relative path that does not climb out of the folder it is resolved against. */
 function staysInFolder(path: string): boolean {

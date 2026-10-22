@@ -227,12 +227,19 @@ describe('ApprovalGate', () => {
       expect(gate.coversCommands('s', always(['git diff *'], ['git diff --stat']), true)).toBe(true);
     });
 
+    it('never carries a one-word pattern over taint', async () => {
+      const gate = new ApprovalGate();
+      await allow(gate, always(['node *'], ['node a.js']), true);
+      expect(gate.coversCommands('s', always(['node *'], ['node b.js']), true)).toBe(false);
+      expect(gate.coversCommands('s', always(['node *'], ['node b.js']))).toBe(true);
+    });
+
     it('never covers an opaque command over taint, whatever was answered', async () => {
       const gate = new ApprovalGate();
-      await allow(gate, always(['node *'], ['node -e x']), true);
+      await allow(gate, always(['pnpm exec node *'], ['pnpm exec node -e x']), true);
       const opaque: ApprovalAlways = {
         namespace: 'bash_execute',
-        commands: [{ pattern: 'node *', text: 'node -e y', coverable: true, opaque: 'node -e' }],
+        commands: [{ pattern: 'pnpm exec node *', text: 'pnpm exec node -e y', coverable: true, opaque: 'node -e' }],
         directories: [],
       };
       expect(gate.coversCommands('s', opaque)).toBe(true);

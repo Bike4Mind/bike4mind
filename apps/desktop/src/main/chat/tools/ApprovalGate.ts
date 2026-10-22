@@ -154,7 +154,8 @@ export class ApprovalGate {
 
   /**
    * Whether every sub-command of this script has been allowed before. Over a tainted reply only
-   * patterns answered over taint count, and never for a command that runs code the scan cannot read.
+   * patterns answered over taint count, never a one-word pattern such as `node *`, and never an
+   * inline or stdin script.
    */
   coversCommands(sessionId: string, always: ApprovalAlways, tainted = false): boolean {
     const standing = this.standingShell.get(sessionId);
@@ -304,7 +305,7 @@ export class ApprovalGate {
     for (const { pattern } of always.commands) {
       const entry = `${always.namespace}\x00${pattern}`;
       standing.patterns.add(entry);
-      if (overTaint) standing.overTaint.add(entry);
+      if (overTaint && pattern.split(' ').length > 2) standing.overTaint.add(entry);
     }
     for (const directory of always.directories) standing.directories.add(directory);
     this.standingShell.set(sessionId, standing);
