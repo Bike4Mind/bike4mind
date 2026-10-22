@@ -30,7 +30,7 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
-vi.mock('@server/integrations/github/sreWebhookDispatch', () => ({
+vi.mock('@bike4mind/server-utils/integrations/github/sreWebhookDispatch', () => ({
   dispatchIssueToSre: mockDispatchIssueToSre,
   syncSreIssueStateFromWebhook: mockSyncSreIssueState,
 }));

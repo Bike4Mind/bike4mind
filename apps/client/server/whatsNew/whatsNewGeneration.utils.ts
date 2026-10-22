@@ -193,7 +193,7 @@ Description: ${m.description || 'N/A'}
     try {
       // Import renderTemplate dynamically to avoid circular dependencies
       // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { renderTemplate } = require('./whatsNewGeneration.templateUtils');
+      const { renderTemplate } = require('@bike4mind/server-utils/whatsNew/whatsNewGeneration.templateUtils');
 
       // Format data for template variables
       const templateData = {

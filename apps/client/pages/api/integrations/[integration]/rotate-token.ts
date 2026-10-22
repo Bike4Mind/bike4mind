@@ -4,7 +4,7 @@ initializeSlackPackage();
 import { baseApi } from '@server/middlewares/baseApi';
 import { userRepository, mcpServerRepository, User } from '@bike4mind/database';
 import { McpServerName, ROTATABLE_INTEGRATIONS, type RotatableIntegration } from '@bike4mind/common';
-import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
+import { IntegrationAuditLogger } from '@bike4mind/server-utils/integrations/integrationAuditLogger';
 import { randomUUID } from 'crypto';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';

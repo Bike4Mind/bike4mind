@@ -5,6 +5,8 @@ import { isPathWithin } from './pathWithin.js';
 
 type EntryKind = 'file' | 'directory' | 'other';
 
+type WalkOptions = { skipHiddenDirectories: boolean; stopAtSkillFile: boolean };
+
 type DirentLike = {
   isFile(): boolean;
   isDirectory(): boolean;
@@ -50,11 +52,16 @@ async function classifyEntry(fullPath: string, entry: DirentLike): Promise<Entry
  * hostile clone cannot point a project SKILL.md/command/agent at a file outside
  * the checkout. Global dirs omit it - that is where dotfile managers legitimately
  * symlink into an out-of-tree immutable store.
+ *
+ * `stopAtSkillFile` makes a directory below `directory` that holds a SKILL.md a
+ * leaf: only that file is returned and nothing beneath it is walked. Everything
+ * else in a skill folder (references/, assets/, README.md) is the skill's
+ * supporting material, not a command of its own.
  */
 export async function findMarkdownFiles(
   directory: string,
   containmentRoot?: string,
-  options: { skipHiddenDirectories?: boolean } = {}
+  options: { skipHiddenDirectories?: boolean; stopAtSkillFile?: boolean } = {}
 ): Promise<string[]> {
   // Resolve the containment boundary once, then walk with a private visited-set
   // accumulator (kept out of the public signature so callers can't pass it).
@@ -66,14 +73,34 @@ export async function findMarkdownFiles(
       return []; // Containment requested but root is unresolvable - refuse all.
     }
   }
-  return walkMarkdown(directory, new Set<string>(), realRoot, options.skipHiddenDirectories ?? false);
+  return walkMarkdown(directory, new Set<string>(), realRoot, true, {
+    skipHiddenDirectories: options.skipHiddenDirectories ?? false,
+    stopAtSkillFile: options.stopAtSkillFile ?? false,
+  });
+}
+
+/** Containment check for one entry; true when no containment root applies. */
+async function isContained(fullPath: string, realRoot: string | undefined): Promise<boolean> {
+  if (realRoot === undefined) return true;
+  let realEntry: string;
+  try {
+    realEntry = await fs.realpath(fullPath);
+  } catch {
+    return false;
+  }
+  if (!isPathWithin(realEntry, realRoot)) {
+    console.warn(`Skipping ${fullPath}: symlink target escapes ${realRoot}`);
+    return false;
+  }
+  return true;
 }
 
 async function walkMarkdown(
   directory: string,
   visitedRealPaths: Set<string>,
   realRoot: string | undefined,
-  skipHiddenDirectories: boolean
+  isRoot: boolean,
+  options: WalkOptions
 ): Promise<string[]> {
   const files: string[] = [];
 
@@ -95,27 +122,27 @@ async function walkMarkdown(
     return files;
   }
 
+  // The root is a commands/skills directory, never a skill folder itself. An unloadable SKILL.md
+  // (broken link, escaping target) still marks a skill folder, so its supporting docs stay out.
+  if (options.stopAtSkillFile && !isRoot) {
+    const skillEntry = entries.find(entry => entry.name.toLowerCase() === 'skill.md');
+    if (skillEntry) {
+      const skillPath = path.join(directory, skillEntry.name);
+      const loadable =
+        (await classifyEntry(skillPath, skillEntry)) === 'file' && (await isContained(skillPath, realRoot));
+      return loadable ? [skillPath] : [];
+    }
+  }
+
   for (const entry of entries) {
     const fullPath = path.join(directory, entry.name);
     const kind = await classifyEntry(fullPath, entry);
     if (kind === 'other') continue;
-
-    if (realRoot !== undefined) {
-      let realEntry: string;
-      try {
-        realEntry = await fs.realpath(fullPath);
-      } catch {
-        continue; // Unresolvable target - skip.
-      }
-      if (!isPathWithin(realEntry, realRoot)) {
-        console.warn(`Skipping ${fullPath}: symlink target escapes ${realRoot}`);
-        continue;
-      }
-    }
+    if (!(await isContained(fullPath, realRoot))) continue;
 
     if (kind === 'directory') {
-      if (skipHiddenDirectories && entry.name.startsWith('.')) continue;
-      files.push(...(await walkMarkdown(fullPath, visitedRealPaths, realRoot, skipHiddenDirectories)));
+      if (options.skipHiddenDirectories && entry.name.startsWith('.')) continue;
+      files.push(...(await walkMarkdown(fullPath, visitedRealPaths, realRoot, false, options)));
     } else if (kind === 'file' && entry.name.endsWith('.md')) {
       files.push(fullPath);
     }

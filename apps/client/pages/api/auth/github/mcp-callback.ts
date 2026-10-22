@@ -9,7 +9,7 @@ import { randomUUID } from 'crypto';
 import { readStateNonceHash, clearStateNonce } from '@server/auth/oauthFlowCookie';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
-import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
+import { IntegrationAuditLogger } from '@bike4mind/server-utils/integrations/integrationAuditLogger';
 import { encryptEnvVariables } from '@server/security/tokenEncryption';
 import { buildMcpToolCacheUpdate } from '@bike4mind/services/llm';
 

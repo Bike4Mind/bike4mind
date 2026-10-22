@@ -107,7 +107,7 @@ describe('supportsToolSearch / supportsToolChanges', () => {
 });
 
 describe('completionsSupportsToolSearch', () => {
-  it('is true only where the direct Anthropic adapter serves the model', () => {
+  it('is true where the direct Anthropic adapter serves the model', () => {
     expect(completionsSupportsToolSearch({ id: ChatModels.CLAUDE_5_5_OPUS, backend: ModelBackend.Anthropic })).toBe(
       true
     );
@@ -116,11 +116,23 @@ describe('completionsSupportsToolSearch', () => {
     );
   });
 
-  it('is false for a Bedrock row the model predicate accepts', () => {
+  it('is true for a Bedrock row the model predicate accepts, served by the Bedrock Claude adapter', () => {
     expect(flags(ChatModels.CLAUDE_5_5_OPUS_BEDROCK)).toEqual([true, true]);
     expect(
       completionsSupportsToolSearch({ id: ChatModels.CLAUDE_5_5_OPUS_BEDROCK, backend: ModelBackend.Bedrock })
+    ).toBe(true);
+    expect(
+      completionsSupportsToolSearch({ id: ChatModels.CLAUDE_4_5_HAIKU_BEDROCK, backend: ModelBackend.Bedrock })
+    ).toBe(true);
+  });
+
+  it('is false for a Bedrock Claude row the model predicate rejects and for non-Claude Bedrock models', () => {
+    expect(
+      completionsSupportsToolSearch({ id: ChatModels.CLAUDE_4_1_OPUS_BEDROCK, backend: ModelBackend.Bedrock })
     ).toBe(false);
+    expect(completionsSupportsToolSearch({ id: ChatModels.DEEPSEEK_R1_BEDROCK, backend: ModelBackend.Bedrock })).toBe(
+      false
+    );
   });
 
   it('follows adapterFamily over backend, as getLlmByModel dispatches', () => {
@@ -130,10 +142,13 @@ describe('completionsSupportsToolSearch', () => {
     ).toBe(true);
     expect(
       completionsSupportsToolSearch({ id, backend: ModelBackend.Anthropic, adapterFamily: 'bedrock-anthropic' })
-    ).toBe(false);
+    ).toBe(true);
     expect(
       completionsSupportsToolSearch({ id, backend: ModelBackend.Anthropic, adapterFamily: 'anthropic-messages' })
     ).toBe(true);
+    expect(completionsSupportsToolSearch({ id, backend: ModelBackend.Bedrock, adapterFamily: 'bedrock-llama' })).toBe(
+      false
+    );
   });
 
   it('is false for unsupported Claude models and non-Claude models', () => {
@@ -155,6 +170,13 @@ describe('completionsSupportsToolChanges', () => {
     expect(supportsToolChanges({ id: ChatModels.CLAUDE_5_5_OPUS_BEDROCK, backend: ModelBackend.Bedrock })).toBe(true);
     expect(
       completionsSupportsToolChanges({ id: ChatModels.CLAUDE_5_5_OPUS_BEDROCK, backend: ModelBackend.Bedrock })
+    ).toBe(false);
+    expect(
+      completionsSupportsToolChanges({
+        id: 'claude-opus-5-5',
+        backend: ModelBackend.Anthropic,
+        adapterFamily: 'bedrock-anthropic',
+      })
     ).toBe(false);
   });
 

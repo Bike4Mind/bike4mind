@@ -72,13 +72,13 @@ const makeSearchTool = () => {
 
 async function run(chunk: unknown) {
   const { tool, toolFn } = makeSearchTool();
-  const calls: { text: (string | null | undefined)[]; info?: CompletionInfo }[] = [];
+  const calls: { text: (string | null | undefined)[]; info?: CompletionInfo; toolIdsAtSend: string[] }[] = [];
   await withBody(chunk).complete(
     TEST_MODEL,
     [{ role: 'user', content: 'find bikes' }],
     { stream: false, tools: [tool], executeTools: false } as Partial<ICompletionOptions>,
     async (text, info) => {
-      calls.push({ text, info });
+      calls.push({ text, info, toolIdsAtSend: (info?.toolsUsed ?? []).map(t => t.id ?? '') });
     }
   );
   return { calls, toolFn };
@@ -90,12 +90,11 @@ describe('BaseBedrockBackend non-streaming executeTools:false', () => {
 
     expect(toolFn).not.toHaveBeenCalled();
     expect(calls.map(c => c.text)).toEqual([["I'll search for that."], [null]]);
-    // The reported call rides on both sends, so a consumer sees it with the intro text.
-    for (const { info } of calls) {
-      expect(info?.toolsUsed).toEqual([
-        { name: 'search', arguments: JSON.stringify({ q: 'bikes' }), id: 'tool_search_01' },
-      ]);
-    }
+    // Only the [null] send carries the call: each send with toolsUsed is its own tool_use frame on the wire.
+    expect(calls.map(c => c.toolIdsAtSend)).toEqual([[], ['tool_search_01']]);
+    expect(calls[1].info?.toolsUsed).toEqual([
+      { name: 'search', arguments: JSON.stringify({ q: 'bikes' }), id: 'tool_search_01' },
+    ]);
   });
 
   it('sends only [null] when the tool call carries no text', async () => {
