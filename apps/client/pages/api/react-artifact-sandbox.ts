@@ -159,6 +159,7 @@ const SANDBOX_HTML = `<!DOCTYPE html>
         var ok = probe.length === 2 && probe[1].clause === '{ b as c }' && probe[1].specifier === 'y' &&
           importScanner.stripTypeOnlyImports("import type T from 't';import { type U, v } from 'u';") === "import { v } from 'u';" &&
           importScanner.findRelativeImport("import a from './a'") === './a' &&
+          importScanner.moduleBaseName('../ui/Panel.tsx') === 'panel' &&
           importScanner.renameAsBindings('{ b as c, d }') === '{ b: c, d }' &&
           importScanner.replaceImportStatements("import a from 'x'", {}, function (st) { return st.specifier; }) === 'x';
         return ok ? '' : 'Import scanner self-check failed';
@@ -252,8 +253,10 @@ const SANDBOX_HTML = `<!DOCTYPE html>
     // global name, so it is reached the same way from the eval-mode Function and the inert script.
     // files is [name, factory] pairs; each factory is a CommonJS (module, exports, require) wrapper.
     function runArtifactModules(requireExternal, files, entryFactory) {
+      // The scanner's normalizer, which the chat's artifact grouping (reactArtifactGroup.ts) also
+      // matches siblings with, so the two agree on which file an import names.
       function moduleName(path) {
-        return String(path).split('/').pop().replace(/\\.[cm]?[jt]sx?$/i, '').toLowerCase();
+        return importScanner.moduleBaseName(String(path));
       }
       var factories = Object.create(null);
       var keysByName = Object.create(null);

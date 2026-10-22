@@ -3,6 +3,7 @@ import { Box, Typography } from '@mui/joy';
 import { generateCompleteArtifactId, getArtifactTimestamp } from '@client/app/utils/artifactParser';
 import { getCachedArtifactId, useArtifactIdResolver } from './ArtifactIdResolver';
 import { getArtifactHandler, type ParsedArtifact } from './registry';
+import type { ReactArtifactGroupRole } from '@client/app/utils/reactArtifactGroup';
 
 // Ensure all handlers are registered
 import './handlers';
@@ -12,13 +13,15 @@ type ArtifactRendererProps = {
   index: number;
   messageId: string;
   sessionId?: string;
+  /** This artifact's place in a multi-file React app, from groupReactArtifacts over its reply. */
+  reactGroup?: ReactArtifactGroupRole;
 };
 
 /**
  * Resolves the artifact ID asynchronously, then dispatches to the appropriate
  * handler's PreviewCard via the registry.
  */
-const ArtifactRenderer: FC<ArtifactRendererProps> = ({ artifact, index, messageId, sessionId }) => {
+const ArtifactRenderer: FC<ArtifactRendererProps> = ({ artifact, index, messageId, sessionId, reactGroup }) => {
   const { resolveArtifactId } = useArtifactIdResolver();
   // Seeded from the module cache rather than starting at null: resolution is async, so a
   // null start renders the loading placeholder for a frame on every mount. In a virtualized
@@ -88,7 +91,7 @@ const ArtifactRenderer: FC<ArtifactRendererProps> = ({ artifact, index, messageI
 
   return (
     <Box data-testid={`artifact-renderer-${artifact.type}`}>
-      <handler.PreviewCard artifact={artifact} artifactId={resolvedId} index={index} />
+      <handler.PreviewCard artifact={artifact} artifactId={resolvedId} index={index} reactGroup={reactGroup} />
     </Box>
   );
 };

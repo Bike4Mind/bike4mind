@@ -16,7 +16,11 @@ vi.mock('@client/app/utils/artifactPersistence', () => ({
 
 registerArtifactType({
   type: 'stub',
-  PreviewCard: ({ artifactId }) => <div data-testid="stub-card">{artifactId}</div>,
+  PreviewCard: ({ artifactId, reactGroup }) => (
+    <div data-testid="stub-card" data-role={reactGroup?.role}>
+      {artifactId}
+    </div>
+  ),
 });
 
 const artifact = { type: 'stub', title: 'Stub', content: 'x', identifier: 'stub-1' };
@@ -39,6 +43,25 @@ describe('ArtifactRenderer', () => {
 
     expect(screen.getByTestId('stub-card')).toHaveTextContent('cached-id');
     expect(screen.queryByTestId('artifact-loading')).not.toBeInTheDocument();
+  });
+
+  it("hands the artifact's multi-file group role to the handler", () => {
+    (window as unknown as { __artifactIdCache: Map<string, string> }).__artifactIdCache.set(
+      'session-1_stub_stub-1',
+      'cached-id'
+    );
+
+    render(
+      <ArtifactRenderer
+        artifact={artifact}
+        index={0}
+        messageId="msg-1"
+        sessionId="session-1"
+        reactGroup={{ role: 'sibling', entryTitle: 'App' }}
+      />
+    );
+
+    expect(screen.getByTestId('stub-card')).toHaveAttribute('data-role', 'sibling');
   });
 
   it('falls back to the loading state when nothing is cached', () => {
