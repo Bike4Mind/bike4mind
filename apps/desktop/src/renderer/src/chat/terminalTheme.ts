@@ -1,4 +1,5 @@
 import type { ITheme } from '@xterm/xterm';
+import { DARK_PALETTE } from '../theme';
 
 /** VS Code's terminal ANSI colours, which are tuned for contrast on light and dark grounds. */
 const ANSI: Record<'light' | 'dark', ITheme> = {
@@ -42,8 +43,7 @@ const ANSI: Record<'light' | 'dark', ITheme> = {
 
 const FALLBACK = {
   light: { background: '#fbfcfe', foreground: '#171a1c', selection: '#c7dff7' },
-  // Mirrors DARK_PALETTE in theme.ts (panel, ink, selected).
-  dark: { background: '#13181c', foreground: '#d1e4f4', selection: '#1b4b7a' },
+  dark: { background: DARK_PALETTE.panel, foreground: DARK_PALETTE.ink, selection: DARK_PALETTE.selected },
 };
 
 /**
