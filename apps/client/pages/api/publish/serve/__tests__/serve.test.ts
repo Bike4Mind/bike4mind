@@ -10,6 +10,7 @@ const {
   mockUserFindById,
   mockStarterCredits,
   mockGetSignedUrl,
+  mockBrowserSigningOrigin,
   signing,
 } = vi.hoisted(() => ({
   mockArtifactFindOne: vi.fn(),
@@ -20,6 +21,7 @@ const {
   mockUserFindById: vi.fn(),
   mockStarterCredits: vi.fn(() => Promise.resolve(0)),
   mockGetSignedUrl: vi.fn(),
+  mockBrowserSigningOrigin: vi.fn(),
   // Signing is off unless a suite turns it on, so the buffered path stays the default here.
   signing: { enabled: false },
 }));
@@ -58,7 +60,7 @@ vi.mock('@server/utils/starterCredits', () => ({
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getPublishedArtifactsStorage: () => ({
     download: mockDownload,
-    ...(signing.enabled ? { getSignedUrl: mockGetSignedUrl } : {}),
+    ...(signing.enabled ? { getSignedUrl: mockGetSignedUrl, browserSigningOrigin: mockBrowserSigningOrigin } : {}),
   }),
 }));
 
@@ -3570,6 +3572,7 @@ describe('GET /api/publish/serve - signed file delivery', () => {
 
   beforeEach(() => {
     signing.enabled = true;
+    mockBrowserSigningOrigin.mockReset().mockResolvedValue(BUCKET);
     mockGetSignedUrl
       .mockReset()
       .mockImplementation((key: string) => Promise.resolve(`${BUCKET}/${key}?X-Amz-Signature=sig`));
@@ -3595,7 +3598,8 @@ describe('GET /api/publish/serve - signed file delivery', () => {
     expect(res.getHeader('Cache-Control')).toBe('private, no-store');
     expect(mockGetSignedUrl).toHaveBeenCalledWith('user/scope123/my-slug/files/evil.pdf', 'get', {
       audience: 'browser',
-      expiresIn: 7200,
+      // Opened at once: a short-lived link, not the media-element lifetime.
+      expiresIn: 900,
       ResponseContentType: 'application/pdf',
       ResponseContentDisposition: `inline; filename="evil.pdf"; filename*=UTF-8''evil.pdf`,
     });
@@ -3654,6 +3658,7 @@ describe('GET /api/publish/serve - signed file delivery', () => {
     ['the app host', 'https://app.bike4mind.com'],
     ['an artifact usercontent host', 'https://pub1.usercontent.app.bike4mind.com'],
   ])('refuses to hand out signed links on %s and falls back to the buffered path', async (_label, origin) => {
+    mockBrowserSigningOrigin.mockResolvedValue(origin);
     mockGetSignedUrl.mockImplementation((key: string) => Promise.resolve(`${origin}/${key}?X-Amz-Signature=sig`));
     mockArtifactFindOne.mockReturnValue(bundle({ manifest: FILES }));
     const { res, promise } = run(['u', 'scope123', 'my-slug', 'media', 'still.jpg'], { fetchDest: 'document' });
@@ -3661,6 +3666,73 @@ describe('GET /api/publish/serve - signed file delivery', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(res.getHeader('Content-Disposition')).toBe('attachment');
     expect(res.getHeader('Location')).toBeUndefined();
+  });
+
+  it('keeps the buffered path when the storage cannot sign for a browser (self-host without a public endpoint)', async () => {
+    mockBrowserSigningOrigin.mockResolvedValue('');
+    mockArtifactFindOne.mockReturnValue(bundle({ manifest: FILES }));
+    const { res, promise } = run(['u', 'scope123', 'my-slug', 'media', 'still.jpg'], { fetchDest: 'document' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('Location')).toBeUndefined();
+    expect(mockGetSignedUrl).not.toHaveBeenCalled();
+  });
+
+  it('drops a signed link that lands off the storage origin it was configured with', async () => {
+    mockGetSignedUrl.mockImplementation((key: string) => Promise.resolve(`https://elsewhere.example/${key}?sig=1`));
+    mockArtifactFindOne.mockReturnValue(bundle({ manifest: FILES }));
+    const { res, promise } = run(['u', 'scope123', 'my-slug', 'media', 'still.jpg'], { fetchDest: 'document' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('Location')).toBeUndefined();
+  });
+
+  it('varies on Sec-Fetch-Dest wherever one file URL can answer with a redirect or bytes', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ manifest: FILES }));
+    const nav = run(['u', 'scope123', 'my-slug', 'media', 'still.jpg'], { fetchDest: 'document' });
+    await nav.promise;
+    expect(nav.res._getStatusCode()).toBe(302);
+    expect(nav.res.getHeader('Vary')).toBe('Sec-Fetch-Dest');
+
+    mockArtifactFindOne.mockReturnValue(bundle({ manifest: FILES }));
+    const img = run(['u', 'scope123', 'my-slug', 'media', 'still.jpg'], { fetchDest: 'image' });
+    await img.promise;
+    expect(img.res._getStatusCode()).toBe(200);
+    expect(img.res.getHeader('Vary')).toBe('Sec-Fetch-Dest');
+  });
+
+  it('caps media links in a gated render at the remaining proof lifetime', async () => {
+    const { signGateToken } = await import('@server/services/publish/publishGateToken');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+      const cookie = `b4m_pg_pub1=${signGateToken({ publicId: 'pub1' })}`;
+      // 100 minutes into a 2h proof: 20 minutes left.
+      vi.setSystemTime(new Date('2026-01-01T01:40:00Z'));
+      mockArtifactFindOne.mockReturnValue(gated());
+      const { res, promise } = run(['u', 'scope123', 'my-slug', 'player.html'], { cookie });
+      await promise;
+      expect(res._getStatusCode()).toBe(200);
+      const call = mockGetSignedUrl.mock.calls.find(c => c[0] === 'user/scope123/my-slug/media/clip.mp4');
+      expect(call?.[2].expiresIn).toBe(20 * 60);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('exports a sub-page with its own page-relative assets, without inlining other pages or streamed files', async () => {
+    mockArtifactFindOne.mockReturnValue(gated());
+    const { res, promise } = run(['u', 'scope123', 'my-slug', 'player.html'], {
+      cookie: await proofCookie(),
+      exportAs: 'html',
+    });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData().toString()).toContain(
+      `poster="data:image/jpeg;base64,${Buffer.from('JPEG').toString('base64')}"`
+    );
+    expect(mockDownload).not.toHaveBeenCalledWith('user/scope123/my-slug/index.html');
+    expect(mockDownload).not.toHaveBeenCalledWith('user/scope123/my-slug/media/clip.mp4');
   });
 
   it('answers the loader shell ?sign=1 request with a signed link once the gate passes', async () => {

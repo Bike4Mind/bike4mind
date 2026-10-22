@@ -4,6 +4,8 @@ import {
   inlineTypeFor,
   isSafeSignedOrigin,
   isStreamedFile,
+  mediaLinkTtlSeconds,
+  SIGNED_LINK_TTL_SECONDS,
   signedDisposition,
   signedResponseFor,
 } from './signedFiles';
@@ -95,4 +97,19 @@ describe('bufferedContentType', () => {
       expect(bufferedContentType(type)).toBe(type);
     }
   );
+});
+
+describe('signed link lifetimes', () => {
+  it('opens redirect and ?sign=1 links for 15 minutes', () => {
+    expect(SIGNED_LINK_TTL_SECONDS).toBe(900);
+  });
+
+  it('bounds a media link by the proof that authorized the render', () => {
+    expect(mediaLinkTtlSeconds(20 * 60)).toBe(20 * 60);
+    expect(mediaLinkTtlSeconds(5 * 60 * 60)).toBe(2 * 60 * 60);
+    // A proof on its last seconds still yields a link that survives the page load.
+    expect(mediaLinkTtlSeconds(3)).toBe(60);
+    // Another gate (no proof cookie) gets the ceiling.
+    expect(mediaLinkTtlSeconds(null)).toBe(2 * 60 * 60);
+  });
 });

@@ -40,11 +40,30 @@ const INLINE_TYPES: Readonly<Record<string, string>> = {
 };
 
 /**
- * Signed links live as long as the passphrase proof that authorized them, so a video
- * started near the end of an unlock can still seek. The link names one object and is
- * equivalent to a download the viewer was already allowed to make.
+ * Lifetime of a link handed out by redirect or `?sign=1`: the viewer opens it at once, so
+ * it only has to outlive the navigation (and a PDF viewer's follow-up range requests).
  */
-export const SIGNED_FILE_TTL_SECONDS = GATE_TOKEN_TTL_SECONDS;
+export const SIGNED_LINK_TTL_SECONDS = 15 * 60;
+
+/**
+ * Upper bound for a link baked into a rendered page (`<video src>`): it must outlive the
+ * page, so a long video can still seek, but never the proof that authorized the render -
+ * see `mediaLinkTtlSeconds`.
+ */
+export const SIGNED_MEDIA_TTL_SECONDS = GATE_TOKEN_TTL_SECONDS;
+
+/** Floor so a proof about to expire still yields a link that survives the page load. */
+const MIN_MEDIA_TTL_SECONDS = 60;
+
+/**
+ * TTL for a media link in a render authorized by a passphrase proof with `proofSecondsLeft`
+ * remaining (null when another gate authorized it). Issued links are NOT revoked by a
+ * takedown or a passphrase change; this bound is what limits them.
+ */
+export function mediaLinkTtlSeconds(proofSecondsLeft: number | null): number {
+  if (proofSecondsLeft === null) return SIGNED_MEDIA_TTL_SECONDS;
+  return Math.max(MIN_MEDIA_TTL_SECONDS, Math.min(SIGNED_MEDIA_TTL_SECONDS, proofSecondsLeft));
+}
 
 function extensionOf(path: string): string {
   const name = path.slice(path.lastIndexOf('/') + 1);
@@ -114,7 +133,9 @@ export function signedResponseFor(
  * infra/web.ts. A buffered response with any other type is converted as UTF-8 text on the
  * way out, splicing U+FFFD into the bytes. Notably absent upstream: `video/mp4`,
  * `audio/mp4`, `image/avif`, `application/wasm`, `audio/wav` and `audio/webm` (the last two
- * are fused into one entry by a missing comma there).
+ * are fused into one entry by a missing comma there). So a wasm module goes out as
+ * octet-stream and cannot use `WebAssembly.instantiateStreaming`; the publish docs tell
+ * authors to instantiate from bytes. Corrupting it would be the only alternative.
  */
 const EDGE_BINARY_TYPES = new Set([
   'application/octet-stream',

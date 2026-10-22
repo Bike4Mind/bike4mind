@@ -33,14 +33,15 @@ import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import { parsePublishPath } from '@server/services/publish/parsePublishPath';
 import { HASH_BRIDGE_JS } from '@server/services/publish/fragmentNav';
 import {
-  SIGNED_FILE_TTL_SECONDS,
+  SIGNED_LINK_TTL_SECONDS,
   bufferedContentType,
+  mediaLinkTtlSeconds,
   inlineTypeFor,
   isSafeSignedOrigin,
   isStreamedFile,
   signedResponseFor,
 } from '@server/services/publish/signedFiles';
-import { requestHasGateProof } from '@server/services/publish/publishGateToken';
+import { gateProofSecondsLeft, requestHasGateProof } from '@server/services/publish/publishGateToken';
 import { renderPassphraseShell } from '@server/services/publish/renderPassphraseShell';
 import { injectSignupGateBridge } from '@server/services/publish/signupGateBridge';
 import { PUBLISH_HOST } from '@server/services/publish/validateBundle';
@@ -545,7 +546,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
       // Static shell - intentionally carries no artifact data (title/id), so an anonymous
       // viewer of a gated bundle learns nothing; the real title appears only once the
       // authenticated ?raw=1 srcdoc renders.
-      return res.status(200).send(renderBundleLoaderShell());
+      return res.status(200).send(renderBundleLoaderShell(await signFile.origin()));
     }
     return res.status(access.status).json({ error: access.error });
   }
@@ -766,10 +767,12 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
       return res.status(404).json({ error: 'Asset not in artifact manifest' });
     }
     const wantsDownload = req.query.download === '1';
+    // One URL answers with a redirect or with bytes depending on how it was requested.
+    res.setHeader('Vary', 'Sec-Fetch-Dest');
     // `?sign=1`: the loader shell's Bearer-authorized request for a signed link it can open
     // at top level (a plain navigation there carries no credential). Gate already passed.
     if (req.query.sign === '1') {
-      const url = await signFile(assetPath, wantsDownload);
+      const url = await signFile(assetPath, wantsDownload, SIGNED_LINK_TTL_SECONDS);
       res.setHeader('Cache-Control', 'private, no-store');
       return url ? res.status(200).json({ url }) : res.status(404).json({ error: 'Not found' });
     }
@@ -777,7 +780,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     // storage serves it (Range, any size, byte-exact). Subresources such as CSS keep the
     // buffered path below. A missing Sec-Fetch-Dest (older UA, scripts) also stays buffered.
     if (wantsDownload || isStreamedFile(assetPath) || req.headers['sec-fetch-dest'] === 'document') {
-      const url = await signFile(assetPath, wantsDownload);
+      const url = await signFile(assetPath, wantsDownload, SIGNED_LINK_TTL_SECONDS);
       if (url) {
         res.setHeader('Cache-Control', 'private, no-store');
         res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -896,7 +899,9 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // app host, so a saved bundle that used one needs network to render fully.
   if (exportFormat) {
     const collected = await collectInlineAssets({
-      manifest: artifact.manifest,
+      // As in the served view: pages are separate documents and streamed files are not
+      // inlinable, so neither spends the inline budget.
+      manifest: artifact.manifest.filter(f => !isBundlePagePath(f.path) && !isStreamedFile(f.path)),
       load: path => storage.download(`${artifact.storageKeyPrefix}${path}`),
     });
     const skipped = [...collected.oversized, ...collected.failed];
@@ -913,6 +918,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
       visibility: effectiveVisibility,
       assetMode: 'inline',
       assets: collected.assets,
+      pagePath,
     });
     bumpViewCount(artifact, req.user as { id?: string } | undefined, req.headers['user-agent'], {
       gateView: gateViewAudit,
@@ -940,9 +946,11 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     // The opaque frame's own requests carry no cookie, so media it cannot get inlined is
     // pointed straight at signed storage URLs minted here, after the gate.
     signedAssets = new Map();
+    // Baked into the page, so these must outlive it - but never the proof behind the render.
+    const mediaTtl = mediaLinkTtlSeconds(passphraseVerified ? gateProofSecondsLeft(req, artifact.publicId) : null);
     const oversizedImages = collected.oversized.filter(path => inlineTypeFor(path)?.startsWith('image/'));
     for (const path of [...artifact.manifest.map(f => f.path).filter(isStreamedFile), ...oversizedImages]) {
-      const url = await signFile(path, false);
+      const url = await signFile(path, false, mediaTtl);
       if (url) signedAssets.set(path, url);
     }
     droppedAssets = [...collected.oversized.filter(path => !signedAssets?.has(path)), ...collected.failed];
@@ -2135,15 +2143,17 @@ function injectPinBridge(srcdoc: string): string {
   return /<\/body>/i.test(srcdoc) ? srcdoc.replace(/<\/body>/i, `${tag}</body>`) : srcdoc + tag;
 }
 
-type FileSigner = ((path: string, wantsDownload: boolean) => Promise<string | null>) & {
+type FileSigner = ((path: string, wantsDownload: boolean, ttlSeconds: number) => Promise<string | null>) & {
   /** Origin of this deployment's signed links, '' when signing is unavailable or unsafe. */
   origin: () => Promise<string>;
 };
 
 /**
  * Signs bundle files for this request (see signedFiles.ts). Returns null instead of a URL
- * whenever signing is unavailable or the signing endpoint resolves to an app-controlled
- * origin, and callers then fall back to the buffered path. Signing is a local HMAC, no I/O.
+ * whenever the storage cannot sign for browsers (e.g. a server-only endpoint), its signing
+ * origin is an app-controlled host, or a link lands anywhere but that one origin - callers
+ * then fall back to the buffered path. The origin comes from the storage's own config, so
+ * a CSP naming it admits exactly the bucket.
  */
 function makeFileSigner(
   storage: ReturnType<typeof getPublishedArtifactsStorage>,
@@ -2151,24 +2161,32 @@ function makeFileSigner(
   req: Request
 ): FileSigner {
   const docOrigin = resolveDocOrigin(req.headers.host, req.headers['x-forwarded-proto']);
-  const sign = async (key: string, params: Record<string, string>): Promise<string | null> => {
-    if (typeof storage.getSignedUrl !== 'function') return null;
+  let origin: Promise<string> | undefined;
+  const originOnce = (): Promise<string> =>
+    (origin ??= (async () => {
+      if (typeof storage.browserSigningOrigin !== 'function') return '';
+      try {
+        const found = await storage.browserSigningOrigin();
+        return found && isSafeSignedOrigin(found, docOrigin) ? found : '';
+      } catch {
+        return '';
+      }
+    })());
+  const signer = (async (path: string, wantsDownload: boolean, ttlSeconds: number) => {
+    const allowed = await originOnce();
+    if (!allowed) return null;
     try {
-      const url = await storage.getSignedUrl(key, 'get', {
+      const url = await storage.getSignedUrl(`${storageKeyPrefix}${path}`, 'get', {
         audience: 'browser',
-        expiresIn: SIGNED_FILE_TTL_SECONDS,
-        ...params,
+        expiresIn: ttlSeconds,
+        ...signedResponseFor(path, wantsDownload),
       });
-      return isSafeSignedOrigin(new URL(url).origin, docOrigin) ? url : null;
+      return new URL(url).origin === allowed ? url : null;
     } catch {
       return null;
     }
-  };
-  let origin: Promise<string> | undefined;
-  const signer = ((path: string, wantsDownload: boolean) =>
-    sign(`${storageKeyPrefix}${path}`, signedResponseFor(path, wantsDownload))) as FileSigner;
-  signer.origin = () =>
-    (origin ??= sign(`${storageKeyPrefix}index.html`, {}).then(url => (url ? new URL(url).origin : '')));
+  }) as FileSigner;
+  signer.origin = originOnce;
   return signer;
 }
 

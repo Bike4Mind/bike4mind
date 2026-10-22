@@ -106,5 +106,13 @@ display name or username does not select a publishing namespace.
   when linked, and `<video>`/`<audio>` elements play with seeking, including on
   passphrase-protected pages. They are delivered from file storage through short-lived
   links issued after the access check. Use MP4 rather than HLS for video.
+- Those storage links stay valid until they expire: 15 minutes for a file you open or
+  download, and for media playing in a page, until the passphrase unlock that opened the
+  page expires (at most 2 hours). Unpublishing an artifact or changing its passphrase
+  does not revoke links already issued. Treat a passphrase change as taking effect once
+  those windows have passed.
 - Other files (archives, SVG, data files) download when opened. Add `?download=1` to any
   file's URL, a page's included, to download it instead of viewing it.
+- WebAssembly modules are served as `application/octet-stream`, so
+  `WebAssembly.instantiateStreaming` rejects them. Load them with
+  `WebAssembly.instantiate` on the fetched bytes instead.
