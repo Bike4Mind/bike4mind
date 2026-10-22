@@ -776,24 +776,18 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     },
     ['execute-api:ManageConnections']
   ),
-  wired(
-    'schedule:infra/cron.ts:scheduleTaskCron',
-    '4792978953745b7ea8c9c384086e3be84d182f00db2252b3b61745af65096def',
-    {
-      source: 'apps/workers/src/selfhost/taskScheduler.ts',
-      symbol: 'registerTaskScheduler',
-      fingerprint: 'f394d8b0c0847bf801d80443d57e8f46a220a037cc7a0484d9f9d39365c5206e',
-    },
-    ['events:*']
-  ),
+  wired('schedule:infra/cron.ts:scheduleTaskCron', '58b0d87429914460cc1c54bb7456d31b30a95aa830116697b8a7ed011450f9fe', {
+    source: 'apps/workers/src/selfhost/taskScheduler.ts',
+    symbol: 'registerTaskScheduler',
+    fingerprint: 'f394d8b0c0847bf801d80443d57e8f46a220a037cc7a0484d9f9d39365c5206e',
+  }),
   gap(
     'schedule:infra/cron.ts:secretRotationNotifier',
     '53ce6957dc65b2898314c65405ebf7a4b16a7471bedb6ccd8ed642e0ced5ed2e'
   ),
   gap(
     'schedule:infra/cron.ts:securityScanScheduler',
-    '937c351074f20bfa1f240fab190968f89b0acecae4f8e6cf38620b97ba44ff21',
-    ['events:*']
+    'cddcc224c42638df7e24e67d5ed1bee16ada802e08f68038610f79b9e5f55c9b'
   ),
   wired(
     'schedule:infra/cron.ts:skillMarketReviewSla',
