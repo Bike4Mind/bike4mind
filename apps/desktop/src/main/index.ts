@@ -131,6 +131,7 @@ void app.whenReady().then(async () => {
     browser,
     pullRequests,
     claudeImport,
+    spareWorktrees,
   } = registerChat(auth, {
     sessionClosed: sessionId => terminals.killSession(sessionId),
     observeStream: event => fleet.observe(event),
@@ -171,6 +172,7 @@ void app.whenReady().then(async () => {
         mcp.shutdown(),
         terminals.shutdown(),
         browser.cookies.clearOnQuit(),
+        spareWorktrees.dispose(),
       ]).catch(() => undefined);
     },
   });
@@ -198,7 +200,13 @@ void app.whenReady().then(async () => {
     event.preventDefault();
     // The imported cookies go too. They have no expiry and so were never written to disk, but
     // this is the pass that can await, and the guarantee is worth holding in two places.
-    void Promise.all([background.shutdown(), mcp.shutdown(), terminals.shutdown(), browser.cookies.clearOnQuit()])
+    void Promise.all([
+      background.shutdown(),
+      mcp.shutdown(),
+      terminals.shutdown(),
+      browser.cookies.clearOnQuit(),
+      spareWorktrees.dispose(),
+    ])
       .catch(() => undefined)
       .finally(() => app.quit());
   });

@@ -94,6 +94,7 @@ async function mount(
     chat: {
       listSessions: async () => sessions,
       onSessionSummary: () => () => undefined,
+      onStreamEvent: () => () => undefined,
       renameSession,
     },
     ...extra,

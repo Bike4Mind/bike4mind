@@ -493,6 +493,24 @@ Three cases it handles rather than failing:
 deleting a conversation must not be a way to lose code. Removing one stays a git operation the
 user performs themselves (`rmworktree <branch>`).
 
+### Starting a session in a worktree
+
+A suggested task or approved `session_spawn` appears in the sidebar before git finishes,
+with "Preparing worktree..." in its row and chips. Its first turn waits for the checkout;
+messages sent while it prepares queue behind the initial task. New Code sessions with the
+worktree toggle on also wait for their checkout before running tools.
+
+If a spawned session cannot prepare its worktree, the app shows a failure toast and reports
+the failure to the parent conversation. An empty failed session is removed, and a suggested
+task returns to pending: start the card again after correcting the git or filesystem error.
+For a tool spawn, ask the parent to try `session_spawn` again.
+
+A failed session that accepted follow-up messages is kept. Its unsent task, follow-ups and
+attachments are saved in its transcript, and typed input returns to its open composer for
+retry. Relayed messages remain in the transcript. After correcting the startup error, retry
+in that conversation; its suggestion card stays started to avoid creating a duplicate.
+Deleting a session while it prepares cancels its launch without reporting a startup failure.
+
 ### Tools run in the session's working directory
 
 `ChatService.resolveToolScope` puts the session's working directory and its context
@@ -523,9 +541,9 @@ not a hand-written approximation.
 Adapted from Claude Code desktop's layout: primary nav, a **Pinned** section, then project
 groups with per-group actions (new session, search, settings) and a leading status dot per row
 
-- filled while a reply streams, hollow when idle. The dot is driven by a global subscription to
-  main's stream events, not the open conversation, so a session replying in the background shows
-  as running.
+- filled while a reply streams or its worktree prepares, hollow when idle. The dot is driven by a
+  global subscription to main's stream events, not the open conversation, so a session replying in
+  the background shows as running.
 
 **Artifacts** opens a searchable grid of the artifacts created by this app across your machines.
 Thumbnails load as cards approach the viewport; select a card to view it or share its live link.

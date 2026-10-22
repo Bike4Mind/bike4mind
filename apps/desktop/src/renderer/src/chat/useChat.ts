@@ -95,6 +95,15 @@ export function useSessions(): SessionsController {
   // Main batches these, so a sync of hundreds of transcripts re-lists a handful of times.
   useEffect(() => window.b4m.claudeImport?.onSessionsChanged(() => void reload()), [reload]);
 
+  // Failed spawns are deleted without a reply ending or a status push to refresh the list.
+  useEffect(
+    () =>
+      window.b4m.chat.onStreamEvent(event => {
+        if (event.type === 'spawn-failed') void reload();
+      }),
+    [reload]
+  );
+
   // Patched in place rather than moved to the front, the way pinning is: a generated title does
   // not touch `updatedAt`, so reordering here would disagree with the next reload. An id this
   // window does not hold is ignored - the push reaches every window, including ones that have
@@ -445,6 +454,7 @@ export function useConversation(
   const sendingFor = useRef<string | null>(null);
   // An imported refresh must not replace a prompt, boundary or reply that arrived after its read began.
   const transcriptVersion = useRef(0);
+  const workspaceVersion = useRef(0);
 
   useEffect(() => {
     setSendError(null);
@@ -465,8 +475,10 @@ export function useConversation(
 
     let current = true;
     const load = (): void => {
+      const preparationBeforeRead = workspaceVersion.current;
       void window.b4m.chat.getSession(sessionId).then(loaded => {
         if (!current) return;
+        if (preparationBeforeRead !== workspaceVersion.current) return load();
         // A reply already running arrives as main's live copy, and the events from now on
         // extend it. One that settled while this read was in flight is stale: read again
         // rather than put back a turn the 'done' already closed.
@@ -474,6 +486,9 @@ export function useConversation(
         if (live && settledReplies.current.has(live.messageId)) return load();
         setSession(loaded);
         setMessages(loaded?.messages ?? []);
+        // A started session opened while its worktree is still being cut: no event is coming
+        // to say so, the 'workspace' one went out before this window was looking.
+        setPreparing(current => current ?? loaded?.preparingWorkspace ?? null);
         setStreaming(!!live);
         setTurn(live ? { startedAt: live.startedAt, tokens: null } : null);
       });
@@ -534,7 +549,9 @@ export function useConversation(
   useEffect(() => {
     return window.b4m.chat.onSessionSummary(summary => {
       if (summary.id !== activeSessionId.current) return;
-      setSession(current => (current ? { ...current, title: summary.title } : current));
+      // The project too: a worktree landing under an open session is pushed this way, and the
+      // chips have to stop saying it is on its way.
+      setSession(current => (current ? { ...current, title: summary.title, project: summary.project } : current));
     });
   }, []);
 
@@ -647,6 +664,7 @@ export function useConversation(
       }
 
       if (event.type === 'start') {
+        workspaceVersion.current++;
         setPhase(null);
         setPreparing(null);
         setStreaming(true);
@@ -693,6 +711,7 @@ export function useConversation(
       }
 
       if (event.type === 'workspace') {
+        workspaceVersion.current++;
         const sending = sendingFor.current === event.sessionId;
         setPreparing(current => applyWorkspaceEvent(current, event, Date.now(), sending));
         return;

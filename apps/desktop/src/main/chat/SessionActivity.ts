@@ -17,6 +17,9 @@ import type { ChatSessionStatus, ChatSessionStatusEvent } from '@shared/chat';
 export class SessionActivity {
   private readonly replying = new Set<string>();
 
+  /** Sessions cutting their worktree or sending their first turn, which have no reply yet. */
+  private readonly preparing = new Set<string>();
+
   /** sessionId -> approvals outstanding. One turn can put several tools at the gate at once. */
   private readonly awaiting = new Map<string, number>();
 
@@ -24,7 +27,7 @@ export class SessionActivity {
 
   statusOf(sessionId: string): ChatSessionStatus {
     if ((this.awaiting.get(sessionId) ?? 0) > 0) return 'needs-action';
-    return this.replying.has(sessionId) ? 'processing' : 'done';
+    return this.replying.has(sessionId) || this.preparing.has(sessionId) ? 'processing' : 'done';
   }
 
   /**
@@ -34,7 +37,7 @@ export class SessionActivity {
    * per busy conversation rather than one per conversation that has ever existed.
    */
   snapshot(): ChatSessionStatusEvent[] {
-    const ids = new Set([...this.replying, ...this.awaiting.keys()]);
+    const ids = new Set([...this.replying, ...this.preparing, ...this.awaiting.keys()]);
     const events: ChatSessionStatusEvent[] = [];
     for (const sessionId of ids) {
       const status = this.statusOf(sessionId);
@@ -49,6 +52,18 @@ export class SessionActivity {
 
   replyEnded(sessionId: string): void {
     this.transition(sessionId, () => this.replying.delete(sessionId));
+  }
+
+  /**
+   * Held across the worktree and the turn that follows it, and ended after `replyStarted`, so
+   * the row goes straight from preparing to replying without a 'done' push in between.
+   */
+  preparingStarted(sessionId: string): void {
+    this.transition(sessionId, () => this.preparing.add(sessionId));
+  }
+
+  preparingEnded(sessionId: string): void {
+    this.transition(sessionId, () => this.preparing.delete(sessionId));
   }
 
   approvalRequested(sessionId: string): void {
@@ -69,6 +84,7 @@ export class SessionActivity {
    */
   forget(sessionId: string): void {
     this.replying.delete(sessionId);
+    this.preparing.delete(sessionId);
     this.awaiting.delete(sessionId);
   }
 

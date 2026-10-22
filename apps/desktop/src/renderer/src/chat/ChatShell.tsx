@@ -65,6 +65,8 @@ import { useSidebarSections } from './useSidebarSections';
 import { usePromptSuggestion } from './usePromptSuggestion';
 import { useFileDrop } from './useFileDrop';
 import { useSkills } from './useSkills';
+import { useSessionStartTiming } from './useSessionStartTiming';
+import { SpawnFailureToast } from './SpawnFailureToast';
 
 function SessionHeader({ title, onRename }: { title: string; onRename: (title: string) => void }) {
   const [editing, setEditing] = useState(false);
@@ -194,6 +196,15 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
   // transcript under this one's id until the read lands.
   const opening = settling || (!!activeId && conversation.session?.id !== activeId);
   const spawnSuggestions = useSpawnSuggestions(conversation.session);
+  const markSessionStart = useSessionStartTiming(sessions);
+  const startSuggestion = spawnSuggestions.start;
+  const onStartSuggestion = useCallback(
+    (request: Parameters<typeof startSuggestion>[0]) => {
+      if (request.placement !== 'here') markSessionStart('suggestion');
+      return startSuggestion(request);
+    },
+    [startSuggestion, markSessionStart]
+  );
   const background = useBackgroundProcesses(activeId);
   const videoJobs = useVideoJobs(activeId);
   const skills = useSkills(activeId);
@@ -460,9 +471,10 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
    */
   const onCreate = useCallback(async () => {
     setScreen('conversation');
+    markSessionStart('new');
     const created = await startSession();
     if (created) setActiveId(created);
-  }, [startSession]);
+  }, [startSession, markSessionStart]);
 
   /**
    * New, from a user section's header or menu: the same session New makes, but in that section
@@ -516,6 +528,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
       const sibling = projectForGroup(sessions, directory);
       if (!sibling) return;
       clearCodeError();
+      markSessionStart('project');
       // Before the screen switches, so the git calls never leave the previous session's
       // composer live under the new one's id.
       const inWorktree =
@@ -524,7 +537,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
       const created = await createCode(newSessionInProject(sibling, inWorktree));
       if (created) setActiveId(created);
     },
-    [sessions, createCode, clearCodeError]
+    [sessions, createCode, clearCodeError, markSessionStart]
   );
 
   const onDelete = useCallback(
@@ -537,6 +550,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
 
   return (
     <Box sx={{ position: 'relative', display: 'flex', height: '100vh', bgcolor: 'background.body' }} {...drop.handlers}>
+      <SpawnFailureToast />
       {drop.over && (
         <Box
           sx={{
@@ -824,7 +838,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
 
           <SpawnSuggestionTray
             suggestions={spawnSuggestions.suggestions}
-            onStart={spawnSuggestions.start}
+            onStart={onStartSuggestion}
             onDismiss={spawnSuggestions.dismiss}
           />
 
@@ -839,6 +853,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
               binding={conversation.project}
               settledTurns={conversation.settledTurns}
               inUse={conversation.messages.length > 0}
+              preparing={conversation.preparing !== null}
             />
           )}
           {conversation.session && conversation.session.mode !== 'code' && (
