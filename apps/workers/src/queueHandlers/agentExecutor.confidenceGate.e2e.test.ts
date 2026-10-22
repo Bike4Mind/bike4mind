@@ -10,7 +10,8 @@ import { LOW_CONFIDENCE_STREAK_TO_PAUSE } from './agentExecutorUtils/confidenceG
 // The confidence gate's pause -> resume -> complete loop, end to end: the real executor
 // `handler` and the real WebSocket `gate_response` handler over a real Mongo, so every status
 // transition goes through the repository's own CAS writes. Only the edges are stubbed - the
-// LLM (one tool call, then a final answer), the toolbelt, credits, and the transports.
+// LLM (probe calls, then a final answer), the toolbelt, credits, the transports, and the
+// chat-history and memento writes on completion.
 // `confidenceOverrides` is what makes the gate fire: the tool's real score would clear it,
 // and the gate pauses only on a streak, so the script carries one low entry per probe turn.
 

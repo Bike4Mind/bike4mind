@@ -1026,7 +1026,7 @@
             },
             "minItems": 1,
             "maxItems": 100,
-            "description": "Admin only. Scripted per-iteration confidence scores (0 to 1) that replace the real score at the confidence gate: entry i scores iteration i + 1, and iterations past the end use the real score. A value below the gate threshold pauses the run for review. A non-admin caller gets 403."
+            "description": "Admin only. Scripted per-iteration confidence scores (0 to 1) that replace the real score at the confidence gate: entry i scores iteration i + 1, and iterations past the end use the real score. A value below the gate threshold pauses the run for review, on an iteration that ran tools and did not finish; the gate never evaluates other iterations, scripted or not. A non-admin caller gets 403."
           }
         },
         "required": [
