@@ -178,6 +178,19 @@ export class ReleaseNoteRepository extends BaseRepository<IReleaseNoteDocument> 
     return this.page(filter, after, limit);
   }
 
+  /**
+   * Sets only the video and leaves editedAt alone: the release-video job's write is not an admin
+   * decision, so the note is not shown as edited and still regenerates (upsertGenerated keeps the video).
+   */
+  async attachVideo(id: string, video: ReleaseNoteData['video']): Promise<ReleaseNoteMutationResult> {
+    const note = await this.model.findOneAndUpdate(
+      { _id: id },
+      { $set: { video } },
+      { new: true, runValidators: true }
+    );
+    return note ? { kind: 'ok', note } : { kind: 'notFound' };
+  }
+
   /*
    * Every admin mutation below stamps editedAt, so upsertGenerated (which only matches editedAt:null)
    * never overwrites an admin decision: an edited or hidden note survives regeneration of its tag.

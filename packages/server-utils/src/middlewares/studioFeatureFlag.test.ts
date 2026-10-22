@@ -37,6 +37,13 @@ describe('isStudioFeatureEnabled', () => {
     await expect(isStudioFeatureEnabled('productions', { isAdmin: true })).resolves.toBe(true);
     expect(getSettingByNameMock).toHaveBeenCalledWith('EnableStudioProductions', expect.anything());
   });
+
+  it('stays closed to an admin with the feature flag on while Create v2 is off', async () => {
+    getSettingByNameMock.mockImplementation(async (key: string) => key !== 'EnableStudioCreateV2');
+    await expect(isStudioFeatureEnabled('productions', { isAdmin: true })).resolves.toBe(false);
+    await expect(isStudioFeatureEnabled('image', { isAdmin: true })).resolves.toBe(false);
+    expect(getSettingByNameMock).toHaveBeenCalledWith('EnableStudioCreateV2', expect.anything());
+  });
 });
 
 describe('requireStudioFeature', () => {

@@ -472,3 +472,45 @@ describe('UserApiKeysTab - premium scopes', () => {
     for (const scope of PREMIUM) expect(screen.getByText(scope)).toBeInTheDocument();
   });
 });
+
+describe('UserApiKeysTab - Bob scopes', () => {
+  beforeEach(() => {
+    h.keys = [activeKey];
+    h.hasOptiAccess = false;
+    h.createMutate.mockClear();
+  });
+
+  // Opens the New-Key modal, picks a preset (none keeps the Read-only default), and returns what it mints.
+  const mintScopes = (preset?: 'readwrite' | 'full') => {
+    renderTab();
+    fireEvent.click(screen.getByText('Create API Key'));
+    // Joy puts a clickable Chip's onClick on its inner action button.
+    if (preset) fireEvent.click(screen.getByTestId(`api-key-preset-${preset}`).querySelector('button')!);
+    fireEvent.change(screen.getByTestId('api-key-name-input').querySelector('input')!, {
+      target: { value: 'Bob key' },
+    });
+    fireEvent.click(screen.getByTestId('api-key-create-btn'));
+    return (h.createMutate.mock.calls[0][0] as { scopes: ApiKeyScope[] }).scopes;
+  };
+
+  it('puts bob:read, and not bob:run, in the default Read-only selection', () => {
+    const scopes = mintScopes();
+    expect(scopes).toContain(ApiKeyScope.BOB_READ);
+    expect(scopes).not.toContain(ApiKeyScope.BOB_RUN);
+    expect(scopes).not.toContain(ApiKeyScope.WRITE_NOTEBOOKS);
+  });
+
+  it('keeps bob:run out of Read & write, which still carries bob:read', () => {
+    const scopes = mintScopes('readwrite');
+    // A write scope proves the preset click took effect: without it this case reads like Read-only.
+    expect(scopes).toContain(ApiKeyScope.WRITE_NOTEBOOKS);
+    expect(scopes).toContain(ApiKeyScope.BOB_READ);
+    expect(scopes).not.toContain(ApiKeyScope.BOB_RUN);
+  });
+
+  it('adds bob:run only with Full access', () => {
+    const scopes = mintScopes('full');
+    expect(scopes).toContain(ApiKeyScope.BOB_READ);
+    expect(scopes).toContain(ApiKeyScope.BOB_RUN);
+  });
+});

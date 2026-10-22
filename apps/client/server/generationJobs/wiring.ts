@@ -60,6 +60,8 @@ import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { saveGeneratedAssetToFiles } from '@server/utils/saveGeneratedAssetToFiles';
+import { deliverJobToSlack } from './slackJobDelivery';
+import { createSlackJobDeliveryDeps } from './slackJobDeliveryDeps';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 
 // Must outlive the worker timeout (5 min, infra/queues.ts generationJobQueue) so two workers never overlap on
@@ -355,7 +357,14 @@ const recordUsage: VideoJobDeps['recordUsage'] = async ({ job, creditsCharged, c
 
 const notify = async (job: IGenerationJobDocument): Promise<void> => {
   const sender = new ClientMessageSender({ connections: Connection }, logger);
-  await sender.sendToClient(job.requestedBy, Resource.websocket.managementEndpoint, toJobUpdate(job));
+  // Independent channels: a websocket failure must not swallow the Slack post, nor the reverse.
+  const results = await Promise.allSettled([
+    sender.sendToClient(job.requestedBy, Resource.websocket.managementEndpoint, toJobUpdate(job)),
+    deliverJobToSlack(job, createSlackJobDeliveryDeps(logger)),
+  ]);
+  for (const result of results) {
+    if (result.status === 'rejected') throw result.reason;
+  }
 };
 
 let videoJobDeps: VideoJobDeps | undefined;

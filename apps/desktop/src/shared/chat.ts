@@ -397,6 +397,23 @@ export interface AddAttachmentsResult {
 }
 
 /**
+ * An image in the thread, as the image context menu names it to main.
+ *
+ * Never a filesystem path: main resolves 'media' and 'attachment' through the stores that wrote
+ * them, so a crafted ref can only reach a file the app itself saved. 'remote' is an image a
+ * reply links by URL; nothing about it is on disk, so only its Markdown can be copied.
+ */
+export type ChatImageRef =
+  | { source: 'media'; url: string; nameHint?: 'screenshot' | 'image' }
+  | { source: 'attachment'; sessionId: string; attachmentId: string; mediaType: string; name: string }
+  | { source: 'remote'; url: string };
+
+export type ChatImageAction = 'copy' | 'save' | 'copy-path' | 'copy-markdown' | 'reveal';
+
+/** `done` is false when the user cancelled a save dialog. */
+export type ChatImageActionResult = { ok: true; done: boolean } | { ok: false; error: string };
+
+/**
  * Everything the artifact card needs to draw one, whether it came out of a reply or back off
  * the server.
  *

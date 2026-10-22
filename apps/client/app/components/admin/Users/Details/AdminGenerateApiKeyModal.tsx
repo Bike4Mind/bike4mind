@@ -226,7 +226,8 @@ export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminG
             <FormLabel sx={{ mb: 0.5 }}>Service ingest key</FormLabel>
             <Typography level="body-xs" color="neutral" sx={{ mb: 1 }}>
               Admin-only. An ingest scope must be the key&apos;s only scope, so selecting one clears the generic scopes
-              above. A QA ingest key is refused (403) unless its owner carries the {QA_INGEST_USER_TAG} user tag.
+              above. A QA ingest key is refused (403) unless its owner carries the {QA_INGEST_USER_TAG} user tag, and a
+              release-notes key can only be minted for a platform admin.
             </Typography>
             <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 'sm', p: 1 }}>
               {ingestScopeOptions.map(renderScope)}

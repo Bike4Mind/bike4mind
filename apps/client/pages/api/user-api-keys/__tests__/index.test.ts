@@ -411,6 +411,12 @@ describe('POST /api/user-api-keys - scope allowlist guard', () => {
     expect(createUserApiKey).not.toHaveBeenCalled();
   });
 
+  it.each([false, true])('rejects release-notes:write (admin-provisioned only) with isAdmin=%s', async isAdmin => {
+    const { req, res } = post({ name: 'release', scopes: ['release-notes:write'] }, { isAdmin });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/Scope not allowed/i);
+    expect(createUserApiKey).not.toHaveBeenCalled();
+  });
+
   it('allows a valid self-service scope through (notebooks:read)', async () => {
     const { req, res } = post({ name: 'plain', scopes: ['notebooks:read'] });
     await mockRefs.postHandler!(req, res);
@@ -597,5 +603,17 @@ describe('POST /api/user-api-keys - product scope entitlement', () => {
     const { req, res } = post({ name: 'k', scopes: ['me:read', 'files:read'] });
     await mockRefs.postHandler!(req, res);
     expect(res._getStatusCode()).toBe(201);
+  });
+
+  it('mints both Bob scopes without any product', async () => {
+    // Every signed-in account can use Bob, so neither scope waits on a product flag.
+    const { req, res } = post({ name: 'k', scopes: ['bob:read', 'bob:run'] });
+    await mockRefs.postHandler!(req, res);
+    expect(res._getStatusCode()).toBe(201);
+    expect(createUserApiKey).toHaveBeenCalledWith(
+      'u1',
+      expect.objectContaining({ scopes: ['bob:read', 'bob:run'] }),
+      expect.anything()
+    );
   });
 });

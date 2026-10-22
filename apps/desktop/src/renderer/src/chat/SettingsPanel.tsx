@@ -21,6 +21,7 @@ import { ClaudeImportSettings, claudeImportSummary, useClaudeImport } from './Cl
 import { EntrySection, entryAttentionChip, type ConfigEntry } from './ConfigEntry';
 import {
   ArrowLeftIcon,
+  BranchIcon,
   ContrastIcon,
   DownloadIcon,
   FolderIcon,
@@ -36,6 +37,7 @@ import { SuggestionModelPicker } from './SuggestionModelPicker';
 import { THEME_MODES, currentThemeMode, themeModeSummary, type ResolvedThemeMode, type ThemeMode } from './themeMode';
 import { UpdateSettings } from './UpdateSettings';
 import { useAppUpdate, type AppUpdateController } from './useAppUpdate';
+import { useWorktreeByDefault, worktreeDefaultSummary } from './worktreeDefault';
 
 /** What the General page is for, said on the page so it does not have to be inferred from a name. */
 const SETTINGS_INTRO = 'How the app looks, behaves, connects, and keeps itself up to date.';
@@ -89,6 +91,32 @@ function suggestionsEntry(enabled: boolean, toggle: () => void, model: string | 
           }}
         />
         {enabled && <SuggestionModelPicker />}
+      </Stack>
+    ),
+  };
+}
+
+function worktreeEntry(enabled: boolean, toggle: () => void): ConfigEntry {
+  return {
+    id: 'worktree-default',
+    icon: <BranchIcon />,
+    label: 'Worktree by default',
+    summary: worktreeDefaultSummary(enabled),
+    control: (
+      <Stack spacing={1.25}>
+        <Typography level="body-xs" textColor="text.tertiary">
+          Tick the worktree box whenever a Code session gets a git folder. You can still untick it before the first
+          message.
+        </Typography>
+        <Switch
+          size="sm"
+          checked={enabled}
+          onChange={toggle}
+          sx={{ alignSelf: 'flex-start' }}
+          slotProps={{
+            input: { 'aria-label': 'Worktree by default', 'data-testid': 'settings-worktree-default-switch' },
+          }}
+        />
       </Stack>
     ),
   };
@@ -205,11 +233,13 @@ function useSettingsEntries(auth: AuthState | null): Record<SettingsSection, Con
   const [suggestionModel] = usePromptSuggestionModel();
   const [permissions, setPermissions, permissionsError, retryPermissions] = usePermissions();
   const [claudeImport, setClaudeImport, importError, retryImport] = useClaudeImport();
+  const [worktreeDefault, toggleWorktreeDefault] = useWorktreeByDefault();
 
   return {
     general: [
       appearanceEntry(mode, setMode, theme.palette.mode),
       suggestionsEntry(suggestions, toggleSuggestions, suggestionModel),
+      worktreeEntry(worktreeDefault, toggleWorktreeDefault),
       ...(auth ? [serverEntry(auth)] : []),
       updatesEntry(update),
     ],

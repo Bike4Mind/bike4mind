@@ -298,6 +298,24 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
       'POST /api/premium-overwatch/agent/mcp',
     ],
   },
+  {
+    value: ApiKeyScope.BOB_READ,
+    label: 'Bob: Read',
+    description:
+      "Read the key owner's own Bob reports - site reads, comparisons and re-checks - plus the recent-reports list and runs left. Starts nothing and spends no credits",
+    endpoints: ['GET /api/premium-bob/bob-run', 'GET /api/premium-bob/bob-compare', 'GET /api/premium-bob/bob-recheck'],
+  },
+  {
+    value: ApiKeyScope.BOB_RUN,
+    label: 'Bob: Run',
+    description:
+      "Start a Bob site read, a two-site comparison or a re-check. Spends the key owner's credits and publishes a report as them - grant only to keys that must run",
+    endpoints: [
+      'POST /api/premium-bob/bob-run',
+      'POST /api/premium-bob/bob-compare',
+      'POST /api/premium-bob/bob-recheck',
+    ],
+  },
 ];
 
 /** All user-selectable scope values, e.g. for a "Select All" action. */
@@ -343,7 +361,11 @@ export interface ApiKeyScopeAccess {
   hearthEnabled: boolean;
 }
 
-/** Product scopes offered only when the matching ApiKeyScopeAccess flag holds; every other scope is ungated. */
+/**
+ * Product scopes offered only when the matching ApiKeyScopeAccess flag holds; every other scope is ungated.
+ * `bob:read` and `bob:run` are deliberately absent: every signed-in account can use Bob, so no
+ * flag holds for some viewers and not others (see the `bob` row in lib/entitlements/registry.ts).
+ */
 export const GATED_API_KEY_SCOPES: Readonly<Partial<Record<ApiKeyScope, keyof ApiKeyScopeAccess>>> = {
   [ApiKeyScope.OPTIHASHI_READ]: 'hasOptiAccess',
   [ApiKeyScope.OPTIHASHI_COMPUTE]: 'hasOptiAccess',
@@ -397,7 +419,7 @@ export const NON_MINTABLE_API_KEY_SCOPES: ReadonlySet<ApiKeyScope> = new Set([
 
 /**
  * Scopes that are provisioned by admins only and must never appear in the user-facing
- * key creation UI. The ingest scope is excluded from USER_API_KEY_SCOPES by design.
+ * key creation UI. The ingest and automation scopes are excluded from USER_API_KEY_SCOPES by design.
  */
 export const ADMIN_ONLY_API_KEY_SCOPES: ApiKeyScopeOption[] = [
   {
@@ -411,5 +433,16 @@ export const ADMIN_ONLY_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     label: 'QA: Ingest',
     description: 'CI ingest of end-to-end test runs for the admin status page',
     endpoints: ['POST /api/qa/uploads', 'POST /api/qa/runs'],
+  },
+  {
+    value: ApiKeyScope.RELEASE_NOTES_WRITE,
+    label: 'Release Notes: Write',
+    description:
+      "Release-note automation: find a release note and set its video, and upload its What's New media. The key's user must be a platform admin",
+    endpoints: [
+      'GET /api/admin/release-notes',
+      'PATCH /api/admin/release-notes/:id (video only)',
+      'POST /api/files/createFabFile (purpose: modal-media only)',
+    ],
   },
 ];

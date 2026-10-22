@@ -33,15 +33,31 @@ pnpm --filter @bike4mind/desktop dev
 Starts the Vite dev server for the renderer, builds main and preload, and launches
 Electron against it with HMR.
 
-| Command | What it does |
-| --- | --- |
-| `pnpm dev` | Dev server + Electron, with HMR |
-| `pnpm build` | Bundles main, preload and renderer into `out/` |
-| `pnpm start` | Launches Electron against an existing `out/` build |
-| `pnpm typecheck` | `tsc` over both tsconfig projects |
-| `pnpm typecheck:fast` | `tsgo`, falling back to `tsc` |
-| `pnpm test` | vitest |
-| `pnpm package` | Installers for the host platform, into `release/` |
+| Command               | What it does                                       |
+| --------------------- | -------------------------------------------------- |
+| `pnpm dev`            | Dev server + Electron, with HMR                    |
+| `pnpm build`          | Bundles main, preload and renderer into `out/`     |
+| `pnpm start`          | Launches Electron against an existing `out/` build |
+| `pnpm typecheck`      | `tsc` over both tsconfig projects                  |
+| `pnpm typecheck:fast` | `tsgo`, falling back to `tsc`                      |
+| `pnpm test`           | vitest                                             |
+| `pnpm package`        | Installers for the host platform, into `release/`  |
+
+## Images in conversations
+
+Right-click an image in a sent message or tool result to open its menu. From the keyboard,
+focus the image and press Shift+F10 or the context-menu key. Local images offer **Copy image**,
+**Save image...**, **Attach as context** for the next message, a **Copy** submenu for the image,
+file path or Markdown, and **Show in Finder** (File Explorer on Windows, folder on Linux).
+Draft attachment tiles have no context menu. Cancelling the save dialog leaves the image alone.
+
+A remote image linked in a Markdown reply offers only **Copy > Markdown**: it has no local file,
+and the desktop renderer does not load remote images.
+
+If an action fails, read the error notice. "That image is no longer available" means the stored
+file could not be found; paste or attach the original image again. If the clipboard cannot decode
+the image format, use **Save image...** instead. A failed attachment appears as a rejection above
+the composer, where it can be dismissed.
 
 ## Suggested next prompt
 
@@ -81,13 +97,13 @@ files remain read-only throughout import.
 [`electron-builder.yml`](./electron-builder.yml). Artifacts land in `release/`, which is
 gitignored.
 
-| Command | Produces |
-| --- | --- |
-| `pnpm package` | everything the host platform can build |
-| `pnpm package:mac` | `dmg` and `zip`, both for arm64 and x64 |
-| `pnpm package:win` | `nsis` installer, x64 |
-| `pnpm package:linux` | `AppImage`, x64 |
-| `pnpm package:dir` | an unpacked `.app`/directory, no installer - the fast loop |
+| Command              | Produces                                                   |
+| -------------------- | ---------------------------------------------------------- |
+| `pnpm package`       | everything the host platform can build                     |
+| `pnpm package:mac`   | `dmg` and `zip`, both for arm64 and x64                    |
+| `pnpm package:win`   | `nsis` installer, x64                                      |
+| `pnpm package:linux` | `AppImage`, x64                                            |
+| `pnpm package:dir`   | an unpacked `.app`/directory, no installer - the fast loop |
 
 The macOS `zip` is not redundant with the `dmg`. The dmg is the human-facing installer;
 the zip is the format a Squirrel.Mac auto-updater consumes, so it has to exist before
@@ -340,11 +356,11 @@ Direct electron-builder invocations (including the trusted CI signing job) can u
 credentials from the environment. Local package scripts additionally require
 `DESKTOP_MAC_IDENTITY` to opt into a Developer ID identity:
 
-| Variable | Effect |
-| --- | --- |
-| `CSC_LINK` + `CSC_KEY_PASSWORD` | base64 `.p12` (or a file path) used on both platforms |
-| `WIN_CSC_LINK` + `WIN_CSC_KEY_PASSWORD` | Windows-only certificate, for a combined build |
-| `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` | notarization credentials |
+| Variable                                                   | Effect                                                |
+| ---------------------------------------------------------- | ----------------------------------------------------- |
+| `CSC_LINK` + `CSC_KEY_PASSWORD`                            | base64 `.p12` (or a file path) used on both platforms |
+| `WIN_CSC_LINK` + `WIN_CSC_KEY_PASSWORD`                    | Windows-only certificate, for a combined build        |
+| `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` | notarization credentials                              |
 
 A "Developer ID Application" identity already in the login keychain is picked up with no
 variables at all. `hardenedRuntime` and `build/entitlements.mac.plist` are always on: they
@@ -366,7 +382,7 @@ change when they arrive - only the environment does.
 
 ### What ships, and what does not
 
-`dependencies` in this package's `package.json` is the *unbundled runtime* closure, not
+`dependencies` in this package's `package.json` is the _unbundled runtime_ closure, not
 everything the app imports. Vite bundles the renderer, so React, MUI Joy, Tanstack Router
 and the markdown stack are build-time only and live in `devDependencies`; electron-builder
 computes the packaged `node_modules` from `dependencies` alone, so leaving them there
@@ -374,7 +390,7 @@ shipped every one of them twice.
 
 The same rule is why `@bike4mind/utils` is bundled into main rather than externalized (see
 the `exclude` on `externalizeDepsPlugin` in `electron.vite.config.ts`). Main uses one
-subpath of it; the package *declares* six AWS SDK clients, openai, jimp, tiktoken, xlsx
+subpath of it; the package _declares_ six AWS SDK clients, openai, jimp, tiktoken, xlsx
 and mammoth, and electron-builder ships what is declared. Bundling that one subpath took
 `app.asar` from 257 MB to 42 MB.
 
@@ -406,7 +422,7 @@ one hand-written method per IPC channel rather than a generic `invoke(channel, .
 passthrough, because a passthrough would let renderer code reach every handler main ever
 registers. The OAuth device flow runs in **main** so tokens never enter the renderer, and
 the IPC contract in `src/shared/ipc.ts` states the invariant that channels may return auth
-*state* but never a token.
+_state_ but never a token.
 
 ## Chat and Code modes
 
@@ -419,14 +435,14 @@ Every conversation has a mode, chosen with the segmented control at the top of t
   group under the project in the sidebar.
 
 **Tools are not the difference.** Both modes carry the same file, shell and background-process
-tools. Code mode's distinction is *where* they run.
+tools. Code mode's distinction is _where_ they run.
 
 ### The chip row
 
 A Code session's grounding sits above the composer as a row of pills - the backend, the project
 directory, the branch paired with a worktree checkbox, and the folders granted for context -
 and every one of them is editable mid-session. It is a persistent surface rather than a setup
-step, because what it shows is where the *next* turn's commands will run.
+step, because what it shows is where the _next_ turn's commands will run.
 
 The first chip names the b4m backend (the environment from `src/main/auth/environment.ts`), not
 where the agent runs: the agent is this app's main process and has nowhere else to be, so a
@@ -441,7 +457,7 @@ repointing it past a live dev server would leave that server in a checkout the c
 longer claims. Both conditions clear on their own, so it is a wait rather than a dead end;
 `ChatService.project.test.ts` pins both the refusal and that it leaves the binding untouched.
 
-Moving to a *different* repository drops the branch and the context folders with it: a branch
+Moving to a _different_ repository drops the branch and the context folders with it: a branch
 name means nothing in a repository it does not belong to, and folders chosen as context for one
 codebase are not consent to read them alongside another.
 
@@ -465,11 +481,11 @@ to a `../` path, which would scatter folders that read as separate projects.
 Three cases it handles rather than failing:
 
 - **The worktree already exists** - adopted, not recreated. A worktree registered for that
-  branch at some *other* path is adopted too, because git allows a branch in exactly one
+  branch at some _other_ path is adopted too, because git allows a branch in exactly one
   worktree and `worktree add` would otherwise fail against it.
 - **The branch does not exist** - created from `origin/main` (then `origin/master`, then
   `HEAD`), `--no-track`, matching the shell helper's default.
-- **The branch is the one the main checkout is on** - resolves *to* the main checkout, since
+- **The branch is the one the main checkout is on** - resolves _to_ the main checkout, since
   git permits nothing else. The resolved path is shown under the session title whenever it
   differs from the project directory, so the app never claims an isolation it did not get.
 
@@ -493,7 +509,7 @@ cancels its launch without reporting a startup failure.
 ### Tools run in the session's working directory
 
 `ChatService.resolveToolScope` puts the session's working directory and its context
-directories at the *front* of the granted roots and passes the working directory on
+directories at the _front_ of the granted roots and passes the working directory on
 `ToolContext`. Everything downstream reads it: `bash_execute` and `bash_background` default
 their cwd to it, `resolveWithinRoots` resolves relative paths against it, and `glob_files` /
 `grep_search` anchor there.
@@ -501,7 +517,7 @@ their cwd to it, `resolveWithinRoots` resolves relative paths against it, and `g
 This is load-bearing. Before it, an ungrounded default fell back to `roots[0]` - the first
 folder the user ever granted. For a session bound to a worktree that is the main checkout, so
 commands would have run on the wrong branch while the UI said otherwise. `src/main/chat/tools/
-workingDirectory.test.ts` pins it by making the working directory the *second* root, so any
+workingDirectory.test.ts` pins it by making the working directory the _second_ root, so any
 regression to `roots[0]` fails.
 
 ### Session storage and migration
@@ -519,13 +535,20 @@ not a hand-written approximation.
 
 Adapted from Claude Code desktop's layout: primary nav, a **Pinned** section, then project
 groups with per-group actions (new session, search, settings) and a leading status dot per row
-- filled while a reply streams or its worktree prepares, hollow when idle. The dot is driven by a global subscription to
-main's stream events, not the open conversation, so a session replying in the background shows
-as running.
 
-Two of its entries have no counterpart here. **Artifacts** is dropped: desktop conversations are
-local and produce none. **Customize** maps onto the folder grants this app already had, which
-moved out of the account panel into the collapsible **More**.
+- filled while a reply streams or its worktree prepares, hollow when idle. The dot is driven by a
+  global subscription to main's stream events, not the open conversation, so a session replying in
+  the background shows as running.
+
+**Artifacts** opens a searchable grid of the artifacts created by this app across your machines.
+Thumbnails load as cards approach the viewport; select a card to view it or share its live link.
+Use Back or Escape to return to the grid. **Refresh** reloads the list and thumbnail bodies after
+an edit in the web app. Search, filters and counts cover the newest 100 artifacts at most.
+
+The library requires a signed-in account and network access. If the list or an opened artifact
+cannot load, its error offers **Try again**; sign in again if your session has expired.
+**Customize** maps onto the folder grants this app already had, which moved out of the account
+panel into the collapsible **More**.
 
 ## Authentication
 
@@ -584,11 +607,11 @@ publishes no releases.
 Only https is accepted, plus http on the loopback so the check path can be exercised against a
 local static server. See `resolveFeedUrl` in `src/main/update/feed.ts`.
 
-| When | What |
-| --- | --- |
-| 15s after launch | The first check, deliberately behind the window, auth and model catalog |
-| Every 6 hours | Because this app is left running for days, so "on launch" alone is not enough |
-| The Customize row | On demand |
+| When              | What                                                                          |
+| ----------------- | ----------------------------------------------------------------------------- |
+| 15s after launch  | The first check, deliberately behind the window, auth and model catalog       |
+| Every 6 hours     | Because this app is left running for days, so "on launch" alone is not enough |
+| The Customize row | On demand                                                                     |
 
 Nothing downloads or installs itself. `autoDownload` and `autoInstallOnAppQuit` are both off:
 the user presses Download, and then Restart. An install asks main what is in flight first - a
@@ -627,13 +650,13 @@ internal renderer silently drops every gradient-filled path, which here is the e
 leaving four cyan dots on a blank canvas. Quick Look flattens onto white, so the script
 restores the transparent corners with a circular mask.
 
-| File | Consumed by |
-| --- | --- |
-| `build/icon.icns` | electron-builder, macOS app bundle |
-| `build/icon-mac.png` | macOS development Dock icon (1024x1024) |
-| `build/icon.ico` | electron-builder, Windows |
-| `build/icon.png` | electron-builder, Linux (512x512) |
-| `src/renderer/favicon.png` | the renderer's `<link rel="icon">` |
+| File                       | Consumed by                             |
+| -------------------------- | --------------------------------------- |
+| `build/icon.icns`          | electron-builder, macOS app bundle      |
+| `build/icon-mac.png`       | macOS development Dock icon (1024x1024) |
+| `build/icon.ico`           | electron-builder, Windows               |
+| `build/icon.png`           | electron-builder, Linux (512x512)       |
+| `src/renderer/favicon.png` | the renderer's `<link rel="icon">`      |
 
 macOS uses the full-size mark with its own blue gradient extended behind it, making the
 circular edge seamless with the rounded-square tile. The corner radius is 22% of the tile
@@ -661,13 +684,13 @@ Where the icon actually shows:
 **Electron 44 is required, and it is not a Node-version compromise.** The repo sets
 `engines: node >=24`, and Electron ships its own Node for the main process:
 
-| Electron | Bundled Node | Chromium |
-| --- | --- | --- |
-| 44.4.5 (used here) | **24.21.0** | 152 |
-| 43.7.5 | 24.21.0 | 150 |
-| 40.10.6 | 24.15.0 | 144 |
-| 39.8.10 | 22.22.1 | 142 |
-| 38 and earlier | 22.x | <= 140 |
+| Electron           | Bundled Node | Chromium |
+| ------------------ | ------------ | -------- |
+| 44.4.5 (used here) | **24.21.0**  | 152      |
+| 43.7.5             | 24.21.0      | 150      |
+| 40.10.6            | 24.15.0      | 144      |
+| 39.8.10            | 22.22.1      | 142      |
+| 38 and earlier     | 22.x         | <= 140   |
 
 Electron 40 was the first release to bundle Node 24, so **do not drop below Electron 40** or
 the main process stops satisfying the repo's stated Node floor. At Electron 44 there is

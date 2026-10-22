@@ -5,6 +5,7 @@ import {
   type ReleaseNoteMutationResult,
 } from '@bike4mind/database';
 import {
+  ApiKeyScope,
   findDenied,
   parseReleaseNotesConfig,
   ReleaseNotesConfigSchema,
@@ -15,6 +16,7 @@ import {
 import { getSettingsByNames } from '@bike4mind/utils';
 import type { Logger } from '@bike4mind/observability';
 import { BadRequestError, ConflictError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { holdsApiKeyScope, type ScopedRequest } from '@server/middlewares/apiKeyScopeGate';
 
 export const RELEASE_NOTES_SETTING = 'releaseNotesConfig';
 
@@ -61,6 +63,13 @@ export const toAdminReleaseNote = (
   editedAt: note.editedAt ? note.editedAt.toISOString() : null,
   deniedTerm: findDeniedInNote(note, denylist) ?? null,
 });
+
+/**
+ * True for an API key that reached a release-note route through release-notes:write rather than
+ * admin:*. That scope is confined, so the key holds nothing else and gets only the job's narrow form.
+ */
+export const isReleaseNotesWriteOnlyKey = (req: ScopedRequest): boolean =>
+  !!req.apiKeyInfo && !holdsApiKeyScope(req, [ApiKeyScope.ADMIN]);
 
 export function noteOrThrow(result: ReleaseNoteMutationResult): IReleaseNoteDocument {
   if (result.kind === 'notFound') throw new NotFoundError('Release note not found');

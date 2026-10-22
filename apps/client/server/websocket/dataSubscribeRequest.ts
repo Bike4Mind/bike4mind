@@ -313,7 +313,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   if (!(await Connection.findOne({ connectionId }, { _id: 1 }).lean())) {
     await realtimeConnectionRepository
       .removeConnectionSubscribers(connectionId)
-      .catch(error =>
+      .catch((error: unknown) =>
         logger.warn(`[dataSubscribeRequest] Failed to remove subscribers of ended connection ${connectionId}`, error)
       );
     await closeConnection(connectionId, endpoint).catch(error =>

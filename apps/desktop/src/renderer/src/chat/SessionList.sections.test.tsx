@@ -433,6 +433,21 @@ describe('starting a session in a section', () => {
 
     expect(query('sidebar-context-menu')).not.toBeNull();
     expect(query('sidebar-context-new-in-section-btn')).toBeNull();
+    expect(query('sidebar-context-rename-section-btn')).toBeNull();
+  });
+
+  it('renames the section from a right-click on it', async () => {
+    await mount([summary('a', 'Alpha')], workAndHome);
+
+    rightClick(el('sidebar-section-header', sectionNamed('Home')));
+    await settle();
+    await click(el('sidebar-context-rename-section-btn'));
+    expect((el('section-name-input') as HTMLInputElement).value).toBe('Home');
+    typeName('House');
+    await click(el('section-name-submit-btn'));
+
+    expect(bridge.renameSection).toHaveBeenCalledWith('home', 'House');
+    expect(sectionNamed('House')).toBeTruthy();
   });
 });
 
@@ -462,6 +477,23 @@ describe("a section's own menu", () => {
     expect(all('sidebar-section-name').map(node => node.textContent)).toEqual(['Home']);
     expect(looseTitles()).toEqual(['Alpha', 'Beta']);
     expect(onDelete).not.toHaveBeenCalled();
+  });
+
+  it('renames the section from a double-click on its name', async () => {
+    await mount([summary('a', 'Alpha')], workAndHome);
+
+    act(() => {
+      el('sidebar-section-name', sectionNamed('Work')).dispatchEvent(
+        new MouseEvent('dblclick', { bubbles: true, cancelable: true })
+      );
+    });
+    await settle();
+    expect((el('section-name-input') as HTMLInputElement).value).toBe('Work');
+    typeName('Day job');
+    await click(el('section-name-submit-btn'));
+
+    expect(bridge.renameSection).toHaveBeenCalledWith('work', 'Day job');
+    expect(titlesIn(sectionNamed('Day job'))).toEqual(['Alpha']);
   });
 
   it('cancels a rename without changing anything', async () => {

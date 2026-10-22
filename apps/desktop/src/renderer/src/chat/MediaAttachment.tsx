@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import Box from '@mui/joy/Box';
 import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
-import type { ChatMedia } from '@shared/chat';
+import type { ChatImageRef, ChatMedia } from '@shared/chat';
+import { useImageMenu } from './ImageContextMenu';
 import { ImageViewer } from './ImageViewer';
 
 /**
@@ -37,9 +38,16 @@ function Caption({ item }: { item: ChatMedia }) {
  * Main serves the bytes over that scheme out of its own media folder, which is the only origin
  * the CSP admits for media - see index.html.
  */
-function MediaItem({ item }: { item: ChatMedia }) {
+type MediaNameHint = Extract<ChatImageRef, { source: 'media' }>['nameHint'];
+
+function MediaItem({ item, nameHint }: { item: ChatMedia; nameHint?: MediaNameHint }) {
   const [failed, setFailed] = useState(false);
   const [viewing, setViewing] = useState(false);
+  const imageRef = useMemo<ChatImageRef | null>(
+    () => (item.kind === 'image' ? { source: 'media', url: item.url, nameHint } : null),
+    [item.kind, item.url, nameHint]
+  );
+  const menu = useImageMenu(failed ? null : imageRef);
 
   if (failed) {
     return (
@@ -60,6 +68,7 @@ function MediaItem({ item }: { item: ChatMedia }) {
           onClick={() => setViewing(true)}
           aria-label={`View ${item.caption} at full size`}
           sx={{ display: 'block', p: 0, border: 'none', bgcolor: 'transparent', cursor: 'zoom-in', maxWidth: '100%' }}
+          {...menu}
           data-testid="chat-media-view-btn"
         >
           <Box
@@ -100,12 +109,13 @@ function MediaItem({ item }: { item: ChatMedia }) {
   );
 }
 
-export function MediaAttachments({ media }: { media: ChatMedia[] }) {
+/** `nameHint` names a saved copy: 'screenshot' for the browser's captures. */
+export function MediaAttachments({ media, nameHint }: { media: ChatMedia[]; nameHint?: MediaNameHint }) {
   if (media.length === 0) return null;
   return (
     <Stack spacing={1} sx={{ mt: 1 }} data-testid="chat-media-list">
       {media.map(item => (
-        <MediaItem key={item.url} item={item} />
+        <MediaItem key={item.url} item={item} nameHint={nameHint} />
       ))}
     </Stack>
   );

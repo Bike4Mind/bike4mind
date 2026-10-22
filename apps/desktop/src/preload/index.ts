@@ -6,6 +6,8 @@ import type {
   ChatArtifactPublishProgress,
   ChatArtifactPublishRequest,
   ChatAttachmentInput,
+  ChatImageAction,
+  ChatImageRef,
   ChatQueueEvent,
   ChatSessionStatusEvent,
   ChatSessionSummary,
@@ -147,6 +149,10 @@ const api: DesktopApi = {
       ipcRenderer.invoke(IPC_CHANNELS.chatReadAttachment, sessionId, attachmentId, mediaType),
     discardAttachment: (sessionId: string, attachmentId: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatDiscardAttachment, sessionId, attachmentId),
+    imageAction: (image: ChatImageRef, action: ChatImageAction) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatImageAction, image, action),
+    attachImage: (sessionId: string, image: ChatImageRef) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatAttachImage, sessionId, image),
     respondToApproval: (approvalId: string, answer: ChatApprovalAnswer) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatRespondToApproval, approvalId, answer),
     listArtifacts: () => ipcRenderer.invoke(IPC_CHANNELS.chatListArtifacts),

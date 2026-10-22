@@ -5,10 +5,10 @@ import { tmpdir } from 'os';
 import { createHash } from 'crypto';
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
 
-// executeTool routes through ToolRouter (server/WebSocket executors, output
-// sanitizer). Override just executeTool to invoke the tool's own fn, so these
-// tests exercise ONLY the permission wrapper's cleanup guard and risk-driven
-// force-prompt - not tool routing.
+// executeTool routes through ToolRouter (server/WebSocket executors). Override
+// just executeTool to invoke the tool's own fn, so these tests exercise ONLY the
+// permission wrapper's cleanup guard and risk-driven force-prompt - not tool
+// routing. The output stage still redacts and caps around it.
 vi.mock('../../llm/ToolRouter', async importOriginal => {
   const actual = await importOriginal<typeof import('../../llm/ToolRouter')>();
   return {
@@ -221,11 +221,17 @@ describe('wrapToolWithPermission: edit_local_file fuzzy force-prompt', () => {
       await fs.writeFile(file, 'hello   world\n');
       return (fn as (args: unknown) => Promise<string>)(callArgs);
     });
+    vi.mocked(executeTool).mockImplementationOnce(
+      async (_name, callArgs, _api, fn) =>
+        `${await (fn as (args: unknown) => Promise<string>)(callArgs)} ${'ghp_' + 'f'.repeat(36)}`
+    );
 
-    await wrapped.toolFn({ path: file, old_string: 'hello world', new_string: 'hi world' });
+    const result = await wrapped.toolFn({ path: file, old_string: 'hello world', new_string: 'hi world' });
 
     expect(prompt).toHaveBeenCalledTimes(1);
     expect(await fs.readFile(file, 'utf-8')).toBe('hi world\n');
+    expect(result).toContain('[REDACTED]');
+    expect(result).not.toContain('ghp_');
   });
 
   it('strips an externally supplied gateSnapshot when the gate itself finds no match', async () => {

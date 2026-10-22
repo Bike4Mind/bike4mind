@@ -12,6 +12,7 @@
 
 - Show spawned sessions immediately while their worktrees prepare, with queued messages and visible startup failures.
 - Reuse base-branch fetches and spare checkouts, and invalidate the skill catalog when its files change.
+- Show artifact thumbnails in a searchable grid with a full-panel detail view, and reload cached bodies on Refresh.
 
 - Add account-scoped Claude Code sync and claude.ai export import, with continued sessions protected from later imports and removal.
 - Move Settings to a dedicated page with General, Permissions and Import sections.

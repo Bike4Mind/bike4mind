@@ -3799,6 +3799,7 @@ export const settingsMap = {
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 301,
+    dependsOn: 'EnableStudioCreateV2',
   }),
   EnableStudioProductions: makeBooleanSetting({
     key: 'EnableStudioProductions',
@@ -3809,6 +3810,7 @@ export const settingsMap = {
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 302,
+    dependsOn: 'EnableStudioCreateV2',
   }),
   EnablePotionQuest: makeBooleanSetting({
     key: 'EnablePotionQuest',
