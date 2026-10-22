@@ -11,6 +11,8 @@ import {
   MAX_WEB_SEARCHES_PER_TURN,
   WEB_SEARCH_NOT_CONFIGURED_MSG,
   WEB_SEARCH_UNAVAILABLE_MSG,
+  WEB_SEARCH_NO_RESULTS_MSG,
+  validateWebSearchResult,
   shouldIncludeImages,
   formatImageResults,
   searchCacheClear,
@@ -1101,5 +1103,25 @@ describe('performWebSearch - shared citation numbering', () => {
     expect(result.formattedResults).toContain('1. **A**');
     expect(result.formattedResults).not.toContain('ONLY by the bracketed number');
     expect(result.citables.every(c => c.metadata?.citationIndex === undefined)).toBe(true);
+  });
+});
+
+describe('validateWebSearchResult', () => {
+  it.each([WEB_SEARCH_NOT_CONFIGURED_MSG, WEB_SEARCH_UNAVAILABLE_MSG])(
+    'scores a search that never ran as a failure',
+    message => {
+      expect(validateWebSearchResult(message)).toEqual({ confidence: 0.1, source: 'deterministic' });
+    }
+  );
+
+  it('scores an empty search as empty, even with a prompt appended', () => {
+    expect(validateWebSearchResult(`${WEB_SEARCH_NO_RESULTS_MSG}\nShow the image cards.`)).toEqual({
+      confidence: 0.3,
+      source: 'deterministic',
+    });
+  });
+
+  it('has no opinion on a search with hits', () => {
+    expect(validateWebSearchResult("Here's what I found from searching the web:\n\n1. A hit")).toBeUndefined();
   });
 });

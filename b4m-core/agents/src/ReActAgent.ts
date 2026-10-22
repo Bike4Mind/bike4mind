@@ -6,7 +6,7 @@ import {
   type ICacheStrategy,
   type TurnUsage,
 } from '@bike4mind/common';
-import type { ICompletionOptionTools, CompletionInfo } from '@bike4mind/llm-adapters';
+import type { ICompletionOptionTools, CompletionInfo, ToolResultScore } from '@bike4mind/llm-adapters';
 import { isContextLimitError } from './errors';
 import { isJsonObjectString, isPlainObject, isRepaired, repairTranscript } from './transcript';
 import type {
@@ -1847,10 +1847,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
    * Returns the step for callers that need to collect iteration steps.
    */
   private buildObservationStep(toolName: string, observation: string, toolFailed = false): AgentStep {
-    const confidence = this.scoreToolResult(toolName, observation);
-    const confidenceSource: 'deterministic' | 'default' = observation.startsWith('Error:')
-      ? 'deterministic'
-      : 'default';
+    const { confidence, source: confidenceSource } = this.scoreToolResult(toolName, observation);
 
     this.confidenceLog.push({ toolName, confidence, source: confidenceSource, timestamp: Date.now() });
     this.iterationConfidences.push(confidence);
@@ -1881,25 +1878,38 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
   }
 
   /**
-   * Score the confidence of a tool result.
-   * Deterministic scoring for errors; default stub (0.7) for everything else.
-   * This is the extension point for tool-level score functions.
+   * Score the confidence of a tool result. A thrown tool's `Error:` observation is always 0.1;
+   * otherwise the tool's own `validateResult` decides, and a result it has no opinion on (or a
+   * tool without one) gets a default from the result's shape.
    */
-  private scoreToolResult(toolName: string, result: string): number {
-    // Deterministic: errors get low confidence
+  private scoreToolResult(
+    toolName: string,
+    result: string
+  ): { confidence: number; source: 'deterministic' | 'heuristic' | 'default' } {
     if (result.startsWith('Error:')) {
-      return 0.1;
+      return { confidence: 0.1, source: 'deterministic' };
     }
-    // Deterministic: empty results are suspicious
-    if (!result || result.trim().length === 0) {
-      return 0.3;
+    const validated = this.validateToolResult(toolName, result);
+    if (validated) return validated;
+    if (result.trim().length === 0) {
+      return { confidence: 0.3, source: 'deterministic' };
     }
-    // Stub phase: all non-error tool results get a fixed 0.7 confidence score.
-    // Intentional - real confidence signals (tool-specific validators, LLM
-    // self-reported certainty, output schema conformance) will replace this
-    // when the confidence calibration system is built. The 0.7 baseline keeps
-    // the confidence gate functional without triggering false pauses.
-    return 0.7;
+    // Baseline for a non-empty result nothing has judged: above the gate threshold, so an
+    // unvalidated tool never pauses a run on its own.
+    return { confidence: 0.7, source: 'default' };
+  }
+
+  /** The tool's own validator verdict, clamped to 0-1; a throwing validator is logged and ignored. */
+  private validateToolResult(toolName: string, result: string): ToolResultScore | undefined {
+    const validateResult = this.context.tools.find(t => t.toolSchema.name === toolName)?.validateResult;
+    if (!validateResult) return undefined;
+    try {
+      const score = validateResult(result);
+      return score && { ...score, confidence: Math.min(1, Math.max(0, score.confidence)) };
+    } catch (error) {
+      this.context.logger.warn(`Result validator for tool "${toolName}" threw; using the default score`, error);
+      return undefined;
+    }
   }
 
   /**

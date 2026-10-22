@@ -99,8 +99,24 @@ export type IChoiceEnd = IChoiceEndStop | IChoiceEndComplete | IChoiceEndToolUse
 
 export type IChoice = IChoiceStream | IChoiceEnd;
 
+/**
+ * A tool's own judgment of one of its results, fed to the agent confidence gate.
+ * `deterministic` when the tool recognizes a result it produced itself (a known failure
+ * message, a schema failure); `heuristic` when it is inferring quality from the content.
+ */
+export type ToolResultScore = {
+  /** 0-1; the agent gate pauses a run when an iteration's average falls below its threshold. */
+  confidence: number;
+  source: 'deterministic' | 'heuristic';
+};
+
+/** Returns `undefined` for a result it has no opinion on, deferring to the agent's default scoring. */
+export type ToolResultValidator = (result: string) => ToolResultScore | undefined;
+
 export interface ICompletionOptionTools {
   toolFn: (parameters?: unknown, apiKey?: string) => Promise<string>;
+  /** Scores this tool's results for the agent confidence gate (ReActAgent.scoreToolResult). */
+  validateResult?: ToolResultValidator;
   toolSchema: {
     name: string;
     description: string;
