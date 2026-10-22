@@ -22,6 +22,10 @@ import { createS3Client } from './createS3Client';
 export class S3Storage extends BaseStorage {
   private s3: S3Client;
   private presignS3: S3Client;
+  /** True when signed links can be handed to a browser (see `browserSigningOrigin`). */
+  private browserPresignable: boolean;
+  private hasPresignEndpoint: boolean;
+  private browserOrigin?: Promise<string>;
 
   constructor(
     private bucketName: string,
@@ -59,6 +63,11 @@ export class S3Storage extends BaseStorage {
         throw new Error('S3_PRESIGN_ENDPOINT must be an absolute HTTP or HTTPS URL');
       }
     }
+    // A custom server endpoint (self-host MinIO at `http://minio:9000`) is an address only the
+    // server can resolve. Without a browser-facing S3_PRESIGN_ENDPOINT, a "browser" link
+    // signed against it is useless to the browser it is handed to.
+    this.browserPresignable = !endpoint || !!presignEndpoint;
+    this.hasPresignEndpoint = !!presignEndpoint;
     // Browser signing is opt-in; server consumers keep the private endpoint.
     this.presignS3 = presignEndpoint
       ? createS3Client({
@@ -228,6 +237,27 @@ export class S3Storage extends BaseStorage {
         ...(bindLength && { signableHeaders: new Set(['content-length']) }),
       }
     );
+  }
+
+  /**
+   * Origin of this bucket's browser-audience signed GET links, or '' when they are not
+   * browser-usable: a custom server endpoint with no S3_PRESIGN_ENDPOINT, or a link that is
+   * not on the bucket's OWN virtual host on AWS. The last case matters to callers that admit
+   * this origin in a CSP: a path-style link lives on the shared regional endpoint, which
+   * would admit every bucket in the region. Computed once per instance (signing is local).
+   */
+  browserSigningOrigin(): Promise<string> {
+    this.browserOrigin ??= (async () => {
+      if (!this.browserPresignable) return '';
+      try {
+        const url = new URL(await this.getSignedUrl('__origin__', 'get', { audience: 'browser', expiresIn: 60 }));
+        if (this.hasPresignEndpoint) return url.origin;
+        return url.hostname.startsWith(`${this.bucketName}.`) ? url.origin : '';
+      } catch {
+        return '';
+      }
+    })();
+    return this.browserOrigin;
   }
 
   getPublicUrl(path: string): string {

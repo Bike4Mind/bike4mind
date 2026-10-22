@@ -19,6 +19,14 @@ export abstract class BaseStorage {
     }
   ): Promise<string>;
   abstract getPublicUrl(path: string): string;
+  /**
+   * Origin a browser fetches this storage's signed GET links from, or '' when signed links
+   * are not usable by a browser here. Storages that cannot presign for browsers keep the
+   * default.
+   */
+  async browserSigningOrigin(): Promise<string> {
+    return '';
+  }
   abstract getPreview(path: string): Promise<string>;
   abstract getMetadata(path: string): Promise<{
     size?: number;

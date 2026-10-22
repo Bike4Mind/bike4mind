@@ -169,3 +169,31 @@ describe('S3Storage browser-facing signing endpoint', () => {
     expect(requests).toHaveLength(4);
   });
 });
+
+describe('S3Storage.browserSigningOrigin', () => {
+  it('is empty on a custom server endpoint with no browser-facing signing endpoint', async () => {
+    // beforeEach: AWS_ENDPOINT_URL_S3=http://minio.internal:9000, S3_PRESIGN_ENDPOINT unset.
+    expect(await new S3Storage('exports-bucket', 'us-east-2').browserSigningOrigin()).toBe('');
+  });
+
+  it('is the browser-facing signing endpoint when one is configured', async () => {
+    vi.stubEnv('S3_PRESIGN_ENDPOINT', 'https://objects.example.invalid:9443');
+    expect(await new S3Storage('exports-bucket', 'us-east-2').browserSigningOrigin()).toBe(
+      'https://objects.example.invalid:9443'
+    );
+  });
+
+  it("is the bucket's own virtual host on AWS", async () => {
+    vi.stubEnv('AWS_ENDPOINT_URL_S3', '');
+    expect(await new S3Storage('exports-bucket', 'us-east-2').browserSigningOrigin()).toBe(
+      'https://exports-bucket.s3.us-east-2.amazonaws.com'
+    );
+  });
+
+  it('refuses a path-style AWS link, whose origin is the shared regional endpoint', async () => {
+    vi.stubEnv('AWS_ENDPOINT_URL_S3', '');
+    // A dotted bucket name cannot use a virtual host over TLS, so the SDK signs path-style.
+    const origin = await new S3Storage('exports.bucket', 'us-east-2').browserSigningOrigin();
+    expect(origin).toBe('');
+  });
+});
