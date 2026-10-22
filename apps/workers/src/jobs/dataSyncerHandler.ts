@@ -9,6 +9,7 @@
  */
 
 import { Resource } from 'sst';
+import { ciphertextPatternSource } from '@bike4mind/utils/security';
 import type { Handler } from 'aws-lambda';
 import { MongoClient } from 'mongodb';
 import '@client/lib/settings/registerContributedSettings';
@@ -45,6 +46,7 @@ const COLLECTIONS_TO_SYNC = ['adminsettings', 'rapidreplymappings'];
 // ciphertext across would decrypt to '' on read - silently blanking every provider/demo key,
 // Slack token, Firecrawl/Serper key and ollamaBackend at once. Never sync them cross-stage;
 // previews resolve sensitive settings from their own config (or the demo-key fallback).
+// Rows holding ciphertext are skipped by shape too, so an unregistered sensitive key never leaks across.
 const SENSITIVE_ADMIN_SETTING_NAMES = new Set(
   allSettingDefinitions()
     .filter(def => def.isSensitive === true)
@@ -55,8 +57,11 @@ const SENSITIVE_ADMIN_SETTING_NAMES = new Set(
 // every other collection copies in full. Used for BOTH the count and the cursor so the
 // progress total matches what is actually inserted.
 function syncSourceFilter(collectionName: string): Record<string, unknown> {
-  if (collectionName === 'adminsettings' && SENSITIVE_ADMIN_SETTING_NAMES.size > 0) {
-    return { settingName: { $nin: Array.from(SENSITIVE_ADMIN_SETTING_NAMES) } };
+  if (collectionName === 'adminsettings') {
+    return {
+      settingName: { $nin: Array.from(SENSITIVE_ADMIN_SETTING_NAMES) },
+      settingValue: { $not: { $regex: ciphertextPatternSource, $options: 'i' } },
+    };
   }
   return {};
 }
