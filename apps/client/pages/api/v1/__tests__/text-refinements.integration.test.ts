@@ -183,6 +183,20 @@ describe('POST /api/v1/text-refinements', () => {
     errorLog.mockRestore();
   });
 
+  it.each([401, 403])('401s with provider_rejected when the provider refuses our key (upstream %i)', async status => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    // The provider SDK's own error - a numeric `status` is what the classifier reads. 403 is
+    // here too: an access-denied reply to our key is just as permanent as a wrong one.
+    mockRefineText.mockRejectedValue(Object.assign(new Error('invalid api key'), { status }));
+    const { req, res } = post({ text: 'hello' });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(401);
+    expect(res._getJSONData()).toMatchObject({
+      error: expect.any(String),
+      errorCode: 'provider_rejected',
+    });
+  });
+
   it('502s on an empty refinement and does not cache it', async () => {
     validateWithScopes([ApiKeyScope.AI_GENERATE]);
     mockRefineText.mockResolvedValue('');

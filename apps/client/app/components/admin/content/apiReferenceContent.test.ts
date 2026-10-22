@@ -148,6 +148,11 @@ describe('API reference facts shared with the generated docs', () => {
     expect(publicSection).not.toContain('(or the job resource) until it is terminal');
   });
 
+  it('names the text-refinement endpoint in the generated-docs inventory', () => {
+    // The only pointer a reader gets to the v1 route this page does not document by hand.
+    expect(section('## Public endpoints (generated docs)')).toContain('`/api/v1/text-refinements`');
+  });
+
   it('points at the generated docs for the reads exempt from the per-day ceiling', () => {
     const rateLimits = section('### Rate Limits');
     expect(rateLimits).toMatch(/exempt from the per-day ceiling/);

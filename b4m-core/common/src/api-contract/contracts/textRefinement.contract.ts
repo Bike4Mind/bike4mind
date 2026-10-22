@@ -41,12 +41,21 @@ export const createTextRefinementContract = defineEndpoint({
       schema: TextRefinementResponseSchema,
       example: { text: 'A golden retriever running along a sunlit beach at sunset, waves breaking behind it.' },
     },
+    401: {
+      description:
+        'Missing/invalid credentials, or the text-refinement provider refused the configured key ' +
+        '(`errorCode: "provider_rejected"`).',
+      schema: TextRefinementErrorSchema,
+    },
     429: { description: 'Per-key rate limit exceeded.', schema: ApiErrorSchema },
     500: {
       description: 'Unexpected server error (for example the refinement cache is unavailable).',
       schema: ApiErrorSchema,
     },
-    502: { description: 'The model returned no refined text, or the call failed.', schema: ApiErrorSchema },
+    502: {
+      description: 'The model call failed for a reason other than a rejected credential, or returned no refined text.',
+      schema: ApiErrorSchema,
+    },
     503: {
       description: 'This deployment has no operations model configured (`errorCode: "provider_not_configured"`).',
       schema: TextRefinementErrorSchema,

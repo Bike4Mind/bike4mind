@@ -18,7 +18,10 @@ export const TextRefinementResponseSchema = z.object({
 
 export type TextRefinementResponse = z.infer<typeof TextRefinementResponseSchema>;
 
-export const TEXT_REFINEMENT_ERROR_CODES = ['provider_not_configured'] as const satisfies readonly ApiErrorCode[];
+export const TEXT_REFINEMENT_ERROR_CODES = [
+  'provider_not_configured',
+  'provider_rejected',
+] as const satisfies readonly ApiErrorCode[];
 
 export const TextRefinementErrorSchema = ApiErrorSchema.extend({
   errorCode: z.enum(TEXT_REFINEMENT_ERROR_CODES).optional(),

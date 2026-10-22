@@ -6,6 +6,7 @@
  */
 
 import { createTextRefinementContract } from '@bike4mind/common';
+import { getHttpStatus } from '@bike4mind/utils';
 import { RefineFailedError, RefineProviderUnavailableError, refineTextRequest } from '@server/ai/refineTextRequest';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 
@@ -24,6 +25,15 @@ const handler = nextRouteForContract(createTextRefinementContract).post(async (r
     }
     if (error instanceof RefineFailedError) {
       req.logger.error('Text refinement failed', error.cause ?? error);
+      // A refused key is a permanent misconfiguration, not a transient provider fault: retrying
+      // it never helps, so it gets the 401 the conventions and sibling endpoints publish.
+      const status = error.cause instanceof Error ? getHttpStatus(error.cause) : undefined;
+      if (status === 401 || status === 403) {
+        return res.status(401).json({
+          error: 'The text-refinement provider rejected the configured credential.',
+          errorCode: 'provider_rejected',
+        });
+      }
       return res.status(502).json({ error: 'Text refinement failed' });
     }
     // Anything unclassified - a cache/DB fault, a resolver failure - is an internal error, not a

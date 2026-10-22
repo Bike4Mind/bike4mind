@@ -86,6 +86,11 @@ describe('POST /api/ai/refineText', () => {
     expect(opts.expiry).toBe(5 * 60 * 1000);
     // maxTokens is finite (not Infinity) - the whole point of the hardening.
     expect(complete.mock.calls[0][2].maxTokens).toBe(800);
+    // The helper is the one adapter call both routes share: a dropped model id fails every
+    // refine at the provider, and streaming lets refineText's per-chunk callback cache a
+    // partial refinement.
+    expect(complete.mock.calls[0][0]).toBe('ops-model');
+    expect(complete.mock.calls[0][2]).toMatchObject({ stream: false, maxTokens: 800 });
     expect(res._getJSONData()).toEqual({ text: 'refined output' });
   });
 

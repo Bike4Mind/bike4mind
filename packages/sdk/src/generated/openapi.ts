@@ -2976,6 +2976,17 @@ export interface components {
     createTextRefinementResponse200: {
       text: string;
     };
+    createTextRefinementResponse401: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'provider_not_configured' | 'provider_rejected';
+    };
     createTextRefinementResponse503: {
       error: string;
       request_id?: string;
@@ -2985,7 +2996,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'provider_not_configured';
+      errorCode?: 'provider_not_configured' | 'provider_rejected';
     };
     /**
      * @example {
@@ -9077,15 +9088,27 @@ export interface operations {
           'application/json': components['schemas']['createTextRefinementResponse200'];
         };
       };
-      /** @description Missing or invalid credentials. */
+      /** @description Missing/invalid credentials, or the text-refinement provider refused the configured key (`errorCode: "provider_rejected"`). */
       401: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ErrorResponse'];
+          'application/json': components['schemas']['createTextRefinementResponse401'];
         };
       };
       /** @description The API key does not hold any of the required scopes. */
@@ -9181,7 +9204,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The model returned no refined text, or the call failed. */
+      /** @description The model call failed for a reason other than a rejected credential, or returned no refined text. */
       502: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
