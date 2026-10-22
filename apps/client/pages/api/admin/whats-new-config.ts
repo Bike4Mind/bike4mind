@@ -5,6 +5,7 @@ import { WhatsNewConfigService } from '@bike4mind/server-utils/services/whatsNew
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { ApiKeyScope, WhatsNewConfigSchema } from '@bike4mind/common';
 import { validateTemplate } from '@bike4mind/server-utils/whatsNew/whatsNewGeneration.templateUtils';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 // Rate limiting constants
 const ADMIN_CONFIG_RATE_LIMIT = 10; // requests per minute
@@ -50,8 +51,15 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         }
       }
 
+      const previousConfig = await WhatsNewConfigService.getCurrentConfig();
       // Update the configuration with history tracking
       await WhatsNewConfigService.updateConfigWithHistory(config, req.user.id, req.user.username ?? req.user.email);
+      await recordAdminActionFromRequest(req, {
+        action: 'settings.whats_new.updated',
+        target: { kind: 'settings', id: 'whats-new-config', displayName: "What's New configuration" },
+        summary: 'updated the configuration',
+        changes: [{ field: 'config', before: previousConfig, after: config }],
+      });
 
       return res.json({
         success: true,

@@ -11,6 +11,7 @@ import {
 import { BadRequestError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { stampCreditLot } from './stampCreditLot';
+import type { CreditLedgerWrite } from './ledgerWrite';
 
 /** Raised when a replayed `transactionId` must fail rather than answer idempotently. */
 export class DuplicateCreditTransactionError extends Error {
@@ -53,12 +54,13 @@ export const AddCreditsSchema = z.discriminatedUnion('type', [
 export type AddCreditsParameters = z.infer<typeof AddCreditsSchema>;
 
 /**
- * Add credits to a User or Organization and create a corresponding transaction record
+ * Add credits to a User or Organization and create a corresponding transaction record.
+ * Returns the holder and the id of the CreditTransaction row it wrote (undefined on an idempotent retry).
  */
-export async function addCredits(
+export async function addCreditsWithLedgerRow(
   parameters: AddCreditsParameters,
   { db, creditHolderMethods, duplicateTransactionId = 'return' }: AddCreditsAdapters
-): Promise<ICreditHolder> {
+): Promise<CreditLedgerWrite> {
   const params = secureParameters(parameters, AddCreditsSchema);
   const { ownerId, ownerType, credits, type, description, metadata } = params;
 
@@ -127,7 +129,7 @@ export async function addCredits(
     if (!currentEntity) {
       throw new BadRequestError('Failed to load credit holder for idempotent add');
     }
-    return currentEntity;
+    return { creditHolder: currentEntity, creditTransactionId: undefined };
   }
 
   // Transaction record committed - now safe to credit the balance exactly once.
@@ -151,5 +153,14 @@ export async function addCredits(
     );
   }
 
-  return updatedEntity;
+  return { creditHolder: updatedEntity, creditTransactionId: tx.id };
+}
+
+/** addCredits for callers that need the ledger row id; see addCreditsWithLedgerRow. */
+export async function addCredits(
+  parameters: AddCreditsParameters,
+  adapters: AddCreditsAdapters
+): Promise<ICreditHolder> {
+  const { creditHolder } = await addCreditsWithLedgerRow(parameters, adapters);
+  return creditHolder;
 }
