@@ -172,7 +172,7 @@ async function processHighlightsGeneration(
     await postHighlightsNotice(
       { slackChannelId, slackTeamId, correlationId },
       `Weekly highlights skipped for ${dateRange.start} - ${dateRange.end}: release notes are disabled.`,
-      'Enable release notes (or fix their config) in the Release Notes admin tab to resume weekly highlights.',
+      'Enable release notes (or fix their config) in the Release Notes admin tab, then run highlights again.',
       logger
     );
     return;
