@@ -40,12 +40,20 @@ describe('partitionContributed', () => {
   );
 
   // Each of these would alias a core or platform variable through the env var it maps to.
-  it.each(['MongodbUri', 'mongodb_uri', 'ExampleUrl', 'NODE_OPTIONS', 'AWS_SECRET_ACCESS_KEY', 'LD_PRELOAD', 'PATH'])(
-    'rejects %j, which names or aliases a variable a contribution must not own',
-    name => {
-      expect(isValidContributedResourceName(name)).toBe(false);
-    }
-  );
+  it.each([
+    'MongodbUri',
+    'mongodb_uri',
+    'ExampleUrl',
+    'NODE_OPTIONS',
+    'AWS_SECRET_ACCESS_KEY',
+    'LD_PRELOAD',
+    'PATH',
+    'HTTPS_PROXY',
+    'SSL_CERT_FILE',
+    'OPENSSL_CONF',
+  ])('rejects %j, which names or aliases a variable a contribution must not own', name => {
+    expect(isValidContributedResourceName(name)).toBe(false);
+  });
 
   it('rejects a non-string name', () => {
     expect(partitionContributed([{ name: 42 }], s => s.name, core).rejected).toEqual(['42']);
