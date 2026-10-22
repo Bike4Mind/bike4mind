@@ -1,7 +1,7 @@
 #!/usr/bin/env tsx
 /**
  * One-off script: soft-delete secretRotation DB records whose keyName is no
- * longer present in SECRET_ROTATION_CONFIG.
+ * longer present in the rotation config (core entries plus registered contributions).
  *
  * After trimming or renaming entries in the manifest, stale DB records keep
  * isActive: true and the cron + admin UI keep alerting on them.  This script
@@ -16,7 +16,10 @@
 
 import { connectDB, mongoose } from '@bike4mind/database';
 import { secretRotationRepository } from '@bike4mind/database/infra';
-import { SECRET_ROTATION_CONFIG } from '@bike4mind/server-utils/lib/secretRotation/constants';
+import {
+  getSecretRotationConfig,
+  getUnregisteredContributedRotations,
+} from '@bike4mind/server-utils/lib/secretRotation/constants';
 import { Resource } from 'sst';
 import { Config } from '@bike4mind/server-utils/utils/config';
 
@@ -25,7 +28,14 @@ const isDryRun = process.argv.includes('--dry-run');
 async function main() {
   await connectDB(Config.MONGODB_URI.replace('%STAGE%', Resource.App.stage));
 
-  const configKeys = new Set(Object.keys(SECRET_ROTATION_CONFIG));
+  const unregistered = getUnregisteredContributedRotations();
+  if (unregistered.length > 0) {
+    throw new Error(
+      `Refusing to deactivate: declared rotation(s) failed to register (${unregistered.join(', ')}), ` +
+        'so their records would look stale. Fix the declaration and re-run.'
+    );
+  }
+  const configKeys = new Set(Object.keys(getSecretRotationConfig()));
   const allActive = await secretRotationRepository.find({ isActive: true });
 
   const stale = allActive.filter(r => !configKeys.has(r.keyName));

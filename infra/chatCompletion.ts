@@ -6,7 +6,7 @@ import { mcpHandler } from './mcp';
 import { generationJobQueue } from './queues';
 import { cdnUrlForLambdaEnv, router, routePrefix } from './router';
 import { searxngUrl } from './searxng';
-import { allSecrets, secrets } from './secrets';
+import { allSecrets, contributedSecretEnvironment, secrets } from './secrets';
 import { cluster, resolvedVpcId, vpc, vpcId } from './vpc';
 import { websocketApi } from './websocket';
 
@@ -125,6 +125,8 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
     },
   ],
   environment: {
+    // First, so a core variable of the same name always wins.
+    ...contributedSecretEnvironment(),
     ...DEFAULT_LAMBDA_ENVIRONMENT,
     ...TEST_GENERATION_PROVIDER_ENVIRONMENT,
     NEXT_PUBLIC_CDN_URL: cdnUrlForLambdaEnv(),
