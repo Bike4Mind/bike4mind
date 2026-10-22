@@ -21,6 +21,7 @@ const {
   mockGetSettingsMap,
   mockInvoke,
   mockProcess,
+  mockWriteStaticCompletion,
 } = vi.hoisted(() => ({
   mockVerifyVoiceSessionToken: vi.fn(),
   mockFindDuplicateQuests: vi.fn(),
@@ -28,6 +29,7 @@ const {
   mockGetSettingsMap: vi.fn(),
   mockInvoke: vi.fn(),
   mockProcess: vi.fn(),
+  mockWriteStaticCompletion: vi.fn(),
 }));
 
 // Bypass baseApi's whole middleware chain (connectDB, passport, api-key auth) - this
@@ -108,7 +110,7 @@ vi.mock('@bike4mind/voice', () => ({
   openAiSseChunk: () => 'chunk',
   openAiSseDone: () => 'done',
   stripSpokenThinking: (text: string) => text,
-  writeStaticCompletion: () => {},
+  writeStaticCompletion: (...args: unknown[]) => mockWriteStaticCompletion(...args),
 }));
 
 import handler from '../completions';
@@ -241,6 +243,8 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - video generation', () 
     expect((mockInvoke.mock.calls[0][0] as VideoBody).body.tools).toContain('video_generation');
     const processArg = mockProcess.mock.calls[0][0] as VideoProcessArg;
     expect(processArg.body.tools).toContain('video_generation');
+    // The usable-model lookup is a DB read: it must wait for the engine to ask, not run on every voice turn.
+    expect(mockBuildVideoToolConfig).not.toHaveBeenCalled();
     expect(await processArg.videoToolConfigResolver?.()).toEqual({
       ...config,
       deliveryNote: expect.stringContaining('appears on screen in this session chat'),
@@ -277,6 +281,66 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - video generation', () 
     expect((mockProcess.mock.calls[0][0] as VideoBody).body.tools).toEqual(
       expect.arrayContaining(['web_search', 'search_knowledge_base', 'video_generation'])
     );
+  });
+});
+
+describe('POST /api/voice/v2/llm-proxy/chat/completions - duplicate turns', () => {
+  beforeEach(primeSuccessfulTurn);
+
+  // currentTurnUserMessage is mocked to 'hello there'
+  const quest = (overrides: Record<string, unknown>) => ({ prompt: 'hello there', status: 'done', ...overrides });
+
+  it('drops a retry while the original turn is still running, speaking nothing', async () => {
+    mockFindDuplicateQuests.mockResolvedValue([quest({ status: 'running' })]);
+
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect(mockInvoke).not.toHaveBeenCalled();
+    expect(mockWriteStaticCompletion).toHaveBeenCalledWith(expect.anything(), expect.anything(), '');
+  });
+
+  // A dropped connection stops the quest but leaves the billed video job its tool call already created.
+  it('drops a retry of a stopped turn that already started a video job, and says so', async () => {
+    mockFindDuplicateQuests.mockResolvedValue([
+      quest({ status: 'stopped', generationJobs: [{ id: 'job-1', kind: 'video' }] }),
+    ]);
+
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect(mockInvoke).not.toHaveBeenCalled();
+    expect(mockProcess).not.toHaveBeenCalled();
+    expect(mockWriteStaticCompletion).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.stringContaining('already being made')
+    );
+  });
+
+  it('also recognizes a video job recorded on the legacy videoJobIds field', async () => {
+    mockFindDuplicateQuests.mockResolvedValue([quest({ status: 'stopped', videoJobIds: ['job-1'] })]);
+
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect(mockProcess).not.toHaveBeenCalled();
+  });
+
+  it('still answers a retry of a stopped turn that never started a job', async () => {
+    mockFindDuplicateQuests.mockResolvedValue([quest({ status: 'stopped' })]);
+
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect(mockProcess).toHaveBeenCalledTimes(1);
+  });
+
+  it('still answers the same words after a non-video job, or a video job on a different prompt', async () => {
+    mockFindDuplicateQuests.mockResolvedValue([
+      quest({ status: 'done', generationJobs: [{ id: 'song-1', kind: 'music' }] }),
+      quest({ prompt: 'something else', status: 'done', generationJobs: [{ id: 'job-2', kind: 'video' }] }),
+    ]);
+
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect(mockProcess).toHaveBeenCalledTimes(1);
   });
 });
 
