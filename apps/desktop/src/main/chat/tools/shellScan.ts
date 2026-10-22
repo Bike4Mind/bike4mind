@@ -97,7 +97,7 @@ function toolchainLocations(): string[] {
 }
 
 // Credential files a package manager or a shell keeps beside its toolchain.
-const SECRET_NAME = /^\.(npmrc|netrc|pypirc|git-credentials|yarnrc(\.yml)?)$|credential|secret|token/i;
+const SECRET_NAME = /^\.?(npmrc|netrc|pypirc|git-credentials|yarnrc(\.yml)?)$|credential|secret|token/i;
 
 const namesSecret = (path: string): boolean => path.split('/').some(part => SECRET_NAME.test(part)) || isEnvFile(path);
 
@@ -674,6 +674,7 @@ const LOCAL_PROGRAMS = new Set([
 const RUNS_A_PROGRAM: Readonly<Record<string, RegExp>> = {
   find: /^-(exec|execdir|ok|okdir|delete|fprint0?|fprintf|fls)$/,
   rg: /^--pre(-glob)?(=|$)/,
+  tree: /^-[A-Za-z]*o/,
 };
 
 /**
@@ -805,8 +806,11 @@ export async function scanShell(
 
     /** A `probe` only reads, so a toolchain folder it names is recorded as a path, not an outside folder to grant. */
     const check = async (raw: string, cwd: string, probe = false): Promise<string | null> => {
-      const prefix = globPrefix(expandHome(unquote(raw)));
+      const text = expandHome(unquote(raw));
+      const prefix = globPrefix(text);
       if (!prefix || isDynamic(prefix)) return null;
+      // A glob can expand to `..` (`~/.nvm*/../.ssh`, `~/.nvm/.?/.ssh`), so a dot after the glob never stays inside.
+      const stays = text === prefix || (!text.slice(prefix.length).includes('.') && !prefix.endsWith('.'));
       try {
         const physical = await resolveWithinRootsPhysically(prefix, allowed, cwd);
         paths.add(physical);
@@ -815,7 +819,7 @@ export async function scanShell(
         const target = resolve(cwd, prefix);
         paths.add(target);
         paths.add(await realpathNearest(target));
-        if (probe && (await isToolchainPath(prefix, cwd))) return target;
+        if (probe && stays && (await isToolchainPath(prefix, cwd))) return target;
         const isDirectory = (await stat(target).catch(() => null))?.isDirectory() === true;
         directories.add(isDirectory ? target : dirname(target));
         return target;

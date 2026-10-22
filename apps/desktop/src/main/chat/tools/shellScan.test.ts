@@ -528,6 +528,10 @@ describe('scanShell', () => {
       'rm ~/.nvm/alias/default',
       'cp ~/.nvm/alias/default ~/.local/bin/x',
       'find ~/.nvm -name x -delete',
+      'cat ~/.nvm*/../.ssh/id_rsa',
+      'cat ~/.nvm/.?/.ssh/id_rsa',
+      'tree -o ~/.nvm/nvm.sh .',
+      'cat ~/.nvm/versions/node/v20/etc/npmrc',
     ])('still asks for a folder: %s', async command => {
       expect((await scan(command)).directories).not.toEqual([]);
     });
