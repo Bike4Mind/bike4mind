@@ -27,7 +27,7 @@ import {
 } from '@bike4mind/utils';
 import { logEvent } from '@server/utils/analyticsLog';
 import { baseApi } from '@server/middlewares/baseApi';
-import { reserveVoiceHold, settlePriorVoiceHold } from '@server/voice/settleVoiceHold';
+import { reserveVoiceHold, settlePriorVoiceHold } from '@bike4mind/server-utils/voice/settleVoiceHold';
 import {
   REALTIME_VOICE_RESERVE_USD,
   REALTIME_VOICE_HOLD_SECONDS,
@@ -139,7 +139,7 @@ const handler = baseApi().post(async (req, res) => {
       }
     );
     // The credit hold lives on the session and is settled for, and refunded to, its owner
-    // (server/websocket/voiceSessionEnded.ts, server/voice/settleVoiceHold.ts), so only the owner
+    // (server/websocket/voiceSessionEnded.ts, packages/server-utils/src/voice/settleVoiceHold.ts), so only the owner
     // may open one. Matches POST /api/v1/voice/sessions, which looks the session up by owner.
     if (session.userId !== req.user.id) {
       throw new ForbiddenError('Voice calls can only be started in your own notebooks');

@@ -5,7 +5,7 @@ import { api } from '@client/app/contexts/ApiContext';
 export type ReleaseNoteState = 'scheduled' | 'published' | 'hidden';
 export type ReleaseNoteAction = 'hide' | 'unhide' | 'publishNow';
 
-/** Mirrors AdminReleaseNote in apps/client/server/releaseNotes/adminReleaseNotes.ts. */
+/** Mirrors AdminReleaseNote in packages/server-utils/src/releaseNotes/adminReleaseNotes.ts. */
 export interface AdminReleaseNote {
   id: string;
   releaseTag: string;

@@ -94,7 +94,7 @@ vi.mock('@server/websocket/utils', () => ({
   sendToClient: (...args: unknown[]) => mockSendToClient(...args),
 }));
 
-vi.mock('@server/integrations/stripe/stripe', () => ({
+vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   isStripeConfigured: vi.fn().mockReturnValue(true),
   stripe: {
     webhooks: { constructEvent: (...args: unknown[]) => mockConstructEvent(...args) },

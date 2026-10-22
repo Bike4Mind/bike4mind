@@ -70,7 +70,7 @@ vi.mock('@bike4mind/database', async () => {
 
 vi.mock('@casl/mongoose', () => ({ accessibleBy: () => ({ ofType: () => ({}) }) }));
 
-vi.mock('@server/videoGenerations/buildVideoToolConfig', () => ({
+vi.mock('@bike4mind/server-utils/videoGenerations/buildVideoToolConfig', () => ({
   buildVideoToolConfig: vi.fn(async () => ({ usableModels: ['test-video'], createJob: vi.fn() })),
 }));
 
@@ -82,7 +82,7 @@ describe('questProcessor getVideoToolConfigResolver', () => {
 
   it('offers a video resolver on a session turn', async () => {
     const { getVideoToolConfigResolver } = await import('./questProcessor');
-    const { buildVideoToolConfig } = await import('@server/videoGenerations/buildVideoToolConfig');
+    const { buildVideoToolConfig } = await import('@bike4mind/server-utils/videoGenerations/buildVideoToolConfig');
     const resolver = getVideoToolConfigResolver(undefined, 'u1');
     expect(resolver).toBeTypeOf('function');
     await resolver?.();
@@ -90,7 +90,7 @@ describe('questProcessor getVideoToolConfigResolver', () => {
   }, 120_000);
 });
 
-vi.mock('@server/musicGenerations/buildMusicToolConfig', () => ({
+vi.mock('@bike4mind/server-utils/musicGenerations/buildMusicToolConfig', () => ({
   buildMusicToolConfig: vi.fn(async () => ({ usableModels: ['test-music'], createJob: vi.fn() })),
 }));
 
@@ -102,7 +102,7 @@ describe('questProcessor getMusicToolConfigResolver', () => {
 
   it('offers a music resolver on a session turn', async () => {
     const { getMusicToolConfigResolver } = await import('./questProcessor');
-    const { buildMusicToolConfig } = await import('@server/musicGenerations/buildMusicToolConfig');
+    const { buildMusicToolConfig } = await import('@bike4mind/server-utils/musicGenerations/buildMusicToolConfig');
     const resolver = getMusicToolConfigResolver(undefined, 'u1');
     expect(resolver).toBeTypeOf('function');
     await resolver?.();

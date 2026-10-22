@@ -1,6 +1,12 @@
 import { describe, it, expect, vi, beforeEach, MockedObject } from 'vitest';
 import { subtractCredits, SubtractCreditsAdapters, SubtractCreditsParameters } from './subtractCredits';
-import { ICreditHolder, ICreditHolderMethods, CreditHolderType } from '@bike4mind/common';
+import {
+  ICreditHolder,
+  ICreditHolderMethods,
+  CreditHolderType,
+  GenericDeductReason,
+  registerGenericDeductReason,
+} from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { createMockCreditTransactionRepository } from '../__tests__/utils/testUtils';
 
@@ -65,6 +71,48 @@ describe('creditService - subtractCredits', () => {
         reason: 'admin_adjustment',
         userId: 'user1',
       });
+    });
+
+    it('accepts a reason added through the registry', async () => {
+      mockCreditHolderMethods.incrementCredits.mockResolvedValue(mockUser);
+      const reason = 'subtract_test_registered_reason';
+      registerGenericDeductReason(reason);
+
+      await subtractCredits(
+        {
+          type: 'generic_deduct',
+          ownerId: 'user1',
+          ownerType: CreditHolderType.User,
+          credits: 5,
+          reason: reason as GenericDeductReason,
+        },
+        mockAdapters
+      );
+
+      expect(mockCreditTransactionRepo.createTransaction).toHaveBeenCalledWith(
+        'generic_deduct',
+        expect.objectContaining({ reason, credits: -5 })
+      );
+    });
+
+    it('rejects a reason that was never registered', async () => {
+      await expect(
+        subtractCredits(
+          {
+            type: 'generic_deduct',
+            ownerId: 'user1',
+            ownerType: CreditHolderType.User,
+            credits: 5,
+            reason: 'subtract_test_unregistered_reason' as GenericDeductReason,
+          },
+          mockAdapters
+        )
+      ).rejects.toMatchObject({
+        statusCode: 422,
+        message: expect.stringContaining('Unregistered generic deduct reason'),
+      });
+      expect(mockCreditHolderMethods.incrementCredits).not.toHaveBeenCalled();
+      expect(mockCreditTransactionRepo.createTransaction).not.toHaveBeenCalled();
     });
 
     it('should subtract credits from organization for generic_deduct transaction', async () => {

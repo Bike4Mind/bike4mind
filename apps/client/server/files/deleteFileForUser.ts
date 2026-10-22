@@ -13,7 +13,7 @@ import { fabFilesService } from '@bike4mind/services';
 import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { logEvent } from '@server/utils/analyticsLog';
-import { recomputeStatsForLakeTags } from '@server/dataLakes/recomputeStatsForLakeTags';
+import { recomputeStatsForLakeTags } from '@bike4mind/server-utils/dataLakes/recomputeStatsForLakeTags';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { lakeMembershipAuditDb } from '@bike4mind/server-utils/dataLakes/lakeMembershipAuditDb';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';

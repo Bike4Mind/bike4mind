@@ -53,7 +53,7 @@ vi.mock('@bike4mind/server-utils/memory/mementoQueryEmbedding', () => ({
 
 import { recordFindingResolutionBelief } from './recordFindingResolutionBelief';
 import { createLedgerMemoryStore } from '@bike4mind/server-utils/memory/ledgerMemoryStore';
-import { recallLakeMemory } from '@server/memory/recallLakeMemory';
+import { recallLakeMemory } from '@bike4mind/server-utils/memory/recallLakeMemory';
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 

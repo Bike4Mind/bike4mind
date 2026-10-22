@@ -7,7 +7,7 @@ import {
   resolveQuestTimeoutRecovery,
   STUCK_QUEST_RECOVERED_LOG,
 } from '@bike4mind/server-utils/chatCompletion/questTimeoutRecovery';
-import { dispatchQuestCallback } from '@server/generationCallback/dispatchQuestCallback';
+import { dispatchQuestCallback } from '@bike4mind/server-utils/generationCallback/dispatchQuestCallback';
 import type { Request } from 'express';
 
 const handler = baseApi().post(async (req: Request<{}, {}, {}, { id: string }>, res) => {

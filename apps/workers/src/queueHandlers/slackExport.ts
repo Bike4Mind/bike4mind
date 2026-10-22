@@ -10,7 +10,7 @@ import pLimit from 'p-limit';
 import {
   isSlackUserValidationError,
   isSlackUserValidationErrorByMessage,
-} from '@server/integrations/slack/slackExportErrors';
+} from '@bike4mind/server-utils/integrations/slack/slackExportErrors';
 import { decryptToken } from '@server/security/tokenEncryption';
 
 const PayloadSchema = z.object({

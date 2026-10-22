@@ -28,7 +28,7 @@ import {
   postSreFixFailureMessage,
   postSreAlreadyFixedMessage,
   postSreCiRetryMessage,
-} from '@server/integrations/slack/sreSlackApproval';
+} from '@bike4mind/server-utils/integrations/slack/sreSlackApproval';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import type { SreRevisionRequest, SreJobType } from '@bike4mind/common';

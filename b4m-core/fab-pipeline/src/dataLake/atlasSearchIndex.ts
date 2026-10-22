@@ -40,6 +40,9 @@ const ALL_MODEL_DIMENSIONS: Map<string, number> = new Map(
 
 export const getEmbeddingDimensions = (model: string): number | null => ALL_MODEL_DIMENSIONS.get(model) ?? null;
 
+/** Every model with a per-model Atlas vector index definition, sorted. */
+export const atlasVectorIndexModels = (): string[] => [...ALL_MODEL_DIMENSIONS.keys()].sort();
+
 /** Every registered model whose write-time width equals `numDimensions` - used to guess a legacy chunk's model from its stored vector length. */
 export const modelsWithDimensions = (numDimensions: number): string[] =>
   [...ALL_MODEL_DIMENSIONS.entries()]

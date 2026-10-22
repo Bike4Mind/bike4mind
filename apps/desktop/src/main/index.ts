@@ -9,6 +9,7 @@ import { registerAccount } from './account';
 import { onAuthStateChanged, registerAuth } from './auth';
 import { registerChat } from './chat';
 import { sessionScopeFor, sessionScopeKey } from './chat/sessionScope';
+import { resolveUserPath } from './chat/tools/userPath';
 import { attachDevLogShortcut, closeDevLogWindow, registerDevLog } from './devlog';
 import { registerFleet } from './fleet';
 import { registerArtifactScheme } from './chat/artifacts/sandboxProtocol';
@@ -113,6 +114,8 @@ void app.whenReady().then(async () => {
   // First in this handler, so a failure below is on disk too (a packaged build has no terminal);
   // warnings before app ready are not persisted.
   persistConsoleWarnings(console, app.getPath('logs'));
+  // Started now so the first command or PR poll does not wait on a slow login shell.
+  void resolveUserPath();
 
   // macOS reads the dock icon from the app bundle, which only a packaged build has, so a
   // dev run would otherwise sit in the dock as Electron's own atom.

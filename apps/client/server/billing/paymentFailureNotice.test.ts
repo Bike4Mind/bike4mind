@@ -18,7 +18,7 @@ vi.mock('@bike4mind/database', () => ({
   organizationRepository: { findById: mocks.findOrg },
   userRepository: { findById: mocks.findUser },
 }));
-vi.mock('@server/integrations/stripe/stripe', () => ({
+vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   stripe: { invoices: { retrieve: mocks.retrieveInvoice } },
 }));
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetric: mocks.emitMetric }));
