@@ -35,6 +35,8 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
+vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn() }));
+
 import handler from '../team-members';
 
 const ADMIN = { id: 'a1', isAdmin: true };

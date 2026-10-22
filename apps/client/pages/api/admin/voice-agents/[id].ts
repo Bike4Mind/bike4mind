@@ -3,6 +3,7 @@ import { BadRequestError, ForbiddenError, NotFoundError, getSettingsMap, getSett
 import { deleteElevenLabsAgent, getElevenLabsAgent, updateElevenLabsAgent } from '@bike4mind/voice';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { z } from 'zod';
 
 const UpdateVoiceAgentBodySchema = z.object({
@@ -129,6 +130,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     }
 
     const updated = await agentRepository.findById(id);
+    await recordAdminActionFromRequest(req, {
+      action: 'settings.voice_agent.updated',
+      target: { kind: 'settings', id, displayName: updated?.name ?? agent.name },
+      summary: `updated voice agent ${updated?.name ?? agent.name}`,
+      // Field names only: the system prompt can be long and is not worth copying into the log.
+      details: { fields: Object.keys(body) },
+    });
     return res.status(200).json({ agent: updated });
   })
   .delete(async (req, res) => {
@@ -172,6 +180,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         await agentRepository.setDefaultVoiceAgent(remaining[0].id);
       }
     }
+
+    await recordAdminActionFromRequest(req, {
+      action: 'settings.voice_agent.deleted',
+      target: { kind: 'settings', id, displayName: agent.name },
+      summary: `deleted voice agent ${agent.name}`,
+      details: { elevenLabsAgentId: agent.elevenLabsAgentId, wasDefault: agent.isDefaultVoiceAgent === true },
+    });
 
     return res.status(200).json({ ok: true });
   });

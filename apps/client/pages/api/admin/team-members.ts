@@ -1,5 +1,6 @@
 import { internalTeamMemberRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import {
   ApiKeyScope,
@@ -59,6 +60,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       isActive: payload.isActive ?? true,
     });
 
+    await recordAdminActionFromRequest(req, {
+      action: 'settings.team_member.created',
+      target: { kind: 'settings', id: created.id, displayName: created.name },
+      summary: `created team member ${created.name}`,
+      details: { role: created.role, department: created.department, isActive: created.isActive },
+    });
+
     return respond(res, internalTeamMemberResponseSchema, created, 201);
   })
   .put(async (req, res) => {
@@ -78,6 +86,15 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       throw new BadRequestError('Team member not found.');
     }
 
+    // Field names only: the phone number and email are personal data.
+    const { id: updatedId, ...updatedFields } = payload;
+    await recordAdminActionFromRequest(req, {
+      action: 'settings.team_member.updated',
+      target: { kind: 'settings', id: updatedId, displayName: updated.name },
+      summary: `updated team member ${updated.name}`,
+      details: { fields: Object.keys(updatedFields) },
+    });
+
     return respond(res, internalTeamMemberResponseSchema, updated);
   })
   .delete(async (req, res) => {
@@ -89,7 +106,17 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       throw new BadRequestError('Team member id is required.');
     }
 
+    const existing = await internalTeamMemberRepository.findById(id);
     await internalTeamMemberRepository.delete(id);
+
+    if (existing) {
+      await recordAdminActionFromRequest(req, {
+        action: 'settings.team_member.deleted',
+        target: { kind: 'settings', id, displayName: existing.name },
+        summary: `deleted team member ${existing.name}`,
+        details: { role: existing.role, department: existing.department },
+      });
+    }
 
     return res.json({ success: true });
   });

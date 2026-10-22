@@ -6,6 +6,7 @@ import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ensureAdmin } from '@bike4mind/server-utils/utils/errors';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import qs from 'qs';
 
@@ -117,6 +118,13 @@ const handler = baseApi()
         ticker,
         type,
         categoryId,
+      });
+
+      await recordAdminActionFromRequest(req, {
+        action: 'settings.business_link.created',
+        target: { kind: 'settings', id: String(link._id), displayName: name },
+        summary: `created business link ${name}`,
+        details: { url, ticker, type, categoryId },
       });
 
       return res.status(201).json(link);
