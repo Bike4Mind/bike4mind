@@ -10,6 +10,7 @@ const m = vi.hoisted(() => ({
   findBySettingName: vi.fn(),
   getUserEntitlements: vi.fn(),
   recordUsageEvent: vi.fn(),
+  getSettingsMap: vi.fn(async (..._args: unknown[]) => ({})),
   enforceCredits: true,
 }));
 
@@ -35,7 +36,7 @@ vi.mock('@bike4mind/services', async () => {
 });
 vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/utils')>()),
-  getSettingsMap: async () => ({}),
+  getSettingsMap: (...args: unknown[]) => m.getSettingsMap(...args),
   getSettingsValue: () => m.enforceCredits,
 }));
 vi.mock('@server/entitlements', () => ({ getUserEntitlements: m.getUserEntitlements }));
@@ -48,6 +49,7 @@ import {
   assertRequestCanAfford,
   createModelAdmission,
   createRequestCompletionMeter,
+  isCreditsEnforced,
   reserveCompletionCredits,
   settleCompletion,
 } from './meterPlatformCompletion';
@@ -275,6 +277,13 @@ describe('meterPlatformCompletion credits', () => {
     expect(1000 - balance).toBeGreaterThanOrEqual(3 * oneTurnCredits - 2);
     await metered.settle({});
     expect(1000 - balance).toBeLessThanOrEqual(oneTurnCredits + 1);
+  });
+});
+
+describe('isCreditsEnforced', () => {
+  it('reads enforceCredits fresh, bypassing the per-process settings cache', async () => {
+    await isCreditsEnforced();
+    expect(m.getSettingsMap).toHaveBeenCalledWith(expect.anything(), { names: ['enforceCredits'], skipCache: true });
   });
 });
 

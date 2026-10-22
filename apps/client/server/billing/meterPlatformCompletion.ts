@@ -109,7 +109,10 @@ export function completionRequestCeilingUsd(
 }
 
 export async function isCreditsEnforced(): Promise<boolean> {
-  const settings = await getSettingsMap({ adminSettings: adminSettingsRepository }, { names: ['enforceCredits'] });
+  const settings = await getSettingsMap(
+    { adminSettings: adminSettingsRepository },
+    { names: ['enforceCredits'], skipCache: true }
+  );
   return Boolean(getSettingsValue('enforceCredits', settings));
 }
 
