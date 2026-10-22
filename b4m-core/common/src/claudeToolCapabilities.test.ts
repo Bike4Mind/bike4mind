@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   completionsSupportsToolChanges,
   completionsSupportsToolSearch,
+  supportsAssistantPrefill,
   supportsToolChanges,
   supportsToolSearch,
 } from './claudeToolCapabilities';
@@ -103,6 +104,38 @@ describe('supportsToolSearch / supportsToolChanges', () => {
     expect(flags(ChatModels.GPT4o, ModelBackend.OpenAI)).toEqual([false, false]);
     expect(flags(ChatModels.GEMINI_2_5_PRO, ModelBackend.Gemini)).toEqual([false, false]);
     expect(flags(ChatModels.DEEPSEEK_R1_BEDROCK, ModelBackend.Bedrock)).toEqual([false, false]);
+  });
+});
+
+describe('supportsAssistantPrefill', () => {
+  it.each([
+    ChatModels.CLAUDE_4_6_OPUS,
+    ChatModels.CLAUDE_4_7_OPUS,
+    ChatModels.CLAUDE_4_8_OPUS,
+    ChatModels.CLAUDE_5_OPUS,
+    ChatModels.CLAUDE_5_5_OPUS,
+    ChatModels.CLAUDE_4_6_SONNET,
+    ChatModels.CLAUDE_5_SONNET,
+    'claude-sonnet-5-5',
+    ChatModels.CLAUDE_5_5_HAIKU,
+    ChatModels.CLAUDE_FABLE_5,
+    'claude-fable-5-1',
+    'claude-mythos-5',
+    'claude-mythos-5-1',
+  ])('is false for documented non-prefill model %s', id => {
+    expect(supportsAssistantPrefill({ id })).toBe(false);
+  });
+
+  it.each([ChatModels.CLAUDE_4_5_OPUS, ChatModels.CLAUDE_4_5_SONNET, ChatModels.CLAUDE_4_5_HAIKU, ChatModels.GPT4o])(
+    'defaults to true for supported or non-Claude model %s',
+    id => {
+      expect(supportsAssistantPrefill({ id })).toBe(true);
+    }
+  );
+
+  it('classifies provider-prefixed and suffixed ids by Claude family version', () => {
+    expect(supportsAssistantPrefill({ id: 'global.anthropic.claude-opus-4-6-v1:0' })).toBe(false);
+    expect(supportsAssistantPrefill({ id: 'claude-opus-5-5[1m]' })).toBe(false);
   });
 });
 

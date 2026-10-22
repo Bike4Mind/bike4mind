@@ -36,6 +36,8 @@ export const createCompletionContract = defineEndpoint({
     'A message `content` may be a string or an array of parts; image parts are accepted in ' +
     'OpenAI Chat (`image_url`), OpenAI Responses (`input_image`) or Anthropic (`image` with a ' +
     '`source`) form and are translated to whatever the target model speaks. ' +
+    "A final non-system assistant message is an assistant prefill. Check the model's " +
+    '`supports_assistant_prefill` field from `GET /api/v1/models` before sending one. ' +
     'Authenticate with an API key (`b4m_live_`) or a JWT.\n\n' +
     'TOOL SEARCH. On a model whose `GET /api/v1/models` row has `supports_tool_search: true` (`backend` `"anthropic"` or `"bedrock"`), ' +
     'a `tools` entry may set `toolSchema.defer_loading: true`, and a `{ "serverTool": { "type": ' +
@@ -87,7 +89,8 @@ export const createCompletionContract = defineEndpoint({
     },
     400: {
       description:
-        'Malformed or otherwise invalid request (no `errorCode`), provider-rejected caller input (`errorCode: "invalid_request"`), or a `model` the caller cannot use (`errorCode: "unknown_model"`): ' +
+        'Malformed or otherwise invalid request (no `errorCode`), a model that rejects a final assistant message ' +
+        '(`errorCode: "assistant_prefill_unsupported"`), provider-rejected caller input (`errorCode: "invalid_request"`), or a `model` the caller cannot use (`errorCode: "unknown_model"`): ' +
         'not in the catalog or not available to the caller. List valid ids with `GET /api/v1/models`. Tool search requests ' +
         'are refused with: `tool_search_unsupported` (a server tool, `tool_reference` or echoed tool search block on a model ' +
         'that cannot serve tool search here), `all_tools_deferred` (every tool deferred and no server tool), ' +

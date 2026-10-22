@@ -32,6 +32,8 @@ import {
   DEGENERATE_FINISH_REASON,
   estimateStreamedOutputTokens,
   completionsSupportsToolSearch,
+  supportsAssistantPrefill,
+  ASSISTANT_PREFILL_UNSUPPORTED_ERROR_CODE,
   isClaudeModelId,
   type CreditHoldRecord,
   type ICacheStrategy,
@@ -526,6 +528,14 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     models,
     enforceCredits: Boolean(enforceCredits),
   }).assert(model);
+
+  const lastConversationMessage = messages.findLast(message => message.role !== 'system');
+  if (modelInfo && lastConversationMessage?.role === 'assistant' && !supportsAssistantPrefill(modelInfo)) {
+    throw new BadRequestError(
+      `Model '${params.model}' does not support assistant message prefill. End the conversation with a user message.`,
+      { errorCode: ASSISTANT_PREFILL_UNSUPPORTED_ERROR_CODE }
+    );
+  }
 
   const llm = getLlmByModel(apiKeys, {
     modelInfo,

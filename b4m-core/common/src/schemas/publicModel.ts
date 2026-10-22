@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { supportsToolChanges, supportsToolSearch } from '../claudeToolCapabilities';
+import { supportsAssistantPrefill, supportsToolChanges, supportsToolSearch } from '../claudeToolCapabilities';
 import { ModelBackend, type ModelInfo } from '../models';
 import { getTextModelCreditsPer1M } from '../pricing';
 import type { ReasoningEffort } from '../types/common';
@@ -126,6 +126,12 @@ export const PublicModelSchema = z.object({
         'models whose `backend` is `anthropic`; a `bedrock` model with this flag set is refused there with ' +
         '`errorCode: "tool_changes_unsupported"`.'
     ),
+  supports_assistant_prefill: z
+    .boolean()
+    .describe(
+      'Whether `/api/ai/v1/completions` accepts a final assistant message for the model to continue. When false, ' +
+        'that request returns `400` with `errorCode: "assistant_prefill_unsupported"`.'
+    ),
   supports_vision: z.boolean(),
   deprecation_date: z.string().nullable().describe('`YYYY-MM-DD`; null when no retirement is scheduled.'),
   replaced_by: z.string().nullable().describe('The id of the recommended successor, when there is one.'),
@@ -227,6 +233,7 @@ export function toPublicModel(model: ModelInfo, reasoning: PublicModelReasoning)
     supports_tools: model.supportsTools ?? false,
     supports_tool_search: supportsToolSearch(model),
     supports_tool_changes: supportsToolChanges(model),
+    supports_assistant_prefill: supportsAssistantPrefill(model),
     supports_vision: model.supportsVision ?? false,
     deprecation_date: model.deprecationDate ?? null,
     replaced_by: model.replacedBy ?? null,

@@ -45,7 +45,7 @@ vi.mock('@bike4mind/common', async importOriginal => ({
   getTextModelCost: vi.fn(() => 0.001),
 }));
 
-import { BadRequestError } from '@bike4mind/common';
+import { BadRequestError, ChatModels, ModelBackend } from '@bike4mind/common';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { getSettingsValue } from '@bike4mind/utils';
 import { InsufficientCreditsError } from './llm/ChatCompletionProcess';
@@ -164,6 +164,53 @@ describe('executeCompletion onReady', () => {
     expect(users.incrementCredits).not.toHaveBeenCalled();
     expect(onReady).not.toHaveBeenCalled();
     expect(mockComplete).not.toHaveBeenCalled();
+  });
+
+  it('refuses unsupported assistant prefill without a hold, provider call, or error log', async () => {
+    vi.mocked(getAvailableModels).mockResolvedValueOnce([
+      {
+        ...CATALOGUED_MODEL,
+        id: ChatModels.CLAUDE_5_5_HAIKU,
+        backend: ModelBackend.Anthropic,
+      } as never,
+    ]);
+    const { db, users } = buildDb();
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+    const onReady = vi.fn();
+
+    await expect(
+      executeCompletion({
+        ...baseParams,
+        model: ChatModels.CLAUDE_5_5_HAIKU,
+        messages: [
+          { role: 'user', content: 'Answer in JSON.' },
+          { role: 'assistant', content: '{' },
+          { role: 'system', content: 'Keep the answer short.' },
+        ],
+        db,
+        logger: logger as never,
+        onReady,
+      })
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      additionalInfo: { errorCode: 'assistant_prefill_unsupported' },
+    });
+    expect(users.incrementCredits).not.toHaveBeenCalled();
+    expect(onReady).not.toHaveBeenCalled();
+    expect(mockComplete).not.toHaveBeenCalled();
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it('preserves assistant prefill for a model that supports it', async () => {
+    const { db } = buildDb();
+    const messages = [
+      { role: 'user' as const, content: 'Answer in JSON.' },
+      { role: 'assistant' as const, content: '{' },
+    ];
+
+    await executeCompletion({ ...baseParams, messages, db });
+
+    expect(mockComplete).toHaveBeenCalledWith(baseParams.model, messages, expect.any(Object), expect.any(Function));
   });
 
   it('words a disabled model without a reason as plainly unavailable', async () => {

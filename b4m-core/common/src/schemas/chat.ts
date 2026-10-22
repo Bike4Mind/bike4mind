@@ -13,7 +13,7 @@ import { CHAT_HISTORY_ITEM_TYPES, QUEST_ERROR_CODES } from '../types/entities/Se
 import { PROMPT_TEXT_MAX } from './briefcasePrompt';
 import { FallbackInfoSchema } from './llm';
 import { SystemPromptDetailSchema } from './contextTelemetry';
-import { COMPLETION_TOOL_ERROR_CODES } from './cliCompletions';
+import { ASSISTANT_PREFILL_UNSUPPORTED_ERROR_CODE, COMPLETION_TOOL_ERROR_CODES } from './cliCompletions';
 import { ChatToolModeSchema } from './promptMeta';
 
 /**
@@ -362,7 +362,9 @@ export const ProviderNotConfiguredErrorSchema = ApiErrorSchema.extend({
  * request; `errorCode` is absent on the other 400s (e.g. malformed JSON).
  */
 export const CompletionsBadRequestErrorSchema = ApiErrorSchema.extend({
-  errorCode: z.enum(['invalid_request', UNKNOWN_MODEL_ERROR_CODE, ...COMPLETION_TOOL_ERROR_CODES]).optional(),
+  errorCode: z
+    .enum(['invalid_request', UNKNOWN_MODEL_ERROR_CODE, ASSISTANT_PREFILL_UNSUPPORTED_ERROR_CODE, ...COMPLETION_TOOL_ERROR_CODES])
+    .optional(),
 });
 
 /** @deprecated Use CompletionsBadRequestErrorSchema; kept so the published export does not break. */

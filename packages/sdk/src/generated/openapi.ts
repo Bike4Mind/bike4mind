@@ -140,7 +140,7 @@ export interface paths {
     put?: never;
     /**
      * Create a chat completion
-     * @description OpenAI-compatible completion. A successful request is ALWAYS answered with an SSE stream (`text/event-stream`), regardless of the `stream` flag: a `meta` event, then `content`/`tool_use` events carrying `usage`/`credits`, terminated by `data: [DONE]`. The terminal event carries `stopReason`; treat `max_tokens` as a TRUNCATED reply rather than a complete one, and note that omitting `max_tokens` on the request lets the server size the output ceiling for the model (recommended for reasoning models, which spend thinking tokens inside that ceiling). A message `content` may be a string or an array of parts; image parts are accepted in OpenAI Chat (`image_url`), OpenAI Responses (`input_image`) or Anthropic (`image` with a `source`) form and are translated to whatever the target model speaks. Authenticate with an API key (`b4m_live_`) or a JWT.
+     * @description OpenAI-compatible completion. A successful request is ALWAYS answered with an SSE stream (`text/event-stream`), regardless of the `stream` flag: a `meta` event, then `content`/`tool_use` events carrying `usage`/`credits`, terminated by `data: [DONE]`. The terminal event carries `stopReason`; treat `max_tokens` as a TRUNCATED reply rather than a complete one, and note that omitting `max_tokens` on the request lets the server size the output ceiling for the model (recommended for reasoning models, which spend thinking tokens inside that ceiling). A message `content` may be a string or an array of parts; image parts are accepted in OpenAI Chat (`image_url`), OpenAI Responses (`input_image`) or Anthropic (`image` with a `source`) form and are translated to whatever the target model speaks. A final non-system assistant message is an assistant prefill. Check the model's `supports_assistant_prefill` field from `GET /api/v1/models` before sending one. Authenticate with an API key (`b4m_live_`) or a JWT.
      *
      *     TOOL SEARCH. On a model whose `GET /api/v1/models` row has `supports_tool_search: true` (`backend` `"anthropic"` or `"bedrock"`), a `tools` entry may set `toolSchema.defer_loading: true`, and a `{ "serverTool": { "type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex" } }` (or the `bm25` pair) entry adds Anthropic's tool search, so deferred definitions load only when the model searches for them. The stream then carries `provider_block` events (`{ type, provider: "anthropic", block }`) for the server-run search; echo each block back verbatim, in order, in the assistant `messages` content of the next request, and never answer one with a `tool_result`. When the server-run search loop hits its iteration limit the stream ends with `stopReason: "pause_turn"`; continue by re-sending the conversation with that assistant turn's provider blocks echoed. A client-side search may return `{ "type": "tool_reference", "tool_name": "..." }` blocks inside a `tool_result`'s content. On every other model `defer_loading` is ignored (every tool is sent as usual) and a server tool, a `tool_reference` or an echoed tool search block is refused with a `400` rather than run without it.
      *
@@ -1728,6 +1728,7 @@ export interface components {
       errorCode?:
         | 'invalid_request'
         | 'unknown_model'
+        | 'assistant_prefill_unsupported'
         | 'tool_search_unsupported'
         | 'all_tools_deferred'
         | 'deferred_tool_cache_control'
@@ -1774,7 +1775,7 @@ export interface components {
       messages: {
         /** @enum {string} */
         role: 'user' | 'assistant' | 'system';
-        /** @description A string, or an array of content blocks. A `system` message may instead hold only `tool_addition` / `tool_removal` blocks (`{ type, tool: { type: "tool_reference", name } }`) to load or unload a tool named in `tools` mid-conversation without invalidating the prompt cache. It must follow a user turn or an assistant turn ending in a tool search result, and be the last message or precede an assistant turn. Only on models whose `supports_tool_changes` is true and that are served by the direct Anthropic API; otherwise refused with `errorCode: "tool_changes_unsupported"` (or `invalid_tool_change` / `unknown_tool_reference` when malformed). */
+        /** @description A string, or an array of content blocks. A `system` message may instead hold only `tool_addition` / `tool_removal` blocks (`{ type, tool: { type: "tool_reference", name } }`) to load or unload a tool named in `tools` mid-conversation without invalidating the prompt cache. It must follow a user turn or an assistant turn ending in a tool search result, and be the last message or precede an assistant turn. Only on models whose `supports_tool_changes` is true and that are served by the direct Anthropic API; otherwise refused with `errorCode: "tool_changes_unsupported"` (or `invalid_tool_change` / `unknown_tool_reference` when malformed). If the last non-system message is an assistant turn, the request is an assistant prefill. It is accepted only when the selected model has `supports_assistant_prefill: true`; otherwise the request returns `400` with `errorCode: "assistant_prefill_unsupported"` without changing the message. */
         content: string | unknown[];
         cache?: boolean;
       }[];
@@ -2324,6 +2325,7 @@ export interface components {
      *           "supports_tools": true,
      *           "supports_tool_search": true,
      *           "supports_tool_changes": false,
+     *           "supports_assistant_prefill": false,
      *           "supports_vision": true,
      *           "deprecation_date": null,
      *           "replaced_by": null,
@@ -2349,6 +2351,7 @@ export interface components {
      *           "supports_tools": false,
      *           "supports_tool_search": false,
      *           "supports_tool_changes": false,
+     *           "supports_assistant_prefill": true,
      *           "supports_vision": false,
      *           "deprecation_date": null,
      *           "replaced_by": null,
@@ -2422,6 +2425,8 @@ export interface components {
         supports_tool_search: boolean;
         /** @description Whether a system-role message can carry `tool_addition` and `tool_removal` blocks, which add or remove a declared tool mid-conversation. Describes the model: `/api/ai/v1/completions` honours it only for models whose `backend` is `anthropic`; a `bedrock` model with this flag set is refused there with `errorCode: "tool_changes_unsupported"`. */
         supports_tool_changes: boolean;
+        /** @description Whether `/api/ai/v1/completions` accepts a final assistant message for the model to continue. When false, that request returns `400` with `errorCode: "assistant_prefill_unsupported"`. */
+        supports_assistant_prefill: boolean;
         supports_vision: boolean;
         /** @description `YYYY-MM-DD`; null when no retirement is scheduled. */
         deprecation_date: string | null;
@@ -6739,7 +6744,7 @@ export interface operations {
           'text/event-stream': components['schemas']['createCompletionResponse200'];
         };
       };
-      /** @description Malformed or otherwise invalid request (no `errorCode`), provider-rejected caller input (`errorCode: "invalid_request"`), or a `model` the caller cannot use (`errorCode: "unknown_model"`): not in the catalog or not available to the caller. List valid ids with `GET /api/v1/models`. Tool search requests are refused with: `tool_search_unsupported` (a server tool, `tool_reference` or echoed tool search block on a model that cannot serve tool search here), `all_tools_deferred` (every tool deferred and no server tool), `deferred_tool_cache_control` (`cache_control` on a deferred tool), `unknown_tool_reference` (a `tool_reference` naming a tool not in `tools`, or carrying no string `tool_name`). Mid-conversation tool changes are refused with: `tool_changes_unsupported` (a `tool_addition` / `tool_removal` system message on a model that cannot serve it here), `invalid_tool_change` (a malformed block, or one placed where the provider does not accept it), and `unknown_tool_reference` (a changed tool not in `tools`). */
+      /** @description Malformed or otherwise invalid request (no `errorCode`), a model that rejects a final assistant message (`errorCode: "assistant_prefill_unsupported"`), or a `model` the caller cannot use (`errorCode: "unknown_model"`): not in the catalog or not available to the caller. List valid ids with `GET /api/v1/models`. Tool search requests are refused with: `tool_search_unsupported` (a server tool, `tool_reference` or echoed tool search block on a model that cannot serve tool search here), `all_tools_deferred` (every tool deferred and no server tool), `deferred_tool_cache_control` (`cache_control` on a deferred tool), `unknown_tool_reference` (a `tool_reference` naming a tool not in `tools`, or carrying no string `tool_name`). Mid-conversation tool changes are refused with: `tool_changes_unsupported` (a `tool_addition` / `tool_removal` system message on a model that cannot serve it here), `invalid_tool_change` (a malformed block, or one placed where the provider does not accept it), and `unknown_tool_reference` (a changed tool not in `tools`). */
       400: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
