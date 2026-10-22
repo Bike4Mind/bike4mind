@@ -82,15 +82,18 @@ type DuplicateTurn = 'in-flight' | 'video-started';
  * A dropped connection marks the quest `stopped` but leaves any video job its
  * tool call already created (and billed) running, and a retry gets a fresh quest
  * so the job's idempotency key never matches. A recent quest with the same prompt
- * that already started a video job therefore also counts as a duplicate, even
- * when it is no longer `running`.
+ * that is `stopped` yet already started a video job therefore also counts as a
+ * duplicate. A normally `done` turn does not: a user may repeat the sentence to
+ * ask for another clip.
  */
 async function findDuplicateTurn(sessionId: string, message: string): Promise<DuplicateTurn | null> {
   const cutoff = new Date(Date.now() - DUPLICATE_LOOKBACK_MS);
   const recent = await questRepository.findAllBySessionIdAndGreaterThanOrEqualToTimestamp(sessionId, cutoff);
   const sameTurn = recent.filter(q => q.prompt === message);
   if (sameTurn.some(q => q.status === 'running')) return 'in-flight';
-  if (sameTurn.some(q => questGenerationJobs(q).some(job => job.kind === 'video'))) return 'video-started';
+  if (sameTurn.some(q => q.status === 'stopped' && questGenerationJobs(q).some(job => job.kind === 'video'))) {
+    return 'video-started';
+  }
   return null;
 }
 
