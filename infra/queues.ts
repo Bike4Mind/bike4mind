@@ -1430,7 +1430,7 @@ const overwatchAnalyticsQueueSubscription = overwatchAnalyticsQueue.subscribe(
 //   2. Publishes a continuation message to this queue with `checkpointDepth` incremented
 //   3. A new Lambda invocation CAS-claims the execution and resumes from the checkpoint
 //
-// Self-dispatch safety constraints (see agentExecutor.ts for constants):
+// Self-dispatch safety constraints (see agentExecutor.checkpointDepth.ts for constants):
 //   - CHECKPOINT_DEPTH_WARNING = 25: emits `CheckpointDepthWarning` metric to catch runaway agents early
 //   - MAX_CHECKPOINT_DEPTH    = 50: hard ceiling; Lambda refuses to process and marks the execution failed
 //
