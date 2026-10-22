@@ -34,16 +34,6 @@ const scheduleTaskCron = new sst.aws.Cron('scheduleTaskCron', {
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
-    permissions: [
-      {
-        actions: ['sqs:*'],
-        resources: ['*'],
-      },
-      {
-        actions: ['events:*'],
-        resources: ['*'],
-      },
-    ],
   },
 });
 
@@ -483,12 +473,6 @@ const securityScanSchedulerCron = runsScheduledJobs
         environment: {
           ...DEFAULT_LAMBDA_ENVIRONMENT,
         },
-        permissions: [
-          {
-            actions: ['events:*'],
-            resources: ['*'],
-          },
-        ],
       },
     })
   : undefined;
