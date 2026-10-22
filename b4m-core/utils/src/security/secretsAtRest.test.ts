@@ -27,9 +27,9 @@ describe('secretsAtRest', () => {
     expect(decryptAtRest('sk-plaintext-not-migrated')).toBe('sk-plaintext-not-migrated');
   });
 
-  it('is idempotent: encryptAtRest leaves already-encrypted input untouched', () => {
+  it('encrypts ciphertext-shaped input as a literal secret', () => {
     const cipher = encryptAtRest('secret');
-    expect(encryptAtRest(cipher)).toBe(cipher);
+    expect(decryptAtRest(encryptAtRest(cipher))).toBe(cipher);
   });
 
   it('rejects a malformed key by treating storage as unconfigured (plaintext passthrough)', () => {
@@ -61,4 +61,25 @@ describe('secretsAtRest', () => {
     expect(encryptAtRest('')).toBe('');
     expect(decryptAtRest('')).toBe('');
   });
+});
+
+describe('record-bound ciphertext', () => {
+  it('requires the same owner, record and field to decrypt, including after key rotation', () => {
+    configureSecretsAtRest(KEY);
+    const owner = JSON.stringify(['ApiKey', 'user-a', 'record-a', 'apiKey']);
+    const cipher = encryptAtRest('provider-secret', owner);
+    expect(cipher.startsWith('v2:')).toBe(true);
+    expect(decryptAtRest(cipher, owner)).toBe('provider-secret');
+    expect(decryptAtRest(cipher, JSON.stringify(['ApiKey', 'user-b', 'record-a', 'apiKey']))).toBe('');
+    expect(decryptAtRest(cipher, JSON.stringify(['ApiKey', 'user-a', 'record-b', 'apiKey']))).toBe('');
+    expect(decryptAtRest(cipher)).toBe('');
+    configureSecretsAtRest(PREVIOUS_KEY, KEY);
+    expect(decryptAtRest(cipher, owner)).toBe('provider-secret');
+  });
+});
+
+it('rejects ciphertext-shaped input when encryption is unconfigured', () => {
+  const foreign = encryptSecret('foreign-secret', KEY);
+  configureSecretsAtRest(undefined);
+  expect(() => encryptAtRest(foreign)).toThrow('without an encryption key');
 });

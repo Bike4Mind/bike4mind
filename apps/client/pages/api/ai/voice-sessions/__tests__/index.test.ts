@@ -15,6 +15,7 @@ const mockCreateSession = vi.fn();
 const mockGetSession = vi.fn();
 const mockClaimVoiceHold = vi.fn();
 const mockOpenVoiceHold = vi.fn();
+const { mockGetSettingsMap } = vi.hoisted(() => ({ mockGetSettingsMap: vi.fn(async () => ({})) }));
 
 vi.mock('axios', () => ({
   default: {
@@ -57,7 +58,7 @@ vi.mock('@bike4mind/utils', async importOriginal => {
   const flags: Record<string, unknown> = { enableVoiceSession: true, enforceCredits: true };
   return {
     ...actual,
-    getSettingsMap: async () => ({}),
+    getSettingsMap: mockGetSettingsMap,
     getSettingsValue: (name: string, _settings: unknown, fallback?: unknown) => flags[name] ?? fallback,
   };
 });
@@ -469,5 +470,26 @@ describe('POST /api/ai/voice-sessions over an open hold', () => {
       priorStartedAt,
       expect.objectContaining({ voiceReservedCredits: expect.any(Number), realtime: true })
     );
+  });
+});
+
+// The handler reads these keys off one map. Under skipCache an unlisted key comes back absent
+// and silently reverts to its coded default - for voiceSessionTranscriptionModel that is
+// whisper-1, so a missing name would quietly downgrade every session's transcription.
+describe('POST /api/ai/voice-sessions - admin settings read', () => {
+  it('names every setting it reads and bypasses the process cache', async () => {
+    await callRoute({ sessionId: 'session-1' });
+
+    expect(mockGetSettingsMap).toHaveBeenCalledWith(expect.anything(), {
+      names: [
+        'enableVoiceSession',
+        'voiceSessionAiVoice',
+        'voiceSessionVadType',
+        'voiceSessionVadEagerness',
+        'voiceSessionTranscriptionModel',
+        'enforceCredits',
+      ],
+      skipCache: true,
+    });
   });
 });

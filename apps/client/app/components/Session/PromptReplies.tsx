@@ -86,6 +86,7 @@ import ReplyChoiceButtons from './ReplyChoiceButtons';
 import ReplyAccessories from './ReplyAccessories';
 import EnableWebSearchAction from './EnableWebSearchAction';
 import AttachmentNotices from './AttachmentNotices';
+import { TurnTimingNotice } from './TurnTimingNotice';
 import { NotebookExecutionButtons } from './NotebookExecutionButtons';
 import type { UiSideEffect } from '@bike4mind/common';
 import {
@@ -645,6 +646,7 @@ const PromptReplies: FC<PromptReplyProps> = ({
         suggestedChoices={messageData.suggestedChoices}
         attachmentNotices={messageData.attachmentNotices}
         attachmentDelivery={messageData.attachmentDelivery}
+        turnTiming={messageData.turnTiming}
         uiSideEffects={messageData.uiSideEffects}
         replySessionId={messageData.sessionId}
         jupyterNotebook={messageData.jupyterNotebook}
@@ -1241,6 +1243,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   suggestedChoices,
   attachmentNotices,
   attachmentDelivery,
+  turnTiming,
   uiSideEffects,
   replySessionId,
   jupyterNotebook,
@@ -1928,6 +1931,9 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
       {/* Deliberately not gated on `completed`: a failed attachment is known before the reply
           starts, and waiting hides it for exactly as long as the model is answering without it. */}
       <AttachmentNotices attachmentNotices={attachmentNotices} attachmentDelivery={attachmentDelivery} />
+
+      {/* Not gated on `completed` either: during a stall the retries are the one thing worth reporting. */}
+      <TurnTimingNotice questId={messageId} timing={turnTiming} />
 
       {messageId && (
         <UiSideEffectDispatcher

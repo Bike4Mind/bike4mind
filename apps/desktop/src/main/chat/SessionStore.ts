@@ -84,6 +84,8 @@ export interface CreateOptions {
   approvalMode?: ChatApprovalMode;
   /** A spawned session's copy of its parent's session-scoped grants; see ChatSession.grantedDirectories. */
   grantedDirectories?: string[];
+  /** A name chosen up front, locked exactly as `rename` locks one. */
+  title?: string;
 }
 
 /**
@@ -357,7 +359,8 @@ export class SessionStore {
       id: randomUUID(),
       // Left untitled even for a Code session: the project name is already the group header it
       // sits under, so the row itself is still best named after the first thing asked.
-      title: UNTITLED,
+      title: options.title ? deriveTitle(options.title) : UNTITLED,
+      ...(options.title ? { titleLocked: true } : {}),
       model: model || this.defaultModel,
       createdAt: now,
       updatedAt: now,

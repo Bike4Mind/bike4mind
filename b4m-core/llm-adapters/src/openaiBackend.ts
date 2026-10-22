@@ -1258,6 +1258,7 @@ export class OpenAIBackend implements ICompletionBackend {
         isRetryable: err => isRetryableError(err) && !isUserInitiatedAbort(err, options.abortSignal),
         logger: this.logger,
         abortSignal: options.abortSignal,
+        onRetry: ({ error, delayMs }) => options._internal?.turnTelemetry?.onRetry({ error, delayMs, model }),
       }
     ).then(r => r.result);
     // Non-streaming: the full response is back here. Streaming: reassigned once the stream is drained.
@@ -1416,10 +1417,7 @@ export class OpenAIBackend implements ICompletionBackend {
               }
 
               const resultStr = outcome.result.toString();
-              this.logger.debug(
-                `[Tool Result] Tool executed for ${outcome.name}:`,
-                resultStr.substring(0, 200) + '...'
-              );
+              this.logger.debug('[Tool Result] Tool executed', { name: outcome.name, resultLength: resultStr.length });
 
               // Track per-outcome whether this specific tool streamed an artifact, which picks
               // the placeholder the model sees (delivered vs removed) - every result is still
@@ -1803,7 +1801,10 @@ export class OpenAIBackend implements ICompletionBackend {
             const parsedParams = JSON.parse(parameters);
             resolvedTools.push({ id, name, parameters, parsedParams, toolFn, isMcpTool: toolDef?._isMcpTool ?? false });
           } catch {
-            this.logger.warn('JSON parse error for tool parameters (skipping):', { name, parameters });
+            this.logger.warn('JSON parse error for tool parameters (skipping):', {
+              name,
+              parameterLength: parameters.length,
+            });
             const entry = toolsUsed.find(t => t.name === name && t.id === id);
             if (entry) entry.arguments = '{}';
             recordToolResult(
@@ -1890,7 +1891,7 @@ export class OpenAIBackend implements ICompletionBackend {
           }
 
           const resultStr = outcome.result.toString();
-          this.logger.debug(`[Tool Result] Tool executed for ${outcome.name}:`, resultStr.substring(0, 200) + '...');
+          this.logger.debug('[Tool Result] Tool executed', { name: outcome.name, resultLength: resultStr.length });
 
           // Track per-outcome whether this specific tool streamed an artifact, which picks the
           // placeholder the model sees (delivered vs removed) - every result is still sanitized
@@ -2242,6 +2243,7 @@ export class OpenAIBackend implements ICompletionBackend {
       isRetryable: err => isRetryableError(err) && !isUserInitiatedAbort(err, options.abortSignal),
       logger: this.logger,
       abortSignal: options.abortSignal,
+      onRetry: ({ error, delayMs }) => options._internal?.turnTelemetry?.onRetry({ error, delayMs, model }),
     }).then(r => r.result);
 
     // Stream text deltas live; capture the terminal Response for usage + tool handling.

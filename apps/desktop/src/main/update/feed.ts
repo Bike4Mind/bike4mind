@@ -39,3 +39,29 @@ export function resolveFeedUrl(raw: string | undefined | null): string | null {
   if (parsed.protocol === 'http:' && LOOPBACK_HOSTS.has(parsed.hostname)) return parsed.href;
   return null;
 }
+
+/** The feed shape the desktop-release workflow publishes; see scripts/distribution.py `feed_url`. */
+const GITHUB_LATEST_FEED = /^\/([^/]+)\/([^/]+)\/releases\/latest\/download\/?$/;
+
+/** Must match the tag prefix scripts/publish-release.sh creates releases under. */
+const RELEASE_TAG_PREFIX = 'desktop-v';
+
+/**
+ * The page that holds a version's release notes and installers, or null when the feed is not one
+ * whose layout we know. Only GitHub Releases is recognised: a generic static host has no
+ * conventional notes page, and a guessed link that 404s is worse than no link.
+ */
+export function releasePageUrl(feedUrl: string | null, version: string): string | null {
+  if (!feedUrl) return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(feedUrl);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== 'https:' || parsed.hostname !== 'github.com') return null;
+  const match = GITHUB_LATEST_FEED.exec(parsed.pathname);
+  if (!match) return null;
+  const tag = encodeURIComponent(`${RELEASE_TAG_PREFIX}${version}`);
+  return `https://github.com/${match[1]}/${match[2]}/releases/tag/${tag}`;
+}

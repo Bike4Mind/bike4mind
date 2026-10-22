@@ -43,6 +43,18 @@ describe('SessionStore', () => {
     expect(loaded?.messages).toEqual([]);
   });
 
+  it('keeps a title given at creation over the first prompt, in one write', async () => {
+    const { id } = await store.create(MODEL, { title: 'Tidy imports' });
+    await store.appendMessage(id, {
+      id: 'm1',
+      role: 'user',
+      content: 'seed text',
+      createdAt: new Date().toISOString(),
+    });
+
+    expect((await store.get(id))?.title).toBe('Tidy imports');
+  });
+
   it('returns null for a session that does not exist rather than throwing', async () => {
     expect(await store.get('deadbeef')).toBeNull();
   });

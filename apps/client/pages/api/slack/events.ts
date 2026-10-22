@@ -1,3 +1,4 @@
+import { VERIFIED_SLACK_IDENTITY_FILTER } from '@bike4mind/common';
 import { initializeSlackPackage } from '@server/integrations/slack/slackPackageInit';
 initializeSlackPackage();
 
@@ -341,7 +342,10 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       // let Slack show cached view, then update directly to new content.
 
       // Look up B4M user by Slack ID
-      const b4mUser = await User.findOne({ 'slackSettings.slackUserId': slackUserId });
+      const b4mUser = await User.findOne({
+        'slackSettings.slackUserId': slackUserId,
+        ...VERIFIED_SLACK_IDENTITY_FILTER,
+      });
 
       // Update audit context with B4M user ID if found
       if (b4mUser) {

@@ -4,6 +4,7 @@ import {
   dataLakeRepository,
   fabFileChunkRepository,
   fabFileRepository,
+  memoryLedgerRepository,
   userRepository,
 } from '@bike4mind/database';
 import { getQuestErrorCode, LAKE_MEMORY_EXTRACTION_LEASE_MS, type IUserDocument } from '@bike4mind/common';
@@ -355,6 +356,11 @@ export async function extractLakeMemoryForBatch(
           // report erased facts as written.
           if (!written) {
             factsRefused++;
+            break;
+          }
+          const current = await fabFileRepository.findById(doc.fabFileId);
+          if (!current || !dataLakeService.lakeMembershipSignals(lake, current).inLake) {
+            await memoryLedgerRepository.markSourceShredded('lake', datalakeTag, ownerUserId, doc.fabFileId);
             break;
           }
           factsWritten++;

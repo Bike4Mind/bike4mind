@@ -216,6 +216,9 @@ const MODEL_CACHE_TTL_MS = 5 * 60_000;
 // only briefly: a transient blip or a missed perBackendTimeoutMs should cost
 // seconds of a short list or superseded prices, not a full TTL window.
 const MODEL_CACHE_RETRY_TTL_MS = 30_000;
+// Default listing deadline for runtime-discovered backends; matches LocalImageBackend's axios
+// timeout and bounds an Ollama host that drops packets (undici's connect timeout is ~10s).
+const RUNTIME_LISTING_DEFAULT_TIMEOUT_MS = 4_000;
 // preFilterModels keeps the merged list from before the deprecation filter. It is
 // never returned to a caller; getSupersededModels reads it to put a display name
 // on a pin the filter has already hidden.
@@ -306,7 +309,8 @@ export interface GetAvailableModelsOptions {
   /**
    * Deadline for one backend's listing call, in ms. A backend that misses it
    * contributes nothing instead of holding up the whole fan-out. Omitted means no
-   * deadline, which is what every caller but the picker route wants.
+   * deadline for static backends; runtime-discovered ones (RUNTIME_DISCOVERED_BACKENDS)
+   * then get RUNTIME_LISTING_DEFAULT_TIMEOUT_MS.
    */
   perBackendTimeoutMs?: number;
   /**
@@ -439,14 +443,13 @@ export const getAvailableModels = async (
   const backendPromises = Object.entries(backends).map(async ([backendName, backend]) => {
     if (!backend) return { backendName, models: [] };
 
+    const live = RUNTIME_DISCOVERED_BACKENDS.includes(backendName as ModelBackend);
+    const timeoutMs = perBackendTimeoutMs || (live ? RUNTIME_LISTING_DEFAULT_TIMEOUT_MS : 0);
     try {
       const listing = backend.getModelInfo();
-      const models = await (perBackendTimeoutMs
-        ? withListingTimeout(listing, perBackendTimeoutMs, backendName)
-        : listing);
+      const models = await (timeoutMs ? withListingTimeout(listing, timeoutMs, backendName) : listing);
       return { backendName, models };
     } catch (error) {
-      const live = RUNTIME_DISCOVERED_BACKENDS.includes(backendName as ModelBackend);
       const message = `[getAvailableModels] Error fetching models from ${backendName}:`;
       if (live) Logger.globalInstance.warn(message, error instanceof Error ? error.message : error);
       else Logger.globalInstance.error(message, error);

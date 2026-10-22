@@ -94,6 +94,37 @@ describe('buildToolUsageEvent', () => {
     expect(event.cacheWriteTokens).toBe(400);
   });
 
+  it('spreads a price stamp onto the event when provided', () => {
+    const priceStamp = {
+      priceSource: 'catalog' as const,
+      priceRowId: 'price-row-1',
+      rates: { tierKey: 200_000, input: 0.000003, output: 0.000015 },
+    };
+    const event = buildToolUsageEvent({
+      quest,
+      user,
+      provider: 'bedrock',
+      model: 'm',
+      costUsd: 0.01,
+      creditsCharged: 50,
+      priceStamp,
+    });
+    expect(event).toMatchObject(priceStamp);
+  });
+
+  it('leaves the price fields off the event when no stamp is given', () => {
+    const event = buildToolUsageEvent({
+      quest,
+      user,
+      provider: 'bedrock',
+      model: 'm',
+      costUsd: 0.01,
+      creditsCharged: 50,
+    });
+    expect(event).not.toHaveProperty('priceSource');
+    expect(event).not.toHaveProperty('rates');
+  });
+
   it('defaults cache token counts to 0 when omitted', () => {
     const event = buildToolUsageEvent({
       quest,

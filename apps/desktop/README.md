@@ -59,6 +59,21 @@ file could not be found; paste or attach the original image again. If the clipbo
 the image format, use **Save image...** instead. A failed attachment appears as a rejection above
 the composer, where it can be dismissed.
 
+## Chat costs
+
+Chat shows the credits reported by the server while a reply streams, after it finishes, and
+in the composer's usage details. Missing credit usage is left blank rather than shown as zero.
+
+In development (`pnpm dev`), Settings offers **Show dollar costs**, off by default. It switches
+the streaming cost and the composer's last-turn cost to the server's dollar figure, and adds
+dollars to the completed reply's tooltip. Completed replies keep their credit headline.
+The choice is saved locally. Production builds hide this setting and always display credits,
+even if a development run previously saved the dollar preference.
+
+If a cost is absent, the server may not have reported it yet; older replies may have no saved
+usage. The app does not estimate credits by converting dollars. A developer dollar display
+falls back to credits when the server reports no dollar figure.
+
 ## Suggested next prompt
 
 Settings has a **Suggested next prompt** switch and model picker. **Automatic** uses a small
@@ -493,6 +508,24 @@ Three cases it handles rather than failing:
 deleting a conversation must not be a way to lose code. Removing one stays a git operation the
 user performs themselves (`rmworktree <branch>`).
 
+### Starting a session in a worktree
+
+A suggested task or approved `session_spawn` appears in the sidebar before git finishes,
+with "Preparing worktree..." in its row and chips. Its first turn waits for the checkout;
+messages sent while it prepares queue behind the initial task. New Code sessions with the
+worktree toggle on also wait for their checkout before running tools.
+
+If a spawned session cannot prepare its worktree, the app shows a failure toast and reports
+the failure to the parent conversation. An empty failed session is removed, and a suggested
+task returns to pending: start the card again after correcting the git or filesystem error.
+For a tool spawn, ask the parent to try `session_spawn` again.
+
+A failed session that accepted follow-up messages is kept. Its unsent task, follow-ups and
+attachments are saved in its transcript, and typed input returns to its open composer for
+retry. Relayed messages remain in the transcript. After correcting the startup error, retry
+in that conversation; its suggestion card stays started to avoid creating a duplicate.
+Deleting a session while it prepares cancels its launch without reporting a startup failure.
+
 ### Tools run in the session's working directory
 
 `ChatService.resolveToolScope` puts the session's working directory and its context
@@ -523,9 +556,9 @@ not a hand-written approximation.
 Adapted from Claude Code desktop's layout: primary nav, a **Pinned** section, then project
 groups with per-group actions (new session, search, settings) and a leading status dot per row
 
-- filled while a reply streams, hollow when idle. The dot is driven by a global subscription to
-  main's stream events, not the open conversation, so a session replying in the background shows
-  as running.
+- filled while a reply streams or its worktree prepares, hollow when idle. The dot is driven by a
+  global subscription to main's stream events, not the open conversation, so a session replying in
+  the background shows as running.
 
 **Artifacts** opens a searchable grid of the artifacts created by this app across your machines.
 Thumbnails load as cards approach the viewport; select a card to view it or share its live link.
@@ -746,9 +779,14 @@ ask, and ask over allow. A shell command needs an allow for every subcommand.
 Native tool rules such as `request_directory` also apply to interactive tools:
 a deny refuses the call, while an allow still requires the tool's interactive response.
 
-The approval card's "Always, in every session" saves the displayed allow rules.
-Irreversible calls cannot save a standing allow. Settings also shows imported Claude
-Code sources read-only. Turn off "Use them here" to stop importing them. An untrusted
+The approval card's "Allow in this chat" remembers consent for this conversation.
+"Always allow" saves the displayed allow rules in Settings -> Permissions, and also
+answers waiting cards those rules cover. For web fetches, both buttons cover every site,
+including after a reply has read web content; the saved rule is `WebFetch`.
+Use a `WebFetch(domain:...)` rule in Settings for a narrower persistent allow.
+Irreversible calls cannot save a standing allow. Browser cards cannot save a rule.
+Settings also shows imported Claude Code sources read-only. Turn off "Use them here"
+to stop importing them. An untrusted
 project contributes ask and deny rules, but cannot grant itself an allow.
 
 If a permission source cannot be read or parsed, tool execution is refused rather than
@@ -756,3 +794,8 @@ dropping its restrictions. Check the path named in the error, repair the JSON or
 permissions, then retry. Claude Code sources reload when their settings change; after
 repairing the desktop rule file, retry the call. A failed Settings save displays an
 error and keeps the previously saved rules active.
+
+If "Always allow" reports that its rule could not be saved, consent still applies in
+this conversation. Retry the save in Settings -> Permissions before relying on it in
+another chat. To restore fetch approval cards, remove the saved `WebFetch` allow and
+start a new chat; existing conversation consent lasts for that conversation.

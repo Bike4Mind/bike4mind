@@ -15,6 +15,8 @@ export const QUESTION_CANCELLED = 'cancelled';
 
 interface PendingApproval {
   sessionId: string;
+  /** See ApprovalRequestOptions.recheck. */
+  recheck?: () => Promise<ChatApprovalAnswer | null>;
   /** False for a tool whose effect cannot be undone: 'always' is downgraded to 'once'. */
   remember: boolean;
   /** An untimed question card; see ApprovalRequestOptions.untimed. */
@@ -33,6 +35,11 @@ interface PendingApproval {
 export interface StandingApproval {
   optionId?: string;
   value?: string;
+  /**
+   * Answered on a card that already said the reply had read untrusted content, so the user
+   * consented knowing that, and a later tainted call with the same key need not ask again.
+   */
+  overTaint?: true;
 }
 
 /** The key a standing approval is filed under: the call, plus which way it was allowed. */
@@ -81,6 +88,14 @@ export interface ApprovalRequestOptions {
    * after ten minutes would throw away the answer they were composing.
    */
   untimed?: boolean;
+  /** The card said the reply had read untrusted content; recorded on an 'always' as overTaint. */
+  tainted?: boolean;
+  /**
+   * Whether a standing answer or rule given since the card was shown now covers this call: the
+   * answer to settle it with, or null to keep asking. Run by settleCovered after another card's
+   * "always", so five parallel fetches need one click rather than five.
+   */
+  recheck?: () => Promise<ChatApprovalAnswer | null>;
 }
 
 /**
@@ -187,7 +202,7 @@ export class ApprovalGate {
           answer.decision === 'always' &&
           (!options.rememberable || (!!answer.optionId && options.rememberable.includes(answer.optionId)));
         if (keep) {
-          this.remember(sessionId, standingKey(key, answer.optionId), answer);
+          this.remember(sessionId, standingKey(key, answer.optionId), answer, options.tainted === true);
           if (options.always) this.rememberShell(sessionId, options.always);
         }
         if (announced) this.listener?.settled(sessionId);
@@ -199,7 +214,13 @@ export class ApprovalGate {
       // Unref so a pending approval never keeps the process alive on quit.
       timer?.unref?.();
 
-      this.pending.set(approvalId, { sessionId, remember, question: !!options.untimed, settle });
+      this.pending.set(approvalId, {
+        sessionId,
+        remember,
+        question: !!options.untimed,
+        settle,
+        ...(options.recheck ? { recheck: options.recheck } : {}),
+      });
       signal.addEventListener('abort', onAbort, { once: true });
       if (signal.aborted) {
         settle({ decision: 'deny' });
@@ -215,6 +236,23 @@ export class ApprovalGate {
   /** Unknown ids are ignored: a stale click must never answer whatever request came next. */
   resolve(approvalId: string, answer: ChatApprovalAnswer): void {
     this.pending.get(approvalId)?.settle(answer);
+  }
+
+  /**
+   * Settle every pending card that a new standing answer or rule now covers - this
+   * conversation's, or every conversation's when `sessionId` is omitted (a rule was saved). Walks
+   * only the pending cards, never a transcript; a card without a `recheck` keeps waiting.
+   */
+  async settleCovered(sessionId?: string): Promise<void> {
+    const candidates = [...this.pending.values()].filter(
+      entry => entry.recheck && (sessionId === undefined || entry.sessionId === sessionId)
+    );
+    await Promise.all(
+      candidates.map(async entry => {
+        const answer = await entry.recheck?.().catch(() => null);
+        if (answer) entry.settle(answer);
+      })
+    );
   }
 
   /**
@@ -255,11 +293,12 @@ export class ApprovalGate {
     this.standingShell.set(sessionId, standing);
   }
 
-  private remember(sessionId: string, key: string, answer: ChatApprovalAnswer): void {
+  private remember(sessionId: string, key: string, answer: ChatApprovalAnswer, overTaint: boolean): void {
     const keys = this.standing.get(sessionId) ?? new Map<string, StandingApproval>();
     keys.set(key, {
       ...(answer.optionId ? { optionId: answer.optionId } : {}),
       ...(answer.value === undefined ? {} : { value: answer.value }),
+      ...(overTaint || keys.get(key)?.overTaint ? { overTaint: true as const } : {}),
     });
     this.standing.set(sessionId, keys);
   }

@@ -353,13 +353,47 @@ describe('filterSessionIdsByOperationalCredits', () => {
     mockFindOrgById.mockResolvedValue(null);
   });
 
-  const filter = (sessions: { id: string; userId: string }[], logger?: { warn: ReturnType<typeof vi.fn> }) =>
+  const filter = (
+    sessions: { id: string; userId: string }[],
+    logger?: { warn: ReturnType<typeof vi.fn>; error?: ReturnType<typeof vi.fn> }
+  ) =>
     filterSessionIdsByOperationalCredits(sessions as never, {
       payerId: PAYER_ID,
       operationsPerSession: 2,
       operation: 'session summarization',
       logger: logger as never,
     });
+
+  it('allows the whole batch with a diagnostic when its billing gate read fails', async () => {
+    const error = new Error('settings unavailable');
+    mockBillingEnabled.mockRejectedValueOnce(error);
+    const logger = { warn: vi.fn(), error: vi.fn() };
+
+    const allowed = await filter(
+      [
+        { id: 's1', userId: USER_ID },
+        { id: 's2', userId: OTHER_USER_ID },
+        { id: 's3', userId: '' },
+      ],
+      logger
+    );
+
+    expect(allowed).toEqual(new Set(['s1', 's2', 's3']));
+    expect(mockBillingEnabled).toHaveBeenCalledTimes(1);
+    expect(mockFindUserById).not.toHaveBeenCalled();
+    expect(mockFindOrgById).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledExactlyOnceWith(
+      '[sessionOperationalCreditPreflight] gate disabled: failed to read billing settings',
+      error
+    );
+  });
+
+  it('skips all billing reads for an empty batch', async () => {
+    await expect(filter([])).resolves.toEqual(new Set());
+    expect(mockBillingEnabled).not.toHaveBeenCalled();
+    expect(mockFindUserById).not.toHaveBeenCalled();
+    expect(mockFindOrgById).not.toHaveBeenCalled();
+  });
 
   it('passes every session through when operational billing is off', async () => {
     mockBillingEnabled.mockResolvedValue(false);
@@ -387,6 +421,23 @@ describe('filterSessionIdsByOperationalCredits', () => {
     expect(mockFindUserById).toHaveBeenCalledTimes(1);
     expect(mockFindUserById).toHaveBeenCalledWith(PAYER_ID);
     expect(allowed).toEqual(new Set(['s1', 's2', 's3']));
+  });
+
+  it('reads the billing gate once for a batch with several owners', async () => {
+    billingOn();
+    mockFindUserById.mockResolvedValue({ id: PAYER_ID, currentCredits: 1000 });
+    await filter([
+      { id: 's1', userId: USER_ID },
+      { id: 's2', userId: OTHER_USER_ID },
+    ]);
+    expect(mockBillingEnabled).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips billing reads for an entirely ownerless batch', async () => {
+    await expect(filter([{ id: 's1', userId: '' }])).resolves.toEqual(new Set(['s1']));
+    expect(mockBillingEnabled).not.toHaveBeenCalled();
+    expect(mockFindUserById).not.toHaveBeenCalled();
+    expect(mockFindOrgById).not.toHaveBeenCalled();
   });
 
   // Three sessions at 2 operations each is 6 credits, so a 5-credit payer is refused for all of

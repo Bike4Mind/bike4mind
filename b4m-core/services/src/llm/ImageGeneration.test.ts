@@ -1243,8 +1243,8 @@ describe('ImageGenerationService.process (size normalization)', () => {
     const validateUserCredits = vi
       .spyOn(service as any, 'validateUserCredits')
       .mockResolvedValue({ requiredCredits: 0, usdCost: 0 });
-    // Twice: process() reads the settings map once for the credit gate and once for moderation.
-    vi.mocked(getSettingsMap).mockResolvedValueOnce({ enforceCredits: 'true' }).mockResolvedValueOnce({});
+    // One fresh map per request carries both the credit gate and moderation.
+    vi.mocked(getSettingsMap).mockResolvedValueOnce({ enforceCredits: 'true' });
 
     await service.process({
       body: {
@@ -1264,6 +1264,15 @@ describe('ImageGenerationService.process (size normalization)', () => {
       billed: validateUserCredits.mock.calls[0]?.[3] as { size?: string; inputImageCount?: number } | undefined,
     };
   };
+
+  it('passes skipCache once per image so an admin toggle applies on the next image', async () => {
+    vi.mocked(getSettingsMap).mockClear();
+
+    await generateWith(ImageModels.GPT_IMAGE_2, ModelBackend.OpenAI);
+
+    // One fresh map per request, shared by the credit gate and moderation.
+    expect(vi.mocked(getSettingsMap).mock.calls.map(([, options]) => options)).toEqual([{ skipCache: true }]);
+  });
 
   it('holds credits for one image when a Kontext request asks for several', async () => {
     vi.mocked(getAvailableModels).mockResolvedValue([
@@ -1531,8 +1540,8 @@ describe('ImageGenerationService quest partial writes', () => {
       service as unknown as { validateUserCredits: () => Promise<unknown> },
       'validateUserCredits'
     ).mockResolvedValue(cost);
-    // process() reads the settings map once for the credit gate and once for moderation.
-    vi.mocked(getSettingsMap).mockResolvedValueOnce({ enforceCredits: 'true' }).mockResolvedValueOnce({});
+    // One fresh map per request carries both the credit gate and moderation.
+    vi.mocked(getSettingsMap).mockResolvedValueOnce({ enforceCredits: 'true' });
   };
 
   // Drops any queued enforceCredits value that process() did not consume, so it cannot leak.

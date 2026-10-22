@@ -77,7 +77,7 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
 
   const settings = await getSettingsMap(
     { adminSettings: adminSettingsRepository },
-    { names: ['voiceV2Enabled', 'enforceCredits', 'elevenLabsServerApiKey'] }
+    { names: ['voiceV2Enabled', 'enforceCredits', 'elevenLabsServerApiKey'], skipCache: true }
   );
 
   if (!getSettingsValue('voiceV2Enabled', settings)) {

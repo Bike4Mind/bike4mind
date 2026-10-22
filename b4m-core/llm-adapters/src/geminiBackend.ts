@@ -803,7 +803,6 @@ export class GeminiBackend implements ICompletionBackend {
             finishReason: lastChunk.candidates?.[0]?.finishReason,
             finishMessage: lastChunk.candidates?.[0]?.finishMessage,
             usageMetadata: lastChunk.usageMetadata,
-            fullChunk: JSON.stringify(lastChunk, null, 2),
           });
 
           // Check final chunk for function calls (they might only appear here)

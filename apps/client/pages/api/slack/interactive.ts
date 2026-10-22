@@ -1,3 +1,4 @@
+import { VERIFIED_SLACK_IDENTITY_FILTER } from '@bike4mind/common';
 import { initializeSlackPackage } from '@server/integrations/slack/slackPackageInit';
 initializeSlackPackage();
 
@@ -135,6 +136,7 @@ async function getRawBody(req: NextApiRequest): Promise<string> {
 async function findUserBySlackId(slackUserId: string) {
   const user = await User.findOne({
     'slackSettings.slackUserId': slackUserId,
+    ...VERIFIED_SLACK_IDENTITY_FILTER,
   });
   return user;
 }
@@ -686,11 +688,17 @@ async function handleInteractiveAction(
         }
         // Execute and send result via response_url for reliable update
         if (response_url) {
-          const confirmResult = await handleConfirmAction(dbUser, parseConfirmationButtonValue(action.value));
+          const confirmResult = await handleConfirmAction(dbUser, parseConfirmationButtonValue(action.value), {
+            slackTeamId: payload.team?.id,
+            channelId: payload.channel?.id,
+          });
           await sendSlackResponse(response_url, confirmResult);
           return {}; // Empty response since we sent via response_url
         }
-        return await handleConfirmAction(dbUser, parseConfirmationButtonValue(action.value));
+        return await handleConfirmAction(dbUser, parseConfirmationButtonValue(action.value), {
+          slackTeamId: payload.team?.id,
+          channelId: payload.channel?.id,
+        });
 
       case 'cancel_action':
         // Handle cancel button click - use response_url for reliable update
@@ -1287,7 +1295,8 @@ const NOT_REQUESTER_RESPONSE = {
  */
 async function handleConfirmAction(
   dbUser: any,
-  { questId, pendingActionTs }: { questId: string; pendingActionTs?: number }
+  { questId, pendingActionTs }: { questId: string; pendingActionTs?: number },
+  clickedDestination: { slackTeamId: string; channelId: string }
 ): Promise<any> {
   const logger = new Logger({ metadata: { component: 'slack-interactive-confirm' } });
 
@@ -1314,7 +1323,7 @@ async function handleConfirmAction(
     };
   }
 
-  const result = await executePendingAction(questId, dbUser, logger, pendingActionTs);
+  const result = await executePendingAction(questId, dbUser, logger, pendingActionTs, clickedDestination);
 
   return {
     text: result.success ? result.message : `❌ ${result.message}`,

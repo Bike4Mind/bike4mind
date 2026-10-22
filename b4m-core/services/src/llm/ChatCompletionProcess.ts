@@ -14,6 +14,7 @@ import {
   QueryComplexityType,
   getTextModelCost,
   getTurnsCost,
+  buildUsagePriceStamp,
   CACHE_READ_MULTIPLIER,
   ModelInfo,
   ModelBackend,
@@ -96,6 +97,8 @@ import {
   safeInputWindow,
   withTokenEstimateMultiplier,
 } from '@bike4mind/utils';
+import { isRequestTimeoutError, isStreamIdleTimeoutError, isToolPairingError } from './llmErrorPredicates';
+import { TurnTimingRecorder } from './turnTiming';
 import type { FabFileNotice, EmbeddingCredential } from '@bike4mind/utils';
 import { buildAttachmentNoticePrompt, toAttachmentNoticeStrings } from './attachmentNotices';
 import { buildPromptMetaModel } from './buildPromptMetaModel';
@@ -533,19 +536,7 @@ export function resolveQuestErrorCode(error: unknown): QuestErrorCode | undefine
  */
 export const FORCE_FALLBACK_TEST_MARKER = '[[force-provider-fallback]]';
 
-function isToolPairingError(error: Error): boolean {
-  const msg = error.message.toLowerCase();
-  // Match known Anthropic tool-pairing failure patterns:
-  // - messages mentioning both "tool_use" and "tool_result"
-  // - messages mentioning "tool_use_id" (e.g., "unexpected tool_use_id")
-  const hasToolUseAndResult = msg.includes('tool_use') && msg.includes('tool_result');
-  const hasToolUseIdVariant = msg.includes('tool_use_id');
-  return hasToolUseAndResult || hasToolUseIdVariant;
-}
-
-export function isRequestTimeoutError(error: Error): boolean {
-  return error.message.includes('request timeout') || error.message.includes('Request timeout');
-}
+export { isRequestTimeoutError, isStreamIdleTimeoutError };
 
 /**
  * True when an error is a request abort/cancellation (user stop, client
@@ -561,10 +552,6 @@ export function isAbortError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
   if (error.name === 'AbortError') return true;
   return error.message.toLowerCase().includes('aborted');
-}
-
-export function isStreamIdleTimeoutError(error: Error): boolean {
-  return error.message.includes('stream timeout') || error.message.includes('Stream timeout');
 }
 
 /**
@@ -1891,6 +1878,14 @@ export class ChatCompletionProcess {
     const enableMementos = initialEnableMementos;
     let enableAgents = initialEnableAgents;
     const { questId, sessionId, promptMode } = parsedBody;
+    // From the attempt's timestamp, not createdAt: a user retry reuses the quest doc. The snapshot
+    // replaces any record a previous attempt left, before the first frame streams it. Backend-
+    // reported retries and slot waits land through `onChange`, so live frames and a last save
+    // (a Lambda that dies mid-turn) carry them too, not only the sites below that record directly.
+    const turnTiming = new TurnTimingRecorder(quest.timestamp, processStartTime, logger, snapshot => {
+      quest.turnTiming = snapshot;
+    });
+    quest.turnTiming = turnTiming.snapshot();
 
     // Variables to store actual timing durations
     let actualArtifactProcessingDuration = 0;
@@ -2113,6 +2108,7 @@ export class ChatCompletionProcess {
         // Try to clean up the quest if session doesn't exist
         setTerminalQuestStatus(quest, 'stopped');
         quest.replies = ['Session not found. Please create a new session or refresh the page.'];
+        turnTiming.finish();
         await saveQuest(quest);
         return;
       }
@@ -2129,6 +2125,9 @@ export class ChatCompletionProcess {
       if (latestQuestStatus?.status === 'stopped') {
         logger.info(`Quest ${questId} was stopped before processing started`);
         setTerminalQuestStatus(quest, 'stopped');
+        // The finally block's terminal frame carries the record, so end it here rather than
+        // leaving a total-less record that would read as "still running" forever.
+        turnTiming.finish();
         return;
       }
       quest.status = 'running';
@@ -2693,6 +2692,14 @@ export class ChatCompletionProcess {
       const takeoverFeature = featureResults.find(({ result }) => result?.shouldContinue === false);
       if (takeoverFeature) {
         logger.log(`✅ Feature '${takeoverFeature.name}' has taken over processing`);
+        // The feature finishes the turn outside this flow, so this partial record (no total, only
+        // the queue wait) would render as "still running" on a reply it never tracked. Drop it
+        // rather than have the Answer diagnosis claim coverage the turn did not get. The setup save
+        // already persisted it, and a `$set` of `undefined` is dropped, so unset it in the DB too.
+        quest.turnTiming = undefined;
+        void this.db.quests
+          .update({ id: quest.id }, { unset: ['turnTiming'] })
+          .catch(error => logger.warn('Failed to drop turnTiming after feature takeover:', error));
         this.sendStatusUpdate(quest, null, { immediate: true });
         return;
       }
@@ -4775,6 +4782,9 @@ export class ChatCompletionProcess {
           })),
         });
 
+        // This path skips the normal finalize below, so end the record here: the reply is done
+        // and its Answer diagnosis would otherwise show "still running" permanently.
+        turnTiming.finish();
         await saveQuest(quest);
 
         // Send final status update to complete the Research Mode processing
@@ -4793,6 +4803,7 @@ export class ChatCompletionProcess {
       );
 
       timer.phase('llm_completion');
+      turnTiming.markLlmRequestStarted();
       logger.info(`⏱️ [${Date.now() - processStartTime}ms] === LLM STREAMING PHASE START ===`);
 
       // Bounded multi-hop fallback: a provider-wide outage walks the preference chain one
@@ -5013,6 +5024,7 @@ export class ChatCompletionProcess {
                 cacheStrategy,
                 _internal: {
                   ...options._internal,
+                  turnTelemetry: turnTiming.sink,
                   enableIdleTimeout,
                   enableRequestTimeout: enableIdleTimeout,
                   idleTimeoutMs: idleTimeoutSeconds * 1000,
@@ -5052,19 +5064,11 @@ export class ChatCompletionProcess {
                     this.sendStatusUpdate(quest, 'First model response', { statusAt: new Date(), silent: true });
 
                     logger.info(`⏱️ [${Date.now() - processStartTime}ms] Time to first chunk: ${timeToFirstChunk}ms`);
-                    logger.info(
-                      `🔍 [DEBUG] First content chunk: ${JSON.stringify(streamedTexts.slice(0, 2))} (Model: ${
-                        currentModel.id
-                      })`
-                    );
+                    logger.info('First content chunk received', { modelId: currentModel.id });
                   }
                 } else if (chunkCount === 0 && streamedTexts.some(text => text != null)) {
                   // Some models might send empty or whitespace-only first chunks
-                  logger.info(
-                    `⚠️ [DEBUG] Empty first chunk received for ${currentModel.id}: ${JSON.stringify(
-                      streamedTexts.slice(0, 2)
-                    )}`
-                  );
+                  logger.info('Empty first chunk received', { modelId: currentModel.id });
                 }
 
                 chunkCount++;
@@ -5099,7 +5103,7 @@ export class ChatCompletionProcess {
                   transitionMode = rapidReplySettings?.transitionMode || 'replace';
 
                   logger.info(
-                    `🔍 [TRANSITION_DEBUG] Query complexity: ${queryComplexity}, Transition mode: ${transitionMode}, Rapid reply content: "${rapidReplyContent}"`
+                    `[TRANSITION_DEBUG] Query complexity: ${queryComplexity}, Transition mode: ${transitionMode}, Rapid reply length: ${rapidReplyContent.length}`
                   );
 
                   // Handle transition based on mode
@@ -5258,6 +5262,7 @@ export class ChatCompletionProcess {
               );
               messages = stripAllToolBlocks(messages, logger);
               outboundMessages = stripAllToolBlocks(outboundMessages, logger);
+              turnTiming.recordRetry(lastError, 0, currentModel.id);
 
               resetStreamStateForRetry();
 
@@ -5292,6 +5297,7 @@ export class ChatCompletionProcess {
                   { statusAt: new Date() }
                 );
 
+                turnTiming.recordRetry(lastError, totalDelay, currentModel.id);
                 await new Promise(resolve => setTimeout(resolve, totalDelay));
 
                 resetStreamStateForRetry();
@@ -5317,6 +5323,7 @@ export class ChatCompletionProcess {
 
               this.sendStatusUpdate(quest, 'AI service is slow, retrying...', { statusAt: new Date() });
 
+              turnTiming.recordRetry(lastError, TIMEOUT_RETRY_DELAY_MS + jitter, currentModel.id);
               await new Promise(resolve => setTimeout(resolve, TIMEOUT_RETRY_DELAY_MS + jitter));
 
               resetStreamStateForRetry();
@@ -5338,6 +5345,7 @@ export class ChatCompletionProcess {
 
               this.sendStatusUpdate(quest, 'AI service is slow, retrying...', { statusAt: new Date() });
 
+              turnTiming.recordRetry(lastError, STREAM_IDLE_RETRY_DELAY_MS + jitter, currentModel.id);
               await new Promise(resolve => setTimeout(resolve, STREAM_IDLE_RETRY_DELAY_MS + jitter));
 
               resetStreamStateForRetry();
@@ -5390,6 +5398,9 @@ export class ChatCompletionProcess {
               primaryFailureReason ??= sanitizeTelemetryError(lastError);
               fallbackAttempt++;
               triedModelIds.add(currentModel.id);
+              // The failure that caused the hop is a retry too, on another model.
+              turnTiming.recordRetry(lastError, 0, failedModel.id);
+              turnTiming.recordFallbackHop();
 
               logger.info(`🔄 [Fallback] Switching to fallback model: ${currentModel.id} (attempt ${fallbackAttempt})`);
 
@@ -6109,6 +6120,15 @@ export class ChatCompletionProcess {
             });
           }
 
+          // Same turns / tier basis the estimatedCost branches above priced on.
+          const priceStamp = buildUsagePriceStamp(currentModel, {
+            turns: hasProviderUsage ? actualTokenUsage.turnUsage : undefined,
+            tierBasisTokens: hasProviderUsage
+              ? settledInputTokens + cacheReadInputTokens + cacheCreationInputTokens
+              : localInputTokens,
+            localEstimate: !hasProviderUsage,
+          });
+
           // Dual-write usage event: ties frozen COGS to credits debited
           // for margin reporting. Fire-and-forget - must never affect billing.
           this.db.usageEvents
@@ -6137,6 +6157,7 @@ export class ChatCompletionProcess {
               providerOutputTokens: actualTokenUsage?.outputTokens,
               costUsd: estimatedCost,
               creditsCharged: textCreditsUsed,
+              ...priceStamp,
               // Quest-level write-off (uncollected part of the whole settlement,
               // tools included), recorded on the chat settlement event so
               // collected revenue = sum(creditsCharged) - sum(writtenOffCredits).
@@ -6518,6 +6539,9 @@ export class ChatCompletionProcess {
         clearStaleFallbackInfoIfNoAnswer();
 
         timer.phase('save');
+        // Before the terminal frame, so totalMs rides it and the awaited save below rather than
+        // only the fire-and-forget final save.
+        turnTiming.finish();
 
         // P4-b: Fire-and-forget status update, don't block on WebSocket delivery
         this.sendStatusUpdate(quest, `Completed Quest`, { statusAt: new Date(), silent: true });
@@ -6622,11 +6646,14 @@ export class ChatCompletionProcess {
         logger.error(`❌ [POST_PROCESS] Error in post-streaming processing for quest ${questId}:`, postProcessError);
         setTerminalQuestStatus(quest, successStatus());
         clearStaleFallbackInfoIfNoAnswer();
+        turnTiming.finish();
         // Ensure quest is persisted as 'done' even if the error occurred before the normal save
         await saveQuest(quest);
       }
     } catch (err) {
       const totalResponseTime = Date.now() - processStartTime;
+      // Every branch below that saves the quest keeps the failed turn's timing too.
+      turnTiming.finish();
 
       // A Stop or disconnect that threw, or a later tool call refused for credits, still bills what
       // streamed and the tools already delivered; the rollback below then has nothing left to refund.
@@ -6937,6 +6964,8 @@ export class ChatCompletionProcess {
           cacheWriteTokens: usage.cacheCreationInputTokens ?? 0,
           costUsd: usage.costUsd,
           creditsCharged: usage.credits,
+          // getTextModelCost above tiered on inputTokens (its default basis).
+          ...buildUsagePriceStamp(usage.modelInfo, { tierBasisTokens: usage.inputTokens }),
           writtenOffCredits: writtenOffCredits > 0 && usage === priced[0] ? writtenOffCredits : undefined,
           status,
           latencyMs: Date.now() - processStartTime,
@@ -7246,7 +7275,9 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     try {
       logger.info(`⏱️ [${Date.now() - processStartTime}ms] Background admin settings fetch started`);
 
-      const adminSettings = await getSettingsMap(this.db, { logger });
+      // skipCache: the billing/access flags in this map gate money, and this process outlives an
+      // admin write made by another one. One read here, once per turn - not per chunk.
+      const adminSettings = await getSettingsMap(this.db, { logger, skipCache: true });
 
       const fetchTime = Date.now() - adminSettingsStartTime;
       logger.info(`⏱️ [${Date.now() - processStartTime}ms] Background admin settings completed in ${fetchTime}ms`);
@@ -7254,8 +7285,15 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       return adminSettings;
     } catch (error) {
       logger.warn(`Background admin settings fetch failed after ${Date.now() - adminSettingsStartTime}ms:`, error);
-      // Return defaults if background fetch fails
-      return this.getDefaultAdminSettings();
+      // A stale-but-real map beats fabricated defaults here: getDefaultAdminSettings() hardcodes
+      // enforceCredits 'true', which would charge a deployment whose admin turned metering off.
+      // Fall back to the cached map, and to the defaults only when there is no cached map either.
+      try {
+        return await getSettingsMap(this.db, { logger });
+      } catch (cacheError) {
+        logger.warn('Cached admin settings fallback failed too; using defaults:', cacheError);
+        return this.getDefaultAdminSettings();
+      }
     }
   }
 

@@ -503,6 +503,8 @@ export interface ApprovalPrompt {
   always?: ApprovalAlways;
   /** For an MCP tool: the server's slug and the tool's own name, which an `mcp__server__tool` rule names. */
   mcp?: { server: string; tool: string };
+  /** What "always allow" in this conversation covers, for a `key` broader than this one call. */
+  alwaysCovers?: string;
 }
 
 export interface ApprovalAlways {

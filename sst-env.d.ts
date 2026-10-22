@@ -317,6 +317,10 @@ declare module "sst" {
       "type": "sst.sst.Secret"
       "value": string
     }
+    "MEMORY_KEY_SECRET": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
     "SECRET_ENCRYPTION_KEY": {
       "type": "sst.sst.Secret"
       "value": string

@@ -12,6 +12,8 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+const sourceFileMock = vi.fn();
+const sourceShredMock = vi.fn();
 const findByIdMock = vi.fn();
 const findLakeMemoryExtractionMembersMock = vi.fn();
 const findTextsByFabFileIdMock = vi.fn();
@@ -37,7 +39,9 @@ vi.mock('@bike4mind/database', () => ({
     getLakeMemoryFence: (...a: unknown[]) => getLakeMemoryFenceMock(...a),
   },
   fabFileChunkRepository: { findTextsByFabFileId: (...a: unknown[]) => findTextsByFabFileIdMock(...a) },
+  memoryLedgerRepository: { markSourceShredded: (...args: unknown[]) => sourceShredMock(...args) },
   fabFileRepository: {
+    findById: (...args: unknown[]) => sourceFileMock(...args),
     findLakeMemoryExtractionMembers: (...a: unknown[]) => findLakeMemoryExtractionMembersMock(...a),
   },
 }));
@@ -50,7 +54,7 @@ vi.mock('@bike4mind/common', () => ({
 vi.mock('@server/billing/meterPlatformCompletion', () => ({ createCompletionMeter: () => vi.fn() }));
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) },
-  dataLakeService: { lakeMembershipScope: () => 'datalake:test' },
+  dataLakeService: { lakeMembershipScope: () => 'datalake:test', lakeMembershipSignals: () => ({ inLake: true }) },
 }));
 vi.mock('@bike4mind/services/llm', () => ({
   LakeMemoryExtractionService: class {
@@ -116,6 +120,8 @@ const purgedNow = () => new Date();
 describe('extractLakeMemoryForBatch purge fence', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    sourceFileMock.mockResolvedValue({ id: 'source-file' });
+    sourceShredMock.mockResolvedValue(1);
     claimLakeMemoryExtractionMock.mockResolvedValue(true);
     releaseLakeMemoryExtractionMock.mockResolvedValue(undefined);
     // The ledger seals by default; a test that wants a refusal says so. Left undefined this would read
@@ -343,5 +349,13 @@ describe('extractLakeMemoryForBatch purge fence', () => {
     await extractLakeMemoryForBatch(PLENTY_OF_TIME, makeLogger() as never);
 
     expect(releaseLakeMemoryExtractionMock).toHaveBeenCalledTimes(1);
+  });
+  it('shreds a late append when its source left the lake during extraction', async () => {
+    seedLake(1);
+    sourceFileMock.mockResolvedValue(null);
+    const result = await extractLakeMemoryForBatch(PLENTY_OF_TIME, makeLogger());
+    expect(result.factsWritten).toBe(0);
+    expect(sourceFileMock).toHaveBeenCalledWith('doc-000');
+    expect(sourceShredMock).toHaveBeenCalledWith('lake', 'datalake:test', 'owner-1', 'doc-000');
   });
 });

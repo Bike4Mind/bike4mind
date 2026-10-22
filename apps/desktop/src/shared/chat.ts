@@ -197,7 +197,7 @@ export interface ChatToolCall {
   approvalAlwaysFull?: string;
   /**
    * Set with `approvalId` when the call can be allowed in every session: the permission rules
-   * (Claude Code syntax) that "Always, in every session" saves. Never on an irreversible call.
+   * (Claude Code syntax) that the card's "Always allow" saves. Never on an irreversible call.
    */
   approvalRules?: string[];
   /**
@@ -1076,6 +1076,16 @@ export interface ChatSession extends ChatSessionMeta {
    * status line with a true elapsed time rather than none at all.
    */
   replyInFlight?: { messageId: string; startedAt: number };
+  /** The worktree being cut right now, added the same way; see the 'workspace' stream event. */
+  preparingWorkspace?: WorkspacePreparation;
+}
+
+/** A worktree being cut ahead of a session's first turn. `since` is epoch ms. */
+export interface WorkspacePreparation {
+  since: number;
+  base: string;
+  /** The session's own branch, once it has been chosen. */
+  branch?: string;
 }
 
 /**
@@ -1178,6 +1188,12 @@ export type ChatStreamEvent =
    * refusal.
    */
   | { type: 'workspace'; sessionId: string; running: boolean; base: string; branch?: string }
+  /**
+   * A session started from this one (a card or session_spawn) could not prepare its worktree
+   * or first turn. Empty sessions are removed; accepted input keeps its session for retry.
+   * The parent's transcript gets a report too; `title` identifies the failed session.
+   */
+  | { type: 'spawn-failed'; sessionId: string; title: string; message: string }
   /** The conversation's spawn suggestions changed; carries the whole list. No reply in flight. */
   | { type: 'spawn-suggestions'; sessionId: string; suggestions: ChatSpawnSuggestion[] };
 

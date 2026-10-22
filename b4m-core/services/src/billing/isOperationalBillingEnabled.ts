@@ -20,10 +20,10 @@ export type OperationalBillingSettingsAdapter = {
  * the pre-flight exists to close.
  *
  * Owns the fetch rather than taking a settings map, so no caller can narrow it to the
- * wrong keys: `getSettingsMap`'s `names` option is honoured only under `skipCache`
- * (`b4m-core/utils/src/settings.ts:130-143`), so a named fetch is inert on the cached
- * path and, on a `skipCache` path, one that omits a key reads `undefined` for it and
- * silently gates billing OFF - turning a pre-flight into a no-op with no error anywhere.
+ * wrong keys: under `skipCache` a `names` list that omits a key reads `undefined` for
+ * it and silently gates billing OFF - turning a pre-flight into a no-op with no error
+ * anywhere. `skipCache` is required for the same reason: a long-lived host's process
+ * cache can lag another process's admin write until its TTL expires.
  *
  * Throws if the settings store does: a caller that must not fail on a billing-store
  * blip has to catch this and decide its own fallback.
@@ -32,7 +32,13 @@ export async function isOperationalBillingEnabled(
   db: OperationalBillingSettingsAdapter,
   logger?: Logger
 ): Promise<boolean> {
-  const settings = await getSettingsMap(db, { logger });
+  const settings = await getSettingsMap(db, {
+    logger,
+    // Both keys the caller could narrow away are listed here; the read bypasses the process
+    // cache so an admin flip is honoured on the next call rather than after the TTL.
+    names: ['billOperationalUsage', 'enforceCredits'],
+    skipCache: true,
+  });
   return (
     (getSettingsValue('billOperationalUsage', settings) ?? false) &&
     (getSettingsValue('enforceCredits', settings) ?? false)
@@ -55,6 +61,7 @@ export async function isOperationalBillingEnabled(
  * Throws if the settings store does, matching `isOperationalBillingEnabled`.
  */
 export async function areCreditsEnforced(db: OperationalBillingSettingsAdapter, logger?: Logger): Promise<boolean> {
-  const settings = await getSettingsMap(db, { logger });
+  // Same cross-process staleness as isOperationalBillingEnabled: this gates a forced debit.
+  const settings = await getSettingsMap(db, { logger, names: ['enforceCredits'], skipCache: true });
   return getSettingsValue('enforceCredits', settings) ?? false;
 }
