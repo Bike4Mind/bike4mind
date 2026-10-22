@@ -1,5 +1,6 @@
 import {
   ApiKeyScope,
+  ApiKeyScopeValue,
   IOrganizationRepository,
   IRealtimeConnectionRepository,
   IUserApiKeyRepository,
@@ -33,7 +34,7 @@ interface RotateUserApiKeyAdapters {
    * Undefined for a browser/JWT caller, who is already the full account and gains
    * nothing from a rotation. See the no-escalation rule below.
    */
-  callerScopes?: ApiKeyScope[];
+  callerScopes?: ApiKeyScopeValue[];
 }
 
 export interface RotateUserApiKeyResult {

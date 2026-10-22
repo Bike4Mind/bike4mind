@@ -1,4 +1,4 @@
-import { ApiKeyScope, IApiKeyScopePreflight, IApiKeyScopePreflightRow } from '@bike4mind/common';
+import { ApiKeyScope, ApiKeyScopeValue, IApiKeyScopePreflight, IApiKeyScopePreflightRow } from '@bike4mind/common';
 import { apiKeyUsageLogRepository, userApiKeyRepository } from '@bike4mind/database/auth';
 import { BadRequestError } from '@bike4mind/utils';
 import mongoose from 'mongoose';
@@ -172,7 +172,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
     // schema's `toObject` has no strip transform (only `toJSON` deletes it).
     // Nothing leaks, but a credential hash has no business in this request.
     const keyDocs = lookupIds.length ? await userApiKeyRepository.find({ _id: { $in: lookupIds } }, { scopes: 1 }) : [];
-    const scopesByKeyId = new Map<string, ApiKeyScope[]>(keyDocs.map(doc => [String(doc.id), doc.scopes ?? []]));
+    const scopesByKeyId = new Map<string, ApiKeyScopeValue[]>(keyDocs.map(doc => [String(doc.id), doc.scopes ?? []]));
 
     const { staged } = parseStagedScopes(process.env[SCOPE_STAGING_ENV_VAR]);
 

@@ -1,4 +1,4 @@
-import { ApiKeyScope, CONFINED_API_KEY_SCOPES } from '@bike4mind/common';
+import { ApiKeyScope, ApiKeyScopeValue, CONFINED_API_KEY_SCOPES } from '@bike4mind/common';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
 /**
@@ -51,7 +51,7 @@ const UNSTAGEABLE_SCOPES: ReadonlySet<string> = new Set<string>([ApiKeyScope.ADM
  * A key with no scopes at all is not confined - that is a legacy broad key, and
  * narrowing it here would be a silent revocation rather than a gate.
  */
-function isConfinedKey(heldScopes: ApiKeyScope[] | undefined): boolean {
+function isConfinedKey(heldScopes: readonly ApiKeyScopeValue[] | undefined): boolean {
   return !!heldScopes?.some(scope => CONFINED_SCOPES.has(scope));
 }
 
@@ -121,7 +121,7 @@ export function parseStagedScopes(raw: string | undefined): {
  */
 export function decideScopeGate(
   requiredScopes: ApiKeyScope[] | undefined,
-  heldScopes: ApiKeyScope[] | undefined,
+  heldScopes: readonly ApiKeyScopeValue[] | undefined,
   staged: ReadonlySet<string>,
   alsoRequiredScopes?: ApiKeyScope[]
 ): ScopeGateDecision {
@@ -142,7 +142,7 @@ export function decideScopeGate(
 }
 
 export type ScopedRequest = {
-  apiKeyInfo?: { scopes?: ApiKeyScope[] };
+  apiKeyInfo?: { scopes?: ApiKeyScopeValue[] };
 };
 
 /**

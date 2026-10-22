@@ -1,7 +1,7 @@
 import { userApiKeyService, userService } from '@bike4mind/services';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { User } from '@bike4mind/database';
-import { ApiKeyScope, resolveApiCompletionSource, type ScopeForbiddenErrorSchema } from '@bike4mind/common';
+import { ApiKeyScope, ApiKeyScopeValue, resolveApiCompletionSource, type ScopeForbiddenErrorSchema } from '@bike4mind/common';
 import { UnauthorizedError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
 import { logEvent } from '@server/utils/analyticsLog';
@@ -289,6 +289,6 @@ export const isApiKeyAuth = (req: Request): boolean => {
 /**
  * Helper function to get API key scopes from request
  */
-export const getApiKeyScopes = (req: Request): ApiKeyScope[] => {
+export const getApiKeyScopes = (req: Request): ApiKeyScopeValue[] => {
   return req.apiKeyInfo?.scopes || [];
 };
