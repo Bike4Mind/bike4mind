@@ -133,10 +133,11 @@ describe('resolveToolbeltProfile', () => {
     const contributed = { ...TOOLBELT_PROFILES[DEFAULT_TOOLBELT_ROLE], role: 'contributed-role', maxIterations: 4 };
     const clash = { ...TOOLBELT_PROFILES['paper-repro'], maxIterations: 1 };
 
-    expect(registerToolbelts([contributed, clash, { ...contributed, maxIterations: 9 }])).toEqual([
-      'paper-repro',
-      'contributed-role',
-    ]);
+    expect(registerToolbelts([contributed, clash, { ...contributed, maxIterations: 9 }])).toEqual({
+      taken: ['paper-repro', 'contributed-role'],
+      invalid: 0,
+    });
+    expect(registerToolbelts([{ ...contributed, role: '' }])).toEqual({ taken: [], invalid: 1 });
     expect(resolveToolbeltProfile('contributed-role').maxIterations).toBe(4);
     expect(resolveToolbeltProfile('paper-repro')).toBe(TOOLBELT_PROFILES['paper-repro']);
     expect(resolveToolbeltProfile('paper-repro').enabledToolNames).toContain('wolfram_alpha');

@@ -101,6 +101,74 @@ describe('createAgentExtensionRegistry', () => {
     expect(registry.list()).toEqual({ surfaceProfiles: [], toolMapGuards: [] });
   });
 
+  it('drops a null contribution, null entries and non-array lists without throwing', () => {
+    const { registry, warn } = newRegistry();
+    registry.registerContribution(null as never);
+    registry.registerContribution({ toolMapGuards: 'nope' as never });
+    registry.registerContribution({ surfaceProfiles: [null as never], toolMapGuards: [undefined as never] });
+    expect(warn).toHaveBeenCalledTimes(4);
+    expect(registry.list()).toEqual({ surfaceProfiles: [], toolMapGuards: [] });
+  });
+
+  it('skips a contributed guard that throws or returns no map, and still runs the built-ins', () => {
+    const { registry } = newRegistry();
+    const runLogger = { info: vi.fn(), warn: vi.fn() };
+    registry.registerToolMapGuard(tagGuard('inner', 100), 'builtin');
+    registry.registerContribution({
+      toolMapGuards: [
+        {
+          id: 'throws',
+          priority: 1,
+          apply: () => {
+            throw new Error('boom');
+          },
+        },
+        { id: 'empty', priority: 2, apply: () => undefined as unknown as Tools },
+      ],
+    });
+    const out = registry.applyToolMapGuards(
+      { t: 'x' },
+      { executionId: 'e', logger: runLogger, runState: { calls: [] } }
+    );
+    expect(out.t).toBe('inner(x)');
+    expect(runLogger.warn).toHaveBeenCalledTimes(2);
+  });
+
+  it('lets a throwing built-in guard propagate', () => {
+    const { registry } = newRegistry();
+    registry.registerToolMapGuard(
+      {
+        id: 'bad-builtin',
+        priority: 100,
+        apply: () => {
+          throw new Error('host bug');
+        },
+      },
+      'builtin'
+    );
+    expect(() => registry.applyToolMapGuards({}, { executionId: 'e', logger, runState: { calls: [] } })).toThrow(
+      'host bug'
+    );
+  });
+
+  it('resolves no profile when a contributed build throws', () => {
+    const { registry } = newRegistry();
+    const runLogger = { info: vi.fn(), warn: vi.fn() };
+    registry.registerContribution({
+      surfaceProfiles: [
+        {
+          id: 'p',
+          surface: 's',
+          build: () => {
+            throw new Error('boom');
+          },
+        },
+      ],
+    });
+    expect(registry.resolveSurfaceProfile('s', { ...profileCtx, logger: runLogger })).toBeUndefined();
+    expect(runLogger.warn).toHaveBeenCalledTimes(1);
+  });
+
   it('applies guards innermost-first by priority, ties broken by id, sharing one runState', () => {
     const { registry } = newRegistry();
     registry.registerToolMapGuard(tagGuard('outer', 300), 'builtin');

@@ -8,9 +8,12 @@ export function registerContributedToolbelts(
   contributions: readonly AgentExtensionContribution[],
   logger: Pick<Logger, 'warn'>
 ): void {
-  const dropped = registerToolbelts(contributions.flatMap(c => c.toolbelts ?? []));
-  if (dropped.length > 0) {
-    logger.warn('Dropped contributed toolbelts whose role is already taken', { roles: dropped });
+  const { taken, invalid } = registerToolbelts(contributions.flatMap(c => c.toolbelts ?? []));
+  if (taken.length > 0) {
+    logger.warn('Dropped contributed toolbelts whose role is already taken', { roles: taken });
+  }
+  if (invalid > 0) {
+    logger.warn('Dropped contributed toolbelts with no role', { count: invalid });
   }
 }
 
