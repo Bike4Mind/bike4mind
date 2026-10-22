@@ -161,6 +161,15 @@ describe('CompletionStreamEventSchema provider_block', () => {
 });
 
 describe('CompletionRequestSchema', () => {
+  it('rejects an empty messages array', () => {
+    const result = CompletionRequestSchema.safeParse({ model: 'claude-sonnet-4-5-20250929', messages: [] });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.issues).toEqual([
+      expect.objectContaining({ code: 'too_small', path: ['messages'], minimum: 1 }),
+    ]);
+  });
+
   it('parses a minimal request', () => {
     const out = CompletionRequestSchema.parse({
       model: 'claude-sonnet-4-5-20250929',

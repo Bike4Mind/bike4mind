@@ -512,8 +512,16 @@ describe('POST /api/ai/v1/completions - pre-stream failures are JSON with a real
     expect(ScopeForbiddenErrorSchema.safeParse(body).success).toBe(true);
   });
 
-  it('answers a schema failure with 422 naming the failing path, before authenticating', async () => {
-    const body = await expectJsonError(await post({ messages: [] }), 422);
+  it('answers an empty conversation with 400 before authenticating or logging an error', async () => {
+    const body = await expectJsonError(await post({ model: 'test-model', messages: [] }), 400);
+    expect(String(body.error)).toContain('messages');
+    expect(mockResolveContractAuth).not.toHaveBeenCalled();
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+    expect(mockLoggerError).not.toHaveBeenCalled();
+  });
+
+  it('answers other schema failures with 422 naming the failing path, before authenticating', async () => {
+    const body = await expectJsonError(await post({ messages: [{ role: 'user', content: 'hi' }] }), 422);
     expect(String(body.error)).toContain('model');
     expect(mockResolveContractAuth).not.toHaveBeenCalled();
   });
@@ -555,6 +563,16 @@ describe('POST /api/ai/v1/completions - pre-stream failures are JSON with a real
     const body = await expectJsonError(await post(), 400);
     expect(body.error).toBe("Unknown model 'gpt-9000'. List the models you can call with GET /api/v1/models.");
     expect(body.errorCode).toBe('unknown_model');
+  });
+
+  it('answers an adapter empty-message refusal with 400 and no error-level log', async () => {
+    mockExecuteCompletion.mockRejectedValueOnce(
+      new BadRequestError('request must contain at least one non-empty user or assistant message')
+    );
+
+    const body = await expectJsonError(await post(), 400);
+    expect(body.error).toBe('request must contain at least one non-empty user or assistant message');
+    expect(mockLoggerError).not.toHaveBeenCalled();
   });
 
   it('answers a refused tool search request with 400 and its errorCode', async () => {

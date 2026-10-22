@@ -14,6 +14,7 @@ import { addReasoningTokens, reasoningTokensField, reasoningTokensFromUsage } fr
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import { Logger } from '@bike4mind/observability';
 import {
+  BadRequestError,
   ChatModels,
   estimateStreamedOutputTokens,
   ImageModels,
@@ -670,6 +671,9 @@ export class GeminiBackend implements ICompletionBackend {
 
     const nonsystemMessages = messagesWithFormat.filter(message => message.role !== 'system');
     const contents = this.formatMessagesIntoGeminiContent(nonsystemMessages, liveToolUseIds);
+    if (contents.length === 0) {
+      throw new BadRequestError('request must contain at least one non-empty user or assistant message');
+    }
     const generationConfig = this.getGenerationConfig(modelInfo, options);
 
     // Zero or one tools; if one, then all the functionDefinitions are there, up to the
@@ -1379,6 +1383,7 @@ export class GeminiBackend implements ICompletionBackend {
         };
 
         if (typeof message.content === 'string') {
+          if (!message.content.trim()) return null;
           return {
             role: mapRole(message.role),
             parts: [{ text: message.content }],
@@ -1394,9 +1399,11 @@ export class GeminiBackend implements ICompletionBackend {
         const hasToolUse = Array.isArray(message.content) && message.content.some(item => item.type === 'tool_use');
 
         if (!hasToolUse && message.content?.[0].type === 'text') {
+          const text = (message.content[0] as MessageContentText).text;
+          if (!text.trim()) return null;
           return {
             role: mapRole(message.role),
-            parts: [{ text: (message.content?.[0] as MessageContentText).text }],
+            parts: [{ text }],
           };
         }
 

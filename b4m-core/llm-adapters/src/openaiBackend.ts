@@ -1,4 +1,5 @@
 import {
+  BadRequestError,
   ChatModels,
   IMessage,
   ImageModels,
@@ -2059,6 +2060,17 @@ export class OpenAIBackend implements ICompletionBackend {
     // Convert B4M standard format (tool_use/tool_result) to OpenAI format (tool_calls/role:tool).
     // Exclude system messages from the body - they are now consolidated into systemMessage above.
     const nonSystemMessages = filteredMessages.filter(m => m.role !== 'system');
+    const hasEffectiveMessage = nonSystemMessages.some(message =>
+      'tool_calls' in message && Array.isArray(message.tool_calls) && message.tool_calls.length > 0
+        ? true
+        : typeof message.content === 'string'
+          ? message.content.trim().length > 0
+          : Array.isArray(message.content) &&
+            message.content.some(block => block.type !== 'text' || Boolean(block.text?.trim()))
+    );
+    if (!hasEffectiveMessage) {
+      throw new BadRequestError('request must contain at least one non-empty user or assistant message');
+    }
     const convertedMessages = convertMessagesToOpenAIFormat(nonSystemMessages);
     const formattedMessages = convertedMessages as OpenAI.ChatCompletionMessageParam[];
 

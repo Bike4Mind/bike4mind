@@ -9,6 +9,7 @@ import type {
 import { CloudWatchClient, PutMetricDataCommand, StandardUnit } from '@aws-sdk/client-cloudwatch';
 import {
   ChatModels,
+  BadRequestError,
   createThinkMarkerEscaper,
   IMessage,
   MessageContentText,
@@ -1122,6 +1123,10 @@ export class AnthropicBackend implements ICompletionBackend {
           filteredMessages = stripAllToolBlocks(filteredMessages, this.logger);
         }
       }
+    }
+
+    if (!filteredMessages.some(message => message.role === 'user' || message.role === 'assistant')) {
+      throw new BadRequestError('request must contain at least one non-empty user or assistant message');
     }
 
     // Resolved here rather than at the thinking block below, because max_tokens needs it:
@@ -3263,10 +3268,7 @@ export class AnthropicBackend implements ICompletionBackend {
   }
 
   /**
-   * Filter out irrelevant messages for Anthropic API.
-   * Remove all messages with `system` role, except tool change messages, which stay in place.
-   * Remove messages that have no reply from the assistant, except for the last one.
-   * Also remove the first message if it's from the assistant.
+   * Removes system messages except tool changes, blank content, and duplicate adjacent turns.
    */
   private filterRelevantMessages(messages: IMessage[]): IMessage[] {
     const formattedMessages = messages
