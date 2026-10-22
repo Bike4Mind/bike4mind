@@ -81,7 +81,7 @@ describe('POST /api/v1/text-refinements', () => {
 
   it('serves the second identical request from the cache', async () => {
     validateWithScopes([ApiKeyScope.AI_GENERATE]);
-    for (const _ of [1, 2]) {
+    for (let attempt = 0; attempt < 2; attempt++) {
       const { req, res } = post({ text: 'a dog on a beach' });
       await handler(req, res);
       expect(res._getStatusCode()).toBe(200);
@@ -153,7 +153,7 @@ describe('POST /api/v1/text-refinements', () => {
   it('502s on an empty refinement and does not cache it', async () => {
     validateWithScopes([ApiKeyScope.AI_GENERATE]);
     mockRefineText.mockResolvedValue('');
-    for (const _ of [1, 2]) {
+    for (let attempt = 0; attempt < 2; attempt++) {
       const { req, res } = post({ text: 'hello' });
       await handler(req, res);
       expect(res._getStatusCode()).toBe(502);
