@@ -1,4 +1,4 @@
-import { VIDEO_MODEL_CATALOG, type VideoInput, type VideoModelId } from '@bike4mind/common';
+import { VIDEO_MODEL_CATALOG, type VideoModelId } from '@bike4mind/common';
 import type { CreateVideoJobInput, CreateVideoJobResult } from '../../../../videoJobs/types';
 import type { ToolContext, ToolDefinition } from '../../base/types';
 import {
@@ -27,24 +27,20 @@ export const isVideoToolConfig = (value: unknown): value is PopulatedVideoToolCo
   Array.isArray(value.usableModels) &&
   value.usableModels.length > 0;
 
-// The tool offers one image to animate, so it is always the first frame.
-const toFirstFrame = (args: VideoToolArgs): VideoInput | null => {
-  if (args.inputImageFileId) return { role: 'first_frame', fileId: args.inputImageFileId };
-  if (args.inputGeneratedImageKey) return { role: 'first_frame', generatedImageKey: args.inputGeneratedImageKey };
-  return null;
-};
-
+// Still the legacy single-image fields (read as one first_frame input), not `inputs`: a handler from before
+// `inputs` existed cannot read an inputs-only payload, so a rollback would fail every pending agent job. Switch
+// once that rollback window has passed, or when the tool offers more than one image.
 const toRequest = (args: VideoToolArgs) => {
   const caps = VIDEO_MODEL_CATALOG[args.model];
-  const firstFrame = toFirstFrame(args);
   return {
     model: args.model,
-    mode: firstFrame ? 'image_to_video' : 'text_to_video',
+    mode: args.inputImageFileId || args.inputGeneratedImageKey ? 'image_to_video' : 'text_to_video',
     prompt: args.prompt,
     durationSeconds: args.durationSeconds ?? caps.defaults.durationSeconds,
     aspectRatio: args.aspectRatio ?? caps.defaults.aspectRatio,
     resolution: args.resolution ?? caps.defaults.resolution,
-    ...(firstFrame && { inputs: [firstFrame] }),
+    ...(args.inputImageFileId ? { inputImageFileId: args.inputImageFileId } : {}),
+    ...(args.inputGeneratedImageKey ? { inputGeneratedImageKey: args.inputGeneratedImageKey } : {}),
   };
 };
 

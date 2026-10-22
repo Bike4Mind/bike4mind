@@ -4077,10 +4077,9 @@ export interface components {
         display_name: string;
         provider: string;
         modes: ('text_to_video' | 'image_to_video')[];
-        /** @description The inputs[] roles this model accepts and the most of each one request may carry. */
-        input_roles: {
-          /** @enum {string} */
-          role: 'first_frame' | 'last_frame' | 'reference' | 'style';
+        /** @description The inputs[] roles this model accepts and the most of each one request may carry. Roles today: first_frame, last_frame, reference, style; ignore any you do not know. */
+        input_roles?: {
+          role: string;
           max: number;
         }[];
         duration:

@@ -8241,13 +8241,7 @@
                     "type": "object",
                     "properties": {
                       "role": {
-                        "type": "string",
-                        "enum": [
-                          "first_frame",
-                          "last_frame",
-                          "reference",
-                          "style"
-                        ]
+                        "type": "string"
                       },
                       "max": {
                         "type": "integer",
@@ -8259,7 +8253,7 @@
                       "max"
                     ]
                   },
-                  "description": "The inputs[] roles this model accepts and the most of each one request may carry."
+                  "description": "The inputs[] roles this model accepts and the most of each one request may carry. Roles today: first_frame, last_frame, reference, style; ignore any you do not know."
                 },
                 "duration": {
                   "anyOf": [
@@ -8408,7 +8402,6 @@
                 "display_name",
                 "provider",
                 "modes",
-                "input_roles",
                 "duration",
                 "aspect_ratios",
                 "resolutions",

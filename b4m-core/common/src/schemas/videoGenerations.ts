@@ -148,9 +148,15 @@ export const VideoModelSchema = z.object({
   display_name: z.string(),
   provider: z.string(),
   modes: z.array(z.enum(VIDEO_MODES)),
+  // Loose on purpose: clients parse this at runtime, so a role added later (or a server from before input_roles)
+  // must not make an older client drop the whole model. Requests still take only the known roles.
   input_roles: z
-    .array(z.object({ role: z.enum(VIDEO_INPUT_ROLES), max: z.number().int().positive() }))
-    .describe('The inputs[] roles this model accepts and the most of each one request may carry.'),
+    .array(z.object({ role: z.string(), max: z.number().int().positive() }))
+    .optional()
+    .describe(
+      `The inputs[] roles this model accepts and the most of each one request may carry. Roles today: ` +
+        `${VIDEO_INPUT_ROLES.join(', ')}; ignore any you do not know.`
+    ),
   duration: z.union([
     z.object({ kind: z.literal('range'), min: z.number(), max: z.number(), step: z.number() }),
     z.object({ kind: z.literal('discrete'), values: z.array(z.number()) }),

@@ -170,6 +170,18 @@ describe('POST /api/v1/video-generations', () => {
     expect(h.createVideoJob).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { role: 'first_frame', generated_image_key: 'k.png' },
+    { role: 'first_frame', generatedImageKey: 'k.png' },
+    { role: 'first_frame', file_id: 'f1', generatedImageKey: 'k.png' },
+  ])('never takes a generated-image key in inputs (422) before the domain: %o', async input => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    const { req, res } = post({ model: 'test-video', prompt: 'p', inputs: [input] });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(422);
+    expect(h.createVideoJob).not.toHaveBeenCalled();
+  });
+
   it('rejects an input role the API does not define (422) before the domain', async () => {
     validateWithScopes([ApiKeyScope.AI_GENERATE]);
     const { req, res } = post({ model: 'test-video', prompt: 'p', inputs: [{ file_id: 'f1', role: 'mask' }] });
