@@ -48,6 +48,29 @@ describe('parseDesktopRelease', () => {
     expect(release?.macArm64DmgUrl).toBeUndefined();
   });
 
+  it('drops links that only share a prefix with the releases repo', () => {
+    const release = parseDesktopRelease(
+      githubRelease({
+        html_url: 'https://github.com/Bike4Mind/desktop-releases-evil/releases/tag/desktop-v0.42.0',
+        assets: [
+          {
+            name: 'Bike4Mind-0.42.0-arm64.dmg',
+            browser_download_url:
+              'https://github.com/someone-else/desktop-releases/releases/download/desktop-v0.42.0/Bike4Mind-0.42.0-arm64.dmg',
+          },
+          {
+            name: 'Bike4Mind-0.42.0-x64.AppImage',
+            browser_download_url:
+              'https://github.com/Bike4Mind/desktop-releases-evil/releases/download/desktop-v0.42.0/Bike4Mind-0.42.0-x64.AppImage',
+          },
+        ],
+      })
+    );
+    expect(release?.releaseUrl).toBe(DESKTOP_RELEASES_PAGE_URL);
+    expect(release?.macArm64DmgUrl).toBeUndefined();
+    expect(release?.linuxX64AppImageUrl).toBeUndefined();
+  });
+
   it('rejects a response that is not a release, such as a rate-limit error body', () => {
     expect(parseDesktopRelease({ message: 'API rate limit exceeded' })).toBeNull();
     expect(parseDesktopRelease(null)).toBeNull();

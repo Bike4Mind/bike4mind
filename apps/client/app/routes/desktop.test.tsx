@@ -4,6 +4,7 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
+import { DESKTOP_RELEASE_QUERY_KEY } from '@client/app/hooks/data/desktopRelease';
 import { DESKTOP_INSTALL_COMMAND, DESKTOP_RELEASES_PAGE_URL } from '@client/app/utils/desktopReleases';
 import DesktopDownloadPage from './desktop';
 
@@ -38,13 +39,16 @@ const appTheme = extendTheme({ ...getThemeConfig() });
 
 function renderPage() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <CssVarsProvider theme={appTheme}>
-        <DesktopDownloadPage />
-      </CssVarsProvider>
-    </QueryClientProvider>
-  );
+  return {
+    queryClient,
+    ...render(
+      <QueryClientProvider client={queryClient}>
+        <CssVarsProvider theme={appTheme}>
+          <DesktopDownloadPage />
+        </CssVarsProvider>
+      </QueryClientProvider>
+    ),
+  };
 }
 
 function setUserAgent(userAgent: string, userAgentData?: unknown) {
@@ -141,9 +145,9 @@ describe('DesktopDownloadPage', () => {
       platform: 'macOS',
       getHighEntropyValues: async () => ({ architecture: 'arm', bitness: '64' }),
     });
-    renderPage();
+    const { queryClient } = renderPage();
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    await waitFor(() => expect(queryClient.getQueryState(DESKTOP_RELEASE_QUERY_KEY)?.status).toBe('error'));
     const primary = screen.getByTestId('desktop-download-primary');
     expect(within(primary).getByTestId('desktop-download-command')).toHaveTextContent(DESKTOP_INSTALL_COMMAND);
     const dmg = within(primary).getByTestId('desktop-download-dmg-link');
