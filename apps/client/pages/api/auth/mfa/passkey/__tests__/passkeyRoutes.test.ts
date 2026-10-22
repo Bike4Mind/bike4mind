@@ -116,7 +116,10 @@ describe('/api/auth/mfa/passkey/authenticate', () => {
     mockFinishAuthentication.mockResolvedValue({ user: { id: 'user-1', ...SECRET_USER_FIELDS }, credentialId: 'pk-1' });
     const { req, res } = makeReqRes({ response: assertion });
 
-    await authenticateHandler(req as any, res as any);
+    await authenticateHandler(
+      req as unknown as Parameters<typeof authenticateHandler>[0],
+      res as unknown as Parameters<typeof authenticateHandler>[1]
+    );
 
     const body = res._getJSONData();
     expect(body.accessToken).toBe('full-access');

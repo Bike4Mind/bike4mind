@@ -1,33 +1,69 @@
 import { expect } from 'vitest';
+import { USER_SECRET_FIELDS, USER_SUBFIELD_REDACTED_FIELDS } from '@bike4mind/common';
 
-// Secrets a user document can carry. Keep in sync with selfUserResponseSchema and
-// redactUserSecretsForSelf in @bike4mind/common. Route tests stub the redactor to identity,
-// so the response schema alone has to drop these.
+const SECRET_VALUE = 'session-user-secret-sentinel';
+
+// Route tests stub the redactor to identity, so the response schema alone must
+// strip every secret family, including future additions to USER_SECRET_FIELDS.
 export const SECRET_USER_FIELDS = {
-  password: 'bcrypt_secret_value',
-  passwordHash: 'hash_secret_value',
-  oauthCredentials: { github: 'ghp_secret_value' },
-  securityQuestions: [{ question: 'first pet', answer: 'mittens' }],
-  loginRecords: [{ ip: '203.0.113.7' }],
-  authProviders: [{ id: 'goog-sub-1', strategy: 'google', accessToken: 'ya29.secret_value' }],
-  googleDrive: { accessToken: 'gd_secret_value', refreshToken: 'gd_refresh_value', expiresAt: 123 },
-  mfa: { totpEnabled: true, secret: 'totp_secret_value', backupCodes: ['backup_secret_value'] },
-  notInSchema: 'undeclared_secret_value',
-};
+  password: SECRET_VALUE,
+  passwordHash: SECRET_VALUE,
+  oauthCredentials: { github: SECRET_VALUE },
+  securityQuestions: [{ question: 'first pet', answer: SECRET_VALUE }],
+  loginRecords: [{ ip: SECRET_VALUE }],
+  authProviders: [
+    {
+      id: 'goog-sub-1',
+      strategy: 'google',
+      accessToken: SECRET_VALUE,
+      refreshToken: SECRET_VALUE,
+      futureField: SECRET_VALUE,
+    },
+  ],
+  googleDrive: { accessToken: SECRET_VALUE, refreshToken: SECRET_VALUE, expiresAt: 123, futureField: SECRET_VALUE },
+  mfa: { totpEnabled: true, totpSecret: SECRET_VALUE, backupCodes: [SECRET_VALUE], futureField: SECRET_VALUE },
+  totpLastStep: 123,
+  atlassianConnect: {
+    siteName: 'test-site',
+    accessToken: SECRET_VALUE,
+    refreshToken: SECRET_VALUE,
+    futureField: SECRET_VALUE,
+  },
+  notionConnect: { workspaceId: 'w1', accessToken: SECRET_VALUE, botId: SECRET_VALUE, futureField: SECRET_VALUE },
+  blogIntegration: { baseUrl: 'https://example.com', apiKey: SECRET_VALUE, futureField: SECRET_VALUE },
+  slackSettings: {
+    slackUserId: 'U1',
+    slackUserToken: SECRET_VALUE,
+    slackUserScopes: [SECRET_VALUE],
+    lastUsedAgent: SECRET_VALUE,
+    futureField: SECRET_VALUE,
+  },
+  resetPasswordToken: SECRET_VALUE,
+  resetPasswordSentAt: new Date('2026-01-01'),
+  resetPasswordExpires: new Date('2026-01-02'),
+  emailVerificationToken: SECRET_VALUE,
+  emailVerificationSentAt: new Date('2026-01-01'),
+  emailVerificationExpires: new Date('2026-01-02'),
+  pendingEmailToken: SECRET_VALUE,
+  pendingEmailSentAt: new Date('2026-01-01'),
+  pendingEmailExpires: new Date('2026-01-02'),
+  pendingNotionOAuthNonce: SECRET_VALUE,
+  userNotes: SECRET_VALUE,
+  stripeCustomerId: SECRET_VALUE,
+  notInSchema: SECRET_VALUE,
+} satisfies Record<(typeof USER_SECRET_FIELDS)[number] | 'passwordHash' | 'notInSchema', unknown>;
 
-const SECRET_VALUES = [
-  'bcrypt_secret_value',
-  'hash_secret_value',
-  'ghp_secret_value',
-  'mittens',
-  '203.0.113.7',
-  'ya29.secret_value',
-  'gd_secret_value',
-  'gd_refresh_value',
-  'totp_secret_value',
-  'backup_secret_value',
-  'undeclared_secret_value',
-];
+const EXPECTED_REDACTED_FIELDS = {
+  authProviders: [{ id: 'goog-sub-1', strategy: 'google' }],
+  googleDrive: { expiresAt: 123 },
+  mfa: { totpEnabled: true },
+  atlassianConnect: { siteName: 'test-site' },
+  notionConnect: { workspaceId: 'w1' },
+  blogIntegration: { baseUrl: 'https://example.com' },
+  slackSettings: { slackUserId: 'U1' },
+} satisfies Record<(typeof USER_SUBFIELD_REDACTED_FIELDS)[number], unknown>;
+
+const SUBFIELD_REDACTED_FIELDS: ReadonlySet<string> = new Set(USER_SUBFIELD_REDACTED_FIELDS);
 
 /**
  * Asserts a response carrying a user seeded with SECRET_USER_FIELDS exposes only the
@@ -36,19 +72,12 @@ const SECRET_VALUES = [
  */
 export function expectSelfUserStripped(user: Record<string, unknown>, body: unknown) {
   expect(user).toHaveProperty('id');
-  for (const key of [
-    'password',
-    'passwordHash',
-    'oauthCredentials',
-    'securityQuestions',
-    'loginRecords',
-    'notInSchema',
-  ]) {
+  for (const key of [...USER_SECRET_FIELDS, 'passwordHash', 'notInSchema']) {
+    if (SUBFIELD_REDACTED_FIELDS.has(key)) continue;
     expect(user).not.toHaveProperty(key);
   }
-  expect(user.authProviders).toEqual([{ id: 'goog-sub-1', strategy: 'google' }]);
-  expect(user.googleDrive).toEqual({ expiresAt: 123 });
-  expect(user.mfa).toEqual({ totpEnabled: true });
-  const serialized = JSON.stringify(body);
-  for (const secret of SECRET_VALUES) expect(serialized).not.toContain(secret);
+  for (const [key, expected] of Object.entries(EXPECTED_REDACTED_FIELDS)) {
+    expect(user[key]).toEqual(expected);
+  }
+  expect(JSON.stringify(body)).not.toContain(SECRET_VALUE);
 }
