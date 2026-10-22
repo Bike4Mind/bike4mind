@@ -29,4 +29,12 @@ describe('contributed toolbelts', () => {
     expect(logger.warn).toHaveBeenCalledWith(expect.any(String), { roles: [DEFAULT_TOOLBELT_ROLE] });
     expect(resolveToolbeltProfile(DEFAULT_TOOLBELT_ROLE).maxIterations).not.toBe(99);
   });
+
+  it('warns about a contribution with no role separately from a taken one', () => {
+    const logger = { warn: vi.fn() };
+    registerContributedToolbelts([{ toolbelts: [fixture('')] }], logger);
+
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith('Dropped contributed toolbelts with no role', { count: 1 });
+  });
 });

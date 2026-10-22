@@ -6,7 +6,8 @@
  * A host registers its own entries as built-ins, then folds in contributions, then freezes the
  * registry so nothing can mutate it after module load. Built-ins fail loudly on a duplicate
  * (that is a programming error in the host); a contribution that collides or is malformed is
- * dropped with a warning so one bad package cannot take the executor down.
+ * dropped with a warning, and a contributed profile or guard that throws at run time is skipped
+ * with a warning, so one bad package cannot take the executor down.
  */
 
 import type { ToolbeltProfile } from './toolbelts';
@@ -157,9 +158,9 @@ export function createAgentExtensionRegistry<TTools, TState>(
   };
 
   const registerSurfaceProfile = (entry: SurfaceProfileEntry, source: AgentExtensionSource = 'contribution') => {
-    assertOpen(entry.id);
-    if (!entry.id || !entry.surface || typeof entry.build !== 'function') {
-      return reject(source, `surface profile "${entry.id}" is malformed`, { id: entry.id });
+    assertOpen(entry?.id);
+    if (!entry || !entry.id || !entry.surface || typeof entry.build !== 'function') {
+      return reject(source, `surface profile "${entry?.id}" is malformed`, { id: entry?.id });
     }
     const bySurface = profilesBySurface.get(entry.surface);
     const byId = [...profilesBySurface.values()].find(p => p.entry.id === entry.id);
@@ -176,9 +177,9 @@ export function createAgentExtensionRegistry<TTools, TState>(
     entry: ToolMapGuardEntry<TTools, TState>,
     source: AgentExtensionSource = 'contribution'
   ) => {
-    assertOpen(entry.id);
-    if (!entry.id || typeof entry.apply !== 'function' || !Number.isInteger(entry.priority)) {
-      return reject(source, `tool-map guard "${entry.id}" is malformed`, { id: entry.id });
+    assertOpen(entry?.id);
+    if (!entry || !entry.id || typeof entry.apply !== 'function' || !Number.isInteger(entry.priority)) {
+      return reject(source, `tool-map guard "${entry?.id}" is malformed`, { id: entry?.id });
     }
     if (
       source === 'contribution' &&
@@ -205,18 +206,53 @@ export function createAgentExtensionRegistry<TTools, TState>(
     registerToolMapGuard,
     registerContribution(contribution) {
       assertOpen('contribution');
-      for (const profile of contribution.surfaceProfiles ?? []) registerSurfaceProfile(profile, 'contribution');
-      for (const guard of contribution.toolMapGuards ?? []) registerToolMapGuard(guard, 'contribution');
+      const surfaceProfiles = contribution?.surfaceProfiles ?? [];
+      const toolMapGuards = contribution?.toolMapGuards ?? [];
+      if (!contribution || !Array.isArray(surfaceProfiles) || !Array.isArray(toolMapGuards)) {
+        return reject('contribution', 'contribution is malformed', {});
+      }
+      for (const profile of surfaceProfiles) registerSurfaceProfile(profile, 'contribution');
+      for (const guard of toolMapGuards) registerToolMapGuard(guard, 'contribution');
     },
     freeze() {
       frozen = true;
     },
     resolveSurfaceProfile(surface, ctx) {
       if (!surface) return undefined;
-      return profilesBySurface.get(surface)?.entry.build(ctx);
+      const stored = profilesBySurface.get(surface);
+      if (!stored) return undefined;
+      if (stored.source === 'builtin') return stored.entry.build(ctx);
+      try {
+        return stored.entry.build(ctx) ?? undefined;
+      } catch (err) {
+        ctx.logger.warn(`[agent-extensions] skipped surface profile "${stored.entry.id}": build threw`, {
+          id: stored.entry.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        return undefined;
+      }
     },
     applyToolMapGuards(tools, ctx) {
-      return sortedGuards().reduce((acc, { entry }) => entry.apply(acc, ctx), tools);
+      return sortedGuards().reduce((acc, { entry, source }) => {
+        if (source === 'builtin') return entry.apply(acc, ctx);
+        let next: TTools;
+        try {
+          next = entry.apply(acc, ctx);
+        } catch (err) {
+          ctx.logger.warn(`[agent-extensions] skipped tool-map guard "${entry.id}": apply threw`, {
+            id: entry.id,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          return acc;
+        }
+        if (next === null || typeof next !== 'object') {
+          ctx.logger.warn(`[agent-extensions] skipped tool-map guard "${entry.id}": apply returned no tool map`, {
+            id: entry.id,
+          });
+          return acc;
+        }
+        return next;
+      }, tools);
     },
     list() {
       return {

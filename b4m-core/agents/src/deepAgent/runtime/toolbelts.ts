@@ -78,19 +78,24 @@ const contributedToolbelts = new Map<string, ToolbeltProfile>();
 
 /**
  * Add toolbelt profiles for new roles. A profile whose role is already taken (built-in or
- * contributed earlier) is dropped, not merged; the dropped roles are returned for the host to log.
+ * contributed earlier) is dropped, not merged, and so is one with no role; both are returned for
+ * the host to log.
  */
-export function registerToolbelts(profiles: readonly ToolbeltProfile[]): string[] {
-  const dropped: string[] = [];
+export function registerToolbelts(profiles: readonly ToolbeltProfile[]): { taken: string[]; invalid: number } {
+  const taken: string[] = [];
+  let invalid = 0;
   for (const profile of profiles) {
-    const taken = Object.hasOwn(TOOLBELT_PROFILES, profile.role) || contributedToolbelts.has(profile.role);
-    if (!profile.role || taken) {
-      dropped.push(profile.role);
+    if (!profile || typeof profile.role !== 'string' || !profile.role) {
+      invalid++;
+      continue;
+    }
+    if (Object.hasOwn(TOOLBELT_PROFILES, profile.role) || contributedToolbelts.has(profile.role)) {
+      taken.push(profile.role);
       continue;
     }
     contributedToolbelts.set(profile.role, profile);
   }
-  return dropped;
+  return { taken, invalid };
 }
 
 /** Resolve the toolbelt profile for a role (built-in, then contributed), falling back to the default. */
