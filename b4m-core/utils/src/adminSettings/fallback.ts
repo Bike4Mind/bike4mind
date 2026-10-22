@@ -1,7 +1,7 @@
 import { ModelInfo } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { isAxiosError } from 'axios';
-import { getLlmByModel, type ApiKeyTable, type ICompletionBackend } from '@bike4mind/llm-adapters';
+import { getLlmByModel, isLlmTimeoutError, type ApiKeyTable, type ICompletionBackend } from '@bike4mind/llm-adapters';
 
 /**
  * Fallback attempt result
@@ -158,6 +158,11 @@ export function shouldTriggerFallback(error: Error): boolean {
  * with the same model before falling back to a different one.
  */
 export function isOverloadedError(error: Error): boolean {
+  // Our own timers gave up on a slow model; the provider never said it was busy.
+  if (isLlmTimeoutError(error)) {
+    return false;
+  }
+
   const message = error.message.toLowerCase();
 
   // Check HTTP status codes from both Axios and AWS SDK (e.g. Bedrock 503) error shapes.

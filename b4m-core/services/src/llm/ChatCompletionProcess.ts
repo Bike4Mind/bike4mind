@@ -97,7 +97,12 @@ import {
   safeInputWindow,
   withTokenEstimateMultiplier,
 } from '@bike4mind/utils';
-import { isRequestTimeoutError, isStreamIdleTimeoutError, isToolPairingError } from './llmErrorPredicates';
+import {
+  isRequestTimeoutError,
+  isSlowModelTimeoutError,
+  isStreamIdleTimeoutError,
+  isToolPairingError,
+} from './llmErrorPredicates';
 import { TurnTimingRecorder } from './turnTiming';
 import type { FabFileNotice, EmbeddingCredential } from '@bike4mind/utils';
 import { buildAttachmentNoticePrompt, toAttachmentNoticeStrings } from './attachmentNotices';
@@ -284,6 +289,9 @@ const THROTTLE_INTERVAL = 100;
 const DISABLE_SERVER_THROTTLING = process.env.DISABLE_SERVER_THROTTLING === 'true';
 const STREAMING_HEARTBEAT_INTERVAL_MS = 10_000;
 const STREAMING_HEARTBEAT_ERROR_ESCALATION_THRESHOLD = 3;
+
+/** Final reply when the model stayed too slow through its retry and any fallback. Not "busy": the provider never said so. */
+export const SLOW_MODEL_ERROR_REPLY = 'The AI model took too long to respond. Please try again in a moment.';
 
 // Context management constants: message-history limits per query type
 
@@ -5258,9 +5266,14 @@ export class ChatCompletionProcess {
               throw lastError;
             }
 
+            // A timeout our own timers raised means a slow model, not a busy provider. Checked
+            // explicitly so it never takes the overload branch, even worded the old way ("may be
+            // overloaded") by a backend deployed before the typed timeout errors.
+            const isSlowModelTimeout = isSlowModelTimeoutError(lastError);
+
             // Same-model retry: for overloaded errors, retry with exponential backoff
             // before falling back to a different model (transient outages often resolve quickly)
-            if (isOverloadedError(lastError) && fallbackAttempt === 0) {
+            if (!isSlowModelTimeout && isOverloadedError(lastError) && fallbackAttempt === 0) {
               const MAX_OVERLOAD_RETRIES = 3;
               const BASE_DELAY_MS = 2000;
               overloadRetryCount++;
@@ -5316,7 +5329,8 @@ export class ChatCompletionProcess {
 
             // Stream idle timeout retry: for mid-stream stalls, retry once with short backoff.
             // Unlike request timeouts (model never started), stream idle timeouts mean the model
-            // started responding but stalled - likely transient overload. One retry before fallback.
+            // started responding but stalled. One retry, then fall back: repeating the same stall
+            // on the same model wastes minutes.
             if (isStreamIdleTimeoutError(lastError) && !streamIdleTimeoutRetried) {
               streamIdleTimeoutRetried = true;
               const STREAM_IDLE_RETRY_DELAY_MS = 3000;
@@ -5359,7 +5373,8 @@ export class ChatCompletionProcess {
                 apiKeyTable,
                 logger,
                 {
-                  forceSwitch: overloadRetriesExhausted,
+                  // A timeout that reaches here has spent its one same-model retry.
+                  forceSwitch: overloadRetriesExhausted || isSlowModelTimeout,
                   excludeModelIds: triedModelIds,
                   preferUntriedBackend: isFinalHop,
                   endUserId: this.user.id,
@@ -6754,17 +6769,14 @@ export class ChatCompletionProcess {
         setTerminalQuestStatus(quest, 'done');
         finalQuest = await saveQuest(quest);
         return;
-      } else if (
-        err instanceof Error &&
-        (err.message.includes('request timeout') || err.message.includes('stream timeout'))
-      ) {
+      } else if (err instanceof Error && isSlowModelTimeoutError(err)) {
         // WARN, not error: an upstream request/idle timeout is expected and
         // recoverable (the user gets the retry message below and the backend
         // already emitted trend metrics). Logging at error severity re-trips the
         // CloudWatch ERROR to LiveOps/Slack alert path that the backend WARN downgrade
         // was meant to avoid.
         logger.warn(`[Timeout] Quest ${questId}: ${err.message}`);
-        setErrorReply('The AI service is currently experiencing high demand. Please try again in a few minutes.');
+        setErrorReply(SLOW_MODEL_ERROR_REPLY);
         quest.type = 'error';
         setTerminalQuestStatus(quest, 'done');
         finalQuest = await saveQuest(quest);

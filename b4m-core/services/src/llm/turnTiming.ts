@@ -18,9 +18,9 @@ export const CHAT_RETRY_METRIC = 'ChatRetry';
 export const MAX_RECORDED_RETRIES = MAX_RECORDED_TURN_RETRIES;
 
 /**
- * Timeouts first: the backends' own idle and request timeouts say "the model may be overloaded",
- * which isOverloadedError matches, and recording that as provider overload is the misreading this
- * telemetry exists to expose. Must stay in sync with TURN_RETRY_REASONS in @bike4mind/common.
+ * Timeouts first: our own idle and request timeouts are a slow model, not provider overload, and
+ * older backends worded them "the model may be overloaded", which isOverloadedError matches.
+ * Recording that as overload is the misreading this telemetry exists to expose. Must stay in sync with TURN_RETRY_REASONS in @bike4mind/common.
  */
 export function classifyTurnRetryReason(error: Error): TurnRetryReason {
   // The truncation error shares the idle timeout's "stream timeout" prefix but is not a stall.

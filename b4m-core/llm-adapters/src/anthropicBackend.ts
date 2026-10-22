@@ -71,6 +71,8 @@ import {
 } from './thinkingParams';
 import { DispatchModel } from './dispatchModel';
 import { logAnthropicLimitResponse, pickRateLimitHeaders } from './anthropicRateLimitLog';
+import { openObservedMessageStream } from './anthropicObservedStream';
+import { createAnthropicRequestTimeoutError, createAnthropicStreamTimeoutError } from './llmTimeoutErrors';
 import { addReasoningTokens, reasoningTokensField, reasoningTokensFromUsage } from './reasoningTokens';
 import { acquireSlot, type SlotRelease } from './_anthropicSemaphore';
 import { appendIdentityReminder, buildIdentityReminder } from './identityReminder';
@@ -1478,6 +1480,7 @@ export class AnthropicBackend implements ICompletionBackend {
           // Track idle timeout state at a scope accessible to catch block
           let isIdleTimeout = false;
           let idleTimeoutMsForError = 0; // Store for error message
+          let idleTimeoutKind: 'first_event' | 'stream_idle' = 'stream_idle';
 
           // Degeneration state, also read from the catch block. The idle timer
           // cannot cover this case - it resets on every stream event, and a
@@ -1521,14 +1524,19 @@ export class AnthropicBackend implements ICompletionBackend {
 
               roundStart = Date.now();
               // Wrap with retry for transient network errors (TLS abort, fetch terminated)
+              // Bound once the idle timer exists below; body bytes arriving before then are covered
+              // by the request timeout.
+              let onStreamBytes = () => {};
               const stream = await withRetry(
                 () =>
-                  this._api.messages.create(
+                  openObservedMessageStream(
+                    this._api,
                     { ...apiParams, stream: true },
                     {
                       signal: combinedSignal,
                       ...(requestExtraHeaders ? { headers: requestExtraHeaders } : {}),
-                    }
+                    },
+                    () => onStreamBytes()
                   ),
                 {
                   maxRetries: 3,
@@ -1623,6 +1631,7 @@ export class AnthropicBackend implements ICompletionBackend {
                   // Mark idle timeout for catch block (must happen before abort)
                   isIdleTimeout = true;
                   idleTimeoutMsForError = timeoutMs;
+                  idleTimeoutKind = eventCount === 0 ? 'first_event' : 'stream_idle';
 
                   // WARN, not error: an idle/streaming timeout is expected and
                   // recoverable (user retries); error severity would page LiveOps
@@ -1642,8 +1651,10 @@ export class AnthropicBackend implements ICompletionBackend {
                 }, timeoutMs);
               };
 
-              // Start initial timeout
+              // Start initial timeout. Raw body bytes also count as activity, so the keepalive pings
+              // a silently thinking model sends hold the timer off the way real events do.
               resetIdleTimer();
+              onStreamBytes = resetIdleTimer;
 
               try {
                 for await (const event of stream as AsyncIterable<RawMessageStreamEvent>) {
@@ -1919,11 +1930,7 @@ export class AnthropicBackend implements ICompletionBackend {
                     funcEntries: func.filter(f => f?.name).length,
                   }
                 );
-                reject(
-                  new Error(
-                    `Anthropic API stream timeout - no response received within ${idleTimeoutMsForError / 1000} seconds. The model may be overloaded. Try simplifying your request or using fewer tools.`
-                  )
-                );
+                reject(createAnthropicStreamTimeoutError(idleTimeoutKind, idleTimeoutMsForError));
                 return;
               }
 
@@ -2121,11 +2128,7 @@ export class AnthropicBackend implements ICompletionBackend {
                     model,
                     toolCount: options.tools?.length || 0,
                   });
-                  reject(
-                    new Error(
-                      `Anthropic API request timeout after ${requestTimeoutMs}ms - no streaming response received`
-                    )
-                  );
+                  reject(createAnthropicRequestTimeoutError(requestTimeoutMs));
                 } else if (degenerateVerdict) {
                   // Our own abort after the output degenerated into repetition.
                   // Resolve rather than reject: the text emitted before the loop
@@ -2171,11 +2174,7 @@ export class AnthropicBackend implements ICompletionBackend {
                     toolCount: options.tools?.length || 0,
                     idleTimeoutMs: idleTimeoutMsForError,
                   });
-                  reject(
-                    new Error(
-                      `Anthropic API stream timeout - no response received within ${idleTimeoutMsForError / 1000} seconds. The model may be overloaded. Try simplifying your request or using fewer tools.`
-                    )
-                  );
+                  reject(createAnthropicStreamTimeoutError(idleTimeoutKind, idleTimeoutMsForError));
                 } else {
                   // User-initiated abort - resolve gracefully
                   this.logger.debug('Anthropic request was aborted (likely client disconnect)');

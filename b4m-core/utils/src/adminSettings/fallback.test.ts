@@ -12,6 +12,11 @@ import { AxiosError } from 'axios';
 import { ApiError } from '@google/genai';
 import { ModelInfo, ModelBackend } from '@bike4mind/common';
 import { toProviderEndUserId } from '../llm';
+import {
+  LlmTimeoutError,
+  createAnthropicRequestTimeoutError,
+  createAnthropicStreamTimeoutError,
+} from '@bike4mind/llm-adapters';
 
 // Helper to create mock Axios errors
 function createAxiosError(status: number, code?: string): AxiosError {
@@ -286,6 +291,24 @@ describe('isSafetyRefusalError', () => {
 });
 
 describe('isOverloadedError', () => {
+  it.each([
+    ['stream idle', createAnthropicStreamTimeoutError('stream_idle', 90_000)],
+    ['first event', createAnthropicStreamTimeoutError('first_event', 30_000)],
+    ['request', createAnthropicRequestTimeoutError(60_000)],
+  ])('does not read our own %s timeout as provider overload', (_label, error) => {
+    expect(isOverloadedError(error)).toBe(false);
+  });
+
+  it('excludes a typed timeout even if its text mentions overload', () => {
+    const error = new LlmTimeoutError('stream_idle', 90_000, 'stream timeout - the model may be overloaded');
+    expect(isOverloadedError(error)).toBe(false);
+  });
+
+  it('still treats our timeouts as fallback-worthy', () => {
+    expect(shouldTriggerFallback(createAnthropicStreamTimeoutError('stream_idle', 90_000))).toBe(true);
+    expect(shouldTriggerFallback(createAnthropicRequestTimeoutError(60_000))).toBe(true);
+  });
+
   it('should return true for Axios 503', () => {
     expect(isOverloadedError(createAxiosError(503))).toBe(true);
   });

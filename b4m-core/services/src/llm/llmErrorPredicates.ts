@@ -1,6 +1,8 @@
 // Message-shape predicates for LLM call failures, shared by the completion retry loop
 // (ChatCompletionProcess) and the turn-timing retry classifier (turnTiming.ts).
 
+import { isLlmTimeoutError } from '@bike4mind/llm-adapters';
+
 export function isToolPairingError(error: Error): boolean {
   const msg = error.message.toLowerCase();
   // Match known Anthropic tool-pairing failure patterns:
@@ -11,10 +13,20 @@ export function isToolPairingError(error: Error): boolean {
   return hasToolUseAndResult || hasToolUseIdVariant;
 }
 
+// The typed LlmTimeoutError is authoritative. The message checks stay for errors that are not
+// typed: the truncation rejections (Anthropic and Bedrock, worded to match "stream timeout") and
+// any other backend's wording.
 export function isRequestTimeoutError(error: Error): boolean {
+  if (isLlmTimeoutError(error)) return error.kind === 'request';
   return error.message.includes('request timeout') || error.message.includes('Request timeout');
 }
 
 export function isStreamIdleTimeoutError(error: Error): boolean {
+  if (isLlmTimeoutError(error)) return error.kind !== 'request';
   return error.message.includes('stream timeout') || error.message.includes('Stream timeout');
+}
+
+/** A timeout our own timers raised, or a truncated stream: the model is slow or the connection dropped, not busy. */
+export function isSlowModelTimeoutError(error: Error): boolean {
+  return isRequestTimeoutError(error) || isStreamIdleTimeoutError(error);
 }

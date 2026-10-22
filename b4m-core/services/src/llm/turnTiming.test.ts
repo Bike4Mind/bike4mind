@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ITurnTiming } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
+import { createAnthropicRequestTimeoutError, createAnthropicStreamTimeoutError } from '@bike4mind/llm-adapters';
 
 const send = vi.fn();
 vi.mock('@aws-sdk/client-cloudwatch', () => ({
@@ -23,7 +24,8 @@ import {
   describeTurnRetry,
 } from './turnTiming';
 
-// The exact text the Anthropic backend rejects with on an idle timeout - note "may be overloaded".
+// The text the Anthropic backend rejected with on an idle timeout before the typed errors - note
+// "may be overloaded". Errors still in flight across a deploy can carry it.
 const IDLE_TIMEOUT_ERROR = new Error(
   'Anthropic API stream timeout - no response received within 90 seconds. The model may be overloaded. Try simplifying your request or using fewer tools.'
 );
@@ -34,6 +36,14 @@ const withStatus = (message: string, status: number, extra: Record<string, unkno
 describe('classifyTurnRetryReason', () => {
   it('reads our own idle timeout as a stall, not provider overload', () => {
     expect(classifyTurnRetryReason(IDLE_TIMEOUT_ERROR)).toBe('stream_idle_timeout');
+  });
+
+  it.each([
+    [createAnthropicStreamTimeoutError('stream_idle', 180_000), 'stream_idle_timeout'],
+    [createAnthropicStreamTimeoutError('first_event', 30_000), 'stream_idle_timeout'],
+    [createAnthropicRequestTimeoutError(60_000), 'request_timeout'],
+  ] as const)('classifies the typed timeout %s as %s', (error, reason) => {
+    expect(classifyTurnRetryReason(error)).toBe(reason);
   });
 
   it('reads a stream that ended without message_stop as truncated, not stalled', () => {
