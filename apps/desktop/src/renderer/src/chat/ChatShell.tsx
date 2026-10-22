@@ -388,13 +388,15 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
   const panelProject = !opening && conversation.session?.mode === 'code' ? conversation.session.project : undefined;
   const panelDocked = threadRegionWidth === null || panelFitsBesideThread(threadRegionWidth);
   const panelShown = !!panelProject && (panelDocked ? panelPrefs.open : panelPopoverOpen);
+  const bindingErrorHidden =
+    !!panelProject && !!conversation.project.error && (!panelShown || panelPrefs.collapsed.has('environment'));
   const { toggleOpen: togglePanelOpen } = panelPrefs;
   const togglePanel = useCallback(() => {
     if (panelDocked) togglePanelOpen();
     else setPanelPopoverOpen(current => !current);
   }, [panelDocked, togglePanelOpen]);
   const closePanelPopover = useCallback(() => setPanelPopoverOpen(false), []);
-  useEffect(() => setPanelPopoverOpen(false), [activeId, panelDocked]);
+  useEffect(() => setPanelPopoverOpen(false), [activeId, panelDocked, screen]);
 
   /**
    * What the composer's usage indicator reports: how full the window is, and what is left.
@@ -950,10 +952,11 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
           />
 
           {/* An unbound Code session: the chips are how a project is chosen, so they stay here,
-            where they cannot be hidden. Once bound they live in the session panel. */}
-          {conversation.session?.mode === 'code' && !conversation.session.project && (
+            where they cannot be hidden. Once bound they live in the session panel, unless a binding
+            error would have nowhere on screen to appear. */}
+          {conversation.session?.mode === 'code' && (!conversation.session.project || bindingErrorHidden) && (
             <SessionChips
-              project={null}
+              project={conversation.session.project ?? null}
               {...(conversation.session.grantedDirectories
                 ? { grantedDirectories: conversation.session.grantedDirectories }
                 : {})}
