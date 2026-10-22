@@ -51,6 +51,7 @@ vi.mock('@server/middlewares/apiKeyRateLimit', () => ({ apiKeyRateLimit: () => h
 vi.mock('@server/middlewares/oauthRouteGate', () => ({ oauthRouteGate: () => h.observe('oauthRouteGate') }));
 vi.mock('@server/analytics/analyticsMiddleware', () => ({ analyticsMiddleware: () => h.observe('analytics') }));
 vi.mock('@bike4mind/server-utils/services/gears/toolGearObserver', () => ({ registerToolGearObserver: () => {} }));
+vi.mock('@client/lib/settings/registerContributedSettings', () => ({}));
 vi.mock('@server/middlewares/errorHandler', () => ({ default: () => {} }));
 vi.mock('@bike4mind/common', () => ({ ApiKeyScope: {}, MethodNotAllowedError: class extends Error {} }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({
