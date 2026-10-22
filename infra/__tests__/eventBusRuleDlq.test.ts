@@ -26,8 +26,8 @@ const INFRA_FILES = readdirSync(path.join(REPO_ROOT, 'infra'), { withFileTypes: 
 
 const SUBSCRIBE_FILES = ['infra/eventBus.ts', 'infra/llm.ts'];
 
-const SUBSCRIBE = /(?:const (\w+) = )?(?:eventBus|slackEventBus)\.subscribe\(([\s\S]*?)\n\}?\);/g;
-const rawSubscribeCount = (source: string) => source.match(/(?:eventBus|slackEventBus)\.subscribe\(/g)?.length ?? 0;
+const SUBSCRIBE = /(?:const (\w+) = )?eventBus\.subscribe\(([\s\S]*?)\n\}?\);/g;
+const rawSubscribeCount = (source: string) => source.match(/eventBus\.subscribe\(/g)?.length ?? 0;
 
 type Subscription = {
   file: string;
