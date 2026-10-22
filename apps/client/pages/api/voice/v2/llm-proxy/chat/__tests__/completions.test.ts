@@ -332,6 +332,16 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - duplicate turns', () =
     expect(mockProcess).toHaveBeenCalledTimes(1);
   });
 
+  it('still answers an identical repeat of a done turn that started a video job', async () => {
+    mockFindDuplicateQuests.mockResolvedValue([
+      quest({ status: 'done', generationJobs: [{ id: 'job-1', kind: 'video' }] }),
+    ]);
+
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect(mockProcess).toHaveBeenCalledTimes(1);
+  });
+
   it('still answers the same words after a non-video job, or a video job on a different prompt', async () => {
     mockFindDuplicateQuests.mockResolvedValue([
       quest({ status: 'done', generationJobs: [{ id: 'song-1', kind: 'music' }] }),
