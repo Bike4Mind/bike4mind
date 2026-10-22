@@ -4,6 +4,8 @@ import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/e
 import { z } from 'zod';
 import { slackDevWorkspaceRepository } from '@bike4mind/database/infra';
 import { isSlackUserValidationError } from '@bike4mind/server-utils/integrations/slack/slackExportErrors';
+import { withTransaction } from '@bike4mind/database';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 /**
  * POST /api/admin/slack-app/create
@@ -151,24 +153,37 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
 
   const credentials = slackData.credentials as Record<string, string>;
 
-  const workspace = await slackDevWorkspaceRepository.createOrUpdateWithCredentials({
-    slackBotName: manifest.features.bot_user?.display_name,
-    slackAppId: slackData.app_id as string,
-    slackClientId: credentials.client_id,
-    slackClientSecret: credentials.client_secret,
-    slackOAuthSigningSecret: credentials.signing_secret,
-    slackOAuthRedirectUri: manifest.oauth_config.redirect_urls[0],
-    slackVerificationToken: credentials.verification_token,
-    enableWorkflowSteps,
-  });
+  const appName = manifest.display_information.name;
 
-  // Store the config token for future manifest management
-  await slackDevWorkspaceRepository.storeConfigToken(workspace.id, configToken);
+  // A failed audit rolls back the local save; the app already created on Slack is left in place.
+  const workspace = await withTransaction(async () => {
+    const saved = await slackDevWorkspaceRepository.createOrUpdateWithCredentials({
+      slackBotName: manifest.features.bot_user?.display_name,
+      slackAppId: slackData.app_id as string,
+      slackClientId: credentials.client_id,
+      slackClientSecret: credentials.client_secret,
+      slackOAuthSigningSecret: credentials.signing_secret,
+      slackOAuthRedirectUri: manifest.oauth_config.redirect_urls[0],
+      slackVerificationToken: credentials.verification_token,
+      enableWorkflowSteps,
+    });
+
+    // Store the config token for future manifest management
+    await slackDevWorkspaceRepository.storeConfigToken(saved.id, configToken);
+
+    await recordAdminActionFromRequest(req, {
+      action: 'integration.slack_app.created',
+      target: { kind: 'settings', id: saved.id, displayName: appName },
+      summary: `created slack app ${appName}`,
+      details: { appId: slackData.app_id },
+    });
+    return saved;
+  });
 
   req.logger.info('✨ [Admin] Created Slack app from manifest and saved credentials', {
     appId: slackData.app_id,
     workspaceId: workspace.id,
-    appName: manifest.display_information.name,
+    appName,
     adminUserId: req.user?.id,
   });
 

@@ -4,6 +4,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError, BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 /**
  * Admin API for managing Slack OAuth workspaces
@@ -58,6 +59,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       slackTeamId: workspace.slackTeamId,
       workspaceName: workspace.name,
       adminUserId: req.user?.id,
+    });
+
+    await recordAdminActionFromRequest(req, {
+      action: 'integration.slack_workspace.deactivated',
+      target: { kind: 'settings', id: workspace.id, displayName: workspace.name || workspace.slackAppId },
+      summary: `deactivated slack workspace ${workspace.name || workspace.id}`,
+      details: { slackTeamId: workspace.slackTeamId, appId: workspace.slackAppId },
     });
 
     return res.json({

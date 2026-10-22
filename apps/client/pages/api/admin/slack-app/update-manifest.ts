@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { slackDevWorkspaceRepository } from '@bike4mind/database/infra';
 import { mergeManifest, extractBaseUrl } from '@bike4mind/slack';
 import { isSlackUserValidationError } from '@bike4mind/server-utils/integrations/slack/slackExportErrors';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 /**
  * POST /api/admin/slack-app/update-manifest
@@ -136,6 +137,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     workspaceId,
     appId: workspace.slackAppId,
     adminUserId: req.user?.id,
+  });
+
+  await recordAdminActionFromRequest(req, {
+    action: 'integration.slack_app.manifest_updated',
+    target: { kind: 'settings', id: workspaceId, displayName: workspace.name || workspace.slackAppId },
+    summary: `updated slack app manifest for ${workspace.slackAppId}`,
+    details: { appId: workspace.slackAppId },
   });
 
   return res.status(200).json({

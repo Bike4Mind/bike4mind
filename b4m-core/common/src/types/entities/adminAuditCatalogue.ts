@@ -99,6 +99,21 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.mfa.reset': { category: 'identity', severity: 'notice', write: 'strict' },
   'user.mfa.denied': { category: 'identity', severity: 'critical', write: 'bestEffort' },
 
+  // Handler coverage: secrets and integration credentials
+  'settings.system_secret.upserted': { category: 'settings', severity: 'critical', write: 'strict' },
+  'settings.system_secret.deleted': { category: 'settings', severity: 'critical', write: 'strict' },
+  'integration.github_connection.created': { category: 'settings', severity: 'critical', write: 'strict' },
+  'integration.github_connection.updated': { category: 'settings', severity: 'critical', write: 'strict' },
+  'integration.github_connection.deleted': { category: 'settings', severity: 'critical', write: 'strict' },
+  'integration.github_connection.key_rotated': { category: 'settings', severity: 'critical', write: 'strict' },
+  'integration.slack_app.created': { category: 'settings', severity: 'critical', write: 'strict' },
+  'integration.slack_app.reconnected': { category: 'settings', severity: 'critical', write: 'strict' },
+  'integration.slack_app.manifest_updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'integration.slack_workspace.deactivated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'identity.sso_provider.created': { category: 'identity', severity: 'critical', write: 'strict' },
+  'identity.sso_provider.updated': { category: 'identity', severity: 'critical', write: 'strict' },
+  'identity.sso_provider.deleted': { category: 'identity', severity: 'critical', write: 'strict' },
+
   'audit.exported': { category: 'support', severity: 'info', write: 'bestEffort' },
 } as const satisfies Record<string, AdminAuditCatalogueEntry>;
 

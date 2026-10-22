@@ -15,13 +15,14 @@
 import { z } from 'zod';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { orgGitHubConnectionRepository } from '@bike4mind/database';
+import { orgGitHubConnectionRepository, withTransaction } from '@bike4mind/database';
 import { encryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { BadRequestError, InternalServerError, NotFoundError, ensureAdmin } from '@bike4mind/server-utils/utils/errors';
 import { validatePrivateKeyFormat } from '@server/utils/validators';
 import { Logger } from '@bike4mind/observability';
 import { rateLimit } from '@server/middlewares/rateLimit';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 const logger = new Logger({ metadata: { component: 'admin-github-rotate-key' } });
 
@@ -79,12 +80,20 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     const encryptedPrivateKey = encryptSecret(privateKey, encryptionKey);
 
     // Update the connection with new key and clear cached token
-    await orgGitHubConnectionRepository.update({
-      id: connection.id,
-      privateKey: encryptedPrivateKey,
-      cachedAccessToken: undefined,
-      tokenExpiresAt: undefined,
-      tokenCachedAt: undefined,
+    await withTransaction(async () => {
+      await orgGitHubConnectionRepository.update({
+        id: connection.id,
+        privateKey: encryptedPrivateKey,
+        cachedAccessToken: undefined,
+        tokenExpiresAt: undefined,
+        tokenCachedAt: undefined,
+      });
+      await recordAdminActionFromRequest(req, {
+        action: 'integration.github_connection.key_rotated',
+        target: { kind: 'settings', id: connection.id, displayName: 'System GitHub connection' },
+        summary: 'rotated github app private key',
+        details: { appId: connection.appId },
+      });
     });
 
     logger.info('[Admin] Rotated GitHub App private key', {

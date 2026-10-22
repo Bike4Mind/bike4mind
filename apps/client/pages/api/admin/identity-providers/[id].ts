@@ -1,10 +1,22 @@
-import { identityProviderRepository } from '@bike4mind/database';
+import { identityProviderRepository, withTransaction, type IIdentityProviderDocument } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, NotFoundError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { clearConfigurationCache } from '@server/auth/oktaOidcClient';
-import { ApiKeyScope, identityProviderResponseSchema } from '@bike4mind/common';
+import { ApiKeyScope, identityProviderResponseSchema, type AuditChange } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+
+const AUDITED_IDP_FIELDS = ['name', 'emailDomain', 'type', 'isActive'] as const;
+
+// Config blocks hold credentials, so only the non-secret top-level fields are diffed.
+function diffIdentityProvider(existing: IIdentityProviderDocument, updated: IIdentityProviderDocument): AuditChange[] {
+  return AUDITED_IDP_FIELDS.filter(field => existing[field] !== updated[field]).map(field => ({
+    field,
+    before: existing[field],
+    after: updated[field],
+  }));
+}
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .get(async (req, res) => {
@@ -59,18 +71,37 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         }
       }
 
-      const updatedIdp = await identityProviderRepository.updateIDP(id, {
-        name,
-        emailDomain: emailDomain?.toLowerCase(),
-        type,
-        isActive,
-        samlConfig,
-        oktaConfig,
-      });
-
-      if (!updatedIdp) {
+      const existing = await identityProviderRepository.findById(id);
+      if (!existing) {
         throw new NotFoundError('Identity provider not found');
       }
+
+      const updatedIdp = await withTransaction(async () => {
+        const updated = await identityProviderRepository.updateIDP(id, {
+          name,
+          emailDomain: emailDomain?.toLowerCase(),
+          type,
+          isActive,
+          samlConfig,
+          oktaConfig,
+        });
+
+        if (!updated) {
+          throw new NotFoundError('Identity provider not found');
+        }
+
+        await recordAdminActionFromRequest(req, {
+          action: 'identity.sso_provider.updated',
+          target: { kind: 'settings', id: updated.id, displayName: updated.name },
+          summary: `updated identity provider ${updated.name}`,
+          changes: diffIdentityProvider(existing, updated),
+          details: {
+            samlConfigUpdated: samlConfig !== undefined,
+            oktaConfigUpdated: oktaConfig !== undefined,
+          },
+        });
+        return updated;
+      });
 
       // Clear OIDC configuration cache when Okta config is updated so the next login uses it.
       // Each Lambda instance has its own cache, so propagation may take up to 60s.
@@ -103,11 +134,25 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         throw new BadRequestError('Identity provider ID is required');
       }
 
-      const deleted = await identityProviderRepository.deleteIDP(id);
-
-      if (!deleted) {
+      const provider = await identityProviderRepository.findById(id);
+      if (!provider) {
         throw new NotFoundError('Identity provider not found');
       }
+
+      await withTransaction(async () => {
+        const deleted = await identityProviderRepository.deleteIDP(id);
+
+        if (!deleted) {
+          throw new NotFoundError('Identity provider not found');
+        }
+
+        await recordAdminActionFromRequest(req, {
+          action: 'identity.sso_provider.deleted',
+          target: { kind: 'settings', id: provider.id, displayName: provider.name },
+          summary: `deleted ${provider.type} identity provider ${provider.name}`,
+          details: { emailDomain: provider.emailDomain, type: provider.type },
+        });
+      });
 
       // Clear OIDC configuration cache when any IDP is deleted so removed configs don't persist
       clearConfigurationCache();
