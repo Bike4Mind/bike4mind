@@ -30,9 +30,12 @@ import { IMPORT_SCANNER_FACTORY_SRC } from '@client/app/utils/importStatements';
  * tokens - identical isolation to the old blob: iframe, but with a working CSP.
  *
  * Per-artifact code + dependencies are delivered via postMessage (never string-baked into
- * the document): the parent sends `{ type: 'react-artifact-render', code, dependencies }`
- * after receiving `react-sandbox-ready`. Errors are posted back as
- * `{ type: 'react-sandbox-error', message }`.
+ * the document): the parent sends `{ type: 'react-artifact-render', code, dependencies, mode, files? }`
+ * after receiving `react-sandbox-ready`. `mode` is 'eval' or 'inert'. `files` optionally maps
+ * sibling file names to their source: a relative import in `code` resolves against it by
+ * basename (directories, a JS/TS extension and case ignored), and `dependencies` must cover the
+ * npm imports of every file. Without `files`, a relative import is rejected. Errors are posted
+ * back as `{ type: 'react-sandbox-error', message }`.
  *
  * NOTE: this route still relies on in-browser eval (Babel + new Function). Milestone 3
  * moves transpilation to an on-demand server endpoint and drops `'unsafe-eval'`
@@ -171,11 +174,17 @@ const SANDBOX_HTML = `<!DOCTYPE html>
 
     // Statement boundaries come from the shared scanner; this callback is sandbox-local and differs
     // from the publish transpiler's (every react import is dropped here, React being a global).
-    function rewriteImportsForSandbox(code) {
-      return importScanner.replaceImportStatements(code, {}, function (statement) {
+    // asModule (multi-file renders): sibling imports are left for Babel's CommonJS transform, which
+    // gives them ESM interop, and react imports become real requires so any named export resolves.
+    function rewriteImportsForSandbox(code, asModule) {
+      return importScanner.replaceImportStatements(code, {}, function (statement, text) {
         var imports = statement.clause;
         var module = statement.specifier;
-        if (module === 'react') return '// React is global';
+        if (asModule) {
+          if (/^\\.\\.?\\//.test(module)) return text;
+        } else {
+          if (module === 'react') return '// React is global';
+        }
         if (imports.trim().match(/^\\w+$/)) return 'const ' + imports.trim() + " = require('" + module + "');";
         // Namespace import (import * as d3 from 'd3') -> const d3 = require('d3'). Without this it
         // would emit an invalid \`const * as d3 = require(...)\` (matches the publish transpiler).
@@ -189,7 +198,145 @@ const SANDBOX_HTML = `<!DOCTYPE html>
       });
     }
 
-    function renderArtifact(code, dependencies, mode) {
+    // The single-file program: npm imports rewritten to require(), JSX + TS compiled, and the default
+    // export unwrapped into the __DEFAULT_EXPORT__ local the render reads.
+    function transpileSingleFile(withoutTypeImports) {
+      var transformedCode = rewriteImportsForSandbox(withoutTypeImports);
+      var processedCode;
+      try {
+        // Pin the CLASSIC JSX runtime (React.createElement). @babel/standalone 8.x
+        // defaults preset-react to the AUTOMATIC runtime, which INJECTS
+        // \`import { jsx as _jsx } from "react/jsx-runtime"\` at the top of the output -
+        // fatal here: the sandbox runs the transformed code as a classic <script> /
+        // new Function with React as a GLOBAL (no module loader), so a top-level import
+        // throws "Cannot use import statement outside a module" and nothing renders. The
+        // classic runtime emits React.createElement, which resolves against the in-scope
+        // React global.
+        // The \`typescript\` preset strips TS syntax (types/generics/interfaces the assistant
+        // emits by default) before the JSX transform (presets run last-to-first). TSX is detected
+        // via the \`.tsx\` filename, NOT preset-typescript allExtensions/isTSX (those conflict with
+        // preset-react JSX detection and break plain JS). Keep in sync with
+        // transpileReactArtifact.ts so the published bundle matches this preview.
+        processedCode = Babel.transform(transformedCode, {
+          presets: [['react', { runtime: 'classic' }], 'typescript'],
+          filename: 'component.tsx',
+        }).code;
+      } catch (e) {
+        processedCode = transformedCode;
+        if (processedCode.indexOf('<') !== -1 && processedCode.indexOf('>') !== -1) {
+          throw new Error('JSX transformation failed. Use React.createElement() syntax.');
+        }
+      }
+
+      // Unwrap the default export into the local the render reads. Handle BOTH forms that
+      // checkHasDefaultExport accepts - \`export default X\` and \`export { X as default }\` - so the
+      // preview stays in parity with publish (transpileReactArtifact.ts does the same); otherwise
+      // the \`export { ... }\` survives into this classic script as a parse error and blanks #root.
+      return processedCode
+        .replace(/export\\s+default\\s+/g, 'const __DEFAULT_EXPORT__ = ')
+        .replace(/export\\s*\\{\\s*([A-Za-z_$][\\w$]*)\\s+as\\s+default\\s*\\}/g, 'const __DEFAULT_EXPORT__ = $1');
+    }
+
+    // The render message's files map with non-string entries dropped, or null when none remain.
+    function siblingFiles(files) {
+      if (!files || typeof files !== 'object' || Array.isArray(files)) return null;
+      var out = Object.create(null);
+      var count = 0;
+      Object.keys(files).forEach(function (key) {
+        if (typeof files[key] === 'string') { out[key] = files[key]; count++; }
+      });
+      return count ? out : null;
+    }
+
+    // Links a multi-file artifact at run time. The program from buildModuleProgram calls it by this
+    // global name, so it is reached the same way from the eval-mode Function and the inert script.
+    // files is [name, factory] pairs; each factory is a CommonJS (module, exports, require) wrapper.
+    function runArtifactModules(requireExternal, files, entryFactory) {
+      function moduleName(path) {
+        return String(path).split('/').pop().replace(/\\.[cm]?[jt]sx?$/i, '').toLowerCase();
+      }
+      var factories = Object.create(null);
+      var keysByName = Object.create(null);
+      var keys = [];
+      files.forEach(function (file) {
+        var name = moduleName(file[0]);
+        factories[file[0]] = file[1];
+        keys.push(file[0]);
+        (keysByName[name] = keysByName[name] || []).push(file[0]);
+      });
+
+      var cache = Object.create(null);
+      var annotated = null;
+      function load(key) {
+        // A module required again while still loading (a cycle) gets its partial exports, as in Node.
+        if (cache[key]) return cache[key].exports;
+        var module = cache[key] = { exports: {} };
+        try {
+          factories[key].call(module.exports, module, module.exports, require);
+        } catch (e) {
+          // Name the innermost failing file once; the loads above it rethrow the error untouched.
+          if (e && typeof e === 'object' && typeof e.message === 'string' && e !== annotated) {
+            e.message = key + ': ' + e.message;
+            annotated = e;
+          }
+          throw e;
+        }
+        return module.exports;
+      }
+      function require(specifier) {
+        if (!/^\\.\\.?\\//.test(specifier)) return requireExternal(specifier);
+        var name = moduleName(specifier);
+        var matches = keysByName[name];
+        if (!matches) {
+          throw new Error('Cannot resolve "' + specifier + '": no artifact file is named "' + name +
+            '". Available files: ' + keys.join(', ') + '.');
+        }
+        if (matches.length > 1) {
+          throw new Error('Cannot resolve "' + specifier + '": files ' + matches.join(', ') + ' all match "' + name +
+            '". Give each file a unique name (case and extension are ignored).');
+        }
+        return load(matches[0]);
+      }
+
+      var entry = { exports: {} };
+      entryFactory.call(entry.exports, entry, entry.exports, require);
+      return entry.exports.default;
+    }
+
+    // Same presets as the single-file path plus real ESM-to-CommonJS module semantics.
+    function transpileModule(code, filename) {
+      return Babel.transform(rewriteImportsForSandbox(code, true), {
+        presets: [['react', { runtime: 'classic' }], 'typescript'],
+        plugins: ['transform-modules-commonjs'],
+        filename: filename,
+      }).code;
+    }
+
+    function moduleFactory(body) {
+      return 'function (module, exports, require) {\\n' + body + '\\n}';
+    }
+
+    // Every file, the entry included, becomes a factory inside ONE program, so eval mode still runs a
+    // single new Function and inert mode a single inline script. It assigns __DEFAULT_EXPORT__ like
+    // the single-file program, so both modes finish the render unchanged.
+    function buildModuleProgram(entryCode, files) {
+      var siblings = Object.keys(files).map(function (key) {
+        var body;
+        try {
+          // Always .tsx so every file gets TS + JSX like the entry; Babel prefixes errors with it.
+          var filename = key.split('/').pop().replace(/\\.[cm]?[jt]sx?$/i, '') + '.tsx';
+          body = transpileModule(importScanner.stripTypeOnlyImports(files[key]), filename);
+        } catch (e) {
+          // Deferred: a file that fails to transpile only breaks the render if something imports it.
+          body = 'throw new Error(' + JSON.stringify(String((e && e.message) || e)) + ');';
+        }
+        return '[' + JSON.stringify(key) + ', ' + moduleFactory(body) + ']';
+      });
+      return 'var __DEFAULT_EXPORT__ = runArtifactModules(require, [\\n' + siblings.join(',\\n') + '\\n], ' +
+        moduleFactory(transpileModule(entryCode, 'component.tsx')) + ');';
+    }
+
+    function renderArtifact(code, dependencies, mode, files) {
       var scannerFault = importScannerFault();
       if (scannerFault) {
         showError(scannerFault);
@@ -203,15 +350,14 @@ const SANDBOX_HTML = `<!DOCTYPE html>
       // the publish transpiler, which runs this same stripTypeOnlyImports before findRelativeImport.
       var withoutTypeImports = importScanner.stripTypeOnlyImports(code);
 
-      // Multi-file artifacts aren't supported yet (#9403 follow-up): the require() shim below
-      // resolves only npm packages, not sibling artifact files. Detect a relative import up
-      // front and show a clear message instead of a cryptic "Cannot use import statement" /
-      // "Module not available" further down.
-      // Catch every relative-reference form: import-from, export-from, side-effect import,
-      // and require() of a "./" or "../" path — all unresolvable by the npm-only shim below.
-      // Run on the type-stripped view so a type-only relative import is already gone.
+      // Any relative reference (import-from, export-from, side-effect import, require() of a "./"
+      // or "../" path) needs sibling files to resolve against. With none supplied, say so up front
+      // instead of a cryptic "Cannot use import statement" / "Module not available" further down.
+      // Run on the type-stripped view so a type-only relative import is already gone. An entry with
+      // no relative import stays on the single-file path even when files are supplied.
       var relImport = importScanner.findRelativeImport(withoutTypeImports);
-      if (relImport !== null) {
+      var moduleFiles = relImport !== null ? siblingFiles(files) : null;
+      if (relImport !== null && !moduleFiles) {
         var msg = 'Multi-file artifacts are not supported yet \u2014 this one references "' + relImport +
           '" from a separate file. Ask for a single, self-contained component (one file, one default export).';
         showError(msg);
@@ -234,45 +380,11 @@ const SANDBOX_HTML = `<!DOCTYPE html>
           throw new Error('Module "' + module + '" is not available');
         };
 
-        var transformedCode = rewriteImportsForSandbox(withoutTypeImports);
-
         var R = React;
         var useState = R.useState, useEffect = R.useEffect, useRef = R.useRef, useMemo = R.useMemo,
             useCallback = R.useCallback, useReducer = R.useReducer, useContext = R.useContext, createContext = R.createContext;
 
-        var processedCode;
-        try {
-          // Pin the CLASSIC JSX runtime (React.createElement). @babel/standalone 8.x
-          // defaults preset-react to the AUTOMATIC runtime, which INJECTS
-          // \`import { jsx as _jsx } from "react/jsx-runtime"\` at the top of the output —
-          // fatal here: the sandbox runs the transformed code as a classic <script> /
-          // new Function with React as a GLOBAL (no module loader), so a top-level import
-          // throws "Cannot use import statement outside a module" and nothing renders. The
-          // classic runtime emits React.createElement, which resolves against the in-scope
-          // React global. (#9506 follow-up — surfaced once #9539 fixed the script truncation.)
-          // The \`typescript\` preset strips TS syntax (types/generics/interfaces the assistant
-          // emits by default) before the JSX transform (presets run last-to-first). TSX is detected
-          // via the \`.tsx\` filename, NOT preset-typescript allExtensions/isTSX (those conflict with
-          // preset-react JSX detection and break plain JS). Keep in sync with
-          // transpileReactArtifact.ts so the published bundle matches this preview.
-          processedCode = Babel.transform(transformedCode, {
-            presets: [['react', { runtime: 'classic' }], 'typescript'],
-            filename: 'component.tsx',
-          }).code;
-        } catch (e) {
-          processedCode = transformedCode;
-          if (processedCode.indexOf('<') !== -1 && processedCode.indexOf('>') !== -1) {
-            throw new Error('JSX transformation failed. Use React.createElement() syntax.');
-          }
-        }
-
-        // Unwrap the default export into the local the render reads. Handle BOTH forms that
-        // checkHasDefaultExport accepts - \`export default X\` and \`export { X as default }\` - so the
-        // preview stays in parity with publish (transpileReactArtifact.ts does the same); otherwise
-        // the \`export { ... }\` survives into this classic script as a parse error and blanks #root.
-        var codeWithoutExports = processedCode
-          .replace(/export\\s+default\\s+/g, 'const __DEFAULT_EXPORT__ = ')
-          .replace(/export\\s*\\{\\s*([A-Za-z_$][\\w$]*)\\s+as\\s+default\\s*\\}/g, 'const __DEFAULT_EXPORT__ = $1');
+        var program = moduleFiles ? buildModuleProgram(withoutTypeImports, moduleFiles) : transpileSingleFile(withoutTypeImports);
 
         if (mode === 'inert') {
           // Eval-free execution (#9403 M3): Babel.transform above only PARSES + GENERATES code
@@ -285,14 +397,14 @@ const SANDBOX_HTML = `<!DOCTYPE html>
           window.__artifactRequire = require;
           window.__artifactRoot = rootEl;
           var hooks = 'var useState=React.useState,useEffect=React.useEffect,useRef=React.useRef,useMemo=React.useMemo,useCallback=React.useCallback,useReducer=React.useReducer,useContext=React.useContext,createContext=React.createContext;';
-          var inertSource = '(function(){var React=window.React;' + hooks + 'var require=window.__artifactRequire;var root=window.__artifactRoot;delete window.__artifactRequire;delete window.__artifactRoot;' + codeWithoutExports + ';var __c=(typeof __DEFAULT_EXPORT__!=="undefined")?__DEFAULT_EXPORT__:null;if(!__c){throw new Error("No component found");}ReactDOM.createRoot(root).render(React.createElement(__c));})();';
+          var inertSource = '(function(){var React=window.React;' + hooks + 'var require=window.__artifactRequire;var root=window.__artifactRoot;delete window.__artifactRequire;delete window.__artifactRoot;' + program + ';var __c=(typeof __DEFAULT_EXPORT__!=="undefined")?__DEFAULT_EXPORT__:null;if(!__c){throw new Error("No component found");}ReactDOM.createRoot(root).render(React.createElement(__c));})();';
           var inertScript = document.createElement('script');
           inertScript.textContent = inertSource;
           document.body.appendChild(inertScript);
           return;
         }
 
-        var functionBody = codeWithoutExports + "; if (typeof __DEFAULT_EXPORT__ !== 'undefined') return __DEFAULT_EXPORT__; throw new Error('No component found');";
+        var functionBody = program + "; if (typeof __DEFAULT_EXPORT__ !== 'undefined') return __DEFAULT_EXPORT__; throw new Error('No component found');";
         var ComponentFactory = new Function('React', 'useState', 'useEffect', 'useRef', 'useMemo', 'useCallback', 'useReducer', 'useContext', 'createContext', 'require', functionBody);
         var Component = ComponentFactory.call({}, R, useState, useEffect, useRef, useMemo, useCallback, useReducer, useContext, createContext, require);
         ReactDOM.createRoot(rootEl).render(React.createElement(Component));
@@ -312,7 +424,7 @@ const SANDBOX_HTML = `<!DOCTYPE html>
       if (rendered) return;
       rendered = true;
       try {
-        renderArtifact(event.data.code, event.data.dependencies || [], event.data.mode);
+        renderArtifact(event.data.code, event.data.dependencies || [], event.data.mode, event.data.files);
         // Report straight after rendering. The ResizeObserver below catches later changes,
         // but the first paint is the one the parent needs and React may commit without the
         // observed box ever changing size again.
