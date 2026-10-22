@@ -6,6 +6,7 @@ import {
   API_SERVICE_GROUPS,
   Category,
   CATEGORY_ICONS,
+  type SettingKey,
 } from '@bike4mind/common';
 import { EmbeddingProviderLimits } from './EmbeddingProviderLimits';
 import { useAdminSettingsSearchParams, type SettingSectionKey } from './useAdminSettingsSearchParams';
@@ -148,7 +149,7 @@ const settingConfigs = Object.values(settingsMap);
 // Edited only on the Growth and Pricing tab (GROWTH_PRICING_SECTIONS in AdminGrowthPricingTab); the
 // Credits System group links there instead. ReferralCreditsAmount is on that tab too but keeps its
 // Referrals editor here, so it is not listed.
-export const GROWTH_PRICING_ONLY_KEYS: ReadonlySet<string> = new Set([
+export const GROWTH_PRICING_ONLY_KEYS: ReadonlySet<SettingKey> = new Set<SettingKey>([
   'allowOpenRegistration',
   'defaultFreeCredits',
   'enforceCredits',
@@ -212,6 +213,12 @@ const AdminSettingsTab: React.FC = () => {
   // Computed once so the category injection and the render gate can't drift apart.
   const logoMatchesSearch = useMemo(
     () => !!searchTerm && matchesSearch(settingsMap.logoSettings, searchTerm),
+    [searchTerm, matchesSearch]
+  );
+
+  // The Growth and Pricing keys have no editor here, so a search for one points to the tab instead.
+  const growthPricingMatchesSearch = useMemo(
+    () => !!searchTerm && [...GROWTH_PRICING_ONLY_KEYS].some(key => matchesSearch(settingsMap[key], searchTerm)),
     [searchTerm, matchesSearch]
   );
 
@@ -586,6 +593,24 @@ const AdminSettingsTab: React.FC = () => {
               </Tooltip>
             </FormControl>
           </Stack>
+
+          {growthPricingMatchesSearch && (
+            <Typography
+              level="body-sm"
+              sx={{ px: '1rem', pt: 1 }}
+              data-testid="admin-settings-search-growth-pricing-hint"
+            >
+              Signup, starter credits, credit pricing and team-plan limits are edited on{' '}
+              <Link
+                component="button"
+                onClick={() => setAdminTab(AdminTab.GrowthPricing)}
+                data-testid="admin-settings-search-growth-pricing-link"
+              >
+                Growth and Pricing
+              </Link>
+              .
+            </Typography>
+          )}
 
           {allTabs ? (
             <Stack

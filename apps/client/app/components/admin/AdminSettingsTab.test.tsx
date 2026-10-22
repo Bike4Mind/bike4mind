@@ -304,4 +304,21 @@ describe('AdminSettingsTab Credits System group', () => {
     fireEvent.click(screen.getByTestId('admin-settings-credits-growth-pricing-link'));
     expect(useAdminModal.getState().activeTab).toBe(AdminTab.GrowthPricing);
   });
+
+  it('points a search for a Growth and Pricing key to that tab', () => {
+    useAdminModal.getState().setActiveTab(AdminTab.AdminSettings);
+    router.search = { tab: 'admin-settings', q: 'price per credit' };
+    renderSettings();
+
+    expect(screen.queryByTestId('generic-setting-pricePerCredit')).toBeNull();
+    fireEvent.click(screen.getByTestId('admin-settings-search-growth-pricing-link'));
+    expect(useAdminModal.getState().activeTab).toBe(AdminTab.GrowthPricing);
+  });
+
+  it('shows no Growth and Pricing pointer for an unrelated search', () => {
+    router.search = { tab: 'admin-settings', q: 'slack' };
+    renderSettings();
+
+    expect(screen.queryByTestId('admin-settings-search-growth-pricing-hint')).toBeNull();
+  });
 });
