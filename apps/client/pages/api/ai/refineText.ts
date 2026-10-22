@@ -3,7 +3,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { refineTextLLMSchema } from '@bike4mind/services/llm/refineText';
 import { ApiKeyScope } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
-import { RefineFailedError, refineTextRequest } from '@server/ai/refineTextRequest';
+import { RefineFailedError, RefineProviderUnavailableError, refineTextRequest } from '@server/ai/refineTextRequest';
 import { z } from 'zod';
 
 // POST (not GET): this triggers an LLM completion, so it isn't a safe/idempotent
@@ -29,7 +29,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_GENERATE] }).post(
       // existed, where the provider's own error reached errorHandler and its numeric `status`
       // set the response (429/401/400, logged at warn). An empty refinement has no cause, so it
       // stays a RefineFailedError and errorHandler's default 500.
+      // The unavailable case also rethrows the service's own error, so its reason stays in the log.
       if (error instanceof RefineFailedError) throw error.cause ?? error;
+      if (error instanceof RefineProviderUnavailableError) throw error.cause ?? error;
       throw error;
     }
 

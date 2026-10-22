@@ -14,8 +14,8 @@ const REFINE_TEXT_MAX_TOKENS = 800;
 
 /** Thrown when no operations LLM can be initialised, so callers can map it to their own status. */
 export class RefineProviderUnavailableError extends Error {
-  constructor() {
-    super('Failed to initialize LLM');
+  constructor(cause?: unknown) {
+    super('Failed to initialize LLM', { cause });
     this.name = 'RefineProviderUnavailableError';
   }
 }
@@ -52,7 +52,7 @@ export const refineTextRequest = async (
         // getOperationsModel never returns a null llm - it throws when it cannot resolve
         // one, which is the same deployment state the public route calls provider_not_configured.
         if (error instanceof OperationsModelUnavailableError) {
-          throw new RefineProviderUnavailableError();
+          throw new RefineProviderUnavailableError(error);
         }
         throw error;
       }

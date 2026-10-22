@@ -101,10 +101,13 @@ describe('POST /api/ai/refineText', () => {
     );
 
     const { req, res } = createMocks({ method: 'POST', body: { text: 'hello' } });
-    // The helper's translation, not the typed service error: a plain Error with no statusCode,
-    // so errorHandler's default 500. The v1 route is the one that maps it to 503.
+    // The route unwraps the helper's error back to the service's own, which has no statusCode,
+    // so errorHandler's default 500 carries the real reason. The v1 route is the one that maps it to 503.
     const error = await handler(req as any, res as any).catch((e: unknown) => e);
-    expect(error).toMatchObject({ name: 'RefineProviderUnavailableError' });
+    expect(error).toMatchObject({
+      name: 'OperationsModelUnavailableError',
+      message: 'No text models available for operations',
+    });
     expect((error as { statusCode?: number }).statusCode).toBeUndefined();
     expect(mockRefineText).not.toHaveBeenCalled();
   });

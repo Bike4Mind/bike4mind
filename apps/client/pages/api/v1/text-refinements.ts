@@ -18,6 +18,7 @@ const handler = nextRouteForContract(createTextRefinementContract).post(async (r
     refined = await refineTextRequest({ text, context }, { logger: req.logger });
   } catch (error) {
     if (error instanceof RefineProviderUnavailableError) {
+      req.logger.warn('Text refinement provider not configured', error.cause ?? error);
       return res.status(503).json({
         error: 'No operations model is configured on this deployment.',
         errorCode: 'provider_not_configured',
