@@ -184,14 +184,19 @@ describe('Hearth presence projection', () => {
     const channelId = channel._id.toString();
 
     const actors = await Promise.all(
-      ['idle-old', 'working-one', 'blocked-old', 'blocked-new'].map(name =>
+      ['idle-old', 'working-old', 'working-one', 'blocked-old', 'blocked-new'].map(name =>
         hearthRepository.ensureActor(USER, 'agent', name)
       )
     );
-    const [idleOld, workingOne, blockedOld, blockedNew] = actors.map(a => a._id.toString());
+    const [idleOld, workingOld, workingOne, blockedOld, blockedNew] = actors.map(a => a._id.toString());
 
     await hearthRepository.upsertPresence(
       presence(channelId, idleOld, new Date('2026-07-27T10:00:30Z'), 'turn_finished')
+    );
+    // Inserted oldest-first so that dropping the recency key leaves the older
+    // running row ahead, which the assertion below catches.
+    await hearthRepository.upsertPresence(
+      presence(channelId, workingOld, new Date('2026-07-27T10:00:15Z'), 'tool_use')
     );
     await hearthRepository.upsertPresence(
       presence(channelId, workingOne, new Date('2026-07-27T10:00:20Z'), 'tool_use')
@@ -211,9 +216,9 @@ describe('Hearth presence projection', () => {
     // Both blocked actors outrank the more recently seen running and idle rows,
     // AND the permission block outranks the question despite being seen EARLIER -
     // state ranking dominates recency, because a halted session is the thing
-    // most in need of the human.
-    expect(roster.map(r => r.actorId.toString())).toEqual([blockedOld, blockedNew, workingOne, idleOld]);
-    expect(roster.map(r => r.state)).toEqual(['awaiting_permission', 'awaiting_input', 'running', 'idle']);
+    // most in need of the human. Within the running pair, recency decides.
+    expect(roster.map(r => r.actorId.toString())).toEqual([blockedOld, blockedNew, workingOne, workingOld, idleOld]);
+    expect(roster.map(r => r.state)).toEqual(['awaiting_permission', 'awaiting_input', 'running', 'running', 'idle']);
   });
 
   it('ranks a stale awaiting_permission row below fresh rows', async () => {

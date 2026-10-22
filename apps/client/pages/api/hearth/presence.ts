@@ -47,9 +47,10 @@ const handler = baseApi({
       presence: rows.map(row => toWireHearthPresence(row, actors.get(row.actorId.toString()))),
       staleAfterMs: PRESENCE_STALE_AFTER_MS,
       // Published so a full page reads as "capped" rather than "that is everyone".
-      // Rows are ranked before the cap applies, so a truncated roster keeps the
-      // fresh rows - and within them whoever is most blocked on the human. Stale
-      // rows are the first to be dropped.
+      // Rows are ranked before the cap applies, so a truncated roster drops stale
+      // rows first and keeps fresh rows ahead of them. Freshness orders rows, it
+      // does not exempt them: see presenceForChannel for what the cap sheds once
+      // fresh rows alone fill it.
       maxRows: MAX_ROSTER_ROWS,
     });
   });
