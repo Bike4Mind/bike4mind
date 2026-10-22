@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
@@ -33,7 +34,10 @@ vi.mock('@bike4mind/database', () => ({
   },
   generateModelPriceSeed: (...a: unknown[]) => mockGenerateSeed(...a),
   SEED_NOTE: 'adapter-seed',
+  withTransaction: (fn: () => Promise<unknown>) => fn(),
 }));
+const mockAudit = vi.hoisted(() => vi.fn(async () => null));
+vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: mockAudit }));
 
 import handler, {
   MANUAL_REPRICE_BAND_ERROR_CODE,
@@ -551,5 +555,62 @@ describe('POST /api/admin/model-prices', () => {
     });
     await expect(run()).rejects.toThrow(/not seed-managed/);
     expect(mockAppend).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/admin/model-prices admin audit', () => {
+  const REPRICE_BODY = { modelId: 'gpt-x', unit: 'per_token', pricing: { '0': TIER }, note: 'invoice A' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAudit.mockResolvedValue(null);
+    mockAppend.mockResolvedValue({ id: 'row1' });
+    mockGenerateSeed.mockResolvedValue([{ modelId: 'gpt-x', unit: 'per_token', pricing: { '0': TIER } }]);
+    mockRowsInForce.mockResolvedValue([]);
+  });
+
+  it('records a strict reprice with before/after pricing after the append', async () => {
+    const newPricing = { '0': { input: 5e-6, output: 20e-6 } };
+    mockRowsInForce.mockResolvedValue([inForceRow]);
+    const { req, run } = call({ method: 'POST', body: { ...REPRICE_BODY, pricing: newPricing } });
+    await run();
+
+    expect(mockAudit).toHaveBeenCalledTimes(1);
+    expect(mockAudit.mock.calls[0][0]).toBe(req);
+    expect(mockAudit.mock.calls[0][1]).toMatchObject({
+      action: 'settings.model_price.repriced',
+      target: { kind: 'settings', id: 'gpt-x:per_token' },
+      changes: [{ field: 'gpt-x.per_token.pricing', before: inForceRow.pricing, after: newPricing }],
+    });
+    expect(mockAppend.mock.invocationCallOrder[0]).toBeLessThan(mockAudit.mock.invocationCallOrder[0]);
+  });
+
+  it('records a revert-to-seed as a reprice', async () => {
+    mockRowsInForce.mockResolvedValue([inForceRow]);
+    await call({ method: 'POST', body: { modelId: 'gpt-x', unit: 'per_token', action: 'revert-to-seed' } }).run();
+
+    expect(mockAudit).toHaveBeenCalledTimes(1);
+    expect(mockAudit.mock.calls[0][1]).toMatchObject({
+      action: 'settings.model_price.repriced',
+      target: { kind: 'settings', id: 'gpt-x:per_token' },
+      changes: [{ before: inForceRow.pricing, after: { '0': TIER } }],
+      details: { revertToSeed: true },
+    });
+  });
+
+  it('does not audit an idempotent resubmit that appended nothing', async () => {
+    mockRowsInForce.mockResolvedValue([inForceRow]);
+    await call({ method: 'POST', body: { ...REPRICE_BODY, note: 'invoice A' } }).run();
+
+    expect(mockAppend).not.toHaveBeenCalled();
+    expect(mockAudit).not.toHaveBeenCalled();
+  });
+
+  it('does not report success when the audit write rejects', async () => {
+    mockAudit.mockRejectedValue(new Error('audit down'));
+    const { res, run } = call({ method: 'POST', body: REPRICE_BODY });
+
+    await expect(run()).rejects.toThrow('audit down');
+    expect(res._isEndCalled()).toBe(false);
   });
 });

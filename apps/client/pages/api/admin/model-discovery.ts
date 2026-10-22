@@ -1,5 +1,6 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { adminSettingsRepository, modelDiscoveryRunRepository } from '@bike4mind/database';
 import type { IModelDiscoveryRun } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
@@ -172,6 +173,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       // No debounce: the service's lease turns a concurrent trigger into a
       // 'skipped' run, so the only cost of a double-click is a second log line.
       const { dispatched } = await dispatchDiscoveryRunNow(logger);
+      await recordAdminActionFromRequest(req, {
+        action: 'settings.model_discovery.triggered',
+        target: { kind: 'system', id: 'model-discovery', displayName: 'Model discovery run' },
+        summary: 'triggered a model discovery run',
+        details: { dispatched },
+      });
       return res.status(202).json({ dispatched });
     } catch (error) {
       if (error instanceof DiscoveryDispatchUnavailableError) {

@@ -148,6 +148,15 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.api_key.rate_limit_reset': { category: 'access', severity: 'info', write: 'bestEffort' },
   'org.data_lake.embedding_spend_reset': { category: 'credits', severity: 'notice', write: 'strict' },
   'user.storage.recalculated': { category: 'support', severity: 'info', write: 'bestEffort' },
+  // Handler coverage: billing and model config
+  'settings.model_price.repriced': { category: 'settings', severity: 'notice', write: 'strict' },
+  'settings.provider_invoice.recorded': { category: 'settings', severity: 'info', write: 'bestEffort' },
+  'settings.model_lifecycle.suggestion_resolved': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.model_discovery.triggered': { category: 'settings', severity: 'info', write: 'bestEffort' },
+  'settings.gear_override.updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.gear_override.deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.tool_definition.override_updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.tool_definition.override_deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
 
   'audit.exported': { category: 'support', severity: 'info', write: 'bestEffort' },
 } as const satisfies Record<string, AdminAuditCatalogueEntry>;
