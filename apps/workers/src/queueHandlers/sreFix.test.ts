@@ -75,7 +75,7 @@ vi.mock('@server/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...args: unknown[]) => unknown) => fn,
 }));
 
-vi.mock('@server/integrations/slack/sreSlackApproval', () => ({
+vi.mock('@bike4mind/server-utils/integrations/slack/sreSlackApproval', () => ({
   postSreFixFailureMessage: vi.fn().mockResolvedValue(undefined),
 }));
 

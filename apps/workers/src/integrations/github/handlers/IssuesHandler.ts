@@ -28,7 +28,10 @@ import {
   buildIssueAssignedBlocks,
 } from '@bike4mind/slack';
 import { webhookSubscriptionRepository } from '@bike4mind/database';
-import { dispatchIssueToSre, syncSreIssueStateFromWebhook } from '@server/integrations/github/sreWebhookDispatch';
+import {
+  dispatchIssueToSre,
+  syncSreIssueStateFromWebhook,
+} from '@bike4mind/server-utils/integrations/github/sreWebhookDispatch';
 import { emptyNotifyResult, mergeNotifyResults, toHandlerResult } from './notifyResultUtils';
 
 export class IssuesHandler implements GitHubEventHandler {

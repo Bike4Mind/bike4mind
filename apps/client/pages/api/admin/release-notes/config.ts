@@ -3,7 +3,7 @@ import { AdminSettings } from '@bike4mind/database/infra';
 import { invalidateSettingsCache } from '@bike4mind/utils';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ConflictError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { loadReleaseNotesConfig, RELEASE_NOTES_SETTING } from '@server/releaseNotes/adminReleaseNotes';
+import { loadReleaseNotesConfig, RELEASE_NOTES_SETTING } from '@bike4mind/server-utils/releaseNotes/adminReleaseNotes';
 
 // Validates only the keys sent; omitted keys keep their stored value (see the merge in PUT).
 const ConfigPatchSchema = ReleaseNotesConfigSchema.partial().strict();

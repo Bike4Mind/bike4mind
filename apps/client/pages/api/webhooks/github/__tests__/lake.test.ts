@@ -41,7 +41,7 @@ vi.mock('@bike4mind/observability', () => {
   };
 });
 
-vi.mock('@server/integrations/integrationAuditLogger', () => ({
+vi.mock('@bike4mind/server-utils/integrations/integrationAuditLogger', () => ({
   IntegrationAuditLogger: {
     create: vi.fn(() => ({ failure: vi.fn(), success: vi.fn(), setUserId: vi.fn() })),
   },

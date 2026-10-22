@@ -38,7 +38,7 @@ import {
   GENERATION_CALLBACK_REDISPATCH_HORIZON_MS,
   GENERATION_CALLBACK_STALE_DISPATCH_MS,
   redispatchStaleQuestCallback,
-} from '@server/generationCallback/dispatchQuestCallback';
+} from '@bike4mind/server-utils/generationCallback/dispatchQuestCallback';
 
 const logger = new Logger({ metadata: { service: 'questTimeoutSweep' } });
 
