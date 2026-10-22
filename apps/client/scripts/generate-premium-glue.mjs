@@ -1838,7 +1838,7 @@ function readCoreResourceNames() {
     const captured = [...code.matchAll(/new sst\.[A-Za-z.]+\(\s*'([A-Za-z0-9_]+)'/g)];
     // The contributed-secret loop is the one constructor named from data; those names are not core's.
     const constructors = [...code.matchAll(/new sst\.[A-Za-z.]+\(/g)].filter(
-      m => !code.startsWith('spec.name', m.index + m[0].length)
+      m => !(file === 'secrets.ts' && /^\s*spec\.name,/.test(code.slice(m.index + m[0].length)))
     );
     if (constructors.length !== captured.length) {
       throw new Error(
@@ -1857,13 +1857,13 @@ function toEnvKey(name) {
   return name.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toUpperCase();
 }
 
-// Env var names core owns: the env form of every core resource, plus every upper-snake key in
-// infra/*.ts environment blocks and the env/compose example files. Over-capture is safe: it
-// only makes a contributed name more likely to be dropped. Null when coreNames is null.
+// Env var names core is known to own: the env form of every core resource, plus every upper-snake
+// key in infra/*.ts and the env/compose example files. This catches accidental collisions only; it
+// is not a sandbox, since a package's own code can read process.env. Null when coreNames is null.
 function readCoreEnvNames(coreNames) {
   if (coreNames === null) return null;
   const names = new Set(coreNames.map(toEnvKey));
-  const keyPattern = /^\s*(?:-\s*)?#?\s*([A-Z][A-Z0-9_]*)\s*[:=]/gm;
+  const keyPattern = /(?:^|[{,])\s*(?:-\s*)?#?\s*([A-Z][A-Z0-9_]*)\s*[:=]/gm;
   const infraDir = join(REPO_ROOT, 'infra');
   const files = readdirSync(infraDir)
     .filter(f => f.endsWith('.ts'))
