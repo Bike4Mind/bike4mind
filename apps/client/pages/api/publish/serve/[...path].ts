@@ -908,9 +908,9 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // app host, so a saved bundle that used one needs network to render fully.
   if (exportFormat) {
     const collected = await collectInlineAssets({
-      // As in the served view: pages are separate documents and streamed files are not
-      // inlinable, so neither spends the inline budget.
-      manifest: artifact.manifest.filter(f => !isBundlePagePath(f.path) && !isStreamedFile(f.path)),
+      // Pages are separate documents, never inlined. A download has no route to fetch a signed
+      // link through either, so media is inlined like any other file while it fits the budget.
+      manifest: artifact.manifest.filter(f => !isBundlePagePath(f.path)),
       load: path => storage.download(`${artifact.storageKeyPrefix}${path}`),
     });
     const skipped = [...collected.oversized, ...collected.failed];
@@ -945,24 +945,29 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   let signedAssets: Map<string, string> | undefined;
   let droppedAssets: string[] = [];
   if (isShare ? !!artifact.accessGate : !isOpenPublic) {
+    // The opaque frame's own requests carry no cookie, so media is pointed straight at
+    // signed storage URLs minted here, after the gate.
+    const signed = new Map<string, string>();
+    // Baked into the page, so these must outlive it - but never the proof behind the render.
+    const mediaTtl = mediaLinkTtlSeconds(passphraseVerified ? gateProofSecondsLeft(req, artifact.publicId) : null);
+    for (const path of artifact.manifest.map(f => f.path).filter(isStreamedFile)) {
+      const url = await signFile(path, false, mediaTtl);
+      if (url) signed.set(path, url);
+    }
     const collected = await collectInlineAssets({
-      // Pages are navigated to, never inlined, and streamed files are signed below, so
-      // neither spends the inline budget.
-      manifest: artifact.manifest.filter(f => !isBundlePagePath(f.path) && !isStreamedFile(f.path)),
+      // Pages are navigated to, never inlined, and signed media needs no bytes, so neither
+      // spends the inline budget. Media that got no link (no browser signing origin) is
+      // inlined as on the buffered path, while it fits.
+      manifest: artifact.manifest.filter(f => !isBundlePagePath(f.path) && !signed.has(f.path)),
       load: path => storage.download(`${artifact.storageKeyPrefix}${path}`),
     });
     inlineAssets = collected.assets;
-    // The opaque frame's own requests carry no cookie, so media it cannot get inlined is
-    // pointed straight at signed storage URLs minted here, after the gate.
-    signedAssets = new Map();
-    // Baked into the page, so these must outlive it - but never the proof behind the render.
-    const mediaTtl = mediaLinkTtlSeconds(passphraseVerified ? gateProofSecondsLeft(req, artifact.publicId) : null);
-    const oversizedImages = collected.oversized.filter(path => inlineTypeFor(path)?.startsWith('image/'));
-    for (const path of [...artifact.manifest.map(f => f.path).filter(isStreamedFile), ...oversizedImages]) {
+    for (const path of collected.oversized.filter(p => inlineTypeFor(p)?.startsWith('image/'))) {
       const url = await signFile(path, false, mediaTtl);
-      if (url) signedAssets.set(path, url);
+      if (url) signed.set(path, url);
     }
-    droppedAssets = [...collected.oversized.filter(path => !signedAssets?.has(path)), ...collected.failed];
+    signedAssets = signed;
+    droppedAssets = [...collected.oversized.filter(path => !signed.has(path)), ...collected.failed];
   }
 
   const { srcdoc: baseSrcdoc } = renderSandboxedBundle({

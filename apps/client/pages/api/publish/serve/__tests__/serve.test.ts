@@ -3778,7 +3778,7 @@ describe('GET /api/publish/serve - signed file delivery', () => {
     }
   });
 
-  it('exports a sub-page with its own page-relative assets, without inlining other pages or streamed files', async () => {
+  it('exports a sub-page with its own page-relative assets and media inlined, but not other pages', async () => {
     mockArtifactFindOne.mockReturnValue(gated());
     const { res, promise } = run(['u', 'scope123', 'my-slug', 'player.html'], {
       cookie: await proofCookie(),
@@ -3786,11 +3786,67 @@ describe('GET /api/publish/serve - signed file delivery', () => {
     });
     await promise;
     expect(res._getStatusCode()).toBe(200);
-    expect(res._getData().toString()).toContain(
-      `poster="data:image/jpeg;base64,${Buffer.from('JPEG').toString('base64')}"`
-    );
+    const html = res._getData().toString();
+    expect(html).toContain(`poster="data:image/jpeg;base64,${Buffer.from('JPEG').toString('base64')}"`);
+    // A download cannot follow a signed link back, so the video rides along while it fits.
+    expect(html).toContain(`src="data:video/mp4;base64,${Buffer.from('MP4').toString('base64')}"`);
+    expect(mockGetSignedUrl).not.toHaveBeenCalled();
     expect(mockDownload).not.toHaveBeenCalledWith('user/scope123/my-slug/index.html');
-    expect(mockDownload).not.toHaveBeenCalledWith('user/scope123/my-slug/media/clip.mp4');
+    expect(res.getHeader('X-Publish-Dropped-Assets')).toBeUndefined();
+  });
+
+  const oversizedClip = () => {
+    mockDownload.mockImplementation((key: string) => {
+      if (key === 'user/scope123/my-slug/media/clip.mp4') return Promise.resolve(Buffer.alloc(4 * 1024 * 1024));
+      return key in storage ? Promise.resolve(Buffer.from(storage[key])) : Promise.reject(new Error('missing'));
+    });
+  };
+
+  it('counts media an export leaves out in X-Publish-Dropped-Assets', async () => {
+    oversizedClip();
+    mockArtifactFindOne.mockReturnValue(gated());
+    const { res, promise } = run(['u', 'scope123', 'my-slug', 'player.html'], {
+      cookie: await proofCookie(),
+      exportAs: 'html',
+    });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('X-Publish-Dropped-Assets')).toBe('1');
+    expect(res.getHeader('X-Publish-Dropped-Asset-Names')).toContain('media/clip.mp4');
+  });
+
+  describe('a gated render where storage cannot sign for the browser', () => {
+    beforeEach(() => {
+      mockBrowserSigningOrigin.mockResolvedValue('');
+    });
+
+    it('inlines media that fits, as the buffered path did', async () => {
+      mockArtifactFindOne.mockReturnValue(gated());
+      const { res, promise } = run(['u', 'scope123', 'my-slug', 'player.html'], {
+        cookie: await proofCookie(),
+        fetchDest: 'document',
+      });
+      await promise;
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getData() as string).toContain(
+        `src=&quot;data:video/mp4;base64,${Buffer.from('MP4').toString('base64')}&quot;`
+      );
+      expect(mockGetSignedUrl).not.toHaveBeenCalled();
+      expect(res.getHeader('X-Publish-Dropped-Assets')).toBeUndefined();
+    });
+
+    it('counts media that does not fit in X-Publish-Dropped-Assets', async () => {
+      oversizedClip();
+      mockArtifactFindOne.mockReturnValue(gated());
+      const { res, promise } = run(['u', 'scope123', 'my-slug', 'player.html'], {
+        cookie: await proofCookie(),
+        fetchDest: 'document',
+      });
+      await promise;
+      expect(res._getStatusCode()).toBe(200);
+      expect(res.getHeader('X-Publish-Dropped-Assets')).toBe('1');
+      expect(res.getHeader('X-Publish-Dropped-Asset-Names')).toContain('media/clip.mp4');
+    });
   });
 
   it('answers the loader shell ?sign=1 request with a signed link once the gate passes', async () => {

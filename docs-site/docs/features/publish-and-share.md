@@ -115,6 +115,10 @@ display name or username does not select a publishing namespace.
   gets the file from the page's own address, so it works as long as the file is under
   about 4 MB. Larger files, and files played by a plain `<video>`/`<audio>` element, come
   from file storage.
+- An HTML export, and a protected page on a deployment without file storage links,
+  include media files directly in the page while they fit (3 MB per file, 6 MB in all).
+  Files that do not fit are left out, and the response names them in its
+  `X-Publish-Dropped-Asset-Names` header.
 - Other files (archives, SVG, data files) download when opened. Add `?download=1` to any
   file's URL, a page's included, to download it instead of viewing it.
 - WebAssembly modules are served as `application/octet-stream`, so
