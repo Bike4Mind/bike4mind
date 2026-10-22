@@ -42,6 +42,10 @@ export const createTextRefinementContract = defineEndpoint({
       example: { text: 'A golden retriever running along a sunlit beach at sunset, waves breaking behind it.' },
     },
     429: { description: 'Per-key rate limit exceeded.', schema: ApiErrorSchema },
+    500: {
+      description: 'Unexpected server error (for example the refinement cache is unavailable).',
+      schema: ApiErrorSchema,
+    },
     502: { description: 'The model returned no refined text, or the call failed.', schema: ApiErrorSchema },
     503: {
       description: 'This deployment has no operations model configured (`errorCode: "provider_not_configured"`).',

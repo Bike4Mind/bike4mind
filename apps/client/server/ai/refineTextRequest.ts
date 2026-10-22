@@ -21,9 +21,22 @@ export class RefineProviderUnavailableError extends Error {
 }
 
 /**
+ * Thrown when the model call fails or returns nothing, so callers can map it to a provider-failure
+ * status. Carries the original error as `cause` for the log. Cache/DB faults are deliberately NOT
+ * wrapped: they are an internal error, not the provider's.
+ */
+export class RefineFailedError extends Error {
+  constructor(message: string, cause?: unknown) {
+    super(message, { cause });
+    this.name = 'RefineFailedError';
+  }
+}
+
+/**
  * Cached operations-model refinement shared by POST /api/ai/refineText and POST /api/v1/text-refinements.
- * Throws RefineProviderUnavailableError when the deployment has no operations text model, and on an
- * empty model output (an empty refinement is a failure, and must not be cached).
+ * Throws RefineProviderUnavailableError when the deployment has no operations text model, and
+ * RefineFailedError when the model call fails or its output is empty (an empty refinement must not
+ * be cached). Anything else - cache/DB faults, a resolver failure - propagates as itself.
  */
 export const refineTextRequest = async (
   { text, context }: { text: string; context?: string },
@@ -45,27 +58,33 @@ export const refineTextRequest = async (
       }
       const { modelId, llm } = operationsModel;
 
-      const refined = await refineText(
-        { text, context },
-        {
-          llm: {
-            complete: async (messages, callback) => {
-              await llm.complete(
-                modelId,
-                messages as unknown as IMessage[],
-                { stream: false, maxTokens: REFINE_TEXT_MAX_TOKENS },
-                async chunks => {
-                  await callback(chunks[0]);
-                }
-              );
+      let refined: string | undefined;
+      try {
+        refined = await refineText(
+          { text, context },
+          {
+            llm: {
+              complete: async (messages, callback) => {
+                await llm.complete(
+                  modelId,
+                  messages as unknown as IMessage[],
+                  { stream: false, maxTokens: REFINE_TEXT_MAX_TOKENS },
+                  async chunks => {
+                    await callback(chunks[0]);
+                  }
+                );
+              },
             },
-          },
-        }
-      );
+          }
+        );
+      } catch (error) {
+        // The original message stays on the wrapper so the legacy route's 500 body is unchanged.
+        throw new RefineFailedError(error instanceof Error ? error.message : 'Text refinement failed', error);
+      }
       // getCachedData stores whatever the producer returns, so an empty output has to throw:
       // cached, it would answer every retry for the whole TTL without calling the model again.
       if (!refined) {
-        throw new Error('The model returned no refined text');
+        throw new RefineFailedError('The model returned no refined text');
       }
       return refined;
     },

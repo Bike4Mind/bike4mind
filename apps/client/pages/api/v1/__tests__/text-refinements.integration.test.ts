@@ -53,6 +53,7 @@ vi.mock('@server/auth/auth', async orig => (await import('@server/generations/__
 
 import handler from '../text-refinements';
 import { OperationsModelUnavailableError } from '@client/services/operationsModelService';
+import { Logger } from '@bike4mind/observability';
 
 const post = (body: Record<string, unknown>) => fire({ method: 'POST', url: '/api/v1/text-refinements', body });
 
@@ -144,23 +145,41 @@ describe('POST /api/v1/text-refinements', () => {
     });
   });
 
-  it('502s, not 503s, when the operations-model resolver fails for any other reason', async () => {
+  it('500s, not 502s or 503s, when the operations-model resolver fails for any other reason', async () => {
     validateWithScopes([ApiKeyScope.AI_GENERATE]);
-    // A call failure is not an unconfigured deployment: only the typed no-model error is a 503.
+    // Neither an unconfigured deployment (503) nor the provider's fault (502): an internal error.
     mockGetOperationsModel.mockRejectedValue(new Error('db timeout'));
+    const { req, res } = post({ text: 'hello' });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(500);
+    expect(res._getJSONData()).toMatchObject({ error: 'db timeout', request_id: expect.any(String) });
+  });
+
+  it.each([
+    ['a cache read', 'MongoNetworkError', () => mockFindByKey.mockRejectedValue(new Error('MongoNetworkError'))],
+    ['a cache write', 'MongoWriteError', () => mockCreateOrUpdate.mockRejectedValue(new Error('MongoWriteError'))],
+  ])('500s, not 502s, when %s fails', async (_label, message, arrangeFault) => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    // A Mongo fault is ours, not the model's: 502 would tell the caller to blame the provider.
+    arrangeFault();
+    const { req, res } = post({ text: 'hello' });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(500);
+    expect(res._getJSONData()).toMatchObject({ error: message, request_id: expect.any(String) });
+  });
+
+  it('502s when the model call throws, logging the Error so its stack survives', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    const providerError = new Error('boom');
+    mockRefineText.mockRejectedValue(providerError);
+    const errorLog = vi.spyOn(Logger.prototype, 'error');
     const { req, res } = post({ text: 'hello' });
     await handler(req, res);
     expect(res._getStatusCode()).toBe(502);
     expect(res._getJSONData()).toMatchObject({ error: 'Text refinement failed' });
-  });
-
-  it('502s when the model call throws', async () => {
-    validateWithScopes([ApiKeyScope.AI_GENERATE]);
-    mockRefineText.mockRejectedValue(new Error('boom'));
-    const { req, res } = post({ text: 'hello' });
-    await handler(req, res);
-    expect(res._getStatusCode()).toBe(502);
-    expect(res._getJSONData()).toMatchObject({ error: expect.any(String) });
+    // The Error object, not its message: the logger keeps `stack || message` from it.
+    expect(errorLog).toHaveBeenCalledWith('Text refinement failed', providerError);
+    errorLog.mockRestore();
   });
 
   it('502s on an empty refinement and does not cache it', async () => {

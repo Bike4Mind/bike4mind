@@ -6,7 +6,7 @@
  */
 
 import { createTextRefinementContract } from '@bike4mind/common';
-import { RefineProviderUnavailableError, refineTextRequest } from '@server/ai/refineTextRequest';
+import { RefineFailedError, RefineProviderUnavailableError, refineTextRequest } from '@server/ai/refineTextRequest';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 
 const handler = nextRouteForContract(createTextRefinementContract).post(async (req, res) => {
@@ -22,10 +22,13 @@ const handler = nextRouteForContract(createTextRefinementContract).post(async (r
         errorCode: 'provider_not_configured',
       });
     }
-    req.logger.error('Text refinement failed', {
-      error: error instanceof Error ? error.message : 'Unknown error',
-    });
-    return res.status(502).json({ error: 'Text refinement failed' });
+    if (error instanceof RefineFailedError) {
+      req.logger.error('Text refinement failed', error.cause ?? error);
+      return res.status(502).json({ error: 'Text refinement failed' });
+    }
+    // Anything unclassified - a cache/DB fault, a resolver failure - is an internal error, not a
+    // provider one. Rethrow so errorHandler answers the same 500 the legacy route gets.
+    throw error;
   }
 
   // The helper throws on an empty refinement, so this only catches one cached before that
