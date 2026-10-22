@@ -108,7 +108,12 @@ const namesSecret = (path: string): boolean => path.split('/').some(part => SECR
 export async function isToolchainPath(path: string, cwd: string): Promise<boolean> {
   if (namesSecret(resolve(cwd, path))) return false;
   try {
-    return !namesSecret(await resolveWithinRootsPhysically(path, toolchainLocations(), cwd));
+    // Each root is resolved the way the path is: a root that does not exist under a linked
+    // parent (macOS `/etc` -> `/private/etc`) must still match the path's physical form.
+    const roots = await Promise.all(
+      toolchainLocations().map(root => resolveWithinRootsPhysically(root, [parse(root).root], root))
+    );
+    return !namesSecret(await resolveWithinRootsPhysically(path, roots, cwd));
   } catch {
     return false;
   }
