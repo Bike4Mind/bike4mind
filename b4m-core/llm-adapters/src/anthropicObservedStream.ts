@@ -1,6 +1,7 @@
 import type { Anthropic } from '@anthropic-ai/sdk';
 import type { MessageCreateParamsStreaming, RawMessageStreamEvent } from '@anthropic-ai/sdk/resources/messages';
-import { Stream } from '@anthropic-ai/sdk/streaming';
+// Mirrors the SDK's internal stream construction; re-verify on SDK upgrades.
+import { Stream } from '@anthropic-ai/sdk/core/streaming';
 
 export type ObservedMessageStream = AsyncIterable<RawMessageStreamEvent> & { controller?: AbortController };
 
