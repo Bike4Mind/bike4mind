@@ -181,7 +181,7 @@ ArtifactSchema.index({ organizationId: 1, visibility: 1 }); // Org artifacts by 
 ArtifactSchema.index({ type: 1, status: 1, visibility: 1 }); // Public artifacts by type
 ArtifactSchema.index({ sessionId: 1, createdAt: -1 }); // Session artifacts chronologically
 // The row a re-emitted `<artifact identifier=...>` versions. Pre-built by
-// 20260921235987_ensure-artifact-session-identifier-index, same reason as the keyset index below.
+// 20260921235984_ensure-artifact-session-identifier-index, same reason as the keyset index below.
 ArtifactSchema.index({ sessionId: 1, identifier: 1 });
 ArtifactSchema.index({ tags: 1, status: 1 }); // Tag-based discovery
 ArtifactSchema.index({ createdAt: -1, status: 1 }); // Recent artifacts
