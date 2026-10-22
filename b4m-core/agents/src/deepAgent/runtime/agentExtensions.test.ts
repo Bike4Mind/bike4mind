@@ -169,6 +169,34 @@ describe('createAgentExtensionRegistry', () => {
     expect(runLogger.warn).toHaveBeenCalledTimes(1);
   });
 
+  it('resolves no profile when a contributed build returns something that is not a profile', () => {
+    const { registry } = newRegistry();
+    const runLogger = { info: vi.fn(), warn: vi.fn() };
+    registry.registerContribution({
+      surfaceProfiles: [
+        { id: 'p1', surface: 's1', build: () => ({}) as never },
+        { id: 'p2', surface: 's2', build: () => true as never },
+      ],
+    });
+    expect(registry.resolveSurfaceProfile('s1', { ...profileCtx, logger: runLogger })).toBeUndefined();
+    expect(registry.resolveSurfaceProfile('s2', { ...profileCtx, logger: runLogger })).toBeUndefined();
+    expect(runLogger.warn).toHaveBeenCalledTimes(2);
+  });
+
+  it('skips a contributed guard that returns a promise instead of a map', () => {
+    const { registry } = newRegistry();
+    const runLogger = { info: vi.fn(), warn: vi.fn() };
+    registry.registerContribution({
+      toolMapGuards: [{ id: 'async', priority: 1, apply: (async () => ({ t: 'y' })) as never }],
+    });
+    const out = registry.applyToolMapGuards(
+      { t: 'x' },
+      { executionId: 'e', logger: runLogger, runState: { calls: [] } }
+    );
+    expect(out).toEqual({ t: 'x' });
+    expect(runLogger.warn).toHaveBeenCalledTimes(1);
+  });
+
   it('applies guards innermost-first by priority, ties broken by id, sharing one runState', () => {
     const { registry } = newRegistry();
     registry.registerToolMapGuard(tagGuard('outer', 300), 'builtin');
