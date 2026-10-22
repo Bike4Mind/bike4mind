@@ -38,7 +38,8 @@ export function resolveUserPath(): Promise<string> {
     execFile(
       process.env.SHELL || '/bin/zsh',
       ['-ilc', `printf '%s' "${PATH_MARKER}\${PATH}${PATH_MARKER}"`],
-      { timeout: SHELL_PATH_TIMEOUT_MS, env: { ...process.env, TERM: 'dumb' } },
+      // SIGKILL: an interactive (-i) zsh/bash ignores the default SIGTERM, so the timeout would not cut it short.
+      { timeout: SHELL_PATH_TIMEOUT_MS, killSignal: 'SIGKILL', env: { ...process.env, TERM: 'dumb' } },
       (error, stdout) => {
         const found = error ? undefined : new RegExp(`${PATH_MARKER}(.*)${PATH_MARKER}`).exec(stdout)?.[1];
         resolve(found ? `${found}${delimiter}${fallback}` : fallback);
