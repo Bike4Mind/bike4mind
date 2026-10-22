@@ -8,9 +8,10 @@ const invalidateQueries = vi.fn();
 const resetStreaming = vi.fn();
 const checkQuestTimeout = vi.fn();
 const updateAllQueryData = vi.fn();
+const queryClient = { invalidateQueries };
 
 vi.mock('@tanstack/react-query', () => ({
-  useQueryClient: () => ({ invalidateQueries }),
+  useQueryClient: () => queryClient,
 }));
 
 vi.mock('@client/app/hooks/useStreamingState', () => ({
@@ -382,6 +383,27 @@ describe('useStreamingMessageMerge', () => {
     expect(updateAllQueryData).toHaveBeenCalled();
     expect(setChatCompletion).toHaveBeenCalledWith({ quest: undefined, completed: true, stopped: false });
     expect(resetStreaming).toHaveBeenCalledWith(SESSION_ID);
+  });
+
+  it('keeps the 20s poll cadence when the held completion object changes', async () => {
+    vi.useFakeTimers();
+    checkQuestTimeout.mockResolvedValue({ id: 'q1', status: 'done', type: 'error' });
+
+    const running = makeQuest({ id: 'q1', status: 'running', replies: [], timestamp: Date.now() });
+    const first = makeChatCompletion({ quest: makeStreamQuest({ id: 'q1', replies: [], status: 'running' }) });
+
+    const { rerender } = renderHook(params => useStreamingMessageMerge(params), {
+      initialProps: baseParams({ flattenQuests: [running], chatCompletion: first }),
+    });
+
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    const second = makeChatCompletion({ quest: makeStreamQuest({ id: 'q1', replies: [], status: 'running' }) });
+    rerender(baseParams({ flattenQuests: [running], chatCompletion: second }));
+    expect(checkQuestTimeout).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(checkQuestTimeout).toHaveBeenCalledWith('q1');
   });
 
   it('recovers a successfully-completed quest whose terminal WebSocket frame was lost', async () => {

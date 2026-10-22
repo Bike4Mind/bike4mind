@@ -13,13 +13,13 @@ export const QUEST_HEARTBEAT_INTERVAL_MS = 10_000;
 // counter resets on the next successful write.
 const HEARTBEAT_FAILURE_ESCALATE_AFTER = 3;
 
-// Terminal quest statuses; must stay in sync with updateIfUnfinished (QuestTypes.ts).
+// Terminal quest statuses; must stay in sync with TERMINAL_QUEST_STATUSES (packages/database/src/models/content/QuestModel.ts).
 export const SETTLED_QUEST_STATUSES = ['done', 'stopped'] as const;
 
 export const isSettledQuestStatus = (status: string | undefined): boolean =>
   (SETTLED_QUEST_STATUSES as readonly (string | undefined)[]).includes(status);
 
-type QuestHeartbeatDb = { quests: Pick<IChatHistoryItemRepository, 'update' | 'updateMany'> };
+type QuestHeartbeatDb = { quests: Pick<IChatHistoryItemRepository, 'updateMany'> };
 type QuestHeartbeatQuest = Pick<IChatHistoryItemDocument, 'id' | 'status'>;
 
 /**
@@ -34,7 +34,7 @@ type QuestHeartbeatQuest = Pick<IChatHistoryItemDocument, 'id' | 'status'>;
  * stalled job past its 120s threshold, while a live job keeps updatedAt fresh and is left alone.
  *
  * The heartbeat write is CONDITIONAL (filtered on status:'running'), so it can never resurrect
- * 'running' over a terminal 'done'/'error' write - it becomes a no-op the moment the terminal write
+ * 'running' over a terminal write ('done' or 'stopped') - it becomes a no-op the moment the terminal write
  * commits, race-free regardless of ordering. The in-memory `quest.status` check is a fast path in
  * front of it. Backed by the { _id: 1, status: 1 } id_status index on the Quest schema.
  *
