@@ -4,7 +4,14 @@ import Chip from '@mui/joy/Chip';
 import IconButton from '@mui/joy/IconButton';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
-import { runningTasksLabel, splitTasks, taskElapsedMs, taskTitle, useSecondTick } from './backgroundTasks';
+import {
+  runningTasksLabel,
+  splitTasks,
+  taskElapsedMs,
+  taskStatusLabel,
+  taskTitle,
+  useSecondTick,
+} from './backgroundTasks';
 import { ChevronIcon, CloseIcon, ExpandIcon, StopIcon, TrashIcon } from './icons';
 import { thinScrollbarSx } from './layout';
 import { formatElapsed } from './statusLine';
@@ -19,13 +26,6 @@ import type { BackgroundProcessView } from './useBackgroundProcesses';
  */
 export const TASK_PANEL_WIDTH = 300;
 export const TASK_PANEL_WIDE_WIDTH = 480;
-
-export function taskStatusLabel(entry: BackgroundProcessView): string {
-  if (entry.status === 'killed') return 'stopped';
-  if (entry.status === 'failed') return 'failed';
-  if (entry.exitCode !== null && entry.exitCode !== undefined) return `exit ${entry.exitCode}`;
-  return entry.signal ?? 'exited';
-}
 
 /** A log pane that follows the tail, unless the user has scrolled up to read something. */
 function OutputTail({ text }: { text: string }) {

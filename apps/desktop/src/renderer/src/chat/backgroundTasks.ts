@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { BackgroundProcessStatus, ChatSessionStatus, ChatSessionSummary } from '@shared/chat';
+import type { BackgroundProcessView } from './useBackgroundProcesses';
 
 /**
  * The count chip above the composer.
@@ -39,6 +40,13 @@ export function taskElapsedMs(entry: TaskTiming, now: number): number {
 export function taskTitle(command: string): string {
   const firstLine = command.split('\n', 1)[0].trim();
   return firstLine || 'command';
+}
+
+export function taskStatusLabel(entry: BackgroundProcessView): string {
+  if (entry.status === 'killed') return 'stopped';
+  if (entry.status === 'failed') return 'failed';
+  if (entry.exitCode !== null && entry.exitCode !== undefined) return `exit ${entry.exitCode}`;
+  return entry.signal ?? 'exited';
 }
 
 /** The two sections of the panel, each in the order main reported them. */

@@ -4,11 +4,11 @@ import Button from '@mui/joy/Button';
 import IconButton from '@mui/joy/IconButton';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
-import { taskStatusLabel } from './BackgroundTaskPanel';
 import {
   isSpawnedRunning,
   splitTasks,
   taskElapsedMs,
+  taskStatusLabel,
   taskTitle,
   useSecondTick,
   type SpawnedSessionView,

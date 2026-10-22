@@ -15,7 +15,12 @@ import { thinScrollbarSx } from './layout';
 import { PrHeadline, PrStatusBar } from './PrStatusBar';
 import { SessionChips } from './SessionChips';
 import { BackgroundSection, backgroundSummary, type BackgroundSectionProps } from './SessionPanelBackground';
-import { SESSION_PANEL_INSET, SESSION_PANEL_WIDTH, type SessionPanelSectionId } from './sessionPanelState';
+import {
+  SESSION_PANEL_INSET,
+  SESSION_PANEL_SECTIONS,
+  SESSION_PANEL_WIDTH,
+  type SessionPanelSectionId,
+} from './sessionPanelState';
 import {
   contextPercent,
   describeCompaction,
@@ -256,16 +261,16 @@ function backgroundSection({ background }: SessionPanelProps): SectionSpec | nul
 }
 
 /**
- * The sections, in the order SESSION_PANEL_SECTIONS lists them; each builder returns null when it
- * has nothing to say, and that section is left out. A new section is one more builder here.
+ * One builder per section, drawn in SESSION_PANEL_SECTIONS order; a builder returns null when it
+ * has nothing to say, and that section is left out.
  */
-const SECTION_BUILDERS: readonly ((props: SessionPanelProps) => SectionSpec | null)[] = [
-  environmentSection,
-  contextSection,
-  changesSection,
-  planSection,
-  backgroundSection,
-];
+const SECTION_BUILDERS: Record<SessionPanelSectionId, (props: SessionPanelProps) => SectionSpec | null> = {
+  environment: environmentSection,
+  context: contextSection,
+  changes: changesSection,
+  plan: planSection,
+  background: backgroundSection,
+};
 
 /** Escape, or a press outside the card that is not on its anchor or in a menu it opened. */
 function useDismiss(
@@ -311,8 +316,9 @@ export function SessionPanel(props: SessionPanelProps) {
   const card = useRef<HTMLDivElement | null>(null);
   useDismiss(card, variant === 'popover' ? onDismiss : undefined, anchor);
 
-  const sections = SECTION_BUILDERS.map(build => build(props)).filter((section): section is SectionSpec => !!section);
-  if (sections.length === 0) return null;
+  const sections = SESSION_PANEL_SECTIONS.map(id => SECTION_BUILDERS[id](props)).filter(
+    (section): section is SectionSpec => !!section
+  );
 
   return (
     <Box

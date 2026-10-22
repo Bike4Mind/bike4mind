@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { CONTENT_MAX_WIDTH } from './layout';
+import { COLUMN_PADDING, CONTENT_MAX_WIDTH } from './layout';
 
 /**
  * The session panel's sections, in the order they are drawn. Adding one is a new id here and a
@@ -12,8 +12,6 @@ export type SessionPanelSectionId = (typeof SESSION_PANEL_SECTIONS)[number];
 export const SESSION_PANEL_WIDTH = 280;
 /** Gap between the card and the edges of the thread it floats over, in px. */
 export const SESSION_PANEL_INSET = 12;
-/** contentColumnSx's horizontal padding (`px: 3`), in px: the text starts this far inside the column. */
-const COLUMN_PADDING = 24;
 
 /**
  * Whether the docked card fits beside the reading column without covering any of its text.
