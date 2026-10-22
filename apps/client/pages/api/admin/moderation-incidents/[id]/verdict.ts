@@ -3,9 +3,10 @@ import { Request } from 'express';
 import { Resource } from 'sst';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { imageModerationIncidentRepository } from '@bike4mind/database';
+import { imageModerationIncidentRepository, withTransaction } from '@bike4mind/database';
 import { ncmecService } from '@bike4mind/services';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 // Resolve NCMEC credentials from SST Resource (linked secrets expose Resource.X.value, not
 // process.env.X). Fall back to process.env for local dev and self-host. useSandbox defaults
@@ -76,6 +77,22 @@ const bodySchema = z.union([
   z.object({ verdict: z.literal('record_manual_report'), ncmecReportId: ncmecReportIdSchema }),
 ]);
 
+type Verdict = z.infer<typeof bodySchema>['verdict'];
+
+// Targets the flagged user so an admin's moderation history against an account is filterable.
+const recordVerdict = (
+  req: Request,
+  incident: { incidentId: string; userId: string },
+  verdict: Verdict,
+  details: Record<string, unknown> = {}
+) =>
+  recordAdminActionFromRequest(req, {
+    action: 'moderation.incident.verdict_recorded',
+    target: { kind: 'user', id: incident.userId, displayName: incident.userId },
+    summary: `recorded ${verdict} verdict on moderation incident ${incident.incidentId}`,
+    details: { incidentId: incident.incidentId, verdict, ...details },
+  });
+
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req: Request, res) => {
   if (!req.user?.isAdmin) {
     throw new ForbiddenError('Admin access required');
@@ -92,10 +109,19 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
 
   // Recovery paths: move a stuck confirmed_csam incident without claiming it.
   if (body.verdict === 'mark_reported') {
-    const updated = await imageModerationIncidentRepository.resolveConfirmedCsam(incidentId, {
-      status: 'reported',
-      ncmecReportId: body.ncmecReportId,
-      reportedBy: req.user.id,
+    const adminId = req.user.id;
+    const updated = await withTransaction(async () => {
+      const resolved = await imageModerationIncidentRepository.resolveConfirmedCsam(incidentId, {
+        status: 'reported',
+        ncmecReportId: body.ncmecReportId,
+        reportedBy: adminId,
+      });
+      if (resolved) {
+        await recordVerdict(req, { incidentId, userId: resolved.userId }, body.verdict, {
+          ncmecReportId: body.ncmecReportId,
+        });
+      }
+      return resolved;
     });
     if (!updated) {
       return res
@@ -109,8 +135,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
   }
 
   if (body.verdict === 'requeue') {
-    const updated = await imageModerationIncidentRepository.resolveConfirmedCsam(incidentId, {
-      status: 'pending_review',
+    const updated = await withTransaction(async () => {
+      const resolved = await imageModerationIncidentRepository.resolveConfirmedCsam(incidentId, {
+        status: 'pending_review',
+      });
+      if (resolved) await recordVerdict(req, { incidentId, userId: resolved.userId }, body.verdict);
+      return resolved;
     });
     if (!updated) {
       return res.status(409).json({
@@ -157,11 +187,22 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     // Pass staleAfterMs=0: /finish just succeeded so the outcome is known; the stale filter
     // is not appropriate here (it exists to prevent mark_reported/requeue from racing a live
     // in-flight submission, not to gate a retry we just confirmed succeeded).
-    const updated = await imageModerationIncidentRepository.resolveConfirmedCsam(
-      incidentId,
-      { status: 'reported', ncmecReportId: incident.ncmecReportId, reportedBy: req.user.id },
-      0
-    );
+    // /finish already succeeded, so the verdict is audited even when a concurrent resolution
+    // won the DB write; a failed audit leaves the incident retryable (/finish is idempotent).
+    const ncmecReportId = incident.ncmecReportId;
+    const adminId = req.user.id;
+    const updated = await withTransaction(async () => {
+      const resolved = await imageModerationIncidentRepository.resolveConfirmedCsam(
+        incidentId,
+        { status: 'reported', ncmecReportId, reportedBy: adminId },
+        0
+      );
+      await recordVerdict(req, { incidentId, userId: incident.userId }, body.verdict, {
+        ncmecReportId,
+        incidentUpdated: resolved !== null,
+      });
+      return resolved;
+    });
     if (!updated) {
       // Concurrent mark_reported or requeue resolved the incident between our /finish call
       // and this DB write. The reportId is in the log above; the incident is already closed.
@@ -173,9 +214,19 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
   }
 
   if (body.verdict === 'record_manual_report') {
-    const updated = await imageModerationIncidentRepository.recordManualReport(incidentId, {
-      ncmecReportId: body.ncmecReportId,
-      reportedBy: req.user.id,
+    const adminId = req.user.id;
+    const updated = await withTransaction(async () => {
+      const recorded = await imageModerationIncidentRepository.recordManualReport(incidentId, {
+        ncmecReportId: body.ncmecReportId,
+        reportedBy: adminId,
+      });
+      if (recorded) {
+        await recordVerdict(req, { incidentId, userId: recorded.userId }, body.verdict, {
+          ncmecReportId: body.ncmecReportId,
+          previousReviewStatus: recorded.previousReviewStatus ?? null,
+        });
+      }
+      return recorded;
     });
     if (!updated) {
       const incident = await imageModerationIncidentRepository.findById(incidentId);
@@ -290,12 +341,21 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
       `[NCMEC] submission accepted for incident ${incidentId}, reportId=${ncmecReportId}; persisting to DB`
     );
 
-    const updated = await imageModerationIncidentRepository.updateReviewStatus(
-      incidentId,
-      'reported',
-      ncmecReportId,
-      req.user.id
-    );
+    // A failed audit rolls this write back and the request 500s with the incident left in
+    // confirmed_csam; the reportId logged above lets an admin finish it with mark_reported.
+    const adminId = req.user.id;
+    const updated = await withTransaction(async () => {
+      const reported = await imageModerationIncidentRepository.updateReviewStatus(
+        incidentId,
+        'reported',
+        ncmecReportId,
+        adminId
+      );
+      if (reported) {
+        await recordVerdict(req, { incidentId, userId: claimed.userId }, body.verdict, { ncmecReportId });
+      }
+      return reported;
+    });
     if (!updated) {
       req.logger.warn(
         `[NCMEC] DB update skipped for incident ${incidentId} (already reported); NCMEC reportId=${ncmecReportId}`
@@ -310,12 +370,17 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
   }
 
   // false_positive: no NCMEC submission, just update the status.
-  const updated = await imageModerationIncidentRepository.updateReviewStatus(
-    incidentId,
-    'false_positive',
-    undefined,
-    req.user.id
-  );
+  const adminId = req.user.id;
+  const updated = await withTransaction(async () => {
+    const reviewed = await imageModerationIncidentRepository.updateReviewStatus(
+      incidentId,
+      'false_positive',
+      undefined,
+      adminId
+    );
+    if (reviewed) await recordVerdict(req, { incidentId, userId: reviewed.userId }, body.verdict);
+    return reviewed;
+  });
   if (!updated) {
     const incident = await imageModerationIncidentRepository.findById(incidentId);
     if (!incident) return res.status(404).json({ error: 'Incident not found' });

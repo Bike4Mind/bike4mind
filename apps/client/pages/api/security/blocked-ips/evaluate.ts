@@ -1,6 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { blockedIPRepository, authFailLogRepository } from '@bike4mind/database';
+import { blockedIPRepository, authFailLogRepository, withTransaction } from '@bike4mind/database';
 import { ensureAdmin } from '@bike4mind/server-utils/utils/errors';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 // POST /api/security/blocked-ips/evaluate
 // Evaluates last 10 minutes and auto-blocks IPs with >=10 attempts.
@@ -12,10 +13,25 @@ const handler = baseApi().post(async (req, res) => {
   const result = await authFailLogRepository.getIPsWithHighAttempts(since, 10);
   const blocked: string[] = [];
   for (const r of result) {
+    let ipBlocked = false;
     try {
-      await blockedIPRepository.block(r.ip, `Auto-blocked: ${r.attempts} attempts in 10 minutes`);
+      await withTransaction(async () => {
+        ipBlocked = false;
+        const reason = `Auto-blocked: ${r.attempts} attempts in 10 minutes`;
+        await blockedIPRepository.block(r.ip, reason);
+        ipBlocked = true;
+        await recordAdminActionFromRequest(req, {
+          action: 'security.blocked_ip.auto_added',
+          target: { kind: 'settings', id: `blocked-ip:${r.ip}`, displayName: r.ip },
+          summary: `auto-blocked ip ${r.ip}`,
+          details: { ip: r.ip, attempts: r.attempts, evaluatedSince: since },
+          reason,
+        });
+      });
       blocked.push(r.ip);
     } catch (error) {
+      // A failed audit write rolled the block back; fail the run instead of skipping the IP.
+      if (ipBlocked) throw error;
       // Log error but continue blocking other IPs
       req.logger?.warn(`Failed to block IP ${r.ip}:`, error);
     }

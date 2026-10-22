@@ -1,6 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { blockedIPRepository } from '@bike4mind/database';
+import { blockedIPRepository, withTransaction } from '@bike4mind/database';
 import { ensureAdmin } from '@bike4mind/server-utils/utils/errors';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 // GET: list active blocked IPs (limit=10)
 // POST: block ip { ip, reason }
@@ -23,7 +24,17 @@ const handler = baseApi()
     const body = req.body as { ip?: string; reason?: string };
     const { ip, reason } = body || {};
     if (!ip) return res.status(400).json({ error: 'ip is required' });
-    const doc = await blockedIPRepository.block(ip, reason);
+    const doc = await withTransaction(async () => {
+      const blocked = await blockedIPRepository.block(ip, reason);
+      await recordAdminActionFromRequest(req, {
+        action: 'security.blocked_ip.added',
+        target: { kind: 'settings', id: `blocked-ip:${ip}`, displayName: ip },
+        summary: `blocked ip ${ip}`,
+        details: { ip, expiresAt: blocked.expiresAt },
+        reason,
+      });
+      return blocked;
+    });
     res.status(201).json({ item: doc });
   })
   .delete(async (req, res) => {
@@ -32,7 +43,18 @@ const handler = baseApi()
     const body = req.body as { ip?: string } | undefined;
     const ip = query.ip || body?.ip;
     if (!ip) return res.status(400).json({ error: 'ip is required' });
-    const doc = await blockedIPRepository.unblock(ip);
+    const doc = await withTransaction(async () => {
+      const unblocked = await blockedIPRepository.unblock(ip);
+      if (unblocked) {
+        await recordAdminActionFromRequest(req, {
+          action: 'security.blocked_ip.removed',
+          target: { kind: 'settings', id: `blocked-ip:${ip}`, displayName: ip },
+          summary: `unblocked ip ${ip}`,
+          details: { ip },
+        });
+      }
+      return unblocked;
+    });
     res.status(200).json({ item: doc });
   });
 
