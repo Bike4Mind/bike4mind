@@ -24,6 +24,12 @@ describe('partitionContributed', () => {
     expect(result.coreCollisions).toEqual(['MONGODB_URI']);
   });
 
+  it('reports a core-name collision in coreCollisions and registers the rest', () => {
+    const result = partitionContributed([{ name: 'MONGODB_URI' }, { name: 'EXAMPLE_URL' }], byName, core);
+    expect(result.coreCollisions).toEqual(['MONGODB_URI']);
+    expect(result.registered.map(byName)).toEqual(['EXAMPLE_URL']);
+  });
+
   it('keeps the first of two declarations with the same name', () => {
     const first = { name: 'EXAMPLE_API_TOKEN', placeholder: 'a' };
     const result = partitionContributed([first, { name: 'EXAMPLE_API_TOKEN', placeholder: 'b' }], byName, core);
@@ -51,6 +57,8 @@ describe('partitionContributed', () => {
     'HTTPS_PROXY',
     'SSL_CERT_FILE',
     'OPENSSL_CONF',
+    'AWS_X',
+    'HTTP_PROXY',
   ])('rejects %j, which names or aliases a variable a contribution must not own', name => {
     expect(isValidContributedResourceName(name)).toBe(false);
   });

@@ -17,7 +17,8 @@ function mockResource(linked: Record<string, { value: string }>) {
 async function load(declared = DECLARED) {
   vi.doMock('../premium-generated/infraResources.generated', () => ({
     contributedInfraResources: declared,
-    coreResourceNames: ['MONGODB_URI'],
+    coreResourceNames: ['MONGODB_URI', 'ChatCompletion'],
+    coreEnvNames: ['MONGODB_URI', 'CHAT_COMPLETION', 'SERVER_DOMAIN'],
   }));
   return import('./contributedSecrets');
 }
@@ -61,7 +62,7 @@ describe('contributed secret registry', () => {
     expect(readContributedSecret('MONGODB_URI')).toBeUndefined();
   });
 
-  it('never resolves a name whose env var form is a core secret', async () => {
+  it('rejects a camelCase name whose env var form would alias another variable', async () => {
     mockResource({});
     process.env.MONGODB_URI_TEST_ALIAS = 'core-credential';
     const { registerContributedSecrets, readContributedSecret } = await load({
@@ -72,6 +73,24 @@ describe('contributed secret registry', () => {
     expect(readContributedSecret('MongodbUriTestAlias')).toBeUndefined();
     delete process.env.MONGODB_URI_TEST_ALIAS;
   });
+
+  it.each(['CHAT_COMPLETION', 'SERVER_DOMAIN'])(
+    'never registers %s, a core env var, nor reads its value',
+    async name => {
+      mockResource({});
+      process.env[name] = 'core-value';
+      try {
+        const { registerContributedSecrets, readContributedSecret } = await load({
+          secrets: [{ name }],
+          rotations: [],
+        });
+        expect(registerContributedSecrets([{ name }]).coreCollisions).toEqual([name]);
+        expect(readContributedSecret(name)).toBeUndefined();
+      } finally {
+        delete process.env[name];
+      }
+    }
+  );
 
   it('keeps the first registration of a duplicate and drops empty names', async () => {
     mockResource({});

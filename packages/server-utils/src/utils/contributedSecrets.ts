@@ -5,7 +5,11 @@ import {
   type PartitionedContributions,
 } from '@bike4mind/infra';
 import { Resource } from 'sst';
-import { contributedInfraResources, coreResourceNames } from '../premium-generated/infraResources.generated';
+import {
+  contributedInfraResources,
+  coreEnvNames,
+  coreResourceNames,
+} from '../premium-generated/infraResources.generated';
 
 const registeredSecrets = new Set<string>();
 let loaded = false;
@@ -18,11 +22,11 @@ let loaded = false;
 export function registerContributedSecrets(
   specs: readonly ContributedSecretSpec[]
 ): PartitionedContributions<ContributedSecretSpec> {
-  if (coreResourceNames === null) {
+  if (coreResourceNames === null || coreEnvNames === null) {
     console.warn('[config] core resource names unknown (codegen ran without infra/); no contributed secret registered');
     return { registered: [], coreCollisions: [], duplicates: [], rejected: specs.map(spec => String(spec.name)) };
   }
-  const result = partitionContributed(specs, spec => spec.name, new Set(coreResourceNames));
+  const result = partitionContributed(specs, spec => spec.name, new Set([...coreResourceNames, ...coreEnvNames]));
   const fresh = result.registered.filter(spec => !registeredSecrets.has(spec.name));
   result.duplicates.push(...result.registered.filter(spec => registeredSecrets.has(spec.name)).map(spec => spec.name));
   result.registered = fresh;
