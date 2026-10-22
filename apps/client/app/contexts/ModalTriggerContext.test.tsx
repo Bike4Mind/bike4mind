@@ -2,11 +2,13 @@
 import React from 'react';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { markFirstSignupSession } from '@client/app/utils/firstSignupSession';
 import { releaseNoteToModal } from '../components/modals/releaseNoteSlides';
 import { ModalTriggerProvider, SETTLE_DELAY, useModalTrigger } from './ModalTriggerContext';
 
 const mocks = vi.hoisted(() => ({
   refetch: vi.fn(),
+  createdAt: new Date('2020-01-01'),
   counters: { isPending: false, data: [] as unknown[] },
 }));
 
@@ -17,7 +19,7 @@ vi.mock('../components/modals/WhatsNewSliderModal', () => ({
 }));
 vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: (selector: (s: { currentUser: unknown }) => unknown) =>
-    selector({ currentUser: { id: 'user-1', createdAt: new Date('2020-01-01') } }),
+    selector({ currentUser: { id: 'user-1', createdAt: mocks.createdAt } }),
 }));
 vi.mock('@client/app/hooks/data/modalsWithReleaseNotes', () => ({
   useModalsWithReleaseNotes: () => ({ data: [], refetch: mocks.refetch }),
@@ -56,6 +58,7 @@ const sliderAuto = () => screen.getByTestId('whats-new-slider').getAttribute('da
 describe('ModalTriggerContext whats-new trigger source', () => {
   beforeEach(() => {
     localStorage.clear();
+    mocks.createdAt = new Date('2020-01-01');
     mocks.refetch.mockReset();
     mocks.counters = { isPending: false, data: [] };
   });
@@ -83,6 +86,31 @@ describe('ModalTriggerContext whats-new trigger source', () => {
     fireEvent.click(screen.getByTestId('trigger-auto-btn'));
     expect(sliderAuto()).toBe('true');
     fireEvent.click(screen.getByTestId('trigger-manual-btn'));
+    expect(sliderAuto()).toBe('false');
+  });
+
+  it('suppresses visibility auto-triggers throughout a first signup session', async () => {
+    vi.useFakeTimers();
+    markFirstSignupSession('user-1');
+    renderProvider();
+    localStorage.setItem('tab_last_hidden_at', String(Date.now()));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15 * 60 * 1000);
+    });
+    vi.spyOn(document, 'hidden', 'get').mockReturnValue(false);
+    document.dispatchEvent(new Event('visibilitychange'));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SETTLE_DELAY);
+    });
+    expect(mocks.refetch).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('whats-new-slider')).not.toBeInTheDocument();
+  });
+
+  it('still opens the slider for a manual trigger during a first signup session', () => {
+    markFirstSignupSession('user-1');
+    renderProvider();
+    fireEvent.click(screen.getByTestId('trigger-manual-btn'));
+    expect(screen.getByTestId('whats-new-slider')).toBeInTheDocument();
     expect(sliderAuto()).toBe('false');
   });
 

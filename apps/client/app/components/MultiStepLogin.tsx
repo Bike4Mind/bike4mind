@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useRouter } from '@tanstack/react-router';
 import { applyRedirect, appendRedirectTo } from '@client/app/utils/authRedirect';
 import { getLoginErrorMessage } from '@client/app/utils/loginErrorMessages';
+import { markFirstSignupSession } from '@client/app/utils/firstSignupSession';
 import { useTranslation, Trans } from 'react-i18next';
 import { toast } from 'sonner';
 import { dismissOtcCodeSentToast, toastOtcCodeSent } from './otcToast';
@@ -447,6 +448,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
         // Ad-conversion signal (GA4 sign_up + Reddit SignUp), mirroring Register.tsx. Only the
         // nested shape is a freshly created account - the flat shape is a login of one that
         // already existed, which must not double-count.
+        if ('id' in flat && typeof flat.id === 'string') markFirstSignupSession(flat.id);
         trackSignupConversion('password');
       }
       finishLogin(flat as Record<string, unknown> & { accessToken: string });
