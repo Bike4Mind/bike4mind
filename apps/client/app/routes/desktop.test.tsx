@@ -81,6 +81,7 @@ describe('DesktopDownloadPage', () => {
     expect(within(primary).getByText('macOS (Apple Silicon)')).toBeInTheDocument();
     expect(within(primary).getByTestId('desktop-download-command')).toHaveTextContent(DESKTOP_INSTALL_COMMAND);
     expect(within(primary).getByTestId('desktop-download-gatekeeper-note')).toHaveTextContent('Open Anyway');
+    expect(within(primary).getByRole('img', { name: /desktop app/ })).toBeInTheDocument();
     expect(within(primary).queryByTestId('desktop-download-ambiguous-note')).not.toBeInTheDocument();
     expect(screen.getByTestId('desktop-download-version')).toHaveTextContent('Version 0.42.0');
     expect(screen.getByTestId('desktop-download-platform-mac-intel')).toHaveTextContent('Paused');

@@ -1,6 +1,5 @@
-import { type ReactNode, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Alert, Box, Button, Chip, IconButton, Link, Stack, Tooltip, Typography } from '@mui/joy';
-import { keyframes, useMediaQuery } from '@mui/system';
 import { Link as RouterLink } from '@tanstack/react-router';
 import ArrowBackRoundedIcon from '@mui/icons-material/ArrowBackRounded';
 import CheckRoundedIcon from '@mui/icons-material/CheckRounded';
@@ -11,6 +10,7 @@ import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import OpenInNewRoundedIcon from '@mui/icons-material/OpenInNewRounded';
 import PersonOutlineRoundedIcon from '@mui/icons-material/PersonOutlineRounded';
 import VerifiedUserOutlinedIcon from '@mui/icons-material/VerifiedUserOutlined';
+import DesktopAppPreview from '@client/app/components/DesktopAppPromo/DesktopAppPreview';
 import { useCopyToClipboard } from '@client/app/hooks/useCopyToClipboard';
 import { useLatestDesktopRelease } from '@client/app/hooks/data/desktopRelease';
 import { detectPlatform, detectPlatformFromUserAgent, type DetectedPlatform } from '@client/app/utils/desktopPlatform';
@@ -42,13 +42,6 @@ const SUPPORTED_SUMMARY = 'The desktop app runs on macOS (Apple Silicon) and Lin
 
 const LISTED_PLATFORMS: PlatformId[] = ['mac-arm64', 'mac-intel', 'linux-x64', 'windows'];
 
-// install.sh's default destinations; the terminal preview prints its real messages
-// (apps/desktop/install.sh), so keep these in step with it.
-const INSTALL_DESTINATIONS: Record<AvailablePlatformId, string> = {
-  'mac-arm64': '/Applications/Bike4Mind.app',
-  'linux-x64': '~/.local/share/bike4mind/Bike4Mind.AppImage',
-};
-
 // Summarised from apps/desktop/README.md; keep in step with what the desktop app actually does.
 const DESKTOP_FACTS = [
   {
@@ -67,37 +60,6 @@ const DESKTOP_FACTS = [
     body: 'Sign in with the account you use here.',
   },
 ];
-
-// A terminal is dark whatever the page theme, so these stay fixed in light and dark mode.
-const TERMINAL = {
-  window: '#0F1A2E',
-  titleBar: '#16233B',
-  border: 'rgba(148, 163, 184, 0.18)',
-  text: '#E2E8F0',
-  muted: '#94A3B8',
-  prompt: '#60A5FA',
-  success: '#4ADE80',
-};
-
-const TYPE_INTERVAL_MS = 24;
-const CHARS_PER_TICK = 2;
-
-const blink = keyframes`
-  50% { opacity: 0; }
-`;
-
-const settleIn = keyframes`
-  from { opacity: 0; transform: translateY(4px); }
-  to { opacity: 1; transform: none; }
-`;
-
-const cursorSx = {
-  display: 'inline-block',
-  width: '0.6em',
-  height: '1.1em',
-  verticalAlign: 'text-bottom',
-  bgcolor: TERMINAL.prompt,
-};
 
 /** Which platform to lead with. A Mac of unknown chip leads with Apple Silicon, the only Mac build. */
 function primaryPlatform({ os, arch }: DetectedPlatform): PlatformId | null {
@@ -126,24 +88,6 @@ function useDetectedPlatform(): DetectedPlatform {
   return platform;
 }
 
-/** How many characters of `text` to show: types it out once, or shows it whole under reduced motion. */
-function useTypedLength(text: string): number {
-  const reduceMotion = useMediaQuery('(prefers-reduced-motion: reduce)');
-  const [typed, setTyped] = useState(0);
-  useEffect(() => {
-    if (reduceMotion) return;
-    const timer = setInterval(() => {
-      setTyped(current => {
-        const next = Math.min(current + CHARS_PER_TICK, text.length);
-        if (next === text.length) clearInterval(timer);
-        return next;
-      });
-    }, TYPE_INTERVAL_MS);
-    return () => clearInterval(timer);
-  }, [reduceMotion, text]);
-  return reduceMotion ? text.length : typed;
-}
-
 function downloadFor(platform: AvailablePlatformId, release: DesktopRelease | undefined) {
   const url = platform === 'mac-arm64' ? release?.macArm64DmgUrl : release?.linuxX64AppImageUrl;
   const fileLabel = platform === 'mac-arm64' ? '.dmg' : '.AppImage';
@@ -158,115 +102,49 @@ function downloadFor(platform: AvailablePlatformId, release: DesktopRelease | un
 
 const externalLinkProps = (external: boolean) => (external ? { target: '_blank', rel: 'noopener noreferrer' } : {});
 
-function TerminalWindow({ children }: { children: ReactNode }) {
+function InstallCommand() {
+  const { copied, handleCopyToClipboard } = useCopyToClipboard();
   return (
     <Box
       sx={{
-        borderRadius: '12px',
-        overflow: 'hidden',
-        bgcolor: TERMINAL.window,
-        color: TERMINAL.text,
-        border: `1px solid ${TERMINAL.border}`,
-        boxShadow: '0 1px 2px rgba(15, 26, 46, 0.2), 0 24px 48px -12px rgba(15, 26, 46, 0.45)',
+        display: 'flex',
+        alignItems: 'flex-start',
+        gap: 1.25,
+        pl: 1.75,
+        pr: 0.75,
+        py: 0.75,
+        borderRadius: '10px',
+        border: '1px solid',
+        borderColor: 'neutral.outlinedBorder',
+        bgcolor: 'background.level1',
+        fontFamily: 'code',
+        fontSize: '13px',
+        lineHeight: 1.7,
       }}
     >
+      <Box component="span" aria-hidden sx={{ color: 'text.tertiary', userSelect: 'none', pt: '3px' }}>
+        $
+      </Box>
       <Box
-        aria-hidden
-        sx={{ display: 'flex', alignItems: 'center', gap: '8px', px: 2, height: 38, bgcolor: TERMINAL.titleBar }}
+        data-testid="desktop-download-command"
+        component="code"
+        sx={{ flex: 1, minWidth: 0, pt: '3px', fontFamily: 'inherit', color: 'text.primary', overflowWrap: 'anywhere' }}
       >
-        {['#FF5F57', '#FEBC2E', '#28C840'].map(color => (
-          <Box key={color} sx={{ width: 12, height: 12, borderRadius: '50%', bgcolor: color }} />
-        ))}
-        <Typography level="body-xs" sx={{ flex: 1, textAlign: 'center', color: TERMINAL.muted, mr: '44px' }}>
-          Terminal
-        </Typography>
+        {DESKTOP_INSTALL_COMMAND}
       </Box>
-      <Box sx={{ px: { xs: 2, sm: 2.5 }, pt: 2, pb: 2.5, fontFamily: 'code', fontSize: '14px', lineHeight: 1.7 }}>
-        {children}
-      </Box>
-    </Box>
-  );
-}
-
-function InstallTerminal({
-  platform,
-  release,
-}: {
-  platform: AvailablePlatformId;
-  release: DesktopRelease | undefined;
-}) {
-  const { copied, handleCopyToClipboard } = useCopyToClipboard();
-  const typed = useTypedLength(DESKTOP_INSTALL_COMMAND);
-  const done = typed === DESKTOP_INSTALL_COMMAND.length;
-  const version = release ? ` ${release.version}` : '';
-
-  return (
-    <TerminalWindow>
-      <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.5 }}>
-        <Box component="span" aria-hidden sx={{ color: TERMINAL.prompt, userSelect: 'none' }}>
-          $
-        </Box>
-        {/* The untyped rest stays in the layout, hidden, so the window never resizes while it types. */}
-        <Box
-          data-testid="desktop-download-command"
-          component="code"
-          sx={{ flex: 1, minWidth: 0, fontFamily: 'inherit', overflowWrap: 'anywhere' }}
+      <Tooltip title={copied ? 'Copied' : 'Copy command'} variant="soft" size="sm">
+        <IconButton
+          data-testid="desktop-download-copy-btn"
+          size="sm"
+          variant="plain"
+          color="neutral"
+          aria-label="Copy install command"
+          onClick={() => handleCopyToClipboard(DESKTOP_INSTALL_COMMAND)}
         >
-          <span>{DESKTOP_INSTALL_COMMAND.slice(0, typed)}</span>
-          {!done && <Box component="span" aria-hidden sx={cursorSx} />}
-          <span style={{ visibility: 'hidden' }}>{DESKTOP_INSTALL_COMMAND.slice(typed)}</span>
-        </Box>
-        <Tooltip title={copied ? 'Copied' : 'Copy command'} variant="soft" size="sm">
-          <IconButton
-            data-testid="desktop-download-copy-btn"
-            size="sm"
-            variant="soft"
-            aria-label="Copy install command"
-            onClick={() => handleCopyToClipboard(DESKTOP_INSTALL_COMMAND)}
-            sx={{
-              mt: '-2px',
-              '--Icon-color': TERMINAL.text,
-              bgcolor: 'rgba(148, 163, 184, 0.16)',
-              '&:hover': { bgcolor: 'rgba(148, 163, 184, 0.28)' },
-            }}
-          >
-            {copied ? <CheckRoundedIcon /> : <ContentCopyRoundedIcon />}
-          </IconButton>
-        </Tooltip>
-      </Box>
-      {done && (
-        <Box aria-hidden sx={{ mt: 1, animation: `${settleIn} 240ms ease-out both` }}>
-          <Box sx={{ color: TERMINAL.muted }}>Downloading Bike4Mind{version}...</Box>
-          <Box sx={{ color: TERMINAL.success, overflowWrap: 'anywhere' }}>
-            Installed Bike4Mind{version} to {INSTALL_DESTINATIONS[platform]}
-          </Box>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mt: 0.5 }}>
-            <span style={{ color: TERMINAL.prompt }}>$</span>
-            <Box
-              component="span"
-              sx={{
-                ...cursorSx,
-                animation: `${blink} 1.1s steps(1) infinite`,
-                '@media (prefers-reduced-motion: reduce)': { animation: 'none' },
-              }}
-            />
-          </Box>
-        </Box>
-      )}
-    </TerminalWindow>
-  );
-}
-
-function UnavailableTerminal({ platform }: { platform: PlatformId | null }) {
-  const reason = platform ? UNAVAILABLE_REASONS[platform]?.detail : undefined;
-  return (
-    <TerminalWindow>
-      <Box data-testid="desktop-download-unavailable" sx={{ color: TERMINAL.muted }}>
-        {reason && <Box># {reason}</Box>}
-        <Box># {SUPPORTED_SUMMARY}</Box>
-        {!reason && <Box># Open this page on one of those computers to install it.</Box>}
-      </Box>
-    </TerminalWindow>
+          {copied ? <CheckRoundedIcon /> : <ContentCopyRoundedIcon />}
+        </IconButton>
+      </Tooltip>
+    </Box>
   );
 }
 
@@ -300,16 +178,25 @@ function HeroDetails({
   detected: DetectedPlatform;
   release: DesktopRelease | undefined;
 }) {
-  // The terminal beside this explains what is missing, so only the platform is named here.
   if (!isAvailable(primary)) {
-    return primary ? (
-      <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
-        <Typography level="title-md">{PLATFORM_LABELS[primary]}</Typography>
-        <Chip size="sm" variant="soft" color="neutral">
-          {UNAVAILABLE_REASONS[primary]?.status}
-        </Chip>
+    const reason = primary ? UNAVAILABLE_REASONS[primary]?.detail : undefined;
+    return (
+      <Stack spacing={1.5}>
+        {primary && (
+          <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+            <Typography level="title-md">{PLATFORM_LABELS[primary]}</Typography>
+            <Chip size="sm" variant="soft" color="neutral">
+              {UNAVAILABLE_REASONS[primary]?.status}
+            </Chip>
+          </Stack>
+        )}
+        <Typography data-testid="desktop-download-unavailable" level="body-md">
+          {reason && `${reason} `}
+          {SUPPORTED_SUMMARY}
+          {!reason && ' Open this page on one of those computers to install it.'}
+        </Typography>
       </Stack>
-    ) : null;
+    );
   }
 
   const macChipUnknown = detected.os === 'mac' && detected.arch === 'unknown';
@@ -325,8 +212,9 @@ function HeroDetails({
           </Chip>
         )}
       </Stack>
-      <Typography level="body-md">
-        Paste the command into {isMac ? 'Terminal' : 'a terminal'}. Run it again any time to update.
+      <InstallCommand />
+      <Typography level="body-sm">
+        Paste it into {isMac ? 'Terminal' : 'a terminal'}. Run it again any time to update.
       </Typography>
       {macChipUnknown && (
         <Typography data-testid="desktop-download-ambiguous-note" level="body-sm">
@@ -430,16 +318,10 @@ export default function DesktopDownloadPage() {
             </Typography>
             <HeroDetails primary={primary} detected={detected} release={release} />
           </Stack>
-          <Box sx={{ pt: { md: 1 } }}>
-            {isAvailable(primary) ? (
-              <Stack spacing={2.5}>
-                <InstallTerminal platform={primary} release={release} />
-                {primary === 'mac-arm64' && <GatekeeperNote />}
-              </Stack>
-            ) : (
-              <UnavailableTerminal platform={primary} />
-            )}
-          </Box>
+          <Stack spacing={2.5} sx={{ pt: { md: 1 } }}>
+            <DesktopAppPreview />
+            {primary === 'mac-arm64' && <GatekeeperNote />}
+          </Stack>
         </Box>
 
         <Box
