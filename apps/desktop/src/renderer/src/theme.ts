@@ -16,9 +16,9 @@ const avoidPage = [avoidPageModifier];
 
 /**
  * Dark mode borrows the web app's cool, blue-tinted ramp instead of Joy's default, whose page is
- * pure black. Values are lifted from apps/client/app/utils/themes/colors.ts (`gray` / `brand`);
- * keep them in step when the web ramp moves. Light mode stays on Joy's defaults, which already
- * share the web's light grays.
+ * pure black. Values are lifted from apps/client/app/utils/themes/colors.ts (`gray` / `brand`),
+ * apart from the prompt-bubble fills; keep the lifted ones in step when the web ramp moves. Light
+ * mode stays on Joy's defaults, which already share the web's light grays.
  */
 export const DARK_PALETTE = {
   /** web gray[900]: the page behind the thread. */
@@ -39,11 +39,17 @@ export const DARK_PALETTE = {
   selected: '#1B4B7A',
   /** web brand[900]: main button hover. */
   buttonHover: '#0959AA',
+  /** The user's prompt bubble: a slate navy that reads as brand without glowing against the page. */
+  bubble: '#172535',
+  /** The same bubble under the pointer; pressed uses `selected`. */
+  bubbleHover: '#1C3550',
 } as const;
+
+const INK_RGB = [1, 3, 5].map(offset => Number.parseInt(DARK_PALETTE.ink.slice(offset, offset + 2), 16)).join(' ');
 
 // The web's secondary/tertiary ink steps (text.secondary / text.tertiary there); both clear 4.5:1
 // on page, panel and raised.
-const inkAt = (opacity: number) => `rgba(209 228 244 / ${opacity})`;
+const inkAt = (opacity: number) => `rgba(${INK_RGB} / ${opacity})`;
 
 export const desktopTheme = extendTheme({
   colorSchemes: {
@@ -77,10 +83,8 @@ export const desktopTheme = extendTheme({
         primary: {
           // solidBg is already the web's main-button blue (#0B6BCB); only its hover differs.
           solidHoverBg: DARK_PALETTE.buttonHover,
-          // The user's prompt bubble and soft chips: a slate navy that reads as brand without
-          // glowing against the page, stepping up to the selected blue when pressed.
-          softBg: '#172535',
-          softHoverBg: '#1C3550',
+          softBg: DARK_PALETTE.bubble,
+          softHoverBg: DARK_PALETTE.bubbleHover,
           softActiveBg: DARK_PALETTE.selected,
           softColor: DARK_PALETTE.ink,
         },
