@@ -73,6 +73,20 @@ describe('fragment nav (in-frame) bundle-link routing', () => {
     expect(post).toHaveBeenCalledWith({ b4m: 'navigate', path: BASE }, '*');
   });
 
+  it("passes on only a file link's exact ?download=1 query", () => {
+    const post = vi.spyOn(window.parent, 'postMessage').mockImplementation(() => {});
+    runFrameScript([BASE]);
+
+    click(`${ORIGIN}${BASE}/files/deck.pdf?download=1#p2`);
+    click(`${ORIGIN}${BASE}/files/deck.pdf?download=1&x=2`);
+    click(`${ORIGIN}${BASE}/guide/next.html?download=1`);
+    expect(post.mock.calls.map(c => (c[0] as { path: string }).path)).toEqual([
+      `${BASE}/files/deck.pdf?download=1#p2`,
+      `${BASE}/files/deck.pdf`,
+      `${BASE}/guide/next.html`,
+    ]);
+  });
+
   it('leaves a new-tab page link, other bundles and other origins to the browser', () => {
     const post = vi.spyOn(window.parent, 'postMessage').mockImplementation(() => {});
     runFrameScript([BASE]);
@@ -124,6 +138,12 @@ describe('hash bridge (parent) navigate handling', () => {
     expect(fetchDownload).toHaveBeenCalledWith(`${BASE}/files/report.pdf`);
   });
 
+  it("passes a file's ?download=1 on to the download hook", () => {
+    runParentBridge(`${BASE}/guide/intro.html`);
+    fromFrame({ b4m: 'navigate', path: `${BASE}/files/deck.pdf?download=1` });
+    expect(fetchDownload).toHaveBeenCalledWith(`${BASE}/files/deck.pdf?download=1`);
+  });
+
   it('accepts a file under a share-link bundle', () => {
     runParentBridge('/a/tok123');
     fromFrame({ b4m: 'navigate', path: '/a/tok123/files/report.pdf' });
@@ -137,6 +157,11 @@ describe('hash bridge (parent) navigate handling', () => {
     ['an encoded dot-dot segment', `${BASE}/%2e%2e/report.pdf`],
     ['an empty segment', `${BASE}//report.pdf`],
     ['a query string', `${BASE}/report.pdf?export=html`],
+    ['a query string after ?download=1', `${BASE}/report.pdf?download=1&export=html`],
+    ['?download=1 in the middle of the path', `${BASE}/report.pdf?download=1/x.pdf`],
+    ['?download=1 on a page', `${BASE}/guide/next.html?download=1`],
+    ['?download=1 on the bundle root', `${BASE}?download=1`],
+    ['a query string in the fragment', `${BASE}/report.pdf#a?b`],
     ['an absolute URL', `https://elsewhere.example${BASE}/report.pdf`],
     ['a protocol-relative URL', `//elsewhere.example${BASE}/report.pdf`],
     ['a non-string', 42],

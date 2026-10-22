@@ -370,6 +370,23 @@ describe('renderSandboxedBundle - multi-page bundles', () => {
     expect(srcdoc).toContain('href="../../outside.html"');
   });
 
+  it("keeps a file link's exact ?download=1 and drops every other query", () => {
+    const { srcdoc } = renderSandboxedBundle({
+      indexHtml:
+        '<html><body><a href="files/deck.pdf?download=1">Get</a><a href="files/deck.pdf?download=1#p2">Get p2</a>' +
+        '<a href="files/deck.pdf?download=1&x=2">Other</a><a href="next.html?download=1">Page</a>' +
+        '<a href="next.html?tab=2#s">Tab</a></body></html>',
+      urlBase: URL_BASE,
+      origin: ORIGIN,
+      visibility: 'private',
+    });
+    expect(srcdoc).toContain(`href="${ORIGIN}${URL_BASE}/files/deck.pdf?download=1"`);
+    expect(srcdoc).toContain(`href="${ORIGIN}${URL_BASE}/files/deck.pdf?download=1#p2"`);
+    expect(srcdoc).toContain(`href="${ORIGIN}${URL_BASE}/files/deck.pdf">Other`);
+    expect(srcdoc).toContain(`href="${ORIGIN}${URL_BASE}/next.html">Page`);
+    expect(srcdoc).toContain(`href="${ORIGIN}${URL_BASE}/next.html#s">Tab`);
+  });
+
   it('also fixes index links in gated mode, which have no <base> to resolve against', () => {
     const { srcdoc } = renderSandboxedBundle({
       indexHtml: '<html><body><a href="poster/poster.html">Poster</a></body></html>',

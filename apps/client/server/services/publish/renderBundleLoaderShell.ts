@@ -155,7 +155,7 @@ export function renderBundleLoaderShell(signedOrigin = ''): string {
     var t = b4mBundlePath(raw);
     if (!token || !t || t.page) return;
     var path = t.path;
-    fetch(path + '?sign=1', { headers: { Authorization: 'Bearer ' + token }, credentials: 'omit' })
+    fetch(path + (t.download ? '?sign=1&download=1' : '?sign=1'), { headers: { Authorization: 'Bearer ' + token }, credentials: 'omit' })
       .then(function (res) { return res.status === 200 ? res.json() : null; })
       .then(function (data) {
         var link = data ? signedLink(data.url) : null;

@@ -86,7 +86,8 @@ const FRAGMENT_NAV_JS = String.raw`(function(){
         var page=CFG.bases.indexOf(p)!==-1||/\.html?$/i.test(p);
         if(page&&(a.getAttribute('target')||'').toLowerCase()==='_blank'){return;}
         e.preventDefault();
-        try{window.parent.postMessage({b4m:'navigate',path:p+u.hash},'*');}catch(err){}
+        var q=!page&&u.search==='?download=1'?u.search:'';
+        try{window.parent.postMessage({b4m:'navigate',path:p+q+u.hash},'*');}catch(err){}
         return;
       }
       hash=u.hash;
@@ -121,22 +122,25 @@ export function buildFragmentNavScriptTag(config: FragmentNavConfig): string {
  * The ONE validator every consumer of a frame-supplied bundle path runs (the wrapper and
  * loader-shell hash bridge, and the loader shell's file hook). Inlined into each script, so
  * it is ES5 and self-contained. `b4mBundlePath(path)` returns
- * `{ path, hash, page }` for a same-origin path that is the bundle root this document is
- * showing (derived from its own location) or sits under it, else null. It rejects anything
- * a URL parser would rewrite (`.%2e`, `%2e.`, backslashes, `//`), any segment that DECODES
- * to `.`/`..` or still carries `%`, `/` or `\` after one decode (double encoding), any query,
- * and any other origin - so the only places a bundle can send the viewer are its own pages
- * and files.
+ * `{ path, hash, page, download }` for a same-origin path that is the bundle root this
+ * document is showing (derived from its own location) or sits under it, else null. It
+ * rejects anything a URL parser would rewrite (`.%2e`, `%2e.`, backslashes, `//`), any
+ * segment that DECODES to `.`/`..` or still carries `%`, `/` or `\` after one decode (double
+ * encoding), any query but a file's `?download=1`, and any other origin - so the only places
+ * a bundle can send the viewer are its own pages and files.
  */
 export const BUNDLE_PATH_JS = String.raw`function b4mBundleBase(){
   return (/^\/(?:p\/(?:u|pj|o)\/[^/]+\/[^/]+|a\/[^/]+)(?=\/|$)/.exec(location.pathname)||[''])[0];
 }
 function b4mBundlePath(path){
   var base=b4mBundleBase();
-  if(typeof path!=='string'||!base||path.length>2048||/[\\\s?]/.test(path)){return null;}
+  if(typeof path!=='string'||!base||path.length>2048){return null;}
   var at=path.indexOf('#');
   var p=at===-1?path:path.slice(0,at);
   var hash=at===-1?'':path.slice(at);
+  var download=/\?download=1$/.test(p);
+  if(download){p=p.slice(0,-11);}
+  if(/[\\\s?]/.test(p+hash)){return null;}
   if(hash&&!/^#[^#]{1,512}$/.test(hash)){return null;}
   if(p.charAt(0)!=='/'||p.charAt(1)==='/'){return null;}
   if(p!==base&&p.indexOf(base+'/')!==0){return null;}
@@ -147,7 +151,9 @@ function b4mBundlePath(path){
     var d;try{d=decodeURIComponent(segs[i]);}catch(e){return null;}
     if(d===''||d==='.'||d==='..'||/[%\/\\]/.test(d)){return null;}
   }
-  return {path:p,hash:hash,page:p===base||/\.html?$/i.test(p)};
+  var page=p===base||/\.html?$/i.test(p);
+  if(page&&download){return null;}
+  return {path:p,hash:hash,page:page,download:download};
 }`;
 
 /**
@@ -189,8 +195,9 @@ export const HASH_BRIDGE_JS = String.raw`(function(){
   function navigate(raw){
     var t=b4mBundlePath(raw);
     if(!t||!allowed(t.page)){return;}
-    if(!t.page&&typeof window.__b4mFetchDownload==='function'){window.__b4mFetchDownload(t.path);return;}
-    location.assign(t.path+t.hash);
+    var q=t.download?'?download=1':'';
+    if(!t.page&&typeof window.__b4mFetchDownload==='function'){window.__b4mFetchDownload(t.path+q);return;}
+    location.assign(t.path+q+t.hash);
   }
   window.addEventListener('message',function(e){
     if(e.source!==frame.contentWindow){return;}

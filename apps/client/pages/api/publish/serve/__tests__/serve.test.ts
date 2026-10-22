@@ -3558,7 +3558,8 @@ describe('GET /api/publish/serve - signed file delivery', () => {
   ];
   const storage: Record<string, string> = {
     'user/scope123/my-slug/index.html':
-      '<html><body><h1>Index</h1><a href="player.html">Watch</a><a href="files/deck.pdf">Deck</a></body></html>',
+      '<html><body><h1>Index</h1><a href="player.html">Watch</a><a href="files/deck.pdf">Deck</a>' +
+      '<a href="files/deck.pdf?download=1">Download deck</a></body></html>',
     'user/scope123/my-slug/player.html':
       '<html><body><video controls src="media/clip.mp4" poster="media/still.jpg"></video>' +
       '<a href="index.html">Back</a></body></html>',
@@ -3823,6 +3824,11 @@ describe('GET /api/publish/serve - signed file delivery', () => {
     const indexHtml = index.res._getData() as string;
     expect(indexHtml).not.toContain('passphrase-protected');
     expect(indexHtml).toContain('href=&quot;https://app.bike4mind.com/p/u/scope123/my-slug/player.html&quot;');
+    // The download link keeps its one allowed query through the rewrite.
+    expect(indexHtml).toContain(
+      'href=&quot;https://app.bike4mind.com/p/u/scope123/my-slug/files/deck.pdf?download=1&quot;'
+    );
+
     // 3. Player page: no second prompt, the video and poster point at signed storage URLs, and
     //    the wrapper CSP (which the srcdoc inherits) admits exactly that storage origin.
     mockArtifactFindOne.mockReturnValue(gated());
@@ -3847,6 +3853,23 @@ describe('GET /api/publish/serve - signed file delivery', () => {
       'user/scope123/my-slug/files/deck.pdf',
       'get',
       expect.objectContaining({ ResponseContentType: 'application/pdf' })
+    );
+
+    // 4b. The download link signs the same deck as an attachment.
+    mockArtifactFindOne.mockReturnValue(gated());
+    const download = run(['u', 'scope123', 'my-slug', 'files', 'deck.pdf'], {
+      cookie,
+      download: true,
+      fetchDest: 'document',
+    });
+    await download.promise;
+    expect(download.res._getStatusCode()).toBe(302);
+    expect(mockGetSignedUrl).toHaveBeenLastCalledWith(
+      'user/scope123/my-slug/files/deck.pdf',
+      'get',
+      expect.objectContaining({
+        ResponseContentDisposition: `attachment; filename="deck.pdf"; filename*=UTF-8''deck.pdf`,
+      })
     );
 
     // 5. Back to the index: same cookie, renders again, no prompt.

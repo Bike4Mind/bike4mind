@@ -202,7 +202,7 @@ describe('loader shell bootstrap - same-bundle file downloads', () => {
         calls.push({ url, init });
         if (url.includes('/api/auth/refreshToken'))
           return Promise.resolve(json(200, { accessToken: 'fresh.access.token' }));
-        if (url.endsWith('?sign=1')) return Promise.resolve(sign());
+        if (url.includes('?sign=1')) return Promise.resolve(sign());
         if (url.includes('/files/')) return Promise.resolve(file());
         return Promise.resolve(html(200, '<h1>ok</h1>'));
       })
@@ -225,6 +225,21 @@ describe('loader shell bootstrap - same-bundle file downloads', () => {
     expect(signCall?.init?.headers).toEqual({ Authorization: 'Bearer fresh.access.token' });
     expect(signCall?.init?.credentials).toBe('omit');
     expect(calls.some(c => c.url === '/p/u/scope123/my-slug/files/report.pdf')).toBe(false);
+  });
+
+  it('asks for a signed attachment when the link carried ?download=1', async () => {
+    stubSession(
+      () => json(200, { url: `${SIGNED_ORIGIN}/deck.pdf?X-Amz-Signature=abc` }),
+      () => {
+        throw new Error('file must not be fetched when a signed link is available');
+      }
+    );
+    await runBootstrap();
+
+    hook()('/p/u/scope123/my-slug/files/deck.pdf?download=1');
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(calls.some(c => c.url === '/p/u/scope123/my-slug/files/deck.pdf?sign=1&download=1')).toBe(true);
   });
 
   it('falls back to fetching the file with the Bearer and saving it when signing is unavailable', async () => {

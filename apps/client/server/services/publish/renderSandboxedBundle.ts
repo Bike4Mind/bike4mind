@@ -250,6 +250,8 @@ function retargetOffOriginLinks($: cheerio.CheerioAPI, origin: string): void {
  * page's directory. A link to `index.html` (or the bundle root) maps to the bundle's own
  * URL, so the fragment helper treats `index.html#x` from the index as an in-page jump.
  * Links that climb out of the bundle are left alone; the server would 404 them anyway.
+ * The query is dropped, except a file's exact `?download=1`, the one query the navigate
+ * bridge passes on (fragmentNav.ts).
  */
 function absolutizeBundleLinks($: cheerio.CheerioAPI, origin: string, urlBase: string, pagePath: string): void {
   $('a[href]').each((_i, el) => {
@@ -259,8 +261,11 @@ function absolutizeBundleLinks($: cheerio.CheerioAPI, origin: string, urlBase: s
     if (resolved === null) return;
     const hashAt = href.indexOf('#');
     const hash = hashAt === -1 ? '' : href.slice(hashAt);
+    const beforeHash = hashAt === -1 ? href : href.slice(0, hashAt);
+    const queryAt = beforeHash.indexOf('?');
+    const download = queryAt !== -1 && beforeHash.slice(queryAt) === '?download=1' && !isBundlePagePath(resolved);
     const target = resolved === '' || resolved === 'index.html' ? '' : `/${encodeBundlePath(resolved)}`;
-    $(el).attr('href', `${origin}${urlBase}${target}${hash}`);
+    $(el).attr('href', `${origin}${urlBase}${target}${download ? '?download=1' : ''}${hash}`);
   });
 }
 
