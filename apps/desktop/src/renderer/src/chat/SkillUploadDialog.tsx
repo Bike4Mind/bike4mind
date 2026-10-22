@@ -1,4 +1,4 @@
-import { useEffect, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useState, type KeyboardEvent, type ReactNode } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
@@ -741,12 +741,12 @@ export function useSkillUpload(onSaved?: () => void, sessionId?: string | null) 
   const [open, setOpen] = useState<{ preview: Preview; listing?: { id: string; name: string } } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const start = async (load: () => Promise<SkillUploadPreview>, listing?: { id: string; name: string }) => {
+  const start = useCallback(async (load: () => Promise<SkillUploadPreview>, listing?: { id: string; name: string }) => {
     setError(null);
     const preview = await load();
     if (preview.ok) setOpen({ preview, ...(listing ? { listing } : {}) });
     else if (!preview.canceled) setError(preview.error);
-  };
+  }, []);
 
   const dialog = open ? (
     <SkillUploadDialog
