@@ -1663,7 +1663,8 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                 videos.length > 0 ||
                 generationJobs.length > 0 ||
                 audio.length > 0 ||
-                navSuggestions) && (
+                navSuggestions ||
+                retrievalCoverageNotice) && (
                 <Box
                   sx={{
                     position: 'relative',
