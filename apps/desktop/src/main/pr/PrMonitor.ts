@@ -1,7 +1,6 @@
 import type { ChatAutomaticOrigin, ChatToolCall } from '@shared/chat';
 import type { AutomaticTurnResult } from '../chat/ChatService';
 import {
-  inMergeQueue,
   isFinishedState,
   parsePullRequestUrl,
   prDisplayState,
@@ -727,23 +726,13 @@ export class PrMonitor {
     const archiving = shouldAutoArchive(current, snapshot.state);
     const finished = isFinishedState(snapshot.state);
     const draftChanged = (current.lastDraft === true) !== snapshot.isDraft;
-    const queued = inMergeQueue(snapshot);
-    const queuedChanged = (current.lastQueued === true) !== queued;
-    if (
-      current.lastState !== snapshot.state ||
-      draftChanged ||
-      queuedChanged ||
-      archiving ||
-      finished ||
-      current.finalSnapshot
-    ) {
+    if (current.lastState !== snapshot.state || draftChanged || archiving || finished || current.finalSnapshot) {
       const { finalSnapshot: _previous, ...rest } = current;
       // Recorded before archiving, so a crash in between errs toward not archiving twice.
       await this.deps.store.set(sessionId, {
         ...rest,
         lastState: snapshot.state,
         lastDraft: snapshot.isDraft,
-        lastQueued: queued,
         ...(archiving ? { archivedOnClose: true } : {}),
         // Without checks: a finished bar draws none, and every launch reads this file whole.
         ...(finished ? { finalSnapshot: { ...forTheBar(snapshot), checks: [] } } : {}),
@@ -897,15 +886,13 @@ export class PrMonitor {
   private summaryOf(sessionId: string, binding: PrBinding | null): PrSummary | null {
     if (!binding) return null;
     const snapshot = this.snapshotFor(sessionId, binding);
-    // live.queued, not the snapshot's queue entry: it is what the bar's icon and chip read, and it
-    // is set the moment the app enqueues, before GitHub lists the entry.
+    // live.queued, which the bar's icon and chip also read: set from this launch's reads and the
+    // app's own enqueue, never from the binding file. A PR sits in the queue for minutes, so a
+    // stored flag would keep a row the app has not re-read queued long after it left.
     const queued = !!this.live.get(sessionId)?.queued;
     if (snapshot) return { number: binding.number, state: prDisplayState(snapshot.state, snapshot.isDraft, queued) };
     if (!binding.lastState) return null;
-    return {
-      number: binding.number,
-      state: prDisplayState(binding.lastState, binding.lastDraft, binding.lastQueued),
-    };
+    return { number: binding.number, state: prDisplayState(binding.lastState, binding.lastDraft) };
   }
 
   private async sidebarSummaries(): Promise<Map<string, PrSummary>> {

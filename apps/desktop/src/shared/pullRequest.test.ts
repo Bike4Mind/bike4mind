@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
   ciSummary,
   findPullRequestUrls,
-  inMergeQueue,
   parsePullRequestUrl,
   prDisplayState,
   pullRequestFromShell,
@@ -127,13 +126,5 @@ describe('prDisplayState', () => {
     expect(prDisplayState('OPEN', true, true)).toBe('draft');
     expect(prDisplayState('MERGED', false, true)).toBe('merged');
     expect(prDisplayState('CLOSED', false, true)).toBe('closed');
-  });
-
-  it('counts a merge-queue entry only while the PR is open', () => {
-    const entry = { enabled: true, entry: { state: 'QUEUED', position: 1 } };
-    expect(inMergeQueue({ state: 'OPEN', mergeQueue: entry })).toBe(true);
-    expect(inMergeQueue({ state: 'OPEN', mergeQueue: { enabled: true } })).toBe(false);
-    expect(inMergeQueue({ state: 'OPEN' })).toBe(false);
-    expect(inMergeQueue({ state: 'MERGED', mergeQueue: entry })).toBe(false);
   });
 });

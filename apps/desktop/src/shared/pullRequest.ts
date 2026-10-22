@@ -56,8 +56,6 @@ export interface PrBinding extends PrRef {
   lastState?: PrState;
   /** Whether that read found a draft, so the sidebar can tell draft from open without a read. */
   lastDraft?: boolean;
-  /** Whether that read found it in the merge queue, for the same reason. */
-  lastQueued?: boolean;
   /** Set when auto-archive has fired, so it fires once even if the user unarchives. */
   archivedOnClose?: boolean;
   /**
@@ -180,11 +178,6 @@ export function prDisplayState(state: PrState, isDraft = false, queued = false):
   if (state === 'CLOSED') return 'closed';
   if (isDraft) return 'draft';
   return queued ? 'queued' : 'open';
-}
-
-/** GitHub lists the PR in its base branch's merge queue. */
-export function inMergeQueue(snapshot: Pick<PrSnapshot, 'state' | 'mergeQueue'>): boolean {
-  return snapshot.state === 'OPEN' && snapshot.mergeQueue?.entry !== undefined;
 }
 
 /** What the sidebar shows for one conversation's PR. Built from stored and in-memory state only. */
