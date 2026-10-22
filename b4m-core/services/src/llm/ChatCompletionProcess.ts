@@ -97,7 +97,13 @@ import {
   safeInputWindow,
   withTokenEstimateMultiplier,
 } from '@bike4mind/utils';
-import { isRequestTimeoutError, isStreamIdleTimeoutError, isToolPairingError } from './llmErrorPredicates';
+import {
+  isRequestTimeoutError,
+  isSlowModelTimeoutError,
+  isStreamIdleTimeoutError,
+  isToolPairingError,
+  isTruncatedStreamError,
+} from './llmErrorPredicates';
 import { TurnTimingRecorder } from './turnTiming';
 import type { FabFileNotice, EmbeddingCredential } from '@bike4mind/utils';
 import { buildAttachmentNoticePrompt, toAttachmentNoticeStrings } from './attachmentNotices';
@@ -123,6 +129,7 @@ import {
   resolveDeprecatedModelId,
   isTurnEndingTool,
   ResponsesStreamTruncatedError,
+  LlmTimeoutError,
 } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { ToolCacheManager } from './tools/ToolCacheManager';
@@ -284,6 +291,9 @@ const THROTTLE_INTERVAL = 100;
 const DISABLE_SERVER_THROTTLING = process.env.DISABLE_SERVER_THROTTLING === 'true';
 const STREAMING_HEARTBEAT_INTERVAL_MS = 10_000;
 const STREAMING_HEARTBEAT_ERROR_ESCALATION_THRESHOLD = 3;
+
+/** Final reply when the model stayed too slow through its retry and any fallback. Not "busy": the provider never said so. */
+export const SLOW_MODEL_ERROR_REPLY = 'The AI model took too long to respond. Please try again in a moment.';
 
 // Context management constants: message-history limits per query type
 
@@ -535,6 +545,13 @@ export function resolveQuestErrorCode(error: unknown): QuestErrorCode | undefine
  */
 export const FORCE_FALLBACK_TEST_MARKER = '[[force-provider-fallback]]';
 
+/**
+ * Sibling of FORCE_FALLBACK_TEST_MARKER, under the same preview/E2E-only gate: makes every
+ * Anthropic-family hop fail with our own stream idle timeout, so QA can watch the slow-model
+ * retry, the fallback hop after it, and the turn-timing record without waiting out a real stall.
+ */
+export const FORCE_STREAM_STALL_TEST_MARKER = '[[force-stream-stall]]';
+
 export { isRequestTimeoutError, isStreamIdleTimeoutError };
 
 /**
@@ -558,9 +575,8 @@ export function isAbortError(error: unknown): boolean {
  * `ProcessingFailed` metric. Approximates the terminal branches of the quest-level error handler
  * (billing, abort, request/stream timeout, truncated Responses stream, tool pairing, overloaded,
  * context overflow), which resolve the quest without rethrowing and so never reached /process's
- * failure path. It is not an exact mirror: the handler matches timeouts case-sensitively and
- * rethrows 4xx HTTPErrors (so /process counts them), whereas CLI and embed treat 4xx as caller input
- * and skip them. The CLI and embed routes call this; /process does not.
+ * failure path. It is not an exact mirror: the handler rethrows 4xx HTTPErrors (so /process counts
+ * them), whereas CLI and embed treat 4xx as caller input and skip them. The CLI and embed routes call this; /process does not.
  */
 export function isOperatorFault(error: unknown): boolean {
   if (resolveQuestErrorCode(error)) return false;
@@ -569,7 +585,8 @@ export function isOperatorFault(error: unknown): boolean {
   return !(
     isAbortError(error) ||
     isRequestTimeoutError(error) ||
-    isStreamIdleTimeoutError(error) ||
+    isTruncatedStreamError(error) ||
+    isSlowModelTimeoutError(error) ||
     error instanceof ResponsesStreamTruncatedError ||
     isToolPairingError(error) ||
     isOverloadedError(error) ||
@@ -4976,16 +4993,24 @@ export class ChatCompletionProcess {
             // takes the real overloaded-error path: same-model overload retries on the primary,
             // then forceSwitch through the fallback chain - matching how a genuine sustained
             // outage degrades. See the Guide for Testers.
-            if (
+            const previewTestMarkerActive = (marker: string) =>
               process.env.E2E_ENDPOINTS_ENABLED === 'true' &&
               (currentModel.backend === ModelBackend.Bedrock || currentModel.backend === ModelBackend.Anthropic) &&
-              JSON.stringify(outboundMessages).includes(FORCE_FALLBACK_TEST_MARKER)
-            ) {
+              JSON.stringify(outboundMessages).includes(marker);
+            if (previewTestMarkerActive(FORCE_FALLBACK_TEST_MARKER)) {
               const forced = new Error(
                 `ServiceUnavailableException: simulated ${currentModel.backend} outage for fallback testing (preview only)`
               );
               forced.name = 'ServiceUnavailableException';
               throw forced;
+            }
+            // Same gate; the real typed timeout the backend raises, so the loop takes the slow path.
+            if (previewTestMarkerActive(FORCE_STREAM_STALL_TEST_MARKER)) {
+              throw new LlmTimeoutError(
+                'stream_idle',
+                idleTimeoutSeconds * 1000,
+                `stream timeout - simulated ${currentModel.backend} stall (preview only)`
+              );
             }
 
             await currentLlm.complete(
@@ -5258,9 +5283,14 @@ export class ChatCompletionProcess {
               throw lastError;
             }
 
+            // A timeout our own timers raised means a slow model, not a busy provider. Checked
+            // explicitly so it never takes the overload branch, even worded the old way ("may be
+            // overloaded") by a backend deployed before the typed timeout errors.
+            const isSlowModelTimeout = isSlowModelTimeoutError(lastError);
+
             // Same-model retry: for overloaded errors, retry with exponential backoff
             // before falling back to a different model (transient outages often resolve quickly)
-            if (isOverloadedError(lastError) && fallbackAttempt === 0) {
+            if (!isSlowModelTimeout && isOverloadedError(lastError) && fallbackAttempt === 0) {
               const MAX_OVERLOAD_RETRIES = 3;
               const BASE_DELAY_MS = 2000;
               overloadRetryCount++;
@@ -5316,7 +5346,8 @@ export class ChatCompletionProcess {
 
             // Stream idle timeout retry: for mid-stream stalls, retry once with short backoff.
             // Unlike request timeouts (model never started), stream idle timeouts mean the model
-            // started responding but stalled - likely transient overload. One retry before fallback.
+            // started responding but stalled. One retry, then fall back: repeating the same stall
+            // on the same model wastes minutes.
             if (isStreamIdleTimeoutError(lastError) && !streamIdleTimeoutRetried) {
               streamIdleTimeoutRetried = true;
               const STREAM_IDLE_RETRY_DELAY_MS = 3000;
@@ -5359,7 +5390,9 @@ export class ChatCompletionProcess {
                 apiKeyTable,
                 logger,
                 {
-                  forceSwitch: overloadRetriesExhausted,
+                  // A timeout that reaches here has spent its one same-model retry. triedModelIds
+                  // already excludes the failed model; forceSwitch states that intent outright.
+                  forceSwitch: overloadRetriesExhausted || isSlowModelTimeout,
                   excludeModelIds: triedModelIds,
                   preferUntriedBackend: isFinalHop,
                   endUserId: this.user.id,
@@ -6745,7 +6778,10 @@ export class ChatCompletionProcess {
         setTerminalQuestStatus(quest, 'done');
         finalQuest = await saveQuest(quest);
         return;
-      } else if (err instanceof ResponsesStreamTruncatedError) {
+      } else if (
+        err instanceof ResponsesStreamTruncatedError ||
+        (err instanceof Error && isTruncatedStreamError(err))
+      ) {
         // WARN, not error: an upstream close mid-stream is recoverable by resending, and error
         // severity would trip the CloudWatch ERROR alert path.
         logger.warn(`[Truncated] Quest ${questId}: ${err.message}`);
@@ -6754,17 +6790,14 @@ export class ChatCompletionProcess {
         setTerminalQuestStatus(quest, 'done');
         finalQuest = await saveQuest(quest);
         return;
-      } else if (
-        err instanceof Error &&
-        (err.message.includes('request timeout') || err.message.includes('stream timeout'))
-      ) {
+      } else if (err instanceof Error && isSlowModelTimeoutError(err)) {
         // WARN, not error: an upstream request/idle timeout is expected and
         // recoverable (the user gets the retry message below and the backend
         // already emitted trend metrics). Logging at error severity re-trips the
         // CloudWatch ERROR to LiveOps/Slack alert path that the backend WARN downgrade
         // was meant to avoid.
         logger.warn(`[Timeout] Quest ${questId}: ${err.message}`);
-        setErrorReply('The AI service is currently experiencing high demand. Please try again in a few minutes.');
+        setErrorReply(SLOW_MODEL_ERROR_REPLY);
         quest.type = 'error';
         setTerminalQuestStatus(quest, 'done');
         finalQuest = await saveQuest(quest);

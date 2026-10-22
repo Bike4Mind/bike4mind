@@ -13,6 +13,8 @@ import {
   isRequestTimeoutError,
   isStreamIdleTimeoutError,
   FORCE_FALLBACK_TEST_MARKER,
+  FORCE_STREAM_STALL_TEST_MARKER,
+  SLOW_MODEL_ERROR_REPLY,
 } from './ChatCompletionProcess';
 import {
   buildAndSortMessages,
@@ -43,6 +45,7 @@ import {
   getFullToolResult,
   MAX_FULL_TOOL_RESULT_CHARS,
   ResponsesStreamTruncatedError,
+  createAnthropicStreamTimeoutError,
   type ICompletionBackend,
 } from '@bike4mind/llm-adapters';
 import {
@@ -10537,7 +10540,7 @@ describe('ChatCompletionProcess', () => {
       // Quest should be saved with friendly error message
       expect(mockDb.quests.update).toHaveBeenCalledWith(
         expect.objectContaining({
-          reply: 'The AI service is currently experiencing high demand. Please try again in a few minutes.',
+          reply: SLOW_MODEL_ERROR_REPLY,
           type: 'error',
           status: 'done',
         })
@@ -10622,7 +10625,30 @@ describe('ChatCompletionProcess', () => {
       // Should save with friendly error, not raw message
       expect(mockDb.quests.update).toHaveBeenCalledWith(
         expect.objectContaining({
-          reply: 'The AI service is currently experiencing high demand. Please try again in a few minutes.',
+          reply: SLOW_MODEL_ERROR_REPLY,
+          type: 'error',
+          status: 'done',
+        })
+      );
+    });
+
+    it('tells the user a truncated stream was interrupted, not that the model was slow', async () => {
+      setupTimeoutMocks();
+      mockedShouldTriggerFallback.mockReturnValue(false);
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async () => {
+          throw new Error('Anthropic API stream timeout - the stream ended after 4 events without message_stop');
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await service.process({ body, logger: mockLogger });
+
+      expect(mockDb.quests.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          reply: 'The request was interrupted. Please try sending your message again.',
           type: 'error',
           status: 'done',
         })
@@ -10650,8 +10676,8 @@ describe('ChatCompletionProcess', () => {
 
       expect(mockDb.quests.update).toHaveBeenCalledWith(
         expect.objectContaining({
-          reply: 'The AI service is currently experiencing high demand. Please try again in a few minutes.',
-          replies: ['The AI service is currently experiencing high demand. Please try again in a few minutes.'],
+          reply: SLOW_MODEL_ERROR_REPLY,
+          replies: [SLOW_MODEL_ERROR_REPLY],
           type: 'error',
           status: 'done',
         })
@@ -10678,12 +10704,8 @@ describe('ChatCompletionProcess', () => {
 
       expect(mockDb.quests.update).toHaveBeenCalledWith(
         expect.objectContaining({
-          reply:
-            'Here is what I found so farThe AI service is currently experiencing high demand. Please try again in a few minutes.',
-          replies: [
-            'Here is what I found so far',
-            'The AI service is currently experiencing high demand. Please try again in a few minutes.',
-          ],
+          reply: `Here is what I found so far${SLOW_MODEL_ERROR_REPLY}`,
+          replies: ['Here is what I found so far', SLOW_MODEL_ERROR_REPLY],
           type: 'error',
           status: 'done',
         })
@@ -10836,7 +10858,7 @@ describe('ChatCompletionProcess', () => {
 
       expect(mockDb.quests.update).toHaveBeenCalledWith(
         expect.objectContaining({
-          reply: 'The AI service is currently experiencing high demand. Please try again in a few minutes.',
+          reply: SLOW_MODEL_ERROR_REPLY,
           type: 'error',
           status: 'done',
         })
@@ -10875,6 +10897,177 @@ describe('ChatCompletionProcess', () => {
           type: 'message',
         })
       );
+    });
+
+    it('shows a slow status, never busy, even for the old idle text that matches the overload check', async () => {
+      setupStreamIdleTimeoutMocks();
+      // A backend deployed before the typed errors still says "may be overloaded", which the real
+      // isOverloadedError matches.
+      mockedIsOverloadedError.mockReturnValue(true);
+      const complete = vi
+        .fn()
+        .mockRejectedValue(
+          new Error(
+            'Anthropic API stream timeout - no response received within 90 seconds. The model may be overloaded.'
+          )
+        );
+      mockedGetLlmByModel.mockReturnValue({
+        complete,
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await runWithFakeTimers(service.process({ body, logger: mockLogger }));
+
+      // One same-model retry, not the three-step overload backoff.
+      expect(complete).toHaveBeenCalledTimes(2);
+      expect(service.sendStatusUpdate).toHaveBeenCalledWith(
+        expect.anything(),
+        'AI service is slow, retrying...',
+        expect.objectContaining({ statusAt: expect.any(Date) })
+      );
+      expect(service.sendStatusUpdate).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.stringContaining('busy'),
+        expect.anything()
+      );
+      expect(mockDb.quests.update).toHaveBeenCalledWith(
+        expect.objectContaining({ reply: SLOW_MODEL_ERROR_REPLY, type: 'error', status: 'done' })
+      );
+    });
+
+    it('falls back to another model after one idle retry instead of repeating the stall', async () => {
+      setupStreamIdleTimeoutMocks();
+      mockQuest.promptMeta.model = { name: ChatModels.GPT4, backend: ModelBackend.OpenAI };
+      const primaryComplete = vi.fn().mockRejectedValue(createAnthropicStreamTimeoutError('stream_idle', 180_000));
+      mockedGetLlmByModel.mockReturnValue({
+        complete: primaryComplete,
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+      const fallbackModel = {
+        id: 'claude-sonnet-4-8',
+        type: 'text' as const,
+        name: 'Claude Sonnet 4.8',
+        backend: ModelBackend.Anthropic,
+        max_tokens: 100,
+        contextWindow: 200_000,
+        can_stream: true,
+        pricing: {},
+        supportsImageVariation: false,
+      };
+      const fallbackBackend = {
+        complete: vi
+          .fn()
+          .mockImplementation(
+            async (_model: unknown, _messages: unknown, _opts: unknown, cb: (chunks: string[]) => Promise<void>) => {
+              await cb(['Hello from fallback']);
+            }
+          ),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: 'claude-sonnet-4-8',
+      };
+      mockedGetLlmWithFallback.mockResolvedValue({ model: fallbackModel, backend: fallbackBackend, attempt: 1 } as any);
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await runWithFakeTimers(service.process({ body, logger: mockLogger }));
+
+      expect(primaryComplete).toHaveBeenCalledTimes(2);
+      expect(mockedGetLlmWithFallback).toHaveBeenCalledTimes(1);
+      expect(mockedGetLlmWithFallback.mock.calls[0][5]).toMatchObject({ forceSwitch: true });
+      expect(fallbackBackend.complete).toHaveBeenCalledTimes(1);
+      expect(mockDb.quests.update).toHaveBeenCalledWith(
+        expect.objectContaining({ replies: ['Hello from fallback'], status: 'done', type: 'message' })
+      );
+    });
+
+    describe('preview stall marker', () => {
+      const claudeModel = {
+        id: 'global.anthropic.claude-opus-4-8',
+        type: 'text' as const,
+        name: 'Claude Opus 4.8',
+        backend: ModelBackend.Bedrock,
+        max_tokens: 100,
+        contextWindow: 200_000,
+        pricing: { 200000: { input: 0, output: 0 } },
+        supportsImageVariation: false,
+      };
+      let prevEnv: string | undefined;
+      beforeEach(() => {
+        prevEnv = process.env.E2E_ENDPOINTS_ENABLED;
+      });
+      afterEach(() => {
+        if (prevEnv === undefined) delete process.env.E2E_ENDPOINTS_ENABLED;
+        else process.env.E2E_ENDPOINTS_ENABLED = prevEnv;
+      });
+
+      function setupStallMarkerTurn() {
+        setupStreamIdleTimeoutMocks();
+        mockedGetAvailableModels.mockResolvedValue([claudeModel]);
+        mockedBuildAndSortMessages.mockResolvedValue({
+          messages: [{ role: 'user', content: `hi ${FORCE_STREAM_STALL_TEST_MARKER}` }],
+          messageTruncation: null,
+        });
+        mockQuest.promptMeta.model = { name: claudeModel.id, backend: ModelBackend.Bedrock };
+        const primaryComplete = vi.fn().mockImplementation(async (_m, _ms, _o, cb) => {
+          await cb(['answer from the primary']);
+        });
+        mockedGetLlmByModel.mockReturnValue({
+          complete: primaryComplete,
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: claudeModel.id,
+        });
+        const fallbackComplete = vi.fn().mockImplementation(async (_m, _ms, _o, cb) => {
+          await cb(['answer from fallback model']);
+        });
+        mockedGetLlmWithFallback.mockResolvedValue({
+          model: { ...claudeModel, id: 'gpt-5', name: 'GPT-5', backend: ModelBackend.OpenAI },
+          backend: { complete: fallbackComplete, getModelInfo: vi.fn().mockResolvedValue([]), currentModel: 'gpt-5' },
+          attempt: 1,
+        } as any);
+        const body = {
+          ...startQuestParams,
+          params: { ...startQuestParams.params, model: claudeModel.id },
+          tools: [],
+          projectId: undefined,
+          organizationId: undefined,
+        };
+        return { primaryComplete, fallbackComplete, body };
+      }
+
+      it('stalls every Anthropic-family hop on a preview: slow retry, then a fallback hop, recorded on turnTiming', async () => {
+        process.env.E2E_ENDPOINTS_ENABLED = 'true';
+        const { primaryComplete, fallbackComplete, body } = setupStallMarkerTurn();
+
+        await runWithFakeTimers(service.process({ body, logger: mockLogger }));
+
+        expect(primaryComplete).not.toHaveBeenCalled();
+        expect(service.sendStatusUpdate).toHaveBeenCalledWith(
+          expect.anything(),
+          'AI service is slow, retrying...',
+          expect.anything()
+        );
+        expect(mockedGetLlmWithFallback.mock.calls[0][5]).toMatchObject({ forceSwitch: true });
+        expect(fallbackComplete).toHaveBeenCalledTimes(1);
+        const saved = mockDb.quests.update.mock.calls.map(call => call[0]?.turnTiming).filter(Boolean);
+        const turnTiming = saved[saved.length - 1];
+        expect(turnTiming.retries.map((retry: { reason: string }) => retry.reason)).toEqual([
+          'stream_idle_timeout',
+          'stream_idle_timeout',
+        ]);
+        expect(turnTiming.fallbackHops).toBe(1);
+      });
+
+      it('ignores the stall marker when E2E endpoints are disabled', async () => {
+        delete process.env.E2E_ENDPOINTS_ENABLED;
+        const { primaryComplete, fallbackComplete, body } = setupStallMarkerTurn();
+
+        await runWithFakeTimers(service.process({ body, logger: mockLogger }));
+
+        expect(primaryComplete).toHaveBeenCalledTimes(1);
+        expect(fallbackComplete).not.toHaveBeenCalled();
+      });
     });
 
     it('persists the idle-timeout retry on quest.turnTiming and hands the backend a telemetry sink', async () => {
