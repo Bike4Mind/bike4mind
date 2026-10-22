@@ -296,9 +296,11 @@ describe('ChatService approval record', () => {
 
   it('saves no rule when a stop closes the card', async () => {
     const sessionId = await run('ask', 'touch made.txt');
-    await awaitCall('c1', 'awaiting-approval');
+    const asked = await awaitCall('c1', 'awaiting-approval');
     service.stop(sessionId);
     await awaitCall('c1', 'denied');
+    approvals.resolve(asked.approvalId!, { decision: 'always', everywhere: true });
+    await Promise.resolve();
     expect(rememberAllows).not.toHaveBeenCalled();
   });
 

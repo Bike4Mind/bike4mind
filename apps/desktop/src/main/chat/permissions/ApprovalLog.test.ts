@@ -5,6 +5,19 @@ import type { ChatToolApproval } from '@shared/chat';
 import { describe, expect, it, vi } from 'vitest';
 import { ApprovalLog, summarizeToolInput, type ApprovalLogEntry } from './ApprovalLog';
 
+const renameFailure = vi.hoisted(() => ({ code: undefined as string | undefined }));
+
+vi.mock('node:fs/promises', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...actual,
+    rename: (...args: Parameters<typeof actual.rename>) =>
+      renameFailure.code
+        ? Promise.reject(Object.assign(new Error(renameFailure.code), { code: renameFailure.code }))
+        : actual.rename(...args),
+  };
+});
+
 const approval: ChatToolApproval = {
   outcome: 'allowed',
   decidedBy: { kind: 'mode', mode: 'auto' },
@@ -59,6 +72,27 @@ describe('ApprovalLog', () => {
     expect(log.rotatedPath).toBe(path.replace(/\.jsonl$/, '.1.jsonl'));
     expect((await lines(path)).map(line => (line as ApprovalLogEntry).input)).toEqual(['fiv']);
     expect((await lines(log.rotatedPath)).map(line => (line as ApprovalLogEntry).input)).toEqual(['thr', 'fou']);
+  });
+
+  it('keeps appending when the rotation is blocked, and warns on any other rename failure', async () => {
+    const path = join(await mkdtemp(join(tmpdir(), 'b4m-approval-log-')), 'approval-log.jsonl');
+    const lineBytes = Buffer.byteLength(`${JSON.stringify(entry())}\n`);
+    const warn = vi.fn();
+    const log = new ApprovalLog(path, warn, lineBytes);
+
+    try {
+      renameFailure.code = 'EBUSY';
+      await log.append(entry({ input: 'one' }));
+      await log.append(entry({ input: 'two' }));
+      expect((await lines(path)).map(line => (line as ApprovalLogEntry).input)).toEqual(['one', 'two']);
+      expect(warn).not.toHaveBeenCalled();
+
+      renameFailure.code = 'EIO';
+      await log.append(entry({ input: 'thr' }));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('could not write the approval log'));
+    } finally {
+      renameFailure.code = undefined;
+    }
   });
 
   it('warns instead of throwing when the file cannot be written', async () => {
