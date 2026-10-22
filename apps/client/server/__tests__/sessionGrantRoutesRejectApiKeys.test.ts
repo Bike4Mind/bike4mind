@@ -17,21 +17,31 @@ import path from 'path';
  * A hand-mounted `apiKeyAuth(...)` or `optionalAuth` re-opens the key surface and fails either way.
  *
  * Routes are found by call site, so a new minting route is held to this without anyone listing it.
- * The minting helpers are only defined under server/auth and are called directly from routes, so
- * scanning pages/api (admin/ included) reaches every path. Sibling guard for scope posture in
+ * Routes reach the leaf helpers through wrappers (completeMfaLogin -> issueBrowserSession ->
+ * issueSessionForRequest), so every wrapper is a marker too, and the wrapper check below fails when
+ * a function under server/ calls a marker without being one. Sibling guard for scope posture in
  * general: apiKeyScopePostureCoverage.test.ts.
  */
 
 // Scanned from outside pages/: an fs-walking test under pages/ is traced as a route and
 // pulls the project into the server Lambda (eslint no-restricted-syntax guards it).
 const ROUTES_DIR = path.join(__dirname, '..', '..', 'pages', 'api');
+const SERVER_DIR = path.join(__dirname, '..');
 
+// Keyed by the function each marker calls, so the wrapper check can tell a marker's own definition
+// from a new wrapper around it. Only call-shaped markers belong here; the device-store markers below
+// are writes, not wrappable helpers.
+const MINTING_HELPERS: Record<string, RegExp> = {
+  issueSessionForRequest: /\bissueSessionForRequest\(/,
+  issueBrowserSession: /\bissueBrowserSession\(/,
+  completeMfaLogin: /\bcompleteMfaLogin\(/,
+  issueSession: /\.issueSession\(/,
+  signAccessToken: /\.signAccessToken\(/,
+  generateAuthCode: /\bgenerateAuthCode\(/,
+  mintRefreshFamily: /\bmintRefreshFamily\(/,
+};
 const SESSION_GRANT_MARKERS = [
-  /\bissueSessionForRequest\(/,
-  /\.issueSession\(/,
-  /\.signAccessToken\(/,
-  /\bgenerateAuthCode\(/,
-  /\bmintRefreshFamily\(/,
+  ...Object.values(MINTING_HELPERS),
   /\bdeviceAuthorizationRepository\b/,
   /\bDeviceAuthorizationModel\b/,
 ];
@@ -40,10 +50,10 @@ const KEY_SHIMS = [/\bapiKeyAuth\(/, /\boptionalAuth\b/];
 // Object-literal options only; a route passing a variable (`baseApi(opts)`) fails closed below.
 const BASE_API_CALL = /\bbaseApi\(([^)]*)\)/g;
 
-function routeFiles(dir: string): string[] {
+function sourceFiles(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
     const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) return entry.name === '__tests__' ? [] : routeFiles(full);
+    if (entry.isDirectory()) return entry.name === '__tests__' ? [] : sourceFiles(full);
     return /\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name) ? [full] : [];
   });
 }
@@ -58,7 +68,7 @@ const stripComments = (src: string) =>
 
 const rel = (f: string) => path.relative(ROUTES_DIR, f).split(path.sep).join('/');
 
-const sessionGrantRoutes = routeFiles(ROUTES_DIR)
+const sessionGrantRoutes = sourceFiles(ROUTES_DIR)
   .map(f => ({ route: rel(f), src: stripComments(readFileSync(f, 'utf8')) }))
   .filter(({ src }) => SESSION_GRANT_MARKERS.some(re => re.test(src)));
 
@@ -68,6 +78,25 @@ function keyOpenings(src: string): string[] {
   const openCalls = calls.filter(call => !KEY_CLOSED_AUTH.test(call));
   const shims = KEY_SHIMS.filter(re => re.test(src)).map(re => `mounts ${re.source}`);
   return [...openCalls, ...shims];
+}
+
+// Top-level `function f` / `const f = (...) =>` declarations. Each body runs to the next declaration,
+// so a nested helper is attributed to its enclosing function: that over-reports, never under-reports.
+const DECLARATION =
+  /^(?:export\s+)?(?:async\s+)?function\s+(\w+)|^(?:export\s+)?const\s+(\w+)\s*=\s*(?:async\s*)?(?:\([^)]*\)|\w+)\s*=>/gm;
+
+function unregisteredWrappers(): string[] {
+  return sourceFiles(SERVER_DIR).flatMap(file => {
+    const src = stripComments(readFileSync(file, 'utf8'));
+    const declarations = [...src.matchAll(DECLARATION)];
+    return declarations.flatMap((match, i) => {
+      const name = match[1] ?? match[2];
+      if (name in MINTING_HELPERS) return [];
+      const body = src.slice(match.index, declarations[i + 1]?.index ?? src.length);
+      const wrapped = Object.entries(MINTING_HELPERS).filter(([, re]) => re.test(body));
+      return wrapped.map(([helper]) => `${path.relative(SERVER_DIR, file)}: ${name} wraps ${helper}`);
+    });
+  });
 }
 
 describe('an API key cannot obtain a session token', () => {
@@ -80,8 +109,17 @@ describe('an API key cannot obtain a session token', () => {
         'oauth/device/token.ts',
         'oauth/token.ts',
         'users/[id]/loginAs.ts',
+        'auth/mfa/verify.ts',
       ])
     );
+  });
+
+  it('has every wrapper around a minting helper registered as a marker', () => {
+    expect(
+      unregisteredWrappers(),
+      'a route calling these wrappers would mint a session without matching any marker. Add each ' +
+        'wrapper to MINTING_HELPERS.'
+    ).toEqual([]);
   });
 
   it.each(sessionGrantRoutes.map(r => [r.route, r.src]))('%s rejects API keys', (route, src) => {

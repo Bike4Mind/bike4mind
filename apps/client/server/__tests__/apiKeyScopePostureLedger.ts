@@ -43,7 +43,6 @@ export const KNOWN_UNPOSTURED = new Set<string>([
   'auth/github/disconnect.ts',
   'auth/mfa/force-reset.ts',
   'auth/mfa/status.ts',
-  'auth/mfa/verify.ts',
   'auth/trusted-devices/[id].ts',
   'auth/trusted-devices/index.ts',
   'auth/unlink.ts',

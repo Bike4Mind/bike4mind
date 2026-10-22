@@ -50,7 +50,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | app-files | 7 | 0 | 6 | 0 | 0 | 1 | 3 |
 | artifact-sandbox | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | artifacts | 6 | 0 | 6 | 0 | 0 | 0 | 1 |
-| auth | 33 | 0 | 8 | 15 | 0 | 10 | 5 |
+| auth | 33 | 0 | 7 | 16 | 0 | 10 | 5 |
 | blog | 6 | 0 | 6 | 0 | 0 | 0 | 0 |
 | blog-integration | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
 | briefcase | 3 | 0 | 3 | 0 | 0 | 0 | 0 |
@@ -512,7 +512,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/auth/mfa/regenerate-backup-codes` | POST | jwt | - | no | - | 1: `hooks/data/mfa.ts` |
 | `/api/auth/mfa/setup` | POST | jwt | - | no | - | 1: `hooks/data/mfa.ts` |
 | `/api/auth/mfa/status` | GET | jwt+key | - | no | - | 1: `hooks/data/mfa.ts` |
-| `/api/auth/mfa/verify` | POST | jwt+key | - | no | - | 1: `hooks/data/mfa.ts` |
+| `/api/auth/mfa/verify` | POST | jwt | - | no | - | 1: `hooks/data/mfa.ts` |
 | `/api/auth/mfa/verify-setup` | POST | jwt | - | no | - | 1: `hooks/data/mfa.ts` |
 | `/api/auth/okta` | GET | handler | - | no | - | 0 |
 | `/api/auth/okta/callback` | GET | handler | - | no | - | 0 |
