@@ -5,7 +5,7 @@
 // and ElevenLabs appends "/chat/completions" when making the actual request,
 // so the file lives at that suffix. This is the canonical (and only) location
 // of the handler.
-import { DATA_LAKE_TOOL_NAMES } from '@bike4mind/common';
+import { DATA_LAKE_TOOL_NAMES, questGenerationJobs } from '@bike4mind/common';
 import { adminSettingsRepository, questRepository, sessionRepository, userRepository } from '@bike4mind/database';
 import {
   ChatCompletionFeature,
@@ -69,18 +69,29 @@ const noopQueue: IQueueService = {
 // retries a slow voice turn within seconds, so a short window is plenty.
 const DUPLICATE_LOOKBACK_MS = 60_000;
 
+type DuplicateTurn = 'in-flight' | 'video-started';
+
 /**
- * True if this turn is already being processed. ElevenLabs retries a slow turn
+ * Whether this turn repeats one already handled. ElevenLabs retries a slow turn
  * (the proxy buffers the whole reply, and tools add latency), and each retry
  * would otherwise run a fresh ChatCompletionProcess and create a duplicate
  * quest. A quest is marked `running` the moment it's created and only flips to
  * `done` when the reply is ready, so a still-running quest in this session with
  * the same prompt means the original turn is mid-flight - drop the retry.
+ *
+ * A dropped connection marks the quest `stopped` but leaves any video job its
+ * tool call already created (and billed) running, and a retry gets a fresh quest
+ * so the job's idempotency key never matches. A recent quest with the same prompt
+ * that already started a video job therefore also counts as a duplicate, even
+ * when it is no longer `running`.
  */
-async function isDuplicateInFlightTurn(sessionId: string, message: string): Promise<boolean> {
+async function findDuplicateTurn(sessionId: string, message: string): Promise<DuplicateTurn | null> {
   const cutoff = new Date(Date.now() - DUPLICATE_LOOKBACK_MS);
   const recent = await questRepository.findAllBySessionIdAndGreaterThanOrEqualToTimestamp(sessionId, cutoff);
-  return recent.some(q => q.status === 'running' && q.prompt === message);
+  const sameTurn = recent.filter(q => q.prompt === message);
+  if (sameTurn.some(q => q.status === 'running')) return 'in-flight';
+  if (sameTurn.some(q => questGenerationJobs(q).some(job => job.kind === 'video'))) return 'video-started';
+  return null;
 }
 
 /**
@@ -287,9 +298,16 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
   // Drop duplicate turns: if the original quest for this exact prompt is still
   // running, ElevenLabs is retrying a slow turn - don't create a second quest.
   // Close the stream with no spoken content; the original turn's stream speaks.
-  if (await isDuplicateInFlightTurn(sessionCtx.sessionId, message)) {
-    req.logger.info({ sessionId: sessionCtx.sessionId }, '[voice-v2/llm-proxy] duplicate in-flight turn — skipping');
-    writeStaticCompletion(res, model, '');
+  // If that turn already started a video job the original stream may be gone, so
+  // say so instead of staying silent - and never start a second billed job.
+  const duplicate = await findDuplicateTurn(sessionCtx.sessionId, message);
+  if (duplicate) {
+    req.logger.info({ sessionId: sessionCtx.sessionId, duplicate }, '[voice-v2/llm-proxy] duplicate turn - skipping');
+    writeStaticCompletion(
+      res,
+      model,
+      duplicate === 'video-started' ? 'Your video is already being made and will show up in the chat.' : ''
+    );
     return;
   }
 
