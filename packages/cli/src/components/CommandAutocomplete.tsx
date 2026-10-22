@@ -62,7 +62,7 @@ export function CommandAutocomplete({ commands, selectedIndex }: CommandAutocomp
             <Text color={isSelected ? 'cyan' : undefined} bold={isSelected}>
               {isSelected ? '▸ ' : '  '}
               {sourceIcon}/{sanitizeTerminalText(cmd.name)}
-              {args} - {sanitizeTerminalText(cmd.description)}
+              {sanitizeTerminalText(args)} - {sanitizeTerminalText(cmd.description)}
             </Text>
           </Box>
         );

@@ -122,7 +122,11 @@ describe('untrusted text render sites', () => {
     'components/BackgroundShellStatus.tsx': ['sanitizeTerminalText(rawCommand)'],
     'components/FileAutocomplete.tsx': ['sanitizeTerminalText(file.isDirectory'],
     'components/CompletedGroupNotification.tsx': ['sanitizeTerminalText(item.groupDescription)'],
-    'components/CommandAutocomplete.tsx': ['sanitizeTerminalText(cmd.name)', 'sanitizeTerminalText(cmd.description)'],
+    'components/CommandAutocomplete.tsx': [
+      'sanitizeTerminalText(cmd.name)',
+      'sanitizeTerminalText(args)',
+      'sanitizeTerminalText(cmd.description)',
+    ],
     'commands/handlers/workflowViews.ts': [
       'sanitizeTerminalText(formatDecisionsOutput(',
       'sanitizeTerminalText(formatBlockersOutput(',

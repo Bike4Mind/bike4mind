@@ -14,7 +14,7 @@
  *   - escapeTerminalControlChars makes them visible as `\xHH` / `\uHHHH`: for
  *     approval prompts, where the user must see exactly what they approve.
  * Guarded by sanitizeTerminalText.test.ts (hostile-input table) and
- * terminalRenderSites.test.ts (render sites that must route through here).
+ * terminalRenderSites.test.tsx (render sites that must route through here).
  */
 
 // ESC-introduced sequences are removed whole, so their parameter bytes do not
