@@ -16,6 +16,7 @@ async function load(
   vi.doMock('../../premium-generated/infraResources.generated', () => ({
     contributedInfraResources: declared,
     coreResourceNames,
+    coreEnvNames: coreResourceNames,
   }));
   return import('./constants');
 }

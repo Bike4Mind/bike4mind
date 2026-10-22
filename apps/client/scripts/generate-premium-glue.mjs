@@ -1858,8 +1858,9 @@ function toEnvKey(name) {
 }
 
 // Env var names core is known to own: the env form of every core resource, plus every upper-snake
-// key in infra/*.ts and the env/compose example files. This catches accidental collisions only; it
-// is not a sandbox, since a package's own code can read process.env. Null when coreNames is null.
+// key in infra/*.ts. This catches accidental collisions only; it is not a sandbox, since a package's
+// own code can read process.env. The env example files are not scanned: they list core secrets a
+// package may later take over. Null when coreNames is null.
 function readCoreEnvNames(coreNames) {
   if (coreNames === null) return null;
   const names = new Set(coreNames.map(toEnvKey));
@@ -1868,9 +1869,6 @@ function readCoreEnvNames(coreNames) {
   const files = readdirSync(infraDir)
     .filter(f => f.endsWith('.ts'))
     .map(f => join(infraDir, f));
-  for (const f of readdirSync(REPO_ROOT)) {
-    if (/^\.env(\.[a-z]+)*\.example$/.test(f) || /^compose.*\.ya?ml$/.test(f)) files.push(join(REPO_ROOT, f));
-  }
   for (const file of files) {
     for (const m of readFileSync(file, 'utf8').matchAll(keyPattern)) names.add(m[1]);
   }
