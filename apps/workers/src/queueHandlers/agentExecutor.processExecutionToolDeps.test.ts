@@ -744,8 +744,43 @@ describe('processExecution tool deps', () => {
       expect(Object.keys(tools)).toEqual(['fixture_tool']);
       expect(ctx).toEqual(expect.objectContaining({ executionId: 'exec-1', runState: expect.any(Object) }));
       const guarded = guard.mock.results[0].value;
-      const { externalTools } = buildSharedToolsMock.mock.calls[0][2] as { externalTools: Record<string, unknown> };
+      const { externalTools, enabledTools, sessionDisabledTools } = buildSharedToolsMock.mock.calls[0][2] as {
+        externalTools: Record<string, unknown>;
+        enabledTools: string[];
+        sessionDisabledTools: string[];
+      };
       expect(externalTools.fixture_tool).toBe(guarded.fixture_tool);
+      // The resolved profile, not the execution doc, is what shapes the toolbelt: its denials reach the build.
+      expect(sessionDisabledTools).toEqual(expect.arrayContaining(profile.deniedTools));
+      expect(enabledTools).toContain('fixture_tool');
+    });
+
+    it('skips the surface profile when the run pins an agent, still guarding tools', async () => {
+      const { resolve, guard } = await registry();
+      const { sessionRepository, agentRepository, agentExecutionRepository, adminSettingsRepository } =
+        await import('@bike4mind/database');
+      vi.mocked(sessionRepository.findById).mockResolvedValue({ ...baseSession, surface: OPTI_SURFACE } as never);
+      vi.spyOn(agentRepository, 'findById').mockResolvedValue(null as never);
+      // Only a new execution resolves memento gates; the continuation-only harness never mocked it.
+      vi.spyOn(agentExecutionRepository, 'persistResolvedMementoGates').mockResolvedValue(undefined as never);
+      vi.mocked(adminSettingsRepository.getSettingsValue).mockImplementation((async (key: string) =>
+        key === 'orchestrationDefaults' ? undefined : false) as never);
+      const { handler } = await import('./agentExecutor');
+      const start = {
+        executionId: 'exec-1',
+        userId: 'user-1',
+        sessionId: 'session-1',
+        query: 'q',
+        model: 'claude-sonnet-5',
+        connectionId: 'conn-1',
+        agentId: 'agent-1',
+      };
+      await handler(start as never, lambdaContext).catch(() => undefined);
+      vi.mocked(adminSettingsRepository.getSettingsValue).mockResolvedValue(false as never);
+
+      expect(buildSharedToolsMock).toHaveBeenCalledTimes(1);
+      expect(resolve).not.toHaveBeenCalled();
+      expect(guard).toHaveBeenCalledTimes(1);
     });
 
     it('falls through to the default profile on a surface with none registered, still guarding tools', async () => {
