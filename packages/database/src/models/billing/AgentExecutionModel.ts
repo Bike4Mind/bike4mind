@@ -444,6 +444,15 @@ export interface IAgentExecution {
   confidenceTelemetry?: IConfidenceTelemetry;
 
   /**
+   * Consecutive gate-evaluated iterations below the confidence threshold. The gate
+   * pauses on a streak, not one weak iteration, and the streak has to outlive the
+   * Lambda that started it, so it lives here rather than in executor memory. Advanced
+   * by `recordIterationConfidence`, reset by `setPendingGate`. Optional because docs
+   * written before it existed lack it; `$inc` treats the missing field as 0.
+   */
+  lowConfidenceStreak?: number;
+
+  /**
    * Durable optimizer plan ledger (#680). Present only on opti agent runs; rehydrated each
    * invocation so the decompose-once / plan-completion guards survive continuation Lambdas.
    */
@@ -810,6 +819,7 @@ const AgentExecutionSchema = new mongoose.Schema(
     // the subdoc so its field defaults (evaluatedCount 0, minConfidence 1, ...)
     // apply to every new execution.
     confidenceTelemetry: { type: ConfidenceTelemetrySchema, default: () => ({}) },
+    lowConfidenceStreak: { type: Number, default: 0 },
     // Opti-only; no default so non-opti executions don't carry an empty ledger.
     optiPlanState: { type: OptiPlanStateSchema, required: false },
 
@@ -1655,11 +1665,14 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
    * check and this call. Without the filter, we would write `status: 'paused'`
    * over a doc that's already logically aborted. Caller checks the return and
    * bails when `false`.
+   *
+   * Resets `lowConfidenceStreak`: the pause consumes the streak, so after resume the
+   * run must build a fresh one before it can pause again.
    */
   async setPendingGate(id: string, pendingGate: IPendingGate): Promise<boolean> {
     const result = await this.model.updateOne(
       { _id: id, abortedAt: { $exists: false } },
-      { $set: { pendingGate, status: 'paused' } }
+      { $set: { pendingGate, status: 'paused', lowConfidenceStreak: 0 } }
     );
     return result.modifiedCount > 0;
   }
@@ -1685,18 +1698,30 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
    * Called for every iteration the gate evaluates - including ones that
    * complete in the same turn or clear the threshold - so `evaluatedCount` is
    * the honest denominator for the gate's fire rate.
+   *
+   * Also advances `lowConfidenceStreak` in the same write: incremented when
+   * `belowThreshold`, reset to 0 otherwise. Returns the updated streak, which is
+   * what the gate decides on (0 if the doc is gone).
    */
-  async recordIterationConfidence(id: string, confidence: number): Promise<void> {
-    await this.model.updateOne(
+  async recordIterationConfidence(
+    id: string,
+    confidence: number,
+    { belowThreshold }: { belowThreshold: boolean }
+  ): Promise<number> {
+    const updated = await this.model.findOneAndUpdate(
       { _id: id },
       {
         $inc: {
           'confidenceTelemetry.evaluatedCount': 1,
           'confidenceTelemetry.confidenceSum': confidence,
+          ...(belowThreshold ? { lowConfidenceStreak: 1 } : {}),
         },
         $min: { 'confidenceTelemetry.minConfidence': confidence },
-      }
+        ...(belowThreshold ? {} : { $set: { lowConfidenceStreak: 0 } }),
+      },
+      { new: true, projection: { lowConfidenceStreak: 1 } }
     );
+    return updated?.lowConfidenceStreak ?? 0;
   }
 
   /**
