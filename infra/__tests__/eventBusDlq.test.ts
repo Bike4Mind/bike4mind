@@ -9,7 +9,7 @@
  * Text-matched, not executed: infra/ is an SST program and does not load outside `sst`.
  */
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'fs';
+import { readdirSync, readFileSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -18,7 +18,10 @@ const readInfra = (file: string) => readFileSync(path.join(REPO_ROOT, 'infra', f
 const EVENT_BUS_SOURCE = readInfra('eventBus.ts');
 const DLQ_ALARMS_SOURCE = readInfra('dlqAlarms.ts');
 const FUNCTIONS_SOURCE = readInfra('functions.ts');
-const SUBSCRIBING_FILES = ['eventBus.ts', 'llm.ts'];
+// Discovered rather than listed, so a subscription added in any other infra file is covered too.
+const SUBSCRIBING_FILES = readdirSync(path.join(REPO_ROOT, 'infra'))
+  .filter(file => file.endsWith('.ts'))
+  .filter(file => readInfra(file).includes('eventBus.subscribe('));
 
 // One match per `eventBus.subscribe(` call, cut at its column-0 `);` (or `});` for the
 // single-object-arg form) so a subscription cannot pass on text that belongs to the code after
