@@ -176,6 +176,7 @@ export {
   MAX_DRIVE_DELTA_PER_WAKE,
   noopRunAct,
   resolveToolbeltProfile,
+  registerToolbelts,
   TOOLBELT_PROFILES,
   DEFAULT_TOOLBELT_ROLE,
   // Framework prompt building blocks (render helpers + act-step prompts). The

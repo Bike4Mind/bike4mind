@@ -9,6 +9,8 @@
  * dropped with a warning so one bad package cannot take the executor down.
  */
 
+import type { ToolbeltProfile } from './toolbelts';
+
 /**
  * Subset of the orchestration fields the executor consumes when deciding the top-level tool
  * whitelist and iteration ceiling. Intentionally narrower than a persisted agent document.
@@ -101,6 +103,8 @@ export interface ToolMapGuardEntry<TTools, TState> {
 export interface AgentExtensionContribution<TTools = Record<string, unknown>, TState = unknown> {
   surfaceProfiles?: readonly SurfaceProfileEntry[];
   toolMapGuards?: readonly ToolMapGuardEntry<TTools, TState>[];
+  /** Wake-cycle toolbelts for new roles; the host passes them to `registerToolbelts`, not to this registry. */
+  toolbelts?: readonly ToolbeltProfile[];
 }
 
 export type AgentExtensionSource = 'builtin' | 'contribution';
