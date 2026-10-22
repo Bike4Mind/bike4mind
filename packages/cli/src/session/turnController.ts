@@ -134,6 +134,20 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
   }
 }
 
+/** Not awaited by the steer drain, so a failed history write is logged rather than left as an unhandled rejection. */
+async function recordSteerHistory(
+  steers: string[],
+  commandHistoryStore: CommandHistoryStore,
+  setCommandHistory: TurnContext['setCommandHistory']
+): Promise<void> {
+  try {
+    for (const text of steers) await commandHistoryStore.add(text);
+    setCommandHistory(await commandHistoryStore.list());
+  } catch (error) {
+    logger.debug(`[STEER] History write failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 async function runHeldTurn(message: string, ctx: TurnContext): Promise<void> {
   const {
     agent,
@@ -370,9 +384,9 @@ async function runHeldTurn(message: string, ctx: TurnContext): Promise<void> {
           const steered = deliverSteers(abortController.signal);
           if (steered) {
             for (const text of steered.steers) {
-              void commandHistoryStore.add(text);
               void bridgePresence.emitEvent({ type: 'message', role: 'user', text: text.slice(0, 4000) });
             }
+            void recordSteerHistory(steered.steers, commandHistoryStore, setCommandHistory);
           }
           return [steered?.feedback, diagnosticsFeedback].filter(Boolean).join('\n\n') || null;
         },
