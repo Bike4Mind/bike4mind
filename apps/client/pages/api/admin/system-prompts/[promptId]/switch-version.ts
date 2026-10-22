@@ -1,6 +1,7 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { systemPromptRepository } from '@bike4mind/database';
 import { getDefaultSystemPrompts } from '@server/utils/systemPrompts/defaults';
 
@@ -68,6 +69,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
       req.user?.name || 'Admin',
       codeDefaultContent
     );
+
+    await recordAdminActionFromRequest(req, {
+      action: 'settings.system_prompt.version_switched',
+      target: { kind: 'settings', id: promptId, displayName: prompt.name },
+      summary: `switched system prompt ${promptId} to ${targetVersion === 0 ? 'code default' : `version ${targetVersion}`}`,
+      changes: [{ field: 'activeVersion', before: prompt.activeVersion ?? prompt.version ?? 1, after: targetVersion }],
+    });
 
     return res.status(200).json({
       success: true,

@@ -2,6 +2,7 @@ import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@client/server/middlewares/baseApi';
 import { agentOpsSettingsRepository } from '@bike4mind/database';
 import { AgentOpsSettings } from '@bike4mind/database';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { ForbiddenError } from '@bike4mind/utils';
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
@@ -50,6 +51,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     }
 
     await settingsDoc.save();
+
+    await recordAdminActionFromRequest(req, {
+      action: 'settings.agent_ops.repaired',
+      target: { kind: 'settings', id: 'agent_ops', displayName: 'Agent Ops settings' },
+      summary: `repaired Agent Ops settings (${repairsMade.length} fixes)`,
+      details: { repairsMade },
+    });
 
     res.json({
       success: true,
