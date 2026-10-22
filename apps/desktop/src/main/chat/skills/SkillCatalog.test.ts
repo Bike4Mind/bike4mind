@@ -54,6 +54,15 @@ describe('SkillCatalog project trust', () => {
     expect(state.projectDirectory).toBe(project);
   });
 
+  it('hands the model the same list until the catalog rescans, so its prompt is built once', async () => {
+    const store = catalog();
+    await store.setTrusted(project, true);
+    const first = await store.forModel(project);
+    expect(await store.forModel(project)).toBe(first);
+    await store.setTrusted(project, false);
+    expect(await store.forModel(project)).not.toBe(first);
+  });
+
   it('remembers the decision across instances, so the user is asked once', async () => {
     await catalog().setTrusted(project, true);
     await expect(catalog().get(project, 'deploy')).resolves.toBeDefined();

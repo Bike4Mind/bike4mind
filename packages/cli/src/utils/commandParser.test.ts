@@ -45,6 +45,12 @@ describe('parseCommandFile model-invocation opt-out', () => {
     expect(parse('autoinvoke: true').disableModelInvocation).toBe(false);
   });
 
+  it('ignores a malformed autoinvoke rather than discarding the rest of the frontmatter', () => {
+    const command = parse('autoinvoke: "off"');
+    expect(command.description).toBe('d');
+    expect(command.disableModelInvocation).toBe(false);
+  });
+
   it('leaves a skill model-invocable by default', () => {
     expect(parse('').disableModelInvocation).toBe(false);
   });

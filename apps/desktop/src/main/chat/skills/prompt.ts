@@ -56,7 +56,7 @@ export function buildSkillsSection(commands: readonly CustomCommand[], limit = M
   if (listed.length === 0) return '';
 
   const full = buildSkillsPromptSection(listed);
-  if (Buffer.byteLength(full) <= limit) return full;
+  if (listed.length === 1 || Buffer.byteLength(full) <= limit) return full;
 
   // The size only grows with the number of full entries (an entry is always longer than its name
   // in the list), so the largest prefix that fits is found by bisection. One full entry is kept
@@ -80,12 +80,9 @@ export function buildSkillsSection(commands: readonly CustomCommand[], limit = M
 function withNamesOnly(listed: readonly CustomCommand[], kept: number): string {
   const names = listed.slice(kept).map(command => command.name);
   return (
-    `${buildSkillsPromptSection(listed.slice(0, kept))}
-` +
-    `Also available: ${names.join(', ')}.
-` +
-    `Their descriptions are left out for space; the skill tool runs any of them by name.
-`
+    `${buildSkillsPromptSection(listed.slice(0, kept))}\n` +
+    `Also available: ${names.join(', ')}.\n` +
+    `Their descriptions are left out for space; the skill tool runs any of them by name.\n`
   );
 }
 

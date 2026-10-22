@@ -129,8 +129,9 @@ const FrontmatterSchema = z.object({
   // Visibility controls
   /** When true, skill is hidden from AI's auto-loading in system prompt */
   'disable-model-invocation': z.boolean().prefault(false),
-  /** opencode's spelling of the same opt-out: false hides the skill from the AI */
-  autoinvoke: z.boolean().optional(),
+  /** opencode's spelling of the same opt-out: false hides the skill from the AI. A malformed value
+   *  is dropped rather than failing the schema, which would discard the description with it. */
+  autoinvoke: z.boolean().optional().catch(undefined),
   /** When false, skill is hidden from /commands menu but still callable */
   'user-invocable': z.boolean().prefault(true),
 

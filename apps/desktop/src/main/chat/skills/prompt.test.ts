@@ -99,6 +99,12 @@ describe('buildSkillsSection', () => {
     for (const skill of skills) expect(section).toContain(skill.name);
   });
 
+  it('lists a lone skill in full even when it alone overruns the limit', () => {
+    const section = buildSkillsSection([command('only', 'Use for the one thing. '.repeat(20))], 100);
+    expect(section).toContain('**only**: Use for the one thing.');
+    expect(section).not.toContain('Also available');
+  });
+
   it('caps a long description at the spec maximum, so one skill cannot crowd out the rest', () => {
     const essay = `Use for huge things. ${'This sentence pads the description out. '.repeat(100)}`;
     const section = buildSkillsSection([command('huge', essay), command('small', 'Use for small things.')]);
