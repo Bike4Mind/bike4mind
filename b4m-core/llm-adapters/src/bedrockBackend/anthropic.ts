@@ -1300,49 +1300,39 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         input: Record<string, unknown>;
       }>;
 
-      // Create a choice object with the extracted text and tool info
-      let choice: IChoiceEnd;
-
-      if (toolUseBlocks.length > 0) {
-        // If there are tool_use blocks, create IChoiceEndToolUse
-        choice = {
-          status: ChoiceStatus.END,
-          statusEndReason: ChoiceEndReason.TOOL_USE,
-          index: 0,
-          chunkText: textContent,
-          usage: {
-            input_tokens: response.usage?.input_tokens || 0,
-            output_tokens: response.usage?.output_tokens || 0,
-            cache_read_input_tokens: response.usage?.cache_read_input_tokens,
-            cache_creation_input_tokens: response.usage?.cache_creation_input_tokens,
-          },
-          tool: {
-            id: toolUseBlocks[0].id,
-            name: toolUseBlocks[0].name,
-            parameters: JSON.stringify(toolUseBlocks[0].input),
-          },
-        };
-      } else {
-        // No tool use, create IChoiceEndComplete
-        choice = {
-          status: ChoiceStatus.END,
-          statusEndReason: ChoiceEndReason.COMPLETE,
-          index: 0,
-          chunkText: textContent,
-          usage: {
-            input_tokens: response.usage?.input_tokens || 0,
-            output_tokens: response.usage?.output_tokens || 0,
-            cache_read_input_tokens: response.usage?.cache_read_input_tokens,
-            cache_creation_input_tokens: response.usage?.cache_creation_input_tokens,
-          },
-        };
-      }
+      const usage = {
+        input_tokens: response.usage?.input_tokens || 0,
+        output_tokens: response.usage?.output_tokens || 0,
+        cache_read_input_tokens: response.usage?.cache_read_input_tokens,
+        cache_creation_input_tokens: response.usage?.cache_creation_input_tokens,
+      };
+      // The base loop executes every TOOL_USE choice; keep prose and usage on the first
+      // choice only so a parallel tool turn neither duplicates text nor counts usage twice.
+      const choices: IChoiceEnd[] =
+        toolUseBlocks.length > 0
+          ? toolUseBlocks.map((tool, index) => ({
+              status: ChoiceStatus.END,
+              statusEndReason: ChoiceEndReason.TOOL_USE,
+              index,
+              chunkText: index === 0 ? textContent : '',
+              ...(index === 0 ? { usage } : {}),
+              tool: { id: tool.id, name: tool.name, parameters: JSON.stringify(tool.input) },
+            }))
+          : [
+              {
+                status: ChoiceStatus.END,
+                statusEndReason: ChoiceEndReason.COMPLETE,
+                index: 0,
+                chunkText: textContent,
+                usage,
+              },
+            ];
 
       return {
         done: true,
         chunk: {
           model,
-          choices: [choice],
+          choices,
           ...(providerBlocks.length > 0 ? { providerBlocks } : {}),
           ...(stopReason === 'pause_turn' ? { stopReason } : {}),
         },
@@ -1437,6 +1427,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
 
         if (isTextDelta(delta)) {
           choice.chunkText = delta.text;
+          choice.toolArguments = false;
           const block = this.assistantContent[chunk.index];
           if (block?.type === 'text') block.text = `${block.text}${delta.text}`;
         } else if (isInputJsonDelta(delta) && this.serverToolInputJson.has(chunk.index)) {

@@ -259,6 +259,29 @@ describe('AnthropicBedrockBackend tool search request body', () => {
 });
 
 describe('AnthropicBedrockBackend tool search stream', () => {
+  it('delivers prose after a client tool call without adding it to the arguments', async () => {
+    const backend = new RecordingBedrockBackend([
+      round([
+        ...serverToolUseEvents(0),
+        ...searchResultEvents(1),
+        ...toolUseEvents(2, 'toolu_weather', 'get_weather', '{"city":"Paris"}'),
+        ...textEvents(3, 'Checking the forecast now.'),
+      ]),
+    ]);
+    const { frames, last } = await run(backend, {
+      tools: [tool('get_weather', { defer_loading: true })],
+      providerTools: [REGEX_TOOL],
+      executeTools: false,
+    });
+
+    expect(frames).toEqual([
+      { block: expect.objectContaining({ type: 'server_tool_use' }) },
+      { block: SEARCH_RESULT },
+      { text: 'Checking the forecast now.' },
+    ]);
+    expect(last?.toolsUsed).toEqual([{ name: 'get_weather', arguments: '{"city":"Paris"}', id: 'toolu_weather' }]);
+  });
+
   it('surfaces server blocks as provider blocks in order and reports only the tool_use (thinking off)', async () => {
     const backend = new RecordingBedrockBackend([searchThenToolRound()]);
     const { frames, last } = await run(backend, {
@@ -530,6 +553,41 @@ describe('AnthropicBedrockBackend tool search stream', () => {
 });
 
 describe('AnthropicBedrockBackend usage on a tool search turn', () => {
+  it('retains larger initial usage when the final event reports lower counts', async () => {
+    const backend = new RecordingBedrockBackend([
+      [
+        {
+          type: 'message_start',
+          message: { usage: { input_tokens: 1629, cache_read_input_tokens: 1800, cache_creation_input_tokens: 40 } },
+        },
+        ...serverToolUseEvents(0),
+        ...searchResultEvents(1),
+        {
+          type: 'message_delta',
+          delta: { stop_reason: 'pause_turn' },
+          usage: {
+            input_tokens: 716,
+            output_tokens: 114,
+            cache_read_input_tokens: 900,
+            cache_creation_input_tokens: 0,
+          },
+        },
+        { type: 'message_stop' },
+      ],
+    ]);
+    const { last } = await run(backend, { providerTools: [REGEX_TOOL], executeTools: false });
+
+    expect(last).toMatchObject({
+      inputTokens: 1629,
+      outputTokens: 114,
+      cacheReadInputTokens: 1800,
+      cacheCreationInputTokens: 40,
+    });
+    expect(last?.turnUsage).toEqual([
+      { inputTokens: 1629, outputTokens: 114, cacheReadInputTokens: 1800, cacheCreationInputTokens: 40 },
+    ]);
+  });
+
   it('reports the message_delta input and cache tokens, which include the loaded definitions', async () => {
     const events = searchThenToolRound();
     events[0] = {
@@ -592,6 +650,77 @@ describe('AnthropicBedrockBackend tool search (non-streaming)', () => {
     name: 'tool_search_tool_regex',
     input: { pattern: 'weather' },
   };
+
+  it('reports every parallel tool call while emitting the surrounding text once in order', async () => {
+    const backend = new RecordingBedrockBackend(
+      [],
+      [
+        response([
+          { type: 'text', text: 'Searching.' },
+          serverToolUse,
+          SEARCH_RESULT,
+          { type: 'tool_use', id: 'toolu_weather', name: 'get_weather', input: { city: 'Paris' } },
+          { type: 'text', text: 'Checking both.' },
+          { type: 'tool_use', id: 'toolu_time', name: 'get_time', input: { city: 'Paris' } },
+        ]),
+      ]
+    );
+    const { frames, last } = await run(backend, {
+      stream: false,
+      tools: [tool('get_weather', { defer_loading: true }), tool('get_time')],
+      providerTools: [REGEX_TOOL],
+      executeTools: false,
+    });
+
+    expect(frames).toEqual([
+      { text: 'Searching.' },
+      { block: serverToolUse },
+      { block: SEARCH_RESULT },
+      { text: 'Checking both.' },
+    ]);
+    expect(last?.toolsUsed).toEqual([
+      { name: 'get_weather', arguments: '{"city":"Paris"}', id: 'toolu_weather' },
+      { name: 'get_time', arguments: '{"city":"Paris"}', id: 'toolu_time' },
+    ]);
+    expect(last).toMatchObject({ inputTokens: 1631, outputTokens: 107, cacheReadInputTokens: 600 });
+  });
+
+  it('executes and replays every parallel tool call in one provider turn', async () => {
+    const weather = tool('get_weather', { defer_loading: true });
+    const time = tool('get_time');
+    const weatherCall = vi.spyOn(weather, 'toolFn');
+    const timeCall = vi.spyOn(time, 'toolFn');
+    const content = [
+      serverToolUse,
+      SEARCH_RESULT,
+      { type: 'tool_use', id: 'toolu_weather', name: 'get_weather', input: { city: 'Paris' } },
+      { type: 'tool_use', id: 'toolu_time', name: 'get_time', input: { city: 'Paris' } },
+    ];
+    const backend = new RecordingBedrockBackend(
+      [],
+      [response(content), response([{ type: 'text', text: 'Sunny.' }], 'end_turn')]
+    );
+    const { last } = await run(backend, {
+      stream: false,
+      tools: [weather, time],
+      providerTools: [REGEX_TOOL],
+    });
+
+    expect(weatherCall).toHaveBeenCalledExactlyOnceWith({ city: 'Paris' });
+    expect(timeCall).toHaveBeenCalledExactlyOnceWith({ city: 'Paris' });
+    expect(backend.body(1).messages.slice(1)).toEqual([
+      { role: 'assistant', content },
+      {
+        role: 'user',
+        content: [
+          { type: 'tool_result', tool_use_id: 'toolu_weather', content: 'get_weather result' },
+          { type: 'tool_result', tool_use_id: 'toolu_time', content: 'get_time result' },
+        ],
+      },
+    ]);
+    expect(last).toMatchObject({ inputTokens: 3262, outputTokens: 214, cacheReadInputTokens: 1200 });
+    expect(last?.turnUsage).toHaveLength(2);
+  });
 
   it('emits text and provider blocks in response order with the usage', async () => {
     const backend = new RecordingBedrockBackend(
