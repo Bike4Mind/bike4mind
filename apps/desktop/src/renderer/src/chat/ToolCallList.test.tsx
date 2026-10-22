@@ -38,6 +38,56 @@ function withMove(calls: ChatToolCall[]): string {
 }
 
 describe('ToolCallList', () => {
+  describe('approval attribution', () => {
+    const decidedAt = '2026-10-22T00:00:00.000Z';
+    const attribution = (html: string) =>
+      [...html.matchAll(/data-testid="tool-call-approval-attribution"[^>]*>([^<]*)</g)].map(match => match[1]);
+
+    it('says who let a settled call run', () => {
+      const html = markup([
+        bash({
+          status: 'done',
+          approval: { outcome: 'allowed', decidedBy: { kind: 'user', answer: 'once' }, asked: true, decidedAt },
+        }),
+      ]);
+      expect(attribution(html)).toEqual(['Approved by you']);
+    });
+
+    it.each([
+      [{ kind: 'mode', mode: 'auto' } as const, 'allowed' as const, 'Auto-approved - Approve for me'],
+      [{ kind: 'rule', rule: 'Bash(git commit:*)' } as const, 'allowed' as const, 'Allowed by rule Bash(git commit:*)'],
+      [{ kind: 'chat-allowance' } as const, 'allowed' as const, 'Allowed in this chat'],
+      [{ kind: 'user', answer: 'always' } as const, 'allowed' as const, 'Approved by you - always in this chat'],
+      [{ kind: 'user', answer: 'deny' } as const, 'denied' as const, 'Declined by you'],
+      [{ kind: 'system', reason: 'stopped' } as const, 'denied' as const, 'Not run - reply stopped before approval'],
+      [{ kind: 'system', reason: 'app-quit' } as const, 'denied' as const, 'Not run - app quit before approval'],
+      [
+        { kind: 'system', reason: 'error', detail: 'outside every folder' } as const,
+        'denied' as const,
+        'Blocked - outside every folder',
+      ],
+    ])('reads %o as "%s"', (decidedBy, outcome, text) => {
+      const html = markup([
+        bash({
+          status: outcome === 'allowed' ? 'done' : 'denied',
+          approval: { outcome, decidedBy, asked: false, decidedAt },
+        }),
+      ]);
+      expect(attribution(html)).toEqual([text]);
+    });
+
+    it('says it once for a group answered the same way, and nothing for an ungated call', () => {
+      const auto = { outcome: 'allowed', decidedBy: { kind: 'mode', mode: 'auto' }, asked: false, decidedAt } as const;
+      const html = markup([
+        bash({ id: 'a', status: 'done', approval: auto }),
+        bash({ id: 'b', status: 'done', approval: auto }),
+        bash({ id: 'c', status: 'done' }),
+      ]);
+      expect(attribution(html)).toEqual(['Auto-approved - Approve for me']);
+      expect(attribution(markup([bash({ status: 'done' })]))).toEqual([]);
+    });
+  });
+
   it('shows a failed permission save outside the collapsed tool result', () => {
     const html = markup([
       bash({
