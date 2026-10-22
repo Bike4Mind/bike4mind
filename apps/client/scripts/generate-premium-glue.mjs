@@ -1831,9 +1831,50 @@ function readCoreResourceNames() {
     .filter(f => f.endsWith('.ts'))
     .sort()) {
     const source = readFileSync(join(infraDir, file), 'utf8');
-    for (const m of source.matchAll(/new sst\.[A-Za-z.]+\(\s*'([A-Za-z0-9_]+)'/g)) names.add(m[1]);
+    const code = source
+      .split('\n')
+      .filter(line => !/^\s*(\/\/|\/?\*)/.test(line))
+      .join('\n');
+    const captured = [...code.matchAll(/new sst\.[A-Za-z.]+\(\s*'([A-Za-z0-9_]+)'/g)];
+    // The contributed-secret loop is the one constructor named from data; those names are not core's.
+    const constructors = [...code.matchAll(/new sst\.[A-Za-z.]+\(/g)].filter(
+      m => !code.startsWith('spec.name', m.index + m[0].length)
+    );
+    if (constructors.length !== captured.length) {
+      throw new Error(
+        `infra/${file}: ${constructors.length - captured.length} sst constructor(s) not named by a ` +
+          `single-quoted literal; core resource names cannot be read reliably`
+      );
+    }
+    for (const m of captured) names.add(m[1]);
   }
   return [...names];
+}
+
+// Mirrors toEnvKey in b4m-core/resource/src/index.ts; keep in sync.
+function toEnvKey(name) {
+  if (/^[A-Z0-9_]+$/.test(name)) return name;
+  return name.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toUpperCase();
+}
+
+// Env var names core owns: the env form of every core resource, plus every upper-snake key in
+// infra/*.ts environment blocks and the env/compose example files. Over-capture is safe: it
+// only makes a contributed name more likely to be dropped. Null when coreNames is null.
+function readCoreEnvNames(coreNames) {
+  if (coreNames === null) return null;
+  const names = new Set(coreNames.map(toEnvKey));
+  const keyPattern = /^\s*(?:-\s*)?#?\s*([A-Z][A-Z0-9_]*)\s*[:=]/gm;
+  const infraDir = join(REPO_ROOT, 'infra');
+  const files = readdirSync(infraDir)
+    .filter(f => f.endsWith('.ts'))
+    .map(f => join(infraDir, f));
+  for (const f of readdirSync(REPO_ROOT)) {
+    if (/^\.env(\.[a-z]+)*\.example$/.test(f) || /^compose.*\.ya?ml$/.test(f)) files.push(join(REPO_ROOT, f));
+  }
+  for (const file of files) {
+    for (const m of readFileSync(file, 'utf8').matchAll(keyPattern)) names.add(m[1]);
+  }
+  return [...names].sort();
 }
 
 function generateInfraResources(packages) {
@@ -1844,10 +1885,12 @@ function generateInfraResources(packages) {
     merged.secrets.push(...secrets);
     merged.rotations.push(...rotations);
   }
+  const coreNames = readCoreResourceNames();
   const content =
     `${GENERATED_BANNER}import type { InfraResourceContributions } from '@bike4mind/infra';\n\n` +
     `export const contributedInfraResources: InfraResourceContributions = ${JSON.stringify(merged, null, 2)};\n\n` +
-    `export const coreResourceNames: readonly string[] | null = ${JSON.stringify(readCoreResourceNames())};\n`;
+    `export const coreResourceNames: readonly string[] | null = ${JSON.stringify(coreNames)};\n\n` +
+    `export const coreEnvNames: readonly string[] | null = ${JSON.stringify(readCoreEnvNames(coreNames))};\n`;
   for (const target of INFRA_RESOURCE_TARGETS) writeFile(target, content);
 }
 
