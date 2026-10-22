@@ -14,7 +14,7 @@ if (duplicates.length > 0) {
 }
 if (rejected.length > 0) {
   console.warn(
-    'Dropped contributed admin settings that failed validation (reserved or missing key, no schema, or a sensitive default)',
+    'Dropped contributed admin settings that failed validation (reserved or missing key, no schema, a sensitive default, or a scope)',
     rejected
   );
 }
