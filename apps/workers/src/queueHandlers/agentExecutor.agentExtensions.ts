@@ -7,6 +7,7 @@
  * 1-99 and therefore always wrap inside the built-ins.
  */
 
+import '@client/lib/settings/registerContributedSettings';
 import {
   createAgentExtensionRegistry,
   type AgentExtensionContribution,
