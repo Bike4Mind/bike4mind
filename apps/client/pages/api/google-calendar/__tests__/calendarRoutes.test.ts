@@ -109,6 +109,15 @@ describe('google calendar routes', () => {
       expect(mockInsert).not.toHaveBeenCalled();
     });
 
+    it('hides Google errors behind a bad gateway error', async () => {
+      configure();
+      mockInsert.mockRejectedValue(Object.assign(new Error('unauthorized_client: secret detail'), { status: 401 }));
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      await expect(
+        createEvent({ body: validBody, user: { email: 'me@example.com' } }, makeRes())
+      ).rejects.toMatchObject({ statusCode: 502, message: 'Google Calendar request failed' });
+    });
+
     it('rejects a user with no email', async () => {
       configure();
       await expect(createEvent({ body: validBody, user: { email: null } }, makeRes())).rejects.toMatchObject({
@@ -137,6 +146,13 @@ describe('google calendar routes', () => {
       await available({ query: { ...query, calendarId: 'other@example.com' } }, res);
       expect(mockFreebusy.mock.calls[0][0].requestBody.items).toEqual([{ id: 'organizer@example.com' }]);
       expect(res.json).toHaveBeenCalled();
+    });
+
+    it('hides Google errors behind a bad gateway error', async () => {
+      configure();
+      mockFreebusy.mockRejectedValue(Object.assign(new Error('unauthorized_client: secret detail'), { status: 401 }));
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      await expect(available({ query }, makeRes())).rejects.toMatchObject({ statusCode: 502 });
     });
 
     it('rejects an invalid query', async () => {

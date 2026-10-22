@@ -6,7 +6,7 @@ import isBetween from 'dayjs/plugin/isBetween';
 import weekOfYear from 'dayjs/plugin/weekOfYear';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
-import { ServiceUnavailableError } from '@bike4mind/server-utils/utils/errors';
+import { BadGatewayError, ServiceUnavailableError } from '@bike4mind/server-utils/utils/errors';
 
 const scopes = ['https://www.googleapis.com/auth/calendar'];
 
@@ -36,6 +36,17 @@ export const calendarClient = async () => {
   return { client: calendarApi({ version: 'v3', auth: authClient }), calendarId: organizerEmail };
 };
 
+// Google's status and message must not reach the caller: a delegation fault is a 401 that the SPA
+// would read as an expired session, and a 4xx is logged at warn so it never alarms.
+const callGoogle = async <T>(call: () => Promise<T>): Promise<T> => {
+  try {
+    return await call();
+  } catch (error) {
+    console.error('Google Calendar request failed', error);
+    throw new BadGatewayError('Google Calendar request failed');
+  }
+};
+
 dayjs.extend(utc);
 dayjs.extend(timezone);
 dayjs.extend(isBetween);
@@ -59,14 +70,16 @@ export async function getAvailableTimeSlots(year: number, week: number, timeZone
 
   const { client, calendarId } = await calendarClient();
 
-  const res = await client.freebusy.query({
-    requestBody: {
-      timeMin: startOfWeek.toISOString(),
-      timeMax: endOfWeek.toISOString(),
-      timeZone,
-      items: [{ id: calendarId }],
-    },
-  });
+  const res = await callGoogle(() =>
+    client.freebusy.query({
+      requestBody: {
+        timeMin: startOfWeek.toISOString(),
+        timeMax: endOfWeek.toISOString(),
+        timeZone,
+        items: [{ id: calendarId }],
+      },
+    })
+  );
 
   const busyTimes = res.data.calendars?.[calendarId]?.busy ?? [];
   console.log('Gooogle Calendar: busyTimes', busyTimes);
@@ -134,30 +147,32 @@ export async function createEvent({
   const endDateTime = dayjs.tz(date, timeZone).add(1, 'hour').format();
   const { client, calendarId } = await calendarClient();
 
-  const res = await client.events.insert({
-    calendarId,
-    requestBody: {
-      summary,
-      description,
-      start: {
-        dateTime: startDateTime,
-        timeZone,
+  const res = await callGoogle(() =>
+    client.events.insert({
+      calendarId,
+      requestBody: {
+        summary,
+        description,
+        start: {
+          dateTime: startDateTime,
+          timeZone,
+        },
+        attendees,
+        end: {
+          dateTime: endDateTime,
+          timeZone,
+        },
+        reminders: {
+          useDefault: false,
+          overrides: [
+            { method: 'email', minutes: 24 * 60 },
+            { method: 'popup', minutes: 10 },
+          ],
+        },
       },
-      attendees,
-      end: {
-        dateTime: endDateTime,
-        timeZone,
-      },
-      reminders: {
-        useDefault: false,
-        overrides: [
-          { method: 'email', minutes: 24 * 60 },
-          { method: 'popup', minutes: 10 },
-        ],
-      },
-    },
-    sendUpdates: 'all',
-  });
+      sendUpdates: 'all',
+    })
+  );
 
   return res;
 }
