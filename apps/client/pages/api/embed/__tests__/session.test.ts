@@ -124,6 +124,12 @@ describe('POST /api/embed/session', () => {
     expect(json.error_description).toBe('Origin not allowed for this embed key');
   });
 
+  it('mints for an opaque origin when the key has no allowed origins', async () => {
+    mockVerifyEmbedApiKey.mockResolvedValue({ ...KEY_INFO, allowedOrigins: [] });
+    const { status } = await mint({}, { origin: 'null' });
+    expect(status).toBe(200);
+  });
+
   it('still mints for a request that carries no Origin header', async () => {
     const { status } = await mint({});
     expect(status).toBe(200);
