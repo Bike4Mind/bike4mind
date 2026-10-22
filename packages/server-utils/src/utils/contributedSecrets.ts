@@ -49,7 +49,7 @@ export function readContributedSecret(name: string): string | undefined {
   if (!isContributedSecret(name)) return undefined;
   try {
     // Untyped on purpose: sst-env.d.ts only declares the secrets linked on the stage that
-    // generated it, which never includes an overlay's.
+    // generated it, and the committed copies are generated without any overlay mounted.
     const value = (Resource as unknown as Record<string, { value?: string } | undefined>)[name]?.value;
     if (value !== undefined) return value;
   } catch {
