@@ -56,6 +56,13 @@ describe('ChatCompletion ECS secrets', () => {
     expect(link).toMatch(/^\s+\.\.\.linkedSecrets,$/m);
     expect(link).not.toContain('allSecrets');
     expect(service).toMatch(/^\s+ssm: ecsSecretParameters,$/m);
+    expect(chatCompletion).toContain(
+      "ecsResourceSecrets('ChatCompletion', Object.fromEntries(ecsSecretNames.map(n => [n, secrets[n]])), {"
+    );
+    expect(chatCompletion).toMatch(/advanced: \['OAUTH_RSA_PRIVATE_KEY'\]/);
+    expect(chatCompletion).toContain(
+      'const ecsSecretParameters = ecsSecretGroups && Object.assign({}, ...ecsSecretGroups.map(g => g.ssm));'
+    );
   });
 
   it('sets the parameter version fingerprint as plain environment only when secrets are moved', () => {
