@@ -16,37 +16,48 @@ function createTool(result: string, validateResult?: ToolResultValidator): IComp
   };
 }
 
-/** Calls `probe` once, then answers. */
-function createLlm(): ICompletionBackend {
+/** Calls `probe` with the same arguments `probeCalls` times, one per iteration, then answers. */
+function createLlm(probeCalls = 1): ICompletionBackend {
   let callCount = 0;
   return {
     currentModel: 'test-model',
     getModelInfo: async () => [],
     complete: async (_model, _messages, _options, callback) => {
       callCount++;
-      await callback([callCount === 1 ? 'Checking' : 'Done'], {
+      const probing = callCount <= probeCalls;
+      await callback([probing ? 'Checking' : 'Done'], {
         inputTokens: 10,
         outputTokens: 5,
-        toolsUsed: callCount === 1 ? [{ name: 'probe', arguments: '{}' }] : [],
+        toolsUsed: probing ? [{ name: 'probe', arguments: '{}' }] : [],
       });
     },
     pushToolMessages: vi.fn(),
   };
 }
 
-async function scoreOf(tool: ICompletionOptionTools, logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn() }) {
+async function scoresOf(
+  tool: ICompletionOptionTools,
+  { probeCalls = 1, logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn() } } = {}
+) {
   const context = {
     userId: 'test-user',
     logger,
-    llm: createLlm(),
+    llm: createLlm(probeCalls),
     model: 'test-model',
     tools: [tool],
-    maxIterations: 3,
+    maxIterations: probeCalls + 2,
   } as unknown as AgentContext;
   const agent = new ReActAgent(context);
   await agent.run('probe it');
-  const [entry] = agent.toCheckpoint().confidenceLog;
-  return { confidence: entry.confidence, source: entry.source };
+  return agent.toCheckpoint().confidenceLog.map(({ confidence, source }) => ({ confidence, source }));
+}
+
+async function scoreOf(
+  tool: ICompletionOptionTools,
+  logger?: { debug: () => void; info: () => void; warn: () => void }
+) {
+  const [score] = await scoresOf(tool, logger && { logger });
+  return score;
 }
 
 describe('ReActAgent tool-result confidence', () => {
@@ -85,6 +96,19 @@ describe('ReActAgent tool-result confidence', () => {
 
     expect(await scoreOf(tool, logger)).toEqual({ confidence: 0.7, source: 'default' });
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('"probe" threw'), expect.any(Error));
+  });
+
+  // From the third identical call the agent appends a repeated-call notice to the observation;
+  // the validator must still judge exactly what the tool returned.
+  it('validates the raw tool output, not the observation carrying the repeated-call notice', async () => {
+    const failure = 'The website is temporarily unavailable.';
+    const tool = createTool(failure, result =>
+      result === failure ? { confidence: 0.1, source: 'deterministic' } : undefined
+    );
+
+    const scores = await scoresOf(tool, { probeCalls: 3 });
+
+    expect(scores).toEqual(Array(3).fill({ confidence: 0.1, source: 'deterministic' }));
   });
 
   it('scores an empty result from a tool without a validator as deterministic 0.3', async () => {

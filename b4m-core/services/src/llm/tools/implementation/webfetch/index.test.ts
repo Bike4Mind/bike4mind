@@ -638,6 +638,14 @@ describe('validateWebFetchResult', () => {
     expect(validateWebFetchResult(result)).toEqual({ confidence: 0.1, source: 'deterministic' });
   });
 
+  it('scores the PDF-too-large message as a failure', async () => {
+    scrapeUrl.mockRejectedValueOnce(new FirecrawlError('PDF page count timed out', 500));
+
+    const { result } = await runTool('https://example.com/report.pdf');
+
+    expect(validateWebFetchResult(result)).toEqual({ confidence: 0.1, source: 'deterministic' });
+  });
+
   it('scores the unreachable-page message as a failure', async () => {
     scrapeUrl.mockRejectedValueOnce(new Error('socket hang up'));
 
