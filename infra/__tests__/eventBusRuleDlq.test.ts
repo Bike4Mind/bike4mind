@@ -129,8 +129,9 @@ describe('every event bus subscription dead-letters undeliverable events', () =>
 
       // $util.all pairs the queue EventBridge sends to with the rule(s) it accepts sends from. A
       // policy naming the wrong queue or rule deploys green and silently rejects the DLQ send.
+      // The trailing comma is optional: prettier breaks a long array one element per line.
       const ws = '\\s*';
-      expect(policy).toMatch(new RegExp(`\\.all\\(\\[${ws}${dlq}\\.arn,${ws}(?:${ruleArnRefs(sub)})${ws}\\]\\)`));
+      expect(policy).toMatch(new RegExp(`\\.all\\(\\[${ws}${dlq}\\.arn,${ws}(?:${ruleArnRefs(sub)}),?${ws}\\]\\)`));
 
       // The aliases destructured from that pair are the ones the statement must use.
       const aliases = policy?.match(/\.apply\(\(\[(\w+),\s*(\w+)\]\)/);
