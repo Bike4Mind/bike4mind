@@ -268,7 +268,7 @@ export function PrStatusBar({
             <Chip
               size="sm"
               variant="soft"
-              color={state.autoMerge.queued ? 'success' : 'primary'}
+              color={state.autoMerge.queued ? 'warning' : 'primary'}
               data-testid="pr-bar-automerge-armed"
               data-queued={state.autoMerge.queued ? 'true' : undefined}
             >
