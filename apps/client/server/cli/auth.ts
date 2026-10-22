@@ -158,7 +158,7 @@ export async function verifyJwtToken(token: string | undefined): Promise<Verifie
 export interface VerifyApiKeyOptions {
   /** At least one of these scopes must be present on the key. Defaults to
    *  AI_GENERATE / AI_CHAT to preserve the legacy completions behavior. */
-  requiredScopes?: ApiKeyScope[];
+  requiredScopes?: ApiKeyScopeValue[];
 }
 
 /**

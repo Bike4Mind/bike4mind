@@ -1,4 +1,4 @@
-import { ApiKeyScope, CONFINED_API_KEY_SCOPES, QA_INGEST_USER_TAG } from '@bike4mind/common';
+import { ApiKeyScope, type ApiKeyScopeValue, CONFINED_API_KEY_SCOPES, QA_INGEST_USER_TAG } from '@bike4mind/common';
 import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import { useAdminGenerateApiKey, AdminCreateUserApiKeyRequest } from '@client/app/hooks/data/userApiKeys';
 import { useGetPreauthorizableDataLakes } from '@client/app/hooks/data/dataLakes';
@@ -38,7 +38,7 @@ interface AdminGenerateApiKeyModalProps {
 const ingestScopeOptions = ADMIN_ONLY_API_KEY_SCOPES.filter(s => s.value !== ApiKeyScope.OVERWATCH_INGEST_WRITE);
 // A confined scope must be a key's only scope (createUserApiKey enforces it), so picking one
 // replaces the selection and picking any other scope drops it.
-const confinedScopeValues = new Set<ApiKeyScope>(CONFINED_API_KEY_SCOPES);
+const confinedScopeValues = new Set<ApiKeyScopeValue>(CONFINED_API_KEY_SCOPES);
 
 export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminGenerateApiKeyModalProps) {
   // Embed keys are minted through the dedicated embed flow, not this generic modal, so
@@ -111,8 +111,8 @@ export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminG
   const allScopesSelected = scopeOptions.every(s => formData.scopes.includes(s.value));
   const genericSelectedCount = formData.scopes.filter(s => !confinedScopeValues.has(s)).length;
 
-  const toggleScope = (value: ApiKeyScope, checked: boolean) => {
-    let scopes: ApiKeyScope[];
+  const toggleScope = (value: ApiKeyScopeValue, checked: boolean) => {
+    let scopes: ApiKeyScopeValue[];
     if (!checked) scopes = formData.scopes.filter(s => s !== value);
     else if (confinedScopeValues.has(value)) scopes = [value];
     else scopes = [...formData.scopes.filter(s => !confinedScopeValues.has(s)), value];

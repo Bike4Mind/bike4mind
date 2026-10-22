@@ -30,6 +30,8 @@ describe('resolveApiKeyScopeAccess', () => {
       hasOptiAccess: false,
       hasOverwatchAccess: false,
       hearthEnabled: false,
+      bypass: false,
+      entitlements: new Set(),
     });
   });
 
@@ -38,6 +40,7 @@ describe('resolveApiKeyScopeAccess', () => {
     const access = await resolveApiKeyScopeAccess(req({ id: 'u1', tags: [] }));
     expect(access.hasOverwatchAccess).toBe(true);
     expect(access.hasOptiAccess).toBe(false);
+    expect(access.entitlements).toEqual(new Set(['overwatch:pro']));
   });
 
   it('lets admins and developers bypass the entitlement arms without resolving entitlements', async () => {
@@ -46,7 +49,8 @@ describe('resolveApiKeyScopeAccess', () => {
       { id: 'd', tags: ['developer'] },
     ]) {
       const access = await resolveApiKeyScopeAccess(req(user));
-      expect(access.hasOptiAccess && access.hasOverwatchAccess).toBe(true);
+      expect(access.hasOptiAccess && access.hasOverwatchAccess && access.bypass).toBe(true);
+      expect(access.entitlements.size).toBe(0);
     }
     expect(h.getRequestEntitlements).not.toHaveBeenCalled();
   });

@@ -15,7 +15,11 @@ import { BadRequestError } from '@bike4mind/utils';
 import { logEventSafe } from '@server/utils/analyticsLog';
 import { toObjectIdString } from '@bike4mind/server-utils/utils/objectId';
 import { ApiKeyScope, UserApiKeyEvents } from '@bike4mind/common';
-import { ADMIN_ONLY_API_KEY_SCOPES, USER_API_KEY_SCOPE_VALUES } from '@client/app/constants/apiKeyScopes';
+import {
+  ADMIN_ONLY_API_KEY_SCOPES,
+  USER_API_KEY_SCOPE_VALUES,
+  isKnownApiKeyScope,
+} from '@client/app/constants/apiKeyScopes';
 
 // Scopes this admin endpoint may mint: the standard self-service set plus the
 // admin-provisioned ingest scopes. ADMIN and CC_BRIDGE are still excluded -
@@ -237,6 +241,7 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
             userApiKeys: userApiKeyRepository,
             agents: agentRepository,
           },
+          isKnownScope: isKnownApiKeyScope,
         }
       );
 

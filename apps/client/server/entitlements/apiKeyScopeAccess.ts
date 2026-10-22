@@ -8,7 +8,8 @@ import { getRequestEntitlements, type EntitlementRequest } from './index';
 /**
  * Server half of useApiKeyScopeAccess: the same product gates the scoped routes apply to a key's
  * owner, resolved for the minting user so a key cannot be minted with a scope the UI hid.
- * Admin and developer bypass the entitlement arms, matching the overlays' access predicates.
+ * Admin and developer bypass the entitlement arms, matching the overlays' access predicates, and
+ * skip the entitlement lookup, so `entitlements` is empty for them.
  */
 export async function resolveApiKeyScopeAccess(req: EntitlementRequest): Promise<ApiKeyScopeAccess> {
   const bypass = !!req.user?.isAdmin || hasDeveloperUserTag(req.user?.tags);
@@ -20,5 +21,7 @@ export async function resolveApiKeyScopeAccess(req: EntitlementRequest): Promise
     hasOptiAccess: bypass || entitlements.includes('optihashi:pro'),
     hasOverwatchAccess: bypass || entitlements.includes('overwatch:pro'),
     hearthEnabled: isSettingEnabled(hearthSetting ?? settingsMap.EnableHearth?.defaultValue),
+    bypass,
+    entitlements: new Set(entitlements),
   };
 }
