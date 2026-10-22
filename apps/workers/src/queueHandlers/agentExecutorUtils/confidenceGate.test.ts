@@ -1,9 +1,11 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import type { AgentStep } from '@bike4mind/agents';
 import {
   evaluateConfidenceGate,
   formatConfidenceGateReason,
   isPausingLowConfidenceStreak,
+  recordAndDecideConfidencePause,
+  type ConfidenceGateEvaluation,
   type ConfidenceGateInput,
 } from './confidenceGate';
 
@@ -99,7 +101,52 @@ describe('isPausingLowConfidenceStreak', () => {
 describe('formatConfidenceGateReason', () => {
   it('names the confidence, the threshold and the streak length', () => {
     expect(formatConfidenceGateReason(0.3, 0.6, 2)).toBe(
-      'Iteration confidence 30% below threshold 60% for 2 consecutive iterations'
+      'Iteration confidence 30% below threshold 60% for 2 scored iterations in a row'
     );
+  });
+});
+
+describe('recordAndDecideConfidencePause', () => {
+  const evaluation = (overrides: Partial<ConfidenceGateEvaluation> = {}): ConfidenceGateEvaluation => ({
+    iteration: 2,
+    confidence: 0.3,
+    belowThreshold: true,
+    pausable: true,
+    ...overrides,
+  });
+
+  it('records whether the iteration was below the threshold, not whether it can pause', async () => {
+    const record = vi.fn(async () => 1);
+    await recordAndDecideConfidencePause(evaluation({ belowThreshold: false, pausable: true }), record);
+    expect(record).toHaveBeenCalledWith(0.3, { belowThreshold: false });
+  });
+
+  it('does not pause on the first low iteration and pauses on the second', async () => {
+    expect(
+      await recordAndDecideConfidencePause(
+        evaluation(),
+        vi.fn(async () => 1)
+      )
+    ).toEqual({
+      pause: false,
+      lowConfidenceStreak: 1,
+    });
+    expect(
+      await recordAndDecideConfidencePause(
+        evaluation(),
+        vi.fn(async () => 2)
+      )
+    ).toEqual({
+      pause: true,
+      lowConfidenceStreak: 2,
+    });
+  });
+
+  it('does not pause a completed run even on a streak', async () => {
+    const decision = await recordAndDecideConfidencePause(
+      evaluation({ pausable: false }),
+      vi.fn(async () => 2)
+    );
+    expect(decision.pause).toBe(false);
   });
 });

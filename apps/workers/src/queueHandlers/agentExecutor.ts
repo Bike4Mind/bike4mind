@@ -134,7 +134,7 @@ import { resolveDisplayAnswer } from './agentExecutorUtils/truncatedReply';
 import {
   evaluateConfidenceGate,
   formatConfidenceGateReason,
-  isPausingLowConfidenceStreak,
+  recordAndDecideConfidencePause,
 } from './agentExecutorUtils/confidenceGate';
 import { guardPlanCompletion } from './agentExecutorUtils/planCompletionGuard';
 import { injectBriefContext } from './agentExecutorUtils/briefContextInjector';
@@ -3191,18 +3191,18 @@ async function processExecution(
         threshold: confidenceGateThreshold,
         iterationSteps: iterationResult.allSteps,
       });
-      let lowConfidenceStreak = 0;
-      if (gate !== null) {
-        // Telemetry (#56 M1.1): record every iteration the gate evaluates -
-        // including ones that complete in the same turn (isComplete=true) or
-        // clear the threshold - so `evaluatedCount` is the true denominator for
-        // fire rate. `recordGateEmitted` below increments the numerator only on
-        // a real pause. Baseline observability before touching signal quality.
-        lowConfidenceStreak = await agentExecutionRepository.recordIterationConfidence(executionId, gate.confidence, {
-          belowThreshold: gate.belowThreshold,
-        });
-      }
-      if (gate?.pausable && isPausingLowConfidenceStreak(lowConfidenceStreak)) {
+      // Telemetry (#56 M1.1): record every iteration the gate evaluates -
+      // including ones that complete in the same turn (isComplete=true) or
+      // clear the threshold - so `evaluatedCount` is the true denominator for
+      // fire rate. `recordGateEmitted` below increments the numerator only on
+      // a real pause. Baseline observability before touching signal quality.
+      const decision =
+        gate === null
+          ? null
+          : await recordAndDecideConfidencePause(gate, (confidence, options) =>
+              agentExecutionRepository.recordIterationConfidence(executionId, confidence, options)
+            );
+      if (gate !== null && decision?.pause) {
         // 0-indexed wire convention: the agent reports 1-indexed
         // `this.iterations`, but the client's `IterationStream` and
         // `permission_request` use 0-indexed (see the matching subtraction
@@ -3210,7 +3210,11 @@ async function processExecution(
         // consistent so the eventual gate UI doesn't render an off-by-one
         // iteration label relative to the permission card.
         const wireIteration = Math.max(0, gate.iteration - 1);
-        const reason = formatConfidenceGateReason(gate.confidence, confidenceGateThreshold, lowConfidenceStreak);
+        const reason = formatConfidenceGateReason(
+          gate.confidence,
+          confidenceGateThreshold,
+          decision.lowConfidenceStreak
+        );
         const gatePayload = { iteration: wireIteration, confidence: gate.confidence, reason };
         logger.info('[ConfidenceGate] Pausing execution for human review', { executionId, ...gatePayload });
         // `updateCheckpoint` above already persisted the current iteration's

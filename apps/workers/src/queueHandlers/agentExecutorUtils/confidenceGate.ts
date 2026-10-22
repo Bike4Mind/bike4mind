@@ -85,7 +85,22 @@ export function isPausingLowConfidenceStreak(lowConfidenceStreak: number): boole
   return lowConfidenceStreak >= LOW_CONFIDENCE_STREAK_TO_PAUSE;
 }
 
+/**
+ * Persist one evaluated iteration (telemetry + streak, in one write) and decide whether
+ * it pauses the run. Iterations the gate skipped (`evaluateConfidenceGate` returned null)
+ * never reach here, so they neither extend nor break the streak.
+ */
+export async function recordAndDecideConfidencePause(
+  evaluation: ConfidenceGateEvaluation,
+  recordIterationConfidence: (confidence: number, options: { belowThreshold: boolean }) => Promise<number>
+): Promise<{ pause: boolean; lowConfidenceStreak: number }> {
+  const lowConfidenceStreak = await recordIterationConfidence(evaluation.confidence, {
+    belowThreshold: evaluation.belowThreshold,
+  });
+  return { pause: evaluation.pausable && isPausingLowConfidenceStreak(lowConfidenceStreak), lowConfidenceStreak };
+}
+
 /** The human-facing `pendingGate.reason`, shared by the per-iteration and replay gate sites. */
 export function formatConfidenceGateReason(confidence: number, threshold: number, lowConfidenceStreak: number): string {
-  return `Iteration confidence ${(confidence * 100).toFixed(0)}% below threshold ${(threshold * 100).toFixed(0)}% for ${lowConfidenceStreak} consecutive iterations`;
+  return `Iteration confidence ${(confidence * 100).toFixed(0)}% below threshold ${(threshold * 100).toFixed(0)}% for ${lowConfidenceStreak} scored iterations in a row`;
 }
