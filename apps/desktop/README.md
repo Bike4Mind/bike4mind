@@ -59,6 +59,21 @@ file could not be found; paste or attach the original image again. If the clipbo
 the image format, use **Save image...** instead. A failed attachment appears as a rejection above
 the composer, where it can be dismissed.
 
+## Chat costs
+
+Chat shows the credits reported by the server while a reply streams, after it finishes, and
+in the composer's usage details. Missing credit usage is left blank rather than shown as zero.
+
+In development (`pnpm dev`), Settings offers **Show dollar costs**, off by default. It switches
+the streaming cost and the composer's last-turn cost to the server's dollar figure, and adds
+dollars to the completed reply's tooltip. Completed replies keep their credit headline.
+The choice is saved locally. Production builds hide this setting and always display credits,
+even if a development run previously saved the dollar preference.
+
+If a cost is absent, the server may not have reported it yet; older replies may have no saved
+usage. The app does not estimate credits by converting dollars. A developer dollar display
+falls back to credits when the server reports no dollar figure.
+
 ## Suggested next prompt
 
 Settings has a **Suggested next prompt** switch and model picker. **Automatic** uses a small
