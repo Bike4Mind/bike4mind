@@ -132,6 +132,19 @@ describe('POST /api/v1/text-refinements', () => {
     expect(mockRefineText).not.toHaveBeenCalled();
   });
 
+  // 10_000 is written literally, not imported: the published bound is what callers rely on, so
+  // this test must not move with the constant it pins.
+  it.each([
+    ['text', { text: 'x'.repeat(10_000) }],
+    ['context', { text: 'hello', context: 'x'.repeat(10_000) }],
+  ])('200s a %s at exactly the published 10,000-character bound', async (_field, body) => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    const { req, res } = post(body);
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockRefineText).toHaveBeenCalledTimes(1);
+  });
+
   it('503s with provider_not_configured when the deployment has no operations text model', async () => {
     validateWithScopes([ApiKeyScope.AI_GENERATE]);
     mockGetOperationsModel.mockRejectedValue(
