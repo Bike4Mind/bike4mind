@@ -188,6 +188,16 @@ shown in the startup banner (`🌍 API Environment: …`).
 > For a one-off custom/self-hosted URL, use the in-session `/set-api <url>` command
 > (see [API Configuration](#api-configuration) below).
 
+### Typing while the agent works
+
+You can keep typing while a turn is running. Nothing you send is dropped, and a second turn never starts in parallel with the first.
+
+- **Enter** steers the running turn. The message is added to the agent's next model request, which is sent after the current batch of tool calls finishes. If the agent has just answered and has iterations left, it reopens to take the message into account. A message the turn never reaches runs as the next turn.
+- **Tab** queues the message as a follow-up. It runs as a new turn once the current one ends. Everything still queued at that point runs together as a single turn, in the order you sent it.
+- **Esc** cancels the turn and moves any queued messages back into the input, where you can edit and resend them or clear them with Ctrl+C. Any message you send while the cancelled turn is still shutting down runs once the turn has stopped.
+
+Queued messages appear above the input. Follow-ups are labelled `[next turn]`.
+
 ## Commands
 
 While in interactive mode. This mirrors the registry in `src/config/commands.ts` — run `/help` in a session for the live list (which also includes any custom and project commands).

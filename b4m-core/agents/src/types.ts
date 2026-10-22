@@ -324,6 +324,9 @@ export interface AgentRunOptions {
    *   more iteration with the feedback as the next user message.
    * The host owns the wait budget per phase and must return promptly; return
    * null/'' when there is nothing to report. Not provided: behavior is unchanged.
+   * Never called once `signal` has aborted or when no further request will
+   * follow (last iteration, token ceiling), so a host can treat a drain call as
+   * delivery (the CLI uses this to steer user messages into a running turn).
    */
   drainFeedback?: (phase: FeedbackDrainPhase) => Promise<string | null>;
 }
