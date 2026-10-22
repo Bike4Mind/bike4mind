@@ -348,8 +348,14 @@ describe('POST /api/embed/chat', () => {
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
 
-  it('treats Origin: null (sandboxed iframe) as absent rather than 403', async () => {
+  it('denies an opaque origin when the key restricts origins', async () => {
     const res = await post(CHAT, { origin: 'null' });
+    expect(res.status).toBe(403);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('still serves a request that carries no Origin header', async () => {
+    const res = await post(CHAT);
     expect(res.status).toBe(200);
     expect(mockExecuteCompletion).toHaveBeenCalledTimes(1);
   });

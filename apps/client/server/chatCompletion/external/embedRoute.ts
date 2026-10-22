@@ -57,7 +57,7 @@ import { verifyEmbedApiKey, type ApiKeyInfo } from '@server/cli/auth';
 import { isAuthInfraFailure, setAuthInfraFailureHeaders } from '@server/auth/apiKeyAuthFailure';
 import { extractBearer, resolveEmbedSessionToken } from '@server/embed/resolveEmbedSessionToken';
 import { reauthorizeIdentifiedSession } from '@server/embed/identifiedEmbedUser';
-import { isEmbedOriginAllowed } from '@server/embed/firstPartyOrigin';
+import { resolveEmbedOriginDecision } from '@server/embed/firstPartyOrigin';
 import { checkApiKeyRateLimit } from '@server/utils/apiKeyRateLimitCheck';
 import { checkEmbedSessionRateLimit } from '@server/utils/embedSessionRateLimit';
 import { embedCors } from '@server/middlewares/embedCors';
@@ -428,15 +428,8 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       }
 
       // Origin gate (defense-in-depth for browsers; the credential is the boundary).
-      // A sandboxed iframe without allow-same-origin sends the literal `Origin: null`;
-      // treat that like an absent Origin (let the credential decide) rather than a
-      // hard 403 that would break a legitimate embed without stopping a real attacker
-      // (who can just omit the header anyway). Our own serving origin is implicitly
-      // permitted: the /embed/* widget page posts from the app host, which can never
-      // appear on an allow-list (see firstPartyOrigin.ts) - must stay in lockstep
-      // with the mint gate in pages/api/embed/session.ts.
-      const requestOrigin = headers.origin && headers.origin !== 'null' ? headers.origin : undefined;
-      if (requestOrigin && !isEmbedOriginAllowed(requestOrigin, ctx.allowedOrigins, headers.host)) {
+      // Shared with the mint and history gates via resolveEmbedOriginDecision.
+      if (!resolveEmbedOriginDecision(headers.origin, ctx.allowedOrigins, headers.host).allowed) {
         return res.status(403).json({ error: 'forbidden', error_description: 'Origin not allowed for this embed key' });
       }
 

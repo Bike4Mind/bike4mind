@@ -141,4 +141,15 @@ describe('/api/embed/history', () => {
     const { status } = await call('GET', { authorization: 'Bearer eyJ.tok', origin: 'https://evil.example.com' });
     expect(status).toBe(403);
   });
+
+  it('denies an opaque origin when the key restricts origins', async () => {
+    const { status, body } = await call('GET', { authorization: 'Bearer eyJ.tok', origin: 'null' });
+    expect(status).toBe(403);
+    expect(body.error_description).toBe('Origin not allowed for this embed key');
+  });
+
+  it('still serves a request that carries no Origin header', async () => {
+    const { status } = await call('GET', { authorization: 'Bearer eyJ.tok' });
+    expect(status).toBe(200);
+  });
 });

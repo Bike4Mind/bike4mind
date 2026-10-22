@@ -118,6 +118,17 @@ describe('POST /api/embed/session', () => {
     expect(json.error).toBe('unauthorized');
   });
 
+  it('denies an opaque origin when the key restricts origins', async () => {
+    const { status, json } = await mint({}, { origin: 'null' });
+    expect(status).toBe(403);
+    expect(json.error_description).toBe('Origin not allowed for this embed key');
+  });
+
+  it('still mints for a request that carries no Origin header', async () => {
+    const { status } = await mint({});
+    expect(status).toBe(200);
+  });
+
   it('refuses an identified mint from a browser, since it carries a client secret', async () => {
     const { status, json } = await mint(IDENTIFIED_BODY, { origin: 'https://host.example.com' });
     expect(status).toBe(400);
