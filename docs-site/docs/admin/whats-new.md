@@ -130,7 +130,7 @@ Batch operations:
 
 ## Weekly Highlights to Slack
 
-This card is visible on main environments (production, dev, PR previews) but not on fork environments. It configures automatic generation of weekly highlight summaries from What's New modals, posted to a Slack channel.
+This card is visible on main environments (production, dev, PR previews) but not on fork environments. It configures on-demand generation of weekly highlight summaries from What's New modals, posted to a Slack channel. There is no automatic schedule: highlights are generated only when an admin clicks **Generate Now**.
 
 ### Configuration
 
@@ -138,7 +138,7 @@ The configuration is in a collapsible accordion with the following settings:
 
 | Setting | Description |
 |---------|-------------|
-| **Enabled Toggle** | Turn weekly auto-generation on or off |
+| **Enabled Toggle** | Saved with the config but currently has no effect, since there is no automatic schedule |
 | **Slack Channel ID** | The Slack channel (starts with C) where highlights are posted |
 | **Slack Team ID** | The Slack workspace/team ID (starts with T) |
 | **Attach Markdown File** | When enabled, a `.md` file is attached to the Slack message |
@@ -173,7 +173,7 @@ A "Preview" button on the success alert opens the last generated highlights text
 
 - On non-source environments, configure the distribution URL before enabling auto-sync to ensure modals can be fetched.
 - Use the expiry date to automatically archive announcements after they become stale, rather than manually disabling them.
-- When configuring Weekly Highlights, test with "Generate Now" before enabling the automatic schedule to verify the Slack integration works correctly.
+- When configuring Weekly Highlights, use a test Slack channel for the first "Generate Now" run to verify the Slack integration works correctly.
 - Keep announcement descriptions concise and use Markdown formatting for readability.
 
 ---

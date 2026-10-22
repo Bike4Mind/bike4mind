@@ -1,27 +1,25 @@
 import { api } from '@client/app/contexts/ApiContext';
 import { useMutation, useQuery } from '@tanstack/react-query';
 
-export function useGetAvailableSlots(calendarId: string, year: number, weekNumber: number, timeZone: string) {
+export function useGetAvailableSlots(year: number, weekNumber: number, timeZone: string) {
   return useQuery({
-    queryKey: ['google-calendar', `google-calendar-${calendarId}-${year}-${weekNumber}-${timeZone}`],
+    queryKey: ['google-calendar', `google-calendar-${year}-${weekNumber}-${timeZone}`],
     queryFn: async () => {
       const response = await api.get('/api/google-calendar/available', {
-        params: { calendarId, year, weekNumber, timeZone },
+        params: { year, weekNumber, timeZone },
       });
       return response.data;
     },
     staleTime: 1000 * 60 * 5, // 5 minutes
     placeholderData: prev => prev,
-    enabled: !!(calendarId && weekNumber && timeZone),
+    enabled: !!(weekNumber && timeZone),
   });
 }
 
 interface ICreateCalendarEvent {
   objective: string;
-  calendarId: string;
   date: string;
   timeZone: string;
-  attendees: { email: string }[];
 }
 
 interface GoogleCalendarEventInput {

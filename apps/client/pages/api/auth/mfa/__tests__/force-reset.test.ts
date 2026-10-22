@@ -44,7 +44,7 @@ vi.mock('@bike4mind/common', async importOriginal => ({
 }));
 
 import { ForbiddenError } from '@bike4mind/common';
-import { SECRET_USER_FIELDS, expectSelfUserStripped } from '@server/auth/__tests__/sessionUserSecrets';
+import { secretUserFields, expectSelfUserStripped } from '@server/auth/__tests__/sessionUserSecrets';
 import handler from '../force-reset';
 
 const REASON = 'Lost authenticator, identity verified by phone';
@@ -123,13 +123,13 @@ describe('POST /api/auth/mfa/force-reset', () => {
   });
 
   it('strips secrets and undeclared fields from the user in the response', async () => {
-    mockForceResetMFA.mockResolvedValue({ success: true, user: { id: 'target1', ...SECRET_USER_FIELDS } });
+    mockForceResetMFA.mockResolvedValue({ success: true, user: { id: 'target1', ...secretUserFields() } });
     const { res, run } = post({ userId: 'target1', reason: REASON });
     await run();
 
     const body = res._getJSONData();
     expect(body.success).toBe(true);
-    expectSelfUserStripped(body.user, body);
+    expectSelfUserStripped(body.user, body, 'target1');
   });
 
   it('resets inside the transaction and records user.mfa.reset with the reason and counts', async () => {

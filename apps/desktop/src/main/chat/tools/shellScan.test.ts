@@ -478,6 +478,65 @@ describe('scanShell', () => {
       ]);
     });
   });
+
+  describe('repository writes', () => {
+    const targets = async (command: string) => (await scan(command)).sends.map(entry => entry.target);
+
+    it('pins a push or a gh write to the folder it runs in', async () => {
+      expect(await targets('git push -u origin feat/x')).toEqual([
+        { kind: 'push', cwd: root, remote: 'origin', destinations: ['feat/x'], force: false },
+      ]);
+      expect(await targets('cd sub && gh pr create --title "a b"')).toEqual([
+        { kind: 'github', cwd: join(root, 'sub') },
+      ]);
+    });
+
+    it('pins nothing when the script can redirect git or gh', async () => {
+      expect(await targets('GH_REPO=other/app gh pr create')).toEqual([null]);
+      expect(await targets('export GIT_DIR=/elsewhere; git push')).toEqual([null]);
+      expect(await targets('git push "$REMOTE" main')).toEqual([null]);
+      expect(await targets('git push https://example.com/x.git')).toEqual([null]);
+      expect(await targets('curl -d @a https://example.com')).toEqual([null]);
+    });
+
+    it('checks the file a gh write sends like any path argument', async () => {
+      expect((await scan('gh pr create --body-file ~/.ssh/id_rsa')).directories).toEqual([join(home, '.ssh')]);
+      expect((await scan('gh pr create --body-file /tmp/body.md')).directories).toEqual([]);
+      expect((await scan('gh api repos/a/b/issues -F body=@~/notes/x.md')).directories).toEqual([join(home, 'notes')]);
+    });
+  });
+
+  describe('read-only probes of toolchain folders', () => {
+    it.each([
+      'ls ~/.nvm/versions/node',
+      'ls -la ~/Library/pnpm',
+      'cat ~/.nvm/alias/default',
+      'stat /etc/profiles/per-user/tester/bin/node',
+      'ls ~/.local/bin && head -1 ~/.local/share/pnpm/pnpm',
+      'find ~/.nvm/versions -maxdepth 2 -name node',
+    ])('does not ask for a folder: %s', async command => {
+      expect((await scan(command)).directories).toEqual([]);
+    });
+
+    it.each([
+      'cat ~/.ssh/id_rsa',
+      'ls ~/.aws',
+      'ls ~/Library/Keychains',
+      'cat ~/.local/share/keyrings/login.keyring',
+      'cat ~/.nvm/../.ssh/config',
+      'cat ~/.nvm/.npmrc',
+      'rm ~/.nvm/alias/default',
+      'cp ~/.nvm/alias/default ~/.local/bin/x',
+      'find ~/.nvm -name x -delete',
+      'cat ~/.nvm*/../.ssh/id_rsa',
+      'cat ~/.nvm/.?/.ssh/id_rsa',
+      'tree -o ~/.nvm/nvm.sh .',
+      'tree -R ~/.nvm',
+      'cat ~/.nvm/versions/node/v20/etc/npmrc',
+    ])('still asks for a folder: %s', async command => {
+      expect((await scan(command)).directories).not.toEqual([]);
+    });
+  });
 });
 
 describe('a standing "always" on git status', () => {

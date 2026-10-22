@@ -50,7 +50,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | app-files | 7 | 0 | 6 | 0 | 0 | 1 | 3 |
 | artifact-sandbox | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | artifacts | 6 | 0 | 6 | 0 | 0 | 0 | 1 |
-| auth | 33 | 0 | 8 | 15 | 0 | 10 | 5 |
+| auth | 33 | 0 | 7 | 16 | 0 | 10 | 5 |
 | blog | 6 | 0 | 6 | 0 | 0 | 0 | 0 |
 | blog-integration | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
 | briefcase | 3 | 0 | 3 | 0 | 0 | 0 | 0 |
@@ -100,7 +100,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | modals | 4 | 0 | 4 | 0 | 0 | 0 | 0 |
 | models | 2 | 0 | 2 | 0 | 0 | 0 | 0 |
 | notebooks | 6 | 0 | 6 | 0 | 0 | 0 | 2 |
-| oauth | 13 | 0 | 3 | 2 | 0 | 8 | 9 |
+| oauth | 13 | 0 | 1 | 4 | 0 | 8 | 9 |
 | ollama | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
 | organizations | 35 | 0 | 35 | 0 | 0 | 0 | 1 |
 | otc | 2 | 0 | 0 | 0 | 0 | 2 | 0 |
@@ -139,7 +139,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | usage | 2 | 0 | 1 | 0 | 0 | 1 | 1 |
 | user | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
 | user-api-keys | 7 | 0 | 7 | 0 | 0 | 0 | 1 |
-| users | 31 | 0 | 30 | 1 | 0 | 0 | 4 |
+| users | 31 | 0 | 29 | 2 | 0 | 0 | 4 |
 | v1 | 46 | 42 | 41 | 0 | 0 | 5 | 36 |
 | voice | 6 | 0 | 5 | 0 | 0 | 1 | 2 |
 | webhooks | 12 | 0 | 7 | 0 | 0 | 5 | 5 |
@@ -512,7 +512,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/auth/mfa/regenerate-backup-codes` | POST | jwt | - | no | - | 1: `hooks/data/mfa.ts` |
 | `/api/auth/mfa/setup` | POST | jwt | - | no | - | 1: `hooks/data/mfa.ts` |
 | `/api/auth/mfa/status` | GET | jwt+key | - | no | - | 1: `hooks/data/mfa.ts` |
-| `/api/auth/mfa/verify` | POST | jwt+key | - | no | - | 1: `hooks/data/mfa.ts` |
+| `/api/auth/mfa/verify` | POST | jwt | - | no | - | 1: `hooks/data/mfa.ts` |
 | `/api/auth/mfa/verify-setup` | POST | jwt | - | no | - | 1: `hooks/data/mfa.ts` |
 | `/api/auth/okta` | GET | handler | - | no | - | 0 |
 | `/api/auth/okta/callback` | GET | handler | - | no | - | 0 |
@@ -1031,10 +1031,10 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
 | --- | --- | --- | --- | --- | --- | --- |
 | `/api/oauth/ai-token` | POST | handler | - | no | - | 0 |
-| `/api/oauth/code` | POST | jwt+key | - | no | - | 1: `routes/oauth/authorize.tsx` |
+| `/api/oauth/code` | POST | jwt | - | no | - | 1: `routes/oauth/authorize.tsx` |
 | `/api/oauth/device/initiate` | POST | handler | - | no | - | 0 |
 | `/api/oauth/device/token` | POST | handler | - | no | - | 0 |
-| `/api/oauth/device/verify` | POST | jwt+key | - | no | - | 1: `hooks/data/device-auth.ts` |
+| `/api/oauth/device/verify` | POST | jwt | - | no | - | 1: `hooks/data/device-auth.ts` |
 | `/api/oauth/federated-admin` | POST | handler | - | no | - | 0 |
 | `/api/oauth/grants` | GET | jwt | - | no | - | 1: `hooks/data/oauthGrants.ts` |
 | `/api/oauth/grants/[clientId]` | DELETE | jwt | - | no | - | 1: `hooks/data/oauthGrants.ts` |
@@ -1494,7 +1494,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/users/[id]/friend-requests` | GET | jwt+key | - | no | - | 1: `hooks/data/user.ts` |
 | `/api/users/[id]/friends` | GET | jwt+key | - | no | - | 1: `hooks/data/user.ts` |
 | `/api/users/[id]/ingested-emails` | GET, DELETE | jwt+key | - | no | - | 1: `components/ProfileModal/EmailInboxTabContent.tsx` |
-| `/api/users/[id]/loginAs` | POST | jwt+key | - | no | - | 1: `hooks/data/user.ts` |
+| `/api/users/[id]/loginAs` | POST | jwt | - | no | - | 1: `hooks/data/user.ts` |
 | `/api/users/[id]/moderation-appeal` | POST | jwt+key | - | no | - | 0 |
 | `/api/users/[id]/organization` | GET, DELETE | jwt+key | - | no | - | 1: `utils/organizationAPICalls.tsx` |
 | `/api/users/[id]/organizations` | GET | jwt+key | - | no | - | 0 |

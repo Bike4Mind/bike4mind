@@ -1551,7 +1551,11 @@ describe('ImageGenerationService quest partial writes', () => {
 
   // The promptMeta invoke() builds for the `a cat` FLUX_PRO_1_1 body below.
   const invokePromptMeta = {
-    model: { name: ImageModels.FLUX_PRO_1_1, parameters: { safety_tolerance: 2 }, type: 'image' },
+    model: {
+      name: ImageModels.FLUX_PRO_1_1,
+      parameters: { safety_tolerance: 2, prompt_upsampling: false },
+      type: 'image',
+    },
     session: { id: 'session1', userId: 'user1' },
     prompt: 'a cat',
     questId: 'quest1',

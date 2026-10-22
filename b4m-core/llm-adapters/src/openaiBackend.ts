@@ -220,6 +220,7 @@ export class OpenAIBackend implements ICompletionBackend {
     return [
       {
         id: ChatModels.GPT4_1,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-4.1',
         backend: ModelBackend.OpenAI,
@@ -246,6 +247,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.GPT4_1_MINI,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-4.1 Mini',
         backend: ModelBackend.OpenAI,
@@ -271,6 +273,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.GPT4_1_NANO,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-4.1 Nano',
         backend: ModelBackend.OpenAI,
@@ -340,6 +343,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.O3,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'O3',
         backend: ModelBackend.OpenAI,
@@ -454,6 +458,7 @@ export class OpenAIBackend implements ICompletionBackend {
       // rate applies once the prompt exceeds 272k input tokens (long context).
       {
         id: ChatModels.GPT5_6_SOL,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-5.6 Sol',
         backend: ModelBackend.OpenAI,
@@ -479,6 +484,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.GPT5_6_TERRA,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-5.6 Terra',
         backend: ModelBackend.OpenAI,
@@ -502,6 +508,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.GPT5_6_LUNA,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-5.6 Luna',
         backend: ModelBackend.OpenAI,
@@ -527,6 +534,7 @@ export class OpenAIBackend implements ICompletionBackend {
       // GPT 5.5
       {
         id: ChatModels.GPT5_5,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-5.5',
         backend: ModelBackend.OpenAI,
@@ -552,6 +560,7 @@ export class OpenAIBackend implements ICompletionBackend {
       // GPT 5.4
       {
         id: ChatModels.GPT5_4,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-5.4',
         backend: ModelBackend.OpenAI,
@@ -575,6 +584,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.GPT5_4_MINI,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-5.4 Mini',
         backend: ModelBackend.OpenAI,
@@ -597,6 +607,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.GPT5_4_NANO,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-5.4 Nano',
         backend: ModelBackend.OpenAI,
@@ -621,6 +632,7 @@ export class OpenAIBackend implements ICompletionBackend {
       // GPT 5.2
       {
         id: ChatModels.GPT5_2,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-5.2',
         backend: ModelBackend.OpenAI,
@@ -668,6 +680,7 @@ export class OpenAIBackend implements ICompletionBackend {
       // GPT 5.1
       {
         id: ChatModels.GPT5_1,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-5.1',
         backend: ModelBackend.OpenAI,
@@ -716,6 +729,7 @@ export class OpenAIBackend implements ICompletionBackend {
       // GPT-5 Family
       {
         id: ChatModels.GPT5,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-5',
         backend: ModelBackend.OpenAI,
@@ -739,6 +753,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.GPT5_MINI,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-5 Mini',
         backend: ModelBackend.OpenAI,
@@ -761,6 +776,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.GPT5_NANO,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-5 Nano',
         backend: ModelBackend.OpenAI,
@@ -807,6 +823,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.GPT4o,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-4o',
         backend: ModelBackend.OpenAI,
@@ -827,6 +844,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.GPT4o_MINI,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-4o Mini',
         backend: ModelBackend.OpenAI,
@@ -847,6 +865,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.GPT4_TURBO,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-4 Turbo',
         backend: ModelBackend.OpenAI,
@@ -867,6 +886,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.GPT4,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-4',
         backend: ModelBackend.OpenAI,

@@ -10,7 +10,9 @@ const VerifyRequestSchema = z.object({
   action: z.enum(['approve', 'deny']),
 });
 
-const handler = baseApi()
+// jwtOnly: approving a device code grants the device a full session, so an API key must never act
+// as the user here (see sessionGrantRoutesRejectApiKeys.test.ts).
+const handler = baseApi({ auth: 'jwtOnly' })
   .use(
     rateLimit({
       limit: 10,

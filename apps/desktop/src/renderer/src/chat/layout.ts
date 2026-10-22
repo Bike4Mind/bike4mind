@@ -9,6 +9,11 @@ import type { SxProps } from '@mui/joy/styles/types';
  */
 export const CONTENT_MAX_WIDTH = 760;
 
+/** contentColumnSx's horizontal padding, in theme spacing units (`px: 3`). */
+const COLUMN_PADDING_UNITS = 3;
+/** The same padding in px (Joy's spacing unit is 8px), for code that measures against the column. */
+export const COLUMN_PADDING = COLUMN_PADDING_UNITS * 8;
+
 /**
  * Centered reading column. Applied to the INNER element, so the scrollbar stays at the pane edge.
  *
@@ -37,7 +42,7 @@ export const contentColumnSx: SxProps = {
   width: '100%',
   maxWidth: CONTENT_MAX_WIDTH,
   mx: 'auto',
-  px: 3,
+  px: COLUMN_PADDING_UNITS,
 };
 
 /**

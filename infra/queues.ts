@@ -949,7 +949,8 @@ const githubLakeRevokeQueueSubscription = githubLakeRevokeQueue.subscribe(
 );
 
 // What's New Highlights Queue
-// Generates weekly highlights summary from What's New modals and posts to Slack
+// Generates a highlights summary from What's New modals and posts to Slack.
+// Fed only by the admin generate-highlights route; there is no scheduled trigger.
 const whatsNewHighlightsQueueDLQ = new sst.aws.Queue('whatsNewHighlightsQueueDLQ', {
   transform: {
     queue: {

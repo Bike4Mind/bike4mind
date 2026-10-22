@@ -1,4 +1,4 @@
-import { memo, useMemo, type ComponentProps, type MouseEvent } from 'react';
+import { memo, useMemo, type ComponentProps } from 'react';
 import Box from '@mui/joy/Box';
 import { useTheme } from '@mui/joy/styles';
 import ReactMarkdown, { type Components, type ExtraProps } from 'react-markdown';
@@ -7,6 +7,7 @@ import rehypeSanitize from 'rehype-sanitize';
 import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
 import type { ChatImageRef } from '@shared/chat';
+import { ExternalLink } from '../ExternalLink';
 import { useImageMenu } from '../ImageContextMenu';
 import { fastRenderer } from './highlightElements';
 import { codeBlockSx, markdownSx } from './markdownSx';
@@ -112,26 +113,10 @@ function buildComponents(mode: 'light' | 'dark'): Components {
 
     img: ({ node: _node, ...props }) => <MarkdownImage {...props} />,
 
-    /**
-     * A link leaves for the user's browser and never navigates this window.
-     *
-     * Following it in place would replace the app - and the bridge the renderer is holding -
-     * with whatever page the model named. `target="_blank"` is not the answer either: that
-     * still asks Electron to open a window, it just asks for a different one. The href stays
-     * on the anchor so the link reads and copies as a link; the click is what is redirected.
-     */
-    a: ({ href, children, ...props }) => (
-      <a
-        {...props}
-        href={href}
-        data-testid="chat-markdown-link"
-        onClick={(event: MouseEvent<HTMLAnchorElement>) => {
-          event.preventDefault();
-          if (href) void window.b4m.shell.openExternal(href);
-        }}
-      >
-        {children}
-      </a>
+    // The same link a prompt draws, so the two open, and look, the same way. Bare urls arrive
+    // here as links too: remark-gfm's autolink literals turn them into ordinary `a` nodes.
+    a: ({ node: _node, ref: _ref, target: _target, ...props }) => (
+      <ExternalLink {...props} testId="chat-markdown-link" />
     ),
   };
 }

@@ -32,8 +32,13 @@ function looksLikeFilePath(input: string): boolean {
   return false;
 }
 
+export type SubmitOptions = {
+  /** Run as a new turn after the current one instead of steering it (Tab while a turn runs). */
+  followUp?: boolean;
+};
+
 interface InputPromptProps {
-  onSubmit: (input: string) => void;
+  onSubmit: (input: string, options?: SubmitOptions) => void;
   onBashCommand?: (command: string) => void; // Execute bash command directly
   onImageDetected?: (imageData: Buffer) => Promise<string>; // Returns placeholder
   disabled?: boolean;
@@ -92,6 +97,7 @@ export function InputPrompt({
   const pastedLineCount = useCliStore(state => state.pastedLineCount);
   const setPastedContent = useCliStore(state => state.setPastedContent);
   const clearPaste = useCliStore(state => state.clearPaste);
+  const turnBusy = useCliStore(state => state.isThinking || state.turnInFlight);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [historyIndex, setHistoryIndex] = useState(-1); // -1 means not in history
   const [tempInput, setTempInput] = useState(''); // Store current input when navigating history
@@ -212,6 +218,24 @@ export function InputPrompt({
           setSelectedIndex(prev => (prev < filteredCommands.length - 1 ? prev + 1 : 0));
           return;
         }
+      }
+
+      // Tab while a turn runs queues the input as a follow-up turn; Enter would steer the running turn.
+      if (
+        key.tab &&
+        !key.shift &&
+        turnBusy &&
+        !isBashMode &&
+        !shouldShowCommandAutocomplete &&
+        !fileAutocomplete?.active
+      ) {
+        const content = pastedContent ?? value;
+        if (!content.trim()) return;
+        if (pastedContent) clearPaste();
+        onSubmit(content, { followUp: true });
+        setValue('');
+        setHistoryIndex(-1);
+        return;
       }
 
       // History navigation (when NOT in any autocomplete mode)
