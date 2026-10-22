@@ -11,6 +11,7 @@ const mockSetNcmecReportId = vi.fn();
 const mockRecordManualReport = vi.fn();
 const mockSubmitNcmecReport = vi.fn();
 const mockFinishNcmecReport = vi.fn();
+const audit = vi.hoisted(() => ({ record: vi.fn(), inTransaction: [] as boolean[], txActive: false }));
 
 vi.mock('@bike4mind/database', () => ({
   imageModerationIncidentRepository: {
@@ -21,7 +22,17 @@ vi.mock('@bike4mind/database', () => ({
     setNcmecReportId: (...args: unknown[]) => mockSetNcmecReportId(...args),
     recordManualReport: (...args: unknown[]) => mockRecordManualReport(...args),
   },
+  withTransaction: async (fn: () => Promise<unknown>) => {
+    audit.txActive = true;
+    try {
+      return await fn();
+    } finally {
+      audit.txActive = false;
+    }
+  },
 }));
+
+vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: audit.record }));
 
 vi.mock('@bike4mind/services', () => {
   class NcmecRejectedError extends Error {
@@ -113,6 +124,11 @@ const NcmecFinishFailedError = ncmecService.NcmecFinishFailedError as unknown as
 describe('admin/moderation-incidents/[id]/verdict', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    audit.record.mockReset().mockImplementation(async () => {
+      audit.inTransaction.push(audit.txActive);
+      return null;
+    });
+    audit.inTransaction = [];
   });
 
   // ------------------------------------------------------------------ confirmed_csam -- success
@@ -572,6 +588,100 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
       await runHandler(makeReq({}), res);
 
       expect(res.status).toHaveBeenCalledWith(400);
+    });
+  });
+
+  // ------------------------------------------------------------------ admin audit
+  describe('admin audit', () => {
+    const REPORTED = { ...CLAIMED_INCIDENT, reviewStatus: 'reported', ncmecReportId: 'RPT-001' };
+
+    const arrange: Record<string, () => void> = {
+      confirmed_csam: () => {
+        mockClaimForNcmecSubmission.mockResolvedValue(CLAIMED_INCIDENT);
+        mockSubmitNcmecReport.mockResolvedValue({ reportId: 'RPT-001' });
+        mockUpdateReviewStatus.mockResolvedValue(REPORTED);
+      },
+      false_positive: () =>
+        mockUpdateReviewStatus.mockResolvedValue({ ...CLAIMED_INCIDENT, reviewStatus: 'false_positive' }),
+      mark_reported: () => mockResolveConfirmedCsam.mockResolvedValue(REPORTED),
+      requeue: () =>
+        mockResolveConfirmedCsam.mockResolvedValue({ ...CLAIMED_INCIDENT, reviewStatus: 'pending_review' }),
+      retry_finish: () => {
+        mockFindById.mockResolvedValue({ ...CLAIMED_INCIDENT, ncmecReportId: 'RPT-001' });
+        mockFinishNcmecReport.mockResolvedValue(undefined);
+        mockResolveConfirmedCsam.mockResolvedValue(REPORTED);
+      },
+      record_manual_report: () => mockRecordManualReport.mockResolvedValue(REPORTED),
+    };
+    const bodyFor = (verdict: string) =>
+      verdict === 'mark_reported' || verdict === 'record_manual_report'
+        ? { verdict, ncmecReportId: 'RPT-001' }
+        : { verdict };
+    const primaryWrite: Record<string, () => ReturnType<typeof vi.fn>> = {
+      confirmed_csam: () => mockUpdateReviewStatus,
+      false_positive: () => mockUpdateReviewStatus,
+      mark_reported: () => mockResolveConfirmedCsam,
+      requeue: () => mockResolveConfirmedCsam,
+      retry_finish: () => mockResolveConfirmedCsam,
+      record_manual_report: () => mockRecordManualReport,
+    };
+    const verdicts = Object.keys(arrange);
+
+    it.each(verdicts)(
+      'records moderation.incident.verdict_recorded for %s inside the write transaction',
+      async verdict => {
+        arrange[verdict]();
+        const req = makeReq(bodyFor(verdict));
+        const res = makeRes();
+        await runHandler(req, res);
+
+        expect(res.status).toHaveBeenCalledWith(200);
+        expect(audit.record).toHaveBeenCalledTimes(1);
+        expect(audit.record.mock.calls[0][0]).toBe(req);
+        expect(audit.record.mock.calls[0][1]).toMatchObject({
+          action: 'moderation.incident.verdict_recorded',
+          target: { kind: 'user', id: 'user-suspect-1' },
+          details: { incidentId: 'inc-1', verdict },
+        });
+        expect(audit.inTransaction).toEqual([true]);
+        expect(primaryWrite[verdict]().mock.invocationCallOrder[0]).toBeLessThan(
+          audit.record.mock.invocationCallOrder[0]
+        );
+      }
+    );
+
+    it.each(verdicts)('fails %s without a 200 when the audit write rejects', async verdict => {
+      arrange[verdict]();
+      audit.record.mockRejectedValue(new Error('audit down'));
+      const res = makeRes();
+
+      await expect(runHandler(makeReq(bodyFor(verdict)), res)).rejects.toThrow('audit down');
+      expect(res.status).not.toHaveBeenCalledWith(200);
+    });
+
+    it('records the NCMEC report id for a confirmed_csam verdict', async () => {
+      arrange.confirmed_csam();
+      await runHandler(makeReq({ verdict: 'confirmed_csam' }), makeRes());
+
+      expect(audit.record.mock.calls[0][1].details).toMatchObject({ ncmecReportId: 'RPT-001' });
+    });
+
+    it('still records retry_finish when a concurrent resolution won the DB write', async () => {
+      arrange.retry_finish();
+      mockResolveConfirmedCsam.mockResolvedValue(null);
+      await runHandler(makeReq({ verdict: 'retry_finish' }), makeRes());
+
+      expect(audit.record.mock.calls[0][1].details).toMatchObject({ ncmecReportId: 'RPT-001', incidentUpdated: false });
+    });
+
+    it('records nothing when the verdict is refused', async () => {
+      mockUpdateReviewStatus.mockResolvedValue(null);
+      mockFindById.mockResolvedValue({ reviewStatus: 'confirmed_csam' });
+      const res = makeRes();
+      await runHandler(makeReq({ verdict: 'false_positive' }), res);
+
+      expect(res.status).toHaveBeenCalledWith(409);
+      expect(audit.record).not.toHaveBeenCalled();
     });
   });
 });

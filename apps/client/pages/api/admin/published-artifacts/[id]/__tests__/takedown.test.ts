@@ -5,6 +5,8 @@ const { mockFindOneAndUpdate, mockReportUpdateMany } = vi.hoisted(() => ({
   mockFindOneAndUpdate: vi.fn(),
   mockReportUpdateMany: vi.fn(),
 }));
+const audit = vi.hoisted(() => ({ record: vi.fn(), inTransaction: [] as boolean[], txActive: false }));
+vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: audit.record }));
 
 // baseApi mock: callable chain routed by req.method; .use() no-op; last fn per verb is the handler.
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -35,6 +37,14 @@ vi.mock('@bike4mind/database', () => ({
   PublishedArtifactReport: {
     updateMany: (...a: unknown[]) => Promise.resolve(mockReportUpdateMany(...a)),
   },
+  withTransaction: async (fn: () => Promise<unknown>) => {
+    audit.txActive = true;
+    try {
+      return await fn();
+    } finally {
+      audit.txActive = false;
+    }
+  },
 }));
 
 // Stub the publish service so this test stays focused on takedown logic (the real
@@ -59,12 +69,21 @@ const run = ({ method, user, id = 'pub1', body = {} }: RunOpts) => {
   const { req, res } = createMocks({ method, query: { id }, body: body as Record<string, unknown> });
   (req as Record<string, unknown>).logger = { info: vi.fn(), warn: vi.fn() };
   if (user) (req as Record<string, unknown>).user = user;
-  return { res, promise: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res) };
+  return { req, res, promise: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res) };
 };
 
 /** The artifact snapshot returned by either atomic lifecycle write. */
 function updatedDoc(over: Record<string, unknown> = {}) {
-  return { publicId: 'pub1', tier: 'user', scopeId: 'u1', slug: 'r-pub1', source: { kind: 'reply' }, ...over };
+  return {
+    publicId: 'pub1',
+    tier: 'user',
+    scopeId: 'u1',
+    ownerId: 'u1',
+    slug: 'r-pub1',
+    title: 'Report',
+    source: { kind: 'reply' },
+    ...over,
+  };
 }
 
 const ADMIN = { id: 'admin1', isAdmin: true };
@@ -76,6 +95,11 @@ beforeEach(() => {
   thumbnails.deletePublishThumbnail.mockReset().mockResolvedValue(undefined);
   thumbnails.deletePublishThumbnails.mockReset().mockResolvedValue(0);
   thumbnails.enqueuePublishThumbnail.mockReset().mockResolvedValue(true);
+  audit.record.mockReset().mockImplementation(async () => {
+    audit.inTransaction.push(audit.txActive);
+    return null;
+  });
+  audit.inTransaction = [];
 });
 
 describe('takedown and restore - owner-only thumbnails', () => {
@@ -149,7 +173,6 @@ describe('takedown and restore - owner-only thumbnails', () => {
     await promise;
     expect(thumbnails.enqueuePublishThumbnail).not.toHaveBeenCalled();
   });
-});
 
 describe('POST /api/admin/published-artifacts/:id/takedown', () => {
   it('rejects non-admins', async () => {
@@ -218,6 +241,69 @@ describe('DELETE /api/admin/published-artifacts/:id/takedown — restore', () =>
     const { res, promise } = run({ method: 'DELETE', user: ADMIN });
     await promise;
     expect(res._getStatusCode()).toBe(409);
+    expect(invalidateMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('takedown admin audit', () => {
+  it('records moderation.published_artifact.taken_down inside the takedown transaction', async () => {
+    mockFindOneAndUpdate.mockResolvedValue(updatedDoc());
+    const { req, res, promise } = run({ method: 'POST', user: ADMIN, body: { reason: 'phishing host' } });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(audit.record).toHaveBeenCalledTimes(1);
+    expect(audit.record.mock.calls[0][0]).toBe(req);
+    expect(audit.record.mock.calls[0][1]).toMatchObject({
+      action: 'moderation.published_artifact.taken_down',
+      target: { kind: 'user', id: 'u1' },
+      details: { publicId: 'pub1', slug: 'r-pub1', title: 'Report' },
+      reason: 'phishing host',
+    });
+    expect(audit.inTransaction).toEqual([true]);
+    expect(mockReportUpdateMany.mock.invocationCallOrder[0]).toBeLessThan(audit.record.mock.invocationCallOrder[0]);
+  });
+
+  it('fails the takedown and skips the CDN purge when the audit write rejects', async () => {
+    mockFindOneAndUpdate.mockResolvedValue(updatedDoc());
+    audit.record.mockRejectedValue(new Error('audit down'));
+    const { res, promise } = run({ method: 'POST', user: ADMIN });
+
+    await expect(promise).rejects.toThrow('audit down');
+    expect(res._isEndCalled()).toBe(false);
+    expect(invalidateMock).not.toHaveBeenCalled();
+  });
+
+  it('records nothing when there is no live page to take down', async () => {
+    mockFindOneAndUpdate.mockResolvedValue(null);
+    const { promise } = run({ method: 'POST', user: ADMIN });
+    await promise;
+
+    expect(audit.record).not.toHaveBeenCalled();
+  });
+
+  it('records moderation.published_artifact.takedown_reverted inside the restore transaction', async () => {
+    mockFindOneAndUpdate.mockResolvedValue(updatedDoc());
+    const { res, promise } = run({ method: 'DELETE', user: ADMIN });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(audit.record).toHaveBeenCalledTimes(1);
+    expect(audit.record.mock.calls[0][1]).toMatchObject({
+      action: 'moderation.published_artifact.takedown_reverted',
+      target: { kind: 'user', id: 'u1' },
+      details: { publicId: 'pub1' },
+    });
+    expect(audit.inTransaction).toEqual([true]);
+  });
+
+  it('fails the restore and skips the CDN purge when the audit write rejects', async () => {
+    mockFindOneAndUpdate.mockResolvedValue(updatedDoc());
+    audit.record.mockRejectedValue(new Error('audit down'));
+    const { res, promise } = run({ method: 'DELETE', user: ADMIN });
+
+    await expect(promise).rejects.toThrow('audit down');
+    expect(res._isEndCalled()).toBe(false);
     expect(invalidateMock).not.toHaveBeenCalled();
   });
 });
