@@ -1653,7 +1653,7 @@ export class AnthropicBackend implements ICompletionBackend {
                     model,
                     eventCount,
                     lastEventType,
-                    timeoutMs: limitMs,
+                    limitMs,
                     silentMs: idleTimeoutMsForError,
                     toolCount: options.tools?.length || 0,
                     mcpToolCount: options.tools?.filter(t => (t as { _isMcpTool?: boolean })._isMcpTool).length || 0,
@@ -1987,7 +1987,8 @@ export class AnthropicBackend implements ICompletionBackend {
                 // Worded to include "stream timeout" so the completion loop's
                 // isStreamIdleTimeoutError (services/src/llm/llmErrorPredicates.ts) retries once and
                 // then falls back, the same as
-                // the Bedrock truncation error in bedrockBackend/base.ts. Must not say
+                // the Bedrock truncation error in bedrockBackend/base.ts. The "without message_stop"
+                // phrase must stay in sync with isTruncatedStreamError in llmErrorPredicates.ts. Must not say
                 // "aborted": isAbortError would then treat it as a benign cancel.
                 reject(
                   new Error(

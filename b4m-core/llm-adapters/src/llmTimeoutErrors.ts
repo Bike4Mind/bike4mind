@@ -15,7 +15,8 @@ export type LlmStreamTimeoutKind = Exclude<LlmTimeoutKind, 'request'>;
  *
  * The messages keep the "stream timeout" / "request timeout" phrases that the message-based
  * predicates in services/src/llm/llmErrorPredicates.ts and the final-error mapping in
- * ChatCompletionProcess still match, and must never say "overloaded" or "aborted".
+ * ChatCompletionProcess still match (as does the "stream timeout - no (response|event) received"
+ * skip in apps/workers/src/events/logToSlackClassify.ts), and must never say "overloaded" or "aborted".
  */
 export class LlmTimeoutError extends Error {
   constructor(
