@@ -143,7 +143,7 @@ describe('POST /api/ai/refineText', () => {
     expect(logger.error).not.toHaveBeenCalled();
   });
 
-  it('keeps an empty refinement a 500 on the legacy route', async () => {
+  it('answers 500 for an empty refinement, where main answered 200 {}', async () => {
     mockGetCachedData.mockImplementation(async (_key: string, cb: () => Promise<string>) => cb());
     mockGetOperationsModel.mockResolvedValue({ modelId: 'ops-model', llm: { complete: vi.fn() } });
     mockRefineText.mockResolvedValue('');
@@ -153,7 +153,9 @@ describe('POST /api/ai/refineText', () => {
 
     const thrown = await handler(req as any, res as any).catch((e: unknown) => e);
     // No cause to unwrap - an empty output is not a provider error - so the wrapper stands and
-    // errorHandler's default 500 applies, as it did before the wrapper existed.
+    // errorHandler's default 500 applies. main answered 200 {} here (it cached and sent the
+    // undefined output); treating an empty refinement as a failure is a deliberate, accepted
+    // change on this route, not a preserved behaviour.
     expect(thrown).toMatchObject({ name: 'RefineFailedError' });
     expect((thrown as { cause?: unknown }).cause).toBeUndefined();
 
