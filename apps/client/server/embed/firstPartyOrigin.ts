@@ -42,11 +42,8 @@ export function isFirstPartyEmbedOrigin(
 }
 
 /**
- * The full embed origin decision, shared verbatim by the mint gate
- * (pages/api/embed/session.ts) and the chat gate (embedRoute.ts) so the two
- * can never drift: a present browser Origin passes when it is our own serving
- * origin OR on the key's allow-list. Gates call resolveEmbedOriginDecision,
- * which handles an absent or opaque Origin first.
+ * A present, non-opaque browser Origin passes when it is our own serving origin
+ * OR on the key's allow-list. Only called through resolveEmbedOriginDecision.
  */
 export function isEmbedOriginAllowed(
   origin: string,
