@@ -5821,8 +5821,8 @@ export function buildPublicSettingsProjection(settings: AdminSettingDoc[]): Publ
 //
 // An extension package registers its own setting definitions here instead of adding literals to
 // `SettingKeySchema`. Registration is a side effect of importing the generated contribution module
-// (apps/client: premiumAdminSettings.generated.ts and its register modules), so a read that runs
-// before that import sees only the core catalog.
+// (apps/client: premiumAdminSettings.generated.ts, via lib/settings/registerContributedSettings.ts),
+// so a read that runs before that import sees only the core catalog.
 
 const contributedSettings = new Map<string, SettingDefinition<string>>();
 
