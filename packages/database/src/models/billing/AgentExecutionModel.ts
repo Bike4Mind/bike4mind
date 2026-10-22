@@ -1666,8 +1666,8 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
    * over a doc that's already logically aborted. Caller checks the return and
    * bails when `false`.
    *
-   * Resets `lowConfidenceStreak`: a human has now reviewed the run, so the next
-   * pause needs a fresh streak.
+   * Resets `lowConfidenceStreak`: the pause consumes the streak, so after resume the
+   * run must build a fresh one before it can pause again.
    */
   async setPendingGate(id: string, pendingGate: IPendingGate): Promise<boolean> {
     const result = await this.model.updateOne(

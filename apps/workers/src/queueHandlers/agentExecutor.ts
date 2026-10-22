@@ -3191,7 +3191,7 @@ async function processExecution(
         threshold: confidenceGateThreshold,
         iterationSteps: iterationResult.allSteps,
       });
-      // Telemetry (#56 M1.1): record every iteration the gate evaluates -
+      // Telemetry: record every iteration the gate evaluates -
       // including ones that complete in the same turn (isComplete=true) or
       // clear the threshold - so `evaluatedCount` is the true denominator for
       // fire rate. `recordGateEmitted` below increments the numerator only on
