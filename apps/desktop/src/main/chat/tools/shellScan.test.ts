@@ -531,6 +531,7 @@ describe('scanShell', () => {
       'cat ~/.nvm*/../.ssh/id_rsa',
       'cat ~/.nvm/.?/.ssh/id_rsa',
       'tree -o ~/.nvm/nvm.sh .',
+      'tree -R ~/.nvm',
       'cat ~/.nvm/versions/node/v20/etc/npmrc',
     ])('still asks for a folder: %s', async command => {
       expect((await scan(command)).directories).not.toEqual([]);

@@ -674,7 +674,7 @@ const LOCAL_PROGRAMS = new Set([
 const RUNS_A_PROGRAM: Readonly<Record<string, RegExp>> = {
   find: /^-(exec|execdir|ok|okdir|delete|fprint0?|fprintf|fls)$/,
   rg: /^--pre(-glob)?(=|$)/,
-  tree: /^-[A-Za-z]*o/,
+  tree: /^-[A-Za-z]*[oR]/,
 };
 
 /**
