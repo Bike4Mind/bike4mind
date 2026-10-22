@@ -1,6 +1,7 @@
 import { Box, Button, IconButton } from '@mui/joy';
 import { useMediaQuery } from '@mui/system';
 import { useNavigate } from '@tanstack/react-router';
+import { useTranslation } from 'react-i18next';
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
 import DesktopMacOutlinedIcon from '@mui/icons-material/DesktopMacOutlined';
 import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
@@ -21,6 +22,7 @@ export default function DesktopAppPromoButton() {
   const { settings, isHydrated, updatePreferences } = useUserSettings();
   const wideScreenWithMouse = useMediaQuery(DESKTOP_PROMO_MEDIA_QUERY);
   const navigate = useNavigate();
+  const { t } = useTranslation();
 
   // isHydrated: the preference defaults to false until the user record lands.
   if (!enabled || !isHydrated || settings.desktopPromoDismissed || !wideScreenWithMouse) return null;
@@ -48,14 +50,14 @@ export default function DesktopAppPromoButton() {
         onClick={() => navigate({ to: '/desktop' })}
         sx={{ borderRadius: '999px', pl: 1.5, pr: 0.75, fontWeight: 500 }}
       >
-        Try the desktop app
+        {t('desktopApp.tryTheApp', 'Try the desktop app')}
       </Button>
       <IconButton
         data-testid="desktop-promo-dismiss-btn"
         variant="plain"
         color="neutral"
         size="sm"
-        aria-label="Dismiss desktop app suggestion"
+        aria-label={t('desktopApp.dismissSuggestion', 'Dismiss desktop app suggestion')}
         onClick={() => updatePreferences({ desktopPromoDismissed: true })}
         sx={{ borderRadius: '999px', mr: 0.25, '--IconButton-size': '28px' }}
       >
