@@ -15,6 +15,7 @@ import { getHealthSummary, runAllProbes, runProbe } from '@bike4mind/server-util
 import { getStatus } from '@bike4mind/server-utils/services/integrationCircuitBreaker';
 import { flushBreakerMetrics, getAllBreakerStates } from '@bike4mind/server-utils/services/mcpCircuitBreakers';
 import { rateLimit } from '@server/middlewares/rateLimit';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 const timeRangeSchema = z.enum(['24h', '7d', '30d']).default('24h');
 const probeBodySchema = z.object({
@@ -202,6 +203,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
     if (integration) {
       const result = await runProbe(integration as IntegrationName);
+      await recordAdminActionFromRequest(req, {
+        action: 'system_health.integration_probe_run',
+        target: { kind: 'system', id: 'integration-health', displayName: 'Integration health' },
+        summary: `probed integration ${result.integration}`,
+        details: { integration: result.integration, status: result.status },
+      });
       return res.json({
         integration: result.integration,
         status: result.status,
@@ -213,6 +220,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     }
 
     const results = await runAllProbes(logger);
+    await recordAdminActionFromRequest(req, {
+      action: 'system_health.integration_probe_run',
+      target: { kind: 'system', id: 'integration-health', displayName: 'Integration health' },
+      summary: `probed all ${results.length} integrations`,
+      details: { integrations: results.map(r => ({ integration: r.integration, status: r.status })) },
+    });
     return res.json({
       results: results.map(r => ({
         integration: r.integration,

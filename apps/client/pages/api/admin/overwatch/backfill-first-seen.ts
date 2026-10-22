@@ -5,6 +5,7 @@ import { User, OverwatchUserFirstSeen } from '@bike4mind/database';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { pseudonymizeUserId } from '@server/analytics/pseudonymize';
 import { Config } from '@bike4mind/server-utils/utils/config';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 const BATCH_SIZE = 500;
 const PRODUCT_ID = 'bike4mind';
@@ -72,6 +73,19 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
   });
 
   const result = ops.length > 0 ? await OverwatchUserFirstSeen.bulkWrite(ops, { ordered: false }) : null;
+
+  await recordAdminActionFromRequest(req, {
+    action: 'ops.overwatch.first_seen_backfilled',
+    target: { kind: 'system', id: 'overwatch-first-seen-backfill', displayName: 'Overwatch first-seen backfill' },
+    summary: `backfilled first-seen dates for ${users.length} users`,
+    details: {
+      skip,
+      processed: users.length,
+      skipped,
+      upserted: result?.upsertedCount ?? 0,
+      modified: result?.modifiedCount ?? 0,
+    },
+  });
 
   return res.json({
     processed: users.length,

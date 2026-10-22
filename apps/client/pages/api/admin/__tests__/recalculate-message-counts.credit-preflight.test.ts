@@ -8,6 +8,8 @@ const { mockAssertCredits, mockCount, mockCountTaggable, mockPublishStart } = vi
   mockPublishStart: vi.fn(),
 }));
 
+const { mockAudit } = vi.hoisted(() => ({ mockAudit: vi.fn() }));
+vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: mockAudit }));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const chain: Record<string, unknown> = {};
@@ -65,6 +67,21 @@ describe('POST /api/admin/recalculate-message-counts credit pre-flight', () => {
     mockCountTaggable.mockResolvedValue(UNGROOMED_PER_OPERATION);
     mockAssertCredits.mockResolvedValue(undefined);
     mockPublishStart.mockResolvedValue(undefined);
+    mockAudit.mockResolvedValue(null);
+  });
+
+  it('audits a real run after the job is published but not a dry run', async () => {
+    await run({ operations: ['messageCount'], dryRun: true });
+    expect(mockAudit).not.toHaveBeenCalled();
+
+    await run({ operations: ['messageCount'] });
+    expect(mockAudit).toHaveBeenCalledTimes(1);
+    expect(mockAudit.mock.calls[0][1]).toMatchObject({
+      action: 'ops.message_counts.recalculated',
+      target: { kind: 'system', id: 'message-counts-recalculation' },
+      details: { totalNotebooks: TOTAL_NOTEBOOKS, operations: ['messageCount'] },
+    });
+    expect(mockPublishStart.mock.invocationCallOrder[1]).toBeLessThan(mockAudit.mock.invocationCallOrder[0]);
   });
 
   // The batch is what makes the spider the largest operational spend on the platform: a check
