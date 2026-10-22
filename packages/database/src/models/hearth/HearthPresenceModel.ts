@@ -23,8 +23,8 @@ export type HearthPresenceState = ICcAgentStatus;
  * A row not heard from for this long is "probably not live". ONE window, two
  * jobs: presenceForChannel ranks rows older than this below fresh ones, and the
  * presence route publishes the same value so the panel dims by the same
- * threshold the sort used - one shared boundary, so the two cannot disagree
- * about where it sits.
+ * threshold the sort used - one shared value, so the two cannot drift apart.
+ * The panel measures it on the client clock, so skew can still shift its line.
  *
  * A liveness hint, not a filter: the roster never filters a row out by age, and
  * the server cannot know the answer - a session idle for ten minutes is dead to

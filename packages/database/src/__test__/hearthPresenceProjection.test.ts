@@ -193,8 +193,8 @@ describe('Hearth presence projection', () => {
     await hearthRepository.upsertPresence(
       presence(channelId, idleOld, new Date('2026-07-27T10:00:30Z'), 'turn_finished')
     );
-    // Inserted oldest-first so that dropping the recency key leaves the older
-    // running row ahead, which the assertion below catches.
+    // The running pair is inserted oldest-first. With the recency key dropped,
+    // their tie order is unspecified, so the assertion below usually catches it.
     await hearthRepository.upsertPresence(
       presence(channelId, workingOld, new Date('2026-07-27T10:00:15Z'), 'tool_use')
     );

@@ -111,7 +111,8 @@ function formatLastSeen(iso: string, now: number): string {
  * the roster is an inbox, and every surface reading it must agree on what sits
  * at the top (see hearthRepository.presenceForChannel). Dimming re-evaluates
  * the `staleAfterMs` from the same response against the local clock, so panel
- * and server agree on where the boundary sits. The clock ticks between fetch
+ * and server use one threshold and agree on the boundary up to client clock
+ * skew. The clock ticks between fetch
  * and render and this list is never re-sorted, so a row can dim while still
  * holding its fetched place.
  */
