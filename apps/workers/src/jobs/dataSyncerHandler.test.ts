@@ -314,10 +314,10 @@ describe('dataSyncerHandler', () => {
     await invoke();
 
     const adminFilter = state.findFilters.find(f => f.name === 'adminsettings')?.filter as {
-      settingValue: { $not: { $regex: string; $options: string } };
+      settingValue: { $not: RegExp };
     };
-    const { $regex, $options } = adminFilter.settingValue.$not;
-    const matcher = new RegExp($regex, $options);
+    const matcher = adminFilter.settingValue.$not;
+    expect(matcher).toBeInstanceOf(RegExp);
     const ciphertext = `${'a'.repeat(32)}:${'b'.repeat(32)}:${'c'.repeat(10)}`;
     expect(matcher.test(ciphertext)).toBe(true);
     expect(matcher.test(`v2:${ciphertext}`)).toBe(true);
