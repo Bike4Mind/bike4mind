@@ -480,6 +480,33 @@ describe('resumeApprovedPauseAndGateConfidence', () => {
     expect(deps.setPendingGate).toHaveBeenCalledWith('exec_3', expect.objectContaining({ confidence: 0.1 }));
   });
 
+  it('forwards confidenceOverrides to the replay gate', async () => {
+    const approved = call('image_generation', { prompt: 'cat' });
+    // The scripted entry extends an existing low streak, so the replay pauses on it.
+    const deps = makeDeps({ recordIterationConfidence: vi.fn(async () => 2) });
+
+    const outcome = await resumeApprovedPauseAndGateConfidence(
+      {
+        executionId: 'exec_override',
+        iterationIndex: 2,
+        withheld: [approved],
+        approvedToolCallId: approved.id,
+        approvedTools: [],
+        deniedTools: [],
+        confidenceGateThreshold: 0.6,
+        confidenceOverrides: [0.9, 0.1],
+      },
+      deps
+    );
+
+    expect(outcome).toEqual({ proceed: false });
+    expect(deps.setPendingGate).toHaveBeenCalledWith('exec_override', expect.objectContaining({ confidence: 0.1 }));
+    expect(deps.recordIterationConfidence).toHaveBeenCalledWith('exec_override', 0.1, {
+      belowThreshold: true,
+      recordTelemetry: false,
+    });
+  });
+
   it('stops the loop when the confidence gate aborts on a concurrent abort race', async () => {
     const approved = call('image_generation', { prompt: 'cat' });
     const deps = makeDeps({

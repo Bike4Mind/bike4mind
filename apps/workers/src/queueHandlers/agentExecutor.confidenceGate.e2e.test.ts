@@ -218,8 +218,8 @@ describe('confidence gate, end to end', () => {
     expect(resumed?.pendingGate).toBeUndefined();
     expect(h.dispatched).toEqual([{ executionId, connectionId: 'conn-1' }]);
 
-    // Invocation 2: the continuation picks up the checkpoint and the model answers. That
-    // iteration is past the end of the script, so it runs on its real score - and completes.
+    // Invocation 2: the continuation picks up the checkpoint and the model answers. Its final
+    // turn uses no tools, so the gate has nothing to score and the run completes.
     await handler(h.dispatched[0] as never, lambdaContext);
 
     const completed = await agentExecutionRepository.findById(executionId);
