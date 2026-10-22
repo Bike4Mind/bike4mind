@@ -4937,10 +4937,17 @@ describe('ChatCompletionProcess', () => {
           1_000_000: { input: 20 / 1_000_000, output: 60 / 1_000_000 },
         },
       });
-      complete.mockImplementation(async (_model: string, _messages: unknown, _opts: unknown, cb: any) => {
-        await cb(['x'], { inputTokens: 300_000, outputTokens: 1000 });
-        throw abortError();
-      });
+      complete.mockImplementation(
+        async (
+          _model: string,
+          _messages: unknown,
+          _opts: unknown,
+          cb: NonNullable<Parameters<ICompletionBackend['complete']>[3]>
+        ) => {
+          await cb(['x'], { inputTokens: 300_000, outputTokens: 1000 });
+          throw abortError();
+        }
+      );
       fundedOrg();
       mockQuest.sessionId = 'session1';
       const usageEventsRecord = vi.fn().mockResolvedValue(null);
@@ -5915,7 +5922,7 @@ describe('ChatCompletionProcess', () => {
     });
 
     describe('settlement price stamp', () => {
-      const stampedModel = (extra: Record<string, unknown> = {}) => ({
+      const stampedModel = (extra: Partial<ModelInfo> = {}): ModelInfo => ({
         id: ChatModels.GPT4,
         type: 'text',
         name: 'GPT-4',
@@ -5932,14 +5939,14 @@ describe('ChatCompletionProcess', () => {
       const LOW = { tierKey: 200_000, input: 2 / 1_000_000, output: 12 / 1_000_000 };
       const HIGH = { tierKey: 1_000_000, input: 4 / 1_000_000, output: 18 / 1_000_000 };
 
-      const settle = async (info: Record<string, unknown>, modelExtra: Record<string, unknown> = {}) => {
+      const settle = async (info: Record<string, unknown>, modelExtra: Partial<ModelInfo> = {}) => {
         const { usageEventsRecord } = arrangeUsageEventScenario({
           enforceCredits: true,
           primaryComplete: async (_m, _ms, _o, cb) => {
             await cb(['Hello'], info);
           },
         });
-        mockedGetAvailableModels.mockResolvedValue([stampedModel(modelExtra)] as any);
+        mockedGetAvailableModels.mockResolvedValue([stampedModel(modelExtra)]);
         await runUsageEventScenario();
         expect(usageEventsRecord).toHaveBeenCalledTimes(1);
         return usageEventsRecord.mock.calls[0][0];
