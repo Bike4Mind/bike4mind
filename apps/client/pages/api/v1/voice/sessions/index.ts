@@ -33,7 +33,7 @@ import {
   NotFoundError,
 } from '@bike4mind/server-utils/utils/errors';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
-import { reserveVoiceHold, settlePriorVoiceHold } from '@server/voice/settleVoiceHold';
+import { reserveVoiceHold, settlePriorVoiceHold } from '@bike4mind/server-utils/voice/settleVoiceHold';
 import { signVoiceSessionToken } from '@server/voice/voiceSessionToken';
 import {
   MAX_SESSION_SECONDS,
@@ -77,7 +77,7 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
 
   const settings = await getSettingsMap(
     { adminSettings: adminSettingsRepository },
-    { names: ['voiceV2Enabled', 'enforceCredits', 'elevenLabsServerApiKey'] }
+    { names: ['voiceV2Enabled', 'enforceCredits', 'elevenLabsServerApiKey'], skipCache: true }
   );
 
   if (!getSettingsValue('voiceV2Enabled', settings)) {

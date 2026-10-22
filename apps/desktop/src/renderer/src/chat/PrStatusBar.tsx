@@ -7,8 +7,15 @@ import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import { useTheme } from '@mui/joy/styles';
 import { prDisplayState, type PrActionResult, type PrBarState, type PrOption } from '@shared/pullRequest';
+import { DiffCount } from './DiffCount';
 import { CloseIcon, ExternalLinkIcon, PullRequestIcon, ReloadIcon } from './icons';
-import { contentColumnSx } from './layout';
+import {
+  COMPOSER_BAR_BORDER,
+  COMPOSER_BAR_HEIGHT,
+  COMPOSER_BAR_INSET,
+  composerBarIconButtonSx,
+  contentColumnSx,
+} from './layout';
 import { ghFixLine, lifecycleLabel, middleTruncate, timeAgo } from './prBarModel';
 import { PrAutomations, autoFixDescription, autoMergeDescription } from './PrAutomations';
 import { PrCiMenu } from './PrCiMenu';
@@ -16,16 +23,6 @@ import { PrStateIcon, prStateColor } from './prStateStyle';
 import { SYSTEM_BROWSER_HINT, openInSystemBrowser, routePrLink, type BuiltInBrowserOpener } from './prLinks';
 
 const BRANCH_MAX_CHARS = 44;
-
-/** The +adds -dels pair, green and red like a diff gutter; grey once the PR is finished. */
-function DiffChip({ additions, deletions, muted }: { additions: number; deletions: number; muted: boolean }) {
-  return (
-    <Typography level="body-xs" sx={{ fontFamily: 'code', whiteSpace: 'nowrap' }} data-testid="pr-bar-diff">
-      <Box component="span" sx={{ color: muted ? 'text.tertiary' : 'success.plainColor' }}>{`+${additions}`}</Box>{' '}
-      <Box component="span" sx={{ color: muted ? 'text.tertiary' : 'danger.plainColor' }}>{`-${deletions}`}</Box>
-    </Typography>
-  );
-}
 
 /**
  * A slim bar above the composer for a conversation that has a pull request.
@@ -57,7 +54,7 @@ export function PrStatusBar({
   const merged = snapshot?.state === 'MERGED';
   const closed = snapshot?.state === 'CLOSED';
   const finished = merged || closed;
-  const displayState = snapshot ? prDisplayState(snapshot.state, snapshot.isDraft) : null;
+  const displayState = snapshot ? prDisplayState(snapshot.state, snapshot.isDraft, !!state.autoMerge.queued) : null;
   const mergedColor = prStateColor('merged', theme.palette.mode === 'dark' ? 'dark' : 'light');
   const mergedAgo = merged && snapshot.mergedAt ? timeAgo(snapshot.mergedAt, Date.now()) : null;
 
@@ -68,9 +65,9 @@ export function PrStatusBar({
         alignItems="center"
         spacing={1}
         sx={{
-          minHeight: 32,
-          px: 1.25,
-          border: '1px solid',
+          minHeight: COMPOSER_BAR_HEIGHT,
+          px: `${COMPOSER_BAR_INSET}px`,
+          border: `${COMPOSER_BAR_BORDER}px solid`,
           borderColor: merged ? `color-mix(in srgb, ${mergedColor} 40%, transparent)` : 'neutral.outlinedBorder',
           borderRadius: 'md',
           bgcolor: merged
@@ -131,7 +128,14 @@ export function PrStatusBar({
                 </Typography>
               </Tooltip>
             )}
-            {snapshot && <DiffChip additions={snapshot.additions} deletions={snapshot.deletions} muted={finished} />}
+            {snapshot && (
+              <DiffCount
+                added={snapshot.additions}
+                removed={snapshot.deletions}
+                muted={finished}
+                testId="pr-bar-diff"
+              />
+            )}
             {lifecycle && (
               <Chip
                 size="sm"
@@ -207,7 +211,7 @@ export function PrStatusBar({
             <Chip
               size="sm"
               variant="soft"
-              color={state.autoMerge.queued ? 'success' : 'primary'}
+              color={state.autoMerge.queued ? 'warning' : 'primary'}
               data-testid="pr-bar-automerge-armed"
               data-queued={state.autoMerge.queued ? 'true' : undefined}
             >
@@ -241,6 +245,7 @@ export function PrStatusBar({
               loading={state.refreshing}
               onClick={onRefresh}
               aria-label="Refresh pull request"
+              sx={composerBarIconButtonSx}
               data-testid="pr-bar-refresh-btn"
             >
               <ReloadIcon />
@@ -255,6 +260,7 @@ export function PrStatusBar({
             color="neutral"
             onClick={event => routePrLink(binding.url, event, onOpenLink)}
             aria-label="Open pull request in built-in browser"
+            sx={composerBarIconButtonSx}
             data-testid="pr-bar-open-btn"
           >
             <ExternalLinkIcon />
@@ -268,6 +274,7 @@ export function PrStatusBar({
             color="neutral"
             onClick={() => void onDismiss().then(result => setActionError(result.ok ? null : result.error))}
             aria-label="Hide pull request bar"
+            sx={composerBarIconButtonSx}
             data-testid="pr-bar-dismiss-btn"
           >
             <CloseIcon />

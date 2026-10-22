@@ -64,12 +64,17 @@ describe('GET /api/artifact-sandbox', () => {
   // file. Verified inline here so the deployment regression cannot recur
   // silently: proxy.test.ts can't catch this gap because the public/ file
   // bypassed middleware entirely in production.
-  it('sets Content-Security-Policy with style-src https: scoped to this route', () => {
+  it('restricts every resource directive to explicit origins', () => {
     const { res, headers } = makeRes();
     handler(makeReq('GET'), res);
     const csp = headers['Content-Security-Policy'];
     expect(csp).toBeTruthy();
-    expect(csp).toMatch(/style-src [^;]*\bhttps:/);
+    for (const directive of ['img-src', 'media-src', 'style-src', 'font-src']) {
+      const sources = csp.split('; ').find(value => value.startsWith(`${directive} `)) ?? '';
+      expect(sources).not.toMatch(/(?:^| )https:(?: |$)/);
+      expect(sources).not.toContain('*');
+    }
+    expect(csp).toContain('https://fonts.googleapis.com');
   });
 
   it('pins the blessed app-host libraries in script-src (absolutized to the request origin)', () => {

@@ -4,6 +4,7 @@ import Button from '@mui/joy/Button';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import { keyframes } from '@mui/system';
+import { useShowDollarCosts } from './costDisplay';
 import { ChevronIcon } from './icons';
 import { thinScrollbarSx } from './layout';
 import {
@@ -87,6 +88,7 @@ function ActivityDetailView({
  * why withStall is applied at this level rather than where the activity is described.
  */
 export function TurnStatus({ turn, activity }: { turn: TurnProgress | null; activity: TurnActivity }) {
+  const showDollars = useShowDollarCosts();
   const [now, setNow] = useState(() => Date.now());
   const [open, setOpen] = useState(false);
   const detailId = useId();
@@ -126,7 +128,7 @@ export function TurnStatus({ turn, activity }: { turn: TurnProgress | null; acti
       sx={{ minWidth: 0, display: 'block' }}
       data-testid="chat-turn-status-text"
     >
-      {statusFields(turn, now, live.label).join(' \u00b7 ')}
+      {statusFields(turn, now, live.label, showDollars).join(' \u00b7 ')}
     </Typography>
   );
 

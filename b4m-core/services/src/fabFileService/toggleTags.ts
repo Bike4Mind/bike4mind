@@ -1,3 +1,4 @@
+import type { LakeSourceShredDb } from '../dataLakeService/lakeMembership';
 import { z } from 'zod';
 import { distinctIdCount } from '../utils/objectIds';
 import { DATALAKE_TAG_PREFIX, isDataLakeTagName, MAX_TOGGLE_TAGS_FILE_IDS } from '@bike4mind/common';
@@ -40,6 +41,7 @@ interface FabFileToggleTagsAdapters extends LakeConfigAuditAdapters, LakeMembers
   // StorageOwnerTransferDb: a membership change moves the file's billed bytes (reassignStorageOwner).
   db: LakeConfigAuditAdapters['db'] &
     LakeMembershipAuditAdapters['db'] &
+    LakeSourceShredDb &
     StorageOwnerTransferDb & {
       fabFiles: Pick<
         IFabFileRepository,
@@ -415,6 +417,7 @@ export const toggleTags = async (
         // A concurrent removal landing between the read above and this write leaves nothing to
         // remove, which is the state the caller asked for anyway.
         if (!(error instanceof NotFoundError)) throw error;
+        await db.memoryLedger.markSourceShredded('lake', lake.datalakeTag, lake.createdByUserId, file.id);
       }
     }
     // Touched only once the write actually lands (or hits the benign race above): both
@@ -464,6 +467,7 @@ export const toggleTags = async (
         // outcome here, not a race - this still runs to sweep a signal a concurrent writer
         // re-added between the loop and here.
         if (!(error instanceof NotFoundError)) throw error;
+        await db.memoryLedger.markSourceShredded('lake', lake.datalakeTag, lake.createdByUserId, file.id);
       }
     }
     // MEMBERSHIP needs no gate here (the read-side predicate grants it purely on the tag) - and,

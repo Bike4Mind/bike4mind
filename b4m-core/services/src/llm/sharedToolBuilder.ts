@@ -100,6 +100,13 @@ export interface ToolBuilderDeps {
     adminSettingsEnforceCredits: boolean;
     models: ModelInfo[];
   };
+  /**
+   * The models a delegated subagent may run on, when narrower than `precomputed.models`
+   * (which also prices media and tool usage, so it stays the full catalog). The Agent
+   * Executor and the chat path pass the user's runnable models here; a subagent pinned to any
+   * other model falls back to the parent's (see `ServerSubagentOrchestrator.resolveAgentRuntime`).
+   */
+  subagentModels?: ModelInfo[];
   apiKeyTable?: ApiKeyTable;
   thinking?: { enabled: boolean; budget_tokens: number };
   agentStore?: ServerAgentStore;
@@ -165,6 +172,13 @@ export interface ToolBuilderDeps {
    * (see `ServerOrchestratorDeps.checkMemberCreditCap`).
    */
   checkMemberCreditCap?: () => boolean | Promise<boolean>;
+
+  /**
+   * Returns true when the payer cannot cover a subagent's first iteration on the given model;
+   * forwarded like `checkMemberCreditCap`. Set by the agent executor when credits are enforced
+   * (see `ServerOrchestratorDeps.checkInsufficientCredits`).
+   */
+  checkInsufficientCredits?: (model: string) => boolean | Promise<boolean>;
 
   /**
    * The run's tool-permission lists, set only by the agent executor (whose parent gate
@@ -234,12 +248,16 @@ export interface ToolBuilderCallbacks {
   /** Quest (turn) id, for lake-access audit rows to join back to their turn - see
    * ToolContext['questId']'s own doc comment for the agent-mode caveat. */
   questId?: string;
+  slackDestination?: ToolContext['slackDestination'];
 
   /** See ToolContext['numberCitables']; the chat path supplies it for indexed-citation sessions. */
   numberCitables?: ToolContext['numberCitables'];
 
-  /** Called when delegate_to_agent accumulates credits; meta carries cost attribution when resolvable */
-  onSubagentCredits?: (credits: number, meta?: SubagentUsageMeta) => void;
+  /**
+   * Bills a delegation's spend that no tracker bills (see `DelegateToAgentToolDeps.onCredits`);
+   * meta carries cost attribution when resolvable.
+   */
+  onSubagentCredits?: (credits: number, meta?: SubagentUsageMeta) => void | Promise<void>;
 
   /** Called when a subagent completes with telemetry */
   onSubagentTelemetry?: (telemetry: unknown) => void;
@@ -296,6 +314,11 @@ export interface BuildSharedToolsOptions {
    * from the schema sent to the model instead of reaching it and then throwing or refusing.
    */
   toolAvailability?: ToolAvailability;
+  /**
+   * Applied to the tools handed to in-process subagents (`parentTools`), before the denylist.
+   * Callers pass the same wrapper they apply to the array this function returns for the parent.
+   */
+  wrapChildTools?: (tools: ICompletionOptionTools[]) => ICompletionOptionTools[];
 }
 
 /** Namespaced `server__tool` ids of the only tools whose `_attachmentList` result is trusted. */
@@ -398,6 +421,8 @@ export function buildSharedTools(
       authOrigin,
       apiKeyId,
       questId: callbacks.questId,
+      requestConfirmation: callbacks.onPendingAction,
+      slackDestination: callbacks.slackDestination,
       numberCitables: callbacks.numberCitables,
       decide: deps.decide,
       getAbortSignal,
@@ -574,9 +599,13 @@ export function buildSharedTools(
   // delegate tool's closure below, so it never appears in the array this function returns and a
   // denylist applied to that array cannot reach it. Without this, a session-forbidden tool stays
   // callable by a dispatched subagent - the same loophole the delegate gate exists to close.
-  const parentTools = [...tools, ...agentOnlyMcpTools].filter(tool => !deniedToolNames.has(tool.toolSchema.name));
+  const childTools = [...tools, ...agentOnlyMcpTools];
+  const parentTools = (options.wrapChildTools ? options.wrapChildTools(childTools) : childTools).filter(
+    tool => !deniedToolNames.has(tool.toolSchema.name)
+  );
 
-  const subagentModelInfo = deps.precomputed?.models.find(m => m.id === model);
+  const subagentModels = deps.subagentModels ?? deps.precomputed?.models;
+  const subagentModelInfo = subagentModels?.find(m => m.id === model);
   const subagentLlm = getLlmByModel(deps.apiKeyTable!, {
     modelInfo: subagentModelInfo,
     logger,
@@ -593,10 +622,8 @@ export function buildSharedTools(
     logger,
     parentTools,
     getSignal: getAbortSignal,
-    onCredits: callbacks.onSubagentCredits
-      ? (credits: number, meta?: SubagentUsageMeta) => callbacks.onSubagentCredits!(credits, meta)
-      : undefined,
-    availableModels: deps.precomputed?.models,
+    onCredits: callbacks.onSubagentCredits,
+    availableModels: subagentModels,
     onStatusUpdate: callbacks.onSubagentStatusUpdate
       ? async (status: string) => callbacks.onSubagentStatusUpdate!(status)
       : undefined,
@@ -612,6 +639,7 @@ export function buildSharedTools(
     depth: deps.depth,
     optInTools: deps.optInTools,
     checkMemberCreditCap: deps.checkMemberCreditCap,
+    checkInsufficientCredits: deps.checkInsufficientCredits,
     toolPermissions: deps.toolPermissions,
   });
   tools.push(delegateTool);
@@ -626,7 +654,8 @@ export function buildSharedTools(
       logger,
       parentTools,
       getSignal: getAbortSignal,
-      availableModels: deps.precomputed?.models,
+      availableModels: subagentModels,
+      onCredits: callbacks.onSubagentCredits,
       onStatusUpdate: callbacks.onSubagentStatusUpdate
         ? async (status: string) => callbacks.onSubagentStatusUpdate!(status)
         : undefined,
@@ -641,6 +670,7 @@ export function buildSharedTools(
       dagHandoffSignal: deps.dagHandoffSignal,
       optInTools: deps.optInTools,
       checkMemberCreditCap: deps.checkMemberCreditCap,
+      checkInsufficientCredits: deps.checkInsufficientCredits,
       toolPermissions: deps.toolPermissions,
     });
     tools.push(coordinateTool);

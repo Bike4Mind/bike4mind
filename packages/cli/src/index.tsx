@@ -44,7 +44,7 @@ import { CheckpointStore } from './storage/CheckpointStore.js';
 import { ImageStore } from './storage/ImageStore.js';
 import { CustomCommandStore } from './storage/CustomCommandStore.js';
 import { RemoteSkillSource } from './storage/RemoteSkillSource.js';
-import { ReActAgent, createToolSearchTool } from '@bike4mind/agents';
+import { ReActAgent } from '@bike4mind/agents';
 import { ToolCatalog, type PermissionPromptKind } from './tools/gateway/index.js';
 import { buildSystemPrompt } from './core/prompts';
 import { getPlanModeFilePath } from './utils/planMode.js';
@@ -191,6 +191,7 @@ import { buildLlmBackend } from './bootstrap/buildLlmBackend.js';
 import { buildSandbox } from './bootstrap/buildSandbox.js';
 import { buildSupportingStores } from './bootstrap/buildSupportingStores.js';
 import { buildAgent } from './bootstrap/buildAgent.js';
+import { buildToolSearch } from './bootstrap/buildToolSearch.js';
 import { wireAgentEvents } from './bootstrap/wireAgentEvents.js';
 import { dispatch as dispatchCommand } from './commands/registry.js';
 import { handleSandboxNetworkCommand } from './commands/sandboxNetworkCommand.js';
@@ -470,20 +471,18 @@ function CliApp() {
         store.clearPaste();
         return;
       }
+      // ESC means "stop everything", not "skip this one and continue with
+      // the next": queued messages go back into the input, where the user can
+      // edit and resend them or clear them with Ctrl+C. Restored before the
+      // abort so no steer can be delivered to the turn being cancelled.
+      store.restoreQueueToInput();
       if (state.abortController) {
         logger.debug('[ABORT] ESC pressed - aborting current operation...');
         state.abortController.abort();
         setState(prev => ({ ...prev, abortController: null }));
-        // Clear thinking state immediately so UI updates
-        useCliStore.getState().setIsThinking(false);
-        // Drop any queued messages - ESC means "stop everything", not
-        // "skip this one and continue with the next".
-        useCliStore.getState().clearMessageQueue();
-      } else {
-        // No active operation, but the user may still want to clear a
-        // pending queue (e.g. they queued messages, the current finished
-        // before they pressed ESC, and now the queue is about to drain).
-        useCliStore.getState().clearMessageQueue();
+        // Clear thinking state immediately so UI updates. The turn may still
+        // be unwinding; runTurn queues anything submitted meanwhile.
+        store.setIsThinking(false);
       }
       return;
     }
@@ -937,13 +936,26 @@ function CliApp() {
       // Create resume_agent tool (orchestrator-only; continues a prior session)
       const resumeAgentTool = createResumeAgentTool(orchestrator, historyStore, backgroundManager);
 
+      // Holder so the tool_search closure can resolve to the agent's live
+      // context.tools array (assigned below after the agent is constructed).
+      // Pushing into context.tools makes newly-loaded schemas callable in
+      // the next ReAct iteration - see b4m-core/agents/src/ReActAgent.ts:202.
+      const agentToolsRef: { current: ICompletionOptionTools[] | null } = { current: null };
+      const { llm: toolSearchLlm, toolSearchTool } = buildToolSearch({
+        llm,
+        models,
+        registry: deferredToolRegistry,
+        logger,
+        agentToolsRef,
+      });
+
       // Wrap with FallbackLlmBackend if fallback models are configured
       const llmWithFallback =
         config.fallbackModels && config.fallbackModels.length > 0
-          ? new FallbackLlmBackend(llm, config.fallbackModels, (fromModel, toModel, error) => {
+          ? new FallbackLlmBackend(toolSearchLlm, config.fallbackModels, (fromModel, toModel, error) => {
               logger.warn(`⚠️  Model "${fromModel}" failed (${error.message}) — falling back to "${toModel}"`);
             })
-          : llm;
+          : toolSearchLlm;
 
       // Wrap LLM for main agent: injects background agent notifications before each call
       const notifyingLlm = new NotifyingLlmBackend(llmWithFallback, backgroundManager);
@@ -1003,25 +1015,6 @@ function CliApp() {
         ? createWorkItemTools(new WorkItemsClient(apiClient))
         : [];
 
-      // Holder so the tool_search closure can resolve to the agent's live
-      // context.tools array (assigned below after the agent is constructed).
-      // Pushing into context.tools makes newly-loaded schemas callable in
-      // the next ReAct iteration - see b4m-core/agents/src/ReActAgent.ts:202.
-      const agentToolsRef: { current: ICompletionOptionTools[] | null } = { current: null };
-      const toolSearchTool =
-        deferredToolRegistry.size() > 0
-          ? createToolSearchTool({
-              registry: deferredToolRegistry,
-              logger,
-              toolListAccessor: () => {
-                if (!agentToolsRef.current) {
-                  throw new Error('tool_search invoked before agent context was wired');
-                }
-                return agentToolsRef.current;
-              },
-            })
-          : null;
-
       // Combine the CLI-specific tools (B4M and MCP tools arrive already wrapped).
       // Assembled before the feature registry so their names can be reserved against
       // plugin tool-name collisions (a duplicate tool name would 400 every completion).
@@ -1062,7 +1055,11 @@ function CliApp() {
         logger,
         // 'tool_search' is fixed-named; cliTools carries it when deferred schemas exist,
         // but reserve the name unconditionally so a plugin can never claim it.
-        reservedToolNames: [...loadedB4mTools, ...cliTools].map(t => t.toolSchema.name).concat('tool_search'),
+        reservedToolNames: [
+          ...[...loadedB4mTools, ...cliTools].map(t => t.toolSchema.name),
+          ...deferredToolRegistry.getDirectoryNames(),
+          'tool_search',
+        ],
       });
 
       // Feed the live plugin command names into the custom-command load gate, then
@@ -3733,7 +3730,11 @@ function CliApp() {
         descriptors: state.pluginDescriptors,
         config: updatedConfig,
         logger,
-        reservedToolNames: baseTools.map(t => t.toolSchema.name),
+        reservedToolNames: [
+          ...baseTools.map(t => t.toolSchema.name),
+          ...deferredToolRegistry.getDirectoryNames(),
+          'tool_search',
+        ],
       });
       const rebuiltRegistry = rebuilt.registry;
       newFeatureRegistry = rebuiltRegistry;

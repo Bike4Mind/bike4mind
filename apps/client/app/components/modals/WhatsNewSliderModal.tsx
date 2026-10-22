@@ -18,6 +18,9 @@ import MarkdownViewer from '@client/app/components/Knowledge/MarkdownViewer';
 import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
 import { brandAlpha } from '@client/app/utils/themes/colors';
 import { DISPLAY_DATE_REGEX } from '@client/app/utils/dateUtils';
+import WhatsNewSlideVideo from './WhatsNewSlideVideo';
+import { pickSlideVideo, videoUrlsOf } from './whatsNewSlideMedia';
+import { useSignedMediaUrls } from './useSignedMediaUrls';
 
 /** Parse subtitle field into display date and subtitle (admin stores "DATE" or "DATE · SUBTITLE" or "SUBTITLE") */
 function parseSubtitleForDisplay(subtitle: string | null | undefined): { displayDate: string; subtitle: string } {
@@ -72,6 +75,15 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger,
   const isMobile = useMediaQuery('(max-width:768px)');
   const { mutate: getPresignedUrls, isPending } = useGetPresignedUrl();
   const { resetTrigger } = useModalTrigger();
+  const slideVideoUrls = useMemo(() => activeModalList.flatMap(modal => videoUrlsOf(modal.video)), [activeModalList]);
+  const { resolved: videoUrls, refresh: refreshVideoUrl } = useSignedMediaUrls(slideVideoUrls);
+  const [failedVideos, setFailedVideos] = useState<ReadonlySet<string>>(new Set());
+  const handleVideoError = useCallback(
+    (src: string) => {
+      if (!refreshVideoUrl(src)) setFailedVideos(prev => new Set(prev).add(src));
+    },
+    [refreshVideoUrl]
+  );
 
   // Refs for accessibility
   const modalRef = useRef<HTMLDivElement>(null);
@@ -561,6 +573,46 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger,
   const currentTitle = currentModal.title || '';
   const currentImageUrl = urlImages?.[currentModal._id || ''];
   const { displayDate, subtitle: subtitleText } = parseSubtitleForDisplay(currentModal.subtitle);
+  const metaLine = [displayDate, subtitleText].filter(Boolean).join(' \u00b7 ');
+
+  // A video replaces the slide image. When it cannot play (URL withheld, or a playback error that
+  // re-signing cannot fix) the slide shows its image, else the video's poster in the video slot, and
+  // with neither the slot is dropped rather than left empty.
+  const pickedVideo = pickSlideVideo(currentModal.video, isMobile);
+  const videoPoster = (pickedVideo?.poster && videoUrls[pickedVideo.poster]) || undefined;
+  const videoUnplayable = !!pickedVideo && (videoUrls[pickedVideo.src] === null || failedVideos.has(pickedVideo.src));
+  const slideVideo = pickedVideo && !(videoUnplayable && (currentModal.imageUrl || !videoPoster)) ? pickedVideo : null;
+  const showImage = !slideVideo && !!currentModal.imageUrl;
+  const isLandscapeVideo = slideVideo?.orientation === 'landscape';
+  // Video above the text: always on mobile, and for 16:9 on desktop where a side slot is too small
+  const stackVideo = !!slideVideo && (isMobile || isLandscapeVideo);
+
+  const renderVideo = () => {
+    if (!slideVideo) return null;
+    if (videoUnplayable) {
+      return videoPoster ? (
+        <Box
+          component="img"
+          src={videoPoster}
+          alt={currentTitle}
+          data-testid="whats-new-slide-video-poster"
+          sx={{ width: '100%', height: '100%', objectFit: 'contain', borderRadius: '12px' }}
+        />
+      ) : null;
+    }
+    const src = videoUrls[slideVideo.src];
+    if (!src) return <CircularProgress size="lg" />;
+    return (
+      <WhatsNewSlideVideo
+        key={`${currentModal._id}:${slideVideo.src}`}
+        src={src}
+        poster={videoPoster}
+        title={currentTitle}
+        active={isOpen}
+        onSourceError={() => handleVideoError(slideVideo.src)}
+      />
+    );
+  };
 
   return (
     <Modal
@@ -582,8 +634,8 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger,
         sx={{
           width: '100%',
           maxWidth: isMobile ? '100%' : '940px',
-          height: isMobile ? '100%' : '600px',
-          maxHeight: isMobile ? 'calc(100vh - 32px)' : '600px',
+          height: isMobile ? '100%' : stackVideo ? 'min(760px, calc(100vh - 48px))' : '600px',
+          maxHeight: isMobile ? 'calc(100vh - 32px)' : stackVideo ? 'min(760px, calc(100vh - 48px))' : '600px',
           minHeight: 0,
           borderRadius: '12px',
           overflow: 'hidden',
@@ -634,18 +686,20 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger,
         <Box
           sx={{
             display: 'flex',
-            flexDirection: isMobile ? 'column' : 'row',
+            flexDirection: isMobile || stackVideo ? 'column' : 'row',
             flex: 1,
             minHeight: 0,
             position: 'relative',
             overflow: 'hidden',
             justifyContent: 'space-between',
-            columnGap: isMobile ? 0 : '60px',
+            columnGap: isMobile || stackVideo ? 0 : '60px',
             p: isMobile ? '16px' : '24px',
+            // room for the close button beside the date line
+            ...(stackVideo && { pt: '32px' }),
           }}
         >
           {/* Image Section - Top on mobile */}
-          {isMobile && currentModal.imageUrl && (
+          {isMobile && showImage && (
             <Box
               sx={{
                 flexShrink: 0,
@@ -692,7 +746,7 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger,
           {/* Content Section */}
           <Box
             sx={{
-              width: isMobile ? '100%' : currentModal.imageUrl ? '400px' : '100%',
+              width: isMobile || stackVideo ? '100%' : slideVideo || showImage ? '400px' : '100%',
               padding: 0,
               display: 'flex',
               flexDirection: 'column',
@@ -716,6 +770,48 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger,
                 },
               }}
             >
+              {metaLine && (
+                <Typography
+                  level="body-md"
+                  data-testid="whats-new-slide-meta"
+                  sx={{
+                    mb: 0.5,
+                    fontSize: '16px',
+                    color: 'text.tertiary',
+                  }}
+                >
+                  {metaLine}
+                </Typography>
+              )}
+              <Typography
+                id="whats-new-modal-title"
+                level="h2"
+                sx={{
+                  mb: 3,
+                  fontSize: '24px',
+                  fontWeight: 500,
+                  color: 'text.primary',
+                  pr: { xs: '32px', sm: 0 },
+                }}
+              >
+                {currentModal.title}
+              </Typography>
+              {/* Inside the scroll area so the video scrolls away with the text */}
+              {stackVideo && (
+                <Box
+                  data-testid="whats-new-slide-video-slot"
+                  sx={{
+                    width: '100%',
+                    ...(isLandscapeVideo ? { aspectRatio: '16 / 9' } : { height: '50vh', minHeight: '240px' }),
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    mb: '16px',
+                  }}
+                >
+                  {renderVideo()}
+                </Box>
+              )}
               <Box
                 sx={theme => ({
                   display: 'block',
@@ -795,43 +891,6 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger,
                   },
                 })}
               >
-                {displayDate && (
-                  <Typography
-                    level="body-md"
-                    sx={{
-                      mb: 0.5,
-                      fontSize: '16px',
-                      color: 'text.tertiary',
-                    }}
-                  >
-                    {displayDate}
-                  </Typography>
-                )}
-                <Typography
-                  id="whats-new-modal-title"
-                  level="h2"
-                  sx={{
-                    mb: subtitleText ? 1 : 3,
-                    fontSize: '24px',
-                    fontWeight: 500,
-                    color: 'primary.500',
-                    pr: { xs: '32px', sm: 0 },
-                  }}
-                >
-                  {currentModal.title}
-                </Typography>
-                {subtitleText && (
-                  <Typography
-                    level="body-lg"
-                    sx={{
-                      mb: 3,
-                      fontSize: '16px',
-                      color: 'text.tertiary',
-                    }}
-                  >
-                    {subtitleText}
-                  </Typography>
-                )}
                 <MarkdownViewer content={currentModal.description || ''} />
               </Box>
             </Box>
@@ -890,8 +949,25 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger,
             </Box>
           </Box>
 
+          {!stackVideo && slideVideo && (
+            <Box
+              data-testid="whats-new-slide-video-slot"
+              sx={{
+                flexShrink: 0,
+                alignSelf: 'center',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: '400px',
+                height: '400px',
+              }}
+            >
+              {renderVideo()}
+            </Box>
+          )}
+
           {/* Desktop Image Section - Right side */}
-          {!isMobile && currentModal.imageUrl && (
+          {!isMobile && showImage && (
             <Box
               sx={{
                 width: '400px',

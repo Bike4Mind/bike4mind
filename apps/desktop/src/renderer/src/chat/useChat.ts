@@ -16,6 +16,7 @@ import type {
   UpdateProjectRequest,
 } from '@shared/chat';
 import { normalizeSessionTitle } from '@shared/chat';
+import { isUntouchedImport } from './grouping';
 import type { CreatedSession } from '@shared/ipc';
 import type { SidebarSectionsState } from '@shared/sidebarSections';
 import { appendArrived, OPTIMISTIC_ID_PREFIX } from './arrivedMessage';
@@ -26,6 +27,7 @@ import { applyReplyDone } from './replyDone';
 import { applyStatusEvents } from './sessionStatus';
 import { EVENT_STAMP_RESOLUTION_MS, REASONING_TAIL_CHARS, totalTokens, type TurnProgress } from './statusLine';
 import { applyWorkspaceEvent, preparingOnSend, type WorkspaceProgress } from './workspaceProgress';
+import { canHoldWorktree, worktreeByDefault } from './worktreeDefault';
 import { parseDirectoryOutcome, REQUEST_DIRECTORY_TOOL_NAME } from '@shared/directoryRequest';
 
 const LIVE_FLUSH_FALLBACK_MS = 100;
@@ -68,15 +70,39 @@ export function useSessions(): SessionsController {
   const [codeError, setCodeError] = useState<string | null>(null);
   const [renameError, setRenameError] = useState<string | null>(null);
 
-  const reload = useCallback(async () => {
+  const latestReload = useRef(0);
+  const localEdits = useRef(0);
+  // A listing that resolves after a newer listing, or after a local edit (create, pin, rename),
+  // would put back the rows it read before them. Import syncs re-list often enough to hit this.
+  const reload = useCallback(async (): Promise<void> => {
+    const ticket = ++latestReload.current;
+    const editsBefore = localEdits.current;
     const next = await window.b4m.chat.listSessions();
+    if (ticket !== latestReload.current) return;
+    if (editsBefore !== localEdits.current) return reload();
     setSessions(next);
     setLoading(false);
+  }, []);
+  const editSessions = useCallback((update: (current: ChatSessionSummary[]) => ChatSessionSummary[]) => {
+    localEdits.current++;
+    setSessions(update);
   }, []);
 
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  // Main batches these, so a sync of hundreds of transcripts re-lists a handful of times.
+  useEffect(() => window.b4m.claudeImport?.onSessionsChanged(() => void reload()), [reload]);
+
+  // Failed spawns are deleted without a reply ending or a status push to refresh the list.
+  useEffect(
+    () =>
+      window.b4m.chat.onStreamEvent(event => {
+        if (event.type === 'spawn-failed') void reload();
+      }),
+    [reload]
+  );
 
   // Patched in place rather than moved to the front, the way pinning is: a generated title does
   // not touch `updatedAt`, so reordering here would disagree with the next reload. An id this
@@ -84,7 +110,7 @@ export function useSessions(): SessionsController {
   // not listed that session yet.
   useEffect(() => {
     return window.b4m.chat.onSessionSummary(summary => {
-      setSessions(current => current.map(entry => (entry.id === summary.id ? summary : entry)));
+      editSessions(current => current.map(entry => (entry.id === summary.id ? summary : entry)));
     });
   }, []);
 
@@ -93,7 +119,7 @@ export function useSessions(): SessionsController {
   const list = useCallback((created: CreatedSession, placement: SessionPlacement | undefined) => {
     if (created.sidebarSections) placement?.placed(created.sidebarSections);
     else if (created.placementFailed) placement?.failed();
-    setSessions(current => [created.session, ...current]);
+    editSessions(current => [created.session, ...current]);
   }, []);
 
   const create = useCallback(
@@ -128,11 +154,11 @@ export function useSessions(): SessionsController {
 
   const remove = useCallback(async (sessionId: string) => {
     await window.b4m.chat.deleteSession(sessionId);
-    setSessions(current => current.filter(session => session.id !== sessionId));
+    editSessions(current => current.filter(session => session.id !== sessionId));
   }, []);
 
   const apply = useCallback((summary: ChatSessionSummary) => {
-    setSessions(current => [summary, ...current.filter(session => session.id !== summary.id)]);
+    editSessions(current => [summary, ...current.filter(session => session.id !== summary.id)]);
   }, []);
 
   // Patched in place rather than moved to the front: pinning does not touch `updatedAt`, so
@@ -140,7 +166,7 @@ export function useSessions(): SessionsController {
   const togglePin = useCallback(async (session: ChatSessionSummary) => {
     const updated = await window.b4m.chat.setSessionPinned(session.id, !session.pinned);
     if (!updated) return;
-    setSessions(current => current.map(entry => (entry.id === updated.id ? updated : entry)));
+    editSessions(current => current.map(entry => (entry.id === updated.id ? updated : entry)));
   }, []);
 
   // Patched in place rather than moved, for the same reason pinning is: archiving does not
@@ -148,7 +174,7 @@ export function useSessions(): SessionsController {
   const toggleArchived = useCallback(async (session: ChatSessionSummary) => {
     const updated = await window.b4m.chat.setSessionArchived(session.id, !session.archived);
     if (!updated) return;
-    setSessions(current => current.map(entry => (entry.id === updated.id ? updated : entry)));
+    editSessions(current => current.map(entry => (entry.id === updated.id ? updated : entry)));
   }, []);
 
   const rename = useCallback(
@@ -157,7 +183,7 @@ export function useSessions(): SessionsController {
       if (!next || next === session.title) return;
       setRenameError(null);
       const retitle = (from: string, to: string) =>
-        setSessions(current =>
+        editSessions(current =>
           current.map(entry => (entry.id === session.id && entry.title === from ? { ...entry, title: to } : entry))
         );
       retitle(session.title, next);
@@ -426,6 +452,9 @@ export function useConversation(
 
   /** The session this window has a send out for, read by the subscription; see applyWorkspaceEvent. */
   const sendingFor = useRef<string | null>(null);
+  // An imported refresh must not replace a prompt, boundary or reply that arrived after its read began.
+  const transcriptVersion = useRef(0);
+  const workspaceVersion = useRef(0);
 
   useEffect(() => {
     setSendError(null);
@@ -446,8 +475,10 @@ export function useConversation(
 
     let current = true;
     const load = (): void => {
+      const preparationBeforeRead = workspaceVersion.current;
       void window.b4m.chat.getSession(sessionId).then(loaded => {
         if (!current) return;
+        if (preparationBeforeRead !== workspaceVersion.current) return load();
         // A reply already running arrives as main's live copy, and the events from now on
         // extend it. One that settled while this read was in flight is stale: read again
         // rather than put back a turn the 'done' already closed.
@@ -455,6 +486,9 @@ export function useConversation(
         if (live && settledReplies.current.has(live.messageId)) return load();
         setSession(loaded);
         setMessages(loaded?.messages ?? []);
+        // A started session opened while its worktree is still being cut: no event is coming
+        // to say so, the 'workspace' one went out before this window was looking.
+        setPreparing(current => current ?? loaded?.preparingWorkspace ?? null);
         setStreaming(!!live);
         setTurn(live ? { startedAt: live.startedAt, tokens: null } : null);
       });
@@ -470,12 +504,54 @@ export function useConversation(
     };
   }, [sessionId]);
 
+  const followsImport = !!session && isUntouchedImport(session);
+  useEffect(() => {
+    if (!sessionId || !followsImport) return;
+    let current = true;
+    let latestRead = 0;
+    const refresh = async () => {
+      if (sendingFor.current === sessionId) return;
+      const ticket = ++latestRead;
+      const version = transcriptVersion.current;
+      try {
+        const loaded = await window.b4m.chat.getSession(sessionId);
+        if (!current || ticket !== latestRead || version !== transcriptVersion.current) return;
+        if (sendingFor.current === sessionId || !loaded || loaded.replyInFlight || !isUntouchedImport(loaded)) return;
+        setMessages(loaded.messages);
+        // Keep local controls such as model and folder choices; sync only replaced the transcript.
+        setSession(previous =>
+          previous
+            ? {
+                ...previous,
+                title: previous.titleLocked ? previous.title : loaded.title,
+                importOrigin: loaded.importOrigin,
+                messages: loaded.messages,
+                updatedAt: loaded.updatedAt,
+              }
+            : previous
+        );
+      } catch (error) {
+        if (!current || ticket !== latestRead || version !== transcriptVersion.current) return;
+        setSendError(
+          `Could not refresh this imported conversation. ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+    };
+    const off = window.b4m.claudeImport?.onSessionsChanged(() => void refresh());
+    return () => {
+      current = false;
+      off?.();
+    };
+  }, [sessionId, followsImport]);
+
   // The header reads the open conversation's own copy of the title, so the sidebar's patch is
   // not enough: without this, the row renames itself and the heading above the thread does not.
   useEffect(() => {
     return window.b4m.chat.onSessionSummary(summary => {
       if (summary.id !== activeSessionId.current) return;
-      setSession(current => (current ? { ...current, title: summary.title } : current));
+      // The project too: a worktree landing under an open session is pushed this way, and the
+      // chips have to stop saying it is on its way.
+      setSession(current => (current ? { ...current, title: summary.title, project: summary.project } : current));
     });
   }, []);
 
@@ -535,6 +611,7 @@ export function useConversation(
     };
 
     const unsubscribe = window.b4m.chat.onStreamEvent(event => {
+      if (event.sessionId === activeSessionId.current) transcriptVersion.current++;
       const live =
         event.type === 'delta' ||
         event.type === 'tool-start' ||
@@ -587,6 +664,7 @@ export function useConversation(
       }
 
       if (event.type === 'start') {
+        workspaceVersion.current++;
         setPhase(null);
         setPreparing(null);
         setStreaming(true);
@@ -633,6 +711,7 @@ export function useConversation(
       }
 
       if (event.type === 'workspace') {
+        workspaceVersion.current++;
         const sending = sendingFor.current === event.sessionId;
         setPreparing(current => applyWorkspaceEvent(current, event, Date.now(), sending));
         return;
@@ -684,6 +763,7 @@ export function useConversation(
       // An attachment on its own is a turn; only a turn with neither is not.
       if (!prompt && attachments.length === 0) return;
 
+      transcriptVersion.current++;
       setSendError(null);
       setNotice(null);
 
@@ -828,6 +908,7 @@ export function useConversation(
   const runCommand = useCallback(
     async (name: string, args: string) => {
       if (!sessionId) return;
+      transcriptVersion.current++;
       setSendError(null);
       setNotice(null);
       if (name === 'pr') {
@@ -969,7 +1050,12 @@ export function useConversation(
       }
       // The workspace choice does not travel: it named a worktree of the repository being left,
       // and carrying it across would create one in a repository the user has only just pointed at.
-      const moved = await changeProject({ directory, branch: inspected.currentBranch ?? '', workspace: false });
+      // The new folder starts from the user's default instead; see worktreeDefault.ts.
+      const moved = await changeProject({
+        directory,
+        branch: inspected.currentBranch ?? '',
+        workspace: worktreeByDefault() && canHoldWorktree(inspected),
+      });
       // The folder is still usable when git could not be read - it just has no branches to offer -
       // so this is reported after the move rather than instead of it.
       if (moved && inspected.error) setProjectError({ message: inspected.error, busy: false });

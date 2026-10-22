@@ -294,8 +294,8 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/admin/rate-limits` | GET | jwt+key | `admin:*` | no | - | 1: `components/admin/RateLimits/hooks/useRateLimitMetrics.ts` |
 | `/api/admin/rate-limits/ingest` | POST | handler | - | no | - | 0 |
 | `/api/admin/recalculate-message-counts` | POST | jwt+key | `admin:*` | no | - | 1: `components/Notebook/Search/AdvancedSearchDrawer.tsx` |
-| `/api/admin/release-notes` | GET | jwt+key | `admin:*` | no | - | 1: `components/admin/ReleaseNotes/useReleaseNotes.ts` |
-| `/api/admin/release-notes/[id]` | PATCH | jwt+key | `admin:*` | no | - | 1: `components/admin/ReleaseNotes/useReleaseNotes.ts` |
+| `/api/admin/release-notes` | GET | jwt+key | `admin:*`, `release-notes:write` | no | - | 1: `components/admin/ReleaseNotes/useReleaseNotes.ts` |
+| `/api/admin/release-notes/[id]` | PATCH | jwt+key | `admin:*`, `release-notes:write` | no | - | 1: `components/admin/ReleaseNotes/useReleaseNotes.ts` |
 | `/api/admin/release-notes/[id]/status` | POST | jwt+key | `admin:*` | no | - | 1: `components/admin/ReleaseNotes/useReleaseNotes.ts` |
 | `/api/admin/release-notes/config` | GET, PUT | jwt+key | `admin:*` | no | - | 1: `components/admin/ReleaseNotes/useReleaseNotes.ts` |
 | `/api/admin/retrieval-rate` | GET | jwt+key | `admin:*` | no | - | 1: `components/admin/RetrievalRateTab.tsx` |
@@ -759,7 +759,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/files/check-duplicates` | POST | jwt+key | `files:read` | no | - | 1: `hooks/data/dataLakeWizard.ts` |
 | `/api/files/chunk` | POST | jwt+key | `files:write` | no | - | 1: `utils/filesAPICalls.ts` |
 | `/api/files/copy-generated-image` | POST | jwt+key | `files:write` | no | - | 1: `utils/filesAPICalls.ts` |
-| `/api/files/createFabFile` | POST | jwt+key | `files:write` | no | - | 1: `utils/filesAPICalls.ts` |
+| `/api/files/createFabFile` | POST | jwt+key | `files:write`, `release-notes:write` | no | - | 1: `utils/filesAPICalls.ts` |
 | `/api/files/createFabFileURL` | POST | jwt+key | `files:write` | no | - | 2: `hooks/data/fabFileMutations.ts`, `utils/filesAPICalls.ts` |
 | `/api/files/download` | GET | jwt+key | `files:read` | no | - | 3: `components/Files/Browser/ItemActions.tsx`, `components/ProfileModal/SettingsTabContent/GeneralSettingsTab.tsx`, `hooks/data/fabFileMutations.ts` |
 | `/api/files/generate-presigned-url` | POST | jwt+key | `ai:generate`, `files:write` | no | - | 0 |

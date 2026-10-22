@@ -392,6 +392,9 @@ export const SettingKeySchema = z.enum([
   'MaxActiveDungeons',
   'DungeonSpawnIntervalHeartbeats',
   'DungeonTTLMinutes',
+  'EnableStudioCreateV2',
+  'EnableStudioImage',
+  'EnableStudioProductions',
   'VectorThreshold',
   'bflApiKey',
   'EnableMCPServer',
@@ -1077,16 +1080,22 @@ function makeNumberSetting(config: { defaultValue?: number; min?: number; max?: 
   };
 }
 
-function makeBooleanSetting(config: { defaultValue?: boolean } & BaseSetting) {
+function makeBooleanSetting({
+  acceptNumeric = false,
+  ...config
+}: { defaultValue?: boolean; acceptNumeric?: boolean } & BaseSetting) {
   return {
     ...config,
     type: 'boolean' as const,
     schema: z
       .preprocess(val => {
         if (typeof val === 'string') {
-          if (val.toLowerCase() === 'true') return true;
-          if (val.toLowerCase() === 'false') return false;
+          if (val.toLowerCase() === 'true' || (acceptNumeric && val === '1')) return true;
+          if (val.toLowerCase() === 'false' || (acceptNumeric && val === '0')) return false;
         }
+        // Numeric compatibility is opt-in so existing billing and security defaults cannot flip.
+        if (acceptNumeric && val === 1) return true;
+        if (acceptNumeric && val === 0) return false;
         return val;
       }, z.boolean())
       .prefault(config.defaultValue ?? false),
@@ -2065,6 +2074,10 @@ export const API_SERVICE_GROUPS = {
       { key: 'MaxActiveDungeons', order: 291 },
       { key: 'DungeonSpawnIntervalHeartbeats', order: 292 },
       { key: 'DungeonTTLMinutes', order: 293 },
+      // Studio rebuild, admin-only until the reveal (see studioFeatureFlags.ts)
+      { key: 'EnableStudioCreateV2', order: 300 },
+      { key: 'EnableStudioImage', order: 301 },
+      { key: 'EnableStudioProductions', order: 302 },
     ],
   },
   NOTEBOOK: {
@@ -2903,7 +2916,7 @@ export const settingsMap = {
     name: 'Skill Market URL Allowlist',
     defaultValue: '',
     description:
-      'Comma-separated host names a Skill Market skill may reference without a finding (subdomains included). Any other URL holds a Public listing for review.',
+      'Comma-separated host names a Skill Market skill may reference without a finding (subdomains included). Any other URL holds a listing for review at every visibility.',
     category: 'AI Moderation',
   }),
   SkillMarketClassifierMinConfidence: makeNumberSetting({
@@ -3502,6 +3515,7 @@ export const settingsMap = {
     category: 'Users',
   }),
   enableTeamPlan: makeBooleanSetting({
+    acceptNumeric: true,
     key: 'enableTeamPlan',
     userReadable: true,
     name: 'Enable Team Plan',
@@ -3766,6 +3780,37 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.SEARCH.id,
     order: 4,
     isSensitive: true,
+  }),
+  EnableStudioCreateV2: makeBooleanSetting({
+    key: 'EnableStudioCreateV2',
+    name: 'Enable Studio Create v2',
+    defaultValue: false,
+    description:
+      'Admin-only preview of the restructured Studio Create area. Non-admins never see it, whatever this is set to.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 300,
+  }),
+  EnableStudioImage: makeBooleanSetting({
+    key: 'EnableStudioImage',
+    name: 'Enable Image in Studio',
+    defaultValue: false,
+    description: 'Admin-only preview of the Image tab in Studio. Non-admins never see it, whatever this is set to.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 301,
+    dependsOn: 'EnableStudioCreateV2',
+  }),
+  EnableStudioProductions: makeBooleanSetting({
+    key: 'EnableStudioProductions',
+    name: 'Enable Studio Productions',
+    defaultValue: false,
+    description:
+      'Admin-only preview of Studio Productions (assembling many assets into one piece). Non-admins never see it, whatever this is set to.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 302,
+    dependsOn: 'EnableStudioCreateV2',
   }),
   EnablePotionQuest: makeBooleanSetting({
     key: 'EnablePotionQuest',

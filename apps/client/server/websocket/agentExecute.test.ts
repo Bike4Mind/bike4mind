@@ -102,6 +102,8 @@ import { ApiKeyScope, PROMPT_TEXT_MAX } from '@bike4mind/common';
 import { verifyApiKey, verifyJwtToken, checkApiKeyRateLimitOrThrow, checkRateLimit } from '@server/cli/auth';
 import { startAgentExecution } from '@server/utils/startAgentExecution';
 import { persistRunAsQuest } from '@server/utils/persistRunAsQuest';
+import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
+import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { func, handlePermissionResponse, handleGateResponse } from './agentExecute';
 
 const noopLogger = { info: vi.fn(), error: vi.fn(), warn: vi.fn(), updateMetadata: vi.fn() };
@@ -857,5 +859,59 @@ describe('reconnect command', () => {
 
     expect(sentPayloads()).toEqual([{ action: 'reconnect_result', found: false }]);
     expect(mockUpdateConnectionId).not.toHaveBeenCalled();
+  });
+});
+
+const databaseUnreachable = () =>
+  toApiKeyAuthError(Object.assign(new Error('connect ECONNREFUSED 10.0.0.1:27017'), { name: 'MongoNetworkError' }));
+const expectNoDriverLeak = (value: unknown) => {
+  const serialized = JSON.stringify(value);
+  expect(serialized).not.toContain('ECONNREFUSED');
+  expect(serialized).not.toContain('10.0.0.1');
+};
+
+describe('agent_execute API-key check outcome', () => {
+  const event = {
+    requestContext: { connectionId: 'conn-1', domainName: 'example.com', stage: 'dev' },
+    body: JSON.stringify({
+      accessToken: 'b4m_live_x',
+      action: 'agent_execute',
+      command: 'start',
+      sessionId: 's1',
+      questId: 'q1',
+      query: 'go',
+      model: 'm',
+    }),
+  };
+
+  const sentFrames = () =>
+    mockApiGwSend.mock.calls.map(([sent]) => JSON.parse(sent.input.Data.toString()) as Record<string, unknown>);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockApiGwSend.mockResolvedValue(undefined);
+  });
+
+  it('reports an unavailable error when the database is unreachable, without trying the JWT', async () => {
+    vi.mocked(verifyApiKey).mockRejectedValueOnce(databaseUnreachable());
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (func as any)(event, {}, noopLogger);
+
+    expect(sentFrames()).toEqual([{ action: 'agent_error', message: 'Authentication temporarily unavailable' }]);
+    expectNoDriverLeak(sentFrames());
+    expect(verifyJwtToken).not.toHaveBeenCalled();
+    expect(startAgentExecution).not.toHaveBeenCalled();
+  });
+
+  it('keeps the auth-failed error for an unknown key that the JWT check also rejects', async () => {
+    vi.mocked(verifyApiKey).mockRejectedValueOnce(new UnauthorizedError('Invalid or expired API key'));
+    vi.mocked(verifyJwtToken).mockRejectedValueOnce(new Error('bad token'));
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (func as any)(event, {}, noopLogger);
+
+    expect(sentFrames()).toEqual([{ action: 'agent_error', message: 'Authentication failed' }]);
+    expect(verifyJwtToken).toHaveBeenCalled();
   });
 });

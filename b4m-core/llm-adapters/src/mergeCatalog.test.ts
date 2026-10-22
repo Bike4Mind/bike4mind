@@ -690,6 +690,29 @@ describe('mergeCatalog: a non-operator lifecycle only moves toward sunset', () =
     setModelPriceRowsProvider(null);
   });
 
+  it('keeps an adapter superseded marker when discovery only reports an active status', () => {
+    const seed = seedModel({ isSuperseded: true });
+    const [merged] = mergeCatalog([seed], [lifecycleRow(seed.id, 'discovery', { status: 'active' })], NO_KEYS);
+    expect(merged.isSuperseded).toBe(true);
+    expect(merged.disabled).toBeFalsy();
+  });
+
+  it('keeps seeded superseded metadata over discovery but lets an operator clear it', () => {
+    const seed = seedModel();
+    const rows = [
+      lifecycleRow(seed.id, 'seed', { status: 'active', isSuperseded: true }),
+      lifecycleRow(seed.id, 'discovery', { status: 'active', isSuperseded: false }),
+    ];
+    expect(mergeCatalog([seed], rows, NO_KEYS)[0].isSuperseded).toBe(true);
+    expect(
+      mergeCatalog(
+        [seed],
+        [...rows, lifecycleRow(seed.id, 'operator', { status: 'active', isSuperseded: false })],
+        NO_KEYS
+      )[0].isSuperseded
+    ).toBe(false);
+  });
+
   it('keeps a past adapter-literal deprecation hidden when discovery reports it active with a later date', async () => {
     setModelPriceRowsProvider(null);
     setModelCatalogProvider(async () => []);

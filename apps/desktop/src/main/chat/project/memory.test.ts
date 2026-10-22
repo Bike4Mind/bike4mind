@@ -1,9 +1,9 @@
 import { mkdir, mkdtemp, readFile, realpath, symlink, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MAX_INSTRUCTIONS_BYTES, loadInstructions } from './instructions';
 import {
   MEMORY_INDEX_FILE,
@@ -24,6 +24,12 @@ const run = promisify(execFile);
 async function scratch(prefix = 'b4m-memory-'): Promise<string> {
   return realpath(await mkdtemp(join(tmpdir(), prefix)));
 }
+
+beforeEach(async () => {
+  vi.stubEnv('HOME', await scratch('b4m-memory-home-'));
+});
+
+afterEach(() => vi.unstubAllEnvs());
 
 /** The store under a temp instructions root, so no test can reach the real ~/.claude. */
 async function store(userRoot: string, slug = 'project'): Promise<MemoryStore> {
@@ -129,6 +135,57 @@ describe('path containment', () => {
     await symlink(secret, join(memory.directory, 'escape.md'));
 
     await expect(resolveMemoryPath(memory, 'escape')).rejects.toThrow(/does not resolve inside the memory folder/);
+  });
+
+  it('refuses a dangling file symlink before a memory write can create its outside target', async () => {
+    const outside = await scratch('b4m-memory-outside-');
+    const target = join(outside, 'not-created.md');
+    await symlink(target, join(memory.directory, 'escape.md'));
+
+    await expect(planMemoryWrite(memory, { name: 'escape', content: 'must stay inside' })).rejects.toThrow(
+      /does not resolve inside the memory folder/
+    );
+    await expect(readFile(target)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('keeps a dangling symlink whose target is another new memory inside the folder', async () => {
+    const target = join(memory.directory, 'new-fact.md');
+    await symlink(target, join(memory.directory, 'alias.md'));
+
+    await save(memory, 'alias', 'a contained fact');
+    expect(await readFile(target, 'utf8')).toBe('a contained fact\n');
+  });
+
+  it('creates a memory when its entire memory folder does not exist yet', async () => {
+    const fresh: MemoryStore = {
+      directory: join(userRoot, 'projects', 'fresh', 'memory'),
+      userInstructionsRoot: userRoot,
+    };
+
+    await save(fresh, 'first-fact', 'a fresh fact');
+    expect(await readFile(join(fresh.directory, 'first-fact.md'), 'utf8')).toBe('a fresh fact\n');
+  });
+
+  it.each(['settings-backup', 'Settings-backup'])(
+    'refuses a memory store inside the prefix-protected ~/.claude/%s',
+    async folder => {
+      const protectedStore: MemoryStore = {
+        directory: join(homedir(), '.claude', folder, 'memory'),
+        userInstructionsRoot: join(homedir(), '.claude'),
+      };
+      await mkdir(protectedStore.directory, { recursive: true });
+
+      await expect(planMemoryWrite(protectedStore, { name: 'fact', content: 'secret' })).rejects.toThrow(
+        /resolves into a protected location/
+      );
+    }
+  );
+
+  it('allows normal memory writes under ~/.claude/projects despite its tool write protection', async () => {
+    const homeStore = await store(join(homedir(), '.claude'));
+
+    await save(homeStore, 'a-fact', 'intended memory write');
+    expect(await readFile(join(homeStore.directory, 'a-fact.md'), 'utf8')).toBe('intended memory write\n');
   });
 
   it('refuses a name that escapes before any path is built', async () => {

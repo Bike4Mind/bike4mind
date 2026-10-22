@@ -38,7 +38,7 @@ import {
 import { createTranscriptionUploadContract, createTranscriptionContract } from './transcription.contract';
 import { createSessionContract } from './sessionCreate.contract';
 import { listSessionsContract } from './sessionList.contract';
-import { listWhatsNewContract } from './whatsNew.contract';
+import { getWhatsNewMediaContract, listWhatsNewContract } from './whatsNew.contract';
 import {
   listDataLakesContract,
   getDataLakeContract,
@@ -76,6 +76,7 @@ import {
   updateAgentContract,
   deleteAgentContract,
 } from './agents.contract';
+import { getClaudeMarketplaceContract, getClaudePluginZipContract } from './skillMarket.contract';
 
 /**
  * Every public endpoint, as a contract. The OpenAPI generator registers each of
@@ -134,6 +135,7 @@ export const CONTRACTS: readonly EndpointContract[] = [
   createVoiceSessionContract,
   endVoiceSessionContract,
   listWhatsNewContract,
+  getWhatsNewMediaContract,
   listProjectsContract,
   getProjectContract,
   createProjectContract,
@@ -153,4 +155,6 @@ export const CONTRACTS: readonly EndpointContract[] = [
   createAgentContract,
   updateAgentContract,
   deleteAgentContract,
+  getClaudeMarketplaceContract,
+  getClaudePluginZipContract,
 ];

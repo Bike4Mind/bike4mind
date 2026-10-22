@@ -263,7 +263,7 @@ const handler = baseApi().put(
         ? await getPreviousConsentLevel(userId, incomingTelemetryLevel, body.preferences)
         : undefined;
 
-      req.logger.updateMetadata({ body: req.body });
+      req.logger.updateMetadata({ updatedFields: Object.keys(body) });
       await commitWithSessionEnd(
         req,
         async () => {

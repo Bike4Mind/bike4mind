@@ -154,10 +154,12 @@ export class QuestMaster {
       } else {
         // Handle string input (HTML comment format from other models)
         const questPlanText = input;
-        this.logger.log('Processing quest plan:', questPlanText);
+        this.logger.log('Processing quest plan', {
+          inputLength: typeof questPlanText === 'string' ? questPlanText.length : 0,
+        });
 
         if (!questPlanText || typeof questPlanText !== 'string') {
-          this.logger.warn('Invalid questPlanText received:', questPlanText);
+          this.logger.warn('Invalid quest plan input', { inputType: typeof questPlanText });
           if (this.quest) {
             this.quest.questMasterReply = JSON.stringify(defaultResponse);
             await this.db.quests.update({
@@ -816,7 +818,7 @@ Remember:
 
           // Check for the meta tag
           if (!response.includes('<!--QuestMasterMeta')) {
-            this.logger.warn('Response missing QuestMasterMeta section. Response preview:', response.substring(0, 500));
+            this.logger.warn('Response missing QuestMasterMeta section', { responseLength: response.length });
 
             // Try to recover by adding a default meta section if we have quest data
             if (response.includes('<!--QuestMaster')) {
@@ -849,10 +851,9 @@ Remember:
                   response = simpleQuest;
                 } else {
                   // Only throw if we really can't recover
-                  this.logger.error(
-                    'Unable to recover from missing QuestMasterMeta. Response:',
-                    response.substring(0, 200)
-                  );
+                  this.logger.error('Unable to recover from missing QuestMasterMeta', {
+                    responseLength: response.length,
+                  });
                   throw new Error('Missing QuestMasterMeta section and no quest data found');
                 }
               }

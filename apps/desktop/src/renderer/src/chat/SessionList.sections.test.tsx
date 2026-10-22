@@ -2,7 +2,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
-import type { ChatSessionSummary } from '@shared/chat';
+import type { ChatSessionMode, ChatSessionSummary } from '@shared/chat';
 import { normalizeSectionName, type SidebarSectionsState } from '@shared/sidebarSections';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
@@ -86,12 +86,20 @@ let onDelete = vi.fn<(id: string) => void>();
 let onDismissSectionError = vi.fn<() => void>();
 let onToggleCollapsed = vi.fn<() => void>();
 
-function Harness({ sessions, sectionError }: { sessions: ChatSessionSummary[]; sectionError?: string | null }) {
+function Harness({
+  sessions,
+  sectionError,
+  mode = 'chat',
+}: {
+  sessions: ChatSessionSummary[];
+  sectionError?: string | null;
+  mode?: ChatSessionMode;
+}) {
   const { sections, actions } = useSidebarSections();
   return (
     <SessionList
       sessions={sessions}
-      mode="chat"
+      mode={mode}
       onModeChange={() => {}}
       loading={false}
       activeId={null}
@@ -119,7 +127,8 @@ function Harness({ sessions, sectionError }: { sessions: ChatSessionSummary[]; s
 async function mount(
   sessions: ChatSessionSummary[],
   initial: SidebarSectionsState = { sections: [], assignments: {} },
-  sectionError: string | null = null
+  sectionError: string | null = null,
+  mode: ChatSessionMode = 'chat'
 ) {
   bridge = fakeSidebarBridge(initial);
   (window as unknown as { b4m: unknown }).b4m = { sidebar: bridge };
@@ -129,7 +138,7 @@ async function mount(
   await act(async () => {
     root?.render(
       <CssVarsProvider theme={desktopTheme}>
-        <Harness sessions={sessions} sectionError={sectionError} />
+        <Harness sessions={sessions} sectionError={sectionError} mode={mode} />
       </CssVarsProvider>
     );
   });
@@ -325,6 +334,23 @@ describe('moving a session from its menu', () => {
     expect(looseTitles()).toEqual([]);
   });
 
+  it('draws a row moved into a section that shows only its first twenty', async () => {
+    const rows = Array.from({ length: 25 }, (_, index) => summary(`s${index}`, `S${index}`));
+    // Last in the list, so last in the section once moved there.
+    const old = summary('old', 'Old one');
+    await mount([...rows, old], {
+      sections: [{ id: 'work', name: 'Work' }],
+      assignments: Object.fromEntries(rows.map(row => [row.id, 'work'])),
+    });
+    expect(titlesIn(sectionNamed('Work'))).toHaveLength(20);
+    expect(titlesIn(sectionNamed('Work'))).not.toContain('Old one');
+
+    await openMoveTo('Old one');
+    await click(all('chat-move-to-section-btn').find(node => node.textContent === 'Work') ?? el('missing'));
+
+    expect(titlesIn(sectionNamed('Work'))).toContain('Old one');
+  });
+
   it('returns the row to the default list on Remove from', async () => {
     await mount([summary('a', 'Alpha'), summary('b', 'Beta')], workAndHome);
 
@@ -407,6 +433,21 @@ describe('starting a session in a section', () => {
 
     expect(query('sidebar-context-menu')).not.toBeNull();
     expect(query('sidebar-context-new-in-section-btn')).toBeNull();
+    expect(query('sidebar-context-rename-section-btn')).toBeNull();
+  });
+
+  it('renames the section from a right-click on it', async () => {
+    await mount([summary('a', 'Alpha')], workAndHome);
+
+    rightClick(el('sidebar-section-header', sectionNamed('Home')));
+    await settle();
+    await click(el('sidebar-context-rename-section-btn'));
+    expect((el('section-name-input') as HTMLInputElement).value).toBe('Home');
+    typeName('House');
+    await click(el('section-name-submit-btn'));
+
+    expect(bridge.renameSection).toHaveBeenCalledWith('home', 'House');
+    expect(sectionNamed('House')).toBeTruthy();
   });
 });
 
@@ -436,6 +477,23 @@ describe("a section's own menu", () => {
     expect(all('sidebar-section-name').map(node => node.textContent)).toEqual(['Home']);
     expect(looseTitles()).toEqual(['Alpha', 'Beta']);
     expect(onDelete).not.toHaveBeenCalled();
+  });
+
+  it('renames the section from a double-click on its name', async () => {
+    await mount([summary('a', 'Alpha')], workAndHome);
+
+    act(() => {
+      el('sidebar-section-name', sectionNamed('Work')).dispatchEvent(
+        new MouseEvent('dblclick', { bubbles: true, cancelable: true })
+      );
+    });
+    await settle();
+    expect((el('section-name-input') as HTMLInputElement).value).toBe('Work');
+    typeName('Day job');
+    await click(el('section-name-submit-btn'));
+
+    expect(bridge.renameSection).toHaveBeenCalledWith('work', 'Day job');
+    expect(titlesIn(sectionNamed('Day job'))).toEqual(['Alpha']);
   });
 
   it('cancels a rename without changing anything', async () => {
@@ -681,6 +739,47 @@ describe('dragging a session', () => {
     expect(accepted).toBe(false);
     expect(sectionNamed('Home').dataset.dropTarget).toBeUndefined();
     expect(bridge.moveSession).not.toHaveBeenCalled();
+  });
+
+  it('draws an old row dropped into a section that shows only its first twenty', async () => {
+    const rows = Array.from({ length: 25 }, (_, index) => summary(`s${index}`, `S${index}`));
+    // Last in the list, so last in the section once dropped there.
+    const old = summary('old', 'Old one');
+    await mount([...rows, old], {
+      sections: [{ id: 'work', name: 'Work' }],
+      assignments: Object.fromEntries(rows.map(row => [row.id, 'work'])),
+    });
+    expect(titlesIn(sectionNamed('Work'))).toHaveLength(20);
+    expect(titlesIn(sectionNamed('Work'))).not.toContain('Old one');
+
+    await dragRowOnto('Old one', sectionNamed('Work'));
+
+    expect(titlesIn(sectionNamed('Work'))).toContain('Old one');
+  });
+
+  it('draws an old row taken out of a section into a project that shows only its first twenty', async () => {
+    const project = {
+      directory: '/work/long',
+      name: 'long',
+      branch: 'main',
+      workspace: false,
+      workingDirectory: '/work/long',
+      contextDirectories: [],
+    };
+    const rows = Array.from({ length: 25 }, (_, index) => summary(`p${index}`, `P${index}`, { mode: 'code', project }));
+    const old = summary('old', 'Old one', { mode: 'code', project });
+    await mount(
+      [...rows, old],
+      { sections: [{ id: 'work', name: 'Work' }], assignments: { old: 'work' } },
+      null,
+      'code'
+    );
+    expect(titlesIn(el('project-group'))).toHaveLength(20);
+    expect(titlesIn(el('project-group'))).not.toContain('Old one');
+
+    await dragRowOnto('Old one', el('sidebar-session-scroll'));
+
+    expect(titlesIn(el('project-group'))).toContain('Old one');
   });
 });
 

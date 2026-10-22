@@ -35,7 +35,7 @@ vi.mock('@server/dataLakes', () => ({
   grantingLakes: h.grantingLakes,
   resolveAccessibleLakes: h.resolveAccessibleLakes,
 }));
-vi.mock('@server/dataLakes/recomputeStatsForLakeTags', () => ({ recomputeStatsForLakeTags: vi.fn() }));
+vi.mock('@bike4mind/server-utils/dataLakes/recomputeStatsForLakeTags', () => ({ recomputeStatsForLakeTags: vi.fn() }));
 vi.mock('@bike4mind/database', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/database')>()),
   changeStorageSize: vi.fn(),

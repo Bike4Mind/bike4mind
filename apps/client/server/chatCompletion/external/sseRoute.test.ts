@@ -5,6 +5,7 @@ import express from 'express';
 import type { z } from 'zod';
 import { checkApiKeyRateLimitOrThrow, checkRateLimit } from '@server/cli/auth';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
+import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
 
 // Real @bike4mind/common (pure SSE helpers + the published stream-event schema, which
 // these tests parse frames against). Only the seams below are mocked.
@@ -479,6 +480,25 @@ describe('POST /api/ai/v1/completions - pre-stream failures are JSON with a real
     mockResolveContractAuth.mockRejectedValue(new UnauthorizedError('User not found or banned'));
     const body = await expectJsonError(await post(), 401);
     expect(body.error).toBe('User not found or banned');
+  });
+
+  it('answers an unreachable database during API-key auth with 503, Retry-After and no driver text', async () => {
+    mockResolveContractAuth.mockRejectedValue(
+      toApiKeyAuthError(Object.assign(new Error('connect ECONNREFUSED 10.0.0.1:27017'), { name: 'MongoNetworkError' }))
+    );
+    const response = await post();
+    expect(response.status).toBe(503);
+    expect(response.headers.get('retry-after')).toBe('5');
+    const body = (await response.json()) as Record<string, unknown>;
+    expect(body.error).toBe('Authentication temporarily unavailable');
+    expect(JSON.stringify(body)).not.toMatch(/ECONNREFUSED|10\.0\.0\.1/);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('answers an unknown API key with 401', async () => {
+    mockResolveContractAuth.mockRejectedValue(new UnauthorizedError('Invalid or expired API key'));
+    const body = await expectJsonError(await post(), 401);
+    expect(body.error).toBe('Invalid or expired API key');
   });
 
   it('answers a scope miss with 403 and required_scopes', async () => {

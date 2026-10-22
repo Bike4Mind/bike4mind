@@ -46,6 +46,14 @@ Complete HTML documents with:
 - Embedded JavaScript
 - Responsive design preview
 
+HTML previews load images and media only from the app and its configured file CDN.
+Use embedded data URLs for other assets. Stylesheets and fonts use an explicit CDN
+allowlist. If an asset is missing, check its source and the browser's CSP error.
+
+Markdown images in assistant replies and in your own prompts display a **Load image**
+button with the destination host. You choose whether to fetch each image; the preview appears after
+you click the button.
+
 ### SVG Graphics
 
 Vector graphics with:

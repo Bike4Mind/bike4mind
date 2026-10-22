@@ -219,6 +219,7 @@ export class OpenAIBackend implements ICompletionBackend {
     return [
       {
         id: ChatModels.GPT4_1,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-4.1',
         backend: ModelBackend.OpenAI,
@@ -245,6 +246,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.GPT4_1_MINI,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-4.1 Mini',
         backend: ModelBackend.OpenAI,
@@ -270,6 +272,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.GPT4_1_NANO,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-4.1 Nano',
         backend: ModelBackend.OpenAI,
@@ -339,6 +342,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.O3,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'O3',
         backend: ModelBackend.OpenAI,
@@ -453,6 +457,7 @@ export class OpenAIBackend implements ICompletionBackend {
       // rate applies once the prompt exceeds 272k input tokens (long context).
       {
         id: ChatModels.GPT5_6_SOL,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-5.6 Sol',
         backend: ModelBackend.OpenAI,
@@ -478,6 +483,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.GPT5_6_TERRA,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-5.6 Terra',
         backend: ModelBackend.OpenAI,
@@ -501,6 +507,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.GPT5_6_LUNA,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-5.6 Luna',
         backend: ModelBackend.OpenAI,
@@ -526,6 +533,7 @@ export class OpenAIBackend implements ICompletionBackend {
       // GPT 5.5
       {
         id: ChatModels.GPT5_5,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-5.5',
         backend: ModelBackend.OpenAI,
@@ -551,6 +559,7 @@ export class OpenAIBackend implements ICompletionBackend {
       // GPT 5.4
       {
         id: ChatModels.GPT5_4,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-5.4',
         backend: ModelBackend.OpenAI,
@@ -574,6 +583,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.GPT5_4_MINI,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-5.4 Mini',
         backend: ModelBackend.OpenAI,
@@ -596,6 +606,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.GPT5_4_NANO,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-5.4 Nano',
         backend: ModelBackend.OpenAI,
@@ -620,6 +631,7 @@ export class OpenAIBackend implements ICompletionBackend {
       // GPT 5.2
       {
         id: ChatModels.GPT5_2,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-5.2',
         backend: ModelBackend.OpenAI,
@@ -667,6 +679,7 @@ export class OpenAIBackend implements ICompletionBackend {
       // GPT 5.1
       {
         id: ChatModels.GPT5_1,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-5.1',
         backend: ModelBackend.OpenAI,
@@ -715,6 +728,7 @@ export class OpenAIBackend implements ICompletionBackend {
       // GPT-5 Family
       {
         id: ChatModels.GPT5,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-5',
         backend: ModelBackend.OpenAI,
@@ -738,6 +752,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.GPT5_MINI,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-5 Mini',
         backend: ModelBackend.OpenAI,
@@ -760,6 +775,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.GPT5_NANO,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-5 Nano',
         backend: ModelBackend.OpenAI,
@@ -806,6 +822,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.GPT4o,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-4o',
         backend: ModelBackend.OpenAI,
@@ -826,6 +843,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.GPT4o_MINI,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-4o Mini',
         backend: ModelBackend.OpenAI,
@@ -846,6 +864,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.GPT4_TURBO,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-4 Turbo',
         backend: ModelBackend.OpenAI,
@@ -866,6 +885,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.GPT4,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-4',
         backend: ModelBackend.OpenAI,
@@ -1258,6 +1278,7 @@ export class OpenAIBackend implements ICompletionBackend {
         isRetryable: err => isRetryableError(err) && !isUserInitiatedAbort(err, options.abortSignal),
         logger: this.logger,
         abortSignal: options.abortSignal,
+        onRetry: ({ error, delayMs }) => options._internal?.turnTelemetry?.onRetry({ error, delayMs, model }),
       }
     ).then(r => r.result);
     // Non-streaming: the full response is back here. Streaming: reassigned once the stream is drained.
@@ -1416,10 +1437,7 @@ export class OpenAIBackend implements ICompletionBackend {
               }
 
               const resultStr = outcome.result.toString();
-              this.logger.debug(
-                `[Tool Result] Tool executed for ${outcome.name}:`,
-                resultStr.substring(0, 200) + '...'
-              );
+              this.logger.debug('[Tool Result] Tool executed', { name: outcome.name, resultLength: resultStr.length });
 
               // Track per-outcome whether this specific tool streamed an artifact, which picks
               // the placeholder the model sees (delivered vs removed) - every result is still
@@ -1803,7 +1821,10 @@ export class OpenAIBackend implements ICompletionBackend {
             const parsedParams = JSON.parse(parameters);
             resolvedTools.push({ id, name, parameters, parsedParams, toolFn, isMcpTool: toolDef?._isMcpTool ?? false });
           } catch {
-            this.logger.warn('JSON parse error for tool parameters (skipping):', { name, parameters });
+            this.logger.warn('JSON parse error for tool parameters (skipping):', {
+              name,
+              parameterLength: parameters.length,
+            });
             const entry = toolsUsed.find(t => t.name === name && t.id === id);
             if (entry) entry.arguments = '{}';
             recordToolResult(
@@ -1890,7 +1911,7 @@ export class OpenAIBackend implements ICompletionBackend {
           }
 
           const resultStr = outcome.result.toString();
-          this.logger.debug(`[Tool Result] Tool executed for ${outcome.name}:`, resultStr.substring(0, 200) + '...');
+          this.logger.debug('[Tool Result] Tool executed', { name: outcome.name, resultLength: resultStr.length });
 
           // Track per-outcome whether this specific tool streamed an artifact, which picks the
           // placeholder the model sees (delivered vs removed) - every result is still sanitized
@@ -2048,7 +2069,7 @@ export class OpenAIBackend implements ICompletionBackend {
     // entirely. Must stay in sync with the same flag in anthropicBackend / bedrockBackend.
     const mergedContent = options.omitIdentityReminder
       ? callerSystem
-      : appendIdentityReminder(callerSystem, buildIdentityReminder(model));
+      : appendIdentityReminder(callerSystem, buildIdentityReminder(model, options.modelDisplayName));
 
     const systemMessage: OpenAI.ChatCompletionSystemMessageParam = {
       role: 'system',
@@ -2242,6 +2263,7 @@ export class OpenAIBackend implements ICompletionBackend {
       isRetryable: err => isRetryableError(err) && !isUserInitiatedAbort(err, options.abortSignal),
       logger: this.logger,
       abortSignal: options.abortSignal,
+      onRetry: ({ error, delayMs }) => options._internal?.turnTelemetry?.onRetry({ error, delayMs, model }),
     }).then(r => r.result);
 
     // Stream text deltas live; capture the terminal Response for usage + tool handling.

@@ -23,7 +23,15 @@ describe('tagService - update', () => {
   let mockFabFileRepo: FabFileRepo;
   let mockDataLakeRepo: DataLakeRepo;
   let mockUserRepo: UserRepo;
-  let adapters: { db: { tags: TagRepo; fabFiles: FabFileRepo; dataLakes: DataLakeRepo; users: UserRepo } };
+  let adapters: {
+    db: {
+      memoryLedger: { markSourceShredded: ReturnType<typeof vi.fn> };
+      tags: TagRepo;
+      fabFiles: FabFileRepo;
+      dataLakes: DataLakeRepo;
+      users: UserRepo;
+    };
+  };
 
   const lake = (overrides: Partial<IDataLakeDocument> = {}): IDataLakeDocument =>
     ({
@@ -73,6 +81,7 @@ describe('tagService - update', () => {
     };
     adapters = {
       db: {
+        memoryLedger: { markSourceShredded: vi.fn().mockResolvedValue(0) },
         tags: mockTagRepo,
         fabFiles: mockFabFileRepo,
         dataLakes: mockDataLakeRepo,

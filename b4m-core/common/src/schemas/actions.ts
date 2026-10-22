@@ -8,6 +8,7 @@ import {
   hearthEventOriginSchema,
 } from '@bike4mind/hearth';
 import { FallbackInfoSchema } from './llm';
+import { TurnTimingSchema } from './turnTiming';
 import { supportedChatModels } from '../models';
 import { shareableDocumentSchema, QUEST_ERROR_CODES, CHAT_HISTORY_ITEM_TYPES } from '../types';
 import { AGENT_EXECUTION_STATUSES, type AgentExecutionStatus } from '../constants/agentExecutionStatus';
@@ -452,6 +453,7 @@ export const StreamedChatCompletionAction = z.object({
       // Add fallback info to support backend fallback mechanism. Nullish: a whole-quest payload
       // carries the null that clears a stale value (see IChatHistoryItem.fallbackInfo).
       fallbackInfo: FallbackInfoSchema.nullish(),
+      turnTiming: TurnTimingSchema.optional(),
       // MCP confirmation action awaiting user approval (confirm/cancel buttons)
       pendingAction: z
         .object({

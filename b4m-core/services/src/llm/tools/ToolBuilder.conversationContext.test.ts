@@ -29,7 +29,7 @@ describe('buildToolPrompt conversation context', () => {
     vi.clearAllMocks();
   });
 
-  const build = () =>
+  const build = (overrides: { hasCurrentDateTime?: boolean; userTimezone?: string } = {}) =>
     makeBuilder().buildToolPrompt({
       hasContentTransform: false,
       hasChessEngine: false,
@@ -42,6 +42,7 @@ describe('buildToolPrompt conversation context', () => {
       logger: logger as never,
       processStartTime: Date.now(),
       extraContextMessages: [],
+      ...overrides,
     });
 
   it('includes conversation context even when no MCP tools are offered', async () => {
@@ -54,14 +55,30 @@ describe('buildToolPrompt conversation context', () => {
     const prompt = await build();
 
     expect(extractAndSaveEntitiesFromUserMessage).toHaveBeenCalledWith('session-1', 'review that PR', {});
-    expect(prompt?.content).toContain('Bike4Mind/bike4mind#2981');
+    expect(prompt.context?.content).toContain('Bike4Mind/bike4mind#2981');
+    expect(prompt.guidance).toBeNull();
   });
 
   it('keeps prompt construction non-fatal when conversation context persistence fails', async () => {
     const failure = new Error('session store unavailable');
     vi.mocked(extractAndSaveEntitiesFromUserMessage).mockRejectedValue(failure);
 
-    await expect(build()).resolves.toBeNull();
+    await expect(build()).resolves.toEqual({ guidance: null, context: null });
     expect(logger.debug).toHaveBeenCalledWith('[ConversationContext] Failed to add context:', failure);
+  });
+
+  // The guidance half rides in the deployment-wide cached prefix, so anything per user in it would
+  // force a cache write per user; the timezone hint is the per-user part of the time section.
+  it('keeps the user timezone out of the shareable guidance', async () => {
+    vi.mocked(extractAndSaveEntitiesFromUserMessage).mockResolvedValue(undefined);
+    vi.mocked(getConversationContextSystemMessage).mockResolvedValue(null);
+
+    const tokyo = await build({ hasCurrentDateTime: true, userTimezone: 'Asia/Tokyo' });
+    const denver = await build({ hasCurrentDateTime: true, userTimezone: 'America/Denver' });
+
+    expect(tokyo.guidance?.content).toContain('current_datetime');
+    expect(tokyo.guidance).toEqual(denver.guidance);
+    expect(tokyo.context?.content).toContain('Asia/Tokyo');
+    expect(denver.context?.content).toContain('America/Denver');
   });
 });

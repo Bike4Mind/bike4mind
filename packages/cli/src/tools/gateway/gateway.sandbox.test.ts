@@ -298,7 +298,7 @@ describe('wrapToolWithPermission sandbox escalation', () => {
     if (options.sandboxAutoAllow ?? true)
       (permissionManager as RealPermissionManager).setSandboxState('auto-allow', true);
     const profileStillThereOnRetry: boolean[] = [];
-    const toolFn = vi.fn(async (args: unknown) => {
+    const toolFn = vi.fn(async (args: unknown): Promise<string> => {
       const { command } = args as { command: string };
       if (command === 'sandboxed-command') return EPERM_RESULT;
       profileStillThereOnRetry.push(existsSync(profile));
@@ -358,6 +358,23 @@ describe('wrapToolWithPermission sandbox escalation', () => {
     await wrapped.toolFn({ command: 'touch /etc/hosts' });
 
     expect(showPermissionPrompt).toHaveBeenCalledTimes(1);
+  });
+
+  it('redacts both runs: the denial the prompt shows and the unsandboxed retry the model gets', async () => {
+    const token = 'ghp_' + 'c'.repeat(36);
+    const { wrapped, toolFn, showPermissionPrompt } = await setup();
+    toolFn.mockImplementation(async (args: unknown) =>
+      (args as { command: string }).command === 'sandboxed-command'
+        ? `touch: ${token}: Operation not permitted\nExit code: 1`
+        : `wrote ${token}`
+    );
+
+    const result = await wrapped.toolFn({ command: 'touch /etc/hosts' });
+
+    const preview = String(showPermissionPrompt.mock.calls[0][2]);
+    expect(preview).toContain('Operation not permitted');
+    expect(preview).not.toContain(token);
+    expect(result).toBe('wrote [REDACTED]');
   });
 
   it('returns the sandbox error when denied, and runs nothing unsandboxed', async () => {
@@ -478,5 +495,37 @@ describe('wrapTools with the real tool router', () => {
     });
     await expect(wrapped.toolFn({})).resolves.toBe('pong');
     expect(mcpTool.toolFn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('gateway output stage with the real tool router', () => {
+  function wrapAutoApproved(toolFn: () => Promise<string>): ICompletionOptionTools {
+    return wrapToolWithPermission(createMockTool('math_evaluate', toolFn), {
+      permissionManager: new RealPermissionManager(new ToolCatalog()),
+      showPermissionPrompt: vi.fn(),
+      agentContext: { currentAgent: null },
+      configStore: {},
+      apiClient: {} as ApiClient,
+    });
+  }
+
+  it('redacts then caps what the tool returns', async () => {
+    const token = 'ghp_' + 'd'.repeat(36);
+    const wrapped = wrapAutoApproved(async () => `${token} ${'x'.repeat(200_000)}`);
+
+    const result = await wrapped.toolFn({});
+
+    expect(result.startsWith('[REDACTED] ')).toBe(true);
+    expect(result).toContain('[output truncated:');
+    expect(result.length).toBeLessThan(101_000);
+  });
+
+  it('redacts what the tool throws', async () => {
+    const token = 'ghp_' + 'e'.repeat(36);
+    const wrapped = wrapAutoApproved(async () => {
+      throw new Error(`rejected ${token}`);
+    });
+
+    await expect(wrapped.toolFn({})).rejects.toThrow('rejected [REDACTED]');
   });
 });

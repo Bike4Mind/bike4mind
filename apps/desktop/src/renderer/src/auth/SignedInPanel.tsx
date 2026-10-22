@@ -38,15 +38,7 @@ function initials(name: string): string {
  * readout, and which deployment a reply came from is worth a line under the name whether or not
  * anyone is about to change it.
  */
-export function SignedInPanel({
-  state,
-  status,
-  onOpenSettings,
-}: {
-  state: AuthState;
-  status?: ReactNode;
-  onOpenSettings?: () => void;
-}) {
+export function SignedInPanel({ state, status }: { state: AuthState; status?: ReactNode }) {
   const [open, setOpen] = useState(false);
   const navigate = useNavigate();
   const settingsAttention = useSettingsAttention();
@@ -129,7 +121,7 @@ export function SignedInPanel({
         <AccountMenu
           state={state}
           attention={settingsAttention}
-          onOpenSettings={onOpenSettings}
+          onOpenSettings={() => void navigate({ to: '/settings' })}
           onProfile={() => void navigate({ to: '/profile' })}
         />
       )}

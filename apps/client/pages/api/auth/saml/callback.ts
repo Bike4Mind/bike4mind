@@ -179,7 +179,8 @@ const handleSamlCallback = async (req: any, res: any) => {
       // Resume the originally requested path (round-tripped via RelayState);
       // /auth/success sanitizes it before navigating.
       const successQuery = authSuccessRedirectQuery(redirectTo);
-      const redirectUrl = `${baseUrl}/auth/success${successQuery}#token=${tokens.accessToken}&userId=${user.id}`;
+      const signupFragment = user.isNewUser ? '&firstSignupSession=1' : '';
+      const redirectUrl = `${baseUrl}/auth/success${successQuery}#token=${tokens.accessToken}&userId=${user.id}${signupFragment}`;
 
       console.log('Redirecting to:', redirectUrl.substring(0, LOG_URL_TRUNCATE_LENGTH) + '...');
       return res.redirect(redirectUrl);

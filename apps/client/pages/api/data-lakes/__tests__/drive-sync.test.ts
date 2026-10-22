@@ -50,14 +50,14 @@ vi.mock('@server/utils/orgAccess', () => ({ verifyOrgAccess: h.verifyOrgAccess }
 vi.mock('@server/integrations/google/drive/common', async () => ({
   getValidUserDriveAccessToken: h.getValidUserDriveAccessToken,
   isTerminalDriveGrantError: (
-    await vi.importActual<typeof import('@server/integrations/google/drive/driveGrantErrors')>(
-      '@server/integrations/google/drive/driveGrantErrors'
+    await vi.importActual<typeof import('@bike4mind/server-utils/integrations/google/drive/driveGrantErrors')>(
+      '@bike4mind/server-utils/integrations/google/drive/driveGrantErrors'
     )
   ).isTerminalDriveGrantError,
 }));
 // Keep isValidDriveFolderId real (the folder-id validation runs for real); mock only the Drive calls.
-vi.mock('@server/integrations/google/drive/driveClient', async importOriginal => {
-  const actual = await importOriginal<typeof import('@server/integrations/google/drive/driveClient')>();
+vi.mock('@bike4mind/server-utils/integrations/google/drive/driveClient', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/server-utils/integrations/google/drive/driveClient')>();
   return {
     ...actual,
     createDriveClient: h.createDriveClient,
