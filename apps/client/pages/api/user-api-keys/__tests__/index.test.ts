@@ -99,6 +99,7 @@ vi.mock('@client/app/premium-generated/premiumApiKeyScopes.generated', () => ({
 }));
 
 import { CreditHolderType } from '@bike4mind/common';
+import { resolveApiKeyScopeAccess } from '@server/entitlements/apiKeyScopeAccess';
 import '@pages/api/user-api-keys/index';
 
 function post(body: unknown, opts: { isAdmin?: boolean } = {}) {
@@ -678,6 +679,15 @@ describe('POST /api/user-api-keys - contributed scopes', () => {
       statusCode: 403,
       message: 'Scope not available on your account: acme:read',
     });
+    expect(createUserApiKey).not.toHaveBeenCalled();
+  });
+
+  it('does not mint when the caller entitlement lookup fails', async () => {
+    const failure = new Error('entitlement lookup unavailable');
+    vi.mocked(resolveApiKeyScopeAccess).mockRejectedValueOnce(failure);
+    const { req, res } = post({ name: 'k', scopes: ['acme:read'] });
+
+    await expect(mockRefs.postHandler!(req, res)).rejects.toBe(failure);
     expect(createUserApiKey).not.toHaveBeenCalled();
   });
 

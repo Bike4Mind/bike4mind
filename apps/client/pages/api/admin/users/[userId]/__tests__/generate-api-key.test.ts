@@ -105,14 +105,10 @@ const targetAccess = vi.hoisted(() => ({ entitlements: new Set<string>(), bypass
 const mockResolveTargetAccess = vi.hoisted(() => vi.fn());
 vi.mock('@server/entitlements', () => ({ toEntitlementUser: (user: unknown) => user }));
 vi.mock('@server/entitlements/apiKeyScopeAccess', () => ({
-  resolveApiKeyScopeAccessForUser: (...a: unknown[]) => {
-    mockResolveTargetAccess(...a);
-    // Only the fields a contributed row's check reads.
-    return Promise.resolve({
-      bypass: targetAccess.bypass,
-      entitlements: targetAccess.entitlements,
-    });
-  },
+  resolveApiKeyScopeAccessForUser: mockResolveTargetAccess.mockImplementation(async () => ({
+    bypass: targetAccess.bypass,
+    entitlements: targetAccess.entitlements,
+  })),
 }));
 
 import '../generate-api-key';
@@ -160,6 +156,32 @@ describe('POST /api/admin/users/:userId/generate-api-key - contributed scope ent
     targetAccess.entitlements = new Set(['acme:pro']);
     const { req, res } = post({ name: 'acme', scopes: ['acme:read'] });
     await mockRefs.postHandler!(req, res);
+    expect(res._getStatusCode()).toBe(201);
+    expect(mockCreateKey).toHaveBeenCalledWith(
+      'target-user',
+      expect.objectContaining({ scopes: ['acme:read'] }),
+      expect.objectContaining({ isKnownScope: expect.any(Function) })
+    );
+    const adapters = mockCreateKey.mock.calls[0][2] as { isKnownScope: (value: string) => boolean };
+    expect(adapters.isKnownScope('acme:read')).toBe(true);
+    expect(adapters.isKnownScope('acme:write')).toBe(false);
+  });
+
+  it('does not mint when the target entitlement lookup fails', async () => {
+    const failure = new Error('entitlement lookup unavailable');
+    mockResolveTargetAccess.mockRejectedValueOnce(failure);
+    const { req, res } = post({ name: 'acme', scopes: ['acme:read'] });
+
+    await expect(mockRefs.postHandler!(req, res)).rejects.toBe(failure);
+    expect(mockCreateKey).not.toHaveBeenCalled();
+  });
+
+  it('honors the target admin/developer bypass without its entitlement', async () => {
+    targetAccess.bypass = true;
+    const { req, res } = post({ name: 'acme', scopes: ['acme:read'] });
+
+    await mockRefs.postHandler!(req, res);
+
     expect(res._getStatusCode()).toBe(201);
     expect(mockCreateKey).toHaveBeenCalled();
   });
