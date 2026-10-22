@@ -1417,10 +1417,7 @@ export class OpenAIBackend implements ICompletionBackend {
               }
 
               const resultStr = outcome.result.toString();
-              this.logger.debug(
-                `[Tool Result] Tool executed for ${outcome.name}:`,
-                resultStr.substring(0, 200) + '...'
-              );
+              this.logger.debug('[Tool Result] Tool executed', { name: outcome.name, resultLength: resultStr.length });
 
               // Track per-outcome whether this specific tool streamed an artifact, which picks
               // the placeholder the model sees (delivered vs removed) - every result is still
@@ -1804,7 +1801,10 @@ export class OpenAIBackend implements ICompletionBackend {
             const parsedParams = JSON.parse(parameters);
             resolvedTools.push({ id, name, parameters, parsedParams, toolFn, isMcpTool: toolDef?._isMcpTool ?? false });
           } catch {
-            this.logger.warn('JSON parse error for tool parameters (skipping):', { name, parameters });
+            this.logger.warn('JSON parse error for tool parameters (skipping):', {
+              name,
+              parameterLength: parameters.length,
+            });
             const entry = toolsUsed.find(t => t.name === name && t.id === id);
             if (entry) entry.arguments = '{}';
             recordToolResult(
@@ -1891,7 +1891,7 @@ export class OpenAIBackend implements ICompletionBackend {
           }
 
           const resultStr = outcome.result.toString();
-          this.logger.debug(`[Tool Result] Tool executed for ${outcome.name}:`, resultStr.substring(0, 200) + '...');
+          this.logger.debug('[Tool Result] Tool executed', { name: outcome.name, resultLength: resultStr.length });
 
           // Track per-outcome whether this specific tool streamed an artifact, which picks the
           // placeholder the model sees (delivered vs removed) - every result is still sanitized

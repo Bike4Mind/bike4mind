@@ -53,7 +53,8 @@ export const updateUserSchema = z.object({
     .nullable()
     .optional(),
   securityQuestions: z
-    .array(z.object({ question: z.string(), answer: z.string() }))
+    .array(z.object({ question: z.string().max(512), answer: z.string().max(1024) }))
+    .max(10)
     .nullable()
     .optional(),
   // `photoUrl` is intentionally NOT in the self-service schema (same reasoning as
@@ -121,6 +122,37 @@ export function applyBaseUserUpdates(user: IUserDocument, params: UpdateUserPara
     }
     const hashedPassword = bcrypt.hashSync(params.password, 10);
     params.password = hashedPassword;
+  }
+
+  if (params.securityQuestions) {
+    const stored = user.securityQuestions ?? [];
+    // Each stored answer is claimed at most once. Matching on text alone collapses two stored
+    // answers to the same question onto the first one, silently dropping the second.
+    const claimed = new Set<number>();
+
+    // An answered entry keeps the slot it occupies, so a blank submitted at the same position
+    // cannot fall back onto an answer the user just replaced.
+    params.securityQuestions.forEach((question, i) => {
+      if (question.answer && stored[i]?.question === question.question) claimed.add(i);
+    });
+
+    params.securityQuestions = params.securityQuestions.map((question, i) => {
+      if (question.answer) return question;
+      const sameIndex = stored[i]?.question === question.question && !claimed.has(i) ? i : -1;
+      const index =
+        sameIndex >= 0
+          ? sameIndex
+          : stored.findIndex((entry, j) => !claimed.has(j) && entry.question === question.question);
+      if (index < 0) {
+        throw new BadRequestError('An answer is required for a new or renamed security question');
+      }
+      const existing = stored[index];
+      if (!existing.answer) {
+        throw new BadRequestError('An answer is required for a new or renamed security question');
+      }
+      claimed.add(index);
+      return { ...question, answer: existing.answer };
+    });
   }
 
   return {

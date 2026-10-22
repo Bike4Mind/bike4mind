@@ -152,7 +152,7 @@ class SyncModelDescriptions {
       this.logger.info('\n✅ Model descriptions analysis completed');
       return 0;
     } catch (error) {
-      this.logger.error('Error updating model descriptions:', error instanceof Error ? error.message : String(error));
+      this.logger.error('Error updating model descriptions:', error);
       return 1;
     }
   }

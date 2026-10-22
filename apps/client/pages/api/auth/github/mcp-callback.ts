@@ -1,3 +1,4 @@
+import { Types } from 'mongoose';
 import { baseApi } from '@server/middlewares/baseApi';
 import { mcpServerRepository, userRepository } from '@bike4mind/database';
 import { Config } from '@bike4mind/server-utils/utils/config';
@@ -248,7 +249,12 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
 
     // Prepare environment variables for MCP server
     const plaintextEnvVariables = [{ key: 'GITHUB_ACCESS_TOKEN', value: access_token }];
-    const encryptedEnvVariables = encryptEnvVariables(plaintextEnvVariables);
+    const recordId = recentConnection?.id ?? new Types.ObjectId().toHexString();
+    const encryptedEnvVariables = encryptEnvVariables(plaintextEnvVariables, {
+      userId,
+      name: McpServerName.Github,
+      id: recordId,
+    });
 
     // Store or update MCP server configuration (reuse recentConnection from idempotency check)
     // Initially save with empty tools array - we'll discover tools dynamically next
@@ -312,6 +318,7 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
       });
     } else {
       githubServer = await mcpServerRepository.create({
+        ...{ _id: recordId },
         userId,
         name: McpServerName.Github,
         enabled: true,

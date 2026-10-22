@@ -1,3 +1,5 @@
+import { redactLogValue } from './redactLogValue';
+
 /**
  * Logger interface for dependency injection
  * Defines the contract for logging implementations
@@ -74,7 +76,7 @@ export class Logger implements ILogger {
       minLevel = (process.env.LOG_LEVEL as LogLevel) || 'info',
     } = options;
 
-    this.metadata = metadata;
+    this.metadata = redactLogValue(metadata) as Record<string, unknown>;
     this.logInJson = logInJson;
     this.prettyPrint = prettyPrint;
     this.minLevel = minLevel;
@@ -170,13 +172,13 @@ export class Logger implements ILogger {
     const message = messageArgs
       .map(a => {
         if (errorAware && a instanceof Error) {
-          return a.stack || a.message;
+          return this.safeStringify(redactLogValue(a));
         }
-        return typeof a === 'string' ? a : this.safeStringify(a);
+        return typeof a === 'string' ? String(redactLogValue(a)) : this.safeStringify(redactLogValue(a));
       })
       .join(' ');
 
-    return { message, metadata };
+    return { message, metadata: metadata ? (redactLogValue(metadata) as Record<string, unknown>) : undefined };
   }
 
   /**
@@ -266,7 +268,7 @@ export class Logger implements ILogger {
   public updateMetadata(metadata: Record<string, unknown>) {
     this.metadata = {
       ...this.metadata,
-      ...metadata,
+      ...(redactLogValue(metadata) as Record<string, unknown>),
     };
     return this;
   }

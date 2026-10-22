@@ -5046,19 +5046,11 @@ export class ChatCompletionProcess {
                     this.sendStatusUpdate(quest, 'First model response', { statusAt: new Date(), silent: true });
 
                     logger.info(`⏱️ [${Date.now() - processStartTime}ms] Time to first chunk: ${timeToFirstChunk}ms`);
-                    logger.info(
-                      `🔍 [DEBUG] First content chunk: ${JSON.stringify(streamedTexts.slice(0, 2))} (Model: ${
-                        currentModel.id
-                      })`
-                    );
+                    logger.info('First content chunk received', { modelId: currentModel.id });
                   }
                 } else if (chunkCount === 0 && streamedTexts.some(text => text != null)) {
                   // Some models might send empty or whitespace-only first chunks
-                  logger.info(
-                    `⚠️ [DEBUG] Empty first chunk received for ${currentModel.id}: ${JSON.stringify(
-                      streamedTexts.slice(0, 2)
-                    )}`
-                  );
+                  logger.info('Empty first chunk received', { modelId: currentModel.id });
                 }
 
                 chunkCount++;
@@ -5093,7 +5085,7 @@ export class ChatCompletionProcess {
                   transitionMode = rapidReplySettings?.transitionMode || 'replace';
 
                   logger.info(
-                    `🔍 [TRANSITION_DEBUG] Query complexity: ${queryComplexity}, Transition mode: ${transitionMode}, Rapid reply content: "${rapidReplyContent}"`
+                    `[TRANSITION_DEBUG] Query complexity: ${queryComplexity}, Transition mode: ${transitionMode}, Rapid reply length: ${rapidReplyContent.length}`
                   );
 
                   // Handle transition based on mode

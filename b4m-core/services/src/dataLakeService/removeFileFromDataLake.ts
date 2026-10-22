@@ -5,7 +5,12 @@ import type {
   ILakeMembershipRemovalRepository,
 } from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/utils';
-import { removeFileFromLake, type MembershipActor, type MembershipOriginOptions } from './lakeMembership';
+import {
+  removeFileFromLake,
+  type MembershipActor,
+  type MembershipOriginOptions,
+  type LakeSourceShredDb,
+} from './lakeMembership';
 import { recomputeLakeStats } from './recomputeLakeStats';
 import type { LakeConfigAuditAdapters } from './recordLakeConfigChange';
 import type { LakeMembershipAuditAdapters } from './recordLakeMembershipChange';
@@ -23,6 +28,7 @@ export interface RemoveFileFromDataLakeAdapters extends LakeConfigAuditAdapters,
   // StorageOwnerTransferDb: a membership change moves the file's billed bytes (reassignStorageOwner).
   db: LakeConfigAuditAdapters['db'] &
     LakeMembershipAuditAdapters['db'] &
+    LakeSourceShredDb &
     StorageOwnerTransferDb & {
       dataLakes: Pick<IDataLakeRepository, 'findById' | 'setStats' | 'activateIfDraft'>;
       fabFiles: Pick<IFabFileRepository, 'findById' | 'pullTagsByFabFileId' | 'computeDataLakeStats'>;

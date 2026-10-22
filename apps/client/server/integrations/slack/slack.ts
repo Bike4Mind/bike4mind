@@ -219,7 +219,7 @@ export const EMAIL_MIRROR_TIMEOUT_MS = 5_000;
 export async function postEmailMirrorToSlack(payload: EmailMirrorPayload): Promise<void> {
   try {
     const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
-    const slackWebhookUrl = resolveSlackWebhookUrl('SlackEmailAuditWebhookUrl', settings);
+    const slackWebhookUrl = getSettingsValue('SlackEmailAuditWebhookUrl', settings);
 
     // Unconfigured is the expected default - stay silent (debug only) so we don't
     // spam error logs on every email when the mirror channel isn't set up yet.

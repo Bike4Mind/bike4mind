@@ -1372,6 +1372,16 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     return [...new Set(docs.map(d => d.sessionId))];
   }
 
+  // Every organization a user's quests were recorded under, soft-deleted ones included: a DSAR
+  // export or deletion has to reach rows the user can no longer see, and telemetry hashes are keyed
+  // by that organization. One full scan of the user's quests, which is why it is not on a read path.
+  async findOrganizationIdsForUser(userId: string): Promise<string[]> {
+    const orgIds: unknown[] = await this.model
+      .distinct('promptMeta.session.organizationId', { 'promptMeta.session.userId': userId })
+      .setOptions({ includeDeleted: true });
+    return orgIds.filter(Boolean).map(String);
+  }
+
   // The subset of `keys` that some quest in this session references as generated media (`images`
   // or `videos`). Session-scoped twin of findSessionIdsByImage: once the caller's access to the
   // session is established, a key is readable iff one of its turns produced it.
