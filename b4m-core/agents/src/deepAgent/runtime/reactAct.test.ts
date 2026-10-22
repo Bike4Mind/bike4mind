@@ -141,8 +141,13 @@ describe('resolveToolbeltProfile', () => {
       registerToolbelts([
         { ...contributed, role: '' },
         { ...contributed, role: 'no-ceiling', maxIterations: undefined as never },
+        { ...contributed, role: 'zero-ceiling', maxIterations: 0 },
+        { ...contributed, role: 'bad-tool-name', enabledToolNames: [42] as never },
+        { ...contributed, role: 'no-token-cap', maxTotalTokens: Infinity },
+        { ...contributed, role: 'no-temperature', temperature: Number.NaN },
+        'not-a-profile' as never,
       ])
-    ).toEqual({ taken: [], invalid: 2 });
+    ).toEqual({ taken: [], invalid: 7 });
     expect(resolveToolbeltProfile('contributed-role').maxIterations).toBe(4);
     expect(resolveToolbeltProfile('paper-repro')).toBe(TOOLBELT_PROFILES['paper-repro']);
     expect(resolveToolbeltProfile('paper-repro').enabledToolNames).toContain('wolfram_alpha');

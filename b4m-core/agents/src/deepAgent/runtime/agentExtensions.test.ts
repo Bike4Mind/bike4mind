@@ -183,7 +183,7 @@ describe('createAgentExtensionRegistry', () => {
     expect(runLogger.warn).toHaveBeenCalledTimes(2);
   });
 
-  it('resolves no profile when a contributed build leaves the iteration ceiling unresolvable', () => {
+  it('resolves no profile when a contributed build returns a shape the executor cannot run', () => {
     const { registry } = newRegistry();
     const runLogger = { info: vi.fn(), warn: vi.fn() };
     const base = profile('p0', 's0').build(profileCtx);
@@ -194,12 +194,15 @@ describe('createAgentExtensionRegistry', () => {
         { id: 'p3', surface: 's3', build: () => ({ ...base, maxIterations: { ...base.maxIterations, medium: 0 } }) },
         { id: 'p4', surface: 's4', build: () => ({ ...base, name: undefined }) as never },
         { id: 'p5', surface: 's5', build: () => base },
+        { id: 'p6', surface: 's6', build: () => ({ ...base, defaultThoroughness: 'exhaustive' }) as never },
+        { id: 'p7', surface: 's7', build: () => ({ ...base, allowedTools: [{ name: 'x' }] }) as never },
+        { id: 'p8', surface: 's8', build: () => ({ ...base, deniedTools: [7] }) as never },
       ],
     });
-    for (const surface of ['s1', 's2', 's3', 's4']) {
+    for (const surface of ['s1', 's2', 's3', 's4', 's6', 's7', 's8']) {
       expect(registry.resolveSurfaceProfile(surface, { ...profileCtx, logger: runLogger })).toBeUndefined();
     }
-    expect(runLogger.warn).toHaveBeenCalledTimes(4);
+    expect(runLogger.warn).toHaveBeenCalledTimes(7);
     expect(registry.resolveSurfaceProfile('s5', { ...profileCtx, logger: runLogger })).toBe(base);
   });
 

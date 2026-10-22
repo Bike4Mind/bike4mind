@@ -140,6 +140,10 @@ interface Stored<T> {
 
 const THOROUGHNESS_LEVELS = ['quick', 'medium', 'very_thorough'] as const;
 
+function isStringList(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every(item => typeof item === 'string');
+}
+
 // The executor reads these fields straight off the profile, and its iteration ceiling is
 // `maxIterations[defaultThoroughness]`, so a contributed build must supply every one of them.
 function isProfileShaped(value: unknown): value is ResolvedOrchestrationProfile {
@@ -149,8 +153,8 @@ function isProfileShaped(value: unknown): value is ResolvedOrchestrationProfile 
   return (
     typeof p.id === 'string' &&
     typeof p.name === 'string' &&
-    Array.isArray(p.allowedTools) &&
-    Array.isArray(p.deniedTools) &&
+    isStringList(p.allowedTools) &&
+    isStringList(p.deniedTools) &&
     ceilings !== null &&
     typeof ceilings === 'object' &&
     THOROUGHNESS_LEVELS.every(level => Number.isInteger(ceilings[level]) && (ceilings[level] as number) > 0) &&
