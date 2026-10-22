@@ -2425,7 +2425,7 @@ export interface components {
         supports_tool_search: boolean;
         /** @description Whether a system-role message can carry `tool_addition` and `tool_removal` blocks, which add or remove a declared tool mid-conversation. Describes the model: `/api/ai/v1/completions` honours it only for models whose `backend` is `anthropic`; a `bedrock` model with this flag set is refused there with `errorCode: "tool_changes_unsupported"`. */
         supports_tool_changes: boolean;
-        /** @description Whether `/api/ai/v1/completions` accepts a final assistant message for the model to continue. When false, that request returns `400` with `errorCode: "assistant_prefill_unsupported"`. */
+        /** @description Whether `/api/ai/v1/completions` accepts a final assistant message for the model to continue. When false, that request returns `400` with `errorCode: "assistant_prefill_unsupported"`. On Claude models that accept assistant prefill, it cannot be combined with `thinking`. */
         supports_assistant_prefill: boolean;
         supports_vision: boolean;
         /** @description `YYYY-MM-DD`; null when no retirement is scheduled. */

@@ -130,7 +130,8 @@ export const PublicModelSchema = z.object({
     .boolean()
     .describe(
       'Whether `/api/ai/v1/completions` accepts a final assistant message for the model to continue. When false, ' +
-        'that request returns `400` with `errorCode: "assistant_prefill_unsupported"`.'
+        'that request returns `400` with `errorCode: "assistant_prefill_unsupported"`. On Claude models that accept ' +
+        'assistant prefill, it cannot be combined with `thinking`.'
     ),
   supports_vision: z.boolean(),
   deprecation_date: z.string().nullable().describe('`YYYY-MM-DD`; null when no retirement is scheduled.'),
