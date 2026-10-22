@@ -153,3 +153,34 @@ describe('integrationHealthService probes', () => {
     expect(await runProbe('slack')).toMatchObject({ integration: 'slack', status: 'healthy', error: null });
   });
 });
+
+describe('integrationHealthService metrics', () => {
+  beforeEach(() => {
+    h.recordCheck.mockReset().mockImplementation(async (check: unknown) => check);
+    h.fetch.mockReset();
+    vi.stubGlobal('fetch', h.fetch);
+    h.emitMetrics.mockClear();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('still publishes CloudWatch metrics by default', async () => {
+    respondWith(200);
+
+    await runAllProbes(logger);
+
+    expect(h.emitMetrics).toHaveBeenCalledOnce();
+  });
+
+  it('records every check but publishes nothing when emitMetrics is false', async () => {
+    respondWith(200);
+
+    const recorded = await runAllProbes(logger, { emitMetrics: false });
+
+    expect(recorded).toHaveLength(4);
+    expect(h.recordCheck).toHaveBeenCalledTimes(4);
+    expect(h.emitMetrics).not.toHaveBeenCalled();
+  });
+});

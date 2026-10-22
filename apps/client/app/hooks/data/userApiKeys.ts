@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
-import { IUserApiKeyDocument, ApiKeyScope, IEmbedBranding } from '@bike4mind/common';
+import { IUserApiKeyDocument, ApiKeyScope, IEmbedBranding, type ApiKeyRateLimitUsage } from '@bike4mind/common';
 import type { CounterLockoutState } from '@server/utils/apiKeyRateLimitCheck';
 import { toast } from 'sonner';
 
@@ -224,11 +224,10 @@ export function useAdminGenerateApiKey({ onSuccess }: { onSuccess?: (result: Cre
 
 /** Response of GET /api/admin/users/[userId]/user-api-keys: the user's keys plus
  * each key's live minute/day rate-limit counters (keyed by key id) - the
- * usage fields on the key doc itself are not maintained. Reset timestamps are
- * epoch seconds and mirror the server's `RateLimitUsage`. */
+ * usage fields on the key doc itself are not maintained. */
 export interface AdminUserApiKeysResponse {
   apiKeys: IUserApiKeyDocument[];
-  liveUsage: Record<string, { minute: number; day: number; minuteResetAt?: number; dayResetAt?: number }>;
+  liveUsage: Record<string, ApiKeyRateLimitUsage>;
 }
 
 export function useAdminGetUserApiKeys(userId: string | undefined, options?: { refetchInterval?: number }) {

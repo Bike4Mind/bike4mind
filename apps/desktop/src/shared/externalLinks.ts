@@ -11,9 +11,10 @@ const OPENABLE_PROTOCOLS = new Set(['http:', 'https:', 'mailto:']);
 /**
  * Whether a url may be handed to shell.openExternal.
  *
- * The gate lives in main rather than in the renderer because main is the side with the
- * privilege: the renderer's sanitizer covers links that went through the markdown pipeline,
- * and this covers everything, including a navigation that never was a link.
+ * Main is the side that enforces it, because main holds the privilege: the renderer's sanitizer
+ * covers links that went through the markdown pipeline, and main covers everything, including a
+ * navigation that never was a link. The renderer asks the same question only so that a link
+ * main would refuse is never drawn as one (see chat/messageLinks).
  */
 export function isExternallyOpenable(url: string): boolean {
   try {

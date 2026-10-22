@@ -14,7 +14,7 @@ import { attachDevLogShortcut, closeDevLogWindow, registerDevLog } from './devlo
 import { registerFleet } from './fleet';
 import { registerArtifactScheme } from './chat/artifacts/sandboxProtocol';
 import { registerMediaScheme } from './chat/media/protocol';
-import { isExternallyOpenable } from './externalLinks';
+import { isExternallyOpenable } from '@shared/externalLinks';
 import { persistConsoleWarnings } from './logFile';
 import { registerUpdates } from './update';
 import { registerTerminals } from './terminal';

@@ -53,6 +53,12 @@ describe('proxy CSP header', () => {
     expect(csp).not.toContain('https://assets.mailerlite.com');
   });
 
+  it('keeps sandbox-only script hosts out of the app CSP', () => {
+    const csp = proxy(makeRequest('https://app.bike4mind.com/new')).headers.get('Content-Security-Policy') ?? '';
+    expect(csp).not.toContain('unpkg.com');
+    expect(csp).not.toContain('cdn.tailwindcss.com');
+  });
+
   it('allow-lists every host the ad pixels need, in each directive that governs them', () => {
     const response = proxy(makeRequest('https://app.bike4mind.com/dashboard'));
     const csp = response.headers.get('Content-Security-Policy') ?? '';

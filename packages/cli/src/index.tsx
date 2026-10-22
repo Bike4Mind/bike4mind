@@ -471,20 +471,18 @@ function CliApp() {
         store.clearPaste();
         return;
       }
+      // ESC means "stop everything", not "skip this one and continue with
+      // the next": queued messages go back into the input, where the user can
+      // edit and resend them or clear them with Ctrl+C. Restored before the
+      // abort so no steer can be delivered to the turn being cancelled.
+      store.restoreQueueToInput();
       if (state.abortController) {
         logger.debug('[ABORT] ESC pressed - aborting current operation...');
         state.abortController.abort();
         setState(prev => ({ ...prev, abortController: null }));
-        // Clear thinking state immediately so UI updates
-        useCliStore.getState().setIsThinking(false);
-        // Drop any queued messages - ESC means "stop everything", not
-        // "skip this one and continue with the next".
-        useCliStore.getState().clearMessageQueue();
-      } else {
-        // No active operation, but the user may still want to clear a
-        // pending queue (e.g. they queued messages, the current finished
-        // before they pressed ESC, and now the queue is about to drain).
-        useCliStore.getState().clearMessageQueue();
+        // Clear thinking state immediately so UI updates. The turn may still
+        // be unwinding; runTurn queues anything submitted meanwhile.
+        store.setIsThinking(false);
       }
       return;
     }

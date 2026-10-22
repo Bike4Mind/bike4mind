@@ -7,7 +7,6 @@ import { allSecrets } from './secrets';
 import {
   researchEngineQueue,
   agentProactiveMessageQueue,
-  whatsNewHighlightsQueue,
   liveOpsTriageQueue,
   deepAgentWakeQueue,
   dataLakeTaxonomyQueue,
@@ -240,43 +239,6 @@ const liveopsTriageDispatcherCron = runsScheduledJobs
       },
       // Only enabled in production
       enabled: $app.stage === 'production',
-    })
-  : undefined;
-
-/**
- * What's New Weekly Highlights Cron
- * Generates a weekly summary of What's New modals and posts to Slack.
- *
- * Schedule: Weekly on Saturday at 2am CST (8:00 UTC)
- * Disabled; see `enabled` below.
- *
- * Workflow:
- * 1. Fetches What's New modals from the past 7 days
- * 2. Uses LLM to generate highlights summary
- * 3. Posts formatted highlights to configured Slack channel
- */
-const whatsNewHighlightsCron = runsScheduledJobs
-  ? new sst.aws.Cron('whatsNewHighlightsCron', {
-      schedule: 'cron(0 8 ? * SAT *)', // 2am CST / 8am UTC every Saturday
-      function: {
-        handler: 'apps/workers/src/cron/whatsNewHighlights.handler',
-        vpc: lambdaVpc,
-        link: [...allSecrets, whatsNewHighlightsQueue],
-        timeout: '2 minutes',
-        runtime: 'nodejs24.x',
-        environment: {
-          ...DEFAULT_LAMBDA_ENVIRONMENT,
-        },
-        permissions: [
-          {
-            actions: ['cloudwatch:PutMetricData'],
-            resources: ['*'],
-          },
-        ],
-      },
-      // Disabled: its only input was the generated What's New modals, which release notes replaced, so it
-      // would post a "no modals" warning every week.
-      enabled: false,
     })
   : undefined;
 
@@ -1231,7 +1193,6 @@ export {
   emailCampaignSchedulerCron,
   whatsNewSyncCron,
   liveopsTriageDispatcherCron,
-  whatsNewHighlightsCron,
   cloudSecurityScanCron,
   integrationHealthCheckCron,
   securityScanSchedulerCron,
