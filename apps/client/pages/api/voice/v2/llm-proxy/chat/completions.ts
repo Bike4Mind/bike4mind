@@ -33,6 +33,9 @@ import {
 import { getDefaultChatCompletionOptions, getSharedTokenizer } from '@server/utils/chatCompletionDefaults';
 import { baseApi } from '@server/middlewares/baseApi';
 import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
+import { getCreateVideoJobDeps, getVideoJobDeps } from '@server/generationJobs/wiring';
+import { buildVideoToolConfig } from '@server/videoGenerations/buildVideoToolConfig';
+import { getVoiceVideoToolConfigResolver } from '@server/videoGenerations/voiceVideoToolConfig';
 import { verifyVoiceSessionToken, type VoiceSessionContext } from '@server/voice/voiceSessionToken';
 import { voiceSessionTokenExpiresAtMs } from '@bike4mind/server-utils/voice/voiceSessionLimits';
 
@@ -40,7 +43,8 @@ import { voiceSessionTokenExpiresAtMs } from '@bike4mind/server-utils/voice/voic
 // (no SQS/Lambda dispatch): web search, knowledge-base RAG, datetime,
 // weather, and math. Deliberately excludes image generation, deep_research,
 // jupyter/excel, and delegate_to_agent - those run out-of-process. `navigate_view`
-// is auto-added by ChatCompletionProcess regardless.
+// is auto-added by ChatCompletionProcess regardless. `video_generation` is added per
+// turn (see runFullPipeline): it only enqueues a job, and the clip arrives later in the chat.
 const VOICE_BUILTIN_TOOLS = [
   'web_search',
   'search_knowledge_base',
@@ -52,7 +56,8 @@ const VOICE_BUILTIN_TOOLS = [
 ];
 
 // No-op queue: satisfies the ChatCompletionProcess option type without ever
-// dispatching to SQS. Voice turns run fully in-process; nothing should enqueue,
+// dispatching to SQS. Voice turns run fully in-process; nothing should enqueue on this
+// chat queue (a video job enqueues on its own generation queue, which this does not touch),
 // and if some path tries, this swallows it instead of hitting the queue.
 const noopQueue: IQueueService = {
   async sendMessage() {
@@ -109,6 +114,9 @@ async function runFullPipeline(
   );
   const embeddingModel = getSettingsValue('defaultEmbeddingModel', settings);
   const organizationId = sessionCtx.organizationId || undefined;
+  const videoToolConfigResolver = getVoiceVideoToolConfigResolver(sessionCtx, userId =>
+    buildVideoToolConfig(userId, { availability: getVideoJobDeps(), createDeps: getCreateVideoJobDeps() })
+  );
 
   const chatCompletionOptions = {
     ...getDefaultChatCompletionOptions(),
@@ -144,8 +152,12 @@ async function runFullPipeline(
     // client tools for this turn. Without the builtins the agent can't search the
     // web. QuestMaster, Agents (subagent Lambda handoff), and Mementos (async
     // creation) stay off so the whole voice turn runs in-process - no separate
-    // Lambda or SQS dispatch.
-    tools: [...VOICE_BUILTIN_TOOLS, ...Object.keys(clientTools)],
+    // Lambda or SQS dispatch. The one exception is video_generation, which only enqueues a job.
+    tools: [
+      ...VOICE_BUILTIN_TOOLS,
+      ...(videoToolConfigResolver ? ['video_generation'] : []),
+      ...Object.keys(clientTools),
+    ],
     // The save-intent gate would otherwise offer the data-lake tools past the list above.
     deniedTools: [...DATA_LAKE_TOOL_NAMES],
     enableQuestMaster: false,
@@ -194,6 +206,7 @@ async function runFullPipeline(
     // executors only capture the call; ElevenLabs runs the real side effect.
     // Premium overlay tool implementations merge first so client tools win.
     externalTools: { ...premiumLlmTools, ...clientTools },
+    videoToolConfigResolver,
   });
 
   // process() mutates the quest in place. Use the last reply item (the visible
