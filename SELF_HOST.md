@@ -1140,7 +1140,10 @@ Focused tests use disposable Mongo, exact retention boundaries and an injected l
 VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/cron/telemetryCleanup.test.ts src/mongoTestTimeoutBudget.test.ts
 VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/selfhost/telemetryCleanup.test.ts
 TZ=America/New_York VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test:integration src/cron/telemetryCleanup.retention.e2e.test.ts
+pnpm --filter @bike4mind/workers test src/selfhost/selfHostWorker.dst.test.ts
 ```
+
+The last command covers the worker scheduler itself, not just this task. It switches the process to `America/New_York` at runtime and checks that daily UTC tasks keep their UTC slot across both transitions and across a restart, and that interval tasks restart their cadence from the moment the worker starts again.
 
 ## Daily API-key usage baselines
 
