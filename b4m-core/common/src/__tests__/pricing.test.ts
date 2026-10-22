@@ -249,7 +249,7 @@ describe('pricing utils', () => {
     });
   });
 
-  describe('creditsToUsdAtFloor and formatUsd', () => {
+  describe('creditsToUsdAtFloor and formatUsdAmount', () => {
     afterEach(() => {
       vi.unstubAllEnvs();
       vi.resetModules();
@@ -261,7 +261,7 @@ describe('pricing utils', () => {
       const pricing = await importPricing();
       expect(pricing.creditsToUsdAtFloor(10000)).toBeCloseTo(6);
       expect(pricing.creditsToUsdAtFloor(0)).toBe(0);
-      expect(pricing.formatUsd(pricing.creditsToUsdAtFloor(10000))).toBe('$6.00');
+      expect(pricing.formatUsdAmount(pricing.creditsToUsdAtFloor(10000))).toBe('$6.00');
     });
 
     it('follows an env-configured floor', async () => {
@@ -273,10 +273,10 @@ describe('pricing utils', () => {
 
     it('formats dollars with cents and keeps sub-cent amounts visible', async () => {
       const pricing = await importPricing();
-      expect(pricing.formatUsd(0)).toBe('$0.00');
-      expect(pricing.formatUsd(1234.5)).toBe('$1,234.50');
-      expect(pricing.formatUsd(0.0006)).toBe('$0.0006');
-      expect(pricing.formatUsd(0.1 + 0.2)).toBe('$0.30');
+      expect(pricing.formatUsdAmount(0)).toBe('$0.00');
+      expect(pricing.formatUsdAmount(1234.5)).toBe('$1,234.50');
+      expect(pricing.formatUsdAmount(0.0006)).toBe('$0.0006');
+      expect(pricing.formatUsdAmount(0.1 + 0.2)).toBe('$0.30');
     });
   });
 

@@ -100,7 +100,7 @@ export const formatUsdPerCredit = (usd: number): string => `$${Number(usd.toPrec
 export const creditsToUsdAtFloor = (credits: number): number => credits * MIN_PRICE_PER_CREDIT_USD;
 
 /** USD amount for display ($6.00). A nonzero amount under a cent keeps its digits rather than rounding to $0.00. */
-export const formatUsd = (usd: number): string => {
+export const formatUsdAmount = (usd: number): string => {
   const subCent = usd !== 0 && Math.abs(usd) < 0.01;
   return usd.toLocaleString('en-US', {
     style: 'currency',

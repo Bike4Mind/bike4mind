@@ -3,7 +3,7 @@ import { Alert, Card, CardContent, Divider, LinearProgress, Stack, Typography } 
 import WarningIcon from '@mui/icons-material/Warning';
 import {
   creditsToUsdAtFloor,
-  formatUsd,
+  formatUsdAmount,
   formatUsdPerCredit,
   MIN_PRICE_PER_CREDIT_USD,
   resolveTeamPlanSettings,
@@ -56,13 +56,14 @@ const formatValue = (value: unknown): string => {
  * (apps/client/lib/credits/constants.ts).
  */
 export const describeDerivedValue = (key: SettingKey, value: unknown): string | null => {
-  const amount = typeof value === 'number' ? value : Number(value);
+  // Unset is not zero: Number('') and Number(null) would both read as 0 credits.
+  const amount = value === undefined || value === null || value === '' ? Number.NaN : Number(value);
   const floor = `floor ${formatUsdPerCredit(MIN_PRICE_PER_CREDIT_USD)} per credit`;
   switch (key) {
     case 'defaultFreeCredits':
     case 'ReferralCreditsAmount':
       if (!Number.isFinite(amount)) return null;
-      return `${amount.toLocaleString()} credits = ${formatUsd(creditsToUsdAtFloor(amount))} at the ${floor}`;
+      return `${amount.toLocaleString()} credits = ${formatUsdAmount(creditsToUsdAtFloor(amount))} at the ${floor}`;
     case 'pricePerCredit':
       return Number.isFinite(amount)
         ? `${formatUsdPerCredit(amount)} per credit (USD) - ${floor}`
