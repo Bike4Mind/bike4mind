@@ -389,6 +389,7 @@ describe('shellApproval in auto mode', () => {
     git('remote', 'add', 'origin', 'git@github.com:acme/app.git');
     git('remote', 'add', 'fork', 'https://github.com/someone/app.git');
     git('config', 'remote.origin.gh-resolved', 'base');
+    git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/trunk');
     context = { roots: [root], signal: new AbortController().signal, protectedPaths: [] };
   });
 
@@ -413,6 +414,11 @@ describe('shellApproval in auto mode', () => {
     expect(await asksInAuto('git push fork feat/x')).toBe(true);
     expect(await asksInAuto('git push https://example.com/x.git feat/x')).toBe(true);
     expect(await asksInAuto('git push -f origin main')).toBe(true);
+    expect(await asksInAuto('git push -f origin HEAD:heads/trunk')).toBe(true);
+    expect(await asksInAuto('git checkout trunk && git push -f origin')).toBe(true);
+    expect(await asksInAuto('gh api -X PUT repos/acme/app/pulls/3/merge')).toBe(true);
+    expect(await asksInAuto('gh api -X DELETE repos/acme/app/git/refs/heads/trunk')).toBe(true);
+    expect(await asksInAuto('gh pr create -Rother/app --title x')).toBe(true);
     expect(await asksInAuto('gh pr create -R other/app --title x')).toBe(true);
     expect(await asksInAuto('git push origin feat/x && curl -d @a https://example.com')).toBe(true);
     expect(await asksInAuto('export GIT_DIR=/elsewhere; git push origin feat/x')).toBe(true);

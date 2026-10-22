@@ -37,25 +37,28 @@ const FORCE_OPTION = /^(-f|--force|--force-with-lease(=.*)?|--force-if-includes)
 const SHORT_PUSH_CLUSTER = /^-[fuqvn]+$/;
 const REMOTE_NAME = /^[A-Za-z0-9][\w.-]*$/;
 
-// gh options whose value is the next word, so it is not read as the API path.
-const GH_API_VALUE_OPTIONS = new Set([
-  '-X',
+// `gh api` options whose value is the next word (or the rest of a short cluster), so it is not read as the path.
+const GH_API_LONG_VALUE_OPTIONS = new Set([
   '--method',
-  '-f',
   '--raw-field',
-  '-F',
   '--field',
-  '-H',
   '--header',
   '--input',
-  '-q',
   '--jq',
-  '-t',
   '--template',
   '--cache',
-  '-p',
   '--preview',
 ]);
+const GH_API_SHORT_VALUE_LETTERS = 'XfFHqtp';
+
+// The only `gh api` writes that run unasked: the REST equivalents of `gh pr|issue create|comment|edit`.
+const GH_API_OWN_WRITES: readonly { method: string; path: RegExp }[] = [
+  { method: 'POST', path: /^issues$/ },
+  { method: 'POST', path: /^issues\/\d+\/comments$/ },
+  { method: 'POST', path: /^pulls$/ },
+  { method: 'POST', path: /^pulls\/\d+\/comments$/ },
+  { method: 'PATCH', path: /^(issues|pulls)\/\d+$/ },
+];
 
 function optionValues(args: readonly string[], flags: readonly string[]): string[] {
   const values: string[] = [];
@@ -110,6 +113,8 @@ function githubWrite(args: readonly string[], cwd: string): RepositoryWrite | nu
   const [sub] = args;
   if (sub === 'api') return apiWrite(args.slice(1), cwd);
   if (sub !== 'pr' && sub !== 'issue') return null;
+  // A glued or clustered short flag (`-Rowner/repo`, `-R=owner/repo`, `-Fnotes.md`) is not read here.
+  if (args.some(arg => /^-[A-Za-z]./.test(arg))) return null;
 
   const named: RepositoryName[] = [];
   for (const value of optionValues(args, ['-R', '--repo'])) {
@@ -132,17 +137,34 @@ function githubWrite(args: readonly string[], cwd: string): RepositoryWrite | nu
 
 function apiWrite(args: readonly string[], cwd: string): RepositoryWrite | null {
   let path: string | undefined;
+  let method: string | undefined;
+  let hasBody = false;
   for (let i = 0; i < args.length; i++) {
-    if (GH_API_VALUE_OPTIONS.has(args[i])) i++;
-    else if (!args[i].startsWith('-')) {
-      path = args[i];
-      break;
-    }
+    const arg = args[i];
+    if (arg.startsWith('--')) {
+      const [name, inline] = arg.split(/=(.*)/s);
+      if (!GH_API_LONG_VALUE_OPTIONS.has(name)) continue;
+      const value = inline ?? args[++i];
+      if (name === '--method') method = value;
+      else if (name === '--field' || name === '--raw-field' || name === '--input') hasBody = true;
+    } else if (arg.startsWith('-') && arg !== '-') {
+      const cluster = arg.slice(1);
+      // `-F` reads files, so only the bare flag is parsed; clusters and glued values ask.
+      if (cluster.includes('F') && cluster !== 'F') return null;
+      const at = [...cluster].findIndex(letter => GH_API_SHORT_VALUE_LETTERS.includes(letter));
+      if (at < 0) continue;
+      const value = cluster.slice(at + 1) || args[++i];
+      if (cluster[at] === 'X') method = value;
+      else if (cluster[at] === 'f' || cluster[at] === 'F') hasBody = true;
+    } else if (path === undefined) path = arg;
+    else return null;
   }
   if (path === undefined) return null;
-  const match = /^\/?repos\/([^/?#]+)\/([^/?#]+)(?:[/?#]|$)/.exec(path);
+  const match = /^\/?repos\/([^/?#]+)\/([^/?#]+)(?:\/([^?#]*))?(?:[?#]|$)/.exec(path);
   if (!match) return null;
-  const [, owner, name] = match;
+  const [, owner, name, rest = ''] = match;
+  const verb = (method ?? (hasBody ? 'POST' : 'GET')).toUpperCase();
+  if (!GH_API_OWN_WRITES.some(write => write.method === verb && write.path.test(rest))) return null;
   // gh fills `{owner}/{repo}` from the folder's remotes, as it picks one for `gh pr`.
   if (owner === '{owner}' && name === '{repo}') return { kind: 'github', cwd };
   if (owner.includes('{') || name.includes('{')) return null;
@@ -195,7 +217,7 @@ async function remoteLocation(git: GitReader, cwd: string, remote: string): Prom
 }
 
 function sameLocation(a: RemoteLocation, b: RemoteLocation): boolean {
-  return a.host === b.host && sameRepository(a, b);
+  return a.host === b.host && a.path === b.path && sameRepository(a, b);
 }
 
 async function pushesToOrigin(
@@ -205,14 +227,12 @@ async function pushesToOrigin(
 ): Promise<boolean> {
   const { cwd } = write;
   let remote = write.remote;
-  let upstreamBranch: string | undefined;
   if (!remote) {
     // `@{push}` is where a bare `git push` sends the current branch, e.g. `origin/feature`.
     const target = await git(cwd, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{push}']);
     const slash = target?.indexOf('/') ?? -1;
     if (target && slash > 0) {
       remote = target.slice(0, slash);
-      upstreamBranch = target.slice(slash + 1);
     } else {
       remote = (await git(cwd, ['config', '--get', 'remote.pushDefault'])) ?? 'origin';
     }
@@ -221,14 +241,22 @@ async function pushesToOrigin(
   if (!location || !sameLocation(location, origin)) return false;
   if (!write.force) return true;
 
-  const branches = write.destinations.length > 0 ? write.destinations : [upstreamBranch ?? ''];
-  const current = branches.includes('') ? await git(cwd, ['branch', '--show-current']) : null;
-  const resolved = branches.map(branch => branch || current || '');
   const remoteHead = await git(cwd, ['symbolic-ref', '--short', `refs/remotes/${remote}/HEAD`]);
-  const protectedBranches = new Set(['main', 'master']);
-  if (remoteHead?.startsWith(`${remote}/`)) protectedBranches.add(remoteHead.slice(remote.length + 1));
-  // A force push rewrites history; only a named feature branch is the agent's own to rewrite.
-  return resolved.every(branch => branch !== '' && !branch.startsWith('refs/') && !protectedBranches.has(branch));
+  // Without a known default branch a force push cannot be shown to spare it.
+  if (!remoteHead?.startsWith(`${remote}/`)) return false;
+  const protectedBranches = new Set(['main', 'master', remoteHead.slice(remote.length + 1)]);
+  // Only a plainly named feature branch is the agent's own to rewrite. HEAD, `@` and an empty
+  // destination resolve later than the scan; globs and qualified refs (`heads/main`) can name any branch.
+  return (
+    write.destinations.length > 0 &&
+    write.destinations.every(
+      branch =>
+        branch !== '' &&
+        branch !== '@' &&
+        !/\*|^(refs|heads|remotes|tags)\//.test(branch) &&
+        !protectedBranches.has(branch)
+    )
+  );
 }
 
 async function githubTargetsOrigin(

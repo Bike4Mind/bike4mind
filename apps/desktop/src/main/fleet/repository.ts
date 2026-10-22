@@ -9,6 +9,8 @@ export interface RepositoryName {
 export interface RemoteLocation extends RepositoryName {
   /** Lower-cased host, e.g. `github.com`. */
   host: string;
+  /** Lower-cased full path without `.git`, so `a/sub/repo` and `b/sub/repo` differ. */
+  path: string;
 }
 
 /**
@@ -48,7 +50,9 @@ export function parseRemoteLocation(remote: string): RemoteLocation | null {
     .filter(Boolean);
   if (parts.length < 2) return null;
   const [owner, name] = parts.slice(-2);
-  return isRepositoryPart(owner) && isRepositoryPart(name) ? { host: host.toLowerCase(), owner, name } : null;
+  return isRepositoryPart(owner) && isRepositoryPart(name)
+    ? { host: host.toLowerCase(), owner, name, path: parts.join('/').toLowerCase() }
+    : null;
 }
 
 const CACHE_MS = 10 * 60_000;
