@@ -5,6 +5,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { ensureAdmin, NotFoundError, BadRequestError, isZodError } from '@bike4mind/server-utils/utils/errors';
 import { ModalModel } from '@bike4mind/database/social';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { MODAL_AUDIENCE_KEY_SET, MODAL_SAFE_DEFAULT_KEY } from '@bike4mind/services';
 
 /**
@@ -56,6 +57,9 @@ const UpdateVariantsSchema = z.object({
 
 const ModalIdBodySchema = z.object({ modalId: z.string().min(1, 'modalId is required') });
 
+const modalDisplayName = (modal: { title?: string | null; textMessage?: string | null }): string =>
+  modal.title || modal.textMessage || 'Untitled';
+
 function zodResponse(res: Response, error: unknown): Response | null {
   if (!isZodError(error)) return null;
   const issues = (error as { issues: Array<{ path: (string | number)[]; message: string }> }).issues.map(i => {
@@ -102,6 +106,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       ).lean();
       if (!updated) throw new NotFoundError('Modal not found');
 
+      await recordAdminActionFromRequest(req, {
+        action: 'settings.modal.variants_updated',
+        target: { kind: 'settings', id: modalId, displayName: modalDisplayName(updated) },
+        summary: `updated audience variants of modal ${modalDisplayName(updated)}`,
+        details: { audienceKeys: Object.keys(variants) },
+      });
+
       return res.json({ success: true, modal: updated });
     } catch (error) {
       const zr = zodResponse(res, error);
@@ -131,6 +142,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
       const updated = await ModalModel.findByIdAndUpdate(modalId, updateOp, { new: true }).lean();
       if (!updated) throw new NotFoundError('Modal not found');
+
+      await recordAdminActionFromRequest(req, {
+        action: 'settings.modal.variants_cleared',
+        target: { kind: 'settings', id: modalId, displayName: modalDisplayName(updated) },
+        summary: `cleared audience variants of modal ${modalDisplayName(updated)}`,
+        details: { clearedAudienceKeys: Object.keys(existingVariants ?? {}), contentFieldsReset: !hadCustomerVariant },
+      });
 
       return res.json({ success: true, modal: updated });
     } catch (error) {

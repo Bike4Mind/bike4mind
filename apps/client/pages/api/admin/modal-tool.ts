@@ -3,7 +3,14 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { Logger } from '@bike4mind/observability';
 import { ApiKeyScope } from '@bike4mind/common';
-import { createModal, listModals, updateModal, deleteModal } from '@client/server/tools/modalOperations';
+import {
+  collectModalChanges,
+  createModal,
+  listModals,
+  updateModal,
+  deleteModal,
+} from '@client/server/tools/modalOperations';
+import { recordModalChanges } from '@client/server/tools/recordModalChanges';
 
 const logger = new Logger({ metadata: { service: 'admin-modal-tool' } });
 
@@ -42,28 +49,26 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
       logger.info(`Parsed tool params - Action: ${toolParams.action}`, toolParams);
 
       // Execute the appropriate action based on parsed parameters
-      let result;
-      switch (toolParams.action) {
-        case 'create':
-          logger.info('Executing CREATE action');
-          result = await createModal(toolParams);
-          break;
-        case 'list':
-          logger.info('Executing LIST action with filter:', toolParams.filter);
-          result = await listModals(toolParams.filter);
-          break;
-        case 'update':
-          logger.info(`Executing UPDATE action for modal ${toolParams.modalId}`);
-          result = await updateModal(toolParams.modalId, toolParams);
-          break;
-        case 'delete':
-          logger.info(`Executing DELETE action for modal ${toolParams.modalId}`);
-          result = await deleteModal(toolParams.modalId);
-          break;
-        default:
-          logger.error(`Unknown action: ${toolParams.action}`);
-          result = { success: false, error: 'Unknown action' };
-      }
+      const { result, changes } = await collectModalChanges(async () => {
+        switch (toolParams.action) {
+          case 'create':
+            logger.info('Executing CREATE action');
+            return await createModal(toolParams);
+          case 'list':
+            logger.info('Executing LIST action with filter:', toolParams.filter);
+            return await listModals(toolParams.filter);
+          case 'update':
+            logger.info(`Executing UPDATE action for modal ${toolParams.modalId}`);
+            return await updateModal(toolParams.modalId, toolParams);
+          case 'delete':
+            logger.info(`Executing DELETE action for modal ${toolParams.modalId}`);
+            return await deleteModal(toolParams.modalId);
+          default:
+            logger.error(`Unknown action: ${toolParams.action}`);
+            return { success: false, error: 'Unknown action' };
+        }
+      });
+      await recordModalChanges(req, changes, 'modal-tool');
 
       logger.info(`Modal tool result - Success: ${result.success}, Message: ${result.message}`);
       return res.json(result);

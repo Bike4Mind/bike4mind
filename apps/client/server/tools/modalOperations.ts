@@ -1,7 +1,23 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { ModalModel } from '@bike4mind/database/social';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { ModalImageHandler } from './modalImageHandler';
 import { cacheExternalImage } from '@server/utils/cacheExternalImage';
+
+export type ModalChange = { kind: 'created' | 'updated' | 'deleted'; id: string; title: string };
+
+// Lets a route audit the modal writes that a tool or LLM-parsed query performed on its behalf.
+const modalChangeStore = new AsyncLocalStorage<ModalChange[]>();
+
+export async function collectModalChanges<T>(run: () => Promise<T>): Promise<{ result: T; changes: ModalChange[] }> {
+  const changes: ModalChange[] = [];
+  const result = await modalChangeStore.run(changes, run);
+  return { result, changes };
+}
+
+const noteModalChange = (kind: ModalChange['kind'], id: unknown, title: string | undefined | null) => {
+  modalChangeStore.getStore()?.push({ kind, id: String(id), title: title || 'Untitled' });
+};
 
 // Modal operation functions that can be shared between server and API
 export async function createModal(params: any) {
@@ -51,6 +67,7 @@ export async function createModal(params: any) {
     }
 
     const modal = await ModalModel.create(modalData);
+    noteModalChange('created', modal._id, modal.title || modal.textMessage);
 
     return {
       success: true,
@@ -261,6 +278,7 @@ export async function updateModal(modalId: string | undefined, params: any) {
     if (!updatedModal) {
       return { success: false, error: 'Failed to update modal' };
     }
+    noteModalChange('updated', updatedModal._id, updatedModal.title || updatedModal.textMessage);
 
     // Build descriptive message based on what was updated
     let actionDescription = 'updated';
@@ -317,6 +335,7 @@ export async function deleteModal(modalId: string | undefined) {
     if (!modal) {
       return { success: false, error: 'Modal not found' };
     }
+    noteModalChange('deleted', modal._id, modal.title || modal.textMessage);
 
     return {
       success: true,

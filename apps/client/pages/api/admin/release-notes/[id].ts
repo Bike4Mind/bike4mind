@@ -9,6 +9,7 @@ import {
   scrubCustomerText,
 } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { deploymentMediaOrigins } from '@server/utils/deploymentMediaOrigins';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
@@ -87,7 +88,14 @@ const handler = api.patch(async (req, res) => {
       items: items.map((item, i) => ({ ...item, text: clean(`items.${i}.text`, item.text) })),
     }),
   });
-  return res.json(toAdminReleaseNote(noteOrThrow(result)));
+  const note = noteOrThrow(result);
+  await recordAdminActionFromRequest(req, {
+    action: 'settings.release_note.updated',
+    target: { kind: 'settings', id, displayName: `release note ${note.releaseTag}` },
+    summary: `edited release note ${note.releaseTag}`,
+    details: { releaseTag: note.releaseTag, fields: Object.keys(parsed.data) },
+  });
+  return res.json(toAdminReleaseNote(note));
 });
 
 export const config = {
