@@ -42,6 +42,7 @@ function CostSurfaces() {
           rejected: [],
           dismissRejected: () => undefined,
           add: async () => undefined,
+          attachImage: async () => undefined,
           pick: async () => undefined,
           remove: () => undefined,
           clear: () => undefined,
