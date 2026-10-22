@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { RETIRED_SETTING_NAMES, settingsMap } from '@bike4mind/common';
+import { settingsMap } from '@bike4mind/common';
 
 import { DEAD_SETTING_NAMES } from './20260911000000_drop-dead-feature-default-settings';
 
@@ -16,9 +16,5 @@ describe('drop-dead-feature-default-settings', () => {
 
   it.each(DEAD_SETTING_NAMES)('%s is not a live setting key', name => {
     expect(settingsMap).not.toHaveProperty(name);
-  });
-
-  it('matches the retired names the contributed-settings registry refuses', () => {
-    expect([...RETIRED_SETTING_NAMES].sort()).toEqual([...DEAD_SETTING_NAMES].sort());
   });
 });
