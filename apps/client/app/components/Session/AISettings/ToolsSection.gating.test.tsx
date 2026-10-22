@@ -617,3 +617,11 @@ describe('ToolsSection Decisions picker', () => {
     expect(queryByTestId('tool-row-decide')).toBeNull();
   });
 });
+
+describe('formatImageToolPrice', () => {
+  it('labels a free model Free and pluralizes the credit unit', () => {
+    expect(formatImageToolPrice(0)).toBe('Free');
+    expect(formatImageToolPrice(1)).toBe('~1 credit/image');
+    expect(formatImageToolPrice(1234)).toBe('~1,234 credits/image');
+  });
+});

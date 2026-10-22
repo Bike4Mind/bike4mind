@@ -136,6 +136,15 @@ describe('estimateImageToolCredits', () => {
     expect(estimateImageToolCredits(models, { model: ImageModels.FLUX_PRO_1_1 })?.credits).toBeGreaterThan(0);
   });
 
+  // usdToCredits floors at 1 credit, but settlement charges a free model nothing.
+  it('prices a free local-image model at 0 credits', () => {
+    const local = [{ id: 'local-image/sd_xl' }] as ModelInfo[];
+    expect(estimateImageToolCredits(local, { model: 'local-image/sd_xl' as never })).toEqual({
+      model: 'local-image/sd_xl',
+      credits: 0,
+    });
+  });
+
   it('returns null for a model missing from the list or with no price', () => {
     expect(estimateImageToolCredits(models, { model: ImageModels.GPT_IMAGE_1_5 })).toBeNull();
     const unpriced = [{ id: 'not-an-image-model' }] as ModelInfo[];

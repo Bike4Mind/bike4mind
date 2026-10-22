@@ -6,7 +6,7 @@ import type { GenerateImageToolCall } from '@bike4mind/common';
 import { estimateImageToolCredits } from '@bike4mind/services/imageCost';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
-import { formatCreditAmount } from '@client/app/utils/formatCredits';
+import { formatAnswerCost } from '@client/app/utils/formatCredits';
 
 export interface ImageToolPrice {
   modelId: string;
@@ -18,7 +18,8 @@ export interface ImageToolPrice {
 export const IMAGE_TOOL_PRICE_TOOLTIP =
   'Estimated credits per image at your saved settings. The assistant can change the size, quality or number of images, which changes the final charge.';
 
-export const formatImageToolPrice = (credits: number): string => `~${formatCreditAmount(credits)} credits/image`;
+export const formatImageToolPrice = (credits: number): string =>
+  credits === 0 ? 'Free' : `~${formatAnswerCost(credits)}/image`;
 
 /**
  * Pre-send price of one image_generation tool image for `model` at the saved quality/size.

@@ -105,7 +105,8 @@ export function estimateImageCredits(
  * `ToolBuilder.settleImageCredits` charges with, so the gpt-image-1 -> gpt-image-2 upgrade
  * and the omitted-quality pin match settlement. The assistant can still override
  * n/quality/size per call, so this is the price at the saved settings, not a quote.
- * Returns null when the resolved model is not in `models` or cannot be priced.
+ * Returns null when the resolved model is not in `models` or cannot be priced. A free model
+ * (local-image) returns 0: settlement charges nothing, though `requiredCredits` floors at 1.
  */
 export function estimateImageToolCredits(
   models: ModelInfo[],
@@ -116,7 +117,8 @@ export function estimateImageToolCredits(
   if (!modelInfo) return null;
   try {
     const input = toImageCostInput('image_generation', { model, size, quality });
-    return { model, credits: estimateImageCredits(modelInfo, 1, input).requiredCredits };
+    const { requiredCredits, usdCost } = estimateImageCredits(modelInfo, 1, input);
+    return { model, credits: usdCost === 0 ? 0 : requiredCredits };
   } catch {
     return null;
   }
