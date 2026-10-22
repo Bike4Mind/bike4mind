@@ -83,7 +83,8 @@ type DuplicateTurn = 'in-flight' | 'video-started';
  * tool call already created (and billed) running, and a retry gets a fresh quest
  * so the job's idempotency key never matches. A recent quest with the same prompt
  * that is `stopped` yet already started a video job therefore also counts as a
- * duplicate. A normally `done` turn does not: a user may repeat the sentence to
+ * duplicate. The video claim is taken before the job is created, so a retry
+ * during the tool call still sees it. A normally `done` turn does not: a user may repeat the sentence to
  * ask for another clip.
  */
 async function findDuplicateTurn(sessionId: string, message: string): Promise<DuplicateTurn | null> {
@@ -91,7 +92,13 @@ async function findDuplicateTurn(sessionId: string, message: string): Promise<Du
   const recent = await questRepository.findAllBySessionIdAndGreaterThanOrEqualToTimestamp(sessionId, cutoff);
   const sameTurn = recent.filter(q => q.prompt === message);
   if (sameTurn.some(q => q.status === 'running')) return 'in-flight';
-  if (sameTurn.some(q => q.status === 'stopped' && questGenerationJobs(q).some(job => job.kind === 'video'))) {
+  if (
+    sameTurn.some(
+      q =>
+        q.status === 'stopped' &&
+        (questGenerationJobs(q).some(job => job.kind === 'video') || (q.agentVideoClipsClaimed ?? 0) > 0)
+    )
+  ) {
     return 'video-started';
   }
   return null;

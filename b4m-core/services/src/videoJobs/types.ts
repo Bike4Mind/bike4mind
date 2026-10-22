@@ -85,7 +85,9 @@ export type CreateVideoJobErrorCode =
   | 'input_image_not_found'
   | 'idempotency_key_reused'
   // Never returned by createVideoJob itself: the agent-mode per-run cap (agentExecutor.videoToolConfig.ts).
-  | 'clip_limit_reached';
+  | 'clip_limit_reached'
+  // Never returned by createVideoJob itself: the voice turn was stopped before the job started (voiceVideoToolConfig.ts).
+  | 'turn_cancelled';
 
 export type CreateVideoJobResult =
   | { ok: true; job: IGenerationJobDocumentOf<'video'>; created: boolean }

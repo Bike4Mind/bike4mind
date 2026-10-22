@@ -247,6 +247,7 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - video generation', () 
     expect(mockBuildVideoToolConfig).not.toHaveBeenCalled();
     expect(await processArg.videoToolConfigResolver?.()).toEqual({
       ...config,
+      createJob: expect.any(Function),
       deliveryNote: expect.stringContaining('appears on screen in this session chat'),
     });
     expect(mockBuildVideoToolConfig).toHaveBeenCalledWith('user-1', {
@@ -316,6 +317,19 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - duplicate turns', () =
     );
   });
 
+  it('drops a retry of a stopped turn that claimed a video start before its job ref was written', async () => {
+    mockFindDuplicateQuests.mockResolvedValue([quest({ status: 'stopped', agentVideoClipsClaimed: 1 })]);
+
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect(mockProcess).not.toHaveBeenCalled();
+    expect(mockWriteStaticCompletion).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.stringContaining('already being made')
+    );
+  });
+
   it('also recognizes a video job recorded on the legacy videoJobIds field', async () => {
     mockFindDuplicateQuests.mockResolvedValue([quest({ status: 'stopped', videoJobIds: ['job-1'] })]);
 
@@ -344,8 +358,8 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - duplicate turns', () =
 
   it('still answers the same words after a non-video job, or a video job on a different prompt', async () => {
     mockFindDuplicateQuests.mockResolvedValue([
-      quest({ status: 'done', generationJobs: [{ id: 'song-1', kind: 'music' }] }),
-      quest({ prompt: 'something else', status: 'done', generationJobs: [{ id: 'job-2', kind: 'video' }] }),
+      quest({ status: 'stopped', generationJobs: [{ id: 'song-1', kind: 'music' }] }),
+      quest({ prompt: 'something else', status: 'stopped', generationJobs: [{ id: 'job-2', kind: 'video' }] }),
     ]);
 
     await handler(makeReq() as never, makeRes() as never);
