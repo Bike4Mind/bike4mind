@@ -160,4 +160,10 @@ describe('settings helpers over contributed definitions', () => {
     const doc = { settingName: 'extensionLimit', settingValue: 'plain-but-unknown' } as AdminSettingDoc;
     expect(redactSettingSecrets(doc).settingValue).not.toBe('plain-but-unknown');
   });
+
+  it('rejects a definition that declares a scope', () => {
+    const scoped = { ...flag, key: 'scopedFlag', scope: { settableAt: ['org'] } } as unknown as typeof flag;
+    expect(registerContributedSettings([scoped]).rejected).toEqual(['scopedFlag']);
+    expect(isRegisteredSettingKey('scopedFlag')).toBe(false);
+  });
 });

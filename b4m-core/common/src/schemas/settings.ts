@@ -1139,7 +1139,10 @@ function makeObjectSetting<T>(
 
 // Factories for a contributed setting (see registerContributedSettings). They build the same schema
 // as the core factories; only the key and parent are widened to plain strings.
-type ContributedSettingFields = Omit<SettingDefinition<string>, 'type' | 'schema' | 'defaultValue' | 'options'>;
+type ContributedSettingFields = Omit<
+  SettingDefinition<string>,
+  'type' | 'schema' | 'defaultValue' | 'options' | 'scope'
+>;
 type AsCoreConfig<T> = Omit<T, 'key' | 'dependsOn'> & BaseSetting;
 
 export function makeContributedStringSetting(
@@ -5889,7 +5892,7 @@ export interface ContributedSettingsRegistration {
   coreCollisions: string[];
   /** Keys an earlier contribution already registered; the first one is kept. */
   duplicates: string[];
-  /** Reserved object keys, definitions with no key or schema, and sensitive ones with a default. */
+  /** Reserved object keys, definitions with no key or schema, sensitive ones with a default, and ones declaring a scope. */
   rejected: string[];
 }
 
@@ -5905,7 +5908,8 @@ export function registerContributedSettings(
       key.trim() === '' ||
       RESERVED_SETTING_NAMES.has(key) ||
       typeof definition.schema?.safeParse !== 'function' ||
-      (definition.isSensitive === true && definition.defaultValue !== undefined && definition.defaultValue !== '')
+      (definition.isSensitive === true && definition.defaultValue !== undefined && definition.defaultValue !== '') ||
+      definition.scope !== undefined
     ) {
       result.rejected.push(String(key));
     } else if (isCoreSettingKey(key)) {
