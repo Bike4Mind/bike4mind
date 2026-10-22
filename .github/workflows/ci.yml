@@ -702,13 +702,17 @@ jobs:
           # oversubscription by construction. vitestWorkerBudget.test.ts pins this.
           pnpm --recursive --workspace-concurrency=1 "${filter_args[@]}" "$SHARD_SCRIPT" "${script_args[@]}"
 
-      - name: Verify telemetry retention across DST
+      # The scheduler suite is a unit test, so it runs under `test` (the integration lane collects
+      # only *.e2e.test.ts). It sets TZ itself at runtime; this step's TZ is for the retention file.
+      - name: Verify telemetry retention and worker scheduling across DST
         if: matrix.shard.name == 'workers-integration'
         env:
           TZ: America/New_York
           VITEST_MAX_WORKERS: '2'
           TMPDIR: /dev/shm
-        run: pnpm --filter @bike4mind/workers test:integration src/cron/telemetryCleanup.retention.e2e.test.ts
+        run: |
+          pnpm --filter @bike4mind/workers test:integration src/cron/telemetryCleanup.retention.e2e.test.ts
+          pnpm --filter @bike4mind/workers test src/selfhost/selfHostWorker.dst.test.ts
 
       # Tests that live outside every pnpm workspace, which the sharded run above cannot reach:
       # infra/ has no package.json, and scripts/codemods and scripts/__tests__ are not in
