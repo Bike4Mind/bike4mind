@@ -7,9 +7,6 @@
 # routes and the probe is blind behind that throw. Builder stage only - never copied into the
 # runner image.
 !.env.selfhost.example
-# Codegen reads the example files' keys to reserve core env var names.
-!.env.example
-!.env.secrets.example
 
 # sst
 .sst

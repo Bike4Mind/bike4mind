@@ -114,12 +114,12 @@ describe('infra resource glue', () => {
     expect(runtime).toContain('coreEnvNames: readonly string[] | null = null');
   });
 
-  it('lists the env form of core resources and the env names core defines elsewhere', () => {
+  it('lists the env form of core resources and the env keys infra defines, not env example keys', () => {
     mkdirSync(join(sandbox, 'infra'), { recursive: true });
     writeFileSync(join(sandbox, 'infra/secrets.ts'), "export const s = new sst.Secret('CORE_A', 'x');\n");
     writeFileSync(
       join(sandbox, 'infra/chat.ts'),
-      "export const c = new sst.aws.Service('ChatCompletion', {\n  environment: {\n    SERVER_DOMAIN: 'x',\n  },\n});\n"
+      "export const c = new sst.aws.Service('ChatCompletion', {\n  environment: {\n    SERVER_DOMAIN: 'x',\n    ...(on ? { ORIGIN_SECRET: 'y' } : {}),\n  },\n});\n"
     );
     writeFileSync(join(sandbox, '.env.selfhost.example'), 'INTERNAL_WS_SECRET=changeme\n# MAIL_HOST=smtp\n');
     expect(runCodegen().status).toBe(0);
@@ -127,7 +127,8 @@ describe('infra resource glue', () => {
     expect(infra).toBe(runtime);
     const match = /coreEnvNames: readonly string\[\] \| null = (\[.*\]);/.exec(runtime);
     const names: string[] = JSON.parse(match![1]);
-    expect(names).toEqual(expect.arrayContaining(['CHAT_COMPLETION', 'CORE_A', 'SERVER_DOMAIN', 'INTERNAL_WS_SECRET']));
+    expect(names).toEqual(expect.arrayContaining(['CHAT_COMPLETION', 'CORE_A', 'SERVER_DOMAIN', 'ORIGIN_SECRET']));
+    expect(names).not.toContain('INTERNAL_WS_SECRET');
     expect(names).toEqual([...names].sort());
   });
 
