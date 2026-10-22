@@ -47,6 +47,7 @@ afterEach(() => {
 });
 
 const button = () => container.querySelector<HTMLButtonElement>('[data-testid="test-copy-btn"]')!;
+const status = () => container.querySelector<HTMLElement>('[data-testid="test-copy-btn-status"]')!;
 
 async function press(): Promise<void> {
   await act(async () => button().click());
@@ -59,6 +60,11 @@ describe('CopyMessageButton', () => {
     expect(button().dataset.state).toBe('idle');
   });
 
+  it('keeps an empty live region mounted so the first outcome is announced', () => {
+    expect(status().getAttribute('role')).toBe('status');
+    expect(status().textContent).toBe('');
+  });
+
   it('puts the exact text on the clipboard and says it did', async () => {
     writeText.mockResolvedValue(undefined);
 
@@ -67,6 +73,7 @@ describe('CopyMessageButton', () => {
     expect(writeText).toHaveBeenCalledExactlyOnceWith('# Title\n\nSee [docs](https://x.com).');
     expect(button().dataset.state).toBe('copied');
     expect(button().getAttribute('aria-label')).toBe('Copied');
+    expect(status().textContent).toBe('Copied');
   });
 
   it('goes back to offering a copy once the confirmation has been seen', async () => {
@@ -78,6 +85,7 @@ describe('CopyMessageButton', () => {
 
     act(() => vi.advanceTimersByTime(2000));
     expect(button().dataset.state).toBe('idle');
+    expect(status().textContent).toBe('');
   });
 
   it('says so, and logs why, when the clipboard refuses the write', async () => {
@@ -89,6 +97,7 @@ describe('CopyMessageButton', () => {
 
     expect(button().dataset.state).toBe('failed');
     expect(button().getAttribute('aria-label')).toBe('Could not copy to the clipboard');
+    expect(status().textContent).toBe('Could not copy to the clipboard');
     expect(logged).toHaveBeenCalledWith(expect.any(String), failure);
   });
 });

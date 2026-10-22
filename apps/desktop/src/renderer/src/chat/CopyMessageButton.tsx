@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import Box from '@mui/joy/Box';
 import IconButton from '@mui/joy/IconButton';
 import { CheckIcon, CopyIcon, WarningIcon } from './icons';
 
@@ -30,7 +31,8 @@ export const revealCopyButtonSx = {
  * Puts a message's text on the clipboard, and says whether that worked.
  *
  * Native `title` rather than a Joy tooltip for the same reason ReplyCost gives: one per turn
- * across a long transcript. The label is also the accessible name, so the outcome is announced.
+ * across a long transcript. A changed name on a focused button is not reliably re-read, so the
+ * outcome also goes to a visually hidden live region, which must already be mounted to be heard.
  */
 export function CopyMessageButton({ text, testId }: { text: string; testId: string }) {
   const [state, setState] = useState<CopyState>('idle');
@@ -53,19 +55,36 @@ export function CopyMessageButton({ text, testId }: { text: string; testId: stri
   };
 
   return (
-    <IconButton
-      size="sm"
-      variant="plain"
-      color={state === 'failed' ? 'danger' : 'neutral'}
-      aria-label={LABEL[state]}
-      title={LABEL[state]}
-      onClick={() => void copy()}
-      className={COPY_BUTTON_CLASS}
-      data-state={state}
-      data-testid={testId}
-      sx={{ '--IconButton-size': '1.5rem' }}
-    >
-      {state === 'copied' ? <CheckIcon /> : state === 'failed' ? <WarningIcon /> : <CopyIcon />}
-    </IconButton>
+    <>
+      <IconButton
+        size="sm"
+        variant="plain"
+        color={state === 'failed' ? 'danger' : 'neutral'}
+        aria-label={LABEL[state]}
+        title={LABEL[state]}
+        onClick={() => void copy()}
+        className={COPY_BUTTON_CLASS}
+        data-state={state}
+        data-testid={testId}
+        sx={{ '--IconButton-size': '1.5rem' }}
+      >
+        {state === 'copied' ? <CheckIcon /> : state === 'failed' ? <WarningIcon /> : <CopyIcon />}
+      </IconButton>
+      <Box
+        component="span"
+        role="status"
+        data-testid={`${testId}-status`}
+        sx={{
+          position: 'absolute',
+          width: '1px',
+          height: '1px',
+          overflow: 'hidden',
+          clip: 'rect(0 0 0 0)',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {state === 'idle' ? '' : LABEL[state]}
+      </Box>
+    </>
   );
 }
