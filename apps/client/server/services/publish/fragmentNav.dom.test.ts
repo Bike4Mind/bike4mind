@@ -131,10 +131,51 @@ describe('hash bridge (parent) navigate handling', () => {
     ['an absolute URL', `https://elsewhere.example${BASE}/report.pdf`],
     ['a protocol-relative URL', `//elsewhere.example${BASE}/report.pdf`],
     ['a non-string', 42],
+    // A URL parser folds these into `..`, so `/p/u/x/y/.%2e/.%2e/.%2e/.%2e/api` would be `/api`.
+    ['a dot + encoded-dot segment', `${BASE}/.%2e/.%2e/.%2e/.%2e/api/users/me`],
+    ['a dot + upper-case encoded-dot segment', `${BASE}/.%2E/.%2E/.%2E/.%2E/api/users/me`],
+    ['an encoded-dot + dot segment', `${BASE}/%2e./%2e./%2e./%2e./api/users/me`],
+    ['an encoded single-dot segment', `${BASE}/%2e/report.pdf`],
+    ['a double-encoded dot-dot segment', `${BASE}/%252e%252e/report.pdf`],
+    ['an encoded slash', `${BASE}/..%2fapi/report.pdf`],
+    ['a backslash', `${BASE}/..\\..\\api`],
+    ['an encoded backslash', `${BASE}/..%5c..%5capi`],
+    ['the bundle root with a trailing dot-dot', `${BASE}/..`],
+    ['a whitespace character', `${BASE}/files/re port.pdf`],
   ])('refuses %s', (_label, path) => {
     runParentBridge(BASE);
     fromFrame({ b4m: 'navigate', path });
     expect(fetchDownload).not.toHaveBeenCalled();
+  });
+
+  describe('user activation', () => {
+    const setActivation = (isActive: boolean) =>
+      Object.defineProperty(navigator, 'userActivation', { value: { isActive }, configurable: true });
+    afterEach(() => {
+      delete (navigator as { userActivation?: unknown }).userActivation;
+    });
+
+    it('refuses to navigate without a user activation (a script looping navigate messages)', () => {
+      setActivation(false);
+      runParentBridge(BASE);
+      fromFrame({ b4m: 'navigate', path: `${BASE}/files/report.pdf` });
+      expect(fetchDownload).not.toHaveBeenCalled();
+    });
+
+    it('navigates during a user activation', () => {
+      setActivation(true);
+      runParentBridge(BASE);
+      fromFrame({ b4m: 'navigate', path: `${BASE}/files/report.pdf` });
+      fromFrame({ b4m: 'navigate', path: `${BASE}/files/other.pdf` });
+      expect(fetchDownload).toHaveBeenCalledTimes(2);
+    });
+
+    it('throttles to one navigation per two seconds where the UA has no activation API', () => {
+      runParentBridge(BASE);
+      fromFrame({ b4m: 'navigate', path: `${BASE}/files/report.pdf` });
+      fromFrame({ b4m: 'navigate', path: `${BASE}/files/other.pdf` });
+      expect(fetchDownload).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('ignores navigate messages that do not come from its own frame', () => {

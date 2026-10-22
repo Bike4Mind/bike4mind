@@ -37,11 +37,17 @@
  * so an indexed copy would leak nothing - but a gated artifact's URL still has no
  * business in a search index. Mirrors the header the serve route already sets.
  */
-import { HASH_BRIDGE_JS } from './fragmentNav';
+import { BUNDLE_PATH_JS, HASH_BRIDGE_JS } from './fragmentNav';
 import { VIEWER_SANDBOX } from './viewerSecurity';
 
-export function renderBundleLoaderShell(): string {
-  // Bootstrap script: no server-interpolated values.
+/**
+ * @param signedOrigin Storage origin of this deployment's signed file links ('' when signing
+ *   is unavailable). Deployment config, not artifact data, so the shell stays artifact-free;
+ *   it is the only origin the file hook will open a server-returned link on.
+ */
+export function renderBundleLoaderShell(signedOrigin = ''): string {
+  // The only server-interpolated value: a JSON string literal with `<` escaped.
+  const signedOriginJs = JSON.stringify(signedOrigin).replace(/</g, '\\u003c');
   const bootstrap = `(function () {
   var frame = document.getElementById('b4m-frame');
   var msg = document.getElementById('b4m-msg');
@@ -117,8 +123,16 @@ export function renderBundleLoaderShell(): string {
   // navigation carries no Bearer, so it would land on a 401. Ask the route for a signed
   // storage link instead and open it at top level: it views in the browser where its type
   // allows (PDF, video) and downloads otherwise. Where signing is unavailable, fetch the
-  // attachment with the token and save the bytes. The bridge has already confined the path
-  // to this bundle.
+  // attachment with the token and save the bytes. The path is re-validated here rather than
+  // trusted from the bridge, because the token rides on every request this hook makes; and a
+  // returned link is opened only on the deployment's signing origin, never wherever a
+  // response body points.
+  var SIGNED_ORIGIN = ${signedOriginJs};
+  ${BUNDLE_PATH_JS}
+  function signedLink(url) {
+    if (!SIGNED_ORIGIN || typeof url !== 'string') return null;
+    try { var u = new URL(url); return u.origin === SIGNED_ORIGIN ? u.href : null; } catch (e) { return null; }
+  }
   function saveBlob(path) {
     fetch(path, { headers: { Authorization: 'Bearer ' + token }, credentials: 'omit' })
       .then(function (res) { return res.status === 200 ? res.blob() : null; })
@@ -137,12 +151,15 @@ export function renderBundleLoaderShell(): string {
       })
       .catch(function () {});
   }
-  window.__b4mFetchDownload = function (path) {
-    if (!token) return;
+  window.__b4mFetchDownload = function (raw) {
+    var t = b4mBundlePath(raw);
+    if (!token || !t || t.page) return;
+    var path = t.path;
     fetch(path + '?sign=1', { headers: { Authorization: 'Bearer ' + token }, credentials: 'omit' })
       .then(function (res) { return res.status === 200 ? res.json() : null; })
       .then(function (data) {
-        if (data && typeof data.url === 'string' && /^https?:/.test(data.url)) { location.assign(data.url); return; }
+        var link = data ? signedLink(data.url) : null;
+        if (link) { location.assign(link); return; }
         saveBlob(path);
       })
       .catch(function () { saveBlob(path); });

@@ -11,8 +11,10 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { renderBundleLoaderShell } from './renderBundleLoaderShell';
 
 /** The bootstrap is the FIRST inline script in the shell (the second is the hash bridge). */
+const SIGNED_ORIGIN = 'https://files.storage.example';
+
 function bootstrapSource(): string {
-  const shell = renderBundleLoaderShell();
+  const shell = renderBundleLoaderShell(SIGNED_ORIGIN);
   const match = /<script>([\s\S]*?)<\/script>/.exec(shell);
   if (!match) throw new Error('loader shell has no inline bootstrap script');
   return match[1];
@@ -176,6 +178,8 @@ describe('loader shell bootstrap - same-bundle file downloads', () => {
     calls = [];
     vi.useFakeTimers();
     mountShell();
+    // The hook confines paths to the bundle this shell is showing, read from its location.
+    window.history.replaceState(null, '', '/p/u/scope123/my-slug/guide/intro.html');
   });
 
   afterEach(() => {
@@ -207,7 +211,7 @@ describe('loader shell bootstrap - same-bundle file downloads', () => {
 
   it('asks for a signed link with the recovered Bearer and does not fetch the bytes itself', async () => {
     stubSession(
-      () => json(200, { url: 'https://files.storage.example/report.pdf?X-Amz-Signature=abc' }),
+      () => json(200, { url: `${SIGNED_ORIGIN}/report.pdf?X-Amz-Signature=abc` }),
       () => {
         throw new Error('file must not be fetched when a signed link is available');
       }
@@ -244,6 +248,40 @@ describe('loader shell bootstrap - same-bundle file downloads', () => {
     expect(fileCall?.init?.headers).toEqual({ Authorization: 'Bearer fresh.access.token' });
     expect(createUrl).toHaveBeenCalledWith(blob);
     expect(clicked).toEqual([{ href: 'blob:report', download: 'My Report.pdf' }]);
+  });
+
+  it('never opens a link from the response body that is not on the signing origin', async () => {
+    const blob = new Blob(['%PDF-1.4']);
+    stubSession(
+      () => json(200, { url: 'https://attacker.example/phish' }),
+      () => ({ status: 200, blob: () => Promise.resolve(blob) }) as Response
+    );
+    Object.assign(URL, { createObjectURL: vi.fn(() => 'blob:report'), revokeObjectURL: vi.fn() });
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    await runBootstrap();
+
+    hook()('/p/u/scope123/my-slug/files/report.pdf');
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Fell back to saving the bytes from the bundle path instead of following the body.
+    expect(calls.some(c => c.url === '/p/u/scope123/my-slug/files/report.pdf')).toBe(true);
+    expect(window.location.href).not.toContain('attacker.example');
+  });
+
+  it.each([
+    ['an encoded dot-dot escape', '/p/u/scope123/my-slug/.%2e/.%2e/.%2e/.%2e/api/users/me'],
+    ['another bundle', '/p/u/scope123/other-slug/files/report.pdf'],
+    ['a page (pages navigate, they are not fetched)', '/p/u/scope123/my-slug/guide/next.html'],
+  ])('sends no Bearer request for %s, even when called directly', async (_label, path) => {
+    stubSession(
+      () => json(200, { url: `${SIGNED_ORIGIN}/x` }),
+      () => ({ status: 200, blob: () => Promise.resolve(new Blob([''])) }) as Response
+    );
+    await runBootstrap();
+    const before = calls.length;
+    hook()(path);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls.slice(before)).toEqual([]);
   });
 
   it('does nothing before a credential is recovered', async () => {

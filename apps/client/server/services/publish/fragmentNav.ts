@@ -118,19 +118,52 @@ export function buildFragmentNavScriptTag(config: FragmentNavConfig): string {
 }
 
 /**
+ * The ONE validator every consumer of a frame-supplied bundle path runs (the wrapper and
+ * loader-shell hash bridge, and the loader shell's file hook). Inlined into each script, so
+ * it is ES5 and self-contained. `b4mBundlePath(path)` returns
+ * `{ path, hash, page }` for a same-origin path that is the bundle root this document is
+ * showing (derived from its own location) or sits under it, else null. It rejects anything
+ * a URL parser would rewrite (`.%2e`, `%2e.`, backslashes, `//`), any segment that DECODES
+ * to `.`/`..` or still carries `%`, `/` or `\` after one decode (double encoding), any query,
+ * and any other origin - so the only places a bundle can send the viewer are its own pages
+ * and files.
+ */
+export const BUNDLE_PATH_JS = String.raw`function b4mBundleBase(){
+  return (/^\/(?:p\/(?:u|pj|o)\/[^/]+\/[^/]+|a\/[^/]+)(?=\/|$)/.exec(location.pathname)||[''])[0];
+}
+function b4mBundlePath(path){
+  var base=b4mBundleBase();
+  if(typeof path!=='string'||!base||path.length>2048||/[\\\s?]/.test(path)){return null;}
+  var at=path.indexOf('#');
+  var p=at===-1?path:path.slice(0,at);
+  var hash=at===-1?'':path.slice(at);
+  if(hash&&!/^#[^#]{1,512}$/.test(hash)){return null;}
+  if(p.charAt(0)!=='/'||p.charAt(1)==='/'){return null;}
+  if(p!==base&&p.indexOf(base+'/')!==0){return null;}
+  var u;try{u=new URL(p,location.origin);}catch(e){return null;}
+  if(u.origin!==location.origin||u.pathname!==p||u.search){return null;}
+  var segs=p.split('/');
+  for(var i=1;i<segs.length;i++){
+    var d;try{d=decodeURIComponent(segs[i]);}catch(e){return null;}
+    if(d===''||d==='.'||d==='..'||/[%\/\\]/.test(d)){return null;}
+  }
+  return {path:p,hash:hash,page:p===base||/\.html?$/i.test(p)};
+}`;
+
+/**
  * Parent-side hash bridge for the wrapper page and the loader shell (srcdoc mode).
  * Sends the page hash on every iframe load (covers the loader shell's late srcdoc
  * injection) and on hashchange; accepts fragment updates back and mirrors them into
  * the address bar. Incoming hashes are fragment-only by construction (regex-gated
  * `#...` or empty), so replaceState can never change path or query.
  *
- * Also answers `navigate` (see the file header): the path must be the bundle root this
- * page itself is showing or sit under it, with no query, no empty/dot segments and no
- * percent-encoded dots, so the only places a bundle can send the viewer are its own pages
- * and files. Files go through `window.__b4mFetchDownload` when a host page defines one
- * (the loader shell, whose viewer authorizes by Bearer and so cannot download by plain
- * navigation); otherwise a top-level navigation to the file's attachment response
- * downloads it without leaving the page.
+ * Also answers `navigate` (see the file header) for a path `b4mBundlePath` accepts, and only
+ * during a user activation: a click inside the frame activates its ancestors too, so a real
+ * click passes, while a script looping navigate messages cannot force top-level navigations
+ * or downloads on its own. Where the UA has no `navigator.userActivation`, navigations are
+ * throttled to one per two seconds instead. Files go through `window.__b4mFetchDownload` when
+ * a host page defines one (the loader shell, whose viewer authorizes by Bearer and so cannot
+ * download by plain navigation); otherwise a top-level navigation to the file opens it.
  */
 export const HASH_BRIDGE_JS = String.raw`(function(){
   var frame=document.querySelector('iframe');
@@ -138,20 +171,18 @@ export const HASH_BRIDGE_JS = String.raw`(function(){
   function send(){try{frame.contentWindow.postMessage({b4m:'hash',hash:location.hash||''},'*');}catch(e){}}
   frame.addEventListener('load',send);
   window.addEventListener('hashchange',send);
-  var base=(/^\/(?:p\/(?:u|pj|o)\/[^/]+\/[^/]+|a\/[^/]+)(?=\/|$)/.exec(location.pathname)||[''])[0];
-  function navigate(path){
-    if(typeof path!=='string'||!base||path.length>2048){return;}
-    var m=/^(\/[^?#\s\\]*)(#\S{0,512})?$/.exec(path);
-    if(!m){return;}
-    var page=m[1]===base;
-    if(!page){
-      if(m[1].indexOf(base+'/')!==0){return;}
-      var segs=m[1].slice(base.length+1).split('/');
-      for(var i=0;i<segs.length;i++){if(segs[i]===''||segs[i]==='.'||segs[i]==='..'||/^%2e/i.test(segs[i])){return;}}
-      page=/\.html?$/i.test(m[1]);
-    }
-    if(!page&&typeof window.__b4mFetchDownload==='function'){window.__b4mFetchDownload(m[1]);return;}
-    location.assign(path);
+  ${BUNDLE_PATH_JS}
+  var last=0;
+  function activated(){
+    var ua=navigator.userActivation;
+    if(ua){return ua.isActive===true;}
+    var now=Date.now();if(now-last<2000){return false;}last=now;return true;
+  }
+  function navigate(raw){
+    var t=b4mBundlePath(raw);
+    if(!t||!activated()){return;}
+    if(!t.page&&typeof window.__b4mFetchDownload==='function'){window.__b4mFetchDownload(t.path);return;}
+    location.assign(t.path+t.hash);
   }
   window.addEventListener('message',function(e){
     if(e.source!==frame.contentWindow){return;}
