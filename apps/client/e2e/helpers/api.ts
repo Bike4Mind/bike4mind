@@ -13,12 +13,14 @@ interface LoginResponse {
 export async function apiCreateSession(
   request: APIRequestContext,
   token: string,
-  name = 'E2E Test Session'
+  name = 'E2E Test Session',
+  /** Grounds the session on this lake (resolveLakeSessionDefaults: forced retrieval scoped to it). */
+  options: { dataLakeId?: string } = {}
 ): Promise<string> {
   const baseURL = process.env.API_URL || 'http://localhost:3000';
   const response = await request.post(`${baseURL}/api/sessions/create`, {
     headers: { Authorization: `Bearer ${token}` },
-    data: { name },
+    data: { name, ...(options.dataLakeId ? { dataLakeId: options.dataLakeId } : {}) },
   });
 
   if (!response.ok()) {
@@ -520,7 +522,35 @@ export async function apiGetDataLakeArticlesStatus(
   return response.status();
 }
 
-export type DataLakeLifecycleAction = 'archive' | 'unarchive' | 'restore' | 'delete' | 'cleanup';
+/** The per-file index fields the forced-retrieval readiness check reads (retrievalUnavailable.ts). */
+export interface DataLakeArticle {
+  id: string;
+  fileName: string;
+  chunkCount?: number | null;
+  vectorizedChunkCount?: number | null;
+  error?: string | null;
+}
+
+/** One page (at most 100) of a lake's articles, sorted by file name. */
+export async function apiListDataLakeArticles(
+  request: APIRequestContext,
+  token: string,
+  dataLakeId: string,
+  page = 1
+): Promise<{ data: DataLakeArticle[]; total: number; hasMore: boolean }> {
+  const baseURL = process.env.API_URL || 'http://localhost:3000';
+  const response = await request.get(`${baseURL}/api/data-lakes/${dataLakeId}/articles`, {
+    headers: { Authorization: `Bearer ${token}` },
+    params: { page, limit: 100 },
+  });
+  if (!response.ok()) {
+    throw new Error(`List data lake articles failed: ${response.status()} ${response.statusText()}`);
+  }
+  return response.json();
+}
+
+// 'promote' flips a draft lake to active; a draft lake does not ground chat (promoteDataLake.ts).
+export type DataLakeLifecycleAction = 'archive' | 'unarchive' | 'restore' | 'delete' | 'cleanup' | 'promote';
 
 /** Drive a lake lifecycle transition. Returns the response status (so callers can assert 403 for non-owners). */
 export async function apiLakeLifecycle(

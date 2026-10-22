@@ -9,7 +9,9 @@ import {
   apiDeleteDataLake,
   apiListDataLakes,
   apiListDataLakesStatus,
+  apiCreateSession,
   apiLakeLifecycle,
+  apiListDataLakeArticles,
   apiSeedLakeArticle,
   apiUpdateDataLake,
   apiSetDataLakeVisibility,
@@ -831,5 +833,128 @@ test.describe('Data Lake - in-chat file actions', () => {
     // /new defers session creation to the first send; attaching a lake file creates the
     // grounded session up front and swaps the URL for the real notebook.
     await expect(page).toHaveURL(/\/notebooks\//, { timeout: TIMEOUTS.NAVIGATION });
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Group K - Asking a lake larger than the forced-retrieval candidate cap
+// -----------------------------------------------------------------------------
+// Must stay above FORCED_RETRIEVAL_MAX_CANDIDATE_FILES (100, ChatCompletionFeatures.ts) and below
+// FORCED_RETRIEVAL_MAX_LISTED_FILES (1000), the range where candidates are cut by relevance.
+const LARGE_LAKE_FILLER_COUNT = 110;
+const SEED_CONCURRENCY = 10;
+const FILLER_TOPICS = [
+  'sourdough starters need regular feeding with flour and water',
+  'tomato seedlings should be hardened off before transplanting',
+  'a road bike chain wears faster in wet and gritty conditions',
+  'watercolor paper is stretched before painting to stop buckling',
+  'basil prefers warm soil and dislikes cold night temperatures',
+  'marathon training plans build weekly mileage gradually',
+  'cast iron pans are seasoned with a thin layer of baked oil',
+  'houseplants in winter need less water than in summer',
+  'chess openings trade tempo against control of the center',
+  'compost piles heat up when green and brown matter are balanced',
+  'film cameras meter light differently from digital sensors',
+];
+
+test.describe('Data Lake - asking a large lake', () => {
+  // The by-name fallback this guards against is intermittent (a cold vector index is one cause), so
+  // a retry on a fresh lake can pass and report the run as flaky instead of failing it.
+  test.describe.configure({ retries: 0 });
+
+  test('a question answered by a file late in name order is answered and cited with full coverage', async ({
+    request,
+    page,
+    basePage,
+    chatPage,
+  }) => {
+    // Seeding past the cap and waiting for every file to embed dominates the runtime.
+    test.setTimeout(10 * 60_000);
+    const token = ownerToken();
+    const passphrase = `amber-heron-${RUN}`;
+    // `zz-` sorts after every `filler-` name, so a by-name cut to the first 100 never reaches it.
+    const answerFileName = `zz-lighthouse-keeper-log-${RUN}.txt`;
+
+    const lake = await test.step('seed a lake past the candidate cap', async () => {
+      const seeded = await seedLake(request, token, {
+        name: `E2E Large Lake ${RUN}`,
+        fileTagPrefix: `e2elarge${RUN}:`,
+      });
+      const fillers = Array.from({ length: LARGE_LAKE_FILLER_COUNT }, (_, i) => {
+        const n = String(i + 1).padStart(3, '0');
+        return {
+          fileName: `filler-${n}-${RUN}.txt`,
+          content: `Field note ${n}. ${FILLER_TOPICS[i % FILLER_TOPICS.length]}. Entry ${n} of run ${RUN}.`,
+        };
+      });
+      const files = [
+        ...fillers,
+        {
+          fileName: answerFileName,
+          content:
+            'Tidewater lighthouse keeper log. The keeper changes the night watch passphrase every season. ' +
+            `The passphrase for this season is ${passphrase}.`,
+        },
+      ];
+      for (let i = 0; i < files.length; i += SEED_CONCURRENCY) {
+        await Promise.all(
+          files.slice(i, i + SEED_CONCURRENCY).map(file => apiSeedLakeArticle(request, token, seeded, file))
+        );
+      }
+      expect(await apiLakeLifecycle(request, token, seeded.id, 'promote')).toBe(200);
+      return { ...seeded, fileCount: files.length };
+    });
+
+    await test.step('wait until every file is embedded', async () => {
+      // Asking earlier gets the unindexed files withheld (retrievalUnavailable.ts), which shows the
+      // coverage notice for a reason this test is not about.
+      await expect
+        .poll(
+          async () => {
+            const pages = [await apiListDataLakeArticles(request, token, lake.id, 1)];
+            while (pages[pages.length - 1].hasMore) {
+              pages.push(await apiListDataLakeArticles(request, token, lake.id, pages.length + 1));
+            }
+            const articles = pages.flatMap(p => p.data);
+            const failed = articles.find(a => a.error && !a.vectorizedChunkCount);
+            if (failed) throw new Error(`${failed.fileName} failed to index: ${failed.error}`);
+            const ready = articles.filter(
+              a => (a.chunkCount ?? 0) > 0 && (a.vectorizedChunkCount ?? 0) >= (a.chunkCount ?? 0)
+            );
+            return ready.length;
+          },
+          { message: 'every seeded file is chunked and embedded', timeout: 6 * 60_000, intervals: [5_000] }
+        )
+        .toBe(lake.fileCount);
+    });
+
+    const reply = await test.step('ask the lake a question only the late file answers', async () => {
+      const sessionId = await apiCreateSession(request, token, `E2E Large Lake Chat ${RUN}`, {
+        dataLakeId: lake.id,
+      });
+      await page.goto(`/notebooks/${sessionId}`, { waitUntil: 'domcontentloaded' });
+      await basePage.dismissModals();
+
+      return chatPage.sendMessageAndWaitForResponse(
+        'What is the night watch passphrase for this season in the Tidewater lighthouse keeper log?'
+      );
+    });
+
+    await test.step('the whole lake was in scope', async () => {
+      // Checked before the answer so a by-name cut fails with the server's own reason, not as a
+      // missing passphrase.
+      const warning = page.getByTestId('retrieval-coverage-warning');
+      const reasons = (await warning.count()) > 0 ? await warning.innerText() : '';
+      expect(reasons, 'retrieval-coverage-warning was shown').toBe('');
+    });
+
+    await test.step('the reply answers from and cites the late file', async () => {
+      expect(reply.toLowerCase()).toContain(passphrase);
+      const replyRoot = chatPage.aiResponseRoot.last();
+      // Only the first few sources show until expanded (CitableSources.tsx COLLAPSED_COUNT).
+      const showMore = replyRoot.getByTestId('citable-sources-show-more-btn');
+      if (await showMore.isVisible()) await showMore.click();
+      await expect(replyRoot.getByTestId('citable-source-chip').filter({ hasText: answerFileName })).toBeVisible();
+    });
   });
 });
