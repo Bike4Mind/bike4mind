@@ -66,9 +66,25 @@ describe('POST /api/users/[id]/revoke-sessions', () => {
     );
   });
 
-  it('reads the target before the revoke', async () => {
+  it('reads the target only after the revoke has passed its admin check', async () => {
     await run();
-    expect(mockFindById.mock.invocationCallOrder[0]).toBeLessThan(mockRevoke.mock.invocationCallOrder[0]);
+    expect(mockRevoke.mock.invocationCallOrder[0]).toBeLessThan(mockFindById.mock.invocationCallOrder[0]);
+  });
+
+  it('never reads the target when the revoke is refused', async () => {
+    mockRevoke.mockRejectedValue(new Error('Forbidden'));
+    await expect(run()).rejects.toThrow('Forbidden');
+    expect(mockFindById).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the id and still answers 200 when the target read fails', async () => {
+    mockFindById.mockRejectedValue(new Error('db down'));
+    const { res } = await run();
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockRecord).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ target: { kind: 'user', id: 'u1', displayName: 'u1' } })
+    );
   });
 
   it.each([
