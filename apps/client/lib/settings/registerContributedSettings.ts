@@ -11,5 +11,5 @@ if (duplicates.length > 0) {
   console.warn('Dropped contributed admin settings whose key was already contributed', duplicates);
 }
 if (rejected.length > 0) {
-  console.warn('Dropped contributed admin settings with a retired, reserved or missing key', rejected);
+  console.warn('Dropped contributed admin settings with a reserved or missing key', rejected);
 }

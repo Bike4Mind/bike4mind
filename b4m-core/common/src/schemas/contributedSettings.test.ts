@@ -13,7 +13,6 @@ import {
   registerContributedSettings,
   resetContributedSettings,
   resolveSettingDefinition,
-  RETIRED_SETTING_NAMES,
   settingsMap,
   userReadableSettingKeys,
   type AdminSettingDoc,
@@ -88,12 +87,6 @@ describe('registerContributedSettings', () => {
     expect(registerContributedSettings([flag]).duplicates).toEqual([]);
     expect(registerContributedSettings([second]).duplicates).toEqual(['ExtensionFlag']);
     expect(resolveSettingDefinition('ExtensionFlag')).toBe(flag);
-  });
-
-  it.each(RETIRED_SETTING_NAMES)('rejects the retired name %s', name => {
-    const retired = makeContributedBooleanSetting({ key: name, name: 'x', description: 'x' });
-    expect(registerContributedSettings([retired]).rejected).toEqual([name]);
-    expect(isRegisteredSettingKey(name)).toBe(false);
   });
 
   it('rejects a reserved object key, a blank key and a definition without a schema', () => {

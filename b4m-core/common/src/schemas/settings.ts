@@ -5870,12 +5870,6 @@ export function buildPublicSettingsProjection(settings: AdminSettingDoc[]): Publ
 // (apps/client: premiumAdminSettings.generated.ts and its register modules), so a read that runs
 // before that import sees only the core catalog.
 
-/**
- * Names whose rows the 20260911000000 migration hard-deletes. A contribution may not reuse one,
- * or a deploy would drop its stored value. The migration's test holds the two lists in sync.
- */
-export const RETIRED_SETTING_NAMES: readonly string[] = ['EnableDataLakesDefault', 'EnableOptiHashiDefault'];
-
 const contributedSettings = new Map<string, SettingDefinition<string>>();
 
 const RESERVED_SETTING_NAMES = new Set(['__proto__', 'constructor', 'prototype']);
@@ -5890,7 +5884,7 @@ export interface ContributedSettingsRegistration {
   coreCollisions: string[];
   /** Keys an earlier contribution already registered; the first one is kept. */
   duplicates: string[];
-  /** Retired names, reserved object keys, and definitions with no key or schema. */
+  /** Reserved object keys and definitions with no key or schema. */
   rejected: string[];
 }
 
@@ -5905,7 +5899,6 @@ export function registerContributedSettings(
       typeof key !== 'string' ||
       key.trim() === '' ||
       RESERVED_SETTING_NAMES.has(key) ||
-      RETIRED_SETTING_NAMES.includes(key) ||
       typeof definition.schema?.safeParse !== 'function'
     ) {
       result.rejected.push(String(key));
