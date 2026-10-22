@@ -705,8 +705,16 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
   pullSystemFilesForUsers: (userIds: string[], fileIds: string[]) => Promise<void>;
   /** Remove a single group id from one user's `groups[]` (used when unassigning a member). */
   removeGroupFromUser: (userId: string, groupId: string) => Promise<void>;
-  /** Charge `count` referrals (floored at zero) and add the invites they created to `regInvites`. */
+  /**
+   * Charge `count` referrals (floored at zero) and add the invites they created to `regInvites`.
+   * @deprecated Reservations are not atomic and can overspend under concurrency. Use
+   * `reserveReferrals` before side effects and `settleReferrals` afterward.
+   */
   recordReferrals: (userId: string, count: number, newInviteIds: string[]) => Promise<void>;
+  /** Atomically charge `count` referrals; resolves false when the allowance is below `count`. */
+  reserveReferrals: (userId: string, count: number) => Promise<boolean>;
+  /** Refund `refundCount` failed referrals and add `newInviteIds` to `regInvites`; not idempotent, do not retry. */
+  settleReferrals: (userId: string, refundCount: number, newInviteIds: string[]) => Promise<void>;
   /**
    * Remove several group ids from ONE user's `groups[]` (idempotent $pull). Used when a member
    * leaves or is removed from an org, to strip that org's group ids from just that member.
