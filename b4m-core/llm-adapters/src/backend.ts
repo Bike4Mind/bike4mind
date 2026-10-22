@@ -161,7 +161,7 @@ export interface ICompletionOptions {
   logitBias?: { [key: string]: number };
   tools: ICompletionOptionTools[];
   /**
-   * Provider-run tools sent verbatim after `tools` (direct Anthropic only; see completionsSupportsToolSearch).
+   * Provider-run tools sent verbatim after `tools` (Claude adapters only; see completionsSupportsToolSearch).
    * Never executed locally: their blocks come back as CompletionInfo.providerBlock.
    */
   providerTools?: ToolSearchServerTool[];
@@ -362,6 +362,11 @@ export interface ICompletionResponseChunk {
    * complete() derives stopReason from the raw provider response leave this unset.
    */
   stopReason?: string;
+  /**
+   * Provider-run blocks to surface as CompletionInfo.providerBlock, in response order. A stream chunk's blocks
+   * go out where they arrive; `textOffset` places each one within a whole-message chunk's text.
+   */
+  providerBlocks?: Array<{ providerBlock: ProviderBlock; textOffset: number }>;
 }
 
 export type CompletionCallback = (done: boolean, chunk?: ICompletionResponseChunk) => Promise<void>;
