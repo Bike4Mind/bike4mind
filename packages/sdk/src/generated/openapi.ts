@@ -2654,6 +2654,10 @@ export interface components {
       )[];
       /** @default 2 */
       safety_tolerance?: number;
+      /**
+       * @description Let the provider rewrite and expand the prompt before rendering. Applies to Black Forest Labs (FLUX) models only; other models ignore it. Defaults to false.
+       * @default false
+       */
       prompt_upsampling?: boolean;
       seed?: number | null;
       /** @enum {string|null} */
