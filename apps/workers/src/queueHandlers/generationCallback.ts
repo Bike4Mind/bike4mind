@@ -11,7 +11,7 @@ import {
 } from '@bike4mind/server-utils/utils/sqsDelivery';
 import { GenerationCallbackMessageSchema } from '@bike4mind/server-utils/generationCallback/messages';
 import { toQuestPollBody } from '@server/utils/questPollBody';
-import { assertUrlAllowed, SsrfError } from '@bike4mind/server-utils/utils/ssrfProtection';
+import { assertUrlAllowed, fetchPinned, SsrfError } from '@bike4mind/server-utils/utils/ssrfProtection';
 import { buildSignedWebhookHeaders, RetryableError, WEBHOOK_HTTP_TIMEOUT_MS } from '@workers/webhooks/signedWebhook';
 
 /**
@@ -136,7 +136,7 @@ async function attemptDelivery(
 
   let response: Response;
   try {
-    response = await fetch(callback.url, {
+    response = await fetchPinned(callback.url, {
       method: 'POST',
       headers,
       body,
@@ -145,6 +145,10 @@ async function attemptDelivery(
       signal: AbortSignal.timeout(WEBHOOK_HTTP_TIMEOUT_MS),
     });
   } catch (error) {
+    if (error instanceof SsrfError) {
+      logger.warn('SECURITY: generation callback target blocked', { error: error.message });
+      return { kind: 'permanent', error: `Callback URL not allowed: ${error.message}` };
+    }
     const isTimeout = error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError');
     return {
       kind: 'retryable',

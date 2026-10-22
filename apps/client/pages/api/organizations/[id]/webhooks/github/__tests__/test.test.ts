@@ -8,6 +8,7 @@ const h = vi.hoisted(() => ({
   verifyOrgOwner: vi.fn(),
   validateTargetUrl: vi.fn(),
   fetchMock: vi.fn(),
+  SsrfError: class SsrfError extends Error {},
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -27,7 +28,11 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({ decryptSecret: () => 'plain-secret' }));
 vi.mock('@server/utils/orgAccess', () => ({ verifyOrgOwner: h.verifyOrgOwner }));
-vi.mock('@bike4mind/server-utils/utils/ssrfProtection', () => ({ validateTargetUrl: h.validateTargetUrl }));
+vi.mock('@bike4mind/server-utils/utils/ssrfProtection', () => ({
+  validateTargetUrl: h.validateTargetUrl,
+  fetchPinned: h.fetchMock,
+  SsrfError: h.SsrfError,
+}));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: 'test-key' } }));
 
 await import('../test');
@@ -65,11 +70,28 @@ describe('POST /api/organizations/[id]/webhooks/github/test', () => {
     h.findByOrganizationId.mockResolvedValue({ id: 'cfg-1', secret: 'enc(secret)' });
     h.validateTargetUrl.mockResolvedValue({ valid: true });
     h.fetchMock.mockResolvedValue({ ok: true, status: 200, statusText: 'OK' });
-    vi.stubGlobal('fetch', h.fetchMock);
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it('sends through the pinned fetch with plain http allowed, not global fetch', async () => {
+    const globalFetch = vi.fn();
+    vi.stubGlobal('fetch', globalFetch);
+
+    await sendTestPing();
+
+    expect(h.fetchMock).toHaveBeenCalledWith(TARGET_URL, expect.objectContaining({ method: 'POST' }), {
+      allowHttp: true,
+    });
+    expect(globalFetch).not.toHaveBeenCalled();
+  });
+
+  it('rejects the request when the pinned fetch refuses the dialed address', async () => {
+    h.fetchMock.mockRejectedValue(new h.SsrfError('Blocked connection to a private address for x'));
+
+    await expect(sendTestPing()).rejects.toThrow('Blocked connection to a private address');
   });
 
   it('does not follow redirects from the target URL', async () => {
