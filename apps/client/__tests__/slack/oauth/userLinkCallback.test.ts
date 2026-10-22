@@ -36,7 +36,7 @@ vi.mock('@server/auth/oauthFlowCookie', () => ({
   consumeStateNonce: vi.fn(() => 'nonce-hash'),
   NONCE_SLOT: { slackUserLink: 'slack-user-link' },
 }));
-vi.mock('@server/integrations/integrationAuditLogger', () => ({
+vi.mock('@bike4mind/server-utils/integrations/integrationAuditLogger', () => ({
   IntegrationAuditLogger: {
     create: () => ({ failure: vi.fn(), success: vi.fn(), setUserId: vi.fn(), setWorkspaceId: vi.fn() }),
   },

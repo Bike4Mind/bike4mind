@@ -243,9 +243,10 @@ describe('recallLakeMemory membership filter', () => {
   });
 
   it('requires the resolver at the call site', () => {
-    // @ts-expect-error resolveMemberSources is required: a caller that omits it would recall
-    // beliefs sourced from documents that have left the lake.
+    // resolveMemberSources is required: a caller that omits it would recall beliefs sourced from
+    // documents that have left the lake.
     const forgotten = () =>
+      // @ts-expect-error the call omits resolveMemberSources
       recallLakeMemory({
         userId: 'u1',
         query: 'q',
