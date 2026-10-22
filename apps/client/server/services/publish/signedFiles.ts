@@ -58,10 +58,12 @@ const MIN_MEDIA_TTL_SECONDS = 60;
 /**
  * TTL for a media link in a render authorized by a passphrase proof with `proofSecondsLeft`
  * remaining (null when another gate authorized it). Issued links are NOT revoked by a
- * takedown or a passphrase change; this bound is what limits them.
+ * takedown, a passphrase change, a revoked share link or a removed org member; this bound
+ * is what limits them. Other gates have no proof lifetime to follow, so they get the
+ * short file-link TTL: long media can stop seeking after that, and a reload mints fresh links.
  */
 export function mediaLinkTtlSeconds(proofSecondsLeft: number | null): number {
-  if (proofSecondsLeft === null) return SIGNED_MEDIA_TTL_SECONDS;
+  if (proofSecondsLeft === null) return SIGNED_LINK_TTL_SECONDS;
   return Math.max(MIN_MEDIA_TTL_SECONDS, Math.min(SIGNED_MEDIA_TTL_SECONDS, proofSecondsLeft));
 }
 

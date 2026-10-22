@@ -107,10 +107,13 @@ display name or username does not select a publishing namespace.
   passphrase-protected pages. They are delivered from file storage through short-lived
   links issued after the access check. Use MP4 rather than HLS for video.
 - Those storage links stay valid until they expire: 15 minutes for a file you open or
-  download, and for media playing in a page, until the passphrase unlock that opened the
-  page expires (at most 2 hours). Unpublishing an artifact or changing its passphrase
-  does not revoke links already issued. Treat a passphrase change as taking effect once
-  those windows have passed.
+  download. Media playing in a passphrase-protected page keeps working until the unlock
+  that opened the page expires (at most 2 hours). On pages protected by sign-in, an
+  organization, an email domain or a protected share link, media links last 15 minutes,
+  so a long video can stop seeking after that; reload the page to get fresh links.
+  Unpublishing an artifact, changing its passphrase, revoking a share link or removing
+  someone from an organization does not revoke links already issued. Treat those changes
+  as taking effect once those windows have passed.
 - A script in the page that loads its own audio, video or PDF (for example with `fetch`)
   gets the file from the page's own address, so it works as long as the file is under
   about 4 MB. Larger files, and files played by a plain `<video>`/`<audio>` element, come

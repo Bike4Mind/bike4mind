@@ -3849,6 +3849,18 @@ describe('GET /api/publish/serve - signed file delivery', () => {
     });
   });
 
+  it('gives media links in a render authorized by another gate the short file-link lifetime', async () => {
+    mockArtifactFindOne.mockReturnValue(gated({ accessGate: undefined, visibility: 'private' }));
+    const { res, promise } = run(['u', 'scope123', 'my-slug', 'player.html'], {
+      user: { id: 'owner1' },
+      fetchDest: 'document',
+    });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    const call = mockGetSignedUrl.mock.calls.find(c => c[0] === 'user/scope123/my-slug/media/clip.mp4');
+    expect(call?.[2].expiresIn).toBe(15 * 60);
+  });
+
   it('answers the loader shell ?sign=1 request with a signed link once the gate passes', async () => {
     mockArtifactFindOne.mockReturnValue(bundle({ visibility: 'private', manifest: FILES }));
     const denied = run(['u', 'scope123', 'my-slug', 'files', 'deck.pdf'], { sign: true });

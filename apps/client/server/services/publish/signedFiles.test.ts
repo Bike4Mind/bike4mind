@@ -110,8 +110,8 @@ describe('signed link lifetimes', () => {
     expect(mediaLinkTtlSeconds(5 * 60 * 60)).toBe(2 * 60 * 60);
     // A proof on its last seconds still yields a link that survives the page load.
     expect(mediaLinkTtlSeconds(3)).toBe(60);
-    // Another gate (no proof cookie) gets the ceiling.
-    expect(mediaLinkTtlSeconds(null)).toBe(2 * 60 * 60);
+    // Another gate (no proof cookie) has no lifetime to follow, so it gets the short file-link TTL.
+    expect(mediaLinkTtlSeconds(null)).toBe(SIGNED_LINK_TTL_SECONDS);
   });
 });
 
