@@ -50,6 +50,7 @@ import type { DevLogRecord, DevLogSnapshot } from './devLog';
 import type { ShareDirectoryResult } from './directoryRequest';
 import type { PrActionResult, PrBarState, PrOption, PrSummaryEvent } from './pullRequest';
 import type { SidebarSectionsState } from './sidebarSections';
+import type { WorkspaceChanges } from './workspaceChanges';
 import type { SkillsState } from './skills';
 import type { PermissionMutationResult, PermissionRuleLists, PermissionScope, PermissionsState } from './permissions';
 import type {
@@ -132,6 +133,7 @@ export const IPC_CHANNELS = {
   chatListRecentFolders: 'chat:list-recent-folders',
   chatRemoveRecentFolder: 'chat:remove-recent-folder',
   chatInspectProject: 'chat:inspect-project',
+  chatWorkspaceChanges: 'chat:workspace-changes',
   chatAddContextDirectory: 'chat:add-context-directory',
   chatRemoveContextDirectory: 'chat:remove-context-directory',
   chatGetSession: 'chat:get-session',
@@ -591,6 +593,11 @@ export interface DesktopApi {
     removeRecentFolder(directory: string): Promise<RecentFolder[]>;
     /** Read a directory's branches, for the branch chip. */
     inspectProject(directory: string): Promise<ProjectInspection>;
+    /**
+     * What this Code session's working directory has changed against its base branch, for the
+     * changes bar above the composer. Null when there is nothing to show or git cannot answer.
+     */
+    workspaceChanges(sessionId: string): Promise<WorkspaceChanges | null>;
     /**
      * Share one more folder with this conversation: `path` when given (`/add-dir <path>`), the
      * folder picker otherwise. Allowed at any point in the session, a running turn included.

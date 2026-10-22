@@ -98,6 +98,8 @@ beforeEach(() => {
         getQueuedMessages: async () => [],
         getSessionStatuses: async () => [],
         listModels: async () => ({ models: [] }),
+        // The bridge's `[]` default is truthy, so the changes bar would render it as a reading.
+        workspaceChanges: async () => null,
         inspectProject,
         createCodeSession,
       }),
