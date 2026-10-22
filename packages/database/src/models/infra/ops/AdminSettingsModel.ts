@@ -114,21 +114,32 @@ class AdminSettingsRepository extends BaseRepository<IAdminSettings> implements 
   /**
    * Insert-once marker row keyed by settingName: true only for the caller whose upsert created it.
    * The name is outside settingsMap, so the settings readers mask the row like any unmapped one.
+   * With staleAfterMs, a claim older than that is taken over, so a holder that died before
+   * releasing it cannot block the slot forever; the conditional update keeps one winner.
    */
-  async claimOnce(settingName: string, claimId: string): Promise<boolean> {
+  async claimOnce(settingName: string, claimId: string, staleAfterMs?: number): Promise<boolean> {
     // autoIndex builds lazily; the unique settingName index must exist before two upserts can race.
     await this.model.init();
+    const now = new Date();
     try {
       const res = await this.model.updateOne(
         { settingName } as RootFilterQuery<IAdminSettings>,
-        { $setOnInsert: { settingValue: { claimId, claimedAt: new Date() } } },
+        { $setOnInsert: { settingValue: { claimId, claimedAt: now } } },
         { upsert: true }
       );
-      return res.upsertedCount === 1;
+      if (res.upsertedCount === 1) return true;
     } catch (err) {
-      if (isDuplicateKey(err)) return false;
-      throw err;
+      if (!isDuplicateKey(err)) throw err;
     }
+    if (staleAfterMs === undefined) return false;
+    const takeover = await this.model.updateOne(
+      {
+        settingName,
+        'settingValue.claimedAt': { $lt: new Date(now.getTime() - staleAfterMs) },
+      } as RootFilterQuery<IAdminSettings>,
+      { $set: { settingValue: { claimId, claimedAt: now } } }
+    );
+    return takeover.modifiedCount === 1;
   }
 
   // Keyed by claimId so a caller can only release the claim it took.

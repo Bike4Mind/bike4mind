@@ -3,6 +3,8 @@ import { adminSettingsRepository } from '@bike4mind/database';
 
 export const BOOTSTRAP_ADMIN_EMAIL_ENV = 'B4M_BOOTSTRAP_ADMIN_EMAIL';
 const BOOTSTRAP_CLAIM_SETTING = 'selfHostBootstrap';
+// A claim this old belongs to a registration that died without releasing it; a live one finishes in seconds.
+const BOOTSTRAP_CLAIM_STALE_MS = 5 * 60 * 1000;
 
 export function configuredBootstrapAdminEmail(): string | undefined {
   return process.env[BOOTSTRAP_ADMIN_EMAIL_ENV]?.trim().toLowerCase() || undefined;
@@ -30,7 +32,9 @@ export function resolveBootstrapAdmin(input: {
 /** One-time claim on the bootstrap admin slot. Returns the claim id when this caller won it. */
 export async function claimBootstrapAdmin(): Promise<string | null> {
   const claimId = randomUUID();
-  return (await adminSettingsRepository.claimOnce(BOOTSTRAP_CLAIM_SETTING, claimId)) ? claimId : null;
+  return (await adminSettingsRepository.claimOnce(BOOTSTRAP_CLAIM_SETTING, claimId, BOOTSTRAP_CLAIM_STALE_MS))
+    ? claimId
+    : null;
 }
 
 // For a registration that failed after winning the claim, so the next attempt can still take it.

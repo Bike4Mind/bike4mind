@@ -28,4 +28,22 @@ describe('AdminSettingsRepository.claimOnce', () => {
     expect(await adminSettingsRepository.releaseClaim('selfHostBootstrap', 'owner')).toBe(true);
     expect(await adminSettingsRepository.claimOnce('selfHostBootstrap', 'next')).toBe(true);
   });
+
+  it('takes over a stale claim for exactly one caller, and only once it is stale', async () => {
+    await adminSettingsRepository.claimOnce('selfHostBootstrap', 'abandoned');
+    expect(await adminSettingsRepository.claimOnce('selfHostBootstrap', 'early', 60_000)).toBe(false);
+
+    await AdminSettings.updateOne(
+      { settingName: 'selfHostBootstrap' },
+      { $set: { 'settingValue.claimedAt': new Date(Date.now() - 120_000) } }
+    );
+    const results = await Promise.all(
+      Array.from({ length: 8 }, (_, i) => adminSettingsRepository.claimOnce('selfHostBootstrap', `retry-${i}`, 60_000))
+    );
+
+    expect(results.filter(Boolean)).toHaveLength(1);
+    const winner = `retry-${results.indexOf(true)}`;
+    expect(await adminSettingsRepository.releaseClaim('selfHostBootstrap', 'abandoned')).toBe(false);
+    expect(await adminSettingsRepository.releaseClaim('selfHostBootstrap', winner)).toBe(true);
+  });
 });
