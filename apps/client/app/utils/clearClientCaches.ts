@@ -1,6 +1,7 @@
 import { del } from 'idb-keyval';
 import { dexie } from './dexie';
 import { tagCacheManager } from './tagCache';
+import { FIRST_SIGNUP_SESSION_KEY } from './firstSignupSession';
 import { premiumLocalStorageKeyPrefixes } from '../premium-generated/premiumLocalStorageKeys.generated';
 
 /**
@@ -10,6 +11,7 @@ import { premiumLocalStorageKeyPrefixes } from '../premium-generated/premiumLoca
  * entirely as defense-in-depth for paths where setCurrentUser isn't called (e.g. session expiry).
  */
 const USER_SPECIFIC_LS_KEYS = [
+  FIRST_SIGNUP_SESSION_KEY,
   'layout-control',
   'artifacts',
   'artifact_versions',

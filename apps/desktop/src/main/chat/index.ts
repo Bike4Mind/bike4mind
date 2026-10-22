@@ -6,6 +6,7 @@ import {
   app,
   BrowserWindow,
   clipboard,
+  ClipboardItem,
   dialog,
   ipcMain,
   nativeImage,
@@ -57,6 +58,7 @@ import type { AuthService } from '../auth';
 import { createMainLogger } from '../logger';
 import { ApprovalModePreference } from './ApprovalModePreference';
 import { SidebarSectionStore } from './SidebarSectionStore';
+import { registerImageMenuIpc } from './imageMenuIpc';
 import { registerSessionCreateIpc } from './sessionCreateIpc';
 import { placeNewSession, registerSidebarIpc } from './sidebarIpc';
 import { AttachmentStore } from './AttachmentStore';
@@ -81,7 +83,7 @@ import { ModelCatalog } from './ModelCatalog';
 import { ModelPreference } from './ModelPreference';
 import { SessionActivity } from './SessionActivity';
 import { SessionStore } from './SessionStore';
-import { sessionScopeFor } from './sessionScope';
+import { sessionScopeFor, sessionScopeKey } from './sessionScope';
 import {
   branchCheckouts,
   currentBranch,
@@ -108,6 +110,8 @@ import { devLog } from '../devlog/DevLogSink';
 import { registerPullRequests } from '../pr';
 import type { PrMonitor } from '../pr/PrMonitor';
 import { appWindows } from '../windows';
+import { registerClaudeImport } from '../claudeImport';
+import type { ClaudeImportService } from '../claudeImport/ClaudeImportService';
 
 const VERBOSE = process.env.B4M_DESKTOP_VERBOSE === '1';
 /** Diagnosis only; see apps/desktop/docs/model-wait-findings.md. */
@@ -203,6 +207,8 @@ export interface RegisteredChat {
   browser: BrowserManager;
   /** Each conversation's pull request, and the timers that watch it. */
   pullRequests: PrMonitor;
+  /** Import from Claude; started once the window is up so it never delays launch. */
+  claudeImport: ClaudeImportService;
 }
 
 /**
@@ -740,6 +746,30 @@ export function registerChat(
     attachments.discard(sessionId, attachmentId)
   );
 
+  registerImageMenuIpc(ipcMain, {
+    media,
+    attachments,
+    readFile: path => readFile(path),
+    // Decoded from the bytes, not the path: attachment files carry no extension to decode by.
+    // Re-encoded as PNG, the one image type every platform clipboard takes.
+    copyImage: async bytes => {
+      const image = nativeImage.createFromBuffer(bytes);
+      if (image.isEmpty()) return false;
+      const png = image.toPNG();
+      await clipboard.write([new ClipboardItem({ 'image/png': new Blob([png], { type: 'image/png' }) })]);
+      return true;
+    },
+    copyText: text => clipboard.writeText(text),
+    pickSavePath: async (sender, options) => {
+      const window = BrowserWindow.fromWebContents(sender);
+      const picked = await (window ? dialog.showSaveDialog(window, options) : dialog.showSaveDialog(options));
+      return picked.canceled || !picked.filePath ? null : picked.filePath;
+    },
+    copyFile: (from, to) => copyFile(from, to),
+    reveal: path => shell.showItemInFolder(path),
+    downloadsDirectory: () => app.getPath('downloads'),
+  });
+
   ipcMain.handle(IPC_CHANNELS.chatListArtifacts, () => artifactLibrary.list());
   ipcMain.handle(IPC_CHANNELS.chatReadArtifact, (_event, artifactId: string) => artifactLibrary.read(artifactId));
   ipcMain.handle(IPC_CHANNELS.chatPublishArtifact, (_event, request: ChatArtifactPublishRequest) =>
@@ -894,7 +924,27 @@ export function registerChat(
     return { ok: true, expiresAt: link.expiresAt };
   });
 
-  return { service, background, mcp, browser, pullRequests };
+  const claudeImport = registerClaudeImport(ipcMain, {
+    home,
+    userData,
+    store,
+    attachments,
+    scopeKey: () => {
+      const scope = sessionScopeFor(auth.getState());
+      return scope ? sessionScopeKey(scope) : null;
+    },
+    pickModel: () => service.modelForNewSession().catch(() => undefined),
+    listSessions: () => store.list(),
+    deleteImported: async (sessionId, scopeKey) => {
+      const outcome = await service.deleteImportedSession(sessionId, scopeKey);
+      if (outcome === 'removed') await pullRequests.forget(sessionId);
+      return outcome;
+    },
+    send,
+    logger,
+  });
+
+  return { service, background, mcp, browser, pullRequests, claudeImport };
 }
 
 export { ChatService } from './ChatService';

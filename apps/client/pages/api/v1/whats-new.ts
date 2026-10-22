@@ -1,5 +1,6 @@
 import { releaseNoteRepository, type IReleaseNoteDocument } from '@bike4mind/database';
 import { listWhatsNewContract, type PublicReleaseNote } from '@bike4mind/common';
+import { Resource } from 'sst';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import {
@@ -11,6 +12,7 @@ import {
 } from '@server/utils/cursorPagination';
 import { findDeniedInNote, loadReleaseNotesConfig } from '@server/releaseNotes/adminReleaseNotes';
 import { fetchUpstreamFeed, getWhatsNewFeedUrl } from '@server/releaseNotes/upstreamFeed';
+import { toPublicFeedVideo } from '@server/releaseNotes/publicMedia';
 
 const CURSOR_SCOPE = 'v1.whats-new';
 // The upstream is usually another deployment of this route, so its raw cursor would decode here as a local
@@ -28,6 +30,7 @@ const toPublicReleaseNote = (note: IReleaseNoteDocument): PublicReleaseNote => (
   summary: note.summary,
   published_at: note.publishAt.toISOString(),
   items: note.items.map(({ category, text, importance }) => ({ category, text, importance })),
+  ...(note.video && { video: toPublicFeedVideo(note.id, note.video, Resource.fabFileBucket.name) }),
 });
 
 type PageCursor = { kind: 'upstream'; cursor: string } | { kind: 'local'; after: TimeIdKeyset };

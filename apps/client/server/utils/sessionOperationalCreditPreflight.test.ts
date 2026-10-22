@@ -169,56 +169,6 @@ describe('checkSessionOperationalCredits', () => {
     expect(mockBillingEnabled).not.toHaveBeenCalled();
   });
 
-  // `pushShareable` shares by bare userId with no org constraint, so a requester holding update
-  // on a shared session can sit outside the holder's org entirely. Second person plus a figure
-  // would address the wrong party and disclose another tenant's balance.
-  it('gives a non-holder requester an impersonal refusal with no balance', async () => {
-    billingOn();
-    mockFindUserById.mockResolvedValue({ id: USER_ID, currentCredits: 0, organizationId: ORG_ID });
-    mockFindOrgById.mockResolvedValue({ id: ORG_ID, currentCredits: 37, userDetails: [] });
-
-    // Underfunded but non-zero, so there is a real balance the message could have leaked.
-    const verdict = await preflight({ requesterId: 'someone-else', operationCount: 40 });
-
-    expect(verdict.allowed).toBe(false);
-    const reason = verdict.allowed === false ? verdict.reason : '';
-    expect(reason).toBe('The owner of this notebook does not have enough credits for session tagging.');
-    expect(reason).not.toContain('37');
-    expect(reason).not.toContain('Your organization');
-  });
-
-  // The cap message tells the reader to contact an administrator they may have no relationship
-  // with, so it is withheld from a non-holder too.
-  it('withholds the per-member cap wording from a non-holder requester', async () => {
-    billingOn();
-    mockFindUserById.mockResolvedValue({ id: USER_ID, currentCredits: 0, organizationId: ORG_ID });
-    mockFindOrgById.mockResolvedValue({
-      id: ORG_ID,
-      currentCredits: 1_000_000,
-      maxCreditsPerMember: 10,
-      userDetails: [{ id: USER_ID, usedCredits: 10, periodStart: new Date() }],
-    });
-
-    const verdict = await preflight({ requesterId: 'someone-else' });
-
-    // The refusal is asserted before its wording: a negative assertion alone would pass just as
-    // happily if the cap stopped refusing at all, which is the regression worth catching here.
-    expect(verdict.allowed).toBe(false);
-    const reason = verdict.allowed === false ? verdict.reason : '';
-    expect(reason).toBe('The owner of this notebook does not have enough credits for session tagging.');
-    expect(reason).not.toContain('administrator');
-  });
-
-  // The common case is requester == owner, where the actionable detail is the whole point.
-  it('keeps the detailed refusal when the requester is the holder', async () => {
-    billingOn();
-    mockFindUserById.mockResolvedValue({ id: USER_ID, currentCredits: 0 });
-
-    const verdict = await preflight({ requesterId: USER_ID });
-
-    expect(verdict.allowed === false && verdict.reason).toContain('currently have 0 credits');
-  });
-
   // A half-resolved pair would skip the cap and bill the member personally for org usage.
   it('allows when the org read fails, rather than falling back to the member balance', async () => {
     billingOn();
@@ -395,6 +345,7 @@ describe('assertSessionOperationalCredits', () => {
 
 describe('filterSessionIdsByOperationalCredits', () => {
   const OTHER_USER_ID = 'user-2';
+  const PAYER_ID = 'payer-1';
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -407,6 +358,7 @@ describe('filterSessionIdsByOperationalCredits', () => {
     logger?: { warn: ReturnType<typeof vi.fn>; error?: ReturnType<typeof vi.fn> }
   ) =>
     filterSessionIdsByOperationalCredits(sessions as never, {
+      payerId: PAYER_ID,
       operationsPerSession: 2,
       operation: 'session summarization',
       logger: logger as never,
@@ -454,94 +406,46 @@ describe('filterSessionIdsByOperationalCredits', () => {
     expect(allowed).toEqual(new Set(['s1', 's2']));
   });
 
-  // A project holds sessions shared in from other users, and the Summarize handler bills the
-  // session OWNER. Checking the requester instead would gate the wrong balance in both
-  // directions: a broke requester blocking a funded owner's summary, and vice versa.
-  it("checks each distinct owner once, sized to that owner's share of the batch", async () => {
+  // A project holds sessions shared in from other users, and the user attaching them is who
+  // asked for the summaries, so that user pays for all of them: their owners never agreed to it.
+  it('checks only the payer, once, sized to the whole batch whoever owns each session', async () => {
     billingOn();
-    mockFindUserById.mockResolvedValue({ id: USER_ID, currentCredits: 1000 });
+    mockFindUserById.mockResolvedValue({ id: PAYER_ID, currentCredits: 6 });
 
-    await filter([
+    const allowed = await filter([
       { id: 's1', userId: USER_ID },
       { id: 's2', userId: USER_ID },
       { id: 's3', userId: OTHER_USER_ID },
     ]);
 
-    expect(mockFindUserById).toHaveBeenCalledTimes(2);
-    expect(mockFindUserById).toHaveBeenCalledWith(USER_ID);
-    expect(mockFindUserById).toHaveBeenCalledWith(OTHER_USER_ID);
+    expect(mockFindUserById).toHaveBeenCalledTimes(1);
+    expect(mockFindUserById).toHaveBeenCalledWith(PAYER_ID);
+    expect(allowed).toEqual(new Set(['s1', 's2', 's3']));
   });
 
-  // The gate is deployment-wide, so one answer covers the whole fan-out. Reading it per owner
-  // would cost a fresh admin-settings query per distinct owner on the same attach request.
-  it('reads the billing gate once for the batch, not once per owner', async () => {
+  it('reads the billing gate once for a batch with several owners', async () => {
     billingOn();
-    mockFindUserById.mockResolvedValue({ id: USER_ID, currentCredits: 1000 });
-
+    mockFindUserById.mockResolvedValue({ id: PAYER_ID, currentCredits: 1000 });
     await filter([
       { id: 's1', userId: USER_ID },
       { id: 's2', userId: OTHER_USER_ID },
     ]);
-
     expect(mockBillingEnabled).toHaveBeenCalledTimes(1);
   });
 
-  it("drops only the refused owner's sessions, and logs why", async () => {
-    billingOn();
-    mockFindUserById.mockImplementation(async (id: string) =>
-      id === USER_ID ? { id, currentCredits: 0 } : { id, currentCredits: 1000 }
-    );
-    const logger = { warn: vi.fn() };
-
-    const allowed = await filter(
-      [
-        { id: 's1', userId: USER_ID },
-        { id: 's2', userId: OTHER_USER_ID },
-      ],
-      logger
-    );
-
-    expect(allowed).toEqual(new Set(['s2']));
-    expect(logger.warn).toHaveBeenCalledTimes(1);
-    expect(logger.warn.mock.calls[0][1]).toMatchObject({ ownerId: USER_ID, sessionCount: 1 });
-  });
-
-  // Two sessions at 2 operations each is 4 credits, so a 3-credit owner must be refused - the
-  // per-session floor would have waved this through.
-  it("multiplies the per-session operation count across the owner's sessions", async () => {
-    billingOn();
-    mockFindUserById.mockResolvedValue({ id: USER_ID, currentCredits: 3 });
-
-    const allowed = await filter([
-      { id: 's1', userId: USER_ID },
-      { id: 's2', userId: USER_ID },
-    ]);
-
-    expect(allowed).toEqual(new Set());
-  });
-
-  it('passes through an ownerless session without a billing read', async () => {
-    billingOn();
-
-    const allowed = await filter([{ id: 's1', userId: '' }]);
-
-    expect(allowed).toEqual(new Set(['s1']));
+  it('skips billing reads for an entirely ownerless batch', async () => {
+    await expect(filter([{ id: 's1', userId: '' }])).resolves.toEqual(new Set(['s1']));
     expect(mockBillingEnabled).not.toHaveBeenCalled();
     expect(mockFindUserById).not.toHaveBeenCalled();
     expect(mockFindOrgById).not.toHaveBeenCalled();
   });
 
-  // Each owner is sized to THEIR share of the batch, not to the batch. The mixed shape is what
-  // makes this assertable: owner 1 holds one of the three sessions and exactly the 2 credits it
-  // needs, so sizing the check against the batch (3 x 2 = 6) would refuse a holder who can pay.
-  // Every other case in this block has one session per owner or one owner for all of them, where
-  // the two sizings agree.
-  it("sizes each owner's check to their own sessions, not to the whole batch", async () => {
+  // Three sessions at 2 operations each is 6 credits, so a 5-credit payer is refused for all of
+  // them, even though each owner's share alone would have fit.
+  it('drops every billable session when the payer cannot cover the batch, and logs why', async () => {
     billingOn();
-    mockFindUserById.mockImplementation(async (id: string) =>
-      id === USER_ID ? { id, currentCredits: 2 } : { id, currentCredits: 1000 }
-    );
-    const logger = { warn: vi.fn(), info: vi.fn() };
+    mockFindUserById.mockResolvedValue({ id: PAYER_ID, currentCredits: 5 });
+    const logger = { warn: vi.fn() };
 
     const allowed = await filter(
       [
@@ -552,25 +456,20 @@ describe('filterSessionIdsByOperationalCredits', () => {
       logger
     );
 
-    expect(allowed).toEqual(new Set(['s1', 's2', 's3']));
-    expect(logger.warn).not.toHaveBeenCalled();
+    expect(allowed).toEqual(new Set());
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn.mock.calls[0][1]).toMatchObject({ payerId: PAYER_ID, sessionCount: 3 });
   });
 
-  // The same discrimination in the other direction: the owner holding the larger share is the one
-  // who must be refused, and a batch-sized check would have refused the wrong owner as well.
-  it('refuses the owner whose own share outruns their balance, not the batch as a whole', async () => {
+  it('passes through an ownerless session, which costs nothing to queue', async () => {
     billingOn();
-    mockFindUserById.mockImplementation(async (id: string) =>
-      id === USER_ID ? { id, currentCredits: 2 } : { id, currentCredits: 3 }
-    );
+    mockFindUserById.mockResolvedValue({ id: PAYER_ID, currentCredits: 0 });
 
     const allowed = await filter([
-      { id: 's1', userId: USER_ID },
-      { id: 's2', userId: OTHER_USER_ID },
-      { id: 's3', userId: OTHER_USER_ID },
+      { id: 's1', userId: '' },
+      { id: 's2', userId: USER_ID },
     ]);
 
-    // Owner 1: 1 session x 2 ops = 2 against 2 credits, allowed. Owner 2: 2 x 2 = 4 against 3.
     expect(allowed).toEqual(new Set(['s1']));
   });
 });

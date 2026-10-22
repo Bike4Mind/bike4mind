@@ -20,9 +20,8 @@ const MIN_CREDITS_PER_OPERATION = 1;
 
 export interface SessionOperationalCreditPreflightArgs {
   /**
-   * The credit holder: the SESSION OWNER, not necessarily the requester. The session-event
-   * handlers bill `userId ?? session.userId` (e.g. sessionTagging.ts:89) and the publishers
-   * gated here pass no userId, so a session shared into a project bills its owner.
+   * The credit holder: the user who asked. The routes gated here publish that user as the event's
+   * `payerId`, which the session-event handlers bill (sessionTagging.ts, sessionSummarization.ts).
    */
   userId: string;
   /**
@@ -31,24 +30,8 @@ export interface SessionOperationalCreditPreflightArgs {
    * Scales the requirement, so a 500-notebook fan-out is not gated like a single tag.
    */
   operationCount: number;
-  /**
-   * Who is asking, when the caller knows. Decides how much of the refusal is safe to say:
-   * `pushShareable` shares by bare userId with no org constraint, so a requester holding
-   * update on a shared session can be outside the holder's organization entirely. Second
-   * person ("Your organization ... has 37 credits") would then both address the wrong party
-   * and disclose another tenant's balance, so a non-holder gets an impersonal reason with no
-   * figures. Omit it on a path whose reason never reaches a client (the fan-out logs its
-   * refusals for ops, where the figures are the point).
-   */
-  requesterId?: string;
   /** Named in the refusal message, e.g. 'session tagging'. */
   operation: string;
-  /**
-   * The settlement gate, when the caller has already read it. It is a deployment-wide switch, so
-   * a fan-out reads it once and hands the same answer to every owner instead of paying one
-   * settings query per owner. Omit it and this reads the gate itself.
-   */
-  billingEnabled?: boolean;
   logger?: Logger;
 }
 
@@ -142,18 +125,14 @@ function resolveRefusalReason({
   billingOrg,
   userId,
   requiredCredits,
-  requesterIsHolder,
   operation,
 }: {
   billingUser: BillingUser;
   billingOrg: BillingOrg;
   userId: string;
   requiredCredits: number;
-  requesterIsHolder: boolean;
   operation: string;
 }): string | null {
-  const crossHolderReason = `The owner of this notebook does not have enough credits for ${operation}.`;
-
   // Cap before pool: a capped member must be refused even when the org pool is flush. Mirrors
   // the RESERVATION pre-flights, which are the only place the cap is ever enforced -
   // semantic-search.ts:496 and music.ts:129 in this app, ChatCompletionProcess.ts:3661 and
@@ -163,15 +142,11 @@ function resolveRefusalReason({
   // could never trip again). That is the same reason the cap cannot live in
   // recordOperationalUsage, and therefore the reason this pre-flight exists.
   if (billingOrg && creditService.isMemberCreditCapExceeded(billingOrg, userId, requiredCredits)) {
-    // "Contact your organization administrator" is only actionable for a member of that org.
-    return requesterIsHolder
-      ? `Your organization member credit limit has been reached for ${operation}. Contact your organization administrator.`
-      : crossHolderReason;
+    return `Your organization member credit limit has been reached for ${operation}. Contact your organization administrator.`;
   }
 
   const availableCredits = (billingOrg ?? billingUser).currentCredits ?? 0;
   if (availableCredits >= requiredCredits) return null;
-  if (!requesterIsHolder) return crossHolderReason;
   return billingOrg
     ? `Your organization does not have enough credits for ${operation}. It currently has ${availableCredits} credits and this requires at least ${requiredCredits}.`
     : `You do not have enough credits for ${operation}. You currently have ${availableCredits} credits and this requires at least ${requiredCredits}.`;
@@ -202,13 +177,27 @@ export async function checkSessionOperationalCredits({
   userId,
   operationCount,
   operation,
-  requesterId,
-  billingEnabled: providedBillingEnabled,
   logger,
 }: SessionOperationalCreditPreflightArgs): Promise<SessionOperationalCreditVerdict> {
   if (operationCount <= 0) return { allowed: true };
 
-  if (!(await resolveOperationalBillingEnabled(providedBillingEnabled, logger))) return { allowed: true };
+  // Gated on the exact pair recordOperationalUsage requires to debit, via the shared helper:
+  // operational billing defaults OFF, and a deployment that never bills for this work must not
+  // start rejecting it. Inside the fail-open boundary like the reads below: AdminSettingsCache
+  // awaits findAll() on a cache miss with no error handling of its own, so a cold container or
+  // a TTL expiry during a mongo blip would otherwise reject - and on the project-attach path
+  // that lands after withTransaction has already committed.
+  try {
+    const billingEnabled = await isOperationalBillingEnabled({ adminSettings: adminSettingsRepository }, logger);
+    if (!billingEnabled) return { allowed: true };
+  } catch (err) {
+    // error, not warn: the fail-open is correct but it means the gate stopped enforcing, which is
+    // indistinguishable from the ungated behavior it replaced. These two strings are the only
+    // evidence that happened, so they are deliberately distinctive enough to hang a
+    // LogMetricFilter alarm on without touching this code (infra/alarms.ts:807).
+    logger?.error('[sessionOperationalCreditPreflight] gate disabled: failed to read billing settings', err);
+    return { allowed: true };
+  }
 
   // Best-effort resolution, matching the semantic-search pre-flight: a billing-store blip must
   // not turn a working request into a 500. Both assigned only after both reads succeed - a
@@ -237,17 +226,11 @@ export async function checkSessionOperationalCredits({
 
   const requiredCredits = operationCount * MIN_CREDITS_PER_OPERATION;
 
-  // Everything second-person, and every figure, is scoped to the requester being the holder.
-  // A caller that cannot say who is asking is treated as the holder, which is the pre-existing
-  // wording; the entry points that can face a cross-tenant share all pass requesterId.
-  const requesterIsHolder = requesterId === undefined || requesterId === userId;
-
   const refusalReason = resolveRefusalReason({
     billingUser,
     billingOrg,
     userId,
     requiredCredits,
-    requesterIsHolder,
     operation,
   });
   if (!refusalReason) return { allowed: true };
@@ -269,31 +252,6 @@ export async function checkSessionOperationalCredits({
 }
 
 /**
- * Gated on the exact pair recordOperationalUsage requires to debit, via the shared helper:
- * operational billing defaults OFF, and a deployment that never bills for this work must not
- * start rejecting it. Fail-open, and inside one helper so the hoisted fan-out read below shares
- * the same behavior: AdminSettingsCache awaits findAll() on a cache miss with no error handling
- * of its own, so a cold container or a TTL expiry during a mongo blip would otherwise reject -
- * and on the project-attach path that lands after withTransaction has already committed.
- *
- * `provided` short-circuits the read for a caller that already has the answer (see
- * `SessionOperationalCreditPreflightArgs.billingEnabled`).
- */
-async function resolveOperationalBillingEnabled(provided: boolean | undefined, logger?: Logger): Promise<boolean> {
-  if (provided !== undefined) return provided;
-  try {
-    return await isOperationalBillingEnabled({ adminSettings: adminSettingsRepository }, logger);
-  } catch (err) {
-    // error, not warn: the fail-open is correct but it means the gate stopped enforcing, which is
-    // indistinguishable from the ungated behavior it replaced. These two strings are the only
-    // evidence that happened, so they are deliberately distinctive enough to hang a
-    // LogMetricFilter alarm on without touching this code (infra/alarms.ts:807).
-    logger?.error('[sessionOperationalCreditPreflight] gate disabled: failed to read billing settings', err);
-    return false;
-  }
-}
-
-/**
  * `checkSessionOperationalCredits` for the entry points whose whole purpose is the operational
  * spend, where a refusal is the answer to the request. Throws a 422 tagged
  * `insufficient_credits` - a billing state, not a bug.
@@ -304,75 +262,38 @@ export async function assertSessionOperationalCredits(args: SessionOperationalCr
 }
 
 /**
- * `checkSessionOperationalCredits` for a fan-out, returning the subset of `sessions` whose owner
- * can pay for the work it would queue.
- *
- * Grouped by session OWNER, not by requester: the session-event handlers bill `session.userId`,
- * and an accessible-not-owned reader (`findAllAccessibleByIds`) lets one request span sessions
- * shared in from several users. One check per distinct owner rather than one per session - the
- * holder document does not change until settlement, so per-session checks would re-read the same
- * verdict N times.
+ * `checkSessionOperationalCredits` for a fan-out, returning the subset of `sessions` the work may be
+ * queued for. The PAYER is whoever asked (the handlers bill the event's `payerId`), so one check
+ * covers every session the request spans, whoever owns it: all of them or none. Owner-less
+ * sessions are always returned, since the handlers do no work (and bill nothing) for them.
  *
  * Returns rather than throws so a caller whose primary action is free (attaching a notebook to a
- * project) can skip the queueing without failing the request; it logs each refusal so a skipped
+ * project) can skip the queueing without failing the request; it logs a refusal so a skipped
  * fan-out is visible to ops rather than silent.
- *
- * Per request, not per owner: the settlement gate is one deployment-wide switch, so it is read
- * once here and handed to every owner check. Beyond that read, a check costs one holder lookup,
- * plus - for a REFUSED owner only - one operations-model resolution (see
- * `operationalSpendSettlesFree`). Left uncached beyond the request deliberately: the owner count
- * per attach is bounded by the notebooks being attached, the checks run concurrently, and a
- * module-level cache would put a staleness window on a billing-adjacent read to save what the
- * hoist already saves.
  */
 export async function filterSessionIdsByOperationalCredits(
   sessions: Pick<ISessionDocument, 'id' | 'userId'>[],
-  { operationsPerSession, operation, logger }: { operationsPerSession: number; operation: string; logger?: Logger }
+  {
+    payerId,
+    operationsPerSession,
+    operation,
+    logger,
+  }: { payerId: string; operationsPerSession: number; operation: string; logger?: Logger }
 ): Promise<Set<string>> {
-  const allowedSessionIds = new Set<string>();
-  const sessionIdsByOwner = new Map<string, string[]>();
+  const ownerless = sessions.filter(session => !session.userId).map(session => session.id);
+  const billableCount = sessions.length - ownerless.length;
+  const verdict = await checkSessionOperationalCredits({
+    userId: payerId,
+    operationCount: billableCount * operationsPerSession,
+    operation,
+    logger,
+  });
+  if (verdict.allowed) return new Set(sessions.map(session => session.id));
 
-  for (const session of sessions) {
-    // No owner means nothing to attribute or bill, matching recordSessionOperationalUsage's skip.
-    if (!session.userId) {
-      allowedSessionIds.add(session.id);
-      continue;
-    }
-    const owned = sessionIdsByOwner.get(session.userId);
-    if (owned) owned.push(session.id);
-    else sessionIdsByOwner.set(session.userId, [session.id]);
-  }
-
-  // Read once for the whole fan-out, and only when some owner can be gated: sessionIdsByOwner is
-  // empty when the batch is all ownerless, which is the one case the per-owner checks spent no
-  // read on. Fail-open lands on the whole batch, as it did per owner before the hoist.
-  if (sessionIdsByOwner.size === 0) return allowedSessionIds;
-  const billingEnabled = await resolveOperationalBillingEnabled(undefined, logger);
-  if (!billingEnabled) {
-    sessions.forEach(session => allowedSessionIds.add(session.id));
-    return allowedSessionIds;
-  }
-
-  await Promise.all(
-    Array.from(sessionIdsByOwner, async ([ownerId, ownedSessionIds]) => {
-      const verdict = await checkSessionOperationalCredits({
-        userId: ownerId,
-        operationCount: ownedSessionIds.length * operationsPerSession,
-        operation,
-        billingEnabled,
-        logger,
-      });
-      if (verdict.allowed) {
-        ownedSessionIds.forEach(sessionId => allowedSessionIds.add(sessionId));
-        return;
-      }
-      logger?.warn(`[sessionOperationalCreditPreflight] skipping ${operation}; owner cannot cover it`, {
-        ownerId,
-        sessionCount: ownedSessionIds.length,
-        reason: verdict.reason,
-      });
-    })
-  );
-
-  return allowedSessionIds;
+  logger?.warn(`[sessionOperationalCreditPreflight] skipping ${operation}; payer cannot cover it`, {
+    payerId,
+    sessionCount: billableCount,
+    reason: verdict.reason,
+  });
+  return new Set(ownerless);
 }

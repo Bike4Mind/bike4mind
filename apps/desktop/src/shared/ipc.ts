@@ -7,6 +7,7 @@ import type {
   CookieImportResult,
   CookieImportState,
 } from './browserCookies';
+import type { ClaudeImportResult, ClaudeImportState, ClaudeRemoveResult } from './claudeImport';
 import type { McpMutationResult, McpServerInput, McpServersState } from './mcp';
 import type {
   AddAttachmentsResult,
@@ -19,6 +20,9 @@ import type {
   ChatArtifactPublishProgress,
   ChatArtifactPublishRequest,
   ChatAttachmentInput,
+  ChatImageAction,
+  ChatImageActionResult,
+  ChatImageRef,
   ChatModelCatalog,
   ChatMoveToBackgroundResult,
   ChatQueueEvent,
@@ -155,6 +159,8 @@ export const IPC_CHANNELS = {
   chatAddAttachments: 'chat:add-attachments',
   chatReadAttachment: 'chat:read-attachment',
   chatDiscardAttachment: 'chat:discard-attachment',
+  chatImageAction: 'chat:image-action',
+  chatAttachImage: 'chat:attach-image',
   chatListArtifacts: 'chat:list-artifacts',
   chatReadArtifact: 'chat:read-artifact',
   chatPublishArtifact: 'chat:publish-artifact',
@@ -226,6 +232,21 @@ export const IPC_CHANNELS = {
   permissionsGetState: 'permissions:get-state',
   permissionsSetRules: 'permissions:set-rules',
   permissionsSetSharing: 'permissions:set-sharing',
+  /**
+   * Import from Claude, Settings only. No channel takes a path: folders and export files are
+   * picked through native dialogs in main, and the importer only ever reads them.
+   */
+  claudeImportGetState: 'claude:get-import-state',
+  claudeImportSetCodeSettings: 'claude:set-code-import',
+  claudeImportPickCodeFolder: 'claude:pick-code-folder',
+  claudeImportSyncCode: 'claude:sync-code',
+  claudeImportChatExport: 'claude:import-chat-export',
+  claudeImportSetWatchFolder: 'claude:set-watch-folder',
+  claudeImportRemove: 'claude:remove-imported',
+  /** main -> renderer push of the import state. */
+  claudeImportStateChanged: 'claude:import-state-changed',
+  /** main -> renderer push, batched: imported sessions were added or changed, so re-list. */
+  claudeImportedSessionsChanged: 'claude:imported-sessions-changed',
   updateGetState: 'update:get-state',
   updateCheck: 'update:check',
   updateDownload: 'update:download',
@@ -647,6 +668,10 @@ export interface DesktopApi {
     readAttachment(sessionId: string, attachmentId: string, mediaType: string): Promise<string | null>;
     /** Throw away an attachment the user removed before sending. Unknown ids are ignored. */
     discardAttachment(sessionId: string, attachmentId: string): Promise<void>;
+    /** One image context menu item, run in main against a ref main resolves itself. Never rejects. */
+    imageAction(image: ChatImageRef, action: ChatImageAction): Promise<ChatImageActionResult>;
+    /** Add a thread image to this session's draft, through the same intake as a paste. */
+    attachImage(sessionId: string, image: ChatImageRef): Promise<AddAttachmentsResult>;
     /**
      * Answer a tool call sitting at 'awaiting-approval'. Unknown or already-answered ids are
      * ignored, so a double click cannot approve a second, different command.
@@ -867,6 +892,24 @@ export interface DesktopApi {
     /** Replaces one scope's lists. Refused, with the reason, when any rule does not parse. */
     setRules(scope: PermissionScope, lists: PermissionRuleLists): Promise<PermissionMutationResult>;
     setSharing(share: boolean): Promise<PermissionsState>;
+  };
+  claudeImport: {
+    getState(): Promise<ClaudeImportState>;
+    setCodeSettings(patch: {
+      enabled?: boolean;
+      includeSubagents?: boolean;
+      projects?: 'all' | string[];
+    }): Promise<ClaudeImportState>;
+    /** Opens a folder picker in main; `reset` goes back to the default folder instead. */
+    pickCodeFolder(reset: boolean): Promise<ClaudeImportState>;
+    syncCode(): Promise<ClaudeImportState>;
+    /** Opens a file picker in main for an export .zip or conversations.json. */
+    importChatExport(): Promise<ClaudeImportResult>;
+    /** Opens a folder picker in main; `clear` stops watching instead. */
+    setWatchFolder(clear: boolean): Promise<ClaudeImportState>;
+    remove(kind: 'claude-code' | 'claude-chat'): Promise<ClaudeRemoveResult>;
+    onStateChanged(listener: (state: ClaudeImportState) => void): () => void;
+    onSessionsChanged(listener: () => void): () => void;
   };
   pullRequests: {
     /**

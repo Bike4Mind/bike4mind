@@ -38,12 +38,10 @@ describe('LocalImageBackend.getModelInfo', () => {
     expect(models[1].id).toBe('local-image/sd_xl_base');
   });
 
-  it('returns an empty list on a connection error (server down)', async () => {
+  it('rejects on a connection error, so the fan-out can tell a down server from an empty one', async () => {
     mockedGet.mockRejectedValue(new Error('connect ECONNREFUSED'));
 
-    const models = await makeBackend().getModelInfo();
-
-    expect(models).toEqual([]);
+    await expect(makeBackend().getModelInfo()).rejects.toThrow('connect ECONNREFUSED');
   });
 
   it('does not support text completion', async () => {

@@ -77,6 +77,12 @@ import { recallMementosV2 } from '@server/memory/recallMementosV2';
 import { recallLakeMemoryForSession } from '@server/memory/lakeMemoryRecall';
 import { loadSystemPromptById } from '@server/utils/sessionSystemPromptResolver';
 import { decryptToken } from '@server/security/tokenEncryption';
+import { buildVideoToolConfig } from '@server/videoGenerations/buildVideoToolConfig';
+import {
+  buildSlackVideoToolConfig,
+  type PendingSlackNotification,
+} from '@server/videoGenerations/slackVideoToolConfig';
+import { getCreateVideoJobDeps, getVideoJobDeps } from '@server/generationJobs/wiring';
 
 // Cache static ChatCompletion options that don't change between invocations
 type ChatCompletionOptions = ConstructorParameters<typeof ChatCompletionProcess>[0];
@@ -283,6 +289,16 @@ async function resolveSlackClient(workspaceId: string, questId: string, logger: 
   return new SlackClient(decryptedToken, logger);
 }
 
+export const getSlackVideoToolConfigResolver = (questId: string, userId: string) => () =>
+  buildSlackVideoToolConfig(questId, userId, {
+    findSlackNotification: async id => {
+      const quest = await Quest.findById(id);
+      return (quest?.slackNotification as PendingSlackNotification | undefined) ?? null;
+    },
+    buildConfig: id =>
+      buildVideoToolConfig(id, { availability: getVideoJobDeps(), createDeps: getCreateVideoJobDeps() }),
+  });
+
 const SLACK_PROCESSING_FAILURE_TEXT = 'Sorry, something went wrong while processing your request. Please try again.';
 
 /**
@@ -347,7 +363,7 @@ async function deliverSlackProcessingFailure(questId: string, logger: Logger): P
 /**
  * Slack Quest Processor Lambda Handler
  *
- * Handles Slack-originated completion requests routed via SlackEventBus.
+ * Handles Slack-originated completion requests ('slack.completion.started' on AppEventBus).
  * Always enables Slack tools (no enableSlackTools flag check needed).
  * Delivers the final AI response directly to Slack after processing,
  * replacing the async notification EventBridge hop.
@@ -446,6 +462,7 @@ export const handler = withEventContext(async (event, logger) => {
       body: requestBody,
       logger,
       externalTools,
+      videoToolConfigResolver: getSlackVideoToolConfigResolver(params.questId, user.id),
     });
   } catch (processError) {
     logger.error('[SLACK-NOTIFY] Chat processing failed before a reply was delivered', {

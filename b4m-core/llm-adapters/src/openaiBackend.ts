@@ -2048,7 +2048,7 @@ export class OpenAIBackend implements ICompletionBackend {
     // entirely. Must stay in sync with the same flag in anthropicBackend / bedrockBackend.
     const mergedContent = options.omitIdentityReminder
       ? callerSystem
-      : appendIdentityReminder(callerSystem, buildIdentityReminder(model));
+      : appendIdentityReminder(callerSystem, buildIdentityReminder(model, options.modelDisplayName));
 
     const systemMessage: OpenAI.ChatCompletionSystemMessageParam = {
       role: 'system',

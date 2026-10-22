@@ -91,8 +91,8 @@ const handler = baseApi({ auth: 'jwtOnly' })
       if (!target || target.userId !== userId || target.importedFrom?.listingId !== String(listing.id)) {
         throw new NotFoundError('Imported copy not found');
       }
-      // A global copy reaches everyone, and the listing's bar can be lower than Public (an org or
-      // unlisted version auto-approves at the `review` tier). Content changes to a global skill go
+      // A global copy reaches everyone; legacy org/unlisted versions may have auto-approved at
+      // the `review` tier. Content changes to a global skill go
       // through `scanGlobalSkillUpdate` on PUT instead; see `globalSkillScanFor` in skillAccess.ts.
       if ((target.isGlobalRead || target.isGlobalWrite) && !req.user!.isAdmin) {
         throw new BadRequestError(

@@ -3,7 +3,9 @@ import {
   IMAGE_BYTE_CAP,
   IMAGE_INPUT_MAX,
   TEXT_BYTE_CAP,
+  extensionForImageType,
   imageMediaTypeForName,
+  isImageMediaType,
   looksBinary,
   prepareImage,
   prepareText,
@@ -23,6 +25,17 @@ describe('imageMediaTypeForName', () => {
   it('returns null for anything else, so it takes the text path', () => {
     expect(imageMediaTypeForName('notes.md')).toBeNull();
     expect(imageMediaTypeForName('archive.zip')).toBeNull();
+  });
+});
+
+describe('image types', () => {
+  it('names the saved extension of every accepted type', () => {
+    for (const mediaType of ['image/png', 'image/jpeg', 'image/gif', 'image/webp'] as const) {
+      expect(isImageMediaType(mediaType)).toBe(true);
+      expect(extensionForImageType(mediaType)).toMatch(/^[a-z]+$/);
+    }
+    expect(extensionForImageType('image/jpeg')).toBe('jpg');
+    expect(isImageMediaType('image/svg+xml')).toBe(false);
   });
 });
 

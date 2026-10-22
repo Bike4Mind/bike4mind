@@ -53,6 +53,13 @@ describe('TOOL_NAMES', () => {
       'generate_image',
       'create_artifact',
       'publish_artifact',
+      'bob_read_site',
+      'bob_compare_sites',
+      'bob_recheck',
+      'get_bob_report',
+      'get_bob_comparison',
+      'list_bob_reports',
+      'bob_runs_left',
     ]);
   });
 });

@@ -45,9 +45,11 @@ import {
   isSafetyRefusalError,
 } from '@bike4mind/utils';
 import {
+  buildApiKeyTable,
   getLlmByModel,
   getAvailableModels,
   reasonsWithinOutputBudget,
+  RUNTIME_DISCOVERED_BACKENDS,
   resolveOutputMaxTokens,
   type ICompletionOptions,
   type ICompletionOptionTools,
@@ -456,9 +458,10 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     billToOrg ? db.organizations!.findById(holderId) : db.users.findById(holderId);
 
   // Get effective API keys (user keys or fallback to admin demo keys)
-  const apiKeys = await getEffectiveLLMApiKeys(userId, { db, getSettingsByNames });
+  const apiKeys = buildApiKeyTable(await getEffectiveLLMApiKeys(userId, { db, getSettingsByNames }));
 
-  const models = await getAvailableModels(apiKeys);
+  let failedListings: readonly ModelBackend[] = [];
+  const models = await getAvailableModels(apiKeys, { onFailedListings: failed => (failedListings = failed) });
   const modelInfo = models.find(m => m.id === (model as ChatModels));
   const catalogued = CHAT_MODELS.includes(model as ChatModels);
 
@@ -482,17 +485,24 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       `Unknown model '${params.model}'. List the models you can call with GET /api/v1/models.`,
       { errorCode: UNKNOWN_MODEL_ERROR_CODE }
     );
-    if (!catalogued) throw unknownModel;
+    const providerUnavailable = (message = `Failed to create LLM backend for model: ${params.model}`) =>
+      new HTTPError(503, message, {
+        errorCode: 'provider_not_configured',
+      });
+    // Ollama pulls and local checkpoints exist only in their live listing, so a failed one proves no absence.
+    if (!catalogued) {
+      const failedRuntime = failedListings.filter(b => RUNTIME_DISCOVERED_BACKENDS.includes(b));
+      if (failedRuntime.length === 0) throw unknownModel;
+      logger?.warn?.('[cliCompletions] live model listing failed; answering 503', { model, failedListings });
+      throw providerUnavailable(`Model listing for ${failedRuntime.join(', ')} is unavailable; retry shortly.`);
+    }
     const providerConfigured = await isModelProviderConfigured(model, apiKeys).catch((cause: unknown) => {
       logger?.error?.('[cliCompletions] provider check failed; answering 503', { model, cause });
       return false;
     });
-    if (!providerConfigured)
-      throw new HTTPError(503, `Failed to create LLM backend for model: ${params.model}`, {
-        errorCode: 'provider_not_configured',
-      });
-    // A retired or unlisted model on a configured provider must be changed by the caller; a retryable status
-    // would loop clients forever. Static listings cannot time out, so absence here is not transient.
+    if (!providerConfigured) throw providerUnavailable();
+    // A retired or unlisted model on a configured provider must be changed by the caller; a retryable status would loop
+    // clients forever. Catalogued ids come from static listings, which cannot fail, so absence here is not transient.
     logger?.warn?.('[cliCompletions] catalogued model unavailable on a configured provider', { model });
     throw unknownModel;
   }

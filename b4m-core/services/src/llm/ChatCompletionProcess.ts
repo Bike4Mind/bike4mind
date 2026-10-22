@@ -53,6 +53,8 @@ import {
   isClaudeModelId,
   questGenerationJobs,
   resolveWorkspaceDeniedTools,
+  filterRunnableModels,
+  type LLMModelConfig,
   applyWorkspaceSessionSettings,
 } from '@bike4mind/common';
 import {
@@ -107,9 +109,8 @@ import {
   toRetrievalFilter,
   type RetrievalExclusionOptions,
 } from '@bike4mind/utils/retrievalExclusion';
+import { sentMaxTokensFor } from '@bike4mind/llm-adapters/model-sizing';
 import {
-  buildThinkingParams,
-  resolveDispatchForRecord,
   resolveOutputMaxTokens,
   reasonsWithinOutputBudget,
   getAvailableModels,
@@ -215,6 +216,7 @@ import {
   type PromptSourceId,
 } from './systemPromptSources';
 import { buildSystemPromptText, type SystemPromptTextDisclosure } from './systemPromptDisclosure';
+import { buildViewRegistryAdminMessages } from './viewRegistryPrompt';
 import { vetPreauthorizedLakeIds } from '../dataLakeService/vetPreauthorizedLakeIds';
 import { vetReaderConsentDatalakeTags } from './vetReaderConsentDatalakeTags';
 import {
@@ -368,6 +370,16 @@ export const KNOWLEDGE_SEARCH_TOOL_NAME = 'search_knowledge_base';
 const PER_TOOL_SCHEMA_RESERVE_TOKENS = 120; // rough serialized {name,description,input_schema} per enabled tool
 
 /** Coerce an admin-setting value to a fraction in (0, 1], falling back when invalid. */
+// Same check as `isValidTimeZone` in apps/client/pages/api/users/counterLogs.ts.
+export function isValidTimeZone(timeZone: string): boolean {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function clampFraction(raw: unknown, fallback: number): number {
   const parsed = typeof raw === 'number' ? raw : parseFloat(String(raw));
   return Number.isFinite(parsed) && parsed > 0 && parsed <= 1 ? parsed : fallback;
@@ -868,21 +880,7 @@ export function researchModeUsages(
   });
 }
 
-/**
- * The max_tokens the adapter actually sends for a `maxTokens` request: the Anthropic adapters raise
- * it for thinking (buildThinkingParams), every other adapter sends it unchanged. Credit holds and
- * the member cap are priced on this, so they cover what the model may really produce.
- */
-export function sentMaxTokensFor(
-  modelInfo: ModelInfo,
-  thinking: { enabled?: boolean; budget_tokens?: number } | null | undefined,
-  maxTokens: number
-): number {
-  if (!thinking?.enabled || !modelInfo.can_think) return maxTokens;
-  const adapterFamily = resolveDispatchForRecord(modelInfo)?.adapterFamily;
-  if (adapterFamily !== 'anthropic-messages' && adapterFamily !== 'bedrock-anthropic') return maxTokens;
-  return buildThinkingParams(modelInfo.id, modelInfo, thinking.budget_tokens ?? 16000, maxTokens).maxTokens;
-}
+export { sentMaxTokensFor } from '@bike4mind/llm-adapters/model-sizing';
 
 export class ChatCompletionProcess {
   public db: IChatCompletionServiceOptions['db'];
@@ -1693,8 +1691,14 @@ export class ChatCompletionProcess {
       imageConfig,
       audioConfig,
       deepResearchConfig,
-      timezone: userTimezone,
+      timezone: requestedTimezone,
     } = parsedBody;
+    // Callers send this unchecked (the browser can report `Etc/Unknown`), and `Intl` throws on a
+    // zone it rejects, so fall back to server time instead of failing the turn.
+    const userTimezone = requestedTimezone && isValidTimeZone(requestedTimezone) ? requestedTimezone : undefined;
+    if (requestedTimezone && !userTimezone) {
+      this.logger.warn(`Ignoring unrecognised timezone "${requestedTimezone}"; using server time`);
+    }
 
     // Companion pairing now runs once in `resolveEnabledTools` (see process()), after the
     // per-session union and attached-knowledge offer, so session-forced and auto-offered
@@ -2484,10 +2488,11 @@ export class ChatCompletionProcess {
         historyCount = adjustedHistoryCount;
       }
 
-      // Use default admin settings for immediate processing
-      const adminModerationEnabled = this.getDefaultSettingValue('ModerationEnabled', defaultAdminSettings);
-      const adminSettingsEnforceCredits = this.getDefaultSettingValue('enforceCredits', defaultAdminSettings);
-      const enableMCPServer = this.getDefaultSettingValue('EnableMCPServer', defaultAdminSettings);
+      // Schema-aware reads: an absent row takes the setting's default (enforceCredits is on for
+      // hosted), not false, so a missing row can never switch billing off.
+      const adminModerationEnabled = getSettingsValue('ModerationEnabled', defaultAdminSettings) === true;
+      const adminSettingsEnforceCredits = getSettingsValue('enforceCredits', defaultAdminSettings) === true;
+      const enableMCPServer = getSettingsValue('EnableMCPServer', defaultAdminSettings) === true;
       if (adminSettingsEnforceCredits && !this.db.creditTransactions) {
         throw new BadRequestError('Enforce credits is enabled but credit transactions are not available');
       }
@@ -3288,6 +3293,10 @@ export class ChatCompletionProcess {
         ? await resolveToolConfigSafely('music_generation', musicToolConfigResolver, logger)
         : null;
 
+      const subagentModels = agentStore
+        ? await this.loadSubagentModels(models, modelInfo, entitlementKeys, logger)
+        : undefined;
+
       let allTools = toolBuilder.buildTools({
         enabledTools,
         // Auto-offers are OUR additions, not the caller's, and MCP tools are merged past the
@@ -3322,6 +3331,7 @@ export class ChatCompletionProcess {
           adminSettingsEnforceCredits: !!adminSettingsEnforceCredits,
           models,
         },
+        subagentModels,
         agentOnlyMcpServers,
         apiKeyTable,
         getAbortSignal: () => abortSignalHolder.signal,
@@ -3572,7 +3582,7 @@ export class ChatCompletionProcess {
       // The built list drops video_generation without a usable config (buildSharedTools), so this is the real offer.
       const videoGenerationAvailable = allTools?.some(t => t.toolSchema.name === 'video_generation') ?? false;
 
-      const toolPromptMessage = await toolBuilder.buildToolPrompt({
+      const toolPromptMessages = await toolBuilder.buildToolPrompt({
         toolPromptId,
         hasContentTransform: hasContentTransform && blogDraftAvailable,
         hasChessEngine: enabledTools.includes('chess_engine'),
@@ -3607,6 +3617,10 @@ export class ChatCompletionProcess {
       const messageBuildingStartTime = Date.now();
       // Generate current date context for the AI.
       // Use user's browser timezone if available, otherwise fall back to server timezone.
+      //
+      // Per timezone-day, so it sits BEHIND the deployment-wide shareable prefix (see
+      // PER_CALLER_AUTHORED_SOURCES); leading the stack, it made that prefix a cache write per
+      // user per day. It is still inside the caller's own cached region, hence:
       //
       // DAY granularity only, deliberately NO clock time. This block sits inside the
       // cached system prefix: the Anthropic caching adapter marks the LAST system block with
@@ -3694,35 +3708,29 @@ export class ChatCompletionProcess {
             content: getSettingsValue('AbstentionPrompt', defaultAdminSettings, ABSTENTION_PROMPT),
           },
         ],
-        // Inject view registry summary when the navigate_view tool reached the model
+        // Inject view registry summary when the navigate_view tool reached the model. The base list
+        // is the same for every user (shareable prefix); the admin views and the current-page
+        // emphasis vary per caller and ride behind it as viewRegistryAdmin.
         viewRegistry: navigateViewAvailable
           ? [
               {
                 role: 'system' as const,
                 // Dropped again if the turn later continues without tools; see stripToolDependentMessages.
                 requiresTool: 'navigate_view',
-                content: (() => {
-                  // Extract current path from extraContextMessages for context-aware prompting
-                  const viewCtx = extraContextMessages.find(
-                    m => typeof m.content === 'string' && m.content.includes('[Current View Context]')
-                  );
-                  const ctxStr = typeof viewCtx?.content === 'string' ? viewCtx.content : '';
-                  const currentPath = ctxStr.match(/Path:\s*(\S+)/)?.[1] || '';
-                  let summary = getViewSummaryForLLM({ isAdmin: this.user?.isAdmin });
-                  // Add path-specific emphasis
-                  if (currentPath.startsWith('/admin')) {
-                    summary +=
-                      '\n\nThe user is currently on the Admin page. When they ask about any admin feature, you MUST call navigate_view with the matching admin.* tab.';
-                  }
-                  return summary;
-                })(),
+                content: getViewSummaryForLLM({ isAdmin: false }),
               },
             ]
+          : [],
+        viewRegistryAdmin: navigateViewAvailable
+          ? buildViewRegistryAdminMessages({ isAdmin: this.user?.isAdmin === true, extraContextMessages })
           : [],
         // Prompt-only, so unlike viewRegistry it needs no tool and runs on every in-app turn;
         // withheld with the other auto-offers - see replyChoicesOffered.
         replyChoices: replyChoicesOffered ? [{ role: 'system' as const, content: REPLY_CHOICES_GUIDANCE }] : [],
-        toolPrompt: toolPromptMessage ? [toolPromptMessage] : [], // Tool prompt, blog draft, MCP guidance, conversation context, agent delegation
+        // Split so the per-user half (timezone, MCP integrations, conversation entities, agent
+        // roster) cannot cut the shareable prefix short; see ToolPromptMessages.
+        toolPrompt: toolPromptMessages.guidance ? [toolPromptMessages.guidance] : [],
+        toolContext: toolPromptMessages.context ? [toolPromptMessages.context] : [],
         agentDetection: featureContextMessages['agentDetection'], // Add agent system prompts
         questMaster: featureContextMessages['questMaster'],
         organizationPrompt: featureContextMessages['organizationPrompt'], // Add team-wide system prompt
@@ -4974,6 +4982,8 @@ export class ChatCompletionProcess {
               outboundMessages,
               {
                 ...options,
+                // Per attempt: a fallback hop must name the model that actually serves it.
+                modelDisplayName: currentModel.name,
                 // The preference is set from a selector shown only for OpenAI-style reasoning models, so
                 // it must not retune Claude, whose adapters honour reasoningEffort for the completions API.
                 // Checked per attempt: a fallback can swap a GPT model for a Claude one (and back).
@@ -6600,10 +6610,15 @@ export class ChatCompletionProcess {
     } catch (err) {
       const totalResponseTime = Date.now() - processStartTime;
 
-      // A Stop or disconnect that threw still bills what streamed; the rollback below then has
-      // nothing left to refund. Any other failure refunds the whole hold. Keyed on the basis, not
-      // the hold: a hold the caller already released (a stuck turn) still bills the full actual.
-      if (this.reservationBasis && this.reservedCreditsOwnerId && isAbortError(err)) {
+      // A Stop or disconnect that threw, or a later tool call refused for credits, still bills what
+      // streamed and the tools already delivered; the rollback below then has nothing left to refund.
+      // Any other failure refunds the whole hold. Keyed on the basis, not the hold: a hold the caller
+      // already released (a stuck turn) still bills the full actual.
+      if (
+        this.reservationBasis &&
+        this.reservedCreditsOwnerId &&
+        (isAbortError(err) || resolveQuestErrorCode(err) === 'insufficient_credits')
+      ) {
         await this.settleAbortedReservation(quest, processStartTime, logger).catch(settleError =>
           logger.error(`Failed to settle the aborted turn for quest ${questId}; refunding its hold`, settleError)
         );
@@ -6841,7 +6856,7 @@ export class ChatCompletionProcess {
    * the full actual. A failed balance update restores the claim for the caller's rollback to refund.
    */
   private async settleReservation(
-    quest: { id: string; sessionId: string },
+    quest: { id: string; sessionId: string; creditsUsed?: number | null },
     usages: ReservationUsage[],
     processStartTime: number,
     logger: Logger,
@@ -6884,6 +6899,7 @@ export class ChatCompletionProcess {
     }
     logger.info(`Credits settled for quest ${quest.id}: reserved=${reserved}, actual=${totalCredits}, delta=${delta}`);
     this.reservedCreditHolder = null;
+    quest.creditsUsed = totalCredits;
 
     for (const usage of priced) {
       this.db.usageEvents
@@ -6967,7 +6983,7 @@ export class ChatCompletionProcess {
    * billable, and the caller's rollback refunds the whole hold.
    */
   private async settleAbortedReservation(
-    quest: { id: string; sessionId: string; replies?: string[] | null; reply?: string | null },
+    quest: IChatHistoryItemDocument,
     processStartTime: number,
     logger: Logger
   ): Promise<void> {
@@ -7000,6 +7016,17 @@ export class ChatCompletionProcess {
             cacheCreationInputTokens,
           }
         : { modelInfo: basis.modelInfo, inputTokens: basis.inputTokens, outputTokens };
+    if (quest.promptMeta) {
+      const calls = [...(quest.promptMeta.functionCalls ?? [])];
+      // A thrown tool call may prevent the backend's final toolsUsed callback. Keep delivered charges visible.
+      for (const [name, charges] of this.toolCreditsMap) {
+        const recordedCalls = calls.filter(call => call.name === name).length;
+        for (let index = recordedCalls; index < charges.length; index++) {
+          calls.push({ name, parameters: {} });
+        }
+      }
+      quest.promptMeta.functionCalls = settleToolCallCredits(calls, this.toolCreditsMap);
+    }
     await this.settleReservation(quest, [usage], processStartTime, logger, 'error', toolCredits);
   }
 
@@ -7162,6 +7189,36 @@ When using tools that require file IDs (like edit_image), use the ID shown above
   }
 
   /**
+   * The models a chat-delegated subagent may run on: the user's runnable catalog under the rule
+   * ChatCompletionInvoke admits the turn's model by (`filterRunnableModels`), plus the turn's own
+   * model, which a subagent pinned to anything else falls back to. Fails closed to the turn's
+   * model alone when the model configurations cannot be read.
+   */
+  private async loadSubagentModels(
+    models: ModelInfo[],
+    turnModel: ModelInfo,
+    entitlementKeys: string[],
+    logger: Logger
+  ): Promise<ModelInfo[]> {
+    let configurations: LLMModelConfig[];
+    try {
+      const setting = await this.db.adminSettings.findOne({ settingName: 'llmModelConfigurations' });
+      configurations = Array.isArray(setting?.settingValue) ? (setting.settingValue as LLMModelConfig[]) : [];
+    } catch (err) {
+      logger.warn('[Delegation] failed to read model configurations; subagents run on the turn model only', err);
+      return [turnModel];
+    }
+    const runnable = filterRunnableModels(
+      models,
+      configurations,
+      this.user.tags ?? [],
+      this.user.isAdmin ?? false,
+      entitlementKeys
+    );
+    return runnable.includes(turnModel) ? runnable : [turnModel, ...runnable];
+  }
+
+  /**
    * Load admin settings in background (non-blocking).
    * Returns a promise that resolves when real settings are available.
    */
@@ -7191,16 +7248,6 @@ When using tools that require file IDs (like edit_image), use the ID shown above
         return this.getDefaultAdminSettings();
       }
     }
-  }
-
-  /**
-   * Get setting value with default fallback.
-   * Works with both default settings and real admin settings.
-   */
-  private getDefaultSettingValue(key: string, settings: Record<string, string | number | boolean>): boolean {
-    const value = settings[key];
-    if (!value) return false;
-    return value.toString().toLowerCase() === 'true' || value.toString() === '1';
   }
 
   private async buildOptimizedFeatures(

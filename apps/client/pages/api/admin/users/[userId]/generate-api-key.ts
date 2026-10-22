@@ -204,6 +204,10 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
       if (invalidScopes.length > 0) {
         throw new BadRequestError(`Scope not allowed: ${invalidScopes.join(', ')}`);
       }
+      // The release-note routes keep their isAdmin check, so this key is useless on anyone else.
+      if (requestedScopes.includes(ApiKeyScope.RELEASE_NOTES_WRITE) && !targetUser.isAdmin) {
+        throw new BadRequestError(`${ApiKeyScope.RELEASE_NOTES_WRITE} needs a target user who is a platform admin`);
+      }
 
       const lakeBinding = await screenPreauthorizedLakeIds(preauthorizedLakeIds, targetUserId, {
         logger: req.logger,

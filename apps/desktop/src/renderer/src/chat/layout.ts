@@ -43,16 +43,12 @@ export const contentColumnSx: SxProps = {
 /**
  * The thin scrollbar the sidebar, the transcript and the scrollers in and beside it share.
  *
- * `scrollbar-width` rather than the ::-webkit-scrollbar pseudo-elements because Chromium ignores
- * those once it is set, and this one declaration is the whole of it. Applied per scroller and
- * never to the document: `publishScrollGutterWidth` measures a scroller wearing exactly this, so
- * a gutter-spending scroller without it would sit off the line its column's other rows are on.
- * Nothing to see where scrollbars overlay the content, which is macOS unless the user asked for
- * them permanently.
+ * The shape lives in scrollbars.css, loaded before the gutter is measured. Keep the standard
+ * properties at auto so Chromium uses those pseudo-elements instead of its native boxed bar.
  */
 export const thinScrollbarSx = {
-  scrollbarWidth: 'thin',
-  scrollbarColor: 'var(--joy-palette-neutral-outlinedBorder) transparent',
+  scrollbarWidth: 'auto',
+  scrollbarColor: 'auto',
 } as const;
 
 /**
@@ -69,8 +65,8 @@ export const hiddenScrollbarSx = {
  *
  * CSS has no way to read it and the column needs it: the transcript scrolls and the rows under
  * it do not, so a scrollbar taken out of the transcript's width alone leaves its column centred
- * in a narrower box than theirs - half a scrollbar to the left of the line they are on. It is an
- * OS setting, so it is measured once. Zero wherever scrollbars overlay the content, and then
+ * in a narrower box than theirs - half a scrollbar to the left of the line they are on. It is a
+ * renderer setting, so it is measured once. Zero wherever scrollbars overlay the content, and then
  * none of this does anything.
  */
 export const SCROLL_GUTTER_VAR = '--b4m-scroll-gutter';

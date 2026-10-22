@@ -1,4 +1,14 @@
-import { memo, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode, type SyntheticEvent } from 'react';
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type DragEvent,
+  type ReactNode,
+  type SyntheticEvent,
+} from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
@@ -16,6 +26,7 @@ import ListItemDecorator from '@mui/joy/ListItemDecorator';
 import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
+import type { Theme } from '@mui/joy/styles';
 import {
   normalizeSessionTitle,
   SESSION_TITLE_MAX_LENGTH,
@@ -25,7 +36,10 @@ import {
 } from '@shared/chat';
 import type { PrSummary } from '@shared/pullRequest';
 import { sectionOf, type SidebarSection, type SidebarSectionsState } from '@shared/sidebarSections';
+import { capRows, raisedRows, setGroupLimit, useGroupLimit } from './groupCap';
 import { groupSessions, orderedSessions, type CustomGroup, type ProjectGroup } from './grouping';
+import { ImportedBadge } from './ImportedBadge';
+import { useImportedInline } from './importedInline';
 import {
   ArrowLeftIcon,
   ArtifactIcon,
@@ -472,6 +486,7 @@ const SessionRow = memo(function SessionRow({
               {session.title}
             </Typography>
           )}
+          {!editing && session.importOrigin && <ImportedBadge origin={session.importOrigin} />}
         </Stack>
       </ListItemButton>
     </ListItem>
@@ -520,7 +535,8 @@ function ProjectHeader({
 
 /**
  * A user section's header: its name, then a "+" for a new session in it and a menu to start one,
- * rename or delete it, both showing on hover like a row's.
+ * rename or delete it, both showing on hover like a row's. Double-clicking the name renames it, as
+ * it does a session row's title.
  */
 function CustomSectionHeader({
   section,
@@ -550,6 +566,7 @@ function CustomSectionHeader({
         level="body-xs"
         noWrap
         sx={{ flex: 1, minWidth: 0, fontWeight: 'lg' }}
+        onDoubleClick={() => onRename(section)}
         data-testid="sidebar-section-name"
       >
         {section.name}
@@ -598,6 +615,83 @@ function CustomSectionHeader({
         </Dropdown>
       </Stack>
     </Stack>
+  );
+}
+
+const SHOW_MORE_SX = {
+  justifyContent: 'flex-start',
+  minHeight: '28px',
+  px: 1,
+  '--Button-radius': '6px',
+  fontSize: '0.8125rem',
+  fontWeight: 'normal',
+  // A step past text.tertiary, which is what the row titles already draw in.
+  color: (theme: Theme) => theme.vars.palette.neutral[theme.palette.mode === 'dark' ? 500 : 400],
+};
+
+/** Statuses a row is never hidden behind "Show more" in: the user is waiting on it or it on them. */
+const isLive = (status: ChatSessionStatus | undefined) => status === 'processing' || status === 'needs-action';
+
+/**
+ * A group's rows, capped at GROUP_ROW_CAP with "Show more" below them. The active, live and
+ * just-moved rows draw in place whatever the cap, and a row that has drawn past the cap keeps
+ * drawing for the rest of the run. `uncapped` is set while a search is narrowing the list, which
+ * then shows every match.
+ */
+function CappedSessionRows({
+  groupKey,
+  testIdPrefix,
+  sessions,
+  uncapped,
+  activeId,
+  statuses,
+  revealId,
+  row,
+}: {
+  groupKey: string;
+  testIdPrefix: 'sidebar-project' | 'sidebar-section';
+  sessions: ChatSessionSummary[];
+  uncapped: boolean;
+  activeId: string | null;
+  statuses: ReadonlyMap<string, ChatSessionStatus>;
+  /** A session just moved into this group, whose updatedAt slot may sit behind the cap. */
+  revealId: string | null;
+  row: (session: ChatSessionSummary) => ReactNode;
+}) {
+  const limit = useGroupLimit(groupKey);
+  const capped = useMemo(() => {
+    if (uncapped) return null;
+    // Append-only and idempotent, so a repeat render (React may discard and re-run one) is harmless.
+    const raised = raisedRows(groupKey);
+    const rows = capRows(
+      sessions,
+      limit,
+      session =>
+        raised.has(session.id) || session.id === activeId || isLive(statuses.get(session.id)) || session.id === revealId
+    );
+    for (const session of rows.visible.slice(limit)) raised.add(session.id);
+    return rows;
+  }, [groupKey, sessions, uncapped, limit, activeId, revealId, statuses]);
+
+  return (
+    <>
+      <List size="sm" sx={SESSION_LIST_SX}>
+        {(capped?.visible ?? sessions).map(row)}
+      </List>
+      {capped && capped.hidden > 0 && (
+        <Button
+          fullWidth
+          size="sm"
+          variant="plain"
+          color="neutral"
+          onClick={() => setGroupLimit(groupKey, capped.nextLimit)}
+          sx={SHOW_MORE_SX}
+          data-testid={`${testIdPrefix}-show-more-btn`}
+        >
+          Show more
+        </Button>
+      )}
+    </>
   );
 }
 
@@ -693,27 +787,40 @@ export function SessionList({
   }, [sessions, query]);
 
   const [archivedOpen, setArchivedOpen] = useState(false);
+  const [importedOpen, setImportedOpen] = useState(false);
+  const [importedInline] = useImportedInline();
 
-  // `section` is set when the right-click landed in a user section, which then offers a new session in it.
+  // `section` is set when the right-click landed in a user section, which then offers a new session in
+  // it and a rename.
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; section?: SidebarSection } | null>(null);
   const [draggedSession, setDraggedSession] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
+  const [revealId, setRevealId] = useState<string | null>(null);
   const dragFrame = useRef(0);
   const [nameRequest, setNameRequest] = useState<SectionNameRequest | null>(null);
+  const requestRename = (section: SidebarSection) =>
+    setNameRequest({ kind: 'rename', sectionId: section.id, currentName: section.name });
 
+  const searching = query.trim() !== '';
   const sections = useMemo(() => {
-    const grouped = groupSessions(matching, mode, userSections);
+    const grouped = groupSessions(matching, mode, userSections, importedInline);
     // An empty section under a search is only noise; with no query it stays so it can be found.
-    return query.trim() ? { ...grouped, custom: grouped.custom.filter(group => group.sessions.length > 0) } : grouped;
-  }, [matching, mode, userSections, query]);
+    return searching ? { ...grouped, custom: grouped.custom.filter(group => group.sessions.length > 0) } : grouped;
+  }, [matching, mode, userSections, searching, importedInline]);
   const empty =
     sections.pinned.length === 0 &&
     sections.custom.length === 0 &&
     sections.projects.length === 0 &&
     sections.loose.length === 0 &&
-    sections.archived.length === 0;
+    sections.archived.length === 0 &&
+    sections.imported.length === 0;
 
-  const ordered = useMemo(() => orderedSessions(sections), [sections]);
+  // Also open while it holds the open session, so clearing a search does not hide the selection.
+  const importedShown = importedOpen || searching || sections.imported.some(session => session.id === activeId);
+  const ordered = useMemo(
+    () => (importedShown ? [...orderedSessions(sections), ...sections.imported] : orderedSessions(sections)),
+    [sections, importedShown]
+  );
 
   // Read inside the key handler so the listener is bound once rather than rebuilt on every
   // keystroke in the search box, which re-orders this list. The row actions read it for the
@@ -740,6 +847,15 @@ export function SessionList({
     sectionActions,
   };
 
+  /**
+   * A moved row keeps its updatedAt slot in the group it lands in, which on a long group is past
+   * the cap - the row would leave one group and arrive hidden in the other.
+   */
+  const moveSession = useCallback((sessionId: string, sectionId: string | null) => {
+    setRevealId(sessionId);
+    target.current.sectionActions.move(sessionId, sectionId);
+  }, []);
+
   const actions = useMemo<RowActions>(
     () => ({
       select: sessionId => target.current.onSelect(sessionId),
@@ -747,7 +863,7 @@ export function SessionList({
       togglePin: session => target.current.onTogglePin(session),
       toggleArchived: session => target.current.onToggleArchived(session),
       rename: (session, title) => target.current.onRename(session, title),
-      moveToSection: (sessionId, sectionId) => target.current.sectionActions.move(sessionId, sectionId),
+      moveToSection: (sessionId, sectionId) => moveSession(sessionId, sectionId),
       requestNewSection: sessionId => setNameRequest({ kind: 'create', sessionId }),
       drag: sessionId => {
         cancelAnimationFrame(dragFrame.current);
@@ -761,7 +877,7 @@ export function SessionList({
         dragFrame.current = requestAnimationFrame(() => setDraggedSession(sessionId));
       },
     }),
-    []
+    [moveSession]
   );
 
   /**
@@ -829,7 +945,7 @@ export function SessionList({
     event.preventDefault();
     event.stopPropagation();
     actions.drag(null);
-    if (sectionOf(userSections, sessionId) !== sectionId) sectionActions.move(sessionId, sectionId);
+    if (sectionOf(userSections, sessionId) !== sectionId) moveSession(sessionId, sectionId);
   };
 
   // Anywhere in the list outside a section takes a session out of its section; a row in no
@@ -852,7 +968,7 @@ export function SessionList({
     if (!sessionId) return;
     event.preventDefault();
     actions.drag(null);
-    if (sectionOf(userSections, sessionId) !== undefined) sectionActions.move(sessionId, null);
+    if (sectionOf(userSections, sessionId) !== undefined) moveSession(sessionId, null);
   };
 
   const customGroup = (group: CustomGroup) => (
@@ -876,13 +992,20 @@ export function SessionList({
       <CustomSectionHeader
         section={group.section}
         onCreateSession={section => onCreateInSection(section.id)}
-        onRename={section => setNameRequest({ kind: 'rename', sectionId: section.id, currentName: section.name })}
+        onRename={requestRename}
         onDelete={section => sectionActions.remove(section.id)}
       />
       {group.sessions.length > 0 ? (
-        <List size="sm" sx={SESSION_LIST_SX}>
-          {group.sessions.map(row)}
-        </List>
+        <CappedSessionRows
+          groupKey={`section:${group.section.id}`}
+          testIdPrefix="sidebar-section"
+          sessions={group.sessions}
+          uncapped={searching}
+          activeId={activeId}
+          statuses={statuses}
+          revealId={revealId}
+          row={row}
+        />
       ) : (
         // Nothing at rest, where a line of text read as a row; a dashed slot only while a row is in the air.
         draggedSession && (
@@ -1090,9 +1213,16 @@ export function SessionList({
             {sections.projects.map(group => (
               <Box key={group.directory} data-testid="project-group">
                 <ProjectHeader group={group} onCreateInProject={target => onCreateInProject(target.directory)} />
-                <List size="sm" sx={SESSION_LIST_SX}>
-                  {group.sessions.map(row)}
-                </List>
+                <CappedSessionRows
+                  groupKey={`project:${group.directory}`}
+                  testIdPrefix="sidebar-project"
+                  sessions={group.sessions}
+                  uncapped={searching}
+                  activeId={activeId}
+                  statuses={statuses}
+                  revealId={revealId}
+                  row={row}
+                />
               </Box>
             ))}
 
@@ -1106,6 +1236,30 @@ export function SessionList({
                 <List size="sm" sx={SESSION_LIST_SX}>
                   {sections.loose.map(row)}
                 </List>
+              </Box>
+            )}
+
+            {/* Shut by default so a first sync of hundreds of transcripts does not bury the
+                user's own work; a search opens it, since a match hidden behind it is no match. */}
+            {sections.imported.length > 0 && (
+              <Box data-testid="sidebar-imported">
+                <Button
+                  fullWidth
+                  size="sm"
+                  variant="plain"
+                  color="neutral"
+                  onClick={() => setImportedOpen(open => !open)}
+                  endDecorator={<ChevronIcon open={importedShown} />}
+                  sx={{ justifyContent: 'flex-start', mt: 1, fontWeight: 'md' }}
+                  data-testid="sidebar-imported-toggle-btn"
+                >
+                  <Box sx={{ flex: 1, textAlign: 'left' }}>Imported from Claude ({sections.imported.length})</Box>
+                </Button>
+                {importedShown && (
+                  <List size="sm" sx={SESSION_LIST_SX}>
+                    {sections.imported.map(row)}
+                  </List>
+                )}
               </Box>
             )}
 
@@ -1162,6 +1316,14 @@ export function SessionList({
               data-testid="sidebar-context-new-in-section-btn"
             >
               New session in {contextMenu.section.name}
+            </MenuItem>
+          )}
+          {contextMenu?.section && (
+            <MenuItem
+              onClick={() => contextMenu.section && requestRename(contextMenu.section)}
+              data-testid="sidebar-context-rename-section-btn"
+            >
+              Rename section
             </MenuItem>
           )}
           <MenuItem onClick={onCreate} data-testid="sidebar-context-new-session-btn">

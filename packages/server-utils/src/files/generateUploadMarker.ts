@@ -20,6 +20,28 @@ export function generateUploadConstraintFor(
   sourceMetadata: unknown,
   measureSize: () => Promise<number>
 ): GenerateUploadConstraint | undefined {
-  const uploadedVia = (sourceMetadata as { uploadedVia?: unknown } | null | undefined)?.uploadedVia;
-  return uploadedVia === GENERATE_UPLOAD_MARKER ? { measureSize } : undefined;
+  return uploadedViaOf(sourceMetadata) === GENERATE_UPLOAD_MARKER ? { measureSize } : undefined;
+}
+
+/** The file fields the ownership gate reads - a structural subset of a FabFile document. */
+export type GenerateUploadFileFields = {
+  userId?: unknown;
+  deletedAt?: unknown;
+  sourceMetadata?: unknown;
+};
+
+/**
+ * True only for a live, marked file owned by `userId`. Shared by the GET and DELETE doors so an
+ * ai:generate-only key's reach cannot drift between reading its staged upload and deleting it.
+ */
+export function isOwnedGenerateUpload(
+  file: GenerateUploadFileFields | null | undefined,
+  userId: string
+): file is GenerateUploadFileFields {
+  if (!file || file.deletedAt) return false;
+  return uploadedViaOf(file.sourceMetadata) === GENERATE_UPLOAD_MARKER && String(file.userId) === String(userId);
+}
+
+function uploadedViaOf(sourceMetadata: unknown): unknown {
+  return (sourceMetadata as { uploadedVia?: unknown } | null | undefined)?.uploadedVia;
 }

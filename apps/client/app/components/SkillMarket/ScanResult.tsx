@@ -44,7 +44,7 @@ export function versionOutcome(v: ISkillListingVersion, visibility: SkillListing
         body:
           v.riskTier === 'high'
             ? 'It declares tools that act outside the conversation, so a reviewer must approve it first.'
-            : 'Public listings with findings are checked by a person before they go live.',
+            : 'Listings with findings are checked by a person before they go live.',
       };
     case 'rejected':
       return {
