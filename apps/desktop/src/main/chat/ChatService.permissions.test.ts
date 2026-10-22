@@ -286,10 +286,10 @@ describe('ChatService permission rules', () => {
     expect(rememberAllows).not.toHaveBeenCalled();
   });
 
-  it('derives a domain rule for a fetch', async () => {
+  it('derives the every-site WebFetch rule for a fetch', async () => {
     await run('ask', 'web_fetch', { url: 'https://docs.example.com/a' });
     const asked = await awaitCall('web_fetch', 'awaiting-approval');
-    expect(asked.approvalRules).toEqual(['WebFetch(domain:docs.example.com)']);
+    expect(asked.approvalRules).toEqual(['WebFetch']);
   });
 });
 
