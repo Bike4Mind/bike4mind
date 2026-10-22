@@ -1124,7 +1124,7 @@ Snapshots upsert by lake and UTC day. Failed lakes are isolated and their attemp
 
 The worker probes Slack, GitHub and Atlassian reachability every five minutes with the same unauthenticated checks hosted deployments run, and stores each result in MongoDB for the admin Integration Health dashboard. It emits no CloudWatch metrics and does not probe at startup, so a fresh container waits one full interval. Stored checks expire after 25 hours through the model's existing TTL index.
 
-An install with no outbound HTTPS to `slack.com`, `api.github.com` or `api.atlassian.com` records those integrations as unhealthy on every run. Three consecutive failures open the platform-wide circuit breaker for them, which blocks their MCP integrations. Those integrations cannot work without that egress anyway, so there is no opt-out switch.
+An install with no outbound HTTPS to `slack.com`, `api.github.com` or `api.atlassian.com` records those integrations as unhealthy on every run. Three consecutive failures open that integration's platform-wide circuit breaker, which blocks its callers: Slack message sends and updates return without sending, and GitHub and Atlassian MCP requests are refused as unavailable. Those integrations cannot work without that egress anyway, so there is no opt-out switch.
 
 ### Daily telemetry retention
 
