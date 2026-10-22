@@ -39,6 +39,11 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
 
 vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
 
+// Model admission reads admin settings from the real repository; these tests exercise other gates.
+vi.mock('@server/billing/meterPlatformCompletion', () => ({
+  createModelAdmission: async () => ({ admits: async () => true, assert: async () => {} }),
+}));
+
 const onDagNodeTerminalMock = vi.fn().mockResolvedValue(undefined);
 vi.mock('./agentExecutorDag', async () => {
   const actual = await vi.importActual<typeof import('./agentExecutorDag')>('./agentExecutorDag');
