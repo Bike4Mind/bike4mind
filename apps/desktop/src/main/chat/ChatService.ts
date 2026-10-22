@@ -121,6 +121,7 @@ import {
 import type { SessionActivity } from './SessionActivity';
 import { deriveTitle, isValidSessionId, type SessionStore } from './SessionStore';
 import { expandSkill, parseSkillInvocation } from './skills/expand';
+import { resolveInlineSkills } from './skills/inline';
 import { SkillsPromptCache } from './skills/prompt';
 import { skillSource, type SkillCatalog } from './skills/SkillCatalog';
 import type { McpManager, McpToolBinding } from './mcp/McpManager';
@@ -1430,6 +1431,17 @@ export class ChatService {
       return { ok: false, error: `No skill called /${invocation.name}. Type / to see what is available.` };
     }
 
+    // A skill named mid-message rides as a note telling the model to run it; see inline.ts.
+    // Resolved once, when the user sends: a released queue entry already carries the note, and
+    // the same relay/automatic exclusion as above applies for the same reason, and a spawn seed,
+    // which the model wrote.
+    let turnOptions = options;
+    if (this.deps.skills && !invocation && !released && options.seedHops === undefined) {
+      const inline = await resolveInlineSkills(prompt, this.deps.skills, existing.project?.workingDirectory ?? null);
+      if ('error' in inline) return { ok: false, error: inline.error };
+      if (inline.note) turnOptions = { ...options, notes: [...(options.notes ?? []), inline.note] };
+    }
+
     /**
      * Typing ahead. Decided HERE rather than in the renderer: a reply that finishes between a
      * renderer-side "is it streaming?" check and this call would otherwise queue a message
@@ -1454,7 +1466,7 @@ export class ChatService {
       return {
         ok: true,
         queued: true,
-        message: this.deps.queue.enqueue(sessionId, prompt, attachments, options.notes),
+        message: this.deps.queue.enqueue(sessionId, prompt, attachments, turnOptions.notes),
       };
     }
 
@@ -1463,7 +1475,15 @@ export class ChatService {
     // one instead of starting a reply of its own.
     this.accepting.add(sessionId);
     try {
-      return await this.startAcceptedTurn(sessionId, prompt, attachments, existing, invocation, skillCommand, options);
+      return await this.startAcceptedTurn(
+        sessionId,
+        prompt,
+        attachments,
+        existing,
+        invocation,
+        skillCommand,
+        turnOptions
+      );
     } finally {
       this.accepting.delete(sessionId);
     }
