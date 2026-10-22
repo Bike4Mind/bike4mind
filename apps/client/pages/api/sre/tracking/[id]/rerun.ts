@@ -28,6 +28,7 @@
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { sreErrorTrackingRepository, cacheRepository, adminSettingsRepository } from '@bike4mind/database';
 import {
@@ -172,6 +173,13 @@ const handler = baseApi().post(
         ? 'Rerun dispatched — a new tracking doc will appear shortly'
         : (DISPATCH_REASON_MESSAGES[result.reason ?? ''] ?? 'Dispatch blocked');
 
+      await recordAdminActionFromRequest(req, {
+        action: 'ops.sre.tracking_rerun',
+        target: { kind: 'settings', id, displayName: `SRE tracking ${fingerprint}` },
+        summary: `reran SRE tracking ${fingerprint}`,
+        details: { source, repoSlug, dispatched: result.dispatched },
+      });
+
       res.status(200).json({
         success: true,
         dispatched: result.dispatched,
@@ -203,6 +211,13 @@ const handler = baseApi().post(
       userId: req.user.id,
       trackingId: id,
       fingerprint,
+    });
+
+    await recordAdminActionFromRequest(req, {
+      action: 'ops.sre.tracking_rerun',
+      target: { kind: 'settings', id, displayName: `SRE tracking ${fingerprint}` },
+      summary: `reran SRE tracking ${fingerprint}`,
+      details: { source, repoSlug, dispatched: true },
     });
 
     res.status(200).json({
