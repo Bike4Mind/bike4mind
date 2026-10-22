@@ -48,6 +48,7 @@ const api: DesktopApi = {
     getState: () => ipcRenderer.invoke(IPC_CHANNELS.updateGetState),
     check: () => ipcRenderer.invoke(IPC_CHANNELS.updateCheck),
     download: () => ipcRenderer.invoke(IPC_CHANNELS.updateDownload),
+    dismiss: (version: string) => ipcRenderer.invoke(IPC_CHANNELS.updateDismiss, version),
     install: (force: boolean) => ipcRenderer.invoke(IPC_CHANNELS.updateInstall, force),
     onStateChanged: listener => {
       const handler = (_event: unknown, state: UpdateState) => listener(state);
