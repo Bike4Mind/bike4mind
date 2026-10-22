@@ -5,6 +5,10 @@ import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import { useNavigate } from '@tanstack/react-router';
 import {
   API_SERVICE_GROUPS,
+  creditsToUsdAtFloor,
+  formatUsdAmount,
+  formatUsdPerCredit,
+  MIN_PRICE_PER_CREDIT_USD,
   resolveTeamPlanSettings,
   SETTING_TABS,
   settingsMap,
@@ -97,6 +101,29 @@ const formatValue = (value: unknown): string => {
   if (value === undefined || value === null || value === '') return 'not set';
   if (typeof value === 'number') return value.toLocaleString();
   return String(value);
+};
+
+/**
+ * Unit and derived value shown under a setting's current value, so a bare number reads as money.
+ * Credit grants are valued at the floor rate because that is what credit packs sell at
+ * (apps/client/lib/credits/constants.ts).
+ */
+export const describeDerivedValue = (key: SettingKey, value: unknown): string | null => {
+  // Unset is not zero: Number('') and Number(null) would both read as 0 credits.
+  const amount = value === undefined || value === null || value === '' ? Number.NaN : Number(value);
+  const floor = `floor ${formatUsdPerCredit(MIN_PRICE_PER_CREDIT_USD)} per credit`;
+  switch (key) {
+    case 'defaultFreeCredits':
+    case 'ReferralCreditsAmount':
+      if (!Number.isFinite(amount)) return null;
+      return `${amount.toLocaleString('en-US')} credits = ${formatUsdAmount(creditsToUsdAtFloor(amount))} at the ${floor}`;
+    case 'pricePerCredit':
+      return Number.isFinite(amount)
+        ? `${formatUsdPerCredit(amount)} per credit (USD) - ${floor}`
+        : `USD per credit - ${floor}`;
+    default:
+      return null;
+  }
 };
 
 const AdminGrowthPricingTab = () => {
@@ -192,6 +219,7 @@ const AdminGrowthPricingTab = () => {
                 const setting = settingsMap[key];
                 const stored = storedByKey.get(key);
                 const current = stored ?? setting.defaultValue;
+                const derived = describeDerivedValue(key, current);
                 return (
                   <div key={key}>
                     <Typography
@@ -202,6 +230,15 @@ const AdminGrowthPricingTab = () => {
                       Current: {formatValue(current)}
                       {stored === undefined ? ' (default)' : ` - default ${formatValue(setting.defaultValue)}`}
                     </Typography>
+                    {derived && (
+                      <Typography
+                        level="body-xs"
+                        sx={{ color: 'text.tertiary', mb: 0.5 }}
+                        data-testid={`admin-growth-pricing-derived-${key}`}
+                      >
+                        {derived}
+                      </Typography>
+                    )}
                     <AdminSettingInputField
                       // Remount when the stored value changes so the editor never shows a stale draft.
                       key={`${key}-${JSON.stringify(stored ?? null)}`}

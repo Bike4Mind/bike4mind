@@ -14,12 +14,13 @@ vi.mock('@client/app/hooks/data/settings', () => ({
 vi.mock('./ScopedSettingOverrides', () => ({ default: () => null }));
 vi.mock('@tanstack/react-router', async () => (await import('./__tests__/fakeAdminRouter')).fakeRouterModule);
 
-import { settingsMap } from '@bike4mind/common';
+import { MIN_PRICE_PER_CREDIT_USD, formatUsdAmount, formatUsdPerCredit, settingsMap } from '@bike4mind/common';
 import { fakeAdminRouter } from './__tests__/fakeAdminRouter';
 import { AdminTab } from './adminSidebarConfig';
 import { useAdminModal } from './useAdminModal';
 import { useCreditAnalysisStore } from './CreditAnalysis/store';
 import AdminGrowthPricingTab, {
+  describeDerivedValue,
   GROWTH_PRICING_LINKS,
   GROWTH_PRICING_SECTIONS,
   RATE_LIMIT_SETTING_KEYS,
@@ -112,6 +113,34 @@ describe('AdminGrowthPricingTab', () => {
   it('shows no warnings at defaults', () => {
     renderTab();
     expect(screen.queryByTestId('admin-growth-pricing-warning')).toBeNull();
+  });
+
+  it('values starter and referral credits in dollars at the floor rate', () => {
+    serverSettings = [{ settingName: 'defaultFreeCredits', settingValue: 5000 }];
+    renderTab();
+
+    const floor = formatUsdPerCredit(MIN_PRICE_PER_CREDIT_USD);
+    expect(screen.getByTestId('admin-growth-pricing-derived-defaultFreeCredits').textContent).toBe(
+      `5,000 credits = ${formatUsdAmount(5000 * MIN_PRICE_PER_CREDIT_USD)} at the floor ${floor} per credit`
+    );
+    // Referral is at its default (10,000).
+    expect(screen.getByTestId('admin-growth-pricing-derived-ReferralCreditsAmount').textContent).toBe(
+      `10,000 credits = ${formatUsdAmount(10000 * MIN_PRICE_PER_CREDIT_USD)} at the floor ${floor} per credit`
+    );
+  });
+
+  it('shows the unit and floor for the price per credit', () => {
+    renderTab();
+    expect(screen.getByTestId('admin-growth-pricing-derived-pricePerCredit').textContent).toBe(
+      `$50 per credit (USD) - floor ${formatUsdPerCredit(MIN_PRICE_PER_CREDIT_USD)} per credit`
+    );
+  });
+
+  it('derives nothing for settings that are not money', () => {
+    expect(describeDerivedValue('teamPlanMaxSeats', 100)).toBeNull();
+    expect(describeDerivedValue('defaultFreeCredits', 'abc')).toBeNull();
+    expect(describeDerivedValue('defaultFreeCredits', '')).toBeNull();
+    expect(describeDerivedValue('pricePerCredit', undefined)).toMatch(/^USD per credit - floor /);
   });
 
   it('links to the model pricing catalog and the tier rate-limit settings', () => {
