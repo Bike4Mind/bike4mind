@@ -42,7 +42,30 @@ function runHook(env: Record<string, string>, stdinPayload: unknown) {
   });
 }
 
-function startCaptureServer(): Promise<{ port: number; captured: { current?: CapturedRequest }; close: () => void }> {
+/** Preload that destroys stdin with EIO; a directory as stdin only errors on some platforms. */
+const STDIN_ERROR_PRELOAD =
+  "data:text/javascript,setTimeout(()=>process.stdin.destroy(Object.assign(new Error('EIO'),{code:'EIO'})),100)";
+
+/** Spawns the hook with stderr captured; `injectStdinError` leaves stdin open and breaks it. */
+function runHookCapturing(env: Record<string, string>, opts: { injectStdinError?: boolean } = {}) {
+  return new Promise<{ code: number; stderr: string }>((resolve, reject) => {
+    const child = spawn(
+      process.execPath,
+      [...(opts.injectStdinError ? ['--import', STDIN_ERROR_PRELOAD] : []), HOOK_PATH],
+      { env: { ...ambientHookEnv(), ...env }, stdio: ['pipe', 'ignore', 'pipe'] }
+    );
+    let stderr = '';
+    child.stderr.on('data', c => (stderr += c));
+    child.on('error', reject);
+    child.on('close', code => resolve({ code: code ?? -1, stderr }));
+    if (!opts.injectStdinError) {
+      child.stdin.write(JSON.stringify(HOOK_INPUT));
+      child.stdin.end();
+    }
+  });
+}
+
+function startCaptureServer(status = 201): Promise<{ port: number; captured: { current?: CapturedRequest }; close: () => void }> {
   const captured: { current?: CapturedRequest } = {};
   return new Promise(resolve => {
     const server = createServer((req: IncomingMessage, res: ServerResponse) => {
@@ -54,7 +77,7 @@ function startCaptureServer(): Promise<{ port: number; captured: { current?: Cap
           apiKey: req.headers['x-api-key'] as string | undefined,
           body: JSON.parse(Buffer.concat(chunks).toString() || '{}'),
         };
-        res.writeHead(201, { 'content-type': 'application/json' });
+        res.writeHead(status, { 'content-type': 'application/json' });
         res.end('{"event":{}}');
       });
     });
@@ -483,4 +506,66 @@ describe('bin/hearth-hook.mjs privacy contract', () => {
       close();
     }
   }, 15000);
+
+  describe('failure reporting', () => {
+    it('exits 0 on a stdin error, silent by default', async () => {
+      const { port, close } = await startCaptureServer();
+      try {
+        const { code, stderr } = await runHookCapturing(HOOK_ENV(port), { injectStdinError: true });
+        expect(code).toBe(0);
+        expect(stderr).toBe('');
+      } finally {
+        close();
+      }
+    }, 15000);
+
+    it('reports a stdin error once under B4M_HEARTH_DEBUG and still exits 0', async () => {
+      const { port, close } = await startCaptureServer();
+      try {
+        const { code, stderr } = await runHookCapturing(
+          { ...HOOK_ENV(port), B4M_HEARTH_DEBUG: '1' },
+          { injectStdinError: true }
+        );
+        expect(code).toBe(0);
+        expect(stderr.trim().split('\n')).toEqual(['hearth-hook: stdin error: EIO']);
+      } finally {
+        close();
+      }
+    }, 15000);
+
+    it('writes exactly one stderr line for a 401 under B4M_HEARTH_DEBUG, without the key', async () => {
+      const { port, close } = await startCaptureServer(401);
+      try {
+        const { code, stderr } = await runHookCapturing({ ...HOOK_ENV(port), B4M_HEARTH_DEBUG: '1' });
+        expect(code).toBe(0);
+        expect(stderr.trim().split('\n')).toHaveLength(1);
+        expect(stderr).toContain('401');
+        expect(stderr).not.toContain('test-key');
+      } finally {
+        close();
+      }
+    }, 15000);
+
+    it('stays silent on a non-2xx without the debug flag', async () => {
+      const { port, close } = await startCaptureServer(429);
+      try {
+        const { code, stderr } = await runHookCapturing(HOOK_ENV(port));
+        expect(code).toBe(0);
+        expect(stderr).toBe('');
+      } finally {
+        close();
+      }
+    }, 15000);
+
+    it('stays silent on a 2xx even with the debug flag', async () => {
+      const { port, close } = await startCaptureServer(201);
+      try {
+        const { code, stderr } = await runHookCapturing({ ...HOOK_ENV(port), B4M_HEARTH_DEBUG: '1' });
+        expect(code).toBe(0);
+        expect(stderr).toBe('');
+      } finally {
+        close();
+      }
+    }, 15000);
+  });
 });

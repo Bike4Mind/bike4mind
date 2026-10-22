@@ -9,6 +9,9 @@
 // shared default channel by NAME and the server find-or-creates it, so a fresh
 // install needs no per-user setup and lands in the same channel the cc-bridge
 // reports into (one roster, not two half-rosters).
+// Optional: B4M_HEARTH_DEBUG - any value but empty or 0 writes one stderr line
+// when the POST fails or stdin errors. Off by default: hook stderr can reach the
+// user's terminal on every event, so a stale key must not nag.
 // Always exits 0 - a reporting hook must never block the session.
 //
 // DISCLOSURE. Everything sent here lands in an append-only log that other
@@ -39,7 +42,14 @@
 import { basename, resolve } from 'node:path';
 import { homedir } from 'node:os';
 
-const { B4M_API_URL, B4M_API_KEY, B4M_HEARTH_CHANNEL, B4M_HEARTH_DISCLOSURE } = process.env;
+const { B4M_API_URL, B4M_API_KEY, B4M_HEARTH_CHANNEL, B4M_HEARTH_DISCLOSURE, B4M_HEARTH_DEBUG } = process.env;
+
+const DEBUG = Boolean(B4M_HEARTH_DEBUG) && B4M_HEARTH_DEBUG !== '0';
+
+// Resolves once the line is flushed: stderr to a pipe is async on macOS, so
+// exiting straight after a bare write can drop it.
+const debug = line =>
+  DEBUG ? new Promise(done => process.stderr.write(`hearth-hook: ${line}\n`, () => done())) : Promise.resolve();
 
 const DEFAULT_DISCLOSURE = 2;
 const MAX_DISCLOSURE = 2;
@@ -238,8 +248,12 @@ function describe({ label, tier, workspace, activity }) {
 }
 
 const chunks = [];
+process.stdin.on('error', err => {
+  debug(`stdin error: ${err?.code ?? err?.name ?? 'unknown'}`).finally(() => process.exit(0));
+});
 process.stdin.on('data', c => chunks.push(c));
 process.stdin.on('end', async () => {
+  let pending = Promise.resolve();
   try {
     if (!B4M_API_URL || !B4M_API_KEY) return;
     const hook = JSON.parse(Buffer.concat(chunks).toString() || '{}');
@@ -267,7 +281,7 @@ process.stdin.on('end', async () => {
     const activity = activityOf(hook);
     if (tier >= 2) payload.activity = activity;
 
-    await fetch(new URL('/api/hearth/events', B4M_API_URL), {
+    const res = await fetch(new URL('/api/hearth/events', B4M_API_URL), {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-api-key': B4M_API_KEY },
       body: JSON.stringify({
@@ -284,9 +298,12 @@ process.stdin.on('end', async () => {
       // Bounded so a hung request can never stall the session past 3s.
       signal: AbortSignal.timeout(3000),
     });
-  } catch {
-    // Swallow everything: reporting must never fail the hook.
+    if (!res.ok) pending = debug(`POST /api/hearth/events failed: HTTP ${res.status}`);
+  } catch (err) {
+    // Never fail the hook; the error name is reported only under B4M_HEARTH_DEBUG.
+    pending = debug(`POST /api/hearth/events error: ${err?.name ?? 'unknown'}`);
   } finally {
+    await pending;
     process.exit(0);
   }
 });
