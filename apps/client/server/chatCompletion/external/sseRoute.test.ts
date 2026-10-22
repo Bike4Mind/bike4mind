@@ -158,6 +158,28 @@ const UPSTREAM_CALLER_ERRORS = [400, 404, 413, 422].flatMap(status => [
   { name: `Axios ${status}`, status, properties: { isAxiosError: true, response: { status } } },
   { name: `AWS ${status}`, status, properties: { $metadata: { httpStatusCode: status } } },
 ]);
+const UPSTREAM_OPERATOR_ERRORS = [
+  [404, 'models/gemini-2.5-flash is no longer available to new users'],
+  [404, 'The model `gpt-x` does not exist or you do not have access to it.'],
+  [404, 'Claude Fable 5 is not available. Please use Opus 4.8'],
+  [400, 'Your credit balance is too low to access the Anthropic API.'],
+  [404, 'The model claude-3-5-haiku-20241022 does not exist'],
+  [400, 'The provided model identifier is invalid'],
+  [404, 'Model not available'],
+  [400, 'API key not valid. Please pass a valid API key.'],
+  [400, 'The API key is invalid'],
+  [400, 'Invalid API key'],
+  [400, 'The API key has expired'],
+  [400, 'The API key is missing'],
+] as const;
+const UPSTREAM_CALLER_MESSAGES = [
+  "Tool parameter 'model' does not exist",
+  'The model rejected the request: tool lookup does not exist',
+  'Tool schema property api_key is required',
+  'Tool schema property api_key must be a string',
+  'Model does not support assistant prefill',
+  'Token limit exceeded',
+] as const;
 
 function post(body: unknown = COMPLETION) {
   return fetch(COMPLETIONS_URL(), {
@@ -479,12 +501,17 @@ describe('POST /api/ai/v1/completions - stream', () => {
     }
   );
 
-  it.each([
-    [404, RAW_UPSTREAM],
-    [404, 'The model `gpt-x` does not exist or you do not have access to it.'],
-    [404, 'Claude Fable 5 is not available. Please use Opus 4.8'],
-    [400, 'Your credit balance is too low to access the Anthropic API.'],
-  ] as const)(
+  it.each(UPSTREAM_CALLER_MESSAGES)('keeps caller input error %s non-retryable after streaming', async message => {
+    mockExecuteCompletion.mockImplementationOnce(failAfterReady(Object.assign(new Error(message), { status: 400 })));
+
+    const text = await (await post()).text();
+    expect(errorFrame(text).code).toBe('invalid_request');
+    expect(text).not.toContain(message);
+    expect(mockLoggerError).not.toHaveBeenCalled();
+    expect(mockEmitProcessingFailed).not.toHaveBeenCalled();
+  });
+
+  it.each(UPSTREAM_OPERATOR_ERRORS)(
     'keeps an operator-side upstream %s (%s) after the stream opened as provider_error at error',
     async (status, raw) => {
       const upstream = Object.assign(new Error(raw), { status });
@@ -496,6 +523,8 @@ describe('POST /api/ai/v1/completions - stream', () => {
         message: `Model provider returned an error (upstream ${status})`,
       });
       expect(mockLoggerError).toHaveBeenCalledWith('[CLI_LLM] Handler error', expect.anything());
+      expect(text).not.toContain(raw);
+      expect(mockLoggerWarn).not.toHaveBeenCalledWith('[CLI_LLM] Handler error', expect.anything());
       expect(mockEmitProcessingFailed).toHaveBeenCalledWith('cli-sse', upstream);
     }
   );
@@ -627,20 +656,32 @@ describe('POST /api/ai/v1/completions - pre-stream failures are JSON with a real
     }
   );
 
-  it.each([
-    [404, 'models/gemini-2.5-flash is no longer available to new users'],
-    [400, 'Your credit balance is too low to access the Anthropic API.'],
-  ] as const)('keeps an operator-side upstream %s (%s) as a 500 and logs it at error', async (status, raw) => {
-    mockExecuteCompletion.mockRejectedValueOnce(Object.assign(new Error(raw), { status }));
+  it.each(UPSTREAM_CALLER_MESSAGES)('keeps caller input error %s as a sanitized 400', async message => {
+    mockExecuteCompletion.mockRejectedValueOnce(Object.assign(new Error(message), { status: 400 }));
 
-    const body = await expectJsonError(await post(), 500);
-    expect(body.error).toBe('Internal error');
-    expect(mockLoggerError).toHaveBeenCalledWith(
-      '[CLI_LLM] Handler error',
-      expect.objectContaining({ upstreamStatus: status })
-    );
-    expect(mockEmitProcessingFailed).toHaveBeenCalledWith('cli-sse', expect.objectContaining({ status }));
+    const body = await expectJsonError(await post(), 400);
+    expect(body.errorCode).toBe('invalid_request');
+    expect(JSON.stringify(body)).not.toContain(message);
+    expect(mockLoggerError).not.toHaveBeenCalled();
+    expect(mockEmitProcessingFailed).not.toHaveBeenCalled();
   });
+
+  it.each(UPSTREAM_OPERATOR_ERRORS)(
+    'keeps an operator-side upstream %s (%s) as a 500 and logs it at error',
+    async (status, raw) => {
+      mockExecuteCompletion.mockRejectedValueOnce(Object.assign(new Error(raw), { status }));
+
+      const body = await expectJsonError(await post(), 500);
+      expect(body.error).toBe('Internal error');
+      expect(JSON.stringify(body)).not.toContain(raw);
+      expect(mockLoggerWarn).not.toHaveBeenCalledWith('[CLI_LLM] Handler error', expect.anything());
+      expect(mockLoggerError).toHaveBeenCalledWith(
+        '[CLI_LLM] Handler error',
+        expect.objectContaining({ upstreamStatus: status })
+      );
+      expect(mockEmitProcessingFailed).toHaveBeenCalledWith('cli-sse', expect.objectContaining({ status }));
+    }
+  );
 
   it.each([429, 500, 503])('keeps an upstream %s as a 500 and logs it at error', async status => {
     mockExecuteCompletion.mockRejectedValueOnce(Object.assign(new Error('provider failed'), { status }));
