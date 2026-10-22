@@ -7,6 +7,7 @@
 
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { adminSettingsRepository, sreErrorTrackingRepository, cacheRepository } from '@bike4mind/database';
 import { SreAgentConfigSchema, getConfiguredRepoSlugs, resolveFullConfig } from '@bike4mind/common';
@@ -163,6 +164,17 @@ const handler = baseApi().post(
         results.push({ issueNumber, dispatched: false, reason: 'internal-error' });
       }
     }
+
+    await recordAdminActionFromRequest(req, {
+      action: 'ops.sre.run_triggered',
+      target: { kind: 'system', id: 'sre-trigger', displayName: 'SRE manual trigger' },
+      summary: `triggered SRE for ${issueNumbers.length} issues in ${systemRepo}`,
+      details: {
+        repoSlug: systemRepo,
+        issueNumbers,
+        dispatched: results.filter(r => r.dispatched).length,
+      },
+    });
 
     res.status(200).json({ results });
   })

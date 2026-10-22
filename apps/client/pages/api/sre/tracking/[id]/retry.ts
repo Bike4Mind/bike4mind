@@ -13,6 +13,7 @@
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { sreErrorTrackingRepository, cacheRepository, RETRYABLE_STATUSES } from '@bike4mind/database';
 import { SreSourceType, SreClassification, SRE_DEFAULT_REPO_SLUG } from '@bike4mind/common';
@@ -146,6 +147,13 @@ const handler = baseApi().post(
       fingerprint,
       source,
       previousStatus,
+    });
+
+    await recordAdminActionFromRequest(req, {
+      action: 'ops.sre.tracking_retried',
+      target: { kind: 'settings', id, displayName: `SRE tracking ${fingerprint}` },
+      summary: `retried SRE tracking ${fingerprint}`,
+      details: { previousStatus, source, repoSlug: effectiveRepoSlug },
     });
 
     res.status(200).json({ success: true, fingerprint });
