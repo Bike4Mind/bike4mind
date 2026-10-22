@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
+import { makeContributedNumberSetting, registerContributedSettings, resetContributedSettings } from '@bike4mind/common';
 import { setupMongoTest } from '../../../__test__/utils';
 import { AdminSettings, adminSettingsRepository } from './AdminSettingsModel';
 
@@ -24,5 +25,39 @@ describe('AdminSettingsRepository.getSettingsValue - MaxFileSize coercion (#2456
   it('falls back to the default when no MaxFileSize row exists at all', async () => {
     const value = await adminSettingsRepository.getSettingsValue('MaxFileSize');
     expect(value).toBe(30);
+  });
+});
+
+describe('AdminSettingsRepository.getSettingsValue - contributed settings', () => {
+  setupMongoTest();
+
+  afterEach(() => resetContributedSettings());
+
+  const register = () =>
+    registerContributedSettings([
+      makeContributedNumberSetting({
+        key: 'extensionLimit',
+        name: 'Extension limit',
+        description: 'A contributed number',
+        defaultValue: 7,
+        min: 1,
+        max: 10,
+        int: true,
+      }),
+    ]);
+
+  it('returns the parsed stored value of a registered contributed key', async () => {
+    register();
+    await AdminSettings.create({ settingName: 'extensionLimit', settingValue: '4' });
+    expect(await adminSettingsRepository.getSettingsValue('extensionLimit' as never)).toBe(4);
+  });
+
+  it('returns the default when no row exists, without throwing', async () => {
+    register();
+    expect(await adminSettingsRepository.getSettingsValue('extensionLimit' as never)).toBe(7);
+  });
+
+  it('returns undefined for a name with no definition', async () => {
+    expect(await adminSettingsRepository.getSettingsValue('nobodyRegisteredThis' as never)).toBeUndefined();
   });
 });
