@@ -84,15 +84,29 @@ describe('infra resource glue', () => {
   it.each([
     ['a non-object', 'nope'],
     ['a non-array secrets list', { secrets: {} }],
+    ['a null secrets list', { secrets: null }],
+    ['a null rotations list', { rotations: null }],
     ['a non-string secret name', { secrets: [{ name: 1 }] }],
     ['a non-boolean env flag', { secrets: [{ name: 'A', env: 'yes' }] }],
+    ['a single-character Lambda env key', { secrets: [{ name: 'A', env: true }] }],
     ['a non-positive rotation interval', { rotations: [{ ...ROTATION, rotationIntervalDays: 0 }] }],
+    ['an unrepresentable rotation date', { rotations: [{ ...ROTATION, rotationIntervalDays: 1e308 }] }],
   ])('fails codegen on %s', (_label, value) => {
     writeOverlay(value);
     const result = runCodegen();
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('b4mContributions.infraResources');
   });
+
+  it.each([{ name: 'A' }, { name: 'A', env: false }, { name: 'AB', env: true }])(
+    'accepts a secret with a valid env option: %j',
+    secret => {
+      writeOverlay({ secrets: [secret] });
+      const result = runCodegen();
+      expect(result.status, result.stderr).toBe(0);
+      expect(readTargets()[0]).toContain(`"name": "${secret.name}"`);
+    }
+  );
 
   it('lists every core resource name infra/ declares', () => {
     mkdirSync(join(sandbox, 'infra'), { recursive: true });

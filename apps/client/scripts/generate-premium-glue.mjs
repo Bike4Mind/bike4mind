@@ -1793,7 +1793,7 @@ function readInfraResources(pkg) {
   };
   if (!isPlainObject(raw)) fail('must be an object');
   const list = field => {
-    const value = raw[field] ?? [];
+    const value = raw[field] === undefined ? [] : raw[field];
     if (!Array.isArray(value) || !value.every(isPlainObject)) fail(`${field} must be an array of objects`);
     return value;
   };
@@ -1802,6 +1802,7 @@ function readInfraResources(pkg) {
     if (s.placeholder !== undefined && typeof s.placeholder !== 'string')
       fail(`${s.name}.placeholder must be a string`);
     if (s.env !== undefined && typeof s.env !== 'boolean') fail(`${s.name}.env must be a boolean`);
+    if (s.env && s.name.length < 2) fail(`${s.name}.env requires a name of at least two characters for Lambda`);
     return { name: s.name, placeholder: s.placeholder, env: s.env };
   });
   const rotations = list('rotations').map(r => {
@@ -1812,6 +1813,9 @@ function readInfraResources(pkg) {
     if (!Number.isInteger(r.rotationIntervalDays) || r.rotationIntervalDays <= 0) {
       fail(`${r.secret}.rotationIntervalDays must be a positive integer`);
     }
+    const nextRotation = new Date();
+    nextRotation.setDate(nextRotation.getDate() + r.rotationIntervalDays);
+    if (Number.isNaN(nextRotation.getTime())) fail(`${r.secret}.rotationIntervalDays exceeds the supported date range`);
     if (typeof r.isAutomatic !== 'boolean') fail(`${r.secret}.isAutomatic must be a boolean`);
     const { secret, description, rotationIntervalDays, isAutomatic, rotationProcess } = r;
     return { secret, description, rotationIntervalDays, isAutomatic, rotationProcess };
