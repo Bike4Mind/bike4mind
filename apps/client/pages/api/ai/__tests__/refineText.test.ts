@@ -30,11 +30,14 @@ vi.mock('@bike4mind/services/llm/refineText', () => ({
 vi.mock('@bike4mind/database', () => ({ cacheRepository: { findByKey: vi.fn(), createOrUpdate: vi.fn() } }));
 
 const mockGetOperationsModel = vi.fn();
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@client/services/operationsModelService', async orig => ({
+  // Keep the real exports (the helper's typed unavailable error) and stub only the resolver.
+  ...(await orig<typeof import('@client/services/operationsModelService')>()),
   OperationsModelService: { getOperationsModel: (...a: any[]) => mockGetOperationsModel(...a) },
 }));
 
 import handler from '@pages/api/ai/refineText';
+import { CacheKeys } from '@server/utils/cacheKeys';
 
 describe('POST /api/ai/refineText', () => {
   beforeEach(() => {
@@ -74,7 +77,10 @@ describe('POST /api/ai/refineText', () => {
 
     expect(mockGetCachedData).toHaveBeenCalledTimes(1);
     const [key, , opts] = mockGetCachedData.mock.calls[0];
-    expect(key).toMatch(/^refine-text:/); // hashed, stable per (text, context)
+    // Exact key: both routes share this helper, so a dropped `context` would serve one
+    // context's refinement for another on both of them.
+    expect(key).toBe(CacheKeys.refineText('hello', 'ctx'));
+    expect(mockRefineText).toHaveBeenCalledWith({ text: 'hello', context: 'ctx' }, expect.anything());
     expect(opts.expiry).toBe(5 * 60 * 1000);
     // maxTokens is finite (not Infinity) - the whole point of the hardening.
     expect(complete.mock.calls[0][2].maxTokens).toBe(800);
