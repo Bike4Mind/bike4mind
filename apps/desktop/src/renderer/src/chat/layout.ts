@@ -41,11 +41,42 @@ export const contentColumnSx: SxProps = {
 };
 
 /**
- * Side padding, in px, of the slim bars above the composer: ChangesBar and the PrStatusBar that
- * replaces it once a PR exists. Shared so the leading icon stays put when one bar swaps for the
- * other.
+ * Geometry, in px, of the slim bars above the composer: ChangesBar and the PrStatusBar that
+ * replaces it once a PR exists. Shared so neither the leading icon nor the composer moves when
+ * one bar swaps for the other.
  */
+export const COMPOSER_BAR_HEIGHT = 32;
+export const COMPOSER_BAR_BORDER = 1;
+// A bar's controls sit this far inside its border on top, bottom and the far end, and its side
+// padding matches, so every edge has the same gap.
 export const COMPOSER_BAR_INSET = 4;
+
+const COMPOSER_BAR_CONTROL_HEIGHT = COMPOSER_BAR_HEIGHT - 2 * (COMPOSER_BAR_BORDER + COMPOSER_BAR_INSET);
+
+const composerBarControlBaseSx = {
+  // Radius shrinks by the distance between the two edges, so the corners nest inside the bar's.
+  borderRadius: `calc(var(--joy-radius-md) - ${COMPOSER_BAR_BORDER + COMPOSER_BAR_INSET}px)`,
+  // Joy's default 2px offset would put the 2px focus ring on the bar's border.
+  '--focus-outline-offset': '0px',
+} as const;
+
+/** A labelled Button or MenuButton inside a composer bar. */
+export const composerBarControlSx = {
+  ...composerBarControlBaseSx,
+  height: COMPOSER_BAR_CONTROL_HEIGHT,
+  minHeight: COMPOSER_BAR_CONTROL_HEIGHT,
+  py: 0,
+  fontWeight: 'md',
+  whiteSpace: 'nowrap',
+  '--Button-gap': '6px',
+} as const;
+
+/** An IconButton inside a composer bar; wider than tall so the short button is still easy to hit. */
+export const composerBarIconButtonSx = {
+  ...composerBarControlBaseSx,
+  '--IconButton-size': `${COMPOSER_BAR_CONTROL_HEIGHT}px`,
+  minWidth: 28,
+} as const;
 
 /**
  * The thin scrollbar the sidebar, the transcript and the scrollers in and beside it share.

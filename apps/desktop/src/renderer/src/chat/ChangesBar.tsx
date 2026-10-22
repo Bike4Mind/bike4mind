@@ -10,29 +10,16 @@ import type { ChangedFile, WorkspaceChanges } from '@shared/workspaceChanges';
 import { changesStateLabel, filesChangedLabel } from './changesBarModel';
 import { DiffCount } from './DiffCount';
 import { CaretDownIcon, FileDiffIcon, PullRequestIcon } from './icons';
-import { COMPOSER_BAR_INSET, contentColumnSx } from './layout';
+import {
+  COMPOSER_BAR_BORDER,
+  COMPOSER_BAR_HEIGHT,
+  COMPOSER_BAR_INSET,
+  composerBarControlSx,
+  contentColumnSx,
+} from './layout';
 import { middleTruncate } from './prBarModel';
 
 const PATH_MAX_CHARS = 56;
-
-const BAR_HEIGHT = 32;
-const BAR_BORDER = 1;
-// The bar's controls sit this far inside its border on top, bottom and the far end, and the bar's
-// own side padding matches, so every edge has the same gap.
-const BAR_INSET = COMPOSER_BAR_INSET;
-
-const BAR_CONTROL_HEIGHT = BAR_HEIGHT - 2 * (BAR_BORDER + BAR_INSET);
-
-// Radius shrinks by the distance between the two edges, so the corners nest inside the bar's.
-const barControlSx = {
-  height: BAR_CONTROL_HEIGHT,
-  minHeight: BAR_CONTROL_HEIGHT,
-  py: 0,
-  borderRadius: `calc(var(--joy-radius-md) - ${BAR_BORDER + BAR_INSET}px)`,
-  fontWeight: 'md',
-  whiteSpace: 'nowrap',
-  '--Button-gap': '6px',
-} as const;
 
 function FileRow({ file }: { file: ChangedFile }) {
   return (
@@ -86,9 +73,9 @@ export function ChangesBar({
         alignItems="center"
         spacing={1}
         sx={{
-          minHeight: BAR_HEIGHT,
-          px: `${BAR_INSET}px`,
-          border: `${BAR_BORDER}px solid`,
+          minHeight: COMPOSER_BAR_HEIGHT,
+          px: `${COMPOSER_BAR_INSET}px`,
+          border: `${COMPOSER_BAR_BORDER}px solid`,
           borderColor: 'neutral.outlinedBorder',
           borderRadius: 'md',
           bgcolor: 'background.surface',
@@ -105,7 +92,7 @@ export function ChangesBar({
             variant="plain"
             color="neutral"
             endDecorator={<CaretDownIcon />}
-            sx={{ ...barControlSx, px: 0.75, minWidth: 0 }}
+            sx={{ ...composerBarControlSx, px: 0.75, minWidth: 0 }}
             slotProps={{ root: { 'data-testid': 'changes-bar-files-btn' } }}
           >
             <Box component="span" sx={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -172,7 +159,7 @@ export function ChangesBar({
               startDecorator={<PullRequestIcon />}
               onClick={() => onCreatePullRequest(changes)}
               sx={{
-                ...barControlSx,
+                ...composerBarControlSx,
                 px: 1,
                 '&:hover, &:focus-visible': { color: 'primary.plainColor', borderColor: 'primary.outlinedBorder' },
               }}
