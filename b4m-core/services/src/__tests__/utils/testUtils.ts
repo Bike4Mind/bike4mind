@@ -275,6 +275,8 @@ export const createMockUserRepository = (): MockedObject<IUserRepository> =>
     addTagsToUser: vi.fn(),
     removeGroupFromUser: vi.fn(),
     recordReferrals: vi.fn(),
+    reserveReferrals: vi.fn(),
+    settleReferrals: vi.fn(),
     removeGroupsFromUser: vi.fn(),
     findUserIdsByGroupIds: vi.fn(),
     findByIds: vi.fn(),

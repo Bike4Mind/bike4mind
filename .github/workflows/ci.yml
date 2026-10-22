@@ -283,7 +283,7 @@ jobs:
         run: pnpm --filter @bike4mind/client run codegen
 
       - name: Generate SST types
-        run: pnpm sst install
+        run: bash scripts/ci-sst-install.sh
         env:
           CI: 'true'
 
@@ -359,7 +359,7 @@ jobs:
         run: pnpm --filter @bike4mind/client run codegen
 
       - name: Generate SST types
-        run: pnpm sst install
+        run: bash scripts/ci-sst-install.sh
         env:
           CI: 'true'
 
@@ -620,7 +620,7 @@ jobs:
         run: pnpm --filter @bike4mind/client run codegen
 
       - name: Generate SST types
-        run: pnpm sst install
+        run: bash scripts/ci-sst-install.sh
         env:
           CI: 'true'
 
@@ -858,7 +858,7 @@ jobs:
         run: pnpm --filter @bike4mind/client run codegen
 
       - name: Generate SST types
-        run: pnpm sst install
+        run: bash scripts/ci-sst-install.sh
         env:
           CI: 'true'
 
