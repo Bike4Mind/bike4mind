@@ -160,13 +160,18 @@ function buildToolResultsNudge(feedback: string | null): string {
   return feedback ? `${TOOL_RESULTS_NUDGE}\n\n${feedback}` : TOOL_RESULTS_NUDGE;
 }
 
-/** Calls the host's feedback drain. A failing drain is logged and treated as empty - it must never fail the run. */
+/**
+ * Calls the host's feedback drain. A failing drain is logged and treated as empty - it must never fail the run.
+ * A cancelled run is not drained: whatever the host has queued stays with the host instead of being handed to a
+ * run that will never send it.
+ */
 async function drainHostFeedback(
   drain: AgentRunOptions['drainFeedback'],
   phase: FeedbackDrainPhase,
-  logger: AgentContext['logger']
+  logger: AgentContext['logger'],
+  signal: AbortSignal | undefined
 ): Promise<string | null> {
-  if (!drain) return null;
+  if (!drain || signal?.aborted) return null;
   try {
     return (await drain(phase))?.trim() || null;
   } catch (error) {
@@ -784,7 +789,7 @@ export class ReActAgent extends EventEmitter {
         // tool_use blocks assembled, terminating tool-using runs at iteration 1.
         const finalFeedback =
           !hadToolCalls && currentText.trim() && iterations < maxIterations
-            ? await drainHostFeedback(options.drainFeedback, 'final', this.context.logger)
+            ? await drainHostFeedback(options.drainFeedback, 'final', this.context.logger, options.signal)
             : null;
         if (finalFeedback) {
           this.reopenAnswerWithFeedback(messages, currentText.trim(), finalFeedback);
@@ -853,7 +858,7 @@ export class ReActAgent extends EventEmitter {
         // After tools complete, nudge the agent to provide the final answer
         // This prevents the agent from forgetting the user's specific requirements (e.g., "list in detail")
         if (!iterationComplete && hadToolCalls) {
-          const feedback = await drainHostFeedback(options.drainFeedback, 'turn', this.context.logger);
+          const feedback = await drainHostFeedback(options.drainFeedback, 'turn', this.context.logger, options.signal);
           messages.push({ role: 'user', content: buildToolResultsNudge(feedback) });
         }
 
@@ -1608,7 +1613,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
       // matching comment in `run()` for full rationale.
       const finalFeedback =
         !hadToolCalls && currentText.trim() && this.iterations < maxIterations
-          ? await drainHostFeedback(options.drainFeedback, 'final', this.context.logger)
+          ? await drainHostFeedback(options.drainFeedback, 'final', this.context.logger, options.signal)
           : null;
       if (finalFeedback) {
         iterationSteps.push(this.reopenAnswerWithFeedback(this.messages, currentText.trim(), finalFeedback));
@@ -1674,7 +1679,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
 
       // Add nudge for next iteration if tools were called but no final answer
       if (!iterationComplete && hadToolCalls) {
-        const feedback = await drainHostFeedback(options.drainFeedback, 'turn', this.context.logger);
+        const feedback = await drainHostFeedback(options.drainFeedback, 'turn', this.context.logger, options.signal);
         this.messages.push({ role: 'user', content: buildToolResultsNudge(feedback) });
       }
 

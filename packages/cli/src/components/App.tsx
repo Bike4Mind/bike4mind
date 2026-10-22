@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { Box, Text, Static, useInput, measureElement, type DOMElement } from 'ink';
 import { StatusBar } from './StatusBar';
-import { InputPrompt } from './InputPrompt';
+import { InputPrompt, type SubmitOptions } from './InputPrompt';
 import { AgentThinking } from './AgentThinking';
 import { BackgroundAgentStatus } from './BackgroundAgentStatus';
 import { BackgroundShellStatus } from './BackgroundShellStatus';
@@ -40,6 +40,9 @@ import { useStdoutDimensions } from '../hooks/useStdoutDimensions.js';
  * agent/shell status blocks render nothing when idle.
  */
 const LIVE_CHROME_ROWS = 10;
+
+/** Shown under the queued-message rows; mirrors the routing in handleSubmit and the ESC handler in index.tsx. */
+const QUEUE_HINT = 'Enter steers this turn \u00B7 Tab queues for next turn \u00B7 Esc cancels and restores to input';
 
 interface AppProps {
   onMessage: (message: string) => Promise<void>;
@@ -169,10 +172,11 @@ export function App({
   // (see liveStepWindow.ts), so the trace and streaming reply only get the rows
   // left over. On a terminal too short to have any left over they drop out
   // entirely - keeping scrollback usable matters more than a two-line trace.
-  const liveRows = Math.max(0, terminalRows - LIVE_CHROME_ROWS - messageQueue.length - promptRows);
+  const queueRows = messageQueue.length > 0 ? messageQueue.length + 1 : 0;
+  const liveRows = Math.max(0, terminalRows - LIVE_CHROME_ROWS - queueRows - promptRows);
 
   const handleSubmit = React.useCallback(
-    async (input: string) => {
+    async (input: string, options?: SubmitOptions) => {
       const trimmed = input.trim();
       if (!trimmed) return;
 
@@ -205,12 +209,12 @@ export function App({
         }
       }
 
-      // If the agent is already processing a message, enqueue this one and
-      // return. The handleMessage finally block drains the queue. This is
-      // what lets the user keep typing/submitting while a long response is
-      // still in flight.
-      if (useCliStore.getState().isThinking) {
-        useCliStore.getState().enqueueMessage(messageToSend);
+      // Mid-turn input is queued, never run as a parallel turn. Enter steers
+      // the running turn (delivered at its next model request); Tab queues a
+      // follow-up turn. turnInFlight covers the unwind after an eager ESC.
+      const store = useCliStore.getState();
+      if (store.isThinking || store.turnInFlight) {
+        store.enqueueMessage(messageToSend, options?.followUp ? 'followUp' : 'steer');
         return;
       }
 
@@ -351,18 +355,18 @@ export function App({
 
           {/* FIXED INPUT AREA - stays at bottom, doesn't scroll */}
           <Box flexDirection="column" flexShrink={0}>
-            {/* Queued user messages — shown above the input box while the
-                agent is processing a previous message. Each entry drains
-                top-down and gets removed from this list as it starts
-                running. Styled with a gray bg + white text to read as
-                "pending" without being too prominent — distinct from the
-                whiteBright bg used for already-sent user prompts. Each
-                row is padded to terminal width so the bg fills the row,
-                matching the sent-prompt highlight pattern. */}
+            {/* Queued user messages, shown above the input box while a turn
+                runs. A steer leaves the list when it is injected into the
+                running turn; follow-ups (and any undelivered steer) leave when
+                the next turn starts. Gray bg + white text reads as "pending",
+                distinct from the whiteBright bg of sent prompts; rows are
+                padded to terminal width so the bg fills the row, matching the
+                sent-prompt highlight in MessageItem.tsx. */}
             {messageQueue.length > 0 && (
               <Box flexDirection="column" paddingX={1} marginBottom={1}>
                 {messageQueue.map((queuedMessage, idx) => {
-                  const rowText = `❯ ${queuedMessage}`;
+                  const label = queuedMessage.kind === 'followUp' ? '[next turn] ' : '';
+                  const rowText = `\u276F ${label}${queuedMessage.text}`;
                   const padded = rowText.length >= terminalCols - 2 ? rowText : rowText.padEnd(terminalCols - 2);
                   return (
                     <Text key={idx} backgroundColor="gray" color="white" wrap="truncate-end">
@@ -370,6 +374,9 @@ export function App({
                     </Text>
                   );
                 })}
+                <Text dimColor wrap="truncate-end">
+                  {QUEUE_HINT}
+                </Text>
               </Box>
             )}
 
