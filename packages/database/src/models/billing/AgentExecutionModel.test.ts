@@ -1371,6 +1371,26 @@ describe('AgentExecutionRepository', () => {
       expect(await agentExecutionRepository.recordIterationConfidence(exec.id, 0.2, { belowThreshold: true })).toBe(1);
     });
 
+    it('advances only the streak when told not to record telemetry (a scripted score)', async () => {
+      const exec = await agentExecutionRepository.create(makeBaseExecution());
+      const scripted = (confidence: number, belowThreshold: boolean) =>
+        agentExecutionRepository.recordIterationConfidence(exec.id, confidence, {
+          belowThreshold,
+          recordTelemetry: false,
+        });
+
+      expect(await scripted(0.1, true)).toBe(1);
+      expect(await scripted(0.1, true)).toBe(2);
+      // Above threshold with no telemetry leaves nothing to `$inc`; the reset must still land.
+      expect(await scripted(0.9, false)).toBe(0);
+
+      expect((await agentExecutionRepository.findById(exec.id))?.confidenceTelemetry).toMatchObject({
+        evaluatedCount: 0,
+        minConfidence: 1,
+        confidenceSum: 0,
+      });
+    });
+
     it('starts the streak from a doc written before the field existed', async () => {
       const exec = await agentExecutionRepository.create(makeBaseExecution());
       await AgentExecutionModel.updateOne({ _id: exec.id }, { $unset: { lowConfidenceStreak: '' } });

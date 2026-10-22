@@ -453,6 +453,15 @@ export interface IAgentExecution {
   lowConfidenceStreak?: number;
 
   /**
+   * Admin-only scripted gate input: entry `i` replaces the confidence of the run's 1-indexed
+   * iteration `i + 1` wherever the gate evaluates one, so a test can make the gate fire on demand.
+   * Set at start only (`startAgentExecution` rejects non-admin callers); read by the executor's
+   * confidence-gate block, which keeps scripted iterations out of `confidenceTelemetry` (they
+   * still advance `lowConfidenceStreak`, so firing the gate takes a streak of low entries).
+   */
+  confidenceOverrides?: number[];
+
+  /**
    * Durable optimizer plan ledger (#680). Present only on opti agent runs; rehydrated each
    * invocation so the decompose-once / plan-completion guards survive continuation Lambdas.
    */
@@ -820,6 +829,8 @@ const AgentExecutionSchema = new mongoose.Schema(
     // apply to every new execution.
     confidenceTelemetry: { type: ConfidenceTelemetrySchema, default: () => ({}) },
     lowConfidenceStreak: { type: Number, default: 0 },
+    // `default: undefined` so a normal run carries no field rather than an empty script.
+    confidenceOverrides: { type: [Number], default: undefined },
     // Opti-only; no default so non-opti executions don't carry an empty ledger.
     optiPlanState: { type: OptiPlanStateSchema, required: false },
 
@@ -1702,21 +1713,27 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
    * Also advances `lowConfidenceStreak` in the same write: incremented when
    * `belowThreshold`, reset to 0 otherwise. Returns the updated streak, which is
    * what the gate decides on (0 if the doc is gone).
+   *
+   * `recordTelemetry: false` advances only the streak: a scripted score
+   * (`confidenceOverrides`) must still drive the gate but stay out of the counters.
    */
   async recordIterationConfidence(
     id: string,
     confidence: number,
-    { belowThreshold }: { belowThreshold: boolean }
+    { belowThreshold, recordTelemetry = true }: { belowThreshold: boolean; recordTelemetry?: boolean }
   ): Promise<number> {
+    const inc: Record<string, number> = {
+      ...(recordTelemetry
+        ? { 'confidenceTelemetry.evaluatedCount': 1, 'confidenceTelemetry.confidenceSum': confidence }
+        : {}),
+      ...(belowThreshold ? { lowConfidenceStreak: 1 } : {}),
+    };
     const updated = await this.model.findOneAndUpdate(
       { _id: id },
       {
-        $inc: {
-          'confidenceTelemetry.evaluatedCount': 1,
-          'confidenceTelemetry.confidenceSum': confidence,
-          ...(belowThreshold ? { lowConfidenceStreak: 1 } : {}),
-        },
-        $min: { 'confidenceTelemetry.minConfidence': confidence },
+        // Mongo rejects an empty `$inc`, which a scripted above-threshold score would otherwise send.
+        ...(Object.keys(inc).length > 0 ? { $inc: inc } : {}),
+        ...(recordTelemetry ? { $min: { 'confidenceTelemetry.minConfidence': confidence } } : {}),
         ...(belowThreshold ? {} : { $set: { lowConfidenceStreak: 0 } }),
       },
       { new: true, projection: { lowConfidenceStreak: 1 } }

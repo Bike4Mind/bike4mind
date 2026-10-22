@@ -145,6 +145,11 @@ export type StartAgentExecutionInput = {
    * system message, carried in the server-only checkpoint so continuations keep it.
    */
   systemContext?: string;
+  /**
+   * Scripted per-iteration gate confidences (see `IAgentExecution.confidenceOverrides`).
+   * Admin-only: any other caller is refused with `confidence_overrides_forbidden`.
+   */
+  confidenceOverrides?: number[];
 };
 
 /** Why a start was refused. Callers map these onto their own transport's errors. */
@@ -153,6 +158,7 @@ export type StartAgentExecutionFailureReason =
   | 'organization_not_found'
   | 'billing_organization_mismatch'
   | 'billing_key_stale'
+  | 'confidence_overrides_forbidden'
   | 'concurrent_limit'
   | 'dispatch_failed';
 
@@ -177,6 +183,15 @@ export async function startAgentExecution(
   logger: Logger
 ): Promise<StartAgentExecutionResult> {
   const { userId } = input;
+
+  if (input.confidenceOverrides && !(await isAdminUser(userId))) {
+    logger.warn('[Start] Non-admin caller sent confidenceOverrides', { userId });
+    return {
+      ok: false,
+      reason: 'confidence_overrides_forbidden',
+      message: 'Only an admin can set confidence overrides',
+    };
+  }
 
   // Validate session ownership before creating anything.
   const session = await sessionRepository.findById(input.sessionId);
@@ -328,6 +343,7 @@ export async function startAgentExecution(
     enableArtifacts: input.enableArtifacts,
     imageConfig: input.imageConfig,
     audioConfig: input.audioConfig,
+    confidenceOverrides: input.confidenceOverrides,
   });
 
   const executionId = execution.id;
@@ -472,6 +488,11 @@ export async function startAgentExecution(
 
   logger.info('[Start] Executor dispatched', { executionId });
   return { ok: true, executionId, questId: persistedQuestId };
+}
+
+async function isAdminUser(userId: string): Promise<boolean> {
+  const user = await userRepository.findById(userId);
+  return user?.isAdmin === true;
 }
 
 type RunBillingOrg =
