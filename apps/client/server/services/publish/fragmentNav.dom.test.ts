@@ -96,6 +96,15 @@ describe('hash bridge (parent) navigate handling', () => {
   let frame: HTMLIFrameElement;
   let fetchDownload: ReturnType<typeof vi.fn>;
 
+  const setActivation = (isActive: boolean) =>
+    Object.defineProperty(navigator, 'userActivation', { value: { isActive }, configurable: true });
+  // Every case runs inside a click's activation unless it says otherwise.
+  beforeEach(() => setActivation(true));
+  afterEach(() => {
+    delete (navigator as { userActivation?: unknown }).userActivation;
+    vi.useRealTimers();
+  });
+
   function runParentBridge(pathname: string): void {
     window.history.replaceState(null, '', pathname);
     frame = document.createElement('iframe');
@@ -149,11 +158,11 @@ describe('hash bridge (parent) navigate handling', () => {
   });
 
   describe('user activation', () => {
-    const setActivation = (isActive: boolean) =>
-      Object.defineProperty(navigator, 'userActivation', { value: { isActive }, configurable: true });
-    afterEach(() => {
-      delete (navigator as { userActivation?: unknown }).userActivation;
-    });
+    const fakeClock = () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    };
+    const tick = (ms: number) => vi.setSystemTime(new Date(Date.now() + ms));
 
     it('refuses to navigate without a user activation (a script looping navigate messages)', () => {
       setActivation(false);
@@ -162,19 +171,40 @@ describe('hash bridge (parent) navigate handling', () => {
       expect(fetchDownload).not.toHaveBeenCalled();
     });
 
-    it('navigates during a user activation', () => {
-      setActivation(true);
+    it('allows one file per activation window, not a burst within it', () => {
+      fakeClock();
       runParentBridge(BASE);
       fromFrame({ b4m: 'navigate', path: `${BASE}/files/report.pdf` });
+      tick(1500);
       fromFrame({ b4m: 'navigate', path: `${BASE}/files/other.pdf` });
+      tick(1500);
+      fromFrame({ b4m: 'navigate', path: `${BASE}/files/third.pdf` });
+      expect(fetchDownload.mock.calls.map(c => c[0])).toEqual([`${BASE}/files/report.pdf`]);
+      tick(5000);
+      fromFrame({ b4m: 'navigate', path: `${BASE}/files/later.pdf` });
       expect(fetchDownload).toHaveBeenCalledTimes(2);
     });
 
-    it('throttles to one navigation per two seconds where the UA has no activation API', () => {
+    it('holds an active window to one navigation per second', () => {
+      fakeClock();
       runParentBridge(BASE);
       fromFrame({ b4m: 'navigate', path: `${BASE}/files/report.pdf` });
-      fromFrame({ b4m: 'navigate', path: `${BASE}/files/other.pdf` });
+      tick(200);
+      // A page navigation right behind it is refused too: the window is not a free pass.
+      fromFrame({ b4m: 'navigate', path: `${BASE}/files/report2.pdf` });
       expect(fetchDownload).toHaveBeenCalledTimes(1);
+    });
+
+    describe('without the activation API', () => {
+      beforeEach(() => {
+        delete (navigator as { userActivation?: unknown }).userActivation;
+      });
+
+      it('refuses every file navigation, since there is no click to require', () => {
+        runParentBridge(BASE);
+        fromFrame({ b4m: 'navigate', path: `${BASE}/files/report.pdf` });
+        expect(fetchDownload).not.toHaveBeenCalled();
+      });
     });
   });
 

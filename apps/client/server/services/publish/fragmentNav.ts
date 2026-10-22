@@ -160,8 +160,11 @@ function b4mBundlePath(path){
  * Also answers `navigate` (see the file header) for a path `b4mBundlePath` accepts, and only
  * during a user activation: a click inside the frame activates its ancestors too, so a real
  * click passes, while a script looping navigate messages cannot force top-level navigations
- * or downloads on its own. Where the UA has no `navigator.userActivation`, navigations are
- * throttled to one per two seconds instead. Files go through `window.__b4mFetchDownload` when
+ * or downloads on its own. Activation is transient (about 5 s) and a navigation does not
+ * consume it, so one click is further held to one navigation per second and to one file
+ * per 5 s - roughly one file per activation. Where the UA has no `navigator.userActivation`
+ * there is no click to require, so only PAGE navigations pass there (one per 2 s); files,
+ * which open or download, are refused rather than allowed without a click. Files go through `window.__b4mFetchDownload` when
  * a host page defines one (the loader shell, whose viewer authorizes by Bearer and so cannot
  * download by plain navigation); otherwise a top-level navigation to the file opens it.
  */
@@ -172,15 +175,20 @@ export const HASH_BRIDGE_JS = String.raw`(function(){
   frame.addEventListener('load',send);
   window.addEventListener('hashchange',send);
   ${BUNDLE_PATH_JS}
-  var last=0;
-  function activated(){
-    var ua=navigator.userActivation;
-    if(ua){return ua.isActive===true;}
-    var now=Date.now();if(now-last<2000){return false;}last=now;return true;
+  var lastNav=0,lastFile=0;
+  function allowed(page){
+    var ua=navigator.userActivation,now=Date.now();
+    if(!ua){
+      if(!page||now-lastNav<2000){return false;}
+      lastNav=now;return true;
+    }
+    if(ua.isActive!==true||now-lastNav<1000){return false;}
+    if(!page){if(now-lastFile<5000){return false;}lastFile=now;}
+    lastNav=now;return true;
   }
   function navigate(raw){
     var t=b4mBundlePath(raw);
-    if(!t||!activated()){return;}
+    if(!t||!allowed(t.page)){return;}
     if(!t.page&&typeof window.__b4mFetchDownload==='function'){window.__b4mFetchDownload(t.path);return;}
     location.assign(t.path+t.hash);
   }
