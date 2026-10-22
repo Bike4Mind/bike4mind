@@ -1,9 +1,10 @@
-import { emailJobRepository } from '@bike4mind/database';
+import { emailJobRepository, withTransaction } from '@bike4mind/database';
 import { ApiKeyScope, EmailJobStatus } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
   if (!req.user?.isAdmin) {
@@ -21,11 +22,20 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     throw new BadRequestError('Job has already been started');
   }
 
-  // Update status to queued and record who started it
-  await emailJobRepository.update({
-    id,
-    status: EmailJobStatus.QUEUED,
-    startedBy: req.user.id,
+  // Strict audit shares the status transaction and runs before the enqueue, so a failed audit sends nothing.
+  await withTransaction(async () => {
+    await emailJobRepository.update({
+      id,
+      status: EmailJobStatus.QUEUED,
+      startedBy: req.user!.id,
+    });
+
+    await recordAdminActionFromRequest(req, {
+      action: 'email.job.started',
+      target: { kind: 'settings', id, displayName: job.name },
+      summary: `started email job ${job.name}`,
+      details: { templateId: job.templateId, subject: job.subject, isTestMode: job.isTestMode },
+    });
   });
 
   // Send to job queue

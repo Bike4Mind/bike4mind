@@ -1,9 +1,10 @@
-import { emailJobRepository } from '@bike4mind/database';
-import { ApiKeyScope, EmailJobOverallStatus } from '@bike4mind/common';
+import { emailJobRepository, withTransaction } from '@bike4mind/database';
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { z } from 'zod';
 
 const RecipientFilterSchema = z
@@ -41,11 +42,41 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
   }
   const recipientFilter = recipientFilterResult.data;
 
-  // Atomically claim the job for sending (prevents duplicate sends from concurrent requests)
-  const job = await emailJobRepository.claimForSending(id, {
-    lastSentAt: new Date(),
-    lastSentBy: req.user.id,
-    startedBy: req.user.id,
+  const actingUserId = req.user.id;
+
+  // Strict audit shares the claim transaction and runs before the enqueue, so a failed audit sends nothing.
+  // The test-mode check throws inside it so the claim rolls back with the transaction.
+  const job = await withTransaction(async () => {
+    // Atomically claim the job for sending (prevents duplicate sends from concurrent requests)
+    const claimed = await emailJobRepository.claimForSending(id, {
+      lastSentAt: new Date(),
+      lastSentBy: actingUserId,
+      startedBy: actingUserId,
+    });
+    if (!claimed) return null;
+
+    if (testMode) {
+      const allTestRecipients = [...(testRecipients || []), ...(claimed.testEmailAddresses || [])];
+      if (allTestRecipients.length === 0) {
+        throw new BadRequestError('Test mode requires at least one test recipient email address.');
+      }
+    }
+
+    await recordAdminActionFromRequest(req, {
+      action: 'email.job.sent',
+      target: { kind: 'settings', id, displayName: claimed.name },
+      summary: `${testMode ? 'sent test of' : 'sent'} email job ${claimed.name}`,
+      details: {
+        templateId: claimed.templateId,
+        subject: claimed.subject,
+        testMode: Boolean(testMode),
+        recipientFilter: recipientFilter ?? null,
+        userIdCount: Array.isArray(userIds) ? userIds.length : null,
+        testRecipientCount: Array.isArray(testRecipients) ? testRecipients.length : 0,
+      },
+    });
+
+    return claimed;
   });
   if (!job) {
     // Either job doesn't exist or is already sending
@@ -54,16 +85,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
       throw new NotFoundError('Job not found');
     }
     throw new BadRequestError('Job is currently being sent. Please wait for it to complete or cancel it first.');
-  }
-
-  // If in test mode, require at least one test recipient
-  if (testMode) {
-    const allTestRecipients = [...(testRecipients || []), ...(job.testEmailAddresses || [])];
-    if (allTestRecipients.length === 0) {
-      // Roll back the status since we're not actually sending
-      await emailJobRepository.updateOverallStatus(id, EmailJobOverallStatus.DRAFT);
-      throw new BadRequestError('Test mode requires at least one test recipient email address.');
-    }
   }
 
   // Queue the job for processing
