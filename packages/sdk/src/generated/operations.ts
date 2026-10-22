@@ -53,6 +53,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/sessions',
   },
+  createTextRefinement: {
+    method: 'POST',
+    path: '/api/v1/text-refinements',
+  },
   createTranscription: {
     method: 'POST',
     path: '/api/v1/transcriptions',

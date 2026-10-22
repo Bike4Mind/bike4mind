@@ -5190,6 +5190,66 @@
           "dimensions": 1024
         }
       },
+      "createTextRefinementResponse200": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "example": {
+          "text": "A golden retriever running along a sunlit beach at sunset, waves breaking behind it."
+        }
+      },
+      "createTextRefinementResponse503": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "provider_not_configured"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "createTextRefinementRequest": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 10000
+          },
+          "context": {
+            "type": "string",
+            "maxLength": 10000
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "example": {
+          "text": "a dog on a beach",
+          "context": "prompt for an image generator"
+        }
+      },
       "createDecisionResponse200": {
         "type": "object",
         "properties": {
@@ -20496,6 +20556,386 @@
             "lang": "Python",
             "label": "requests",
             "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/v1/embeddings\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n    json={\n        \"model\": \"text-embedding-3-small\",\n        \"input\": [\n            \"The quick brown fox\",\n            \"jumps over the lazy dog\"\n        ],\n        \"dimensions\": 1024\n    },\n)"
+          }
+        ]
+      }
+    },
+    "/api/v1/text-refinements": {
+      "post": {
+        "operationId": "createTextRefinement",
+        "summary": "Refine text",
+        "description": "Rewrites `text` to be more concise, clear and detailed while keeping its intent. `context` is optional background that steers the rewrite. `text` is at most 10000 characters and `context` at most 10000. Output is capped at about 800 tokens, and identical requests are served from a cache for about five minutes. Not billed in credits. Authenticate with an API key (`b4m_live_`) carrying `ai:generate`, or a JWT.",
+        "tags": [
+          "AI"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/createTextRefinementRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The refined text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/createTextRefinementResponse200"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The API key does not hold any of the required scopes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The path does not serve this HTTP method.",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Allow": {
+                "description": "The methods this path serves. GET implies HEAD.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request failed validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-key rate limit exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The model returned no refined text, or the call failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no operations model configured (`errorCode: \"provider_not_configured\"`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/createTextRefinementResponse503"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "x-required-scopes": [
+          "ai:generate"
+        ],
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -s -X POST \"https://your-deployment.example.com/api/v1/text-refinements\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\" \\\n  -H \"Content-Type: application/json\" \\\n  --data-binary @- <<'B4M_REQUEST_BODY'\n{\n  \"text\": \"a dog on a beach\",\n  \"context\": \"prompt for an image generator\"\n}\nB4M_REQUEST_BODY"
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/text-refinements\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n  \"text\": \"a dog on a beach\",\n  \"context\": \"prompt for an image generator\"\n}),\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/v1/text-refinements\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n    json={\n        \"text\": \"a dog on a beach\",\n        \"context\": \"prompt for an image generator\"\n    },\n)"
           }
         ]
       }

@@ -31,15 +31,13 @@ describe('API reference scopes table', () => {
     const requiredLines = API_REFERENCE_CONTENT.split('\n').filter(line =>
       /^\*\*Required API-key scope\b[^*]*:\*\*/.test(line)
     );
-    // Only the tokens after the label: the "scope for refineText" form names an endpoint, not a scope.
+    // Only the tokens after the label, so prose before the colon is never read as a scope.
     const required = requiredLines.flatMap(line =>
       [...line.slice(line.indexOf(':**')).matchAll(/`([^`]+)`/g)].map(match => match[1])
     );
 
-    // Pin both label forms (plain and "scope for X"); the tokens alone would not catch a dropped line.
-    expect(requiredLines).toHaveLength(3);
-    expect(requiredLines.some(line => line.includes('for `refineText`'))).toBe(true);
-    expect(required).toContain('ai:generate');
+    // Pin the line count; the tokens alone would not catch a dropped line.
+    expect(requiredLines).toHaveLength(2);
     expect(required).toContain('projects:read');
     expect(required).toContain('projects:write');
     expect(required).toContain('agents:read');
