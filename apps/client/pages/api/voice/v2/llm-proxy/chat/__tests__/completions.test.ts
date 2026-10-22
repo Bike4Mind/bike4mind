@@ -243,7 +243,7 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - video generation', () 
     expect((mockInvoke.mock.calls[0][0] as VideoBody).body.tools).toContain('video_generation');
     const processArg = mockProcess.mock.calls[0][0] as VideoProcessArg;
     expect(processArg.body.tools).toContain('video_generation');
-    // The usable-model lookup is a DB read: it must wait for the engine to ask, not run on every voice turn.
+    // The handler only hands over the resolver; process() (mocked here) is what runs the usable-model lookup.
     expect(mockBuildVideoToolConfig).not.toHaveBeenCalled();
     expect(await processArg.videoToolConfigResolver?.()).toEqual({
       ...config,
