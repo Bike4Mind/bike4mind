@@ -1120,6 +1120,12 @@ The worker records health snapshots for active data lakes at 06:00 UTC, using th
 
 Snapshots upsert by lake and UTC day. Failed lakes are isolated and their attempted-check timestamp advances so they cannot starve other lakes. The existing 2,000-lake cap and five concurrent computations remain; these are count bounds, not cancellation of a hung database request. This job reports health only. It neither repairs content nor runs inconsistency detection: absent or stale stored inconsistency results remain absent or stale. Other hosted maintenance jobs are not enabled by this registration.
 
+### Integration health checks
+
+The worker probes Slack, GitHub and Atlassian reachability every five minutes with the same unauthenticated checks hosted deployments run, and stores each result in MongoDB for the admin Integration Health dashboard. It emits no CloudWatch metrics and does not probe at startup, so a fresh container waits one full interval. Stored checks expire after 25 hours through the model's existing TTL index.
+
+An install with no outbound HTTPS to `slack.com`, `api.github.com` or `api.atlassian.com` records those integrations as unhealthy on every run. Three consecutive failures open the platform-wide circuit breaker for them, which blocks their MCP integrations. Those integrations cannot work without that egress anyway, so there is no opt-out switch.
+
 ### Daily telemetry retention
 
 The single worker removes `promptMeta.contextTelemetry` from eligible Quest records older than 90 days at 03:00 UTC. The existing hosted cleanup and local worker share the same 5,000-record batches and database writes. The cutoff is fixed once per run using UTC calendar days; the exact cutoff remains excluded. Conversation content and other prompt metadata remain intact.
