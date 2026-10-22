@@ -26,7 +26,7 @@ Required variables fail loudly when their feature runs; optional variables may s
 | `SESSION_SECRET` | Session signing key (32-byte hex) |
 | `SECRET_ENCRYPTION_KEY` | Encrypts secrets stored in the database (32-byte hex). **Cannot be rotated after first boot** |
 
-Set `B4M_BOOTSTRAP_ADMIN_EMAIL` to the email of the account that should become the admin on a fresh install. It is optional; if it is unset, the first account to register becomes the admin.
+Set `B4M_BOOTSTRAP_ADMIN_EMAIL` to the email of the account that should become the admin on a fresh install. It is optional; if it is unset, the first account to register becomes the admin. Sign in with the emailed one-time code the first time, not OAuth (for example GitHub): the bootstrap applies only to the email-code sign-in.
 
 The three secrets are the **only values you must change** - everything else in the template already points at the bundled services.
 
