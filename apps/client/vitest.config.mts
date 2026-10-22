@@ -9,6 +9,7 @@ import path from 'path';
 // vite devDep and the plugin-react v6 bump are coupled — keep both or revert both.
 import react from '@vitejs/plugin-react';
 import tsconfigPaths from 'vite-tsconfig-paths';
+import { barrelImportsPlugin } from './vitest.barrelImports';
 
 const INTEGRATION_LANE = process.env.CLIENT_TEST_LANE === 'integration';
 
@@ -89,8 +90,11 @@ const projectTest = {
 
 // Vite-level options both projects share. A factory, not a constant: each project gets its own
 // Vite server, and plugin instances are stateful and must not be shared across them.
+// `@mui/joy` is imported from its root in ~900 files. Next rewrites those per component for the
+// app bundle, but vitest would load all ~70 Joy components (~0.5s) for every test that renders one,
+// so the plugin does the same rewrite here. See vitest.barrelImports.ts.
 const projectVite = () => ({
-  plugins: [react(), tsconfigPaths()],
+  plugins: [react(), tsconfigPaths(), barrelImportsPlugin(['@mui/joy'])],
   resolve: {
     alias: {
       '@server': path.resolve(__dirname, 'server'),
