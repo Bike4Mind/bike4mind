@@ -850,7 +850,11 @@ const FIXTURE_LAKE_OWNER = { email: 'datalake-fixture-e2e@test.com', name: 'E2E 
 // Bump the version whenever largeLakeFiles() changes: the health check below counts files and cannot
 // tell a stale lake from a current one. A rebuild never deletes another version, because a branch
 // still on it may be asking it at that moment; delete an old version by hand once no branch uses it.
-const FIXTURE_LAKE_NAME = 'E2E Large Lake Fixture v1';
+const FIXTURE_LAKE_VERSION = 1;
+const FIXTURE_LAKE_NAME = `E2E Large Lake Fixture v${FIXTURE_LAKE_VERSION}`;
+// Explicit because the derived default is cut to 20 chars, which drops the version: every version
+// would claim the same prefix and assertPrefixAvailable would refuse the second one.
+const FIXTURE_LAKE_TAG_PREFIX = `e2elargelakev${FIXTURE_LAKE_VERSION}:`;
 // Must stay above FORCED_RETRIEVAL_MAX_CANDIDATE_FILES (100, ChatCompletionFeatures.ts) and below
 // FORCED_RETRIEVAL_MAX_LISTED_FILES (1000), the range where candidates are cut by relevance.
 const LARGE_LAKE_FILLER_COUNT = 110;
@@ -940,7 +944,10 @@ async function ensureLargeLakeFixture(
   }
 
   await Promise.all(candidates.map(l => apiDeleteDataLake(request, token, l.id)));
-  const lake = await apiCreateDataLake(request, token, { name: FIXTURE_LAKE_NAME });
+  const lake = await apiCreateDataLake(request, token, {
+    name: FIXTURE_LAKE_NAME,
+    fileTagPrefix: FIXTURE_LAKE_TAG_PREFIX,
+  });
   const files = largeLakeFiles();
   for (let i = 0; i < files.length; i += SEED_CONCURRENCY) {
     await Promise.all(files.slice(i, i + SEED_CONCURRENCY).map(file => apiSeedLakeArticle(request, token, lake, file)));
