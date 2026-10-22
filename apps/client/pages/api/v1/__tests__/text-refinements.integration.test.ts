@@ -144,6 +144,16 @@ describe('POST /api/v1/text-refinements', () => {
     });
   });
 
+  it('502s, not 503s, when the operations-model resolver fails for any other reason', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    // A call failure is not an unconfigured deployment: only the typed no-model error is a 503.
+    mockGetOperationsModel.mockRejectedValue(new Error('db timeout'));
+    const { req, res } = post({ text: 'hello' });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(502);
+    expect(res._getJSONData()).toMatchObject({ error: 'Text refinement failed' });
+  });
+
   it('502s when the model call throws', async () => {
     validateWithScopes([ApiKeyScope.AI_GENERATE]);
     mockRefineText.mockRejectedValue(new Error('boom'));
