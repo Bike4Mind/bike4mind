@@ -31,7 +31,10 @@ export function RetrievalCoverageBanner({ reasons = [] }: { reasons?: string[] }
       {/* Native disclosure: closed by default, keyboard and screen-reader operable without state. */}
       {reasons.length > 0 ? (
         <Box component="details" sx={{ '& > summary': { cursor: 'pointer', listStyle: 'none' } }}>
-          <Box component="summary" sx={{ '&::-webkit-details-marker': { display: 'none' } }}>
+          <Box
+            component="summary"
+            sx={{ '&::-webkit-details-marker': { display: 'none' }, '&:hover': { textDecoration: 'underline' } }}
+          >
             <Typography level="body-sm" textColor="warning.plainColor" component="span">
               {COVERAGE_BANNER_TITLE}{' '}
               <Typography component="span" level="body-sm" sx={{ textDecoration: 'underline' }}>
