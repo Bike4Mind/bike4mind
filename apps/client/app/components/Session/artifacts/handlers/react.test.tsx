@@ -1,10 +1,11 @@
 import React from 'react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, act } from '@testing-library/react';
+import { render, screen, act, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { parseArtifactsWithFallback } from '@client/app/utils/artifactParser';
 import { groupReactArtifacts, type ReactArtifactGroupRole } from '@client/app/utils/reactArtifactGroup';
+import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import { getArtifactHandler, type ParsedArtifact } from '../registry';
 
 // useReactArtifactSandbox reads the inert-render flag through react-query; flag off here.
@@ -93,6 +94,13 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+/** Opens the card in the side panel and returns the artifactData it hands the viewer. */
+function openInViewer(): Record<string, unknown> {
+  fireEvent.click(screen.getByTestId('react-artifact-expand-btn'));
+  expect(setSessionLayout).toHaveBeenCalledTimes(1);
+  return vi.mocked(setSessionLayout).mock.calls[0][0] as Record<string, unknown>;
+}
+
 describe('react artifact handler in a multi-file reply', () => {
   const { artifacts } = parseArtifactsWithFallback(REPLY);
   const entry = artifacts.find(a => a.identifier === 'chrono-app') as ParsedArtifact;
@@ -131,5 +139,56 @@ describe('react artifact handler in a multi-file reply', () => {
     );
     expect(message).not.toHaveProperty('files');
     expect(screen.queryByTestId('react-artifact-used-by-label')).not.toBeInTheDocument();
+  });
+
+  it('opens the entry in the side panel with its group, so the viewer previews it with its files', () => {
+    renderCard(entry, roles.get(entry));
+
+    const layout = openInViewer();
+    expect(layout).toMatchObject({ layout: 'vertical', selectedArtifactId: 'id-chrono-app' });
+    expect(layout.artifactData).toMatchObject({
+      type: 'react',
+      id: 'id-chrono-app',
+      reactGroup: {
+        role: 'entry',
+        files: { Chronosphere: sibling.content },
+        dependencies: ['react', 'framer-motion'],
+        siblings: [{ identifier: 'Chronosphere', title: 'Chronosphere' }],
+      },
+    });
+  });
+
+  it('opens a sibling in the side panel with its sibling role, so the viewer shows it as code', () => {
+    renderCard(sibling, roles.get(sibling));
+
+    expect(openInViewer().artifactData).toMatchObject({
+      type: 'react',
+      id: 'id-Chronosphere',
+      reactGroup: { role: 'sibling', entryTitle: 'Chrono App' },
+    });
+  });
+
+  it('opens a single-file artifact in the side panel without a group', () => {
+    renderCard(entry);
+
+    expect(openInViewer().artifactData).not.toHaveProperty('reactGroup');
+  });
+});
+
+describe('react artifact handler when a relative import matches nothing in the reply', () => {
+  const { artifacts } = parseArtifactsWithFallback(
+    [
+      '<artifact identifier="lonely-app" type="application/vnd.ant.react" title="Lonely App">',
+      "import Missing from './Missing';",
+      'export default function App() { return <Missing />; }',
+      '</artifact>',
+    ].join('\n')
+  );
+  const [entry] = artifacts;
+
+  it('posts an empty files map, so the sandbox names the missing file instead of rejecting', async () => {
+    renderCard(entry, groupReactArtifacts(artifacts).get(entry));
+
+    expect(await renderMessage()).toEqual(expect.objectContaining({ code: entry.content, files: {} }));
   });
 });

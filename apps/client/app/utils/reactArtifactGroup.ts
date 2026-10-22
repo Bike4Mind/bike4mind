@@ -13,6 +13,8 @@ export type ReactArtifactGroupRole =
       files: Record<string, string>;
       /** npm imports of the entry and every file, since the sandbox loads them all up front. */
       dependencies: string[];
+      /** The files the entry reaches through its imports, in `files` order, for the viewer's file tabs. */
+      siblings: { identifier: string; title: string }[];
     }
   | { role: 'sibling'; entryTitle: string };
 
@@ -23,6 +25,9 @@ type GroupableArtifact = Pick<ParsedArtifact, 'type' | 'identifier' | 'title' | 
  * ones are absent. Relative imports match identifiers by `moduleBaseName`, the normalizer the
  * sandbox resolves `files` with, so both agree on which artifact an import names. When an
  * identifier repeats, its last occurrence in the reply wins and earlier ones stay standalone.
+ *
+ * Any artifact with a relative import that nothing imports is an entry, even when none of its
+ * imports match here: its (possibly empty) `files` let the sandbox name the missing file.
  */
 export function groupReactArtifacts<T extends GroupableArtifact>(
   artifacts: readonly T[]
@@ -30,7 +35,7 @@ export function groupReactArtifacts<T extends GroupableArtifact>(
   const roles = new Map<T, ReactArtifactGroupRole>();
   // The parser returns artifacts last-first, so order by position rather than trusting the array.
   const react = artifacts.filter(a => a.type === 'react').sort((a, b) => a.startIndex - b.startIndex);
-  if (react.length < 2) return roles;
+  if (react.length === 0) return roles;
 
   const latest = new Map<string, T>();
   for (const artifact of react) {
@@ -46,9 +51,12 @@ export function groupReactArtifacts<T extends GroupableArtifact>(
 
   const imports = new Map<T, T[]>();
   const imported = new Set<T>();
+  const importsRelative = new Set<T>();
   for (const artifact of nodes) {
+    const specifiers = findRelativeImports(stripTypeOnlyImports(artifact.content));
+    if (specifiers.length > 0) importsRelative.add(artifact);
     const targets = new Set<T>();
-    for (const specifier of findRelativeImports(stripTypeOnlyImports(artifact.content))) {
+    for (const specifier of specifiers) {
       for (const target of byName.get(moduleBaseName(specifier)) ?? []) {
         if (target !== artifact) targets.add(target);
       }
@@ -58,24 +66,31 @@ export function groupReactArtifacts<T extends GroupableArtifact>(
   }
 
   for (const entry of nodes) {
-    const direct = imports.get(entry) ?? [];
-    if (imported.has(entry) || direct.length === 0) continue;
+    if (imported.has(entry) || !importsRelative.has(entry)) continue;
+
+    const reached = new Set<T>([entry]);
+    const queue = [...(imports.get(entry) ?? [])];
+    while (queue.length > 0) {
+      const next = queue.shift() as T;
+      if (reached.has(next)) continue;
+      reached.add(next);
+      queue.push(...(imports.get(next) ?? []));
+    }
 
     const files: Record<string, string> = {};
+    const siblings: { identifier: string; title: string }[] = [];
     const dependencies = new Set(extractReactDependencies(entry.content));
     for (const [identifier, file] of latest) {
       if (file === entry) continue;
       files[identifier] = file.content;
+      if (reached.has(file)) siblings.push({ identifier, title: file.title });
       extractReactDependencies(file.content).forEach(dep => dependencies.add(dep));
     }
-    roles.set(entry, { role: 'entry', files, dependencies: [...dependencies] });
+    roles.set(entry, { role: 'entry', files, dependencies: [...dependencies], siblings });
 
     // A sibling reachable from two entries is labelled with the first one in the reply.
-    const reached = [...direct];
-    for (let i = 0; i < reached.length; i++) {
-      if (roles.has(reached[i])) continue;
-      roles.set(reached[i], { role: 'sibling', entryTitle: entry.title });
-      reached.push(...(imports.get(reached[i]) ?? []));
+    for (const file of reached) {
+      if (file !== entry && !roles.has(file)) roles.set(file, { role: 'sibling', entryTitle: entry.title });
     }
   }
 

@@ -43,6 +43,7 @@ describe('groupReactArtifacts', () => {
       role: 'entry',
       files: { chronosphere: chronosphere.content },
       dependencies: ['react', 'framer-motion'],
+      siblings: [{ identifier: 'chronosphere', title: 'Chronosphere' }],
     });
     expect(roles.get(chronosphere)).toEqual({ role: 'sibling', entryTitle: 'Chrono App' });
   });
@@ -81,6 +82,11 @@ describe('groupReactArtifacts', () => {
     expect(roles.get(app)).toMatchObject({
       role: 'entry',
       files: { Panel: panel.content, Button: button.content, Icons: icons.content },
+      siblings: [
+        { identifier: 'Panel', title: 'Panel title' },
+        { identifier: 'Button', title: 'Button title' },
+        { identifier: 'Icons', title: 'Icons title' },
+      ],
     });
     for (const sibling of [panel, button, icons]) {
       expect(roles.get(sibling)).toEqual({ role: 'sibling', entryTitle: 'App title' });
@@ -115,10 +121,12 @@ describe('groupReactArtifacts', () => {
       role: 'entry',
       files: { One: one.content, Second: second.content, Two: two.content },
       dependencies: [],
+      siblings: [{ identifier: 'One', title: 'One title' }],
     });
     expect(roles.get(second)).toMatchObject({
       role: 'entry',
       files: { First: first.content, One: one.content, Two: two.content },
+      siblings: [{ identifier: 'Two', title: 'Two title' }],
     });
     expect(roles.get(one)).toEqual({ role: 'sibling', entryTitle: 'First title' });
     expect(roles.get(two)).toEqual({ role: 'sibling', entryTitle: 'Second title' });
@@ -130,6 +138,10 @@ describe('groupReactArtifacts', () => {
     const shared = artifact('Shared', component('Shared'));
     const roles = groupReactArtifacts([shared, second, first]);
     expect(roles.get(shared)).toEqual({ role: 'sibling', entryTitle: 'First title' });
+    // Both entries still list it as one of their files.
+    for (const entry of [first, second]) {
+      expect(roles.get(entry)).toMatchObject({ siblings: [{ identifier: 'Shared', title: 'Shared title' }] });
+    }
   });
 
   it('still makes an entry when one import is missing, handing over the files that exist', () => {
@@ -140,10 +152,18 @@ describe('groupReactArtifacts', () => {
     expect(roles.get(here)).toEqual({ role: 'sibling', entryTitle: 'App title' });
   });
 
-  it('leaves an artifact whose imports match nothing standalone', () => {
+  it('still makes an entry when no import matches, handing over every other file for the error', () => {
     const app = artifact('App', component('App', ["import Gone from './Gone';"]));
-    const other = artifact('Other', component('Other'));
-    expect(groupReactArtifacts([app, other]).size).toBe(0);
+    const other = artifact('Other', component('Other', ["import { z } from 'zod';"]));
+    const roles = groupReactArtifacts([app, other]);
+
+    expect(roles.get(app)).toEqual({
+      role: 'entry',
+      files: { Other: other.content },
+      dependencies: ['zod'],
+      siblings: [],
+    });
+    expect(roles.has(other)).toBe(false);
   });
 
   it('lets an artifact without an identifier be an entry but never a sibling or a file', () => {
@@ -152,7 +172,12 @@ describe('groupReactArtifacts', () => {
     const unnamed = artifact(undefined, component('Untitled'));
     const roles = groupReactArtifacts([nameless, panel, unnamed]);
 
-    expect(roles.get(nameless)).toEqual({ role: 'entry', files: { Panel: panel.content }, dependencies: [] });
+    expect(roles.get(nameless)).toEqual({
+      role: 'entry',
+      files: { Panel: panel.content },
+      dependencies: [],
+      siblings: [{ identifier: 'Panel', title: 'Panel title' }],
+    });
     expect(roles.get(panel)).toEqual({ role: 'sibling', entryTitle: 'untitled title' });
     expect(roles.has(unnamed)).toBe(false);
   });
@@ -187,8 +212,15 @@ describe('groupReactArtifacts', () => {
     });
   });
 
-  it('leaves a lone React artifact standalone', () => {
+  it('makes a lone React artifact with a relative import an entry with no files', () => {
     const app = artifact('App', component('App', ["import Panel from './Panel';"]));
+    expect(groupReactArtifacts([app]).get(app)).toEqual({ role: 'entry', files: {}, dependencies: [], siblings: [] });
+  });
+
+  it('leaves a React artifact with no relative import standalone, alone or beside others', () => {
+    const app = artifact('App', component('App', ["import React from 'react';"]));
+    const other = artifact('Other', component('Other'));
     expect(groupReactArtifacts([app]).size).toBe(0);
+    expect(groupReactArtifacts([app, other]).size).toBe(0);
   });
 });

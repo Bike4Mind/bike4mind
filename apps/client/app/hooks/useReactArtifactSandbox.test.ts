@@ -42,17 +42,27 @@ describe('useReactArtifactSandbox files', () => {
     });
   });
 
-  it('leaves files out of the message when none are given', () => {
-    for (const files of [undefined, {}]) {
-      const { signalReady, lastPosted } = setup(files);
-      signalReady();
-      expect(lastPosted()).toEqual({
-        type: 'react-artifact-render',
-        code: CODE,
-        dependencies: ['react'],
-        mode: 'eval',
-      });
-    }
+  it('leaves files out of the message when none are given, so the sandbox keeps its old rejection', () => {
+    const { signalReady, lastPosted } = setup(undefined);
+    signalReady();
+    expect(lastPosted()).toEqual({
+      type: 'react-artifact-render',
+      code: CODE,
+      dependencies: ['react'],
+      mode: 'eval',
+    });
+  });
+
+  it('forwards an empty files map, so the sandbox names the missing sibling', () => {
+    const { signalReady, lastPosted } = setup({});
+    signalReady();
+    expect(lastPosted()).toEqual({
+      type: 'react-artifact-render',
+      code: CODE,
+      dependencies: ['react'],
+      mode: 'eval',
+      files: {},
+    });
   });
 
   it('does not remount for a new files object with equal content, and does for changed content', () => {
@@ -69,5 +79,10 @@ describe('useReactArtifactSandbox files', () => {
 
     hook.rerender({ files: { Sib: 'a2' } });
     expect(hook.result.current.iframeKey).toBe(initialKey + 2);
+
+    hook.rerender({ files: {} });
+    expect(hook.result.current.iframeKey).toBe(initialKey + 3);
+    hook.rerender({ files: undefined });
+    expect(hook.result.current.iframeKey).toBe(initialKey + 4);
   });
 });

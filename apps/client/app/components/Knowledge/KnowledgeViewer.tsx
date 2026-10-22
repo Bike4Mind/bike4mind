@@ -110,6 +110,7 @@ import ErrorBoundary from '@client/app/components/common/ErrorBoundary';
 import { extractMermaidFence } from '@client/app/utils/mermaidFence';
 import { serverStorageLimitMessage } from '@client/app/utils/storageQuota';
 import { getInsufficientCreditsMessage } from '@client/app/utils/error';
+import type { ReactArtifactGroupRole } from '@client/app/utils/reactArtifactGroup';
 
 // Dynamic imports for artifact viewers
 const ReactArtifactViewer = dynamic(() => import('./ReactArtifactViewer'), {
@@ -237,6 +238,7 @@ interface IChessKnowledgeItem extends IBaseKnowledgeItem {
 interface IReactKnowledgeItem extends IBaseKnowledgeItem {
   type: 'react';
   content: ReactArtifact;
+  reactGroup?: ReactArtifactGroupRole;
 }
 
 interface IHtmlKnowledgeItem extends IBaseKnowledgeItem {
@@ -566,6 +568,7 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
             content: updatedContent,
             mimeType: artifactData.mimeType,
             id: latestArtifact.artifact.id, // Use the actual persisted ID
+            ...(artifactData.reactGroup && { reactGroup: artifactData.reactGroup }),
           },
           selectedArtifactId: artifactData.id,
         });
@@ -761,6 +764,7 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
             timestamp: reactArtifact.createdAt
               ? new Date(reactArtifact.createdAt).getTime()
               : getStableTimestamp(artifactId),
+            reactGroup: artifact.reactGroup,
           });
           break;
         }
@@ -2254,7 +2258,7 @@ const KnowledgeContent: React.FC<{
       const reactData = item.content;
       return (
         <Box sx={{ width: '100%', height: '100%' }}>
-          <ReactArtifactViewer artifact={reactData} onSave={handleSaveReactArtifact} />
+          <ReactArtifactViewer artifact={reactData} group={item.reactGroup} onSave={handleSaveReactArtifact} />
         </Box>
       );
     }

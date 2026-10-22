@@ -1,0 +1,170 @@
+// @vitest-environment jsdom
+import React from 'react';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { render, act, cleanup } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import type { ReactArtifact } from '@bike4mind/common';
+import { getThemeConfig } from '@client/app/utils/themes';
+import type { ReactArtifactGroupRole } from '@client/app/utils/reactArtifactGroup';
+
+const SESSION_ID = 'session-A';
+const ENTRY_ID = 'artifact_react_app_1700000000000_0';
+const appTheme = extendTheme({ ...getThemeConfig() });
+
+interface LatestArtifact {
+  artifact: { id: string; version: number; title: string; metadata: unknown; updatedAt: Date };
+  content: { content: string };
+}
+
+const h = vi.hoisted(() => ({
+  // Props of every next/dynamic viewer KnowledgeViewer renders, in render order.
+  viewerProps: [] as Record<string, unknown>[],
+  latest: undefined as LatestArtifact | undefined,
+}));
+
+vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: vi.fn(), post: vi.fn(), put: vi.fn() } }));
+vi.mock('@client/app/contexts/SessionsContext', () => ({
+  useSessions: () => ({ currentSession: { id: SESSION_ID }, currentSessionId: SESSION_ID }),
+  useWorkBenchFiles: () => [],
+  useSystemPromptFiles: () => ({ systemFiles: [] }),
+  useWorkBenchActions: () => ({ setWorkBenchFiles: vi.fn() }),
+}));
+vi.mock('@client/app/hooks/useMessageFiles', () => ({ useMessageFiles: () => [] }));
+vi.mock('@client/app/contexts/WebsocketContext', () => ({
+  useWebsocket: () => ({ subscribeToAction: () => () => undefined }),
+}));
+vi.mock('@client/app/contexts/LLMContext', () => ({
+  useLLM: (selector: (s: { model: string }) => unknown) => selector({ model: 'test-model' }),
+}));
+vi.mock('@client/app/contexts/UserContext', () => ({
+  useUser: (selector: (s: { currentUser: { id: string; organizationId: string } }) => unknown) =>
+    selector({ currentUser: { id: 'user-1', organizationId: 'org-1' } }),
+}));
+vi.mock('@client/app/components/Credits/AccountSelector', () => ({ useSelectedAccount: () => null }));
+vi.mock('@client/app/hooks/usePublishShare', () => ({
+  usePublishShare: () => ({ publishAndShare: vi.fn(), modal: null }),
+}));
+vi.mock('@client/app/hooks/useAdminTools', () => ({ useAdminTools: () => ({ canUseAdminTools: false }) }));
+vi.mock('@client/app/hooks/useIsMobile', () => ({ useIsMobile: () => false }));
+vi.mock('@client/app/hooks/data/useQuestExport', () => ({
+  useQuestExport: () => ({ startExport: vi.fn(), isExporting: false, isStarting: false, progress: 0 }),
+}));
+vi.mock('@client/app/hooks/data/artifacts', () => ({ useArtifact: () => ({ data: h.latest }) }));
+vi.mock('@client/app/hooks/useArtifactPersistence', () => ({ useArtifactPersistence: () => ({ isPersisted: true }) }));
+vi.mock('@client/app/utils/fabFileUtils', () => ({ getContentFromFabfile: vi.fn().mockResolvedValue('') }));
+vi.mock('@client/app/utils/filesAPICalls', () => ({ getFabFileByIdFromServer: vi.fn() }));
+vi.mock('../GenAI/QuestMasterReply', () => ({ default: () => null }));
+
+vi.mock('next/dynamic', () => ({
+  default: () => (props: Record<string, unknown>) => {
+    h.viewerProps.push(props);
+    return null;
+  },
+}));
+vi.mock('react-syntax-highlighter', () => ({ Prism: () => null }));
+vi.mock('react-syntax-highlighter/dist/esm/styles/prism', () => ({ oneDark: {} }));
+vi.mock('@client/app/components/ProfileModal/ContentPreviewModal', () => ({ default: () => null }));
+vi.mock('./EditFileDialog', () => ({ default: () => null }));
+vi.mock('./DiffPreview', () => ({ default: () => null }));
+vi.mock('./TextViewer', () => ({ default: () => null }));
+vi.mock('./MarkdownViewer', () => ({ default: () => null, UnmarkedCitedPassage: () => null }));
+vi.mock('./DOCXViewer', () => ({ default: () => null }));
+vi.mock('./CSVViewer', () => ({ default: () => null }));
+vi.mock('./JSONViewer', () => ({ default: () => null }));
+vi.mock('./XLSXViewer', () => ({ default: () => null }));
+vi.mock('../Charts/MermaidChart', () => ({ default: () => null }));
+vi.mock('../Charts/RechartsRenderer', () => ({ default: () => null }));
+vi.mock('../Chess/ChessBoard', () => ({ default: () => null }));
+vi.mock('../Chess/InteractiveChessBoard', () => ({ default: () => null }));
+vi.mock('../common/DownloadMenu', () => ({ default: () => null, downloadFile: vi.fn(), copyToClipboard: vi.fn() }));
+
+import KnowledgeViewer, { setKnowledgeViewer } from './KnowledgeViewer';
+import useSessionLayout, { setSessionLayout } from '@client/app/hooks/useSessionLayout';
+
+const ENTRY_CODE = "import Panel from './Panel';\nexport default function App() { return <Panel />; }";
+const ENTRY_GROUP: ReactArtifactGroupRole = {
+  role: 'entry',
+  files: { Panel: 'export default function Panel() { return null; }' },
+  dependencies: ['react'],
+  siblings: [{ identifier: 'Panel', title: 'Panel' }],
+};
+
+const entry: ReactArtifact = {
+  id: ENTRY_ID,
+  type: 'react',
+  title: 'Panel App',
+  content: ENTRY_CODE,
+  metadata: { dependencies: ['react'], hasDefaultExport: true, errorBoundary: true },
+  createdAt: new Date(1700000000000),
+  updatedAt: new Date(1700000000000),
+} as ReactArtifact;
+
+const latestVersion = (version: number, content: string): LatestArtifact => ({
+  artifact: { id: ENTRY_ID, version, title: entry.title, metadata: entry.metadata, updatedAt: new Date() },
+  content: { content },
+});
+
+const reactViewerProps = () => h.viewerProps.filter(p => (p.artifact as ReactArtifact | undefined)?.id === ENTRY_ID);
+
+const viewerTree = () => (
+  <CssVarsProvider theme={appTheme}>
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <KnowledgeViewer />
+    </QueryClientProvider>
+  </CssVarsProvider>
+);
+
+describe('KnowledgeViewer with a multi-file React entry', () => {
+  beforeEach(() => {
+    h.viewerProps.length = 0;
+    h.latest = latestVersion(1, ENTRY_CODE);
+    setKnowledgeViewer({ selectedTabIndex: 0, showLineNumbers: false });
+    useSessionLayout.setState({
+      layout: 'vertical',
+      recentArtifacts: [],
+      artifactData: undefined,
+      selectedArtifactId: undefined,
+      previewFile: null,
+    });
+    // Same shape ArtifactPreviewCard opens the viewer with for an entry card.
+    setSessionLayout({
+      layout: 'vertical',
+      artifactData: {
+        type: 'react',
+        content: entry,
+        mimeType: 'application/vnd.ant.react',
+        id: ENTRY_ID,
+        reactGroup: ENTRY_GROUP,
+      },
+      selectedArtifactId: ENTRY_ID,
+    });
+  });
+
+  afterEach(() => cleanup());
+
+  it('hands the group to ReactArtifactViewer with the entry', async () => {
+    render(viewerTree());
+    await act(async () => {});
+
+    const props = reactViewerProps().at(-1);
+    expect(props?.group).toBe(ENTRY_GROUP);
+    expect((props?.artifact as ReactArtifact).content).toBe(ENTRY_CODE);
+  });
+
+  it('keeps the group when a newer persisted version of the entry is adopted', async () => {
+    const view = render(viewerTree());
+    await act(async () => {});
+
+    const newer = ENTRY_CODE.replace('<Panel />', '<main><Panel /></main>');
+    h.latest = latestVersion(2, newer);
+    view.rerender(viewerTree());
+    await act(async () => {});
+
+    expect(useSessionLayout.getState().artifactData).toMatchObject({ id: ENTRY_ID, reactGroup: ENTRY_GROUP });
+    const props = reactViewerProps().at(-1);
+    expect((props?.artifact as ReactArtifact).content).toBe(newer);
+    expect(props?.group).toBe(ENTRY_GROUP);
+  });
+});
