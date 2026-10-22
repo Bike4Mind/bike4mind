@@ -8,6 +8,7 @@ import {
   type ProviderJobHandle,
   type ProviderOutput,
   type ProviderPollResult,
+  findInputImage,
   type ResolvedInputs,
   type VideoProvider,
   type VideoProviderContext,
@@ -91,7 +92,8 @@ const requestIdOf = (handle: ProviderJobHandle): string => {
 const isBlockedHandle = (handle: ProviderJobHandle): boolean => handle.data.blocked === true;
 
 const buildSubmitBody = (request: ValidatedVideoRequest, inputs: ResolvedInputs) => {
-  if (request.mode === 'image_to_video' && !inputs.inputImage) {
+  const firstFrame = findInputImage(inputs, 'first_frame');
+  if (request.mode === 'image_to_video' && !firstFrame) {
     throw new ProviderSubmitError('xai_missing_input_image', true, undefined, false);
   }
   return {
@@ -102,8 +104,8 @@ const buildSubmitBody = (request: ValidatedVideoRequest, inputs: ResolvedInputs)
     resolution: request.resolution,
     // Audio is on by default; generate_audio is not a confirmed REST field, so it is never sent.
     ...(request.mode === 'image_to_video' &&
-      inputs.inputImage && {
-        image: { url: `data:${inputs.inputImage.mimeType};base64,${inputs.inputImage.bytes.toString('base64')}` },
+      firstFrame && {
+        image: { url: `data:${firstFrame.mimeType};base64,${firstFrame.bytes.toString('base64')}` },
       }),
   };
 };

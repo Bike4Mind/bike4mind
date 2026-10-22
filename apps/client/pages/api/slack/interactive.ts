@@ -5,7 +5,7 @@ initializeSlackPackage();
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { verifySlackRequest } from '@server/integrations/slack/slackWebhookVerification';
-import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
+import { IntegrationAuditLogger } from '@bike4mind/server-utils/integrations/integrationAuditLogger';
 import { cleanupConfluencePageContent } from '@server/integrations/atlassian/confluenceAttachmentCleanup';
 import { WebClient } from '@slack/web-api';
 import { User, Quest, connectDB, sessionRepository } from '@bike4mind/database';
@@ -600,7 +600,7 @@ async function handleInteractiveAction(
   if (actions && actions.length > 0) {
     const sreAction = actions[0];
     if (sreAction.action_id === 'sre_approve_fix' || sreAction.action_id === 'sre_reject_fix') {
-      const { handleSreApprovalAction } = await import('@server/integrations/slack/sreSlackApproval');
+      const { handleSreApprovalAction } = await import('@bike4mind/server-utils/integrations/slack/sreSlackApproval');
       const { response, deferred } = await handleSreApprovalAction(
         sreAction.action_id,
         sreAction.value,

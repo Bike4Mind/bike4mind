@@ -286,7 +286,7 @@ const GEARS: GearDef[] = [
     check: ({ stamps }) => stamps.has('forknotebook'),
   },
   // Tool gears - stamped by the shared-pipeline tool-finish observer
-  // (server/services/gears/toolGearObserver.ts): zero-latency by contract.
+  // (packages/server-utils/src/services/gears/toolGearObserver.ts): zero-latency by contract.
   {
     key: 'websearch',
     credits: 100,

@@ -39,10 +39,12 @@ export function RewindSelector({ messages, onSelect, onCancel }: RewindSelectorP
     }
   });
 
-  // Get user messages only for selection
+  // Get user messages only for selection. A steer is persisted ahead of its
+  // turn's reply (session/steering.ts), so rewinding to it would also drop the
+  // work done before it; rewind to the turn's own prompt instead.
   const userMessages = messages
     .map((msg, idx) => ({ msg, originalIndex: idx }))
-    .filter(({ msg }) => msg.role === 'user');
+    .filter(({ msg }) => msg.role === 'user' && !msg.metadata?.steered);
 
   // Create selection items (chronological order - oldest first)
   const items: RewindItem[] = userMessages.map(({ msg, originalIndex }, index) => {

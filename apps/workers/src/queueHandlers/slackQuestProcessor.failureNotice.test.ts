@@ -58,7 +58,7 @@ const mockBuildVideoToolConfig = vi.fn();
 const videoAvailability = { marker: 'video-availability' };
 const videoCreateDeps = { marker: 'video-create-deps' };
 
-vi.mock('@server/videoGenerations/buildVideoToolConfig', () => ({
+vi.mock('@bike4mind/server-utils/videoGenerations/buildVideoToolConfig', () => ({
   buildVideoToolConfig: (...args: unknown[]) => mockBuildVideoToolConfig(...args),
 }));
 

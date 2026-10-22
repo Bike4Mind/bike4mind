@@ -27,6 +27,9 @@ export const isVideoToolConfig = (value: unknown): value is PopulatedVideoToolCo
   Array.isArray(value.usableModels) &&
   value.usableModels.length > 0;
 
+// Still the legacy single-image fields (read as one first_frame input), not `inputs`: a handler from before
+// `inputs` existed cannot read an inputs-only payload, so a rollback would fail every pending agent job. Switch
+// once that rollback window has passed, or when the tool offers more than one image.
 const toRequest = (args: VideoToolArgs) => {
   const caps = VIDEO_MODEL_CATALOG[args.model];
   return {
