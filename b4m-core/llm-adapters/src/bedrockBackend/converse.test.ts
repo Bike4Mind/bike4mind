@@ -58,6 +58,182 @@ const weatherTool = (toolFn: ICompletionOptionTools['toolFn']): ICompletionOptio
 });
 
 describe('ConverseBedrockBackend', () => {
+  it('does not count a megabyte image as base64 text in the context preflight', async () => {
+    const backend = new TestConverseBackend();
+    const { sent } = withMockClient(backend, () => ({
+      output: { message: { content: [{ text: 'a cat' }] } },
+      stopReason: 'end_turn',
+      usage: { inputTokens: 1300, outputTokens: 2 },
+    }));
+    const bytes = Buffer.alloc(1_100_000, 1);
+
+    await backend.complete(
+      NOVA,
+      [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'What is this?' },
+            { type: 'image_url', image_url: { url: `data:image/png;base64,${bytes.toString('base64')}` } },
+          ],
+        },
+      ] as IMessage[],
+      { stream: false },
+      async () => {}
+    );
+
+    expect(sent).toHaveLength(1);
+    const image = sent[0].input.messages?.[0].content?.[1];
+    expect(image).toHaveProperty('image.source.bytes', bytes);
+  });
+
+  it('still rejects excessive text accompanying an image before sending', async () => {
+    const backend = new TestConverseBackend();
+    const { spy } = withMockClient(backend, () => ({}));
+
+    await expect(
+      backend.complete(
+        NOVA,
+        [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: 'x'.repeat(1_300_000) },
+              { type: 'image_url', image_url: { url: 'data:image/png;base64,AQ==' } },
+            ],
+          },
+        ] as IMessage[],
+        { stream: false },
+        async () => {}
+      )
+    ).rejects.toThrow(/Context overflow/);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])('continues after a reasoning-only turn-ending tool round (stream=%s)', async stream => {
+    const backend = new TestConverseBackend();
+    const content = '<thinking>Check the weather first.</thinking>';
+    const responses = stream
+      ? [
+          {
+            stream: asStream([
+              { messageStart: { role: 'assistant' } },
+              { contentBlockDelta: { contentBlockIndex: 0, delta: { text: content } } },
+              { contentBlockStop: { contentBlockIndex: 0 } },
+              {
+                contentBlockStart: {
+                  contentBlockIndex: 1,
+                  start: { toolUse: { toolUseId: 'tu-end', name: 'get_weather' } },
+                },
+              },
+              { contentBlockDelta: { contentBlockIndex: 1, delta: { toolUse: { input: '{"city":"Paris"}' } } } },
+              { contentBlockStop: { contentBlockIndex: 1 } },
+              { messageStop: { stopReason: 'tool_use' } },
+            ]),
+          },
+          {
+            stream: asStream([
+              { contentBlockDelta: { contentBlockIndex: 0, delta: { text: 'Sunny.' } } },
+              { contentBlockStop: { contentBlockIndex: 0 } },
+              { messageStop: { stopReason: 'end_turn' } },
+            ]),
+          },
+        ]
+      : [
+          {
+            output: {
+              message: {
+                content: [
+                  { text: content },
+                  { toolUse: { toolUseId: 'tu-end', name: 'get_weather', input: { city: 'Paris' } } },
+                ],
+              },
+            },
+            stopReason: 'tool_use',
+          },
+          { output: { message: { content: [{ text: 'Sunny.' }] } }, stopReason: 'end_turn' },
+        ];
+    let round = 0;
+    const { sent } = withMockClient(backend, () => responses[round++]);
+    const toolFn = vi.fn(async () => 'sunny');
+    const out = collect();
+
+    await backend.complete(
+      NOVA,
+      [{ role: 'user', content: 'Weather?' }],
+      { stream, tools: [{ ...weatherTool(toolFn), endsTurnAfterText: true }] },
+      out.callback
+    );
+
+    expect(toolFn).toHaveBeenCalledWith({ city: 'Paris' });
+    expect(sent).toHaveLength(2);
+    expect(out.joined()).toContain('Sunny.');
+  });
+
+  it('reserves the clamped output limit instead of rejecting a valid short request', async () => {
+    const backend = new TestConverseBackend();
+    const { sent } = withMockClient(backend, () => ({
+      output: { message: { content: [{ text: 'ok' }] } },
+      stopReason: 'end_turn',
+      usage: { inputTokens: 1, outputTokens: 1 },
+    }));
+
+    await backend.complete(NOVA, [{ role: 'user', content: 'hi' }], { maxTokens: 500_000 }, async () => {});
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].input.inferenceConfig?.maxTokens).toBe(10_000);
+  });
+
+  it.each([
+    ['amazon.nova-pro-v1:0', true],
+    ['us.amazon.nova-pro-v1:0', true],
+    ['eu.amazon.nova-pro-v1:0', true],
+    ['apac.amazon.nova-pro-v1:0', true],
+    ['global.amazon.nova-pro-v1:0', true],
+    ['us.example.converse-model-v1:0', false],
+    ['amazon.novaish-v1:0', false],
+  ])('shapes tool schema root keys for %s without changing nested schemas', (model, isNova) => {
+    const backend = new TestConverseBackend();
+    const tool = weatherTool(async () => '');
+    tool.toolSchema.parameters.additionalProperties = false;
+    tool.toolSchema.parameters.properties.city.additionalProperties = false;
+    const schema = backend.formatToolConfig([tool], 'auto', model).tools[0].toolSpec.inputSchema.json;
+
+    expect(schema).toEqual(
+      isNova
+        ? {
+            type: 'object',
+            properties: tool.toolSchema.parameters.properties,
+            required: ['city'],
+          }
+        : tool.toolSchema.parameters
+    );
+    expect(tool.toolSchema.parameters.additionalProperties).toBe(false);
+  });
+
+  it('sends built-in-style Nova tool schemas without unsupported root fields', async () => {
+    const backend = new TestConverseBackend();
+    const tool = weatherTool(async () => '');
+    tool.toolSchema.parameters.additionalProperties = false;
+    const { sent } = withMockClient(backend, () => ({
+      output: { message: { content: [{ text: 'ok' }] } },
+      stopReason: 'end_turn',
+      usage: { inputTokens: 1, outputTokens: 1 },
+    }));
+
+    await backend.complete(NOVA, [{ role: 'user', content: 'hi' }], { tools: [tool] }, async () => {});
+
+    expect(sent[0].input.toolConfig?.tools[0]).toEqual({
+      toolSpec: {
+        name: 'get_weather',
+        description: 'Look up the weather',
+        inputSchema: {
+          json: { type: 'object', properties: tool.toolSchema.parameters.properties, required: ['city'] },
+        },
+      },
+    });
+  });
+
   it('sends a Converse request and returns non-streamed text, usage and stop reason', async () => {
     const backend = new TestConverseBackend();
     const { sent } = withMockClient(backend, () => ({

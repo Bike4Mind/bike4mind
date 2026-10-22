@@ -69,8 +69,7 @@ const CONVERSE_IMAGE_FORMATS = new Set(['png', 'jpeg', 'gif', 'webp']);
 
 /**
  * The JSON body getPayload hands to base.ts. It is the Converse request with image bytes kept
- * as base64 so it survives JSON (and base.ts's length-based context estimate); invokeModel
- * decodes them back to bytes before sending.
+ * as base64 so it survives JSON; invokeModel decodes them back to bytes before sending.
  */
 type WireContentBlock =
   | { text: string }
@@ -208,6 +207,29 @@ export class ConverseBedrockBackend extends BaseBedrockBackend {
     return this.modelRecordFor(model)?.contextWindow ?? 0;
   }
 
+  protected override getEffectiveMaxOutputTokens(options: Partial<ICompletionOptions>, model?: string): number {
+    const requested = typeof options.maxTokens === 'number' ? options.maxTokens : DEFAULT_MAX_TOKENS;
+    const ceiling = model ? this.modelRecordFor(model)?.max_tokens : undefined;
+    return ceiling ? Math.min(requested, ceiling) : requested;
+  }
+
+  protected override estimateInputTokens(body: string): number {
+    const request = JSON.parse(body) as WireRequest;
+    const textPayload = {
+      ...request,
+      messages: request.messages.map(message => ({
+        ...message,
+        content: message.content.map(block =>
+          'image' in block ? { image: { ...block.image, source: { bytes: '' } } } : block
+        ),
+      })),
+    };
+    // Image tokens depend on dimensions, not encoded byte length. Estimate the full textual
+    // payload only; Bedrock remains authoritative for the image-inclusive context limit.
+    // https://docs.aws.amazon.com/nova/latest/userguide/modalities-image.html
+    return super.estimateInputTokens(JSON.stringify(textPayload));
+  }
+
   formatMessages(messages: IMessage[]): IMessage[] {
     return messages;
   }
@@ -252,10 +274,8 @@ export class ConverseBedrockBackend extends BaseBedrockBackend {
       throw new Error(`Converse request for ${model} has no sendable messages after filtering`);
     }
 
-    const ceiling = record?.max_tokens;
-    const requested = typeof options.maxTokens === 'number' ? options.maxTokens : DEFAULT_MAX_TOKENS;
     const inferenceConfig: WireRequest['inferenceConfig'] = {
-      maxTokens: ceiling ? Math.min(requested, ceiling) : requested,
+      maxTokens: this.getEffectiveMaxOutputTokens(options, model),
     };
     if (typeof options.temperature === 'number') inferenceConfig.temperature = options.temperature;
     if (typeof options.topP === 'number') inferenceConfig.topP = options.topP;
@@ -266,7 +286,7 @@ export class ConverseBedrockBackend extends BaseBedrockBackend {
       messages: converseMessages,
       inferenceConfig,
       ...(systemText && !systemDemotedToUser ? { system: [{ text: systemText }] } : {}),
-      ...(sendTools ? { toolConfig: this.formatToolConfig(options.tools ?? [], options.tool_choice) } : {}),
+      ...(sendTools ? { toolConfig: this.formatToolConfig(options.tools ?? [], options.tool_choice, model) } : {}),
     };
 
     this.isInReasoningBlock = false;
@@ -283,14 +303,26 @@ export class ConverseBedrockBackend extends BaseBedrockBackend {
 
   formatToolConfig(
     tools: ICompletionOptionTools[],
-    toolChoice: ICompletionOptions['tool_choice']
+    toolChoice: ICompletionOptions['tool_choice'],
+    model?: string
   ): NonNullable<WireRequest['toolConfig']> {
     const config: NonNullable<WireRequest['toolConfig']> = {
       tools: tools.map(({ toolSchema }) => ({
         toolSpec: {
           name: toolSchema.name,
           ...(toolSchema.description ? { description: toolSchema.description } : {}),
-          inputSchema: { json: toolSchema.parameters },
+          // Nova only accepts these three root keys. Nested property schemas and other
+          // Converse providers retain their own JSON Schema vocabulary.
+          inputSchema: {
+            json:
+              model && /^(?:(?:us|eu|apac|global)\.)?amazon\.nova-/.test(model)
+                ? {
+                    type: toolSchema.parameters.type,
+                    properties: toolSchema.parameters.properties,
+                    ...(toolSchema.parameters.required ? { required: toolSchema.parameters.required } : {}),
+                  }
+                : toolSchema.parameters,
+          },
         },
       })),
     };
