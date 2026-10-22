@@ -33,7 +33,11 @@ const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(
           fileUrl: knowledge.fileUrl,
           mimeType: knowledge.mimeType,
         });
-        const file = await createTempFile(`${index++}_${knowledge.fileName}`, content as string, tempDir);
+        const file = await createTempFile(
+          `${index++}_${path.basename(knowledge.fileName)}`,
+          content as string,
+          tempDir
+        );
         files.push(file);
       }
 

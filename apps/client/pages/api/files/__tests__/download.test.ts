@@ -135,6 +135,18 @@ describe('GET /api/files/download', () => {
     expect(new Set(tempFiles).size).toBe(2);
   });
 
+  it('keeps entries whose names share a basename separate', async () => {
+    (FabFile.find as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { ...oneFile[0], fileName: 'x/a.txt' },
+      { ...oneFile[0], fileName: 'y/a.txt' },
+    ]);
+
+    const { res } = makeRes();
+    await handler({ method: 'GET', ability: {} } as unknown as NextApiRequest, res);
+
+    expect(tempFiles.map(f => path.basename(f))).toEqual(['0_a.txt', '1_a.txt']);
+  });
+
   it('skips held/blocked uploaded images and a not-yet-cleared non-image, keeps clean files', async () => {
     (FabFile.find as ReturnType<typeof vi.fn>).mockResolvedValue([
       { fileUrl: 'u1', mimeType: 'text/plain', fileName: 'a.txt', moderationStatus: 'clean' },
