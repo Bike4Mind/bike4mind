@@ -144,6 +144,15 @@ describe('hash bridge (parent) navigate handling', () => {
     expect(fetchDownload).toHaveBeenCalledWith(`${BASE}/files/deck.pdf?download=1`);
   });
 
+  it('navigates the top-level context to a page under the bundle, keeping its fragment', () => {
+    runParentBridge(`${BASE}/guide/intro.html`);
+    // jsdom performs only same-document navigations, so the target is this page plus a
+    // fragment: the address bar changing proves `location.assign` ran.
+    fromFrame({ b4m: 'navigate', path: `${BASE}/guide/intro.html#part-2` });
+    expect(window.location.pathname + window.location.hash).toBe(`${BASE}/guide/intro.html#part-2`);
+    expect(fetchDownload).not.toHaveBeenCalled();
+  });
+
   it('accepts a file under a share-link bundle', () => {
     runParentBridge('/a/tok123');
     fromFrame({ b4m: 'navigate', path: '/a/tok123/files/report.pdf' });
@@ -212,12 +221,16 @@ describe('hash bridge (parent) navigate handling', () => {
 
     it('holds an active window to one navigation per second', () => {
       fakeClock();
-      runParentBridge(BASE);
-      fromFrame({ b4m: 'navigate', path: `${BASE}/files/report.pdf` });
+      const page = `${BASE}/guide/intro.html`;
+      runParentBridge(page);
+      fromFrame({ b4m: 'navigate', path: `${page}#one` });
       tick(200);
-      // A page navigation right behind it is refused too: the window is not a free pass.
-      fromFrame({ b4m: 'navigate', path: `${BASE}/files/report2.pdf` });
-      expect(fetchDownload).toHaveBeenCalledTimes(1);
+      // Pages have no 5 s rule of their own, so only the one-per-second hold refuses this.
+      fromFrame({ b4m: 'navigate', path: `${page}#two` });
+      expect(window.location.hash).toBe('#one');
+      tick(1000);
+      fromFrame({ b4m: 'navigate', path: `${page}#three` });
+      expect(window.location.hash).toBe('#three');
     });
 
     describe('without the activation API', () => {
@@ -229,6 +242,20 @@ describe('hash bridge (parent) navigate handling', () => {
         runParentBridge(BASE);
         fromFrame({ b4m: 'navigate', path: `${BASE}/files/report.pdf` });
         expect(fetchDownload).not.toHaveBeenCalled();
+      });
+
+      it('lets a page navigation through, at most one per 2 seconds', () => {
+        fakeClock();
+        const page = `${BASE}/guide/intro.html`;
+        runParentBridge(page);
+        fromFrame({ b4m: 'navigate', path: `${page}#one` });
+        expect(window.location.hash).toBe('#one');
+        tick(1500);
+        fromFrame({ b4m: 'navigate', path: `${page}#two` });
+        expect(window.location.hash).toBe('#one');
+        tick(600);
+        fromFrame({ b4m: 'navigate', path: `${page}#three` });
+        expect(window.location.hash).toBe('#three');
       });
     });
   });

@@ -74,13 +74,21 @@ describe('isSafeSignedOrigin', () => {
   });
 
   it.each([
-    ['the app host', 'https://app.bike4mind.com'],
-    ['the request origin', 'https://preview.bike4mind.com'],
     ['an artifact usercontent host', 'https://abc123.usercontent.app.bike4mind.com'],
     ['a non-http scheme', 'javascript:alert(1)'],
     ['garbage', 'not a url'],
   ])('rejects %s', (_label, origin) => {
-    expect(isSafeSignedOrigin(origin, origin === 'https://preview.bike4mind.com' ? origin : DOC)).toBe(false);
+    expect(isSafeSignedOrigin(origin, DOC)).toBe(false);
+  });
+
+  it('rejects the request origin', () => {
+    expect(isSafeSignedOrigin('https://preview.bike4mind.com', 'https://preview.bike4mind.com')).toBe(false);
+  });
+
+  it('rejects the app host even when the request came from another origin', () => {
+    // A preview host serving the request, so only the app-host check can catch this.
+    expect(isSafeSignedOrigin('https://app.bike4mind.com', 'https://preview.bike4mind.com')).toBe(false);
+    expect(isSafeSignedOrigin('https://APP.bike4mind.com:443', 'https://preview.bike4mind.com')).toBe(false);
   });
 });
 
