@@ -13,6 +13,7 @@ import {
   isRequestTimeoutError,
   isStreamIdleTimeoutError,
   FORCE_FALLBACK_TEST_MARKER,
+  FORCE_STREAM_STALL_TEST_MARKER,
   SLOW_MODEL_ERROR_REPLY,
 } from './ChatCompletionProcess';
 import {
@@ -10979,6 +10980,94 @@ describe('ChatCompletionProcess', () => {
       expect(mockDb.quests.update).toHaveBeenCalledWith(
         expect.objectContaining({ replies: ['Hello from fallback'], status: 'done', type: 'message' })
       );
+    });
+
+    describe('preview stall marker', () => {
+      const claudeModel = {
+        id: 'global.anthropic.claude-opus-4-8',
+        type: 'text' as const,
+        name: 'Claude Opus 4.8',
+        backend: ModelBackend.Bedrock,
+        max_tokens: 100,
+        contextWindow: 200_000,
+        pricing: { 200000: { input: 0, output: 0 } },
+        supportsImageVariation: false,
+      };
+      let prevEnv: string | undefined;
+      beforeEach(() => {
+        prevEnv = process.env.E2E_ENDPOINTS_ENABLED;
+      });
+      afterEach(() => {
+        if (prevEnv === undefined) delete process.env.E2E_ENDPOINTS_ENABLED;
+        else process.env.E2E_ENDPOINTS_ENABLED = prevEnv;
+      });
+
+      function setupStallMarkerTurn() {
+        setupStreamIdleTimeoutMocks();
+        mockedGetAvailableModels.mockResolvedValue([claudeModel]);
+        mockedBuildAndSortMessages.mockResolvedValue({
+          messages: [{ role: 'user', content: `hi ${FORCE_STREAM_STALL_TEST_MARKER}` }],
+          messageTruncation: null,
+        });
+        mockQuest.promptMeta.model = { name: claudeModel.id, backend: ModelBackend.Bedrock };
+        const primaryComplete = vi.fn().mockImplementation(async (_m, _ms, _o, cb) => {
+          await cb(['answer from the primary']);
+        });
+        mockedGetLlmByModel.mockReturnValue({
+          complete: primaryComplete,
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: claudeModel.id,
+        });
+        const fallbackComplete = vi.fn().mockImplementation(async (_m, _ms, _o, cb) => {
+          await cb(['answer from fallback model']);
+        });
+        mockedGetLlmWithFallback.mockResolvedValue({
+          model: { ...claudeModel, id: 'gpt-5', name: 'GPT-5', backend: ModelBackend.OpenAI },
+          backend: { complete: fallbackComplete, getModelInfo: vi.fn().mockResolvedValue([]), currentModel: 'gpt-5' },
+          attempt: 1,
+        } as any);
+        const body = {
+          ...startQuestParams,
+          params: { ...startQuestParams.params, model: claudeModel.id },
+          tools: [],
+          projectId: undefined,
+          organizationId: undefined,
+        };
+        return { primaryComplete, fallbackComplete, body };
+      }
+
+      it('stalls every Anthropic-family hop on a preview: slow retry, then a fallback hop, recorded on turnTiming', async () => {
+        process.env.E2E_ENDPOINTS_ENABLED = 'true';
+        const { primaryComplete, fallbackComplete, body } = setupStallMarkerTurn();
+
+        await runWithFakeTimers(service.process({ body, logger: mockLogger }));
+
+        expect(primaryComplete).not.toHaveBeenCalled();
+        expect(service.sendStatusUpdate).toHaveBeenCalledWith(
+          expect.anything(),
+          'AI service is slow, retrying...',
+          expect.anything()
+        );
+        expect(mockedGetLlmWithFallback.mock.calls[0][5]).toMatchObject({ forceSwitch: true });
+        expect(fallbackComplete).toHaveBeenCalledTimes(1);
+        const saved = mockDb.quests.update.mock.calls.map(call => call[0]?.turnTiming).filter(Boolean);
+        const turnTiming = saved[saved.length - 1];
+        expect(turnTiming.retries.map((retry: { reason: string }) => retry.reason)).toEqual([
+          'stream_idle_timeout',
+          'stream_idle_timeout',
+        ]);
+        expect(turnTiming.fallbackHops).toBe(1);
+      });
+
+      it('ignores the stall marker when E2E endpoints are disabled', async () => {
+        delete process.env.E2E_ENDPOINTS_ENABLED;
+        const { primaryComplete, fallbackComplete, body } = setupStallMarkerTurn();
+
+        await runWithFakeTimers(service.process({ body, logger: mockLogger }));
+
+        expect(primaryComplete).toHaveBeenCalledTimes(1);
+        expect(fallbackComplete).not.toHaveBeenCalled();
+      });
     });
 
     it('persists the idle-timeout retry on quest.turnTiming and hands the backend a telemetry sink', async () => {

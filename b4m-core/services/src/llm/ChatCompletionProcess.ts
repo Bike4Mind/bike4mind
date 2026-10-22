@@ -129,6 +129,7 @@ import {
   resolveDeprecatedModelId,
   isTurnEndingTool,
   ResponsesStreamTruncatedError,
+  createAnthropicStreamTimeoutError,
 } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { ToolCacheManager } from './tools/ToolCacheManager';
@@ -543,6 +544,13 @@ export function resolveQuestErrorCode(error: unknown): QuestErrorCode | undefine
  * end-to-end by QA. See the gated check in the completion loop and the Guide for Testers.
  */
 export const FORCE_FALLBACK_TEST_MARKER = '[[force-provider-fallback]]';
+
+/**
+ * Sibling of FORCE_FALLBACK_TEST_MARKER, under the same preview/E2E-only gate: makes every
+ * Anthropic-family hop fail with our own stream idle timeout, so QA can watch the slow-model
+ * retry, the fallback hop after it, and the turn-timing record without waiting out a real stall.
+ */
+export const FORCE_STREAM_STALL_TEST_MARKER = '[[force-stream-stall]]';
 
 export { isRequestTimeoutError, isStreamIdleTimeoutError };
 
@@ -4984,16 +4992,20 @@ export class ChatCompletionProcess {
             // takes the real overloaded-error path: same-model overload retries on the primary,
             // then forceSwitch through the fallback chain - matching how a genuine sustained
             // outage degrades. See the Guide for Testers.
-            if (
+            const previewTestMarkerActive = (marker: string) =>
               process.env.E2E_ENDPOINTS_ENABLED === 'true' &&
               (currentModel.backend === ModelBackend.Bedrock || currentModel.backend === ModelBackend.Anthropic) &&
-              JSON.stringify(outboundMessages).includes(FORCE_FALLBACK_TEST_MARKER)
-            ) {
+              JSON.stringify(outboundMessages).includes(marker);
+            if (previewTestMarkerActive(FORCE_FALLBACK_TEST_MARKER)) {
               const forced = new Error(
                 `ServiceUnavailableException: simulated ${currentModel.backend} outage for fallback testing (preview only)`
               );
               forced.name = 'ServiceUnavailableException';
               throw forced;
+            }
+            // Same gate; the real typed timeout the backend raises, so the loop takes the slow path.
+            if (previewTestMarkerActive(FORCE_STREAM_STALL_TEST_MARKER)) {
+              throw createAnthropicStreamTimeoutError('stream_idle', idleTimeoutSeconds * 1000);
             }
 
             await currentLlm.complete(
