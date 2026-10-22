@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CONTENT_MAX_WIDTH } from './layout';
 import {
   SESSION_PANEL_INSET,
@@ -12,6 +12,7 @@ import {
 } from './sessionPanelState';
 
 beforeEach(() => window.localStorage.clear());
+afterEach(() => vi.restoreAllMocks());
 
 describe('panelFitsBesideThread', () => {
   // Free on the right is half the pane beyond the column, plus the column's 24px padding.
@@ -50,5 +51,21 @@ describe('the remembered folded sections', () => {
     expect([...readCollapsedSections()]).toEqual(['plan']);
     window.localStorage.setItem('b4m.sessionPanel.collapsed', '{not json');
     expect(readCollapsedSections().size).toBe(0);
+  });
+});
+
+describe('storage that throws', () => {
+  it('falls back to the defaults on read and swallows writes', () => {
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('blocked');
+    });
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('blocked');
+    });
+
+    expect(readSessionPanelOpen()).toBe(true);
+    expect(readCollapsedSections().size).toBe(0);
+    expect(() => writeSessionPanelOpen(false)).not.toThrow();
+    expect(() => writeCollapsedSections(new Set(['plan']))).not.toThrow();
   });
 });

@@ -2,7 +2,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
-import type { ChatProject, ChatSession, ChatSessionSummary } from '@shared/chat';
+import type { BackgroundProcessInfo, ChatMessage, ChatProject, ChatSession, ChatSessionSummary } from '@shared/chat';
 import { EMPTY_SIDEBAR_SECTIONS } from '@shared/sidebarSections';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
@@ -13,7 +13,18 @@ import { ChatShell } from './ChatShell';
 vi.mock('./CustomizePanel', () => ({ CustomizeNavItem: () => null, CustomizeScreen: () => null }));
 // The chips' own behaviour is SessionChips.test.tsx's; here it only matters where they are drawn.
 vi.mock('./SessionChips', () => ({
-  SessionChips: ({ layout = 'row' }: { layout?: string }) => <div data-testid={`session-chips-${layout}`} />,
+  SessionChips: ({
+    layout = 'row',
+    binding,
+  }: {
+    layout?: string;
+    binding: { error: { message: string } | null; chooseDirectory: (directory: string) => Promise<void> };
+  }) => (
+    <div data-testid={`session-chips-${layout}`}>
+      <button data-testid={`session-chips-pick-${layout}`} onClick={() => void binding.chooseDirectory('/elsewhere')} />
+      {binding.error && <span data-testid={`session-chips-error-${layout}`}>{binding.error.message}</span>}
+    </div>
+  ),
   GrantedFolderChips: () => null,
 }));
 
@@ -65,6 +76,11 @@ function quietBridge(overrides: Record<string, unknown>) {
   });
 }
 
+/** What the bridge reports for the open session; reset in beforeEach. */
+let transcript: ChatMessage[] = [];
+let processes: BackgroundProcessInfo[] = [];
+let updateProject: () => Promise<unknown> = async () => ({ ok: true });
+
 let root: Root | null = null;
 let host: HTMLElement | null = null;
 
@@ -75,6 +91,9 @@ function paneWidth(width: number) {
 
 beforeEach(() => {
   window.localStorage.clear();
+  transcript = [];
+  processes = [];
+  updateProject = async () => ({ ok: true });
   Element.prototype.scrollIntoView = () => undefined;
   vi.stubGlobal(
     'IntersectionObserver',
@@ -100,7 +119,10 @@ beforeEach(() => {
       chat: quietBridge({
         listSessions: async () => SESSIONS,
         getSession: async (id: string) =>
-          ({ ...SESSIONS.find(entry => entry.id === id), messages: [] }) as unknown as ChatSession,
+          ({ ...SESSIONS.find(entry => entry.id === id), messages: transcript }) as unknown as ChatSession,
+        listBackgroundProcesses: async () => processes,
+        inspectProject: async () => ({ currentBranch: 'main', branches: [] }),
+        updateProject: () => updateProject(),
         getQueuedMessages: async () => [],
         getSessionStatuses: async () => [],
         listModels: async () => ({ models: [] }),
@@ -203,5 +225,62 @@ describe('the session panel in the shell', () => {
     await open('chatting', 'chat');
     expect(find('chat-toggle-session-panel-btn')).toBeNull();
     expect(find('session-panel')).toBeNull();
+  });
+
+  it('puts the plan bar and the running-tasks chip back when the panel is hidden', async () => {
+    paneWidth(1600);
+    transcript = [
+      {
+        id: 'm1',
+        role: 'assistant',
+        content: '',
+        createdAt: '2026-10-01T00:00:00.000Z',
+        toolCalls: [
+          {
+            id: 'c1',
+            name: 'todo_write',
+            status: 'done',
+            input: { todos: [{ content: 'Ship it', status: 'in_progress' }] },
+          },
+        ],
+      },
+    ];
+    processes = [
+      {
+        id: 'p1',
+        sessionId: 'bound',
+        command: 'pnpm dev',
+        cwd: '/Users/someone/code/thing',
+        status: 'running',
+        startedAt: '2026-10-01T00:00:00.000Z',
+        bufferedChars: 0,
+        droppedChars: 0,
+      },
+    ];
+    await open('bound');
+
+    expect(find('session-panel-section-plan')).not.toBeNull();
+    expect(find('session-panel-section-background')).not.toBeNull();
+    expect(find('chat-todo-panel')).toBeNull();
+    expect(find('background-task-chip')).toBeNull();
+
+    await act(async () => get('chat-toggle-session-panel-btn').click());
+    expect(find('session-panel')).toBeNull();
+    expect(find('chat-todo-panel')).not.toBeNull();
+    expect(find('background-task-chip')).not.toBeNull();
+  });
+
+  it('shows a project binding error above the composer once the panel is hidden', async () => {
+    paneWidth(1600);
+    updateProject = async () => ({ ok: false, error: 'Could not read the repository' });
+    await open('bound');
+
+    await act(async () => get('session-chips-pick-panel').click());
+    expect(get('session-chips-error-panel').textContent).toBe('Could not read the repository');
+    expect(find('session-chips-row')).toBeNull();
+
+    await act(async () => get('chat-toggle-session-panel-btn').click());
+    expect(find('session-panel')).toBeNull();
+    expect(get('session-chips-error-row').textContent).toBe('Could not read the repository');
   });
 });

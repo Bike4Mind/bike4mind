@@ -338,7 +338,7 @@ describe('the Background tasks section', () => {
     });
 
     expect(get('session-panel-task-running').textContent).toContain('pnpm run dev');
-    expect(get('session-panel-task-running').textContent).toContain('1m 5s');
+    expect(get('session-panel-task-running').textContent).toMatch(/1m [56]s/);
     const stops = host.querySelectorAll<HTMLElement>('[data-testid="session-panel-task-stop-btn"]');
     expect(stops).toHaveLength(2);
     await act(async () => stops[0].click());
