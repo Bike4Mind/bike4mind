@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { CreditHolderType, PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
 import { signupCreditsForEmail } from '@client/lib/entitlements/registry';
-import { SECRET_USER_FIELDS, expectSelfUserStripped } from '@server/auth/__tests__/sessionUserSecrets';
+import { secretUserFields, expectSelfUserStripped } from '@server/auth/__tests__/sessionUserSecrets';
 
 // Middleware is stripped so the handler body runs directly (same pattern as the
 // email/verify suite). baseApi().use(...).use(...).post(fn) must chain and hand back
@@ -401,7 +401,7 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
       id: 'user-1',
       tokenVersion: 0,
       currentCredits: 1000,
-      ...SECRET_USER_FIELDS,
+      ...secretUserFields(),
     });
     const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
 
@@ -409,7 +409,7 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
 
     const body = res._getJSONData();
     expect(body.accessToken).toBe('a');
-    expectSelfUserStripped(body.user, body);
+    expectSelfUserStripped(body.user, body, 'user-1');
   });
 
   it('persists the signup touches and reports email_verified and credits_granted for the new user', async () => {
@@ -756,14 +756,25 @@ describe('/api/otc/verify - existing user verification and pending free credits'
     });
 
   it('strips secrets and undeclared fields from the flat login body', async () => {
-    mockFindByEmail.mockResolvedValue(pendingUser({ ...SECRET_USER_FIELDS }));
+    // Deliberately not `pendingUser`: a loosened schema has to fail on a leaked secret, and a
+    // toJSON on the seeded doc would instead serialize the login body without the accessToken.
+    mockFindByEmail.mockResolvedValue({
+      id: 'u-existing',
+      isSystem: false,
+      isBanned: false,
+      emailVerified: true,
+      tags: ['Customer'],
+      pendingCreditGrant: null,
+      tokenVersion: 0,
+      ...secretUserFields(),
+    });
     const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
 
     await handler(req, res);
 
     const body = res._getJSONData();
     expect(body.accessToken).toBe('a');
-    expectSelfUserStripped(body, body);
+    expectSelfUserStripped(body, body, 'u-existing');
   });
 
   it('stamps emailVerified first, then strips the pending-credit tag in a separate write', async () => {
