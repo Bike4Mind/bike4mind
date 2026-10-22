@@ -63,6 +63,11 @@ const RESERVED_ENV_NAMES = new Set([
   'NO_PROXY',
   'SSL_CERT_FILE',
   'SSL_CERT_DIR',
+  // Core reads these from process.env but infra/ never sets them, so the core-name scan misses them.
+  'DOCUMENTDB_CA_BUNDLE_BASE64',
+  'AGENT_EXECUTOR_INTERNAL_SECRET',
+  'INTERNAL_WS_SECRET',
+  'INTERNAL_S3_WEBHOOK_SECRET',
 ]);
 
 export function isValidContributedResourceName(name: unknown): name is string {

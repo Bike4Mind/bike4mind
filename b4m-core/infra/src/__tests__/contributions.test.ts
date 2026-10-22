@@ -59,6 +59,10 @@ describe('partitionContributed', () => {
     'OPENSSL_CONF',
     'AWS_X',
     'HTTP_PROXY',
+    'DOCUMENTDB_CA_BUNDLE_BASE64',
+    'AGENT_EXECUTOR_INTERNAL_SECRET',
+    'INTERNAL_WS_SECRET',
+    'INTERNAL_S3_WEBHOOK_SECRET',
   ])('rejects %j, which names or aliases a variable a contribution must not own', name => {
     expect(isValidContributedResourceName(name)).toBe(false);
   });
