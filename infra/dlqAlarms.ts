@@ -54,7 +54,17 @@ import {
   bobRunQueueDLQ,
   libreoncologyAudioRenderQueueDLQ,
 } from './queues';
-import { telemetryAlertRuleDLQ, sessionEnrichmentDLQ } from './eventBus';
+import {
+  telemetryAlertRuleDLQ,
+  sessionEnrichmentDLQ,
+  stripeInvoicePaymentSucceededRuleDLQ,
+  stripeCustomerSubscriptionUpdatedRuleDLQ,
+  emailSendRuleDLQ,
+  notebookCurationStartRuleDLQ,
+  notebookCurationAnalyticsRuleDLQ,
+  spiderRuleDLQ,
+} from './eventBus';
+import { slackCompletionStartRuleDLQ, createMementoRuleDLQ } from './llm';
 import { emailIngestionQueueDLQ, emailAnalysisQueueDLQ } from './emailIngestion';
 import { emailBatchQueueDLQ, emailJobQueueDLQ } from './emailMarketing';
 import { isMonitoredStage as _isMonitoredStage, buildDlqAlarmSpecs } from '@bike4mind/infra';
@@ -547,6 +557,64 @@ if (isMonitoredStage) {
     displayName: 'Session Enrichment',
     application: 'SessionEnrichment',
     queue: sessionEnrichmentDLQ,
+  });
+
+  // Rule-target DLQs for the remaining event bus subscriptions - alarm-only for the same reason:
+  // they hold events EventBridge could not deliver, with no consumer to replay into.
+  createDlqAlarms({
+    label: 'stripe-invoice-payment-succeeded-rule',
+    displayName: 'Stripe Invoice Payment Succeeded Rule',
+    application: 'Stripe',
+    queue: stripeInvoicePaymentSucceededRuleDLQ,
+  });
+
+  createDlqAlarms({
+    label: 'stripe-customer-subscription-updated-rule',
+    displayName: 'Stripe Customer Subscription Updated Rule',
+    application: 'Stripe',
+    queue: stripeCustomerSubscriptionUpdatedRuleDLQ,
+  });
+
+  createDlqAlarms({
+    label: 'email-send-rule',
+    displayName: 'Email Send Rule',
+    application: 'Email',
+    queue: emailSendRuleDLQ,
+  });
+
+  createDlqAlarms({
+    label: 'notebook-curation-start-rule',
+    displayName: 'Notebook Curation Start Rule',
+    application: 'NotebookCuration',
+    queue: notebookCurationStartRuleDLQ,
+  });
+
+  createDlqAlarms({
+    label: 'notebook-curation-analytics-rule',
+    displayName: 'Notebook Curation Analytics Rule',
+    application: 'NotebookCuration',
+    queue: notebookCurationAnalyticsRuleDLQ,
+  });
+
+  createDlqAlarms({
+    label: 'spider-rule',
+    displayName: 'Spider Rule',
+    application: 'Spider',
+    queue: spiderRuleDLQ,
+  });
+
+  createDlqAlarms({
+    label: 'slack-completion-start-rule',
+    displayName: 'Slack Completion Start Rule',
+    application: 'Slack',
+    queue: slackCompletionStartRuleDLQ,
+  });
+
+  createDlqAlarms({
+    label: 'create-memento-rule',
+    displayName: 'Create Memento Rule',
+    application: 'Memento',
+    queue: createMementoRuleDLQ,
   });
 }
 

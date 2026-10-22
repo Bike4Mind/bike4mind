@@ -7,6 +7,16 @@ import { eventBus } from './bus';
 import { notebookCurationQueue, sreFixQueue, sreFixQueueDLQ } from './queues';
 
 // Stripe events
+// Rule-target DLQs for the subscriptions below: see telemetryAlertRuleDLQ for why EventBridge needs one.
+// Guarded by infra/__tests__/eventBusRuleDlq.test.ts.
+const stripeInvoicePaymentSucceededRuleDLQ = new sst.aws.Queue('stripeInvoicePaymentSucceededRuleDLQ', {
+  transform: {
+    queue: {
+      messageRetentionSeconds: 1209600, // 14 days for forensics investigation
+    },
+  },
+});
+
 const stripeInvoicePaymentSucceededSubscription = eventBus.subscribe(
   'stripe-invoice-payment-succeeded',
   {
@@ -31,8 +41,43 @@ const stripeInvoicePaymentSucceededSubscription = eventBus.subscribe(
     pattern: {
       detailType: ['stripe.invoice.payment_succeeded'],
     },
+    transform: {
+      target: {
+        deadLetterConfig: {
+          arn: stripeInvoicePaymentSucceededRuleDLQ.arn,
+        },
+      },
+    },
   }
 );
+
+new aws.sqs.QueuePolicy('stripeInvoicePaymentSucceededRuleDLQPolicy', {
+  queueUrl: stripeInvoicePaymentSucceededRuleDLQ.url,
+  policy: $util
+    .all([stripeInvoicePaymentSucceededRuleDLQ.arn, stripeInvoicePaymentSucceededSubscription.nodes.rule.arn])
+    .apply(([dlqArn, ruleArn]) =>
+      JSON.stringify({
+        Version: '2012-10-17',
+        Statement: [
+          {
+            Effect: 'Allow',
+            Principal: { Service: 'events.amazonaws.com' },
+            Action: 'sqs:SendMessage',
+            Resource: dlqArn,
+            Condition: { ArnEquals: { 'aws:SourceArn': ruleArn } },
+          },
+        ],
+      })
+    ),
+});
+
+const stripeCustomerSubscriptionUpdatedRuleDLQ = new sst.aws.Queue('stripeCustomerSubscriptionUpdatedRuleDLQ', {
+  transform: {
+    queue: {
+      messageRetentionSeconds: 1209600, // 14 days for forensics investigation
+    },
+  },
+});
 
 const stripeCustomerSubscriptionUpdatedSubscription = eventBus.subscribe(
   'stripe-customer-subscription-updated',
@@ -57,11 +102,46 @@ const stripeCustomerSubscriptionUpdatedSubscription = eventBus.subscribe(
     pattern: {
       detailType: ['stripe.cus.sub.updated'],
     },
+    transform: {
+      target: {
+        deadLetterConfig: {
+          arn: stripeCustomerSubscriptionUpdatedRuleDLQ.arn,
+        },
+      },
+    },
   }
 );
 
+new aws.sqs.QueuePolicy('stripeCustomerSubscriptionUpdatedRuleDLQPolicy', {
+  queueUrl: stripeCustomerSubscriptionUpdatedRuleDLQ.url,
+  policy: $util
+    .all([stripeCustomerSubscriptionUpdatedRuleDLQ.arn, stripeCustomerSubscriptionUpdatedSubscription.nodes.rule.arn])
+    .apply(([dlqArn, ruleArn]) =>
+      JSON.stringify({
+        Version: '2012-10-17',
+        Statement: [
+          {
+            Effect: 'Allow',
+            Principal: { Service: 'events.amazonaws.com' },
+            Action: 'sqs:SendMessage',
+            Resource: dlqArn,
+            Condition: { ArnEquals: { 'aws:SourceArn': ruleArn } },
+          },
+        ],
+      })
+    ),
+});
+
 // Email events
-eventBus.subscribe(
+const emailSendRuleDLQ = new sst.aws.Queue('emailSendRuleDLQ', {
+  transform: {
+    queue: {
+      messageRetentionSeconds: 1209600, // 14 days for forensics investigation
+    },
+  },
+});
+
+const emailSendSubscription = eventBus.subscribe(
   'email-send',
   {
     handler: 'apps/workers/src/events/sendEmail.handler',
@@ -76,8 +156,33 @@ eventBus.subscribe(
     pattern: {
       detailType: ['email.send'],
     },
+    transform: {
+      target: {
+        deadLetterConfig: {
+          arn: emailSendRuleDLQ.arn,
+        },
+      },
+    },
   }
 );
+
+new aws.sqs.QueuePolicy('emailSendRuleDLQPolicy', {
+  queueUrl: emailSendRuleDLQ.url,
+  policy: $util.all([emailSendRuleDLQ.arn, emailSendSubscription.nodes.rule.arn]).apply(([dlqArn, ruleArn]) =>
+    JSON.stringify({
+      Version: '2012-10-17',
+      Statement: [
+        {
+          Effect: 'Allow',
+          Principal: { Service: 'events.amazonaws.com' },
+          Action: 'sqs:SendMessage',
+          Resource: dlqArn,
+          Condition: { ArnEquals: { 'aws:SourceArn': ruleArn } },
+        },
+      ],
+    })
+  ),
+});
 
 // Session events
 //
@@ -248,7 +353,15 @@ new aws.sqs.QueuePolicy('sessionEnrichmentDLQPolicy', {
 });
 
 // Notebook Curation events
-eventBus.subscribe(
+const notebookCurationStartRuleDLQ = new sst.aws.Queue('notebookCurationStartRuleDLQ', {
+  transform: {
+    queue: {
+      messageRetentionSeconds: 1209600, // 14 days for forensics investigation
+    },
+  },
+});
+
+const notebookCurationStartSubscription = eventBus.subscribe(
   'notebook-curation-start',
   {
     handler: 'apps/workers/src/events/notebookCuration.handler',
@@ -278,11 +391,46 @@ eventBus.subscribe(
     pattern: {
       detailType: ['notebook.curation.start'],
     },
+    transform: {
+      target: {
+        deadLetterConfig: {
+          arn: notebookCurationStartRuleDLQ.arn,
+        },
+      },
+    },
   }
 );
 
+new aws.sqs.QueuePolicy('notebookCurationStartRuleDLQPolicy', {
+  queueUrl: notebookCurationStartRuleDLQ.url,
+  policy: $util
+    .all([notebookCurationStartRuleDLQ.arn, notebookCurationStartSubscription.nodes.rule.arn])
+    .apply(([dlqArn, ruleArn]) =>
+      JSON.stringify({
+        Version: '2012-10-17',
+        Statement: [
+          {
+            Effect: 'Allow',
+            Principal: { Service: 'events.amazonaws.com' },
+            Action: 'sqs:SendMessage',
+            Resource: dlqArn,
+            Condition: { ArnEquals: { 'aws:SourceArn': ruleArn } },
+          },
+        ],
+      })
+    ),
+});
+
 // Notebook Curation Analytics - logs analytics when curation completes
-eventBus.subscribe(
+const notebookCurationAnalyticsRuleDLQ = new sst.aws.Queue('notebookCurationAnalyticsRuleDLQ', {
+  transform: {
+    queue: {
+      messageRetentionSeconds: 1209600, // 14 days for forensics investigation
+    },
+  },
+});
+
+const notebookCurationAnalyticsSubscription = eventBus.subscribe(
   'notebook-curation-complete-analytics',
   {
     handler: 'apps/workers/src/events/notebookCurationAnalytics.handler',
@@ -298,8 +446,35 @@ eventBus.subscribe(
     pattern: {
       detailType: ['notebook.curation.complete'],
     },
+    transform: {
+      target: {
+        deadLetterConfig: {
+          arn: notebookCurationAnalyticsRuleDLQ.arn,
+        },
+      },
+    },
   }
 );
+
+new aws.sqs.QueuePolicy('notebookCurationAnalyticsRuleDLQPolicy', {
+  queueUrl: notebookCurationAnalyticsRuleDLQ.url,
+  policy: $util
+    .all([notebookCurationAnalyticsRuleDLQ.arn, notebookCurationAnalyticsSubscription.nodes.rule.arn])
+    .apply(([dlqArn, ruleArn]) =>
+      JSON.stringify({
+        Version: '2012-10-17',
+        Statement: [
+          {
+            Effect: 'Allow',
+            Principal: { Service: 'events.amazonaws.com' },
+            Action: 'sqs:SendMessage',
+            Resource: dlqArn,
+            Condition: { ArnEquals: { 'aws:SourceArn': ruleArn } },
+          },
+        ],
+      })
+    ),
+});
 
 // [DELETION-FOOTPRINT] Pi + Jira history-analysis EventBridge subscriptions
 // ('pi-history-analysis-start', 'jira-history-analysis-start') moved to
@@ -380,6 +555,14 @@ new aws.sqs.QueuePolicy('telemetryAlertRuleDLQPolicy', {
 });
 
 // Spider events - comprehensive notebook grooming
+const spiderRuleDLQ = new sst.aws.Queue('spiderRuleDLQ', {
+  transform: {
+    queue: {
+      messageRetentionSeconds: 1209600, // 14 days for forensics investigation
+    },
+  },
+});
+
 const spiderSubscription = eventBus.subscribe(
   'spider-start',
   {
@@ -402,8 +585,33 @@ const spiderSubscription = eventBus.subscribe(
     pattern: {
       detailType: ['spider.start'],
     },
+    transform: {
+      target: {
+        deadLetterConfig: {
+          arn: spiderRuleDLQ.arn,
+        },
+      },
+    },
   }
 );
+
+new aws.sqs.QueuePolicy('spiderRuleDLQPolicy', {
+  queueUrl: spiderRuleDLQ.url,
+  policy: $util.all([spiderRuleDLQ.arn, spiderSubscription.nodes.rule.arn]).apply(([dlqArn, ruleArn]) =>
+    JSON.stringify({
+      Version: '2012-10-17',
+      Statement: [
+        {
+          Effect: 'Allow',
+          Principal: { Service: 'events.amazonaws.com' },
+          Action: 'sqs:SendMessage',
+          Resource: dlqArn,
+          Condition: { ArnEquals: { 'aws:SourceArn': ruleArn } },
+        },
+      ],
+    })
+  ),
+});
 
 // SRE Diagnostician -> Surgeon handoff. The analysis handler emits
 // sre.analysis.completed (apps/client/server/utils/eventBus.ts) and this rule
@@ -428,6 +636,12 @@ sst.aws.Queue.createPolicy('SreFixQueueDLQEventsPolicy', sreFixQueueDLQ.arn);
 
 export {
   eventBus,
+  stripeInvoicePaymentSucceededRuleDLQ,
+  stripeCustomerSubscriptionUpdatedRuleDLQ,
+  emailSendRuleDLQ,
+  notebookCurationStartRuleDLQ,
+  notebookCurationAnalyticsRuleDLQ,
+  spiderRuleDLQ,
   telemetryAlertRuleDLQ,
   sessionEnrichmentDLQ,
   sreFixDispatchSubscription,
