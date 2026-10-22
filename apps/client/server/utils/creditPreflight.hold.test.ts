@@ -67,6 +67,28 @@ beforeEach(() => {
 });
 
 describe('holdPreflightCredits', () => {
+  it.each([true, false])('uses the fresh enforcement setting when the stored value is %s', async freshEnforcement => {
+    mocks.getSettingsMap.mockImplementation(async (_database: unknown, options?: { skipCache?: boolean }) => ({
+      enforceCredits: String(options?.skipCache ? freshEnforcement : !freshEnforcement),
+    }));
+
+    await hold();
+
+    expect(mocks.getSettingsMap).toHaveBeenCalledExactlyOnceWith(expect.anything(), {
+      names: ['enforceCredits'],
+      skipCache: true,
+    });
+    expect(mocks.reserve).toHaveBeenCalledWith(expect.objectContaining({ enforceCredits: freshEnforcement }));
+  });
+
+  it('propagates a settings failure before reserving credits', async () => {
+    const error = new Error('settings unavailable');
+    mocks.getSettingsMap.mockRejectedValueOnce(error);
+
+    await expect(hold()).rejects.toBe(error);
+    expect(mocks.reserve).not.toHaveBeenCalled();
+  });
+
   it('reserves on the durable request-credit primitive, with the org the route resolved', async () => {
     await hold({ billingOrganizationId: 'org1' });
 

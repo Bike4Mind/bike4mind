@@ -133,7 +133,10 @@ export async function holdPreflightCredits({
   billingOrganizationId?: string | null;
 }): Promise<PreflightCreditHold> {
   const { user, logger } = req;
-  const settings = await getSettingsMap({ adminSettings: adminSettingsRepository }, { names: ['enforceCredits'] });
+  const settings = await getSettingsMap(
+    { adminSettings: adminSettingsRepository },
+    { names: ['enforceCredits'], skipCache: true }
+  );
 
   let reservation: Awaited<ReturnType<typeof reserveRequestCredits>>;
   try {
