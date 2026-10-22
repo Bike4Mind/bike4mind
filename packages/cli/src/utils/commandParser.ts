@@ -129,6 +129,8 @@ const FrontmatterSchema = z.object({
   // Visibility controls
   /** When true, skill is hidden from AI's auto-loading in system prompt */
   'disable-model-invocation': z.boolean().prefault(false),
+  /** opencode's spelling of the same opt-out: false hides the skill from the AI */
+  autoinvoke: z.boolean().optional(),
   /** When false, skill is hidden from /commands menu but still callable */
   'user-invocable': z.boolean().prefault(true),
 
@@ -228,7 +230,7 @@ export function parseCommandFile(
       // New Claude Code spec fields
       allowedTools: validFrontmatter['allowed-tools'],
       context: validFrontmatter.context || 'inline',
-      disableModelInvocation: validFrontmatter['disable-model-invocation'] || false,
+      disableModelInvocation: validFrontmatter['disable-model-invocation'] || validFrontmatter.autoinvoke === false,
       userInvocable: validFrontmatter['user-invocable'] !== false, // Default true
       hooks: validFrontmatter.hooks,
     };

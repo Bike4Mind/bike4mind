@@ -489,6 +489,8 @@ export interface CustomCommandFrontmatter {
   context?: 'fork' | 'inline';
   /** When true, skill is hidden from AI's auto-loading in system prompt */
   'disable-model-invocation'?: boolean;
+  /** opencode's spelling of the same opt-out: false hides the skill from the AI */
+  autoinvoke?: boolean;
   /** When false, skill is hidden from /commands menu but still callable */
   'user-invocable'?: boolean;
   /** Lifecycle hooks for skill execution */
