@@ -89,6 +89,19 @@ describe('registerContributedSettings', () => {
     expect(resolveSettingDefinition('ExtensionFlag')).toBe(flag);
   });
 
+  it('rejects a sensitive definition that carries a default, since the module reaches the client', () => {
+    const seeded = makeContributedStringSetting({
+      key: 'seededToken',
+      name: 'x',
+      description: 'x',
+      defaultValue: 'not-a-secret-but-shipped',
+      isSensitive: true,
+    });
+    expect(registerContributedSettings([seeded, token]).rejected).toEqual(['seededToken']);
+    expect(isRegisteredSettingKey('seededToken')).toBe(false);
+    expect(isRegisteredSettingKey('extensionToken')).toBe(true);
+  });
+
   it('rejects a reserved object key, a blank key and a definition without a schema', () => {
     const noSchema = { ...flag, key: 'noSchema', schema: undefined } as unknown as typeof flag;
     const reserved = makeContributedBooleanSetting({ key: '__proto__', name: 'x', description: 'x' });
@@ -111,6 +124,22 @@ describe('settings helpers over contributed definitions', () => {
     expect(userReadableSettingKeys()).toContain('extensionLimit');
     expect(publicSafeSettingKeys()).toContain('extensionToken');
     expect(userReadableSettingKeys()).not.toContain('extensionToken');
+  });
+
+  it('keeps a contributed setting from non-admins unless a readable arm admits it and it is not sensitive', () => {
+    const plain = makeContributedBooleanSetting({ key: 'extensionPlain', name: 'x', description: 'x' });
+    const experimentalSecret = makeContributedStringSetting({
+      key: 'extensionExperimentalSecret',
+      name: 'x',
+      description: 'x',
+      defaultValue: undefined,
+      isSensitive: true,
+      group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    });
+    registerContributedSettings([plain, experimentalSecret]);
+    expect(getExperimentalFeatureSettingKeys()).toContain('extensionExperimentalSecret');
+    expect(userReadableSettingKeys()).not.toContain('extensionExperimentalSecret');
+    expect(userReadableSettingKeys()).not.toContain('extensionPlain');
   });
 
   it('masks a sensitive contributed value and passes a plain one through', () => {

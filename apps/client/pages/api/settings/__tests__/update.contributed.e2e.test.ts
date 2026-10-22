@@ -9,9 +9,11 @@ import { adminSettingsRepository } from '@bike4mind/database/infra';
 import {
   makeContributedBooleanSetting,
   makeContributedNumberSetting,
+  makeContributedStringSetting,
   registerContributedSettings,
 } from '@bike4mind/common';
 import { getContributedSettingValue } from '@bike4mind/utils';
+import { configureSecretsAtRest } from '@bike4mind/utils/security';
 
 /**
  * A contributed setting through the real write and read paths: update stores it, fetch lists it,
@@ -61,6 +63,13 @@ registerContributedSettings([
     defaultValue: 7,
     max: 10,
   }),
+  makeContributedStringSetting({
+    key: 'extensionToken',
+    name: 'Extension token',
+    description: 'x',
+    defaultValue: undefined,
+    isSensitive: true,
+  }),
 ]);
 
 const put = async (key: string, value: unknown) => {
@@ -84,6 +93,8 @@ const fetchAll = async () => {
 
 let mongoServer: MongoMemoryServer;
 beforeAll(async () => {
+  // The same key the mocked Config hands update.ts, so the repository can decrypt what the route wrote.
+  configureSecretsAtRest('a'.repeat(64));
   mongoServer = await createMongoServer();
   await mongoose.connect(mongoServer.getUri());
 });
@@ -103,6 +114,16 @@ describe('settings/update with contributed settings (real Mongo)', () => {
     const values = Object.fromEntries(listed.map(s => [s.settingName, String(s.settingValue)]));
     expect(getContributedSettingValue('ExtensionFlag', values)).toBe(true);
     expect(getContributedSettingValue('extensionLimit', values)).toBe(4);
+  });
+
+  it('encrypts a sensitive contributed value at rest and decrypts it on a trusted read', async () => {
+    await put('extensionToken', 'plain-secret-value-1234');
+    const raw = await mongoose.connection.collection('adminsettings').findOne({ settingName: 'extensionToken' });
+    expect(raw?.settingValue).toEqual(expect.any(String));
+    expect(raw?.settingValue).not.toBe('plain-secret-value-1234');
+    expect((await adminSettingsRepository.findBySettingName('extensionToken'))?.settingValue).toBe(
+      'plain-secret-value-1234'
+    );
   });
 
   it('validates a contributed value with its own schema', async () => {

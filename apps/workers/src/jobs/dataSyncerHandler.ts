@@ -11,7 +11,8 @@
 import { Resource } from 'sst';
 import type { Handler } from 'aws-lambda';
 import { MongoClient } from 'mongodb';
-import { settingsMap } from '@bike4mind/common';
+import '@client/lib/settings/registerContributedSettings';
+import { allSettingDefinitions } from '@bike4mind/common';
 
 interface DataSyncerEvent {
   // Whether to sync preview settings from staging on preview deploys; the syncmarker makes repeat runs skip
@@ -45,9 +46,9 @@ const COLLECTIONS_TO_SYNC = ['adminsettings', 'rapidreplymappings'];
 // Slack token, Firecrawl/Serper key and ollamaBackend at once. Never sync them cross-stage;
 // previews resolve sensitive settings from their own config (or the demo-key fallback).
 const SENSITIVE_ADMIN_SETTING_NAMES = new Set(
-  Object.entries(settingsMap)
-    .filter(([, def]) => (def as { isSensitive?: boolean })?.isSensitive === true)
-    .map(([key]) => key)
+  allSettingDefinitions()
+    .filter(def => def.isSensitive === true)
+    .map(def => def.key)
 );
 
 // Source-side query for a synced collection. adminsettings excludes sensitive rows (above);

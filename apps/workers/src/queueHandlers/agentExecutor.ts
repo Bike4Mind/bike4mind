@@ -1,3 +1,4 @@
+import '@client/lib/settings/registerContributedSettings';
 /**
  * Agent Executor Lambda Handler
  *
