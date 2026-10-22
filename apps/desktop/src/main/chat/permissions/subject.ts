@@ -119,6 +119,9 @@ export function everySessionRules(subject: PermissionSubject, prompt: ApprovalPr
   if (SHELL_TOOLS.has(subject.tool) || READ_TOOLS.has(subject.tool) || EDIT_TOOLS.has(subject.tool)) return [];
   // An MCP call that reached here has no server to name, and `mcp__x` would read as a whole server.
   if (subject.tool.startsWith(MCP_TOOL_PREFIX) || !NATIVE_NAME.test(subject.tool)) return [];
+  // A browser card is per site, and a bare rule saved from an ordinary one would also skip the
+  // card for acting as the user on a signed-in site: an allow rule outranks askInFull.
+  if (subject.tool.startsWith('browser_')) return [];
   return [subject.tool];
 }
 

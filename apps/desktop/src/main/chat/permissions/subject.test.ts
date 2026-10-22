@@ -193,6 +193,11 @@ describe('everySessionRules', () => {
     expect(rulesFor('mcp__gh_search', {}, { detail: '', key: 'k' })).toEqual([]);
   });
 
+  it('derives nothing for a browser card, whose bare rule would cover signed-in sites too', () => {
+    expect(rulesFor('browser_navigate', { url: 'https://example.com/' }, { detail: '', key: 'k' })).toEqual([]);
+    expect(rulesFor('browser_click', {}, { detail: '', key: 'k' })).toEqual([]);
+  });
+
   it('derives an MCP rule naming the server and tool', () => {
     expect(rulesFor('mcp__gh_search', {}, { detail: '', key: 'k', mcp: { server: 'gh', tool: 'search' } })).toEqual([
       'mcp__gh__search',
