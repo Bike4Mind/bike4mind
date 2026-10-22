@@ -78,6 +78,28 @@ describe('recordOperationalUsage', () => {
     });
   });
 
+  it('writes the caller price stamp onto the UsageEvent, and nothing when there is none', async () => {
+    setToggles({ bill: false, enforce: true });
+    const record = vi.fn().mockResolvedValue(null);
+    const priceStamp = {
+      priceSource: 'catalog' as const,
+      priceRowId: 'price-row-1',
+      rates: { tierKey: 200_000, input: 3e-6, output: 15e-6, cacheRead: 3e-7, cacheWrite: 3.75e-6 },
+      turnUsage: [
+        { inputTokens: 60, outputTokens: 10, tierKey: 200_000 },
+        { inputTokens: 40, outputTokens: 10, tierKey: 200_000 },
+      ],
+    };
+
+    await recordOperationalUsage({ ...baseParams, priceStamp }, { db: fullBillingDb(record), logger });
+    expect(record.mock.calls[0][0]).toMatchObject(priceStamp);
+
+    record.mockClear();
+    await recordOperationalUsage(baseParams, { db: fullBillingDb(record), logger });
+    expect(record.mock.calls[0][0]).not.toHaveProperty('priceSource');
+    expect(record.mock.calls[0][0]).not.toHaveProperty('rates');
+  });
+
   it('deducts credits and records them when both toggles are on and billing repos are present', async () => {
     setToggles({ bill: true, enforce: true });
     const record = vi.fn().mockResolvedValue(null);
