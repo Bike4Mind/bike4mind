@@ -58,6 +58,13 @@ describe('ChatCompletion ECS secrets', () => {
     expect(service).toMatch(/^\s+ssm: ecsSecretParameters,$/m);
   });
 
+  it('sets the parameter version fingerprint as plain environment only when secrets are moved', () => {
+    expect(service).toContain(
+      '...(ecsSecretGroups ? { ECS_SECRETS_VERSION: ecsSecretsVersion(...ecsSecretGroups) } : {}),'
+    );
+    expect(chatCompletion).toMatch(/const ecsSecretGroups = \$dev\s+\? undefined/);
+  });
+
   it('excludes the moved secrets from link and keeps the plain link under sst dev', () => {
     expect(chatCompletion).toMatch(/const linkedSecrets = \$dev \? allSecrets : allSecrets\.filter\(/);
     expect(chatCompletion).toContain('...ecsSecretNames.map(n => secrets[n])');
@@ -85,13 +92,26 @@ describe('ChatCompletion ECS secrets', () => {
 describe('subscriberFanout ECS secrets', () => {
   it('moves MONGODB_URI out of link, with the plain link kept under sst dev', () => {
     expect(fanout).toMatch(/link: \$dev \? \[secrets\.MONGODB_URI, websocketApi\] : \[websocketApi\],/);
-    expect(fanout).toMatch(
-      /ssm: \$dev \? undefined : ecsResourceSecrets\('subscriberFanoutV2', \{ MONGODB_URI: secrets\.MONGODB_URI \}\)/
+    expect(readInfra('subscriberFanout.ts')).toMatch(
+      /const fanoutSecrets = \$dev \? undefined : ecsResourceSecrets\('subscriberFanoutV2', \{ MONGODB_URI: secrets\.MONGODB_URI \}\)/
     );
+    expect(readInfra('subscriberFanout.ts')).toContain('ssm: fanoutSecrets?.ssm,');
+  });
+
+  it('sets the parameter version fingerprint as plain environment only when secrets are moved', () => {
+    expect(fanout).toContain('...(fanoutSecrets ? { ECS_SECRETS_VERSION: ecsSecretsVersion(fanoutSecrets) } : {}),');
   });
 });
 
 describe('ecsSecrets helper', () => {
+  it('exposes parameter versions and builds the fingerprint from versions only', () => {
+    expect(helper).toContain('versions.push(parameter.version);');
+    expect(helper).toContain('versions: [parameter.version]');
+    const fn = cut(helper, 'export function ecsSecretsVersion', '\n}');
+    expect(fn).toContain('$interpolate');
+    expect(fn).not.toContain('.value');
+  });
+
   it('stores resource secrets as {"value": ...} under SST_RESOURCE_<Name> keyed to the parameter ARN', () => {
     expect(helper).toContain('$jsonStringify({ value: secret.value })');
     expect(helper).toContain('`SST_RESOURCE_${name}`, parameter.arn');

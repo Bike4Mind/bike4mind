@@ -1,6 +1,6 @@
 import { appFilesBucket, fabFileBucket, generatedImagesBucket } from './buckets';
 import { DEFAULT_LAMBDA_ENVIRONMENT, PRODUCTION_STAGES, TEST_GENERATION_PROVIDER_ENVIRONMENT } from './constants';
-import { ecsEnvSecret, ecsResourceSecrets } from './ecsSecrets';
+import { ecsEnvSecret, ecsResourceSecrets, ecsSecretsVersion } from './ecsSecrets';
 import { eventBus } from './eventBus';
 import { imageProcessor } from './imageProcessor';
 import { mcpHandler } from './mcp';
@@ -75,14 +75,15 @@ const ecsSecretResources: sst.Secret[] = [
 ];
 const linkedSecrets = $dev ? allSecrets : allSecrets.filter(s => !ecsSecretResources.includes(s));
 // The PEM key size is operator-chosen and may exceed the 4 KB Standard tier limit, so it alone is Advanced tier.
-const ecsSecretParameters = $dev
+const ecsSecretGroups = $dev
   ? undefined
-  : {
-      ...ecsResourceSecrets('ChatCompletion', Object.fromEntries(ecsSecretNames.map(n => [n, secrets[n]])), {
+  : [
+      ecsResourceSecrets('ChatCompletion', Object.fromEntries(ecsSecretNames.map(n => [n, secrets[n]])), {
         advanced: ['OAUTH_RSA_PRIVATE_KEY'],
       }),
-      ...ecsEnvSecret('ChatCompletion', 'OPTIHASHI_INSTANCE_SERVICE_TOKEN', secrets.OPTIHASHI_INSTANCE_SERVICE_TOKEN),
-    };
+      ecsEnvSecret('ChatCompletion', 'OPTIHASHI_INSTANCE_SERVICE_TOKEN', secrets.OPTIHASHI_INSTANCE_SERVICE_TOKEN),
+    ];
+const ecsSecretParameters = ecsSecretGroups && Object.assign({}, ...ecsSecretGroups.map(g => g.ssm));
 
 export const chatCompletion = new sst.aws.Service('ChatCompletion', {
   cluster,
@@ -166,6 +167,7 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
     // — the URL is a secret, sidestepping any creation-order coupling.
     OPTIHASHI_INSTANCE_SERVICE_URL: secrets.OPTIHASHI_INSTANCE_SERVICE_URL.value,
     ...($dev ? { OPTIHASHI_INSTANCE_SERVICE_TOKEN: secrets.OPTIHASHI_INSTANCE_SERVICE_TOKEN.value } : {}),
+    ...(ecsSecretGroups ? { ECS_SECRETS_VERSION: ecsSecretsVersion(...ecsSecretGroups) } : {}),
     // Internal SearXNG (infra/searxng.ts), only where it is deployed. Set only on the VPC Lambdas
     // that run web search (also infra/agentExecutor.ts, infra/queues.ts); the URL resolves only
     // inside the VPC.
