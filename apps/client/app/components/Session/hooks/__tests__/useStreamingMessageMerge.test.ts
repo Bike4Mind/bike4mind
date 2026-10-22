@@ -281,6 +281,60 @@ describe('useStreamingMessageMerge', () => {
     });
   });
 
+  it('recovers a quest whose held completion belongs to a real session while the view is optimistic', async () => {
+    vi.useFakeTimers();
+    const running = makeQuest({ id: 'q1', status: 'running', replies: [] });
+    const chatCompletion = makeChatCompletion({
+      completed: true,
+      quest: makeStreamQuest({ id: 'q1', sessionId: 'real', status: 'done' }),
+    });
+    checkQuestTimeout.mockResolvedValue(makeQuest({ id: 'q1', sessionId: 'real', status: 'done' }));
+
+    const { result } = renderHook(() =>
+      useStreamingMessageMerge(
+        baseParams({ sessionId: 'optimistic-session-1', flattenQuests: [running], chatCompletion })
+      )
+    );
+
+    expect(result.current.streamingMessageData).toBeNull();
+    expect(result.current.showOptimisticSpinner).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    expect(checkQuestTimeout).toHaveBeenCalledWith('q1');
+    expect(updateAllQueryData).toHaveBeenCalledWith(
+      expect.anything(),
+      'quests',
+      'write',
+      expect.objectContaining({ id: 'q1' }),
+      {
+        keysAllowedToCreate: [
+          ['quests', 'session', 'optimistic-session-1'],
+          ['quests', 'session', 'real'],
+        ],
+      }
+    );
+    expect(setChatCompletion).toHaveBeenCalledWith({ quest: undefined, completed: true, stopped: false });
+  });
+
+  it('runs the 10s safety valve when the held quest is a finished earlier one', () => {
+    vi.useFakeTimers();
+    const running = makeQuest({ id: 'q1', status: 'running', replies: [] });
+    const chatCompletion = makeChatCompletion({
+      completed: true,
+      quest: makeStreamQuest({ id: 'q0', status: 'done' }),
+    });
+
+    renderHook(() =>
+      useStreamingMessageMerge(
+        baseParams({ flattenQuests: [running, makeQuest({ id: 'q0', status: 'done' })], chatCompletion })
+      )
+    );
+    vi.advanceTimersByTime(10_000);
+
+    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['quests', 'session', SESSION_ID] });
+  });
+
   it('does not run the 10s safety valve once streaming data has arrived', () => {
     vi.useFakeTimers();
     const cached = makeQuest({ id: 'q1', status: 'running', replies: [] });

@@ -842,24 +842,12 @@ export class ImageGenerationService {
 
     const quest = await this.db.quests.findById(questId);
     if (!quest) throw new NotFoundError('Quest not found');
+    // A duplicate delivery of an already-settled job must not flip it back to running.
+    if (quest.status === 'done') {
+      logger.warn('Image generation skipped: quest already done', { questId });
+      return;
+    }
     quest.status = 'running';
-
-    // Fetch user and organization in parallel
-    const [user, organization] = await Promise.all([
-      this.db.users.findById(userId),
-      organizationId ? this.db.organizations.findById(organizationId) : Promise.resolve(null),
-    ]);
-    if (!user) throw new NotFoundError('User not found');
-
-    // Owner-wide lake access for scoping the input-image lookup: a lake-only image the workbench
-    // admitted must still resolve here. Absent resolver (or a resolution outage) degrades to
-    // owner/share/global-read only - never widens, never fails the run.
-    const lakeAccess = this.resolveLakeAccess ? await this.resolveLakeAccess(user, logger) : undefined;
-
-    // skipCache: enforceCredits gates money (and ModerationEnabled below gates content safety),
-    // and this host may outlive the admin's write to either.
-    const settings = await getSettingsMap(this.db, { skipCache: true });
-    const adminSettingsEnforceCredits = getSettingsValue('enforceCredits', settings);
 
     const parseQuestToStreamPayload = (quest: IChatHistoryItemDocument) => {
       return {
@@ -883,6 +871,23 @@ export class ImageGenerationService {
 
     try {
       stopHeartbeat = await startQuestHeartbeat(this.db, quest, logger, 'image-heartbeat');
+
+      // Fetch user and organization in parallel
+      const [user, organization] = await Promise.all([
+        this.db.users.findById(userId),
+        organizationId ? this.db.organizations.findById(organizationId) : Promise.resolve(null),
+      ]);
+      if (!user) throw new NotFoundError('User not found');
+
+      // Owner-wide lake access for scoping the input-image lookup: a lake-only image the workbench
+      // admitted must still resolve here. Absent resolver (or a resolution outage) degrades to
+      // owner/share/global-read only - never widens, never fails the run.
+      const lakeAccess = this.resolveLakeAccess ? await this.resolveLakeAccess(user, logger) : undefined;
+
+      // skipCache: enforceCredits gates money (and ModerationEnabled below gates content safety),
+      // and this host may outlive the admin's write to either.
+      const settings = await getSettingsMap(this.db, { skipCache: true });
+      const adminSettingsEnforceCredits = getSettingsValue('enforceCredits', settings);
 
       const apiKeyTable = await getEffectiveLLMApiKeys(userId, { db: this.db, getSettingsByNames });
       const models = await getAvailableModels(apiKeyTable);

@@ -40,7 +40,8 @@ export async function startQuestHeartbeat(
   logger: Pick<Logger, 'warn' | 'error'>,
   tag: string
 ): Promise<() => void> {
-  await db.quests.update({ id: quest.id, status: 'running' });
+  // Conditional so a redelivered job cannot flip a settled quest back to 'running'.
+  await db.quests.updateMany({ _id: quest.id, status: { $ne: 'done' } }, { status: 'running' });
 
   let consecutiveFailures = 0;
   const interval = setInterval(() => {
