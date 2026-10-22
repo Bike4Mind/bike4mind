@@ -14,6 +14,7 @@ import {
   FORCED_RETRIEVAL_MAX_PER_LAKE_LISTINGS,
 } from './ChatCompletionFeatures';
 import { GROUNDED_NO_INVENTION_RULE } from './prompts';
+import { forcedRetrievalNoContextPrompt } from './forcedRetrievalAbstention';
 import { lakeOrderScopes } from '../dataLakeService/lakeFairOrder';
 import { mergeRetrievalSummary } from './tools/retrievalSummaryMerge';
 import { sessionExcludesLibrary } from './tools/base/resolveSessionLakeAccess';
@@ -1137,9 +1138,11 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       .retrievalCoverage;
     expect(coverage?.partial).toBe(true);
     expect(coverage?.reasons).toHaveLength(1);
-    expect(coverage?.reasons[0]).toContain('candidate cap');
-    expect(coverage?.reasons[0]).toContain('selected alphabetically by file name');
-    expect(coverage?.reasons[0]).toContain('the rest of the library is never reached');
+    // Reader-facing: no internal cap or selection rule - that detail stays in the warning above.
+    expect(coverage?.reasons[0]).toContain('More documents matched than one search can cover');
+    expect(coverage?.reasons[0]).not.toContain('candidate cap');
+    expect(coverage?.reasons[0]).not.toContain('alphabetically');
+    expect((quest.promptMeta as { warnings?: string[] }).warnings?.[0]).toContain('candidate cap');
   });
 
   describe('candidate selection on a scope larger than the candidate cap', () => {
@@ -1743,6 +1746,9 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
     // only, with no promptMeta write.
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('embedded with a different model and cannot be matched'));
     expect((quest.promptMeta as { warnings?: string[] }).warnings).toHaveLength(1);
+    expect(
+      (quest.promptMeta as { retrievalCoverage?: { reasons: string[] } }).retrievalCoverage?.reasons.join(' ')
+    ).toContain('indexed in a way this search cannot read');
     // Must NOT be reported as "no vectorized chunks" - these files have vectors, at the wrong width.
     const logs = (ctx.logger as unknown as { log: ReturnType<typeof vi.fn> }).log.mock.calls.flat().join(' ');
     expect(logs).not.toContain('no vectorized chunks');
@@ -1967,12 +1973,16 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
           Array.from({ length: 100 }, (_, i) => ({ id: `${id}-${i}`, fabFileId: id, text: 'x', vector: [1, 0] }))
         ),
     });
-    await run(ctx);
+    const { quest } = await run(ctx);
     // 4000-chunk budget over 1000-chunk batches: far fewer than the 10 batches 100 files imply.
     expect(ctx.db.fabfilechunks.findVectorsByFabFileIds.mock.calls.length).toBeLessThanOrEqual(6);
     expect((ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).toHaveBeenCalledWith(
       expect.stringContaining('scan budget')
     );
+    const readerReasons = (quest.promptMeta as { retrievalCoverage?: { reasons: string[] } }).retrievalCoverage
+      ?.reasons;
+    expect(readerReasons?.join(' ')).toContain('matched more content than one search can read');
+    expect(readerReasons?.join(' ')).not.toContain('4000');
   });
 
   it('grounds nothing when the projected reader is missing, rather than falling back', async () => {
@@ -2494,15 +2504,43 @@ describe('KnowledgeRetrievalFeature supersession collapse (forced path)', () => 
     expect(content).toContain('content of new');
   });
 
-  it('reports the collapse in the coverage warning with ids and the matching tier', async () => {
-    const { quest } = await run(makeCtx(twoGenerations, true));
-    const reasons =
-      (quest.promptMeta as { retrievalCoverage?: { reasons: string[] } }).retrievalCoverage?.reasons ?? [];
-    const line = reasons.find(r => r.includes('were not ranked because this lake holds a version'));
+  it('a collapse alone records ids and the tier in warnings but raises no reader notice and no model hedge', async () => {
+    const { quest, content } = await run(makeCtx(twoGenerations, true));
+    const warnings = (quest.promptMeta as { warnings?: string[] }).warnings ?? [];
+    const line = warnings.find(w => w.includes('were not ranked because this lake holds a version'));
     expect(line).toBeDefined();
     expect(line).toContain('old');
     expect(line).toContain('new');
     expect(line).toContain('fileName');
+    expect(quest.promptMeta?.retrievalCoverage).toBeUndefined();
+    expect(content).not.toContain('Coverage note');
+  });
+
+  it('a collapse alone on a turn that retrieves nothing still abstains as partial, with no reader notice', async () => {
+    const orthogonal = makeCtx(twoGenerations, true);
+    const chunks = (id: string) => [{ id: `ch-${id}`, fabFileId: id, text: `content of ${id}`, vector: [0, 1] }];
+    orthogonal.db.fabfilechunks.findVectorsByFabFileIds = vi.fn((ids: string[]) =>
+      Promise.resolve(ids.flatMap(chunks))
+    );
+    const { quest, content } = await run(orthogonal);
+    expect(content).toBe(forcedRetrievalNoContextPrompt('no_match_partial'));
+    expect(quest.promptMeta?.retrievalCoverage).toBeUndefined();
+  });
+
+  it('a collapse beside a real coverage loss keeps the reader reasons id-free', async () => {
+    const ctx = makeCtx(
+      [
+        ...twoGenerations,
+        gen('pending', { fileName: 'Other.pdf', createdAt: new Date('2025-01-01'), vectorizedChunkCount: 0 }),
+      ],
+      true
+    );
+    const { quest } = await run(ctx);
+    const reasons =
+      (quest.promptMeta as { retrievalCoverage?: { reasons: string[] } }).retrievalCoverage?.reasons ?? [];
+    expect(reasons.some(r => r.includes('re-indexed right now'))).toBe(true);
+    expect(reasons.some(r => r.includes('not ranked') || r.includes('superseded') || r.includes('old'))).toBe(false);
+    expect((quest.promptMeta as { warnings?: string[] }).warnings?.[0]).toContain('superseded by new');
   });
 
   it('flag off (the shipped default): both generations still ground the turn', async () => {
@@ -2548,7 +2586,7 @@ describe('KnowledgeRetrievalFeature supersession collapse (forced path)', () => 
     expect(content).toContain('content of old');
     const reasons =
       (quest.promptMeta as { retrievalCoverage?: { reasons: string[] } }).retrievalCoverage?.reasons ?? [];
-    expect(reasons.some(r => r.includes('embedded with a different model'))).toBe(true);
+    expect(reasons.some(r => r.includes('indexed in a way this search cannot read'))).toBe(true);
     expect(reasons.some(r => r.includes('were not ranked because this lake holds a version'))).toBe(false);
   });
 });
@@ -5793,6 +5831,9 @@ describe('KnowledgeRetrievalFeature chunk-cursor stall coverage', () => {
     // its scan was incomplete rather than presenting a partial result as a complete one.
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('PARTIAL coverage'));
     expect((quest.promptMeta as { warnings?: string[] }).warnings?.join(' ')).toContain('stopped advancing');
+    expect(
+      (quest.promptMeta as { retrievalCoverage?: { reasons: string[] } }).retrievalCoverage?.reasons.join(' ')
+    ).toContain('Part of a document batch could not be read');
   });
 });
 
