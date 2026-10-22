@@ -15,6 +15,25 @@ import { middleTruncate } from './prBarModel';
 
 const PATH_MAX_CHARS = 56;
 
+const BAR_HEIGHT = 32;
+const BAR_BORDER = 1;
+// The bar's controls sit this far inside its border on top, bottom and the far end, and the bar's
+// own side padding matches, so every edge has the same gap.
+const BAR_INSET = 4;
+
+const BAR_CONTROL_HEIGHT = BAR_HEIGHT - 2 * (BAR_BORDER + BAR_INSET);
+
+// Radius shrinks by the distance between the two edges, so the corners nest inside the bar's.
+const barControlSx = {
+  height: BAR_CONTROL_HEIGHT,
+  minHeight: BAR_CONTROL_HEIGHT,
+  py: 0,
+  borderRadius: `calc(var(--joy-radius-md) - ${BAR_BORDER + BAR_INSET}px)`,
+  fontWeight: 'md',
+  whiteSpace: 'nowrap',
+  '--Button-gap': '6px',
+} as const;
+
 function FileRow({ file }: { file: ChangedFile }) {
   return (
     <Stack component="li" direction="row" alignItems="center" spacing={1} data-testid="changes-bar-file">
@@ -67,9 +86,9 @@ export function ChangesBar({
         alignItems="center"
         spacing={1}
         sx={{
-          minHeight: 32,
-          px: 1.25,
-          border: '1px solid',
+          minHeight: BAR_HEIGHT,
+          px: `${BAR_INSET}px`,
+          border: `${BAR_BORDER}px solid`,
           borderColor: 'neutral.outlinedBorder',
           borderRadius: 'md',
           bgcolor: 'background.surface',
@@ -86,10 +105,12 @@ export function ChangesBar({
             variant="plain"
             color="neutral"
             endDecorator={<CaretDownIcon />}
-            sx={{ fontWeight: 'md', minHeight: 26, px: 0.75, '--Button-gap': '6px' }}
+            sx={{ ...barControlSx, px: 0.75, minWidth: 0 }}
             slotProps={{ root: { 'data-testid': 'changes-bar-files-btn' } }}
           >
-            {filesChangedLabel(changes)}
+            <Box component="span" sx={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {filesChangedLabel(changes)}
+            </Box>
           </MenuButton>
           <Menu
             size="sm"
@@ -122,7 +143,8 @@ export function ChangesBar({
             level="body-xs"
             textColor="text.tertiary"
             noWrap
-            sx={{ minWidth: 0 }}
+            // Weighted far above the files label so this gives way first in a narrow window.
+            sx={{ minWidth: 0, flexShrink: 1000 }}
             data-testid="changes-bar-state"
           >
             {state}
@@ -141,15 +163,19 @@ export function ChangesBar({
           variant="soft"
           placement="top-end"
         >
-          <Box component="span" sx={{ display: 'inline-flex' }}>
+          <Box component="span" sx={{ display: 'inline-flex', flexShrink: 0 }}>
             <Button
               size="sm"
-              variant="soft"
-              color="primary"
+              variant="outlined"
+              color="neutral"
               disabled={busy}
               startDecorator={<PullRequestIcon />}
               onClick={() => onCreatePullRequest(changes)}
-              sx={{ minHeight: 26, px: 1 }}
+              sx={{
+                ...barControlSx,
+                px: 1,
+                '&:hover, &:focus-visible': { color: 'primary.plainColor', borderColor: 'primary.outlinedBorder' },
+              }}
               data-testid="changes-bar-create-pr-btn"
             >
               Create PR
