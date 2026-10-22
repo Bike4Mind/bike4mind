@@ -896,6 +896,23 @@ describe('forced-retrieval relevance floors are levers (#2497)', () => {
   });
 });
 
+describe('Credits System group', () => {
+  // The group's `settings` index is hand-maintained (see the EMBEDDING note above), so keep it
+  // matching the settings that actually carry the group.
+  it('indexes exactly the settings that carry the group', () => {
+    const indexed = API_SERVICE_GROUPS.CREDITS.settings.map(entry => entry.key).sort();
+    const carried = Object.values(settingsMap)
+      .filter(setting => setting.group === API_SERVICE_GROUPS.CREDITS.id)
+      .map(setting => setting.key)
+      .sort();
+    expect(indexed).toEqual(carried);
+  });
+
+  it('is not repeated in the User Management index', () => {
+    expect(API_SERVICE_GROUPS.USER_MANAGEMENT.settings.map(entry => entry.key)).not.toContain('enforceCredits');
+  });
+});
+
 describe('kbSearchDefaultResults agrees with the search_knowledge_base tool fallback (#1831)', () => {
   // Same drift class as forcedRetrievalCharBudget above: before this setting existed,
   // KB_SEARCH_DEFAULT_RESULTS was a hand-copied literal (5) local to the tool's own file. Both now
