@@ -7,8 +7,9 @@ import AdminSettingInputField from './AdminSettingInputField';
 
 /**
  * The growth and monetization knobs, grouped on one page so they can be tuned without hunting
- * through Admin Settings. Storage is the ordinary admin-settings collection - every field here is
- * the same setting (and the same editor) that also appears under Admin Settings.
+ * through Admin Settings. Storage is the ordinary admin-settings collection. This tab is the only
+ * editor for these keys (GROWTH_PRICING_ONLY_KEYS in AdminSettingsTab, whose Credits System group
+ * links here), except ReferralCreditsAmount, which keeps a second editor under Referrals.
  */
 export const GROWTH_PRICING_SECTIONS: ReadonlyArray<{
   id: string;
