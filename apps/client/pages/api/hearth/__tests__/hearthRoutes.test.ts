@@ -100,8 +100,6 @@ vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'wss://test
 // window the roster sort uses; only the repository is faked.
 vi.mock('@bike4mind/database', async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  MAX_PRESENCE_FIELD_LENGTH: 200,
-  MAX_ROSTER_ROWS: 200,
   hearthRepository: {
     store: storeMock,
     getOwnedChannel: getOwnedChannelMock,
@@ -583,8 +581,10 @@ describe('GET /api/hearth/presence', () => {
     await get()(makeReq({}, { channelId: 'ch-1' }), res);
 
     // The roster is capped for cost (the ranking sort cannot be index-served and
-    // rows are never deleted), so the bound has to be visible to the client.
-    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ maxRows: 200 }));
+    // rows are never deleted), so the bound has to be visible to the client. It
+    // is asserted against the package constant, not the value published here.
+    const { MAX_ROSTER_ROWS } = await vi.importActual<{ MAX_ROSTER_ROWS: number }>('@bike4mind/database');
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ maxRows: MAX_ROSTER_ROWS }));
   });
 
   it('declares the read scope list, so a read-only key is admitted', () => {
@@ -606,7 +606,7 @@ describe('GET /api/hearth/presence', () => {
     expect(rateLimitOptions(presenceRouter, 'get')).toEqual({ limit: 120, windowMs: 60000 });
   });
 
-  it('returns the repository order untouched (needs-you-first, not by recency)', async () => {
+  it('returns the repository order untouched (freshness-first, then needs-you-first)', async () => {
     presenceForChannelMock.mockResolvedValue([
       presenceRow('a-blocked', 'awaiting_permission', '2026-07-27T10:00:05Z', { reason: 'permission_prompt' }),
       presenceRow('a-working', 'running', '2026-07-27T10:00:20Z', { tool: 'Bash' }),
@@ -626,8 +626,8 @@ describe('GET /api/hearth/presence', () => {
       reason: 'permission_prompt',
       lastSeen: '2026-07-27T10:00:05.000Z',
     });
-    // The published hint and the roster sort's window are one value: a local
-    // literal reintroduced in the route would make the panel's dimming and the
+    // The published hint and the roster sort's window are one value: a drifted
+    // local literal in the route would make the panel's dimming and the
     // server's ordering disagree near the boundary.
     const { PRESENCE_STALE_AFTER_MS } = await vi.importActual<{ PRESENCE_STALE_AFTER_MS: number }>(
       '@bike4mind/database'

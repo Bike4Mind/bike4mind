@@ -179,7 +179,7 @@ describe('Hearth presence projection', () => {
     expect(await HearthPresence.countDocuments({})).toBe(1);
   });
 
-  it('orders the roster needs-you-first, most recent within a state', async () => {
+  it('orders fresh rows needs-you-first, most recent within a state', async () => {
     const channel = await hearthRepository.createChannel(USER, 'general');
     const channelId = channel._id.toString();
 
@@ -233,6 +233,25 @@ describe('Hearth presence projection', () => {
     expect(roster.map(r => r.actorId.toString())).toEqual([live, expired]);
     expect(roster.map(r => r.state)).toEqual(['running', 'awaiting_permission']);
     expect(roster[0]).not.toHaveProperty('isStale');
+  });
+
+  it('measures staleness against the wall clock when no now is passed', async () => {
+    // The presence route never passes `now`, so the default branch is the only
+    // path production takes. The margins are wide enough that a slow run cannot
+    // cross the window.
+    const channel = await hearthRepository.createChannel(USER, 'general');
+    const channelId = channel._id.toString();
+    const [expired, live] = (
+      await Promise.all(['wall-expired', 'wall-live'].map(n => hearthRepository.ensureActor(USER, 'agent', n)))
+    ).map(a => a._id.toString());
+
+    await hearthRepository.upsertPresence(
+      presence(channelId, expired, new Date(Date.now() - 16 * 60_000), 'permission_prompt')
+    );
+    await hearthRepository.upsertPresence(presence(channelId, live, new Date(Date.now() - 10_000), 'tool_use'));
+
+    const roster = await hearthRepository.presenceForChannel(USER, channelId);
+    expect(roster.map(r => r.actorId.toString())).toEqual([live, expired]);
   });
 
   it('keeps state ranking among stale rows', async () => {
@@ -393,12 +412,13 @@ describe('Hearth presence projection', () => {
      * runs on an $addFields key no index can serve, so without a cap every read
      * is an in-memory sort proportional to lifetime session count.
      */
-    it('caps returned rows and keeps the most urgent ones', async () => {
+    it('caps returned rows and keeps the most urgent of the fresh ones', async () => {
       const channel = await hearthRepository.createChannel(USER, 'agents');
       const channelId = channel._id.toString();
+      const now = new Date('2026-07-29T00:01:00Z');
 
-      // One more than the cap, all idle except a single blocked actor created LAST
-      // (so insertion order cannot be what puts it first).
+      // One more than the cap, all idle and fresh except a single blocked actor
+      // created LAST (so insertion order cannot be what puts it first).
       for (let i = 0; i < MAX_ROSTER_ROWS; i++) {
         const actor = await hearthRepository.ensureActor(USER, 'agent', `filler-${i}`);
         await hearthRepository.upsertPresence(
@@ -410,13 +430,38 @@ describe('Hearth presence projection', () => {
         presence(channelId, blocked._id.toString(), new Date('2026-07-29T00:00:01Z'), 'permission_prompt')
       );
 
-      const roster = await hearthRepository.presenceForChannel(USER, channelId);
+      const roster = await hearthRepository.presenceForChannel(USER, channelId, { now });
 
       expect(roster).toHaveLength(MAX_ROSTER_ROWS);
-      // Ranking happens BEFORE the limit, so truncation drops the least urgent
-      // rows rather than whichever the scan reached last.
+      // Among these fresh rows, ranking happens BEFORE the limit, so truncation
+      // drops the least urgent ones rather than whichever the scan reached last.
       expect(roster[0].actorId.toString()).toBe(blocked._id.toString());
       expect(roster[0].state).toBe('awaiting_permission');
+    }, 60000);
+
+    it('drops a stale row before fresh ones when the roster is capped', async () => {
+      // Freshness is the first sort key, so a stale awaiting_permission row is
+      // the first casualty of the cap - the documented truncation order.
+      const channel = await hearthRepository.createChannel(USER, 'agents');
+      const channelId = channel._id.toString();
+      const now = new Date('2026-07-29T01:00:00Z');
+
+      for (let i = 0; i < MAX_ROSTER_ROWS; i++) {
+        const actor = await hearthRepository.ensureActor(USER, 'agent', `fresh-${i}`);
+        await hearthRepository.upsertPresence(
+          presence(channelId, actor._id.toString(), new Date('2026-07-29T00:59:00Z'), 'turn_finished')
+        );
+      }
+      const stale = await hearthRepository.ensureActor(USER, 'agent', 'stale-blocked');
+      await hearthRepository.upsertPresence(
+        presence(channelId, stale._id.toString(), new Date('2026-07-29T00:40:00Z'), 'permission_prompt')
+      );
+
+      const roster = await hearthRepository.presenceForChannel(USER, channelId, { now });
+
+      expect(roster).toHaveLength(MAX_ROSTER_ROWS);
+      expect(roster.map(r => r.actorId.toString())).not.toContain(stale._id.toString());
+      expect(roster.every(r => r.state === 'idle')).toBe(true);
     }, 60000);
 
     it('clamps a caller-supplied limit to the ceiling', async () => {

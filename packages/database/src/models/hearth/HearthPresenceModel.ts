@@ -22,13 +22,16 @@ export type HearthPresenceState = ICcAgentStatus;
 /**
  * A row not heard from for this long is "probably not live". ONE window, two
  * jobs: presenceForChannel ranks rows older than this below fresh ones, and the
- * presence route publishes the same value so the panel dims exactly the rows
- * the sort demoted.
+ * presence route publishes the same value so the panel dims by the same
+ * threshold the sort used - one shared boundary, so the two cannot disagree
+ * about where it sits.
  *
- * A liveness hint, not a filter: the roster never drops a row by age, and the
- * server cannot know the answer - a session idle for ten minutes is dead to a
- * dashboard and perfectly normal to an agent that reports on a heartbeat - so
- * this is only the shared default for "probably not live".
+ * A liveness hint, not a filter: the roster never filters a row out by age, and
+ * the server cannot know the answer - a session idle for ten minutes is dead to
+ * a dashboard and perfectly normal to an agent that reports on a heartbeat - so
+ * this is only the shared default for "probably not live". The row cap is a
+ * separate bound: a full roster sheds its lowest-ranked rows, so a stale row
+ * can be truncated away even though this value never excludes one.
  */
 export const PRESENCE_STALE_AFTER_MS = 5 * 60 * 1000;
 

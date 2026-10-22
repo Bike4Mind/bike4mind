@@ -109,9 +109,11 @@ function formatLastSeen(iso: string, now: number): string {
  *
  * The order is exactly what the server returned and is never re-sorted here -
  * the roster is an inbox, and every surface reading it must agree on what sits
- * at the top (see hearthRepository.presenceForChannel). Dimming uses the
- * `staleAfterMs` from the same response, so the dimmed rows are exactly the
- * ones the server's sort demoted.
+ * at the top (see hearthRepository.presenceForChannel). Dimming re-evaluates
+ * the `staleAfterMs` from the same response against the local clock, so panel
+ * and server agree on where the boundary sits. The clock ticks between fetch
+ * and render and this list is never re-sorted, so a row can dim while still
+ * holding its fetched place.
  */
 export default function HearthPresencePanel({ channelId }: { channelId: string }) {
   const queryClient = useQueryClient();
