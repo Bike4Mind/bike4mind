@@ -7,7 +7,8 @@ import { join } from 'node:path';
 /**
  * Guard for the admin-settings contribution: the registration module imports the generated file
  * statically on the server and the client, so it must exist (empty) with nothing mounted. Server
- * handler stubs must register the settings themselves, since Lambdas never pass through baseApi.
+ * handler stubs must register the settings themselves, since cron and queue Lambdas do not go
+ * through baseApi.
  */
 
 const REAL_SCRIPT = join(__dirname, '../scripts/generate-premium-glue.mjs');

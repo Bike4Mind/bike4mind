@@ -1291,7 +1291,7 @@ function generateServerHandlerStubs(packages) {
       // forwards all named exports (handler, dispatch, ...) that SST references.
       assertModuleSpecifier(exportFrom, pkg.name, 'serverHandlerStubs.exportFrom');
 
-      // Cron and queue Lambdas never pass through baseApi, so each stub registers the contributed
+      // Cron and queue Lambdas do not go through baseApi, so each stub registers the contributed
       // admin settings itself before the handler module reads one.
       const registerSpec = relative(dirname(outPath), ADMIN_SETTINGS_REGISTER_MODULE).split(sep).join('/');
       writeFile(
