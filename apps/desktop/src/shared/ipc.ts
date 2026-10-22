@@ -250,6 +250,8 @@ export const IPC_CHANNELS = {
   updateGetState: 'update:get-state',
   updateCheck: 'update:check',
   updateDownload: 'update:download',
+  /** Hide the floating update notice for one version; main persists it. */
+  updateDismiss: 'update:dismiss',
   /** The one channel that can end this process. Main gates it on work in flight. */
   updateInstall: 'update:install',
   /** main -> renderer push; a check, a download or an install offer changed state. */
@@ -490,6 +492,8 @@ export interface DesktopApi {
     /** Resolves when the check finishes; the OUTCOME arrives on onStateChanged. */
     check(): Promise<void>;
     download(): Promise<void>;
+    /** Hide the "update available" notice for this version only. Arrives back on onStateChanged. */
+    dismiss(version: string): Promise<void>;
     /**
      * Restart into the new version. Without `force` this reports what is still running and
      * does nothing, so the renderer can put that to the user before anything is lost.
