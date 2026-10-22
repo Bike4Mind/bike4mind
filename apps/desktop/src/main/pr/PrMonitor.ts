@@ -1,6 +1,7 @@
 import type { ChatAutomaticOrigin, ChatToolCall } from '@shared/chat';
 import type { AutomaticTurnResult } from '../chat/ChatService';
 import {
+  inMergeQueue,
   isFinishedState,
   parsePullRequestUrl,
   prDisplayState,
@@ -726,13 +727,23 @@ export class PrMonitor {
     const archiving = shouldAutoArchive(current, snapshot.state);
     const finished = isFinishedState(snapshot.state);
     const draftChanged = (current.lastDraft === true) !== snapshot.isDraft;
-    if (current.lastState !== snapshot.state || draftChanged || archiving || finished || current.finalSnapshot) {
+    const queued = inMergeQueue(snapshot);
+    const queuedChanged = (current.lastQueued === true) !== queued;
+    if (
+      current.lastState !== snapshot.state ||
+      draftChanged ||
+      queuedChanged ||
+      archiving ||
+      finished ||
+      current.finalSnapshot
+    ) {
       const { finalSnapshot: _previous, ...rest } = current;
       // Recorded before archiving, so a crash in between errs toward not archiving twice.
       await this.deps.store.set(sessionId, {
         ...rest,
         lastState: snapshot.state,
         lastDraft: snapshot.isDraft,
+        lastQueued: queued,
         ...(archiving ? { archivedOnClose: true } : {}),
         // Without checks: a finished bar draws none, and every launch reads this file whole.
         ...(finished ? { finalSnapshot: { ...forTheBar(snapshot), checks: [] } } : {}),
@@ -886,9 +897,15 @@ export class PrMonitor {
   private summaryOf(sessionId: string, binding: PrBinding | null): PrSummary | null {
     if (!binding) return null;
     const snapshot = this.snapshotFor(sessionId, binding);
-    if (snapshot) return { number: binding.number, state: prDisplayState(snapshot.state, snapshot.isDraft) };
+    // live.queued, not the snapshot's queue entry: it is what the bar's icon and chip read, and it
+    // is set the moment the app enqueues, before GitHub lists the entry.
+    const queued = !!this.live.get(sessionId)?.queued;
+    if (snapshot) return { number: binding.number, state: prDisplayState(snapshot.state, snapshot.isDraft, queued) };
     if (!binding.lastState) return null;
-    return { number: binding.number, state: prDisplayState(binding.lastState, binding.lastDraft) };
+    return {
+      number: binding.number,
+      state: prDisplayState(binding.lastState, binding.lastDraft, binding.lastQueued),
+    };
   }
 
   private async sidebarSummaries(): Promise<Map<string, PrSummary>> {

@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   ciSummary,
   findPullRequestUrls,
+  inMergeQueue,
   parsePullRequestUrl,
+  prDisplayState,
   pullRequestFromShell,
   samePullRequest,
   type PrCheck,
@@ -114,5 +116,24 @@ describe('ciSummary', () => {
     expect(ciSummary([check('pass'), check('pending')])).toBe('pending');
     expect(ciSummary([check('pass'), check('skipped')])).toBe('pass');
     expect(ciSummary([])).toBe('none');
+  });
+});
+
+describe('prDisplayState', () => {
+  it('shows an open PR in the merge queue as queued, and only an open one', () => {
+    expect(prDisplayState('OPEN', false, true)).toBe('queued');
+    expect(prDisplayState('OPEN', false, false)).toBe('open');
+    expect(prDisplayState('OPEN')).toBe('open');
+    expect(prDisplayState('OPEN', true, true)).toBe('draft');
+    expect(prDisplayState('MERGED', false, true)).toBe('merged');
+    expect(prDisplayState('CLOSED', false, true)).toBe('closed');
+  });
+
+  it('counts a merge-queue entry only while the PR is open', () => {
+    const entry = { enabled: true, entry: { state: 'QUEUED', position: 1 } };
+    expect(inMergeQueue({ state: 'OPEN', mergeQueue: entry })).toBe(true);
+    expect(inMergeQueue({ state: 'OPEN', mergeQueue: { enabled: true } })).toBe(false);
+    expect(inMergeQueue({ state: 'OPEN' })).toBe(false);
+    expect(inMergeQueue({ state: 'MERGED', mergeQueue: entry })).toBe(false);
   });
 });

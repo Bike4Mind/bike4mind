@@ -104,4 +104,36 @@ describe('PrMonitor sidebar summaries', () => {
     expect(await store.get(SESSION)).toMatchObject({ lastState: 'OPEN', lastDraft: true });
     monitor.dispose();
   });
+
+  it('shows a PR in the merge queue as queued, open again once it leaves, and merged when it lands', async () => {
+    const { store, fake, out, monitor, pushed } = setup();
+    const inQueue = { enabled: true, entry: { state: 'QUEUED', position: 1 } };
+    fake.answer(snapshot({ mergeQueue: inQueue }));
+    await monitor.bindManual(SESSION, REF.url);
+    await monitor.idle();
+    expect(out.last()?.autoMerge.queued).toEqual({ position: 1 });
+    expect(pushed[pushed.length - 1]?.summary?.state).toBe('queued');
+    expect(await store.get(SESSION)).toMatchObject({ lastState: 'OPEN', lastQueued: true });
+
+    fake.answer(snapshot({ mergeQueue: { enabled: true } }));
+    await monitor.refresh(SESSION);
+    expect(pushed[pushed.length - 1]?.summary?.state).toBe('open');
+    expect(await store.get(SESSION)).toMatchObject({ lastQueued: false });
+
+    fake.answer(snapshot({ mergeQueue: inQueue }));
+    await monitor.refresh(SESSION);
+    fake.answer(snapshot({ state: 'MERGED', mergeQueue: inQueue }));
+    await monitor.refresh(SESSION);
+    expect(pushed.slice(-2).map(event => event.summary?.state)).toEqual(['queued', 'merged']);
+    monitor.dispose();
+  });
+
+  it('remembers a queued PR across a relaunch without reading GitHub', async () => {
+    const { store, fake, monitor } = setup();
+    await store.set(SESSION, { ...bound, lastState: 'OPEN', lastQueued: true });
+    expect(await monitor.summaries()).toEqual([{ sessionId: SESSION, summary: { number: 611, state: 'queued' } }]);
+    await monitor.idle();
+    expect(fake.batches).toEqual([]);
+    monitor.dispose();
+  });
 });

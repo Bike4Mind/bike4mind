@@ -54,7 +54,7 @@ export function PrStatusBar({
   const merged = snapshot?.state === 'MERGED';
   const closed = snapshot?.state === 'CLOSED';
   const finished = merged || closed;
-  const displayState = snapshot ? prDisplayState(snapshot.state, snapshot.isDraft) : null;
+  const displayState = snapshot ? prDisplayState(snapshot.state, snapshot.isDraft, !!state.autoMerge.queued) : null;
   const mergedColor = prStateColor('merged', theme.palette.mode === 'dark' ? 'dark' : 'light');
   const mergedAgo = merged && snapshot.mergedAt ? timeAgo(snapshot.mergedAt, Date.now()) : null;
 
@@ -211,7 +211,7 @@ export function PrStatusBar({
             <Chip
               size="sm"
               variant="soft"
-              color={state.autoMerge.queued ? 'success' : 'primary'}
+              color={state.autoMerge.queued ? 'warning' : 'primary'}
               data-testid="pr-bar-automerge-armed"
               data-queued={state.autoMerge.queued ? 'true' : undefined}
             >
