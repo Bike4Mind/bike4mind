@@ -10,7 +10,7 @@ vi.mock('@bike4mind/utils', () => ({
   getSettingsValue: (key: string, settings: Record<string, string>) => getSettingsValueMock(key, settings),
 }));
 
-import { isOperationalBillingEnabled } from './isOperationalBillingEnabled';
+import { areCreditsEnforced, isOperationalBillingEnabled } from './isOperationalBillingEnabled';
 
 const db = { adminSettings: {} as never };
 
@@ -51,19 +51,54 @@ describe('isOperationalBillingEnabled', () => {
     await expect(isOperationalBillingEnabled(db)).resolves.toBe(false);
   });
 
-  // Owns the fetch so no caller can narrow it to the wrong keys: getSettingsMap's `names`
-  // option is honoured only under skipCache, so passing it here would be inert anyway.
-  it('reads the full cached settings map rather than a named subset', async () => {
+  // Owns the fetch so no caller can narrow it to the wrong keys: under skipCache a named read
+  // returns only what is listed, and an omitted key gates billing OFF with no error anywhere.
+  // skipCache is what makes an admin flip land on the next call from a long-lived process.
+  it('reads exactly the two gating keys straight from the store', async () => {
     setToggles({ bill: true, enforce: true });
 
     await isOperationalBillingEnabled(db);
 
-    expect(getSettingsMapMock).toHaveBeenCalledWith(db, { logger: undefined });
+    expect(getSettingsMapMock).toHaveBeenCalledWith(db, {
+      logger: undefined,
+      names: ['billOperationalUsage', 'enforceCredits'],
+      skipCache: true,
+    });
   });
 
   it('propagates a settings-store failure so each caller picks its own fallback', async () => {
     getSettingsMapMock.mockRejectedValue(new Error('mongo down'));
 
     await expect(isOperationalBillingEnabled(db)).rejects.toThrow('mongo down');
+  });
+});
+
+describe('areCreditsEnforced', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    getSettingsMapMock.mockResolvedValue({});
+  });
+
+  it.each([true, false, undefined])(
+    'returns the enforcement flag %s with absent settings defaulting off',
+    async flag => {
+      getSettingsValueMock.mockReturnValue(flag);
+
+      await expect(areCreditsEnforced(db)).resolves.toBe(flag ?? false);
+
+      expect(getSettingsMapMock).toHaveBeenCalledWith(db, {
+        logger: undefined,
+        names: ['enforceCredits'],
+        skipCache: true,
+      });
+      expect(getSettingsValueMock).toHaveBeenCalledWith('enforceCredits', {});
+    }
+  );
+
+  it('propagates a settings-store failure instead of treating billing as disabled', async () => {
+    getSettingsMapMock.mockRejectedValue(new Error('mongo down'));
+
+    await expect(areCreditsEnforced(db)).rejects.toThrow('mongo down');
+    expect(getSettingsValueMock).not.toHaveBeenCalled();
   });
 });

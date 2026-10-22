@@ -48,14 +48,15 @@ export function isSecretsAtRestConfigured(): boolean {
 
 /**
  * Encrypt a plaintext secret for storage.
- * - Already-ciphertext input is returned unchanged (idempotent).
+ * - Input is always treated as plaintext, including ciphertext-shaped strings.
  * - When no key is configured, returns the plaintext unchanged so callers that
  *   tolerate unencrypted storage (self-host, per-user keys) keep working. Callers
  *   that must fail closed should check `isSecretsAtRestConfigured()` first.
  */
-export function encryptAtRest(plaintext: string): string {
-  if (!plaintext || isEncrypted(plaintext)) return plaintext;
+export function encryptAtRest(plaintext: string, context?: string): string {
+  if (!plaintext) return plaintext;
   if (!currentKey) {
+    if (isEncrypted(plaintext)) throw new Error('Cannot store ciphertext-shaped input without an encryption key');
     // Degrading to plaintext storage (self-host without a key, or a stage that fails closed
     // upstream before reaching here). Never silent: log once so an operator can see it.
     if (!warnedPlaintextWrite) {
@@ -66,7 +67,7 @@ export function encryptAtRest(plaintext: string): string {
     }
     return plaintext;
   }
-  return encryptSecret(plaintext, currentKey);
+  return encryptSecret(plaintext, currentKey, context);
 }
 
 /**
@@ -77,7 +78,7 @@ export function encryptAtRest(plaintext: string): string {
  * and degrade to the demo-key fallback, whereas returning the hex blob would be sent
  * upstream as a live credential and read as "configured". The failure is logged once.
  */
-export function decryptAtRest(value: string): string {
+export function decryptAtRest(value: string, context?: string): string {
   if (!value || !isEncrypted(value)) return value;
 
   if (!currentKey && !previousKey) {
@@ -93,7 +94,7 @@ export function decryptAtRest(value: string): string {
   for (const key of [currentKey, previousKey]) {
     if (!key) continue;
     try {
-      return decryptSecret(value, key);
+      return decryptSecret(value, key, context);
     } catch {
       // Try the next key (rotation) before giving up.
     }

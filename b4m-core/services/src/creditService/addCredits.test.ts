@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { addCredits, AddCreditsAdapters, AddCreditsParameters } from './addCredits';
+import { addCredits, AddCreditsAdapters, AddCreditsParameters, DuplicateCreditTransactionError } from './addCredits';
 import { ICreditHolder, ICreditHolderMethods, CreditHolderType, CreditPurchaseStatus } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { createMockCreditTransactionRepository } from '../__tests__/utils/testUtils';
@@ -408,6 +408,25 @@ describe('creditService - addCredits', () => {
       expect(mockCreditHolderMethods.incrementCredits).toHaveBeenCalledTimes(1);
       expect(mockCreditHolderMethods.incrementCredits).toHaveBeenCalledWith('user1', 0);
       expect(mockCreditHolderMethods.incrementCredits).not.toHaveBeenCalledWith('user1', 100, expect.anything());
+    });
+
+    it('raises instead of re-reading the holder when the caller asked duplicates to fail', async () => {
+      // An in-transaction caller cannot absorb the net-zero increment: the duplicate write already
+      // aborted the session, so any further operation there is a transient retry loop.
+      mockCreditTransactionRepo.createTransaction.mockResolvedValue(null);
+
+      const parameters: AddCreditsParameters = {
+        type: 'generic_add',
+        ownerId: 'user1',
+        ownerType: CreditHolderType.User,
+        credits: 100,
+        transactionId: 'reservation-refund:run-1',
+      };
+
+      await expect(addCredits(parameters, { ...mockAdapters, duplicateTransactionId: 'throw' })).rejects.toBeInstanceOf(
+        DuplicateCreditTransactionError
+      );
+      expect(mockCreditHolderMethods.incrementCredits).not.toHaveBeenCalled();
     });
 
     it('does NOT increment when a non-transactionId E11000 is rethrown (e.g. stripePaymentIntentId)', async () => {

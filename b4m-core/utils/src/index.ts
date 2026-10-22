@@ -107,7 +107,7 @@ export {
   getRetryAfterMs,
   calculateRetryDelay,
 } from '@bike4mind/common';
-export type { RetryOptions, RetryResult } from '@bike4mind/common';
+export type { RetryEvent, RetryOptions, RetryResult } from '@bike4mind/common';
 export * from './circuitBreaker';
 export * from './rateLimitHeaders';
 export * from './voiceHistory';

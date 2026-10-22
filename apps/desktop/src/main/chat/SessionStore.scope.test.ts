@@ -169,7 +169,9 @@ describe('SessionStore migration of unscoped conversations', () => {
     expect(session?.messages[0]?.content).toBe('still here');
     // Moved, not copied: the loose file is gone and the scope holds the only one.
     expect((await readdir(root)).filter(name => name.endsWith('.json'))).toEqual([]);
-    expect(await readdir(join(root, sessionScopeKey(scope(LOCAL, ALICE))))).toEqual(['legacy-one.json']);
+    expect(
+      (await readdir(join(root, sessionScopeKey(scope(LOCAL, ALICE))))).filter(name => name.endsWith('.json'))
+    ).toEqual(['legacy-one.json']);
   });
 
   it('migrates the whole directory, byte for byte', async () => {

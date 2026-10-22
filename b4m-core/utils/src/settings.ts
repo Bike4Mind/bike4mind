@@ -131,7 +131,11 @@ export async function getSettingsMap(
 ): Promise<Record<string, string>> {
   const logger = options?.logger;
 
-  // Allow bypassing cache for testing or when explicit fresh data is needed
+  // Bypasses the per-process cache, which only invalidates locally: an admin write made in
+  // another process is otherwise invisible here for up to the cache TTL (5 min). Reserve it for a
+  // billing/security flag that must reflect that write on the next request/turn; it costs one
+  // read per call - `findBySettingNames` (indexed) when `names` is given, a full `findAll`
+  // otherwise - so never call it per chunk or loop iteration.
   if (options?.skipCache) {
     const settings = options?.names
       ? await db.adminSettings.findBySettingNames(options.names)

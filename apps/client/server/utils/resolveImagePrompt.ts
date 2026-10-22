@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { IChatHistoryItemDocument, PromptIntent } from '@bike4mind/common';
 import { getEffectiveApiKeyByBackend, OperationsModelService } from '@client/services/operationsModelService';
 import { serializeError } from '@bike4mind/server-utils/utils/serializeError';
+import { isStoppedBeforeReply } from '@bike4mind/utils';
 import { stripToolOutputMarker } from '@bike4mind/utils/artifactParser';
 
 export const HISTORY_LOOKBACK = 6;
@@ -87,6 +88,7 @@ export const sessionHasHistory = (recentMessages: IChatHistoryItemDocument[]): b
  *   [N] user: "<prompt>" -> image generated   (for image-gen turns)
  *   [N] user: "<prompt>" -> assistant: "<reply truncated to 250 chars>"   (for text turns)
  *   [N] user: "<prompt>" -> error             (for error turns)
+ *   [N] user: "<prompt>" -> stopped before any reply   (for turns stopped with no output)
  */
 export const buildHistoryTranscript = (recentMessages: IChatHistoryItemDocument[]): string => {
   const oldestFirst = [...recentMessages].reverse();
@@ -103,6 +105,10 @@ export const buildHistoryTranscript = (recentMessages: IChatHistoryItemDocument[
       const reply = extractReply(msg);
       if (reply) {
         return `[${idx}] user: "${promptText}" → assistant: "${truncateReply(reply)}"`;
+      }
+      if (msg.status === 'stopped') {
+        const stoppedLabel = isStoppedBeforeReply(msg) ? 'stopped before any reply' : 'stopped after output';
+        return `[${idx}] user: "${promptText}" \u2192 ${stoppedLabel}`;
       }
       return `[${idx}] user: "${promptText}" → reply`;
     })

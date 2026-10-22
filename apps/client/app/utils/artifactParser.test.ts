@@ -1,3 +1,4 @@
+import { cpuUsage } from 'node:process';
 import { beforeAll, describe, it, expect } from 'vitest';
 import {
   convertCodeBlocksToArtifacts as coreConvertCodeBlocksToArtifacts,
@@ -52,6 +53,8 @@ const MIN_BASELINE_MS = 25;
 // Headroom over linear scaling (~2x) while staying clear of quadratic (~4x) and cubic
 // (~8x) - see MIN_BASELINE_MS above for why this is a secondary check in practice.
 const GROWTH_RATIO_CEILING = 3;
+const BASELINE_ATTEMPTS = 3;
+const MEASUREMENT_ATTEMPTS = 5;
 // Generous on purpose: this only exists to catch a genuine wedge, not to pin steady-state timing.
 const SMALL_INPUT_MS_CEILING = 500;
 
@@ -68,25 +71,33 @@ function assertLinearGrowth(
   run: (input: string) => string = convertCodeBlocksToArtifacts,
   minBaselineMs: number = MIN_BASELINE_MS
 ) {
-  // Best of three, not a single timing: a GC pause landing in one measured window is
-  // worth more than the whole budget here (the current parser needs single-digit
-  // milliseconds), while a genuinely super-linear scan is slow on every attempt.
-  const measure = (n: number) => {
-    const input = build(n);
-    let bestMs = Infinity;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const startedAt = performance.now();
-      const out = run(input);
-      bestMs = Math.min(bestMs, performance.now() - startedAt);
-      if (attempt === 0) checkOutput(out, input);
-    }
-    return bestMs;
+  const smallInput = build(small);
+  const doubledInput = build(small * 2);
+  const timeOnce = (input: string, verifyOutput: boolean) => {
+    // Measure parser CPU work, excluding time the shared runner deschedules this worker.
+    const startedAt = cpuUsage();
+    const out = run(input);
+    const elapsedCpu = cpuUsage(startedAt);
+    const elapsedMs = (elapsedCpu.user + elapsedCpu.system) / 1000;
+    if (verifyOutput) checkOutput(out, input);
+    return elapsedMs;
   };
 
-  const baselineMs = measure(small);
+  // Reject a slow baseline before trying a potentially much slower doubled input.
+  let baselineMs = Infinity;
+  for (let attempt = 0; attempt < BASELINE_ATTEMPTS; attempt++) {
+    baselineMs = Math.min(baselineMs, timeOnce(smallInput, attempt === 0));
+  }
   expect(baselineMs).toBeLessThan(SMALL_INPUT_MS_CEILING);
 
-  const doubledMs = measure(small * 2);
+  // Interleave sizes so GC and CPU contention do not affect only the doubled series.
+  // A super-linear scan remains slow across every attempt.
+  let doubledMs = Infinity;
+  for (let attempt = 0; attempt < MEASUREMENT_ATTEMPTS; attempt++) {
+    baselineMs = Math.min(baselineMs, timeOnce(smallInput, false));
+    doubledMs = Math.min(doubledMs, timeOnce(doubledInput, attempt === 0));
+  }
+
   const ratio = doubledMs / Math.max(baselineMs, minBaselineMs);
   expect(ratio).toBeLessThan(GROWTH_RATIO_CEILING);
 }

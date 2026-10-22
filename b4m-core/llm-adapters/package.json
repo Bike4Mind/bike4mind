@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/llm-adapters",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "publishConfig": {
     "access": "restricted"
   },
@@ -32,6 +32,16 @@
       "require": {
         "types": "./dist/backend.d.cts",
         "default": "./dist/backend.cjs"
+      }
+    },
+    "./model-sizing": {
+      "import": {
+        "types": "./dist/modelSizing.d.mts",
+        "default": "./dist/modelSizing.mjs"
+      },
+      "require": {
+        "types": "./dist/modelSizing.d.cts",
+        "default": "./dist/modelSizing.cjs"
       }
     }
   },

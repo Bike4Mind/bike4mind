@@ -26,11 +26,17 @@ describe('buildSystemPromptText', () => {
     const { blocks } = buildSystemPromptText(tagged);
 
     expect(blocks).toEqual([
-      { source: 'hardcoded', name: 'date_time_context', text: 'today is tuesday', redacted: false },
-      { source: 'admin', name: 'artifact_emission', redacted: false },
-      { source: 'admin', name: 'help_center', text: 'the help center exists', redacted: false },
-      { source: 'admin', name: 'format_prompt', redacted: false },
-      { source: 'hardcoded', name: 'image_prompt', redacted: false },
+      { source: 'admin', name: 'artifact_emission', redacted: false, placement: 'system' },
+      { source: 'admin', name: 'help_center', text: 'the help center exists', redacted: false, placement: 'system' },
+      {
+        source: 'hardcoded',
+        name: 'date_time_context',
+        text: 'today is tuesday',
+        redacted: false,
+        placement: 'system',
+      },
+      { source: 'admin', name: 'format_prompt', redacted: false, placement: 'system' },
+      { source: 'hardcoded', name: 'image_prompt', redacted: false, placement: 'system' },
     ]);
   });
 
@@ -41,8 +47,8 @@ describe('buildSystemPromptText', () => {
     });
 
     expect(buildSystemPromptText(tagged).blocks.map(b => b.name)).toEqual([
-      'date_time_context',
       ...FLOOR_NAMES,
+      'date_time_context',
       'attached_files',
       ...INJECTED_NAMES,
     ]);
@@ -58,8 +64,8 @@ describe('buildSystemPromptText', () => {
     const tagged = buildTaggedContextMessages({ dateContext: [sys('today')], mementos: [] });
 
     expect(buildSystemPromptText(tagged).blocks.map(b => b.name)).toEqual([
-      'date_time_context',
       ...FLOOR_NAMES,
+      'date_time_context',
       ...INJECTED_NAMES,
     ]);
   });
@@ -72,16 +78,18 @@ describe('buildSystemPromptText', () => {
 
     const { blocks } = buildSystemPromptText(tagged);
 
-    expect(blocks.map(b => b.name)).toEqual(['date_time_context', ...FLOOR_NAMES, ...INJECTED_NAMES]);
+    expect(blocks.map(b => b.name)).toEqual([...FLOOR_NAMES, 'date_time_context', ...INJECTED_NAMES]);
     expect(blockNamed({ blocks, sizeCapped: false }, 'artifact_emission')).toEqual({
       source: 'admin',
       name: 'artifact_emission',
       redacted: false,
+      placement: 'system',
     });
     expect(blockNamed({ blocks, sizeCapped: false }, 'help_center')).toEqual({
       source: 'admin',
       name: 'help_center',
       redacted: false,
+      placement: 'system',
     });
   });
 
@@ -92,7 +100,7 @@ describe('buildSystemPromptText', () => {
     });
 
     const sessionBlock = blockNamed(buildSystemPromptText(tagged), 'session_prompt');
-    expect(sessionBlock).toEqual({ source: 'session', name: 'session_prompt', redacted: true });
+    expect(sessionBlock).toEqual({ source: 'session', name: 'session_prompt', redacted: true, placement: 'system' });
     expect(JSON.stringify(buildSystemPromptText(tagged))).not.toContain('proprietary');
   });
 
@@ -100,6 +108,20 @@ describe('buildSystemPromptText', () => {
     const tagged = buildTaggedContextMessages({ extraContext: [sys('slack thread')] });
 
     expect(blockNamed(buildSystemPromptText(tagged), 'extra_context')?.text).toBe('slack thread');
+  });
+
+  it('reports where each block was actually sent, not where the source usually lives', () => {
+    const memento = sys('[Mementos] likes tea');
+    const view = sys('[Current View Context] User is on the Admin page.');
+    const identity = sys('[ADMIN_PROMPT:bike4mind_identity] Identity');
+    const tagged = buildTaggedContextMessages({ mementos: [memento], extraContext: [identity, view] });
+    const relocated = new Set<IMessage>([memento, view]);
+
+    const disclosure = buildSystemPromptText(tagged, undefined, undefined, [], relocated);
+
+    expect(blockNamed(disclosure, 'mementos')?.placement).toBe('user_turn');
+    // The same channel carries an admin prompt that stayed in system.
+    expect(blockNamed(disclosure, 'extra_context')?.placement).toBe('mixed');
   });
 
   it('returns no text for a system source the budget dropped, rather than claiming the model saw it', () => {
@@ -110,11 +132,12 @@ describe('buildSystemPromptText', () => {
     const { blocks } = buildSystemPromptText(tagged, new Set([kept]));
 
     // The row survives so the payload still joins to the breakdown, which is where wasIncluded lives.
-    expect(blocks.map(b => b.name)).toEqual(['date_time_context', ...FLOOR_NAMES, 'mementos', ...INJECTED_NAMES]);
+    expect(blocks.map(b => b.name)).toEqual([...FLOOR_NAMES, 'date_time_context', 'mementos', ...INJECTED_NAMES]);
     expect(blockNamed({ blocks, sizeCapped: false }, 'mementos')).toEqual({
       source: 'user',
       name: 'mementos',
       redacted: false,
+      placement: 'system',
     });
   });
 
@@ -139,8 +162,8 @@ describe('buildSystemPromptText', () => {
     const tagged = buildTaggedContextMessages({ dateContext: [sys('today')], mementos: [sys('memory')] });
 
     expect(buildSystemPromptText(tagged).blocks.map(b => b.name)).toEqual([
-      'date_time_context',
       ...FLOOR_NAMES,
+      'date_time_context',
       'mementos',
       ...INJECTED_NAMES,
     ]);
@@ -157,6 +180,7 @@ describe('buildSystemPromptText', () => {
       source: 'hardcoded',
       name: 'recent_images',
       redacted: false,
+      placement: 'system',
     });
   });
 
@@ -170,7 +194,12 @@ describe('buildSystemPromptText', () => {
 
     expect(disclosure.sizeCapped).toBe(true);
     expect(blockNamed(disclosure, 'date_time_context')?.text).toBe('a'.repeat(30));
-    expect(blockNamed(disclosure, 'mementos')).toEqual({ source: 'user', name: 'mementos', redacted: true });
+    expect(blockNamed(disclosure, 'mementos')).toEqual({
+      source: 'user',
+      name: 'mementos',
+      redacted: true,
+      placement: 'system',
+    });
   });
 
   it('does not flag a disclosure that fit inside the cap', () => {
@@ -193,11 +222,13 @@ describe('buildSystemPromptText', () => {
       name: 'format_prompt',
       text: 'Formatting only.',
       redacted: false,
+      placement: 'system',
     });
     expect(blockNamed({ blocks, sizeCapped: false }, 'image_prompt')).toEqual({
       source: 'hardcoded',
       name: 'image_prompt',
       redacted: false,
+      placement: 'system',
     });
   });
 
@@ -212,6 +243,7 @@ describe('buildSystemPromptText', () => {
       source: 'admin',
       name: 'format_prompt',
       redacted: false,
+      placement: 'system',
     });
   });
 
@@ -223,7 +255,12 @@ describe('buildSystemPromptText', () => {
     ]);
 
     expect(disclosure.sizeCapped).toBe(true);
-    expect(blockNamed(disclosure, 'format_prompt')).toEqual({ source: 'admin', name: 'format_prompt', redacted: true });
+    expect(blockNamed(disclosure, 'format_prompt')).toEqual({
+      source: 'admin',
+      name: 'format_prompt',
+      redacted: true,
+      placement: 'system',
+    });
   });
 
   it('names every source the way the breakdown does, so the two can be joined', () => {

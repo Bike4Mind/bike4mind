@@ -622,7 +622,7 @@ export async function generateLLMAnalysis(
     throw new Error('LLM returned empty response');
   }
 
-  logger.debug(`[ContextTelemetry] Raw LLM response (${responseText.length} chars): ${responseText.slice(0, 500)}`);
+  logger.debug('[ContextTelemetry] LLM response received', { responseLength: responseText.length });
 
   const parsed = JSON.parse(extractAnalysisJson(responseText));
   const validated = LLMAnalysisSchema.safeParse(parsed);

@@ -11,6 +11,7 @@ vi.mock('./creditService', async importOriginal => ({
   subtractCredits: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('@bike4mind/llm-adapters', () => ({
+  buildApiKeyTable: (keys: object) => keys,
   reasonsWithinOutputBudget: vi.fn(() => false),
   isAdaptiveThinkingByDefault: vi.fn(() => false),
   // See cliCompletions.maxTokens.test.ts for coverage against the real implementation.

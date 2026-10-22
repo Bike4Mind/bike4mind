@@ -370,6 +370,7 @@ export interface IUser extends ICreditHolder {
   // Slack integration settings
   slackSettings?: {
     slackUserId?: string;
+    slackTeamId?: string;
     // User access token for user-scoped APIs (e.g., reminders). Protected by select: false in DB schema.
     slackUserToken?: string;
     // OAuth scopes granted by the user (e.g., ['identity.basic', 'reminders:write'])
@@ -698,6 +699,8 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
   addGroupToUser: (userId: string, groupId: string) => Promise<void>;
   /** Merge tags into one user's `tags[]` (idempotent, no duplicates; used by partner signup rules). */
   addTagsToUser: (userId: string, tags: string[]) => Promise<void>;
+  /** Remove the given file ids from the named users' `systemFiles[]` (idempotent $pull, enabled or not). */
+  pullSystemFilesForUsers: (userIds: string[], fileIds: string[]) => Promise<void>;
   /** Remove a single group id from one user's `groups[]` (used when unassigning a member). */
   removeGroupFromUser: (userId: string, groupId: string) => Promise<void>;
   /** Charge `count` referrals (floored at zero) and add the invites they created to `regInvites`. */

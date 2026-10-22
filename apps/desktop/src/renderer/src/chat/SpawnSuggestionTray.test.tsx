@@ -42,6 +42,7 @@ const draft: AttachmentDraft = {
   dismissRejected: () => {},
   add: async () => {},
   pick: async () => {},
+  attachImage: async () => {},
   remove: () => {},
   clear: () => {},
 };

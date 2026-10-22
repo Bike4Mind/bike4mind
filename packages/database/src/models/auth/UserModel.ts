@@ -1,3 +1,4 @@
+import { VERIFIED_SLACK_IDENTITY_FILTER } from '@bike4mind/common';
 import {
   AuthStrategy,
   CollectionType,
@@ -15,7 +16,7 @@ import {
 import bcrypt from 'bcryptjs';
 import mongoose, { Document, Model, model, Schema, Query, type PipelineStage } from 'mongoose';
 import { NotFoundError } from '@bike4mind/utils';
-import { decryptAtRest, encryptAtRest } from '@bike4mind/utils/security';
+import { decryptAtRest, encryptAtRest, isEncrypted } from '@bike4mind/utils/security';
 import { convertIds } from '../../utils/mongo';
 import { CountersSchema } from '../infra/ops/CounterModel';
 import BaseRepository from '@bike4mind/db-core';
@@ -272,6 +273,15 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   async addTagsToUser(userId: string, tags: string[]): Promise<void> {
     if (tags.length === 0) return;
     await this.model.updateOne({ _id: userId }, { $addToSet: { tags: { $each: tags } } });
+  }
+
+  async pullSystemFilesForUsers(userIds: string[], fileIds: string[]): Promise<void> {
+    const ids = userIds.filter(id => mongoose.isObjectIdOrHexString(id));
+    if (ids.length === 0 || fileIds.length === 0) return;
+    await this.model.updateMany(
+      { _id: { $in: ids }, 'systemFiles.fileId': { $in: fileIds } },
+      { $pull: { systemFiles: { fileId: { $in: fileIds } } } }
+    );
   }
 
   /** Remove one group id from one user. */
@@ -769,6 +779,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   async findBySlackUserId(slackUserId: string): Promise<IUserDocument | null> {
     const result = await this.model.findOne({
       'slackSettings.slackUserId': slackUserId,
+      ...VERIFIED_SLACK_IDENTITY_FILTER,
       deletedAt: { $exists: false },
     });
     return result?.toJSON() ?? null;
@@ -989,6 +1000,7 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     // Slack integration settings
     slackSettings: {
       slackUserId: { type: String, required: false },
+      slackTeamId: { type: String, required: false },
       slackUserToken: { type: String, required: false, select: false }, // User token for reminders API (protected by select: false)
       slackUserScopes: { type: [String], required: false, default: [] }, // OAuth scopes granted by user
       defaultNotebookId: { type: String, required: false },
@@ -1275,11 +1287,14 @@ function encryptTotpSecretInUpdate(this: Query<unknown, IUserDocument>) {
     if (!container) return;
     const mfa = container.mfa as { totpSecret?: unknown } | null | undefined;
     if (mfa && typeof mfa === 'object' && typeof mfa.totpSecret === 'string') {
-      container.mfa = { ...mfa, totpSecret: encryptAtRest(mfa.totpSecret) };
+      container.mfa = {
+        ...mfa,
+        totpSecret: isEncrypted(mfa.totpSecret) ? mfa.totpSecret : encryptAtRest(mfa.totpSecret),
+      };
     }
     const dotted = container['mfa.totpSecret'];
     if (typeof dotted === 'string') {
-      container['mfa.totpSecret'] = encryptAtRest(dotted);
+      container['mfa.totpSecret'] = isEncrypted(dotted) ? dotted : encryptAtRest(dotted);
     }
   };
 
@@ -1289,11 +1304,40 @@ function encryptTotpSecretInUpdate(this: Query<unknown, IUserDocument>) {
 }
 
 UserSchema.pre(['findOneAndUpdate', 'updateOne', 'updateMany'], stripSecretlessMfaFromUpdate);
+
+const isHashedAnswer = (answer: string): boolean => /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/.test(answer);
+async function hashSecurityQuestions(questions: unknown): Promise<void> {
+  if (!Array.isArray(questions)) return;
+  if (questions.length > 10) throw new Error('At most 10 security questions are allowed');
+  for (const question of questions) {
+    if (typeof question !== 'object' || question === null || typeof question.answer !== 'string') continue;
+    if (question.answer.length > 1024) throw new Error('Security answer is too long');
+    if (!isHashedAnswer(question.answer)) question.answer = await bcrypt.hash(question.answer, 12);
+  }
+}
+
+UserSchema.pre('validate', async function () {
+  if (this.isModified('securityQuestions')) await hashSecurityQuestions(this.securityQuestions);
+});
+UserSchema.pre(['findOneAndUpdate', 'updateOne', 'updateMany'], async function () {
+  const update = this.getUpdate();
+  if (!update || Array.isArray(update)) return;
+  for (const container of [update, update.$set, update.$setOnInsert]) {
+    if (!container || typeof container !== 'object') continue;
+    await hashSecurityQuestions(container.securityQuestions);
+    for (const [path, value] of Object.entries(container)) {
+      if (!/^securityQuestions\.[^.]+\.answer$/.test(path) || typeof value !== 'string') continue;
+      if (value.length > 1024) throw new Error('Security answer is too long');
+      container[path] = isHashedAnswer(value) ? value : await bcrypt.hash(value, 12);
+    }
+  }
+});
+
 UserSchema.pre(['findOneAndUpdate', 'updateOne', 'updateMany'], encryptTotpSecretInUpdate);
 
 // The document-save counterpart of encryptTotpSecretInUpdate (User.create / doc.save()).
 UserSchema.pre('save', function (next) {
-  if (this.mfa?.totpSecret && this.isModified('mfa.totpSecret')) {
+  if (this.mfa?.totpSecret && !isEncrypted(this.mfa.totpSecret) && this.isModified('mfa.totpSecret')) {
     this.mfa.totpSecret = encryptAtRest(this.mfa.totpSecret);
   }
   next();

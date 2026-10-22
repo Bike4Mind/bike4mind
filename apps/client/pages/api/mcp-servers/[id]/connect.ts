@@ -25,7 +25,7 @@ const handler = baseApi().post(async (req, res) => {
 
   try {
     const invoked = await invokeMcpHandler<MCPClient['tools']>({
-      envVariables: decryptEnvVariables(server.envVariables),
+      envVariables: decryptEnvVariables(server.envVariables, server),
       name: server.name,
       action: 'getTools',
       userId: req.user.id,

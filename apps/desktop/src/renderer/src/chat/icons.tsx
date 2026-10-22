@@ -417,3 +417,13 @@ export function ExternalLinkIcon() {
     </Glyph>
   );
 }
+
+/** A file with a plus over a minus: uncommitted or unshipped changes. */
+export function FileDiffIcon() {
+  return (
+    <Glyph>
+      <rect x="2.5" y="2" width="11" height="12" rx="2" />
+      <path d="M8 4.75v4M6 6.75h4M6 11.25h4" />
+    </Glyph>
+  );
+}

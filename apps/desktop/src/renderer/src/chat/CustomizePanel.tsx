@@ -1,4 +1,5 @@
-import { useEffect, useId, useMemo, useReducer, useState } from 'react';
+import { memo, useCallback, useEffect, useId, useMemo, useReducer, useState } from 'react';
+import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import Chip from '@mui/joy/Chip';
@@ -31,6 +32,7 @@ import { skillChipColor, skillSourceLabel } from './skillMenu';
 import { columnStackSx, contentColumnSx, scrollingColumnHostSx } from './layout';
 import { useMcpServers, type McpServersController } from './useMcpServers';
 import { useSkills } from './useSkills';
+import { useSkillUpload } from './SkillUploadDialog';
 
 /** What this screen is for, said on the screen so it does not have to be inferred from a name. */
 const CUSTOMIZE_INTRO = 'What tools the app can reach.';
@@ -40,15 +42,18 @@ function accountSkillId(skill: SkillSummary): string | null {
   return skill.source === 'account' ? (/^b4m:\/api\/skills\/(.+)$/.exec(skill.filePath)?.[1] ?? null) : null;
 }
 
-function SkillRow({
+const SkillRow = memo(function SkillRow({
   skill,
   imports,
   onOpenListing,
+  onUpload,
 }: {
   skill: SkillSummary;
   /** Market imports by skill id, for the update badge. Only the account group passes it. */
   imports?: ReadonlyMap<string, SkillMarketImport>;
   onOpenListing?: (listing: SkillMarketListingRef) => void;
+  /** Upload a local skill to the account. Account rows never offer it. */
+  onUpload?: (skill: SkillSummary) => void;
 }) {
   const id = accountSkillId(skill);
   const imported = id ? imports?.get(id) : undefined;
@@ -103,6 +108,17 @@ function SkillRow({
         <Chip size="sm" variant="plain" color={skillChipColor(skill.source)} data-testid="customize-skill-chip">
           {skillSourceLabel(skill.source)}
         </Chip>
+        {onUpload && skill.source !== 'account' && (
+          <Button
+            size="sm"
+            variant="plain"
+            color="neutral"
+            onClick={() => onUpload(skill)}
+            data-testid="skill-row-upload-btn"
+          >
+            Upload
+          </Button>
+        )}
         {id && (
           <IconButton
             size="sm"
@@ -119,7 +135,7 @@ function SkillRow({
       </Stack>
     </ListItem>
   );
-}
+});
 
 const skillListSx = {
   p: 0,
@@ -127,20 +143,23 @@ const skillListSx = {
   '& > li + li': { borderTop: '1px solid', borderColor: 'divider' },
 } as const;
 
-function SkillGroup({
+// Memoized with SkillRow so a toggle redraws only the group it flips, not every open row.
+const SkillGroup = memo(function SkillGroup({
   group,
   open,
   onToggle,
   empty,
   imports,
   onOpenListing,
+  onUpload,
 }: {
   group: SkillGroupModel;
   open: boolean;
-  onToggle: () => void;
+  onToggle: (key: string) => void;
   empty?: string;
   imports?: ReadonlyMap<string, SkillMarketImport>;
   onOpenListing?: (listing: SkillMarketListingRef) => void;
+  onUpload?: (skill: SkillSummary) => void;
 }) {
   const listId = useId();
   const { title, skills } = group;
@@ -164,7 +183,7 @@ function SkillGroup({
           color="neutral"
           aria-expanded={open}
           aria-controls={open ? listId : undefined}
-          onClick={onToggle}
+          onClick={() => onToggle(group.key)}
           startDecorator={<ChevronIcon open={open} />}
           sx={{ gap: 0.25, px: 0.75, ml: -0.75, mb: 0.75, minHeight: 0, fontWeight: 'inherit' }}
           data-testid="skills-group-toggle-btn"
@@ -194,6 +213,7 @@ function SkillGroup({
                 skill={skill}
                 imports={imports}
                 onOpenListing={onOpenListing}
+                onUpload={onUpload}
               />
             ))}
           </List>
@@ -201,7 +221,7 @@ function SkillGroup({
       )}
     </Box>
   );
-}
+});
 
 function skillScope(filePath: string): string | null {
   const parts = filePath.split(/[\\/]+/);
@@ -232,7 +252,14 @@ function SkillsSettings({
   sessionId: string | null;
   onOpenSkillMarket?: (listing?: SkillMarketListingRef) => void;
 }) {
-  const { skills } = useSkills(sessionId);
+  const { skills, refresh } = useSkills(sessionId);
+  const upload = useSkillUpload(() => void refresh(), sessionId);
+  const startUpload = upload.start;
+  const uploadRow = useCallback(
+    (skill: SkillSummary) =>
+      void startUpload(() => window.b4m.skillMarket.readLocalSkill({ sessionId, name: skill.name })),
+    [startUpload, sessionId]
+  );
   const [imports, setImports] = useState<ReadonlyMap<string, SkillMarketImport>>(new Map());
   const [query, setQuery] = useState('');
   // Collapses made while a filter is on; a new query starts from every match expanded again.
@@ -277,17 +304,22 @@ function SkillsSettings({
     filtering ? !collapsedWhileFiltering.has(key) : rememberedExpansion(key, expandedByDefault);
   const anyOpen = collapsibleKeys.some(isOpen);
 
-  const toggle = (key: string) => {
-    if (filtering) {
-      const next = new Set(collapsedWhileFiltering);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      setCollapsedWhileFiltering(next);
-    } else {
-      rememberGroupExpansion(key, !isOpen(key));
-      rerender();
-    }
-  };
+  const toggle = useCallback(
+    (key: string) => {
+      if (filtering) {
+        setCollapsedWhileFiltering(collapsed => {
+          const next = new Set(collapsed);
+          if (next.has(key)) next.delete(key);
+          else next.add(key);
+          return next;
+        });
+      } else {
+        rememberGroupExpansion(key, !rememberedExpansion(key, expandedByDefault));
+        rerender();
+      }
+    },
+    [filtering, expandedByDefault]
+  );
   const toggleAll = () => {
     if (filtering) {
       setCollapsedWhileFiltering(anyOpen ? new Set(collapsibleKeys) : new Set());
@@ -342,10 +374,16 @@ function SkillsSettings({
             {shownUserGroups.map(group =>
               singleSkillScopes.has(group.key) ? (
                 <List key={group.key} size="sm" sx={skillListSx} data-testid="skills-single-row">
-                  <SkillRow skill={group.skills[0]} />
+                  <SkillRow skill={group.skills[0]} onUpload={uploadRow} />
                 </List>
               ) : (
-                <SkillGroup key={group.key} group={group} open={isOpen(group.key)} onToggle={() => toggle(group.key)} />
+                <SkillGroup
+                  key={group.key}
+                  group={group}
+                  open={isOpen(group.key)}
+                  onToggle={toggle}
+                  onUpload={uploadRow}
+                />
               )
             )}
           </Stack>
@@ -355,19 +393,33 @@ function SkillsSettings({
         <SkillGroup
           group={shownAccountGroup}
           open={isOpen(ACCOUNT_GROUP_KEY)}
-          onToggle={() => toggle(ACCOUNT_GROUP_KEY)}
+          onToggle={toggle}
           empty="No Bike4Mind account skills loaded."
           imports={imports}
           onOpenListing={onOpenSkillMarket}
         />
       )}
-      {onOpenSkillMarket && (
-        <Box>
+      {upload.error && (
+        <Alert color="danger" data-testid="skill-upload-pick-error">
+          {upload.error}
+        </Alert>
+      )}
+      <Stack direction="row" spacing={1}>
+        {onOpenSkillMarket && (
           <Button variant="outlined" onClick={() => onOpenSkillMarket()} data-testid="customize-skill-market-btn">
             Browse Skill Market
           </Button>
-        </Box>
-      )}
+        )}
+        <Button
+          variant="outlined"
+          color="neutral"
+          onClick={() => void upload.start(() => window.b4m.skillMarket.pickUploadSource())}
+          data-testid="skill-upload-pick-btn"
+        >
+          Upload a skill...
+        </Button>
+      </Stack>
+      {upload.dialog}
     </Stack>
   );
 }

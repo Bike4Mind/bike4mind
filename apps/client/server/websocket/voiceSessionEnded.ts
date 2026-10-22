@@ -101,7 +101,10 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   // Usage the balance could not cover: debits are floored at zero, so this is logged, not charged.
   let shortfall = 0;
 
-  const settings = await getSettingsMap({ adminSettings: adminSettingsRepository }, { names: ['enforceCredits'] });
+  const settings = await getSettingsMap(
+    { adminSettings: adminSettingsRepository },
+    { names: ['enforceCredits'], skipCache: true }
+  );
   const enforceCredits = getSettingsValue('enforceCredits', settings);
   // Returns the shortfall. Floored only under enforcement: with credits off a balance tracks usage
   // and may go negative, as before.

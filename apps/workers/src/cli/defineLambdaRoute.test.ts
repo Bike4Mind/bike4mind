@@ -33,6 +33,7 @@ vi.mock('@server/cli/resolveContractAuth', () => ({
 }));
 
 import { defineLambdaRoute } from './defineLambdaRoute';
+import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
 
 const makeEvent = (body: unknown): APIGatewayProxyEventV2 =>
   ({ headers: { authorization: 'Bearer x' }, body: JSON.stringify(body) }) as unknown as APIGatewayProxyEventV2;
@@ -80,6 +81,31 @@ describe('defineLambdaRoute + chatContract', () => {
 
   it('keeps a thrown UnauthorizedError as 401', async () => {
     mockResolveAuth.mockRejectedValueOnce(new UnauthorizedError('User not found or banned'));
+    const res = asResult(await route(makeEvent({ message: 'hi' })));
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('answers 503 with Retry-After and a fixed message when the database is unreachable', async () => {
+    mockResolveAuth.mockRejectedValueOnce(
+      toApiKeyAuthError(Object.assign(new Error('connect ECONNREFUSED 10.0.0.1:27017'), { name: 'MongoNetworkError' }))
+    );
+    const res = asResult(await route(makeEvent({ message: 'hi' })));
+    expect(res.statusCode).toBe(503);
+    expect(res.headers?.['Retry-After']).toBe('5');
+    const body = JSON.parse(res.body as string);
+    expect(body.error).toBe('Authentication temporarily unavailable');
+    expect(res.body).not.toMatch(/ECONNREFUSED|10\.0\.0\.1/);
+  });
+
+  it('answers 500 with a fixed message for an unexpected key-check failure', async () => {
+    mockResolveAuth.mockRejectedValueOnce(toApiKeyAuthError(new Error('boom')));
+    const res = asResult(await route(makeEvent({ message: 'hi' })));
+    expect(res.statusCode).toBe(500);
+    expect(JSON.parse(res.body as string).error).toBe('Authentication failed');
+  });
+
+  it('keeps an unknown key as 401', async () => {
+    mockResolveAuth.mockRejectedValueOnce(new UnauthorizedError('Invalid or expired API key'));
     const res = asResult(await route(makeEvent({ message: 'hi' })));
     expect(res.statusCode).toBe(401);
   });

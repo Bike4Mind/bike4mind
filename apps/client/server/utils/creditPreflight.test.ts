@@ -16,6 +16,8 @@ const { mocks } = vi.hoisted(() => {
 
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
+  organizationRepository: {},
+  creditTransactionRepository: {},
   userRepository: { findById: (...a: unknown[]) => mocks.findById(...a) },
   organizationRepository: { findById: (...a: unknown[]) => mocks.orgFindById(...a) },
 }));
@@ -52,6 +54,15 @@ beforeEach(() => {
 });
 
 describe('assertPreflightCredits', () => {
+  it('reads enforceCredits past the settings cache so an admin flip applies on the next call', async () => {
+    mocks.findById.mockResolvedValue({ currentCredits: 100 });
+    await check(1);
+    expect(mocks.getSettingsMap).toHaveBeenCalledWith(expect.anything(), {
+      names: ['enforceCredits'],
+      skipCache: true,
+    });
+  });
+
   describe('enforcement on (the hosted default when the setting is unset)', () => {
     it('rejects a user that does not exist', async () => {
       mocks.findById.mockResolvedValue(null);

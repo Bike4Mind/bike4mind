@@ -1,3 +1,7 @@
+/** App defaults for the AdminSettings grant thresholds (AdminAuditCriticalGrantCredits / AdminAuditDailyGrantCredits). */
+export const ADMIN_AUDIT_DEFAULT_CRITICAL_GRANT_CREDITS = 50_000;
+export const ADMIN_AUDIT_DEFAULT_DAILY_GRANT_CREDITS = 200_000;
+
 export type AdminAuditCategory = 'credits' | 'access' | 'identity' | 'account' | 'org' | 'settings' | 'support';
 export type AdminAuditSeverity = 'info' | 'notice' | 'critical';
 
@@ -6,14 +10,45 @@ export type AdminAuditCatalogueEntry = {
   severity: AdminAuditSeverity;
   /** strict: a failed audit write fails the action; bestEffort: failure is logged and swallowed. */
   write: 'strict' | 'bestEffort';
+  /**
+   * A grant (positive signed `details.credits`) above the single-grant or per-admin daily
+   * threshold is written as critical instead of `severity`. See recordAdminAction.
+   */
+  escalatesAboveGrantThreshold?: true;
 };
 
 export const ADMIN_AUDIT_CATALOGUE = {
-  'org.credits.granted': { category: 'credits', severity: 'notice', write: 'strict' },
-  'org.credits.topped_up': { category: 'credits', severity: 'notice', write: 'strict' },
-  'org.credits.adjusted': { category: 'credits', severity: 'notice', write: 'strict' },
+  'org.credits.granted': {
+    category: 'credits',
+    severity: 'notice',
+    write: 'strict',
+    escalatesAboveGrantThreshold: true,
+  },
+  'org.credits.topped_up': {
+    category: 'credits',
+    severity: 'notice',
+    write: 'strict',
+    escalatesAboveGrantThreshold: true,
+  },
+  'org.credits.adjusted': {
+    category: 'credits',
+    severity: 'notice',
+    write: 'strict',
+    escalatesAboveGrantThreshold: true,
+  },
+  'org.credits.refunded': {
+    category: 'credits',
+    severity: 'notice',
+    write: 'strict',
+    escalatesAboveGrantThreshold: true,
+  },
   'user.subscription.granted': { category: 'credits', severity: 'notice', write: 'strict' },
-  'user.credits.adjusted': { category: 'credits', severity: 'notice', write: 'strict' },
+  'user.credits.adjusted': {
+    category: 'credits',
+    severity: 'notice',
+    write: 'strict',
+    escalatesAboveGrantThreshold: true,
+  },
   'user.credits.denied': { category: 'credits', severity: 'critical', write: 'bestEffort' },
   'user.subscription.denied': { category: 'credits', severity: 'critical', write: 'bestEffort' },
 
@@ -64,3 +99,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
 } as const satisfies Record<string, AdminAuditCatalogueEntry>;
 
 export type AdminAuditAction = keyof typeof ADMIN_AUDIT_CATALOGUE;
+
+/** Actions whose positive `details.credits` count as a credit grant (thresholds and burst detection). */
+export const ADMIN_AUDIT_CREDIT_GRANT_ACTIONS = (Object.keys(ADMIN_AUDIT_CATALOGUE) as AdminAuditAction[]).filter(
+  action => 'escalatesAboveGrantThreshold' in ADMIN_AUDIT_CATALOGUE[action]
+);

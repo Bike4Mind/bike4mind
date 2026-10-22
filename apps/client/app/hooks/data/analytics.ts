@@ -14,3 +14,11 @@ export function useLogEvent() {
     },
   });
 }
+
+/** The policy interstitial is reachable before the generic analytics route is permitted. */
+export function useLogPoliciesShown() {
+  return useMutation({
+    mutationFn: async () => api.post('/api/user/accept-policies/shown', {}),
+    onError: error => console.warn('Policy interstitial analytics logging failed:', error),
+  });
+}

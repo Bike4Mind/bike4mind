@@ -1,5 +1,13 @@
 # @bike4mind/cli
 
+## 3.4.0
+
+### Minor Changes
+
+- [#5191](https://github.com/Bike4Mind/bike4mind/pull/5191) [`a68d013`](https://github.com/Bike4Mind/bike4mind/commit/a68d013d2a4c7a59268f3bfbb2ed9b343a0a36c0) Thanks [@jjmarfa](https://github.com/jjmarfa)! - Add the `decide` server tool to the CLI and shared tool schemas, with deployment-aware availability and permission handling.
+
+- [#5154](https://github.com/Bike4Mind/bike4mind/pull/5154) [`2d33506`](https://github.com/Bike4Mind/bike4mind/commit/2d33506efd4f95460139dedb554780ac544be23c) Thanks [@julsanchez](https://github.com/julsanchez)! - export skills to Claude Code as SKILL.md and import SKILL.md into new skills
+
 ## 3.3.0
 
 ### Minor Changes

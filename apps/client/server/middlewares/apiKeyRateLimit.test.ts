@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { TooManyRequestsError } from '@bike4mind/utils';
 import { cacheRepository } from '@bike4mind/database';
+import { ApiKeyScope } from '@bike4mind/common';
+import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 
 /**
  * The counter a route is metered against, exercised through the real middleware
@@ -142,5 +144,48 @@ describe('apiKeyRateLimit response headers', () => {
     const err = await run(apiKeyRateLimit(), limited.req, limited.res);
     expect(err).toBeInstanceOf(TooManyRequestsError);
     expect(limited.res.setHeader.mock.calls.map(call => call[0])).toEqual([...expected, 'Retry-After']);
+  });
+});
+
+describe('apiKeyRateLimit overwatch RateLimitHit metric', () => {
+  beforeEach(() => {
+    store.clear();
+    vi.clearAllMocks();
+  });
+
+  // The 429 ends the invocation; a still-pending emit is lost when the Lambda freezes, or sent on a
+  // later thaw with an expired SigV4 signature.
+  it('does not pass the 429 on until the RateLimitHit metric has been emitted', async () => {
+    exhaustDailyQuota();
+    const { req, res } = patchRequest();
+    const ingestReq = {
+      ...req,
+      apiKeyInfo: { ...req.apiKeyInfo, scopes: [ApiKeyScope.OVERWATCH_INGEST_WRITE], productId: 'prod-1' },
+    };
+    let releaseEmit: () => void = () => {};
+    vi.mocked(emitMetric).mockReturnValueOnce(
+      new Promise<void>(resolve => {
+        releaseEmit = resolve;
+      })
+    );
+
+    let nextCalled = false;
+    const result = run(apiKeyRateLimit(), ingestReq, res).then(err => {
+      nextCalled = true;
+      return err;
+    });
+    await vi.waitFor(() => expect(emitMetric).toHaveBeenCalledTimes(1));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(nextCalled).toBe(false);
+
+    releaseEmit();
+    expect(await result).toBeInstanceOf(TooManyRequestsError);
+    expect(emitMetric).toHaveBeenCalledWith(
+      'Lumina5/OverwatchIngest',
+      'RateLimitHit',
+      1,
+      { productId: 'prod-1' },
+      expect.anything()
+    );
   });
 });

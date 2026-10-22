@@ -254,6 +254,8 @@ export const ResearchModeResponseDisplay: React.FC<ResearchModeResponseDisplayPr
     const responseQuest: IChatHistoryItem = {
       ...quest,
       id: `${quest.id}-${configId}`,
+      // The turn's timing belongs to the parent quest; per-panel it would repeat N times under a synthetic id.
+      turnTiming: undefined,
       reply: result?.response || streamingText || undefined,
       replies: result?.response ? [result.response] : streamingText ? [streamingText] : [],
       status: result?.success === false ? 'stopped' : streamingText ? 'running' : 'done',

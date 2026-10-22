@@ -137,6 +137,28 @@ describe('decideScopeGate', () => {
     ).toEqual({ outcome: 'allow' });
   });
 
+  describe('Bob scopes', () => {
+    // The two gate shapes these scopes are built for (the routes ship in the Bob overlay,
+    // not here): a door that admits either scope, and a run-only gate on the verbs that
+    // start work. Held scopes are the stored strings a key carries, so these also pin the
+    // wire values.
+    const BOB_DOOR = [ApiKeyScope.BOB_READ, ApiKeyScope.BOB_RUN, ApiKeyScope.ADMIN];
+    const BOB_RUN_GATE = [ApiKeyScope.BOB_RUN, ApiKeyScope.ADMIN];
+    const held = (...scopes: string[]) => scopes as ApiKeyScope[];
+
+    it('admits a bob:run key at a door requiring bob:read or bob:run, and refuses a notebooks-only key', () => {
+      expect(decideScopeGate(BOB_DOOR, held('bob:run'), NONE)).toEqual({ outcome: 'allow' });
+      expect(decideScopeGate(BOB_DOOR, held('bob:read'), NONE)).toEqual({ outcome: 'allow' });
+      expect(decideScopeGate(BOB_DOOR, held('notebooks:read'), NONE)).toEqual({ outcome: 'deny' });
+    });
+
+    it('refuses a bob:read key where bob:run is required - reading never implies spending', () => {
+      expect(decideScopeGate(BOB_RUN_GATE, held('bob:read'), NONE)).toEqual({ outcome: 'deny' });
+      // Control: the same gate admits the scope it names, so the refusal is about bob:read.
+      expect(decideScopeGate(BOB_RUN_GATE, held('bob:run'), NONE)).toEqual({ outcome: 'allow' });
+    });
+  });
+
   describe('alsoRequiredScopes (AND)', () => {
     it('allows when both the OR match and every AND scope are held', () => {
       const also = [ApiKeyScope.OPTIHASHI_READ, ApiKeyScope.OPTIHASHI_COMPUTE];

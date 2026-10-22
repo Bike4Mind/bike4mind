@@ -6,7 +6,9 @@ import {
   SessionPromptFeature,
   shouldSummarizeSession,
   SUMMARIZATION_CONFIG,
+  SummarizeNotebookFeature,
   LakeMemoryFeature,
+  ProjectFeature,
   mergeLakeFirstListing,
   listLakesFirst,
   FORCED_RETRIEVAL_MAX_PER_LAKE_LISTINGS,
@@ -27,15 +29,17 @@ import {
   SettingScopeLevel,
   settingsMap,
 } from '@bike4mind/common';
-import { invalidateScopedSettingsCache, invalidateSettingsCache } from '@bike4mind/utils';
+import { invalidateScopedSettingsCache, invalidateSettingsCache, type FabFileNotice } from '@bike4mind/utils';
 import type {
   CitableSource,
+  IProjectDocument,
   ISessionDocument,
   IChatHistoryItemDocument,
   IMessage,
   SettingKey,
 } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
+import type { ChatCompletionContext } from './ChatCompletionFeatures';
 
 // Partial mock: ChatCompletionFeatures pulls only `getRelevantMementos` from this module, and the V1
 // assertions below are about the ARGUMENTS it receives rather than what it returns. Spreading the
@@ -443,6 +447,26 @@ describe('shouldSummarizeSession', () => {
     const [shouldRun, trigger] = await shouldSummarizeSession(session, makeCtx(count));
     expect(shouldRun).toBe(false);
     expect(trigger).toBeUndefined();
+  });
+});
+
+// A sharee's turn can be the one that makes a shared session due for a summary; they pay for it.
+describe('SummarizeNotebookFeature', () => {
+  it("bills the summary a turn triggers to the turn's user", async () => {
+    const summarizeSession = vi.fn().mockResolvedValue(undefined);
+    const feature = new SummarizeNotebookFeature({
+      user: { id: 'sharee-1' },
+      db: { quests: { count: vi.fn().mockResolvedValue(SUMMARIZATION_CONFIG.earlyMilestoneQuestCount) } },
+      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      summarizeSession,
+    } as unknown as ConstructorParameters<typeof SummarizeNotebookFeature>[0]);
+
+    await feature.onComplete({
+      quest: { sessionId: 'session1' } as IChatHistoryItemDocument,
+      session: makeSession({ id: 'session1', userId: 'owner-1', summaryAt: undefined }),
+    });
+
+    expect(summarizeSession).toHaveBeenCalledWith('session1', 'earlyMilestone', 'sharee-1');
   });
 });
 
@@ -6132,5 +6156,76 @@ describe('KnowledgeRetrievalFeature follow-up questions', () => {
       embed: vectors,
     });
     expect(injected).toEqual(['ALDER_PRICING']);
+  });
+});
+
+describe('ProjectFeature stale-reference scrub', () => {
+  const GONE = '507f1f77bcf86cd799439101';
+  const DELETED = '507f1f77bcf86cd799439102';
+  const LIVE = '507f1f77bcf86cd799439103';
+  const OWNER = '507f1f77bcf86cd7994391aa';
+  const COLLABORATOR = '507f1f77bcf86cd7994391ab';
+  const PROJECT = '507f1f77bcf86cd7994391cc';
+
+  const unresolved = (fabFileId: string): FabFileNotice => ({
+    fabFileId,
+    fileName: fabFileId,
+    band: 'unresolved',
+    message: 'not found',
+    delivered: false,
+  });
+
+  const wire = (requesterId: string) => {
+    const pullFileReferences = vi.fn(async () => undefined);
+    const chatCompletion = {
+      logger: { info: vi.fn(), warn: vi.fn() },
+      sessionId: 'session1',
+      user: { id: requesterId },
+      db: {
+        sessions: { findAllByIds: vi.fn(async () => []) },
+        fabfiles: {
+          find: vi.fn(async () => []),
+          findExistingIdsIncludingDeletedByIds: vi.fn(async (ids: string[]) => ids.filter(id => id !== GONE)),
+          findExistingIdsByIds: vi.fn(async (ids: string[]) => ids.filter(id => id === LIVE)),
+        },
+        projects: { pullFileReferences },
+      },
+      fabFilesToMessages: vi.fn(async () => ({
+        promptMessages: [],
+        convertedFabFiles: [],
+        fileNotices: [unresolved(GONE), unresolved(DELETED), unresolved(LIVE)],
+      })),
+    } as unknown as ChatCompletionContext;
+    const project = {
+      id: PROJECT,
+      userId: OWNER,
+      sessionIds: [],
+      fileIds: [GONE, DELETED, LIVE],
+      systemPrompts: [{ fileId: GONE, enabled: true }],
+    } as unknown as IProjectDocument;
+    return { feature: new ProjectFeature(chatCompletion, project), project, pullFileReferences };
+  };
+
+  const run = (feature: ProjectFeature) =>
+    feature.getContextMessages(makeQuest(), {} as never, 'message', {} as never, 1000);
+
+  it("drops gone and soft-deleted ids from the project on the owner's turn, in memory and in the DB", async () => {
+    const { feature, project, pullFileReferences } = wire(OWNER);
+
+    await run(feature);
+
+    expect(pullFileReferences).toHaveBeenCalledWith([GONE, DELETED], { projectId: PROJECT });
+    expect(project.fileIds).toEqual([LIVE]);
+    expect(project.systemPrompts).toEqual([]);
+  });
+
+  it("keeps a soft-deleted project file on a collaborator's turn, so a restore can revive it", async () => {
+    const { feature, project, pullFileReferences } = wire(COLLABORATOR);
+
+    await run(feature);
+
+    expect(pullFileReferences).toHaveBeenCalledWith([GONE], { projectId: PROJECT });
+    expect(project.fileIds).toEqual([DELETED, LIVE]);
+    expect(project.systemPrompts).toEqual([]);
   });
 });

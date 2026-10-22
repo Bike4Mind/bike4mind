@@ -54,7 +54,7 @@ function infoDescription(): string {
       'and async jobs.',
     '',
     'Endpoints are grouped by tag: **AI** (chat, completions, embeddings, agent runs, tools, quest polling), ' +
-      '**Images**, **Audio**, **Videos**, **Music**, **Transcriptions**, **Sessions**, **Artifacts**, **Files**, **Projects**, **Agents**, **Data Lakes** and **Account**.',
+      '**Images**, **Audio**, **Videos**, **Music**, **Transcriptions**, **Sessions**, **Artifacts**, **Files**, **Projects**, **Agents**, **Data Lakes**, **Skills** and **Account**.',
     '',
     '## Authentication',
     'Send an API key as `Authorization: Bearer b4m_live_<key>` (canonical), `x-api-key: b4m_live_<key>` ' +
@@ -405,6 +405,10 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
       name: 'Agents',
       description:
         'Custom agents with their own system prompt, model settings and tool access: list, read and manage them.',
+    },
+    {
+      name: 'Skills',
+      description: "Your organization's approved Skill Market listings, served as a Claude Code plugin marketplace.",
     },
   ];
 

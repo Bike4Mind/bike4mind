@@ -39,6 +39,10 @@ import {
 } from '../constants/knowledgeBaseSearch';
 import { BULK_CHANGE_SHARE_PCT_DEFAULT } from '../constants/lakeConvergence';
 import {
+  ADMIN_AUDIT_DEFAULT_CRITICAL_GRANT_CREDITS,
+  ADMIN_AUDIT_DEFAULT_DAILY_GRANT_CREDITS,
+} from '../types/entities/adminAuditCatalogue';
+import {
   ORGANIZATION_SUBSCRIPTION_CREDITS_PER_SEAT,
   ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
   ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
@@ -388,6 +392,9 @@ export const SettingKeySchema = z.enum([
   'MaxActiveDungeons',
   'DungeonSpawnIntervalHeartbeats',
   'DungeonTTLMinutes',
+  'EnableStudioCreateV2',
+  'EnableStudioImage',
+  'EnableStudioProductions',
   'VectorThreshold',
   'bflApiKey',
   'EnableMCPServer',
@@ -492,6 +499,11 @@ export const SettingKeySchema = z.enum([
   'SlackFeedbackWebhookUrl',
   'SlackNonProdFeedbackWebhookUrl',
   'SlackEmailAuditWebhookUrl',
+  'SlackSecurityAlertsWebhookUrl',
+
+  // Admin Audit Log alerting
+  'AdminAuditCriticalGrantCredits',
+  'AdminAuditDailyGrantCredits',
 
   // Slack Analytics Bot (existing production bot - DO NOT CHANGE)
   'slackSigningSecret',
@@ -1068,16 +1080,22 @@ function makeNumberSetting(config: { defaultValue?: number; min?: number; max?: 
   };
 }
 
-function makeBooleanSetting(config: { defaultValue?: boolean } & BaseSetting) {
+function makeBooleanSetting({
+  acceptNumeric = false,
+  ...config
+}: { defaultValue?: boolean; acceptNumeric?: boolean } & BaseSetting) {
   return {
     ...config,
     type: 'boolean' as const,
     schema: z
       .preprocess(val => {
         if (typeof val === 'string') {
-          if (val.toLowerCase() === 'true') return true;
-          if (val.toLowerCase() === 'false') return false;
+          if (val.toLowerCase() === 'true' || (acceptNumeric && val === '1')) return true;
+          if (val.toLowerCase() === 'false' || (acceptNumeric && val === '0')) return false;
         }
+        // Numeric compatibility is opt-in so existing billing and security defaults cannot flip.
+        if (acceptNumeric && val === 1) return true;
+        if (acceptNumeric && val === 0) return false;
         return val;
       }, z.boolean())
       .prefault(config.defaultValue ?? false),
@@ -2056,6 +2074,10 @@ export const API_SERVICE_GROUPS = {
       { key: 'MaxActiveDungeons', order: 291 },
       { key: 'DungeonSpawnIntervalHeartbeats', order: 292 },
       { key: 'DungeonTTLMinutes', order: 293 },
+      // Studio rebuild, admin-only until the reveal (see studioFeatureFlags.ts)
+      { key: 'EnableStudioCreateV2', order: 300 },
+      { key: 'EnableStudioImage', order: 301 },
+      { key: 'EnableStudioProductions', order: 302 },
     ],
   },
   NOTEBOOK: {
@@ -2894,7 +2916,7 @@ export const settingsMap = {
     name: 'Skill Market URL Allowlist',
     defaultValue: '',
     description:
-      'Comma-separated host names a Skill Market skill may reference without a finding (subdomains included). Any other URL holds a Public listing for review.',
+      'Comma-separated host names a Skill Market skill may reference without a finding (subdomains included). Any other URL holds a listing for review at every visibility.',
     category: 'AI Moderation',
   }),
   SkillMarketClassifierMinConfidence: makeNumberSetting({
@@ -3258,6 +3280,35 @@ export const settingsMap = {
     order: 8,
     isSensitive: true,
   }),
+  SlackSecurityAlertsWebhookUrl: makeStringSetting({
+    key: 'SlackSecurityAlertsWebhookUrl',
+    name: 'Security Alerts Channel Webhook URL',
+    defaultValue: '',
+    description:
+      'Incoming-webhook URL for the security Slack channel that receives critical Admin Audit Log entries and credit-grant bursts. Leave empty to turn alerts off; the Audit Log page then shows a banner. It never falls back to the default webhook.',
+    category: 'SecOps',
+    isSensitive: true,
+  }),
+  AdminAuditCriticalGrantCredits: makeNumberSetting({
+    key: 'AdminAuditCriticalGrantCredits',
+    name: 'Critical Single Credit Grant',
+    defaultValue: ADMIN_AUDIT_DEFAULT_CRITICAL_GRANT_CREDITS,
+    min: 1,
+    int: true,
+    description:
+      'An admin credit grant above this many credits is recorded as critical in the Admin Audit Log and alerts the security channel.',
+    category: 'SecOps',
+  }),
+  AdminAuditDailyGrantCredits: makeNumberSetting({
+    key: 'AdminAuditDailyGrantCredits',
+    name: 'Critical Daily Credit Grants per Admin',
+    defaultValue: ADMIN_AUDIT_DEFAULT_DAILY_GRANT_CREDITS,
+    min: 1,
+    int: true,
+    description:
+      'A grant that takes one admin past this many credits granted in the last 24 hours is recorded as critical in the Admin Audit Log and alerts the security channel.',
+    category: 'SecOps',
+  }),
   liveFeedbackEmail: makeStringSetting({
     key: 'liveFeedbackEmail',
     name: 'Live Feedback Email',
@@ -3464,6 +3515,7 @@ export const settingsMap = {
     category: 'Users',
   }),
   enableTeamPlan: makeBooleanSetting({
+    acceptNumeric: true,
     key: 'enableTeamPlan',
     userReadable: true,
     name: 'Enable Team Plan',
@@ -3728,6 +3780,37 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.SEARCH.id,
     order: 4,
     isSensitive: true,
+  }),
+  EnableStudioCreateV2: makeBooleanSetting({
+    key: 'EnableStudioCreateV2',
+    name: 'Enable Studio Create v2',
+    defaultValue: false,
+    description:
+      'Admin-only preview of the restructured Studio Create area. Non-admins never see it, whatever this is set to.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 300,
+  }),
+  EnableStudioImage: makeBooleanSetting({
+    key: 'EnableStudioImage',
+    name: 'Enable Image in Studio',
+    defaultValue: false,
+    description: 'Admin-only preview of the Image tab in Studio. Non-admins never see it, whatever this is set to.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 301,
+    dependsOn: 'EnableStudioCreateV2',
+  }),
+  EnableStudioProductions: makeBooleanSetting({
+    key: 'EnableStudioProductions',
+    name: 'Enable Studio Productions',
+    defaultValue: false,
+    description:
+      'Admin-only preview of Studio Productions (assembling many assets into one piece). Non-admins never see it, whatever this is set to.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 302,
+    dependsOn: 'EnableStudioCreateV2',
   }),
   EnablePotionQuest: makeBooleanSetting({
     key: 'EnablePotionQuest',

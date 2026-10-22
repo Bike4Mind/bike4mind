@@ -7,7 +7,11 @@ import { getThemeConfig } from '@client/app/utils/themes';
 import { CURRENT_POLICY_VERSION, USERNAME_RULES_MESSAGE } from '@bike4mind/common';
 import en from '@client/app/locales/en.json';
 import { ExternalLinks } from '@client/app/utils/externalLinks';
+import { FIRST_SIGNUP_SESSION_KEY } from '@client/app/utils/firstSignupSession';
 import { useCookieSettings } from '@client/app/components/CookieConsentBanner';
+
+const mockLogEvent = vi.hoisted(() => vi.fn());
+vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => ({ mutate: mockLogEvent }) }));
 import MultiStepLogin from './MultiStepLogin';
 
 type MfaHookOptions = {
@@ -135,6 +139,7 @@ const acceptInlinePolicies = async (user: ReturnType<typeof userEvent.setup>) =>
 
 describe('MultiStepLogin — inline registration (new-user branch)', () => {
   beforeEach(() => {
+    localStorage.clear();
     vi.clearAllMocks();
     mocks.userState.currentUser = null;
     mocks.accessTokenState.accessToken = null;
@@ -190,6 +195,8 @@ describe('MultiStepLogin — inline registration (new-user branch)', () => {
     );
     // Ad-conversion signal fires exactly once for the freshly created account.
     expect(mocks.trackSignupConversion).toHaveBeenCalledTimes(1);
+    expect(mockLogEvent).toHaveBeenCalledWith({ type: 'policies_accepted', metadata: { path: 'inline_registration' } });
+    expect(JSON.parse(localStorage.getItem(FIRST_SIGNUP_SESSION_KEY) as string).userId).toBe('new-1');
   });
 
   it('keeps Create account disabled until BOTH acceptance checkboxes are checked', async () => {
@@ -464,6 +471,7 @@ describe('MultiStepLogin — inline registration (new-user branch)', () => {
 // /accept-policies loop (issue #386). See the isLoggedIn guard in MultiStepLogin.
 describe('MultiStepLogin — already-logged-in redirect guard', () => {
   beforeEach(() => {
+    localStorage.clear();
     vi.clearAllMocks();
     mocks.userState.currentUser = null;
     mocks.accessTokenState.accessToken = null;
@@ -499,6 +507,7 @@ describe('MultiStepLogin - Cookie settings link', () => {
   const TRACKER_ENV = ['NEXT_PUBLIC_GA_MEASUREMENT_ID', 'NEXT_PUBLIC_REDDIT_PIXEL_ID', 'NEXT_PUBLIC_META_PIXEL_ID'];
 
   beforeEach(() => {
+    localStorage.clear();
     vi.clearAllMocks();
     mocks.userState.currentUser = null;
     mocks.accessTokenState.accessToken = null;
@@ -553,6 +562,7 @@ describe('MultiStepLogin - Cookie settings link', () => {
 // looking for a password field or a forgot-password link that this flow does not have.
 describe('MultiStepLogin - passwordless email step copy', () => {
   beforeEach(() => {
+    localStorage.clear();
     vi.clearAllMocks();
     mocks.userState.currentUser = null;
     mocks.accessTokenState.accessToken = null;
@@ -565,9 +575,10 @@ describe('MultiStepLogin - passwordless email step copy', () => {
     // the key proves the email step still renders auth.signInOrCreate; the value is checked below.
     expect(screen.getByText('auth.signInOrCreate')).toBeInTheDocument();
 
-    // The copy behind that key names the emailed code and claims no password.
+    // The copy behind that key names the emailed code and says no password is needed.
     expect(en.auth.signInOrCreate).toMatch(/one-time code/i);
-    expect(en.auth.signInOrCreate).not.toMatch(/password|forgot/i);
+    expect(en.auth.signInOrCreate).toMatch(/no password required/i);
+    expect(en.auth.signInOrCreate).not.toMatch(/forgot/i);
 
     // The email step exposes no password field and no forgot-password link.
     expect(document.querySelector('input[type="password"]')).toBeNull();
@@ -580,6 +591,7 @@ describe('MultiStepLogin - passwordless email step copy', () => {
 
 describe('MultiStepLogin - email step guidance and code-request errors', () => {
   beforeEach(() => {
+    localStorage.clear();
     vi.clearAllMocks();
     mocks.userState.currentUser = null;
     mocks.accessTokenState.accessToken = null;
@@ -587,13 +599,6 @@ describe('MultiStepLogin - email step guidance and code-request errors', () => {
       ok: true,
       json: async () => ({ requiresRedirect: false }),
     }) as unknown as typeof fetch;
-  });
-
-  it('tells returning users sign-in is passwordless and a code is emailed', () => {
-    renderLogin();
-
-    expect(screen.getByTestId('login-passwordless-hint')).toHaveTextContent('auth.passwordlessHint');
-    expect(screen.getByTestId('login-no-password-hint')).toHaveTextContent('auth.noPasswordNeeded');
   });
 
   it('ties an invalid-email error to the input and announces it', async () => {
@@ -609,6 +614,20 @@ describe('MultiStepLogin - email step guidance and code-request errors', () => {
     expect(alert).toHaveTextContent('auth.fieldErrors.invalidEmail');
     expect(input).toHaveAttribute('aria-invalid', 'true');
     expect(input.getAttribute('aria-describedby')).toContain(alert.id);
+  });
+
+  it('clears the email error once the user types again', async () => {
+    const user = userEvent.setup();
+    renderLogin();
+
+    const input = textboxIn('login-email-input');
+    await user.type(input, 'not-an-email');
+    fireEvent.submit(input.closest('form')!);
+    await screen.findByTestId('login-email-error');
+
+    await user.type(input, 'x');
+    expect(screen.queryByTestId('login-email-error')).not.toBeInTheDocument();
+    expect(input).toHaveAttribute('aria-invalid', 'false');
   });
 
   it('shows an alert and a Continue countdown when the code request is rate limited', async () => {
@@ -665,6 +684,7 @@ describe('MultiStepLogin - email step guidance and code-request errors', () => {
 
 describe('MultiStepLogin - second-factor handoff', () => {
   beforeEach(() => {
+    localStorage.clear();
     vi.clearAllMocks();
     mocks.userState.currentUser = null;
     mocks.accessTokenState.accessToken = null;

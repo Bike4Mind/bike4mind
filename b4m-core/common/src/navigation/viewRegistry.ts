@@ -790,6 +790,22 @@ export function getViewSummaryForLLM(options?: { section?: ViewSection; isAdmin?
 }
 
 /**
+ * The admin-only views, as an appendix to the non-admin `getViewSummaryForLLM()` text. Kept
+ * separate so the base summary is byte-identical for every user and can sit in the
+ * deployment-wide cached prompt prefix; this appendix rides in the per-caller tail instead.
+ */
+export function getAdminViewSummaryForLLM(): string {
+  const lines = VIEW_REGISTRY.filter(v => v.requiresAdmin).map(v => `- ${v.id}: ${v.label} \u2014 ${v.description}`);
+  return [
+    '# Admin views for navigate_view',
+    '',
+    'This user is an admin, so these views are also available:',
+    '',
+    ...lines,
+  ].join('\n');
+}
+
+/**
  * Top-level path prefixes for views that are first-class routes - derived from
  * VIEW_REGISTRY so this list never drifts from the registered views. Excludes
  * the main chat page (`/`) since it isn't a "feature page" for navigation

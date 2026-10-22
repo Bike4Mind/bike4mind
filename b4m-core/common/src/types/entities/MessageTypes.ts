@@ -110,4 +110,12 @@ export interface IMessage {
    * provider should see.
    */
   requiresTool?: string;
+  /**
+   * Send this message in the current user turn instead of the system prompt, so the system prefix
+   * stays byte-stable and caches across turns. Only for content that changes every turn (a view
+   * description, a per-send brief) - never for a caller's actual system prompt. Control-only, like
+   * `cache`: backends that rebuild each wire message drop it for free, and the ones that forward
+   * IMessage objects strip it explicitly.
+   */
+  perTurn?: boolean;
 }

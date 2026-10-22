@@ -407,6 +407,22 @@ function historyTextReply(item: Pick<IChatHistoryItem, 'replies' | 'researchMode
 }
 
 /**
+ * A prompt the user stopped before the model produced anything replayable. Replaying it leaves a user
+ * turn with no assistant turn, so the next prompt reads as two asks in a row and gets both answered.
+ * A stop after some output keeps its turn, so partial work is still part of the history.
+ */
+export function isStoppedBeforeReply(
+  item: Pick<IChatHistoryItem, 'status' | 'replies' | 'researchModeResults' | 'structuredReplies' | 'promptMeta'>
+): boolean {
+  return (
+    item.status === 'stopped' &&
+    !historyTextReply(item) &&
+    !item.structuredReplies?.length &&
+    replayableToolCalls(item.promptMeta?.functionCalls).length === 0
+  );
+}
+
+/**
  * Whether the slot `historyTextReply` picks (the first non-`<think>` one) is also the turn's last
  * visible slot. On a multi-slot turn it is a pre-tool preamble, which must never carry the block.
  */
@@ -799,6 +815,7 @@ export async function fetchAndProcessPreviousMessages(
 
   // Convert to IMessage format with tool pairing reconstruction.
   const convertedMessages = chatHistoryItems.reduce((acc, cur) => {
+    if (isStoppedBeforeReply(cur)) return acc;
     if (cur.prompt) acc.push({ role: 'user', content: cur.prompt });
 
     const toolCalls = replayableToolCalls(cur.promptMeta?.functionCalls);
@@ -966,6 +983,7 @@ export async function fetchAgentConversationHistory(
     : chatHistoryItems;
 
   return items.reduce((acc, cur) => {
+    if (isStoppedBeforeReply(cur)) return acc;
     if (cur.prompt) acc.push({ role: 'user', content: cur.prompt });
     // Same text-only fallback as fetchAndProcessPreviousMessages, so the agent sees the actual
     // answer (including Research Mode answers), not internal thoughts.
@@ -3266,7 +3284,7 @@ export async function buildAndSortMessages(
     logger.log('\nFinal Combined Messages:');
     messages.forEach((msg, i) => {
       const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
-      logger.log(`  ${i + 1}. Role: ${msg.role}, Content: ${content.substring(0, 50)}...`);
+      logger.log(`  ${i + 1}. Role: ${msg.role}, Content length: ${content.length}`);
     });
 
     logger.log(`\nTotal messages: ${messages.length}`);

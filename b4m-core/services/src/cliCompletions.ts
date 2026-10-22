@@ -7,6 +7,7 @@ import {
   CompletionInfo,
   getTextModelCost,
   getTurnsCost,
+  buildUsagePriceStamp,
   type TurnUsage,
   pricingTierForTokens,
   publishesCacheReadRate,
@@ -45,9 +46,11 @@ import {
   isSafetyRefusalError,
 } from '@bike4mind/utils';
 import {
+  buildApiKeyTable,
   getLlmByModel,
   getAvailableModels,
   reasonsWithinOutputBudget,
+  RUNTIME_DISCOVERED_BACKENDS,
   resolveOutputMaxTokens,
   type ICompletionOptions,
   type ICompletionOptionTools,
@@ -456,9 +459,10 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     billToOrg ? db.organizations!.findById(holderId) : db.users.findById(holderId);
 
   // Get effective API keys (user keys or fallback to admin demo keys)
-  const apiKeys = await getEffectiveLLMApiKeys(userId, { db, getSettingsByNames });
+  const apiKeys = buildApiKeyTable(await getEffectiveLLMApiKeys(userId, { db, getSettingsByNames }));
 
-  const models = await getAvailableModels(apiKeys);
+  let failedListings: readonly ModelBackend[] = [];
+  const models = await getAvailableModels(apiKeys, { onFailedListings: failed => (failedListings = failed) });
   const modelInfo = models.find(m => m.id === (model as ChatModels));
   const catalogued = CHAT_MODELS.includes(model as ChatModels);
 
@@ -482,17 +486,24 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       `Unknown model '${params.model}'. List the models you can call with GET /api/v1/models.`,
       { errorCode: UNKNOWN_MODEL_ERROR_CODE }
     );
-    if (!catalogued) throw unknownModel;
+    const providerUnavailable = (message = `Failed to create LLM backend for model: ${params.model}`) =>
+      new HTTPError(503, message, {
+        errorCode: 'provider_not_configured',
+      });
+    // Ollama pulls and local checkpoints exist only in their live listing, so a failed one proves no absence.
+    if (!catalogued) {
+      const failedRuntime = failedListings.filter(b => RUNTIME_DISCOVERED_BACKENDS.includes(b));
+      if (failedRuntime.length === 0) throw unknownModel;
+      logger?.warn?.('[cliCompletions] live model listing failed; answering 503', { model, failedListings });
+      throw providerUnavailable(`Model listing for ${failedRuntime.join(', ')} is unavailable; retry shortly.`);
+    }
     const providerConfigured = await isModelProviderConfigured(model, apiKeys).catch((cause: unknown) => {
       logger?.error?.('[cliCompletions] provider check failed; answering 503', { model, cause });
       return false;
     });
-    if (!providerConfigured)
-      throw new HTTPError(503, `Failed to create LLM backend for model: ${params.model}`, {
-        errorCode: 'provider_not_configured',
-      });
-    // A retired or unlisted model on a configured provider must be changed by the caller; a retryable status
-    // would loop clients forever. Static listings cannot time out, so absence here is not transient.
+    if (!providerConfigured) throw providerUnavailable();
+    // A retired or unlisted model on a configured provider must be changed by the caller; a retryable status would loop
+    // clients forever. Catalogued ids come from static listings, which cannot fail, so absence here is not transient.
     logger?.warn?.('[cliCompletions] catalogued model unavailable on a configured provider', { model });
     throw unknownModel;
   }
@@ -587,8 +598,9 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     );
   }
 
-  // Credit enforcement: Fail-fast if model info is missing
-  const settings = await getSettingsMap(db);
+  // Credit enforcement: Fail-fast if model info is missing.
+  // skipCache: this flag gates money and the serving process may outlive the admin's write to it.
+  const settings = await getSettingsMap(db, { names: ['enforceCredits'], skipCache: true });
   const enforceCredits = getSettingsValue('enforceCredits', settings);
 
   if (enforceCredits) {
@@ -739,6 +751,13 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
           finalInputTokens + finalCacheReadTokens + finalCacheCreationTokens
         );
 
+  // Provenance of the rates settledUsdCost applied: the same turns, else the same tier basis.
+  const settledPriceStamp = (pricedModel: ModelInfo) =>
+    buildUsagePriceStamp(pricedModel, {
+      turns: finalTurnUsage,
+      tierBasisTokens: finalInputTokens + finalCacheReadTokens + finalCacheCreationTokens,
+    });
+
   const wrappedOnChunk = async (text: (string | null | undefined)[], info?: CompletionInfo) => {
     if (info?.inputTokens) finalInputTokens = info.inputTokens;
     if (info?.outputTokens) finalOutputTokens = info.outputTokens;
@@ -826,6 +845,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
             cacheWriteTokens: finalCacheCreationTokens,
             costUsd: settledUsdCost(modelInfo),
             creditsCharged: 0,
+            ...settledPriceStamp(modelInfo),
             status: isRefusal ? 'refusal' : 'error',
             latencyMs: Date.now() - completionStartTime,
           })
@@ -919,6 +939,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         cacheWriteTokens: finalCacheCreationTokens,
         costUsd: finalUsdCost,
         creditsCharged,
+        ...settledPriceStamp(modelInfo!),
         // Same refund key the web chat path records: a stream aborted as degenerate is
         // priced normally (the provider tokens were spent) but must not read as a clean,
         // fully-valued success. See usageEventStatusForFinish.

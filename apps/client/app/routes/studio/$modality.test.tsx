@@ -12,9 +12,13 @@ const h = vi.hoisted(() => ({
   mutate: vi.fn(),
   musicMutate: vi.fn(),
   navigate: vi.fn(),
+  studioFeatures: {} as Record<string, boolean>,
 }));
 
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => h.navigate }));
+vi.mock('@client/app/components/Studio/useStudioFeature', () => ({
+  useStudioFeature: (feature: string) => h.studioFeatures[feature] ?? false,
+}));
 vi.mock('@client/app/hooks/data/musicGenerations', () => ({
   useMusicModels: () => h.musicModels,
   useCreateMusicGeneration: () => ({ mutate: h.musicMutate, isPending: false }),
@@ -36,6 +40,7 @@ vi.mock('@client/app/components/AudioStudio/AudioGallery', () => ({
 vi.mock('@client/app/components/AudioStudio/useGenerateAudio', () => ({
   useGenerateAudio: () => ({ generate: vi.fn(), isGenerating: false, result: null }),
 }));
+vi.mock('@client/app/components/Credits/GenerationPayerNote', () => ({ default: () => null }));
 vi.mock('@client/app/components/Session/AISettings/AudioGenerationSettings', () => ({
   AudioGenerationSettings: () => <div data-testid="audio-settings-stub" />,
 }));
@@ -66,7 +71,10 @@ const renderPage = (modality: StudioModality = 'video') =>
     </CssVarsProvider>
   );
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  h.studioFeatures = {};
+});
 
 describe('StudioPage (video)', () => {
   it('sets the tab title and keeps the video page test id under the Studio heading', () => {
@@ -197,5 +205,20 @@ describe('StudioPage (sound effects)', () => {
       'Sound effect generation is not available for your account yet.'
     );
     expect(screen.getByTestId('sound-effects-gallery-stub')).toBeInTheDocument();
+  });
+});
+
+describe('StudioPage (Image preview tab)', () => {
+  it('has no Image tab while the Image-in-Studio feature is closed', () => {
+    h.models = { isPending: true, data: undefined };
+    renderPage();
+    expect(screen.queryByTestId('studio-tab-image')).not.toBeInTheDocument();
+  });
+
+  it('shows a disabled Image placeholder tab when the feature is open', () => {
+    h.studioFeatures = { image: true };
+    h.models = { isPending: true, data: undefined };
+    renderPage();
+    expect(screen.getByTestId('studio-tab-image')).toHaveAttribute('aria-disabled', 'true');
   });
 });

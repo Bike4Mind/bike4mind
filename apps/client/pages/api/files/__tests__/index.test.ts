@@ -24,6 +24,9 @@ const mockRefs = vi.hoisted(() => ({
   baseApiOptions: undefined as unknown,
   deleteUser: undefined as undefined | { currentStorageSize: number; save: () => Promise<void> },
   incrementCurrentStorage: undefined as unknown as ReturnType<typeof vi.fn>,
+  pullKnowledgeIdsForUsers: undefined as unknown as ReturnType<typeof vi.fn>,
+  pullSystemFilesForUsers: undefined as unknown as ReturnType<typeof vi.fn>,
+  pullFileReferences: undefined as unknown as ReturnType<typeof vi.fn>,
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -43,9 +46,10 @@ vi.mock('@server/middlewares/baseApi', () => {
 
 const fabFileDocs = vi.hoisted(
   () =>
-    [{ filePath: 'a/one.png' }, { filePath: 'b/two.mp3', sourceMetadata: { generatedCopyKey: 'two.mp3' } }] as Array<
-      Record<string, unknown>
-    >
+    [
+      { _id: 'file-0', filePath: 'a/one.png', userId: 'user-1', users: [{ userId: 'recipient-1' }] },
+      { _id: 'file-1', filePath: 'b/two.mp3', userId: 'user-1', sourceMetadata: { generatedCopyKey: 'two.mp3' } },
+    ] as Array<Record<string, unknown>>
 );
 
 vi.mock('@bike4mind/database', () => {
@@ -96,28 +100,44 @@ vi.mock('@bike4mind/database', () => {
     FabFile,
     User,
     fabFileRepository: { __repo: 'fabFiles' },
-    userRepository: { __repo: 'users' },
+    userRepository: {
+      __repo: 'users',
+      pullSystemFilesForUsers: (...args: unknown[]) => mockRefs.pullSystemFilesForUsers(...args),
+    },
+    sessionRepository: {
+      pullKnowledgeIdsForUsers: (...args: unknown[]) => mockRefs.pullKnowledgeIdsForUsers(...args),
+    },
     organizationRepository: {
       incrementCurrentStorage: (...args: unknown[]) => mockRefs.incrementCurrentStorage(...args),
     },
-    projectRepository: { __repo: 'projects' },
+    projectRepository: {
+      __repo: 'projects',
+      pullFileReferences: (...args: unknown[]) => mockRefs.pullFileReferences(...args),
+    },
     adminSettingsRepository: { __repo: 'adminSettings' },
     withTransaction: vi.fn((fn: (session: unknown) => unknown) => fn({ __fakeSession: true })),
   };
 });
 
-vi.mock('@bike4mind/services', () => ({
-  fabFilesService: {
-    search: (...args: unknown[]) => {
-      mockRefs.searchArgs = args;
-      return Promise.resolve({ data: [], total: 0, hasMore: false });
+vi.mock('@bike4mind/services', async () => {
+  // The reference cleanup runs for real so the test pins which users and projects it is scoped to.
+  const actual = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
+  return {
+    fabFilesService: {
+      deletedFileReferences: actual.fabFilesService.deletedFileReferences,
+      groupDeletedFileReferences: actual.fabFilesService.groupDeletedFileReferences,
+      cleanUpDeletedFileReferences: actual.fabFilesService.cleanUpDeletedFileReferences,
+      search: (...args: unknown[]) => {
+        mockRefs.searchArgs = args;
+        return Promise.resolve({ data: [], total: 0, hasMore: false });
+      },
+      deleteStoredObjects: (...args: unknown[]) => {
+        mockRefs.storedObjectArgs = args;
+        return Promise.resolve();
+      },
     },
-    deleteStoredObjects: (...args: unknown[]) => {
-      mockRefs.storedObjectArgs = args;
-      return Promise.resolve();
-    },
-  },
-}));
+  };
+});
 
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ bucket: 'files', getSignedUrl: browserSigner, delete: vi.fn() }),
@@ -239,7 +259,7 @@ function invokeDelete() {
   const { req, res } = createMocks({ method: 'DELETE', url: '/api/files' });
   (req as any).user = { id: 'user-1' };
   (req as any).ability = { can: () => true };
-  (req as any).logger = { error: vi.fn() };
+  (req as any).logger = { error: vi.fn(), warn: vi.fn() };
   return { req, res };
 }
 
@@ -253,6 +273,9 @@ describe('DELETE /api/files', () => {
     mockRefs.updateManyArgs = undefined;
     mockRefs.updateManyOptions = undefined;
     mockRefs.incrementCurrentStorage = vi.fn().mockResolvedValue(undefined);
+    mockRefs.pullKnowledgeIdsForUsers = vi.fn().mockResolvedValue(0);
+    mockRefs.pullSystemFilesForUsers = vi.fn().mockResolvedValue(undefined);
+    mockRefs.pullFileReferences = vi.fn().mockResolvedValue(undefined);
   });
 
   // Regression for the TypeError that fired in production: FabFile.deleteMany() comes from the
@@ -364,6 +387,31 @@ describe('DELETE /api/files', () => {
     await mockRefs.deleteHandler!(req, res);
 
     expect(res._getStatusCode()).toBe(204);
+  });
+
+  it('drops references to every deleted file, scoped to the owner and direct-share recipients', async () => {
+    const { req, res } = invokeDelete();
+
+    await mockRefs.deleteHandler!(req, res);
+
+    // Each file is cleaned against ITS OWN holders: the recipient of file-0 must never be asked to
+    // let go of file-1, which was never shared with them.
+    expect(mockRefs.pullKnowledgeIdsForUsers).toHaveBeenCalledWith(['user-1', 'recipient-1'], ['file-0']);
+    expect(mockRefs.pullKnowledgeIdsForUsers).toHaveBeenCalledWith(['user-1'], ['file-1']);
+    expect(mockRefs.pullSystemFilesForUsers).toHaveBeenCalledWith(['user-1', 'recipient-1'], ['file-0']);
+    expect(mockRefs.pullSystemFilesForUsers).toHaveBeenCalledWith(['user-1'], ['file-1']);
+    expect(mockRefs.pullFileReferences).toHaveBeenCalledWith(['file-0'], { userIds: ['user-1', 'recipient-1'] });
+    expect(mockRefs.pullFileReferences).toHaveBeenCalledWith(['file-1'], { userIds: ['user-1'] });
+  });
+
+  it('still completes when dropping references fails', async () => {
+    mockRefs.pullFileReferences.mockRejectedValueOnce(new Error('write failed'));
+    const { req, res } = invokeDelete();
+
+    await mockRefs.deleteHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(204);
+    expect((req as any).logger.warn).toHaveBeenCalled();
   });
 
   it('rejects a files:read-only key with a 403 before touching deleteMany', async () => {

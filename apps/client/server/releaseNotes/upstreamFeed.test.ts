@@ -42,6 +42,40 @@ describe('getWhatsNewFeedUrl', () => {
   });
 });
 
+describe('fetchUpstreamFeed video vetting', () => {
+  const pageWith = (video: unknown) => json({ data: [{ ...NOTE, video }], next_cursor: null });
+
+  it('keeps a video whose URLs are all on allowed hosts', async () => {
+    const video = { landscape_url: 'https://d111.cloudfront.net/wide.mp4', portrait_url: null };
+    mockSafeFetch.mockResolvedValue(pageWith(video));
+    expect((await fetchOnce())?.data[0].video).toEqual(video);
+  });
+
+  it('drops a video with any URL outside the allowlist', async () => {
+    mockSafeFetch.mockResolvedValue(
+      pageWith({
+        landscape_url: 'https://d111.cloudfront.net/wide.mp4',
+        portrait_url: 'https://evil.example.com/t.mp4',
+      })
+    );
+    expect((await fetchOnce())?.data[0].video).toBeNull();
+  });
+
+  it("keeps a video served from the upstream's own media route", async () => {
+    const video = {
+      landscape_url: 'https://upstream.example.com/api/v1/whats-new/media/rn1/landscape',
+      landscape_poster_url: 'https://upstream.example.com/api/v1/whats-new/media/rn1/landscape-poster',
+    };
+    mockSafeFetch.mockResolvedValue(pageWith(video));
+    expect((await fetchOnce())?.data[0].video).toEqual(video);
+  });
+
+  it('drops a video that uses any other path on the upstream origin', async () => {
+    mockSafeFetch.mockResolvedValue(pageWith({ landscape_url: 'https://upstream.example.com/files/wide.mp4' }));
+    expect((await fetchOnce())?.data[0].video).toBeNull();
+  });
+});
+
 describe('fetchUpstreamFeed', () => {
   it('returns null without fetching when unset', async () => {
     vi.stubEnv('WHATS_NEW_FEED_URL', '');

@@ -6,8 +6,9 @@ import { IPC_CHANNELS, type AppInfo } from '@shared/ipc';
 import appIcon from '../../build/icon.png?asset';
 import macAppIcon from '../../build/icon-mac.png?asset';
 import { registerAccount } from './account';
-import { registerAuth } from './auth';
+import { onAuthStateChanged, registerAuth } from './auth';
 import { registerChat } from './chat';
+import { sessionScopeFor, sessionScopeKey } from './chat/sessionScope';
 import { attachDevLogShortcut, closeDevLogWindow, registerDevLog } from './devlog';
 import { registerFleet } from './fleet';
 import { registerArtifactScheme } from './chat/artifacts/sandboxProtocol';
@@ -103,6 +104,11 @@ ipcMain.handle(IPC_CHANNELS.shellOpenExternal, (_event, url: unknown) => {
   if (typeof url === 'string' && isExternallyOpenable(url)) void shell.openExternal(url);
 });
 
+function sessionScopeKeyOf(state: Parameters<typeof sessionScopeFor>[0]): string | null {
+  const scope = sessionScopeFor(state);
+  return scope ? sessionScopeKey(scope) : null;
+}
+
 void app.whenReady().then(async () => {
   // First in this handler, so a failure below is on disk too (a packaged build has no terminal);
   // warnings before app ready are not persisted.
@@ -124,6 +130,8 @@ void app.whenReady().then(async () => {
     mcp,
     browser,
     pullRequests,
+    claudeImport,
+    spareWorktrees,
   } = registerChat(auth, {
     sessionClosed: sessionId => terminals.killSession(sessionId),
     observeStream: event => fleet.observe(event),
@@ -164,6 +172,7 @@ void app.whenReady().then(async () => {
         mcp.shutdown(),
         terminals.shutdown(),
         browser.cookies.clearOnQuit(),
+        spareWorktrees.dispose(),
       ]).catch(() => undefined);
     },
   });
@@ -191,7 +200,13 @@ void app.whenReady().then(async () => {
     event.preventDefault();
     // The imported cookies go too. They have no expiry and so were never written to disk, but
     // this is the pass that can await, and the guarantee is worth holding in two places.
-    void Promise.all([background.shutdown(), mcp.shutdown(), terminals.shutdown(), browser.cookies.clearOnQuit()])
+    void Promise.all([
+      background.shutdown(),
+      mcp.shutdown(),
+      terminals.shutdown(),
+      browser.cookies.clearOnQuit(),
+      spareWorktrees.dispose(),
+    ])
       .catch(() => undefined)
       .finally(() => app.quit());
   });
@@ -200,6 +215,7 @@ void app.whenReady().then(async () => {
     auth.dispose();
     fleet.dispose();
     chat.dispose();
+    claudeImport.dispose();
     pullRequests.dispose();
     updates.dispose();
     // Synchronous and unconditional: this handler cannot await, and a quit that raced the
@@ -223,6 +239,14 @@ void app.whenReady().then(async () => {
   }
 
   createWindow();
+  claudeImport.start();
+  let importScope = sessionScopeKeyOf(auth.getState());
+  onAuthStateChanged(state => {
+    const next = sessionScopeKeyOf(state);
+    if (next === importScope) return;
+    importScope = next;
+    claudeImport.onScopeChanged();
+  });
 
   // Restoring runs alongside the window opening rather than gating it: the renderer starts in
   // the `initializing` state and is pushed the outcome, so a slow or unreachable backend

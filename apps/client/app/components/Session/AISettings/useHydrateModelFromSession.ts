@@ -3,7 +3,7 @@ import type { ISessionDocument } from '@bike4mind/common';
 
 /**
  * Hydrates the model picker from a session's pinned `lastUsedModel` -- exactly ONCE per
- * session, never again for the life of that session.
+ * session, unless the user already selected a model while its document was loading.
  *
  * The "once" is the whole point. This used to be a plain effect keyed on the session object:
  *
@@ -31,14 +31,29 @@ import type { ISessionDocument } from '@bike4mind/common';
  * @param applyModel called with the model id to select; must be referentially stable
  */
 export function useHydrateModelFromSession(
-  currentSession: Pick<ISessionDocument, 'id' | 'lastUsedModel'> | null | undefined,
-  applyModel: (model: string) => void
+  currentSession: (Pick<ISessionDocument, 'id' | 'lastUsedModel'> & { isOptimistic?: boolean }) | null | undefined,
+  applyModel: (model: string) => void,
+  restorePreferredModel?: () => void,
+  hasExplicitModelSelection?: () => boolean
 ): void {
   // Session id this hook has already hydrated. Survives re-renders; never triggers one.
   const hydratedSessionIdRef = useRef<string | null>(null);
+  const activeSessionIdRef = useRef<string | null>(null);
+  const activeSessionIsOptimisticRef = useRef(false);
 
   useEffect(() => {
     const sessionId = currentSession?.id ?? null;
+    if (activeSessionIdRef.current !== sessionId) {
+      // null -> id is also the first send creating a chat. Keep its pre-send selection.
+      // Replacing an optimistic id with the server id is still that same chat.
+      const adoptingCreatedSession = activeSessionIsOptimisticRef.current && sessionId !== null;
+      if (!adoptingCreatedSession && (activeSessionIdRef.current !== null || currentSession?.lastUsedModel)) {
+        restorePreferredModel?.();
+      }
+      activeSessionIdRef.current = sessionId;
+      activeSessionIsOptimisticRef.current = currentSession?.isOptimistic ?? false;
+      hydratedSessionIdRef.current = null;
+    }
     if (!sessionId) {
       // Session closed/cleared: allow a future re-open to hydrate again.
       hydratedSessionIdRef.current = null;
@@ -47,10 +62,15 @@ export function useHydrateModelFromSession(
 
     if (hydratedSessionIdRef.current === sessionId) return;
 
+    if (hasExplicitModelSelection?.()) {
+      hydratedSessionIdRef.current = sessionId;
+      return;
+    }
+
     const pinnedModel = currentSession?.lastUsedModel;
     if (!pinnedModel) return; // Not hydrated yet -- stay eligible for a later arrival.
 
     hydratedSessionIdRef.current = sessionId;
     applyModel(pinnedModel);
-  }, [currentSession, applyModel]);
+  }, [currentSession, applyModel, restorePreferredModel, hasExplicitModelSelection]);
 }

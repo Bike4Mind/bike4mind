@@ -577,9 +577,9 @@ describe('rotateSession', () => {
         })
       );
       const presented = generateRefreshSecret();
-      await expect(
-        rotateSession(buildRefreshToken(SID, presented), { db, signAccessToken, audit })
-      ).rejects.toThrow(UnauthorizedError);
+      await expect(rotateSession(buildRefreshToken(SID, presented), { db, signAccessToken, audit })).rejects.toThrow(
+        UnauthorizedError
+      );
 
       const { metadata } = audit.mock.calls[0][0];
       expect(metadata).toEqual({
@@ -646,6 +646,41 @@ describe('rotateSession', () => {
       );
       await rotateSession(buildRefreshToken(SID, held), { db, signAccessToken, audit });
       expect(audit).toHaveBeenCalledWith({ type: 'session_recovered', sid: SID, userId: 'user-1' });
+    });
+
+    // A frozen Lambda loses an audit/metric write still in flight, so a recovery must not return before it settles.
+    it('does not resolve a recovery rotation until the session_recovered audit settles', async () => {
+      const { authSessions, db, signAccessToken } = setup();
+      let release: () => void = () => {};
+      const audit = vi.fn().mockReturnValue(
+        new Promise<void>(resolve => {
+          release = resolve;
+        })
+      );
+      const held = generateRefreshSecret();
+      authSessions.findBySid.mockResolvedValue(
+        makeSession({
+          refreshTokenHash: 'orphaned',
+          previousRefreshTokenHash: hashRefreshSecret(held),
+          graceExpiresAt: past(),
+        })
+      );
+      let settled = false;
+      const pending = rotateSession(buildRefreshToken(SID, held), { db, signAccessToken, audit }).then(result => {
+        settled = true;
+        return result;
+      });
+
+      await vi.waitFor(() =>
+        expect(audit).toHaveBeenCalledWith({ type: 'session_recovered', sid: SID, userId: 'user-1' })
+      );
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(settled).toBe(false);
+
+      release();
+      const result = await pending;
+      expect(settled).toBe(true);
+      expect(result.status).toBe('rotated');
     });
 
     it('emits refresh_replay_capped when the coalesce allowance is spent', async () => {

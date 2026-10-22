@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { ImageModels } from '../models';
+import { ImageModels, type ModelInfo } from '../models';
 import type { LLMModelConfig } from '../types/entities/LLMTypes';
 import { VIDEO_MODEL_IDS } from '../video/catalog';
 import {
+  filterRunnableModels,
   isVideoModel,
   isGPTImageModel,
   isGPTImage2Model,
@@ -326,5 +327,28 @@ describe('isVideoModel', () => {
     expect(isVideoModel('gpt-4o')).toBe(false);
     expect(isVideoModel(ImageModels.GPT_IMAGE_1)).toBe(false);
     expect(isVideoModel('sora-2')).toBe(false);
+  });
+});
+
+describe('filterRunnableModels', () => {
+  const info = (id: string, disabled?: boolean) => ({ id, disabled }) as ModelInfo;
+
+  it('drops disabled models and models the user is not allowed, keeping unconfigured ones', () => {
+    const models = [info('open'), info('off', true), info('gated'), info('entitled')];
+    const configs = [
+      makeModel({ id: 'gated', allowedUserTags: ['pro'] }),
+      makeModel({ id: 'entitled', allowedEntitlements: ['medlib:pro'] }),
+    ];
+    expect(filterRunnableModels(models, configs, [], false, []).map(m => m.id)).toEqual(['open']);
+    expect(filterRunnableModels(models, configs, ['pro'], false, ['medlib:pro']).map(m => m.id)).toEqual([
+      'open',
+      'gated',
+      'entitled',
+    ]);
+  });
+
+  it('drops a model whose admin row is switched off, even for an admin', () => {
+    const configs = [makeModel({ id: 'paused', enabled: false })];
+    expect(filterRunnableModels([info('paused')], configs, [], true, [])).toEqual([]);
   });
 });

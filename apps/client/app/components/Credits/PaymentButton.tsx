@@ -17,6 +17,7 @@ import { formatCreditAmount } from '@client/app/utils/formatCredits';
 interface IPaymentButtonProps {
   /** Called with the credits of the purchase as it was when Buy was clicked, not the current props. */
   onPayment: (credits: number) => void;
+  onPaymentPending?: () => void;
   /** Accessible name naming what this buys; the visible label defaults to a bare "Purchase". */
   ariaLabel?: string;
   /** Visible label; presentation only, the checkout is driven by the payload. */
@@ -42,7 +43,14 @@ const purchasedCredits = (purchase: PaymentPayload): number =>
  * Each step is recorded as a CreditPurchaseEvents analytics event keyed by the payment intent id,
  * so a "paid and got nothing" claim can be traced through to the webhook's grant.
  */
-const PaymentButton: FC<IPaymentButtonProps & PaymentPayload> = ({ onPayment, ariaLabel, label, size, ...rest }) => {
+const PaymentButton: FC<IPaymentButtonProps & PaymentPayload> = ({
+  onPayment,
+  onPaymentPending,
+  ariaLabel,
+  label,
+  size,
+  ...rest
+}) => {
   const [purchase, setPurchase] = useState<PaymentPayload | null>(null);
   const wantOpen = purchase !== null;
   const [open, setOpen] = useState(false);
@@ -79,8 +87,14 @@ const PaymentButton: FC<IPaymentButtonProps & PaymentPayload> = ({ onPayment, ar
   }, [logEvent, rest]);
 
   const handlePayment = useCallback(() => {
+    lastOutcomeRef.current = 'succeeded';
     if (purchase) onPayment(purchasedCredits(purchase));
   }, [onPayment, purchase]);
+
+  const handlePaymentPending = useCallback(() => {
+    if (lastOutcomeRef.current !== 'requires_action') lastOutcomeRef.current = 'processing';
+    onPaymentPending?.();
+  }, [onPaymentPending]);
 
   const handleConfirmResult = useCallback(
     (result: ConfirmResult) => {
@@ -195,6 +209,7 @@ const PaymentButton: FC<IPaymentButtonProps & PaymentPayload> = ({ onPayment, ar
           clientSecret={clientSecret}
           productName={productName}
           onPayment={handlePayment}
+          onPaymentPending={handlePaymentPending}
           onConfirmResult={handleConfirmResult}
         />
       )}

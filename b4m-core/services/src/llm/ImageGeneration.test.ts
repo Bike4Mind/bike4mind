@@ -97,7 +97,7 @@ describe('ImageGenerationService.maybeSummarizeAfterImage', () => {
   it('does nothing when invokeSummarizeSession is not configured', async () => {
     const { service, findById } = makeService({ invokeSummarizeSession: undefined });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (service as any).maybeSummarizeAfterImage('session1', silentLogger);
+    await (service as any).maybeSummarizeAfterImage('session1', 'requester-1', silentLogger);
     expect(findById).not.toHaveBeenCalled();
   });
 
@@ -109,8 +109,9 @@ describe('ImageGenerationService.maybeSummarizeAfterImage', () => {
       totalQuests: SUMMARIZATION_CONFIG.earlyMilestoneQuestCount,
     });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (service as any).maybeSummarizeAfterImage('session1', silentLogger);
-    expect(invokeSummarizeSession).toHaveBeenCalledWith('session1', 'earlyMilestone');
+    await (service as any).maybeSummarizeAfterImage('session1', 'requester-1', silentLogger);
+    // The image requester pays, even on a session they only share.
+    expect(invokeSummarizeSession).toHaveBeenCalledWith('session1', 'earlyMilestone', 'requester-1');
   });
 
   it('skips with a debug log when the session lookup misses', async () => {
@@ -119,7 +120,7 @@ describe('ImageGenerationService.maybeSummarizeAfterImage', () => {
     const logger = { ...silentLogger, debug } as unknown as Logger;
     const { service } = makeService({ invokeSummarizeSession, session: null });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (service as any).maybeSummarizeAfterImage('missing-session', logger);
+    await (service as any).maybeSummarizeAfterImage('missing-session', 'requester-1', logger);
     expect(invokeSummarizeSession).not.toHaveBeenCalled();
     expect(debug).toHaveBeenCalledWith(expect.stringContaining('missing-session'));
   });
@@ -132,7 +133,7 @@ describe('ImageGenerationService.maybeSummarizeAfterImage', () => {
       totalQuests: SUMMARIZATION_CONFIG.earlyMilestoneQuestCount - 1,
     });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (service as any).maybeSummarizeAfterImage('session1', silentLogger);
+    await (service as any).maybeSummarizeAfterImage('session1', 'requester-1', silentLogger);
     expect(invokeSummarizeSession).not.toHaveBeenCalled();
   });
 });
@@ -1242,8 +1243,8 @@ describe('ImageGenerationService.process (size normalization)', () => {
     const validateUserCredits = vi
       .spyOn(service as any, 'validateUserCredits')
       .mockResolvedValue({ requiredCredits: 0, usdCost: 0 });
-    // Twice: process() reads the settings map once for the credit gate and once for moderation.
-    vi.mocked(getSettingsMap).mockResolvedValueOnce({ enforceCredits: 'true' }).mockResolvedValueOnce({});
+    // One fresh map per request carries both the credit gate and moderation.
+    vi.mocked(getSettingsMap).mockResolvedValueOnce({ enforceCredits: 'true' });
 
     await service.process({
       body: {
@@ -1263,6 +1264,15 @@ describe('ImageGenerationService.process (size normalization)', () => {
       billed: validateUserCredits.mock.calls[0]?.[3] as { size?: string; inputImageCount?: number } | undefined,
     };
   };
+
+  it('passes skipCache once per image so an admin toggle applies on the next image', async () => {
+    vi.mocked(getSettingsMap).mockClear();
+
+    await generateWith(ImageModels.GPT_IMAGE_2, ModelBackend.OpenAI);
+
+    // One fresh map per request, shared by the credit gate and moderation.
+    expect(vi.mocked(getSettingsMap).mock.calls.map(([, options]) => options)).toEqual([{ skipCache: true }]);
+  });
 
   it('holds credits for one image when a Kontext request asks for several', async () => {
     vi.mocked(getAvailableModels).mockResolvedValue([
@@ -1530,8 +1540,8 @@ describe('ImageGenerationService quest partial writes', () => {
       service as unknown as { validateUserCredits: () => Promise<unknown> },
       'validateUserCredits'
     ).mockResolvedValue(cost);
-    // process() reads the settings map once for the credit gate and once for moderation.
-    vi.mocked(getSettingsMap).mockResolvedValueOnce({ enforceCredits: 'true' }).mockResolvedValueOnce({});
+    // One fresh map per request carries both the credit gate and moderation.
+    vi.mocked(getSettingsMap).mockResolvedValueOnce({ enforceCredits: 'true' });
   };
 
   // Drops any queued enforceCredits value that process() did not consume, so it cannot leak.

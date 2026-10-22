@@ -20,6 +20,7 @@ import {
   generationJobQueue,
 } from './queues';
 import { lambdaVpc } from './vpc';
+import { appUrlForLambdaEnv } from './router';
 import { fabFileBucket, generatedImagesBucket } from './buckets';
 import { websocketApi } from './websocket';
 
@@ -92,6 +93,28 @@ const weeklyUserActivityReport = runsScheduledJobs
       job: userActivityReportFunction.arn,
       event: { reportType: 'weekly' },
       enabled: $app.stage === 'production',
+    })
+  : undefined;
+
+const signupBaselineReport = runsScheduledJobs
+  ? new sst.aws.Cron('signupBaselineReport', {
+      schedule: 'cron(0 6 ? * MON *)',
+      enabled: $app.stage === 'production',
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/signupBaselineReport.handler',
+        runtime: 'nodejs24.x',
+        timeout: '10 minutes',
+        link: [...allSecrets],
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
+          SIGNUP_BASELINE_SINCE: process.env.SIGNUP_BASELINE_SINCE || '',
+          ANALYTICS_TEST_PATTERN: process.env.ANALYTICS_TEST_PATTERN || '',
+        },
+        logging: {
+          retention: '1 week',
+        },
+      },
     })
   : undefined;
 
@@ -318,6 +341,32 @@ const voiceHoldSweepCron = runsScheduledJobs
         ],
         logging: {
           retention: '1 week',
+        },
+      },
+    })
+  : undefined;
+
+// Admin Audit Alerts - posts critical Admin Audit Log entries and credit-grant bursts to the security
+// Slack webhook (AdminSettings SlackSecurityAlertsWebhookUrl; unset = off). The stored cursor only
+// advances past posted entries, so the next minute's run is the retry. APP_URL builds the entry links.
+// Self-host twin: apps/workers/src/selfhost/adminAuditAlerts.ts.
+const adminAuditAlertsCron = runsScheduledJobs
+  ? new sst.aws.Cron('adminAuditAlerts', {
+      schedule: 'rate(1 minute)',
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/adminAuditAlerts.handler',
+        runtime: 'nodejs24.x',
+        timeout: '50 seconds',
+        // The next minute's run is the retry; Lambda's async retries would overlap it.
+        retries: 0,
+        link: [...allSecrets],
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
+          APP_URL: $dev ? 'http://localhost:3000' : appUrlForLambdaEnv(),
+        },
+        logging: {
+          retention: '1 month',
         },
       },
     })
@@ -1143,9 +1192,11 @@ const lakeInconsistencySweepCron = runsScheduledJobs
   : undefined;
 
 export {
+  adminAuditAlertsCron,
   modelDiscoveryCronEnabled,
   dailyUserActivityReport,
   weeklyUserActivityReport,
+  signupBaselineReport,
   secretRotationNotifierCron,
   scheduleTaskCron,
   apiKeyBaselineCalculation,

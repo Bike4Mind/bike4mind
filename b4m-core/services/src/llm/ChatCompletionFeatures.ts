@@ -152,6 +152,7 @@ import {
   computeCosineSimilarity,
   computeVerbatimTokenBudget,
   EmbeddingFactory,
+  type FabFileNotice,
   fetchAndProcessPreviousMessages,
   getProviderFromModel,
   getSettingsByNames,
@@ -177,17 +178,27 @@ import { MCPClient } from '@bike4mind/mcp';
 import uniq from 'lodash/uniq.js';
 import { mergeRetrievalSummary, type RetrievalSummary } from './tools/retrievalSummaryMerge';
 import { isObjectIdShaped } from './tools/base/objectId';
+import { scrubStaleProjectFiles } from '../sessionService/scrubStaleFileReferences';
 
 interface DatabaseAdapters {
-  // `pullKnowledgeIds` backs the stale-attachment detach in scrubMissingKnowledgeIds - a $pull, so
-  // it cannot clobber a file attached concurrently the way rewriting the array through `update` would.
+  // The `pull*` methods back the stale-attachment detach (scrubMissingKnowledgeIds and
+  // scrubStaleSystemFiles) - $pulls, so they cannot clobber a file attached concurrently the way
+  // rewriting the array through `update` would.
   // incrementImageCount is optional: only the image tools use it, via ToolContext (recordGeneratedImages).
   // addAutoAddedTools is optional: a host without it just loses the session-sticky tool set.
-  sessions: Pick<ISessionRepository, 'findById' | 'findAllByIds' | 'update' | 'attachAgent' | 'pullKnowledgeIds'> &
+  sessions: Pick<
+    ISessionRepository,
+    'findById' | 'findAllByIds' | 'update' | 'attachAgent' | 'pullKnowledgeIds' | 'pullKnowledgeIdsFromSession'
+  > &
     Partial<Pick<ISessionRepository, 'incrementImageCount' | 'addAutoAddedTools'>>;
   users: Pick<
     IUserRepository,
-    'findById' | 'update' | 'incrementCredits' | 'recordModerationHit' | 'setModerationStatus'
+    | 'findById'
+    | 'update'
+    | 'incrementCredits'
+    | 'recordModerationHit'
+    | 'setModerationStatus'
+    | 'pullSystemFilesForUsers'
   >;
   quests: IChatHistoryItemRepository;
   questMasterPlans: IQuestMasterPlanRepository;
@@ -451,7 +462,8 @@ export interface IChatCompletionServiceOptions {
    * Used to turn `session.systemPromptId` into the session's authored prompt on every entry point.
    */
   loadSystemPromptById?: (promptId: string) => Promise<string | null>;
-  summarizeSession: (sessionId: string, trigger: PersistedSessionSummaryTrigger) => Promise<void>;
+  /** `payerId` is the turn's user, who pays for the summary even on a session they only share. */
+  summarizeSession: (sessionId: string, trigger: PersistedSessionSummaryTrigger, payerId: string) => Promise<void>;
   contextSummarizeSession: (sessionId: string, verbatimWindowStartQuestId: string) => Promise<void>;
   getMcpClient: (server: IMcpServerDocument) => Promise<{
     serverName: string;
@@ -574,7 +586,7 @@ export type ChatCompletionContext = Pick<
     message: string,
     attachedFileTokenBudget: number,
     modelInfo: ModelInfo
-  ) => Promise<{ promptMessages: IMessage[]; convertedFabFiles: any[] }>;
+  ) => Promise<{ promptMessages: IMessage[]; convertedFabFiles: any[]; fileNotices: FabFileNotice[] }>;
 };
 
 export interface ChatCompletionFeature {
@@ -1402,9 +1414,9 @@ export class QuestMasterFeature implements ChatCompletionFeature {
     try {
       this.logger.log('QuestMaster Request Debug - Initial params:', {
         model,
-        paramsReceived: params,
+        parameterNames: Object.keys(params ?? {}),
         sessionId,
-        message: message.substring(0, 100) + '...',
+        messageLength: message.length,
         historyMessageCount: conversationHistory.length,
       });
 
@@ -1460,7 +1472,7 @@ export class QuestMasterFeature implements ChatCompletionFeature {
         statusAt: new Date(),
       });
 
-      this.logger.info(`🚀 [QuestMaster] Rapid reply sent: "${rapidReplyContent.substring(0, 100)}..."`);
+      this.logger.info(`[QuestMaster] Rapid reply sent (${rapidReplyContent.length} characters)`);
     } catch (error) {
       // Don't throw - rapid reply failures shouldn't break QuestMaster
       this.logger.warn('Failed to send QuestMaster rapid reply:', error);
@@ -1557,6 +1569,21 @@ export class ProjectFeature implements ChatCompletionFeature {
       attachedFileTokenBudget,
       modelInfo
     );
+
+    const scrubbed = await scrubStaleProjectFiles(
+      this.project,
+      projectFabMessages.fileNotices,
+      {
+        db: { fabFiles: this.chatCompletion.db.fabfiles, projects: this.chatCompletion.db.projects },
+        logger: this.logger,
+      },
+      this.chatCompletion.user.id
+    );
+    if (scrubbed.length > 0) {
+      const removed = new Set(scrubbed);
+      this.project.fileIds = this.project.fileIds.filter(id => !removed.has(id));
+      this.project.systemPrompts = this.project.systemPrompts.filter(prompt => !removed.has(prompt.fileId));
+    }
 
     return projectFabMessages.promptMessages;
   }
@@ -1680,7 +1707,7 @@ export class SummarizeNotebookFeature implements ChatCompletionFeature {
 
     if (decision[0]) {
       this.logger.info(`Triggering notebook summarization job for session ${quest.sessionId}`);
-      this.chatCompletion.summarizeSession(quest.sessionId, decision[1]);
+      this.chatCompletion.summarizeSession(quest.sessionId, decision[1], this.chatCompletion.user.id);
     } else {
       this.logger.debug(`Skipping summarization for session ${quest.sessionId} - criteria not met`);
     }

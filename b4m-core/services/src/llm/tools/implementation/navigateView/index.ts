@@ -18,7 +18,9 @@ export const navigateViewTool: ToolDefinition = {
       const params = value as NavigateViewParams;
       const { suggestions } = params;
 
-      context.logger.log('🧭 navigate_view: Received suggestions:', JSON.stringify(suggestions));
+      context.logger.log('navigate_view: Received suggestions', {
+        suggestionCount: Array.isArray(suggestions) ? suggestions.length : 0,
+      });
 
       if (!suggestions || !Array.isArray(suggestions) || suggestions.length === 0) {
         return 'No navigation suggestions provided.';
