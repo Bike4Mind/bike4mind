@@ -448,7 +448,20 @@ b4m mcp serve --http --port 7000     # stateless streamable HTTP at http://127.0
 
 Over stdio only, when the caller is entitled to OptiHashi and the key carries `optihashi:read` and `optihashi:compute`, the server also offers `optihashi_solvers` and `optihashi_solve` (a free, bounded classical solver race). With an API key, the CLI first checks the key's own scopes and offers them only when it holds both. The solve input schema comes from the server at startup, with a 5 second discovery budget; restart the session to pick up changed family ids, solver ids or limits. `optihashi_solvers` fetches the current roster on every call. With no entitlement, scopes or feature, they are simply not listed. No paid compute is exposed, and HTTP mode never offers them.
 
-Auth precedence is `--api-key` > `B4M_API_KEY` > the stored login; the endpoint is `B4M_API_URL` > `--api-url` > the configured backend. Tool _listing_ needs no credentials, apart from the optional stdio-only tools above, which are fetched once at startup; tool _calls_ authenticate. Prefer `B4M_API_KEY` over `--api-key` (a flag value shows up in process listings). HTTP mode binds loopback only (`127.0.0.1`, `/mcp` path) and has no per-request auth, so do not expose it off-host. The advertised scopes are the recommended key configuration, not per-route hard gates, apart from Bob's, which its routes enforce. See [Serve Bike4Mind as an MCP server](../../BIKE4MIND_CLI.md#serve-bike4mind-as-an-mcp-server-b4m-mcp-serve) for the Claude Desktop config and details.
+Auth precedence is `--api-key` > `B4M_API_KEY` > the stored login; the endpoint is `B4M_API_URL` > `--api-url` > the configured backend. Tool _listing_ needs no credentials, apart from the optional stdio-only tools above, which are fetched once at startup; tool _calls_ authenticate. Prefer `B4M_API_KEY` over `--api-key` (a flag value shows up in process listings). HTTP mode binds loopback only (`127.0.0.1`, `/mcp` path) and requires an `Authorization: Bearer <token>` header on every request. The token is `--token`, else `B4M_MCP_TOKEN`, else a random one generated at startup and printed to stderr (a token you set yourself is printed masked). Prefer `B4M_MCP_TOKEN` over `--token`, which shows up in process listings. Point an HTTP client at it like this:
+
+```json
+{
+  "mcpServers": {
+    "bike4mind": {
+      "type": "http",
+      "url": "http://127.0.0.1:7000/mcp",
+      "headers": { "Authorization": "Bearer <token>" }
+    }
+  }
+}
+```
+ The advertised scopes are the recommended key configuration, not per-route hard gates, apart from Bob's, which its routes enforce. See [Serve Bike4Mind as an MCP server](../../BIKE4MIND_CLI.md#serve-bike4mind-as-an-mcp-server-b4m-mcp-serve) for the Claude Desktop config and details.
 
 ## Plugins
 
