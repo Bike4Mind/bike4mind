@@ -17,6 +17,7 @@ import {
   getAllBreakerStates,
   resetBreaker,
 } from '@bike4mind/server-utils/services/mcpCircuitBreakers';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 const ensureAdmin = (isAdmin?: boolean | null) => {
   if (!isAdmin) {
@@ -90,6 +91,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
       const result = await runProbe(integration as IntegrationName);
 
+      await recordAdminActionFromRequest(req, {
+        action: 'system_health.integration_probe_run',
+        target: { kind: 'system', id: 'integration-health', displayName: 'Integration health' },
+        summary: `probed integration ${result.integration}`,
+        details: { integration: result.integration, status: result.status },
+      });
+
       return res.json({
         status: result.status,
         integration: result.integration,
@@ -102,6 +110,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
     // Probe all integrations
     const results = await runAllProbes(logger);
+
+    await recordAdminActionFromRequest(req, {
+      action: 'system_health.integration_probe_run',
+      target: { kind: 'system', id: 'integration-health', displayName: 'Integration health' },
+      summary: `probed all ${results.length} integrations`,
+      details: { integrations: results.map(r => ({ integration: r.integration, status: r.status })) },
+    });
 
     return res.json({
       results: results.map(r => ({
@@ -143,6 +158,17 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       resetBreaker(integration as string);
       await flushBreakerMetrics();
     }
+
+    await recordAdminActionFromRequest(req, {
+      action: 'system_health.integration_override_set',
+      target: {
+        kind: 'settings',
+        id: override.integration,
+        displayName: `Circuit breaker override for ${override.integration}`,
+      },
+      summary: `set circuit breaker mode for ${override.integration} to ${override.mode}`,
+      details: { integration: override.integration, mode: override.mode, overrideReason: override.reason },
+    });
 
     return res.json({
       integration: override.integration,

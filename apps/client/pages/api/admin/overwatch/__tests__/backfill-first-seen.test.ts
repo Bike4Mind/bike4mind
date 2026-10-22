@@ -26,6 +26,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 
+const mockAudit = vi.hoisted(() => vi.fn().mockResolvedValue(null));
+vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: mockAudit }));
+
 // User.find(...).sort().skip().limit().lean() - chainable query that resolves to the staged docs.
 let usersBatch: Array<{ _id: { toString: () => string }; createdAt: unknown }> = [];
 const mockLean = vi.fn(() => Promise.resolve(usersBatch));
@@ -68,6 +71,7 @@ function doc(id: string, createdAt: unknown) {
 describe('/api/admin/overwatch/backfill-first-seen', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockAudit.mockResolvedValue(null);
     usersBatch = [];
     mockBulkWrite.mockResolvedValue({ upsertedCount: 0, modifiedCount: 0 });
     (Config as Record<string, string>).OVERWATCH_PSEUDONYM_SALT = 'test-salt';
@@ -111,6 +115,22 @@ describe('/api/admin/overwatch/backfill-first-seen', () => {
     expect(ops[0].updateOne.filter).toEqual({ productId: 'bike4mind', userId: 'pseudo:a' });
     expect(ops[0].updateOne.update.$min).toEqual({ firstSeenDate: '2026-01-15' });
     expect(ops[0].updateOne.upsert).toBe(true);
+
+    expect(mockAudit).toHaveBeenCalledTimes(1);
+    expect(mockAudit.mock.calls[0][0]).toBe(req);
+    expect(mockAudit.mock.calls[0][1]).toMatchObject({
+      action: 'ops.overwatch.first_seen_backfilled',
+      target: { kind: 'system', id: 'overwatch-first-seen-backfill' },
+      details: { skip: 0, processed: 2, upserted: 2 },
+    });
+    expect(mockBulkWrite.mock.invocationCallOrder[0]).toBeLessThan(mockAudit.mock.invocationCallOrder[0]);
+  });
+
+  it('does not audit an empty batch', async () => {
+    usersBatch = [];
+    const { req, res } = makeReq({ skip: 0 });
+    await (handler as any)._post(req, res);
+    expect(mockAudit).not.toHaveBeenCalled();
   });
 
   it('skips docs with a missing/unparseable createdAt instead of throwing', async () => {
