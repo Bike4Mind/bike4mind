@@ -39,6 +39,7 @@ export * from './publicFile';
 export * from './artifactPublic';
 export * from './transcriptionPublic';
 export * from './embeddingsApi';
+export * from './textRefinement';
 export * from './toolSideEffects';
 export * from './bfl';
 export * from './embedding';

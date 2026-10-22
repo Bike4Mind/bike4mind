@@ -91,6 +91,14 @@ describe('apiKeyScopes catalog', () => {
     expect(ApiKeyScope.OVERWATCH_READ.endsWith(':read')).toBe(true);
   });
 
+  it('lists the v1 text-refinement endpoint under ai:generate, not the legacy route', () => {
+    // `endpoints` renders verbatim in the profile API-keys tab, so this is the user-facing
+    // pointer to the published route. The legacy route was dropped from the list deliberately.
+    const ai = USER_API_KEY_SCOPES.find(s => s.value === ApiKeyScope.AI_GENERATE)!;
+    expect(ai.endpoints).toContain('POST /api/v1/text-refinements');
+    expect(ai.endpoints).not.toContain('POST /api/ai/refineText');
+  });
+
   it('pins the Bob scope strings the Bob routes and the CLI tools are built against', () => {
     // Keys store the string, not the member name, and both consumers match on it.
     expect(ApiKeyScope.BOB_READ).toBe('bob:read');
