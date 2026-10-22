@@ -57,7 +57,7 @@ vi.mock('@server/generationJobs/wiring', () => ({
   getVideoJobDeps: () => ({ deps: 'availability' }),
   getCreateVideoJobDeps: () => ({ deps: 'create' }),
 }));
-vi.mock('@server/videoGenerations/buildVideoToolConfig', () => ({
+vi.mock('@bike4mind/server-utils/videoGenerations/buildVideoToolConfig', () => ({
   buildVideoToolConfig: (...args: unknown[]) => mockBuildVideoToolConfig(...args),
 }));
 
