@@ -12,6 +12,7 @@ import { PermissionRuleSet, compileRule, parseRule, type CompiledRule } from './
 import type { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
 import { toolsForRequest } from './tools/registry';
+import { bashExecute } from './tools/shellTools';
 
 function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
@@ -101,6 +102,7 @@ describe('ChatService permission rules', () => {
   afterEach(() => {
     service.dispose();
     for (const stream of streams) stream.end();
+    vi.restoreAllMocks();
   });
 
   async function run(mode: ChatApprovalMode, name: string, input: Record<string, unknown>): Promise<string> {
@@ -261,6 +263,8 @@ describe('ChatService permission rules', () => {
 
   it('shows a failed every-session save instead of silently claiming persistence', async () => {
     rememberAllows.mockRejectedValueOnce(new Error('disk full'));
+    // The notice lands on the settled call, which must not wait on the host's own git.
+    vi.spyOn(bashExecute, 'run').mockResolvedValue('git status completed');
     await run('ask', 'bash_execute', { command: 'git status', cwd: root });
     const asked = await awaitCall('bash_execute', 'awaiting-approval');
     approvals.resolve(asked.approvalId!, { decision: 'always', everywhere: true });
