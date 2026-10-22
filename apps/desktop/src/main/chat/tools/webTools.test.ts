@@ -327,10 +327,13 @@ describe('web_fetch', () => {
     expect(() => parseFetchUrl('https://user:pw@example.com/')).toThrow(/credentials/);
   });
 
-  it('asks per origin, and refuses a bad URL without asking', async () => {
+  it('asks under one key for every site, and refuses a bad URL without asking', async () => {
     expect(webFetch.needsApproval?.({ url: 'https://example.com/a' }, context({}))).toBe(true);
     const prompt = await webFetch.approval!({ url: 'https://example.com/a?q=1' }, context({}));
-    expect(prompt.key).toBe('web-fetch:https://example.com');
+    const other = await webFetch.approval!({ url: 'https://example.org/pricing' }, context({}));
+    expect(prompt.key).toBe('web-fetch');
+    expect(other.key).toBe(prompt.key);
+    expect(prompt.alwaysCovers).toBe('every site');
     expect(() => webFetch.approval!({ url: 'file:///etc/passwd' }, context({}))).toThrow();
   });
 

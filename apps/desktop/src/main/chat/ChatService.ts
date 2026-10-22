@@ -11,6 +11,7 @@ import type {
   ChatDiff,
   ChatMedia,
   ChatMessage,
+  ChatApprovalAnswer,
   ChatMessageSkill,
   ChatModelCatalog,
   ChatModelOption,
@@ -139,7 +140,7 @@ import { webContextFor } from './tools/webTools';
 import { DoomLoopTracker } from './tools/doomLoop';
 import { WEB_SEARCH_TURN_BUDGET, WebSearchLimiter } from './tools/webSearchLimits';
 import { INTERRUPTED_MESSAGE, STOPPED_BEFORE_CHANGE, untilStopped } from './tools/interruptible';
-import { spendsCredits, readsUntrusted, sendsOut } from './tools/riskAssessment';
+import { alwaysOverridesTaint, spendsCredits, readsUntrusted, sendsOut } from './tools/riskAssessment';
 import { MCP_TOOL_PREFIX } from './mcp/names';
 import type { PermissionScopeKey, PermissionService } from './permissions/PermissionService';
 import { describeRule, everySessionRules, permissionSubject } from './permissions/subject';
@@ -351,7 +352,7 @@ export interface ChatServiceDeps {
   approvals?: ApprovalGate;
   /**
    * Standing allow, ask and deny rules - the desktop's and Claude Code's. Read here, and written
-   * only by the approval card's "Always, in every session"; no tool can reach it.
+   * only by the approval card's "Always allow"; no tool can reach it.
    */
   permissions?: Pick<PermissionService, 'rulesFor' | 'rememberAllows' | 'invalidate'> &
     Partial<Pick<PermissionService, 'dispose'>>;
@@ -3967,13 +3968,23 @@ export class ChatService {
     // An irreversible tool is asked every time, whatever was answered before: the standing set
     // is keyed on what a call WOULD do, and for something with no undo that is not a good
     // enough reason to skip asking. The gate refuses to record one for these either.
-    if (!prompt.irreversible && !stuck && !tainted && !askedByRule) {
+    const standingAnswer = (): ChatApprovalAnswer | null => {
+      if (prompt.irreversible || stuck || askedByRule) return null;
       const standing = gate.isStanding(
         sessionId,
         prompt.key,
         runnable.map(option => option.id)
       );
-      if (standing) return { input: applyOption(call.input, findOption(prompt, standing.optionId), standing.value) };
+      // Over a tainted reply only an answer given knowing about the taint, or one for a tool
+      // whose "always" already accepted whatever the content could steer it to, still stands.
+      if (standing && (!tainted || standing.overTaint || alwaysOverridesTaint(call.name))) {
+        return {
+          decision: 'once',
+          ...(standing.optionId ? { optionId: standing.optionId } : {}),
+          ...(standing.value === undefined ? {} : { value: standing.value }),
+        };
+      }
+      if (tainted) return null;
 
       // A shell command whose every sub-command was allowed before, by prefix, runs - but not
       // past a directory outside the project that the user has not allowed too.
@@ -3984,9 +3995,12 @@ export class ChatService {
         gate.coversCommands(sessionId, always) &&
         gate.uncoveredDirectories(sessionId, always.directories).length === 0
       ) {
-        return { input: call.input };
+        return { decision: 'once' };
       }
-    }
+      return null;
+    };
+    const standing = standingAnswer();
+    if (standing) return { input: applyOption(call.input, findOption(prompt, standing.optionId), standing.value) };
 
     // Consulted AFTER tool.approval() ran, so a call that is refused outright - a path outside
     // every granted root - is still refused rather than waved through by a loose mode. A mode
@@ -3997,7 +4011,11 @@ export class ChatService {
     }
 
     const choice = prompt.choice ? { options: prompt.choice.options.map(toWireOption) } : undefined;
-    const alwaysScope = prompt.always ? describeAlways(prompt.always, context.workingDirectory) : undefined;
+    const alwaysScope = prompt.always
+      ? describeAlways(prompt.always, context.workingDirectory)
+      : prompt.alwaysCovers
+        ? { shown: prompt.alwaysCovers, full: prompt.alwaysCovers }
+        : undefined;
     // An ask rule outranks any allow, so a rule saved from its card would never apply.
     const everywhere = this.deps.permissions && !askedByRule ? everySessionRules(subject, prompt) : [];
     const answer = await gate.request(
@@ -4030,6 +4048,17 @@ export class ChatService {
       },
       {
         remember: !prompt.irreversible,
+        tainted: !!tainted,
+        // Another card's "always", or a rule saved from it, may cover this one while it waits.
+        recheck: async () => {
+          if (prompt.irreversible || stuck || askedByRule) return null;
+          const fresh = await this.deps.permissions?.rulesFor(permissionScope);
+          const decision = fresh?.size ? fresh.evaluate(subject).decision : null;
+          if (decision === 'deny') return { decision: 'deny' };
+          if (decision === 'ask') return null;
+          if (decision === 'allow') return { decision: 'once', ...(runnable[0] ? { optionId: runnable[0].id } : {}) };
+          return standingAnswer();
+        },
         ...(prompt.always ? { always: prompt.always } : {}),
         // Only the options that RUN the call may become standing. The card offers no "always"
         // beside a redirect, and this is the second lock on that door: a redirect is an
@@ -4040,13 +4069,20 @@ export class ChatService {
 
     // The rules saved are the ones main derived and showed; the renderer only says yes to them.
     if (answer.decision === 'always' && answer.everywhere && everywhere.length > 0) {
-      await this.deps.permissions?.rememberAllows(everywhere).catch(error => {
-        this.deps.logger.warn(`PERMISSIONS: could not save ${everywhere.join(', ')}: ${String(error)}`);
-        context.report?.notice({
-          kind: 'permissions-save-failed',
-          text: `The rule could not be saved for every session: ${String(error)}. This conversation's approval still applies. Retry in Settings > Permissions.`,
-        });
-      });
+      const saved = await this.deps.permissions?.rememberAllows(everywhere).then(
+        () => true,
+        error => {
+          this.deps.logger.warn(`PERMISSIONS: could not save ${everywhere.join(', ')}: ${String(error)}`);
+          context.report?.notice({
+            kind: 'permissions-save-failed',
+            text: `The rule could not be saved for every session: ${String(error)}. This conversation's approval still applies. Retry in Settings > Permissions.`,
+          });
+          return false;
+        }
+      );
+      await gate.settleCovered(saved ? undefined : sessionId);
+    } else if (answer.decision === 'always') {
+      await gate.settleCovered(sessionId);
     }
 
     const picked = findOption(prompt, answer.optionId);
