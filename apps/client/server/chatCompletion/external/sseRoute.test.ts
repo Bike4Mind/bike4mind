@@ -426,7 +426,6 @@ describe('POST /api/ai/v1/completions - stream', () => {
     '{"error":{"code":404,"message":"models/gemini-2.5-flash is no longer available to new users","status":"NOT_FOUND"}}';
 
   it.each([
-    [404, 'provider_error', 'Model provider returned an error (upstream 404)'],
     [401, 'provider_rejected', 'Model provider rejected our credentials'],
     [403, 'provider_rejected', 'Model provider denied access to this model'],
     [undefined, 'provider_error', 'Model provider returned an error'],
@@ -448,6 +447,26 @@ describe('POST /api/ai/v1/completions - stream', () => {
           error: expect.objectContaining({ message: RAW_UPSTREAM }),
         })
       );
+    }
+  );
+
+  it.each([400, 404, 413, 422])(
+    'classifies an upstream %s after the stream opened as a sanitized, non-retryable caller error',
+    async status => {
+      const upstream = Object.assign(new Error(RAW_UPSTREAM), { status });
+      mockExecuteCompletion.mockImplementationOnce(failAfterReady(upstream));
+
+      const text = await (await post()).text();
+      expect(errorFrame(text)).toMatchObject({
+        code: 'invalid_request',
+        message: 'The model provider rejected the request',
+      });
+      expect(text).not.toContain('no longer available');
+      expect(mockLoggerWarn).toHaveBeenCalledWith(
+        '[CLI_LLM] Handler error',
+        expect.objectContaining({ upstreamStatus: status })
+      );
+      expect(mockLoggerError).not.toHaveBeenCalled();
     }
   );
 
@@ -555,6 +574,38 @@ describe('POST /api/ai/v1/completions - pre-stream failures are JSON with a real
     const body = await expectJsonError(await post(), 400);
     expect(body.error).toBe("Unknown model 'gpt-9000'. List the models you can call with GET /api/v1/models.");
     expect(body.errorCode).toBe('unknown_model');
+  });
+
+  it.each([400, 404, 413, 422])(
+    'answers an upstream %s with sanitized 400 invalid_request JSON and warns',
+    async status => {
+      const raw = 'upstream rejected secret-model-name with private request details';
+      mockExecuteCompletion.mockRejectedValueOnce(Object.assign(new Error(raw), { status }));
+
+      const body = await expectJsonError(await post(), 400);
+      expect(body).toMatchObject({
+        error: 'The model provider rejected the request',
+        errorCode: 'invalid_request',
+      });
+      expect(JSON.stringify(body)).not.toContain('secret-model-name');
+      expect(mockLoggerWarn).toHaveBeenCalledWith(
+        '[CLI_LLM] Handler error',
+        expect.objectContaining({ upstreamStatus: status, error: expect.objectContaining({ message: raw }) })
+      );
+      expect(mockLoggerError).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([429, 500, 503])('keeps an upstream %s as a 500 and logs it at error', async status => {
+    mockExecuteCompletion.mockRejectedValueOnce(Object.assign(new Error('provider failed'), { status }));
+
+    const body = await expectJsonError(await post(), 500);
+    expect(body.error).toBe('Internal error');
+    expect(mockLoggerError).toHaveBeenCalledWith(
+      '[CLI_LLM] Handler error',
+      expect.objectContaining({ upstreamStatus: status })
+    );
+    expect(mockLoggerWarn).not.toHaveBeenCalledWith('[CLI_LLM] Handler error', expect.anything());
   });
 
   it('answers a refused tool search request with 400 and its errorCode', async () => {
@@ -792,16 +843,19 @@ describe('POST /api/ai/v1/completions - failures after the stream opened', () =>
     [
       'bedrock 400 without $metadata',
       { name: 'ValidationException', $fault: 'client' },
-      'Model provider returned an error (upstream 400)',
+      'The model provider rejected the request',
     ],
-  ])('sanitizes an %s into a provider_error frame without the raw message', async (_name, shape, message) => {
+  ])('sanitizes an %s into an error frame without the raw message', async (name, shape, message) => {
     const upstream = Object.assign(new Error(RAW), shape, { isAxiosError: 'response' in shape });
     mockExecuteCompletion.mockImplementationOnce(failAfterReady(upstream));
 
     const res = await post();
     expect(res.status).toBe(200);
     const text = await res.text();
-    expect(errorFrame(text)).toMatchObject({ code: 'provider_error', message });
+    expect(errorFrame(text)).toMatchObject({
+      code: name === 'bedrock 400 without $metadata' ? 'invalid_request' : 'provider_error',
+      message,
+    });
     expect(text).not.toContain('secret-model-name');
   });
 

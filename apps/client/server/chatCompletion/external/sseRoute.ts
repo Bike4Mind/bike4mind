@@ -2,6 +2,7 @@ import { createCompletionCreditHolds } from '@server/billing/completionCreditHol
 import express, { type Request, type Response, type Express, type NextFunction } from 'express';
 import {
   CompletionRequestSchema,
+  BadRequestError,
   HTTPError,
   LEGACY_REQUEST_ID_HEADER,
   REQUEST_ID_HEADER,
@@ -75,6 +76,15 @@ const checkCompletionsMethod = createMethodGuard([createCompletionContract.metho
 // Periodic SSE comment so an intermediary (CloudFront / socket layer) doesn't close the
 // connection during a token-less gap (e.g. extended thinking). Matches the v1 cadence.
 const HEARTBEAT_INTERVAL_MS = 10_000;
+const UPSTREAM_CALLER_ERROR_STATUSES = new Set([400, 404, 413, 422]);
+
+function isUpstreamCallerError(error: unknown): error is Error {
+  return (
+    error instanceof Error &&
+    !(error instanceof HTTPError) &&
+    UPSTREAM_CALLER_ERROR_STATUSES.has(getHttpStatus(error) ?? 0)
+  );
+}
 
 function requestIdFrom(headers: Record<string, string | undefined>): string {
   return resolveRequestId(headers[REQUEST_ID_HEADER.toLowerCase()], headers[LEGACY_REQUEST_ID_HEADER.toLowerCase()]);
@@ -91,6 +101,12 @@ function toJsonError(
     return httpErrorToResponse(new UnprocessableEntityError(message, { errorCode: questCode }), requestId);
   }
   if (error instanceof HTTPError) return httpErrorToResponse(error, requestId);
+  if (isUpstreamCallerError(error)) {
+    return httpErrorToResponse(
+      new BadRequestError('The model provider rejected the request', { errorCode: 'invalid_request' }),
+      requestId
+    );
+  }
   return { status: 500, headers: {}, body: buildErrorBody({ error: 'Internal error', requestId }) };
 }
 
@@ -105,6 +121,9 @@ function toStreamErrorFrame(error: unknown, requestId: string): SSEErrorEvent {
     if (error instanceof Error && isSafetyRefusalError(error)) {
       frameError = new Error('The model declined this request');
       code = 'content_blocked';
+    } else if (isUpstreamCallerError(error)) {
+      frameError = new Error('The model provider rejected the request');
+      code = 'invalid_request';
     } else if (status === 401 || status === 403) {
       frameError = new Error(
         status === 401 ? 'Model provider rejected our credentials' : 'Model provider denied access to this model'
