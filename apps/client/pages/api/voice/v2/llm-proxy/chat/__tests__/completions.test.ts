@@ -49,6 +49,16 @@ vi.mock('@server/voice/voiceSessionToken', () => ({
 
 vi.mock('@server/premium-generated/premiumLlmTools.generated', () => ({ premiumLlmTools: {} }));
 
+// The wiring module reads infra Resources at load; the resolver is the unit under test, not the job engine.
+const mockBuildVideoToolConfig = vi.fn();
+vi.mock('@server/generationJobs/wiring', () => ({
+  getVideoJobDeps: () => ({ deps: 'availability' }),
+  getCreateVideoJobDeps: () => ({ deps: 'create' }),
+}));
+vi.mock('@server/videoGenerations/buildVideoToolConfig', () => ({
+  buildVideoToolConfig: (...args: unknown[]) => mockBuildVideoToolConfig(...args),
+}));
+
 vi.mock('@server/utils/chatCompletionDefaults', () => ({
   getDefaultChatCompletionOptions: () => ({}),
   getSharedTokenizer: () => ({}),
@@ -213,6 +223,60 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - turn auth', () => {
     expect((mockInvoke.mock.calls[0][0] as InvokeArg).apiKeyId).toBeUndefined();
     expect((mockProcess.mock.calls[0][0] as ProcessArg).body.authOrigin).toBe('session');
     expect((mockProcess.mock.calls[0][0] as ProcessArg).body.apiKeyId).toBeUndefined();
+  });
+});
+
+describe('POST /api/voice/v2/llm-proxy/chat/completions - video generation', () => {
+  beforeEach(primeSuccessfulTurn);
+
+  type VideoBody = { body: { tools?: string[] } };
+  type VideoProcessArg = VideoBody & { videoToolConfigResolver?: () => Promise<unknown> };
+
+  it('offers video_generation on both bodies and hands process() a resolver carrying the on-screen delivery note', async () => {
+    const config = { usableModels: ['test-video'], createJob: vi.fn() };
+    mockBuildVideoToolConfig.mockResolvedValue(config);
+
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect((mockInvoke.mock.calls[0][0] as VideoBody).body.tools).toContain('video_generation');
+    const processArg = mockProcess.mock.calls[0][0] as VideoProcessArg;
+    expect(processArg.body.tools).toContain('video_generation');
+    expect(await processArg.videoToolConfigResolver?.()).toEqual({
+      ...config,
+      deliveryNote: expect.stringContaining('appears on screen in this session chat'),
+    });
+    expect(mockBuildVideoToolConfig).toHaveBeenCalledWith('user-1', {
+      availability: { deps: 'availability' },
+      createDeps: { deps: 'create' },
+    });
+  });
+
+  it('does not offer the tool, or a resolver, to a call minted by an API key', async () => {
+    mockVerifyVoiceSessionToken.mockReturnValue({
+      userId: 'user-1',
+      sessionId: 'session-1',
+      organizationId: '',
+      reasoningModelId: 'test-model',
+      authOrigin: 'apiKey',
+      apiKeyId: 'key-1',
+      voiceHoldStartedAt: recentHold(),
+    });
+
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect((mockInvoke.mock.calls[0][0] as VideoBody).body.tools).not.toContain('video_generation');
+    const processArg = mockProcess.mock.calls[0][0] as VideoProcessArg;
+    expect(processArg.body.tools).not.toContain('video_generation');
+    expect(processArg.videoToolConfigResolver).toBeUndefined();
+    expect(mockBuildVideoToolConfig).not.toHaveBeenCalled();
+  });
+
+  it('keeps the inline built-ins alongside the video tool', async () => {
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect((mockProcess.mock.calls[0][0] as VideoBody).body.tools).toEqual(
+      expect.arrayContaining(['web_search', 'search_knowledge_base', 'video_generation'])
+    );
   });
 });
 
