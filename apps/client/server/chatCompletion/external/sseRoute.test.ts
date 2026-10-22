@@ -153,6 +153,11 @@ afterEach(() => {
 
 const COMPLETIONS_URL = () => `${baseUrl}/api/ai/v1/completions`;
 const COMPLETION = { model: 'test-model', messages: [{ role: 'user', content: 'hi' }] };
+const UPSTREAM_CALLER_ERRORS = [400, 404, 413, 422].flatMap(status => [
+  { name: `SDK ${status}`, status, properties: { status } },
+  { name: `Axios ${status}`, status, properties: { isAxiosError: true, response: { status } } },
+  { name: `AWS ${status}`, status, properties: { $metadata: { httpStatusCode: status } } },
+]);
 
 function post(body: unknown = COMPLETION) {
   return fetch(COMPLETIONS_URL(), {
@@ -447,13 +452,14 @@ describe('POST /api/ai/v1/completions - stream', () => {
           error: expect.objectContaining({ message: RAW_UPSTREAM }),
         })
       );
+      expect(mockEmitProcessingFailed).toHaveBeenCalledWith('cli-sse', upstream);
     }
   );
 
-  it.each([400, 404, 413, 422])(
-    'classifies an upstream %s after the stream opened as a sanitized, non-retryable caller error',
-    async status => {
-      const upstream = Object.assign(new Error(RAW_UPSTREAM), { status });
+  it.each(UPSTREAM_CALLER_ERRORS)(
+    'classifies an upstream $name after the stream opened as a sanitized, non-retryable caller error',
+    async ({ status, properties }) => {
+      const upstream = Object.assign(new Error(RAW_UPSTREAM), properties);
       mockExecuteCompletion.mockImplementationOnce(failAfterReady(upstream));
 
       const text = await (await post()).text();
@@ -467,6 +473,7 @@ describe('POST /api/ai/v1/completions - stream', () => {
         expect.objectContaining({ upstreamStatus: status })
       );
       expect(mockLoggerError).not.toHaveBeenCalled();
+      expect(mockEmitProcessingFailed).not.toHaveBeenCalled();
     }
   );
 
@@ -576,11 +583,11 @@ describe('POST /api/ai/v1/completions - pre-stream failures are JSON with a real
     expect(body.errorCode).toBe('unknown_model');
   });
 
-  it.each([400, 404, 413, 422])(
-    'answers an upstream %s with sanitized 400 invalid_request JSON and warns',
-    async status => {
+  it.each(UPSTREAM_CALLER_ERRORS)(
+    'answers an upstream $name with sanitized 400 invalid_request JSON and warns',
+    async ({ status, properties }) => {
       const raw = 'upstream rejected secret-model-name with private request details';
-      mockExecuteCompletion.mockRejectedValueOnce(Object.assign(new Error(raw), { status }));
+      mockExecuteCompletion.mockRejectedValueOnce(Object.assign(new Error(raw), properties));
 
       const body = await expectJsonError(await post(), 400);
       expect(body).toMatchObject({
@@ -593,6 +600,7 @@ describe('POST /api/ai/v1/completions - pre-stream failures are JSON with a real
         expect.objectContaining({ upstreamStatus: status, error: expect.objectContaining({ message: raw }) })
       );
       expect(mockLoggerError).not.toHaveBeenCalled();
+      expect(mockEmitProcessingFailed).not.toHaveBeenCalled();
     }
   );
 
@@ -606,6 +614,7 @@ describe('POST /api/ai/v1/completions - pre-stream failures are JSON with a real
       expect.objectContaining({ upstreamStatus: status })
     );
     expect(mockLoggerWarn).not.toHaveBeenCalledWith('[CLI_LLM] Handler error', expect.anything());
+    expect(mockEmitProcessingFailed).toHaveBeenCalledWith('cli-sse', expect.objectContaining({ status }));
   });
 
   it('answers a refused tool search request with 400 and its errorCode', async () => {

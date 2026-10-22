@@ -360,7 +360,8 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       const level = jsonError.status < 500 ? 'warn' : 'error';
       const upstreamStatus = error instanceof Error ? getHttpStatus(error) : undefined;
       logger[level]('[CLI_LLM] Handler error', { requestId, upstreamStatus, error: serializeError(error) });
-      track(emitProcessingFailed('cli-sse', error));
+      // Provider caller errors are not operator failures, including SDK errors that are not HTTPErrors.
+      if (!isUpstreamCallerError(error)) track(emitProcessingFailed('cli-sse', error));
 
       try {
         if (res.headersSent) {
