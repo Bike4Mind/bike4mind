@@ -257,6 +257,51 @@ describe('ChatService approval record', () => {
     expect(done.approval?.decidedBy).toEqual({ kind: 'user', answer: 'always' });
   });
 
+  it('records a card closed by deleting the conversation as that, not as a refusal', async () => {
+    const sessionId = await run('ask', 'touch made.txt');
+    await awaitCall('c1', 'awaiting-approval');
+    await service.deleteSession(sessionId);
+    const denied = await awaitCall('c1', 'denied');
+    expect(denied.approval).toMatchObject({
+      outcome: 'denied',
+      decidedBy: { kind: 'system', reason: 'conversation-deleted' },
+      asked: true,
+    });
+    expect(denied.error).toBe('Not run: the conversation was deleted before this was approved.');
+    expect(denied.error).not.toContain('declined');
+  });
+
+  it('records a card closed by the app quitting as that, not as a refusal', async () => {
+    await run('ask', 'touch made.txt');
+    await awaitCall('c1', 'awaiting-approval');
+    service.dispose();
+    const denied = await awaitCall('c1', 'denied');
+    expect(denied.approval).toMatchObject({
+      outcome: 'denied',
+      decidedBy: { kind: 'system', reason: 'app-quit' },
+      asked: true,
+    });
+    expect(denied.error).toBe('Not run: the app quit before this was approved.');
+    expect(denied.error).not.toContain('declined');
+  });
+
+  it('records "every session" once the rule was saved', async () => {
+    await run('ask', 'touch made.txt');
+    const asked = await awaitCall('c1', 'awaiting-approval');
+    approvals.resolve(asked.approvalId!, { decision: 'always', everywhere: true });
+    const done = await awaitCall('c1', 'done');
+    expect(rememberAllows).toHaveBeenCalled();
+    expect(done.approval?.decidedBy).toEqual({ kind: 'user', answer: 'always', everywhere: true });
+  });
+
+  it('saves no rule when a stop closes the card', async () => {
+    const sessionId = await run('ask', 'touch made.txt');
+    await awaitCall('c1', 'awaiting-approval');
+    service.stop(sessionId);
+    await awaitCall('c1', 'denied');
+    expect(rememberAllows).not.toHaveBeenCalled();
+  });
+
   it('keeps the record on the stored transcript', async () => {
     const sessionId = await run('full', 'touch made.txt');
     await awaitCall('c1', 'done');

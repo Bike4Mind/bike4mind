@@ -145,7 +145,7 @@ import type { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistr
 import type { ForegroundCommandRegistry } from './tools/ForegroundCommandRegistry';
 import { findTool, isOfferedEditTool, toolsForRequest, usesApplyPatch } from './tools/registry';
 import { webContextFor } from './tools/webTools';
-import { DoomLoopTracker } from './tools/doomLoop';
+import { DoomLoopTracker, THRESHOLD as LOOP_THRESHOLD } from './tools/doomLoop';
 import { WEB_SEARCH_TURN_BUDGET, WebSearchLimiter } from './tools/webSearchLimits';
 import { INTERRUPTED_MESSAGE, STOPPED_BEFORE_CHANGE, untilStopped } from './tools/interruptible';
 import { alwaysOverridesTaint, spendsCredits, readsUntrusted, sendsOut } from './tools/riskAssessment';
@@ -5438,7 +5438,7 @@ interface ApprovalOutcome {
   mode?: ChatApprovalMode;
 }
 
-const LOOP_ASK_REASON = 'Asked because the same call was repeated three times in a row.';
+const LOOP_ASK_REASON = `Asked because the same call was repeated ${LOOP_THRESHOLD} times in a row.`;
 
 function approvalRecord(
   outcome: ChatToolApproval['outcome'],
