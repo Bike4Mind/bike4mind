@@ -3123,10 +3123,10 @@ function CliApp() {
           if (projectConfig) {
             console.log('Team Config (.bike4mind/config.json):');
             if (projectConfig.defaultModel) {
-              console.log(`  Default Model: ${projectConfig.defaultModel}`);
+              console.log(`  Default Model: ${sanitizeTerminalText(projectConfig.defaultModel)}`);
             }
             if (projectConfig.tools?.denied && projectConfig.tools.denied.length > 0) {
-              console.log(`  Denied Tools: ${projectConfig.tools.denied.join(', ')}`);
+              console.log(`  Denied Tools: ${sanitizeTerminalText(projectConfig.tools.denied.join(', '))}`);
             }
             if (projectConfig.mcpServers && projectConfig.mcpServers.length > 0) {
               console.log(
@@ -3139,7 +3139,7 @@ function CliApp() {
           if (localConfig) {
             console.log('Local Config (.bike4mind/local.json):');
             if (localConfig.trustedTools && localConfig.trustedTools.length > 0) {
-              console.log(`  Trusted Tools: ${localConfig.trustedTools.join(', ')}`);
+              console.log(`  Trusted Tools: ${sanitizeTerminalText(localConfig.trustedTools.join(', '))}`);
             }
             if (localConfig.mcpServers && localConfig.mcpServers.length > 0) {
               console.log(`  MCP Servers: ${sanitizeTerminalText(localConfig.mcpServers.map(s => s.name).join(', '))}`);
@@ -3188,9 +3188,9 @@ function CliApp() {
           if (globalCommands.length > 0) {
             console.log('🏠 Global Commands (~/.bike4mind/commands/):');
             globalCommands.forEach(cmd => {
-              const argHint = cmd.argumentHint ? ` ${cmd.argumentHint}` : '';
-              const prefix = `  /${cmd.name}${argHint}`;
-              const desc = truncateDescription(cmd.description, prefix.length);
+              const argHint = cmd.argumentHint ? ` ${sanitizeTerminalText(cmd.argumentHint)}` : '';
+              const prefix = `  /${sanitizeTerminalText(cmd.name)}${argHint}`;
+              const desc = truncateDescription(sanitizeTerminalText(cmd.description), prefix.length);
               console.log(`${prefix} - ${desc}`);
             });
             console.log('');
@@ -3199,9 +3199,9 @@ function CliApp() {
           if (projectCommands.length > 0) {
             console.log('📁 Project Commands (.bike4mind/commands/):');
             projectCommands.forEach(cmd => {
-              const argHint = cmd.argumentHint ? ` ${cmd.argumentHint}` : '';
-              const prefix = `  /${cmd.name}${argHint}`;
-              const desc = truncateDescription(cmd.description, prefix.length);
+              const argHint = cmd.argumentHint ? ` ${sanitizeTerminalText(cmd.argumentHint)}` : '';
+              const prefix = `  /${sanitizeTerminalText(cmd.name)}${argHint}`;
+              const desc = truncateDescription(sanitizeTerminalText(cmd.description), prefix.length);
               console.log(`${prefix} - ${desc}`);
             });
             console.log('');

@@ -98,7 +98,7 @@ describe('untrusted text render sites', () => {
   // the wrap at that site fails here even while the import stays. Add a row
   // when you add a sink.
   const SANITIZED_SITES: Record<string, string[]> = {
-    'components/liveStepWindow.ts': ['sanitizeTerminalText(typeof value'],
+    'components/liveStepWindow.ts': ['sanitizeTerminalText(raw.length > window'],
     'components/MarkdownRenderer.tsx': ['marked.lexer(sanitizeTerminalText(content))'],
     'components/PermissionPrompt.tsx': [
       'escapeTerminalControlChars(preview)',
@@ -138,12 +138,19 @@ describe('untrusted text render sites', () => {
     'session/turnController.ts': ['sanitizeTerminalText(rawMessage)'],
     'session/lifecycle.ts': ['sanitizeTerminalText(selected.name)', 'sanitizeTerminalText(sessionForState.name)'],
     'bootstrap/buildSandbox.ts': ['sanitizeTerminalText(event.domain)'],
+    'tools/gateway/stages/sandbox.ts': ['sanitizeTerminalText(reason)'],
     'utils/handoff.ts': ['sanitizeTerminalText(formatHandoff(handoff', "sanitizeTerminalText(lines.join('\\n'))"],
     'index.tsx': [
       'sanitizeTerminalText(agent.description)',
       'sanitizeTerminalText(skippedPlugin.reason)',
       'sanitizeTerminalText(v.detail)',
       'sanitizeTerminalText(projectConfig.mcpServers',
+      'sanitizeTerminalText(projectConfig.defaultModel)',
+      "sanitizeTerminalText(projectConfig.tools.denied.join(', '))",
+      "sanitizeTerminalText(localConfig.trustedTools.join(', '))",
+      'sanitizeTerminalText(cmd.argumentHint)',
+      'sanitizeTerminalText(cmd.name)',
+      'sanitizeTerminalText(cmd.description)',
     ],
   };
 
@@ -151,7 +158,7 @@ describe('untrusted text render sites', () => {
     '%s routes untrusted text through sanitizeTerminalText.ts',
     (relativePath, calls) => {
       const source = readFileSync(path.join(__dirname, '..', relativePath), 'utf8');
-      expect(source).toMatch(/from '\.{1,2}\/(?:\.\.\/)?(?:utils\/)?sanitizeTerminalText(?:\.js)?'/);
+      expect(source).toMatch(/from '(?:\.{1,2}\/)+(?:utils\/)?sanitizeTerminalText(?:\.js)?'/);
       for (const call of calls) expect(source, call).toContain(call);
     }
   );
