@@ -1122,9 +1122,13 @@ Snapshots upsert by lake and UTC day. Failed lakes are isolated and their attemp
 
 ### Integration health checks
 
-The worker probes Slack, GitHub and Atlassian reachability every five minutes with the same unauthenticated checks hosted deployments run, and stores each result in MongoDB for the admin Integration Health dashboard. It emits no CloudWatch metrics and does not probe at startup, so a fresh container waits one full interval. Stored checks expire after 25 hours through the model's existing TTL index.
+The worker probes Slack, GitHub and Atlassian reachability every five minutes with the same unauthenticated checks hosted deployments run, and stores each result in MongoDB for the admin Integration Health dashboard. It emits no CloudWatch metrics and does not probe at startup, so a fresh container waits one full interval. Stored checks become eligible for MongoDB TTL cleanup after 25 hours.
 
 An install with no outbound HTTPS to `slack.com`, `api.github.com` or `api.atlassian.com` records those integrations as unhealthy on every run. Three consecutive failures open that integration's platform-wide circuit breaker, which blocks its callers: Slack message sends and updates return without sending, and GitHub and Atlassian MCP requests are refused as unavailable. Those integrations cannot work without that egress anyway, so there is no opt-out switch.
+
+A successful probe taking more than five seconds is also recorded as unhealthy. Three consecutive slow probes can therefore open the same circuit breaker even while the provider still responds.
+
+Probes use global `fetch`. If proxy support is added to an integration client, the probes must use equivalent proxy routing so a failed direct connection does not mark a working proxied integration as unavailable.
 
 ### Daily telemetry retention
 
