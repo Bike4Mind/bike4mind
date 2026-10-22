@@ -1,6 +1,16 @@
 import { describe, it, expect } from 'vitest';
-import { DATA_LAKE_SLUG_REGEX, MAX_DATA_LAKE_SLUG_LENGTH, MIN_DATA_LAKE_SLUG_LENGTH } from '../constants/dataLakes';
-import { slugifyDataLakeName, isValidDataLakeSlug, deriveTagPrefixFromLakeName } from './dataLakeSlug';
+import {
+  DATA_LAKE_SLUG_REGEX,
+  MAX_DATA_LAKE_SLUG_LENGTH,
+  MAX_TAG_PREFIX_LENGTH,
+  MIN_DATA_LAKE_SLUG_LENGTH,
+} from '../constants/dataLakes';
+import {
+  slugifyDataLakeName,
+  isValidDataLakeSlug,
+  deriveTagPrefixFromLakeName,
+  withTagPrefixSuffix,
+} from './dataLakeSlug';
 
 // The server validates the slug with MIN_DATA_LAKE_SLUG_LENGTH and DATA_LAKE_SLUG_REGEX;
 // isValidDataLakeSlug is the client gate that must agree with both, so a name never passes
@@ -63,5 +73,23 @@ describe('deriveTagPrefixFromLakeName', () => {
   it('derives nothing at all from a name with no alphanumerics', () => {
     expect(deriveTagPrefixFromLakeName('!!!')).toBe('');
     expect(deriveTagPrefixFromLakeName('   ')).toBe('');
+  });
+});
+
+describe('withTagPrefixSuffix', () => {
+  it('keeps the base on attempt 0 and numbers later attempts from -1', () => {
+    expect(withTagPrefixSuffix('acme:', 0)).toBe('acme:');
+    expect(withTagPrefixSuffix('acme:', 1)).toBe('acme-1:');
+    expect(withTagPrefixSuffix('docs:legal:', 1)).toBe('docs:legal-1:');
+  });
+
+  it('keeps fitting once the suffix reaches two digits, trimming a trailing hyphen', () => {
+    const base = `${'a'.repeat(MAX_TAG_PREFIX_LENGTH - 4)}-bc:`;
+
+    for (const attempt of [1, 12]) {
+      const candidate = withTagPrefixSuffix(base, attempt);
+      expect(candidate.length).toBeLessThanOrEqual(MAX_TAG_PREFIX_LENGTH);
+      expect(candidate).toMatch(new RegExp(`[^-]-${attempt}:$`));
+    }
   });
 });

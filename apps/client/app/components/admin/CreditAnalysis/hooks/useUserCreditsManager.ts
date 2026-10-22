@@ -50,7 +50,7 @@ export function useUserCreditsManager(onRefresh?: () => void) {
 
   const users = allUsers.data?.users ?? [];
 
-  const handleCreditAdjustment = async (userId: string, adjustment: number, note?: string) => {
+  const handleCreditAdjustment = async (userId: string, adjustment: number, note: string) => {
     try {
       await updateUserCreditsMutation.mutateAsync({
         userId,
@@ -58,9 +58,8 @@ export function useUserCreditsManager(onRefresh?: () => void) {
         // applies it atomically against the live balance, so interim spend is not
         // refunded and the balance never goes negative.
         creditDelta: adjustment,
-        // The admin's typed "Reason for adjustment" - persisted on the audit
-        // record. Server supplies a default description when this is empty.
-        note: note?.trim() || undefined,
+        // The admin's required "Reason for adjustment" - persisted on the audit record.
+        note: note.trim(),
       });
       setNotification({
         open: true,

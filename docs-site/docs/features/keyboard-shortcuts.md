@@ -33,23 +33,6 @@ Shortcuts available while composing a message in the chat input.
 
 ---
 
-## Tavern Canvas
-
-Shortcuts available when working in the Tavern canvas view.
-
-| Shortcut | Action |
-| -------- | ------ |
-| `W` / `A` / `S` / `D` | Pan the camera up / left / down / right |
-| `↑` / `←` / `↓` / `→` | Pan the camera (arrow keys) |
-| `E` | Toggle the tile editor |
-| `H` | Hilltop view — zoom out to fit the entire map |
-| `F` | Focus on the tavern — zoom in to room view |
-| `Escape` | Clear selection; zoom out to street level if zoomed in |
-| `Cmd` + `Z` / `Ctrl` + `Z` | Undo |
-| `Cmd` + `Shift` + `Z` / `Ctrl` + `Shift` + `Z` | Redo |
-
----
-
 ## General UI
 
 | Shortcut | Action |

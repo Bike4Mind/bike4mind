@@ -28,11 +28,11 @@ import {
   purgeUserMemory,
   shredBelief,
   shredPrincipalMemory,
-} from '@server/memory/ledgerMemoryStore';
-import { createKeyProvider } from '@server/memory/factCipher';
+} from '@bike4mind/server-utils/memory/ledgerMemoryStore';
+import { createKeyProvider } from '@bike4mind/server-utils/memory/factCipher';
 import { createPersonaAgentMemoryStore } from '@server/memory/personaAgentMemoryStore';
-import { createUserMementoMemoryStore } from '@server/memory/userMementoMemoryStore';
-import { createSurvivingSourcesResolver } from '@server/memory/lakeSourceReachability';
+import { createUserMementoMemoryStore } from '@bike4mind/server-utils/memory/userMementoMemoryStore';
+import { createLakeMemberSourcesResolver } from '@bike4mind/server-utils/memory/lakeSourceReachability';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { DataLakeAuditEvents, logAuditEvent } from '@server/utils/auditLog';
 import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
@@ -56,7 +56,8 @@ const SUPPORTED_PRINCIPAL_KINDS: readonly PrincipalKind[] = ['user', 'agent', 'o
  */
 async function resolveLakeMemoryTarget(
   req: EntitlementRequest,
-  id: string
+  id: string,
+  { idOnly = false }: { idOnly?: boolean } = {}
 ): Promise<{
   principal: Principal;
   ownerUserId: string;
@@ -64,7 +65,10 @@ async function resolveLakeMemoryTarget(
   grants: dataLakeService.LakeGrant[];
 } | null> {
   const ctx = await toAccessContext(req);
-  const { lake, grants } = await dataLakeService.assertLakeAccessWithGrants(id, ctx, {
+  const assertAccess = idOnly
+    ? dataLakeService.assertLakeAccessWithGrantsById
+    : dataLakeService.assertLakeAccessWithGrants;
+  const { lake, grants } = await assertAccess(id, ctx, {
     db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
   });
   // BOTH halves of the ledger key must be present, and the tag half is not optional paranoia: the
@@ -181,12 +185,14 @@ handler.delete(async (req, res) => {
   const subject = typeof req.query.subject === 'string' ? req.query.subject : undefined;
 
   if (kind === 'lake') {
-    const target = await resolveLakeMemoryTarget(req, id);
+    // Id only: a slug falls through past a deleted lake to the next one sharing it, and this shred is
+    // irreversible (same reason as the manage routes under data-lakes/[id]/).
+    const target = await resolveLakeMemoryTarget(req, id, { idOnly: true });
     if (!target) return res.status(404).json({ error: 'No memory found for this principal.' });
 
     // Reading a lake is org-shared, but DELETING it is an OWNER action: only the effective owner (or
     // an admin) may shred what the whole org reads. Another reader gets a 403, not a 404 -
-    // assertLakeAccessWithGrants already confirmed they can see the lake. Mirrors the lifecycle
+    // assertLakeAccessWithGrantsById already confirmed they can see the lake. Mirrors the lifecycle
     // guards (data-lakes/[id]/lifecycle.ts).
     // The SAME predicate the list surface hands the UI as `canManageMemory`. Previously this was
     // `canManageLake` called with neither grants nor `organizationId`, which happens to reduce to
@@ -347,20 +353,15 @@ handler.get(async (req, res) => {
   const profile = await readPrincipalMemory(resolution.principal, resolution.store);
   if (!profile) return res.status(404).json({ error: 'No memory found for this principal.' });
 
-  // A lake belief cites the document it was distilled from, and `purgeDataLakeDocument` destroys the
-  // document without touching beliefs already derived from it - so a belief can outlive its only
-  // source. Chat never surfaces one (recallLakeMemory drops uncited beliefs); this read had no
-  // equivalent, which left a PERMANENTLY destroyed document's extracted content readable here
-  // indefinitely, and no purge can reach it afterwards because purges are keyed by source id.
-  //
-  // Existence, not citability - see createSurvivingSourcesResolver for why reusing the recall
-  // predicate here would wrongly hide live-but-unvectorized sources. And this withholds on READ
-  // only: the rows stay at rest under the lake DEK until a whole-lake purge or lake deletion shreds
-  // them, so it closes the disclosure and not the retention.
+  // Recheck membership on reads: a removed source may still exist in another lake,
+  // and extraction can finish after its removal. Neither may disclose its old facts here.
   let served = profile;
   let withheldOrphans = 0;
   if (kind === 'lake') {
-    const survivingSources = createSurvivingSourcesResolver({ fabfiles: fabFileRepository });
+    const survivingSources = createLakeMemberSourcesResolver({
+      fabfiles: fabFileRepository,
+      dataLakes: dataLakeRepository,
+    });
     // Documents only, on both sides of this check. A curator-resolution belief also cites the finding
     // it was decided on (#3049), which is not a FabFile: feeding it to the resolver logs `skipping ids
     // that cannot address a row by _id` on every read, and counting it as a source would make such a
@@ -368,7 +369,12 @@ handler.get(async (req, res) => {
     // which is the exact disclosure this block exists to close.
     const documentSources = (belief: (typeof profile.beliefs)[number]): string[] =>
       (belief.sources ?? []).filter(isDocumentSource);
-    const surviving = await survivingSources([...new Set(profile.beliefs.flatMap(documentSources))]);
+    // Keyed by the lake's `datalakeTag` (the principal id), NOT the URL id: the ledger and the
+    // reachability lookup both address the lake by tag, and passing the ObjectId/slug here makes
+    // `findByDatalakeTag` miss, which reads as "every source is gone" and hides every sourced belief.
+    const surviving = await survivingSources(resolution.principal.id, [
+      ...new Set(profile.beliefs.flatMap(documentSources)),
+    ]);
     // A belief citing no DOCUMENT is kept: nothing was destroyed, so it is not an orphan.
     const kept = profile.beliefs.filter(b => {
       const sources = documentSources(b);

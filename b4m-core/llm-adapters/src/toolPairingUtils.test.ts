@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { IMessage } from '@bike4mind/common';
-import { normalizeToolUseInputs, stripToolDependentMessages } from './toolPairingUtils';
+import { normalizeToolUseInputs, stripAllToolBlocks, stripToolDependentMessages } from './toolPairingUtils';
 
 describe('stripToolDependentMessages', () => {
   const imagePrompt: IMessage = {
@@ -104,5 +104,44 @@ describe('normalizeToolUseInputs', () => {
     normalizeToolUseInputs(withoutInput(), { warn });
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0][0]).toContain('1 tool_use block(s)');
+  });
+});
+
+describe('stripAllToolBlocks', () => {
+  it('drops tool search server blocks and the tool_reference results along with tool blocks', () => {
+    const messages = [
+      { role: 'user', content: 'weather?' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'Let me search.' },
+          { type: 'server_tool_use', id: 'srvtoolu_1', name: 'tool_search_tool_regex', input: {} },
+          {
+            type: 'tool_search_tool_result',
+            tool_use_id: 'srvtoolu_1',
+            content: {
+              type: 'tool_search_tool_search_result',
+              tool_references: [{ type: 'tool_reference', tool_name: 'get_weather' }],
+            },
+          },
+          { type: 'tool_use', id: 'toolu_1', name: 'get_weather', input: {} },
+        ],
+      },
+      {
+        role: 'user',
+        content: [
+          { type: 'tool_result', tool_use_id: 'toolu_1', content: [{ type: 'tool_reference', tool_name: 'x' }] },
+        ],
+      },
+      { role: 'assistant', content: [{ type: 'server_tool_use', id: 'srvtoolu_2', name: 'tool_search_tool_regex' }] },
+    ] as unknown as IMessage[];
+    const logger = { log: vi.fn(), warn: vi.fn() };
+
+    expect(stripAllToolBlocks(messages, logger)).toEqual([
+      { role: 'user', content: 'weather?' },
+      { role: 'assistant', content: [{ type: 'text', text: 'Let me search.' }] },
+      { role: 'user', content: '[Tool results removed during error recovery]' },
+    ]);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('3 server tool blocks'));
   });
 });

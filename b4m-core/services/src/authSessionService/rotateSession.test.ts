@@ -2,7 +2,11 @@ import { describe, it, expect, vi } from 'vitest';
 import { TooManyRequestsError, UnauthorizedError } from '@bike4mind/utils';
 import { rotateSession, type RotateSessionResult } from './rotateSession';
 import { buildRefreshToken, generateRefreshSecret, hashRefreshSecret, parseRefreshToken } from './refreshTokenFormat';
-import { createMockAuthSessionRepository, createMockUserRepository } from '../__tests__/utils/testUtils';
+import {
+  createMockAuthSessionRepository,
+  createMockRealtimeConnectionRepository,
+  createMockUserRepository,
+} from '../__tests__/utils/testUtils';
 import { ABSOLUTE_SESSION_MAX_MS, DEFAULT_REFRESH_TTL_MS, MAX_SESSION_RECOVERIES } from './constants';
 
 const SID = 'sid-1';
@@ -36,7 +40,14 @@ const setup = () => {
   authSessions.registerReplayUse.mockImplementation(async () => makeSession());
   authSessions.revokeBySid.mockResolvedValue(makeSession({ revokedAt: new Date() }));
   const signAccessToken = vi.fn().mockReturnValue('ACCESS');
-  return { authSessions, users, signAccessToken, db: { authSessions, users } };
+  const realtimeConnections = createMockRealtimeConnectionRepository();
+  return {
+    authSessions,
+    users,
+    realtimeConnections,
+    signAccessToken,
+    db: { authSessions, users, realtimeConnections },
+  };
 };
 
 const refreshTokenOf = (result: RotateSessionResult): string => {
@@ -104,7 +115,15 @@ const setupStateful = (initialSecret: string) => {
     return { ...state } as never;
   });
   const signAccessToken = vi.fn().mockReturnValue('ACCESS');
-  return { state, authSessions, users, signAccessToken, db: { authSessions, users } };
+  const realtimeConnections = createMockRealtimeConnectionRepository();
+  return {
+    state,
+    authSessions,
+    users,
+    realtimeConnections,
+    signAccessToken,
+    db: { authSessions, users, realtimeConnections },
+  };
 };
 
 describe('rotateSession', () => {
@@ -199,13 +218,27 @@ describe('rotateSession', () => {
   });
 
   it('rejects + revokes on an unknown secret (theft/replay)', async () => {
-    const { authSessions, db, signAccessToken } = setup();
+    const { authSessions, realtimeConnections, db, signAccessToken } = setup();
     authSessions.findBySid.mockResolvedValue(makeSession({ refreshTokenHash: hashRefreshSecret('the-real-one') }));
 
     await expect(
       rotateSession(buildRefreshToken(SID, generateRefreshSecret()), { db, signAccessToken })
     ).rejects.toBeInstanceOf(UnauthorizedError);
     expect(authSessions.revokeBySid).toHaveBeenCalledWith(SID);
+    expect(realtimeConnections.endConnections).toHaveBeenCalledWith({ sid: SID });
+  });
+
+  it('still emits the audit event and throws the reuse error when ending realtime connections fails', async () => {
+    const { authSessions, realtimeConnections, db, signAccessToken } = setup();
+    authSessions.findBySid.mockResolvedValue(makeSession({ refreshTokenHash: hashRefreshSecret('the-real-one') }));
+    realtimeConnections.endConnections.mockRejectedValue(new Error('db down'));
+    const audit = vi.fn();
+
+    await expect(
+      rotateSession(buildRefreshToken(SID, generateRefreshSecret()), { db, signAccessToken, audit })
+    ).rejects.toBeInstanceOf(UnauthorizedError);
+    expect(authSessions.revokeBySid).toHaveBeenCalledWith(SID);
+    expect(audit).toHaveBeenCalledWith(expect.objectContaining({ type: 'session_reuse_revoked', sid: SID }));
   });
 
   it('rejects a revoked session without rotating or re-revoking', async () => {
@@ -412,7 +445,12 @@ describe('rotateSession', () => {
       );
       // Revoking here would kill a healthy session AND stamp the theft event on a benign stall.
       expect(authSessions.revokeBySid).not.toHaveBeenCalled();
-      expect(audit).toHaveBeenCalledWith({ type: 'refresh_recovery_capped', sid: SID, userId: 'user-1', metadata: { terminal: true } });
+      expect(audit).toHaveBeenCalledWith({
+        type: 'refresh_recovery_capped',
+        sid: SID,
+        userId: 'user-1',
+        metadata: { terminal: true },
+      });
       expect(audit).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'session_reuse_revoked' }));
     });
 
@@ -431,7 +469,12 @@ describe('rotateSession', () => {
         TooManyRequestsError
       );
       expect(authSessions.revokeBySid).not.toHaveBeenCalled();
-      expect(audit).toHaveBeenCalledWith({ type: 'refresh_recovery_capped', sid: SID, userId: 'user-1', metadata: { terminal: false } });
+      expect(audit).toHaveBeenCalledWith({
+        type: 'refresh_recovery_capped',
+        sid: SID,
+        userId: 'user-1',
+        metadata: { terminal: false },
+      });
     });
 
     it('still revokes when the previous hash has genuinely moved on', async () => {
@@ -443,10 +486,17 @@ describe('rotateSession', () => {
         .mockResolvedValueOnce(makeSession({ refreshTokenHash: 'newer', previousRefreshTokenHash: 'newer-prev' }));
       authSessions.recoverRotateHash.mockResolvedValue(null);
 
-      await expect(rotateSession(buildRefreshToken(SID, held), { db, signAccessToken })).rejects.toThrow(
+      const audit = vi.fn();
+      await expect(rotateSession(buildRefreshToken(SID, held), { db, signAccessToken, audit })).rejects.toThrow(
         UnauthorizedError
       );
       expect(authSessions.revokeBySid).toHaveBeenCalledWith(SID);
+      expect(audit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'session_reuse_revoked',
+          metadata: expect.objectContaining({ reason: 'chain_advanced_during_recovery' }),
+        })
+      );
     });
 
     it('stops a replay loop: the allowance survives recoveries and only a true rotation clears it', async () => {
@@ -503,7 +553,84 @@ describe('rotateSession', () => {
       await expect(
         rotateSession(buildRefreshToken(SID, generateRefreshSecret()), { db, signAccessToken, audit })
       ).rejects.toThrow(UnauthorizedError);
-      expect(audit).toHaveBeenCalledWith({ type: 'session_reuse_revoked', sid: SID, userId: 'user-1' });
+      expect(audit).toHaveBeenCalledWith({
+        type: 'session_reuse_revoked',
+        sid: SID,
+        userId: 'user-1',
+        metadata: expect.objectContaining({ reason: 'unrecognized_secret' }),
+      });
+    });
+
+    it('records triage fields on session_reuse_revoked and never token material', async () => {
+      const { authSessions, db, signAccessToken } = setup();
+      const audit = vi.fn();
+      const now = Date.now();
+      authSessions.findBySid.mockResolvedValue(
+        makeSession({
+          refreshTokenHash: 'cur',
+          previousRefreshTokenHash: 'prev',
+          graceExpiresAt: new Date(now - 300_000),
+          lastUsedAt: new Date(now - 600_000),
+          createdAt: new Date(now - 86_400_000),
+          recoveries: 1,
+          device: { ip: '203.0.113.7', userAgent: 'UA/1' },
+        })
+      );
+      const presented = generateRefreshSecret();
+      await expect(rotateSession(buildRefreshToken(SID, presented), { db, signAccessToken, audit })).rejects.toThrow(
+        UnauthorizedError
+      );
+
+      const { metadata } = audit.mock.calls[0][0];
+      expect(metadata).toEqual({
+        reason: 'unrecognized_secret',
+        msSinceLastUse: expect.any(Number),
+        msSinceReplayWindowClosed: expect.any(Number),
+        sessionAgeMs: expect.any(Number),
+        recoveries: 1,
+        createdVia: 'otc',
+        issuedIp: '203.0.113.7',
+        issuedUserAgent: 'UA/1',
+      });
+      expect(metadata.msSinceLastUse).toBeGreaterThanOrEqual(600_000);
+      expect(metadata.msSinceReplayWindowClosed).toBeGreaterThanOrEqual(300_000);
+      expect(metadata.sessionAgeMs).toBeGreaterThanOrEqual(86_400_000);
+      const serialized = JSON.stringify(metadata);
+      for (const secretish of [presented, hashRefreshSecret(presented), 'cur', 'prev']) {
+        expect(serialized).not.toContain(secretish);
+      }
+    });
+
+    it('tags a revoke after a lost rotation CAS whose chain moved two generations on', async () => {
+      const { authSessions, db, signAccessToken } = setup();
+      const audit = vi.fn();
+      const held = generateRefreshSecret();
+      authSessions.findBySid
+        .mockResolvedValueOnce(makeSession({ refreshTokenHash: hashRefreshSecret(held) }))
+        .mockResolvedValueOnce(makeSession({ refreshTokenHash: 'newer', previousRefreshTokenHash: 'newer-prev' }));
+      authSessions.rotateHash.mockResolvedValue(null);
+
+      await expect(rotateSession(buildRefreshToken(SID, held), { db, signAccessToken, audit })).rejects.toThrow(
+        UnauthorizedError
+      );
+      expect(audit).toHaveBeenCalledWith(
+        expect.objectContaining({ metadata: expect.objectContaining({ reason: 'chain_advanced_during_rotation' }) })
+      );
+    });
+
+    it('reports null issuing fields and window when the row has none', async () => {
+      const { authSessions, db, signAccessToken } = setup();
+      const audit = vi.fn();
+      authSessions.findBySid.mockResolvedValue(makeSession({ refreshTokenHash: 'cur' }));
+      await expect(
+        rotateSession(buildRefreshToken(SID, generateRefreshSecret()), { db, signAccessToken, audit })
+      ).rejects.toThrow(UnauthorizedError);
+      expect(audit.mock.calls[0][0].metadata).toMatchObject({
+        msSinceReplayWindowClosed: null,
+        recoveries: 0,
+        issuedIp: null,
+        issuedUserAgent: null,
+      });
     });
 
     it('emits session_recovered on a recovery rotation', async () => {
@@ -519,6 +646,41 @@ describe('rotateSession', () => {
       );
       await rotateSession(buildRefreshToken(SID, held), { db, signAccessToken, audit });
       expect(audit).toHaveBeenCalledWith({ type: 'session_recovered', sid: SID, userId: 'user-1' });
+    });
+
+    // A frozen Lambda loses an audit/metric write still in flight, so a recovery must not return before it settles.
+    it('does not resolve a recovery rotation until the session_recovered audit settles', async () => {
+      const { authSessions, db, signAccessToken } = setup();
+      let release: () => void = () => {};
+      const audit = vi.fn().mockReturnValue(
+        new Promise<void>(resolve => {
+          release = resolve;
+        })
+      );
+      const held = generateRefreshSecret();
+      authSessions.findBySid.mockResolvedValue(
+        makeSession({
+          refreshTokenHash: 'orphaned',
+          previousRefreshTokenHash: hashRefreshSecret(held),
+          graceExpiresAt: past(),
+        })
+      );
+      let settled = false;
+      const pending = rotateSession(buildRefreshToken(SID, held), { db, signAccessToken, audit }).then(result => {
+        settled = true;
+        return result;
+      });
+
+      await vi.waitFor(() =>
+        expect(audit).toHaveBeenCalledWith({ type: 'session_recovered', sid: SID, userId: 'user-1' })
+      );
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(settled).toBe(false);
+
+      release();
+      const result = await pending;
+      expect(settled).toBe(true);
+      expect(result.status).toBe('rotated');
     });
 
     it('emits refresh_replay_capped when the coalesce allowance is spent', async () => {

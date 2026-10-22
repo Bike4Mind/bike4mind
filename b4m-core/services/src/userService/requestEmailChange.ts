@@ -7,7 +7,8 @@ import { EMAIL_VERIFICATION_TOKEN_EXPIRY } from './sendEmailVerification';
 
 const requestEmailChangeSchema = z.object({
   userId: z.string(),
-  newEmail: z.email(),
+  // Normalized before the format check so a padded address is not rejected for its whitespace.
+  newEmail: z.string().trim().toLowerCase().pipe(z.email()),
 });
 
 export type RequestEmailChangeParameters = z.infer<typeof requestEmailChangeSchema>;
@@ -16,7 +17,7 @@ interface RequestEmailChangeAdapters {
   db: {
     users: {
       findById: (id: string) => Promise<IUserDocument | null>;
-      findByEmail: (email: string) => Promise<IUserDocument | null>;
+      existsOtherUserWithEmail: (email: string, excludeUserId?: string) => Promise<boolean>;
       update: (user: Partial<IUserDocument>) => Promise<unknown>;
     };
   };
@@ -39,13 +40,12 @@ export const requestEmailChange = async (
   }
 
   // Check if new email is same as current email
-  if (user.email?.toLowerCase() === newEmail.toLowerCase()) {
+  if (user.email?.trim().toLowerCase() === newEmail) {
     throw new BadRequestError('New email must be different from current email');
   }
 
   // Check if new email is already taken by another user
-  const existingUser = await db.users.findByEmail(newEmail);
-  if (existingUser && existingUser.id !== user.id) {
+  if (await db.users.existsOtherUserWithEmail(newEmail, user.id)) {
     // Silent fail to prevent email enumeration: don't send email or update user,
     // so attackers can't discover which emails are registered.
     return;

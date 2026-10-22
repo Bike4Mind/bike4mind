@@ -236,6 +236,14 @@ describe('processDiscoveredLinks', () => {
     );
   });
 
+  it('propagates a failure-state write error instead of dropping it', async () => {
+    mockDb.researchTasks.findById.mockResolvedValue(mockResearchTask);
+    mockDb.researchDatas.findByUrlAndUserId.mockResolvedValue(null);
+    mockDb.researchTasks.update.mockRejectedValue(new Error('write failed'));
+
+    await expect(processDiscoveredLinks({ id: 'test-task-id' }, adapters)).rejects.toThrow('write failed');
+  });
+
   it('should mark task as failed when fab file is not found', async () => {
     // Arrange
     mockDb.researchTasks.findById.mockResolvedValue(mockResearchTask);

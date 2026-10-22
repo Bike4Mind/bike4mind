@@ -49,6 +49,19 @@ describe('parseStreamEvent', () => {
     });
   });
 
+  it('keeps the reasoning-token count on usage (not stripped at the boundary)', () => {
+    const event = parseStreamEvent({
+      type: 'content',
+      text: 'x',
+      usage: { inputTokens: 10, outputTokens: 5, reasoningTokens: 4 },
+    });
+    expect(event && event.type === 'content' && event.usage).toEqual({
+      inputTokens: 10,
+      outputTokens: 5,
+      reasoningTokens: 4,
+    });
+  });
+
   it('parses an error event', () => {
     expect(parseStreamEvent({ type: 'error', message: 'boom' })).toEqual({
       type: 'error',
@@ -59,6 +72,13 @@ describe('parseStreamEvent', () => {
   it('strips unknown keys not part of the event shape', () => {
     const event = parseStreamEvent({ type: 'content', text: 'hi', bogus: 'drop me' });
     expect(event).toEqual({ type: 'content', text: 'hi' });
+  });
+
+  it.each(['content', 'tool_use'] as const)('keeps toolStarted on %s frames', type => {
+    expect(parseStreamEvent({ type, text: '', toolStarted: { name: 'file_write', id: 'call_1' } })).toMatchObject({
+      type,
+      toolStarted: { name: 'file_write', id: 'call_1' },
+    });
   });
 
   it('returns null for an unrecognized event type (skip semantics)', () => {

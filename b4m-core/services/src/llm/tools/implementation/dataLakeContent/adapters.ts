@@ -43,9 +43,12 @@ export function listLakesAdapters(db: ToolDb) {
 }
 
 export function createLakeAdapters(db: ToolDb) {
-  const { dataLakes, dataLakeAccessGrants } = db;
+  const { dataLakes, dataLakeAccessGrants, lakeConfigChangeEvents, adminSettings } = db;
   if (!hasMethods(dataLakes, ['create']) || !hasMethods(dataLakeAccessGrants, ['upsertGrant'])) return null;
-  return { dataLakes, dataLakeAccessGrants };
+  // The audit sink stays optional here (unlike saveContentAdapters): a missing one costs only the
+  // History row for the create, which is no reason to refuse creating the lake. `adminSettings`
+  // rides along so the row gets the configured retention, as with lakeConfigAuditDb.
+  return { dataLakes, dataLakeAccessGrants, lakeConfigChangeEvents, adminSettings };
 }
 
 /**
@@ -58,10 +61,11 @@ export function saveContentAdapters(db: ToolDb) {
   const { dataLakes, dataLakeAccessGrants, fabfiles, users, lakeMembershipRemovals } = db;
   const { lakeConfigChangeEvents, lakeMembershipChangeEvents } = db;
   if (
-    !hasMethods(dataLakes, ['findBySlug', 'findBySlugAmongIds', 'setStats', 'activateIfDraft']) ||
+    !hasMethods(dataLakes, ['findBySlug', 'findBySlugAmongIds', 'setStats', 'activateIfDraft', 'findByDatalakeTags']) ||
     !hasMethods(dataLakeAccessGrants, ['listByLake']) ||
     !fabfiles ||
-    !users ||
+    !hasMethods(users, ['incrementCurrentStorage']) ||
+    !hasMethods(db.organizations, ['incrementCurrentStorage']) ||
     !lakeMembershipRemovals ||
     !lakeConfigChangeEvents ||
     !lakeMembershipChangeEvents
@@ -73,6 +77,7 @@ export function saveContentAdapters(db: ToolDb) {
     dataLakeAccessGrants,
     fabFiles: fabfiles,
     users,
+    organizations: db.organizations,
     adminSettings: db.adminSettings,
     scopedSettings: db.scopedSettings,
     lakeMembershipRemovals,

@@ -1,13 +1,22 @@
 import { userRepository } from '@bike4mind/database';
-import { ApiKeyScope, AuthEvents, redactUserSecretsForSelf } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  AuthEvents,
+  redactUserSecretsForSelf,
+  sanitizeUsername,
+  selfUserResponseSchema,
+} from '@bike4mind/common';
+import { respond } from '@server/utils/respond';
 import { userService } from '@bike4mind/services';
 import { logEvent } from '@server/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ForbiddenError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { EmailEvents } from '@server/utils/eventBus';
-import { getLogoUrl, buildEmailLogoImg } from '@server/utils/mailer/emailHelpers';
+import { getLogoUrl, buildEmailLogoImg, escapeHtml } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
+import { randomUUID } from 'crypto';
 import { z } from 'zod';
+import { emitSignupFunnelEvents, recordSyntheticIdentity } from '@server/analytics/funnel';
 
 const userImportSchema = z.object({
   email: z.email('Invalid email format'),
@@ -27,6 +36,17 @@ interface UserImportRow {
   tags?: string[];
 }
 
+const bulkCreateResponseSchema = z.object({
+  success: z.literal(true),
+  results: z.array(
+    z.discriminatedUnion('success', [
+      z.object({ success: z.literal(true), email: z.string(), user: selfUserResponseSchema }),
+      // Echoes the row as submitted: it failed validation, so its email may be missing or not a string.
+      z.object({ success: z.literal(false), email: z.unknown().optional(), error: z.string() }),
+    ])
+  ),
+});
+
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
   asyncHandler<{}, unknown, { users: UserImportRow[] }>(async (req, res) => {
     if (!req.user?.isAdmin) {
@@ -44,7 +64,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
         try {
           const validatedData = userImportSchema.parse(userData);
 
-          const username = validatedData.email.split('@')[0];
+          // Derived from the address, so coerce it into the username rules rather than reject the row.
+          const username = sanitizeUsername(validatedData.email.split('@')[0]) || `user-${randomUUID().slice(0, 8)}`;
 
           const newUser = await userService.createUser(
             {
@@ -65,6 +86,14 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
               },
             }
           );
+
+          const isSynthetic = await recordSyntheticIdentity(newUser);
+          await emitSignupFunnelEvents({
+            user: { id: newUser.id, isSynthetic },
+            method: 'admin',
+            emailVerified: newUser.emailVerified === true,
+            creditsGranted: newUser.currentCredits ?? validatedData.startingCredits ?? 0,
+          });
 
           // Apply storage limit if provided (createUser hardcodes storageLimit: 1000, so we override after)
           if (validatedData.startingStorage !== undefined) {
@@ -105,7 +134,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
               <body>
                 <div class="content">
                   ${buildEmailLogoImg(brand, logoUrl)}
-                  <p>Hello ${newUser.name},</p>
+                  <p>Hello ${escapeHtml(newUser.name)},</p>
                   <p>Welcome${brand ? ` to ${brand}` : ''}! Your account has been created.</p>
                   <p>Sign in at the link below — enter your email and we'll send you a one-time sign-in code. No password needed.</p>
                   <p><a href="${loginLink}">${loginLink}</a></p>
@@ -149,7 +178,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
       })
     );
 
-    return res.json({
+    // Validates after users are created and invites sent: a bad success row would 500 a batch that
+    // succeeded and a retry would hit duplicates, so keep the row schema permissive.
+    return respond(res, bulkCreateResponseSchema, {
       success: true,
       results,
     });

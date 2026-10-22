@@ -1,0 +1,171 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { AxiosError, type AxiosAdapter, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
+import { api } from '@client/app/contexts/ApiContext';
+import { useAccessToken } from '@client/app/hooks/useAccessToken';
+import { useStepUpStore } from '@client/app/stores/useStepUpStore';
+import { isStepUpCancelled } from './stepUpInterceptor';
+
+vi.mock('@client/app/utils/clearClientCaches', () => ({ clearClientCaches: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@client/app/utils/refreshCoordinator', async importOriginal => ({
+  ...(await importOriginal<typeof import('@client/app/utils/refreshCoordinator')>()),
+  refreshSession: vi.fn().mockResolvedValue({}),
+}));
+
+const failWith = (config: InternalAxiosRequestConfig, status: number, data: unknown): AxiosError =>
+  new AxiosError('failed', 'ERR_BAD_REQUEST', config, {}, {
+    status,
+    statusText: '',
+    data,
+    headers: {},
+    config,
+  } as AxiosResponse);
+
+const stepUpRequired = { error: 'Recent verification required', code: 'step_up_required' };
+const ok = (config: InternalAxiosRequestConfig): AxiosResponse =>
+  ({ data: { done: true }, status: 200, statusText: 'OK', headers: {}, config }) as AxiosResponse;
+
+describe('step-up response interceptor', () => {
+  let realAdapter: AxiosAdapter | undefined;
+  let calls: string[];
+
+  // Fails with step_up_required until the store reports a completed verification.
+  const installAdapter = (gate: () => boolean) => {
+    api.defaults.adapter = ((config: InternalAxiosRequestConfig) => {
+      calls.push(config.url ?? '');
+      return gate() ? Promise.resolve(ok(config)) : Promise.reject(failWith(config, 403, stepUpRequired));
+    }) as AxiosAdapter;
+  };
+
+  beforeEach(() => {
+    calls = [];
+    realAdapter = api.defaults.adapter as AxiosAdapter | undefined;
+    useAccessToken.setState({ accessToken: 'token', expired: false, expiredReason: null, mfaPending: false });
+    useStepUpStore.setState({ open: false, pending: null, resolvePending: null, rejectPending: null });
+  });
+
+  afterEach(() => {
+    api.defaults.adapter = realAdapter;
+    vi.restoreAllMocks();
+  });
+
+  it('opens the prompt on step_up_required and retries once after verification', async () => {
+    let verified = false;
+    installAdapter(() => verified);
+
+    const request = api.post('/api/email/change', {});
+    await vi.waitFor(() => expect(useStepUpStore.getState().open).toBe(true));
+    verified = true;
+    useStepUpStore.getState().completeStepUp();
+
+    await expect(request).resolves.toMatchObject({ status: 200 });
+    expect(calls).toEqual(['/api/email/change', '/api/email/change']);
+  });
+
+  it('rejects with the original error when the user cancels', async () => {
+    installAdapter(() => false);
+
+    const request = api.post('/api/email/change', {});
+    await vi.waitFor(() => expect(useStepUpStore.getState().open).toBe(true));
+    useStepUpStore.getState().cancelStepUp();
+
+    const error = await request.catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(AxiosError);
+    expect(error).toMatchObject({ response: { status: 403, data: stepUpRequired } });
+    expect(isStepUpCancelled(error)).toBe(true);
+    expect(calls).toHaveLength(1);
+  });
+
+  it('shares one prompt between concurrent requests and retries each', async () => {
+    let verified = false;
+    installAdapter(() => verified);
+    const requestPrompt = vi.spyOn(useStepUpStore.getState(), 'requestStepUp');
+
+    const first = api.post('/api/a', {});
+    const second = api.post('/api/b', {});
+    await vi.waitFor(() => expect(requestPrompt).toHaveBeenCalledTimes(2));
+    verified = true;
+    useStepUpStore.getState().completeStepUp();
+
+    await expect(Promise.all([first, second])).resolves.toHaveLength(2);
+    expect(calls.sort()).toEqual(['/api/a', '/api/a', '/api/b', '/api/b']);
+  });
+
+  it('does not loop when the retry is still refused', async () => {
+    installAdapter(() => false);
+
+    const request = api.post('/api/email/change', {});
+    await vi.waitFor(() => expect(useStepUpStore.getState().open).toBe(true));
+    useStepUpStore.getState().completeStepUp();
+
+    const error = await request.catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ response: { status: 403 } });
+    expect(isStepUpCancelled(error)).toBe(false);
+    expect(calls).toHaveLength(2);
+    expect(useStepUpStore.getState().open).toBe(false);
+  });
+
+  it('prompts only once when a 401 refresh replay is then cancelled', async () => {
+    let attempt = 0;
+    api.defaults.adapter = ((config: InternalAxiosRequestConfig) => {
+      calls.push(config.url ?? '');
+      attempt += 1;
+      return Promise.reject(
+        attempt === 1 ? failWith(config, 401, { error: 'Unauthorized' }) : failWith(config, 403, stepUpRequired)
+      );
+    }) as AxiosAdapter;
+    // Dismiss every prompt as it opens, counting them.
+    let prompts = 0;
+    const unsubscribe = useStepUpStore.subscribe((state, previous) => {
+      if (!state.open || previous.open) return;
+      prompts += 1;
+      queueMicrotask(() => useStepUpStore.getState().cancelStepUp());
+    });
+
+    const error = await api.post('/api/email/change', {}).catch((caught: unknown) => caught);
+    unsubscribe();
+    expect(isStepUpCancelled(error)).toBe(true);
+    expect(prompts).toBe(1);
+    expect(calls).toEqual(['/api/email/change', '/api/email/change']);
+  });
+
+  it('leaves other 403s alone', async () => {
+    api.defaults.adapter = ((config: InternalAxiosRequestConfig) =>
+      Promise.reject(failWith(config, 403, { error: 'Forbidden' }))) as AxiosAdapter;
+
+    await expect(api.get('/api/x')).rejects.toMatchObject({ response: { status: 403 } });
+    expect(useStepUpStore.getState().open).toBe(false);
+  });
+
+  it('never intercepts the step-up routes themselves', async () => {
+    installAdapter(() => false);
+
+    await expect(api.post('/api/auth/step-up', {})).rejects.toMatchObject({ response: { status: 403 } });
+    expect(useStepUpStore.getState().open).toBe(false);
+    expect(calls).toHaveLength(1);
+  });
+
+  it('does not prompt for an unauthenticated request', async () => {
+    useAccessToken.setState({ accessToken: null });
+    installAdapter(() => false);
+
+    await expect(api.post('/api/email/change', {})).rejects.toMatchObject({ response: { status: 403 } });
+    expect(useStepUpStore.getState().open).toBe(false);
+  });
+
+  it('does not prompt while the stored token is an mfaPending sign-in token', async () => {
+    useAccessToken.setState({ accessToken: 'token', mfaPending: true });
+    installAdapter(() => false);
+
+    await expect(api.post('/api/email/change', {})).rejects.toMatchObject({ response: { status: 403 } });
+    expect(useStepUpStore.getState().open).toBe(false);
+    expect(calls).toHaveLength(1);
+  });
+});
+
+describe('isStepUpCancelled', () => {
+  it('is false for values the interceptor did not tag', () => {
+    expect(isStepUpCancelled(new Error('x'))).toBe(false);
+    expect(isStepUpCancelled(null)).toBe(false);
+    expect(isStepUpCancelled('step_up_required')).toBe(false);
+  });
+});

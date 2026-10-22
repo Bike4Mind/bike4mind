@@ -42,7 +42,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/featureFlag', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({
   requireFeatureEnabled:
     () => (_req: unknown, res: { status: (n: number) => { json: (b: unknown) => void } }, next: () => void) =>
       mockFeatureEnabled.value
@@ -115,7 +115,13 @@ describe('GET /api/v1/data-lakes/{id}', () => {
     expect(res._getStatusCode()).toBe(200);
     const body = res._getJSONData();
     expect(DataLakeResourceSchema.safeParse(body).success).toBe(true);
-    expect(body).toMatchObject({ id: LAKE.id, slug: 'handbook', built_in: false, file_count: 4 });
+    expect(body).toMatchObject({
+      id: LAKE.id,
+      slug: 'handbook',
+      datalake_tag: 'datalake:handbook',
+      built_in: false,
+      file_count: 4,
+    });
     expect(JSON.stringify(body)).not.toMatch(/editor only|vip/);
     expect(mockAssertLakeAccess).toHaveBeenCalledWith('handbook', expect.anything(), expect.anything());
     expect(mockComputeStats).not.toHaveBeenCalled();

@@ -5,9 +5,7 @@
     "noEmit": true,
     // The bridge below compiles apps/client files, so the root has to span both apps.
     "rootDir": "..",
-    // DOM only because the apps/client files compiled through the bridge below are written against
-    // it (e.g. fetch().json() is `any` there, `unknown` under node's types). Drop with the bridge.
-    "lib": ["ESNext", "DOM"],
+    "lib": ["ESNext"],
     "paths": {
       "@workers/*": ["./src/*"],
       // Interim one-way bridge into apps/client while the shared server code still lives there.

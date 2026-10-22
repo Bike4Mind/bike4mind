@@ -65,4 +65,20 @@ describe('annVectorSearch document vintage', () => {
     expect(results[0].documentDate).toBeNull();
     expect('documentDate' in results[0]).toBe(true);
   });
+
+  // Per-chip lake attribution keys a dynamic lake's prefix arm on the file owner, so a row that
+  // drops the owner silently downgrades that chip from lake to library.
+  it('carries the parent file owner onto every row it shapes', async () => {
+    const file = { fileName: 'a.pdf', fileTags: ['acme:x'], userId: 'owner-1' };
+    const { results } = await annVectorSearch({
+      fileIds: ['f1'],
+      fileById: new Map([['f1', file]]),
+      queryVector: [1, 2, 3],
+      model: 'text-embedding-3-small',
+      limit: 10,
+      minScore: 0,
+      adapter,
+    });
+    expect(results[0].fileUserId).toBe('owner-1');
+  });
 });

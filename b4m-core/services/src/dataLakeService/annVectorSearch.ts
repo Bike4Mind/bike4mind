@@ -19,6 +19,8 @@ export interface AnnSearchAdapter {
 export interface AnnRankableFile {
   fileName: string;
   fileTags: string[];
+  /** The file's owner; forwarded to `SemanticChunkResult.fileUserId`. */
+  userId?: string;
   /**
    * The source document's own vintage (#3048), carried through for the passage header. Required
    * for the same reason as on `RankableFile`: a builder that omits it renders an undated passage,
@@ -138,6 +140,7 @@ export async function annVectorSearch(args: {
       fileId: hit.fabFileId,
       fileName: file.fileName,
       fileTags: file.fileTags,
+      fileUserId: file.userId,
       // `?? null` despite the field now being required above: the type stops a TYPED builder from
       // dropping it, this stops an undefined reaching the row from a structurally-typed caller.
       // SemanticChunkResult's contract is null-for-undated, and the render channels key on it.

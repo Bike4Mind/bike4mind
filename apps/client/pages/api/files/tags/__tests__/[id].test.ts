@@ -11,11 +11,14 @@ const h = vi.hoisted(() => ({
   update: vi.fn().mockResolvedValue({ id: 't1' }),
   remove: vi.fn().mockResolvedValue({ id: 't1', name: 'invoices', filesUpdated: 2 }),
   assertDataLakeWriteScope: vi.fn(),
+  baseApiOptions: undefined as unknown,
 }));
 
 // baseApi mock: callable chain routed by req.method (same shape as the sibling toggle test).
+// Captures the options for the scope-gate test below.
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+  baseApi: (options: unknown) => {
+    h.baseApiOptions = options;
     const routes: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain = Object.assign((req: { method?: string }, res: unknown) => routes[req.method ?? 'PUT']?.(req, res), {
       use: () => chain,
@@ -32,6 +35,7 @@ vi.mock('@bike4mind/services', () => ({
   tagService: { update: h.update, remove: h.remove },
 }));
 vi.mock('@bike4mind/database', () => ({
+  memoryLedgerRepository: { markSourceShredded: vi.fn().mockResolvedValue(0) },
   fabFileRepository: { __repo: 'fabFiles' },
   fileTagRepository: { __repo: 'fileTags' },
   dataLakeRepository: { __repo: 'dataLakes' },
@@ -173,6 +177,16 @@ describe('PUT /api/files/tags/[id]', () => {
     adapters.assertWriteScope();
     expect(h.assertDataLakeWriteScope).toHaveBeenCalledTimes(1);
   });
+
+  // A failed ledger shred leaves the rename half-applied; the route must not report success for it.
+  it('propagates a shred failure from the service', async () => {
+    const { res } = makeRes();
+    h.update.mockRejectedValueOnce(new Error('memory ledger unavailable'));
+
+    await expect(
+      call({ method: 'PUT', query: { id: 't1' }, body: { id: 't1', name: 'receipts' }, user: { id: 'u1' } }, res)
+    ).rejects.toThrow('memory ledger unavailable');
+  });
 });
 
 describe('DELETE /api/files/tags/[id]', () => {
@@ -263,5 +277,21 @@ describe('DELETE /api/files/tags/[id]', () => {
     expect(h.assertDataLakeWriteScope).not.toHaveBeenCalled();
     adapters.assertWriteScope();
     expect(h.assertDataLakeWriteScope).toHaveBeenCalledTimes(1);
+  });
+
+  // Same reason as the rename above, on the delete path.
+  it('propagates a shred failure from the service', async () => {
+    const { res } = makeRes();
+    h.remove.mockRejectedValueOnce(new Error('memory ledger unavailable'));
+
+    await expect(call({ method: 'DELETE', query: { id: 't1' }, user: { id: 'u1' } }, res)).rejects.toThrow(
+      'memory ledger unavailable'
+    );
+  });
+});
+
+describe('/api/files/tags/[id] - scope gate', () => {
+  it('requires files:write at the baseApi route gate', () => {
+    expect(h.baseApiOptions).toEqual({ requiredScopes: ['files:write'] });
   });
 });

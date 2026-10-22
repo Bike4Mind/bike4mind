@@ -13,8 +13,9 @@ import path from 'node:path';
  * Only packages that reach a real require() at runtime are checked, and that narrowing is
  * load-bearing: reachability from pages/api/** is not the same property, since most ESM-only
  * packages a route can reach are bundled by webpack and never require()d. The sound general
- * form - require each route's BUILT module - needs a `next build` artifact this repo's CI
- * does not produce; see #2982 rather than rebuilding the reachability version.
+ * form - require each route's BUILT module - now runs against a real `next build` in the
+ * self-host image builder stage (apps/client/scripts/check-api-routes-cjs-require.mjs); this
+ * fast, DB-free surface list stays as the floor that names an offending package early.
  *
  * The probe runs under --no-experimental-require-module, which is how the original failure
  * was reproduced. Passing without require(esm) is the stronger guarantee: a dual-published

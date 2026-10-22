@@ -51,6 +51,18 @@ describe('questRepository.findPageBySessionId', () => {
     expect(page.data[0].structuredReplies).toBeUndefined();
   });
 
+  it('returns the persisted pinned flag, including the default', async () => {
+    const base = { sessionId: SESSION, type: 'message' as const };
+    await Quest.create({ ...base, timestamp: new Date(Date.UTC(2026, 0, 1, 0, 0)), prompt: 'pinned', pinned: true });
+    await Quest.create({ ...base, timestamp: new Date(Date.UTC(2026, 0, 1, 0, 1)), prompt: 'plain' });
+
+    const page = await questRepository.findPageBySessionId(SESSION, { page: 1, limit: 10 });
+    expect(page.data.map(q => [q.prompt, q.pinned])).toEqual([
+      ['pinned', true],
+      ['plain', false],
+    ]);
+  });
+
   it('excludes soft-deleted turns and other sessions', async () => {
     await seedTurns(2);
     await Quest.create({

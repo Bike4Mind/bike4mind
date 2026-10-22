@@ -30,7 +30,8 @@
     "title": "更新日志"
   },
   "feedback": {
-    "send": "发送反馈"
+    "send": "发送反馈",
+    "rollupTitle": "你的反馈"
   },
   "terms_policies": "条款与政策",
   "login": "登录",
@@ -166,7 +167,8 @@
     "messages": "消息",
     "invites": "邀请",
     "sendMessage": "发送一条消息",
-    "noMessages": "没有消息"
+    "noMessages": "没有消息",
+    "title_unread": "收件箱，有未读项"
   },
   "addSomething": "添加 {{ name }}",
   "deleteAllSomething": "删除所有 {{ name }}",
@@ -286,7 +288,30 @@
     "renews_on": "在 {{ date }} 更新"
   },
   "billing": {
-    "title": "账单"
+    "title": "账单",
+    "balance": "余额",
+    "credits_heading": "充值积分",
+    "credits_sub": "一次性积分包，计入你的余额。无需订阅。",
+    "credits_sub_with_plan": "一次性积分包，在每月额度之外额外增加。",
+    "free_plan": "免费",
+    "free_plan_detail": "使用积分包按需付费",
+    "low_org": "组织管理员可以为此账户添加积分。",
+    "low_with_plan": "充值后即可继续使用，直到额度续期。",
+    "low_without_plan": "套餐每月提供积分；积分包可立即充值。",
+    "payment_failed": "付款失败",
+    "plan": "套餐",
+    "plan_fallback": "订阅",
+    "plan_unavailable": "不可用",
+    "plan_unavailable_detail": "无法加载你的套餐。",
+    "plans_change": "你的套餐",
+    "plans_change_sub": "管理、更改或取消你的订阅。",
+    "plans_heading": "套餐",
+    "plans_heading_sub": "包含积分额度的月度套餐。",
+    "plans_upgrade": "升级",
+    "plans_upgrade_sub": "每月获得积分额度，无需手动充值。",
+    "retry": "重试",
+    "see_plans": "查看套餐",
+    "top_up": "充值"
   },
   "credits": {
     "title": "积分",
@@ -314,7 +339,8 @@
     "usage_pattern": "基于您过去{{days}}天的使用模式",
     "credits_used": "已使用积分",
     "credits_purchased": "已购买积分",
-    "net_credits": "净积分"
+    "net_credits": "净积分",
+    "unit": "积分"
   },
   "time": {
     "last_7_days": "过去7天",
@@ -362,7 +388,15 @@
       "completed": "已完成",
       "pending": "待处理",
       "failed": "失败"
-    }
+    },
+    "buy_pack": "以 {{price}} 购买 {{credits}} 积分",
+    "choose_pack": "选择积分包",
+    "history_usage_hint": "此处仅列出购买记录。",
+    "organization_credits_active": "组织积分已启用",
+    "rate_per_thousand": "每 1,000 积分 {{rate}}",
+    "see_usage": "查看用量",
+    "shared_rate": "所有积分包单价相同：每 1,000 积分 {{rate}}。",
+    "switch_to_personal": "切换到个人账户以购买个人使用的积分。"
   },
   "settings": {
     "title": "设置",
@@ -531,7 +565,7 @@
   },
   "subscription_modal": {
     "title": "订阅",
-    "description": "通过一个统一的界面访问每个主要的 AI 模型。私密地运行像 Deepseek R1 这样的高级模型。",
+    "description": "通过一个统一的界面访问每个主要的 AI 模型。",
     "no_free_tier": "没有免费套餐 - 专注于专业人士。",
     "credits_rollover": "未使用的积分可累计 3 个月。",
     "monthly_billing": "按月计费",
@@ -543,7 +577,9 @@
     "personal": "个人",
     "business": "商务",
     "team": "团队",
-    "enterprise": "企业"
+    "enterprise": "企业",
+    "audience_label": "套餐类型",
+    "includes": "包含"
   },
   "agents": {
     "title": "代理",
@@ -572,5 +608,13 @@
   "skills": {
     "title": "技能",
     "command_palette_description": "管理可复用的指令模板"
+  },
+  "apiKeys": {
+    "title": "API 密钥"
+  },
+  "connections": {
+    "menuTooltip": "Google Drive、Slack 等集成，以及供你自己的代码使用的 API 密钥",
+    "sections": "连接分区",
+    "title": "连接"
   }
 }

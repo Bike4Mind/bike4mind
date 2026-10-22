@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/agents",
-  "version": "1.0.14",
+  "version": "1.2.9",
   "publishConfig": {
     "access": "restricted"
   },
@@ -44,18 +44,18 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@aws-sdk/client-cloudwatch": "^3.1080.0",
+    "@aws-sdk/client-cloudwatch": "^3.1150.0",
     "@bike4mind/common": "workspace:*",
     "@bike4mind/llm-adapters": "workspace:*",
     "@bike4mind/observability": "workspace:*",
     "@bike4mind/utils": "workspace:*",
     "isolated-vm": "^7.0.1",
-    "zod": "^4.4.3"
+    "zod": "^4.6.6"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
     "tsdown": "^0.22.3",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.11"
   }
 }

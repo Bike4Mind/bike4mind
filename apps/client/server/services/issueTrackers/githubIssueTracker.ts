@@ -18,7 +18,7 @@ import type {
   CreatedIssue,
   ExistingIssue,
   HealthCheckResult,
-} from './types';
+} from '@bike4mind/server-utils/services/issueTrackers/types';
 
 /**
  * Priority label colors for GitHub

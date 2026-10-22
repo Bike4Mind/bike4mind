@@ -4,7 +4,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { Session } from '@bike4mind/database/auth';
 import { SessionEvents } from '@server/utils/eventBus';
-import { isValidObjectId } from '@server/utils/objectId';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { assertSessionOperationalCredits } from '@server/utils/sessionOperationalCreditPreflight';
 
 const handler = baseApi().post(
@@ -20,11 +20,9 @@ const handler = baseApi().post(
     if (!session) throw new Error('Cannot update session');
 
     // Queueing the tag IS the spend, so a refusal is the answer to this request (#1852).
-    // Billed to the session owner, who the Tag handler resolves - not necessarily the
-    // requester, who may only hold update permission on a shared session.
+    // Billed to whoever asked (payerId below), never the owner on a sharee's behalf.
     await assertSessionOperationalCredits({
-      userId: session.userId,
-      requesterId: req.user?.id,
+      userId: req.user!.id,
       operationCount: 1,
       operation: 'session tagging',
       logger: req.logger,
@@ -33,7 +31,7 @@ const handler = baseApi().post(
     // An admin reaches this via CASL's admin-wide Session update, which the handler's share-arm
     // re-check can't express, so their job re-checks as the owner instead (still not-deleted).
     const requesterId = req.user?.isAdmin ? undefined : req.user?.id;
-    const requestId = await SessionEvents.Tag.publish({ sessionId: session.id, requesterId });
+    const requestId = await SessionEvents.Tag.publish({ sessionId: session.id, requesterId, payerId: req.user!.id });
 
     return res.json({ message: 'Tagging job queued', requestId });
   })

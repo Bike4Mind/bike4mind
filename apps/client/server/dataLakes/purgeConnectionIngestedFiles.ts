@@ -3,6 +3,7 @@ import {
   dataLakeRepository,
   fabFileChunkRepository,
   fabFileRepository,
+  organizationRepository,
   sessionRepository,
   userRepository,
 } from '@bike4mind/database';
@@ -11,7 +12,7 @@ import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import type { IDataLakeDocument } from '@bike4mind/common';
 import { shredMemoryForLakeTags } from '@server/dataLakes/shredMemoryForLakeTags';
-import { getFilesStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 
 export interface PurgeConnectionLogger {
   info: (msg: string, ...args: unknown[]) => void;
@@ -27,8 +28,10 @@ type PurgeableConnectionFile = Parameters<typeof dataLakeService.purgeDataLakeCo
  * purgeDataLakeConnectionFiles. A connection-scoped subset of the lake, not the lake itself: a
  * sibling connection's files and any manually-uploaded file in the same lake are untouched.
  *
- * Unsliced, so only GitHub's disconnect and revoke doors use it (the DELETE route and
- * queueHandlers/githubLakeRevoke.ts); Drive's purge runs in slices in queueHandlers/driveDisconnectPurge.ts.
+ * Used by GitHub's disconnect and revoke doors (the DELETE route and apps/workers/src/queueHandlers/githubLakeRevoke.ts);
+ * Drive's purge runs in slices in apps/workers/src/queueHandlers/driveDisconnectPurge.ts. Unsliced by default; with
+ * `sliceSize` it sweeps at most that many files (the finder is handed `sliceSize + 1` as its limit)
+ * and reports whether any remain, so a queue consumer can re-enqueue for the rest.
  *
  * Callers resolve files with their connector's archived/deleted-blind finder, and call this AFTER
  * the connection is disabled (stops a re-claim) but BEFORE its release hard-deletes the row - unlike
@@ -41,32 +44,26 @@ type PurgeableConnectionFile = Parameters<typeof dataLakeService.purgeDataLakeCo
  * the public-lake browse route) drift stale after a disconnect until some unrelated batch happens
  * to recompute them.
  *
- * On failure, logs it, runs `restore` best-effort (the caller's undo of its disable) and rethrows the
- * purge error, never the restore's.
+ * On failure, logs and rethrows the purge error.
  */
 export async function purgeConnectionIngestedFiles(
   lake: IDataLakeDocument,
-  findFiles: () => Promise<PurgeableConnectionFile[]>,
+  findFiles: (limit?: number) => Promise<PurgeableConnectionFile[]>,
   opts: {
     connectionId: string;
     label: string;
     logger: PurgeConnectionLogger;
-    restore?: () => Promise<unknown>;
+    sliceSize?: number;
   }
-): Promise<void> {
-  const { connectionId, label, logger, restore } = opts;
+): Promise<{ remaining: boolean }> {
+  const { connectionId, label, logger, sliceSize } = opts;
   try {
-    await sweep(lake, await findFiles(), logger);
+    const found = await findFiles(sliceSize === undefined ? undefined : sliceSize + 1);
+    const files = sliceSize === undefined ? found : found.slice(0, sliceSize);
+    await sweep(lake, files, logger);
+    return { remaining: files.length < found.length };
   } catch (error) {
-    const ids = { connectionId, dataLakeId: lake.id };
-    logger.error(`${label}: purge failed`, { ...ids, error });
-    if (restore) {
-      try {
-        await restore();
-      } catch (restoreError) {
-        logger.error(`${label}: could not re-enable after a failed purge`, { ...ids, restoreError });
-      }
-    }
+    logger.error(`${label}: purge failed`, { connectionId, dataLakeId: lake.id, error });
     throw error;
   }
 }
@@ -83,6 +80,7 @@ async function sweep(
       fabFiles: fabFileRepository,
       fabFileChunks: fabFileChunkRepository,
       users: userRepository,
+      organizations: organizationRepository,
       dataLakeFindings: dataLakeFindingRepository,
       sessions: sessionRepository,
     },

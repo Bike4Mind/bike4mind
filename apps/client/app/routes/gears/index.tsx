@@ -59,12 +59,14 @@ import { DataLakeIcon } from '@client/app/components/datalake/dataLakeBranding';
 import { openInNewTab } from '@client/app/utils/externalLinks';
 import PageFrame from '@client/app/components/common/PageFrame';
 import FeatureDetailView from '@client/app/components/common/FeatureDetailView';
-import Bike4MindIcon from '@client/app/components/svgs/icons/Bike4MindIcon';
+import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import { gray, grayAlpha } from '@client/app/utils/themes/colors';
 import HelpCenterButton from '@client/app/components/common/HelpCenterButton';
 import { PageTab, pageTabListSx } from '@client/app/components/common/pageTabs';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { useMobileHeader } from '@client/app/hooks/useMobileHeader';
+import { FirstRunEvents } from '@bike4mind/common';
+import { useLogEvent } from '@client/app/hooks/data/analytics';
 
 /**
  * Gears - the feature tour, where each feature's one-time reward is claimed.
@@ -155,7 +157,7 @@ const RewardChip = ({
       size="sm"
       variant="soft"
       color={reward === 'claimable' ? 'success' : 'neutral'}
-      startDecorator={<Bike4MindIcon size="12" />}
+      startDecorator={<CreditIcon sx={{ fontSize: 12, color: 'var(--Icon-color)' }} />}
       data-testid={`gear-reward-${gear.key}`}
       {...(clickable && {
         onClick: (event: React.MouseEvent) => {
@@ -189,7 +191,7 @@ const RewardChip = ({
           '--variant-softActiveColor': ink,
           border: `1px solid ${stroke}`,
           color: ink,
-          // Bike4MindIcon fills with var(--Icon-color), which Joy's
+          // CreditIcon reads var(--Icon-color), which Joy's
           // variant would otherwise set from its own palette.
           '--Icon-color': ink,
         };
@@ -215,7 +217,7 @@ const RewardChip = ({
             size="sm"
             variant="soft"
             color="warning"
-            startDecorator={<Bike4MindIcon size="12" />}
+            startDecorator={<CreditIcon sx={{ fontSize: 12, color: 'var(--Icon-color)' }} />}
             data-testid={`gear-pending-${gear.key}`}
             // Joy sets gap as a plain declaration per size (3px on sm), not
             // as a variable, so it is overridden directly.
@@ -408,6 +410,14 @@ const panelSx = {
 } as const;
 
 const GearsPage = () => {
+  const { mutate: logEvent } = useLogEvent();
+  // Ref-guarded so StrictMode's dev double-mount does not log the open twice.
+  const openLoggedRef = useRef(false);
+  useEffect(() => {
+    if (openLoggedRef.current) return;
+    openLoggedRef.current = true;
+    logEvent({ type: FirstRunEvents.GEARS_PAGE_OPENED });
+  }, [logEvent]);
   const [tab, setTab] = useState<GearsTabKey>('getting-started');
   // Which card is expanded, per tab. Cleared on tab change so switching away and
   // back lands on the list rather than reopening whatever was last read.
@@ -616,7 +626,7 @@ const GearsPage = () => {
                   // The same token the soft chip paints its own text with.
                   sx={{ mt: '16px', fontSize: '13px', color: 'warning.softColor' }}
                 >
-                  Once someone else opens your artifact link, you can claim {creditText(gear)}.
+                  Once someone else opens your artifact link while signed in, you can claim {creditText(gear)}.
                 </Typography>
               )}
               {/* Pinned to the bottom so the CTAs line up across a row of uneven cards. */}

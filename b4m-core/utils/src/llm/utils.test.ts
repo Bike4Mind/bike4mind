@@ -6,14 +6,82 @@ import {
   computeCosineSimilarity,
   fetchAndProcessPreviousMessages,
   fetchAgentConversationHistory,
+  isStoppedBeforeReply,
   includeHardcodedSystemMessage,
   includeImagePromptSystemMessage,
   TOOL_RESULT_NOT_RECORDED,
   ATTACHMENT_DELIVERED_NOTICE,
+  ATTACHMENT_END_DELIMITER,
+  HISTORY_WINDOW_STEP,
+  resolveHistoryWindowStart,
 } from './utils';
 import { ensureToolPairingIntegrity, stripAllToolBlocks } from '@bike4mind/llm-adapters';
-import { DEFAULT_HISTORY_FETCH_LIMIT, FORMAT_PROMPT_TEMPLATE, UNLIMITED_HISTORY_COUNT } from '@bike4mind/common';
+import {
+  DEFAULT_HISTORY_FETCH_LIMIT,
+  FORMAT_PROMPT_TEMPLATE,
+  UNLIMITED_HISTORY_COUNT,
+  extractChoicesBlock,
+  formatChoicesBlock,
+} from '@bike4mind/common';
 import type { IMessage, ISessionDocument } from '@bike4mind/common';
+
+describe('isStoppedBeforeReply', () => {
+  type HistoryItem = Parameters<typeof isStoppedBeforeReply>[0];
+  const cases: Array<[string, HistoryItem, boolean]> = [
+    ['no output', { status: 'stopped', replies: [] }, true],
+    ['absent replies', { status: 'stopped' }, true],
+    ['empty reply', { status: 'stopped', replies: [''] }, true],
+    ['thinking only', { status: 'stopped', replies: ['<think>reasoning</think>'] }, true],
+    ['partial text', { status: 'stopped', replies: ['partial answer'] }, false],
+    ['text after thinking', { status: 'stopped', replies: ['<think>reasoning</think>', 'answer'] }, false],
+    ['completed without output', { status: 'done', replies: [] }, false],
+    ['running without output', { status: 'running', replies: [] }, false],
+    ['legacy status absent', { replies: [] }, false],
+    [
+      'successful research',
+      { status: 'stopped', researchModeResults: [{ configurationId: 'r', success: true, response: 'answer' }] },
+      false,
+    ],
+    [
+      'failed research',
+      { status: 'stopped', researchModeResults: [{ configurationId: 'r', success: false, error: 'failed' }] },
+      true,
+    ],
+    [
+      'blank research',
+      { status: 'stopped', researchModeResults: [{ configurationId: 'r', success: true, response: '  ' }] },
+      true,
+    ],
+    [
+      'structured output',
+      { status: 'stopped', structuredReplies: [{ content: [{ type: 'text', text: 'answer' }] }] },
+      false,
+    ],
+    [
+      'recorded result',
+      { status: 'stopped', promptMeta: { functionCalls: [{ id: 'call-1', name: 'search', returnValue: 'result' }] } },
+      false,
+    ],
+    [
+      'recorded failure',
+      {
+        status: 'stopped',
+        promptMeta: { functionCalls: [{ id: 'call-1', name: 'search', returnValue: 'failed', success: false }] },
+      },
+      false,
+    ],
+    ['resultless tool', { status: 'stopped', promptMeta: { functionCalls: [{ id: 'call-1', name: 'search' }] } }, true],
+    [
+      'unpaired result',
+      { status: 'stopped', promptMeta: { functionCalls: [{ name: 'search', returnValue: 'result' }] } },
+      true,
+    ],
+  ];
+
+  it.each(cases)('%s', (_name, item, expected) => {
+    expect(isStoppedBeforeReply(item)).toBe(expected);
+  });
+});
 
 // Define ITokenizer type locally since it's in @bike4mind/utils
 interface ITokenizer {
@@ -1414,7 +1482,9 @@ describe('Context Management Tests', () => {
       const mockWarn = vi.fn();
       stripAllToolBlocks(messages as IMessage[], { log: vi.fn(), warn: mockWarn });
 
-      expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('Stripped 2 tool_use and 2 tool_result blocks'));
+      expect(mockWarn).toHaveBeenCalledWith(
+        expect.stringContaining('Stripped 2 tool_use, 2 tool_result and 0 server tool blocks')
+      );
     });
 
     it('should handle mixed content in user messages (text + tool_result)', () => {
@@ -1470,6 +1540,45 @@ describe('Context Management Tests', () => {
       // Each item converts to 2 IMessages (user prompt + assistant reply) -> 3 items x 2 = 6
       expect(messages).toHaveLength(6);
       expect(meta.oldestIncludedQuestId).toBe(makeItem(1).id);
+    });
+
+    it('leaves no dangling user turn for a prompt stopped before any reply', async () => {
+      // Newest-first: 4 is the current prompt (popped), 3 was stopped with no output, 2 streamed some
+      // text before the stop, 1 completed.
+      const items = [
+        makeItem(4, { status: 'running', replies: [], reply: '' }),
+        makeItem(3, { status: 'stopped', replies: [], reply: '' }),
+        makeItem(2, { status: 'stopped', replies: ['partial answer'] }),
+        makeItem(1),
+      ];
+      const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+      const [messages] = await fetchAndProcessPreviousMessages(makeSession(), 10, { db });
+
+      expect(messages).toEqual([
+        { role: 'user', content: 'prompt 1' },
+        { role: 'assistant', content: 'reply 1' },
+        { role: 'user', content: 'prompt 2' },
+        { role: 'assistant', content: 'partial answer' },
+      ]);
+    });
+
+    it('keeps a stopped turn that already recorded tool calls', async () => {
+      const items = [
+        makeItem(2, { status: 'running', replies: [], reply: '' }),
+        makeItem(1, {
+          status: 'stopped',
+          replies: [],
+          reply: '',
+          structuredReplies: [{ content: [{ type: 'text', text: 'calling a tool' }] }],
+        }),
+      ];
+      const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+      const [messages] = await fetchAndProcessPreviousMessages(makeSession(), 10, { db });
+
+      expect(messages[0]).toEqual({ role: 'user', content: 'prompt 1' });
+      expect(messages).toHaveLength(2);
     });
 
     it('excludes messages at or before the boundary', async () => {
@@ -2111,6 +2220,22 @@ describe('Context Management Tests', () => {
       expect(messages.every(m => typeof m.content === 'string')).toBe(true);
     });
 
+    it('skips a prompt stopped before any reply, but keeps a stopped turn that streamed text', async () => {
+      const items = [
+        makeItem(3, { status: 'stopped', replies: [], reply: '' }),
+        makeItem(2, { status: 'stopped', replies: ['partial answer'] }),
+        makeItem(1, { status: 'stopped', replies: ['<think>only thoughts</think>'] }),
+      ];
+      const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+      const messages = await fetchAgentConversationHistory(makeSession(), 20, { db });
+
+      expect(messages).toEqual([
+        { role: 'user', content: 'prompt 2' },
+        { role: 'assistant', content: 'partial answer' },
+      ]);
+    });
+
     it('returns empty without querying when questCount <= 0', async () => {
       const getMostRecentChatHistory = vi.fn();
       const messages = await fetchAgentConversationHistory(makeSession(), 0, {
@@ -2335,9 +2460,9 @@ describe('Token budget allocation', () => {
       expect(labels).toContain('history-39');
       expect(labels).toContain('history-38');
 
-      // The primary allocation kept us in bounds, so the final safety net never had to fire. 6661 plus
-      // the delivered-content and anti-inference notices' own real token cost (both fixed, both counted).
-      expect(await calculateTotalTokenLength(result, { estimateOnly: false, tokenizer })).toBe(6723);
+      // The primary allocation kept us in bounds, including the delivery label, truncation notice,
+      // and closing boundary, so the final safety net never had to fire.
+      expect(await calculateTotalTokenLength(result, { estimateOnly: false, tokenizer })).toBe(6712);
       expect(mockLogger.warn).not.toHaveBeenCalledWith(expect.stringContaining('exceeds maxInputTokens'));
 
       // The squeeze is reported, and it names the file so a support engineer can see which one lost.
@@ -2362,7 +2487,9 @@ describe('Token budget allocation', () => {
 
       // Byte-identical past the delivered-content notice, not merely present: the squeeze check
       // compares estimates against estimates, so an attachment that fits can never be reported as squeezed.
-      expect(findAttachedFile(result)?.content).toBe(ATTACHMENT_DELIVERED_NOTICE + attached.content);
+      expect(findAttachedFile(result)?.content).toBe(
+        ATTACHMENT_DELIVERED_NOTICE + attached.content + ATTACHMENT_END_DELIMITER
+      );
       expect(mockLogger.warn).not.toHaveBeenCalled();
     });
 
@@ -2421,7 +2548,9 @@ describe('Token budget allocation', () => {
         tokenizer
       );
 
-      expect(findAttachedFile(result)?.content).toBe(ATTACHMENT_DELIVERED_NOTICE + attached.content);
+      expect(findAttachedFile(result)?.content).toBe(
+        ATTACHMENT_DELIVERED_NOTICE + attached.content + ATTACHMENT_END_DELIMITER
+      );
       expect(historyLabels(result)).toHaveLength(172);
       expect(mockLogger.warn).not.toHaveBeenCalled();
     });
@@ -3098,7 +3227,8 @@ describe('truncated attachments are marked', () => {
     expect(text).toContain(NOTICE);
     expect(
       text.endsWith(
-        'later content was not sent. Do not infer a total row, record, or section count, or a final row, from what is above.]'
+        'later content was not sent. Do not infer a total row, record, or section count, or a final row, from what is above.]' +
+          ATTACHMENT_END_DELIMITER
       )
     ).toBe(true);
     // The tail the marker lives in genuinely did not survive, which is exactly why the notice matters.
@@ -3131,7 +3261,10 @@ describe('truncated attachments are marked', () => {
     const delivered = result.filter(m => typeof m.content === 'string' && (m.content as string).includes('id,name'));
     expect(delivered).toHaveLength(2);
     expect(delivered.map(m => m.content)).toEqual(
-      expect.arrayContaining([ATTACHMENT_DELIVERED_NOTICE + small, ATTACHMENT_DELIVERED_NOTICE + large])
+      expect.arrayContaining([
+        ATTACHMENT_DELIVERED_NOTICE + small + ATTACHMENT_END_DELIMITER,
+        ATTACHMENT_DELIVERED_NOTICE + large + ATTACHMENT_END_DELIMITER,
+      ])
     );
     for (const m of delivered) expect(m.content as string).not.toContain(NOTICE);
   });
@@ -3163,7 +3296,8 @@ describe('truncated attachments are marked', () => {
     expect(text.split(NOTICE)).toHaveLength(2); // exactly one occurrence
     expect(
       text.endsWith(
-        'later content was not sent. Do not infer a total row, record, or section count, or a final row, from what is above.]'
+        'later content was not sent. Do not infer a total row, record, or section count, or a final row, from what is above.]' +
+          ATTACHMENT_END_DELIMITER
       )
     ).toBe(true);
     // No fragment of a notice stranded earlier in the payload.
@@ -3186,7 +3320,7 @@ describe('truncated attachments are marked', () => {
     );
 
     const file = result.find(m => typeof m.content === 'string' && (m.content as string).includes('row-data,'));
-    expect(file!.content).toBe(ATTACHMENT_DELIVERED_NOTICE + whole);
+    expect(file!.content).toBe(ATTACHMENT_DELIVERED_NOTICE + whole + ATTACHMENT_END_DELIMITER);
     expect(file!.content as string).not.toContain(NOTICE);
     expect(file!.content as string).toContain('FINAL_ROW_MARKER: apricot');
   });
@@ -3210,7 +3344,7 @@ describe('truncated attachments are marked', () => {
     );
 
     const delivered = result.find(m => typeof m.content === 'string' && (m.content as string).includes('row,value'));
-    expect(delivered!.content).toBe(ATTACHMENT_DELIVERED_NOTICE + file);
+    expect(delivered!.content).toBe(ATTACHMENT_DELIVERED_NOTICE + file + ATTACHMENT_END_DELIMITER);
     expect(delivered!.content as string).toContain('FINAL_ROW_MARKER: apricot');
     expect(delivered!.content as string).not.toContain(NOTICE);
   });
@@ -3364,7 +3498,7 @@ describe('allocation under a production-shaped system-prompt load', () => {
     const delivered = result.find(
       m => typeof m.content === 'string' && (m.content as string).includes('id,fruit,color')
     );
-    expect(delivered!.content).toBe(ATTACHMENT_DELIVERED_NOTICE + file.content);
+    expect(delivered!.content).toBe(ATTACHMENT_DELIVERED_NOTICE + file.content + ATTACHMENT_END_DELIMITER);
     expect(delivered!.content as string).toContain('FINAL_ROW_MARKER: apricot');
     expect(delivered!.content as string).not.toContain(NOTICE);
     expect(await calculateTotalTokenLength(result, { estimateOnly: false, tokenizer })).toBeLessThanOrEqual(
@@ -4333,5 +4467,323 @@ describe('buildAndSortMessages - concurrent calls do not share truncation teleme
     expect(untouched.messageTruncation?.wasTruncated).toBe(false);
     expect(truncated.messageTruncation?.wasTruncated).toBe(true);
     expect(truncated.messageTruncation?.truncationMethod).toBe('token-budget');
+  });
+});
+
+describe('fetchAndProcessPreviousMessages - stored reply choices', () => {
+  const options = [
+    { label: 'Extend', description: 'Extend the brief.' },
+    { label: 'Ship', description: 'Ship it as is.' },
+  ];
+  const makeItem = (n: number, overrides: Record<string, unknown> = {}) => ({
+    id: String(n).padStart(24, '0'),
+    sessionId: 'session1',
+    prompt: `prompt ${n}`,
+    reply: `reply ${n}`,
+    replies: [`reply ${n}`],
+    timestamp: new Date(n * 1000),
+    type: 'message',
+    status: 'done',
+    ...overrides,
+  });
+  const session = { id: 'session1' } as unknown as ISessionDocument;
+  const fetchWith = async (item: Record<string, unknown>, includeReplyChoices?: boolean) => {
+    const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue([makeItem(2), item]) } };
+    const [messages] = await fetchAndProcessPreviousMessages(session, 10, { db, includeReplyChoices });
+    return messages;
+  };
+
+  it('re-attaches stored choices to the assistant turn when the guidance is offered', async () => {
+    const item = makeItem(1, { suggestedChoices: { options, selectedIndex: 1 } });
+    const messages = await fetchWith(item, true);
+    expect(messages[1]).toEqual({ role: 'assistant', content: 'reply 1' + formatChoicesBlock(options) });
+    // The re-attached block parses back to exactly the stored options, and selectedIndex never leaks.
+    const content = messages[1].content as string;
+    expect(extractChoicesBlock(content).choices).toEqual(options);
+    expect(content).not.toContain('selectedIndex');
+    expect(item.replies).toEqual(['reply 1']);
+  });
+
+  it('leaves history alone when the guidance is withheld', async () => {
+    const messages = await fetchWith(makeItem(1, { suggestedChoices: { options } }), false);
+    expect(messages[1]).toEqual({ role: 'assistant', content: 'reply 1' });
+  });
+
+  it('defaults to leaving history alone', async () => {
+    const messages = await fetchWith(makeItem(1, { suggestedChoices: { options } }));
+    expect(messages[1]).toEqual({ role: 'assistant', content: 'reply 1' });
+  });
+
+  it('skips a turn with fewer than two stored options', async () => {
+    const messages = await fetchWith(makeItem(1, { suggestedChoices: { options: [options[0]] } }), true);
+    expect(messages[1]).toEqual({ role: 'assistant', content: 'reply 1' });
+  });
+
+  it('never attaches a block on a replayed tool turn, even when offered', async () => {
+    const item = makeItem(1, {
+      suggestedChoices: { options },
+      promptMeta: { functionCalls: [{ id: 'toolu_1', name: 'web_search', parameters: {}, returnValue: 'ok' }] },
+    });
+    const messages = await fetchWith(item, true);
+    const content = messages[1].content as Array<{ type: string; text?: string }>;
+    // historyTextReply returns the slot BEFORE the tool_use blocks (the pre-tool-call preamble),
+    // never the turn's final answer, so a block here would teach "choices before the tool call".
+    expect(content[0]).toEqual({ type: 'text', text: 'reply 1' });
+    expect(content[1].type).toBe('tool_use');
+  });
+
+  it('does not attach a block when the first visible slot is not the last', async () => {
+    const item = makeItem(1, {
+      replies: ['partial answer before tool call', 'final answer after tool call'],
+      suggestedChoices: { options },
+    });
+    const messages = await fetchWith(item, true);
+    // historyTextReply picks the FIRST non-<think> slot ('partial answer...'), which is not the
+    // last slot carrying visible text ('final answer...') - so no block is attached.
+    expect(messages[1]).toEqual({ role: 'assistant', content: 'partial answer before tool call' });
+  });
+});
+
+describe('history window alignment', () => {
+  const LIMIT = 30;
+  const STEP = HISTORY_WINDOW_STEP;
+
+  describe('resolveHistoryWindowStart', () => {
+    it.each([
+      ['T below the limit', 12, 0],
+      ['T = L', LIMIT, 0],
+      ['T = L + 1', LIMIT + 1, STEP],
+      ['T = L + STEP', LIMIT + STEP, STEP],
+      ['T = L + STEP + 1', LIMIT + STEP + 1, 2 * STEP],
+    ])('%s', (_label, priorQuestCount, expectedStart) => {
+      expect(resolveHistoryWindowStart(priorQuestCount, LIMIT)).toBe(expectedStart);
+    });
+
+    it('never exceeds the limit, never empties the window, and only moves on a step boundary', () => {
+      let previous = 0;
+      for (let priorQuestCount = 1; priorQuestCount <= 300; priorQuestCount++) {
+        const start = resolveHistoryWindowStart(priorQuestCount, LIMIT);
+        expect(priorQuestCount - start).toBeLessThanOrEqual(LIMIT);
+        expect(priorQuestCount - start).toBeGreaterThan(0);
+        expect(start % STEP).toBe(0);
+        expect(start).toBeGreaterThanOrEqual(previous);
+        previous = start;
+      }
+    });
+
+    it('keeps a usable window at a small limit, where a full step would leave almost none', () => {
+      // Limit 10 with step 10 would collapse to a single quest right after every step.
+      for (let t = 11; t <= 60; t++) {
+        const window = t - resolveHistoryWindowStart(t, 10);
+        expect(window).toBeGreaterThanOrEqual(6);
+        expect(window).toBeLessThanOrEqual(10);
+      }
+      expect(resolveHistoryWindowStart(7, 1)).toBe(6);
+    });
+  });
+
+  describe('fetchAndProcessPreviousMessages', () => {
+    const makeItem = (n: number) => ({
+      id: String(n).padStart(24, '0'),
+      sessionId: 'session1',
+      prompt: `prompt ${n}`,
+      reply: `reply ${n}`,
+      replies: [`reply ${n}`],
+      timestamp: new Date(n * 1000),
+      type: 'message',
+      status: 'done',
+    });
+    const makeSession = (overrides: Partial<ISessionDocument> = {}) =>
+      ({ id: 'session1', ...overrides }) as unknown as ISessionDocument;
+
+    /** A session of `priorQuestCount` earlier quests plus the in-flight one, newest first as the repo returns them. */
+    const repo = (priorQuestCount: number) => {
+      const all = Array.from({ length: priorQuestCount + 1 }, (_, i) => makeItem(i + 1));
+      return {
+        getMostRecentChatHistory: vi.fn(async (_sessionId: string, limit: number) => all.slice(-limit).reverse()),
+        countBySessionId: vi.fn(async () => all.length),
+      };
+    };
+
+    const windowFor = async (priorQuestCount: number, session = makeSession()) => {
+      const quests = repo(priorQuestCount);
+      const [, count, meta] = await fetchAndProcessPreviousMessages(session, LIMIT, { db: { quests } });
+      return { count, oldest: meta.oldestIncludedQuestId, quests };
+    };
+
+    it('keeps the newest quests, unchanged, while the session fits the limit', async () => {
+      const { count, oldest, quests } = await windowFor(12);
+
+      expect(count).toBe(12);
+      expect(oldest).toBe(makeItem(1).id);
+      expect(quests.countBySessionId).not.toHaveBeenCalled();
+    });
+
+    it('holds the window start for STEP turns, then moves it a whole step', async () => {
+      const starts = new Map<number, string | null | undefined>();
+      for (const prior of [LIMIT, LIMIT + 1, LIMIT + STEP, LIMIT + STEP + 1]) {
+        starts.set(prior, (await windowFor(prior)).oldest);
+      }
+
+      expect(starts.get(LIMIT)).toBe(makeItem(1).id);
+      // T = L + 1 drops the first STEP quests at once, and the next STEP - 1 turns reuse that start.
+      expect(starts.get(LIMIT + 1)).toBe(makeItem(STEP + 1).id);
+      expect(starts.get(LIMIT + STEP)).toBe(makeItem(STEP + 1).id);
+      expect(starts.get(LIMIT + STEP + 1)).toBe(makeItem(2 * STEP + 1).id);
+    });
+
+    it('never returns more than the limit', async () => {
+      for (const prior of [LIMIT, LIMIT + 1, LIMIT + STEP, LIMIT + STEP + 1, 95]) {
+        expect((await windowFor(prior)).count).toBeLessThanOrEqual(LIMIT);
+      }
+    });
+
+    it('costs one count query, and only once the session has reached the limit', async () => {
+      const { quests } = await windowFor(LIMIT + 3);
+
+      expect(quests.countBySessionId).toHaveBeenCalledTimes(1);
+      expect(quests.countBySessionId).toHaveBeenCalledWith('session1');
+      expect(quests.getMostRecentChatHistory).toHaveBeenCalledTimes(1);
+      expect(quests.getMostRecentChatHistory).toHaveBeenCalledWith('session1', LIMIT + 1);
+    });
+
+    it('falls back to the newest-N window when the repository has no count', async () => {
+      const { getMostRecentChatHistory } = repo(LIMIT + 3);
+
+      const [, count, meta] = await fetchAndProcessPreviousMessages(makeSession(), LIMIT, {
+        db: { quests: { getMostRecentChatHistory } },
+      });
+
+      expect(count).toBe(LIMIT);
+      expect(meta.oldestIncludedQuestId).toBe(makeItem(4).id);
+    });
+
+    it('keeps the newest-N window, and the turn, when the count query fails', async () => {
+      const { getMostRecentChatHistory } = repo(LIMIT + 3);
+      const countBySessionId = vi.fn(async () => {
+        throw new Error('count timeout');
+      });
+
+      const [, count, meta] = await fetchAndProcessPreviousMessages(makeSession(), LIMIT, {
+        db: { quests: { getMostRecentChatHistory, countBySessionId } },
+      });
+
+      expect(count).toBe(LIMIT);
+      expect(meta.oldestIncludedQuestId).toBe(makeItem(4).id);
+    });
+
+    it('snaps a binding token budget to the same step grid as the count window', async () => {
+      // ~400 estimated tokens per quest, so a 1200-token budget keeps about three of them.
+      const longItem = (n: number) => ({ ...makeItem(n), prompt: 'p'.repeat(700), reply: 'r'.repeat(700) });
+      const starts: number[] = [];
+      for (let priorQuestCount = LIMIT + 1; priorQuestCount <= LIMIT + 2 * STEP; priorQuestCount++) {
+        const all = Array.from({ length: priorQuestCount + 1 }, (_, i) => longItem(i + 1));
+        const [, , meta] = await fetchAndProcessPreviousMessages(makeSession(), LIMIT, {
+          db: {
+            quests: {
+              getMostRecentChatHistory: async (_sessionId: string, limit: number) => all.slice(-limit).reverse(),
+              countBySessionId: async () => all.length,
+            },
+          },
+          verbatimTokenBudget: 1200,
+        });
+        starts.push(Number(meta.oldestIncludedQuestId) - 1);
+      }
+
+      // A budget that binds moves by one quest a turn, so an unaligned trim would slide the window
+      // (and rewrite the prompt prefix) on every turn. Snapped to the grid, the start holds between
+      // boundaries.
+      for (const start of starts) expect(start % STEP).toBe(0);
+      expect(new Set(starts).size).toBeLessThan(starts.length);
+    });
+
+    it('keeps the raw trim when the grid has no point inside a small trim', async () => {
+      // Five heavy quests, fewer than one step: the trim wants to drop four, but the only grid
+      // points are 0 and 10, and 10 would drop the newest turn. Snapping to 0 would leave the
+      // summary boundary at the first quest, so the summarizer would fold nothing and re-fire every
+      // turn; the window takes the raw trim instead.
+      const heavyItem = (n: number) => ({
+        ...makeItem(n),
+        prompt: 'x'.repeat(4000),
+        reply: `reply ${n}`,
+        replies: [`reply ${n}`],
+      });
+      const all = [1, 2, 3, 4, 5, 6].map(heavyItem);
+
+      const [, count, meta] = await fetchAndProcessPreviousMessages(makeSession(), LIMIT, {
+        db: {
+          quests: {
+            getMostRecentChatHistory: async (_sessionId: string, limit: number) => all.slice(-limit).reverse(),
+            countBySessionId: async () => all.length,
+          },
+        },
+        // ~1146 tokens per quest: fits the newest turn only.
+        verbatimTokenBudget: 1500,
+      });
+
+      expect(meta.excludedOlderQuestCount).toBe(4);
+      expect(count).toBe(1);
+      expect(meta.oldestIncludedQuestId).toBe(makeItem(5).id);
+    });
+
+    it('clamps the snapped trim when the summary boundary is off the step grid', async () => {
+      // Fifteen heavy quests, summary covering the first three: after the filter the window starts at
+      // absolute index 3, so the trim at absolute index 7 sits between grid points. Snapping down
+      // would land below the window start; the trim must snap up instead and never go negative.
+      const heavyItem = (n: number) => ({
+        ...makeItem(n),
+        prompt: 'x'.repeat(4000),
+        reply: `reply ${n}`,
+        replies: [`reply ${n}`],
+      });
+      const all = Array.from({ length: 16 }, (_, i) => heavyItem(i + 1));
+
+      const [, count, meta] = await fetchAndProcessPreviousMessages(
+        makeSession({ contextSummaryUpToQuestId: makeItem(3).id }),
+        LIMIT,
+        {
+          db: {
+            quests: {
+              getMostRecentChatHistory: async (_sessionId: string, limit: number) => all.slice(-limit).reverse(),
+              countBySessionId: async () => all.length,
+            },
+          },
+          // ~1146 tokens per quest: fits eight of the twelve in the window.
+          verbatimTokenBudget: 10_000,
+        }
+      );
+
+      expect(meta.excludedOlderQuestCount).toBeGreaterThan(0);
+      expect(count).toBeLessThan(12);
+      expect(meta.oldestIncludedQuestId).toBe(makeItem(11).id);
+    });
+
+    describe('with a context summary', () => {
+      it('already covers the quests the window stepped past, so the filter changes nothing', async () => {
+        // The summarizer covers up to the quest before the window start (see ContextSummarizationFeature).
+        const boundary = makeItem(STEP).id;
+
+        const { count, oldest } = await windowFor(LIMIT + 1, makeSession({ contextSummaryUpToQuestId: boundary }));
+
+        expect(oldest).toBe(makeItem(STEP + 1).id);
+        expect(count).toBe(LIMIT + 1 - STEP);
+      });
+
+      it('still trims a boundary that is ahead of the window start', async () => {
+        const { oldest } = await windowFor(
+          LIMIT + 1,
+          makeSession({ contextSummaryUpToQuestId: makeItem(STEP + 5).id })
+        );
+
+        expect(oldest).toBe(makeItem(STEP + 6).id);
+      });
+
+      it('does not pull quests back into the window when the summary lags its start', async () => {
+        // The summary only reaches quest 3; quests 4..STEP are outside the window and not summarized yet.
+        const { oldest } = await windowFor(LIMIT + 1, makeSession({ contextSummaryUpToQuestId: makeItem(3).id }));
+
+        expect(oldest).toBe(makeItem(STEP + 1).id);
+      });
+    });
   });
 });

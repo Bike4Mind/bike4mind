@@ -16,7 +16,7 @@ import type {
   ExistingIssue,
   HealthCheckResult,
   IssuePriority,
-} from './types';
+} from '@bike4mind/server-utils/services/issueTrackers/types';
 
 /**
  * Priority mapping from our priority levels to Jira priority names

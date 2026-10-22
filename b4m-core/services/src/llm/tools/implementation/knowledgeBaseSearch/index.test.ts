@@ -62,6 +62,7 @@ import {
 } from '@bike4mind/common';
 import { emptyEmbeddingMismatchReport } from '../../../../dataLakeService/embeddingMismatch';
 import type { ToolContext } from '../../base/types';
+import { LIBRARY_OFF_NO_LAKE_MESSAGE } from '../../base/resolveSessionLakeAccess';
 
 const logger = { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as never;
 
@@ -3617,6 +3618,163 @@ describe('search_knowledge_base narrows lake access to the session lake', () => 
   });
 });
 
+describe('search_knowledge_base includeLibraryFiles', () => {
+  const oneLake = {
+    dataLakeTags: ['datalake:mine'],
+    dataLakeTagPrefixes: ['mine:'],
+    scopedTagPrefixes: [],
+    lakes: [
+      {
+        id: 'l1',
+        datalakeTag: 'datalake:mine',
+        fileTagPrefix: 'mine:',
+        membership: { kind: 'registry', datalakeTag: 'datalake:mine', fileTagPrefix: 'mine:' },
+        source: 'registry',
+      },
+    ],
+  };
+  const noLakes = { dataLakeTags: [], dataLakeTagPrefixes: [], scopedTagPrefixes: [], lakes: [] };
+
+  function makeFlagContext(overrides: Partial<ToolContext>): ToolContext {
+    return makeContext({
+      retrievalFilter: undefined,
+      db: {
+        fabfiles: {
+          search: vi.fn().mockResolvedValue({
+            data: [{ id: 'd1', fileName: 'Doc.pdf', tags: [], vectorized: true, mimeType: 'application/pdf' }],
+            total: 1,
+          }),
+        },
+        fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue('text-embedding-ada-002') },
+        apiKeys: {},
+        usageEvents: { record: vi.fn() },
+      } as never,
+      ...overrides,
+    });
+  }
+
+  // Unset excludes whenever the session names a lake (with or without the sidecar); a set flag wins.
+  // Callers resolve the flag through libraryFlagForScope first, so derived-tag chats arrive as true.
+  it.each([
+    ['explicit lake, unset', ['datalake:mine'], true, undefined, true],
+    ['explicit lake, off', ['datalake:mine'], true, false, true],
+    ['explicit lake, on', ['datalake:mine'], true, true, false],
+    ['legacy lake chat, unset', ['datalake:mine'], undefined, undefined, true],
+    ['all lakes, off', undefined, undefined, false, true],
+    ['plain chat, unset', undefined, undefined, undefined, false],
+  ])('%s -> restrictToDataLake %s on both arms', async (_, tags, explicit, flag, restrict) => {
+    getDynamicDataLakeAccessMock.mockResolvedValue(oneLake);
+    semanticDataLakeSearchMock.mockResolvedValueOnce({ results: [], scan: undefined, alternateModelsEmbedded: [] });
+    const ctx = makeFlagContext({
+      sessionRetrievalTags: tags as string[] | undefined,
+      sessionLakeScopeExplicit: explicit as boolean | undefined,
+      sessionIncludeLibraryFiles: flag as boolean | undefined,
+    });
+    await run(ctx);
+
+    expect(semanticDataLakeSearchMock.mock.calls[0][0]).toMatchObject({ restrictToDataLake: restrict });
+    const searchMock = ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>;
+    expect(searchMock.mock.calls[0]?.[5]).toMatchObject({ restrictToDataLake: restrict });
+  });
+
+  it('reports the empty corpus instead of searching when the library is off and no lake is reachable', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue(noLakes);
+    const ctx = makeFlagContext({ sessionIncludeLibraryFiles: false });
+    const out = await run(ctx);
+
+    expect(out).toBe(LIBRARY_OFF_NO_LAKE_MESSAGE);
+    expect(semanticDataLakeSearchMock).not.toHaveBeenCalled();
+    expect(ctx.db.fabfiles!.search).not.toHaveBeenCalled();
+    expect(ctx.statusUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ promptMeta: { retrieval: expect.objectContaining({ outcome: 'no_lakes' }) } })
+    );
+  });
+
+  const ATTACHED_ID = '64b7f0c2a1b2c3d4e5f60718';
+
+  it("library off still searches the chat's attached files on both arms", async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue(oneLake);
+    semanticDataLakeSearchMock.mockResolvedValueOnce({ results: [], scan: undefined, alternateModelsEmbedded: [] });
+    const ctx = makeFlagContext({
+      sessionRetrievalTags: ['datalake:mine'],
+      sessionIncludeLibraryFiles: false,
+      attachedFileIds: [ATTACHED_ID],
+    });
+    await run(ctx);
+
+    expect(semanticDataLakeSearchMock.mock.calls[0][0]).toMatchObject({
+      restrictToDataLake: true,
+      admitFileIds: [ATTACHED_ID],
+    });
+    const searchMock = ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>;
+    expect(searchMock.mock.calls[0]?.[5]).toMatchObject({ restrictToDataLake: true, admitFileIds: [ATTACHED_ID] });
+  });
+
+  it('library on admits nothing extra, since the base arms already cover attachments', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue(oneLake);
+    semanticDataLakeSearchMock.mockResolvedValueOnce({ results: [], scan: undefined, alternateModelsEmbedded: [] });
+    await run(makeFlagContext({ sessionIncludeLibraryFiles: true, attachedFileIds: [ATTACHED_ID] }));
+
+    expect(semanticDataLakeSearchMock.mock.calls[0][0]).toMatchObject({ restrictToDataLake: false, admitFileIds: [] });
+  });
+
+  it('an all-lakes personal-corpus chat with the library off searches its attachments, not an empty corpus', async () => {
+    semanticDataLakeSearchMock.mockResolvedValueOnce({ results: [], scan: undefined, alternateModelsEmbedded: [] });
+    const ctx = makeFlagContext({
+      suppressLakeArms: true,
+      sessionIncludeLibraryFiles: false,
+      attachedFileIds: [ATTACHED_ID],
+    });
+    const out = await run(ctx);
+
+    expect(out).not.toBe(LIBRARY_OFF_NO_LAKE_MESSAGE);
+    expect(semanticDataLakeSearchMock.mock.calls[0][0]).toMatchObject({
+      restrictToDataLake: true,
+      ownFilesOnly: true,
+      admitFileIds: [ATTACHED_ID],
+    });
+    const searchMock = ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>;
+    expect(searchMock.mock.calls[0]?.[5]).toMatchObject({ restrictToDataLake: true, admitFileIds: [ATTACHED_ID] });
+  });
+
+  it('library off with no reachable lake still searches its attachments semantically', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue(noLakes);
+    semanticDataLakeSearchMock.mockResolvedValueOnce({ results: [], scan: undefined, alternateModelsEmbedded: [] });
+    const ctx = makeFlagContext({ sessionIncludeLibraryFiles: false, attachedFileIds: [ATTACHED_ID] });
+    const out = await run(ctx);
+
+    expect(out).not.toBe(LIBRARY_OFF_NO_LAKE_MESSAGE);
+    expect(semanticDataLakeSearchMock.mock.calls[0][0]).toMatchObject({
+      dataLakeTags: [],
+      restrictToDataLake: true,
+      admitFileIds: [ATTACHED_ID],
+    });
+  });
+
+  it('library off wins over a personal-corpus session: nothing is searched', async () => {
+    const ctx = makeFlagContext({ suppressLakeArms: true, sessionIncludeLibraryFiles: false });
+    const out = await run(ctx);
+
+    expect(out).toBe(LIBRARY_OFF_NO_LAKE_MESSAGE);
+    expect(semanticDataLakeSearchMock).not.toHaveBeenCalled();
+    expect(ctx.db.fabfiles!.search).not.toHaveBeenCalled();
+  });
+
+  it('a malformed attached id is dropped before it can reach an _id query', async () => {
+    const ctx = makeFlagContext({
+      suppressLakeArms: true,
+      sessionIncludeLibraryFiles: false,
+      attachedFileIds: ['not-an-id'],
+    });
+    const out = await run(ctx);
+
+    expect(out).toBe(LIBRARY_OFF_NO_LAKE_MESSAGE);
+    expect(semanticDataLakeSearchMock).not.toHaveBeenCalled();
+    expect(ctx.db.fabfiles!.search).not.toHaveBeenCalled();
+  });
+});
+
 describe('search_knowledge_base flags passages that contradict each other', () => {
   const CONFLICT_NOTE = 'NOTE: the retrieved documents below may contradict each other';
 
@@ -3789,5 +3947,318 @@ describe('search_knowledge_base flags passages that contradict each other', () =
     expect(budgetNote).toBeGreaterThanOrEqual(0);
     expect(budgetNote).toBeLessThan(conflict);
     expect(conflict).toBeLessThan(out.indexOf(RETRIEVED_CONTENT_BEGIN));
+  });
+});
+
+describe('search_knowledge_base chip source origin', () => {
+  const lakeA = { id: 'lake-a', name: 'Lake A', datalakeTag: 'datalake:a' };
+  const lakeB = { id: 'lake-b', name: 'Lake B', datalakeTag: 'datalake:b' };
+  const hit = (fileId: string, fileTags: string[], fileUserId: string, score: number) => ({
+    chunkId: `c-${fileId}`,
+    fileId,
+    fileName: `${fileId}.md`,
+    fileTags,
+    fileUserId,
+    chunkText: `body of ${fileId}`,
+    score,
+  });
+
+  function semanticCtx(overrides: Partial<ToolContext> = {}): ToolContext {
+    return makeContext({
+      retrievalFilter: undefined,
+      db: {
+        fabfiles: { search: vi.fn().mockResolvedValue({ data: [], total: 0 }), getAccessibleFiles: vi.fn() },
+        fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(ADA) },
+        apiKeys: {},
+        usageEvents: { record: vi.fn() },
+      } as never,
+      ...overrides,
+    });
+  }
+
+  beforeEach(() => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:a', 'datalake:b'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+      lakes: [lakeA, lakeB],
+    });
+  });
+
+  it('semantic arm: labels each chip with its own lake, and an untagged owned file as library', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue({
+      ...emptySemanticResult(),
+      results: [
+        hit('fa', ['datalake:a'], 'someone-else', 0.9),
+        hit('fb', ['datalake:b'], 'someone-else', 0.85),
+        hit('fmine', [], 'u1', 0.8),
+      ],
+    });
+
+    const ctx = semanticCtx();
+    await run(ctx);
+
+    const originById = Object.fromEntries(emittedCitables(ctx).map(c => [c.id, c.metadata?.sourceOrigin]));
+    expect(originById).toEqual({
+      fa: { kind: 'lake', lakes: [{ id: 'lake-a', name: 'Lake A' }] },
+      fb: { kind: 'lake', lakes: [{ id: 'lake-b', name: 'Lake B' }] },
+      fmine: { kind: 'library', owned: true },
+    });
+  });
+
+  it('semantic arm: a dynamic lake prefix attributes only the creator-owned file', async () => {
+    const dynamicLake = {
+      id: 'lake-dyn',
+      name: 'Dynamic Lake',
+      datalakeTag: 'datalake:dyn',
+      membership: {
+        kind: 'owned' as const,
+        datalakeTag: 'datalake:dyn',
+        creatorUserId: 'creator',
+        fileTagPrefix: 'acme:',
+      },
+    };
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:dyn'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+      lakes: [dynamicLake],
+    });
+    semanticDataLakeSearchMock.mockResolvedValue({
+      ...emptySemanticResult(),
+      results: [hit('fcreator', ['acme:x'], 'creator', 0.9), hit('fother', ['acme:x'], 'someone-else', 0.85)],
+    });
+
+    const ctx = semanticCtx();
+    await run(ctx);
+
+    const originById = Object.fromEntries(emittedCitables(ctx).map(c => [c.id, c.metadata?.sourceOrigin]));
+    expect(originById).toEqual({
+      fcreator: { kind: 'lake', lakes: [{ id: 'lake-dyn', name: 'Dynamic Lake' }] },
+      fother: { kind: 'library', owned: false },
+    });
+  });
+
+  it('semantic agent-scoped (kbScope) arm: chips carry no sourceOrigin key at all', async () => {
+    fileScopedSemanticSearchMock.mockResolvedValue({
+      ...emptySemanticResult(),
+      results: [hit('fa', ['datalake:a'], 'someone-else', 0.9)],
+    });
+    const ctx = semanticCtx({ kbScope: { fileIds: ['fa'] } as never });
+
+    await run(ctx);
+
+    expect(fileScopedSemanticSearchMock).toHaveBeenCalled();
+    const citables = emittedCitables(ctx);
+    expect(citables).toHaveLength(1);
+    expect(citables[0].metadata).not.toHaveProperty('sourceOrigin');
+  });
+
+  it('keyword arm (unscoped): chips carry an origin, attributed per file', async () => {
+    const ctx = makeContext({
+      retrievalFilter: undefined,
+      db: {
+        fabfiles: {
+          search: vi.fn().mockResolvedValue({
+            data: [
+              { id: 'fa', fileName: 'A.pdf', tags: [{ name: 'datalake:a' }], userId: 'someone-else' },
+              { id: 'fother', fileName: 'Shared.pdf', tags: [], userId: 'someone-else' },
+              { id: 'fmine', fileName: 'Mine.pdf', tags: [], userId: 'u1' },
+            ],
+            total: 3,
+          }),
+        },
+      } as never,
+    });
+
+    await run(ctx);
+
+    const originById = Object.fromEntries(emittedCitables(ctx).map(c => [c.id, c.metadata?.sourceOrigin]));
+    expect(originById).toEqual({
+      fa: { kind: 'lake', lakes: [{ id: 'lake-a', name: 'Lake A' }] },
+      fother: { kind: 'library', owned: false },
+      fmine: { kind: 'library', owned: true },
+    });
+  });
+
+  // A degraded lake read returns a short lake list without throwing, so a lake file would otherwise
+  // read as library; leaving the origin off keeps the chip's "Data Lake" fallback instead.
+  it('semantic and keyword arms: leave the origin off when the lake view is incomplete', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:a'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+      lakes: [lakeA],
+      lakeViewComplete: false,
+    });
+    semanticDataLakeSearchMock.mockResolvedValue({
+      ...emptySemanticResult(),
+      results: [hit('fb', ['datalake:b'], 'someone-else', 0.9)],
+    });
+    const semantic = semanticCtx();
+    await run(semantic);
+    expect(emittedCitables(semantic)).toHaveLength(1);
+    expect(emittedCitables(semantic)[0].metadata).not.toHaveProperty('sourceOrigin');
+
+    const keyword = makeContext({
+      retrievalFilter: undefined,
+      db: {
+        fabfiles: {
+          search: vi.fn().mockResolvedValue({
+            data: [{ id: 'fb', fileName: 'B.pdf', tags: [{ name: 'datalake:b' }], userId: 'someone-else' }],
+            total: 1,
+          }),
+        },
+      } as never,
+    });
+    await run(keyword);
+    expect(emittedCitables(keyword)).toHaveLength(1);
+    expect(emittedCitables(keyword)[0].metadata).not.toHaveProperty('sourceOrigin');
+  });
+
+  it('keyword arm (agent-scoped): chips carry no sourceOrigin key at all', async () => {
+    const ctx = makeContext({
+      retrievalFilter: undefined,
+      kbScope: { fileIds: ['fa'] },
+      db: {
+        fabfiles: {
+          search: vi.fn().mockResolvedValue({
+            data: [{ id: 'fa', fileName: 'A.pdf', tags: [{ name: 'datalake:a' }], userId: 'u1' }],
+            total: 1,
+          }),
+        },
+      } as never,
+    });
+
+    await run(ctx);
+
+    const citables = emittedCitables(ctx);
+    expect(citables).toHaveLength(1);
+    expect(citables[0].metadata).not.toHaveProperty('sourceOrigin');
+    expect(getDynamicDataLakeAccessMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('search_knowledge_base shared citation numbering', () => {
+  const RULE_FRAGMENT = 'ONLY by the bracketed number';
+  const scan = {
+    truncated: false,
+    fileBudgetHit: false,
+    chunkBudgetHit: false,
+    filesMatching: 2,
+    filesScoped: 2,
+    filesScanned: 2,
+    chunksScanned: 3,
+    chunksSkippedDimensionMismatch: 0,
+    annFilesQueried: 0,
+    annHits: 0,
+    budgets: { maxFiles: 20000, maxChunks: 100000 },
+  };
+  const hitOf = (chunkId: string, fileId: string, fileName: string) => ({
+    chunkId,
+    fileId,
+    fileName,
+    fileTags: [],
+    chunkText: `text of ${chunkId}`,
+    score: 0.81,
+  });
+
+  /** Stamps each citable with position + 3, as if two citables were already in the turn. */
+  const stampFromThree = (citables: CitableSource[]) =>
+    citables.map((citable, position) => ({
+      ...citable,
+      metadata: { ...citable.metadata, citationIndex: position + 3 },
+    }));
+
+  function semanticContext(overrides: Partial<ToolContext> = {}): ToolContext {
+    return makeContext({
+      retrievalFilter: undefined,
+      db: {
+        fabfiles: { search: vi.fn().mockResolvedValue({ data: [], total: 0 }), getAccessibleFiles: vi.fn() },
+        fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue('text-embedding-ada-002') },
+        apiKeys: {},
+        usageEvents: { record: vi.fn() },
+        dataLakes: {
+          findActiveByUserTags: vi.fn(),
+          findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([]),
+        },
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+      } as never,
+      ...overrides,
+    });
+  }
+
+  function keywordContext(overrides: Partial<ToolContext> = {}): ToolContext {
+    return makeContext({
+      retrievalFilter: undefined,
+      db: {
+        fabfiles: {
+          search: vi.fn().mockResolvedValue({
+            data: [
+              { id: 'f1', fileName: 'Handbook.pdf', tags: [], vectorized: true, mimeType: 'application/pdf' },
+              { id: 'f2', fileName: 'Policy.pdf', tags: [], vectorized: true, mimeType: 'application/pdf' },
+            ],
+            total: 2,
+          }),
+        },
+      } as never,
+      ...overrides,
+    });
+  }
+
+  beforeEach(() => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:x'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+      lakes: [{ id: 'lake-x', datalakeTag: 'datalake:x' }],
+    });
+  });
+
+  it('semantic arm: headings use the stamped [N], the rule is shown, and the stamped citables are emitted', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue({
+      results: [hitOf('c1', 'f1', 'Handbook.pdf'), hitOf('c2', 'f1', 'Handbook.pdf'), hitOf('c3', 'f2', 'Policy.pdf')],
+      scan,
+    });
+    const numberCitables = vi.fn(stampFromThree);
+    const context = semanticContext({ numberCitables });
+
+    const out = await run(context);
+
+    expect(numberCitables).toHaveBeenCalledTimes(1);
+    expect(out).toContain('[3] **Handbook** (ID: f1');
+    expect(out).toContain('[4] **Policy** (ID: f2');
+    // Both passages of one file carry that file's number.
+    expect(out.match(/^\[3\] \*\*Handbook\*\*/gm)).toHaveLength(2);
+    expect(out).toContain(RULE_FRAGMENT);
+    expect(out).not.toMatch(/^\d+\. \*\*/m);
+    expect(emittedCitables(context).map(citable => citable.metadata?.citationIndex)).toEqual([3, 4]);
+  });
+
+  it('keyword arm: listing uses the stamped [N], the rule is shown, and the stamped citables are emitted', async () => {
+    const numberCitables = vi.fn(stampFromThree);
+    const context = keywordContext({ numberCitables });
+
+    const out = await run(context);
+
+    expect(numberCitables).toHaveBeenCalledTimes(1);
+    expect(out).toContain('[3] **Handbook.pdf** (ID: f1');
+    expect(out).toContain('[4] **Policy.pdf** (ID: f2');
+    expect(out).toContain(RULE_FRAGMENT);
+    expect(out).not.toMatch(/^\d+\. \*\*/m);
+    expect(emittedCitables(context).map(citable => citable.metadata?.citationIndex)).toEqual([3, 4]);
+  });
+
+  it('keeps the local 1. labels and omits the rule when numberCitables returns undefined', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue({ results: [hitOf('c1', 'f1', 'Handbook.pdf')], scan });
+    const semanticOut = await run(semanticContext({ numberCitables: vi.fn().mockReturnValue(undefined) }));
+    expect(semanticOut).toContain('1. **Handbook** (ID: f1');
+    expect(semanticOut).not.toContain(RULE_FRAGMENT);
+
+    const keywordOut = await run(keywordContext({ numberCitables: vi.fn().mockReturnValue(undefined) }));
+    expect(keywordOut).toContain('1. **Handbook.pdf** (ID: f1');
+    expect(keywordOut).not.toContain(RULE_FRAGMENT);
   });
 });

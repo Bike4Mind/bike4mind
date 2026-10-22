@@ -1,17 +1,18 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { apiKeyService } from '@bike4mind/services';
 import {
   resolveToolAvailability,
   isLocalImageBackendAvailable,
   isLocalEmbedderAvailable,
   type ToolAvailability,
-} from '@bike4mind/services/llm';
+} from '@bike4mind/services/llm/toolAvailability';
 import { getSettingsByNames } from '@bike4mind/utils';
-import { resolveEffectiveEmbeddingModel } from '@server/embeddings/effectiveEmbeddingModel';
+import { resolveEffectiveEmbeddingModel } from '@bike4mind/server-utils/embeddings/effectiveEmbeddingModel';
 import { apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
 import { Resource } from 'sst';
+import { resolveWhatsNewUpstreamOrigin } from '@server/utils/deploymentMediaOrigins';
 
 export { isLocalImageBackendAvailable, isLocalEmbedderAvailable, type ToolAvailability };
 
@@ -41,6 +42,8 @@ export type ServerConfig = {
   cdnUrl: string;
   /** Inbound-email recipient domain (e.g. "@app.<domain>"); empty when unconfigured. */
   platformEmailDomain: string;
+  /** Origin of the upstream What's New feed (WHATS_NEW_FEED_URL), whose note media stays cross-origin; '' when unset. */
+  whatsNewUpstreamOrigin: string;
   /** Per-request availability of key-gated tools, for the tools picker. */
   toolAvailability: ToolAvailability;
   /**
@@ -113,6 +116,7 @@ const handler = baseApi({ auth: true }).get(
       cdnUrl: process.env.NEXT_PUBLIC_CDN_URL || '',
       // Inbound-email recipient domain, externalized for open-core; no brand fallback.
       platformEmailDomain: process.env.PLATFORM_EMAIL_DOMAIN || '',
+      whatsNewUpstreamOrigin: resolveWhatsNewUpstreamOrigin(process.env.WHATS_NEW_FEED_URL),
       toolAvailability,
       effectiveEmbeddingModel,
     };

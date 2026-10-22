@@ -1,0 +1,658 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { BadRequestError } from '@bike4mind/utils';
+import { FabFileSourceType, StorageLimitError } from '@bike4mind/common';
+
+const storageRefusal = () =>
+  new StorageLimitError('File size exceeds storage limit', {
+    errorCode: 'storage_limit_exceeded',
+    used_bytes: 0,
+    limit_bytes: 1,
+    requested_bytes: 2,
+    owner: 'user',
+  });
+
+const h = vi.hoisted(() => ({
+  order: [] as string[],
+  getRecursiveTree: vi.fn(),
+  getBlobBytes: vi.fn(),
+  findByGitHubConnectionIdInDataLake: vi.fn(),
+  batchFindById: vi.fn(),
+  batchCreate: vi.fn(),
+  setTotalFilesIfActive: vi.fn(),
+  recordSkippedDriveFile: vi.fn(),
+  recordSkip: vi.fn(),
+  recordSkips: vi.fn(),
+  clearSkipSources: vi.fn(),
+  pruneMissingSkips: vi.fn(),
+  retire: vi.fn(),
+  flush: vi.fn(),
+  ingest: vi.fn(),
+  assertWrite: vi.fn(),
+  getSettingsMap: vi.fn(),
+  getSettingsValue: vi.fn(),
+  checkStorageLimit: vi.fn(),
+  stagedReclaimFor: vi.fn(),
+  orgFindById: vi.fn(),
+  // The real owner-aware quota gate, for the tests that pin which counter it reads.
+  actualCheckForOwner: undefined as unknown as (...args: unknown[]) => Promise<void>,
+  recomputeLakeStats: vi.fn(),
+  decideStampPrefix: vi.fn(),
+  recordTreeCounts: vi.fn(),
+  pushTags: vi.fn(),
+  pullTags: vi.fn(),
+}));
+
+vi.mock('@bike4mind/database', () => ({
+  organizationRepository: { findById: (id: string) => h.orgFindById(id) },
+  adminSettingsRepository: {},
+  dataLakeRepository: {},
+  dataLakeBatchRepository: {
+    findById: h.batchFindById,
+    create: h.batchCreate,
+    setTotalFilesIfActive: h.setTotalFilesIfActive,
+    recordSkippedDriveFile: h.recordSkippedDriveFile,
+  },
+  fabFileRepository: {
+    findByGitHubConnectionIdInDataLake: h.findByGitHubConnectionIdInDataLake,
+    pushTagsByFabFileId: h.pushTags,
+    pullTagsByFabFileId: h.pullTags,
+  },
+  lakeSkippedFileRepository: {
+    recordSkip: h.recordSkip,
+    recordSkips: h.recordSkips,
+    clearSources: h.clearSkipSources,
+    pruneMissing: h.pruneMissingSkips,
+  },
+}));
+vi.mock('@bike4mind/utils', async importOriginal => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  // Real getSettingsValue by default (its own MaxFileSize schema floors at 1 MB - same as the
+  // hardcoded rule, so it can never be the smaller Math.min term); overridden per-test to drive
+  // the min() itself below the hardcoded rule, independent of that floor.
+  h.getSettingsValue.mockImplementation(actual.getSettingsValue as (...args: unknown[]) => unknown);
+  h.actualCheckForOwner = actual.checkStorageLimitForOwner as typeof h.actualCheckForOwner;
+  return {
+    ...actual,
+    getSettingsMap: h.getSettingsMap,
+    getSettingsValue: h.getSettingsValue,
+    checkStorageLimitForOwner: h.checkStorageLimit,
+  };
+});
+vi.mock('@bike4mind/services', () => ({
+  dataLakeService: {
+    createDataLakeFallbackTagger: () => async (tags: unknown) => tags,
+    recomputeLakeStats: h.recomputeLakeStats,
+    decideStampPrefix: h.decideStampPrefix,
+  },
+}));
+vi.mock('@server/auth/ability', () => ({ default: () => ({}) }));
+vi.mock('@server/integrations/github/dataLake/lakeAppClient', async importOriginal => ({
+  ...(await importOriginal<typeof import('@server/integrations/github/dataLake/lakeAppClient')>()),
+  getRecursiveTree: h.getRecursiveTree,
+  getBlobBytes: h.getBlobBytes,
+}));
+vi.mock('@workers/queueHandlers/lakeIngestShared', () => ({
+  createLakeIngestRetirer: () => ({
+    retireSupersededCopy: h.retire,
+    flushReclaimedStorage: h.flush,
+    stagedReclaimFor: h.stagedReclaimFor,
+  }),
+  ingestLakeFile: h.ingest,
+  assertConnectorLakeWrite: h.assertWrite,
+}));
+
+import { runGitHubLakeSlice, GITHUB_LAKE_DEADLINE_BUFFER_MS } from './githubLakeSlice';
+
+const logger = { warn: vi.fn(), error: vi.fn(), info: vi.fn(), log: vi.fn() } as never;
+const blob = (path: string, sha: string, size = 5) => ({ path, mode: '100644', type: 'blob', sha, size });
+const stored = (id: string, githubPath: string, githubBlobSha: string, createdAt = '2026-01-01T00:00:00Z') => ({
+  id,
+  githubPath,
+  githubBlobSha,
+  createdAt: new Date(createdAt),
+  userId: 'owner1',
+});
+const input = (over: Record<string, unknown> = {}) => ({
+  octokit: {} as never,
+  repoFullName: 'acme/docs',
+  commitSha: 'c1',
+  connection: { id: 'conn1', targetDataLakeId: 'lake1', connectedBy: 'owner1' } as never,
+  lake: { id: 'lake1', datalakeTag: 'datalake:lake1' } as never,
+  user: { id: 'owner1' } as never,
+  remainingMs: () => 600_000,
+  recordTreeCounts: h.recordTreeCounts,
+  logger,
+  ...over,
+});
+const tree = (...entries: ReturnType<typeof blob>[]) =>
+  h.getRecursiveTree.mockResolvedValue({ truncated: false, entries });
+const rateLimited = () =>
+  Object.assign(new Error('rate limited'), {
+    status: 403,
+    response: {
+      headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(Math.floor(Date.now() / 1000) + 120) },
+    },
+  });
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  h.order.length = 0;
+  tree();
+  h.getSettingsMap.mockResolvedValue({});
+  h.findByGitHubConnectionIdInDataLake.mockResolvedValue([]);
+  h.getBlobBytes.mockImplementation(async (_o: unknown, _r: string, sha: string) => Buffer.from(`content of ${sha}`));
+  h.batchCreate.mockResolvedValue({ id: 'batch1' });
+  h.batchFindById.mockResolvedValue(null);
+  h.recordSkippedDriveFile.mockResolvedValue(true);
+  h.recordSkip.mockResolvedValue(undefined);
+  h.recordSkips.mockResolvedValue(undefined);
+  h.clearSkipSources.mockResolvedValue(0);
+  h.pruneMissingSkips.mockResolvedValue(0);
+  h.retire.mockImplementation(async (copy: { id: string }, replacement: string | null) => {
+    h.order.push(`retire:${copy.id}->${replacement}`);
+    return 'deleted';
+  });
+  let n = 0;
+  h.ingest.mockImplementation(async ({ data }: { data: { githubPath: string } }) => {
+    h.order.push(`ingest:${data.githubPath}`);
+    return { id: `new${++n}` };
+  });
+  h.assertWrite.mockResolvedValue(undefined);
+  h.checkStorageLimit.mockResolvedValue(undefined);
+  h.stagedReclaimFor.mockReturnValue(0);
+  h.orgFindById.mockImplementation(async (id: string) => ({ id, currentStorageSize: 0 }));
+  h.recomputeLakeStats.mockResolvedValue(undefined);
+  h.decideStampPrefix.mockResolvedValue({ stamp: true, prefix: 'gh-x:' });
+  h.flush.mockResolvedValue(undefined);
+  h.recordTreeCounts.mockResolvedValue(undefined);
+});
+
+describe('runGitHubLakeSlice', () => {
+  it('refuses a truncated tree before any write', async () => {
+    h.getRecursiveTree.mockResolvedValue({ truncated: true, entries: [blob('a.md', 's1')] });
+    h.findByGitHubConnectionIdInDataLake.mockResolvedValue([stored('old', 'gone.md', 's0')]);
+    await expect(runGitHubLakeSlice(input())).resolves.toEqual({
+      kind: 'refused',
+      batchId: null,
+      message: expect.stringContaining('too large'),
+    });
+    expect(h.retire).not.toHaveBeenCalled();
+    expect(h.ingest).not.toHaveBeenCalled();
+    expect(h.batchCreate).not.toHaveBeenCalled();
+  });
+
+  it('refuses over 5000 candidates before any write, removals included', async () => {
+    tree(...Array.from({ length: 5001 }, (_, i) => blob(`f${i}.md`, `s${i}`)));
+    h.findByGitHubConnectionIdInDataLake.mockResolvedValue([stored('old', 'gone.md', 's0')]);
+    await expect(runGitHubLakeSlice(input())).resolves.toMatchObject({
+      kind: 'refused',
+      message: expect.stringContaining('5000'),
+    });
+    expect(h.retire).not.toHaveBeenCalled();
+    expect(h.batchCreate).not.toHaveBeenCalled();
+  });
+
+  it('records the tree split under the sync rules, counting files only', async () => {
+    const directory = { path: 'src', mode: '040000', type: 'tree', sha: 'd1' };
+    const symlink = { path: 'link.md', mode: '120000', type: 'blob', sha: 'l1', size: 5 };
+    tree(
+      blob('README.md', 's1'),
+      blob('src/index.ts', 's2'),
+      blob('logo.png', 's3'),
+      blob('node_modules/x/index.js', 's4'),
+      blob('pnpm-lock.yaml', 's5'),
+      blob('big.md', 's6', 2 * 1024 * 1024),
+      directory as ReturnType<typeof blob>,
+      symlink
+    );
+    await runGitHubLakeSlice(input());
+    expect(h.recordTreeCounts).toHaveBeenCalledWith({ candidateCount: 2, skippedCount: 5 });
+  });
+
+  it('records the tree counts even when it refuses the tree as too many files', async () => {
+    tree(...Array.from({ length: 5001 }, (_, i) => blob(`f${i}.md`, `s${i}`)), blob('a.png', 'p1'));
+    await runGitHubLakeSlice(input());
+    expect(h.recordTreeCounts).toHaveBeenCalledWith({ candidateCount: 5001, skippedCount: 1 });
+  });
+
+  it('records no tree counts for a truncated tree', async () => {
+    h.getRecursiveTree.mockResolvedValue({ truncated: true, entries: [blob('a.md', 's1')] });
+    await runGitHubLakeSlice(input());
+    expect(h.recordTreeCounts).not.toHaveBeenCalled();
+  });
+
+  it('removes first, then ingests, and retires a changed file only after its replacement uploaded', async () => {
+    tree(blob('keep.md', 's1'), blob('edit.md', 's2-new'), blob('new.md', 's3'));
+    h.findByGitHubConnectionIdInDataLake.mockResolvedValue([
+      stored('keep', 'keep.md', 's1'),
+      stored('edit', 'edit.md', 's2-old'),
+      stored('gone', 'gone.md', 's4'),
+    ]);
+    await expect(runGitHubLakeSlice(input())).resolves.toEqual({ kind: 'done', batchId: 'batch1', transientSkips: 0 });
+    expect(h.order).toEqual(['retire:gone->null', 'ingest:new.md', 'ingest:edit.md', 'retire:edit->new2']);
+    expect(h.batchCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ dataLakeId: 'lake1', userId: 'owner1', totalFiles: 2 })
+    );
+    expect(h.recomputeLakeStats).toHaveBeenCalled();
+    expect(h.flush).toHaveBeenCalled();
+  });
+
+  it('stamps GitHub provenance on every created file', async () => {
+    tree(blob('src/index.ts', 's9'));
+    await runGitHubLakeSlice(input());
+    expect(h.ingest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        batchId: 'batch1',
+        data: expect.objectContaining({
+          sourceType: FabFileSourceType.GITHUB,
+          githubConnectionId: 'conn1',
+          githubPath: 'src/index.ts',
+          githubBlobSha: 's9',
+          sourceLakeId: 'lake1',
+          relativePath: 'src/index.ts',
+          userId: 'owner1',
+          fileName: 'index.ts',
+          mimeType: 'text/plain',
+          batchId: 'batch1',
+          tags: [
+            { name: 'datalake:lake1', strength: 1 },
+            { name: 'gh-x:src', strength: 1 },
+          ],
+        }),
+      })
+    );
+  });
+
+  const ingestedTags = () =>
+    h.ingest.mock.calls.map(([arg]: [{ data: { githubPath: string; tags: { name: string }[] } }]) => [
+      arg.data.githubPath,
+      arg.data.tags.map(t => t.name),
+    ]);
+
+  it('tags each file with its repo directory path, and a root file with the meta-tag only', async () => {
+    tree(blob('README.md', 's1'), blob('docs/guide.md', 's2'), blob('src/a/b.ts', 's3'));
+    await runGitHubLakeSlice(input());
+    expect(h.decideStampPrefix).toHaveBeenCalledTimes(1);
+    expect(ingestedTags()).toEqual([
+      ['README.md', ['datalake:lake1']],
+      ['docs/guide.md', ['datalake:lake1', 'gh-x:docs']],
+      ['src/a/b.ts', ['datalake:lake1', 'gh-x:src:a']],
+    ]);
+  });
+
+  it.each([
+    ['the gate refuses the prefix', { stamp: false, reason: 'prefix-overlap' }],
+    ['the overlap check could not run', { stamp: true, prefix: 'gh-x:', overlapCheckFailed: true }],
+  ])('mints no folder tags when %s', async (_label, decision) => {
+    h.decideStampPrefix.mockResolvedValue(decision);
+    tree(blob('docs/guide.md', 's2'));
+    await runGitHubLakeSlice(input());
+    expect(ingestedTags()).toEqual([['docs/guide.md', ['datalake:lake1']]]);
+  });
+
+  it('keeps the old copy when the replacement upload fails', async () => {
+    tree(blob('edit.md', 's2-new'));
+    h.findByGitHubConnectionIdInDataLake.mockResolvedValue([stored('edit', 'edit.md', 's2-old')]);
+    h.ingest.mockRejectedValue(new Error('upload failed'));
+    await expect(runGitHubLakeSlice(input())).rejects.toThrow('upload failed');
+    expect(h.retire).not.toHaveBeenCalled();
+    expect(h.flush).toHaveBeenCalled();
+  });
+
+  it('retires duplicates of a live path into the newest copy', async () => {
+    tree(blob('a.md', 's1'));
+    h.findByGitHubConnectionIdInDataLake.mockResolvedValue([
+      stored('a-old', 'a.md', 's1', '2026-01-01T00:00:00Z'),
+      stored('a-new', 'a.md', 's1', '2026-02-01T00:00:00Z'),
+    ]);
+    await expect(runGitHubLakeSlice(input())).resolves.toEqual({ kind: 'done', batchId: null, transientSkips: 0 });
+    expect(h.order).toEqual(['retire:a-old->a-new']);
+  });
+
+  it('yields on the deadline before starting a file', async () => {
+    tree(blob('a.md', 's1'), blob('b.md', 's2'));
+    const out = await runGitHubLakeSlice(input({ remainingMs: () => GITHUB_LAKE_DEADLINE_BUFFER_MS - 1 }));
+    expect(out).toEqual({ kind: 'deadline', batchId: 'batch1', remaining: 2 });
+    expect(h.getBlobBytes).not.toHaveBeenCalled();
+    expect(h.ingest).not.toHaveBeenCalled();
+  });
+
+  it('yields on the deadline mid-removal, after retiring what fits', async () => {
+    tree();
+    h.findByGitHubConnectionIdInDataLake.mockResolvedValue([
+      stored('gone1', 'gone1.md', 's1'),
+      stored('gone2', 'gone2.md', 's2'),
+    ]);
+    let calls = 0;
+    const remainingMs = () => (calls++ === 0 ? 600_000 : GITHUB_LAKE_DEADLINE_BUFFER_MS - 1);
+    const out = await runGitHubLakeSlice(input({ remainingMs }));
+    expect(out).toEqual({ kind: 'deadline', batchId: null, remaining: 1 });
+    expect(h.order).toEqual(['retire:gone1->null']);
+    expect(h.flush).toHaveBeenCalled();
+    expect(h.recomputeLakeStats).toHaveBeenCalled();
+  });
+
+  it('yields on the deadline mid-duplicate-retire, after retiring what fits', async () => {
+    tree(blob('a.md', 's1'), blob('b.md', 's2'));
+    h.findByGitHubConnectionIdInDataLake.mockResolvedValue([
+      stored('a-old', 'a.md', 's1', '2026-01-01T00:00:00Z'),
+      stored('a-new', 'a.md', 's1', '2026-02-01T00:00:00Z'),
+      stored('b-old', 'b.md', 's2', '2026-01-01T00:00:00Z'),
+      stored('b-new', 'b.md', 's2', '2026-02-01T00:00:00Z'),
+    ]);
+    let calls = 0;
+    const remainingMs = () => (calls++ === 0 ? 600_000 : GITHUB_LAKE_DEADLINE_BUFFER_MS - 1);
+    const out = await runGitHubLakeSlice(input({ remainingMs }));
+    expect(out).toEqual({ kind: 'deadline', batchId: null, remaining: 1 });
+    expect(h.order).toEqual(['retire:a-old->a-new']);
+    expect(h.flush).toHaveBeenCalled();
+    expect(h.recomputeLakeStats).toHaveBeenCalled();
+  });
+
+  it('yields the rest of the slice when a blob fetch is rate-limited', async () => {
+    tree(blob('a.md', 's1'), blob('b.md', 's2'));
+    h.getBlobBytes.mockResolvedValueOnce(Buffer.from('ok')).mockRejectedValueOnce(rateLimited());
+    const out = await runGitHubLakeSlice(input());
+    expect(out).toMatchObject({ kind: 'rate_limited', batchId: 'batch1', remaining: 1 });
+    expect((out as { delaySeconds: number }).delaySeconds).toBeGreaterThanOrEqual(119);
+    expect((out as { delaySeconds: number }).delaySeconds).toBeLessThanOrEqual(120);
+  });
+
+  it('reports a rate-limited tree read with no batch to hand off', async () => {
+    h.getRecursiveTree.mockRejectedValue(rateLimited());
+    await expect(runGitHubLakeSlice(input())).resolves.toMatchObject({
+      kind: 'rate_limited',
+      batchId: null,
+      remaining: 0,
+    });
+  });
+
+  it('records a binary or non-UTF-8 file as a permanent chain skip', async () => {
+    tree(blob('bin.md', 's1'), blob('latin1.txt', 's2'));
+    h.getBlobBytes.mockResolvedValueOnce(Buffer.from([0x61, 0x00])).mockResolvedValueOnce(Buffer.from([0xc3, 0x28]));
+    await expect(runGitHubLakeSlice(input())).resolves.toEqual({ kind: 'done', batchId: 'batch1', transientSkips: 0 });
+    expect(h.recordSkippedDriveFile).toHaveBeenCalledWith('batch1', 'bin.md');
+    expect(h.recordSkippedDriveFile).toHaveBeenCalledWith('batch1', 'latin1.txt');
+    expect(h.ingest).not.toHaveBeenCalled();
+  });
+
+  it('records an oversized tree entry as a permanent skip with its size, without fetching it', async () => {
+    tree(blob('big.md', 's1', 2 * 1024 * 1024), blob('small.md', 's2', 5));
+    await expect(runGitHubLakeSlice(input())).resolves.toEqual({ kind: 'done', batchId: 'batch1', transientSkips: 0 });
+    expect(h.batchCreate).toHaveBeenCalledWith(expect.objectContaining({ totalFiles: 2 }));
+    expect(h.recordSkippedDriveFile).toHaveBeenCalledWith('batch1', 'big.md');
+    expect(h.getBlobBytes).toHaveBeenCalledTimes(1);
+    expect(h.getBlobBytes).toHaveBeenCalledWith(expect.anything(), expect.anything(), 's2');
+    expect(h.ingest).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the stored copy of a file that grew past the size cap instead of removing it', async () => {
+    tree(blob('grew.md', 's1-new', 2 * 1024 * 1024));
+    h.findByGitHubConnectionIdInDataLake.mockResolvedValue([stored('grew', 'grew.md', 's1-old')]);
+    await runGitHubLakeSlice(input());
+    expect(h.retire).not.toHaveBeenCalled();
+    expect(h.ingest).not.toHaveBeenCalled();
+  });
+
+  it('logs oversized files but creates no batch, claim check, or skip record when there is no other sync work', async () => {
+    tree(blob('big1.md', 's1', 2 * 1024 * 1024), blob('big2.md', 's2', 3 * 1024 * 1024));
+    await expect(runGitHubLakeSlice(input())).resolves.toEqual({ kind: 'done', batchId: null, transientSkips: 0 });
+    expect(h.batchCreate).not.toHaveBeenCalled();
+    expect(h.assertWrite).not.toHaveBeenCalled();
+    expect(h.recordSkippedDriveFile).not.toHaveBeenCalled();
+    expect(h.getBlobBytes).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith(
+      '[githubLakeIngest] oversized files with no other sync work this run; not batch-recorded',
+      expect.objectContaining({ count: 2 })
+    );
+  });
+
+  it('records an oversized skip when the admin MaxFileSize setting lowers the cap below 1 MB', async () => {
+    // MaxFileSize's real settings schema floors at 1 MB (equal to the hardcoded rule), so it can
+    // never itself be lower - stub the resolved value directly to exercise the min() computation.
+    h.getSettingsValue.mockReturnValueOnce(0.5);
+    tree(blob('big.md', 's1', 600_000), blob('small.md', 's2', 5));
+    await expect(runGitHubLakeSlice(input())).resolves.toEqual({ kind: 'done', batchId: 'batch1', transientSkips: 0 });
+    expect(h.batchCreate).toHaveBeenCalledWith(expect.objectContaining({ totalFiles: 2 }));
+    expect(h.recordSkippedDriveFile).toHaveBeenCalledWith('batch1', 'big.md');
+    expect(h.getBlobBytes).toHaveBeenCalledTimes(1);
+    expect(h.getBlobBytes).toHaveBeenCalledWith(expect.anything(), expect.anything(), 's2');
+    expect(h.ingest).toHaveBeenCalledTimes(1);
+  });
+
+  it('counts a storage-limit skip as transient and does not record it for the chain', async () => {
+    tree(blob('a.md', 's1'));
+    h.checkStorageLimit.mockRejectedValue(storageRefusal());
+    await expect(runGitHubLakeSlice(input())).resolves.toEqual({ kind: 'done', batchId: 'batch1', transientSkips: 1 });
+    expect(h.recordSkippedDriveFile).not.toHaveBeenCalled();
+  });
+
+  it("gates an org lake's file on the org quota, crediting that org's staged reclaim", async () => {
+    tree(blob('a.md', 's1', 40));
+    h.stagedReclaimFor.mockReturnValue(5);
+    await runGitHubLakeSlice(
+      input({ lake: { id: 'lake1', datalakeTag: 'datalake:lake1', organizationId: 'org1' }, user: { id: 'owner1' } })
+    );
+    expect(h.stagedReclaimFor).toHaveBeenCalledWith({ type: 'org', id: 'org1' });
+    expect(h.checkStorageLimit).toHaveBeenCalledWith(
+      { user: { id: 'owner1' }, organizationId: 'org1' },
+      Buffer.byteLength('content of s1') - 5,
+      expect.any(Function)
+    );
+  });
+
+  it("refuses an org lake's file at the ORG limit, reading the org and not the user", async () => {
+    h.checkStorageLimit.mockImplementation(h.actualCheckForOwner);
+    // A zero-byte org limit refuses everything; the user's own limit is the roomy default.
+    h.orgFindById.mockResolvedValue({ id: 'org1', currentStorageSize: 0, storageLimit: 0 });
+    tree(blob('a.md', 's1'));
+    await expect(
+      runGitHubLakeSlice(
+        input({
+          lake: { id: 'lake1', datalakeTag: 'datalake:lake1', organizationId: 'org1' },
+          user: { id: 'owner1', currentStorageSize: 0 },
+        })
+      )
+    ).resolves.toEqual({ kind: 'done', batchId: 'batch1', transientSkips: 1 });
+    expect(h.orgFindById).toHaveBeenCalledWith('org1');
+    expect(h.ingest).not.toHaveBeenCalled();
+  });
+
+  it("gates a personal lake's file on the user's own quota and reclaim", async () => {
+    tree(blob('a.md', 's1'));
+    await runGitHubLakeSlice(input());
+    expect(h.stagedReclaimFor).toHaveBeenCalledWith({ type: 'user', id: 'owner1' });
+    expect(h.checkStorageLimit).toHaveBeenCalledWith(
+      { user: { id: 'owner1' }, organizationId: undefined },
+      expect.any(Number),
+      expect.any(Function)
+    );
+    expect(h.orgFindById).not.toHaveBeenCalled();
+  });
+
+  it('rethrows a non-quota error from the storage check rather than counting a quota skip', async () => {
+    tree(blob('a.md', 's1'));
+    h.checkStorageLimit.mockRejectedValue(new Error('connection reset'));
+    await expect(runGitHubLakeSlice(input())).rejects.toThrow('connection reset');
+    expect(h.recordSkip).not.toHaveBeenCalled();
+    expect(h.recordSkippedDriveFile).not.toHaveBeenCalled();
+    expect(h.ingest).not.toHaveBeenCalled();
+  });
+
+  it('adopts the chain s batch and subtracts the paths it already skipped', async () => {
+    tree(blob('bin.md', 's1'), blob('new.md', 's2'));
+    h.batchFindById.mockResolvedValue({
+      id: 'batch9',
+      dataLakeId: 'lake1',
+      status: 'processing',
+      totalFiles: 1,
+      files: [{ fabFileId: 'x', fileName: 'x', status: 'pending' }],
+      skippedFiles: 1,
+      skippedDriveFileIds: ['bin.md'],
+    });
+    await runGitHubLakeSlice(input({ resumeBatchId: 'batch9' }));
+    expect(h.batchCreate).not.toHaveBeenCalled();
+    expect(h.order).toEqual(['ingest:new.md']);
+    expect(h.setTotalFilesIfActive).toHaveBeenCalledWith('batch9', 3);
+  });
+
+  it('refuses when the lake refuses connector writes, after applying removals', async () => {
+    tree(blob('a.md', 's1'));
+    h.findByGitHubConnectionIdInDataLake.mockResolvedValue([stored('gone', 'gone.md', 's0')]);
+    h.assertWrite.mockRejectedValue(new BadRequestError('This lake is curated'));
+    await expect(runGitHubLakeSlice(input())).resolves.toEqual({
+      kind: 'refused',
+      batchId: null,
+      message: 'This lake is curated',
+    });
+    expect(h.order).toEqual(['retire:gone->null']);
+    expect(h.batchCreate).not.toHaveBeenCalled();
+  });
+
+  describe('folder-tag heal of copies synced before folder tagging', () => {
+    const stamped = (id: string, githubPath: string, sha: string) => ({
+      ...stored(id, githubPath, sha),
+      tags: [{ name: 'datalake:lake1' }, { name: 'gh-x:uncategorized' }],
+    });
+
+    it('adds the folder tag and drops the stamp on an unchanged stamped copy, with no batch', async () => {
+      tree(blob('docs/x.md', 's1'));
+      h.findByGitHubConnectionIdInDataLake.mockResolvedValue([stamped('d', 'docs/x.md', 's1')]);
+      await expect(runGitHubLakeSlice(input())).resolves.toEqual({ kind: 'done', batchId: null, transientSkips: 0 });
+      expect(h.pushTags).toHaveBeenCalledWith('d', ['gh-x:docs'], 1);
+      expect(h.pullTags).toHaveBeenCalledWith('d', ['gh-x:uncategorized']);
+      expect(h.batchCreate).not.toHaveBeenCalled();
+    });
+
+    it('drops a stamp left beside the folder tag by an interrupted heal, without re-pushing', async () => {
+      tree(blob('docs/x.md', 's1'));
+      h.findByGitHubConnectionIdInDataLake.mockResolvedValue([
+        {
+          ...stored('d', 'docs/x.md', 's1'),
+          tags: [{ name: 'datalake:lake1' }, { name: 'gh-x:docs' }, { name: 'gh-x:uncategorized' }],
+        },
+      ]);
+      await runGitHubLakeSlice(input());
+      expect(h.pushTags).not.toHaveBeenCalled();
+      expect(h.pullTags).toHaveBeenCalledWith('d', ['gh-x:uncategorized']);
+    });
+
+    it('leaves alone a copy whose folder tag a user removed (no stamp left)', async () => {
+      tree(blob('docs/x.md', 's1'));
+      h.findByGitHubConnectionIdInDataLake.mockResolvedValue([
+        { ...stored('d', 'docs/x.md', 's1'), tags: [{ name: 'datalake:lake1' }, { name: 'gh-x:legal' }] },
+      ]);
+      await runGitHubLakeSlice(input());
+      expect(h.pushTags).not.toHaveBeenCalled();
+      expect(h.assertWrite).not.toHaveBeenCalled();
+    });
+
+    it('skips a copy this run re-ingests, retires, or removes', async () => {
+      tree(blob('docs/edit.md', 's2-new'));
+      h.findByGitHubConnectionIdInDataLake.mockResolvedValue([
+        stamped('edit', 'docs/edit.md', 's2-old'),
+        stamped('gone', 'docs/gone.md', 's3'),
+      ]);
+      await runGitHubLakeSlice(input());
+      expect(h.pushTags).not.toHaveBeenCalled();
+    });
+
+    it('refuses before any heal write when the lake refuses connector writes', async () => {
+      tree(blob('docs/x.md', 's1'));
+      h.findByGitHubConnectionIdInDataLake.mockResolvedValue([stamped('d', 'docs/x.md', 's1')]);
+      h.assertWrite.mockRejectedValue(new BadRequestError('This lake is curated'));
+      await expect(runGitHubLakeSlice(input())).resolves.toEqual({
+        kind: 'refused',
+        batchId: null,
+        message: 'This lake is curated',
+      });
+      expect(h.pushTags).not.toHaveBeenCalled();
+    });
+
+    it('yields on the deadline mid-heal, after healing what fits', async () => {
+      tree(blob('docs/a.md', 's1'), blob('docs/b.md', 's2'));
+      h.findByGitHubConnectionIdInDataLake.mockResolvedValue([
+        stamped('a', 'docs/a.md', 's1'),
+        stamped('b', 'docs/b.md', 's2'),
+      ]);
+      let calls = 0;
+      const remainingMs = () => (calls++ === 0 ? 600_000 : GITHUB_LAKE_DEADLINE_BUFFER_MS - 1);
+      await expect(runGitHubLakeSlice(input({ remainingMs }))).resolves.toEqual({
+        kind: 'deadline',
+        batchId: null,
+        remaining: 1,
+      });
+      expect(h.pushTags).toHaveBeenCalledTimes(1);
+      expect(h.pushTags).toHaveBeenCalledWith('a', ['gh-x:docs'], 1);
+    });
+  });
+
+  describe('not-ingested list', () => {
+    it('records content skips by path and reason, and clears the row of a file that ingests', async () => {
+      tree(blob('docs/bin.md', 's1'), blob('ok.md', 's2'));
+      h.getBlobBytes.mockResolvedValueOnce(Buffer.from([0x61, 0x00]));
+
+      await runGitHubLakeSlice(input());
+
+      expect(h.recordSkip).toHaveBeenCalledWith({
+        dataLakeId: 'lake1',
+        sourceKind: 'github',
+        sourceId: 'docs/bin.md',
+        name: 'bin.md',
+        relativePath: 'docs/bin.md',
+        mimeType: expect.any(String),
+        size: 2,
+        reason: 'binary',
+      });
+      expect(h.clearSkipSources).toHaveBeenCalledWith('lake1', 'github', ['ok.md']);
+    });
+
+    it('records an oversized file even on a sync with no other work, which creates no batch', async () => {
+      tree(blob('big.md', 's1', 2 * 1024 * 1024));
+
+      await runGitHubLakeSlice(input());
+
+      expect(h.batchCreate).not.toHaveBeenCalled();
+      expect(h.recordSkips).toHaveBeenCalledWith([
+        expect.objectContaining({ sourceId: 'big.md', reason: 'oversized', size: 2 * 1024 * 1024 }),
+      ]);
+    });
+
+    it('names the admin MaxFileSize as the reason when it is the cap that bound', async () => {
+      h.getSettingsValue.mockReturnValueOnce(0.5);
+      tree(blob('big.md', 's1', 600_000));
+
+      await runGitHubLakeSlice(input());
+
+      expect(h.recordSkips).toHaveBeenCalledWith([
+        expect.objectContaining({ sourceId: 'big.md', reason: 'exceeds_max_file_size' }),
+      ]);
+    });
+
+    it('lists a storage-limit file as retryable while keeping it out of the chain skips', async () => {
+      tree(blob('a.md', 's1'));
+      h.checkStorageLimit.mockRejectedValue(storageRefusal());
+
+      await runGitHubLakeSlice(input());
+
+      expect(h.recordSkippedDriveFile).not.toHaveBeenCalled();
+      expect(h.recordSkip).toHaveBeenCalledWith(expect.objectContaining({ sourceId: 'a.md', reason: 'storage_limit' }));
+    });
+
+    it('prunes rows against every path in the tree, oversized included', async () => {
+      tree(blob('a.md', 's1'), blob('big.md', 's2', 2 * 1024 * 1024));
+
+      await runGitHubLakeSlice(input());
+
+      expect(h.pruneMissingSkips).toHaveBeenCalledWith('lake1', 'github', new Set(['a.md', 'big.md']));
+    });
+
+    it('never prunes against a truncated tree', async () => {
+      h.getRecursiveTree.mockResolvedValue({ truncated: true, entries: [blob('a.md', 's1')] });
+
+      await runGitHubLakeSlice(input());
+
+      expect(h.pruneMissingSkips).not.toHaveBeenCalled();
+    });
+  });
+});

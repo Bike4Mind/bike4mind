@@ -24,12 +24,13 @@ import {
   ImageOutputFormatSchema,
   AttachmentLakeAccess,
   IFabFileDocument,
+  usdToCreditsStochastic,
 } from '@bike4mind/common';
 import {
   isImageServeable,
   isBflImageModel,
   isGeminiImageModel,
-  isGPTImage2Model,
+  rejectsTransparentBackground,
   isGPTImageModel,
   MAX_REFERENCE_IMAGES,
   supportsImageEdit,
@@ -72,6 +73,16 @@ import { startQuestHeartbeat } from './questHeartbeat';
 // Aliased: this module also has a private method named validateUserCredits.
 import { validateUserCredits as validateImageUserCredits } from './tools/base/utils';
 import { getQuestErrorCode } from '@bike4mind/common';
+import { recordGeneratedImages } from './recordGeneratedImages';
+import { saveGeneratedImage, type SaveGeneratedAssetFn } from './saveGeneratedImage';
+
+// Bounded wait at the mask gate for a scan still in flight: the client's on-demand call returned
+// 'pending', or the S3 event owns the claim ('scanning'). Both values are in ms.
+const MODERATION_WAIT_MS = 12_000;
+const MODERATION_POLL_INTERVAL_MS = 750;
+
+const isModerationInFlight = (f: { moderationStatus?: string | null }) =>
+  f.moderationStatus === 'pending' || f.moderationStatus === 'scanning';
 
 export const ImageEditBodySchema = OpenAIImageGenerationInput.extend({
   sessionId: z.string(),
@@ -83,11 +94,10 @@ export const ImageEditBodySchema = OpenAIImageGenerationInput.extend({
     .number()
     .min(BFL_SAFETY_TOLERANCE.MIN)
     .max(BFL_SAFETY_TOLERANCE.MAX)
-    .optional()
     .prefault(BFL_SAFETY_TOLERANCE.DEFAULT),
-  prompt_upsampling: z.boolean().optional().prefault(false),
+  prompt_upsampling: z.boolean().prefault(false),
   seed: z.number().nullable().optional(),
-  output_format: ImageOutputFormatSchema.nullable().optional().prefault('png'),
+  output_format: ImageOutputFormatSchema.nullable().prefault('png'),
   width: z.number().optional(),
   height: z.number().optional(),
   aspect_ratio: z.string().optional(),
@@ -97,6 +107,8 @@ export const ImageEditBodySchema = OpenAIImageGenerationInput.extend({
   // through this schema, and an undeclared key is stripped before it reaches process().
   referenceImageFabFileIds: z.array(z.string()).max(MAX_REFERENCE_IMAGES).optional(),
   image: z.string(),
+  /** Minted per invoke(); see ImageGenerationBodySchema.generationId. */
+  generationId: z.string().optional(),
   // `n` is inherited from OpenAIImageGenerationInput (1-10, the range generation honors) and
   // deliberately left alone: editing renders IMAGES_PER_EDIT_REQUEST whatever it says, so it is
   // accepted and ignored, never billed. Narrowing it to 1 here would 400 an API-key caller whose
@@ -108,6 +120,8 @@ interface IImageEditServiceOptions {
   db: {
     sessions: {
       findById: (id: string) => Promise<ISessionDocument | null | undefined>;
+      /** Feeds the sidebar's image marker (ISession.imageCount). Optional so test fakes compile. */
+      incrementImageCount?: (sessionId: string, count: number) => Promise<void>;
     };
     quests: IChatHistoryItemRepository;
     connections: {
@@ -130,6 +144,8 @@ interface IImageEditServiceOptions {
   /** Storage where the generated images will be stored. */
   storage: BaseStorage;
   fabFileStorage: BaseStorage;
+  /** Keeps the edited image in the user's files. Required so the app factory cannot silently drop it. */
+  saveGeneratedAsset: SaveGeneratedAssetFn;
   /** Lambda function name for image processing (from SST Resource.ImageProcessor.name) */
   imageProcessorLambdaName?: string;
   /** Checks an edited image for explicit content before it's stored. Optional so existing callers/tests keep compiling; the moderation hook is a no-op when absent. */
@@ -155,6 +171,7 @@ export class ImageEditService {
   private abilityGetter: IImageEditServiceOptions['abilityGetter'];
   private storage: BaseStorage;
   private fabFileStorage: BaseStorage;
+  private saveGeneratedAsset: SaveGeneratedAssetFn;
   private deleteFabFile: IImageEditServiceOptions['deleteFabFile'];
   private tokenizer: TiktokenTokenizer;
   private imageProcessorLambdaName?: string;
@@ -168,6 +185,7 @@ export class ImageEditService {
     this.logEvent = options.logEvent;
     this.storage = options.storage;
     this.fabFileStorage = options.fabFileStorage;
+    this.saveGeneratedAsset = options.saveGeneratedAsset;
     this.abilityGetter = options.abilityGetter;
     this.imageProcessorLambdaName = options.imageProcessorLambdaName;
     this.imageModerationService = options.imageModerationService;
@@ -194,7 +212,7 @@ export class ImageEditService {
     // gpt-image-2 rejects background: 'transparent' outright. Resolved here, before
     // promptMeta is built, so the persisted model matches what actually renders and bills.
     const model =
-      rest.background === 'transparent' && isGPTImage2Model(requestedModel)
+      rest.background === 'transparent' && rejectsTransparentBackground(requestedModel)
         ? ImageModels.GPT_IMAGE_1_5
         : requestedModel;
 
@@ -229,13 +247,24 @@ export class ImageEditService {
       quest.images = [];
       quest.replies = [];
       quest.status = undefined;
+      // A failed run leaves `type: 'error'`, and the success path never resets it, so a successful
+      // retry would still tell pollers and the callback to discard the render.
+      quest.type = 'message';
+      quest.errorCode = undefined;
       quest.promptMeta = promptMeta;
-      await this.db.quests.update({
-        id: quest.id,
-        images: quest.images,
-        replies: quest.replies,
-        promptMeta: quest.promptMeta,
-      });
+      // `undefined` alone is dropped from $set, so the prior terminal status would survive and let
+      // armGenerationCallback dispatch the previous run's outcome at once, and a stale errorCode
+      // would outlive a successful retry. Unset both explicitly (mirrors ChatCompletionInvoke).
+      await this.db.quests.update(
+        {
+          id: quest.id,
+          images: quest.images,
+          replies: quest.replies,
+          type: quest.type,
+          promptMeta: quest.promptMeta,
+        },
+        { unset: ['status', 'errorCode'] }
+      );
     } else {
       // Create the associated quest record.  We'll update this as we go.
       quest = await this.db.quests.create({
@@ -259,6 +288,7 @@ export class ImageEditService {
           sessionId: session.id,
           fabFileIds,
           organizationId,
+          generationId: uuidv4(),
         })
       );
     } catch (error) {
@@ -270,10 +300,13 @@ export class ImageEditService {
       }
 
       quest.type = 'error';
+      quest.status = 'done';
       quest.reply = errorMessage;
       // Write only the fields this error path sets, not the whole stale quest: this catch can run
       // after the success-path update above, and a whole-doc write would clobber that update.
-      await this.db.quests.update({ id: quest.id, type: quest.type, reply: quest.reply });
+      // `status` settles the quest like process()'s own catch does, so a poller (and an armed
+      // completion callback) sees a terminal failure instead of a quest stuck in flight.
+      await this.db.quests.update({ id: quest.id, type: quest.type, status: quest.status, reply: quest.reply });
     }
 
     return quest;
@@ -282,7 +315,7 @@ export class ImageEditService {
   private async validateUserCredits(
     user: IUserDocument,
     model: string,
-    imageParams: Pick<ImageEditBody, 'size' | 'quality'>,
+    imageParams: Pick<ImageEditBody, 'size' | 'quality'> & { inputImageCount?: number },
     logger: Logger,
     organization?: IOrganizationDocument | null
   ) {
@@ -386,6 +419,32 @@ export class ImageEditService {
     });
   }
 
+  /**
+   * Re-reads a still-scanning file (through the same access-scoped lookup as the initial load)
+   * until it leaves 'pending'/'scanning' or the budget runs out. Returns the last row seen, so the
+   * caller's fail-closed gate decides: a timeout hands back a still-in-flight row, not a 'clean' one.
+   * A mask that vanished or is no longer accessible returns null.
+   */
+  private async waitForModerationScan(
+    file: IFabFileDocument,
+    access: { userId: string; userGroups?: string[]; lakeAccess?: AttachmentLakeAccess }
+  ): Promise<IFabFileDocument | null> {
+    const deadline = Date.now() + MODERATION_WAIT_MS;
+    let current = file;
+    while (isModerationInFlight(current) && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, MODERATION_POLL_INTERVAL_MS));
+      const [refreshed] = await this.db.fabFiles.findAccessibleInIds(
+        [file.id as string],
+        { userId: access.userId, userGroups: access.userGroups },
+        access.lakeAccess
+      );
+      // A mask that vanished or is no longer accessible is unavailable, not still being scanned.
+      if (!refreshed) return null;
+      current = refreshed;
+    }
+    return current;
+  }
+
   public async process({ body, logger }: { body: z.infer<typeof ImageEditBodySchema>; logger: Logger }) {
     const {
       sessionId,
@@ -405,13 +464,16 @@ export class ImageEditService {
       quality,
       image: sourceImageUrl,
       organizationId,
+      generationId,
     } = ImageEditBodySchema.parse(body);
     // Step a gpt-image-2 selection down to gpt-image-1.5 when transparency is requested:
     // gpt-image-2 rejects background: 'transparent' outright, so sending it there would
     // silently turn a valid request into an opaque image. Resolved before billing so
     // credits key off the model actually used.
     const model =
-      background === 'transparent' && isGPTImage2Model(requestedModel) ? ImageModels.GPT_IMAGE_1_5 : requestedModel;
+      background === 'transparent' && rejectsTransparentBackground(requestedModel)
+        ? ImageModels.GPT_IMAGE_1_5
+        : requestedModel;
 
     logger.updateMetadata({ notebookId: sessionId, questId, userId });
 
@@ -426,7 +488,9 @@ export class ImageEditService {
     ]);
     if (!user) throw new NotFoundError('User not found');
 
-    const settings = await getSettingsMap(this.db);
+    // skipCache: enforceCredits gates money (and ModerationEnabled below gates content safety),
+    // and this host may outlive the admin's write to either.
+    const settings = await getSettingsMap(this.db, { skipCache: true });
     const adminSettingsEnforceCredits = getSettingsValue('enforceCredits', settings);
 
     const parseQuestToStreamPayload = (quest: IChatHistoryItemDocument) => {
@@ -539,7 +603,8 @@ export class ImageEditService {
         const { requiredCredits, usdCost } = await this.validateUserCredits(
           user,
           model,
-          { size, quality },
+          // The primary image plus the de-duped references; the mask is not an input image.
+          { size, quality, inputImageCount: 1 + new Set(referenceImageFabFileIds ?? []).size },
           logger,
           organization
         );
@@ -555,8 +620,6 @@ export class ImageEditService {
         quest: parseQuestToStreamPayload(quest),
         statusMessage: 'Preparing to paint...',
       });
-
-      const settings = await getSettingsMap(this.db);
 
       if (getSettingsValue('ModerationEnabled', settings)) {
         await clientMessageSender.sendToClient(userId, wsEndpoint, {
@@ -599,13 +662,32 @@ export class ImageEditService {
       });
 
       // Pick the first image-type fab file to send as the edit source.
-      const fileImage = fabFiles.find(file => file.mimeType.startsWith('image'));
+      let fileImage = fabFiles.find(file => file.mimeType.startsWith('image'));
 
       // An explicit workbench upload used as the edit mask must not be fed into generation
       // while it's held (pending scan) or blocked. Checked once here, before the per-model
       // branches below each call `fabFileStorage.getSignedUrl` on it.
+      //
+      // Normally already 'clean' from the client's on-demand scan; otherwise the scan is still in
+      // flight under that call ('pending') or the S3 event ('scanning'), so wait for the verdict
+      // here. Still fail-closed: not 'clean' by the deadline is rejected.
+      if (fileImage && isModerationInFlight(fileImage)) {
+        const waited = await this.waitForModerationScan(fileImage, {
+          userId,
+          userGroups: user.groups ?? undefined,
+          lakeAccess,
+        });
+        if (!waited) throw new BadRequestError('The uploaded image is not available');
+        fileImage = waited;
+      }
       if (fileImage && !isImageServeable(fileImage)) {
-        throw new BadRequestError('The uploaded image is not available (moderation pending or blocked)');
+        throw new BadRequestError(
+          isModerationInFlight(fileImage)
+            ? 'The uploaded image is still being scanned. Please try again in a few seconds.'
+            : fileImage.moderationStatus === 'blocked'
+              ? 'The uploaded image is not available (blocked by moderation)'
+              : 'The uploaded image is not available'
+        );
       }
 
       let service: BFLImageService | GeminiImageService | OpenAIImageService;
@@ -712,7 +794,7 @@ export class ImageEditService {
 
       const buffer = await downloadImageAsBuffer(result);
       const fileType = await fileTypeFromBuffer(buffer);
-      const filename = `${uuidv4()}.${fileType?.ext}`;
+      const filename = `${uuidv4()}.${fileType?.ext ?? 'png'}`;
 
       await moderateImageOrThrow({
         service: this.imageModerationService,
@@ -729,6 +811,7 @@ export class ImageEditService {
           questId,
           provider,
           model,
+          surface: 'edit',
         },
         logger,
       });
@@ -761,6 +844,15 @@ export class ImageEditService {
         model,
       });
 
+      // Per-image prices are exact, so the final debit is the unbiased draw on usageCostUsd
+      // (may be 0), replacing the rounded-up pre-flight figure.
+      const creditTransactions = this.db.creditTransactions;
+      const settlement =
+        adminSettingsEnforceCredits && typeof quest.creditsUsed === 'number' && creditTransactions
+          ? { creditTransactions, credits: usdToCreditsStochastic(usageCostUsd) }
+          : undefined;
+      if (settlement) quest.creditsUsed = settlement.credits;
+
       quest.reply = '';
       quest.replies = [];
       quest.images = [path];
@@ -774,6 +866,8 @@ export class ImageEditService {
         creditsUsed: quest.creditsUsed,
       });
 
+      await recordGeneratedImages(this.db.sessions, sessionId, 1, logger);
+
       // Remove prompt loading message on the client
       await clientMessageSender.sendToClient(userId, wsEndpoint, {
         action: 'streamed_chat_completion',
@@ -781,29 +875,33 @@ export class ImageEditService {
         statusMessage: null,
       });
 
-      // Deduct credits after successful edit
-      if (adminSettingsEnforceCredits && typeof quest.creditsUsed === 'number' && this.db.creditTransactions) {
-        await deductCreditsWithOrgSupport(
-          {
-            type: 'image_edit_usage',
-            user,
-            organization,
-            credits: quest.creditsUsed,
-            sessionId,
-            questId,
-            model,
-          },
-          {
-            db: {
-              creditTransactions: this.db.creditTransactions,
-              users: this.db.users,
-              organizations: this.db.organizations,
+      // Deduct credits after successful edit. A zero draw writes no ledger row; the usage event still lands.
+      if (settlement) {
+        if (settlement.credits > 0) {
+          await deductCreditsWithOrgSupport(
+            {
+              type: 'image_edit_usage',
+              user,
+              organization,
+              credits: settlement.credits,
+              sessionId,
+              questId,
+              model,
             },
-          }
-        );
+            {
+              db: {
+                creditTransactions: settlement.creditTransactions,
+                users: this.db.users,
+                organizations: this.db.organizations,
+              },
+            }
+          );
+        }
 
-        // Dual-write usage event: analytics only, never billing.
-        this.db.usageEvents
+        // Dual-write usage event: analytics only, never billing. Awaited because a write still in
+        // flight when the Lambda handler returns can be frozen and never land; the catch keeps it
+        // from failing the request.
+        await this.db.usageEvents
           ?.record({
             requestId: questId,
             userId,
@@ -822,11 +920,31 @@ export class ImageEditService {
             cacheWriteTokens: 0,
             units: IMAGES_PER_EDIT_REQUEST,
             costUsd: usageCostUsd,
-            creditsCharged: quest.creditsUsed,
+            creditsCharged: settlement.credits,
             status: 'ok',
           })
           .catch(err => logger.warn('Failed to record usage event', err));
       }
+
+      // Last, so a run that fails anywhere above (quest update, billing) leaves no file.
+      await saveGeneratedImage(
+        this.saveGeneratedAsset,
+        {
+          userId,
+          bytes: buffer,
+          contentType: fileType?.mime ?? 'image/png',
+          generation: {
+            generator: 'image',
+            provider,
+            modelId: model,
+            ...(generationId && { jobId: generationId }),
+            prompt,
+          },
+          sessionId,
+          questId,
+        },
+        logger
+      );
     } catch (error) {
       Logger.globalInstance.log(error);
       quest.reply = (error as Error).message;

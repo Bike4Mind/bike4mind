@@ -28,6 +28,13 @@ export const TRUNCATED_FINISH_REASON = 'max_tokens';
 export const DEGENERATE_FINISH_REASON = 'degenerate_repetition';
 
 /**
+ * The model declined the request (Anthropic's native `stop_reason: 'refusal'`). Only reaches a
+ * settled turn for models outside REFUSAL_FALLBACK_MODELS; for those the backend throws so the
+ * completion loop falls back instead.
+ */
+export const REFUSAL_FINISH_REASON = 'refusal';
+
+/**
  * Stamped on `promptMeta.finishReason` when recovery settles a quest whose run died without
  * finishing: the liveness timeout (the process was hard-killed, e.g. at the server Lambda's
  * execution limit) or the abandoned-run sweep. No provider ever reports these; they exist so

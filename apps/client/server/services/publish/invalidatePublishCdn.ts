@@ -1,6 +1,7 @@
 import { CloudFrontClient, CreateInvalidationCommand } from '@aws-sdk/client-cloudfront';
 import type { PublishScopeTier, PublishSourceKind } from '@bike4mind/common';
 import { resolveRouterDistributionId } from '@server/security/wafSharedHelpers';
+import type { MinimalLogger } from './minimalLogger';
 import { buildPublishUrlPath } from './paths';
 
 /**
@@ -48,8 +49,10 @@ export function toCacheTarget(a: {
  *  matches by path across all host variants, so listing `/uc/...` clears it regardless
  *  of whether the cache policy keys on Host. */
 export function publishCachePaths(t: PublishCacheTarget): string[] {
-  if (t.sourceKind === 'reply') return [`/p/r/${t.publicId}`];
-  if (t.sourceKind === 'fabfile') return [`/p/f/${t.publicId}`];
+  // Replies and files are cached under query variants too (`?format=raw` - the full text - and the
+  // `?a={i}` embedded-artifact frames), so they need the same bare-wildcard belt as bundles below.
+  if (t.sourceKind === 'reply') return [`/p/r/${t.publicId}`, `/p/r/${t.publicId}*`];
+  if (t.sourceKind === 'fabfile') return [`/p/f/${t.publicId}`, `/p/f/${t.publicId}*`];
   const base = buildPublishUrlPath(t.tier, t.scopeId, t.slug); // /p/{prefix}/{scopeId}/{slug}
   const ucBase = base.replace(/^\/p\b/, '/uc'); // isolated-origin path (mirrors the serve handler)
   // `${base}*` (no slash) in addition to `${base}/*`: a slash-wildcard matches further path
@@ -84,30 +87,93 @@ function getRouterDistributionId(logger?: MinimalLogger): string | undefined {
   }
 }
 
-interface MinimalLogger {
-  info: (msg: string) => void;
-  warn: (msg: string) => void;
-}
-
 /** Invalidate a published page's CDN paths so a removed page stops serving immediately. Never throws. */
 export async function invalidatePublishCdn(target: PublishCacheTarget, logger?: MinimalLogger): Promise<void> {
   const distributionId = getRouterDistributionId(logger);
   if (!distributionId) return; // getRouterDistributionId already logged why
+  // Wildcards go in their own request: CloudFront throttles them separately, and a rejected
+  // wildcard must not take the exact-path purge down with it.
   const paths = publishCachePaths(target);
+  const exact = paths.filter(p => !p.includes('*'));
+  const wild = paths.filter(p => p.includes('*'));
+  await sendInvalidation(distributionId, target.publicId, exact, logger);
+  if (wild.length) await sendInvalidation(distributionId, `${target.publicId}-variants`, wild, logger);
+}
+
+// Well under CloudFront's cap on paths in flight per distribution.
+const MAX_PATHS_PER_BATCH = 1000;
+
+// CloudFront allows only ~15 wildcard paths in flight per distribution (versus thousands of plain
+// paths), shared with every concurrent single-page purge. This budgets the reply/file variant
+// wildcards for one invalidatePublishCdnMany call: the bundle wildcards sent by that call are
+// counted first, and the reply/file pages only get their own `/p/r/{id}*` wildcards if the rest
+// fits. Otherwise they collapse into one `/p/r/*` and/or `/p/f/*`, which invalidates every page of
+// that kind but costs one slot. It does not cap the bundle wildcards themselves.
+export const MAX_WILDCARDS_PER_BULK_CALL = 5;
+
+/**
+ * Invalidate many removed pages (a bulk takedown, or deleting a notebook or file that had
+ * publications) without one CloudFront call per page. The exact reply/file paths share batches.
+ * Their query-variant wildcards (`/p/r/{id}*`, see publishCachePaths) go in one separate request
+ * so a throttled wildcard cannot take the exact paths down with it: per page up to
+ * the remaining wildcard budget (MAX_WILDCARDS_PER_BULK_CALL minus the bundle wildcards sent in this
+ * call), else collapsed to the per-kind wildcard; a failed per-page request is retried once with
+ * the per-kind wildcards. Bundles keep one call each (their wildcards are per bundle). Never throws.
+ */
+export async function invalidatePublishCdnMany(targets: PublishCacheTarget[], logger?: MinimalLogger): Promise<void> {
+  if (targets.length === 0) return;
+  const distributionId = getRouterDistributionId(logger);
+  if (!distributionId) return;
+  const shortPaths: string[] = [];
+  const pageWildcards = new Set<string>();
+  const kindWildcards = new Set<string>();
+  let bundleWildcards = 0;
+  for (const target of targets) {
+    if (target.sourceKind === 'bundle') {
+      const paths = publishCachePaths(target);
+      bundleWildcards += paths.filter(p => p.includes('*')).length;
+      await sendInvalidation(distributionId, target.publicId, paths, logger);
+    } else {
+      const paths = publishCachePaths(target);
+      shortPaths.push(...paths.filter(p => !p.includes('*')));
+      for (const p of paths.filter(p => p.includes('*'))) pageWildcards.add(p);
+      kindWildcards.add(target.sourceKind === 'reply' ? '/p/r/*' : '/p/f/*');
+    }
+  }
+  for (let i = 0; i < shortPaths.length; i += MAX_PATHS_PER_BATCH) {
+    await sendInvalidation(distributionId, `batch-${i}`, shortPaths.slice(i, i + MAX_PATHS_PER_BATCH), logger);
+  }
+  if (pageWildcards.size === 0) return;
+  const perPage = pageWildcards.size <= MAX_WILDCARDS_PER_BULK_CALL - bundleWildcards;
+  const sent = await sendInvalidation(
+    distributionId,
+    'variants',
+    [...(perPage ? pageWildcards : kindWildcards)],
+    logger
+  );
+  if (!sent && perPage) await sendInvalidation(distributionId, 'variants-kind', [...kindWildcards], logger);
+}
+
+async function sendInvalidation(
+  distributionId: string,
+  label: string,
+  paths: string[],
+  logger?: MinimalLogger
+): Promise<boolean> {
   try {
     await cfClient.send(
       new CreateInvalidationCommand({
         DistributionId: distributionId,
         InvalidationBatch: {
-          CallerReference: `publish-${target.publicId}-${Date.now()}`,
+          CallerReference: `publish-${label}-${Date.now()}`,
           Paths: { Quantity: paths.length, Items: paths },
         },
       })
     );
-    logger?.info(`[PUBLISH] CDN invalidation issued for ${target.publicId}: ${paths.join(', ')}`);
+    logger?.info(`[PUBLISH] CDN invalidation issued for ${label}: ${paths.join(', ')}`);
+    return true;
   } catch (err) {
-    logger?.warn(
-      `[PUBLISH] CDN invalidation failed for ${target.publicId}: ${err instanceof Error ? err.message : String(err)}`
-    );
+    logger?.warn(`[PUBLISH] CDN invalidation failed for ${label}: ${err instanceof Error ? err.message : String(err)}`);
+    return false;
   }
 }

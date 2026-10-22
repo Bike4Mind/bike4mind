@@ -1,5 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
+import { MAX_TOOL_CALLS_CEILING } from '@bike4mind/common';
 import { snipSession } from './snip';
+
+const snipWithEmptyTable = (
+  userId: string,
+  params: Parameters<typeof snipSession>[1],
+  adapters: Omit<Parameters<typeof snipSession>[2], 'workspaceSessionSettings'>
+) => snipSession(userId, params, { ...adapters, workspaceSessionSettings: {} });
 
 describe('snipSession', () => {
   const makeAdapters = () => {
@@ -50,9 +57,103 @@ describe('snipSession', () => {
     });
     db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
 
-    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db, workspaceSessionSettings: {} });
 
     expect(db.sessions.create).toHaveBeenCalledWith(expect.objectContaining({ retrievalTags: ['datalake:acme'] }));
+  });
+
+  // `citationStyle` is create-only, so a snip that drops it is stuck on the 'named' default for good.
+  it('carries the source session citationStyle onto the snip', async () => {
+    const { db } = makeAdapters();
+    db.sessions.findByIdAndUserId.mockResolvedValueOnce({
+      id: 'session-1',
+      name: 'Original',
+      knowledgeIds: [],
+      tags: [],
+      citationStyle: 'indexed',
+      corpusGroundingMode: 'retrieve',
+      retrievalExcludeFilenameMarkers: ['draft'],
+      retrievalVectorizedOnly: true,
+      includeLibraryFiles: false,
+      forceKnowledgeRetrieval: true,
+    });
+    db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
+
+    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db, workspaceSessionSettings: {} });
+
+    expect(db.sessions.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        citationStyle: 'indexed',
+        corpusGroundingMode: 'retrieve',
+        retrievalExcludeFilenameMarkers: ['draft'],
+        retrievalVectorizedOnly: true,
+        includeLibraryFiles: false,
+      })
+    );
+  });
+
+  // Create-only (not in SessionUpdateRequestSchema), so a snip that drops them can never get them back.
+  it('carries the source session systemPromptText, temperature and maxToolCalls onto the snip', async () => {
+    const { db } = makeAdapters();
+    db.sessions.findByIdAndUserId.mockResolvedValueOnce({
+      id: 'session-1',
+      name: 'Original',
+      knowledgeIds: [],
+      tags: [],
+      systemPromptText: 'Answer like a pirate.',
+      temperature: 0.2,
+      maxToolCalls: 7,
+    });
+    db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
+
+    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db, workspaceSessionSettings: {} });
+
+    expect(db.sessions.create).toHaveBeenCalledWith(
+      expect.objectContaining({ systemPromptText: 'Answer like a pirate.', temperature: 0.2, maxToolCalls: 7 })
+    );
+  });
+
+  it('clamps a stored maxToolCalls past MAX_TOOL_CALLS_CEILING instead of failing the snip', async () => {
+    const { db } = makeAdapters();
+    db.sessions.findByIdAndUserId.mockResolvedValueOnce({
+      id: 'session-1',
+      name: 'Original',
+      knowledgeIds: [],
+      tags: [],
+      maxToolCalls: 1000,
+    });
+    db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
+
+    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db, workspaceSessionSettings: {} });
+
+    expect(db.sessions.create.mock.calls[0][0].maxToolCalls).toBe(MAX_TOOL_CALLS_CEILING);
+  });
+
+  // Create-only (not in SessionUpdateRequestSchema), so a snip that drops them can never get them back.
+  it('carries the source session tool lists and systemPromptId onto the snip', async () => {
+    const { db } = makeAdapters();
+    db.sessions.findByIdAndUserId.mockResolvedValueOnce({
+      id: 'session-1',
+      name: 'Original',
+      knowledgeIds: [],
+      tags: [],
+      enabledTools: ['web_search'],
+      disabledTools: ['image_generation'],
+      disableUserIntegrations: true,
+      systemPromptId: 'triage_router',
+    });
+    db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
+
+    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db, workspaceSessionSettings: {} });
+
+    expect(db.sessions.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        enabledTools: ['web_search'],
+        disabledTools: ['image_generation'],
+        disableUserIntegrations: true,
+        systemPromptId: 'triage_router',
+      })
+    );
   });
 
   /**
@@ -75,7 +176,7 @@ describe('snipSession', () => {
     });
     db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
 
-    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db, workspaceSessionSettings: {} });
 
     expect(findAccessibleInIds).not.toHaveBeenCalled();
     expect(db.sessions.create).toHaveBeenCalledWith(expect.objectContaining({ knowledgeIds: [FILE_ID] }));
@@ -98,7 +199,7 @@ describe('snipSession', () => {
     });
     db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
 
-    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db, workspaceSessionSettings: {} });
 
     const persisted = db.sessions.create.mock.calls[0][0];
     expect(persisted.taggedAt).toBeUndefined();
@@ -129,7 +230,7 @@ describe('snipSession', () => {
     });
     db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
 
-    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db, workspaceSessionSettings: {} });
 
     expect(db.sessions.create.mock.calls[0][0].summaryTrigger).toBeUndefined();
     expect(db.sessions.create.mock.calls[0][0].summary).toBe('the gist');
@@ -149,7 +250,7 @@ describe('snipSession', () => {
     });
     db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
 
-    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db, workspaceSessionSettings: {} });
 
     expect(db.sessions.create).toHaveBeenCalledWith(
       expect.objectContaining({ summary: 'the gist', summaryAt, summaryTrigger: 'contentGrowth' })
@@ -169,9 +270,130 @@ describe('snipSession', () => {
     });
     db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
 
-    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db, workspaceSessionSettings: {} });
 
     expect(db.sessions.create.mock.calls[0][0].summaryTrigger).toBeUndefined();
+  });
+
+  // A snip made inside a product surface must stay in that surface's list, not drop into the main one.
+  it('carries the source session surface onto the snip', async () => {
+    const { db } = makeAdapters();
+    db.sessions.findByIdAndUserId.mockResolvedValueOnce({
+      id: 'session-1',
+      name: 'Original',
+      knowledgeIds: [],
+      tags: [],
+      surface: 'opti',
+    });
+    db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
+
+    await snipWithEmptyTable(
+      'caller-1',
+      { sessionId: 'session-1', messageId: 'm1' },
+      { db, resolveSurfaceAccess: async () => ({ entitlements: ['optihashi:pro'] }) }
+    );
+
+    expect(db.sessions.create).toHaveBeenCalledWith(expect.objectContaining({ surface: 'opti' }));
+  });
+
+  // E.g. the entitlement lapsed since the source was made: the snip must land where it can be opened.
+  it('snips into the main list when the caller cannot use the registered source workspace', async () => {
+    const { db } = makeAdapters();
+    db.sessions.findByIdAndUserId.mockResolvedValueOnce({
+      id: 'session-1',
+      name: 'Original',
+      knowledgeIds: [],
+      tags: [],
+      surface: 'opti',
+    });
+    db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
+
+    await snipSession(
+      'caller-1',
+      { sessionId: 'session-1', messageId: 'm1' },
+      { db, workspaceSessionSettings: {}, resolveSurfaceAccess: async () => ({ entitlements: [] }) }
+    );
+
+    expect(db.sessions.create.mock.calls[0][0].surface).toBeUndefined();
+  });
+
+  it('leaves the snip of a main-list session without a surface', async () => {
+    const { db } = makeAdapters();
+    db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
+
+    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db, workspaceSessionSettings: {} });
+
+    expect(db.sessions.create.mock.calls[0][0].surface).toBeUndefined();
+  });
+
+  describe('targetSurface', () => {
+    const OPTI_ACCESS = async () => ({ entitlements: ['optihashi:pro'] });
+    const NO_ACCESS = async () => ({ entitlements: [] });
+    const snipFrom = async (
+      surface: string | undefined,
+      targetSurface: string | null | undefined,
+      resolveSurfaceAccess?: () => Promise<{ entitlements: string[] }>
+    ) => {
+      const { db } = makeAdapters();
+      db.sessions.findByIdAndUserId.mockResolvedValueOnce({
+        id: 'session-1',
+        name: 'Original',
+        knowledgeIds: [],
+        tags: [],
+        surface,
+      });
+      db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
+      const run = snipSession(
+        'caller-1',
+        { sessionId: 'session-1', messageId: 'm1', targetSurface },
+        { db, resolveSurfaceAccess, workspaceSessionSettings: {} }
+      );
+      return { db, run };
+    };
+
+    it('snips a main-list session into opti for an entitled caller', async () => {
+      const { db, run } = await snipFrom(undefined, 'opti', OPTI_ACCESS);
+      await run;
+      expect(db.sessions.create).toHaveBeenCalledWith(expect.objectContaining({ surface: 'opti' }));
+    });
+
+    // With access, so only an honored `null` target (not the no-entitlement fallback) yields no surface.
+    it('snips an opti session into the main list', async () => {
+      const { db, run } = await snipFrom('opti', null, OPTI_ACCESS);
+      await run;
+      expect(db.sessions.create.mock.calls[0][0].surface).toBeUndefined();
+    });
+
+    it('403s a destination the caller is not entitled to, creating nothing', async () => {
+      const { db, run } = await snipFrom(undefined, 'opti', NO_ACCESS);
+      await expect(run).rejects.toMatchObject({ statusCode: 403 });
+      expect(db.sessions.create).not.toHaveBeenCalled();
+    });
+
+    it('400s an unregistered destination', async () => {
+      const { db, run } = await snipFrom(undefined, 'some-private-surface', OPTI_ACCESS);
+      await expect(run).rejects.toMatchObject({ statusCode: 400 });
+      expect(db.sessions.create).not.toHaveBeenCalled();
+    });
+
+    it('400s a targeted snip out of an unregistered surface', async () => {
+      const { db, run } = await snipFrom('some-private-surface', null, OPTI_ACCESS);
+      await expect(run).rejects.toMatchObject({ statusCode: 400 });
+      expect(db.sessions.create).not.toHaveBeenCalled();
+    });
+
+    // A copy without a target inherits even a surface this repo does not register.
+    it('inherits an unregistered surface when no target is named', async () => {
+      const { db, run } = await snipFrom('some-private-surface', undefined);
+      await run;
+      expect(db.sessions.create).toHaveBeenCalledWith(expect.objectContaining({ surface: 'some-private-surface' }));
+    });
+
+    it('refuses a targeted snip when the route supplied no access resolver', async () => {
+      const { db, run } = await snipFrom(undefined, 'opti');
+      await expect(run).rejects.toMatchObject({ statusCode: 403 });
+      expect(db.sessions.create).not.toHaveBeenCalled();
+    });
   });
 
   it('snips messages from the snip point forward when the message belongs to the session', async () => {
@@ -181,7 +403,11 @@ describe('snipSession', () => {
       { id: 'm2', sessionId: 'session-1', prompt: 'later' },
     ]);
 
-    const newSession = await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+    const newSession = await snipSession(
+      'caller-1',
+      { sessionId: 'session-1', messageId: 'm1' },
+      { db, workspaceSessionSettings: {} }
+    );
 
     expect(db.chatHistories.findBySessionIdAndId).toHaveBeenCalledWith('session-1', 'm1');
     expect(newSession).toEqual({ id: 'snip-1' });
@@ -198,7 +424,7 @@ describe('snipSession', () => {
       { id: 'm2', sessionId: 'session-1', prompt: 'a correction', correctsQuestId: 'quest-in-source-session' },
     ]);
 
-    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db, workspaceSessionSettings: {} });
 
     expect(created[0]).not.toHaveProperty('correctsQuestId');
     expect(created[0]).toEqual({ sessionId: 'snip-1', prompt: 'a correction' });
@@ -219,7 +445,7 @@ describe('snipSession', () => {
       },
     ]);
 
-    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db, workspaceSessionSettings: {} });
 
     expect(created[0].promptMeta).toEqual({
       warnings: ['partial coverage'],
@@ -235,9 +461,9 @@ describe('snipSession', () => {
     const { db } = makeAdapters();
     db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce(null);
 
-    await expect(snipSession('caller-1', { sessionId: 'session-1', messageId: 'missing' }, { db })).rejects.toThrow(
-      'Message not found'
-    );
+    await expect(
+      snipSession('caller-1', { sessionId: 'session-1', messageId: 'missing' }, { db, workspaceSessionSettings: {} })
+    ).rejects.toThrow('Message not found');
     expect(db.chatHistories.findBySessionIdAndId).toHaveBeenCalledWith('session-1', 'missing');
   });
 });

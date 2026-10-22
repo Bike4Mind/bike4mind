@@ -2,7 +2,7 @@
 
 import { baseApi } from '@server/middlewares/baseApi';
 import { inviteRepository, cacheRepository } from '@bike4mind/database';
-import { UnauthorizedError } from '@server/utils/errors';
+import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { sharingService, cacheService } from '@bike4mind/services';
 import { filterInviteRecipientsToSelf } from '@server/managers/inviteManager';
 import { z } from 'zod';
@@ -14,6 +14,9 @@ const paginationSchema = z.object({
 });
 
 const handler = baseApi().get(async (req, res) => {
+  // Response depends on who asks, so a shared CDN cache must never store it.
+  res.setHeader('Cache-Control', 'private, no-store');
+
   const currentUser = req.user;
   const id = req.query.id! as string;
   const { limit, page } = paginationSchema.parse(req.query);

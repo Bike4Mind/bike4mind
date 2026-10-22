@@ -1,10 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { OWNER_ONLY_PROMPT_META_PROJECTION_PATHS } from '@bike4mind/common';
-import { resolveFieldLimits, type FieldLimitOptions } from './dataSubscribeFieldLimits';
+import { CHAT_MESSAGE_WITHHELD_FIELDS, OWNER_ONLY_PROMPT_META_PROJECTION_PATHS } from '@bike4mind/common';
+import { findWithheldFilterPaths, resolveFieldLimits, type FieldLimitOptions } from './dataSubscribeFieldLimits';
 
 const opts = (overrides: Partial<FieldLimitOptions> = {}): FieldLimitOptions => ({
   questCollectionName: 'quests',
   organizationCollectionName: 'organizations',
+  inviteCollectionName: 'invites',
   ...overrides,
 });
 
@@ -15,6 +16,9 @@ describe('resolveFieldLimits', () => {
       'promptMeta.functionCalls.returnValue': false,
       'promptMeta.functionCalls.error': false,
       'promptMeta.citables.metadata.fullContext': false,
+      callback: false,
+      embedding: false,
+      slackNotification: false,
     });
   });
 
@@ -30,8 +34,24 @@ describe('resolveFieldLimits', () => {
     // The policy lives in @bike4mind/common; this branch must not grow a hand-maintained copy that
     // can drift from what the REST redaction enforces.
     expect(Object.keys(resolveFieldLimits('quests', opts()) ?? {}).sort()).toEqual(
-      [...OWNER_ONLY_PROMPT_META_PROJECTION_PATHS].sort()
+      [...OWNER_ONLY_PROMPT_META_PROJECTION_PATHS, ...CHAT_MESSAGE_WITHHELD_FIELDS].sort()
     );
+  });
+
+  it('excludes the completion callback for a sharee, since a change stream ignores select: false', () => {
+    expect(resolveFieldLimits('quests', opts())).toMatchObject({ callback: false });
+  });
+
+  it('excludes the completion callback for the session owner too, since a collaborator key may have armed it', () => {
+    expect(resolveFieldLimits('quests', opts({ isQuestOwner: true }))).toMatchObject({ callback: false });
+  });
+
+  it('withholds the same server-only quest fields as the REST chat routes, for owner and sharee', () => {
+    // The REST side strips CHAT_MESSAGE_WITHHELD_FIELDS via chatMessageResponseSchema; a socket
+    // event must not hand back what the HTTP response withheld.
+    const serverOnly = Object.fromEntries(CHAT_MESSAGE_WITHHELD_FIELDS.map(field => [field, false]));
+    expect(resolveFieldLimits('quests', opts({ isQuestOwner: true }))).toEqual(serverOnly);
+    expect(resolveFieldLimits('quests', opts())).toMatchObject(serverOnly);
   });
 
   it('excludes password/stripeCustomerId/resetPasswordToken for the users collection', () => {
@@ -51,9 +71,10 @@ describe('resolveFieldLimits', () => {
 
   it('does not exclude any promptMeta path for the quests collection when the caller owns the session', () => {
     // A caller-owned quest subscription must not lose returnValue - the client cache merges a WS
-    // update as a top-level spread, so ANY exclusion here replaces the owner's own cached tool
-    // output the moment a live update lands, not just a sharee's.
-    expect(resolveFieldLimits('quests', opts({ isQuestOwner: true }))).toBeUndefined();
+    // update as a top-level spread, so a promptMeta exclusion here replaces the owner's own cached
+    // tool output the moment a live update lands, not just a sharee's.
+    const limits = resolveFieldLimits('quests', opts({ isQuestOwner: true })) ?? {};
+    expect(Object.keys(limits).filter(path => path.startsWith('promptMeta'))).toEqual([]);
   });
 
   it('still excludes the owner-only promptMeta paths for the quests collection when the caller is a sharee', () => {
@@ -62,6 +83,9 @@ describe('resolveFieldLimits', () => {
       'promptMeta.functionCalls.returnValue': false,
       'promptMeta.functionCalls.error': false,
       'promptMeta.citables.metadata.fullContext': false,
+      callback: false,
+      embedding: false,
+      slackNotification: false,
     });
   });
 
@@ -85,5 +109,42 @@ describe('resolveFieldLimits', () => {
       stripeCustomerId: false,
       billingContact: false,
     });
+  });
+
+  it('drops invite recipients and the bearer token for a non-admin', () => {
+    expect(resolveFieldLimits('invites', opts())).toEqual({
+      token: false,
+      recipients: false,
+      typedRecipients: false,
+    });
+  });
+
+  it('keeps invite recipients for a platform admin but never the token', () => {
+    expect(resolveFieldLimits('invites', opts({ isPlatformAdmin: true }))).toEqual({ token: false });
+  });
+});
+
+describe('findWithheldFilterPaths', () => {
+  const inviteLimits = resolveFieldLimits('invites', opts());
+
+  it('names a filter path equal to, under, or above a withheld path', () => {
+    expect(findWithheldFilterPaths({ token: 'x' }, inviteLimits)).toEqual(['token']);
+    expect(findWithheldFilterPaths({ 'recipients.pending': 'x' }, inviteLimits)).toEqual(['recipients.pending']);
+    const questLimits = resolveFieldLimits('quests', opts());
+    expect(findWithheldFilterPaths({ promptMeta: {} }, questLimits)).toEqual(['promptMeta']);
+  });
+
+  it('walks $and/$or/$nor', () => {
+    expect(findWithheldFilterPaths({ $nor: [{ $and: [{ typedRecipients: 'x' }] }] }, inviteLimits)).toEqual([
+      'typedRecipients',
+    ]);
+  });
+
+  it('passes filters that touch nothing withheld, and every filter when nothing is withheld', () => {
+    expect(findWithheldFilterPaths({ documentId: 'd', type: 'Project', recipientsCount: 1 }, inviteLimits)).toEqual([]);
+    expect(findWithheldFilterPaths({ token: 'x' }, undefined)).toEqual([]);
+    expect(
+      findWithheldFilterPaths({ recipients: 'x' }, resolveFieldLimits('invites', opts({ isPlatformAdmin: true })))
+    ).toEqual([]);
   });
 });

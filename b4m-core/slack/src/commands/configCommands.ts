@@ -65,21 +65,29 @@ async function resolveChannelModelConfig(
  * Format a model ID into a human-readable display name.
  * Returns the ID itself if no friendly name is found.
  */
-function formatModelName(modelId: string): string {
+export function formatModelName(modelId: string): string {
   // Known model ID -> display name mappings
   const knownModels: Record<string, string> = {
     // SYSTEM_MODEL_DEFAULTS.modelId is global.anthropic.claude-sonnet-5 -> covers the Bedrock Sonnet 5 id
     [SYSTEM_MODEL_DEFAULTS.modelId]: SYSTEM_MODEL_DEFAULTS.modelDisplayName,
     'claude-sonnet-5': 'Claude Sonnet 5',
+    'global.anthropic.claude-sonnet-5-5': 'Claude Sonnet 5.5',
     'claude-sonnet-4-6': 'Claude Sonnet 4.6',
     'global.anthropic.claude-sonnet-4-6': 'Claude Sonnet 4.6',
     'claude-sonnet-4-5': 'Claude Sonnet 4.5',
     'claude-opus-5': 'Claude Opus 5',
+    'global.anthropic.claude-opus-5': 'Claude Opus 5',
+    'claude-opus-5-5': 'Claude Opus 5.5',
+    'global.anthropic.claude-opus-5-5': 'Claude Opus 5.5',
+    'global.anthropic.claude-fable-5': 'Claude Fable 5',
+    'global.anthropic.claude-fable-5-1': 'Claude Fable 5.1',
     'claude-opus-4-8': 'Claude Opus 4.8',
     'claude-opus-4-7': 'Claude Opus 4.7',
     'global.anthropic.claude-opus-4-8': 'Claude Opus 4.8',
     'global.anthropic.claude-opus-4-7': 'Claude Opus 4.7',
     'claude-opus-4-6': 'Claude Opus 4.6',
+    'claude-haiku-5-5': 'Claude Haiku 5.5',
+    'global.anthropic.claude-haiku-5-5': 'Claude Haiku 5.5',
     'claude-haiku-4-5-20251001': 'Claude Haiku 4.5',
     'gpt-4.1': 'GPT-4.1',
     'gpt-4.1-mini': 'GPT-4.1 Mini',

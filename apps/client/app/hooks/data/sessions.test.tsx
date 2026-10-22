@@ -8,7 +8,14 @@ import {
   getOrFetchSession,
   useSummarizeSession,
   useUpdateSessionTags,
+  sessionMatchesListFilters,
+  updateSessionsQueryData,
+  useCloneSession,
+  useForkSession,
+  useSnipSession,
+  useOwnSessionCount,
 } from './sessions';
+import { api } from '@client/app/contexts/ApiContext';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import { ISessionDocument } from '@bike4mind/common';
 // Mocked below (vi.mock is hoisted); imported so the toast assertions can read the spy.
@@ -20,6 +27,7 @@ vi.mock('@client/app/utils/sessionsAPICalls', async () => {
   const actual = await vi.importActual<object>('@client/app/utils/sessionsAPICalls');
   return {
     ...actual,
+    cloneSession: vi.fn(),
     getChatMessages: vi.fn(),
     getSessionsFromServer: vi.fn(),
     getSessionByIdFromServer: vi.fn(),
@@ -45,6 +53,7 @@ vi.mock('@client/app/hooks/useJobStatus', () => ({
 }));
 
 import {
+  cloneSession,
   getChatMessages,
   getSessionsFromServer,
   getSessionByIdFromServer,
@@ -368,5 +377,263 @@ describe('useUpdateSessionTags', () => {
 
     await waitFor(() => expect(result.current.isError).toBe(true));
     expect(toast.error).toHaveBeenCalledWith(`Failed to start generating tags for "${SESSION_NAME}"`);
+  });
+});
+
+// Truth table for the predicate gating updateSessionsQueryData's create-path: must stay in
+// lockstep with the server's sessionListFilterQuery (SessionModel.ts).
+describe('sessionMatchesListFilters', () => {
+  const webSession = { imageCount: 0, origin: undefined } as Pick<ISessionDocument, 'imageCount' | 'origin'>;
+  const apiSession = {
+    imageCount: 0,
+    origin: { channel: 'api' },
+  } as Pick<ISessionDocument, 'imageCount' | 'origin'>;
+
+  it('matches everything when there are no filters', () => {
+    expect(sessionMatchesListFilters(webSession, undefined)).toBe(true);
+    expect(sessionMatchesListFilters(apiSession, undefined)).toBe(true);
+  });
+
+  it('treats a session with no recorded origin as "web" for both origin and excludeOrigin', () => {
+    expect(sessionMatchesListFilters(webSession, { origin: 'web' })).toBe(true);
+    expect(sessionMatchesListFilters(webSession, { origin: 'api' })).toBe(false);
+    expect(sessionMatchesListFilters(webSession, { excludeOrigin: 'web' })).toBe(false);
+    expect(sessionMatchesListFilters(webSession, { excludeOrigin: 'api' })).toBe(true);
+  });
+
+  it('matches an explicit origin.channel against origin / excludeOrigin', () => {
+    expect(sessionMatchesListFilters(apiSession, { origin: 'api' })).toBe(true);
+    expect(sessionMatchesListFilters(apiSession, { origin: 'web' })).toBe(false);
+    expect(sessionMatchesListFilters(apiSession, { excludeOrigin: 'api' })).toBe(false);
+    expect(sessionMatchesListFilters(apiSession, { excludeOrigin: 'web' })).toBe(true);
+  });
+
+  it('gates on hasImages in both directions, treating a missing imageCount as zero', () => {
+    const noCount = { origin: undefined } as Pick<ISessionDocument, 'imageCount' | 'origin'>;
+    expect(sessionMatchesListFilters(noCount, { hasImages: false })).toBe(true);
+    expect(sessionMatchesListFilters(noCount, { hasImages: true })).toBe(false);
+    expect(sessionMatchesListFilters({ ...webSession, imageCount: 2 }, { hasImages: true })).toBe(true);
+    expect(sessionMatchesListFilters({ ...webSession, imageCount: 2 }, { hasImages: false })).toBe(false);
+  });
+
+  it('requires every set filter to match (AND, not OR)', () => {
+    const apiWithImages = { imageCount: 3, origin: { channel: 'api' } } as Pick<
+      ISessionDocument,
+      'imageCount' | 'origin'
+    >;
+    expect(sessionMatchesListFilters(apiWithImages, { origin: 'api', hasImages: true })).toBe(true);
+    expect(sessionMatchesListFilters(apiWithImages, { origin: 'api', hasImages: false })).toBe(false);
+    expect(sessionMatchesListFilters(apiWithImages, { origin: 'web', hasImages: true })).toBe(false);
+  });
+});
+
+// Integration-level: a real QueryClient holding several simultaneously-cached filtered variants
+// of the sidebar list (the actual shape sidenavFilters.ts produces), proving a single write only
+// lands in the caches whose filter it satisfies. This is the regression this fix exists for: an
+// API-created session fanning in over the "Hide API" view must never appear there, even for one frame.
+describe('updateSessionsQueryData', () => {
+  const apiOriginSession = {
+    id: 'new-api-session',
+    name: 'From API key',
+    imageCount: 0,
+    origin: { channel: 'api' },
+  } as ISessionDocument;
+
+  const seedEmptyPage = (queryClient: QueryClient, key: unknown[]) =>
+    queryClient.setQueryData<InfiniteData<SessionsPage>>(key as readonly unknown[], {
+      pages: [{ data: [], hasMore: false }],
+      pageParams: [{ page: 1 }],
+    });
+
+  const dataOf = (queryClient: QueryClient, key: unknown[]) =>
+    queryClient.getQueryData<InfiniteData<SessionsPage>>(key as readonly unknown[])?.pages[0]?.data ?? [];
+
+  it('creates into an unfiltered cache and into a cache whose origin filter the session satisfies', () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const unfilteredKey = ['sessions', 'own', '', ''];
+    const matchingOriginKey = ['sessions', 'own', '', '', { origin: 'api' }];
+    seedEmptyPage(queryClient, unfilteredKey);
+    seedEmptyPage(queryClient, matchingOriginKey);
+
+    updateSessionsQueryData(queryClient, 'write', apiOriginSession);
+
+    expect(dataOf(queryClient, unfilteredKey)).toContainEqual(expect.objectContaining({ id: 'new-api-session' }));
+    expect(dataOf(queryClient, matchingOriginKey)).toContainEqual(expect.objectContaining({ id: 'new-api-session' }));
+  });
+
+  it('does NOT create into a cache whose filter the session fails to satisfy (the "Hide API" regression)', () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const hideApiKey = ['sessions', 'own', '', '', { excludeOrigin: 'api' }];
+    const imagesOnlyKey = ['sessions', 'own', '', '', { hasImages: true }];
+    seedEmptyPage(queryClient, hideApiKey);
+    seedEmptyPage(queryClient, imagesOnlyKey);
+
+    updateSessionsQueryData(queryClient, 'write', apiOriginSession);
+
+    expect(dataOf(queryClient, hideApiKey)).toHaveLength(0);
+    expect(dataOf(queryClient, imagesOnlyKey)).toHaveLength(0);
+  });
+
+  it('still updates an item already present in a filtered cache in place, independent of the filter gate', () => {
+    // The create-path gate assumes origin/imageCount only ever move further INTO a match
+    // (see sessionMatchesListFilters' doc comment); an update to an item already cached is
+    // therefore never blocked, only a brand-new insert is.
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const hideApiKey = ['sessions', 'own', '', '', { excludeOrigin: 'api' }];
+    queryClient.setQueryData<InfiniteData<SessionsPage>>(hideApiKey as readonly unknown[], {
+      pages: [{ data: [{ ...apiOriginSession, name: 'Old name' }], hasMore: false }],
+      pageParams: [{ page: 1 }],
+    });
+
+    updateSessionsQueryData(queryClient, 'write', apiOriginSession);
+
+    expect(dataOf(queryClient, hideApiKey)).toContainEqual(expect.objectContaining({ name: 'From API key' }));
+  });
+
+  it('creates only into the cached list whose surface slot matches the session surface', () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const mainKey = ['sessions', 'own', '', ''];
+    const optiKey = ['sessions', 'own', '', 'opti'];
+    seedEmptyPage(queryClient, mainKey);
+    seedEmptyPage(queryClient, optiKey);
+
+    updateSessionsQueryData(queryClient, 'write', { ...apiOriginSession, id: 'surfaced', surface: 'opti' });
+    updateSessionsQueryData(queryClient, 'write', { ...apiOriginSession, id: 'main' });
+
+    expect(dataOf(queryClient, mainKey).map(s => s.id)).toEqual(['main']);
+    expect(dataOf(queryClient, optiKey).map(s => s.id)).toEqual(['surfaced']);
+  });
+});
+
+// Clone, fork and snip write their copy through updateSessionsQueryData, so a copy failing a cached list's Content/Origin filter must not be
+// spliced into it - the same "Hide API" regression the gate exists for.
+describe('copy-path cache writes', () => {
+  // restoreAllMocks only restores vi.spyOn spies; module-level vi.fn()s (toast, cloneSession) keep their calls unless cleared.
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.restoreAllMocks();
+  });
+
+  const unfilteredKey = ['sessions', 'own', '', ''];
+  const hideApiKey = ['sessions', 'own', '', '', { excludeOrigin: 'api' }];
+  const apiCopy = { id: 'copy-1', name: 'Copy', origin: { channel: 'api' } } as ISessionDocument;
+
+  const dataOf = (queryClient: QueryClient, key: unknown[]) =>
+    queryClient.getQueryData<InfiniteData<SessionsPage>>(key as readonly unknown[])?.pages[0]?.data ?? [];
+
+  const seedLists = (queryClient: QueryClient) => {
+    for (const key of [unfilteredKey, hideApiKey]) {
+      queryClient.setQueryData<InfiniteData<SessionsPage>>(key as readonly unknown[], {
+        pages: [{ data: [], hasMore: false }],
+        pageParams: [{ page: 1 }],
+      });
+    }
+  };
+
+  const wrapperFor = (queryClient: QueryClient) => {
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    return wrapper;
+  };
+
+  const expectGatedCopy = (queryClient: QueryClient) => {
+    expect(dataOf(queryClient, unfilteredKey)).toContainEqual(expect.objectContaining({ id: 'copy-1' }));
+    expect(dataOf(queryClient, hideApiKey)).toHaveLength(0);
+  };
+
+  it('clone writes the copy through the filter gate', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    seedLists(queryClient);
+    vi.mocked(cloneSession).mockResolvedValueOnce(apiCopy);
+    const { result } = renderHook(() => useCloneSession(), { wrapper: wrapperFor(queryClient) });
+    result.current.mutate(SESSION_ID);
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expectGatedCopy(queryClient);
+  });
+
+  it('fork writes the copy through the filter gate', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    seedLists(queryClient);
+    vi.spyOn(api, 'post').mockResolvedValueOnce({ data: apiCopy });
+    const { result } = renderHook(() => useForkSession(), { wrapper: wrapperFor(queryClient) });
+    result.current.mutate({ sessionId: SESSION_ID, messageId: 'm1' });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expectGatedCopy(queryClient);
+  });
+
+  it('snip writes the copy through the filter gate', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    seedLists(queryClient);
+    vi.spyOn(api, 'post').mockResolvedValueOnce({ data: apiCopy });
+    const { result } = renderHook(() => useSnipSession(), { wrapper: wrapperFor(queryClient) });
+    result.current.mutate({ sessionId: SESSION_ID, messageId: 'm1' });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expectGatedCopy(queryClient);
+  });
+
+  it('a rejected snip toasts the failure and leaves every cached list untouched', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    seedLists(queryClient);
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    vi.spyOn(api, 'post').mockRejectedValueOnce(axiosRefusal(500, 'Internal error'));
+    const { result } = renderHook(() => useSnipSession(), { wrapper: wrapperFor(queryClient) });
+    result.current.mutate({ sessionId: SESSION_ID, messageId: 'm1' });
+    await waitFor(() => expect(result.current.isError).toBe(true));
+
+    expect(toast.error).toHaveBeenCalledWith('Failed to snip session');
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(invalidate).not.toHaveBeenCalled();
+    for (const key of [unfilteredKey, hideApiKey]) {
+      expect(queryClient.getQueryData(key)).toEqual({
+        pages: [{ data: [], hasMore: false }],
+        pageParams: [{ page: 1 }],
+      });
+    }
+  });
+
+  // Clone, fork and snip share the gate, so one hook covers the surface guard for all three.
+  it('a surfaced copy is not inserted into a cached main list, nor a main-list copy into a surface list', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    const optiKey = ['sessions', 'own', '', 'opti'];
+    for (const key of [unfilteredKey, optiKey]) {
+      queryClient.setQueryData<InfiniteData<SessionsPage>>(key as readonly unknown[], {
+        pages: [{ data: [], hasMore: false }],
+        pageParams: [{ page: 1 }],
+      });
+    }
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    vi.spyOn(api, 'post')
+      .mockResolvedValueOnce({ data: { id: 'opti-copy', name: 'Copy', surface: 'opti' } })
+      .mockResolvedValueOnce({ data: { id: 'main-copy', name: 'Copy' } });
+    const { result } = renderHook(() => useSnipSession(), { wrapper: wrapperFor(queryClient) });
+
+    await result.current.mutateAsync({ sessionId: SESSION_ID, messageId: 'm1' });
+    await result.current.mutateAsync({ sessionId: SESSION_ID, messageId: 'm2' });
+
+    expect(dataOf(queryClient, unfilteredKey).map(s => s.id)).toEqual(['main-copy']);
+    expect(dataOf(queryClient, optiKey).map(s => s.id)).toEqual(['opti-copy']);
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ['sessions', 'own'] });
+  });
+});
+
+describe('useOwnSessionCount', () => {
+  it('reads the count endpoint, and a cached count survives a sessions cache write', async () => {
+    const get = vi.spyOn(api, 'get').mockResolvedValue({ data: { count: 3 } });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    const { result } = renderHook(() => useOwnSessionCount(), { wrapper });
+
+    await waitFor(() => expect(result.current.data).toBe(3));
+    expect(get).toHaveBeenCalledWith('/api/sessions/count');
+    // updateAllQueryData walks every ['sessions', ...] entry assuming a list shape; a number
+    // cached under that prefix made `'pages' in 3` throw on every session write.
+    expect(() =>
+      updateSessionsQueryData(queryClient, 'write', { id: 's1', name: 'n' } as ISessionDocument)
+    ).not.toThrow();
+    expect(result.current.data).toBe(3);
+    get.mockRestore();
   });
 });

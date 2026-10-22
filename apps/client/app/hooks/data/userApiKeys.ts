@@ -88,6 +88,15 @@ export interface RotateUserApiKeyResponse {
   name: string;
   keyPrefix: string;
   key: string; // Only returned once during rotation
+  /** Only on a rotation that re-owned the key (the previous owner knew the old secret). */
+  callbackSigningSecret?: string;
+}
+
+export interface RotateCallbackSigningSecretResponse {
+  id: string;
+  name: string;
+  callbackSigningSecret: string; // Only returned once
+  callbackSigningSecretCreatedAt: Date;
 }
 
 /**
@@ -155,6 +164,27 @@ export function useRotateUserApiKey({ onSuccess }: { onSuccess?: (result: Rotate
   });
 }
 
+/** Mints or replaces the key's generation-callback signing secret; same route both ways. */
+export function useRotateCallbackSigningSecret({
+  onSuccess,
+}: { onSuccess?: (result: RotateCallbackSigningSecretResponse) => void } = {}) {
+  const queryClient = useQueryClient();
+
+  return useMutation<RotateCallbackSigningSecretResponse, Error, string>({
+    mutationFn: async keyId => {
+      const response = await api.post(`/api/user-api-keys/${keyId}/callback-secret`);
+      return response.data;
+    },
+    onSuccess: result => {
+      queryClient.invalidateQueries({ queryKey: ['user-api-keys'] });
+      if (onSuccess) onSuccess(result);
+    },
+    onError: (error: Error) => {
+      toast.error(parseValidationError(error));
+    },
+  });
+}
+
 export function useUpdateEmbedKey({ onSuccess }: { onSuccess?: () => void } = {}) {
   const queryClient = useQueryClient();
 
@@ -194,13 +224,14 @@ export function useAdminGenerateApiKey({ onSuccess }: { onSuccess?: (result: Cre
 
 /** Response of GET /api/admin/users/[userId]/user-api-keys: the user's keys plus
  * each key's live minute/day rate-limit counters (keyed by key id) - the
- * usage fields on the key doc itself are not maintained. */
+ * usage fields on the key doc itself are not maintained. Reset timestamps are
+ * epoch seconds and mirror the server's `RateLimitUsage`. */
 export interface AdminUserApiKeysResponse {
   apiKeys: IUserApiKeyDocument[];
-  liveUsage: Record<string, { minute: number; day: number }>;
+  liveUsage: Record<string, { minute: number; day: number; minuteResetAt?: number; dayResetAt?: number }>;
 }
 
-export function useAdminGetUserApiKeys(userId: string | undefined) {
+export function useAdminGetUserApiKeys(userId: string | undefined, options?: { refetchInterval?: number }) {
   return useQuery<AdminUserApiKeysResponse>({
     queryKey: ['admin', 'user-api-keys', userId],
     queryFn: async () => {
@@ -208,6 +239,7 @@ export function useAdminGetUserApiKeys(userId: string | undefined) {
       return response.data;
     },
     enabled: typeof userId === 'string' && userId.length > 0,
+    refetchInterval: options?.refetchInterval,
   });
 }
 

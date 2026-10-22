@@ -112,4 +112,14 @@ describe('ExperimentalFeatureToggle telemetry level control', () => {
 
     expect(screen.getByTestId('telemetry-export-btn')).toBeTruthy();
   });
+
+  it('labels the export as telemetry and points content exports elsewhere', () => {
+    renderToggle();
+
+    expect(screen.getByTestId('telemetry-export-btn')).toHaveTextContent('Export telemetry data');
+    expect(screen.queryByText('Export My Data')).toBeNull();
+    expect(screen.getByTestId('telemetry-export-helper')).toHaveTextContent(
+      'use Export All on the Notebooks and Knowledge Files cards'
+    );
+  });
 });

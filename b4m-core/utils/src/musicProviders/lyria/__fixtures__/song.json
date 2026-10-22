@@ -1,0 +1,73 @@
+{
+  "scenario": "song",
+  "recordedAt": "2026-10-13T03:42:00.000Z",
+  "renderSeconds": 29,
+  "audio": {
+    "bytes": 2920134,
+    "mimeType": "audio/mpeg",
+    "durationSeconds": 121.41708333333334
+  },
+  "exchanges": [
+    {
+      "name": "generate",
+      "request": {
+        "method": "POST",
+        "path": "/v1beta/interactions",
+        "body": {
+          "model": "lyria-3.5",
+          "input": "A warm indie pop song about a sunny Saturday morning, about 2 minutes long.\n\nLyrics:\n[Verse]\nCoffee on the window sill\nThe city waking slow and still\n[Chorus]\nSaturday, Saturday, stay a while\n"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "id": "v1_ChdiNmpOYXNEdEJQN2FyZmNQLWFiNzRBMBIXYjZqTmFzRHRCUDdhcmZjUC1hYjc0QTA",
+          "status": "completed",
+          "usage": {
+            "total_tokens": 2081,
+            "total_input_tokens": 51,
+            "input_tokens_by_modality": [
+              {
+                "modality": "text",
+                "tokens": 51
+              }
+            ],
+            "total_cached_tokens": 0,
+            "total_output_tokens": 2030,
+            "total_tool_use_tokens": 0,
+            "total_thought_tokens": 0
+          },
+          "created": "2026-10-13T03:42:00Z",
+          "updated": "2026-10-13T03:42:00Z",
+          "service_tier": "standard",
+          "steps": [
+            {
+              "content": [
+                {
+                  "text": "[[A0]]\n[[B1]]\n[:] Coffee on the window sill\n[:] The city waking slow and still\n[:] The sun is warm against my face\n[:] No reason now to join the race\n[[C2]]\n[:] We can leave the world outside\n[:] There is nowhere else to hide\n[:] Just this feeling, pure and bright\n[:] Everything is feeling right\n[[D3]]\n[:] Saturday, Saturday, stay a while\n[:] Saturday, Saturday, stay a while\n[:] Let the morning turn to day\n[:] We can watch it fade away\n[:] Saturday, Saturday, stay a while\n[[E4]]\n[[D5]]\n[:] Saturday, Saturday, stay a while\n[:] Saturday, Saturday, stay a while\n[:] Let the morning turn to day\n[:] We can watch it fade away\n[:] Saturday, Saturday, stay a while\n[[F6]]\n[:] No alarms and no demands\n[:] We've got the whole day in our hands\n[:] Just a quiet kind of peace\n[:] That I never want to cease\n[[G7]]\n[:] Saturday, Saturday, stay a while\n[:] (Stay a while)\n[:] Just a little longer now\n[:] (Stay with me)",
+                  "type": "text"
+                }
+              ],
+              "type": "model_output"
+            },
+            {
+              "content": [
+                {
+                  "data": "<redacted:base64 3893512 chars>",
+                  "mime_type": "audio/mpeg",
+                  "type": "audio"
+                }
+              ],
+              "type": "model_output"
+            }
+          ],
+          "object": "interaction",
+          "model": "lyria-3.5"
+        }
+      }
+    }
+  ]
+}

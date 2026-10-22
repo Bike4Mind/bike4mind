@@ -127,6 +127,7 @@ export const browsePublicDataLakes = async (
       name: lake.name,
       description: lake.description,
       fileTagPrefix: lake.fileTagPrefix,
+      origin: lake.origin,
       ownerDisplayName: nameById.get(lake.createdByUserId),
       fileCount: lake.fileCount ?? 0,
       totalSizeBytes: lake.totalSizeBytes ?? 0,

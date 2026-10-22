@@ -3,10 +3,12 @@ import type { Request, Response } from 'express';
 import {
   STATE_NONCE_COOKIE_NAME,
   OKTA_PKCE_COOKIE_NAME,
+  NONCE_SLOT,
   issueStateNonce,
   readStateNonceHash,
   stateNonceMatches,
   clearStateNonce,
+  consumeStateNonce,
   setPkceVerifierCookie,
   readPkceVerifierCookie,
 } from './oauthFlowCookie';
@@ -92,6 +94,36 @@ describe('oauthFlowCookie', () => {
     expect(cookies[0]).toMatch(new RegExp(`${STATE_NONCE_COOKIE_NAME}=; .*Max-Age=0`));
   });
 
+  it('clears the slot-suffixed nonce cookie for a slot', () => {
+    const { res, cookies } = makeRes();
+    clearStateNonce(res, NONCE_SLOT.slackAppInstall);
+    expect(cookies[0]).toMatch(/^b4m_oauth_nonce_slack-app-install=; .*Max-Age=0/);
+  });
+
+  it('consumeStateNonce returns the hash of a present cookie and burns it', () => {
+    const { res: issueRes, cookies: issued } = makeRes();
+    const hash = issueStateNonce(issueRes, NONCE_SLOT.driveConnect);
+    const name = `${STATE_NONCE_COOKIE_NAME}_${NONCE_SLOT.driveConnect}`;
+    const req = reqWith(`${name}=${cookieValue(issued[0], name)}`);
+    const { res, cookies } = makeRes();
+
+    expect(consumeStateNonce(req, res, NONCE_SLOT.driveConnect)).toBe(hash);
+    expect(cookies[0]).toMatch(new RegExp(`^${name}=; .*Max-Age=0`));
+  });
+
+  it('consumeStateNonce returns null with no cookie and still burns', () => {
+    const { res, cookies } = makeRes();
+    expect(consumeStateNonce(reqWith(undefined), res, NONCE_SLOT.driveConnect)).toBeNull();
+    expect(cookies[0]).toMatch(/^b4m_oauth_nonce_google-drive=; .*Max-Age=0/);
+  });
+
+  it('does not touch cookies once headers are already sent', () => {
+    const { res, cookies } = makeRes();
+    (res as { headersSent: boolean }).headersSent = true;
+    clearStateNonce(res);
+    expect(cookies).toEqual([]);
+  });
+
   it('round-trips the PKCE verifier through an HttpOnly cookie', () => {
     const { res, cookies } = makeRes();
     setPkceVerifierCookie(res, 'the-code-verifier');
@@ -99,5 +131,12 @@ describe('oauthFlowCookie', () => {
     expect(setCookie).toMatch(/HttpOnly/);
     const req = reqWith(`${OKTA_PKCE_COOKIE_NAME}=the-code-verifier`);
     expect(readPkceVerifierCookie(req)).toBe('the-code-verifier');
+  });
+});
+
+describe('NONCE_SLOT', () => {
+  it('has a unique value per flow', () => {
+    const slots = Object.values(NONCE_SLOT);
+    expect(new Set(slots).size).toBe(slots.length);
   });
 });

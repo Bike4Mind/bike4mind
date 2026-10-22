@@ -8,6 +8,7 @@ const dbLake = {
   id: '65a000000000000000000001',
   name: 'Handbook',
   slug: 'handbook',
+  datalakeTag: 'datalake:acme:handbook',
   description: 'Company handbook',
   organizationId: '65a0000000000000000000aa',
   isPublic: true,
@@ -26,6 +27,7 @@ describe('toPublicDataLake', () => {
       id: dbLake.id,
       name: 'Handbook',
       slug: 'handbook',
+      datalake_tag: 'datalake:acme:handbook',
       description: 'Company handbook',
       organization_id: dbLake.organizationId,
       is_public: true,
@@ -47,8 +49,16 @@ describe('toPublicDataLake', () => {
     expect(JSON.stringify(resource)).not.toContain('secret');
   });
 
+  it('returns a stored tag verbatim, even one that predates the lake organization', () => {
+    const resource = toPublicDataLake({
+      ...dbLake,
+      datalakeTag: 'datalake:handbook',
+    });
+    expect(resource.datalake_tag).toBe('datalake:handbook');
+  });
+
   it('fills absent optional fields with null, false, 0 and an active status', () => {
-    const resource = toPublicDataLake({ id: dbLake.id, name: 'Bare', slug: 'bare' });
+    const resource = toPublicDataLake({ id: dbLake.id, name: 'Bare', slug: 'bare', datalakeTag: 'datalake:bare' });
     expect(resource).toMatchObject({
       description: null,
       organization_id: null,
@@ -77,12 +87,14 @@ describe('toPublicDataLake', () => {
         id: registryLake.id,
         name: registryLake.name,
         slug: registryLake.slug,
+        datalakeTag: registryLake.datalakeTag,
         createdAt: new Date(),
         updatedAt: new Date(),
       },
       { fileCount: 12, totalSizeBytes: 999 }
     );
     expect(resource).toMatchObject({
+      datalake_tag: registryLake.datalakeTag,
       built_in: true,
       file_count: 12,
       total_size_bytes: 999,

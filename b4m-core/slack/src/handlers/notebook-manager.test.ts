@@ -110,6 +110,12 @@ describe('getOrCreateNotebookForSlackUser saved notebook ids', () => {
     withUser({}, FOREIGN);
     expect(await resolve()).toBe(CREATED);
     expect(mockCreateSession).toHaveBeenCalledOnce();
+    expect(mockCreateSession).toHaveBeenCalledWith(
+      USER_ID,
+      expect.objectContaining({ origin: { channel: 'slack' } }),
+      expect.anything(),
+      expect.anything()
+    );
   });
 
   it('returns a lastNotebookId shared with update permission', async () => {

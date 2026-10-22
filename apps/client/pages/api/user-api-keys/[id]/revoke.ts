@@ -1,11 +1,11 @@
 import { userApiKeyService } from '@bike4mind/services';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
-import { organizationRepository } from '@bike4mind/database';
+import { organizationRepository, realtimeConnectionRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { logEventSafe } from '@server/utils/analyticsLog';
 import { UserApiKeyEvents } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
 const handler = baseApi().post(
   asyncHandler<{}, unknown, { reason?: string }, { id: string }>(async (req, res) => {
@@ -22,6 +22,7 @@ const handler = baseApi().post(
         db: {
           userApiKeys: userApiKeyRepository,
           organizations: organizationRepository,
+          realtimeConnections: realtimeConnectionRepository,
         },
       }
     );

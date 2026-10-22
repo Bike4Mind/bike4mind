@@ -26,6 +26,7 @@
  * - AWS credentials (provided by SST shell)
  */
 
+import { appendFileSync } from 'node:fs';
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
 import {
@@ -38,6 +39,7 @@ import {
 import { getNextVersion, getDailyDeploymentNumber } from './utils/versioningUtils';
 import { generateChangelog, formatChangelogMarkdown } from './generateChangelog';
 import { formatSlackMessage, sendSlackNotification } from './utils/slackFormatter';
+import { resolveDeployedSha } from './utils/resolveDeployedSha';
 
 /**
  * Validate required environment variables
@@ -71,11 +73,11 @@ async function main(): Promise<void> {
       description: 'Preview the release without creating it',
       default: false,
     })
-    .option('target-branch', {
-      alias: 'branch',
+    .option('target-sha', {
+      alias: ['branch', 'target-branch'],
       type: 'string',
-      description: 'Target branch to compare against (defaults to "prod", use "HEAD" for testing)',
-      default: 'prod',
+      description: 'Exact commit SHA that was deployed (use "HEAD" for a --dry-run test)',
+      default: 'HEAD',
     })
     .option('github-token', {
       type: 'string',
@@ -96,7 +98,7 @@ async function main(): Promise<void> {
       description: 'Force enable/disable Slack notification (overrides default behavior)',
     })
     .example('$0 --dry-run', 'Preview release using environment variables')
-    .example('$0 --dry-run --target-branch HEAD', 'Test from current branch')
+    .example('$0 --dry-run --target-sha HEAD', 'Test from current branch')
     .example('$0 --dry-run --repo MillionOnMars/lumina5 --github-token ghp_xxx', 'Preview with explicit credentials')
     .example('$0 --help', 'Show help')
     .help()
@@ -152,9 +154,9 @@ async function main(): Promise<void> {
     }
 
     // Step 2: Get commits since last release
-    const targetBranch = argv['target-branch'] as string;
-    console.log(`📝 Fetching commits since last release (comparing to ${targetBranch})...`);
-    const commits = await getCommitsSinceLastRelease(targetBranch);
+    const targetSha = resolveDeployedSha(argv['target-sha'] as string | undefined, { dryRun: isDryRun });
+    console.log(`📝 Fetching commits since last release (comparing to ${targetSha})...`);
+    const commits = await getCommitsSinceLastRelease(targetSha);
 
     if (commits.length === 0) {
       console.log('⚠️  No commits found since last release - skipping release');
@@ -194,14 +196,17 @@ async function main(): Promise<void> {
         tag: nextVersion,
         name: releaseName,
         body: releaseBody,
-        // Anchor the release tag to the same ref the changelog was computed
-        // against (target-branch). For the prod-branch flow this is 'prod'
-        // (unchanged); for a SHA-promote (deploy console) it is the deployed
-        // commit, so the tag lands on what actually shipped, not a stale branch.
-        targetCommitish: targetBranch,
+        // Anchor the release tag to the exact commit SHA that was deployed, so
+        // the tag lands on what actually shipped rather than a branch pointer.
+        targetCommitish: targetSha,
       });
       releaseUrl = release.html_url;
       console.log(`   ✅ Release created: ${releaseUrl}\n`);
+
+      if (process.env.GITHUB_OUTPUT) {
+        appendFileSync(process.env.GITHUB_OUTPUT, `release_tag=${nextVersion}\n`);
+        appendFileSync(process.env.GITHUB_OUTPUT, `release_url=${releaseUrl}\n`);
+      }
     }
 
     // Step 5: Send Slack notification

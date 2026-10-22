@@ -1,6 +1,14 @@
 import { z } from 'zod';
-import { updateUserSchema, applyBaseUserUpdates, toUserUpdatePartial } from './update';
 import {
+  updateUserSchema,
+  applyBaseUserUpdates,
+  toUserUpdatePartial,
+  validateUsernameChange,
+  writeUserUpdate,
+  EMAIL_IN_USE_MESSAGE,
+} from './update';
+import {
+  ConflictError,
   CreditHolderType,
   ICreditTransactionRepository,
   IOrganizationDocument,
@@ -8,6 +16,7 @@ import {
   Permission,
   IFriendshipModelAdapter,
   IUserApiKeyRepository,
+  IRealtimeConnectionRepository,
 } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, secureParameters } from '@bike4mind/utils';
 import { sendFriendRequest } from '../friendshipService/sendFriendRequest';
@@ -15,11 +24,12 @@ import { addCredits } from '../creditService/addCredits';
 import { subtractCredits } from '../creditService/subtractCredits';
 import { MODERATION_POLICY } from './moderationPolicy';
 import { entersBlockedState } from './accountState';
+import { endRealtimeConnections } from '../authSessionService/endRealtimeConnections';
 
 export const adminUpdateUserSchema = updateUserSchema.extend({
   id: z.string(),
   // Admins can directly update email addresses without verification
-  email: z.email().optional(),
+  email: z.string().trim().toLowerCase().pipe(z.email()).optional(),
   role: z.string().optional().nullable(),
   isAdmin: z.boolean().optional(),
   // Admin-only: `tags` was removed from the base self-service schema because it
@@ -53,6 +63,9 @@ export const adminUpdateUserSchema = updateUserSchema.extend({
   // as an absolute `currentCredits`). Not a user-doc field: stripped from the doc write
   // and routed to addCredits/subtractCredits. Takes precedence over `currentCredits`.
   creditDelta: z.number().optional(),
+  // Why the admin role is being granted or revoked. Not a user-doc field: the route records it on
+  // the audit entry, and it is stripped from the doc write here.
+  roleChangeReason: z.string().max(500).optional(),
 });
 
 export type AdminUpdateUserParameters = z.infer<typeof adminUpdateUserSchema>;
@@ -67,16 +80,26 @@ export interface AdminUpdateUserAdapters {
     friendship: IFriendshipModelAdapter;
     // Required: a ban, dispute or suspension must deactivate the user's API keys.
     userApiKeys: Pick<IUserApiKeyRepository, 'deactivateAllByUserId'>;
-    /**
-     * Optional: when provided, a `currentCredits` change is routed through the
-     * audited credit ledger (addCredits/subtractCredits) instead of a raw
-     * balance overwrite, so every admin adjustment leaves a CreditTransaction
-     * recording actor, delta, resulting balance, timestamp, and reason. Omit to
-     * keep the legacy direct-overwrite behavior (unaudited).
-     */
-    creditTransactions?: ICreditTransactionRepository;
+    // Required: a ban, dispute or suspension must also end the user's realtime connections.
+    realtimeConnections: Pick<IRealtimeConnectionRepository, 'endConnections'>;
+    // Required: every admin balance change goes through the ledger (addCredits/subtractCredits),
+    // so no admin adjustment can land without a CreditTransaction row.
+    creditTransactions: ICreditTransactionRepository;
   };
 }
+
+/** The balance change an admin update applied; signed, after the non-negative floor. */
+export type AdminCreditAdjustment = {
+  credits: number;
+  previousBalance: number;
+  resultingBalance: number;
+  note?: string;
+};
+
+export type AdminUpdateUserResult = {
+  user: Awaited<ReturnType<IUserRepository['findById']>>;
+  creditAdjustment: AdminCreditAdjustment | null;
+};
 
 async function sendFriendRequestsToOrgMembers(
   adminId: string,
@@ -109,7 +132,7 @@ export async function adminUpdateUser(
   userId: string,
   parameters: AdminUpdateUserParameters,
   { db }: AdminUpdateUserAdapters
-) {
+): Promise<AdminUpdateUserResult> {
   const params = secureParameters(parameters, adminUpdateUserSchema);
   const admin = await db.users.findById(userId);
   if (!admin || !admin.isAdmin) {
@@ -120,16 +143,28 @@ export async function adminUpdateUser(
   if (!user) {
     throw new Error('User not found');
   }
+  await validateUsernameChange(user, params, db.users);
+  if (params.email !== undefined && params.email !== user.email) {
+    if (await db.users.existsOtherUserWithEmail(params.email, user.id)) {
+      throw new ConflictError(EMAIL_IN_USE_MESSAGE);
+    }
+  }
 
-  // Route a `currentCredits` change through the audited ledger when the adapter
-  // is wired. The ledger runs before every write below, so a failure aborts with
-  // nothing persisted; its atomic `$inc` is the sole owner of the balance.
+  // Route a `currentCredits` change through the audited ledger; its atomic `$inc` is the
+  // sole owner of the balance. The ledger runs
+  // before every other write, but this function is not atomic on its own (callers
+  // wrap it in a transaction):
+  // - a ledger failure can still leave a CreditTransaction row for credits never
+  //   applied (addCredits/subtractCredits write the row before the `$inc`);
+  // - a failure after the ledger leaves the balance committed and skips the org
+  //   membership move, the doc write, the moderation transition, and the API-key
+  //   deactivation.
   //
-  // `moderationStatus`/`creditReason`/`creditDelta` are handled out-of-band (a dedicated
-  // repo call, the CreditTransaction record, and the ledger respectively) - pull them out
+  // `moderationStatus`/`creditReason`/`creditDelta`/`roleChangeReason` are handled out-of-band (a
+  // dedicated repo call, the CreditTransaction record, the ledger, and the route's audit entry) - pull them out
   // so they never land as stray top-level fields on the user doc.
   const previousBalance = user.currentCredits ?? 0;
-  const { moderationStatus, creditReason, creditDelta: signedDelta, ...baseParams } = params;
+  const { moderationStatus, creditReason, creditDelta: signedDelta, roleChangeReason, ...baseParams } = params;
   // Which moderation statuses block (only `suspended`) lives in accountState.ts, shared with the
   // Stripe dispute path and the client use-time gate.
   const enteringBlockedState = entersBlockedState(user, {
@@ -150,7 +185,7 @@ export async function adminUpdateUser(
   // it is already negative, `-previousBalance` is a positive floor that would invert a
   // deduction into a credit, so apply the delta verbatim in that case.
   const creditDelta = previousBalance >= 0 ? Math.max(rawDelta, -previousBalance) : rawDelta;
-  const auditCreditChange = creditDelta !== 0 && !!db.creditTransactions;
+  const note = creditReason?.trim() || undefined;
 
   // Stamp a purchase timestamp only for a net grant: a deduction is not a purchase, and carrying
   // the field on every other admin save would $set the read snapshot back over a concurrent
@@ -159,25 +194,32 @@ export async function adminUpdateUser(
   const builtUser = applyBaseUserUpdates(user, builtParams);
   // Persist ONLY the fields this request changed, never a spread of the read snapshot -
   // that is what let an admin save round-trip (and revert) a concurrent tokenVersion bump
-  // or credit deduction. When auditing, drop `currentCredits` so its `$set` cannot clobber
-  // the ledger `$inc`; the legacy (no-ledger) path keeps it and overwrites the balance.
+  // or credit deduction. `currentCredits` is always dropped so its `$set` can never overwrite
+  // the balance outside the ledger `$inc`.
   const writeData = toUserUpdatePartial(builtUser, builtParams);
-  if (auditCreditChange) {
-    delete (writeData as { currentCredits?: number }).currentCredits;
-  } else if (signedDelta !== undefined && creditDelta !== 0) {
-    // Signed-delta path with no ledger adapter wired: apply the delta to the doc write
-    // directly (like the legacy absolute-`currentCredits` fallback) instead of dropping
-    // it silently. `currentCredits` is not in `baseParams` on this path, so nothing else
-    // would persist the change.
-    (writeData as { currentCredits?: number }).currentCredits = previousBalance + creditDelta;
+  delete (writeData as { currentCredits?: number }).currentCredits;
+
+  // Validate the org move before the ledger so an unknown org cannot leave a
+  // committed balance behind; the membership writes themselves stay after it.
+  let currentOrg: IOrganizationDocument | null = null;
+  let newOrg: IOrganizationDocument | null = null;
+  if (params.organizationId && user.organizationId !== params.organizationId) {
+    if (user.organizationId) {
+      currentOrg = await db.organizations.findById(user.organizationId);
+      if (!currentOrg) {
+        throw new Error('Organization not found');
+      }
+    }
+    newOrg = await db.organizations.findById(params.organizationId);
+    if (!newOrg) {
+      throw new Error('Organization not found');
+    }
   }
 
-  // Audited credit adjustment: runs BEFORE any persistence (org membership, the
-  // user-doc write, the moderation transition) so a ledger failure leaves nothing
-  // half-written. Records the actor, delta, resulting balance, and reason as a
-  // generic_add / generic_deduct CreditTransaction.
-  if (auditCreditChange && db.creditTransactions) {
-    const note = creditReason?.trim() || undefined;
+  // Records the actor, delta, resulting balance, and reason as a generic_add /
+  // generic_deduct CreditTransaction (ordering and failure modes: see above).
+  let creditAdjustment: AdminCreditAdjustment | null = null;
+  if (creditDelta !== 0) {
     // Best-effort resulting balance predicted from the read snapshot. The atomic $inc
     // inside addCredits/subtractCredits is the source of truth, so concurrent spend
     // between the read and the increment can make this differ from the committed balance.
@@ -217,33 +259,31 @@ export async function adminUpdateUser(
         creditAdapters
       );
     }
+    creditAdjustment = { credits: creditDelta, previousBalance, resultingBalance, note };
   }
 
-  if (!!params.organizationId && user.organizationId !== params.organizationId) {
-    if (user.organizationId) {
-      const currentOrg = await db.organizations.findById(user.organizationId);
-      if (!currentOrg) {
-        throw new Error('Organization not found');
-      }
+  if (currentOrg) {
+    const remainingUsers = currentOrg.users.filter(userDetail => userDetail.userId !== user.id);
+    await db.organizations.update({ id: currentOrg.id, users: remainingUsers });
+  }
 
-      const remainingUsers = currentOrg.users.filter(userDetail => userDetail.userId !== user.id);
-      await db.organizations.update({ id: currentOrg.id, users: remainingUsers });
-    }
+  if (newOrg) {
+    await sendFriendRequestsToOrgMembers(userId, newOrg, db);
 
-    if (params.organizationId) {
-      const newOrg = await db.organizations.findById(params.organizationId);
-      if (!newOrg) {
-        throw new Error('Organization not found');
-      }
-
-      await sendFriendRequestsToOrgMembers(userId, newOrg, db);
-
-      const updatedUsers = [...newOrg.users, { userId: user.id, permissions: [Permission.read] }];
+    // The owner holds a seat without a row, and a target already in users[] keeps one row (read
+    // merged in) rather than gaining a duplicate.
+    if (String(newOrg.userId) !== user.id) {
+      const existing = newOrg.users.find(userDetail => userDetail.userId === user.id);
+      const permissions = [...new Set([...(existing?.permissions ?? []), Permission.read])];
+      const updatedUsers = [
+        ...newOrg.users.filter(userDetail => userDetail.userId !== user.id),
+        { userId: user.id, permissions },
+      ];
       await db.organizations.update({ id: newOrg.id, users: updatedUsers });
     }
   }
 
-  await db.users.update(writeData);
+  await writeUserUpdate(db.users, writeData);
 
   // Apply the moderation escalation transition last so it authoritatively sets
   // `moderation.status`, `throttledUntil`, and the `isModerated` mirror.
@@ -257,9 +297,10 @@ export async function adminUpdateUser(
   // Leaving the state later does not reactivate keys; the user mints new ones.
   if (enteringBlockedState) {
     await db.userApiKeys.deactivateAllByUserId(params.id);
+    await endRealtimeConnections({ userId: params.id }, { db });
   }
 
   const finalUser = await db.users.findById(params.id);
 
-  return finalUser;
+  return { user: finalUser, creditAdjustment };
 }

@@ -1,3 +1,4 @@
+import type { LakeSourceShredDb } from '../dataLakeService/lakeMembership';
 import { secureParameters, BadRequestError } from '@bike4mind/utils';
 import { IDataLakeRepository, IFabFileRepository, ITagRepository, LakeAuditPrincipal } from '@bike4mind/common';
 import { z } from 'zod';
@@ -17,17 +18,18 @@ const tagRemoveSchema = z.object({
 type TagRemoveParams = z.infer<typeof tagRemoveSchema>;
 
 interface TagRemoveAdapters extends LakeMembershipAuditAdapters {
-  db: LakeMembershipAuditAdapters['db'] & {
-    tags: Pick<ITagRepository, 'findByIdAndUserId' | 'delete'>;
-    fabFiles: Pick<IFabFileRepository, 'removeTagByUserId' | 'computeDataLakeStats' | 'claimTagRewriteByUserId'>;
-    dataLakes: Pick<IDataLakeRepository, 'find' | 'setStats' | 'activateIfDraft'>;
-    // The config-audit repos, OPTIONAL and forwarded straight to recomputeLakeStats below: a
-    // prefix-arm rename or delete can flip a draft lake to active, and without these that
-    // transition records nothing at all. Optional because this service has many callers and the
-    // recorder degrades to a no-op when they are absent - see LakeConfigAuditAdapters.
-    lakeConfigChangeEvents?: LakeConfigAuditAdapters['db']['lakeConfigChangeEvents'];
-    adminSettings?: LakeConfigAuditAdapters['db']['adminSettings'];
-  };
+  db: LakeMembershipAuditAdapters['db'] &
+    LakeSourceShredDb & {
+      tags: Pick<ITagRepository, 'findByIdAndUserId' | 'delete'>;
+      fabFiles: Pick<IFabFileRepository, 'removeTagByUserId' | 'computeDataLakeStats' | 'claimTagRewriteByUserId'>;
+      dataLakes: Pick<IDataLakeRepository, 'find' | 'setStats' | 'activateIfDraft'>;
+      // The config-audit repos, OPTIONAL and forwarded straight to recomputeLakeStats below: a
+      // prefix-arm rename or delete can flip a draft lake to active, and without these that
+      // transition records nothing at all. Optional because this service has many callers and the
+      // recorder degrades to a no-op when they are absent - see LakeConfigAuditAdapters.
+      lakeConfigChangeEvents?: LakeConfigAuditAdapters['db']['lakeConfigChangeEvents'];
+      adminSettings?: LakeConfigAuditAdapters['db']['adminSettings'];
+    };
   /**
    * Forwarded to recomputeLakeStats so a best-effort audit failure on the draft -> active flip is
    * reported through the caller's structured logger instead of falling to `console.warn`, where

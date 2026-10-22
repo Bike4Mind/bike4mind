@@ -4,6 +4,7 @@ import SessionSidenavItem from '@client/app/components/Session/SidenavItem';
 import ProjectSidenavItem from '@client/app/components/Project/SidenavItem';
 import AgentSidenavItem from '@client/app/components/Agent/SidenavItem';
 import type { CombinedItem } from './types';
+import NotebookRowBadges, { hasNotebookRowBadges } from './NotebookRowBadges';
 
 /**
  * Memoized list row. Defined at module level so the `memo` boundary is stable across the
@@ -64,10 +65,12 @@ const NotebookRow = memo(function NotebookRow({
       />
     );
   }
+  const session = item as ISessionDocument;
   return (
     <SessionSidenavItem
-      session={item as ISessionDocument}
-      onClick={() => onNotebookClick(item as ISessionDocument)}
+      session={session}
+      leadingDecorator={hasNotebookRowBadges(session) ? <NotebookRowBadges session={session} /> : undefined}
+      onClick={() => onNotebookClick(session)}
       favoriteSessions={favoriteSessions}
       isEditMode={isEditMode}
       isChecked={isChecked}

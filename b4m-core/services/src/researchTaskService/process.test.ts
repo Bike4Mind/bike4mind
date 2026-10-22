@@ -5,8 +5,10 @@ const { process } = processModule;
 import { IResearchTask, ResearchTaskStatus, KnowledgeType, ResearchTaskType } from '@bike4mind/common';
 import { NotFoundError, BadRequestError } from '@bike4mind/utils';
 import * as fabFilesService from '../fabFileService';
+import * as tagService from '../tagService';
 import { mockResearchTask } from '../__tests__/utils/testUtils';
 import { findOrUpdateExistingResearchData, createSendStatusUpdate } from './utils';
+import { getLinksFromHtml } from '../lib/cheerio';
 
 vi.mock('../lib/turndown', () => ({
   htmlToMarkdown: vi.fn().mockImplementation(html => html),
@@ -81,6 +83,7 @@ describe('researchTaskService - process', () => {
       delete: vi.fn(),
       count: vi.fn(),
       updateMany: vi.fn(),
+      addWarning: vi.fn(),
     };
     mockFabFileRepo = {
       create: vi.fn(),
@@ -207,6 +210,11 @@ describe('researchTaskService - process', () => {
     await process(mockUser, { id: taskId }, adapters);
 
     // Assert
+    expect(mockResearchTaskRepo.update.mock.calls[0][0]).toStrictEqual({
+      id: taskId,
+      status: ResearchTaskStatus.PROCESSING,
+      warnings: [],
+    });
     expect(mockResearchTaskRepo.findByIdAndUserId).toHaveBeenCalledWith(taskId, mockUser.id);
     // Check that scraper.fetch was called with the first URL from the urls array
     expect(adapters.scraper.fetch).toHaveBeenCalledWith('https://example.com');
@@ -243,6 +251,64 @@ describe('researchTaskService - process', () => {
       id: mockTask.id,
       status: ResearchTaskStatus.COMPLETED,
       statusCompletedAt: expect.any(Date),
+    });
+  });
+
+  it('persists discovered links before process() re-reads the task', async () => {
+    const taskId = 'test-task-id';
+    const mockTask: IResearchTask = mockResearchTask({
+      id: taskId,
+      canDiscoverLinks: true,
+      urls: ['https://example.com'],
+    });
+
+    (mockResearchTaskRepo.findByIdAndUserId as Mock).mockResolvedValue(mockTask);
+    (mockResearchTaskRepo.findById as Mock).mockResolvedValue({ ...mockTask, discoveredLinks: [] });
+    (adapters.scraper.fetch as Mock).mockResolvedValue({ rawHtml: '<html></html>', metadata: {} });
+    (getLinksFromHtml as Mock).mockReturnValueOnce(['https://example.com/a', 'https://example.com/b']);
+
+    await process(mockUser, { id: taskId }, adapters);
+
+    const expectedLinks = [
+      { url: 'https://example.com/a', status: 'pending', sourceUrl: 'https://example.com' },
+      { url: 'https://example.com/b', status: 'pending', sourceUrl: 'https://example.com' },
+    ];
+    const updateMock = mockResearchTaskRepo.update as Mock;
+    const linksWriteIndex = updateMock.mock.calls.findIndex(
+      ([arg]) => Object.keys(arg).sort().join() === 'discoveredLinks,id'
+    );
+    expect(linksWriteIndex).toBeGreaterThanOrEqual(0);
+    expect(updateMock.mock.calls[linksWriteIndex][0]).toEqual({ id: taskId, discoveredLinks: expectedLinks });
+    expect(updateMock.mock.invocationCallOrder[linksWriteIndex]).toBeLessThan(
+      (mockResearchTaskRepo.findById as Mock).mock.invocationCallOrder[0]
+    );
+  });
+
+  it('does not re-queue previously discovered links that are no longer on the page', async () => {
+    const taskId = 'test-task-id';
+    const mockTask: IResearchTask = mockResearchTask({
+      id: taskId,
+      canDiscoverLinks: true,
+      urls: ['https://example.com'],
+      discoveredLinks: [
+        { url: 'https://example.com/old', status: 'completed', sourceUrl: 'https://example.com' },
+        { url: 'https://example.com/a', status: 'completed', sourceUrl: 'https://example.com' },
+      ],
+    });
+
+    (mockResearchTaskRepo.findByIdAndUserId as Mock).mockResolvedValue(mockTask);
+    (mockResearchTaskRepo.findById as Mock).mockResolvedValue({ ...mockTask });
+    (adapters.scraper.fetch as Mock).mockResolvedValue({ rawHtml: '<html></html>', metadata: {} });
+    (getLinksFromHtml as Mock).mockReturnValueOnce(['https://example.com/a']);
+
+    await process(mockUser, { id: taskId }, adapters);
+
+    expect(mockResearchTaskRepo.update).toHaveBeenCalledWith({
+      id: taskId,
+      discoveredLinks: [
+        { url: 'https://example.com/old', status: 'completed', sourceUrl: 'https://example.com' },
+        { url: 'https://example.com/a', status: 'pending', sourceUrl: 'https://example.com' },
+      ],
     });
   });
 
@@ -552,7 +618,7 @@ describe('researchTaskService - process', () => {
     });
   });
 
-  it('should set organizationId on created fab files when research task has organizationId', async () => {
+  it('should not pass the task organizationId to createFabFile (the owner derives from the lake)', async () => {
     // Arrange
     const taskId = 'test-task-id';
     const organizationId = 'test-organization-id';
@@ -591,7 +657,6 @@ describe('researchTaskService - process', () => {
         fileSize: Buffer.byteLength(mockMarkdownContent, 'utf8'),
         type: KnowledgeType.TEXT,
         content: mockMarkdownContent,
-        organizationId,
         tags: [],
       }),
       { db: adapters.db, storage: adapters.storage }
@@ -682,8 +747,6 @@ describe('researchTaskService - process', () => {
     (fabFilesService.createFabFile as Mock).mockResolvedValue(mockFabFile);
     (adapters.scraper.fetch as Mock).mockResolvedValue({ rawHtml: mockMarkdownContent, metadata: {} });
 
-    // Import and mock tagService
-    const { tagService } = await import('..');
     (tagService.createFileTag as Mock).mockResolvedValue(mockCreatedTag);
 
     // Act
@@ -740,7 +803,6 @@ describe('researchTaskService - process', () => {
     (fabFilesService.createFabFile as Mock).mockResolvedValue(mockFabFile);
     (adapters.scraper.fetch as Mock).mockResolvedValue({ rawHtml: mockMarkdownContent, metadata: {} });
 
-    const { tagService } = await import('..');
     (tagService.createFileTag as Mock).mockResolvedValue(mockExistingTag);
 
     // Act
@@ -950,6 +1012,67 @@ describe('researchTaskService - process', () => {
           maxProgress: 100, // Should be 100 when canDiscoverLinks is false
         })
       );
+    });
+
+    it('tells the user when a re-crawl keeps the previous copy because storage is full', async () => {
+      const taskId = 'test-task-id';
+      const mockTask = mockResearchTask({ id: taskId, urls: ['https://example.com'], canDiscoverLinks: false });
+      (mockResearchTaskRepo.findByIdAndUserId as Mock).mockResolvedValue(mockTask);
+      (mockResearchTaskRepo.findById as Mock).mockResolvedValue(mockTask);
+      (adapters.scraper.fetch as Mock).mockResolvedValue({ rawHtml: '# Test Content', metadata: {} });
+      (findOrUpdateExistingResearchData as any).mockResolvedValue({
+        file: { id: 'existing-file-id', fileName: 'existing.md' },
+        researchData: { id: 'existing-research-data-id' },
+        storageLimitReached: true,
+      });
+
+      await process(mockUser, { id: taskId }, adapters);
+
+      expect(mockSendStatusUpdate).toHaveBeenCalledWith(
+        '\u26a0\ufe0f [1/1] Storage limit reached: kept the previous copy of https://example.com',
+        0
+      );
+      expect(mockResearchTaskRepo.addWarning).toHaveBeenCalledWith(
+        taskId,
+        'Storage limit reached: kept the previous copy of https://example.com'
+      );
+    });
+
+    it('clears the previous run warnings when a run starts', async () => {
+      const taskId = 'test-task-id';
+      const mockTask = mockResearchTask({ id: taskId, urls: ['https://example.com'], canDiscoverLinks: false });
+      (mockResearchTaskRepo.findByIdAndUserId as Mock).mockResolvedValue({ ...mockTask, warnings: ['old'] });
+      (mockResearchTaskRepo.findById as Mock).mockResolvedValue(mockTask);
+      (adapters.scraper.fetch as Mock).mockResolvedValue({ rawHtml: '# Test Content', metadata: {} });
+
+      await process(mockUser, { id: taskId }, adapters);
+
+      expect(mockResearchTaskRepo.update.mock.calls[0][0]).toStrictEqual({
+        id: taskId,
+        status: ResearchTaskStatus.PROCESSING,
+        warnings: [],
+      });
+    });
+
+    it('sends no storage message when a re-crawl fits', async () => {
+      const taskId = 'test-task-id';
+      const mockTask = mockResearchTask({ id: taskId, urls: ['https://example.com'], canDiscoverLinks: false });
+      (mockResearchTaskRepo.findByIdAndUserId as Mock).mockResolvedValue(mockTask);
+      (mockResearchTaskRepo.findById as Mock).mockResolvedValue(mockTask);
+      (adapters.scraper.fetch as Mock).mockResolvedValue({ rawHtml: '# Test Content', metadata: {} });
+      (findOrUpdateExistingResearchData as any).mockResolvedValue({
+        file: { id: 'existing-file-id', fileName: 'existing.md' },
+        researchData: { id: 'existing-research-data-id' },
+        storageLimitReached: false,
+      });
+
+      await process(mockUser, { id: taskId }, adapters);
+
+      expect(mockSendStatusUpdate).not.toHaveBeenCalledWith(
+        expect.stringContaining('Storage limit'),
+        expect.anything()
+      );
+      expect(mockResearchTaskRepo.addWarning).not.toHaveBeenCalled();
     });
 
     it('should distribute progress evenly across multiple URLs within 0-40% range', async () => {

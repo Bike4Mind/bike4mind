@@ -17,6 +17,7 @@ import {
   IChatHistoryItemDocument,
   ISessionDocument,
   ModelName,
+  PROMPT_TEXT_MAX,
   requiresImageInput,
 } from '@bike4mind/common';
 import { useAudioGenSettings } from '@client/app/stores/useAudioGenSettings';
@@ -27,10 +28,18 @@ import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { ReadyState, useWebsocket } from '@client/app/contexts/WebsocketContext';
 import { useSessions, useWorkBenchFiles } from '@client/app/contexts/SessionsContext';
+import {
+  holdMirroredPinsUntilAgentStart,
+  messageOnlyFileIds,
+  mirrorPinnedMessageFiles,
+  rollbackMirroredPins,
+} from '@client/app/utils/messageFilePins';
 import { handleLLMCommand } from '@client/app/components/commands/LLMCommand';
 import { commandHandlers } from './sessionBottomConstants';
 import { pickRoutingSource } from './pickRoutingSource';
+import { pickerAttachedAgents, resolveDispatchAgent, resolveDispatchMaxIterations } from './resolveDispatchAgent';
 import { resolveDispatchTools } from './resolveDispatchTools';
+import { resolveSystemContext } from './resolveSystemContext';
 import { useSessionCacheMigration } from '../hooks/useSessionCacheMigration';
 import { useLLMSettingsAssembly } from '../hooks/useLLMSettingsAssembly';
 import { useRecordImageTemplateUse, isTemplateUseEligiblePrompt } from '../ImageTemplates/useRecordImageTemplateUse';
@@ -57,8 +66,10 @@ import {
 } from '@client/app/hooks/useAgentMentions';
 import { useAgentExecutionDispatch } from '@client/app/hooks/useAgentExecution';
 import { useAgentExecutionStore } from '@client/app/stores/useAgentExecutionStore';
-import { classifyQueryComplexity, isImageAttachment, routeQuery } from '@bike4mind/common';
-import { pickOrchestrationAgent } from '@client/app/utils/agentOrchestration';
+import { classifyQueryComplexity, expandChoiceKey, isImageAttachment, routeQuery } from '@bike4mind/common';
+import { useReplyChoices } from '@client/app/hooks/useReplyChoices';
+import { recordReplyChoice } from '@client/app/hooks/data/quests';
+import { pickOrchestrationAgent } from '@bike4mind/server-utils/lib/agentOrchestration';
 import { evaluateShortCircuits, hasExplicitAgentLiteral } from '@client/app/utils/intentClassifierShortCircuits';
 import { useIntentClassifier } from '@client/app/hooks/useIntentClassifier';
 import { useAdminSettings } from '@client/app/contexts/AdminSettingsContext';
@@ -66,8 +77,9 @@ import { useEffectiveCredits } from '@client/app/hooks/useEffectiveCredits';
 import { useTokenLimits } from '@client/app/hooks/useTokenLimits';
 import { CommandKey, extractCommandAndParams, handleCommand, isImageModel } from '@client/app/utils/commands';
 import { validateChatInput } from '@client/app/utils/validateChatInput';
+import { effectiveDisabledTools } from '@client/app/utils/effectiveDisabledTools';
 import { recordSessionActivity } from '@client/app/utils/sessionActivityCleanup';
-import { updateAllQueryData } from '@client/app/utils/react-query';
+import { updateSessionsQueryData } from '@client/app/hooks/data/sessions';
 import { generateNewSession, stopChatMessage } from '@client/app/utils/sessionsAPICalls';
 import { INFINITE_VALUE } from '@client/app/components/FibonacciSlider';
 import { useAdvancedAISettings } from '@client/app/components/Session/AdvancedAISettings';
@@ -76,6 +88,7 @@ import { useAccessibleModels } from '../../../hooks/useAccessibleModels';
 import perfLogger from '../../../utils/performanceLogger';
 import { consumeQuestLaunchIntent } from '../../../utils/questLaunchIntent';
 import { LexicalChatInputRef } from '../LexicalChatInput';
+import { shouldBlurComposerAfterSend } from './composerFocus';
 
 interface UseSendMessageParams {
   lexicalInputRef: React.RefObject<LexicalChatInputRef | null>;
@@ -87,14 +100,25 @@ interface UseSendMessageParams {
   onAgentsAttached?: () => void;
 }
 
+interface SendClickOptions {
+  forceEnableQuestMaster?: boolean;
+  toolsOverride?: B4MLLMTools[];
+  /**
+   * Extra system context for this one send (a programmatic launch's `systemContext`).
+   * Delivered as a system message on whichever route the send takes; never part of the
+   * prompt, so it is neither shown in the bubble nor persisted on the turn. A host-managed
+   * first send (`hostCreateSession`) re-dispatches only the prompt, so it does not carry this.
+   */
+  systemContext?: string;
+  /** Called when the send is refused before dispatch (one already in flight, validation, setup). */
+  onRefused?: () => void;
+}
+
 interface UseSendMessageResult {
   submitting: boolean;
   stoppingMessage: boolean;
   pendingAutoSubmitGoal: string | null;
-  handleSendClick: (
-    prompt?: string,
-    options?: { forceEnableQuestMaster?: boolean; toolsOverride?: B4MLLMTools[] }
-  ) => Promise<IChatHistoryItemDocument | undefined>;
+  handleSendClick: (prompt?: string, options?: SendClickOptions) => Promise<IChatHistoryItemDocument | undefined>;
   handleStopMessage: () => Promise<void>;
 }
 
@@ -128,6 +152,7 @@ export function useSendMessage({
     workBenchAgents,
     setWorkBenchAgents,
     setCurrentSessionId,
+    setCurrentSessionRaw,
   } = useSessions();
 
   const pendingFirstMessage = useSessionLayout(s => s.pendingFirstMessage);
@@ -275,6 +300,10 @@ export function useSendMessage({
     submittingRef.current = value;
     setSubmittingState(value);
   }, []);
+  // Set once `handler()` below has actually posted the message. A throw past that point
+  // (quest adoption, cache migration, cleanup) must not be reported as a refusal - the
+  // send already happened, so `onRefused` would wrongly tell the caller its pick was lost.
+  const dispatchedRef = useRef(false);
   const [stoppingMessage, setStoppingMessage] = useState<boolean>(false);
   const [pendingAutoSubmitGoal, setPendingAutoSubmitGoal] = useState<string | null>(null);
   const [enableQuestMasterOnSubmit, setEnableQuestMasterOnSubmit] = useState(false);
@@ -347,9 +376,13 @@ export function useSendMessage({
   // directly: the wrapper is what releases the submit mutex if this throws.
   const runSendClick = async (
     newPrompt?: string,
-    options?: { forceEnableQuestMaster?: boolean; toolsOverride?: B4MLLMTools[] }
+    options?: SendClickOptions
   ): Promise<IChatHistoryItemDocument | undefined> => {
-    if (submittingRef.current) return;
+    dispatchedRef.current = false;
+    if (submittingRef.current) {
+      options?.onRefused?.();
+      return;
+    }
 
     // Lock out concurrent sends immediately so a second click/Enter during
     // validation or the host-create await cannot slip through the guard above.
@@ -362,7 +395,12 @@ export function useSendMessage({
     // literal-markdown senders are unaffected. Falls back to the plain chatInputValue
     // when the editor ref isn't mounted. Programmatic sends pass newPrompt explicitly
     // and bypass the editor (mirrors the getMentions() guard below).
-    const prompt = newPrompt ?? lexicalInputRef.current?.getSerializedValue() ?? chatInputValue;
+    const typedPrompt = newPrompt ?? lexicalInputRef.current?.getSerializedValue() ?? chatInputValue;
+    // A typed bare key ("2") picks that option of the newest reply's open choices, sending exactly
+    // what its button would. Editor sends only: a programmatic prompt is already what it means.
+    const newestTurn = currentSession ? useReplyChoices.getState().newestBySession[currentSession.id] : undefined;
+    const choiceKey = newPrompt === undefined ? expandChoiceKey(typedPrompt, newestTurn?.suggestedChoices) : null;
+    const prompt = choiceKey?.prompt ?? typedPrompt;
     // Validation (and the message the server stores) sees the serialized prompt,
     // so a formatted message counts its markdown syntax toward the input budget
     // (e.g. `**bold**` is 4 chars over `bold`). The overhead is markup-only and
@@ -382,7 +420,31 @@ export function useSendMessage({
       console.error(errorMessage);
       toast.error(errorMessage);
       setSubmitting(false);
+      options?.onRefused?.();
       return;
+    }
+    // Normalized and capped here, the boundary every caller passes through, and before any
+    // session creation or host hand-off, so an over-cap value never half-sends.
+    // Spread into each route's payload only when set, so a send without it is unchanged.
+    const resolvedSystemContext = resolveSystemContext(options?.systemContext);
+    if (resolvedSystemContext.kind === 'tooLong') {
+      console.error(
+        `[useSendMessage] Refused send: systemContext is ${resolvedSystemContext.length} characters (max ${PROMPT_TEXT_MAX}).`
+      );
+      toast.error('This prompt could not be sent: its extra instructions are too long.');
+      setSubmitting(false);
+      options?.onRefused?.();
+      return;
+    }
+    const systemContext = resolvedSystemContext.kind === 'ok' ? resolvedSystemContext.systemContext : undefined;
+    const systemContextField = systemContext ? { systemContext } : {};
+    if (currentSession && newestTurn?.suggestedChoices && choiceKey?.pickedIndex != null) {
+      void recordReplyChoice(queryClient, {
+        sessionId: currentSession.id,
+        questId: newestTurn.questId,
+        suggestedChoices: newestTurn.suggestedChoices,
+        index: choiceKey.pickedIndex,
+      });
     }
 
     // Host-managed first-message creation (e.g. /opti's TREATED OptiHashi session).
@@ -415,6 +477,7 @@ export function useSendMessage({
         console.error('Data Lake session create failed:', error);
         setSubmitting(false);
         toast.error("Couldn't start the chat - please try again.");
+        options?.onRefused?.();
         return;
       }
     }
@@ -511,6 +574,9 @@ export function useSendMessage({
       toast.warning("An image couldn't be added — it may violate our content policy.");
     }
     const messageFileIdsForRouting = sendableMessageFileIds;
+    const sentMessageOnlyFileIds = messageOnlyFileIds(pendingMessageFiles);
+    const mirrorPins = (sessionId: string | null | undefined) =>
+      mirrorPinnedMessageFiles(sessionId, pendingMessageFiles, sendableMessageFileIds, setCurrentSessionRaw);
     // Routing verdict ONLY - `tools`/`researchMode` are deliberately omitted.
     // Passing them trips the classifier's tool short-circuit, which is a
     // session-level setting: with any of recharts / image generation / deep
@@ -527,7 +593,7 @@ export function useSendMessage({
       undefined,
       sessionAgents.map(a => a.id)
     );
-    // Real slash commands (e.g. `/gen_image`, `/roll`, `/gen_video`) must run
+    // Real slash commands (e.g. `/gen_image`, `/roll`) must run
     // their own handler even when the Agent-mode toggle is ON - otherwise the
     // executor branch returns before `handler(sessionToSend)` is reached and
     // the command silently never executes. `/llm` is the implicit default and
@@ -690,11 +756,18 @@ export function useSendMessage({
       supportsTools: !!currentModelInfo?.supportsTools,
       toolsOverride: options?.toolsOverride,
       skipAutoOffers,
+      activeSurface: sessionToSend?.surface,
+      deniedTools: effectiveDisabledTools(currentSession),
     });
     if (refused) {
       setSubmitting(false);
+      options?.onRefused?.();
       return;
     }
+    // Tool-directed or context-carrying send: see LLMCommandArgs.skipRapidReply. The ack
+    // model sees neither the tools nor the hidden system context, so with either present an
+    // instant ack could contradict what the real reply is told to do.
+    const skipRapidReply = (options?.toolsOverride?.length ?? 0) > 0 || systemContext !== undefined;
 
     // Warn if images are attached but a TEXT model can't see them (no vision). Gated to text
     // models: for image models "vision" is irrelevant - image-input capability is handled by
@@ -749,8 +822,10 @@ export function useSendMessage({
           currentSession: notebook,
           model: model as any,
           workBenchFiles,
+          agentIds: workBenchAgents.map(a => a.id),
           sendJsonMessage,
           promptFileIds: messageLevelFileIds,
+          messageOnlyFileIds: sentMessageOnlyFileIds,
           optimisticSessionId: optimisticTmpId ?? undefined,
           enableQuestMaster: options?.forceEnableQuestMaster ?? isQuestMasterEnabled,
           enableMementos: isMementosEnabled,
@@ -764,6 +839,7 @@ export function useSendMessage({
           organizationId,
           researchMode,
           skipAutoOffers,
+          skipRapidReply,
           agentMode: effectiveAgentMode,
           deepResearchConfig,
           imageConfig: imageSettings,
@@ -782,6 +858,7 @@ export function useSendMessage({
           prompt_upsampling,
           seed,
           output_format,
+          ...systemContextField,
         });
       };
     } else {
@@ -795,8 +872,10 @@ export function useSendMessage({
           currentSession: notebook,
           model: model as ModelName,
           workBenchFiles,
+          agentIds: workBenchAgents.map(a => a.id),
           sendJsonMessage,
           promptFileIds: messageLevelFileIds,
+          messageOnlyFileIds: sentMessageOnlyFileIds,
           enableQuestMaster: options?.forceEnableQuestMaster ?? isQuestMasterEnabled,
           enableMementos: isMementosEnabled,
           enableArtifacts: isArtifactsEnabled,
@@ -809,6 +888,7 @@ export function useSendMessage({
           organizationId,
           researchMode,
           skipAutoOffers,
+          skipRapidReply,
           deepResearchConfig,
           imageConfig: imageSettings,
           audioConfig: audioSettings,
@@ -822,6 +902,7 @@ export function useSendMessage({
           // path - but we still surface the source so per-decision logs can
           // attribute the choice.
           agentMode: effectiveAgentMode,
+          ...systemContextField,
         });
       };
     }
@@ -877,16 +958,18 @@ export function useSendMessage({
     //   - With `orchestrationAgent`: use its preferred model + tool whitelist
     //     (preserves the earlier `@specific-agent` UX). A briefcase
     //     `toolsOverride` still wins the whitelist (see `enabledTools` below).
-    //   - Without (toggle ON or `@agent` literal): dispatch agentless and let
-    //     the executor build a synthetic profile from admin defaults.
+    //   - Without (toggle ON or `@agent` literal): run as the first agent
+    //     attached with the Agents picker on the composer-selected model, or
+    //     dispatch agentless when none is attached and let the executor build a
+    //     synthetic profile from admin defaults.
     if (routeTarget === 'agent_executor') {
       try {
-        // Prefer the dispatched agent's own text model - the orchestration
-        // agent when present, else the first plain @mentioned agent - so a
-        // personality-only agent runs on its `preferredModel` rather than the
-        // caller's current selection. Mirrors the `agentId` and
-        // `preferredImageModel` resolution above (#agent-mode-persona). Falls
-        // back to the caller's `model` when neither agent pins one.
+        // Same set the composer's Agents badge shows (SessionBottom `displayAgents`).
+        const pickerAgents = pickerAttachedAgents(currentSessionId, sessionAgents, workBenchAgents);
+        const dispatchAgent = resolveDispatchAgent(orchestrationAgent, mentionedAgent, pickerAgents);
+        // Only an @mentioned agent's `preferredModel` overrides the composer model
+        // (#agent-mode-persona). A picker-attached agent sets `agentId` alone, so the
+        // composer-selected model still wins for it, as it does in chat mode.
         const dispatchModel = (orchestrationAgent ?? mentionedAgent)?.preferredModel ?? (model as string);
         // `currentSessionId` is a stale render-closure value on `/new` (still null even
         // after the Data Lake seam above just created + set the session), so fall back to
@@ -914,9 +997,7 @@ export function useSendMessage({
           // minimum viable equivalent. `keysAllowedToCreate` mirrors the hook
           // so the entry lands on the sidebar's `['sessions', 'own']` infinite
           // query without disturbing other session lists (shared, projects).
-          updateAllQueryData(queryClient, 'sessions', 'write', realSession, {
-            keysAllowedToCreate: [['sessions', 'own']],
-          });
+          updateSessionsQueryData(queryClient, 'write', realSession);
           // Match the invalidation set in `useGenerateNewSession.onSuccess`
           // (sessions.ts:643-651) so a session created via the agent_execute
           // flow refreshes the project view + activity feed identically to
@@ -939,36 +1020,35 @@ export function useSendMessage({
         // store would otherwise grow unbounded across a long-lived tab.
         useAgentExecutionStore.getState().clearForSession(dispatchSessionId);
 
-        // Render the user's prompt as a message bubble above the iteration
-        // stream. The agent executor doesn't create a Quest server-side
-        // (it's fire-and-forget over WebSocket), so the normal chat-completion
-        // optimistic-quest flow isn't triggered and the bubble would otherwise
-        // never mount - leaving a confusing empty area above the permission
-        // card. Optimistic-only is acceptable for now; refresh persistence
-        // for agent executions is a follow-up.
-        // Pass `routingSource` so the AutoRouteBadge renders live on the
-        // optimistic bubble instead of waiting for the persisted Quest on reload.
-        createOptimisticPromptBubble(queryClient, dispatchSessionId, prompt, routingSource);
-
-        // Iteration cap comes from the agent doc; left unset when agentless so
-        // the executor fills it from admin defaults.
-        const thoroughness = orchestrationAgent?.defaultThoroughness ?? 'medium';
-        const maxIters = orchestrationAgent?.maxIterations?.[thoroughness];
-        // A briefcase `toolsOverride` wins the whitelist so an `@`-mention can't
-        // drop the tools the prompt needs (see `resolveDispatchTools`). An agentless send
-        // ships the user's Smart Tools marked ambient; the server unions them onto the
-        // profile it resolves rather than replacing it.
-        const { enabledTools, enabledToolsAreAmbient } = resolveDispatchTools(
-          options?.toolsOverride,
-          effectiveTools,
-          orchestrationAgent?.allowedTools
-        );
         // Per-message file attachments - dedupe against the session-level set
         // so the same fabFileId isn't materialized twice into the first
         // iteration. Mirrors the dedup the `chat_completion` flow does in
         // `buildDataSources()`.
         const dispatchSessionFabFileIds = workBenchFiles.map(f => f.id);
         const dispatchMessageFileIds = sendableMessageFileIds.filter(id => !dispatchSessionFabFileIds.includes(id));
+
+        // Render the user's prompt as a message bubble above the iteration
+        // stream right away. The server creates the prompt Quest at dispatch
+        // (startAgentExecution), and useAgentExecution re-keys this bubble to
+        // that Quest's id once it arrives (swapOptimisticPromptBubbleId).
+        // Pass `routingSource` so the AutoRouteBadge renders live on the
+        // optimistic bubble instead of waiting for the persisted Quest on reload.
+        createOptimisticPromptBubble(queryClient, dispatchSessionId, prompt, routingSource, dispatchMessageFileIds);
+
+        // Iteration cap comes from the agent doc; unset when agentless or the agent has no
+        // default thoroughness, so the executor fills it from admin defaults.
+        const maxIters = resolveDispatchMaxIterations(dispatchAgent);
+        // A briefcase `toolsOverride` wins the whitelist so an agent can't
+        // drop the tools the prompt needs (see `resolveDispatchTools`). An agentless send
+        // ships the user's Smart Tools marked ambient; the server unions them onto the
+        // profile it resolves rather than replacing it.
+        const { enabledTools, enabledToolsAreAmbient } = resolveDispatchTools(
+          options?.toolsOverride,
+          effectiveTools,
+          dispatchAgent?.allowedTools
+        );
+        // Mirrored before the dispatch, settled on the socket's start outcome (useAgentExecution).
+        holdMirroredPinsUntilAgentStart(dispatchSessionId, mirrorPins(dispatchSessionId));
         agentExecution.start({
           sessionId: dispatchSessionId,
           // Server requires `questId`; without an authored quest we tag the
@@ -978,14 +1058,12 @@ export function useSendMessage({
           query: prompt,
           model: dispatchModel,
           organizationId: organizationId ?? undefined,
-          // Forward the @mentioned agent's id so the executor injects its
-          // persona and runs as that agent. Prefer the orchestration-configured
-          // agent (carries tool whitelist + iteration caps); otherwise fall back
-          // to the first plain @mentioned agent so a personality-only agent is
-          // still run-as rather than ignored in favor of the synthetic default
-          // (#agent-mode-persona / @-tag-enables-agent). Absent (no mention)
+          // The executor injects this agent's persona and runs as it, so its own
+          // tool policy applies (#agent-mode-persona / @-tag-enables-agent).
+          // Orchestration @mention, then plain @mention, then the first
+          // picker-attached agent; absent only when none of those exist, which
           // triggers the synthetic-profile path on the executor.
-          agentId: orchestrationAgent?.id ?? mentionedAgent?.id,
+          agentId: dispatchAgent?.id,
           enabledTools,
           enabledToolsAreAmbient,
           maxIterations: maxIters,
@@ -994,6 +1072,7 @@ export function useSendMessage({
           // + per-message attachments here.
           sessionFabFileIds: dispatchSessionFabFileIds.length > 0 ? dispatchSessionFabFileIds : undefined,
           messageFileIds: dispatchMessageFileIds.length > 0 ? dispatchMessageFileIds : undefined,
+          messageOnlyFileIds: sentMessageOnlyFileIds.length > 0 ? sentMessageOnlyFileIds : undefined,
           // LLM runtime knobs. `thinking` is forwarded only when the user
           // actually enabled it - the LLM store ships a baseline
           // `{enabled: false, ...}` that would otherwise round-trip needlessly.
@@ -1041,6 +1120,9 @@ export function useSendMessage({
           // Propagate provenance so persisted IChatHistoryItem carries the
           // tag the AutoRouteBadge reads.
           routingSource,
+          // Per-send system context: the executor folds it into the run's system
+          // message, and it is kept off the stored execution and Quest.
+          ...systemContextField,
         });
         setChatInputValue('');
         clearDraft(dispatchSessionId);
@@ -1094,7 +1176,7 @@ export function useSendMessage({
     // stream replaces `statusMessage` on its first update; the error path below
     // clears it if no stream ever lands.
     //
-    // Skipped for real slash commands (`/roll`, `/gen_image`, `/gen_video`,
+    // Skipped for real slash commands (`/roll`, `/gen_image`,
     // etc.) - those handlers don't emit `streamed_chat_completion` WS events,
     // so the sentinel would never be overwritten on success and the Stop
     // button would stay stuck after the command returned. `handleLLMCommand`
@@ -1118,6 +1200,10 @@ export function useSendMessage({
       }));
     }
 
+    // Mirrored before the send so a workbench write racing it carries the pin. A new session is
+    // seeded server-side at create, and session.created carries the list.
+    const pinnedSessionId = isNewSession ? null : sessionToSend?.id;
+    const mirroredPins = mirrorPins(pinnedSessionId);
     let data;
     try {
       data = await handler(sessionToSend);
@@ -1141,12 +1227,17 @@ export function useSendMessage({
       // `shouldShowStopButton` stays true and the composer renders Stop and
       // swallows Enter for good - dead in a way releasing the mutex cannot fix.
       // A held Stop is dropped first so the placeholder reads as unreplaced again.
+      if (pinnedSessionId) rollbackMirroredPins(pinnedSessionId, mirroredPins, setCurrentSessionRaw);
       deferredStop.cancel();
       setChatCompletion(rollbackOptimisticGenerating);
       setWorkBenchAgents([]);
       setSubmitting(false);
       return;
     }
+
+    // The message is posted from here on; a later throw (quest adoption, cache migration,
+    // cleanup) is cleanup failing, not a refusal, so the outer catch must not report it as one.
+    dispatchedRef.current = true;
 
     setWorkBenchAgents([]);
     setSubmitting(false);
@@ -1190,10 +1281,11 @@ export function useSendMessage({
 
     clearFiles();
 
-    // Hide keyboard after sending message (mobile)
-    setTimeout(() => {
-      lexicalInputRef.current?.blur();
-    }, 100);
+    if (shouldBlurComposerAfterSend()) {
+      setTimeout(() => {
+        lexicalInputRef.current?.blur();
+      }, 100);
+    }
   };
 
   // Latest-ref so the exported `handleSendClick` below can be permanently
@@ -1217,10 +1309,7 @@ export function useSendMessage({
    * with no error visible to the user.
    */
   const handleSendClick = useCallback(
-    async (
-      newPrompt?: string,
-      options?: { forceEnableQuestMaster?: boolean; toolsOverride?: B4MLLMTools[] }
-    ): Promise<IChatHistoryItemDocument | undefined> => {
+    async (newPrompt?: string, options?: SendClickOptions): Promise<IChatHistoryItemDocument | undefined> => {
       try {
         return await withSubmitMutex(submittingRef, setSubmittingState, () =>
           runSendClickRef.current(newPrompt, options)
@@ -1230,6 +1319,10 @@ export function useSendMessage({
         // send failures itself (LLMCommand toasts, optimistic rollback).
         console.error('Unexpected error sending message:', error);
         toast.error("Couldn't send your message - please try again.");
+        // A throw after dispatch (`dispatchedRef`) is cleanup failing on an already-sent
+        // message, not a refusal - calling onRefused here would tell the caller (e.g. a
+        // reply-choice button) its pick was lost when it wasn't.
+        if (!dispatchedRef.current) options?.onRefused?.();
         return undefined;
       }
     },

@@ -6,11 +6,15 @@ import { setupSamlStrategy } from '@server/auth/auth';
 import { issueBrowserSession } from '@server/auth/issueSession';
 import { logEvent } from '@server/utils/analyticsLog';
 import { logAuthAudit } from '@server/utils/authAudit';
-import { AuthEvents, AuthStrategy } from '@bike4mind/common';
-import { BadRequestError, ForbiddenError } from '@server/utils/errors';
+import { AuthEvents, AuthStrategy, clientIdFromAuthorizeRedirect } from '@bike4mind/common';
+import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { LOG_URL_TRUNCATE_LENGTH } from '@server/auth/oktaConstants';
 import { authSuccessRedirectQuery } from '@server/auth/authSuccessRedirect';
 import { isLocalAppUrl } from '@server/utils/validators';
+import { stampOAuthSourceTag } from '@server/utils/auth/oauthSourceTag';
+import { getClientIp } from '@bike4mind/server-utils/utils/ip';
+import type { OAuthUser } from '@server/utils/auth/verifyCallback';
+import { emitSignupFunnelEvents, recordSignupAcquisition } from '@server/analytics/funnel';
 
 const handleSamlCallback = async (req: any, res: any) => {
   try {
@@ -71,7 +75,7 @@ const handleSamlCallback = async (req: any, res: any) => {
     });
 
     passport.authenticate(strategyName, async (err: Error | null, user: any, info: any) => {
-      const ip = req.socket?.remoteAddress || (req.headers['x-forwarded-for'] as string) || req.ip || 'unknown';
+      const ip = getClientIp(req);
       const userAgent = req.headers['user-agent'] || 'unknown';
       const email = (info && (info.email as string)) || undefined;
 
@@ -134,6 +138,19 @@ const handleSamlCallback = async (req: any, res: any) => {
         throw new ForbiddenError('User is banned');
       }
 
+      // RelayState is not signed, so the client id carries the same trust as the OTC path's
+      // client-supplied one: only an active registered client yields a tag.
+      if (user.isNewUser) {
+        await stampOAuthSourceTag(user.id, clientIdFromAuthorizeRedirect(redirectTo));
+        const signupFunnel = await recordSignupAcquisition({ req, user, method: AuthStrategy.SAML });
+        await emitSignupFunnelEvents({
+          user: { id: user.id, ...signupFunnel },
+          method: AuthStrategy.SAML,
+          emailVerified: user.emailVerified === true,
+          creditsGranted: (user as OAuthUser).signupCreditsGranted ?? 0,
+        });
+      }
+
       const { accessToken } = await issueBrowserSession(req, res, user.id, {
         createdVia: 'saml',
         tokenVersion: user.tokenVersion ?? 0,
@@ -145,7 +162,7 @@ const handleSamlCallback = async (req: any, res: any) => {
         type: AuthEvents.LOGIN,
         metadata: {
           strategy: AuthStrategy.SAML,
-          ip: req.ip || req.connection.remoteAddress || (req.headers['x-forwarded-for'] as string) || 'unknown',
+          ip: getClientIp(req),
           userAgent: req.headers['user-agent'] || 'unknown',
         },
       });
@@ -162,7 +179,8 @@ const handleSamlCallback = async (req: any, res: any) => {
       // Resume the originally requested path (round-tripped via RelayState);
       // /auth/success sanitizes it before navigating.
       const successQuery = authSuccessRedirectQuery(redirectTo);
-      const redirectUrl = `${baseUrl}/auth/success${successQuery}#token=${tokens.accessToken}&userId=${user.id}`;
+      const signupFragment = user.isNewUser ? '&firstSignupSession=1' : '';
+      const redirectUrl = `${baseUrl}/auth/success${successQuery}#token=${tokens.accessToken}&userId=${user.id}${signupFragment}`;
 
       console.log('Redirecting to:', redirectUrl.substring(0, LOG_URL_TRUNCATE_LENGTH) + '...');
       return res.redirect(redirectUrl);

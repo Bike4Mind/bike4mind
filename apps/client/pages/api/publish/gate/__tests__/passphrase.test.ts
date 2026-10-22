@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
@@ -8,6 +9,7 @@ const { mocks } = vi.hoisted(() => ({
     lean: vi.fn(),
     stamp: vi.fn(() => Promise.resolve()),
     parse: vi.fn(),
+    loadLiveOwner: vi.fn(),
   },
 }));
 
@@ -58,23 +60,36 @@ vi.mock('@server/services/publish/parsePublishPath', () => ({
 }));
 vi.mock('@server/services/publish/publishGateToken', () => ({ setGateProofCookie: () => true }));
 vi.mock('@server/services/publish/passphraseLockout', () => lockout);
+vi.mock('@server/services/publish/loadLiveOwner', () => ({ loadLiveOwner: mocks.loadLiveOwner }));
 vi.mock('bcryptjs', () => ({ default: { compare: () => Promise.resolve(true) } }));
 
 import handler from '../passphrase';
 
-const run = (body: unknown) => {
-  const { req, res } = createMocks({ method: 'POST', body });
+const viewerIp = '203.0.113.10';
+const viewerId = createHash('sha256').update(viewerIp).digest('hex');
+
+const run = (body: unknown, ip = viewerIp) => {
+  const { req, res } = createMocks({
+    method: 'POST',
+    body,
+    headers: { 'cloudfront-viewer-address': `${ip}:12345`, 'x-forwarded-for': 'spoofed' },
+  });
   (req as Record<string, unknown>).user = { id: 'u1' };
   return { res, promise: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res) };
 };
 
 const gated = () =>
-  mocks.lean.mockResolvedValue({ publicId: 'pub1', accessGate: { kind: 'passphrase', passphraseHash: 'h' } });
+  mocks.lean.mockResolvedValue({
+    publicId: 'pub1',
+    ownerId: 'o1',
+    accessGate: { kind: 'passphrase', passphraseHash: 'h' },
+  });
 
 beforeEach(() => {
   vi.restoreAllMocks(); // reset bcrypt.compare spy history between tests
   Object.values(mocks).forEach(m => (m as { mockReset?: () => void }).mockReset?.());
   mocks.stamp.mockResolvedValue(undefined);
+  mocks.loadLiveOwner.mockResolvedValue({ name: 'Owner' });
   lockout.checkLock.mockReset().mockResolvedValue({ locked: false, retryAfterMs: 0 });
   lockout.recordFailure.mockReset().mockResolvedValue({ locked: false, retryAfterMs: 0 });
   lockout.clear.mockReset().mockResolvedValue(undefined);
@@ -123,6 +138,20 @@ describe('POST /api/publish/gate/passphrase - projection safety (regression: Mon
   });
 });
 
+describe('POST /api/publish/gate/passphrase - owner check', () => {
+  it('404s like the serve route when the owner account is gone, banned or suspended', async () => {
+    gated();
+    mocks.loadLiveOwner.mockResolvedValue(null);
+
+    const { res, promise } = run({ path: '/p/u/scope/slug', passphrase: 'hunter2secret' });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(404);
+    expect(mocks.loadLiveOwner).toHaveBeenCalledWith('o1');
+    expect(lockout.checkLock).not.toHaveBeenCalled();
+  });
+});
+
 describe('POST /api/publish/gate/passphrase - per-artifact lockout', () => {
   it('returns 423 with Retry-After when the gate is already locked, before checking bcrypt', async () => {
     const bcrypt = (await import('bcryptjs')).default as { compare: () => Promise<boolean> };
@@ -150,7 +179,7 @@ describe('POST /api/publish/gate/passphrase - per-artifact lockout', () => {
 
     expect(res._getStatusCode()).toBe(423);
     expect(res.getHeader('Retry-After')).toBe(120);
-    expect(lockout.recordFailure).toHaveBeenCalledWith('pub1');
+    expect(lockout.recordFailure).toHaveBeenCalledWith('pub1', viewerId);
   });
 
   it('records a failure but stays 403 while under the cap', async () => {
@@ -163,7 +192,7 @@ describe('POST /api/publish/gate/passphrase - per-artifact lockout', () => {
     await promise;
 
     expect(res._getStatusCode()).toBe(403);
-    expect(lockout.recordFailure).toHaveBeenCalledWith('pub1');
+    expect(lockout.recordFailure).toHaveBeenCalledWith('pub1', viewerId);
   });
 
   it('clears the lock on a correct passphrase', async () => {
@@ -173,7 +202,21 @@ describe('POST /api/publish/gate/passphrase - per-artifact lockout', () => {
     await promise;
 
     expect(res._getStatusCode()).toBe(204);
-    expect(lockout.clear).toHaveBeenCalledWith('pub1');
+    expect(lockout.clear).toHaveBeenCalledWith('pub1', viewerId);
     expect(lockout.recordFailure).not.toHaveBeenCalled();
   });
+});
+
+it('keys every lock operation by the trusted viewer IP, ignoring spoofed forwarding headers', async () => {
+  gated();
+  const first = run({ path: '/p/u/scope/slug', passphrase: 'correct' });
+  await first.promise;
+  expect(lockout.checkLock).toHaveBeenLastCalledWith('pub1', viewerId);
+  expect(lockout.clear).toHaveBeenLastCalledWith('pub1', viewerId);
+  const secondIp = '203.0.113.20';
+  const second = run({ path: '/p/u/scope/slug', passphrase: 'correct' }, secondIp);
+  await second.promise;
+  const secondId = createHash('sha256').update(secondIp).digest('hex');
+  expect(lockout.checkLock).toHaveBeenLastCalledWith('pub1', secondId);
+  expect(lockout.clear).toHaveBeenLastCalledWith('pub1', secondId);
 });

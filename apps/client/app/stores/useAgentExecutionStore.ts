@@ -118,7 +118,21 @@ export interface PendingPermission {
   toolCallId?: string;
 }
 
+export interface PendingGate {
+  /** 0-indexed wire convention. */
+  iteration: number;
+  /** 0..1. */
+  confidence: number;
+  /** Server-formatted explanation of why the run paused. */
+  reason: string;
+  /** Epoch ms; unique per pause, so cards can reset click guards on it. */
+  requestedAt: number;
+}
+
 export interface ParentExecution {
+  /** Changes only for live lifecycle events, so reconnects cannot overwrite newer decisions. */
+  lifecycleRevision?: number;
+  reconnectSequence?: number;
   executionId: string;
   /** Session the dispatch was bound to. Set on startExecution; not all server
    * events carry it, so the client supplies it at dispatch time. */
@@ -128,6 +142,9 @@ export interface ParentExecution {
   totalCreditsUsed: number;
   childExecutions: Record<string, ChildExecution>;
   pendingPermission?: PendingPermission;
+  /** Set while the run sits in `paused` awaiting a Proceed/Stop decision at the
+   *  confidence gate. `ConfidenceGateCard` renders purely on its presence. */
+  pendingGate?: PendingGate;
   /** Optimistic UI flag: user clicked Stop and we're awaiting the server's
    *  abort acknowledgement. Drives the "Aborting…" status + disabled Stop button
    *  so the click has immediate feedback even if the run takes a beat to stop. */
@@ -158,35 +175,38 @@ export interface ParentExecution {
   pendingTextByIteration?: Record<number, string>;
 }
 
-/** One outstanding `reconnect` request, waiting for the response that answers it. */
-export interface PendingReconnect {
-  /** Absent when the sweep asked about a run whose session the store never learned -
-   *  consuming such an entry returns undefined and hydrate falls back to the
-   *  execution's own stored sessionId. */
-  sessionId?: string;
-  /** Absent when the caller was asking "is anything running here?" and had no id yet. */
-  executionId?: string;
-}
+type PendingReconnectRequest = {
+  requestedAt: number;
+  sequence: number;
+  retryAllowed: boolean;
+  lifecycleRevisions: Record<string, number>;
+};
+
+const RECONNECT_REQUEST_TTL_MS = 60_000;
+const MAX_PENDING_RECONNECT_REQUESTS = 100;
+let lifecycleRevision = 0;
+let reconnectSequence = 0;
 
 interface AgentExecutionState {
+  pendingReconnectRequests: Record<string, PendingReconnectRequest>;
+  registerReconnectRequest: (
+    requestId: string,
+    sessionId?: string,
+    executionId?: string,
+    retryAllowed?: boolean
+  ) => void;
+  /** Consume the correlation once; conflicts may request one fresh snapshot. */
+  consumeReconnectRequest: (
+    requestId?: string,
+    executionId?: string,
+    status?: AgentExecutionStatus
+  ) => number | 'retry' | undefined;
   executions: Record<string, ParentExecution>;
   /** Sessions awaiting their first `execution_started` event. Dispatch enqueues,
    * `execution_started` dequeues. FIFO ordering matches WS event ordering on a
    * single tab; concurrent dispatches are bounded by the server's
    * `concurrent_limit` check. */
   pendingDispatches: string[];
-  /** Sessions awaiting their `reconnect_result` response. The server's payload
-   * doesn't echo sessionId back (the response shape is kept stable), so the
-   * sessionId has to be carried here to be stamped onto the hydrated execution.
-   *
-   * Correlation is by `executionId` whenever the caller knew one - a socket-open
-   * sweep asks about several runs at once, and independent handler invocations
-   * answer in whatever order their work finishes, so arrival order alone would
-   * pair a response with another run's session. Callers that cannot know the id
-   * yet (the mount-time "is anything running in this session?" probe) enqueue
-   * without one and are matched FIFO among themselves, which is safe because
-   * that probe is one-shot per session. */
-  pendingReconnects: PendingReconnect[];
 
   // Lifecycle
   startExecution: (executionId: string, sessionId?: string) => void;
@@ -196,11 +216,13 @@ interface AgentExecutionState {
   appendTextDelta: (executionId: string, iteration: number, delta: string) => void;
   recordCredits: (executionId: string, credits: number) => void;
   markCompleted: (executionId: string, answer: string | undefined, totalCreditsUsed: number) => void;
-  markFailed: (executionId: string, reason: string, message?: string) => void;
+  markFailed: (executionId: string, reason: string | undefined, message?: string) => void;
   markAborted: (executionId: string) => void;
   /** Optimistic: flag an execution as aborting the moment the user clicks Stop. */
   markAborting: (executionId: string) => void;
   setPendingPermission: (executionId: string, pending: PendingPermission | undefined) => void;
+  /** Set (and flip the run to `paused`) or clear the confidence gate. */
+  setPendingGate: (executionId: string, gate: PendingGate | undefined) => void;
   /** Replace state from a reconnect snapshot - only resets fields the server can re-supply. */
   hydrateFromReconnect: (snapshot: {
     executionId: string;
@@ -209,6 +231,8 @@ interface AgentExecutionState {
     totalCreditsUsed: number;
     iterationCount: number;
     pendingPermission?: PendingPermission;
+    pendingGate?: PendingGate;
+    reconnectSequence?: number;
     /**
      * Persisted iteration trace for step replay. When provided,
      * replaces `exec.iterations` so the IterationStream can re-render past
@@ -301,10 +325,6 @@ interface AgentExecutionState {
   // Dispatch correlation
   registerPendingDispatch: (sessionId: string) => void;
   consumePendingDispatch: () => string | undefined;
-  /** `executionId` when the caller already knows which run it is asking about. */
-  registerPendingReconnect: (sessionId: string | undefined, executionId?: string) => void;
-  /** Pass the id the response carries; falls back to FIFO for un-keyed entries. */
-  consumePendingReconnect: (executionId?: string) => string | undefined;
 
   // Cleanup
   clear: (executionId: string) => void;
@@ -446,7 +466,47 @@ export function findChildAnyDepth(
 export const useAgentExecutionStore = create<AgentExecutionState>((set, get) => ({
   executions: {},
   pendingDispatches: [],
-  pendingReconnects: [],
+  pendingReconnectRequests: {},
+
+  registerReconnectRequest: (requestId, sessionId, executionId, retryAllowed = true) =>
+    set(state => {
+      const now = Date.now();
+      const pending = Object.entries(state.pendingReconnectRequests)
+        .filter(([, request]) => now - request.requestedAt < RECONNECT_REQUEST_TTL_MS)
+        .slice(-(MAX_PENDING_RECONNECT_REQUESTS - 1));
+      const lifecycleRevisions = Object.fromEntries(
+        Object.values(state.executions)
+          .filter(execution =>
+            executionId ? execution.executionId === executionId : execution.sessionId === sessionId
+          )
+          .map(execution => [execution.executionId, execution.lifecycleRevision ?? 0])
+      );
+      return {
+        pendingReconnectRequests: {
+          ...Object.fromEntries(pending),
+          [requestId]: { requestedAt: now, sequence: ++reconnectSequence, retryAllowed, lifecycleRevisions },
+        },
+      };
+    }),
+
+  consumeReconnectRequest: (requestId, executionId, status) => {
+    // Legacy servers omit the echo. Terminal monotonicity is enforced at hydration too.
+    if (!requestId) return 0;
+    const state = get();
+    const request = state.pendingReconnectRequests[requestId];
+    const { [requestId]: _request, ...pendingReconnectRequests } = state.pendingReconnectRequests;
+    set({ pendingReconnectRequests });
+    if (!request || !executionId || Date.now() - request.requestedAt >= RECONNECT_REQUEST_TTL_MS) return undefined;
+    const execution = state.executions[executionId];
+    if (execution && !isActiveStatus(execution.status) && execution.status !== status) return undefined;
+    if ((execution?.reconnectSequence ?? 0) > request.sequence) return undefined;
+    // A terminal snapshot repairs a lost completion push even if live progress overtook its request.
+    if (status && !isActiveStatus(status)) return request.sequence;
+    if ((execution?.lifecycleRevision ?? 0) !== (request.lifecycleRevisions[executionId] ?? 0)) {
+      return request.retryAllowed ? 'retry' : undefined;
+    }
+    return request.sequence;
+  },
 
   registerPendingDispatch: sessionId => set(state => ({ pendingDispatches: [...state.pendingDispatches, sessionId] })),
 
@@ -456,35 +516,28 @@ export const useAgentExecutionStore = create<AgentExecutionState>((set, get) => 
     return head;
   },
 
-  registerPendingReconnect: (sessionId, executionId) =>
-    set(state => ({ pendingReconnects: [...state.pendingReconnects, { sessionId, executionId }] })),
-
-  consumePendingReconnect: executionId => {
-    const queue = get().pendingReconnects;
-    // A keyed entry answers only to its own run. Fall through to the oldest
-    // un-keyed entry otherwise, which is both the mount-time probe's own case
-    // and what a `found: false` response (no executionId on the wire) drains.
-    const at = executionId
-      ? queue.findIndex(e => e.executionId === executionId)
-      : queue.findIndex(e => e.executionId === undefined);
-    const index = at === -1 ? queue.findIndex(e => e.executionId === undefined) : at;
-    if (index === -1) return undefined;
-    set({ pendingReconnects: queue.filter((_, i) => i !== index) });
-    return queue[index].sessionId;
-  },
-
   startExecution: (executionId, sessionId) =>
     set(state => ({
       executions: withExecution(state, executionId, exec => ({
         ...exec,
         status: 'running',
+        lifecycleRevision: ++lifecycleRevision,
         sessionId: sessionId ?? exec.sessionId,
       })),
     })),
 
   setStatus: (executionId, status) =>
     set(state => ({
-      executions: withExecution(state, executionId, exec => ({ ...exec, status })),
+      executions: withExecution(state, executionId, exec => ({
+        ...exec,
+        status,
+        lifecycleRevision: exec.status === status ? exec.lifecycleRevision : ++lifecycleRevision,
+        // The gate lives only while the run is `paused`. A frame that moves the
+        // run off it (`resumed` for a pause the client already answered)
+        // invalidates the gate: the card renders on presence alone, so keeping
+        // it would paint a dead Proceed/Stop over a live run.
+        pendingGate: status === 'paused' ? exec.pendingGate : undefined,
+      })),
     })),
 
   appendIteration: (executionId, iteration) =>
@@ -526,19 +579,23 @@ export const useAgentExecutionStore = create<AgentExecutionState>((set, get) => 
       })),
     })),
 
-  // A terminal run can't have a live permission request outstanding - the server
-  // has resolved or abandoned it. `PermissionCard` renders purely on
-  // `pendingPermission` presence (not status), so a lingering value would leave a
-  // dead permission prompt on a completed/failed/aborted run. Clear it on every
-  // terminal transition.
+  // A terminal run can't have a live permission request or gate outstanding -
+  // the server has resolved or abandoned it. The cards render purely on field
+  // presence (not status), so a lingering value would leave a dead prompt on a
+  // completed/failed/aborted run. Clear both on every terminal transition.
+  // `isAborting` is cleared too, so an abort racing a completed/failed event
+  // doesn't leave the flag set on a finished run.
   markCompleted: (executionId, answer, totalCreditsUsed) =>
     set(state => ({
       executions: withExecution(state, executionId, exec => ({
         ...exec,
         status: 'completed',
+        lifecycleRevision: ++lifecycleRevision,
         answer,
         totalCreditsUsed,
         pendingPermission: undefined,
+        pendingGate: undefined,
+        isAborting: false,
       })),
     })),
 
@@ -547,9 +604,12 @@ export const useAgentExecutionStore = create<AgentExecutionState>((set, get) => 
       executions: withExecution(state, executionId, exec => ({
         ...exec,
         status: 'failed',
+        lifecycleRevision: ++lifecycleRevision,
         failureReason: reason,
         errorMessage: message,
         pendingPermission: undefined,
+        pendingGate: undefined,
+        isAborting: false,
       })),
     })),
 
@@ -558,8 +618,10 @@ export const useAgentExecutionStore = create<AgentExecutionState>((set, get) => 
       executions: withExecution(state, executionId, exec => ({
         ...exec,
         status: 'aborted',
+        lifecycleRevision: ++lifecycleRevision,
         failureReason: 'aborted',
         pendingPermission: undefined,
+        pendingGate: undefined,
         isAborting: false,
       })),
     })),
@@ -574,40 +636,69 @@ export const useAgentExecutionStore = create<AgentExecutionState>((set, get) => 
       executions: withExecution(state, executionId, exec => ({
         ...exec,
         pendingPermission: pending,
+        lifecycleRevision: ++lifecycleRevision,
         status: pending ? 'awaiting_permission' : exec.status,
       })),
     })),
 
+  setPendingGate: (executionId, gate) =>
+    set(state => ({
+      executions: withExecution(state, executionId, exec => {
+        // A late `confidence_gate` for a run that already finished must not
+        // resurrect the card (or flip status back to `paused`). The server
+        // writes gate + status atomically, but the frame still races a
+        // completed/aborted one in the client.
+        if (gate && !isActiveStatus(exec.status)) return exec;
+        return {
+          ...exec,
+          pendingGate: gate,
+          lifecycleRevision: ++lifecycleRevision,
+          status: gate ? 'paused' : exec.status,
+        };
+      }),
+    })),
+
   hydrateFromReconnect: snapshot =>
     set(state => ({
-      executions: withExecution(state, snapshot.executionId, exec => ({
-        ...exec,
-        // Stamp the sessionId so `selectExecutionIdsForSession` picks up the
-        // hydrated execution and `ActiveAgentExecutions` mounts the live UI.
-        // Without this, the rehydrated entry is orphaned from any session and
-        // the user sees nothing despite the server having an active run.
-        sessionId: snapshot.sessionId ?? exec.sessionId,
-        status: snapshot.status,
-        totalCreditsUsed: snapshot.totalCreditsUsed,
-        // Only restore a pending permission for a still-active run. A reconnect
-        // snapshot for a terminal run can still carry a stale `pendingPermission`
-        // (it was outstanding when the run ended); restoring it re-shows the
-        // permission card on an already-finished run - the reconnect arm of the
-        // same bug the terminal transitions above guard against.
-        pendingPermission: isActiveStatus(snapshot.status) ? snapshot.pendingPermission : undefined,
-        lastKnownIteration: Math.max(exec.lastKnownIteration, snapshot.iterationCount),
-        // Step replay. Replace iterations only when the server actually
-        // supplied them - `undefined` means "live-only reconnect" (legacy
-        // behavior or large-trace fallback to REST) and we keep whatever's
-        // already in the store. A REST-fallback path can re-call this with
-        // `iterations` filled in once the fetch resolves.
-        iterations: snapshot.iterations ?? exec.iterations,
-        // Child subagent replay. Same "replace if supplied" semantics
-        // as `iterations`. `undefined` means the server didn't ship children
-        // (no children, or `childrenTruncated: true` - REST fallback path
-        // handles the latter via `mergeChildExecutions`).
-        childExecutions: snapshot.childExecutions ?? exec.childExecutions,
-      })),
+      executions: withExecution(state, snapshot.executionId, exec => {
+        if (!isActiveStatus(exec.status) && exec.status !== snapshot.status) return exec;
+        return {
+          ...exec,
+          reconnectSequence: snapshot.reconnectSequence || exec.reconnectSequence,
+          // Stamp the sessionId so `selectExecutionIdsForSession` picks up the
+          // hydrated execution and `ActiveAgentExecutions` mounts the live UI.
+          // Without this, the rehydrated entry is orphaned from any session and
+          // the user sees nothing despite the server having an active run.
+          sessionId: snapshot.sessionId ?? exec.sessionId,
+          status: snapshot.status,
+          totalCreditsUsed: snapshot.totalCreditsUsed,
+          // Only restore a pending permission for a still-active run. A reconnect
+          // snapshot for a terminal run can still carry a stale `pendingPermission`
+          // (it was outstanding when the run ended); restoring it re-shows the
+          // permission card on an already-finished run - the reconnect arm of the
+          // same bug the terminal transitions above guard against.
+          pendingPermission: isActiveStatus(snapshot.status) ? snapshot.pendingPermission : undefined,
+          isAborting: isActiveStatus(snapshot.status) ? exec.isAborting : false,
+          // Same guard for the confidence gate, and stricter: the gate implies
+          // `paused` (the executor writes both atomically), so any other status
+          // invalidates it. An active-but-running snapshot carrying a gate means
+          // the server read that gate before an in-flight `gate_response` landed;
+          // restoring it would outlive the pause.
+          pendingGate: snapshot.status === 'paused' ? snapshot.pendingGate : undefined,
+          lastKnownIteration: Math.max(exec.lastKnownIteration, snapshot.iterationCount),
+          // Step replay. Replace iterations only when the server actually
+          // supplied them - `undefined` means "live-only reconnect" (legacy
+          // behavior or large-trace fallback to REST) and we keep whatever's
+          // already in the store. A REST-fallback path can re-call this with
+          // `iterations` filled in once the fetch resolves.
+          iterations: snapshot.iterations ?? exec.iterations,
+          // Child subagent replay. Same "replace if supplied" semantics
+          // as `iterations`. `undefined` means the server didn't ship children
+          // (no children, or `childrenTruncated: true` - REST fallback path
+          // handles the latter via `mergeChildExecutions`).
+          childExecutions: snapshot.childExecutions ?? exec.childExecutions,
+        };
+      }),
     })),
 
   replaceIterations: (executionId, iterations) =>
@@ -755,10 +846,10 @@ export const useAgentExecutionStore = create<AgentExecutionState>((set, get) => 
       return { executions: next, pendingDispatches };
     }),
 
-  // The pending queues are correlation state for requests already in flight, so a reset that
-  // dropped the executions but kept them would leave entries that can only ever mis-pair with
+  // The pending-dispatch queue is correlation state for requests already in flight, so a reset
+  // that dropped the executions but kept it would leave entries that can only ever mis-pair with
   // whatever comes next.
-  clearAll: () => set({ executions: {}, pendingDispatches: [], pendingReconnects: [] }),
+  clearAll: () => set({ executions: {}, pendingDispatches: [], pendingReconnectRequests: {} }),
 }));
 
 // ---------------------------------------------------------------------------

@@ -1,7 +1,8 @@
 import { Logger } from '@bike4mind/observability';
 import OpenAI from 'openai';
 import { toFile } from 'openai/uploads';
-import { Readable } from 'stream';
+import { addAbortSignal, Readable } from 'node:stream';
+import { setTimeout as delay } from 'node:timers/promises';
 import {
   TranscribeClient,
   StartTranscriptionJobCommand,
@@ -22,6 +23,8 @@ export interface SpeechModelInfo {
   id: string;
   backend: string;
 }
+
+export type TranscriptionOptions = { abortSignal?: AbortSignal };
 
 // Typed against AllowedAudioMimeType so adding a mime to the allowlist
 // becomes a compile error here until the AWS mapping is filled in.
@@ -55,25 +58,34 @@ export class speechService {
     s3Key: string,
     mimetype: string,
     speechModelInfo: SpeechModelInfo,
-    apiKey: string
+    apiKey: string,
+    { abortSignal }: TranscriptionOptions = {}
   ): Promise<TranscriptionResult> {
-    const openai = new OpenAI({ apiKey: apiKey || undefined });
+    abortSignal?.throwIfAborted();
+    const openai = new OpenAI({ apiKey: apiKey || undefined, maxRetries: 0 });
 
-    const getResponse = await this.s3.send(new GetObjectCommand({ Bucket: this.bucketName, Key: s3Key }));
+    const getResponse = await this.s3.send(new GetObjectCommand({ Bucket: this.bucketName, Key: s3Key }), {
+      abortSignal,
+    });
     if (!getResponse.Body) throw new BadRequestError('Audio object not found in S3');
 
     // Derive the filename from the S3 key. Whisper uses the extension as a
     // format hint, and the upload endpoint already encoded the correct
     // extension in the key, so no separate mime-to-ext mapping is needed.
     const filename = s3Key.split('/').pop() || 'audio';
-    const file = await toFile(getResponse.Body as Readable, filename, { type: mimetype });
+    const body = getResponse.Body as Readable;
+    const file = await toFile(abortSignal ? addAbortSignal(abortSignal, body) : body, filename, { type: mimetype });
+    abortSignal?.throwIfAborted();
 
-    const transcription = await openai.audio.transcriptions.create({
-      file,
-      model: speechModelInfo.id,
-      response_format: 'json',
-      language: 'en',
-    });
+    const transcription = await openai.audio.transcriptions.create(
+      {
+        file,
+        model: speechModelInfo.id,
+        response_format: 'json',
+        language: 'en',
+      },
+      { signal: abortSignal }
+    );
 
     return { text: transcription.text || '' };
   }
@@ -84,7 +96,12 @@ export class speechService {
    * responsible for deleting the input audio object; this method cleans up
    * its own transcript output.
    */
-  async transcribeAWSFromS3(s3Key: string, mimetype: string): Promise<TranscriptionResult> {
+  async transcribeAWSFromS3(
+    s3Key: string,
+    mimetype: string,
+    { abortSignal }: TranscriptionOptions = {}
+  ): Promise<TranscriptionResult> {
+    abortSignal?.throwIfAborted();
     const mediaFormat = MIME_TO_AWS_MEDIA_FORMAT[mimetype as AllowedAudioMimeType];
     if (!mediaFormat) throw new BadRequestError(`Unsupported audio mime type for AWS Transcribe: ${mimetype}`);
 
@@ -92,54 +109,74 @@ export class speechService {
     const jobName = `transcribe-${uuidv4()}`;
     const transcriptKey = `transcripts/${jobName}.json`;
 
-    await transcribeClient.send(
-      new StartTranscriptionJobCommand({
-        TranscriptionJobName: jobName,
-        LanguageCode: LanguageCode.EN_US,
-        MediaFormat: mediaFormat,
-        Media: { MediaFileUri: `s3://${this.bucketName}/${s3Key}` },
-        OutputBucketName: this.bucketName,
-        OutputKey: transcriptKey,
-      })
-    );
-
-    for (let attempt = 0; attempt < AWS_POLL_MAX_ATTEMPTS; attempt++) {
-      await new Promise(resolve => setTimeout(resolve, AWS_POLL_INTERVAL_MS));
-
-      const getJobResult = await transcribeClient.send(
-        new GetTranscriptionJobCommand({ TranscriptionJobName: jobName })
+    try {
+      await transcribeClient.send(
+        new StartTranscriptionJobCommand({
+          TranscriptionJobName: jobName,
+          LanguageCode: LanguageCode.EN_US,
+          MediaFormat: mediaFormat,
+          Media: { MediaFileUri: `s3://${this.bucketName}/${s3Key}` },
+          OutputBucketName: this.bucketName,
+          OutputKey: transcriptKey,
+        }),
+        { abortSignal }
       );
-      const status = getJobResult.TranscriptionJob?.TranscriptionJobStatus;
 
-      if (status === 'COMPLETED') {
-        const getObjectResponse = await this.s3.send(
-          new GetObjectCommand({ Bucket: this.bucketName, Key: transcriptKey })
+      for (let attempt = 0; attempt < AWS_POLL_MAX_ATTEMPTS; attempt++) {
+        await delay(AWS_POLL_INTERVAL_MS, undefined, { signal: abortSignal });
+
+        const getJobResult = await transcribeClient.send(
+          new GetTranscriptionJobCommand({ TranscriptionJobName: jobName }),
+          { abortSignal }
         );
-        if (!getObjectResponse.Body) throw new BadRequestError('Failed to retrieve transcription result');
+        const status = getJobResult.TranscriptionJob?.TranscriptionJobStatus;
 
-        const transcriptText = await getObjectResponse.Body.transformToString();
-        const transcriptData = JSON.parse(transcriptText);
-        const text = transcriptData.results?.transcripts?.[0]?.transcript ?? '';
+        if (status === 'COMPLETED') {
+          const getObjectResponse = await this.s3.send(
+            new GetObjectCommand({ Bucket: this.bucketName, Key: transcriptKey }),
+            { abortSignal }
+          );
+          if (!getObjectResponse.Body) throw new BadRequestError('Failed to retrieve transcription result');
 
-        // Await the delete before returning: in Lambda the container can be
-        // frozen as soon as the handler promise resolves, so a fire-and-forget
-        // here can leave transcript JSON (which contains the user's verbatim
-        // speech) in S3 indefinitely. The bucket lifecycle rule on transcripts/
-        // is a backstop, not a substitute.
-        try {
-          await this.s3.send(new DeleteObjectCommand({ Bucket: this.bucketName, Key: transcriptKey }));
-        } catch (err) {
-          Logger.globalInstance.warn('Failed to delete AWS Transcribe output:', err);
+          if (abortSignal && getObjectResponse.Body instanceof Readable) {
+            addAbortSignal(abortSignal, getObjectResponse.Body);
+          }
+          const transcriptText = await getObjectResponse.Body.transformToString();
+          const transcriptData = JSON.parse(transcriptText);
+          const text = transcriptData.results?.transcripts?.[0]?.transcript ?? '';
+
+          // Await the delete before returning: in Lambda the container can be
+          // frozen as soon as the handler promise resolves, so a fire-and-forget
+          // here can leave transcript JSON (which contains the user's verbatim
+          // speech) in S3 indefinitely. The bucket lifecycle rule on transcripts/
+          // is a backstop, not a substitute.
+          try {
+            await this.s3.send(new DeleteObjectCommand({ Bucket: this.bucketName, Key: transcriptKey }), {
+              abortSignal: AbortSignal.timeout(2_000),
+            });
+          } catch (err) {
+            Logger.globalInstance.warn('Failed to delete AWS Transcribe output:', err);
+          }
+
+          return { text };
         }
 
-        return { text };
+        if (status === 'FAILED') {
+          throw new BadRequestError('Transcription job failed');
+        }
       }
 
-      if (status === 'FAILED') {
-        throw new BadRequestError('Transcription job failed');
+      throw new BadRequestError('Transcription job timed out');
+    } catch (error) {
+      if (abortSignal?.aborted) {
+        // AWS cannot cancel an IN_PROGRESS batch job. Stop local I/O and polling; the caller refunds
+        // the failed request. Bucket lifecycle rules expire any late transcripts/ output.
+        Logger.globalInstance.warn('AWS transcription request aborted; remote job may still finish', {
+          jobName,
+          transcriptKey,
+        });
       }
+      throw error;
     }
-
-    throw new BadRequestError('Transcription job timed out');
   }
 }

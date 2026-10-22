@@ -1,4 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import { PROJECTS_WRITE_SCOPES } from '@server/projects/projectScopes';
 import { fabFileRepository, projectRepository, userRepository } from '@bike4mind/database';
 import { projectService } from '@bike4mind/services';
 import { logEvent } from '@server/utils/analyticsLog';
@@ -14,7 +15,7 @@ const RequestSchema = z.object({
  * (and revokes project users' access to those files). If fileIds are provided, only
  * projects containing them are processed.
  */
-const handler = baseApi().delete(async (req, res) => {
+const handler = baseApi({ requiredScopes: PROJECTS_WRITE_SCOPES }).delete(async (req, res) => {
   const userId = req.user.id;
 
   const { fileIds } = RequestSchema.parse(req.body);

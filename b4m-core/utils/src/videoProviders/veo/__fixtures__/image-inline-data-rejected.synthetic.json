@@ -1,0 +1,45 @@
+{
+  "scenario": "image-inline-data-rejected.synthetic",
+  "synthetic": true,
+  "basis": "Hand-built from a live run: the inlineData image shape was rejected at submit with 400 INVALID_ARGUMENT. Message quoted from that run; the request body is the rejected shape with the image data redacted.",
+  "exchanges": [
+    {
+      "name": "submit",
+      "request": {
+        "method": "POST",
+        "path": "/v1beta/models/veo-3.1-fast-generate-preview:predictLongRunning",
+        "body": {
+          "instances": [
+            {
+              "prompt": "The color slowly ripples like water, camera static.",
+              "image": {
+                "inlineData": {
+                  "mimeType": "image/png",
+                  "data": "<redacted:base64 1132 chars>"
+                }
+              }
+            }
+          ],
+          "parameters": {
+            "durationSeconds": 4,
+            "aspectRatio": "16:9",
+            "resolution": "720p"
+          }
+        }
+      },
+      "response": {
+        "status": 400,
+        "headers": {
+          "content-type": "application/json; charset=UTF-8"
+        },
+        "body": {
+          "error": {
+            "code": 400,
+            "message": "`inlineData` isn't supported by this model. Please remove it or refer to the Gemini API documentation for supported usage.",
+            "status": "INVALID_ARGUMENT"
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-import { runLakeHealthSweep } from '@server/cron/lakeHealthSweep';
+import { runLakeHealthSweep } from '@workers/cron/lakeHealthSweep';
 import type { SelfHostWorker } from './selfHostWorker';
 
 export function registerLakeHealthSweep(worker: SelfHostWorker): void {

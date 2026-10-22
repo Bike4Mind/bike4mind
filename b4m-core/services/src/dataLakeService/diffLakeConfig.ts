@@ -2,6 +2,7 @@ import type {
   DataLakeAccessRole,
   DataLakePrincipalType,
   IDataLake,
+  IDataLakeBatch,
   ILakeConfigFieldChange,
   ILakeConfigLiteralChange,
   LakeConfigChangeField,
@@ -192,17 +193,21 @@ export function grantChange(
  * - exactly like `grantChange` above - `diffLakeConfig` can never see this and it is synthesized
  * onto the derived `proposalReview` field.
  *
- * The SOURCE URL is encoded into the value rather than carried separately, for the same reason
+ * The proposal is encoded into the value rather than carried separately, for the same reason
  * `grantChange` bakes the principal into its string: the action (`approve-proposal` /
- * `decline-proposal` / `restore-proposal`) already says WHAT happened, so the field's before/after
- * pair only needs to say WHICH queued source it happened to. `before` is always unset - a proposal
- * is reviewed exactly once per decision, so there is no prior value on this field to show.
+ * `decline-proposal` / `restore-proposal`) already says WHAT happened, so the value only needs to
+ * say WHICH queued source it happened to. The title leads because it is what the review queue
+ * shows a curator; the source url follows because it is the only identifier - two proposals titled
+ * "Home" are otherwise indistinguishable, and the row is permanent. A blank title records the url
+ * alone. `before` is always unset - see LAKE_CONFIG_EVENT_VALUE_FIELDS.
  */
 export function proposalReviewChange(
-  sourceUrl: string,
+  proposal: { title?: string; sourceUrl: string },
   decision: 'approved' | 'declined' | 'restored'
 ): ILakeConfigLiteralChange {
-  return literalChange('proposalReview', undefined, `${decision}: ${sourceUrl}`);
+  const title = proposal.title?.trim();
+  const label = title ? `${title} (${proposal.sourceUrl})` : proposal.sourceUrl;
+  return literalChange('proposalReview', undefined, `${decision}: ${label}`);
 }
 
 /**
@@ -238,4 +243,37 @@ export function researchRunChange(
   runId: string
 ): ILakeConfigLiteralChange {
   return literalChange('researchRun', undefined, `${outcome}: ${query} (run ${runId})`);
+}
+
+/**
+ * How an upload batch was settled. `finished` is the normal finalize; `cancelled` is the uploader's
+ * cancel; `stopped` is the stuck-batch reconciler forcing an abandoned batch terminal.
+ */
+export type UploadBatchOutcome = 'finished' | 'cancelled' | 'stopped';
+
+const UPLOAD_OUTCOME_PREFIX: Record<UploadBatchOutcome, string> = {
+  finished: '',
+  cancelled: 'Upload cancelled: ',
+  stopped: 'Upload stopped: ',
+};
+
+/**
+ * A settled upload batch, as a change entry - the same derived-field, value-encoded pattern as the
+ * research helpers above, since a batch lives in its own collection. Counts only the files that
+ * landed, plus the ones that did not, so "12 files" never hides 3 that failed. A cancelled or
+ * stopped batch says so up front: its counts are what had landed when it settled, and a lake that
+ * went Draft -> Published off an abandoned upload should not look like it got a clean one.
+ */
+export function uploadBatchChange(
+  batch: Pick<IDataLakeBatch, 'vectorizedFiles' | 'failedFiles' | 'skippedFiles' | 'deferredFiles'>,
+  outcome: UploadBatchOutcome = 'finished'
+): ILakeConfigLiteralChange {
+  const count = (n: number, noun: string) => `${n} ${noun}${n === 1 ? '' : 's'}`;
+  const extras = [
+    batch.failedFiles > 0 ? `${batch.failedFiles} failed` : '',
+    batch.skippedFiles > 0 ? `${batch.skippedFiles} skipped` : '',
+    (batch.deferredFiles ?? 0) > 0 ? `${batch.deferredFiles} not finished` : '',
+  ].filter(Boolean);
+  const summary = `${UPLOAD_OUTCOME_PREFIX[outcome]}${count(batch.vectorizedFiles, 'file')} added${extras.length ? ` (${extras.join(', ')})` : ''}`;
+  return literalChange('upload', undefined, summary);
 }

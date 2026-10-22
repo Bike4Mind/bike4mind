@@ -192,13 +192,20 @@ describe('retry', () => {
     });
 
     it('should parse Retry-After as HTTP date', () => {
-      const futureDate = new Date(Date.now() + 3000);
-      const error = createAxiosError(429, undefined, {
-        'retry-after': futureDate.toUTCString(),
-      });
-      const result = getRetryAfterMs(error);
-      expect(result).toBeGreaterThan(2000);
-      expect(result).toBeLessThan(4000);
+      // toUTCString() drops sub-second precision, so pin the clock to a whole second.
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date('2030-01-01T00:00:00.000Z'));
+        const futureDate = new Date(Date.now() + 3000);
+        const error = createAxiosError(429, undefined, {
+          'retry-after': futureDate.toUTCString(),
+        });
+        const result = getRetryAfterMs(error);
+        expect(result).toBeGreaterThan(2000);
+        expect(result).toBeLessThan(4000);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     // #2118: withRetry overrides its exponential backoff with ANY non-null return, so a zero does
@@ -328,6 +335,37 @@ describe('retry', () => {
 
       await expect(withRetry(fn, { maxRetries: 3 })).rejects.toThrow();
       expect(fn).toHaveBeenCalledTimes(1);
+    });
+
+    it('reports each scheduled retry to onRetry with its attempt, delay and error', async () => {
+      const first = createAxiosError(429);
+      const second = createAxiosError(503);
+      const fn = vi.fn().mockRejectedValueOnce(first).mockRejectedValueOnce(second).mockResolvedValue('success');
+      const onRetry = vi.fn();
+
+      await withRetry(fn, { ...shortDelay, onRetry });
+
+      expect(onRetry).toHaveBeenCalledTimes(2);
+      expect(onRetry).toHaveBeenNthCalledWith(1, { attempt: 1, delayMs: 5, error: first });
+      expect(onRetry).toHaveBeenNthCalledWith(2, { attempt: 2, delayMs: 10, error: second });
+    });
+
+    it('does not call onRetry for an error it will not retry', async () => {
+      const onRetry = vi.fn();
+
+      await expect(withRetry(vi.fn().mockRejectedValue(createAxiosError(400)), { onRetry })).rejects.toThrow();
+
+      expect(onRetry).not.toHaveBeenCalled();
+    });
+
+    it('keeps retrying when onRetry throws', async () => {
+      const fn = vi.fn().mockRejectedValueOnce(createAxiosError(429)).mockResolvedValue('success');
+      const onRetry = vi.fn(() => {
+        throw new Error('telemetry broke');
+      });
+
+      await expect(withRetry(fn, { ...shortDelay, onRetry })).resolves.toMatchObject({ result: 'success' });
+      expect(onRetry).toHaveBeenCalledTimes(1);
     });
 
     it('should call logger on retry', async () => {

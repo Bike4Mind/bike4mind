@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_WRITE_SCOPES } from '@server/dataLakes/dataLakeScopes';
-import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import {
   dataLakeRepository,
@@ -8,15 +8,17 @@ import {
   fabFileRepository,
   lakeMembershipDecisionRepository,
   lakeMembershipRemovalRepository,
+  withTransaction,
 } from '@bike4mind/database';
 import { REPAIR_DECISIONS } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { Request } from 'express';
 import { z } from 'zod';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
-import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
-import { lakeMembershipAuditDb } from '@server/dataLakes/lakeMembershipAuditDb';
+import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
+import { lakeMembershipAuditDb } from '@bike4mind/server-utils/dataLakes/lakeMembershipAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
+import { storageOwnerTransferDb } from '@server/files/storageOwnerTransferDb';
 
 /**
  * POST /api/data-lakes/:id/membership-decisions
@@ -66,44 +68,50 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
     }
 
     const ctx = await toAccessContext(req);
-    const lake = await dataLakeService.assertLakeAccess(id, ctx, {
-      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
-    });
-    dataLakeService.assertLakeWritable(lake);
-
-    const canManage = await dataLakeService.resolveCanManageLake(lake, ctx, {
-      db: { dataLakeAccessGrants: dataLakeAccessGrantRepository },
-    });
-    if (!canManage) {
-      throw new BadRequestError('You do not have permission to resolve duplicates in this data lake');
-    }
-
     // The removal inside recomputes stats, which can flip a draft lake active and emit a
     // config-change row; `auditPrincipal` is what keeps a key-driven call from being recorded as
     // the human.
     const actor = { ...ctx, auditPrincipal: lakeConfigAuditPrincipal(req.user!, req.apiKeyInfo) };
 
-    const { group, removedFabFileIds } = await dataLakeService.applyAdmissionDecision(
-      actor,
-      lake,
-      parsed.data.decision === 'keep-specific'
-        ? { fileName: parsed.data.fileName, decision: 'keep-specific', keptFabFileId: parsed.data.keptFabFileId! }
-        : { fileName: parsed.data.fileName, decision: parsed.data.decision, keptFabFileId: null },
-      {
-        db: {
-          dataLakes: dataLakeRepository,
-          dataLakeAccessGrants: dataLakeAccessGrantRepository,
-          fabFiles: fabFileRepository,
-          lakeMembershipDecisions: lakeMembershipDecisionRepository,
-          // The removal door's restore record - required, not optional: without it "Undo" on a
-          // replacement silently does nothing.
-          lakeMembershipRemovals: lakeMembershipRemovalRepository,
-          ...lakeConfigAuditDb,
-          ...lakeMembershipAuditDb,
-        },
-        logger: req.logger,
+    const { group, removedFabFileIds } = await withTransaction(async () => {
+      const lake = await dataLakeService.assertLakeAccessById(id, ctx, {
+        db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+      });
+      dataLakeService.assertLakeWritable(lake);
+
+      const canManage = await dataLakeService.resolveCanManageLake(lake, ctx, {
+        db: { dataLakeAccessGrants: dataLakeAccessGrantRepository },
+      });
+      if (!canManage) {
+        throw new BadRequestError('You do not have permission to resolve duplicates in this data lake');
       }
-    );
+
+      const result = await dataLakeService.applyAdmissionDecision(
+        actor,
+        lake,
+        parsed.data.decision === 'keep-specific'
+          ? { fileName: parsed.data.fileName, decision: 'keep-specific', keptFabFileId: parsed.data.keptFabFileId! }
+          : { fileName: parsed.data.fileName, decision: parsed.data.decision, keptFabFileId: null },
+        {
+          db: {
+            ...storageOwnerTransferDb,
+            dataLakes: dataLakeRepository,
+            dataLakeAccessGrants: dataLakeAccessGrantRepository,
+            fabFiles: fabFileRepository,
+            lakeMembershipDecisions: lakeMembershipDecisionRepository,
+            // The removal door's restore record - required, not optional: without it "Undo" on a
+            // replacement silently does nothing.
+            lakeMembershipRemovals: lakeMembershipRemovalRepository,
+            ...lakeConfigAuditDb,
+            ...lakeMembershipAuditDb,
+          },
+          logger: req.logger,
+        }
+      );
+      // Serializes this write against a concurrent grant revoke - see WRITE-TIME RESIDUAL on `canManageLake`.
+      await dataLakeRepository.touchIfStable(lake.id);
+      return result;
+    });
 
     return res.json({
       success: true,

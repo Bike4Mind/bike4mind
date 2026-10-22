@@ -16,7 +16,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
-import { isDirectInvocation } from './isDirectInvocation.js';
+import { isDirectInvocation } from '../utils/isDirectInvocation.js';
 import { loadHelpArticles, type LoadedHelpArticle } from './loadHelpArticles.js';
 
 const __filename = fileURLToPath(import.meta.url);

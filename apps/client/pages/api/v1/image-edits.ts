@@ -6,13 +6,22 @@
  */
 
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { getImageEdit } from '@server/queueHandlers/imageEdit';
+import { getImageEdit } from '@server/imageGenerations/imageEdit';
 import { getOrCreateSession } from '@server/managers/sessionManager';
-import { resolveBillingOrgId } from '@server/utils/orgAccess';
+import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
+import { resolveMediaBillingOrgId } from '@server/billing/resolveMediaBillingOrgId';
+import { assertNoStrayBillingOrgKeys, resolveBillingOrgInput } from '@server/utils/orgAccess';
 import { editImageContract } from '@bike4mind/common';
+import { armGenerationCallback, resolveGenerationCallback } from '@server/generationCallback/armGenerationCallback';
+import { assertReferenceImagesSupported } from '@server/utils/assertReferenceImagesSupported';
 
 const handler = nextRouteForContract(editImageContract).post(async (req, res) => {
-  const body = req.validated;
+  assertNoStrayBillingOrgKeys(req.body);
+  // organization_id is the request alias; only the mapped value goes on to the queue.
+  const requestedOrgId = resolveBillingOrgInput(req.validated);
+  const { callbackUrl, organization_id: _orgAlias, ...body } = req.validated;
+  assertReferenceImagesSupported(body.model, body.referenceImageFabFileIds);
+  const callback = await resolveGenerationCallback(req, callbackUrl);
 
   // Reject a session the caller can't write to before the service appends a quest to it.
   await getOrCreateSession({
@@ -20,10 +29,11 @@ const handler = nextRouteForContract(editImageContract).post(async (req, res) =>
     user: req.user,
     ability: req.ability,
     logger: req.logger,
+    origin: resolveSessionOrigin(req),
   });
 
-  // null = personal account, undefined = the caller's own org; any org the caller isn't a member of is rejected.
-  const effectiveOrgId = await resolveBillingOrgId(req, body.organizationId);
+  // An org-billed API key bills its org; otherwise null = personal, undefined = the caller's own org.
+  const effectiveOrgId = await resolveMediaBillingOrgId(req, requestedOrgId);
 
   const quest = await getImageEdit().invoke({
     userId: req.user.id,
@@ -32,6 +42,8 @@ const handler = nextRouteForContract(editImageContract).post(async (req, res) =>
       organizationId: effectiveOrgId,
     },
   });
+
+  await armGenerationCallback(quest.id, callback, req.logger);
 
   return res.json(quest);
 });

@@ -1,6 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest';
+const browserSigner = vi.hoisted(() => vi.fn(async () => 'https://objects.example.invalid/file'));
 import { createMocks } from 'node-mocks-http';
-import { getDataLakeTags } from '@bike4mind/common';
+import { ApiKeyScope, getDataLakeTags } from '@bike4mind/common';
 
 /**
  * Route-layer coverage for GET /api/files/search. This route decides the scope the file list is
@@ -14,6 +15,7 @@ import { getDataLakeTags } from '@bike4mind/common';
 const mockRefs = vi.hoisted(() => ({
   getHandler: null as null | ((req: any, res: any) => unknown),
   searchArgs: undefined as unknown[] | undefined,
+  baseApiOptions: undefined as unknown,
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -24,7 +26,7 @@ vi.mock('@server/middlewares/baseApi', () => {
       return chain;
     },
   };
-  return { baseApi: () => chain };
+  return { baseApi: (options: unknown) => ((mockRefs.baseApiOptions = options), chain) };
 });
 
 vi.mock('@bike4mind/database', () => ({
@@ -44,7 +46,9 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ getSignedUrl: vi.fn() }) }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
+  getFilesStorage: () => ({ getSignedUrl: browserSigner }),
+}));
 
 // Import after mocks are registered so the chain capture runs.
 import '@pages/api/files/search';
@@ -67,6 +71,27 @@ function invokeGet(query: Record<string, unknown> = {}, user: Record<string, unk
 const scopeArg = () => mockRefs.searchArgs?.[3] as Record<string, unknown> | undefined;
 
 describe('GET /api/files/search', () => {
+  it.each([undefined, '', '   ', 'https://objects.example.invalid'])(
+    'uses request-local browser signing for collection responses',
+    async endpoint => {
+      vi.stubEnv('S3_PRESIGN_ENDPOINT', endpoint);
+      const { req, res } = invokeGet();
+      await mockRefs.getHandler!(req, res);
+      const adapter = mockRefs.searchArgs?.[2] as {
+        storage: {
+          signedUrlCache?: string;
+          generateSignedUrl: (path: string, expiry: number) => Promise<string | null>;
+        };
+      };
+      expect(adapter.storage.signedUrlCache).toBe(endpoint?.trim() ? 'bypass' : undefined);
+      await adapter.storage.generateSignedUrl('owned/report.txt', 600);
+      expect(browserSigner).toHaveBeenLastCalledWith('owned/report.txt', 'get', {
+        expiresIn: 600,
+        audience: 'browser',
+      });
+    }
+  );
+
   beforeEach(() => {
     mockRefs.searchArgs = undefined;
   });
@@ -177,6 +202,24 @@ describe('GET /api/files/search', () => {
     expect(scopeArg()).toBeUndefined();
   });
 
+  // Owner-only means the unwidened query. Unlike shared/curated it is parsed strictly by the
+  // service, so 'false' must keep the default-view scope rather than quietly narrowing the list.
+  it('injects no scope for the owned view', async () => {
+    const { req, res } = invokeGet({ filters: { generated: 'true', owned: 'true' } });
+
+    await mockRefs.getHandler!(req, res);
+
+    expect(scopeArg()).toBeUndefined();
+  });
+
+  it('keeps the default-view scope for owned spelled false', async () => {
+    const { req, res } = invokeGet({ filters: { owned: 'false' } });
+
+    await mockRefs.getHandler!(req, res);
+
+    expect(scopeArg()?.includeShared).toBe(true);
+  });
+
   it('still scopes the default view when neither flag is present at all', async () => {
     const { req, res } = invokeGet({ filters: { type: 'pdf' } });
 
@@ -192,4 +235,38 @@ describe('GET /api/files/search', () => {
     await expect(mockRefs.getHandler!(req, res)).rejects.toThrow();
     expect(mockRefs.searchArgs).toBeUndefined();
   });
+
+  it('requires files:read at the baseApi route gate', () => {
+    expect(mockRefs.baseApiOptions).toEqual({ requiredScopes: ['files:read'] });
+  });
+
+  describe('data-lake read scope', () => {
+    it('drops the lake tags for a files:read-only API key caller', async () => {
+      const { req, res } = invokeGet();
+      (req as any).apiKeyInfo = { scopes: [ApiKeyScope.READ_FILES] };
+
+      await mockRefs.getHandler!(req, res);
+
+      expect(scopeArg()?.dataLakeTags).toEqual([]);
+    });
+
+    it('keeps the lake tags for a key holding datalake:read', async () => {
+      const { req, res } = invokeGet();
+      (req as any).apiKeyInfo = { scopes: [ApiKeyScope.READ_FILES, ApiKeyScope.DATALAKE_READ] };
+
+      await mockRefs.getHandler!(req, res);
+
+      expect(scopeArg()?.dataLakeTags).toEqual(getDataLakeTags(USER_TAGS));
+    });
+
+    it('keeps the lake tags for a JWT/browser caller (no apiKeyInfo)', async () => {
+      const { req, res } = invokeGet();
+
+      await mockRefs.getHandler!(req, res);
+
+      expect(scopeArg()?.dataLakeTags).toEqual(getDataLakeTags(USER_TAGS));
+    });
+  });
 });
+
+afterEach(() => vi.unstubAllEnvs());

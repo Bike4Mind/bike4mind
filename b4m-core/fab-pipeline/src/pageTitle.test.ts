@@ -1,6 +1,6 @@
 import { load } from 'cheerio';
 import { describe, expect, it } from 'vitest';
-import { cleanPageTitle, readPageTitle } from './pageTitle';
+import { cleanPageTitle, isPlaceholderTitle, readPageTitle } from './pageTitle';
 
 const EN_DASH = String.fromCharCode(0x2013);
 
@@ -89,5 +89,28 @@ describe('readPageTitle', () => {
     const $ = load('<html><body><svg><title>Close banner</title></svg><p>text</p></body></html>');
 
     expect(readPageTitle($, 'https://news.example/tides')).toBe('');
+  });
+});
+
+describe('isPlaceholderTitle', () => {
+  it.each([
+    ['1909.08247', 'https://arxiv.org/pdf/1909.08247'],
+    ['10324315', 'https://ieeexplore.ieee.org/document/10324315'],
+    ['- YouTube', 'https://www.youtube.com/watch?v=abc'],
+    ['', 'https://example.com/a'],
+    ['   ', 'https://example.com/a'],
+    [';jsessionid=ABC123', 'https://ieeexplore.ieee.org/document/277252/;jsessionid=ABC123'],
+  ])('flags %j as a placeholder for %s', (title, url) => {
+    expect(isPlaceholderTitle(title, url)).toBe(true);
+  });
+
+  it.each([
+    ['Job shop scheduling with deep RL', 'https://arxiv.org/abs/1909.08247'],
+    ['How to deploy | Part 2', 'https://example.com/docs/deploy'],
+    ['Go', 'https://example.com/lang'],
+    ['Foo', 'not a url'],
+    ['YouTube Music', 'https://www.youtube.com/watch?v=abc'],
+  ])('keeps %j for %s', (title, url) => {
+    expect(isPlaceholderTitle(title, url)).toBe(false);
   });
 });

@@ -6,7 +6,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => ({ get: (fn: any) => fn }),
 }));
 
-vi.mock('@server/utils/config', () => ({ Config: { JWT_SECRET: 'test-jwt-secret' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { JWT_SECRET: 'test-jwt-secret' } }));
 
 vi.mock('@bike4mind/database', () => ({
   mcpServerRepository: { findOne: vi.fn(), update: vi.fn(), create: vi.fn() },
@@ -29,8 +29,10 @@ vi.mock('@server/integrations/integrationAuditLogger', () => ({
   IntegrationAuditLogger: { create: () => ({ setUserId: vi.fn(), success: vi.fn(), failure: vi.fn() }) },
 }));
 
+const encryptEnvVariables = vi.hoisted(() => vi.fn(() => [{ key: 'GITHUB_ACCESS_TOKEN', value: 'encrypted' }]));
+
 vi.mock('@server/security/tokenEncryption', () => ({
-  encryptEnvVariables: () => [{ key: 'GITHUB_ACCESS_TOKEN', value: 'encrypted' }],
+  encryptEnvVariables,
 }));
 
 // Tool discovery is best-effort; make it fail fast so only the connect write is exercised.
@@ -110,7 +112,8 @@ function expectLeafUpdate(login: string, id: number) {
     'metadata.connectedAt': expect.any(String),
     'metadata.scope': 'repo,read:user',
   });
-  expect(options).toBeUndefined();
+  // Reconnect also clears the confirmed-empty tool marker.
+  expect(options).toEqual({ unset: ['toolSchemasFetchedAt'] });
 }
 
 function expectFullReplace(login: string, id: number) {
@@ -119,7 +122,7 @@ function expectFullReplace(login: string, id: number) {
     ...CONNECTION_FIELDS,
     metadata: { githubLogin: login, githubUserId: id, connectedAt: expect.any(String), scope: 'repo,read:user' },
   });
-  expect(options).toBeUndefined();
+  expect(options).toEqual({ unset: ['toolSchemasFetchedAt'] });
 }
 
 const STALE = '2026-01-01T00:00:00.000Z';
@@ -130,6 +133,7 @@ describe('/api/auth/github/mcp-callback reconnect', () => {
     // resetAllMocks also wipes the vi.mock factory implementations; re-seed them.
     vi.mocked(getSettingsMap).mockResolvedValue({} as any);
     vi.mocked(invokeMcpHandler).mockRejectedValue(new Error('discovery skipped in test'));
+    encryptEnvVariables.mockReturnValue([{ key: 'GITHUB_ACCESS_TOKEN', value: 'encrypted' }]);
     vi.mocked(userRepository.findById).mockResolvedValue({ id: 'user-123' } as any);
     mockUpdate.mockImplementation(async data => data as any);
     mockCreate.mockImplementation(async data => ({ ...data, id: 'server-new' }) as any);
@@ -252,6 +256,17 @@ describe('/api/auth/github/mcp-callback reconnect', () => {
     });
   });
 
+  it('binds the stored ciphertext to the row id it persists', async () => {
+    mockFindOne.mockResolvedValue(null);
+    stubGitHub(OCTOCAT);
+
+    await run();
+
+    const [, owner] = encryptEnvVariables.mock.calls[0];
+    expect(mockCreate.mock.calls[0][0]._id).toBe(owner.id);
+    expect(owner).toEqual({ userId: 'user-123', name: 'github', id: expect.any(String) });
+  });
+
   it.each([
     ['a non-2xx /user response', { message: 'API rate limit exceeded' }, false],
     ['a /user body without a login', { id: OCTOCAT.id }, true],
@@ -308,5 +323,21 @@ describe('/api/auth/github/mcp-callback reconnect', () => {
 
     expect(global.fetch).toHaveBeenCalled();
     expectLeafUpdate('octocat', OCTOCAT.id);
+  });
+
+  it('stamps the confirmed-empty marker after a successful tool discovery', async () => {
+    mockFindOne.mockResolvedValue(
+      existingServer({ ...OCTOCAT, githubUserId: OCTOCAT.id, connectedAt: STALE, webhooks: { github: WEBHOOK } })
+    );
+    stubGitHub(OCTOCAT);
+    vi.mocked(invokeMcpHandler).mockResolvedValue([]);
+
+    await run();
+
+    // Update #1 is the reconnect write (which clears the marker); #2 is the tool-cache stamp.
+    expect(mockUpdate).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ id: 'server-1', tools: [], toolSchemas: [], toolSchemasFetchedAt: expect.any(Date) })
+    );
   });
 });

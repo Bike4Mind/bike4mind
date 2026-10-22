@@ -43,6 +43,7 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@server/services/publish', () => ({
   resolveVisibility: vi.fn(() => ({ ok: true })),
   invalidatePublishCdn: vi.fn(),
+  restrictDuplicatePublications: vi.fn(),
   toCacheTarget: vi.fn(() => ({})),
   validateEmbedOrigins: vi.fn(() => ({ ok: true, value: [] })),
 }));
@@ -116,14 +117,25 @@ function makePublicArtifactRow() {
   };
 }
 
-async function getArtifact(user: unknown, row = makePublicArtifactRow()) {
-  findOne.mockReturnValue({ select: () => ({ lean: () => Promise.resolve(row) }) });
+async function getArtifact(user: unknown, row = makePublicArtifactRow(), select = vi.fn()) {
+  findOne.mockReturnValue({
+    select: (fields: string) => (select(fields), { lean: () => Promise.resolve(row) }),
+  });
   const { req, res } = createMocks({ method: 'GET' });
   (req as unknown as { query: unknown }).query = { id: 'pub-1' };
   (req as unknown as { user?: unknown }).user = user;
   await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
   return res;
 }
+
+describe('GET public artifact - share-token capability', () => {
+  it('projects the share token out of the query, since .lean() bypasses the toJSON strip', async () => {
+    const select = vi.fn();
+    await getArtifact({ id: 'someone-else', isAdmin: false }, makePublicArtifactRow(), select);
+    expect(select).toHaveBeenCalledOnce();
+    expect(select).toHaveBeenCalledWith('-shareTokens.token');
+  });
+});
 
 describe('GET public artifact - response scoping', () => {
   it('returns only public display fields to a non-owner viewer', async () => {
@@ -349,6 +361,37 @@ describe('PATCH /api/publish/artifacts/[id] - discoverable de-arms on leaving op
     expect(invalidatePublishCdn).toHaveBeenCalled();
   });
 
+  it('does not respond until the CDN purge has been sent', async () => {
+    const { invalidatePublishCdn } = await import('@server/services/publish');
+    let release!: () => void;
+    vi.mocked(invalidatePublishCdn).mockImplementationOnce(() => new Promise<void>(r => (release = r)));
+    findOne.mockResolvedValue(listedArtifact());
+    const { req, res } = createMocks({ method: 'PATCH' });
+    (req as unknown as { query: unknown }).query = { id: 'pub-1' };
+    (req as unknown as { user?: unknown }).user = { id: OWNER };
+    (req as unknown as { body: unknown }).body = { visibility: 'private' };
+    (req as unknown as { logger: unknown }).logger = { warn: vi.fn(), error: vi.fn(), info: vi.fn() };
+    const done = (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
+
+    await vi.waitFor(() => expect(invalidatePublishCdn).toHaveBeenCalled());
+    await new Promise(r => setTimeout(r, 0));
+    expect(res._isEndCalled()).toBe(false);
+
+    release();
+    await done;
+    expect(res._getStatusCode()).toBe(200);
+  });
+
+  it('carries a visibility change over to older duplicates of the same source, and only then', async () => {
+    const { restrictDuplicatePublications } = await import('@server/services/publish');
+    vi.mocked(restrictDuplicatePublications).mockClear();
+    const { artifact } = await patchBody({ visibility: 'private' }, listedArtifact());
+    expect(restrictDuplicatePublications).toHaveBeenCalledWith(artifact, expect.anything());
+    vi.mocked(restrictDuplicatePublications).mockClear();
+    await patchBody({ title: 'Renamed' }, listedArtifact());
+    expect(restrictDuplicatePublications).not.toHaveBeenCalled();
+  });
+
   it('does not re-list an artifact when a gate is later cleared', async () => {
     const a = makeArtifact();
     (a as unknown as { discoverable?: boolean }).discoverable = false;
@@ -514,5 +557,86 @@ describe('PATCH /api/publish/artifacts/[id] - a gate needs an ENFORCING surface,
     vi.mocked(invalidatePublishCdn).mockClear();
     await patchBody({ accessGate: { kind: 'passphrase', passphrase: 'a-long-passphrase' } }, tokenSharedPrivate());
     expect(invalidatePublishCdn).not.toHaveBeenCalled();
+  });
+});
+
+describe('PATCH /api/publish/artifacts/[id] - title/description purge the cached share page', () => {
+  function titled(overrides: Record<string, unknown> = {}) {
+    return Object.assign(makeArtifact(), { title: 'Old title', description: 'Old description' }, overrides);
+  }
+
+  async function patchBody(body: Record<string, unknown>, artifact = titled()) {
+    const { invalidatePublishCdn } = await import('@server/services/publish');
+    vi.mocked(invalidatePublishCdn).mockClear();
+    findOne.mockResolvedValue(artifact);
+    const { req, res } = createMocks({ method: 'PATCH' });
+    (req as unknown as { query: unknown }).query = { id: 'pub-1' };
+    (req as unknown as { user?: unknown }).user = { id: OWNER };
+    (req as unknown as { body: unknown }).body = body;
+    (req as unknown as { logger: unknown }).logger = { warn: vi.fn(), error: vi.fn(), info: vi.fn() };
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    return vi.mocked(invalidatePublishCdn);
+  }
+
+  it('purges when the title of an open-public artifact changes', async () => {
+    expect(await patchBody({ title: 'New title' })).toHaveBeenCalledTimes(1);
+  });
+
+  it('purges when the description of an open-public artifact changes', async () => {
+    expect(await patchBody({ description: 'New description' })).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT purge when the title and description are re-sent unchanged', async () => {
+    expect(await patchBody({ title: 'Old title', description: 'Old description' })).not.toHaveBeenCalled();
+  });
+
+  it('purges when a non-empty description is cleared to empty', async () => {
+    expect(await patchBody({ description: '' })).toHaveBeenCalledTimes(1);
+  });
+
+  it('purges the artifact it just saved, with the request logger', async () => {
+    const { toCacheTarget } = await import('@server/services/publish');
+    const target = { publicId: 'pub-1' };
+    vi.mocked(toCacheTarget).mockReturnValueOnce(target as ReturnType<typeof toCacheTarget>);
+    const artifact = titled();
+    const invalidate = await patchBody({ title: 'New title' }, artifact);
+    expect(toCacheTarget).toHaveBeenLastCalledWith(artifact);
+    expect(invalidate.mock.calls[0][0]).toBe(target);
+  });
+
+  it('does NOT purge when an absent description is sent as empty', async () => {
+    expect(await patchBody({ description: '' }, titled({ description: undefined }))).not.toHaveBeenCalled();
+  });
+
+  it('purges when the comment policy of an open-public artifact changes', async () => {
+    expect(await patchBody({ commentPolicy: 'open' }, titled({ commentPolicy: 'none' }))).toHaveBeenCalledTimes(1);
+  });
+
+  it('purges when comments are switched on for an artifact with no stored policy', async () => {
+    expect(await patchBody({ commentPolicy: 'open' })).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT purge when the comment policy is re-sent unchanged, or absent is sent as none', async () => {
+    expect(await patchBody({ commentPolicy: 'open' }, titled({ commentPolicy: 'open' }))).not.toHaveBeenCalled();
+    expect(await patchBody({ commentPolicy: 'none' })).not.toHaveBeenCalled();
+  });
+
+  it('does NOT purge a comment-policy change on a gated public artifact - it is not cache-eligible', async () => {
+    const gated = titled({ accessGate: { kind: 'passphrase', passphraseHash: 'x' } });
+    expect(await patchBody({ commentPolicy: 'open' }, gated)).not.toHaveBeenCalled();
+  });
+
+  it('does NOT purge a tags-only change - tags are not rendered into the share page', async () => {
+    expect(await patchBody({ tags: ['weekly'] })).not.toHaveBeenCalled();
+  });
+
+  it('does NOT purge a renamed private artifact - it was never cached', async () => {
+    expect(await patchBody({ title: 'New title' }, titled({ visibility: 'private' }))).not.toHaveBeenCalled();
+  });
+
+  it('does NOT purge a renamed gated public artifact - it is not cache-eligible', async () => {
+    const gated = titled({ accessGate: { kind: 'passphrase', passphraseHash: 'x' } });
+    expect(await patchBody({ title: 'New title' }, gated)).not.toHaveBeenCalled();
   });
 });

@@ -39,7 +39,13 @@ vi.mock('@client/app/contexts/LLMContext', () => {
 vi.mock('@client/app/contexts/WebsocketContext', () => ({
   useWebsocket: () => ({ subscribeToAction: vi.fn(() => vi.fn()) }),
 }));
+vi.mock('@client/app/hooks/useWorkspaceTargets', () => ({
+  surfaceRouteExists: () => true,
+  useWorkspacePresenter: () => (surface: unknown) => surface,
+  useWorkspaceTargets: () => ({ current: undefined, copyTargets: [], moveTargets: [] }),
+}));
 vi.mock('@client/app/hooks/data/sessions', () => ({
+  useGetSession: () => ({ data: undefined }),
   useForkSession: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useSnipSession: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));

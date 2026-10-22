@@ -1,7 +1,7 @@
 import { Logger } from '@bike4mind/observability';
 import { Anthropic } from '@anthropic-ai/sdk';
 import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
-import { ModelBackend } from '@bike4mind/common';
+import { ModelBackend, bedrockClientConfig } from '@bike4mind/common';
 import { GoogleGenAI } from '@google/genai';
 import OpenAI from 'openai';
 import { KpiMetrics } from './types';
@@ -105,7 +105,7 @@ export async function generateAgnosticAiInsights(
       }
 
       case ModelBackend.Bedrock: {
-        const bedrock = new BedrockRuntimeClient({ region: 'us-east-1' });
+        const bedrock = new BedrockRuntimeClient({ region: 'us-east-1', ...bedrockClientConfig() });
 
         let requestBody: any;
         if (model.includes('anthropic')) {

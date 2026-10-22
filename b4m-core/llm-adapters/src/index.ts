@@ -6,6 +6,7 @@ import {
   ModelInfo,
   SupersededModelInfo,
   applyModelPriceCatalog,
+  bedrockClientCredentials,
   isModelDeprecated,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
@@ -18,6 +19,7 @@ import type { ApiKeyTable, BackendGateContext } from './backendGate';
 import { catalogLifecycles } from './deprecationHorizon';
 import { toProviderEndUserId } from './endUserId';
 import { mergeCatalog } from './mergeCatalog';
+import { alignRouteTwinNames } from './routeTwinNames';
 import { buildSupersededIndex, catalogSuccessors, updateReplacedByOverlay } from './resolveDeprecatedModel';
 import AnthropicBedrockBackend from './bedrockBackend/anthropic';
 import DeepSeekBedrockBackend from './bedrockBackend/deepseek';
@@ -83,6 +85,8 @@ export function getLlmByModel(
   // changes behavior. The family path is the only one that can fail loudly:
   // an unknown family throws instead of returning the null that would be
   // indistinguishable from a missing credential (sec 9 item 3).
+  // MUST STAY IN SYNC WITH completionsForwardsNativeTools in @bike4mind/common
+  // (claudeToolCapabilities.ts), which restates this family-then-backend routing.
   if (modelInfo.adapterFamily) {
     backend = backendForAdapterFamily(modelInfo.adapterFamily, {
       apiKeyTable,
@@ -114,9 +118,15 @@ export function getLlmByModel(
         case ChatModels.CLAUDE_4_5_OPUS_BEDROCK:
         case ChatModels.CLAUDE_4_6_SONNET_BEDROCK:
         case ChatModels.CLAUDE_5_SONNET_BEDROCK:
+        case ChatModels.CLAUDE_5_5_SONNET_BEDROCK:
         case ChatModels.CLAUDE_4_6_OPUS_BEDROCK:
         case ChatModels.CLAUDE_4_7_OPUS_BEDROCK:
         case ChatModels.CLAUDE_4_8_OPUS_BEDROCK:
+        case ChatModels.CLAUDE_FABLE_5_BEDROCK:
+        case ChatModels.CLAUDE_FABLE_5_1_BEDROCK:
+        case ChatModels.CLAUDE_5_OPUS_BEDROCK:
+        case ChatModels.CLAUDE_5_5_OPUS_BEDROCK:
+        case ChatModels.CLAUDE_5_5_HAIKU_BEDROCK:
           backend = new AnthropicBedrockBackend();
           break;
         case ChatModels.LLAMA3_INSTRUCT_8B_V1:
@@ -181,7 +191,7 @@ export function getLlmByModel(
       // adapterFamily (see mergeCatalog's DISPATCHABLE_ADAPTER_FAMILIES comment) -
       // this legacy switch is the only path these records reach.
       const localImageBaseUrl = apiKeyTable['local-image'];
-      backend = localImageBaseUrl ? new LocalImageBackend(localImageBaseUrl, logger) : null;
+      backend = localImageBaseUrl ? new LocalImageBackend(localImageBaseUrl) : null;
       break;
     }
     default:
@@ -197,7 +207,7 @@ export function getLlmByModel(
 }
 
 // Module-level TTL cache for getAvailableModels.
-// 7/8 backends return hardcoded static arrays; only Ollama does a network call.
+// Most backends return static arrays; Ollama and LocalImage query a live server and reject when it is down.
 // Model lists almost never change between deploys, so a 5-minute TTL is safe and keeps
 // warm Lambda instances from re-fetching every request (admin model changes still take
 // effect within 5 minutes, and a cold start always rebuilds the list).
@@ -206,6 +216,9 @@ const MODEL_CACHE_TTL_MS = 5 * 60_000;
 // only briefly: a transient blip or a missed perBackendTimeoutMs should cost
 // seconds of a short list or superseded prices, not a full TTL window.
 const MODEL_CACHE_RETRY_TTL_MS = 30_000;
+// Default listing deadline for runtime-discovered backends; matches LocalImageBackend's axios
+// timeout and bounds an Ollama host that drops packets (undici's connect timeout is ~10s).
+const RUNTIME_LISTING_DEFAULT_TIMEOUT_MS = 4_000;
 // preFilterModels keeps the merged list from before the deprecation filter. It is
 // never returned to a caller; getSupersededModels reads it to put a display name
 // on a pin the filter has already hidden.
@@ -213,6 +226,7 @@ let _modelCache: {
   key: string;
   models: ModelInfo[];
   preFilterModels: ModelInfo[];
+  failedListings: ModelBackend[];
   expiresAt: number;
 } | null = null;
 
@@ -249,11 +263,10 @@ export function setModelCatalogProvider(provider: ModelCatalogProvider | null): 
 }
 
 /**
- * Backends whose credential is a base URL. Presence is not identity for these:
- * two self-host callers pointing at different Ollama hosts serve different model
- * lists, so the key hashes the value instead of collapsing it to a bit.
+ * Backends whose credential is a base URL (the cache key hashes it, since two hosts serve different
+ * lists) and whose models exist only in the live listing, so a failed listing hides ids no catalog knows.
  */
-const URL_VALUED_BACKENDS: readonly string[] = [ModelBackend.Ollama, ModelBackend.LocalImage];
+export const RUNTIME_DISCOVERED_BACKENDS: readonly ModelBackend[] = [ModelBackend.Ollama, ModelBackend.LocalImage];
 
 /** FNV-1a, so a base URL that embeds basic-auth credentials never lands in the key verbatim. */
 function hashKeyValue(value: string): string {
@@ -273,17 +286,19 @@ function hashKeyValue(value: string): string {
  */
 function getModelCacheKey(
   apiKeys: ApiKeyTable | null,
-  gate: { isSelfHost: boolean; perBackendTimeoutMs?: number }
+  gate: { isSelfHost: boolean; bedrockReachable: boolean; perBackendTimeoutMs?: number }
 ): string {
-  // isSelfHost decides which backends get constructed and perBackendTimeoutMs
-  // decides what a slow one contributes, so both are part of the identity.
-  const suffix = `|selfHost:${gate.isSelfHost ? '1' : '0'}|timeout:${gate.perBackendTimeoutMs ?? 0}`;
+  // isSelfHost and bedrockReachable decide which backends get constructed and
+  // perBackendTimeoutMs decides what a slow one contributes, so all are part of the identity.
+  const suffix =
+    `|selfHost:${gate.isSelfHost ? '1' : '0'}|bedrock:${gate.bedrockReachable ? '1' : '0'}` +
+    `|timeout:${gate.perBackendTimeoutMs ?? 0}`;
   if (!apiKeys) return `null${suffix}`;
   const keys = Object.keys(apiKeys)
     .sort()
     .map(k => {
       const value = apiKeys[k as keyof ApiKeyTable];
-      if (value && URL_VALUED_BACKENDS.includes(k)) return `${k}:#${hashKeyValue(value)}`;
+      if (value && RUNTIME_DISCOVERED_BACKENDS.includes(k as ModelBackend)) return `${k}:#${hashKeyValue(value)}`;
       return `${k}:${value ? '1' : '0'}`;
     })
     .join(',');
@@ -294,7 +309,8 @@ export interface GetAvailableModelsOptions {
   /**
    * Deadline for one backend's listing call, in ms. A backend that misses it
    * contributes nothing instead of holding up the whole fan-out. Omitted means no
-   * deadline, which is what every caller but the picker route wants.
+   * deadline for static backends; runtime-discovered ones (RUNTIME_DISCOVERED_BACKENDS)
+   * then get RUNTIME_LISTING_DEFAULT_TIMEOUT_MS.
    */
   perBackendTimeoutMs?: number;
   /**
@@ -305,6 +321,13 @@ export interface GetAvailableModelsOptions {
   includePrivate?: boolean;
   /** Deployment self-host flag; defaults to B4M_SELF_HOST. See BackendGateContext. */
   isSelfHost?: boolean;
+  /** Bedrock credentials are present; defaults to bedrockClientCredentials(). See BackendGateContext. */
+  bedrockReachable?: boolean;
+  /**
+   * Receives the backends whose listing threw or timed out while building the returned list (a
+   * cached list replays its own), so a caller can tell "not served" from "could not ask".
+   */
+  onFailedListings?: (backends: readonly ModelBackend[]) => void;
 }
 
 /**
@@ -341,12 +364,32 @@ function withListingTimeout<T>(promise: Promise<T>, ms: number, label: string): 
   });
 }
 
+/** A throwing callback is the caller's bug and must not cost it the model list. */
+function reportFailedListings(options: GetAvailableModelsOptions, failed: readonly ModelBackend[]): void {
+  try {
+    options.onFailedListings?.(failed);
+  } catch (error) {
+    Logger.globalInstance.error('[getAvailableModels] onFailedListings callback threw:', error);
+  }
+}
+
 /** The caller's view of a cached list; the cache itself always holds every model. */
 const applyPrivateVisibility = (models: ModelInfo[], includePrivate: boolean): ModelInfo[] =>
   includePrivate ? models : models.filter(m => !m.private);
 
-// Given Settings data, return a list of models that are available.  In the
-// future, we might consider using this to filter based on capability.
+/** Evaluated under the effective isSelfHost, so an isSelfHost override cannot list Bedrock off hosted defaults. */
+function resolveGateContext(
+  apiKeys: ApiKeyTable | null,
+  overrides: { isSelfHost?: boolean; bedrockReachable?: boolean } = {}
+): BackendGateContext {
+  const isSelfHost = overrides.isSelfHost ?? process.env.B4M_SELF_HOST === 'true';
+  const bedrockReachable =
+    overrides.bedrockReachable ??
+    bedrockClientCredentials({ ...process.env, B4M_SELF_HOST: isSelfHost ? 'true' : undefined }) !== null;
+  return { apiKeys, isSelfHost, bedrockReachable };
+}
+
+// Given Settings data, return a list of models that are available.
 // Only meant to be called from the server.
 export const getAvailableModels = async (
   apiKeys: ApiKeyTable | null,
@@ -354,11 +397,13 @@ export const getAvailableModels = async (
 ): Promise<ModelInfo[]> => {
   const { perBackendTimeoutMs } = options;
   const includePrivate = options.includePrivate ?? true;
-  const isSelfHost = options.isSelfHost ?? process.env.B4M_SELF_HOST === 'true';
+  const gateCtx = resolveGateContext(apiKeys, options);
+  const { isSelfHost, bedrockReachable } = gateCtx;
 
   // Check module-level cache first
-  const cacheKey = getModelCacheKey(apiKeys, { isSelfHost, perBackendTimeoutMs });
+  const cacheKey = getModelCacheKey(apiKeys, { isSelfHost, bedrockReachable, perBackendTimeoutMs });
   if (_modelCache && _modelCache.key === cacheKey && Date.now() < _modelCache.expiresAt) {
+    reportFailedListings(options, _modelCache.failedListings);
     return applyPrivateVisibility(_modelCache.models, includePrivate);
   }
 
@@ -366,7 +411,6 @@ export const getAvailableModels = async (
   // the catalog merge gates catalog-only records with, so the two tiers cannot
   // disagree about which backends this caller can reach. The local-image env
   // fallback lives in that predicate for the same reason.
-  const gateCtx: BackendGateContext = { apiKeys, isSelfHost };
   const openaiKey = resolveListingKey(ModelBackend.OpenAI, gateCtx);
   const anthropicKey = resolveListingKey(ModelBackend.Anthropic, gateCtx);
   const geminiKey = resolveListingKey(ModelBackend.Gemini, gateCtx);
@@ -381,8 +425,8 @@ export const getAvailableModels = async (
     [ModelBackend.OpenAI]: openaiKey ? new OpenAIBackend(openaiKey) : null,
     [ModelBackend.Anthropic]: anthropicKey ? new AnthropicBackend(anthropicKey) : null,
     // The keyless AWS-credentialed pair goes through isBackendUsable so the
-    // self-host cutoff is stated once, in the same predicate the catalog tier
-    // reads, instead of once here and once in /api/models.
+    // self-host rules (Bedrock needs BEDROCK_AWS_*, AWS is hosted-only) are stated
+    // once, in the same predicate the catalog tier reads, instead of once here and once in /api/models.
     [ModelBackend.Bedrock]: isBackendUsable(ModelBackend.Bedrock, gateCtx)
       ? new UndifferentiatedBedrockBackend()
       : null,
@@ -393,42 +437,29 @@ export const getAvailableModels = async (
     [ModelBackend.Kimi]: kimiKey ? new KimiBackend(kimiKey) : null,
     [ModelBackend.DeepSeek]: deepseekKey ? new DeepSeekBackend(deepseekKey) : null,
     [ModelBackend.AWS]: isBackendUsable(ModelBackend.AWS, gateCtx) ? new AWSBackend() : null,
-    [ModelBackend.LocalImage]: localImageBaseUrl
-      ? new LocalImageBackend(localImageBaseUrl, Logger.globalInstance)
-      : null,
+    [ModelBackend.LocalImage]: localImageBaseUrl ? new LocalImageBackend(localImageBaseUrl) : null,
   } as const;
 
   const backendPromises = Object.entries(backends).map(async ([backendName, backend]) => {
     if (!backend) return { backendName, models: [] };
 
+    const live = RUNTIME_DISCOVERED_BACKENDS.includes(backendName as ModelBackend);
+    const timeoutMs = perBackendTimeoutMs || (live ? RUNTIME_LISTING_DEFAULT_TIMEOUT_MS : 0);
     try {
       const listing = backend.getModelInfo();
-      const models = await (perBackendTimeoutMs
-        ? withListingTimeout(listing, perBackendTimeoutMs, backendName)
-        : listing);
+      const models = await (timeoutMs ? withListingTimeout(listing, timeoutMs, backendName) : listing);
       return { backendName, models };
     } catch (error) {
-      Logger.globalInstance.error(`[getAvailableModels] Error fetching models from ${backendName}:`, error);
+      const message = `[getAvailableModels] Error fetching models from ${backendName}:`;
+      if (live) Logger.globalInstance.warn(message, error instanceof Error ? error.message : error);
+      else Logger.globalInstance.error(message, error);
       return { backendName, models: [], error };
     }
   });
 
-  const results = await Promise.allSettled(backendPromises);
-  let listingFailed = false;
-
-  const backendModels = results
-    .map((result, index) => {
-      if (result.status === 'fulfilled') {
-        if ('error' in result.value) listingFailed = true;
-        return result.value.models;
-      } else {
-        listingFailed = true;
-        const backendName = Object.keys(backends)[index];
-        Logger.globalInstance.error(`[getAvailableModels] Failed to get models from ${backendName}:`, result.reason);
-        return [];
-      }
-    })
-    .flat();
+  const results = await Promise.all(backendPromises);
+  const failedListings = results.filter(r => 'error' in r).map(r => r.backendName as ModelBackend);
+  const backendModels = results.flatMap(r => r.models);
 
   let catalogFetchFailed = false;
 
@@ -458,6 +489,8 @@ export const getAvailableModels = async (
     }
   }
 
+  merged = await alignRouteTwinNames(merged);
+
   // Overlay versioned catalog prices when the app wired a provider.
   let priced = merged;
   if (_priceRowsProvider) {
@@ -481,11 +514,40 @@ export const getAvailableModels = async (
 
   // Store in module-level cache (short-lived when a listing or catalog fetch
   // failed). The cached list is always private-inclusive; see getModelCacheKey.
-  const ttl = listingFailed || catalogFetchFailed ? MODEL_CACHE_RETRY_TTL_MS : MODEL_CACHE_TTL_MS;
-  _modelCache = { key: cacheKey, models: filtered, preFilterModels: priced, expiresAt: Date.now() + ttl };
+  const ttl = failedListings.length > 0 || catalogFetchFailed ? MODEL_CACHE_RETRY_TTL_MS : MODEL_CACHE_TTL_MS;
+  _modelCache = {
+    key: cacheKey,
+    models: filtered,
+    preFilterModels: priced,
+    failedListings,
+    expiresAt: Date.now() + ttl,
+  };
 
+  reportFailedListings(options, failedListings);
   return applyPrivateVisibility(filtered, includePrivate);
 };
+
+/**
+ * Can this caller reach a static-table backend that serves `modelId`? Reads the adapter tables, not the live
+ * listing; an id no static table names (an Ollama pull, a catalog-only row) answers false.
+ */
+export async function isModelProviderConfigured(modelId: string, apiKeys: ApiKeyTable | null): Promise<boolean> {
+  const ctx = resolveGateContext(apiKeys);
+  const placeholder = 'static-listing';
+  const statics: Array<[ModelBackend, () => ICompletionBackend]> = [
+    [ModelBackend.OpenAI, () => new OpenAIBackend(placeholder)],
+    [ModelBackend.Anthropic, () => new AnthropicBackend(placeholder)],
+    [ModelBackend.Gemini, () => new GeminiBackend(placeholder)],
+    [ModelBackend.XAI, () => new XAIBackend(placeholder)],
+    [ModelBackend.Kimi, () => new KimiBackend(placeholder)],
+    [ModelBackend.DeepSeek, () => new DeepSeekBackend(placeholder)],
+    [ModelBackend.Bedrock, () => new UndifferentiatedBedrockBackend()],
+  ];
+  for (const [backend, build] of statics) {
+    if (isBackendUsable(backend, ctx) && (await build().getModelInfo()).some(m => m.id === modelId)) return true;
+  }
+  return false;
+}
 
 /**
  * Superseded pins the given caller can be upgraded off, for clients that must
@@ -510,6 +572,7 @@ export * from './dispatchModel';
 export * from './dispatchResolver';
 export * from './endUserId';
 export * from './mergeCatalog';
+export * from './routeTwinNames';
 
 // Implementations:
 export * from './anthropicBackend';
@@ -543,6 +606,7 @@ export {
   MAX_QUEUED_PER_TENANT,
   DEFAULT_ACQUIRE_TIMEOUT_MS,
 } from './_anthropicSemaphore';
+export { isTerminalToolError, isTurnEndingTool } from './executeToolsBatch';
 export * from './PipelineTimer';
 export * from './realtimeVoicePricing';
 export {
@@ -552,6 +616,7 @@ export {
   getFullToolResult,
   type FullToolResult,
 } from './recordToolResult';
+export * from './reasoningEfforts';
 export * from './resolveDeprecatedModel';
 export * from './deprecationHorizon';
 export * from './staleReferences';

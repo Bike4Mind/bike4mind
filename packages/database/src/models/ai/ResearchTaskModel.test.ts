@@ -84,6 +84,40 @@ describe('ResearchTaskRepository', () => {
     });
   });
 
+  describe('addWarning', () => {
+    const create = () =>
+      researchTaskRepository.create({
+        userId,
+        researchAgentId,
+        title: 'Test Task',
+        description: 'Test Description',
+        type: ResearchTaskType.SCRAPE,
+        status: ResearchTaskStatus.PROCESSING,
+        executionType: ResearchTaskExecutionType.ON_DEMAND,
+        urls: ['https://example.com'],
+        discoveredLinks: [],
+      } as Omit<IResearchTaskScrape, 'id' | 'createdAt' | 'updatedAt'>);
+
+    it('persists warnings on the task in order', async () => {
+      const task = await create();
+
+      await researchTaskRepository.addWarning(task.id, 'first');
+      await researchTaskRepository.addWarning(task.id, 'second');
+
+      expect((await researchTaskRepository.findByIdAndUserId(task.id, userId))?.warnings).toEqual(['first', 'second']);
+    });
+
+    it('keeps only the most recent 50', async () => {
+      const task = await create();
+
+      for (let i = 0; i < 52; i++) await researchTaskRepository.addWarning(task.id, `w${i}`);
+
+      const warnings = (await researchTaskRepository.findByIdAndUserId(task.id, userId))?.warnings;
+      expect(warnings).toHaveLength(50);
+      expect(warnings?.[0]).toBe('w2');
+    });
+  });
+
   describe('findAllByUserId', () => {
     it('should find all tasks by userId', async () => {
       // Arrange

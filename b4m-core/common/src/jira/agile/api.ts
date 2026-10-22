@@ -2,6 +2,7 @@
 // Uses Jira Agile REST API 1.0 (Jira Software)
 
 import { isValidIssueKey, type JiraConfig } from '../api';
+import { apiPath, assertSafeApiPath } from '../../atlassian/apiPath';
 import {
   formatBoard,
   formatBoardList,
@@ -48,6 +49,7 @@ export class AgileApi {
    * Build URL for Agile API (uses different base URL than standard Jira API)
    */
   private buildAgileUrl(path: string, query: QueryParams = {}): string {
+    assertSafeApiPath(path);
     const base = `${this.config.agileApiBaseUrl}${path}`;
     const url = new URL(base);
     Object.entries(query).forEach(([key, value]) => {
@@ -131,7 +133,7 @@ export class AgileApi {
     if (!isValidBoardOrSprintId(boardId)) {
       throw new Error(`Invalid boardId: ${boardId}. Must be a positive integer.`);
     }
-    const board = await this.requestAgile<JiraBoard>('GET', `/board/${boardId}`);
+    const board = await this.requestAgile<JiraBoard>('GET', apiPath`/board/${boardId}`);
     return formatBoard(board, this.config.siteUrl);
   }
 
@@ -143,7 +145,7 @@ export class AgileApi {
     if (!isValidBoardOrSprintId(boardId)) {
       throw new Error(`Invalid boardId: ${boardId}. Must be a positive integer.`);
     }
-    const config = await this.requestAgile<JiraBoardConfiguration>('GET', `/board/${boardId}/configuration`);
+    const config = await this.requestAgile<JiraBoardConfiguration>('GET', apiPath`/board/${boardId}/configuration`);
     return formatBoardConfiguration(config, this.config.siteUrl);
   }
 
@@ -163,7 +165,7 @@ export class AgileApi {
       throw new Error(`Invalid boardId: ${boardId}. Must be a positive integer.`);
     }
 
-    const response = await this.requestAgile<JiraBoardIssuesResponse>('GET', `/board/${boardId}/issue`, {
+    const response = await this.requestAgile<JiraBoardIssuesResponse>('GET', apiPath`/board/${boardId}/issue`, {
       query: {
         startAt,
         maxResults,
@@ -189,7 +191,7 @@ export class AgileApi {
       throw new Error(`Invalid boardId: ${boardId}. Must be a positive integer.`);
     }
 
-    const result = await this.requestAgile<JiraSprintListResponse>('GET', `/board/${boardId}/sprint`, {
+    const result = await this.requestAgile<JiraSprintListResponse>('GET', apiPath`/board/${boardId}/sprint`, {
       query: {
         startAt,
         maxResults,
@@ -208,7 +210,7 @@ export class AgileApi {
     if (!isValidBoardOrSprintId(sprintId)) {
       throw new Error(`Invalid sprintId: ${sprintId}. Must be a positive integer.`);
     }
-    const sprint = await this.requestAgile<JiraSprint>('GET', `/sprint/${sprintId}`);
+    const sprint = await this.requestAgile<JiraSprint>('GET', apiPath`/sprint/${sprintId}`);
     return formatSprint(sprint, this.config.siteUrl);
   }
 
@@ -265,7 +267,7 @@ export class AgileApi {
     if (endDate !== undefined) body.endDate = endDate;
     if (state !== undefined) body.state = state;
 
-    const sprint = await this.requestAgile<JiraSprint>('POST', `/sprint/${sprintId}`, {
+    const sprint = await this.requestAgile<JiraSprint>('POST', apiPath`/sprint/${sprintId}`, {
       body,
     });
 
@@ -287,7 +289,7 @@ export class AgileApi {
       throw new Error(`Invalid sprintId: ${sprintId}. Must be a positive integer.`);
     }
 
-    const result = await this.requestAgile<JiraSprintIssuesResponse>('GET', `/sprint/${sprintId}/issue`, {
+    const result = await this.requestAgile<JiraSprintIssuesResponse>('GET', apiPath`/sprint/${sprintId}/issue`, {
       query: {
         startAt,
         maxResults,
@@ -323,7 +325,7 @@ export class AgileApi {
       throw new Error('Maximum 50 issues can be moved to a sprint in one operation. Please split your request.');
     }
 
-    await this.requestAgile<void>('POST', `/sprint/${sprintId}/issue`, {
+    await this.requestAgile<void>('POST', apiPath`/sprint/${sprintId}/issue`, {
       body: { issues },
     });
   }

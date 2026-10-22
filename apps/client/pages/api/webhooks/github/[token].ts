@@ -24,10 +24,14 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { connectDB, mcpServerRepository, orgWebhookConfigRepository } from '@bike4mind/database';
 import { IOrgWebhookConfigDocument, IMongoDocument } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
-import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
-import { Config } from '@server/utils/config';
+import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { GitHubEvent } from '@server/integrations/github/GitHubEvent';
-import { GitHubEventType, WebhookProcessingResult, isValidGitHubEventType } from '@server/integrations/github/types';
+import {
+  GitHubEventType,
+  WebhookProcessingResult,
+  isValidGitHubEventType,
+} from '@bike4mind/server-utils/integrations/github/types';
 import {
   verifyGitHubSignature,
   getRawBody,
@@ -37,8 +41,8 @@ import {
 import { WebhookAuditLogger, extractWebhookMetadata } from '@server/integrations/github/WebhookAuditLogger';
 import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
 import { decryptToken } from '@server/security/tokenEncryption';
-import { sendToQueue } from '@server/utils/sqs';
-import { serializeError } from '@server/utils/serializeError';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
+import { serializeError } from '@bike4mind/server-utils/utils/serializeError';
 import { randomUUID } from 'crypto';
 
 // Disable body parsing to get raw body for signature verification

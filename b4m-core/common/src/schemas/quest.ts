@@ -1,16 +1,20 @@
 import { z } from 'zod';
 import { ChatQuestPollResultSchema } from './chat';
+import { TurnTimingPollSchema } from './turnTiming';
 
 export const QuestIdParamSchema = z.object({
   id: z.string().min(1).describe('The quest id returned by POST /api/chat or another async start.'),
 });
 
-const GeneratedFileSchema = z.object({
+export const GeneratedFileSchema = z.object({
   name: z.string(),
-  url: z.string(),
+  url: z.string().describe('Presigned download URL. Short-lived (about an hour): fetch it promptly, do not store it.'),
   isImage: z.boolean(),
   isAudio: z.boolean(),
+  isVideo: z.boolean(),
 });
+
+export type GeneratedFile = z.infer<typeof GeneratedFileSchema>;
 
 /**
  * Response of GET /api/v1/quests/{id}. Extends the outcome subset the async chat and image
@@ -21,6 +25,8 @@ export const QuestPollResponseSchema = ChatQuestPollResultSchema.extend({
   status: z.enum(['pending', 'running', 'done', 'stopped']).optional(),
   sessionId: z.string(),
   images: z.array(z.string()),
+  // Rendered-video basenames; resolved into `files` alongside `images`.
+  videos: z.array(z.string()),
   files: z.array(GeneratedFileSchema),
   // Loose: tool payloads are a heterogeneous union with no shared Zod shape.
   toolPayloads: z.array(z.unknown()),
@@ -31,6 +37,7 @@ export const QuestPollResponseSchema = ChatQuestPollResultSchema.extend({
   attachmentNotices: z.array(z.string()).optional(),
   // Loose: mirrors IAttachmentDelivery (requested, delivered, fullyDelivered, dropped, droppedIds).
   attachmentDelivery: z.record(z.string(), z.unknown()).optional(),
+  turnTiming: TurnTimingPollSchema.optional(),
   executionTracking: z.unknown().optional(),
 });
 

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import mongoose from 'mongoose';
-import type { IAttachmentDelivery } from '@bike4mind/common';
+import type { IAttachmentDelivery, ITurnTiming } from '@bike4mind/common';
 import { createMongoServer } from '../../__test__/createMongoServer';
 import { Quest, questRepository } from './QuestModel';
 
@@ -48,6 +48,99 @@ describe('Quest.attachmentDelivery persistence', () => {
     // Deep equality against the literal covers every sub-field and its type: a dropped path reads
     // back as undefined, and a mis-declared droppedIds reads back as something other than an array.
     expect(raw?.attachmentDelivery).toEqual(fullDelivery);
+  });
+});
+
+describe('Quest.turnTiming persistence', () => {
+  const turnTiming: ITurnTiming = {
+    queueMs: 120,
+    contextBuildMs: 2400,
+    semaphoreWaitMs: 35,
+    totalMs: 415000,
+    retries: [
+      {
+        reason: 'stream_idle_timeout',
+        delayMs: 3500,
+        model: 'model-a',
+        at: new Date('2026-10-21T02:21:46Z'),
+      },
+      {
+        reason: 'rate_limit',
+        status: 429,
+        retryAfterMs: 2000,
+        requestId: 'req_123',
+        delayMs: 2000,
+        model: 'model-a',
+        at: new Date('2026-10-21T02:23:20Z'),
+      },
+    ],
+    fallbackHops: 1,
+  };
+
+  it('round-trips every sub-field, including the retries array, through a real write', async () => {
+    const quest = await makeQuest({ turnTiming });
+
+    const raw = await readRaw(quest._id.toString());
+
+    expect(raw?.turnTiming).toEqual(turnTiming);
+  });
+
+  it('is kept by the findPageBySessionId projection, so it survives a reload', async () => {
+    await makeQuest({ turnTiming });
+
+    const page = await questRepository.findPageBySessionId('session-1', { limit: 10, page: 1 });
+
+    expect(page.data[0]?.turnTiming).toMatchObject({ queueMs: 120, fallbackHops: 1 });
+  });
+});
+
+describe('Quest.fallbackInfo persistence', () => {
+  const fallbackInfo = {
+    sessionId: 'session-1',
+    primaryModel: 'claude-opus-4-8',
+    primaryModelName: 'Claude Opus 4.8',
+    fallbackModel: 'gpt-5',
+    fallbackModelName: 'GPT-5',
+    primaryModelBackend: 'anthropic',
+    fallbackModelBackend: 'openai',
+    reason: '429 rate limit exceeded',
+    timestamp: 1_760_000_000_000,
+  };
+
+  it('round-trips through create and a fresh read', async () => {
+    const quest = await makeQuest({ fallbackInfo });
+
+    const raw = await readRaw(quest._id.toString());
+
+    expect(raw?.fallbackInfo).toEqual(fallbackInfo);
+  });
+
+  // The completion pipeline writes through BaseRepository.update, not create.
+  it('survives the update path the completion pipeline saves through', async () => {
+    const quest = await makeQuest();
+
+    await questRepository.update({ id: quest._id.toString(), fallbackInfo });
+
+    const raw = await readRaw(quest._id.toString());
+    expect(raw?.fallbackInfo).toEqual(fallbackInfo);
+  });
+
+  // `$set` drops undefined, so retries and switched-then-failed turns clear it with null.
+  it('is cleared by an update that sets it to null', async () => {
+    const quest = await makeQuest({ fallbackInfo });
+
+    await questRepository.update({ id: quest._id.toString(), fallbackInfo: null });
+
+    const raw = await readRaw(quest._id.toString());
+    expect(raw?.fallbackInfo).toBeNull();
+  });
+
+  it('stays absent on a turn that did not fall back', async () => {
+    const quest = await makeQuest();
+
+    const raw = await readRaw(quest._id.toString());
+
+    expect(raw && 'fallbackInfo' in raw).toBe(false);
   });
 });
 

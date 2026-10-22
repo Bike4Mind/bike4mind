@@ -82,7 +82,6 @@ export * from './questMasterToolSchema';
 export * from './imageGeneration';
 export type { ImageEditResponse } from './imageGeneration';
 export * from './voiceGeneration';
-export * from './videoGeneration';
 export * from './soundGeneration';
 export * from './musicGeneration';
 export * from './analytics';
@@ -108,7 +107,7 @@ export {
   getRetryAfterMs,
   calculateRetryDelay,
 } from '@bike4mind/common';
-export type { RetryOptions, RetryResult } from '@bike4mind/common';
+export type { RetryEvent, RetryOptions, RetryResult } from '@bike4mind/common';
 export * from './circuitBreaker';
 export * from './rateLimitHeaders';
 export * from './voiceHistory';

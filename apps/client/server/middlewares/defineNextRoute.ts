@@ -1,6 +1,15 @@
 import { baseApi } from './baseApi';
-import type { EndpointContract, PathParamsOf, QueryParamsOf, RequestBodyOf } from '@bike4mind/common';
+import {
+  BadRequestError,
+  deprecationHeaders,
+  isZodError,
+  type EndpointContract,
+  type PathParamsOf,
+  type QueryParamsOf,
+  type RequestBodyOf,
+} from '@bike4mind/common';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
+import { fromZodError } from 'zod-validation-error';
 
 /**
  * EVERY registrar next-connect 0.13 exposes - patch all of them, not just the
@@ -57,6 +66,8 @@ export function nextRouteForContract<C extends EndpointContract>(
   const { rateLimit, ...baseOptions } = options;
 
   const router = baseApi<ValidatedReq, Response>({
+    // First, so the contract-derived options below always win over a stray runtime field.
+    ...baseOptions,
     // 'jwtOnly' is enforced in baseApi by not installing the api-key chain at all,
     // so a key is never validated/metered/billed before being rejected.
     auth: contract.auth === 'public' ? false : contract.auth === 'jwtOnly' ? 'jwtOnly' : true,
@@ -64,13 +75,36 @@ export function nextRouteForContract<C extends EndpointContract>(
     // empty `requiredScopes.some(...)` in apiKeyAuth is always false and would 403
     // every key. Collapse it to undefined.
     requiredScopes: contract.scopes?.length ? [...contract.scopes] : undefined,
-    ...baseOptions,
+    // A contract serves exactly one method (the verb guard below enforces it), so any
+    // other method 405s before the scope gate can misreport it as a 403.
+    allowedMethods: [contract.method],
   });
 
   const prelude: Handler[] = [];
 
-  // Prepended first so it runs BEFORE validation: a malformed body still counts
-  // against the limiter (see the function-doc note on ordering).
+  const parse = <T>(schema: { parse(value: unknown): T }, value: unknown): T => {
+    try {
+      return schema.parse(value);
+    } catch (error) {
+      if (contract.validationErrorStatus === 400 && isZodError(error)) {
+        throw new BadRequestError(fromZodError(error).message);
+      }
+      throw error;
+    }
+  };
+
+  // Ahead of everything else in the prelude so a validation failure or a rate-limit
+  // rejection still tells the caller the endpoint is going away.
+  const deprecation = contract.deprecated;
+  if (deprecation) {
+    prelude.push((_req, res, next) => {
+      for (const [name, value] of Object.entries(deprecationHeaders(deprecation))) res.setHeader(name, value);
+      next();
+    });
+  }
+
+  // Ahead of validation (behind only the deprecation headers, which reject nothing):
+  // a malformed body still counts against the limiter (see the function-doc note on ordering).
   if (rateLimit) {
     prelude.push(rateLimit as unknown as Handler);
   }
@@ -102,7 +136,7 @@ export function nextRouteForContract<C extends EndpointContract>(
 
   if (pathParamsSchema) {
     prelude.push((req, _res, next) => {
-      req.validatedParams = pathParamsSchema.parse(pick(req.query, pathParamsKeys)) as PathParamsOf<C>;
+      req.validatedParams = parse(pathParamsSchema, pick(req.query, pathParamsKeys)) as PathParamsOf<C>;
       next();
     });
   }
@@ -111,7 +145,7 @@ export function nextRouteForContract<C extends EndpointContract>(
   // same precedence reasoning: address/filter the resource before its payload.
   if (queryParamsSchema) {
     prelude.push((req, _res, next) => {
-      req.validatedQuery = queryParamsSchema.parse(omit(req.query, pathParamsKeys)) as QueryParamsOf<C>;
+      req.validatedQuery = parse(queryParamsSchema, omit(req.query, pathParamsKeys)) as QueryParamsOf<C>;
       next();
     });
   }
@@ -119,7 +153,7 @@ export function nextRouteForContract<C extends EndpointContract>(
   const requestSchema = contract.request;
   if (requestSchema) {
     prelude.push((req, _res, next) => {
-      req.validated = requestSchema.parse(req.body) as RequestBodyOf<C>;
+      req.validated = parse(requestSchema, req.body) as RequestBodyOf<C>;
       next();
     });
   }
@@ -158,12 +192,12 @@ export function nextRouteForContract<C extends EndpointContract>(
   //     caller's own `.use(...)`, so a flood of malformed bodies would 422 without
   //     ever touching a caller-mounted limiter. Registering per method puts the
   //     prelude right before the terminal handler, so caller `.use(...)` middleware
-  //     runs ahead of validation. (The `rateLimit` option instead lives at the FRONT
-  //     of the prelude, so it beats validation without a caller having to remember the
+  //     runs ahead of validation. (The `rateLimit` option instead sits at the front
+  //     of the prelude, behind only the deprecation headers, so it beats validation without a caller having to remember the
   //     ordering.)
-  //  2. next-connect only falls through to its 404 when no non-`USE` handler matches
-  //     the method. A `use`-mounted validator matches every method, so GET on a
-  //     POST-only contract would 422 instead of 404.
+  //  2. A `use`-mounted validator matches every method. baseApi's `allowedMethods`
+  //     guard already 405s an undeclared method ahead of everything, but a validator
+  //     mounted with `use` would still sit on every verb's path for no reason.
   for (const method of METHODS) {
     const registrar = (router as unknown as Record<string, ((...a: unknown[]) => unknown) | undefined>)[method];
     // Some registrars may be absent depending on the next-connect version; skip those.

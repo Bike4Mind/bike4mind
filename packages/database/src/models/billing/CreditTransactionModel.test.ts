@@ -207,6 +207,7 @@ describe('CreditTransactionRepository.sourceUsageForOwner', () => {
     'realtime_voice_usage',
     'tool_usage',
     'completion_api_usage',
+    'decision_usage',
     'speech_to_text_usage',
     'text_to_speech_usage',
     'sound_effects_usage',
@@ -361,5 +362,57 @@ describe('CreditTransactionRepository.queryAdminAdjustmentsPage', () => {
     await CreditTransaction.collection.updateMany({}, { $set: { createdAt: new Date('2020-01-01') } });
     res = await creditTransactionRepository.queryAdminAdjustmentsPage({ days: 30, limit: 50, skip: 0 });
     expect(res.total).toBe(0);
+  });
+});
+
+describe('CreditTransactionRepository.dailyNetCreditsForOwner', () => {
+  it('sums signed credits per UTC day since `from`, oldest first, scoped to the owner', async () => {
+    await seed([
+      { ownerId: 'user-1', ownerType: CreditHolderType.User, credits: 100, type: 'purchase', createdAt: day(2) },
+      {
+        ownerId: 'user-1',
+        ownerType: CreditHolderType.User,
+        credits: -30,
+        createdAt: new Date(Date.UTC(2026, 0, 2, 23, 59)),
+      },
+      { ownerId: 'user-1', ownerType: CreditHolderType.User, credits: -5, createdAt: day(4) },
+      // Before the window, another owner, and an org holder with the same id are all excluded.
+      { ownerId: 'user-1', ownerType: CreditHolderType.User, credits: -999, createdAt: day(1) },
+      { ownerId: 'user-2', ownerType: CreditHolderType.User, credits: -999, createdAt: day(3) },
+      { ownerId: 'user-1', ownerType: CreditHolderType.Organization, credits: -999, createdAt: day(3) },
+      // After the window closes: the sum must stop where the balance snapshot was taken.
+      { ownerId: 'user-1', ownerType: CreditHolderType.User, credits: -999, createdAt: day(7) },
+    ]);
+
+    const rows = await creditTransactionRepository.dailyNetCreditsForOwner(
+      'user-1',
+      CreditHolderType.User,
+      day(2),
+      day(6)
+    );
+
+    expect(rows).toEqual([
+      { day: '2026-01-02', netCredits: 70 },
+      { day: '2026-01-04', netCredits: -5 },
+    ]);
+  });
+});
+
+describe('CreditTransactionRepository.findAdminAdjustmentsForUser', () => {
+  it('returns only that user admin adjustments since `from`, newest first, capped at limit', async () => {
+    const adjustment = { ownerId: 'user-1', ownerType: CreditHolderType.User, reason: 'admin_adjustment' };
+    await seed([
+      { ...adjustment, type: 'generic_add', credits: 50, createdAt: day(3) },
+      { ...adjustment, type: 'generic_deduct', credits: -20, createdAt: day(5) },
+      { ...adjustment, type: 'generic_add', credits: 10, createdAt: day(4) },
+      { ...adjustment, type: 'generic_add', credits: 10, createdAt: day(1) },
+      { ...adjustment, ownerId: 'user-2', type: 'generic_add', createdAt: day(5) },
+      { ownerId: 'user-1', ownerType: CreditHolderType.User, type: 'generic_add', reason: 'otc', createdAt: day(5) },
+      { ...adjustment, type: 'generic_add', credits: 999, createdAt: day(7) },
+    ]);
+
+    const rows = await creditTransactionRepository.findAdminAdjustmentsForUser('user-1', day(2), day(6), 2);
+
+    expect(rows.map(row => row.credits)).toEqual([-20, 10]);
   });
 });

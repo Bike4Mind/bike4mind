@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-// Fails when a root pnpm.overrides pin contradicts a range a package in the
+// Fails when a root pnpm-workspace.yaml overrides pin contradicts a range a package in the
 // installed tree declares. pnpm applies an override silently: the package still
 // resolves, nothing warns, and the mismatch first surfaces much later as a
 // missing export while bundling.
@@ -22,6 +22,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import semver from 'semver';
+import { readOverrides } from './lib-pnpm-workspace.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const virtualStore = join(repoRoot, 'node_modules', '.pnpm');
@@ -105,10 +106,10 @@ export function findViolations(edges) {
 }
 
 function report(violations, overrides) {
-  const lines = ['ERROR: pnpm.overrides contradicts ranges declared in the installed tree.', ''];
+  const lines = ['ERROR: pnpm-workspace.yaml overrides contradict ranges declared in the installed tree.', ''];
 
   for (const [dep, byRange] of [...violations].sort(([a], [b]) => a.localeCompare(b))) {
-    lines.push(`  ${dep}, pinned by pnpm.overrides to "${overrides[dep]}":`);
+    lines.push(`  ${dep}, pinned by the overrides to "${overrides[dep]}":`);
     for (const [range, group] of [...byRange].sort(([a], [b]) => a.localeCompare(b))) {
       const shown = [...new Set(group.dependents)].sort();
       const extra = shown.length - MAX_DEPENDENTS_SHOWN;
@@ -126,7 +127,7 @@ function report(violations, overrides) {
 }
 
 function main() {
-  const overrides = readManifest(join(repoRoot, 'package.json'))?.pnpm?.overrides ?? {};
+  const overrides = readOverrides(join(repoRoot, 'pnpm-workspace.yaml'));
   const overrideKeys = Object.keys(overrides).filter(isPlainNameKey);
 
   if (!existsSync(virtualStore)) {
@@ -148,7 +149,7 @@ function main() {
     process.exit(1);
   }
 
-  console.log(`OK: ${edges.length} dependency edges agree with ${overrideKeys.length} pnpm.overrides pins.`);
+  console.log(`OK: ${edges.length} dependency edges agree with ${overrideKeys.length} overrides pins.`);
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

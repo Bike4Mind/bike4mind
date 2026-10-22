@@ -1,58 +1,12 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { User, orgGoogleDriveConnectionRepository } from '@bike4mind/database';
-import { BadRequestError } from '@server/utils/errors';
+import { User } from '@bike4mind/database';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { decryptStoredToken, revokeDriveGrant } from '@server/integrations/google/drive/common';
+import { flagConnectionsStoppedByDisconnect } from '@server/integrations/google/drive/flagConnectionsStoppedByDisconnect';
 
 /**
- * Mark every org Drive connection that the just-revoked token actually kills.
- *
- * The connect flow copies `User.googleDrive.refreshToken` VERBATIM as the connection's org-owned
- * credential (see captureOrgCredential in data-lakes/drive-sync.ts), so revoking here necessarily
- * kills those connections too. We revoke anyway: a user asking us to drop their Google access must
- * win over an org's convenience. What we owe them is that the breakage is VISIBLE rather than a
- * scheduled re-sync that quietly starts failing - which is what this does. `credential_error` is the
- * exact state (the stored credential no longer authenticates); the remedy is an org owner/manager
- * re-running Connect, which rewrites the credential.
- *
- * Matched on the TOKEN, not on `connectedBy` alone: a connection can still hold an older refresh
- * token of the same user, which is a separate grant at Google and survives this revoke. Flagging that
- * one would stop a sync that still works, since findDueForPoll skips `credential_error`.
- *
- * Returns how many connections were flagged so the caller can warn the user.
- */
-async function flagConnectionsUsingRevokedToken(userId: string, revokedToken: string | null): Promise<number> {
-  if (!revokedToken) return 0;
-
-  const connections = await orgGoogleDriveConnectionRepository.findByConnectedBy(userId);
-  // Per-connection credential read: the token is select:false, and the accessor is org-scoped by
-  // design, so it cannot be batched into one query. This runs on an interactive disconnect over the
-  // handful of folders one user connected.
-  const killed = await Promise.all(
-    connections.map(async connection => {
-      const withCredentials = await orgGoogleDriveConnectionRepository.findByIdWithCredentials(
-        connection.id,
-        connection.organizationId
-      );
-      return decryptStoredToken(withCredentials?.oauthRefreshToken) === revokedToken ? connection : null;
-    })
-  );
-
-  const affected = killed.filter((connection): connection is (typeof connections)[number] => connection !== null);
-  await Promise.all(
-    affected.map(connection =>
-      orgGoogleDriveConnectionRepository.updateHealth(connection.id, {
-        status: 'credential_error',
-        lastError:
-          'The Google account that authorized this folder was disconnected. Reconnect the folder to resume syncing.',
-      })
-    )
-  );
-  return affected.length;
-}
-
-/**
- * DELETE /api/google-drive/disconnect -> 200 { affectedOrgConnections }
+ * DELETE /api/google-drive/disconnect -> 200 { affectedOrgConnections, affectedPersonalConnections }
  *
  * Revokes the grant at Google and then drops the local record. Order matters: nulling `googleDrive`
  * first would leave nothing to revoke WITH if the revoke did not go through, so the grant would stay
@@ -86,9 +40,9 @@ const handler = baseApi().delete(
     // with nothing left to drive a second attempt.
     //
     // Only the refresh token identifies a grant that org connections could be sharing; the access-token
-    // fallback above kills one token and nothing downstream, so it flags nothing (and an org connection
-    // cannot exist without a refresh token - captureOrgCredential requires one).
-    const affectedOrgConnections = await flagConnectionsUsingRevokedToken(
+    // fallback above kills one token and no org connection (one cannot exist without a refresh token -
+    // readUserDriveCredential requires one). Personal connections stop either way.
+    const affected = await flagConnectionsStoppedByDisconnect(
       userId,
       googleDrive.refreshToken ? decryptStoredToken(googleDrive.refreshToken) : null
     );
@@ -97,7 +51,7 @@ const handler = baseApi().delete(
       googleDrive: null,
     });
 
-    return res.status(200).json({ affectedOrgConnections });
+    return res.status(200).json(affected);
   })
 );
 

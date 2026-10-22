@@ -8,6 +8,7 @@ const {
   generateEmbeddingBatch,
   generateEmbedding,
   getSettingsValue,
+  getSettingsMap,
   recordUsage,
   reserve,
   refund,
@@ -19,6 +20,7 @@ const {
   generateEmbeddingBatch: vi.fn(),
   generateEmbedding: vi.fn(),
   getSettingsValue: vi.fn(),
+  getSettingsMap: vi.fn(async () => ({})),
   recordUsage: vi.fn(),
   reserve: vi.fn(),
   refund: vi.fn(),
@@ -102,7 +104,7 @@ vi.mock('@bike4mind/fab-pipeline', async importActual => {
 vi.mock('@bike4mind/utils', () => ({
   createTokenizer: () => ({ countTokens: (...a: unknown[]) => countTokens(...a) }),
   getSettingsByNames: vi.fn(),
-  getSettingsMap: vi.fn(async () => ({})),
+  getSettingsMap,
   getSettingsValue: (...a: unknown[]) => getSettingsValue(...a),
 }));
 vi.mock('@server/billing/reserveRequestCredits', () => ({
@@ -110,12 +112,13 @@ vi.mock('@server/billing/reserveRequestCredits', () => ({
 }));
 
 import { EmbeddingAuthError } from '@bike4mind/fab-pipeline';
+import { adminSettingsRepository } from '@bike4mind/database';
 import handler from '../embeddings';
 
 type Handler = (req: unknown, res: unknown) => Promise<void>;
 
-const run = async (body: unknown) => {
-  const { req, res } = createMocks({ method: 'POST', body });
+const run = async (body: unknown, headers: Record<string, string> = {}) => {
+  const { req, res } = createMocks({ method: 'POST', body, headers });
   Object.assign(req, { user: { id: 'u1' }, logger: { error: vi.fn(), warn: vi.fn() } });
   await (handler as unknown as Handler)(req, res);
   return { status: res._getStatusCode(), body: res._getJSONData() };
@@ -140,6 +143,15 @@ describe('POST /api/v1/embeddings', () => {
       refund,
       settle,
     });
+  });
+
+  it('reads fresh credit enforcement before reserving', async () => {
+    const { status } = await run({ model: 'text-embedding-3-small', input: 'hello' });
+    expect(status).toBe(200);
+    expect(getSettingsMap).toHaveBeenCalledExactlyOnceWith(
+      { adminSettings: adminSettingsRepository },
+      { names: ['enforceCredits'], skipCache: true }
+    );
   });
 
   it('returns an OpenAI-shaped list, one vector per input in order', async () => {
@@ -170,7 +182,17 @@ describe('POST /api/v1/embeddings', () => {
       0,
       expect.objectContaining({ type: 'text_generation_usage', inputTokens: 5, outputTokens: 0, source: 'api' })
     );
-    expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({ feature: 'embedding', status: 'ok' }));
+    expect(recordUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ feature: 'embedding', source: 'api', status: 'ok' })
+    );
+  });
+
+  it('stamps source cli on the ledger row and usage event for the b4m CLI', async () => {
+    await run({ model: 'text-embedding-3-small', input: 'hello' }, { 'user-agent': 'b4m-cli/0.9.3' });
+
+    // Same classifier apiKeyAuth stamps on ApiKeyUsageLog, so the dashboard slices agree.
+    expect(settle).toHaveBeenCalledWith(0, expect.objectContaining({ source: 'cli' }));
+    expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({ source: 'cli', status: 'ok' }));
   });
 
   it('truncates to the requested width and base64-encodes on request', async () => {

@@ -1,4 +1,9 @@
-import { DEGENERATE_FINISH_REASON, TRUNCATED_FINISH_REASON, type UsageEventStatus } from '@bike4mind/common';
+import {
+  DEGENERATE_FINISH_REASON,
+  REFUSAL_FINISH_REASON,
+  TRUNCATED_FINISH_REASON,
+  type UsageEventStatus,
+} from '@bike4mind/common';
 
 /**
  * What a reply that stopped early carries: the user-facing warning, and the outcome recorded
@@ -43,6 +48,16 @@ export function buildEarlyStopStamp(finishReason: string | undefined | null): Ea
   return null;
 }
 
+/**
+ * The status a settled call's UsageEvent records for how generation ended. A refusal carries no
+ * early-stop warning (the model's own reply explains it) but must still count toward the admin
+ * Spend tab's Refusal Rate.
+ */
+export function usageEventStatusForFinish(finishReason: string | undefined | null): UsageEventStatus {
+  if (finishReason === REFUSAL_FINISH_REASON) return 'refusal';
+  return buildEarlyStopStamp(finishReason)?.usageEventStatus ?? 'ok';
+}
+
 /** Appended as its own reply slot when a tool-loop turn finishes without writing an answer. */
 export const INCOMPLETE_ANSWER_NOTICE = 'The response ended before an answer was written. Please try again.';
 
@@ -63,6 +78,11 @@ export interface AnswerCompletenessInput {
    * answer even with no caption, and "please try again" would re-run a paid generation.
    */
   producedNonTextDeliverable: boolean;
+  /**
+   * The turn ended because its last tool round only called tools flagged endsTurnAfterText,
+   * which the adapter does only after the round streamed answer text, so the answer precedes the call.
+   */
+  endedOnAnswerTool: boolean;
 }
 
 /**
@@ -74,6 +94,7 @@ export function buildIncompleteAnswerNotice(input: AnswerCompletenessInput): str
   // Also suppresses the max_tokens variant: the truncation banner (TRUNCATION_WARNING) still
   // shows, and the deliverable is intact, so only the retry advice would be wrong.
   if (input.stopped || input.producedNonTextDeliverable || input.visibleCharsAfterLastToolCall > 0) return null;
+  if (input.endedOnAnswerTool) return null;
   if (input.stopReason === TRUNCATED_FINISH_REASON) return TRUNCATED_ANSWER_NOTICE;
   if (input.toolCallCount > 0) return INCOMPLETE_ANSWER_NOTICE;
   return null;

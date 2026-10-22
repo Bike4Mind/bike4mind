@@ -1,15 +1,19 @@
 import React, { useState, useCallback } from 'react';
 import { Box, Text, useInput } from 'ink';
+import type { PermissionPromptKind } from '../tools/gateway/gatewayTypes.js';
 
 export type PermissionResponse = 'allow-once' | 'allow-session' | 'allow-always' | 'deny';
 
 /**
- * Escape characters that let model-authored text render differently from what
- * actually runs, into a visible escape form. The preview and arguments are
- * model-authored, so the approved text could otherwise differ from what runs.
- * Two ranges are covered, deliberately and no wider:
- *   - C0 controls (minus tab/newline) and DEL -> `\xHH`: a raw `\r` or ESC
- *     sequence could rewrite the line the user is approving.
+ * Escape characters that let untrusted text render differently from what
+ * actually runs, into a visible escape form. Shared by every prompt that shows
+ * untrusted text for the user to decide on: tool previews/arguments here,
+ * repo-authored MCP definitions (McpApprovalPrompt), the folder-trust path
+ * (FolderTrustPrompt), and model-authored ReviewGatePrompt / UserQuestionPrompt text. Display only - never escape the
+ * value that is acted on or sent back.
+ * These ranges are covered, deliberately and no wider:
+ *   - C0 controls (minus tab/newline), DEL and C1 controls -> `\xHH`: a raw
+ *     `\r`, ESC or 8-bit CSI (U+009B) could rewrite the line being approved.
  *   - Unicode bidi overrides U+202A..U+202E and isolates U+2066..U+2069
  *     -> `\uXXXX`: these reorder displayed glyphs without changing the
  *     underlying code points, spoofing the same way.
@@ -18,7 +22,7 @@ export type PermissionResponse = 'allow-once' | 'allow-session' | 'allow-always'
  */
 export function escapeTerminalControlChars(text: string): string {
   // eslint-disable-next-line no-control-regex
-  return text.replace(/[\x00-\x08\x0b-\x1f\x7f\u202a-\u202e\u2066-\u2069]/g, ch => {
+  return text.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]/g, ch => {
     const code = ch.charCodeAt(0);
     return code > 0xff ? `\\u${code.toString(16).padStart(4, '0')}` : `\\x${code.toString(16).padStart(2, '0')}`;
   });
@@ -89,6 +93,8 @@ export interface PermissionPromptProps {
   args: unknown;
   preview?: string;
   canBeTrusted: boolean; // Whether this tool can be trusted (not prompt_always)
+  /** 'sandbox-escalation' offers a retry outside the sandbox with no trust options. */
+  kind?: PermissionPromptKind;
   onResponse: (response: PermissionResponse) => void;
 }
 
@@ -109,22 +115,30 @@ export function PermissionPrompt({
   args,
   preview,
   canBeTrusted,
+  kind,
   onResponse,
 }: PermissionPromptProps) {
+  const isSandboxEscalation = kind === 'sandbox-escalation';
   const hideArgs = TOOLS_WITH_HIDDEN_ARGS.has(toolName);
   // Build menu items based on whether tool can be trusted
-  const items: Array<{ label: string; value: PermissionResponse }> = canBeTrusted
+  const items: Array<{ label: string; value: PermissionResponse }> = isSandboxEscalation
     ? [
-        { label: '✓ Allow once', value: 'allow-once' },
-        { label: '✓ Allow for this session', value: 'allow-session' },
-        { label: '✓ Always allow (trust this tool)', value: 'allow-always' },
+        { label: '\u2713 Retry once without sandbox', value: 'allow-once' },
+        { label: '\u2713 Allow this command unsandboxed for the session', value: 'allow-session' },
         { label: '✗ Deny', value: 'deny' },
       ]
-    : [
-        { label: '✓ Allow once', value: 'allow-once' },
-        { label: '✓ Allow for this session', value: 'allow-session' },
-        { label: '✗ Deny', value: 'deny' },
-      ];
+    : canBeTrusted
+      ? [
+          { label: '✓ Allow once', value: 'allow-once' },
+          { label: '✓ Allow for this session', value: 'allow-session' },
+          { label: '✓ Always allow (trust this tool)', value: 'allow-always' },
+          { label: '✗ Deny', value: 'deny' },
+        ]
+      : [
+          { label: '✓ Allow once', value: 'allow-once' },
+          { label: '✓ Allow for this session', value: 'allow-session' },
+          { label: '✗ Deny', value: 'deny' },
+        ];
 
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [responded, setResponded] = useState(false);
@@ -202,14 +216,14 @@ export function PermissionPrompt({
       <Box marginTop={1}>
         <Text dimColor>Tool: </Text>
         <Text bold color="cyan">
-          {toolName}
+          {escapeTerminalControlChars(toolName)}
         </Text>
       </Box>
 
       {toolDescription && (
         <Box>
           <Text dimColor>Action: </Text>
-          <Text>{toolDescription}</Text>
+          <Text>{escapeTerminalControlChars(toolDescription)}</Text>
         </Box>
       )}
 
@@ -234,7 +248,7 @@ export function PermissionPrompt({
         </Box>
       )}
 
-      {!canBeTrusted && (
+      {!canBeTrusted && !isSandboxEscalation && (
         <Box marginTop={1}>
           <Text color="red" dimColor>
             Note: This tool cannot be trusted due to its dangerous nature.

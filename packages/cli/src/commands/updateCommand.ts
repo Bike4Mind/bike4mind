@@ -9,7 +9,7 @@ import { createInterface } from 'readline';
 import packageJson from '../../package.json';
 import {
   forceCheckForUpdate,
-  checkForUpdate,
+  readCachedUpdate,
   isNpmPrefixWritable,
   getAutoUpdatePreference,
   setAutoUpdatePreference,
@@ -129,8 +129,8 @@ function installAndReexec(currentVersion: string, latestVersion: string): void {
  *               Skip (ask again next launch) / Never (persist `never`).
  *
  * It is a safe no-op (returns without installing) when: already re-exec'd this
- * launch, disabled via `B4M_AUTO_UPDATE=0`, not attached to a TTY, no update is
- * available, the prefix needs sudo (notify banner informs instead), or the
+ * launch, disabled via `B4M_AUTO_UPDATE=0`, not attached to a TTY, the last
+ * cached check found no update, the prefix needs sudo (notify banner informs instead), or the
  * user declines the prompt. Any install/network failure is swallowed so the
  * user is never blocked from launching the current version.
  */
@@ -147,26 +147,10 @@ export async function maybeAutoUpdateOnLaunch(): Promise<void> {
 
   const currentVersion = packageJson.version;
 
-  // Bounded check so a slow/hung network can never stall launch (mirrors the
-  // 3s race the startup banner uses in index.tsx). checkForUpdate is cached, so
-  // the common case resolves instantly without touching the network at all.
-  // On timeout the losing checkForUpdate promise is intentionally left dangling
-  // - it's internally try/catch'd (can't reject) and its eventual cache write is
-  // beneficial; don't "clean up" by awaiting it, that would reintroduce the stall.
-  let result;
-  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-  try {
-    result = await Promise.race([
-      checkForUpdate(currentVersion),
-      new Promise<null>(resolve => {
-        timeoutHandle = setTimeout(() => resolve(null), 3000);
-      }),
-    ]);
-  } catch {
-    return;
-  } finally {
-    if (timeoutHandle) clearTimeout(timeoutHandle);
-  }
+  // Cache only, so launch never waits on the network. The interactive app
+  // refreshes the cache in the background (getStartupUpdateStatus), so an update published
+  // since the last check is offered on the next launch.
+  const result = await readCachedUpdate(currentVersion);
   if (!result?.updateAvailable) return;
 
   // Can't install to a root-owned prefix without sudo; leave it to the

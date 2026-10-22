@@ -38,7 +38,7 @@ import { ResearchModeConfiguration } from '../../types/ResearchMode';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { toast } from 'sonner';
 import { Settings as SettingsIcon } from '@mui/icons-material';
-import { extractThinking } from '@client/app/utils/replyUtils';
+import { extractThinking } from '@bike4mind/server-utils/shared/replyUtils';
 
 interface ResearchModeResult {
   configurationId: string;
@@ -254,6 +254,8 @@ export const ResearchModeResponseDisplay: React.FC<ResearchModeResponseDisplayPr
     const responseQuest: IChatHistoryItem = {
       ...quest,
       id: `${quest.id}-${configId}`,
+      // The turn's timing belongs to the parent quest; per-panel it would repeat N times under a synthetic id.
+      turnTiming: undefined,
       reply: result?.response || streamingText || undefined,
       replies: result?.response ? [result.response] : streamingText ? [streamingText] : [],
       status: result?.success === false ? 'stopped' : streamingText ? 'running' : 'done',

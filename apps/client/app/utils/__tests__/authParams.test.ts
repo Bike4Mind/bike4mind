@@ -3,6 +3,15 @@ import { parseHashParams, parseQueryParams, parseAuthParams } from '../authParam
 
 describe('authParams', () => {
   describe('parseHashParams', () => {
+    it.each([
+      '#token=access&userId=user-1&firstSignupSession=1',
+      '#mfaToken=pending&userId=user-1&mfa=setup&firstSignupSession=1',
+    ])('parses the signup-session flag independently of conversion tracking: %s', hash => {
+      const result = parseHashParams(hash);
+      expect(result?.firstSignupSession).toBe(true);
+      expect(result?.isNewUser).toBeUndefined();
+    });
+
     it('should parse complete hash params with leading #', () => {
       const hash = '#token=abc123&userId=user789';
       const result = parseHashParams(hash);
@@ -75,6 +84,30 @@ describe('authParams', () => {
       const result = parseHashParams(hash);
 
       expect(result?.token).toBe(jwtToken);
+    });
+    it('parses an MFA handoff as a challenge, never as a session token', () => {
+      const result = parseHashParams('#mfaToken=pending.jwt&userId=user123&mfa=verify&passkey=1');
+      expect(result).toEqual({
+        userId: 'user123',
+        mfa: { token: 'pending.jwt', mode: 'verify', passkeyAvailable: true },
+        isNewUser: undefined,
+        signupMethod: undefined,
+      });
+      expect(result?.token).toBeUndefined();
+    });
+
+    it('parses an enrollment handoff and keeps the signup flags', () => {
+      const result = parseHashParams('#mfaToken=pending.jwt&userId=user123&mfa=setup&isNewUser=1&signupMethod=google');
+      expect(result).toMatchObject({
+        userId: 'user123',
+        mfa: { token: 'pending.jwt', mode: 'setup', passkeyAvailable: false },
+        isNewUser: true,
+        signupMethod: 'google',
+      });
+    });
+
+    it('ignores an MFA handoff with an unknown mode', () => {
+      expect(parseHashParams('#mfaToken=pending.jwt&userId=user123&mfa=skip')).toBeNull();
     });
   });
 

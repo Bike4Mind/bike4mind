@@ -5,6 +5,7 @@ import {
   useCopySessionAsMarkdown,
   useDeleteSession,
   useDownloadSession,
+  useMoveSession,
   useExportSessionToExcel,
   useExportSessionToWord,
   useExportSessionToHtml,
@@ -14,9 +15,10 @@ import {
   useUpdateSessionTags,
 } from '@client/app/hooks/data/sessions';
 import { useJobStatus } from '@client/app/hooks/useJobStatus';
+import { useStreamingState } from '@client/app/hooks/useStreamingState';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
-import { ISessionDocument, ISessionFavoriteItem, InviteType } from '@bike4mind/common';
-import { formatSessionTitle } from '@client/app/utils/sessionTitle';
+import { ISessionDocument, ISessionFavoriteItem, InviteType, type WorkspaceSurface } from '@bike4mind/common';
+import { AUTO_TITLE_PENDING_WINDOW_MS, formatSessionTitle, getPendingTitleLabel } from '@client/app/utils/sessionTitle';
 import CloseIcon from '@mui/icons-material/Close';
 import DeleteOutline from '@mui/icons-material/DeleteOutline';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
@@ -72,6 +74,9 @@ import MenuBookIcon from '@mui/icons-material/MenuBook';
 import { useTriggerProactiveMessages } from '@client/app/hooks/data/agentProactiveMessaging';
 import { useSessionUnreadCount } from '@client/app/hooks/useUnreadProactiveMessages';
 import { green, greenAlpha } from '@client/app/utils/themes/colors';
+import { useWorkspaceTargets } from '@client/app/hooks/useWorkspaceTargets';
+import WorkspaceTargetMenuItems from '@client/app/components/Session/WorkspaceTargetMenuItems';
+import MoveSessionConfirmModal from '@client/app/components/Session/MoveSessionConfirmModal';
 
 /**
  * Classify message count into two tiers:
@@ -105,6 +110,9 @@ const SessionSidenavItem: FC<{
   /** Optional icon/badge rendered before the session name. Surface-scoped rails use it to
    *  mark rows that carry a surface-specific artifact; omitted rows render unchanged. */
   leadingDecorator?: ReactNode;
+  /** Row only opens the session: no actions menu (rename, favorite, share, move, delete, export).
+   *  Header mode falls back to the plain row, since its name button is the menu trigger. */
+  readOnly?: boolean;
 }> = ({
   session,
   onClick,
@@ -118,6 +126,7 @@ const SessionSidenavItem: FC<{
   displayNameOverride,
   selected,
   leadingDecorator,
+  readOnly = false,
 }): React.JSX.Element => {
   const { currentSessionId } = useSessions();
   const { currentUser, isAdmin } = useUser();
@@ -126,6 +135,9 @@ const SessionSidenavItem: FC<{
   const [openNotebookCurationModal, toggleNotebookCurationModal] = useToggle();
   const { openModal } = useProjectAddToModal();
   const cloneSession = useCloneSession();
+  const moveSession = useMoveSession();
+  const { current: currentWorkspace, copyTargets, moveTargets } = useWorkspaceTargets(session);
+  const [pendingMove, setPendingMove] = useState<WorkspaceSurface | null>(null);
   const copySessionAsMarkdown = useCopySessionAsMarkdown();
   const downloadSession = useDownloadSession();
   const exportToExcel = useExportSessionToExcel();
@@ -159,9 +171,25 @@ const SessionSidenavItem: FC<{
 
   // Existing sessions may have a raw JSON literal as their name. Format it for
   // display so the sidebar (and the derived accessible name) stays readable.
+  // `now` is state so the row re-renders when the pending window closes; otherwise a session
+  // whose auto-title never lands would show the placeholder until the row remounts.
+  const [now, setNow] = useState(() => Date.now());
+  // Auto-naming runs off the first prompt, so an empty notebook from New keeps its default name.
+  // sawPrompt bridges the gap between the stream ending and the new title (or lastUsedModel) landing.
+  const isPromptInFlight = useStreamingState(s => s.sessions.has(session.id));
+  const [sawPrompt, setSawPrompt] = useState(false);
+  if (isPromptInFlight && !sawPrompt) setSawPrompt(true);
+  const hasPrompt = isPromptInFlight || sawPrompt || !!session.lastUsedModel || (session.messageCount ?? 0) > 0;
+  const pendingTitleLabel = hasPrompt ? getPendingTitleLabel(session.name, session.firstCreated, now) : null;
+  useEffect(() => {
+    if (!pendingTitleLabel || !session.firstCreated) return;
+    const closesIn = new Date(session.firstCreated).getTime() + AUTO_TITLE_PENDING_WINDOW_MS - Date.now();
+    const timer = setTimeout(() => setNow(Date.now()), Math.max(0, closesIn));
+    return () => clearTimeout(timer);
+  }, [pendingTitleLabel, session.firstCreated]);
   const displayName = useMemo(
-    () => displayNameOverride || formatSessionTitle(session.name),
-    [displayNameOverride, session.name]
+    () => displayNameOverride || pendingTitleLabel || formatSessionTitle(session.name),
+    [displayNameOverride, pendingTitleLabel, session.name]
   );
 
   // The real underlying title - used to pre-fill the rename input so the user edits what's
@@ -177,6 +205,7 @@ const SessionSidenavItem: FC<{
   const isProcessing =
     downloadSession.isPending ||
     cloneSession.isPending ||
+    moveSession.isPending ||
     summarizeSession.isPending ||
     updateSessionTags.isPending ||
     deleteSession.isPending ||
@@ -216,6 +245,30 @@ const SessionSidenavItem: FC<{
   const handleCloneSession = useCallback(() => {
     cloneSession.mutate(session.id);
   }, [cloneSession, session.id]);
+
+  // Picking the session's own workspace is a plain clone; any other names its destination.
+  const handleCloneInto = useCallback(
+    (target: WorkspaceSurface) => {
+      cloneSession.mutate(
+        target.id === currentWorkspace?.id ? session.id : { sessionId: session.id, targetSurface: target.id }
+      );
+    },
+    [cloneSession, currentWorkspace, session.id]
+  );
+
+  const handleMoveConfirm = useCallback(async () => {
+    if (!pendingMove) return;
+    try {
+      await moveSession.mutateAsync({ sessionId: session.id, targetSurface: pendingMove.id });
+      // The open notebook just left the workspace being viewed: follow it to its new home.
+      if (isSelected) navigate({ href: pendingMove.sessionHref(session.id) });
+    } catch {
+      // useMoveSession already reports the failure.
+    }
+    setPendingMove(null);
+  }, [pendingMove, moveSession, session.id, isSelected, navigate]);
+
+  const handleMoveCancel = useCallback(() => setPendingMove(null), []);
 
   const handleDownloadSession = useCallback(() => {
     downloadSession.mutate(session);
@@ -299,6 +352,39 @@ const SessionSidenavItem: FC<{
     setOpenSessionModal(false);
   }, []);
 
+  // Rendered in both menu variants (header dropdown and row menu).
+  const workspaceMenuItems = (
+    <>
+      {copyTargets.length > 1 ? (
+        <WorkspaceTargetMenuItems
+          label="Clone into"
+          targets={copyTargets}
+          currentId={currentWorkspace?.id}
+          testIdPrefix="session-menu-clone-into"
+          onSelect={handleCloneInto}
+          disabled={cloneSession.isPending}
+        />
+      ) : (
+        <MenuItem
+          onClick={handleCloneSession}
+          className="sidenav-item-menuitem-clone"
+          data-testid="sidenav-item-menuitem-clone"
+        >
+          <FolderCopyIcon /> {t('notebooks.clone')}
+        </MenuItem>
+      )}
+      {moveTargets.length > 0 && (
+        <WorkspaceTargetMenuItems
+          label="Move to"
+          targets={moveTargets}
+          testIdPrefix="session-menu-move-to"
+          onSelect={setPendingMove}
+          disabled={moveSession.isPending}
+        />
+      )}
+    </>
+  );
+
   const ShareModal = useMemo(
     () =>
       openShareModal ? (
@@ -309,9 +395,10 @@ const SessionSidenavItem: FC<{
           name={formatSessionTitle(session.name)}
           type={InviteType.Session}
           users={session.users}
+          ownerId={session.userId}
         />
       ) : null,
-    [openShareModal, session.id, session.name, session.users]
+    [openShareModal, session.id, session.name, session.users, session.userId]
   );
 
   const boxStyles = useMemo(
@@ -345,6 +432,12 @@ const SessionSidenavItem: FC<{
         visibility: isSelected ? 'visible' : 'hidden',
         opacity: isSelected ? 1 : 0,
       },
+      // A touch screen has no hover to reveal the row menu, and a keyboard user tabbing onto it
+      // would otherwise land on an invisible button.
+      '@media (hover: none)': {
+        '& .item-actions:not(.isProcessing)': { visibility: 'visible', opacity: 1 },
+      },
+      '&:focus-within .item-actions:not(.isProcessing)': { visibility: 'visible', opacity: 1 },
       // Header style
       ...(location === 'header' && {
         backgroundColor: 'transparent',
@@ -373,7 +466,7 @@ const SessionSidenavItem: FC<{
             type="text"
             onSuccess={handleRenameSuccess}
           />
-        ) : location === 'header' ? (
+        ) : location === 'header' && !readOnly ? (
           /* Header mode: name, chip, and dropdown arrow all in one unified container */
           <Dropdown>
             <Badge
@@ -512,9 +605,7 @@ const SessionSidenavItem: FC<{
                   </MenuItem>
                 </>
               )}
-              <MenuItem onClick={handleCloneSession} className="sidenav-item-menuitem-clone">
-                <FolderCopyIcon /> {t('notebooks.clone')}
-              </MenuItem>
+              {workspaceMenuItems}
               <MenuItem onClick={handleDownloadSession} className="sidenav-item-menuitem-download">
                 <DownloadIcon /> {t('notebooks.download')}
               </MenuItem>
@@ -751,7 +842,7 @@ const SessionSidenavItem: FC<{
           </Box>
         )}
         {/* Hide menu button in edit mode to focus on selection actions - sidenav only */}
-        {!isEditMode && location !== 'header' && (
+        {!isEditMode && !readOnly && location !== 'header' && (
           <Box
             sx={{
               position: 'absolute',
@@ -767,6 +858,7 @@ const SessionSidenavItem: FC<{
             <Dropdown>
               <MenuButton
                 data-testid="sidenav-item-menu-btn"
+                aria-label="Chat options"
                 size={'sm'}
                 slots={{ root: IconButton }}
                 className={clsx('item-actions', { isProcessing })}
@@ -854,9 +946,7 @@ const SessionSidenavItem: FC<{
                     </MenuItem>
                   </>
                 )}
-                <MenuItem onClick={handleCloneSession} className="sidenav-item-menuitem-clone">
-                  <FolderCopyIcon /> {t('notebooks.clone')}
-                </MenuItem>
+                {workspaceMenuItems}
                 <MenuItem onClick={handleDownloadSession} className="sidenav-item-menuitem-download">
                   <DownloadIcon /> {t('notebooks.download')}
                 </MenuItem>
@@ -962,6 +1052,15 @@ const SessionSidenavItem: FC<{
         forwardButtonText="Delete"
         backwardButtonText="Cancel"
         loading={deleteSession.isPending}
+      />
+      <MoveSessionConfirmModal
+        open={!!pendingMove}
+        sessionName={displayName}
+        from={currentWorkspace}
+        to={pendingMove}
+        loading={moveSession.isPending}
+        onConfirm={handleMoveConfirm}
+        onCancel={handleMoveCancel}
       />
       {openNotebookCurationModal && (
         <NotebookCurationModal

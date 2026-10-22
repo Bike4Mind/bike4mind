@@ -52,8 +52,8 @@ vi.mock('@server/middlewares/oauthRouteGate', () => ({ oauthRouteGate: () => h.o
 vi.mock('@server/analytics/analyticsMiddleware', () => ({ analyticsMiddleware: () => h.observe('analytics') }));
 vi.mock('@server/services/gears/toolGearObserver', () => ({ registerToolGearObserver: () => {} }));
 vi.mock('@server/middlewares/errorHandler', () => ({ default: () => {} }));
-vi.mock('@bike4mind/common', () => ({ ApiKeyScope: {} }));
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/common', () => ({ ApiKeyScope: {}, MethodNotAllowedError: class extends Error {} }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { MONGODB_URI: 'mongodb://test/%STAGE%', STAGE: 'test' },
   isDevelopment: () => true,
 }));

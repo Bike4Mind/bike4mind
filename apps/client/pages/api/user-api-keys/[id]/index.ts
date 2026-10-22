@@ -7,13 +7,15 @@ import { gateEmbedBrandingWrite } from '@server/entitlements/embedKeyEntitlement
 import { logEventSafe } from '@server/utils/analyticsLog';
 import { IEmbedBranding, UserApiKeyEvents } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
 interface UpdateEmbedKeyRequest {
   /** Embed key configuration (epic #41 Phase E). Only provided fields change. */
   agentId?: string;
   allowedOrigins?: string[];
   branding?: IEmbedBranding;
+  /** OAuth clients allowed to mint identified (user-pays) sessions; `[]` turns it off. */
+  identifiedClientIds?: string[];
 }
 
 // Neither method is admin-gated at the route: the services resolve the key by
@@ -24,10 +26,15 @@ const handler = baseApi()
     asyncHandler<{}, unknown, UpdateEmbedKeyRequest, { id: string }>(async (req, res) => {
       const userId = req.user?.id;
       const keyId = req.query.id;
-      const { agentId, allowedOrigins, branding } = req.body;
+      const { agentId, allowedOrigins, branding, identifiedClientIds } = req.body;
 
       if (!keyId) throw new BadRequestError('Invalid key ID');
-      if (agentId === undefined && allowedOrigins === undefined && branding === undefined) {
+      if (
+        agentId === undefined &&
+        allowedOrigins === undefined &&
+        branding === undefined &&
+        identifiedClientIds === undefined
+      ) {
         throw new BadRequestError('Nothing to update');
       }
 
@@ -79,7 +86,7 @@ const handler = baseApi()
 
       const updated = await userApiKeyService.updateEmbedKey(
         userId,
-        { keyId, agentId, allowedOrigins: embedOrigins, branding: gatedBranding },
+        { keyId, agentId, allowedOrigins: embedOrigins, branding: gatedBranding, identifiedClientIds },
         { db: { userApiKeys: userApiKeyRepository, organizations: organizationRepository, agents: agentRepository } }
       );
 
@@ -94,6 +101,7 @@ const handler = baseApi()
               ...(agentId !== undefined ? ['agentId'] : []),
               ...(allowedOrigins !== undefined ? ['allowedOrigins'] : []),
               ...(branding !== undefined ? ['branding'] : []),
+              ...(identifiedClientIds !== undefined ? ['identifiedClientIds'] : []),
             ],
           },
         },

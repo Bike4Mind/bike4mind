@@ -32,11 +32,11 @@ vi.mock('@server/integrations/jira/webhookUtils', async importOriginal => ({
   ...(await importOriginal<typeof import('@server/integrations/jira/webhookUtils')>()),
   generateWebhookSecret: () => 'new-plain-secret',
 }));
-vi.mock('@server/security/secretEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({
   encryptSecret: (value: string) => `enc(${value})`,
   decryptSecret: (value: string) => value.replace(/^enc\((.*)\)$/, '$1'),
 }));
-vi.mock('@server/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: 'test-key' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: 'test-key' } }));
 vi.mock('@server/integrations/jira/atlassianTokenManager', () => ({
   AtlassianTokenManager: { getValidTokens: h.getValidTokens },
   AtlassianReconnectRequiredError: class extends Error {},

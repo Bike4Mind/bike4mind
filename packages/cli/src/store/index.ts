@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { Session, Message } from '../storage';
 import type { PermissionResponse } from '../components';
+import type { PermissionPromptKind } from '../tools/gateway/gatewayTypes.js';
 import type { BackgroundAgentJob, BackgroundAgentStatus } from '../agents/types.js';
 import type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/services/llm';
 import type { ShellSession, ShellSessionStatus } from '@bike4mind/services/llm/tools/cliTools';
@@ -42,6 +43,7 @@ interface PermissionPromptState {
   args: unknown;
   preview?: string;
   canBeTrusted: boolean;
+  kind?: PermissionPromptKind;
   resolve: (response: { action: PermissionResponse }) => void;
 }
 
@@ -95,6 +97,14 @@ interface CliStore {
   enqueueMessage: (message: string) => void;
   dequeueAllMessages: () => string[];
   clearMessageQueue: () => void;
+
+  // Operations that read the session, await, then write it back from that snapshot (agent turns,
+  // custom commands, background completion, compaction; handoff holds across its LLM call). Anything else that appends to the session waits for
+  // this to reach zero (see session/whenTurnIdle.ts). Unlike isThinking, which is UI state that
+  // ESC clears early, a hold lasts until the operation's own `finally`.
+  sessionHolds: number;
+  /** Takes a hold; the returned release is idempotent. */
+  holdSession: () => () => void;
 
   // UI state
   isThinking: boolean;
@@ -264,6 +274,17 @@ export const useCliStore = create<CliStore>(set => ({
         },
       };
     }),
+
+  sessionHolds: 0,
+  holdSession: () => {
+    set(state => ({ sessionHolds: state.sessionHolds + 1 }));
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      set(state => ({ sessionHolds: state.sessionHolds - 1 }));
+    };
+  },
 
   // User-message queue
   messageQueue: [],

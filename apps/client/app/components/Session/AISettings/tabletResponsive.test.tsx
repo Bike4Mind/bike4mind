@@ -46,6 +46,7 @@ vi.mock('../../common/ToolIndicators', () => ({
   default: () => <div data-testid="tool-indicators" />,
   ICONED_MCP_SERVERS: ['github', 'atlassian'],
   AGENT_ONLY_MCP_SERVERS: ['github', 'atlassian'],
+  hasToolIndicators: () => false,
 }));
 vi.mock('./AgentsSection', () => ({ default: () => <div data-testid="agents-section" /> }));
 vi.mock('../../common/AgentsCountBadge', () => ({ default: () => <div data-testid="agents-count-badge" /> }));

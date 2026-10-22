@@ -66,8 +66,11 @@ describe('FabFile GitHub provenance', () => {
     await FabFile.create(row({ githubConnectionId: 'other-conn', githubPath: 'other.md' }));
     await FabFile.create(row({ tags: [{ name: 'datalake:other', strength: 1 }], githubPath: 'untagged.md' }));
 
-    const found = await fabFileRepository.findByGitHubConnectionIdInDataLake('gh-conn-1', TAG, { includeDeleted: true });
+    const found = await fabFileRepository.findByGitHubConnectionIdInDataLake('gh-conn-1', TAG, {
+      includeDeleted: true,
+    });
     expect(found.map(f => f.id).sort()).toEqual([live.id, deleted.id, archived.id].sort());
+    expect(await fabFileRepository.countByGitHubConnectionIdInDataLake('gh-conn-1', TAG)).toBe(3);
   });
 
   it('declares the { githubConnectionId, deletedAt, status } reconcile index', async () => {

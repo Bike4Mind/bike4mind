@@ -109,8 +109,8 @@ export default function ActivatePage() {
             <Typography level="body-lg" sx={{ color: 'text.secondary', mb: 1 }}>
               Your device has been successfully authorized.
             </Typography>
-            <Typography level="body-sm" sx={{ color: 'text.tertiary' }}>
-              You can close this window and return to your CLI.
+            <Typography level="body-sm" sx={{ color: 'text.tertiary' }} data-testid="activate-success-return-text">
+              You can close this window and return to {verifyMutation.data.device_info.client_name}.
             </Typography>
           </CardContent>
         </Card>
@@ -157,7 +157,7 @@ export default function ActivatePage() {
                 Device Authorization
               </Typography>
               <Typography level="body-sm" sx={{ color: 'text.tertiary' }}>
-                Authenticate your B4M CLI
+                Authorize a B4M app on your account
               </Typography>
             </Box>
           </Stack>
@@ -196,7 +196,7 @@ export default function ActivatePage() {
               </Typography>
             </Stack>
             <Typography level="body-xs" sx={{ color: 'text.tertiary', mb: 2 }}>
-              Enter the 8-character code displayed in your CLI terminal
+              Enter the 8-character code shown by the app requesting access
             </Typography>
             <Input
               value={userCode}
@@ -248,12 +248,15 @@ export default function ActivatePage() {
                 Security Notice
               </Typography>
               <Typography level="body-sm">
-                Only approve if you recognize this device and initiated the authorization request from your CLI.
+                Only approve if you recognize this device and started the authorization request yourself.
               </Typography>
             </Box>
           </Alert>
 
           {/* Action Buttons */}
+          {/* The approve step does not name the client yet: /verify returns client_name, but it is
+              only shown on the success screen above, after consent has already been given. Until
+              this block shows it, the user approves without seeing which app they are approving. */}
           <Stack direction="row" spacing={2}>
             <Button
               onClick={handleApprove}
@@ -288,7 +291,7 @@ export default function ActivatePage() {
               color: 'text.tertiary',
             }}
           >
-            This authorization will grant CLI access to your B4M account
+            This authorization will grant the requesting app access to your B4M account
           </Typography>
         </CardContent>
       </Card>

@@ -43,7 +43,7 @@ export const provisionalRank = <T extends ModelInfo>(model: T, models: T[]): num
 };
 
 /**
- * Leading version token in a display name: "Claude 4.8 Opus" -> 4.8, "Llama 3 Instruct 70B" -> 3.
+ * Leading version token in a display name: "Claude Opus 4.8" -> 4.8, "Llama 3 Instruct 70B" -> 3.
  * -1 sorts a versionless name last.
  *
  * The FIRST number, not the last: parameter counts and variant suffixes trail the version

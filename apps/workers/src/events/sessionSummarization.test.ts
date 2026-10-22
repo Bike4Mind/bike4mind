@@ -8,10 +8,12 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { BadRequestError } from '@bike4mind/utils';
-import { PERSISTED_SESSION_SUMMARY_TRIGGERS } from '@bike4mind/common';
+import { PERSISTED_SESSION_SUMMARY_TRIGGERS, StorageLimitError } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   fabFileStore: [] as Record<string, unknown>[],
+  quests: [{ _id: 'q1', prompt: 'hello', reply: 'world' }] as Record<string, unknown>[],
+  modelMessages: vi.fn(),
   findOne: vi.fn(),
   updateFabFile: vi.fn(),
   createFabFile: vi.fn(),
@@ -33,7 +35,7 @@ const h = vi.hoisted(() => ({
 }));
 
 // Passthrough the wrapper so the raw handler runs without connectDB / Config.
-vi.mock('@server/utils/eventContext', () => ({
+vi.mock('@workers/utils/eventContext', () => ({
   withEventContext: (fn: unknown) => fn,
 }));
 
@@ -45,11 +47,15 @@ vi.mock('@server/utils/eventBus', () => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
+  organizationRepository: {},
   Session: { findById: vi.fn(async () => h.session) },
   User: { findById: h.userFindById },
   Quest: {
     find: vi.fn(() => ({
-      sort: () => ({ limit: async () => [{ _id: 'q1', prompt: 'hello', reply: 'world' }] }),
+      sort: () => ({
+        limit: async (limit: number) => h.quests.slice(0, limit),
+        skip: (offset: number) => ({ limit: async (limit: number) => h.quests.slice(offset, offset + limit) }),
+      }),
     })),
   },
   sessionRepository: {
@@ -104,6 +110,7 @@ vi.mock('@client/services/operationsModelService', () => ({
           _options: unknown,
           onChunk: (chunk: (string | null)[]) => Promise<void>
         ) => {
+          h.modelMessages(_messages);
           await onChunk(['A summary of the session.']);
         },
       },
@@ -111,7 +118,7 @@ vi.mock('@client/services/operationsModelService', () => ({
   },
 }));
 
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ upload: h.upload, getSignedUrl: vi.fn(async () => 'https://example.test/signed') }),
 }));
 
@@ -128,6 +135,10 @@ const STRANGER = 'user-stranger';
 const SESSION_ID = 'session-1';
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), updateMetadata: vi.fn() };
+
+beforeEach(() => {
+  h.quests = [{ _id: 'q1', prompt: 'hello', reply: 'world' }];
+});
 
 const run = (properties: Record<string, unknown> = {}) =>
   (handler as unknown as (event: unknown, logger: unknown) => Promise<void>)(
@@ -154,6 +165,28 @@ describe('sessionSummarization summary-file lookup', () => {
     await run();
 
     expect(h.findOne).toHaveBeenCalledWith({ sessionId: SESSION_ID, userId: OWNER });
+  });
+
+  it('labels a new library file as an automatic summary', async () => {
+    await run();
+
+    expect(h.createFabFile).toHaveBeenCalledWith(
+      OWNER,
+      expect.objectContaining({ fileName: '[Automatic summary] Notebook.txt' }),
+      expect.anything()
+    );
+  });
+
+  it('labels an existing summary file when refreshing it', async () => {
+    h.fabFileStore.push({ id: 'summary-1', userId: OWNER, sessionId: SESSION_ID, fileName: 'Notebook Summary.txt' });
+
+    await run();
+
+    expect(h.updateFabFile).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ id: 'summary-1', fileName: '[Automatic summary] Notebook.txt' }),
+      expect.anything()
+    );
   });
 
   it('leaves a stranger-owned file carrying the session id alone and creates its own summary', async () => {
@@ -212,6 +245,30 @@ describe('sessionSummarization summary-file lookup', () => {
       expect.objectContaining({ id: 'fabfile-owner' }),
       expect.anything()
     );
+  });
+
+  it('skips a re-summary that would grow the file past the quota, keeping the old file', async () => {
+    h.fabFileStore.push({ id: 'fabfile-owner', userId: OWNER, sessionId: SESSION_ID, tags: [] });
+    h.updateFabFile.mockRejectedValueOnce(
+      new StorageLimitError('File size exceeds storage limit', {
+        errorCode: 'storage_limit_exceeded',
+        used_bytes: 0,
+        limit_bytes: 1,
+        requested_bytes: 2,
+        owner: 'user',
+      })
+    );
+
+    await expect(run()).resolves.toBeUndefined();
+
+    // The rewrite is charged to the owner, so the update needs the user repository.
+    expect(h.updateFabFile).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ db: expect.objectContaining({ users: expect.anything() }) })
+    );
+    expect(h.createFabFile).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('not created or updated'));
   });
 
   // A stored meta-tag or prefix-arm content tag is never carried through by hand here -
@@ -490,7 +547,28 @@ describe('sessionSummarization requester write-time re-check', () => {
       expect.objectContaining({ id: SESSION_ID, summary: 'A summary of the session.', summaryTrigger: 'manual' }),
       { includeGlobalWrite: true }
     );
-    expect(h.publishTag).toHaveBeenCalledWith({ sessionId: SESSION_ID, requesterId: SHAREE });
+    expect(h.publishTag).toHaveBeenCalledWith({ sessionId: SESSION_ID, requesterId: SHAREE, payerId: undefined });
+  });
+
+  it('bills the sharee who asked, not the owner', async () => {
+    h.sessionUpdateWithUpdateAccess.mockResolvedValue({ id: SESSION_ID });
+
+    await run({ requesterId: SHAREE });
+
+    expect(h.recordSessionOperationalUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ user: expect.objectContaining({ id: SHAREE }) })
+    );
+  });
+
+  it('bills the named payer and forwards it to the tag job it queues', async () => {
+    h.sessionUpdateWithUpdateAccess.mockResolvedValue({ id: SESSION_ID });
+
+    await run({ payerId: 'user-admin', callTagging: true });
+
+    expect(h.recordSessionOperationalUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ user: expect.objectContaining({ id: 'user-admin' }) })
+    );
+    expect(h.publishTag).toHaveBeenCalledWith({ sessionId: SESSION_ID, requesterId: undefined, payerId: 'user-admin' });
   });
 
   it('stops before the FabFile, upload and tag job when the requester lost access mid-run', async () => {
@@ -548,5 +626,107 @@ describe('sessionSummarization requester write-time re-check', () => {
 
     expect(h.recordSessionOperationalUsage).not.toHaveBeenCalled();
     expect(h.sessionUpdateWithUpdateAccess).not.toHaveBeenCalled();
+  });
+});
+
+describe('sessionSummarization when the summary file cannot be stored', () => {
+  const refusal = (errorCode: 'storage_limit_exceeded' | 'file_too_large') =>
+    new StorageLimitError('reworded message that matches nothing', {
+      errorCode,
+      used_bytes: 0,
+      limit_bytes: 1,
+      requested_bytes: 2,
+      owner: 'user',
+    });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.assertLakeAdmission.mockReset();
+    h.fabFileStore.length = 0;
+    h.session = { id: SESSION_ID, _id: SESSION_ID, userId: OWNER, name: 'Notebook', tags: [] };
+    h.findOne.mockImplementation(async () => null);
+  });
+
+  it('swallows a storage quota refusal and warns, whatever its message says', async () => {
+    h.createFabFile.mockRejectedValue(refusal('storage_limit_exceeded'));
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Storage limit exceeded'));
+  });
+
+  it('rethrows a per-file size refusal', async () => {
+    h.createFabFile.mockRejectedValue(refusal('file_too_large'));
+
+    await expect(run()).rejects.toBeInstanceOf(StorageLimitError);
+  });
+
+  it('rethrows a plain error even when its message quotes the old storage text', async () => {
+    h.createFabFile.mockRejectedValue(new Error('File size exceeds storage limit'));
+
+    await expect(run()).rejects.toThrow('File size exceeds storage limit');
+  });
+});
+
+describe('sessionSummarization stopped turns', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.assertLakeAdmission.mockReset();
+    h.session = { id: SESSION_ID, userId: OWNER, name: 'Notebook', tags: [] };
+    h.findOne.mockResolvedValue(null);
+    h.createFabFile.mockResolvedValue({ filePath: 'summary.txt', mimeType: 'text/plain' });
+    h.quests = [
+      { _id: 'q1', prompt: 'cancelled ask', status: 'stopped', replies: [] },
+      { _id: 'q2', prompt: 'partial ask', status: 'stopped', replies: ['partial answer'] },
+    ];
+  });
+
+  it('excludes cancelled prompts while preserving stopped partial answers in the model payload', async () => {
+    await run();
+
+    const messages = h.modelMessages.mock.calls[0][0];
+    expect(messages).toContainEqual({ role: 'user', content: 'Question: partial ask\nAnswer: partial answer' });
+    expect(JSON.stringify(messages)).not.toContain('cancelled ask');
+  });
+
+  it('looks past a full cancelled page to find the next replayable turn', async () => {
+    h.quests = [
+      ...Array.from({ length: 5 }, (_, index) => ({
+        _id: `cancelled-${index}`,
+        prompt: `cancelled ask ${index}`,
+        status: 'stopped',
+        replies: [],
+      })),
+      { _id: 'completed', prompt: 'completed ask', status: 'done', replies: ['completed answer'] },
+    ];
+    await run();
+
+    const messages = h.modelMessages.mock.calls[0][0];
+    expect(messages).toContainEqual({ role: 'user', content: 'Question: completed ask\nAnswer: completed answer' });
+    expect(JSON.stringify(messages)).not.toContain('cancelled ask');
+  });
+
+  it('stops at the end of a full cancelled page without calling the model', async () => {
+    h.quests = Array.from({ length: 5 }, (_, index) => ({
+      _id: `cancelled-${index}`,
+      prompt: 'cancelled ask',
+      status: 'stopped',
+      replies: [],
+    }));
+    await run();
+
+    expect(h.modelMessages).not.toHaveBeenCalled();
+    expect(h.recordSessionOperationalUsage).not.toHaveBeenCalled();
+  });
+
+  it('leaves the stored summary alone when all new turns were cancelled', async () => {
+    h.quests = [h.quests[0]];
+    h.session.summary = 'Existing summary';
+    await run();
+
+    expect(h.modelMessages).not.toHaveBeenCalled();
+    expect(h.session.summary).toBe('Existing summary');
+    expect(h.recordSessionOperationalUsage).not.toHaveBeenCalled();
+    expect(h.createFabFile).not.toHaveBeenCalled();
   });
 });

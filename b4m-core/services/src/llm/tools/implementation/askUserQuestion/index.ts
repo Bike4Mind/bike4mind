@@ -1,11 +1,11 @@
+import { ChoiceOption } from '@bike4mind/common';
 import { ToolDefinition } from '../../base/types';
 
 // Types
 
-export interface QuestionOption {
-  label: string;
-  description: string;
-}
+// Same shape as a reply's suggestedChoices option (see replyChoices.ts) - kept as one type so the
+// two option surfaces can't drift apart.
+export type QuestionOption = ChoiceOption;
 
 export interface UserQuestion {
   question: string;

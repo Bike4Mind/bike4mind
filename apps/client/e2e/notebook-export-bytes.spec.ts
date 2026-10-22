@@ -413,7 +413,7 @@ async function attachAsNotebookKnowledge(page: Page, filePath: string): Promise<
   await expect(page.getByTestId('upload-from-device-btn')).toBeVisible({ timeout: TIMEOUTS.ELEMENT_STATE });
 
   // The testid lands on Joy's Radio ROOT span, not the input - useSlot merges forwarded props into
-  // the root slot only - and that root's `overlay` action is absolutely positioned over the Chip,
+  // the root slot only - and that root's `overlay` action is absolutely positioned over the row,
   // so clicking the testid itself resolves to another element and leaves the mode alone without
   // erroring. Descend to the input, which is where the state actually lives: it needs no
   // accessible-name computation and `toBeChecked` works on it.
@@ -421,6 +421,8 @@ async function attachAsNotebookKnowledge(page: Page, filePath: string): Promise<
   // The assertion is the point. A silently-unset mode falls back to "Smart", where
   // resolveAttachScope routes images to a single message, and an image that never enters
   // session.knowledgeIds is dropped from the export with no error anywhere.
+  // The mode lives in a side panel behind the upload row's gear.
+  await page.getByTestId('upload-scope-settings-btn').click();
   const notebookScope = page.getByTestId('attach-file-scope-notebook-radio').locator('input[type="radio"]');
   await notebookScope.check();
   await expect(notebookScope).toBeChecked();

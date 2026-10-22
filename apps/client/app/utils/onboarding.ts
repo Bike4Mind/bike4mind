@@ -1,17 +1,15 @@
-/**
- * First-run / onboarding helpers, extracted as pure functions so the branchy logic in
- * `ModalManager` (brand-new-account grace) and `EmailVerificationBanner` (nag cadence)
- * is unit-testable and lives in one place instead of inline in effect bodies.
- */
+import { PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
+
+/** Account-age and email-verification helpers shared by onboarding surfaces. */
 
 /** Window during which a freshly created account is treated as "brand new". */
 export const NEW_ACCOUNT_GRACE_MS = 10 * 60 * 1000; // 10 minutes
 
 /**
  * True when the account was created within the grace window, used to give brand-new users a clean
- * first run (no "What's New" changelog of releases that predate them). When `createdAt` is absent
- * or unparseable this returns false, which is correct: an account with no usable createdAt is not
- * treated as brand-new (it has already lived past its first in-memory session).
+ * first run. When `createdAt` is absent or unparseable this returns false, which is correct: an
+ * account with no usable createdAt is not treated as brand-new (it has already lived past its first
+ * in-memory session).
  */
 export function isBrandNewAccount(
   createdAt: Date | string | number | null | undefined,
@@ -47,4 +45,26 @@ export function shouldShowVerificationNag(
   const dismissedAt = parseInt(dismissedAtRaw, 10);
   if (!Number.isFinite(dismissedAt)) return true;
   return now - dismissedAt >= nagIntervalMs;
+}
+
+/** Signed up openly and still owes email verification before the starter grant lands. */
+export function isAwaitingEmailVerification(
+  user: { emailVerified?: boolean | null; tags?: string[] | null } | null | undefined
+): boolean {
+  return user?.emailVerified === false && (user.tags ?? []).includes(PENDING_FREE_CREDITS_TAG);
+}
+
+export interface ResendVerificationError {
+  response?: { status?: number; data?: { message?: string; isConfigError?: boolean } };
+}
+
+/** What to tell the user when POST /api/email/resend-verification fails. */
+export function resendVerificationErrorMessage(error: ResendVerificationError): string {
+  if (error.response?.status === 429) {
+    return "You've reached the limit for resending verification emails. Please wait 15 minutes before trying again.";
+  }
+  if (error.response?.status === 503 && error.response?.data?.isConfigError) {
+    return error.response.data.message || 'Email service is not configured.';
+  }
+  return error.response?.data?.message || 'Failed to send verification email. Please try again later.';
 }

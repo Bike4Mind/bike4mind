@@ -91,7 +91,7 @@ const LEVEL_ICON: Record<BadgeLevel, ReactNode> = {
 const pct = (share: number) => `${Math.round(share * 100)}%`;
 
 /** The chip label leads with the ONE headline metric: reachable content share (#1666). */
-function badgeLabel(level: BadgeLevel, health: LakeHealthApiResponse): string {
+function badgeLabel(level: BadgeLevel, health: LakeHealthApiResponse, viewerIsCreator?: boolean): string {
   const { serving } = health;
   if (level === 'notServing') return `Not serving: ${serving.status}`;
   if (health.reachableShare === null) {
@@ -102,9 +102,11 @@ function badgeLabel(level: BadgeLevel, health: LakeHealthApiResponse): string {
     if (level === 'degraded') return 'Health: needs attention';
     return 'Health: not measured';
   }
-  // Scoped like the member-count chip beside it (LakeInfoPanel): membership, and so this share, is
-  // computed against the lake's CREATOR - see buildDataLakeMembershipFilter's docblock.
-  return `Reachable ${pct(health.reachableShare)} (as creator)`;
+  // Membership, and so this share, is computed in the lake CREATOR's scope (see
+  // buildDataLakeMembershipFilter's docblock), so any viewer who is not known to be the creator is
+  // told whose view it is. Same rule as the member-count chip beside it (LakeInfoPanel).
+  const share = `Reachable ${pct(health.reachableShare)}`;
+  return viewerIsCreator ? share : `${share} (creator's view)`;
 }
 
 const DRILLDOWN_ROWS = 8;
@@ -184,7 +186,16 @@ function HealthTooltip({ health, failedFileCount = 0 }: { health: LakeHealthApiR
   );
 }
 
-export default function LakeHealthBadge({ lakeId, failedFileCount = 0 }: { lakeId: string; failedFileCount?: number }) {
+export default function LakeHealthBadge({
+  lakeId,
+  failedFileCount = 0,
+  viewerIsCreator,
+}: {
+  lakeId: string;
+  failedFileCount?: number;
+  /** True suppresses the "(creator's view)" qualifier; absent or false keeps it. */
+  viewerIsCreator?: boolean;
+}) {
   // The badge only mounts inside the lake detail view, so the query is already scoped to "open"; no
   // `enabled` gate is needed here.
   const { data: health, isLoading } = useGetDataLakeHealth(lakeId);
@@ -208,7 +219,7 @@ export default function LakeHealthBadge({ lakeId, failedFileCount = 0 }: { lakeI
         sx={{ fontSize: '11px', cursor: 'default' }}
         data-testid={`datalake-health-badge-${lakeId}`}
       >
-        {badgeLabel(level, health)}
+        {badgeLabel(level, health, viewerIsCreator)}
       </Chip>
     </Tooltip>
   );

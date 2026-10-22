@@ -33,4 +33,31 @@ describe('partitionPremiumRoutes', () => {
   it('refuses a public app-shell route', () => {
     expect(() => partitionPremiumRoutes([route({ public: true, appShell: true })])).toThrow(/public and appShell/);
   });
+
+  it('refuses a route that hosts a workspace list outside the app shell', () => {
+    expect(() => partitionPremiumRoutes([route({ hostsWorkspace: 'space' })])).toThrow(
+      /hostsWorkspace without appShell/
+    );
+    expect(() => partitionPremiumRoutes([route({ public: true, hostsWorkspace: 'space' })])).toThrow(
+      /hostsWorkspace without appShell/
+    );
+  });
+
+  it('accepts an app-shell route that hosts a workspace list', () => {
+    const shell = route({ appShell: true, hostsWorkspace: 'space' });
+    expect(partitionPremiumRoutes([shell]).appShell).toEqual([shell]);
+  });
+
+  it('refuses an admin dashboard card on a parameterised path', () => {
+    expect(() =>
+      partitionPremiumRoutes([
+        route({ path: '/x/$id', adminDashboard: { label: 'X', description: 'Example dashboard.' } }),
+      ])
+    ).toThrow(/adminDashboard on a parameterised path/);
+  });
+
+  it('accepts an admin dashboard card on a concrete path', () => {
+    const dashboard = route({ path: '/x/stats', adminDashboard: { label: 'X', description: 'Example dashboard.' } });
+    expect(partitionPremiumRoutes([dashboard]).standalone).toEqual([dashboard]);
+  });
 });

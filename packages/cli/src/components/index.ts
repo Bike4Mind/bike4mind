@@ -18,6 +18,8 @@ export type { ConfigEditorProps } from './ConfigEditor';
 export { TrustLocationSelector } from './TrustLocationSelector';
 export { FolderTrustPrompt } from './FolderTrustPrompt';
 export type { FolderTrustChoice } from './FolderTrustPrompt';
+export { McpApprovalPrompt } from './McpApprovalPrompt';
+export type { McpApprovalChoice } from './McpApprovalPrompt';
 export { RewindSelector } from './RewindSelector';
 export { SessionSelector } from './SessionSelector';
 export { ModelPicker } from './ModelPicker';

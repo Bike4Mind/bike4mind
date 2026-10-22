@@ -3,7 +3,7 @@ import { Dropdown, MenuButton, Menu, MenuItem, ListDivider, IconButton, Tooltip 
 import type { SxProps } from '@mui/joy/styles/types';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import SaveAltIcon from '@mui/icons-material/SaveAlt';
-import { toast } from 'react-hot-toast';
+import { toast } from 'sonner';
 import { marked } from 'marked';
 import { Document, Paragraph, TextRun, Packer, Table, TableRow, TableCell, WidthType } from 'docx';
 import { renderMarkdownToStyledHtml } from '@client/app/utils/markdownToStyledHtml';
@@ -212,6 +212,90 @@ export const copyToClipboard = async (content: string): Promise<boolean> => {
   }
 };
 
+/**
+ * The download formats for a reply, as menu items: formats found in the reply first (code files,
+ * tables), then Markdown, DOCX and HTML. Works inside a Menu (DownloadMenu) or a MenuList (the
+ * phone actions sheet). Formats are scanned on mount, which a menu does on open: this mounts once
+ * per message, and a reply still streaming would otherwise cache a list built from a partial body.
+ */
+export const ReplyDownloadMenuItems: React.FC<{ content: string; fileName: string; onDone?: () => void }> = ({
+  content: rawContent,
+  fileName,
+  onDone,
+}) => {
+  // The Markdown/DOCX/HTML paths below have no way to render a b4m_cards fence, so they'd
+  // otherwise download raw model-authored card JSON as if it were reply text.
+  const content = stripSearchResultCardFences(rawContent);
+  const done = onDone || (() => {});
+  const [detected] = useState<ReplyDownload[]>(() => buildReplyDownloads(content, fileName.replace(/\.[^./]+$/, '')));
+
+  return (
+    <>
+      {detected.map(item => (
+        <MenuItem
+          key={item.key}
+          className="download-menu-item-detected"
+          data-testid={`download-menu-detected-${item.key}`}
+          onClick={() => {
+            downloadFile(item.content, item.fileName, item.mimeType);
+            done();
+          }}
+        >
+          {item.label}
+        </MenuItem>
+      ))}
+      {detected.length > 0 && <ListDivider />}
+      <MenuItem
+        className="download-menu-item-markdown"
+        onClick={() => {
+          downloadFile(content, fileName, 'text/markdown');
+          done();
+        }}
+      >
+        Markdown
+      </MenuItem>
+      <MenuItem
+        className="download-menu-item-docx"
+        onClick={async () => {
+          try {
+            const docxBlob = await convertMarkdownToDocx(content);
+            const url = URL.createObjectURL(docxBlob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = fileName.replace(/\.mdx?$/, '.docx');
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+          } catch (error) {
+            console.error('Error converting to DOCX:', error);
+            toast.error('Failed to convert to DOCX');
+          }
+          done();
+        }}
+      >
+        DOCX
+      </MenuItem>
+      <MenuItem
+        className="download-menu-item-html"
+        onClick={async () => {
+          try {
+            const title = fileName.replace(/\.mdx?$/, '');
+            const html = await renderMarkdownToStyledHtml(content, { title });
+            downloadFile(html, fileName.replace(/\.mdx?$/, '.html'), 'text/html');
+          } catch (error) {
+            console.error('Error converting to HTML:', error);
+            toast.error('Failed to convert to HTML');
+          }
+          done();
+        }}
+      >
+        HTML
+      </MenuItem>
+    </>
+  );
+};
+
 // DownloadMenu component
 const DownloadMenu: React.FC<{
   content: string;
@@ -221,22 +305,11 @@ const DownloadMenu: React.FC<{
   variant?: 'outlined' | 'plain';
   /** Extra styles for the trigger, so a row can size it with its siblings. */
   triggerSx?: SxProps;
-}> = ({ content: rawContent, fileName, onClose, variant = 'outlined', triggerSx }) => {
-  // The Markdown/DOCX/HTML paths below have no way to render a b4m_cards fence, so they'd
-  // otherwise download raw model-authored card JSON as if it were reply text.
-  const content = stripSearchResultCardFences(rawContent);
-  const handleClose = onClose || (() => {});
+}> = ({ content, fileName, onClose, variant = 'outlined', triggerSx }) => {
   const isMobile = useIsMobile();
-  // Scanned on open rather than on render: this mounts once per message in a session, and a
-  // reply that is still streaming would otherwise cache a format list built from a partial body.
-  const [detected, setDetected] = useState<ReplyDownload[]>([]);
 
   return (
-    <Dropdown
-      onOpenChange={(_event, open) => {
-        if (open) setDetected(buildReplyDownloads(content, fileName.replace(/\.[^./]+$/, '')));
-      }}
-    >
+    <Dropdown>
       <Tooltip title="Download">
         <MenuButton
           className="download-menu-button"
@@ -247,67 +320,7 @@ const DownloadMenu: React.FC<{
         </MenuButton>
       </Tooltip>
       <Menu className="download-menu" placement={isMobile ? 'top' : 'bottom'}>
-        {detected.map(item => (
-          <MenuItem
-            key={item.key}
-            className="download-menu-item-detected"
-            data-testid={`download-menu-detected-${item.key}`}
-            onClick={() => {
-              downloadFile(item.content, item.fileName, item.mimeType);
-              handleClose();
-            }}
-          >
-            {item.label}
-          </MenuItem>
-        ))}
-        {detected.length > 0 && <ListDivider />}
-        <MenuItem
-          className="download-menu-item-markdown"
-          onClick={() => {
-            downloadFile(content, fileName, 'text/markdown');
-            handleClose();
-          }}
-        >
-          Markdown
-        </MenuItem>
-        <MenuItem
-          className="download-menu-item-docx"
-          onClick={async () => {
-            try {
-              const docxBlob = await convertMarkdownToDocx(content);
-              const url = URL.createObjectURL(docxBlob);
-              const a = document.createElement('a');
-              a.href = url;
-              a.download = fileName.replace(/\.mdx?$/, '.docx');
-              document.body.appendChild(a);
-              a.click();
-              document.body.removeChild(a);
-              URL.revokeObjectURL(url);
-            } catch (error) {
-              console.error('Error converting to DOCX:', error);
-              toast.error('Failed to convert to DOCX');
-            }
-            handleClose();
-          }}
-        >
-          DOCX
-        </MenuItem>
-        <MenuItem
-          className="download-menu-item-html"
-          onClick={async () => {
-            try {
-              const title = fileName.replace(/\.mdx?$/, '');
-              const html = await renderMarkdownToStyledHtml(content, { title });
-              downloadFile(html, fileName.replace(/\.mdx?$/, '.html'), 'text/html');
-            } catch (error) {
-              console.error('Error converting to HTML:', error);
-              toast.error('Failed to convert to HTML');
-            }
-            handleClose();
-          }}
-        >
-          HTML
-        </MenuItem>
+        <ReplyDownloadMenuItems content={content} fileName={fileName} onDone={onClose} />
       </Menu>
     </Dropdown>
   );

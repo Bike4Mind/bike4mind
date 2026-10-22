@@ -337,7 +337,8 @@ async function findOrCreateProbeUser(): Promise<IUserDocument> {
 }
 
 async function findOrCreateProbeLake(userId: string): Promise<{ lakeId: string }> {
-  const existing = await dataLakeRepository.findBySlug(LAKE_SLUG);
+  // By tag: findBySlug skips a deleted lake, and re-creating it would collide on the unique datalakeTag.
+  const existing = await dataLakeRepository.findByDatalakeTag(DATALAKE_TAG);
   if (existing) {
     if (existing.status !== 'active') {
       logger.log(`Reactivating data lake "${LAKE_SLUG}" (was ${existing.status}).`);

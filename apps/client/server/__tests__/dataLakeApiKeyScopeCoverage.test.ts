@@ -14,6 +14,7 @@ import {
   removeDataLakeFileContract,
   searchDataLakeContract,
 } from '@bike4mind/common';
+import { methodBlocks } from './scopeCoverageHelpers';
 
 /**
  * `requiredScopes` is opt-in and defaults open, so a lake route that forgets it is
@@ -72,34 +73,6 @@ function routeFiles(dir: string): string[] {
     if (entry.isDirectory()) return entry.name === '__tests__' ? [] : routeFiles(full);
     return entry.name.endsWith('.ts') ? [full] : [];
   });
-}
-
-/**
- * Splits a handler chain into [method, body] pairs - body runs to the next `.method(` or EOF.
- * Not anchored to a leading newline: a handler chained onto the `baseApi(...)` line itself (e.g.
- * `baseApi().post(...)`, as in articles.ts and tag-counts.ts) would otherwise produce no block and
- * never get scanned. Tolerates a generic type argument (`.post<T>(`), used by other route files
- * under `pages/api` - not live on a data-lake route today, but a future one using that syntax
- * would otherwise pass this guard with an unasserted mutating handler.
- *
- * The opener is filtered to matches whose preceding character is NOT an identifier character:
- * a fluent `baseApi(...).use(...).post(` chain always follows a `)` (or whitespace), while
- * `someMap.get(x)` follows an identifier - so an unrelated `.get(`/`.post(` call inside a handler
- * body (e.g. `userById.get(id)`) is not mistaken for another route method and does not truncate
- * the body it lives in.
- */
-function methodBlocks(source: string): Array<{ method: string; body: string }> {
-  const opener = /\.(get|post|put|patch|delete)(?:<[^<>]*>)?\(/g;
-  const starts: Array<{ method: string; index: number }> = [];
-  for (const match of source.matchAll(opener)) {
-    const precedingChar = source[match.index! - 1];
-    if (precedingChar && /[A-Za-z0-9_$]/.test(precedingChar)) continue;
-    starts.push({ method: match[1], index: match.index! });
-  }
-  return starts.map(({ method, index }, i) => ({
-    method,
-    body: source.slice(index, starts[i + 1]?.index ?? source.length),
-  }));
 }
 
 const files = routeFiles(ROUTES_DIR);

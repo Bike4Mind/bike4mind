@@ -1,24 +1,29 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
 const h = vi.hoisted(() => ({
   getFabFileById: vi.fn(),
   sendToQueue: vi.fn(),
   sendToClient: vi.fn(),
   getSourceQueueUrl: vi.fn(),
+  baseApiOptions: undefined as unknown,
 }));
 
-// Single-method chain: the route only calls `.post(...)`.
+// Single-method chain: the route only calls `.post(...)`. Captures the options for the scope-gate
+// test below.
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({ post: (fn: unknown) => fn }),
+  baseApi: (options: unknown) => {
+    h.baseApiOptions = options;
+    return { post: (fn: unknown) => fn };
+  },
 }));
 
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'wss://test' } } }));
 
 vi.mock('@server/managers/fabFileManager', () => ({ getFabFileById: h.getFabFileById }));
-vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: h.sendToClient }));
-vi.mock('@server/utils/dlqRegistry', () => ({ getSourceQueueUrl: h.getSourceQueueUrl }));
+vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({ getSourceQueueUrl: h.getSourceQueueUrl }));
 
 import handler from '../chunk';
 
@@ -93,5 +98,9 @@ describe('chunk handler (unit) - chunkSize bounds', () => {
     await run({ fabFileId: 'f1', chunkSize: '300' }, res);
     expect(h.sendToQueue).toHaveBeenCalledWith('http://sqs/chunk', expect.objectContaining({ chunkSize: '300' }));
     expect(json).toHaveBeenCalledWith({ messageId: 'msg-1' });
+  });
+
+  it('requires files:write at the baseApi route gate', () => {
+    expect(h.baseApiOptions).toEqual({ requiredScopes: ['files:write'] });
   });
 });

@@ -4,6 +4,7 @@ import type { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/serv
 import type { ListResourcesResult, ReadResourceResult } from '@modelcontextprotocol/sdk/types.js';
 import { AGENT_QUEST_MANIFEST } from '@bike4mind/common';
 import type { B4mApiClient } from './b4mApiClient';
+import { NotAuthenticatedError } from '../auth/ApiClient';
 import { registerResources } from './resources';
 import { logger } from '../utils/Logger';
 
@@ -181,6 +182,16 @@ describe('registerResources', () => {
 
     await expect(entry.read(new URL('b4m://notebook/n1'), { id: 'n1' })).rejects.toThrow(
       "API key forbidden: check the key's scopes and account access (recommended scope: notebooks:read)"
+    );
+  });
+
+  it('throws the no-credential message when a notebook read has no credential configured', async () => {
+    const entry = collectResources(
+      mockClient({ getNotebook: vi.fn().mockRejectedValue(new NotAuthenticatedError('Authentication failed')) })
+    ).get('notebook')!;
+
+    await expect(entry.read(new URL('b4m://notebook/n1'), { id: 'n1' })).rejects.toThrow(
+      'not authenticated: no credential configured (set B4M_API_KEY or run `b4m login`)'
     );
   });
 

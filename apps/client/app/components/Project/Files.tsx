@@ -17,7 +17,7 @@ import { useAddFilesToProject } from '@client/app/hooks/data/projects';
 import FolderSharedIcon from '@mui/icons-material/FolderShared';
 import { getErrorMessage } from '@client/app/utils/error';
 import { createFabFileOnServerWithUpload } from '@client/app/utils/filesAPICalls';
-import { toast } from 'react-hot-toast';
+import { toast } from 'sonner';
 
 const ProjectFiles: FC<{
   projectId: string;

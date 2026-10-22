@@ -7,6 +7,11 @@ vi.mock('./removeFileFromDataLake', () => ({
   removeFileFromDataLake: (...args: unknown[]) => removeFileFromDataLake(...(args as [])),
 }));
 
+const recomputeLakeStats = vi.fn(async () => ({ fileCount: 1, totalSizeBytes: 1, totalChunkedChars: 1 }));
+vi.mock('./recomputeLakeStats', () => ({
+  recomputeLakeStats: (...args: unknown[]) => recomputeLakeStats(...(args as [])),
+}));
+
 const LAKE = {
   id: 'lake-1',
   datalakeTag: 'datalake:acme',
@@ -41,6 +46,7 @@ const adapters = (members: LakeMembershipMemberRow[] = [NEWEST, OLDEST]) => {
 
 beforeEach(() => {
   removeFileFromDataLake.mockClear();
+  recomputeLakeStats.mockClear();
 });
 
 describe('applyAdmissionDecision', () => {
@@ -108,7 +114,46 @@ describe('applyAdmissionDecision', () => {
 
     expect(result.removedFabFileIds).toEqual(['old-1']);
     expect(removeFileFromDataLake).toHaveBeenCalledTimes(1);
-    expect(removeFileFromDataLake).toHaveBeenCalledWith(ACTOR, 'lake-1', 'old-1', bag);
+    expect(removeFileFromDataLake).toHaveBeenCalledWith(ACTOR, 'lake-1', 'old-1', bag, { deferStatsRecompute: true });
+  });
+
+  it('recomputes the lake stats once, after every removal, rather than once per removed copy', async () => {
+    const { bag } = adapters([
+      NEWEST,
+      OLDEST,
+      row({ fabFileId: 'old-2', createdAt: new Date('2026-02-01T00:00:00Z') }),
+    ]);
+    const order: string[] = [];
+    removeFileFromDataLake.mockImplementation(async () => {
+      order.push('remove');
+      return { success: true as const, fileCount: 1, totalSizeBytes: 1 };
+    });
+    recomputeLakeStats.mockImplementation(async () => {
+      order.push('recompute');
+      return { fileCount: 1, totalSizeBytes: 1, totalChunkedChars: 1 };
+    });
+
+    await applyAdmissionDecision(ACTOR, LAKE, { fileName: 'policy.md', decision: 'keep-newest' }, bag);
+
+    expect(order).toEqual(['remove', 'remove', 'recompute']);
+    expect(recomputeLakeStats).toHaveBeenCalledWith(LAKE, bag);
+  });
+
+  it('fails the ruling when the stats recompute fails, so a transactional caller rolls back', async () => {
+    const { bag } = adapters();
+    recomputeLakeStats.mockRejectedValueOnce(new Error('agg'));
+
+    await expect(
+      applyAdmissionDecision(ACTOR, LAKE, { fileName: 'policy.md', decision: 'keep-newest' }, bag)
+    ).rejects.toThrow('agg');
+  });
+
+  it('does not recompute for keep-both, which removes nothing', async () => {
+    const { bag } = adapters();
+
+    await applyAdmissionDecision(ACTOR, LAKE, { fileName: 'policy.md', decision: 'keep-both' }, bag);
+
+    expect(recomputeLakeStats).not.toHaveBeenCalled();
   });
 
   it('keep-specific keeps the named member and removes the rest', async () => {
@@ -169,7 +214,7 @@ describe('applyAdmissionDecision', () => {
     expect(upsertDecision).not.toHaveBeenCalled();
   });
 
-  it('removes sequentially, so two stat recomputes cannot overwrite each other', async () => {
+  it('removes sequentially, as the ambient session of the route transaction requires', async () => {
     const { bag } = adapters([
       NEWEST,
       OLDEST,

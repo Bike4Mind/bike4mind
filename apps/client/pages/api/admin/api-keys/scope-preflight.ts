@@ -5,7 +5,7 @@ import mongoose from 'mongoose';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { decideScopeGate, parseStagedScopes, SCOPE_STAGING_ENV_VAR } from '@server/middlewares/apiKeyScopeGate';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
 /** ApiKeyUsageLog's TTL is 90 days, so a longer window would silently return less. */
 const MAX_WINDOW_DAYS = 90;

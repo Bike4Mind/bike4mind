@@ -54,35 +54,6 @@
       }
     },
     {
-      "Name": "Allow-ZAP-Scanner",
-      "Priority": 1,
-      "Statement": {
-        "ByteMatchStatement": {
-          "SearchString": "f9fd8990-82df-4184-b72f-0c10dc61805a",
-          "FieldToMatch": {
-            "SingleHeader": {
-              "Name": "x-zap-scanner"
-            }
-          },
-          "TextTransformations": [
-            {
-              "Priority": 0,
-              "Type": "NONE"
-            }
-          ],
-          "PositionalConstraint": "EXACTLY"
-        }
-      },
-      "Action": {
-        "Allow": {}
-      },
-      "VisibilityConfig": {
-        "SampledRequestsEnabled": true,
-        "CloudWatchMetricsEnabled": true,
-        "MetricName": "Allow-ZAP-Scanner"
-      }
-    },
-    {
       "Name": "emergency-ip-block",
       "Priority": 2,
       "Statement": {

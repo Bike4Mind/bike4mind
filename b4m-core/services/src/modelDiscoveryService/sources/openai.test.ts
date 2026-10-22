@@ -98,10 +98,7 @@ describe('openai source normalization', () => {
   });
 
   it('skips an unknown object kind and keeps an unknown owner tier', () => {
-    expect(normalizeOpenAiModels(unknownEnum).records.map(record => record.modelId)).toEqual([
-      'gpt-5',
-      'gpt-5.7-quantum',
-    ]);
+    expect(normalizeOpenAiModels(unknownEnum).records.map(record => record.modelId)).toEqual(['gpt-5', 'gpt-5.7-nova']);
   });
 
   it('returns nothing for an empty list rather than inventing rows', () => {

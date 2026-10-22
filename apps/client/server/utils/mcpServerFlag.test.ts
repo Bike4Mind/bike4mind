@@ -1,0 +1,21 @@
+// @vitest-environment node
+import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ isFeatureEnabled: vi.fn() }));
+
+import { isFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { assertMcpServerEnabled } from './mcpServerFlag';
+
+describe('assertMcpServerEnabled', () => {
+  it('passes when the MCP admin flag is on', async () => {
+    vi.mocked(isFeatureEnabled).mockResolvedValue(true);
+    await expect(assertMcpServerEnabled()).resolves.toBeUndefined();
+    expect(isFeatureEnabled).toHaveBeenCalledWith('EnableMCPServer');
+  });
+
+  it('throws a ForbiddenError when the flag is off', async () => {
+    vi.mocked(isFeatureEnabled).mockResolvedValue(false);
+    await expect(assertMcpServerEnabled()).rejects.toBeInstanceOf(ForbiddenError);
+  });
+});

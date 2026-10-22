@@ -1,7 +1,8 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
+import { readEnforceMfa } from '@server/auth/signInSecondFactor';
 import { mfaService } from '@bike4mind/services';
-import { adminSettingsRepository, userRepository } from '@bike4mind/database';
+import { userRepository } from '@bike4mind/database';
 
 const handler = baseApi().get(
   asyncHandler(async (req, res) => {
@@ -17,8 +18,7 @@ const handler = baseApi().get(
         return res.status(404).json({ error: 'User not found in database' });
       }
 
-      const enforceMFASetting = await adminSettingsRepository.findBySettingName('enforceMFA');
-      const enforceMFA = enforceMFASetting?.settingValue === 'true' || false;
+      const enforceMFA = await readEnforceMfa();
 
       const status = mfaService.getMFAStatus({ user: freshUser, enforceMFA });
       res.json(status);

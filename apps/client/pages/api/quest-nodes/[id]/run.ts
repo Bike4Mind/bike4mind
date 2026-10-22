@@ -58,6 +58,7 @@ const handler = baseApi()
       userId: req.user.id,
       model: input.model,
       logger,
+      apiKeyInfo: req.apiKeyInfo,
     });
 
     respond(

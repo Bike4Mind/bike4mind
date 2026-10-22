@@ -1,9 +1,9 @@
 import { emailJobRepository } from '@bike4mind/database';
 import { ApiKeyScope, EmailJobStatus } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { sendToQueue } from '@server/utils/sqs';
-import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
-import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
   if (!req.user?.isAdmin) {

@@ -5,6 +5,7 @@ import {
   type LakeFindingDetector,
   type LakeFindingSource,
 } from '@bike4mind/common';
+import { isTransientTransactionError } from '@bike4mind/db-core';
 import { Logger } from '@bike4mind/observability';
 
 export interface RecordLakeFindingsAdapters {
@@ -21,6 +22,11 @@ export interface RecordLakeFindingsOptions {
    * identically - "everything this pass still saw" has to be a single instant to compare against.
    */
   seenAt: Date;
+  /**
+   * Rethrow the first failure instead of counting it. Set by a caller running inside a transaction,
+   * where a server-side abort poisons every later write.
+   */
+  failFast?: boolean;
 }
 
 export interface RecordLakeFindingsResult {
@@ -45,7 +51,7 @@ export interface RecordLakeFindingsResult {
 export async function recordLakeFindings(
   lakeId: string,
   findings: InconsistencyFinding[],
-  { detector, seenAt }: RecordLakeFindingsOptions,
+  { detector, seenAt, failFast }: RecordLakeFindingsOptions,
   { db, logger }: RecordLakeFindingsAdapters
 ): Promise<RecordLakeFindingsResult> {
   let recorded = 0;
@@ -69,7 +75,11 @@ export async function recordLakeFindings(
     } catch (error) {
       // Isolated per finding, the same way the detector isolates a per-member read failure: one
       // malformed subject must not cost a curator the other 199 problems this pass found. Counted
-      // and returned rather than swallowed, so a caller reports a partial write as partial.
+      // and returned rather than swallowed, so a caller reports a partial write as partial. Inside a
+      // transaction any server-side failure aborts the whole transaction, so per-finding isolation
+      // only holds outside one: the transactional caller passes failFast so a server-side abort is
+      // not swallowed, and a transient abort is always rethrown so withTransaction can retry it.
+      if (failFast || isTransientTransactionError(error)) throw error;
       failed += 1;
       logger?.error('Failed to record lake finding', {
         lakeId,

@@ -16,18 +16,19 @@ import { Request, Response, NextFunction } from 'express';
  * origin here keeps that rejection (and every real response) readable by the
  * browser; a successful 200 is only ever produced for an approved origin.
  */
-const ALLOW_METHODS = 'POST, OPTIONS';
+const DEFAULT_ALLOW_METHODS = 'POST, OPTIONS';
 const ALLOW_HEADERS = 'Content-Type, X-API-Key, Authorization';
 // Let browsers cache the preflight so a chatty widget doesn't re-preflight every turn.
 const MAX_AGE_SECONDS = '600';
 
-export function embedCors() {
+export function embedCors(opts: { methods?: string } = {}) {
+  const allowMethods = opts.methods ?? DEFAULT_ALLOW_METHODS;
   return (req: Request, res: Response, next: NextFunction): void => {
     const origin = req.headers.origin;
     if (origin) {
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Vary', 'Origin');
-      res.setHeader('Access-Control-Allow-Methods', ALLOW_METHODS);
+      res.setHeader('Access-Control-Allow-Methods', allowMethods);
       res.setHeader('Access-Control-Allow-Headers', ALLOW_HEADERS);
     }
     if (req.method === 'OPTIONS') {

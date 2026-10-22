@@ -17,6 +17,14 @@ export type CitableSourceType =
 export type CitableSourceStatus = 'pending' | 'processing' | 'complete' | 'error';
 
 /**
+ * Where a cited internal file came from, for the chip label.
+ * - `lake`: the file sits in these lakes (non-empty; a file can be in several).
+ * - `library`: no lake attribution; `owned` is whether the asker owns the file.
+ */
+export type CitableSourceOrigin =
+  { kind: 'lake'; lakes: Array<{ id: string; name: string }> } | { kind: 'library'; owned: boolean };
+
+/**
  * A unified interface for citable sources across the application.
  * Used to track and display sources referenced in AI responses.
  *
@@ -121,10 +129,22 @@ export interface CitableSource {
      */
     conflictsWith?: string[];
     /**
+     * Where the chip's file came from, which is what the chip label is built from. Absent on legacy
+     * chips and on agent-scoped KB chips, where the UI falls back to "Data Lake". `owned` is
+     * relative to the user whose retrieval produced the chip (the conversation owner), not to
+     * whoever views it later.
+     */
+    sourceOrigin?: CitableSourceOrigin;
+    /**
      * A place web_search found with provider coordinates, for the inline `b4m_map` widget. The map
      * takes its pins from here only - see WebSearchPlace.
      */
     place?: WebSearchPlace;
+    /**
+     * 1-based position in promptMeta.citables, matching the [N] markers in the reply. Stamped by
+     * forced retrieval and by tools through ToolContext.numberCitables (indexed sessions only).
+     */
+    citationIndex?: number;
     [key: string]: unknown;
   };
 }

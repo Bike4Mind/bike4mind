@@ -5,13 +5,17 @@ import {
   hearthEventKindSchema,
   hearthMachineBodySchema,
   hearthEventRefsSchema,
+  hearthEventOriginSchema,
 } from '@bike4mind/hearth';
 import { FallbackInfoSchema } from './llm';
+import { TurnTimingSchema } from './turnTiming';
 import { supportedChatModels } from '../models';
 import { shareableDocumentSchema, QUEST_ERROR_CODES, CHAT_HISTORY_ITEM_TYPES } from '../types';
 import { AGENT_EXECUTION_STATUSES, type AgentExecutionStatus } from '../constants/agentExecutionStatus';
 import { PERSISTED_SESSION_SUMMARY_TRIGGERS } from '../constants/sessionSummary';
+import { GENERATION_JOB_KINDS, GENERATION_JOB_STATES } from '../types/entities/GenerationJobTypes';
 import { findDisallowedSubscriptionFilterKeys } from './subscriptionQueryFilter';
+import { CompletionProviderBlockEventSchema, CompletionToolSchema, ResponseFormatSchema } from './cliCompletions';
 
 // Schemas for actions sent over the WebSocket connection.
 
@@ -56,6 +60,17 @@ export const HeartbeatAction = z.object({
 });
 export type IHeartbeatAction = z.infer<typeof HeartbeatAction>;
 
+/**
+ * Re-authenticate a live socket with a freshly refreshed access token. The server re-stamps the
+ * connection's auth expiry, drops all of its query subscriptions and answers with
+ * `resubscribe_required`, so every subscription is re-created under the new token.
+ */
+export const ReauthConnectionAction = z.object({
+  action: z.literal('reauth_connection'),
+  accessToken: z.string(),
+});
+export type IReauthConnectionAction = z.infer<typeof ReauthConnectionAction>;
+
 export const VoiceSessionSendTranscriptAction = z.object({
   action: z.literal('voice_session_send_transcript'),
   userId: z.string(),
@@ -88,24 +103,8 @@ export const CliCompletionRequestAction = z.object({
       temperature: z.number().optional(),
       maxTokens: z.number().optional(),
       stream: z.boolean().optional(),
-      tools: z.array(z.unknown()).optional(),
-      // structured-output contract. Mirrors ResponseFormatSchema in
-      // schemas/cliCompletions.ts. Defined inline here to avoid an import cycle
-      // between actions.ts and cliCompletions.ts.
-      response_format: z
-        .discriminatedUnion('type', [
-          z.object({ type: z.literal('text') }),
-          z.object({
-            type: z.literal('json_schema'),
-            json_schema: z.object({
-              name: z.string(),
-              description: z.string().optional(),
-              schema: z.record(z.string(), z.any()),
-              strict: z.boolean().optional().default(true),
-            }),
-          }),
-        ])
-        .optional(),
+      tools: z.array(CompletionToolSchema).optional(),
+      response_format: ResponseFormatSchema.optional(),
     })
     .optional(),
 });
@@ -123,11 +122,17 @@ export const CliToolRequestAction = z.object({
 });
 export type ICliToolRequestAction = z.infer<typeof CliToolRequestAction>;
 
+/**
+ * Realtime voice billing frame. With `responseId` it bills one response (exactly once per id) and
+ * leaves the call's credit hold open; without it, it bills `usage` and closes the hold, refunding
+ * what the call did not use. Older clients send only the latter, once per response.
+ */
 export const VoiceSessionEndedAction = z.object({
   action: z.literal('voice_session_ended'),
   userId: z.string(),
   model: z.string(),
   sessionId: z.string(),
+  responseId: z.string().min(1).max(200).optional(),
   usage: z.object({
     audioInputTokens: z.number().min(0),
     audioCachedInputTokens: z.number().min(0),
@@ -166,6 +171,12 @@ export const DataSubscribeErrorAction = z.object({
   error: z.string(),
 });
 export type IDataSubscribeErrorAction = z.infer<typeof DataSubscribeErrorAction>;
+
+/** Server -> Client: the socket was re-authenticated and its subscriptions dropped; re-send them. */
+export const ResubscribeRequiredAction = z.object({
+  action: z.literal('resubscribe_required'),
+});
+export type IResubscribeRequiredAction = z.infer<typeof ResubscribeRequiredAction>;
 
 export const LLMStatusUpdateAction = z.object({
   action: z.literal('llm_status_update'),
@@ -345,6 +356,21 @@ export const PiHistoryErrorAction = z.object({
 });
 export type IPiHistoryErrorAction = z.infer<typeof PiHistoryErrorAction>;
 
+export const GenerationJobUpdatedAction = z.object({
+  action: z.literal('generation_job_updated'),
+  job: z.object({
+    id: z.string(),
+    kind: z.enum(GENERATION_JOB_KINDS),
+    state: z.enum(GENERATION_JOB_STATES),
+    progress: z.number().min(0).max(1).optional(),
+    error: z.object({ code: z.string(), message: z.string() }).optional(),
+    output: z
+      .object({ fileId: z.string().optional(), contentType: z.string(), durationSeconds: z.number() })
+      .optional(),
+  }),
+});
+export type IGenerationJobUpdatedAction = z.infer<typeof GenerationJobUpdatedAction>;
+
 export const StreamedChatCompletionAction = z.object({
   action: z.literal('streamed_chat_completion'),
   clientId: z.string().optional(),
@@ -357,6 +383,8 @@ export const StreamedChatCompletionAction = z.object({
       replies: z.array(z.string()).optional(),
       images: z.array(z.string()).optional(),
       videos: z.array(z.string()).optional(),
+      videoJobIds: z.array(z.string()).optional(),
+      generationJobs: z.array(z.object({ id: z.string(), kind: z.enum(GENERATION_JOB_KINDS) })).optional(),
       // Derived from CHAT_HISTORY_ITEM_TYPES so the WebSocket payload cannot publish a
       // narrower quest-type vocabulary than the REST surfaces (schemas/chat.ts) do.
       type: z.enum(CHAT_HISTORY_ITEM_TYPES),
@@ -422,8 +450,10 @@ export const StreamedChatCompletionAction = z.object({
           endTime: z.number().optional(),
         })
         .optional(),
-      // Add fallback info to support backend fallback mechanism
-      fallbackInfo: FallbackInfoSchema.optional(),
+      // Add fallback info to support backend fallback mechanism. Nullish: a whole-quest payload
+      // carries the null that clears a stale value (see IChatHistoryItem.fallbackInfo).
+      fallbackInfo: FallbackInfoSchema.nullish(),
+      turnTiming: TurnTimingSchema.optional(),
       // MCP confirmation action awaiting user approval (confirm/cancel buttons)
       pendingAction: z
         .object({
@@ -574,18 +604,22 @@ export type IVoiceCreditsExhaustedAction = z.infer<typeof VoiceCreditsExhaustedA
 export const CliCompletionChunkAction = z.object({
   action: z.literal('cli_completion_chunk'),
   requestId: z.string(),
-  chunk: z.object({
-    type: z.enum(['content', 'tool_use']),
-    text: z.string(),
-    tools: z.array(z.unknown()).optional(),
-    usage: z
-      .object({
-        inputTokens: z.number().optional(),
-        outputTokens: z.number().optional(),
-      })
-      .optional(),
-    thinking: z.array(z.unknown()).optional(),
-  }),
+  chunk: z.union([
+    z.object({
+      type: z.enum(['content', 'tool_use']),
+      text: z.string(),
+      toolStarted: z.object({ name: z.string(), id: z.string().optional() }).optional(),
+      tools: z.array(z.unknown()).optional(),
+      usage: z
+        .object({
+          inputTokens: z.number().optional(),
+          outputTokens: z.number().optional(),
+        })
+        .optional(),
+      thinking: z.array(z.unknown()).optional(),
+    }),
+    CompletionProviderBlockEventSchema,
+  ]),
 });
 export type ICliCompletionChunkAction = z.infer<typeof CliCompletionChunkAction>;
 
@@ -605,6 +639,10 @@ export const CliCompletionErrorAction = z.object({
   action: z.literal('cli_completion_error'),
   requestId: z.string(),
   error: z.string(),
+  /** Seconds until the caller's rate-limit window reopens; present only on a rate-limit refusal. */
+  retryAfter: z.number().optional(),
+  /** Machine-readable reason on a request the caller must fix (a 4xx), e.g. `tool_search_unsupported`. */
+  errorCode: z.string().optional(),
 });
 export type ICliCompletionErrorAction = z.infer<typeof CliCompletionErrorAction>;
 
@@ -894,6 +932,8 @@ export const HearthEventAction = z.object({
     }),
     machine: hearthMachineBodySchema.optional(),
     refs: hearthEventRefsSchema.prefault({}),
+    // Server-set provenance; surfaces badge api-key/gateway writes.
+    origin: hearthEventOriginSchema.optional(),
     createdAt: z.string(),
   }),
 });
@@ -1295,6 +1335,11 @@ export const AgentProgressAction = z.object({
   status: z.string().optional(),
   creditsUsed: z.number().optional(),
   iteration: z.number().optional(),
+  // Jobs a tool just started, or a write preview awaiting confirmation, so the client can render
+  // their cards on the run's quest mid-run. questId is only set together with generationJobs or pendingAction.
+  questId: z.string().optional(),
+  generationJobs: z.array(z.object({ id: z.string(), kind: z.enum(GENERATION_JOB_KINDS) })).optional(),
+  pendingAction: z.object({ tool: z.string(), params: z.record(z.string(), z.unknown()), ts: z.number() }).optional(),
 });
 
 export const AgentCompletedAction = z.object({
@@ -1432,6 +1477,17 @@ export const PermissionRequestAction = z.object({
   toolCallId: z.string().optional(),
 });
 
+export const ConfidenceGateAction = z.object({
+  action: z.literal('confidence_gate'),
+  executionId: z.string(),
+  /** 0-indexed wire convention, matching `permission_request` and `IterationStream`. */
+  iteration: z.number(),
+  /** 0..1, the agent's reported confidence for the paused iteration. */
+  confidence: z.number(),
+  /** Pre-formatted server copy, e.g. "Iteration confidence 42% below threshold 60%". */
+  reason: z.string(),
+});
+
 /**
  * Persisted snapshot of a non-background child subagent execution. Replayed on
  * reconnect so `SubagentStepNest` can re-render the nested iteration
@@ -1490,8 +1546,13 @@ export const ChildExecutionSnapshotSchema: z.ZodType<ChildExecutionSnapshotShape
 
 export const ReconnectResultAction = z.object({
   action: z.literal('reconnect_result'),
+  requestId: z.string().optional(),
   found: z.boolean(),
   executionId: z.string().optional(),
+  // The session the found run belongs to, so the client stamps it from the
+  // response rather than correlating responses with requests. Absent on
+  // `found: false`, and on frames from servers that predate the echo.
+  sessionId: z.string().optional(),
   // Same enum reasoning as `ChildExecutionSnapshotSchema.status` - a free
   // string forced the client to re-narrow on every read. `.optional()` because
   // a `found: false` frame omits it.
@@ -1504,6 +1565,17 @@ export const ReconnectResultAction = z.object({
       // Carried through reconnect so a client that refreshes mid-pause still
       // has the identity `permission_response` needs - see `PermissionRequestAction`.
       toolCallId: z.string().optional(),
+    })
+    .optional(),
+  // Written atomically with `status: 'paused'` by the executor, so a reconnect
+  // to a gate-paused run gets both and can re-render the gate card.
+  pendingGate: z
+    .object({
+      /** 0-indexed wire convention, matching `ConfidenceGateAction` and `IterationStream`. */
+      iteration: z.number(),
+      confidence: z.number(),
+      reason: z.string(),
+      requestedAt: z.union([z.string(), z.date()]),
     })
     .optional(),
   totalCreditsUsed: z.number().optional(),
@@ -1529,6 +1601,7 @@ export const MessageDataToServer = z.discriminatedUnion('action', [
   DataSubscribeRequestAction,
   DataUnsubscribeRequestAction,
   HeartbeatAction,
+  ReauthConnectionAction,
   VoiceSessionSendTranscriptAction,
   VoiceSessionEndedAction,
   CliCompletionRequestAction,
@@ -1552,8 +1625,10 @@ export const OptiHashiRunUpdatedAction = z.object({
 export type IOptiHashiRunUpdatedAction = z.infer<typeof OptiHashiRunUpdatedAction>;
 
 export const MessageDataToClient = z.discriminatedUnion('action', [
+  GenerationJobUpdatedAction,
   DataSubscriptionUpdateAction,
   DataSubscribeErrorAction,
+  ResubscribeRequiredAction,
   InboxRefetchAction,
   LLMStatusUpdateAction,
   InvitesRefetchAction,
@@ -1611,6 +1686,7 @@ export const MessageDataToClient = z.discriminatedUnion('action', [
   SubagentFailedAction,
   SubagentProgressAction,
   PermissionRequestAction,
+  ConfidenceGateAction,
   ReconnectResultAction,
 ]);
 export type IMessageDataToClient = z.infer<typeof MessageDataToClient>;

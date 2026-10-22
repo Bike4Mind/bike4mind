@@ -73,13 +73,14 @@ vi.mock('../di/registry', () => ({
     },
     chatCompletionDefaults: {
       defaultChatCompletionOptions: {},
+      getSharedTokenizer: vi.fn(),
     },
   }),
 }));
 
 // Mock ChatCompletionInvoke
 const mockInvoke = vi.fn();
-vi.mock('@bike4mind/services/llm', () => ({
+vi.mock('@bike4mind/services/llm/ChatCompletionInvoke', () => ({
   ChatCompletionInvoke: vi.fn().mockImplementation(function () {
     return {
       invoke: mockInvoke,
@@ -255,6 +256,7 @@ describe('GlobalShortcutHandlers', () => {
 
       expect(mockUserFindOne).toHaveBeenCalledWith({
         'slackSettings.slackUserId': 'U12345',
+        'slackSettings.slackTeamId': { $type: 'string', $ne: '' },
       });
     });
   });
@@ -289,9 +291,14 @@ describe('GlobalShortcutHandlers', () => {
       const result = await handleCreateNotebookSubmission(basePayload, 'xoxb-token');
 
       expect(result).toEqual({});
-      expect(mockCreateSession).toHaveBeenCalledWith('user123', { name: 'My Test Notebook' }, expect.anything(), {
-        setLastNotebook: true,
-      });
+      expect(mockCreateSession).toHaveBeenCalledWith(
+        'user123',
+        { name: 'My Test Notebook', origin: { channel: 'slack' } },
+        expect.anything(),
+        {
+          setLastNotebook: true,
+        }
+      );
     });
 
     it('should generate default name when notebook name is empty', async () => {
@@ -313,7 +320,7 @@ describe('GlobalShortcutHandlers', () => {
 
       expect(mockCreateSession).toHaveBeenCalledWith(
         'user123',
-        { name: expect.stringContaining('Slack Chat') },
+        { name: expect.stringContaining('Slack Chat'), origin: { channel: 'slack' } },
         expect.anything(),
         { setLastNotebook: true }
       );
@@ -443,6 +450,12 @@ describe('GlobalShortcutHandlers', () => {
     it('should return empty response on valid submission', async () => {
       const result = await handleQuickAskSubmission(basePayload, 'xoxb-token');
       expect(result).toEqual({});
+    });
+
+    it('invokes the completion as an internal-origin caller', async () => {
+      await handleQuickAskSubmission(basePayload, 'xoxb-token');
+      await vi.waitFor(() => expect(mockInvoke).toHaveBeenCalled());
+      expect(mockInvoke).toHaveBeenCalledWith(expect.objectContaining({ authOrigin: 'internal' }));
     });
 
     it('should return error when userId is missing from metadata', async () => {

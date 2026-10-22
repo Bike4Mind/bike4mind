@@ -11,7 +11,10 @@ interface VerifyDeviceRequest {
 interface VerifyDeviceResponse {
   success: true;
   device_info: {
+    /** Raw client_id slug the device flow was initiated with (see OAUTH_DEVICE_CLIENT_IDS). */
     client_type: string;
+    /** Same client, worded for the user. Show this, not the slug. */
+    client_name: string;
     ip_address: string;
     created_at: string;
   };

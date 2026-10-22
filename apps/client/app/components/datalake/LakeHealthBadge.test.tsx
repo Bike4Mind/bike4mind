@@ -122,6 +122,30 @@ const health = (over?: Record<string, unknown>) => ({
   ...over,
 });
 
+describe('LakeHealthBadge creator qualifier', () => {
+  const renderBadge = (viewerIsCreator?: boolean) => {
+    useGetDataLakeHealth.mockReturnValue({ data: health({ reachableShare: 0.5 }), isLoading: false });
+    render(
+      <Wrapper>
+        <LakeHealthBadge lakeId="l1" viewerIsCreator={viewerIsCreator} />
+      </Wrapper>
+    );
+    return screen.getByTestId('datalake-health-badge-l1');
+  };
+
+  it('shows no qualifier when the viewer is the creator', () => {
+    expect(renderBadge(true)).toHaveTextContent(/^Reachable 50%$/);
+  });
+
+  it("names the creator's view for a non-creator", () => {
+    expect(renderBadge(false)).toHaveTextContent("Reachable 50% (creator's view)");
+  });
+
+  it('keeps the qualifier when the viewer is unknown', () => {
+    expect(renderBadge(undefined)).toHaveTextContent("Reachable 50% (creator's view)");
+  });
+});
+
 describe('LakeHealthBadge render', () => {
   it('renders nothing while loading or before data', () => {
     useGetDataLakeHealth.mockReturnValue({ data: undefined, isLoading: true });

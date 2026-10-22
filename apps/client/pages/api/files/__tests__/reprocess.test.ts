@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { BadRequestError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 
 const LAKE_TAG = 'datalake:test-lake';
 const LAKE_ID = 'lake-1';
@@ -16,19 +16,24 @@ const h = vi.hoisted(() => ({
   sendToQueue: vi.fn(),
   sendToClient: vi.fn(),
   getSourceQueueUrl: vi.fn(),
+  baseApiOptions: undefined as unknown,
 }));
 
-// Single-method chain: the route only calls `.post(...)`.
+// Single-method chain: the route only calls `.post(...)`. Captures the options for the scope-gate
+// test below.
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({ post: (fn: unknown) => fn }),
+  baseApi: (options: unknown) => {
+    h.baseApiOptions = options;
+    return { post: (fn: unknown) => fn };
+  },
 }));
 
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'wss://test' } } }));
 
 vi.mock('@server/managers/fabFileManager', () => ({ getFabFileById: h.getFabFileById }));
-vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: h.sendToClient }));
-vi.mock('@server/utils/dlqRegistry', () => ({ getSourceQueueUrl: h.getSourceQueueUrl }));
+vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({ getSourceQueueUrl: h.getSourceQueueUrl }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 vi.mock('@server/dataLakes/dataLakeScopes', () => ({ assertDataLakeWriteScope: h.assertDataLakeWriteScope }));
 
@@ -107,8 +112,9 @@ describe('reprocess handler (unit) - authorization', () => {
     await run({ fabFileId: 'f1' }, res, OWNER);
 
     expect(h.assertLakeRebuildAccess).not.toHaveBeenCalled();
-    // The owner path must stay scope-less: this route declares no `requiredScopes`, so gating it
-    // would 403 a file-scoped key reprocessing its own file - a regression this change must not make.
+    // The owner path must stay clear of the DATA LAKE scope gate: `datalake:write` is only asserted
+    // on the named-lake path below, so a files:write-only key reprocessing its own file must not
+    // be routed through it - a regression this change must not make.
     expect(h.assertDataLakeWriteScope).not.toHaveBeenCalled();
     expect(json).toHaveBeenCalledWith({ messageId: 'msg-1' });
   });
@@ -244,5 +250,9 @@ describe('reprocess handler (unit) - authorization', () => {
 
     await expect(run({ fabFileId: 'f1', dataLakeId: LAKE_ID }, res)).rejects.toThrow(/currently being chunked/i);
     expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('requires files:write at the baseApi route gate', () => {
+    expect(h.baseApiOptions).toEqual({ requiredScopes: ['files:write'] });
   });
 });

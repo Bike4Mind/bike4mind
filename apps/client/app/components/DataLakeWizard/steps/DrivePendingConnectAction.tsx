@@ -1,44 +1,58 @@
+import { useEffect } from 'react';
 import { Button, Chip, Stack, Typography } from '@mui/joy';
 import CloudIcon from '@mui/icons-material/Cloud';
 import CloseIcon from '@mui/icons-material/Close';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
-import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { useDriveFolderPicker } from '@client/app/hooks/data/useDriveFolderPicker';
+import { activeOrgId } from '@client/app/hooks/data/dataLakes';
+import { useUser } from '@client/app/contexts/UserContext';
+import { saveDriveConnectHandoff, takeDrivePickerResume } from '@client/app/utils/driveConnectHandoff';
 import { DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
 import DriveAccessDisclosure from './DriveAccessDisclosure';
-import DriveConnectUnavailableButton from './DriveConnectUnavailableButton';
 
 /**
  * Pick a Google Drive folder while CREATING a data lake. There is no lake id to bind to yet, so the
  * selection is parked in wizard state and connected on commit - which is what lets a lake be created
  * from a Drive folder alone, with no local files, and lets abandoning the wizard leave nothing behind
  * (#1916). The existing-lake surface is DriveConnectAction, which connects immediately.
+ *
+ * Offered in every account scope: the wizard creates the lake in whatever scope the account switcher
+ * is on, and drive-sync accepts both - an org lake from an org owner/manager, a personal lake from
+ * its creator (the caller, here). Create mode has no lake to read canManage off, so the org role
+ * stays the server's call and a refusal rolls the new lake back (see useCreateLakeFromDrive).
+ *
+ * A first-time connect leaves the page for Google consent, so the wizard's typed-in config is saved
+ * first; the Drive callback route reopens the wizard from it and asks this action to open the picker.
  */
 export default function DrivePendingConnectAction() {
   const pendingDriveFolder = useDataLakeWizardStore(s => s.pendingDriveFolder);
   const setPendingDriveFolder = useDataLakeWizardStore(s => s.setPendingDriveFolder);
 
-  // POST /api/data-lakes/drive-sync refuses a lake with no organizationId, and the wizard creates
-  // the lake in whatever scope the account switcher is on - so in Personal scope this action could
-  // only ever create a lake and then fail to connect it. Same condition as SelectedLakeHeader's
-  // canConnectDrive, minus the role half: create mode has no lake to read canManage off, so org
-  // owner/manager stays the server's call and a refusal rolls the new lake back (see
-  // useCreateLakeFromDrive).
-  const selectedAccount = useSelectedAccount(s => s.selectedAccount);
-  const isOrgScope = !!selectedAccount && !selectedAccount.personal;
-
   const { openFolderPicker, isPicking } = useDriveFolderPicker({
     onPicked: folder => setPendingDriveFolder(folder),
+    onBeforeRedirect: authUrl => {
+      const userId = useUser.getState().currentUser?.id;
+      if (!userId) return;
+      const { config, autoDerivedTagPrefix, optionalSteps } = useDataLakeWizardStore.getState();
+      saveDriveConnectHandoff(
+        {
+          kind: 'createWizard',
+          userId,
+          organizationId: activeOrgId() ?? null,
+          config,
+          autoDerivedTagPrefix,
+          optionalSteps,
+        },
+        authUrl
+      );
+    },
   });
 
-  if (!isOrgScope) {
-    return (
-      <DriveConnectUnavailableButton
-        testId="drive-connect-personal-scope-btn"
-        reason={`Google Drive folders can only feed an organization ${DATA_LAKE}. Switch to your organization in the account selector, then connect a folder.`}
-      />
-    );
-  }
+  useEffect(() => {
+    if (takeDrivePickerResume(useUser.getState().currentUser?.id)) void openFolderPicker();
+    // Mount-only: the resume signal is one-shot and only meaningful as the resumed wizard appears.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   if (pendingDriveFolder) {
     return (

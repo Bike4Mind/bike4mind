@@ -1,5 +1,8 @@
 import { sessionService, dataLakeService } from '@bike4mind/services';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
+import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
+import { decodeCursor, encodeCursor } from '@server/utils/cursorPagination';
+import { UnprocessableEntityError } from '@bike4mind/server-utils/utils/errors';
 import {
   agentRepository,
   dataLakeAccessGrantRepository,
@@ -14,28 +17,59 @@ import {
   activityRepository,
 } from '@bike4mind/database';
 import { logEvent } from '@server/utils/analyticsLog';
-import { isValidObjectId } from '@server/utils/objectId';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
+import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import {
   SessionEvents,
   ProjectEvents,
   redactSessionForClient,
   createSessionContract,
+  listSessionsContract,
+  type ISessionDocument,
+  type SessionResponse,
+  ApiKeyScope,
   BadRequestError,
   ForbiddenError,
   NotFoundError,
+  canUseSurface,
+  getWorkspaceSurface,
 } from '@bike4mind/common';
+import { surfaceAccessForRequest } from '@server/entitlements/surfaceAccess';
 import { projectService } from '@bike4mind/services';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
-import { ActivityType } from '@client/config/activities';
+import { ActivityType } from '@bike4mind/server-utils/config/activityType';
+import { holdsApiKeyScope } from '@server/middlewares/apiKeyScopeGate';
 import { CreateSessionRequestBody } from '../../../../types/api';
+import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';
+
+/**
+ * The only fields a key holding `ai:generate` WITHOUT `notebooks:write` may set. Everything else
+ * (project, lake, files, agents, retrieval, tools, surface, prompts) can attach the session to
+ * shared content, so it stays behind notebooks:write. An allowlist, so a new schema field is
+ * denied to these keys until someone adds it here.
+ */
+const BARE_SESSION_FIELDS: ReadonlySet<string> = new Set([
+  'name',
+  'lastUsedModel',
+  'temperature',
+  'autoNamePlaceholder',
+]);
 
 /** See the cap check in the handler - bounds a sequential, two-reads-per-id authorization loop. */
 const MAX_PREAUTHORIZED_LAKES = 10;
 
-const handler = nextRouteForContract(createSessionContract).post(async (req, res) => {
+// Exported for the legacy POST /api/sessions/create alias, which must not also answer GET.
+export const createSessionRouter = nextRouteForContract(createSessionContract).post(async (req, res) => {
   const userId = req.user.id;
   const body = req.validated;
   const { projectId } = body;
+
+  // The route gate admits ai:generate so a generate-only key can open a bare session. Anything
+  // beyond that needs notebooks:write; a JWT caller has no apiKeyInfo and is unaffected.
+  const setFields = Object.keys(body).filter(k => body[k as keyof typeof body] != null);
+  if (setFields.some(k => !BARE_SESSION_FIELDS.has(k)) && !holdsApiKeyScope(req, [ApiKeyScope.WRITE_NOTEBOOKS])) {
+    throw new ForbiddenError('Insufficient API key permissions', { required_scopes: [ApiKeyScope.WRITE_NOTEBOOKS] });
+  }
 
   // corpusGroundingMode is resolved server-side from the lake (resolveLakeSessionDefaults) whenever
   // a lake is named, never client-supplied for one: strip it unconditionally when `dataLakeId` is
@@ -47,6 +81,17 @@ const handler = nextRouteForContract(createSessionContract).post(async (req, res
   const namesALakeByTagsOnly = !body.dataLakeId && Array.isArray(body.retrievalTags) && body.retrievalTags.length > 0;
   if (!namesALakeByTagsOnly) {
     delete body.corpusGroundingMode;
+  }
+
+  // Only REGISTERED surfaces are entitlement-checked. Private modules create sessions under surface
+  // strings this repo does not register (see surfaces.ts) and rely on that write passing through as
+  // it always has, so an unknown surface is deliberately left alone here.
+  if (
+    body.surface &&
+    getWorkspaceSurface(body.surface) &&
+    !canUseSurface(await surfaceAccessForRequest(req)(), body.surface)
+  ) {
+    throw new ForbiddenError('You do not have access to that workspace');
   }
 
   // Manage-but-not-member admission: a lake maintainer who is not a member of the lake's org (or
@@ -140,30 +185,33 @@ const handler = nextRouteForContract(createSessionContract).post(async (req, res
     createParams = { ...lakeDefaults, ...body } as CreateSessionRequestBody;
   }
 
-  const newSession = await sessionService.createSession(req.user, createParams, {
-    db: {
-      sessions: sessionRepository,
-      projects: projectRepository,
-      fabFiles: fabFileRepository,
-      agents: agentRepository,
+  const newSession = await sessionService.createSession(
+    req.user,
+    createParams,
+    {
+      db: {
+        sessions: sessionRepository,
+        projects: projectRepository,
+        fabFiles: fabFileRepository,
+        agents: agentRepository,
+      },
+      logger: req.logger,
+      // See the update route: the ownership reader cannot see a lake-membership file, so without
+      // this a session started from a teammate's org-lake file derives no scope at all.
+      //
+      // Imported at CALL time, not module load: the resolver's dependency graph reaches the Mongoose
+      // models, which pulls schema construction into the import graph of every consumer of this
+      // route. It is only needed when files are actually attached, so paying for it lazily keeps the
+      // route's static imports as they were.
+      resolveLakeAccess: async () =>
+        (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScope(req),
+      // The attachment door's lake arms, so a supplied lake file passes the access check.
+      resolveAttachmentLakeAccess: async () =>
+        (await import('@server/dataLakes/attachmentLakeAccess')).createAttachmentLakeAccess(req.user, req.logger)(),
+      workspaceSessionSettings: premiumWorkspaceSessionSettings,
     },
-    logger: req.logger,
-    // See the update route: the ownership reader cannot see a lake-membership file, so without
-    // this a session started from a teammate's org-lake file derives no scope at all.
-    //
-    // Imported at CALL time, not module load: the resolver's dependency graph reaches the Mongoose
-    // models, which pulls schema construction into the import graph of every consumer of this
-    // route. It is only needed when files are actually attached, so paying for it lazily keeps the
-    // route's static imports as they were.
-    resolveLakeAccess: async () =>
-      (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScope(req),
-    // The attachment door's lake arms, so a supplied lake file passes the access check.
-    resolveAttachmentLakeAccess: async () =>
-      (await import('@server/queueHandlers/agentExecutor.attachmentLakeAccess')).createAttachmentLakeAccess(
-        req.user,
-        req.logger
-      )(),
-  });
+    { origin: resolveSessionOrigin(req) }
+  );
 
   // Separate, authorized write - never part of createSession's own params (see above). The
   // in-memory mutation keeps `newSession` faithful to the record for any later reader in this
@@ -236,10 +284,62 @@ const handler = nextRouteForContract(createSessionContract).post(async (req, res
   return res.json(redactSessionForClient(newSession));
 });
 
+const LIST_CURSOR_SCOPE = 'v1.sessions';
+
+/**
+ * Explicit allowlist onto the public SessionResponse shape. Redaction already strips the
+ * server-owned fields; the allowlist additionally keeps every undocumented internal field off
+ * the wire, so a new ISession field is private until someone adds it here and to the schema.
+ */
+function toPublicSession(session: ISessionDocument): SessionResponse {
+  const redacted = redactSessionForClient(session);
+  return {
+    id: redacted.id,
+    _id: redacted.id,
+    name: redacted.name,
+    userId: redacted.userId,
+    knowledgeIds: redacted.knowledgeIds,
+    artifactIds: redacted.artifactIds,
+    tags: redacted.tags?.map(({ name, strength }) => ({ name, strength })),
+    forceKnowledgeRetrieval: redacted.forceKnowledgeRetrieval,
+    retrievalTags: redacted.retrievalTags,
+    lakeScopeExplicit: redacted.lakeScopeExplicit,
+    lastUsedModel: redacted.lastUsedModel,
+    firstCreated: redacted.firstCreated,
+    lastUpdated: redacted.lastUpdated,
+  };
+}
+
+// Lists only the caller's OWN sessions (userId match); shared sessions stay on the SPA's
+// GET /api/sessions/shared. Paged by _id rather than lastUpdated: lastUpdated moves on every edit,
+// which would skip or repeat rows across pages.
+const listSessionsRouter = nextRouteForContract(listSessionsContract, {
+  exemptReadsFromDailyRateLimit: true,
+}).get(async (req, res) => {
+  const { limit, cursor, search, surface, origin } = req.validatedQuery;
+  const beforeId = cursor === undefined ? undefined : decodeCursor(cursor, LIST_CURSOR_SCOPE);
+  // A decoded id is client-controlled; keep a malformed one away from Mongo.
+  if (beforeId !== undefined && !isValidObjectId(beforeId)) {
+    throw new UnprocessableEntityError('Invalid cursor');
+  }
+  // One extra row tells whether another page exists without a count query.
+  const rows = await sessionRepository.listByUserId({
+    userId: req.user.id,
+    search,
+    surface,
+    filters: origin ? { origin } : undefined,
+    beforeId,
+    limit: limit + 1,
+  });
+  const page = rows.slice(0, limit);
+  const nextCursor = rows.length > limit ? encodeCursor(LIST_CURSOR_SCOPE, page[page.length - 1].id) : null;
+  return res.json({ data: page.map(toPublicSession), next_cursor: nextCursor });
+});
+
 export const config = {
   api: {
     externalResolver: true,
   },
 };
 
-export default handler;
+export default dispatchByMethod({ GET: listSessionsRouter, POST: createSessionRouter });

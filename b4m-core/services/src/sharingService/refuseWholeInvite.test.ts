@@ -45,17 +45,37 @@ describe('sharingService - refuseWholeInvite', () => {
 
     await refuseWholeInvite(user, { id: '65a1f77bcf86cd7994390001' }, { db } as any);
 
-    expect(db.invites.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        remaining: 1,
-        recipients: {
-          pending: ['other@example.com'],
-          accepted: [],
-          refused: ['already-refused@example.com', 'me@example.com'],
-        },
-      })
-    );
+    expect(db.invites.update).toHaveBeenCalledTimes(1);
+    expect(db.invites.update.mock.calls[0][0]).toStrictEqual({
+      id: '65a1f77bcf86cd7994390001',
+      remaining: 1,
+      recipients: {
+        pending: ['other@example.com'],
+        accepted: [],
+        refused: ['already-refused@example.com', 'me@example.com'],
+      },
+    });
     expect(db.fabFiles.shareable.findShareAccessById).not.toHaveBeenCalled();
+  });
+
+  it('lets a named recipient decline when their stored email differs only in case', async () => {
+    const invite = {
+      id: '65a1f77bcf86cd7994390001',
+      type: InviteType.Project,
+      documentId: 'doc-1',
+      remaining: 1,
+      recipients: { pending: ['me@example.com'], accepted: [], refused: [] },
+    };
+    db.invites.findById.mockResolvedValueOnce(invite).mockResolvedValueOnce({ ...invite });
+
+    await refuseWholeInvite({ ...user, email: 'Me@Example.com' }, { id: invite.id }, { db } as any);
+
+    expect(db.invites.update.mock.calls[0][0]).toStrictEqual({
+      id: invite.id,
+      remaining: 0,
+      recipients: { pending: [], accepted: [], refused: ['Me@Example.com'] },
+    });
+    expect(db.projects.shareable.findShareAccessById).not.toHaveBeenCalled();
   });
 
   it('denies a non-recipient without share authority on the underlying document', async () => {
@@ -88,12 +108,12 @@ describe('sharingService - refuseWholeInvite', () => {
     await refuseWholeInvite(user, { id: '65a1f77bcf86cd7994390001' }, { db } as any);
 
     expect(db.fabFiles.shareable.findShareAccessById).toHaveBeenCalledWith(user, 'doc-1');
-    expect(db.invites.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        remaining: 0,
-        recipients: expect.objectContaining({ pending: [] }),
-      })
-    );
+    expect(db.invites.update).toHaveBeenCalledTimes(1);
+    expect(db.invites.update.mock.calls[0][0]).toStrictEqual({
+      id: '65a1f77bcf86cd7994390001',
+      remaining: 0,
+      recipients: { pending: [], accepted: [], refused: [] },
+    });
   });
 
   it('denies a random holder of a link invite id who lacks share authority (the other half of the defect)', async () => {
@@ -130,7 +150,12 @@ describe('sharingService - refuseWholeInvite', () => {
 
     await refuseWholeInvite(user, { id: '65a1f77bcf86cd7994390001' }, { db } as any);
 
-    expect(db.invites.update).toHaveBeenCalledWith(expect.objectContaining({ remaining: 0 }));
+    expect(db.invites.update).toHaveBeenCalledTimes(1);
+    expect(db.invites.update.mock.calls[0][0]).toStrictEqual({
+      id: '65a1f77bcf86cd7994390001',
+      remaining: 0,
+      recipients: { pending: [], accepted: [], refused: [] },
+    });
   });
 
   // The other half of the same pair: the id opening this door grants nothing on its own.
@@ -165,7 +190,12 @@ describe('sharingService - refuseWholeInvite', () => {
 
     await refuseWholeInvite(user, { id: '65a1f77bcf86cd7994390001' }, { db } as any);
 
-    expect(db.invites.update).toHaveBeenCalledWith(expect.objectContaining({ remaining: 0 }));
+    expect(db.invites.update).toHaveBeenCalledTimes(1);
+    expect(db.invites.update.mock.calls[0][0]).toStrictEqual({
+      id: '65a1f77bcf86cd7994390001',
+      remaining: 0,
+      recipients: { pending: [], accepted: [], refused: [] },
+    });
   });
 
   it('throws NotFoundError when the invite does not exist', async () => {
@@ -183,9 +213,15 @@ describe('sharingService - refuseWholeInvite', () => {
       recipients: { pending: ['someone-else@example.com'], accepted: [], refused: [] },
     };
     db.invites.findById.mockResolvedValue(invite);
-    db.organizations.findById.mockResolvedValue({ id: 'org-1', userId: 'other', users: [{ userId: 'member-1', permissions: ['read'] }] });
+    db.organizations.findById.mockResolvedValue({
+      id: 'org-1',
+      userId: 'other',
+      users: [{ userId: 'member-1', permissions: ['read'] }],
+    });
 
-    await expect(refuseWholeInvite(member, { id: '65a1f77bcf86cd7994390001' }, { db } as any)).rejects.toThrow(ForbiddenError);
+    await expect(refuseWholeInvite(member, { id: '65a1f77bcf86cd7994390001' }, { db } as never)).rejects.toThrow(
+      ForbiddenError
+    );
     expect(db.invites.update).not.toHaveBeenCalled();
   });
 
@@ -204,7 +240,12 @@ describe('sharingService - refuseWholeInvite', () => {
 
     await refuseWholeInvite(owner, { id: '65a1f77bcf86cd7994390002' }, { db } as any);
 
-    expect(db.invites.update).toHaveBeenCalledWith(expect.objectContaining({ remaining: 0 }));
+    expect(db.invites.update).toHaveBeenCalledTimes(1);
+    expect(db.invites.update.mock.calls[0][0]).toStrictEqual({
+      id: '65a1f77bcf86cd7994390002',
+      remaining: 0,
+      recipients: { pending: [], accepted: [], refused: [] },
+    });
   });
 
   it('rejects an expired invite even for a named pending recipient', async () => {
@@ -250,12 +291,12 @@ describe('sharingService - refuseWholeInvite', () => {
 
       await refuseWholeInvite(user, { id: TOKEN }, { db } as any);
 
-      expect(db.invites.update).toHaveBeenCalledWith(
-        expect.objectContaining({
-          remaining: 1,
-          recipients: expect.objectContaining({ pending: ['other@example.com'] }),
-        })
-      );
+      expect(db.invites.update).toHaveBeenCalledTimes(1);
+      expect(db.invites.update.mock.calls[0][0]).toStrictEqual({
+        id: ID,
+        remaining: 1,
+        recipients: { pending: ['other@example.com'], accepted: [], refused: ['me@example.com'] },
+      });
     });
 
     // The same regression from the other side: closing the id door for every tokenized invite would
@@ -266,12 +307,12 @@ describe('sharingService - refuseWholeInvite', () => {
 
       await refuseWholeInvite(user, { id: ID }, { db } as any);
 
-      expect(db.invites.update).toHaveBeenCalledWith(
-        expect.objectContaining({
-          remaining: 1,
-          recipients: expect.objectContaining({ pending: ['other@example.com'] }),
-        })
-      );
+      expect(db.invites.update).toHaveBeenCalledTimes(1);
+      expect(db.invites.update.mock.calls[0][0]).toStrictEqual({
+        id: ID,
+        remaining: 1,
+        recipients: { pending: ['other@example.com'], accepted: [], refused: ['me@example.com'] },
+      });
     });
   });
 });

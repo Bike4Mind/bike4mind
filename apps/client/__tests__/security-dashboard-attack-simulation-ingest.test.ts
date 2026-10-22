@@ -36,7 +36,7 @@ vi.mock('@aws-sdk/client-sqs', () => ({
   }),
 }));
 
-vi.mock('@server/utils/dlqRegistry', () => ({
+vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({
   getSourceQueueUrl: vi.fn().mockReturnValue('https://sqs.us-east-1.amazonaws.com/123/secopsTriageQueue'),
 }));
 
@@ -61,7 +61,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   }),
 }));
 
-vi.mock('@server/security/resolveStage', () => ({
+vi.mock('@bike4mind/server-utils/security/resolveStage', () => ({
   resolveStage: vi.fn(() => 'dev'),
 }));
 

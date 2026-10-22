@@ -100,4 +100,63 @@ describe('JiraApi Watcher Operations', () => {
       expect(callArgs[1]?.method).toBe('DELETE');
     });
   });
+
+  describe('issue key handling in watcher paths', () => {
+    it('encodes the issue key as a single path segment', async () => {
+      const mockFetch = global.fetch as ReturnType<typeof vi.fn>;
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 204,
+        headers: new Headers(),
+        text: async () => '',
+      } as Response);
+
+      await jiraApi.addWatcher({ issueKey: 'PROJ-1/comment', accountId: 'acc-1' });
+
+      expect(mockFetch.mock.calls[0][0]).toContain('/issue/PROJ-1%2Fcomment/watchers');
+    });
+
+    it.each(['PROJ-1?x=', 'PROJ-1#', '%2e%2e'])('keeps issue key %s inside one encoded segment', async issueKey => {
+      const mockFetch = global.fetch as ReturnType<typeof vi.fn>;
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 204,
+        headers: new Headers(),
+        text: async () => '',
+      } as Response);
+
+      await jiraApi.removeWatcher({ issueKey, accountId: 'acc-1' });
+
+      const url = new URL(mockFetch.mock.calls[0][0]);
+      expect(url.pathname.endsWith(`/issue/${encodeURIComponent(issueKey)}/watchers`)).toBe(true);
+      expect(url.hash).toBe('');
+      expect([...url.searchParams.keys()]).toEqual(['accountId']);
+    });
+
+    it.each(['addWatcher', 'removeWatcher'] as const)(
+      '%s rejects a dot-segment issue key without sending a request',
+      async method => {
+        const mockFetch = global.fetch as ReturnType<typeof vi.fn>;
+
+        await expect(jiraApi[method]({ issueKey: '..', accountId: 'acc-1' })).rejects.toThrow('Invalid API path');
+        expect(mockFetch).not.toHaveBeenCalled();
+      }
+    );
+
+    it('keeps a multi-segment issue key inside one segment on other issue endpoints', async () => {
+      const mockFetch = global.fetch as ReturnType<typeof vi.fn>;
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 204,
+        headers: new Headers(),
+        text: async () => '',
+      } as Response);
+
+      await jiraApi.deleteIssue({ issueKey: 'PROJ-1/comment/10001' });
+
+      const [url, init] = mockFetch.mock.calls[0];
+      expect(new URL(url).pathname.endsWith('/issue/PROJ-1%2Fcomment%2F10001')).toBe(true);
+      expect(init.method).toBe('DELETE');
+    });
+  });
 });

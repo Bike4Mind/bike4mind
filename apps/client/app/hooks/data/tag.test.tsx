@@ -22,7 +22,7 @@ vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (k: string) => k }) }));
 
 import { toast } from 'sonner';
-import { useCreateFileTag, useDeleteFileTag, useUpdateFileTag } from './tag';
+import { useCreateFileTag, useDeleteFileTag, useToggleTagToFiles, useUpdateFileTag } from './tag';
 
 const CACHED_TAG = { id: 'tag-1', name: 'invoices', color: 'blue', fileCount: 7 } as IFileTagWithFileCount;
 
@@ -252,5 +252,43 @@ describe('file tag mutations with an empty cache', () => {
 
     expect(toast.error).not.toHaveBeenCalled();
     expect(cachedTags()).toEqual([]);
+  });
+});
+
+describe('useToggleTagToFiles', () => {
+  const wrapper = ({ children }: { children: React.ReactNode }) => (
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      {children}
+    </QueryClientProvider>
+  );
+  const run = (count: number) => {
+    const ids = Array.from({ length: count }, (_, i) => `file-${i}`);
+    const { result } = renderHook(() => useToggleTagToFiles(), { wrapper });
+    return act(async () => {
+      await result.current.mutateAsync({ ids, tags: [{ name: 'invoices' } as IFileTag] }).catch(() => undefined);
+    });
+  };
+
+  beforeEach(() => {
+    mockPost.mockReset();
+    vi.mocked(toast.error).mockClear();
+  });
+
+  it('reports a partial apply when a later chunk fails after an earlier one committed', async () => {
+    mockPost
+      .mockResolvedValueOnce({ data: Array.from({ length: 100 }, (_, i) => ({ id: `file-${i}` })) })
+      .mockRejectedValueOnce(new Error('boom'));
+
+    await run(101);
+
+    expect(toast.error).toHaveBeenCalledWith('file_actions.toggle_tag_partial');
+  });
+
+  it('keeps the plain failure toast when the first chunk fails', async () => {
+    mockPost.mockRejectedValueOnce(new Error('boom'));
+
+    await run(101);
+
+    expect(toast.error).toHaveBeenCalledWith('file_actions.failed_to_add_tag');
   });
 });

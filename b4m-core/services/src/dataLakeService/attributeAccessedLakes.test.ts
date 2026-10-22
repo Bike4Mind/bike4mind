@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { attributeAccessedLakeIds, attributeFileToLakeIds } from './attributeAccessedLakes';
+import { attributeAccessedLakeIds, attributeFileToLakeIds, citableOriginFor } from './attributeAccessedLakes';
 
 const LAKES = [
   { id: 'lake1', datalakeTag: 'datalake:lake1' },
@@ -213,5 +213,75 @@ describe('attributeFileToLakeIds: dynamic-lake membership arm', () => {
     };
     const ids = attributeFileToLakeIds(['acme:sub:legal'], [DYNAMIC, second], CREATOR);
     expect(new Set(ids)).toEqual(new Set(['lakeDyn', 'lakeDyn2']));
+  });
+});
+
+describe('citableOriginFor', () => {
+  const NAMED = [
+    { id: 'lake1', datalakeTag: 'datalake:lake1', name: 'Lake One' },
+    { id: 'lake2', datalakeTag: 'datalake:lake2', name: 'Lake Two' },
+  ];
+
+  it('names every lake a file is tagged into, in lakes order', () => {
+    const origin = citableOriginFor(
+      { tags: ['datalake:lake2', 'datalake:lake1'], ownerUserId: 'o', callerUserId: 'c' },
+      NAMED
+    );
+    expect(origin).toEqual({
+      kind: 'lake',
+      lakes: [
+        { id: 'lake1', name: 'Lake One' },
+        { id: 'lake2', name: 'Lake Two' },
+      ],
+    });
+  });
+
+  it('reads an untagged file the caller owns as an owned library file, not as every selected lake', () => {
+    expect(citableOriginFor({ tags: ['misc'], ownerUserId: 'c', callerUserId: 'c' }, NAMED)).toEqual({
+      kind: 'library',
+      owned: true,
+    });
+  });
+
+  it('reads an untagged file owned by someone else as not owned', () => {
+    expect(citableOriginFor({ tags: [], ownerUserId: 'other', callerUserId: 'c' }, NAMED)).toEqual({
+      kind: 'library',
+      owned: false,
+    });
+  });
+
+  it('is not owned when the file owner is unknown', () => {
+    expect(citableOriginFor({ tags: [], callerUserId: 'c' }, NAMED)).toEqual({ kind: 'library', owned: false });
+  });
+
+  describe('dynamic lake prefix arm', () => {
+    const dynamic = {
+      id: 'lakeDyn',
+      name: 'Acme',
+      datalakeTag: 'datalake:acme',
+      fileTagPrefix: 'acme:',
+      membership: {
+        kind: 'owned' as const,
+        datalakeTag: 'datalake:acme',
+        fileTagPrefix: 'acme:',
+        creatorUserId: 'creator-1',
+      },
+    };
+
+    it("attributes a prefix-only file the lake's creator owns", () => {
+      expect(
+        citableOriginFor({ tags: ['acme:legal'], ownerUserId: 'creator-1', callerUserId: 'c' }, [dynamic])
+      ).toEqual({
+        kind: 'lake',
+        lakes: [{ id: 'lakeDyn', name: 'Acme' }],
+      });
+    });
+
+    it('reads a prefix-only file owned by anyone else as library', () => {
+      expect(citableOriginFor({ tags: ['acme:legal'], ownerUserId: 'someone', callerUserId: 'c' }, [dynamic])).toEqual({
+        kind: 'library',
+        owned: false,
+      });
+    });
   });
 });

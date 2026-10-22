@@ -1,19 +1,12 @@
 import { getDynamicDataLakeAccess } from '../../../dataLakeService/getDynamicDataLakeTags';
 import {
-  narrowLakeAccessToSession,
+  sessionExcludesLibraryFiles,
   sessionGroundsOnNoLake,
   type ResolvedLakeAccessSet,
 } from '../../../dataLakeService/narrowLakeAccessToSession';
-import { unionPreauthorizedLakeAccess } from '../../../dataLakeService/unionPreauthorizedLakeAccess';
+import { admitSessionLakes, noSessionLakes, searchedSessionLakes } from '../../../dataLakeService/sessionLakeAdmission';
+import { isObjectIdShaped } from './objectId';
 import type { ToolContext } from './types';
-
-const NO_LAKES: ResolvedLakeAccessSet = {
-  dataLakeTags: [],
-  dataLakeTagPrefixes: [],
-  scopedTagPrefixes: [],
-  lakes: [],
-  excludedByAccessCount: 0,
-};
 
 /**
  * The lake access a knowledge tool should run on for THIS session: the caller's owner-wide access,
@@ -25,20 +18,63 @@ const NO_LAKES: ResolvedLakeAccessSet = {
  * differently reopens the leak on every turn the others are scoped - which is exactly what happened
  * when only one tool honoured the session.
  */
-export async function resolveSessionLakeAccess(context: ToolContext): Promise<ResolvedLakeAccessSet> {
+export async function resolveSessionLakeAccess(
+  context: ToolContext,
+  ownerAccess: () => Promise<ResolvedLakeAccessSet> = () => resolveOwnerLakeAccess(context)
+): Promise<ResolvedLakeAccessSet> {
   // Two different reasons for the same answer, and the narrowing below can express neither: it
   // reads an empty scope as "no opinion" and hands back the caller's full owner-wide access.
-  if (context.suppressLakeArms) return NO_LAKES;
-  if (sessionGroundsOnNoLake(context.sessionRetrievalTags, context.sessionLakeScopeExplicit)) return NO_LAKES;
+  if (context.suppressLakeArms) return noSessionLakes();
+  if (sessionGroundsOnNoLake(context.sessionRetrievalTags, context.sessionLakeScopeExplicit)) return noSessionLakes();
+  return searchedSessionLakes(await ownerAccess(), {
+    retrievalTags: context.sessionRetrievalTags,
+    lakeScopeExplicit: context.sessionLakeScopeExplicit,
+  });
+}
+
+/**
+ * The caller's owner-wide lake access plus the session's pre-authorized lakes, with no session
+ * narrowing: the set resolveSessionLakeAccess narrows from. A caller that needs both (retrieve
+ * attributes its chips owner-wide) memoizes this once and passes it in as `ownerAccess`.
+ */
+export async function resolveOwnerLakeAccess(context: ToolContext): Promise<ResolvedLakeAccessSet> {
   const resolved = await getDynamicDataLakeAccess(context);
   // `context.userId` is the session OWNER on any turn that carries preauthorizedLakeIds:
   // vetPreauthorizedLakeIds blanks the field unless the session's own userId equals the acting
   // user, and the identity-substituting worker paths never reach that call at all.
-  const unioned = await unionPreauthorizedLakeAccess(
-    resolved,
-    context.sessionPreauthorizedLakeIds,
-    context.userId,
-    context.db
-  );
-  return narrowLakeAccessToSession(unioned, context.sessionRetrievalTags);
+  return admitSessionLakes(resolved, context.sessionPreauthorizedLakeIds, context.userId, context.db);
 }
+
+/**
+ * Whether the knowledge tools must leave the caller's own/shared library out of this session's
+ * corpus (the "+ My files" chip off). Same derivation and input as forced retrieval
+ * (sessionExcludesLibraryFiles on the pre-narrowing owner access), so a tool can never re-admit
+ * what forced retrieval left out. An agent kbScope is already its own fail-closed corpus and is
+ * never narrowed here. Owner access is resolved only when the answer depends on it.
+ */
+export async function sessionExcludesLibrary(
+  context: ToolContext,
+  ownerAccess: () => Promise<ResolvedLakeAccessSet> = () => resolveOwnerLakeAccess(context)
+): Promise<boolean> {
+  if (context.kbScope) return false;
+  const tags = context.sessionRetrievalTags;
+  const needsAccess = context.sessionIncludeLibraryFiles === undefined && !!tags?.length;
+  const access = needsAccess ? await ownerAccess() : noSessionLakes();
+  return sessionExcludesLibraryFiles(context.sessionIncludeLibraryFiles, access, tags);
+}
+
+/**
+ * The attached files a library-off session still admits (the rest of the library stays out).
+ * Ids are caller-supplied strings, so anything not ObjectId-shaped is dropped before a query sees it.
+ */
+export function admittedAttachmentIds(context: ToolContext, excludesLibrary: boolean): string[] {
+  return excludesLibrary ? (context.attachedFileIds ?? []).filter(isObjectIdShaped) : [];
+}
+
+/** Lead-in for a library-off, no-lake answer when attached files are still in reach. */
+export const LIBRARY_OFF_ATTACHMENTS_LEAD =
+  "No data lake is in this chat's scope and your other files are turned off for this chat";
+
+/** What a knowledge tool says when the library is off and no lake is left to search. */
+export const LIBRARY_OFF_NO_LAKE_MESSAGE =
+  "No data lake is in this chat's scope and your files are turned off for this chat, so there is nothing to search.";

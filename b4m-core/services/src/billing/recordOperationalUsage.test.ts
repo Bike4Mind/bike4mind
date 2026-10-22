@@ -78,6 +78,28 @@ describe('recordOperationalUsage', () => {
     });
   });
 
+  it('writes the caller price stamp onto the UsageEvent, and nothing when there is none', async () => {
+    setToggles({ bill: false, enforce: true });
+    const record = vi.fn().mockResolvedValue(null);
+    const priceStamp = {
+      priceSource: 'catalog' as const,
+      priceRowId: 'price-row-1',
+      rates: { tierKey: 200_000, input: 3e-6, output: 15e-6, cacheRead: 3e-7, cacheWrite: 3.75e-6 },
+      turnUsage: [
+        { inputTokens: 60, outputTokens: 10, tierKey: 200_000 },
+        { inputTokens: 40, outputTokens: 10, tierKey: 200_000 },
+      ],
+    };
+
+    await recordOperationalUsage({ ...baseParams, priceStamp }, { db: fullBillingDb(record), logger });
+    expect(record.mock.calls[0][0]).toMatchObject(priceStamp);
+
+    record.mockClear();
+    await recordOperationalUsage(baseParams, { db: fullBillingDb(record), logger });
+    expect(record.mock.calls[0][0]).not.toHaveProperty('priceSource');
+    expect(record.mock.calls[0][0]).not.toHaveProperty('rates');
+  });
+
   it('deducts credits and records them when both toggles are on and billing repos are present', async () => {
     setToggles({ bill: true, enforce: true });
     const record = vi.fn().mockResolvedValue(null);
@@ -100,6 +122,22 @@ describe('recordOperationalUsage', () => {
 
     expect(deductMock).not.toHaveBeenCalled();
     expect(record.mock.calls[0][0]).toMatchObject({ creditsCharged: 0 });
+  });
+
+  // The knowledge-base and LLM-tool callers record once per search/tool call, so a fresh flag
+  // read here would be a per-call round-trip on a path that can never reach the debit branch.
+  it('does not read the billing flags at all when billing repos are absent', async () => {
+    setToggles({ bill: true, enforce: true });
+    const record = vi.fn().mockResolvedValue(null);
+
+    await recordOperationalUsage(baseParams, {
+      db: { usageEvents: { record }, adminSettings: {} as never },
+      logger,
+    });
+
+    expect(record).toHaveBeenCalledTimes(1);
+    expect(getSettingsValueMock).not.toHaveBeenCalled();
+    expect(deductMock).not.toHaveBeenCalled();
   });
 
   it('does not bill when enforceCredits is off even if billOperationalUsage is on', async () => {
@@ -150,6 +188,44 @@ describe('recordOperationalUsage', () => {
     const record = vi.fn().mockResolvedValue(null);
 
     await recordOperationalUsage({ ...baseParams, bypassCreditBilling: true }, { db: fullBillingDb(record), logger });
+
+    expect(deductMock).not.toHaveBeenCalled();
+    expect(record.mock.calls[0][0]).toMatchObject({ creditsCharged: 0 });
+  });
+
+  // The counterpart of bypassCreditBilling, for spend with its own credit economics (data-lake
+  // research): billed even though `billOperationalUsage` defaults off, which is what makes the
+  // start-pre-flight and this settlement agree.
+  it('deducts credits with forceCreditBilling even when billOperationalUsage is off', async () => {
+    setToggles({ bill: false, enforce: true });
+    const record = vi.fn().mockResolvedValue(null);
+
+    await recordOperationalUsage({ ...baseParams, forceCreditBilling: true }, { db: fullBillingDb(record), logger });
+
+    expect(deductMock).toHaveBeenCalledTimes(1);
+    expect(record.mock.calls[0][0]).toMatchObject({ creditsCharged: 100 });
+  });
+
+  // Not a way past the platform master switch: a deployment that does not meter credits has no
+  // ledger to debit, so research is recorded as platform cost exactly as before.
+  it('does not deduct with forceCreditBilling when enforceCredits is off', async () => {
+    setToggles({ bill: true, enforce: false });
+    const record = vi.fn().mockResolvedValue(null);
+
+    await recordOperationalUsage({ ...baseParams, forceCreditBilling: true }, { db: fullBillingDb(record), logger });
+
+    expect(deductMock).not.toHaveBeenCalled();
+    expect(record.mock.calls[0][0]).toMatchObject({ creditsCharged: 0 });
+  });
+
+  it('lets bypassCreditBilling win over forceCreditBilling', async () => {
+    setToggles({ bill: true, enforce: true });
+    const record = vi.fn().mockResolvedValue(null);
+
+    await recordOperationalUsage(
+      { ...baseParams, bypassCreditBilling: true, forceCreditBilling: true },
+      { db: fullBillingDb(record), logger }
+    );
 
     expect(deductMock).not.toHaveBeenCalled();
     expect(record.mock.calls[0][0]).toMatchObject({ creditsCharged: 0 });

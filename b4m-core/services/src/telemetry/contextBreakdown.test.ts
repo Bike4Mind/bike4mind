@@ -74,8 +74,8 @@ describe('buildContextBreakdown', () => {
 
     expect(breakdown.layers.map(layer => layer.name)).toEqual([
       'image_prompt',
-      'date_time_context',
       'artifact_emission',
+      'date_time_context',
       'session_prompt',
     ]);
     expect(breakdown.layers.at(-1)).toEqual({
@@ -91,7 +91,7 @@ describe('buildContextBreakdown', () => {
     const breakdown = buildContextBreakdown(fullPromptMeta(), { questId: 'quest-1' });
 
     const expected = createHash('sha256')
-      .update('hardcoded:image_prompt:38|hardcoded:date_time_context:60|admin:artifact_emission:2822')
+      .update('hardcoded:image_prompt:38|admin:artifact_emission:2822|hardcoded:date_time_context:60')
       .digest('hex')
       .slice(0, 12);
     expect(breakdown.promptFingerprint).toBe(expected);
@@ -245,6 +245,14 @@ describe('buildContextBreakdown', () => {
 
     const serialized = JSON.stringify(buildContextBreakdown(withTelemetry, { questId: 'quest-1' }));
     expect(serialized).not.toContain('SECRET-HASH');
+  });
+
+  it('names the model that answered a redirected turn, not the requested one', () => {
+    const redirected = fullPromptMeta();
+    redirected.model!.name = 'claude-sonnet-5';
+    redirected.redirectedFrom = 'claude-opus-4-8';
+
+    expect(buildContextBreakdown(redirected, { questId: 'quest-1' }).model.id).toBe('claude-sonnet-5');
   });
 
   it('returns a zeroed but complete breakdown for a quest recorded before any of this existed', () => {

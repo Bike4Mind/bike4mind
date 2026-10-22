@@ -1,17 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
 import type { HelpAccessLevel } from '@bike4mind/scripts/help/types';
-import { isPublicAccessLevel } from '@bike4mind/scripts/help/utils';
+import { isPublicAccessLevel, stripFrontmatter } from '@bike4mind/scripts/help/utils';
 import { useHelpIndex } from './useHelpIndex';
 import { useAccessToken } from './useAccessToken';
-
-/**
- * Strips frontmatter from markdown content
- */
-const stripFrontmatter = (content: string): string => {
-  // Match frontmatter block at the start of the file
-  const frontmatterRegex = /^---[\s\S]*?---\n*/;
-  return content.replace(frontmatterRegex, '');
-};
 
 /**
  * Simple non-reversible hash for cache key derivation. This is a local copy of

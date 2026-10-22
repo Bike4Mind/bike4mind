@@ -1,6 +1,6 @@
 import type { IDataLakeDocument } from '@bike4mind/common';
 import { normalizeEntitlementKey } from '@bike4mind/common';
-import { normalizeId } from '@bike4mind/utils';
+import { normalizeId } from '@bike4mind/utils/normalizeId';
 
 /** The lake fields a widening decision reads: the two gates, plus what the lake falls back to without them. */
 export type GatedLake = Pick<

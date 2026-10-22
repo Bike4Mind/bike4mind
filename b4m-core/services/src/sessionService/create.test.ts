@@ -316,6 +316,18 @@ describe('createSession forced retrieval from an explicit lake scope', () => {
     expect(session.forceKnowledgeRetrieval).toBe(false);
   });
 
+  it('persists includeLibraryFiles: false, and leaves it absent when not sent', async () => {
+    const { adapters } = makeAdapters();
+    const off = await createSession(
+      user,
+      { name: 'n', retrievalTags: ['datalake:acme'], lakeScopeExplicit: true, includeLibraryFiles: false },
+      adapters as never
+    );
+    expect(off.includeLibraryFiles).toBe(false);
+    const plain = await createSession(user, { name: 'n' }, adapters as never);
+    expect(plain).not.toHaveProperty('includeLibraryFiles');
+  });
+
   it('leaves the flag unset on an ordinary session that named no lake', async () => {
     const { adapters } = makeAdapters();
     const session = await createSession(user, { name: 'n' }, adapters as never);
@@ -417,5 +429,55 @@ describe('createSession summaryTrigger validation', () => {
     const { adapters, created } = makeAdapters();
     await createSession(user, { name: 'no-trigger', summary: 'the gist' }, adapters);
     expect(created[0].summaryTrigger).toBeUndefined();
+  });
+});
+
+describe('createSession maxToolCalls bound', () => {
+  const user = { id: '67cbd75e2415ca84138fada7' } as IUserDocument;
+
+  it('rejects a tool-call ceiling past MAX_TOOL_CALLS_CEILING', async () => {
+    const { adapters } = makeAdapters();
+    await expect(createSession(user, { name: 'ok', maxToolCalls: 100_000 }, adapters)).rejects.toThrow(
+      UnprocessableEntityError
+    );
+  });
+
+  it('keeps a tool-call ceiling within the bound', async () => {
+    const { adapters, created } = makeAdapters();
+    await createSession(user, { name: 'ok', maxToolCalls: 50 }, adapters);
+    expect(created[0].maxToolCalls).toBe(50);
+  });
+});
+
+describe('createSession origin', () => {
+  const user = { id: 'u1' } as IUserDocument;
+  const makeAdapters = () => {
+    const create = vi.fn().mockResolvedValue({ id: 'session-1' });
+    return {
+      create,
+      adapters: {
+        db: {
+          sessions: { create },
+          projects: {},
+          fabFiles: { findAccessibleInIds: allowAllFiles },
+          agents: { shareable: { findAllAccessibleByIds: vi.fn() } },
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any -- minimal adapter shape for this unit test
+        } as any,
+      },
+    };
+  };
+
+  it('stamps the origin passed as an option', async () => {
+    const { create, adapters } = makeAdapters();
+    await createSession(user, { name: 'S' }, adapters, { origin: { channel: 'api', apiKeyId: 'key-1' } });
+    expect(create.mock.calls[0][0].origin).toEqual({ channel: 'api', apiKeyId: 'key-1' });
+  });
+
+  it('ignores an origin smuggled in through the parameters', async () => {
+    const { create, adapters } = makeAdapters();
+    // A request body is parsed into these parameters, so it must not be able to set its own origin.
+    const params = { name: 'S', origin: { channel: 'web' } } as unknown as Parameters<typeof createSession>[1];
+    await createSession(user, params, adapters);
+    expect(create.mock.calls[0][0]).not.toHaveProperty('origin');
   });
 });

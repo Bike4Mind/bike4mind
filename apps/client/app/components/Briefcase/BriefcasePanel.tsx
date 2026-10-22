@@ -1,23 +1,13 @@
 import { useMemo } from 'react';
 import { Box, Typography, CircularProgress, Sheet, Button } from '@mui/joy';
-import type { IPromptBatchQuery } from '@bike4mind/common';
+import { BRIEFCASE_CATALOG_QUERIES } from '@bike4mind/common';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { useBriefcaseCatalog } from '@client/app/hooks/data/briefcase';
 import { BriefcaseLauncher } from './BriefcaseLauncher';
 
-/**
- * Default catalog layout: one launcher group per seeded system category, plus
- * the caller's personal prompts. Categories map to the `type` discriminator on
- * seeded system prompts (see the briefcase seed migration).
- */
-const CATALOG_QUERIES: IPromptBatchQuery[] = [
-  { key: 'general', type: 'general' },
-  { key: 'writing', type: 'writing' },
-  { key: 'learning', type: 'learning' },
-  { key: 'personal', personal: true },
-];
-
-const GROUP_LABELS: Record<string, string> = {
+// Keyed by BRIEFCASE_CATALOG_QUERIES keys: adding a category there without a
+// label here is a type error rather than a group that renders its raw key.
+const GROUP_LABELS: Record<(typeof BRIEFCASE_CATALOG_QUERIES)[number]['key'], string> = {
   general: 'General',
   writing: 'Writing',
   learning: 'Learning',
@@ -32,11 +22,14 @@ const GROUP_LABELS: Record<string, string> = {
 export function BriefcasePanel({ onLaunched }: { onLaunched?: () => void } = {}) {
   const { isFeatureEnabled, isLoading: featureLoading } = useFeatureEnabled();
   const enabled = isFeatureEnabled('enableBriefcase');
-  const { data, isLoading, isError, refetch } = useBriefcaseCatalog(CATALOG_QUERIES, enabled);
+  const { data, isLoading, isError, refetch } = useBriefcaseCatalog(BRIEFCASE_CATALOG_QUERIES, enabled);
 
   // Computed before any early return so the hook order is stable.
   const groups = useMemo(
-    () => CATALOG_QUERIES.map(q => ({ key: q.key, prompts: data?.[q.key] ?? [] })).filter(g => g.prompts.length > 0),
+    () =>
+      BRIEFCASE_CATALOG_QUERIES.map(q => ({ key: q.key, prompts: data?.[q.key] ?? [] })).filter(
+        g => g.prompts.length > 0
+      ),
     [data]
   );
 

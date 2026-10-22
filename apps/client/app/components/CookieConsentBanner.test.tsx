@@ -8,15 +8,19 @@ const { mockLoadRedditPixel, mockLoadMetaPixel } = vi.hoisted(() => ({
   mockLoadMetaPixel: vi.fn(),
 }));
 
-vi.mock('@client/app/utils/redditPixel', () => ({
+// Partial, so the real isConfigured checks still decide what the banner names.
+vi.mock('@client/app/utils/redditPixel', async importOriginal => ({
+  ...(await importOriginal<typeof import('@client/app/utils/redditPixel')>()),
   loadRedditPixel: mockLoadRedditPixel,
 }));
 
-vi.mock('@client/app/utils/metaPixel', () => ({
+vi.mock('@client/app/utils/metaPixel', async importOriginal => ({
+  ...(await importOriginal<typeof import('@client/app/utils/metaPixel')>()),
   loadMetaPixel: mockLoadMetaPixel,
 }));
 
 import { CookieConsentBanner, useCookieSettings } from './CookieConsentBanner';
+import { CONSENT_VENDORS } from '../utils/consentVendors';
 import { captureUtmParams, flushUtmCapture } from '../utils/utmCapture';
 
 const TestWrapper = ({ children }: { children: React.ReactNode }) => <CssVarsProvider>{children}</CssVarsProvider>;
@@ -62,6 +66,15 @@ describe('CookieConsentBanner', () => {
     mockLoadMetaPixel.mockClear();
     clearCookies();
     useCookieSettings.setState({ isOpen: false });
+    // The grant loads only configured vendors, so configure the pixels the mocks stand in for.
+    vi.stubEnv('NEXT_PUBLIC_META_PIXEL_ID', 'meta-test');
+    vi.stubEnv('NEXT_PUBLIC_REDDIT_PIXEL_ID', 'reddit-test');
+    // What the inline tag in layout.tsx would have set; each test states its own.
+    delete window.__b4mGaConsentDefault;
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it('shows banner when no consent is stored', () => {
@@ -481,12 +494,12 @@ describe('CookieConsentBanner', () => {
 
       renderAndReopen();
 
-      expect(screen.getByText('Cookie settings.')).toBeInTheDocument();
+      expect(screen.getByText('Cookie settings')).toBeInTheDocument();
       expect(screen.getByTestId('cookie-consent-banner')).toHaveTextContent(
-        'You are currently allowing campaign attribution cookies.'
+        'You are currently allowing advertising (Meta, Reddit) and campaign attribution cookies.'
       );
       expect(screen.getByTestId('cookie-consent-banner')).toHaveTextContent('Declining reloads the page');
-      expect(screen.getByTestId('cookie-consent-cancel-btn')).toBeInTheDocument();
+      expect(screen.getByTestId('cookie-consent-close-btn')).toBeInTheDocument();
       expect(screen.queryByText(/By clicking/)).not.toBeInTheDocument();
     });
 
@@ -497,7 +510,7 @@ describe('CookieConsentBanner', () => {
 
       renderAndReopen();
 
-      expect(screen.getByTestId('cookie-consent-cancel-btn')).toHaveFocus();
+      expect(screen.getByTestId('cookie-consent-close-btn')).toHaveFocus();
       expect(screen.getByRole('region', { name: 'Cookie settings' })).toBe(screen.getByTestId('cookie-consent-banner'));
     });
 
@@ -544,7 +557,7 @@ describe('CookieConsentBanner', () => {
       renderAndReopen();
 
       expect(screen.getByTestId('cookie-consent-banner')).toHaveTextContent(
-        'You are currently declining campaign attribution cookies.'
+        'You are currently declining advertising (Meta, Reddit) and campaign attribution cookies.'
       );
       expect(screen.getByTestId('cookie-consent-banner')).not.toHaveTextContent('reloads the page');
 
@@ -590,14 +603,14 @@ describe('CookieConsentBanner', () => {
       expect(reload).toHaveBeenCalledTimes(1);
     });
 
-    it('Cancel closes it and changes nothing', () => {
+    it('Close closes it and changes nothing', () => {
       localStorageMock.setItem('cookie_consent', 'granted');
       renderAndReopen();
       mockGtag.mockClear();
       mockLoadRedditPixel.mockClear();
       mockLoadMetaPixel.mockClear();
 
-      fireEvent.click(screen.getByTestId('cookie-consent-cancel-btn'));
+      fireEvent.click(screen.getByTestId('cookie-consent-close-btn'));
 
       expect(screen.queryByTestId('cookie-consent-banner')).not.toBeInTheDocument();
       expect(useCookieSettings.getState().isOpen).toBe(false);
@@ -611,8 +624,83 @@ describe('CookieConsentBanner', () => {
       renderAndReopen();
 
       expect(screen.getByText(/By clicking/)).toBeInTheDocument();
-      expect(screen.queryByText('Cookie settings.')).not.toBeInTheDocument();
-      expect(screen.queryByTestId('cookie-consent-cancel-btn')).not.toBeInTheDocument();
+      expect(screen.queryByText('Cookie settings')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('cookie-consent-close-btn')).not.toBeInTheDocument();
+    });
+
+    // Pairs each loader the grant fires with the vendor the ask names. A loader added outside
+    // CONSENT_VENDORS fails here only if it injects a script in this test's env: one gated on an
+    // env var this test does not stub stays silent, so routing through the registry is the guard.
+    it('names every vendor the grant then loads on the first-run ask', () => {
+      vi.stubEnv('NEXT_PUBLIC_GA_MEASUREMENT_ID', 'G-TEST');
+      vi.stubEnv('NEXT_PUBLIC_META_PIXEL_ID', 'meta-test');
+      vi.stubEnv('NEXT_PUBLIC_REDDIT_PIXEL_ID', 'reddit-test');
+      document.getElementById('mailerlite')?.remove();
+      const scriptsBefore = new Set(document.querySelectorAll('script'));
+      try {
+        render(
+          <TestWrapper>
+            <CookieConsentBanner />
+          </TestWrapper>
+        );
+        const asked = screen.getByTestId('cookie-consent-banner').textContent;
+        expect(asked).toContain(
+          'you consent to our use of analytics (Google Analytics), advertising (Meta, Reddit) and campaign attribution cookies.'
+        );
+
+        fireEvent.click(screen.getByTestId('cookie-consent-accept-btn'));
+
+        expect(mockGtag).toHaveBeenCalledWith('consent', 'update', { analytics_storage: 'granted' });
+        expect(mockLoadMetaPixel).toHaveBeenCalledTimes(1);
+        expect(mockLoadRedditPixel).toHaveBeenCalledTimes(1);
+        expect(document.getElementById('mailerlite')).toBeNull();
+        // Pixel loaders are mocked; consent must not inject any additional vendor scripts.
+        const added = [...document.querySelectorAll('script')].filter(script => !scriptsBefore.has(script));
+        expect(added.map(script => script.id)).toEqual([]);
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+
+    it('names every vendor in the consent registry once all are configured', () => {
+      vi.stubEnv('NEXT_PUBLIC_GA_MEASUREMENT_ID', 'G-TEST');
+      vi.stubEnv('NEXT_PUBLIC_META_PIXEL_ID', 'meta-test');
+      vi.stubEnv('NEXT_PUBLIC_REDDIT_PIXEL_ID', 'reddit-test');
+      try {
+        renderAndReopen();
+
+        const banner = screen.getByTestId('cookie-consent-banner');
+        for (const vendor of CONSENT_VENDORS) {
+          expect(vendor.isConfigured()).toBe(true);
+          expect(banner).toHaveTextContent(vendor.name);
+        }
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+
+    it('does not load an unnamed vendor on a grant', () => {
+      vi.stubEnv('NEXT_PUBLIC_META_PIXEL_ID', '');
+      renderAndReopen();
+
+      expect(screen.getByTestId('cookie-consent-banner')).not.toHaveTextContent('Meta');
+      fireEvent.click(screen.getByTestId('cookie-consent-accept-btn'));
+
+      expect(mockLoadMetaPixel).not.toHaveBeenCalled();
+      expect(mockLoadRedditPixel).toHaveBeenCalledTimes(1);
+    });
+
+    it('names only the ad vendor whose pixel is configured', () => {
+      vi.stubEnv('NEXT_PUBLIC_META_PIXEL_ID', '');
+      vi.stubEnv('NEXT_PUBLIC_REDDIT_PIXEL_ID', 'reddit-test');
+      try {
+        renderAndReopen();
+
+        expect(screen.getByTestId('cookie-consent-banner')).toHaveTextContent('advertising (Reddit)');
+        expect(screen.getByTestId('cookie-consent-banner')).not.toHaveTextContent('Meta');
+      } finally {
+        vi.unstubAllEnvs();
+      }
     });
 
     // The first-run ask is already on screen, so opening it changes nothing visible; focus is
@@ -641,12 +729,12 @@ describe('CookieConsentBanner', () => {
         return trigger;
       };
 
-      it('returns focus to the trigger when the manage screen is cancelled', () => {
+      it('returns focus to the trigger when the manage screen is closed', () => {
         localStorageMock.setItem('cookie_consent', 'granted');
         const trigger = renderWithTrigger();
-        expect(screen.getByTestId('cookie-consent-cancel-btn')).toHaveFocus();
+        expect(screen.getByTestId('cookie-consent-close-btn')).toHaveFocus();
 
-        fireEvent.click(screen.getByTestId('cookie-consent-cancel-btn'));
+        fireEvent.click(screen.getByTestId('cookie-consent-close-btn'));
 
         expect(screen.queryByTestId('cookie-consent-banner')).not.toBeInTheDocument();
         expect(trigger).toHaveFocus();
@@ -669,10 +757,259 @@ describe('CookieConsentBanner', () => {
         const elsewhere = screen.getByTestId('elsewhere');
         elsewhere.focus();
 
-        fireEvent.click(screen.getByTestId('cookie-consent-cancel-btn'));
+        fireEvent.click(screen.getByTestId('cookie-consent-close-btn'));
 
         expect(elsewhere).toHaveFocus();
       });
+    });
+  });
+
+  // The bridge from this origin's decision to the server's. The banner keeps its own decision in
+  // localStorage, which no request handler can read, so it publishes the resolution it reached
+  // into a first-party cookie (see publishResolvedConsent). Signup attribution is gated on that
+  // cookie in server/analytics/serverConsent.ts, so if the banner stops publishing it, every
+  // app-direct signup silently stops being attributed and nothing near the auth code fails.
+  describe('publishing the resolved decision for the server', () => {
+    const published = () =>
+      document.cookie
+        .split('; ')
+        .find(c => c.startsWith('b4m_consent='))
+        ?.slice('b4m_consent='.length);
+
+    // A withdrawal is the case where a stale published grant would do real damage: the visitor
+    // has actively revoked consent, and the server must stop attributing them on the next
+    // request. It arrives here through the same activateConsent path as a first-run Decline,
+    // which is why publishing sits there rather than in the first-run handler.
+    it('publishes denied when a visitor withdraws a grant from Cookie settings', () => {
+      localStorageMock.setItem('cookie_consent', 'granted');
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+      expect(published()).toBe('granted');
+      act(() => useCookieSettings.getState().open());
+
+      fireEvent.click(screen.getByTestId('cookie-consent-decline-btn'));
+
+      expect(published()).toBe('denied');
+    });
+
+    it('publishes granted on an Accept click', () => {
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+
+      fireEvent.click(screen.getByTestId('cookie-consent-accept-btn'));
+
+      expect(published()).toBe('granted');
+    });
+
+    it('publishes denied on a Decline click', () => {
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+
+      fireEvent.click(screen.getByTestId('cookie-consent-decline-btn'));
+
+      expect(published()).toBe('denied');
+    });
+
+    // The visitor clicks nothing here, so without publishing there is no decision for the server
+    // to read at all - and this is the majority case outside the opt-in region.
+    it('publishes granted for a region auto-allow, with no click', () => {
+      setRegion('row');
+
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+
+      expect(screen.queryByTestId('cookie-consent-accept-btn')).not.toBeInTheDocument();
+      expect(published()).toBe('granted');
+    });
+
+    it("publishes the marketing site's decision when this origin has none", () => {
+      setSharedDecision('granted');
+
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+
+      expect(published()).toBe('granted');
+    });
+
+    // Travel, and the reason publishing an auto-allow does not freeze it: the visitor carried a
+    // published grant out of the auto-allow region, resolves to 'unset' here, and must stop being
+    // attributed while the banner asks them again.
+    it('withdraws a published grant when the visitor now resolves to unset', () => {
+      document.cookie = 'b4m_consent=granted';
+      setRegion('eu');
+
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+
+      expect(screen.getByTestId('cookie-consent-accept-btn')).toBeInTheDocument();
+      expect(published()).toBeUndefined();
+    });
+  });
+
+  // The inline tag records the landing page with a cookie only when it could read a grant
+  // before sending it. Otherwise a later grant must record the page again, once, or GA's
+  // cookied session starts on a later event with no source and reports "(not set)".
+  describe('recording the page on a grant', () => {
+    const pageViews = () => mockGtag.mock.calls.filter(c => c[0] === 'event' && c[1] === 'page_view');
+    const renderBanner = () =>
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+
+    it('records the page once when an undecided visitor accepts', () => {
+      setRegion('eu');
+      window.__b4mGaConsentDefault = 'denied';
+      renderBanner();
+      expect(pageViews()).toHaveLength(0);
+
+      fireEvent.click(screen.getByTestId('cookie-consent-accept-btn'));
+
+      expect(pageViews()).toHaveLength(1);
+      // After the grant, so the hit carries the cookie.
+      const grant = mockGtag.mock.calls.findIndex(c => c[0] === 'consent' && c[2]?.analytics_storage === 'granted');
+      const pageView = mockGtag.mock.calls.findIndex(c => c[0] === 'event' && c[1] === 'page_view');
+      expect(grant).toBeGreaterThanOrEqual(0);
+      expect(pageView).toBeGreaterThan(grant);
+    });
+
+    it('does not record the page again when the tag already had the grant', () => {
+      localStorageMock.setItem('cookie_consent', 'granted');
+      window.__b4mGaConsentDefault = 'granted';
+      renderBanner();
+      expect(pageViews()).toHaveLength(0);
+    });
+
+    it('records the page at most once, however often consent is granted', () => {
+      localStorageMock.setItem('cookie_consent', 'denied');
+      window.__b4mGaConsentDefault = 'denied';
+      renderBanner();
+      act(() => useCookieSettings.getState().open());
+      fireEvent.click(screen.getByTestId('cookie-consent-accept-btn'));
+      act(() => useCookieSettings.getState().open());
+      fireEvent.click(screen.getByTestId('cookie-consent-accept-btn'));
+      expect(pageViews()).toHaveLength(1);
+    });
+
+    // A tag that read the signals differently from the banner: the banner's grant still heals it.
+    it('records the page when the banner grants on load but the tag had defaulted to denied', () => {
+      localStorageMock.setItem('cookie_consent', 'granted');
+      window.__b4mGaConsentDefault = 'denied';
+      renderBanner();
+      expect(pageViews()).toHaveLength(1);
+    });
+
+    it('never records the page on a decline', () => {
+      setRegion('eu');
+      window.__b4mGaConsentDefault = 'denied';
+      renderBanner();
+      fireEvent.click(screen.getByTestId('cookie-consent-decline-btn'));
+      expect(pageViews()).toHaveLength(0);
+    });
+  });
+
+  describe('tracking cookies and retired marketing loader', () => {
+    const mailerLiteScript = () => document.querySelector('script[src="/scripts/ml.js"]');
+    const ALL_NAMES = ['_fbp', '_fbc', '_rdt_uuid', '_rdt_em', '_rdt_cid', '_ga', '_gcl_au', '_ga_ABC123'];
+    const trackingCookies = () =>
+      document.cookie
+        .split('; ')
+        .map(c => c.split('=')[0])
+        .filter(n => ALL_NAMES.includes(n));
+    const seedTrackingCookies = () => {
+      for (const name of ALL_NAMES) document.cookie = `${name}=x; path=/`;
+    };
+    const renderBanner = () =>
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+
+    beforeEach(() => {
+      document.getElementById('mailerlite')?.remove();
+    });
+
+    it('expires the ad and analytics cookies on decline', () => {
+      seedTrackingCookies();
+      expect(trackingCookies()).toHaveLength(8);
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+
+      fireEvent.click(screen.getByTestId('cookie-consent-decline-btn'));
+
+      expect(trackingCookies()).toEqual([]);
+    });
+
+    it('expires the cookies on load for a visitor who declined earlier', () => {
+      seedTrackingCookies();
+      localStorageMock.setItem('cookie_consent', 'denied');
+      renderBanner();
+      expect(trackingCookies()).toEqual([]);
+    });
+
+    it('expires the cookies on load for a visitor who declined on the marketing site', () => {
+      seedTrackingCookies();
+      setSharedDecision('denied');
+      renderBanner();
+      expect(trackingCookies()).toEqual([]);
+    });
+
+    it('does not load the retired marketing script after consent is granted', () => {
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+      expect(mailerLiteScript()).toBeNull();
+
+      fireEvent.click(screen.getByTestId('cookie-consent-accept-btn'));
+
+      expect(mailerLiteScript()).toBeNull();
+    });
+
+    it('does not load the retired marketing script in the auto-granted region', () => {
+      setRegion('row');
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+
+      expect(mailerLiteScript()).toBeNull();
+    });
+
+    it('does not load the MailerLite script when consent is denied', () => {
+      localStorageMock.setItem('cookie_consent', 'denied');
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+
+      expect(mailerLiteScript()).toBeNull();
     });
   });
 });

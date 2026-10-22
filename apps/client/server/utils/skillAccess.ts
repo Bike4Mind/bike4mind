@@ -1,6 +1,7 @@
 // apps/client/server/utils/skillAccess.ts
 import { organizationRepository } from '@bike4mind/database/infra';
-import { ISkill, IUserShare, IGroupShare, Permission } from '@bike4mind/common';
+import { ISkill, IUserShare, IGroupShare, Permission, canAdministerOrganization } from '@bike4mind/common';
+import { skillContentHash } from '@server/skillMarket/contentHash';
 
 /**
  * Centralized access predicates for a skill, shared by every skill endpoint so
@@ -34,7 +35,7 @@ const isOrgAdminFor = async (skill: ShareableSkill, actor: SkillActor): Promise<
   if (!skill.organizationId) return false;
   const org = await organizationRepository.findById(skill.organizationId);
   if (!org) return false;
-  return org.userId === actor.id || org.managerId === actor.id;
+  return canAdministerOrganization({ id: actor.id }, org);
 };
 
 /** View access - owner, admin, org-admin, any direct share, or global-read. */
@@ -117,4 +118,32 @@ export const redactShareRosterForViewer = (
   if (canManageSharing) return skill;
   const { groups: _groups, ...rest } = skill;
   return { ...rest, users: skill.users?.filter(u => u.userId === actorId) ?? [] };
+};
+
+// Whitespace the edit form and validators normalize away, so an unchanged resubmit hashes equal.
+const normalizedContent = (skill: ISkill): ISkill => ({
+  ...skill,
+  description: skill.description.trim(),
+  body: skill.body.replace(/\r\n/g, '\n'),
+  argumentHint: skill.argumentHint?.trim(),
+});
+
+export type GlobalSkillScan = 'none' | 'name' | 'content';
+
+/**
+ * Which Skill Market scan a non-admin update to a global skill needs before it saves
+ * (`scanGlobalSkillUpdate`): `content` when anything in `skillContentHash` changes, `name` for a
+ * rename alone (the market scans names too), else `none`. Super-admin edits and non-global skills
+ * are never scanned. Keep in sync with share.ts, which gates turning the global flags on.
+ */
+export const globalSkillScanFor = (
+  skill: ShareableSkill,
+  patch: Partial<ISkill>,
+  actor: SkillActor
+): GlobalSkillScan => {
+  if (actor.isAdmin || !(skill.isGlobalRead || skill.isGlobalWrite)) return 'none';
+  if (skillContentHash(normalizedContent({ ...skill, ...patch })) !== skillContentHash(normalizedContent(skill))) {
+    return 'content';
+  }
+  return patch.name !== undefined && patch.name !== skill.name ? 'name' : 'none';
 };

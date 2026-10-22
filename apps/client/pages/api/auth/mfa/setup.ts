@@ -3,14 +3,24 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { mfaService } from '@bike4mind/services';
 import { userRepository } from '@bike4mind/database';
+import { readSignInOrigin } from '@server/auth/signInSecondFactor';
+import { isFreshSignIn, stepUpGate } from '@server/auth/stepUp';
 
-const handler = baseApi()
+// Sign-in enrollment has just proved the first factor, so it skips step-up: an mfaPending token
+// (email-code sign-in) or a session an interactive sign-in minted moments ago (SSO under forced
+// enrollment; see isFreshSignIn for which origins count).
+const handler = baseApi({ auth: 'jwtOnly' })
+  .use(stepUpGate({ skip: async req => !!req.user?.mfaPending || (!!req.user && (await isFreshSignIn(req.user))) }))
   .use(rateLimit({ limit: 3, windowMs: 15 * 60 * 1000 })) // 3 setups per 15 minutes
   .post(
     asyncHandler(async (req, res) => {
       const user = req.user;
       if (!user) {
         return res.status(401).json({ error: 'User not found' });
+      }
+
+      if (readSignInOrigin(req.user)?.createdVia === 'emergency') {
+        return res.status(403).json({ error: 'Authenticator enrollment is not available during emergency sign-in.' });
       }
 
       try {

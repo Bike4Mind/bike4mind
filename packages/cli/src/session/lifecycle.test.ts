@@ -8,6 +8,7 @@ import {
   type SessionLifecycleContext,
 } from './lifecycle';
 import { useCliStore } from '../store';
+import { whenTurnIdle } from './whenTurnIdle';
 import type { Session, Message, SessionStore } from '../storage';
 import type { ReActAgent } from '@bike4mind/agents';
 import type { DecisionStore, BlockerStore, ReviewGateStore, TodoStore } from '../tools';
@@ -393,6 +394,8 @@ describe('session lifecycle', () => {
       await compactSession(ctx, { userInstructions: 'focus on X' });
 
       expect(run).toHaveBeenCalledOnce();
+      // No live view renders the summary, so it must not trade away transient retries.
+      expect(run).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ streamText: false }));
       expect(save).toHaveBeenCalledWith(original); // old session preserved first
       const compacted = useCliStore.getState().session!;
       expect(compacted.id).not.toBe(original.id);
@@ -403,6 +406,28 @@ describe('session lifecycle', () => {
       // Compact swaps the active session, so the usage cache must be invalidated
       // too - matching create/resume (issue #602).
       expect(ctx.onSessionReplaced).toHaveBeenCalledOnce();
+    });
+
+    it('holds the session while compacting, so an append made meanwhile lands in the compacted session', async () => {
+      const messages = ['u1', 'a1', 'u2', 'a2', 'u3', 'a3'].map((content, i) =>
+        message(i % 2 === 0 ? 'user' : 'assistant', content)
+      );
+      useCliStore.getState().setSession(makeSession({ messages }));
+      const run = vi.fn(async () => {
+        whenTurnIdle(() => {
+          const session = useCliStore.getState().session!;
+          useCliStore
+            .getState()
+            .setSession({ ...session, messages: [...session.messages, message('assistant', 'late')] });
+        });
+        return { finalAnswer: 'the summary' };
+      });
+
+      await compactSession(makeCtx({ agent: { run } as unknown as ReActAgent }));
+
+      const { messages: compacted } = useCliStore.getState().session!;
+      expect(compacted[compacted.length - 1].content).toBe('late');
+      expect(useCliStore.getState().sessionHolds).toBe(0);
     });
   });
 

@@ -17,7 +17,7 @@ import PersonIcon from '@mui/icons-material/Person';
 import GroupIcon from '@mui/icons-material/Group';
 import CreditCardIcon from '@mui/icons-material/CreditCard';
 import EventIcon from '@mui/icons-material/Event';
-import AccountBalanceWalletIcon from '@mui/icons-material/AccountBalanceWallet';
+import { CreditIcon } from '@client/app/components/svgs/icons/CreditIcon';
 import DeleteIcon from '@mui/icons-material/Delete';
 import EditIcon from '@mui/icons-material/Edit';
 import dayjs from 'dayjs';
@@ -110,7 +110,7 @@ const UserSubscriptionStatus: React.FC<UserSubscriptionStatusProps> = ({ user })
           {/* User Credits */}
           <Box>
             <Typography level="body-md" sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-              <AccountBalanceWalletIcon />
+              <CreditIcon />
               User Credits: <strong>{userCredits.toLocaleString()}</strong>
             </Typography>
           </Box>
@@ -342,7 +342,7 @@ const UserSubscriptionStatus: React.FC<UserSubscriptionStatusProps> = ({ user })
 
                           <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
                             <Typography level="body-sm" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                              <AccountBalanceWalletIcon sx={{ fontSize: '1rem' }} />
+                              <CreditIcon sx={{ fontSize: '1rem' }} />
                               Org Credits: {organization.currentCredits.toLocaleString()}
                             </Typography>
                           </Box>

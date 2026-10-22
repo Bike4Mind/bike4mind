@@ -184,6 +184,11 @@ describe('OpenAI streaming: cached prompt tokens', () => {
 
     expect(info.cacheReadInputTokens).toBe(800 + 900);
     expect(info.inputTokens).toBe(1000 + 1500 - (800 + 900));
+    // Each request is tiered on its own prompt, so the breakdown keeps the turns apart.
+    expect(info.turnUsage).toEqual([
+      { inputTokens: 200, cacheReadInputTokens: 800, outputTokens: 20 },
+      { inputTokens: 600, cacheReadInputTokens: 900, outputTokens: 30 },
+    ]);
   });
 });
 
@@ -200,6 +205,7 @@ describe('OpenAI non-streaming: cached prompt tokens', () => {
 
     expect(info.cacheReadInputTokens).toBe(1600);
     expect(info.inputTokens).toBe(400);
+    expect(info.turnUsage).toEqual([{ inputTokens: 400, cacheReadInputTokens: 1600, outputTokens: 50 }]);
   });
 
   it('carries cache reads through executeTools:false without losing the discount', async () => {
@@ -225,6 +231,88 @@ describe('OpenAI non-streaming: cached prompt tokens', () => {
 
     expect(info.cacheReadInputTokens).toBe(700);
     expect(info.inputTokens).toBe(200);
+    expect(info.turnUsage).toEqual([{ inputTokens: 200, cacheReadInputTokens: 700, outputTokens: 10 }]);
+  });
+
+  it('reports one turnUsage entry per request across tool recursion', async () => {
+    const { backend } = nonStreamingBackend([
+      {
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: 'assistant',
+              tool_calls: [{ id: 't1', type: 'function', function: { name: 'lookup', arguments: '{}' } }],
+            },
+            finish_reason: 'tool_calls',
+          },
+        ],
+        usage: { prompt_tokens: 300_000, completion_tokens: 10, prompt_tokens_details: { cached_tokens: 280_000 } },
+      },
+      {
+        choices: [{ index: 0, message: { role: 'assistant', content: 'done' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 1000, completion_tokens: 40 },
+      },
+    ]);
+
+    const info = settled(await run(backend, ChatModels.GPT4o, { stream: false, tools: [sampleTool] }));
+
+    expect(info.turnUsage).toEqual([
+      { inputTokens: 20_000, cacheReadInputTokens: 280_000, outputTokens: 10 },
+      { inputTokens: 1000, outputTokens: 40 },
+    ]);
+    // The breakdown sums to the aggregates.
+    expect(info.inputTokens).toBe(21_000);
+    expect(info.cacheReadInputTokens).toBe(280_000);
+    expect(info.outputTokens).toBe(50);
+  });
+
+  it('carries every turn onto the terminal emit of a turn that ends after a flagged tool', async () => {
+    // The end-of-turn emit is the only one this round makes, so it alone carries the last request.
+    // MCP tools, because the non-streaming path drops built-in tools after the first round.
+    const lookupMcp: ICompletionOptionTools = { ...sampleTool, _isMcpTool: true };
+    const suggestTool: ICompletionOptionTools = {
+      ...lookupMcp,
+      toolSchema: { ...sampleTool.toolSchema, name: 'suggest' },
+      endsTurnAfterText: true,
+    };
+    const { backend } = nonStreamingBackend([
+      {
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: 'assistant',
+              tool_calls: [{ id: 't1', type: 'function', function: { name: 'lookup', arguments: '{}' } }],
+            },
+            finish_reason: 'tool_calls',
+          },
+        ],
+        usage: { prompt_tokens: 900, completion_tokens: 10, prompt_tokens_details: { cached_tokens: 700 } },
+      },
+      {
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: 'assistant',
+              content: 'answer',
+              tool_calls: [{ id: 't2', type: 'function', function: { name: 'suggest', arguments: '{}' } }],
+            },
+            finish_reason: 'tool_calls',
+          },
+        ],
+        usage: { prompt_tokens: 1000, completion_tokens: 40 },
+      },
+    ]);
+
+    const frames = await run(backend, ChatModels.GPT4o, { stream: false, tools: [lookupMcp, suggestTool] });
+
+    expect(settled(frames).stopReason).toBe('tool_use');
+    expect(settled(frames).turnUsage).toEqual([
+      { inputTokens: 200, cacheReadInputTokens: 700, outputTokens: 10 },
+      { inputTokens: 1000, outputTokens: 40 },
+    ]);
   });
 });
 
@@ -241,6 +329,7 @@ describe('OpenAI Responses API: cached prompt tokens', () => {
 
     expect(info.cacheReadInputTokens).toBe(4200);
     expect(info.inputTokens).toBe(800);
+    expect(info.turnUsage).toEqual([{ inputTokens: 800, cacheReadInputTokens: 4200, outputTokens: 200 }]);
   });
 
   it('accumulates the Responses turn cache read into the chat synthesis turn', async () => {
@@ -263,6 +352,38 @@ describe('OpenAI Responses API: cached prompt tokens', () => {
 
     expect(info.cacheReadInputTokens).toBe(600 + 500);
     expect(info.inputTokens).toBe(1000 + 1200 - (600 + 500));
+    expect(info.turnUsage).toEqual([
+      { inputTokens: 400, cacheReadInputTokens: 600, outputTokens: 20 },
+      { inputTokens: 700, cacheReadInputTokens: 500, outputTokens: 30 },
+    ]);
+  });
+
+  // Each of these emits is the round's only usage frame.
+  const toolRound = (name: string) => ({
+    output: [{ type: 'function_call', call_id: 'c1', name, arguments: '{}' }],
+    usage: { input_tokens: 1000, output_tokens: 20, input_tokens_details: { cached_tokens: 600 } },
+  });
+
+  it('reports the request on the executeTools:false emit', async () => {
+    const { backend } = responsesBackend([toolRound('lookup')]);
+
+    const info = settled(await run(backend, ChatModels.GPT5, { tools: [sampleTool], executeTools: false }));
+
+    expect(info.turnUsage).toEqual([{ inputTokens: 400, cacheReadInputTokens: 600, outputTokens: 20 }]);
+  });
+
+  it('reports the request on the emit of a turn that ends after a flagged tool', async () => {
+    const suggestTool: ICompletionOptionTools = {
+      ...sampleTool,
+      toolSchema: { ...sampleTool.toolSchema, name: 'suggest' },
+      endsTurnAfterText: true,
+    };
+    const { backend } = responsesBackend([toolRound('suggest')]);
+
+    const info = settled(await run(backend, ChatModels.GPT5, { tools: [suggestTool] }));
+
+    expect(info.stopReason).toBe('tool_use');
+    expect(info.turnUsage).toEqual([{ inputTokens: 400, cacheReadInputTokens: 600, outputTokens: 20 }]);
   });
 });
 
@@ -277,7 +398,7 @@ describe('OpenAI cached-input rates', () => {
   // Rates read from OpenAI's published pricing table on 2026-08-19
   // (https://developers.openai.com/api/docs/pricing). The CACHE_READ_MULTIPLIER
   // fallback is 0.1x, which matches the GPT-5 family but NOT the older ones - OpenAI
-  // bills their cached input at 0.25x (4.1 family, o3, o4-mini) or 0.5x (4o family).
+  // bills their cached input at 0.25x (4.1 family, o3, o4-mini) or 0.5x (4o family, o1, o3-mini).
   // Publishing the real rate is what keeps the new discount from settling those models
   // BELOW what OpenAI charges us.
   it.each([
@@ -286,7 +407,9 @@ describe('OpenAI cached-input rates', () => {
     [ChatModels.GPT4_1_NANO, 0.025],
     [ChatModels.GPT4o, 1.25],
     [ChatModels.GPT4o_MINI, 0.075],
+    [ChatModels.O1, 7.5],
     [ChatModels.O3, 0.5],
+    [ChatModels.O3_MINI, 0.55],
     [ChatModels.O4_MINI, 0.275],
   ])('publishes an explicit cache_read rate for %s', async (id, perMTok) => {
     const model = await modelById(id);
@@ -300,6 +423,28 @@ describe('OpenAI cached-input rates', () => {
     // 400 x $2.50/M + 1600 x $1.25/M
     expect(cost).toBeCloseTo((400 * 2.5 + 1600 * 1.25) / 1_000_000, 12);
   });
+
+  // Standard-tier rates from OpenAI's pricing page, checked 2026-10-13. Both context
+  // bands are pinned; the cached rate is exactly 0.1x input in each, so no override.
+  // Sol is pinned at its regular list price, not the $4 / $20 promotion OpenAI runs
+  // through at least 2026-11-21.
+  it.each([
+    [ChatModels.GPT5_6_SOL, 272_000, 5, 30],
+    [ChatModels.GPT5_6_SOL, 1_050_000, 10, 45],
+    [ChatModels.GPT5_6_TERRA, 272_000, 2, 12],
+    [ChatModels.GPT5_6_TERRA, 1_050_000, 4, 18],
+    [ChatModels.GPT5_6_LUNA, 272_000, 0.2, 1.2],
+    [ChatModels.GPT5_6_LUNA, 1_050_000, 0.4, 1.8],
+  ])(
+    'prices %s at the published %i-token band ($%s in / $%s out per 1M, cache read on the 0.1x default)',
+    async (id, band, inPerM, outPerM) => {
+      const model = await modelById(id);
+      const tier = model.pricing[band];
+      expect(tier.input).toBeCloseTo(inPerM / 1_000_000, 12);
+      expect(tier.output).toBeCloseTo(outPerM / 1_000_000, 12);
+      expect(tier.cache_read).toBeUndefined();
+    }
+  );
 
   it("leaves the GPT-5 family on the 0.1x default, matching OpenAI's published rate", async () => {
     const model = await modelById(ChatModels.GPT5_5);

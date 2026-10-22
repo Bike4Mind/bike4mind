@@ -1,6 +1,15 @@
-import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
-import { IFabFileDocument, IUserDocument } from '@bike4mind/common';
+import { describe, it, expect, beforeEach, afterEach, vi, Mock } from 'vitest';
+import {
+  BadRequestError,
+  FAB_FILE_CONTENT_REWRITE_PATCH,
+  IFabFileDocument,
+  IUserDocument,
+  isStorageLimitError,
+  StorageLimitError,
+} from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
 import { updateFabFile } from './update';
+import { withStorageOwnerFakes } from '../__tests__/utils/storageOwnerTransferFakes';
 
 describe('updateFabFile (upload moderation gate)', () => {
   const mockUser = { id: 'user-123' } as IUserDocument;
@@ -37,12 +46,12 @@ describe('updateFabFile (upload moderation gate)', () => {
     dbUpdate = vi.fn().mockResolvedValue(undefined);
 
     mockAdapters = {
-      db: {
+      db: withStorageOwnerFakes({
         fabFiles: {
           shareable: { findUpdateAccessById },
           update: dbUpdate,
         },
-      },
+      }),
       storage: {
         upload: vi.fn().mockResolvedValue(undefined),
         generateSignedUrl: vi.fn().mockResolvedValue('https://s3.example.com/new-signed-url'),
@@ -160,7 +169,7 @@ describe('updateFabFile (upload moderation gate)', () => {
     };
 
     const adapters = {
-      db: {
+      db: withStorageOwnerFakes({
         fabFiles: {
           shareable: { findUpdateAccessById },
           update: dbUpdate,
@@ -169,7 +178,7 @@ describe('updateFabFile (upload moderation gate)', () => {
           computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }),
         },
         dataLakes: { findByDatalakeTag: vi.fn().mockResolvedValue(lake), setStats: vi.fn(), activateIfDraft: vi.fn() },
-      },
+      }),
       storage: mockAdapters.storage,
     };
 
@@ -210,8 +219,11 @@ describe('updateFabFile (lake-tag reconciliation wiring)', () => {
         findById: Mock;
         pullTagsByFabFileId: Mock;
         computeDataLakeStats: Mock;
+        setOwnerOrganizationIfUnchanged: Mock;
       };
-      dataLakes: { findByDatalakeTag: Mock; find: Mock; setStats: Mock };
+      dataLakes: { findByDatalakeTag: Mock; findByDatalakeTags: Mock; find: Mock; setStats: Mock };
+      users: { findById: Mock; incrementCurrentStorage: Mock };
+      organizations: { findById: Mock; incrementCurrentStorage: Mock };
     };
     storage: { upload: Mock; generateSignedUrl: Mock };
   };
@@ -242,7 +254,7 @@ describe('updateFabFile (lake-tag reconciliation wiring)', () => {
     findByDatalakeTag = vi.fn().mockResolvedValue(null);
 
     mockAdapters = {
-      db: {
+      db: withStorageOwnerFakes({
         fabFiles: {
           shareable: { findUpdateAccessById },
           update: dbUpdate,
@@ -256,7 +268,7 @@ describe('updateFabFile (lake-tag reconciliation wiring)', () => {
           setStats: vi.fn(),
           activateIfDraft: vi.fn(),
         },
-      },
+      }),
       storage: {
         upload: vi.fn().mockResolvedValue(undefined),
         generateSignedUrl: vi.fn().mockResolvedValue('https://s3.example.com/new-signed-url'),
@@ -329,5 +341,462 @@ describe('updateFabFile (lake-tag reconciliation wiring)', () => {
     );
     const persisted = dbUpdate.mock.calls[0][0];
     expect(persisted.tags).toEqual(result.tags);
+  });
+
+  describe('storage owner', () => {
+    const orgLake = {
+      id: 'lake1',
+      datalakeTag: 'datalake:acme',
+      fileTagPrefix: 'acme:',
+      createdByUserId: 'user-123',
+      organizationId: 'org-acme',
+      createdAt: new Date('2026-01-01'),
+      status: 'active',
+    };
+    const charged = { storageChargedAt: new Date('2026-10-10'), status: 'complete' as const };
+
+    // The persisted row the post-write owner transfer re-reads, already carrying the joined tag.
+    const joinOrgLake = () => {
+      findUpdateAccessById.mockResolvedValue(baseFile({ tags: [], ...charged }));
+      findByDatalakeTag.mockResolvedValue(orgLake);
+      mockAdapters.db.dataLakes.findByDatalakeTags.mockResolvedValue([orgLake]);
+      mockAdapters.db.fabFiles.findById.mockResolvedValue(
+        baseFile({ tags: [{ name: 'datalake:acme', strength: 1 }], ...charged })
+      );
+      mockAdapters.db.users.findById.mockResolvedValue({ id: 'user-123', currentStorageSize: 0 });
+    };
+
+    it("moves the file's charged bytes onto the org when a tag replacement joins an org lake", async () => {
+      joinOrgLake();
+      mockAdapters.db.organizations.findById.mockResolvedValue({ id: 'org-acme', currentStorageSize: 0 });
+
+      const result = await updateFabFile(
+        mockUser,
+        { id: 'file-1', tags: [{ name: 'datalake:acme', strength: 1 }] },
+        mockAdapters as any
+      );
+
+      expect(mockAdapters.db.fabFiles.setOwnerOrganizationIfUnchanged).toHaveBeenCalledWith(
+        'file-1',
+        expect.anything(),
+        'org-acme'
+      );
+      expect(mockAdapters.db.users.incrementCurrentStorage).toHaveBeenCalledWith('user-123', -1024);
+      expect(mockAdapters.db.organizations.incrementCurrentStorage).toHaveBeenCalledWith('org-acme', 1024);
+      expect(result.organizationId).toBe('org-acme');
+    });
+
+    it("refuses the join before writing when the org's pool has no room", async () => {
+      joinOrgLake();
+      // storageLimit is in MB: a full 1 MB pool.
+      mockAdapters.db.organizations.findById.mockResolvedValue({
+        id: 'org-acme',
+        currentStorageSize: 1024 * 1024,
+        storageLimit: 1,
+      });
+
+      await expect(
+        updateFabFile(mockUser, { id: 'file-1', tags: [{ name: 'datalake:acme', strength: 1 }] }, mockAdapters as any)
+      ).rejects.toBeInstanceOf(StorageLimitError);
+      expect(dbUpdate).not.toHaveBeenCalled();
+      expect(mockAdapters.db.organizations.incrementCurrentStorage).not.toHaveBeenCalled();
+    });
+
+    it("does not grade a rewrite's growth against the old owner when the edit moves the file to an org", async () => {
+      const textRow = baseFile({ mimeType: 'text/plain', fileSize: 10, tags: [], ...charged });
+      findUpdateAccessById.mockResolvedValue(textRow);
+      findByDatalakeTag.mockResolvedValue(orgLake);
+      mockAdapters.db.dataLakes.findByDatalakeTags.mockResolvedValue([orgLake]);
+      // The uploader's personal pool is full; the destination org has room.
+      mockAdapters.db.users.findById.mockResolvedValue({
+        id: 'user-123',
+        currentStorageSize: 1024 * 1024,
+        storageLimit: 1,
+      });
+      mockAdapters.db.organizations.findById.mockResolvedValue({
+        id: 'org-acme',
+        currentStorageSize: 0,
+        storageLimit: 1,
+      });
+      const fabFiles = mockAdapters.db.fabFiles as typeof mockAdapters.db.fabFiles & Record<string, Mock>;
+      fabFiles.findChargeState = vi.fn().mockResolvedValue(textRow);
+      fabFiles.commitContentRewrite = vi.fn().mockResolvedValue(textRow);
+
+      await updateFabFile(
+        mockUser,
+        { id: 'file-1', fileContent: 'x'.repeat(100), tags: [{ name: 'datalake:acme', strength: 1 }] },
+        mockAdapters as any
+      );
+
+      expect(mockAdapters.storage.upload).toHaveBeenCalled();
+      expect(fabFiles.findChargeState).not.toHaveBeenCalled();
+    });
+
+    it("charges a pending file's rewrite to the uploader, then moves the full new size onto the org", async () => {
+      const pendingRow = baseFile({
+        mimeType: 'text/plain',
+        fileSize: 10,
+        tags: [],
+        status: 'pending',
+        createdAt: new Date('2026-10-10'),
+      });
+      findUpdateAccessById.mockResolvedValue(pendingRow);
+      findByDatalakeTag.mockResolvedValue(orgLake);
+      mockAdapters.db.dataLakes.findByDatalakeTags.mockResolvedValue([orgLake]);
+      mockAdapters.db.users.findById.mockResolvedValue({ id: 'user-123', currentStorageSize: 0 });
+      // The gate grades the rewrite's 100 bytes as if already charged; this 1 MB pool has room for them.
+      mockAdapters.db.organizations.findById.mockResolvedValue({
+        id: 'org-acme',
+        currentStorageSize: 999_800,
+        storageLimit: 1,
+      });
+      const fabFiles = mockAdapters.db.fabFiles as typeof mockAdapters.db.fabFiles & Record<string, Mock>;
+      // The rewrite returns the uncharged pre-image and stamps the row; the reassign then re-reads it.
+      fabFiles.commitContentRewrite = vi.fn().mockResolvedValue(pendingRow);
+      mockAdapters.db.fabFiles.findById.mockResolvedValue({
+        ...pendingRow,
+        fileSize: 100,
+        storageChargedAt: new Date(),
+        tags: [{ name: 'datalake:acme', strength: 1 }],
+      });
+
+      await updateFabFile(
+        mockUser,
+        { id: 'file-1', fileContent: 'x'.repeat(100), tags: [{ name: 'datalake:acme', strength: 1 }] },
+        mockAdapters as any
+      );
+
+      const net = (mock: Mock, id: string) =>
+        mock.mock.calls.filter(([owner]) => owner === id).reduce((sum, [, bytes]) => sum + (bytes as number), 0);
+      expect(mockAdapters.db.users.incrementCurrentStorage.mock.calls).toEqual([
+        ['user-123', 100],
+        ['user-123', -100],
+      ]);
+      expect(net(mockAdapters.db.users.incrementCurrentStorage, 'user-123')).toBe(0);
+      expect(net(mockAdapters.db.organizations.incrementCurrentStorage, 'org-acme')).toBe(100);
+      expect(mockAdapters.db.organizations.findById).toHaveBeenCalledWith('org-acme');
+    });
+
+    it('grades a join against the rewritten size before the upload commits', async () => {
+      // A text file, so the content block runs; unstamped, so its current charged bytes are 0.
+      findUpdateAccessById.mockResolvedValue(
+        baseFile({ mimeType: 'text/plain', fileSize: 10, tags: [], createdAt: new Date('2026-10-10') })
+      );
+      findByDatalakeTag.mockResolvedValue(orgLake);
+      mockAdapters.db.dataLakes.findByDatalakeTags.mockResolvedValue([orgLake]);
+      // 1 MB pool with 12 bytes of headroom: the stored size fits, the rewritten body does not.
+      mockAdapters.db.organizations.findById.mockResolvedValue({
+        id: 'org-acme',
+        currentStorageSize: 999_988,
+        storageLimit: 1,
+      });
+      mockAdapters.db.users.findById.mockResolvedValue({ id: 'user-123', currentStorageSize: 0 });
+
+      await expect(
+        updateFabFile(
+          mockUser,
+          { id: 'file-1', fileContent: 'x'.repeat(100), tags: [{ name: 'datalake:acme', strength: 1 }] },
+          mockAdapters as any
+        )
+      ).rejects.toBeInstanceOf(StorageLimitError);
+
+      expect(mockAdapters.storage.upload).not.toHaveBeenCalled();
+      expect(dbUpdate).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe('updateFabFile (narrowed write pins)', () => {
+  const NOW = new Date('2026-01-01T00:00:00Z');
+  const mockUser = { id: 'user-123' } as IUserDocument;
+
+  let findUpdateAccessById: Mock;
+  let dbUpdate: Mock;
+  let mockAdapters: {
+    db: {
+      fabFiles: {
+        shareable: { findUpdateAccessById: Mock };
+        update: Mock;
+        findById: Mock;
+        pullTagsByFabFileId: Mock;
+        computeDataLakeStats: Mock;
+        commitContentRewrite: Mock;
+        findChargeState: Mock;
+      };
+      users: { findById: Mock; incrementCurrentStorage: Mock };
+      dataLakes: { findByDatalakeTag: Mock; find: Mock; setStats: Mock; activateIfDraft: Mock };
+    };
+    storage: { upload: Mock; generateSignedUrl: Mock; getMetadata?: Mock };
+  };
+
+  const textFile = (overrides: Partial<IFabFileDocument> = {}): IFabFileDocument =>
+    ({
+      id: 'file-1',
+      userId: 'user-123',
+      fileName: 'notes.txt',
+      mimeType: 'text/plain',
+      filePath: 'uploads/notes.txt',
+      moderationStatus: 'clean',
+      tags: [],
+      fileUrl: 'https://s3.example.com/stale-signed-url',
+      users: [],
+      groups: [],
+      ...overrides,
+    }) as IFabFileDocument;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    findUpdateAccessById = vi.fn();
+    dbUpdate = vi.fn().mockResolvedValue(undefined);
+    mockAdapters = {
+      db: withStorageOwnerFakes({
+        fabFiles: {
+          shareable: { findUpdateAccessById },
+          update: dbUpdate,
+          findById: vi.fn().mockResolvedValue(null),
+          pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
+          computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }),
+          commitContentRewrite: vi
+            .fn()
+            .mockResolvedValue({ userId: 'user-123', fileSize: 3, storageChargedAt: new Date('2025-12-01T00:00:00Z') }),
+          findChargeState: vi.fn(() => findUpdateAccessById()),
+        },
+        users: { findById: vi.fn(), incrementCurrentStorage: vi.fn() },
+        dataLakes: {
+          findByDatalakeTag: vi.fn().mockResolvedValue(null),
+          find: vi.fn().mockResolvedValue([]),
+          setStats: vi.fn(),
+          activateIfDraft: vi.fn(),
+        },
+      }),
+      storage: {
+        upload: vi.fn().mockResolvedValue(undefined),
+        generateSignedUrl: vi.fn().mockResolvedValue('https://s3.example.com/new-signed-url'),
+      },
+    };
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('writes only the changed fields and no unset option for a serveable file (notes)', async () => {
+    findUpdateAccessById.mockResolvedValue(textFile());
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await updateFabFile(mockUser, { id: 'file-1', notes: 'a note' }, mockAdapters as any);
+
+    expect(dbUpdate).toHaveBeenCalledTimes(1);
+    expect(dbUpdate.mock.calls[0]).toStrictEqual([
+      { id: 'file-1', notes: 'a note', systemPriority: undefined, updatedAt: NOW },
+      undefined,
+    ]);
+  });
+
+  it('writes the reconciled tags array and no other file fields when tags change', async () => {
+    findUpdateAccessById.mockResolvedValue(textFile());
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await updateFabFile(mockUser, { id: 'file-1', tags: [{ name: 'design', strength: 1 }] }, mockAdapters as any);
+
+    expect(dbUpdate).toHaveBeenCalledTimes(1);
+    expect(dbUpdate.mock.calls[0]).toStrictEqual([
+      {
+        id: 'file-1',
+        tags: [{ name: 'design', strength: 1 }],
+        systemPriority: undefined,
+        updatedAt: NOW,
+      },
+      undefined,
+    ]);
+  });
+
+  it('writes the lake meta-tag and backfilled folder tag in the persisted array on a join', async () => {
+    mockAdapters.db.dataLakes.findByDatalakeTag.mockResolvedValue({
+      id: 'lake1',
+      datalakeTag: 'datalake:acme',
+      fileTagPrefix: 'acme:',
+      createdByUserId: 'user-123',
+      status: 'active',
+    });
+    findUpdateAccessById.mockResolvedValue(textFile());
+
+    await updateFabFile(
+      mockUser,
+      { id: 'file-1', tags: [{ name: 'datalake:acme', strength: 1 }] },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      mockAdapters as any
+    );
+
+    expect(dbUpdate).toHaveBeenCalledTimes(1);
+    expect(dbUpdate.mock.calls[0]).toStrictEqual([
+      {
+        id: 'file-1',
+        tags: [
+          { name: 'datalake:acme', strength: 1 },
+          { name: 'acme:uncategorized', strength: 1 },
+        ],
+        systemPriority: undefined,
+        updatedAt: NOW,
+      },
+      undefined,
+    ]);
+  });
+
+  it('defaults systemPriority to 999 when system is set without one', async () => {
+    findUpdateAccessById.mockResolvedValue(textFile());
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await updateFabFile(mockUser, { id: 'file-1', system: true }, mockAdapters as any);
+
+    expect(dbUpdate.mock.calls[0]).toStrictEqual([
+      { id: 'file-1', system: true, systemPriority: 999, updatedAt: NOW },
+      undefined,
+    ]);
+  });
+
+  it('writes the content-rewrite patch with the new url when fileContent changes', async () => {
+    findUpdateAccessById.mockResolvedValue(textFile());
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await updateFabFile(mockUser, { id: 'file-1', fileContent: 'new body' }, mockAdapters as any);
+
+    // The size is persisted only by commitContentRewrite, so the trailing write cannot clobber it.
+    expect(result.fileSize).toBe(8);
+    expect(mockAdapters.db.fabFiles.commitContentRewrite).toHaveBeenCalledWith('file-1', { fileSize: 8 }, undefined);
+    expect(dbUpdate).toHaveBeenCalledTimes(1);
+    expect(dbUpdate.mock.calls[0]).toStrictEqual([
+      {
+        id: 'file-1',
+        fileUrl: 'https://s3.example.com/new-signed-url',
+        fileUrlExpireAt: new Date('2026-01-01T01:00:00Z'),
+        ...FAB_FILE_CONTENT_REWRITE_PATCH,
+        systemPriority: undefined,
+        updatedAt: NOW,
+      },
+      undefined,
+    ]);
+  });
+
+  it('keeps fileSize out of the trailing write when storage reports metadata', async () => {
+    mockAdapters.storage.getMetadata = vi.fn().mockResolvedValue({ size: 8 });
+    findUpdateAccessById.mockResolvedValue(textFile());
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await updateFabFile(mockUser, { id: 'file-1', fileContent: 'new body' }, mockAdapters as any);
+
+    // The size is persisted only by commitContentRewrite, so the trailing write cannot clobber it.
+    expect(result.fileSize).toBe(8);
+    expect(mockAdapters.db.fabFiles.commitContentRewrite).toHaveBeenCalledWith('file-1', { fileSize: 8 }, undefined);
+    expect(dbUpdate).toHaveBeenCalledTimes(1);
+    expect(dbUpdate.mock.calls[0]).toStrictEqual([
+      {
+        id: 'file-1',
+        fileUrl: 'https://s3.example.com/new-signed-url',
+        fileUrlExpireAt: new Date('2026-01-01T01:00:00Z'),
+        ...FAB_FILE_CONTENT_REWRITE_PATCH,
+        systemPriority: undefined,
+        updatedAt: NOW,
+      },
+      undefined,
+    ]);
+  });
+
+  it('sends the unset option, and no url fields in the partial, for a file held by moderation', async () => {
+    findUpdateAccessById.mockResolvedValue(textFile({ moderationStatus: 'pending' }));
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await updateFabFile(mockUser, { id: 'file-1', fileName: 'renamed.txt' }, mockAdapters as any);
+
+    expect(dbUpdate).toHaveBeenCalledTimes(1);
+    expect(dbUpdate.mock.calls[0]).toStrictEqual([
+      { id: 'file-1', fileName: 'renamed.txt', systemPriority: undefined, updatedAt: NOW },
+      { unset: ['fileUrl', 'fileUrlExpireAt'] },
+    ]);
+  });
+
+  describe('storage accounting', () => {
+    const run = (user: IUserDocument = mockUser) =>
+      updateFabFile(user, { id: 'file-1', fileContent: 'new body' }, mockAdapters as any);
+
+    it('stamps the rewrite and charges the owner only the growth', async () => {
+      findUpdateAccessById.mockResolvedValue(textFile({ fileSize: 3, storageChargedAt: NOW }));
+
+      await run();
+
+      expect(mockAdapters.db.fabFiles.commitContentRewrite).toHaveBeenCalledWith('file-1', { fileSize: 8 }, undefined);
+      expect(mockAdapters.db.users.incrementCurrentStorage).toHaveBeenCalledWith('user-123', 5);
+    });
+
+    it('falls back to the content length when the stored size cannot be read', async () => {
+      mockAdapters.storage.getMetadata = vi.fn().mockRejectedValue(new Error('head failed'));
+      findUpdateAccessById.mockResolvedValue(textFile({ fileSize: 3, storageChargedAt: NOW }));
+
+      await run();
+
+      expect(dbUpdate.mock.calls[0][0]).not.toHaveProperty('fileSize');
+      expect(mockAdapters.db.fabFiles.commitContentRewrite).toHaveBeenCalledWith('file-1', { fileSize: 8 }, undefined);
+    });
+
+    it('warns and charges nothing when the row is gone by the time the rewrite commits', async () => {
+      const warn = vi.spyOn(Logger.globalInstance, 'warn').mockImplementation(() => undefined);
+      mockAdapters.db.fabFiles.commitContentRewrite.mockResolvedValue(null);
+      findUpdateAccessById.mockResolvedValue(textFile({ fileSize: 3, storageChargedAt: NOW }));
+
+      await run();
+
+      expect(mockAdapters.db.users.incrementCurrentStorage).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('matched no live row'));
+      warn.mockRestore();
+    });
+
+    it('persists a newly minted filePath on the first content write', async () => {
+      findUpdateAccessById.mockResolvedValue(textFile({ filePath: undefined }));
+
+      await run();
+
+      const { filePath } = dbUpdate.mock.calls[0][0];
+      expect(filePath).toMatch(/\.txt$/);
+      expect(mockAdapters.storage.upload).toHaveBeenCalledWith(filePath, 'new body', expect.anything());
+    });
+
+    it('charges the owner, not an update-share editor, and refuses growth past the owner quota', async () => {
+      findUpdateAccessById.mockResolvedValue(textFile({ fileSize: 3, storageChargedAt: NOW }));
+      mockAdapters.db.users.findById.mockResolvedValue({ id: 'user-123', storageLimit: 0, currentStorageSize: 0 });
+      const editor = { id: 'editor', storageLimit: 1000, currentStorageSize: 0 } as unknown as IUserDocument;
+
+      await expect(run(editor)).rejects.toMatchObject({ info: { errorCode: 'storage_limit_exceeded' } });
+
+      expect(mockAdapters.db.users.findById).toHaveBeenCalledWith('user-123');
+      expect(mockAdapters.storage.upload).not.toHaveBeenCalled();
+      expect(mockAdapters.db.fabFiles.commitContentRewrite).not.toHaveBeenCalled();
+      expect(dbUpdate).not.toHaveBeenCalled();
+    });
+
+    it('refuses an update-share editor with the storage code but none of the owner usage numbers', async () => {
+      findUpdateAccessById.mockResolvedValue(textFile({ fileSize: 3, storageChargedAt: NOW }));
+      mockAdapters.db.users.findById.mockResolvedValue({ id: 'user-123', storageLimit: 0, currentStorageSize: 4321 });
+      const editor = { id: 'editor', storageLimit: 1000, currentStorageSize: 0 } as unknown as IUserDocument;
+
+      const error = await run(editor).catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(BadRequestError);
+      expect(isStorageLimitError(error)).toBe(true);
+      expect((error as BadRequestError).additionalInfo).toStrictEqual({
+        errorCode: 'storage_limit_exceeded',
+        owner: 'user',
+      });
+      expect(mockAdapters.storage.upload).not.toHaveBeenCalled();
+    });
+
+    it('still gives the owner their own usage numbers on a refusal', async () => {
+      const owner = { id: 'user-123', storageLimit: 0, currentStorageSize: 4321 } as unknown as IUserDocument;
+      findUpdateAccessById.mockResolvedValue(textFile({ fileSize: 3, storageChargedAt: NOW }));
+
+      const error = await run(owner).catch((e: unknown) => e);
+
+      expect(isStorageLimitError(error) && error.info).toMatchObject({ owner: 'user', used_bytes: 4321 });
+    });
   });
 });

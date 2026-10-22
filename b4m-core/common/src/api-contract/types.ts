@@ -28,7 +28,7 @@ export type HttpMethod = 'get' | 'post' | 'put' | 'patch' | 'delete';
  */
 export type AuthMode = 'apiKeyOrJwt' | 'jwtOnly' | 'public';
 
-export type ResponseSpec = {
+type ResponseSpecFields = {
   description: string;
   /**
    * Shape of the response body. OMIT for a raw, non-JSON body (e.g. the audio
@@ -86,9 +86,23 @@ export type ResponseSpec = {
   bespokeErrorShape?: string;
 };
 
+type BodyFields = 'schema' | 'contentType' | 'example' | 'alsoReturns';
+
+export type ResponseSpec =
+  | (ResponseSpecFields & { noBody?: never })
+  | (Omit<ResponseSpecFields, BodyFields> & {
+      /**
+       * The status carries no body at all (e.g. a `303` whose payload is the
+       * `Location` header), so the spec publishes no `content` for it; a
+       * schema-less status is otherwise documented as an opaque binary body.
+       */
+      noBody: true;
+    } & { [K in BodyFields]?: never });
+
 /** curl/JS/Python sample body for the docs (attached as x-codeSamples). */
 export type CodeSample = {
-  body: unknown;
+  /** Omit when the operation declares no request body: the samples only send one when it does. */
+  body?: unknown;
   authToken: string;
   streaming?: boolean;
 };
@@ -128,6 +142,26 @@ export type ConventionExemptions = {
   pagination?: string;
 };
 
+/**
+ * A published endpoint on its way out (CONVENTIONS.md section 7). Dates are
+ * `YYYY-MM-DD` (UTC); `defineEndpoint` rejects anything else, and a sunset that is
+ * not after `since`.
+ *
+ * One declaration drives every surface: the spec marks the operation
+ * `deprecated: true` and leads its description with the sunset, and the Next
+ * adapter sends the RFC 9745 `Deprecation`, RFC 8594 `Sunset` and (with a
+ * `successor`) `Link: rel="successor-version"` headers on every response the
+ * handler produces.
+ */
+export type EndpointDeprecation = {
+  /** The day the endpoint was deprecated. */
+  since: string;
+  /** The first day the endpoint may stop being served. */
+  sunset: string;
+  /** Path of the replacement endpoint, e.g. `/api/v1/music-generations`. */
+  successor?: string;
+};
+
 export type EndpointContract<ReqSchema extends z.ZodTypeAny = z.ZodTypeAny> = {
   method: HttpMethod;
   path: string;
@@ -141,6 +175,10 @@ export type EndpointContract<ReqSchema extends z.ZodTypeAny = z.ZodTypeAny> = {
   scopes?: readonly ApiKeyScope[];
   /** The schema the handlers validate the request body with (all transports). */
   request?: ReqSchema;
+  /** Whether OpenAPI clients must send a body when `request` is present. Defaults to true. */
+  requestBodyRequired?: boolean;
+  /** HTTP status used when request, path, or query validation fails. Defaults to 422. */
+  validationErrorStatus?: 400 | 422;
   /**
    * Schema for dynamic path segments (e.g. `{id}` in `/api/sessions/{id}`).
    * Values arrive via Next.js's file-based routing convention as `req.query`
@@ -187,14 +225,6 @@ export type EndpointContract<ReqSchema extends z.ZodTypeAny = z.ZodTypeAny> = {
    * query params yet, matching its existing `pathParams` gap.
    */
   queryParams?: z.ZodObject<z.ZodRawShape>;
-  /**
-   * Optional OpenAPI-representable projection of `request`, used ONLY for the
-   * generated spec. Needed when `request` carries wrappers zod-to-openapi cannot
-   * introspect (`.catch()`, `.transform()`, `.pipe()`). Its INPUT shape must
-   * match `request` exactly, so it is a doc projection, not a second contract.
-   * Defaults to `request` when omitted.
-   */
-  requestDoc?: z.ZodTypeAny;
   requestExample?: unknown;
   responses: Record<number, ResponseSpec>;
   /** SSE endpoint: skips JSON response-body docs and gets streaming code samples. */
@@ -219,4 +249,6 @@ export type EndpointContract<ReqSchema extends z.ZodTypeAny = z.ZodTypeAny> = {
    * for a new endpoint. See CONVENTIONS.md.
    */
   conventionExemptions?: Readonly<ConventionExemptions>;
+  /** Set once the endpoint is deprecated; see {@link EndpointDeprecation}. */
+  deprecated?: Readonly<EndpointDeprecation>;
 };

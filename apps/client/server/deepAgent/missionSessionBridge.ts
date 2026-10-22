@@ -1,7 +1,7 @@
 import type { Charter, Episode, WakeOutcome } from '@bike4mind/agents';
 import { deepAgentCharterRepository, sessionRepository, Quest } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
-import type { ReviewOutcome } from './reviewWake';
+import type { ReviewOutcome } from '@bike4mind/server-utils/deepAgent/reviewWake';
 
 /**
  * Mission session bridge - wake outputs join the B4M fabric.
@@ -51,6 +51,7 @@ export function defaultBridgeDeps(logger: Logger): MissionBridgeDeps {
         clonedSourceId: null,
         forkedSourceId: null,
         lastUsedModel: null,
+        origin: { channel: 'agent' },
       } as Parameters<typeof sessionRepository.create>[0]);
       if (charter.sessionId) {
         // The stored session was missing (deleted notebook) - re-point off the

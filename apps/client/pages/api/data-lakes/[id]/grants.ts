@@ -1,5 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { DATA_LAKE_SHARE_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { dataLakeService } from '@bike4mind/services';
 import { DATA_LAKE_ACCESS_ROLES, DATA_LAKE_PRINCIPAL_TYPES } from '@bike4mind/common';
@@ -12,7 +12,7 @@ import {
 import { Request } from 'express';
 import { z } from 'zod';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
-import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { firstQueryValue } from '@server/dataLakes/firstQueryValue';
 
@@ -69,7 +69,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_SHARE_SCOPES })
     // The gate has to be INSIDE the callback: a revoke that commits mid-request collides with this
     // write on the lake doc, and the retry must re-read the grants rather than reuse the stale set.
     const data = await withTransaction(async () => {
-      const { lake, grants } = await dataLakeService.assertLakeAccessWithGrants(id, ctx, {
+      const { lake, grants } = await dataLakeService.assertLakeAccessWithGrantsById(id, ctx, {
         db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
       });
 
@@ -98,7 +98,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_SHARE_SCOPES })
     // The gate has to be INSIDE the callback: a revoke that commits mid-request collides with this
     // write on the lake doc, and the retry must re-read the grants rather than reuse the stale set.
     const data = await withTransaction(async () => {
-      const { lake, grants } = await dataLakeService.assertLakeAccessWithGrants(id, ctx, {
+      const { lake, grants } = await dataLakeService.assertLakeAccessWithGrantsById(id, ctx, {
         db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
       });
 

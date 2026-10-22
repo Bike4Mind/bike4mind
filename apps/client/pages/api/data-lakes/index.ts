@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
-import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import {
   dataLakeRepository,
@@ -10,12 +10,24 @@ import {
   userRepository,
   adminSettingsRepository,
   fallbackLakeSettingsRepository,
+  orgGitHubLakeConnectionRepository,
 } from '@bike4mind/database';
-import { CreateDataLakeRequestInput, BadRequestError, ForbiddenError } from '@bike4mind/common';
+import {
+  CreateDataLakeRequestInput,
+  BadRequestError,
+  ForbiddenError,
+  dataLakeConfigListResponseSchema,
+  dataLakeResponseSchema,
+} from '@bike4mind/common';
 import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
-import { isValidObjectId } from '@server/utils/objectId';
-import { resolveActiveOrg } from '@server/utils/resolveActiveOrg';
+import { respond } from '@server/utils/respond';
+import { resolveLakeListRetrievalScope } from '@server/dataLakes/resolveLakeListRetrievalScope';
+import { labelLakeRetrievability } from '@server/dataLakes/labelLakeRetrievability';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
+import { resolveActiveOrg } from '@bike4mind/server-utils/utils/resolveActiveOrg';
+import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
+import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 
 const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
@@ -42,6 +54,9 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       // the queue's only discovery surface - without it a reviewer has to open a lake's settings to
       // learn whether anything is waiting, which nobody does unprompted.
       dataLakeProposals: dataLakeProposalRepository,
+      // GitHub binding per pending-connect lake, flag-free, so the finish-connect banner can rule a
+      // bound repository out while EnableDataLakeGitHub is off.
+      gitHubLakeConnections: orgGitHubLakeConnectionRepository,
       // Org repo: resolves the org-admin rung of `canPreauthorize` for an admin caller, whose
       // ctx.administeredOrgIds is deliberately zeroed. Without it that rung goes dark on this list.
       organizations: organizationRepository,
@@ -69,11 +84,24 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     }
 
     // Admins see all data lakes; non-admins see only those they can access (owner/org/tag).
-    const dataLakes = ctx.isAdmin
-      ? await dataLakeService.listAllDataLakes(ctx, { db, logger: req.logger, preauthorizeForUserId })
-      : await dataLakeService.listDataLakes(ctx, { db });
+    // The `retrievable` label is opt-in (it costs a second lake/grant resolution) and must not break
+    // the list, so a label failure degrades to unlabeled rows. Contract: DataLakeRetrievabilityLabel.
+    const includeRetrievability = req.query.includeRetrievability === 'true';
+    const [dataLakes, retrievalScope] = await Promise.all([
+      ctx.isAdmin
+        ? dataLakeService.listAllDataLakes(ctx, { db, logger: req.logger, preauthorizeForUserId })
+        : dataLakeService.listDataLakes(ctx, { db, logger: req.logger }),
+      includeRetrievability
+        ? resolveLakeListRetrievalScope(req, req.query.sessionId).catch((err: unknown) => {
+            req.logger.warn('data-lakes list: retrieval scope unavailable, rows left unlabeled', { err });
+            return null;
+          })
+        : null,
+    ]);
 
-    return res.json({ data: dataLakes });
+    return respond(res, dataLakeConfigListResponseSchema, {
+      data: retrievalScope ? labelLakeRetrievability(dataLakes, retrievalScope) : dataLakes,
+    });
   })
   // POST /api/data-lakes - create a new data lake
   .post(async (req: Request, res) => {
@@ -89,13 +117,18 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       userId,
       params,
       {
-        db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+        db: {
+          dataLakes: dataLakeRepository,
+          dataLakeAccessGrants: dataLakeAccessGrantRepository,
+          ...lakeConfigAuditDb,
+        },
         logger: req.logger,
       },
-      organizationId
+      organizationId,
+      lakeConfigAuditPrincipal(req.user!, req.apiKeyInfo)
     );
 
-    return res.status(201).json(dataLake);
+    return respond(res, dataLakeResponseSchema, dataLake, 201);
   });
 
 export const config = {

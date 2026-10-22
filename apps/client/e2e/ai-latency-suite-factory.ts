@@ -17,7 +17,13 @@ import {
   isLatencyObservation,
   mergeResults,
   gatedAverageSec,
+  latencyBreach,
+  unexpectedArtifactIds,
 } from './ai-latency-budget';
+
+// Title of the per-cell latency gate. The workflow's Quality column excludes it by this exact
+// title so a slow-but-correct cell reads Quality=Pass, Latency=FAIL (e2e-ai-latency.yml).
+const LATENCY_GATE_TITLE = 'average AI latency is within the threshold';
 
 // Normalizes to NFKC and strips invisible Unicode chars (zero-width joiners, soft hyphens,
 // non-breaking spaces) before matching - innerText-scraped AI text can differ invisibly and break a plain .includes().
@@ -107,6 +113,7 @@ export function createAiLatencySuite({
     const scenario = selectedPrompts[index];
 
     test(scenario.prompt, async ({ navigationPage, chatPage, modelSelector }) => {
+      const testStartMs = Date.now();
       test.setTimeout(timeoutMultiplier * TIMEOUTS.TEST);
 
       await navigationPage.navigateToNewChat();
@@ -115,6 +122,7 @@ export function createAiLatencySuite({
 
       const startMs = Date.now();
       let imageAsserted = false;
+      let artifactRendered = false;
       // streamEndMs marks the end of the token stream (the send helper returns once the
       // stop-generation button is gone). The image render and artifact settle that follow are a
       // separate, much longer measurement, so latency and streaming rate below are taken over the
@@ -143,6 +151,20 @@ export function createAiLatencySuite({
           // the scrape below reads the finished reply, not "Generating artifact..."/"Loading artifact...".
           if (scenario.generatesArtifact) {
             await chatPage.waitForArtifactSettled(TIMEOUTS.IMAGE_GENERATION);
+          } else if (await chatPage.hasArtifact()) {
+            // A chat prompt that came back as an artifact: settle it so the scrape reads the final
+            // reply, and flag it so the result is excluded from the gate (see completedResult).
+            // The settle is bounded by the test's remaining time so a stuck placeholder cannot
+            // outlast the test and discard the stream window already measured.
+            artifactRendered = true;
+            await chatPage
+              .waitForArtifactSettled(
+                Math.max(
+                  1_000,
+                  Math.min(TIMEOUTS.IMAGE_GENERATION, test.info().timeout - (Date.now() - testStartMs) - 15_000)
+                )
+              )
+              .catch(() => undefined);
           }
         }
       } catch (err: unknown) {
@@ -200,7 +222,18 @@ export function createAiLatencySuite({
           .toBeTruthy();
       }
 
-      const result = completedResult(scenario, { response: responseText, responseTimeMs, renderTimeMs });
+      const result = completedResult(scenario, {
+        response: responseText,
+        responseTimeMs,
+        renderTimeMs,
+        artifactRendered,
+      });
+      if (result.unexpectedArtifact) {
+        test.info().annotations.push({
+          type: 'unexpected-artifact',
+          description: `${scenario.id} answered with an artifact instead of chat; excluded from the latency gate`,
+        });
+      }
       collectedResults.push(result);
       // Persist immediately so this prompt's numbers survive a later prompt's timeout/worker recycle.
       persistResults(resolvedModel, [result]);
@@ -226,5 +259,38 @@ export function createAiLatencySuite({
     for (let i = 0; i < 3; i++) {
       prompt(i);
     }
+
+    // Runs last in this describe (mode 'default', so a failed prompt does not retry the group), so it
+    // judges every prompt including retries. Reads the merged file rather than collectedResults,
+    // which a worker recycle after a failed prompt resets.
+    test(LATENCY_GATE_TITLE, () => {
+      let results: PromptResult[] = [];
+      try {
+        const persisted = JSON.parse(fs.readFileSync(resultsPath, 'utf-8'));
+        // Drop rows left on disk by earlier local runs that picked different prompts.
+        const selectedIds = new Set(selectedPrompts.map(p => p.id));
+        if (Array.isArray(persisted.results))
+          results = persisted.results.filter((r: PromptResult) => selectedIds.has(r.id));
+      } catch {
+        // No file: no prompt recorded a timing, so there is nothing to judge.
+      }
+      const switched = unexpectedArtifactIds(results);
+      if (switched.length > 0) {
+        test.info().annotations.push({
+          type: 'unexpected-artifact',
+          description: `Excluded from the gate, answered with an artifact instead of chat: ${switched.join(', ')}`,
+        });
+      }
+      test.skip(
+        results.every(r => r.measuresDeliverable),
+        switched.length > 0
+          ? `No chat-mode latency was recorded for this cell (No Data); artifact-mode replies: ${switched.join(', ')}.`
+          : 'No text-streaming latency was recorded for this cell (No Data).'
+      );
+
+      const breach = latencyBreach(results, thresholdSec);
+      if (breach) test.info().annotations.push({ type: 'latency-breach', description: breach });
+      expect(breach, breach ?? undefined).toBeNull();
+    });
   });
 }

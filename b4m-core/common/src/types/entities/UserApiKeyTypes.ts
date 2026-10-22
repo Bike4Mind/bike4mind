@@ -7,9 +7,23 @@ export enum ApiKeyScope {
   READ_FILES = 'files:read',
   WRITE_FILES = 'files:write',
   AI_GENERATE = 'ai:generate',
+  /**
+   * Only the Decisions API (`POST /api/v1/decisions`, `GET /api/v1/decision-models`): typed questions answered
+   * with probabilities. `ai:generate` also opens these routes. Not confined, so like `me:read` it also passes
+   * scope-less routes; an image sent by `file_id` additionally needs `files:read`.
+   */
+  AI_DECIDE = 'ai:decide',
   AI_CHAT = 'ai:chat',
   READ_PROJECTS = 'projects:read',
   WRITE_PROJECTS = 'projects:write',
+  /** List and read the key owner's agents (and agents shared with them). */
+  READ_AGENTS = 'agents:read',
+  /**
+   * Create, update, delete and fund agents, manage their embed keys, and run the
+   * agent-authoring assistants (description/avatar/system-prompt/field generation),
+   * which spend the owner's credits on the agent's behalf.
+   */
+  WRITE_AGENTS = 'agents:write',
   /** Authorizes only the cc-bridge WS actions (cc_agent_register /
    *  cc_agent_event / cc_agent_disconnect). Keys with this scope CANNOT
    *  call chat/completions - a leaked bridge key has the narrow blast
@@ -19,8 +33,9 @@ export enum ApiKeyScope {
    * Read the key owner's OWN commercial state - tier, credit balance, entitlement
    * keys - via `GET /api/v1/me`. Split from the AI scopes on purpose: a key minted
    * to generate text has no business enumerating what its owner has paid for. It
-   * gates only `GET /api/v1/me` and adds no other reach, so it carries the `:read`
-   * suffix that puts it in the New-Key modal's read-only preset.
+   * reaches only `GET /api/v1/me` and its balance-only subset `GET /api/v1/credits`
+   * (which the AI scopes also open, since spend needs a pre-flight check), so it
+   * carries the `:read` suffix that puts it in the New-Key modal's read-only preset.
    */
   ME_READ = 'me:read',
   ADMIN = 'admin:*',
@@ -116,11 +131,46 @@ export enum ApiKeyScope {
    * to carry the `qa-ingest` user tag (QA_INGEST_USER_TAG in schemas/qa.ts).
    */
   QA_INGEST = 'qa:ingest',
+  /**
+   * List and download the Claude Code plugin feed of an org's approved Skill Market listings
+   * (`/api/v1/skills/market/*`). Confined: the key ends up in plaintext in `~/.claude/settings.json`,
+   * so it must reach nothing else. Minted from the Skill Market's "Use in Claude Code" dialog.
+   */
+  SKILLS_READ = 'skills:read',
+  /**
+   * Release-note automation: find a release note and set its video, and upload the What's New
+   * media for it. Admin-provisioned and confined so the job needs no `admin:*`
+   * key: it reaches only the routes that name it, and those still require a platform-admin owner.
+   */
+  RELEASE_NOTES_WRITE = 'release-notes:write',
+  /**
+   * Read the key owner's own Bob results: single-site reads, two-site comparisons and
+   * re-checks, the recent-reports list, and how many runs are left. It starts nothing and
+   * spends nothing, so the `:read` suffix that puts it in the New-Key modal's Read-only
+   * preset is deliberate, and safe there because every read is scoped to the key's owner.
+   * Split from {@link BOB_RUN} so an agent can be handed the read half alone.
+   *
+   * Like every scope, it authorizes but never entitles. The Bob routes, and the gate that
+   * decides which of the two scopes each one accepts, live in the Bob overlay package and
+   * have no implementation in this repository, so nothing here verifies either claim.
+   */
+  BOB_READ = 'bob:read',
+  /**
+   * Start a Bob site read, a two-site comparison or a re-check. This is the spend half of
+   * the Bob pair: it spends the key owner's credits and publishes a report as them, so it
+   * is never implied by {@link BOB_READ}, and it is deliberately unsuffixed so it stays out
+   * of the Read-only and Read & write presets, as {@link OPTIHASHI_COMPUTE} does. Nor does
+   * it imply {@link BOB_READ} at this repository's scope gate.
+   *
+   * Authorizes without entitling, like {@link BOB_READ}: the gate that enforces it lives in
+   * the Bob overlay package, with no implementation here.
+   */
+  BOB_RUN = 'bob:run',
 }
 
 /**
  * Scopes bound to a single dedicated flow: bridge pairing, the embed widget,
- * Overwatch ingest, QA run ingest. A key carrying ANY of these is *confined* and
+ * Overwatch ingest, QA run ingest, release-note automation. A key carrying ANY of these is *confined* and
  * both ends of the system say the same thing about it in the same words:
  *  - at mint (createUserApiKey): a confined scope must be the key's only scope, so
  *    a confined key is never persisted alongside reach it would then lose;
@@ -134,6 +184,8 @@ export const CONFINED_API_KEY_SCOPES: readonly ApiKeyScope[] = [
   ApiKeyScope.EMBED_CHAT,
   ApiKeyScope.OVERWATCH_INGEST_WRITE,
   ApiKeyScope.QA_INGEST,
+  ApiKeyScope.SKILLS_READ,
+  ApiKeyScope.RELEASE_NOTES_WRITE,
 ];
 
 export enum ApiKeyStatus {
@@ -209,7 +261,7 @@ export const API_KEY_RATE_LIMIT_DEFAULTS: Readonly<IUserApiKeyRateLimit> = Objec
 
 /**
  * White-label config for an embed key (epic #41), rendered by the widget serve
- * route. Writes are validated by EmbedBrandingSchema (schemas/embedBranding.ts);
+ * route. Writes are validated by EmbedBrandingSchema (schemas/embedKey.ts);
  * `hideBranding` is honored only when the key owner's plan carries the
  * whitelabel entitlement - the serve route re-checks on every request.
  */
@@ -220,11 +272,29 @@ export interface IEmbedBranding {
   hideBranding?: boolean;
 }
 
+/**
+ * The stored secret a validation matched the raw key against. Rotation always writes a new digest
+ * and drops any bcrypt hash, so conditioning a write on this value makes it miss after a rotation.
+ */
+export type ApiKeyStoredSecret = { keyDigest: string } | { keyHash: string };
+
 export interface IUserApiKey {
   id: string;
   userId: string;
   name: string; // Human-friendly name
-  keyHash: string; // Hashed secret (never store plain text)
+  /**
+   * Legacy bcrypt hash, present only on keys minted before `keyDigest` existed. New and
+   * rotated keys never get one (rotation removes it), so a stored digest is the only
+   * secret a current key has.
+   */
+  keyHash?: string;
+  /**
+   * Hex SHA-256 of the raw key: the validation path. Keys are 128-bit random
+   * tokens, so an unkeyed digest is not brute-forceable and needs no server secret.
+   * Absent on keys minted before it existed; validate falls back to bcrypt `keyHash`
+   * and writes it back on first successful use. Never serialized (see toJSON).
+   */
+  keyDigest?: string;
   keyPrefix: string; // First 16 chars for lookup (e.g., "b4m_live_xxxxxxx")
   scopes: ApiKeyScope[]; // Permissions array
   status: ApiKeyStatus;
@@ -245,6 +315,14 @@ export interface IUserApiKey {
   revokedBy?: string;
   /** Why the key was revoked, when the caller supplied a reason. */
   revokedReason?: string;
+  /**
+   * HMAC key that signs this key's generation completion callbacks, encrypted at rest and
+   * `select: false`, so it is absent from every read except findCallbackSigningSecret. The
+   * plaintext is returned once, when it is minted.
+   */
+  callbackSigningSecret?: string;
+  /** When the current signing secret was minted; absent = the key has none yet. */
+  callbackSigningSecretCreatedAt?: Date;
   rateLimit: IUserApiKeyRateLimit;
   usage: IUserApiKeyUsage;
   metadata: IUserApiKeyMetadata;
@@ -268,6 +346,12 @@ export interface IUserApiKey {
   agentId?: string;
   /** https origin allow-list for an embed key (normalized, deduped, capped at EMBED_ORIGINS_MAX). */
   allowedOrigins?: string[];
+  /**
+   * OAuth client ids allowed to mint identified (user-pays) sessions on this embed key.
+   * Absent or empty = anonymous only. The opt-in binds a federated client to this key's
+   * tenant; without it any federated client could pair its users with any public key.
+   */
+  identifiedClientIds?: string[];
   /**
    * Lake ids this key is bound to for the manage-but-not-member session admission (see
    * `preauthorizedLakeIds` on the session, and its containment check at
@@ -302,6 +386,15 @@ export type ApiKeyBillingOwnerType = CreditHolderType.User | CreditHolderType.Or
 
 export interface IUserApiKeyDocument extends IUserApiKey, IMongoDocument {}
 
+/**
+ * Which per-user active-key cap a key counts against. Federated-exchange keys
+ * (`createdFrom === 'oauth-exchange'`) are short-lived, at most one per (user, client),
+ * and minted by a relying party rather than the user, so they get their own pool
+ * instead of eating the user's dashboard/admin key slots. Caps live in
+ * b4m-core/services/src/userApiKeyService/create.ts.
+ */
+export type ApiKeyCapPool = 'standard' | 'oauth-exchange';
+
 export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocument> {
   findByKeyPrefix: (keyPrefix: string) => Promise<IUserApiKeyDocument | null>;
   findByUserId: (userId: string) => Promise<IUserApiKeyDocument[]>;
@@ -316,6 +409,17 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
   /** Replaces both request ceilings; the enforcer picks them up on the next request. */
   setRateLimit: (id: string, rateLimit: IUserApiKeyRateLimit) => Promise<void>;
   updateLastUsed: (id: string) => Promise<void>;
+  /**
+   * Stores the fast-path digest for a key validated via the legacy bcrypt hash. A no-op unless
+   * `expectedKeyHash` is still the stored hash and no digest is set: a backfill that lands after a
+   * rotation must not write the old key's digest over the new one.
+   */
+  setKeyDigest: (id: string, keyDigest: string, expectedKeyHash: string) => Promise<void>;
+  /**
+   * Upgrades a legacy short prefix to the current length. A no-op unless `matchedSecret` is still
+   * stored, so a heal racing a rotation cannot repoint the doc at the rotated-away key.
+   */
+  healKeyPrefix: (id: string, keyPrefix: string, matchedSecret: ApiKeyStoredSecret) => Promise<void>;
   findActiveByKeyPrefix: (keyPrefix: string) => Promise<IUserApiKeyDocument | null>;
   deactivateAllByUserId: (userId: string) => Promise<void>;
   /**
@@ -324,7 +428,24 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
    */
   revokeIfNotDisabled?: (id: string, revokedBy: string, revokedReason?: string) => Promise<void>;
   findExpiredKeys: () => Promise<IUserApiKeyDocument[]>;
-  countActiveByUserId: (userId: string) => Promise<number>;
+  /**
+   * Counts the user's ACTIVE keys that have not expired - an expired key cannot authenticate and must not consume a cap slot.
+   * `pool` selects which per-user cap the count feeds (see ApiKeyCapPool); defaults to 'standard'.
+   */
+  countActiveByUserId: (userId: string, pool?: ApiKeyCapPool) => Promise<number>;
+  /**
+   * Inserts the document, then recounts active keys for the same (userId, pool).
+   * Returns the document when the count is within `cap`; otherwise hard-deletes its
+   * own insert and returns 'at_cap'. Every caller that counts over the cap yields,
+   * because `createdAt` is stamped client-side and so cannot rank concurrent inserts
+   * that commit out of order. The cap is therefore never exceeded, at the cost that
+   * simultaneous creates at `cap - 1` may all be rejected and have to be retried.
+   */
+  createIfUnderCap: (
+    doc: Parameters<IUserApiKeyRepository['create']>[0],
+    cap: number,
+    pool: ApiKeyCapPool
+  ) => Promise<IUserApiKeyDocument | 'at_cap'>;
   findByProductId: (productId: string) => Promise<IUserApiKeyDocument[]>;
   /** Counts keys with status ACTIVE or RATE_LIMITED for a product. */
   countActiveByProductId: (productId: string) => Promise<number>;
@@ -341,4 +462,10 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
   /** Active keys bound to an agent (embed keys), newest first; uses the sparse
    *  { agentId, status } index. */
   findByAgentId: (agentId: string) => Promise<IUserApiKeyDocument[]>;
+  /** Stores (encrypted) a freshly minted signing secret, replacing any previous one. */
+  setCallbackSigningSecret: (id: string, secret: string, createdAt: Date) => Promise<void>;
+  /** The decrypted signing secret plus the fields a delivery must re-check; null if the key is gone or has none. */
+  findCallbackSigningSecret: (
+    id: string
+  ) => Promise<{ secret: string; userId: string; status: ApiKeyStatus; expiresAt?: Date } | null>;
 }

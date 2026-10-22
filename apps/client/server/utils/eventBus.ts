@@ -13,12 +13,14 @@ import {
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 
-// Self-host has no EventBridge. Deliver email.send straight to the mailer, and route
-// everything else to the SELF_HOST_EVENT_QUEUE for the background worker to consume
-// (apps/workers/src/selfhost/eventDispatch.ts). These events feed async enrichment (naming,
-// summaries, tags, memento embedding), so a delivery failure must degrade the feature,
-// not 500 the caller - hence warn-and-drop, never throw.
-async function publishSelfHost(eventName: string, detail: unknown): Promise<void> {
+// Self-host has no EventBridge. email.send goes straight to the mailer (it already throws
+// on failure); everything else is queued to SELF_HOST_EVENT_QUEUE for the background worker
+// (apps/workers/src/selfhost/eventDispatch.ts).
+// Default is warn-and-drop: these events feed async enrichment (naming, summaries, tags,
+// memento embedding), so a delivery failure must degrade the feature, not 500 the caller.
+// A user-facing submission endpoint opts in per call with `requireAcceptance` so the caller
+// learns the broker did not accept the event. Background publishers must not opt in.
+async function publishSelfHost(eventName: string, detail: unknown, requiredAcceptance = false): Promise<void> {
   const logger = new Logger({ metadata: { service: 'eventBus' } });
 
   if (eventName === 'email.send') {
@@ -43,14 +45,16 @@ async function publishSelfHost(eventName: string, detail: unknown): Promise<void
 
   const queueUrl = process.env.SELF_HOST_EVENT_QUEUE;
   if (!queueUrl) {
+    if (requiredAcceptance) throw new Error('SELF_HOST_EVENT_QUEUE is required for event submission');
     logger.warn(`Self-host: SELF_HOST_EVENT_QUEUE unset; dropping event ${eventName} (enrichment will not run)`);
     return;
   }
   try {
     // Lazy import so modules that never publish don't pull the SQS client at load.
-    const { sendToQueue } = await import('./sqs');
+    const { sendToQueue } = await import('@bike4mind/server-utils/utils/sqs');
     await sendToQueue(queueUrl, { detailType: eventName, detail });
   } catch (error) {
+    if (requiredAcceptance) throw error;
     logger.warn(`Self-host: failed to enqueue event ${eventName}`, {
       error: error instanceof Error ? error.message : String(error),
     });
@@ -68,9 +72,10 @@ function createEventBuilder({
 }) {
   return function event<EventName extends string, Schema extends z.ZodType>(eventName: EventName, schema: Schema) {
     return {
-      publish: (detail: z.infer<typeof schema>) => {
+      // requireAcceptance only affects self-host; the hosted path always surfaces send errors.
+      publish: (detail: z.infer<typeof schema>, publishOptions: { requireAcceptance?: boolean } = {}) => {
         if (process.env.B4M_SELF_HOST === 'true') {
-          return publishSelfHost(eventName, detail);
+          return publishSelfHost(eventName, detail, publishOptions.requireAcceptance);
         }
         // Create client on each publish to ensure fresh AWS credentials
         // Lambda containers can stay warm for extended periods, causing module-level
@@ -102,10 +107,6 @@ function createEventBuilder({
 
 const event = createEventBuilder({
   getEventBusName: () => Resource.AppEventBus.name,
-});
-
-const slackEvent = createEventBuilder({
-  getEventBusName: () => Resource.SlackEventBus.name,
 });
 
 export const EmailEvents = {
@@ -166,9 +167,14 @@ export const SessionEvents = {
       // Every publisher already passes one, and the summarizeSession chain now types it that way.
       trigger: z.enum(PERSISTED_SESSION_SUMMARY_TRIGGERS),
       // Who asked, when not the owner: the handler's summary write re-checks this user's update
-      // access, and it is forwarded to the Tag job it queues. Distinct from `userId`, which picks
-      // the billed user.
+      // access, and it is forwarded to the Tag job it queues. Distinct from `userId`, the acting
+      // user the summary file and lake tags are resolved for.
       requesterId: z.string().optional(),
+      // Who pays for the operational calls, forwarded to the Tag job too: the user who asked or
+      // whose turn triggered it (sharee or admin), never the owner on their behalf. Unset only where
+      // `userId` already names that user (agent runs) or nobody asked (spider), which bill
+      // `userId ?? session.userId`.
+      payerId: z.string().optional(),
     })
   ),
   Tag: event(
@@ -177,8 +183,9 @@ export const SessionEvents = {
       sessionId: z.string(),
       userId: z.string().optional(),
       // Who asked, when not the owner: the handler's writes re-check this user's update access.
-      // Distinct from `userId`, which picks the billed user.
       requesterId: z.string().optional(),
+      // Who pays, when someone asked (see Summarize.payerId); else `userId ?? session.userId`.
+      payerId: z.string().optional(),
     })
   ),
   ContextSummarize: event(
@@ -192,8 +199,8 @@ export const SessionEvents = {
 
 export const LLMEvents = {
   CompletionStart: event('completion.started', QuestStartBodySchema),
-  // Slack-originated completions publish here - routed to slackQuestProcessor, not questProcessor
-  SlackCompletionStart: slackEvent('slack.completion.started', QuestStartBodySchema),
+  // Slack-originated completions: the distinct detail type routes them to slackQuestProcessor
+  SlackCompletionStart: event('slack.completion.started', QuestStartBodySchema),
   CompletionCompleted: event(
     'completion.completed',
     z.object({
@@ -223,7 +230,7 @@ export const SpiderEvents = {
       userId: z.string(),
       totalNotebooks: z.number(),
       operations: z.array(z.enum(['messageCount', 'curation', 'summarize', 'tags', 'embeddings'])),
-      dryRun: z.boolean().optional().prefault(false),
+      dryRun: z.boolean().prefault(false),
     })
   ),
   Progress: event(
@@ -436,7 +443,7 @@ export const SreEvents = {
   // Diagnostician -> Surgeon handoff. Routed to sreFixQueue by an EventBridge rule
   // (infra/eventBus.ts) so additional consumers (audit, metrics) can attach without
   // touching the analysis handler. The strict payload schema lives with the consumer
-  // (queueHandlers/sreFix.ts); publish-side stays typed via SreFixRequest.
+  // (apps/workers/src/queueHandlers/sreFix.ts); publish-side stays typed via SreFixRequest.
   AnalysisCompleted: event(
     SRE_ANALYSIS_COMPLETED_EVENT,
     z.custom<SreFixRequest>((v: unknown) => typeof v === 'object' && v !== null)

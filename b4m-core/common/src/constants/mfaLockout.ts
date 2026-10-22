@@ -1,0 +1,3 @@
+export const MFA_MAX_FAILED_ATTEMPTS = 3;
+export const MFA_LOCKOUT_DURATION_MS = 15 * 60 * 1000;
+export const MFA_ATTEMPT_RESET_WINDOW_MS = 60 * 60 * 1000;

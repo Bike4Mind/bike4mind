@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ContextTelemetrySchema, SystemPromptDetailSchema } from './contextTelemetry';
 import { PROMPT_META_MODEL_TYPES } from '../modelCatalog';
+import { REPLY_CHOICES_INVALID_REASONS } from '../utils/replyChoices';
 
 /**
  * A Date that also accepts its own JSON form. promptMeta makes a round trip through the client:
@@ -35,8 +36,8 @@ const PromptMetaModelParametersSchema = z.object({
   background: z.string().optional(), // Background handling (transparent/opaque/auto), gpt-image only
   response_format: z.string().optional(), // Response format (url/b64_json)
 
-  // Video generation parameters (Sora)
-  seconds: z.number().optional(), // Video duration in seconds (4, 8, or 12)
+  // Video generation parameters
+  seconds: z.number().optional(), // Requested clip length in seconds
   model: z.string().optional(), // Video model name
 });
 
@@ -230,6 +231,10 @@ const PromptMetaContextSchema = z.object({
     .optional(),
 });
 
+/** A public /api/chat request's tool-selection mode (`SimplifiedChatRequestSchema.toolMode` in schemas/chat.ts). */
+export const ChatToolModeSchema = z.enum(['fast', 'smart']);
+export type ChatToolMode = z.infer<typeof ChatToolModeSchema>;
+
 const PromptMetaFunctionCallSchema = z.object({
   name: z.string().optional(),
   parameters: z.record(z.string(), z.any()).optional(), // z.any() supports arrays, objects, and all JSON types
@@ -255,7 +260,8 @@ const PromptMetaPerformanceSchema = z.object({
   firstTokenTime: z.number().optional(),
   /** Elapsed ms until the first chunk of any kind, including a hidden thinking block. */
   firstChunkTime: z.number().optional(),
-  clientFirstTokenTime: z.number().optional(), // Time from client sending prompt to client rendering first token
+  /** @deprecated Read/write the quest-level clientFirstTokenTime instead. */
+  clientFirstTokenTime: z.number().optional(),
   streamingPerformance: z
     .object({
       chunkCount: z.number().optional(),
@@ -339,6 +345,22 @@ export const CitableSourceSchema = z.object({
        * stamps the wrong shape should fail here, not render a badge that silently names nobody.
        */
       conflictsWith: z.array(z.string()).optional(),
+      /**
+       * The N of the inline `[N]` marker this source answers to. Stamped only on the index-aligned
+       * forced-retrieval prefix of an indexed-style session; the client links a reply's markers only
+       * when every citable carries its own position's stamp (citationMarkersLinkable).
+       */
+      citationIndex: z.number().int().positive().optional(),
+      /** Chip label origin (CitableSourceOrigin); a writer that stamps the wrong shape should fail here. */
+      sourceOrigin: z
+        .discriminatedUnion('kind', [
+          z.object({
+            kind: z.literal('lake'),
+            lakes: z.array(z.object({ id: z.string(), name: z.string() })).min(1),
+          }),
+          z.object({ kind: z.literal('library'), owned: z.boolean() }),
+        ])
+        .optional(),
       /** web_search's provider-located place (WebSearchPlace), the only source of map coordinates. */
       place: z
         .object({
@@ -770,9 +792,11 @@ export const RetrievalSummarySchema = z.object({
    * text - prose could leak a lake's identity through phrasing - so a future exclusion cause (e.g.
    * an archived or quota-limited lake) adds an enum value here rather than a description.
    *
-   * 'access' is the only reason today: the caller's org membership or the lake's public listing
-   * surfaced it as a candidate (they could see it exists) but they hold neither its own
-   * gate/entitlement nor an ownership or grant exception for it.
+   * 'access' is the only reason today: the caller could see the lake exists (their org membership,
+   * the lake's public listing, or having created it; administering its org; an admin may see any
+   * lake) but they hold neither its own gate/entitlement nor an ownership or grant exception for
+   * it. A lake the caller could not see is never counted, so the count cannot confirm that a
+   * guessed lake tag exists.
    *
    * A session-preauthorized lake (unionPreauthorizedLakeAccess) that is ALSO gate-dropped from
    * this account-wide count is corrected, not merely narrow: the seed's targeted measurement
@@ -789,6 +813,25 @@ export const RetrievalSummarySchema = z.object({
       // sizes) rather than by any relationship between two derived lists.
       count: z.number().int().nonnegative(),
       reason: z.enum(['access']),
+    })
+    .optional(),
+  /**
+   * How many lakes this session named (a `datalake:` retrieval tag) were left out of this turn's
+   * scope because they are not serving yet, and why. Retrieval is active-only by design, so a
+   * draft lake narrows the scope to nothing; without this field a turn that abstained for that
+   * reason reads, after the outcome merge, like a search that ran and found nothing.
+   *
+   * Same contract as `excludedLakes`, which it sits beside rather than inside (one session can
+   * name one gated and one draft lake, and that object holds a single reason): ABSENT MEANS NOT
+   * MEASURED, never "every named lake was serving" - a measured turn with nothing missing records
+   * `count: 0`. COUNT AND REASON ONLY, never an id or name, and only drafts the CALLER created are
+   * counted, so naming a tag cannot probe whether another user's draft exists. `reason` is a closed
+   * enum; a further non-serving cause (e.g. an archived lake) adds a value here.
+   */
+  notServingLakes: z
+    .object({
+      count: z.number().int().nonnegative(),
+      reason: z.enum(['draft']),
     })
     .optional(),
 });
@@ -816,6 +859,17 @@ export const RetrievalCoverageSchema = z.object({
   reasons: z.array(z.string()),
 });
 
+/**
+ * Written only when forced retrieval injected nothing because every scored passage fell under an
+ * absolute floor an operator configured above the one measured for the embedding space. Single
+ * producer (ChatCompletionFeatures, the no-match exit); the chat banner reads it.
+ */
+export const RetrievalFloorRejectionSchema = z.object({
+  floorPct: z.number(),
+  measuredPct: z.number(),
+  embeddingModel: z.string(),
+});
+
 // Main PromptMeta Schema
 export const PromptMetaZodSchema = z.object({
   model: PromptMetaModelSchema.optional(),
@@ -828,6 +882,8 @@ export const PromptMetaZodSchema = z.object({
   /** Partial-grounding-coverage detail - see RetrievalCoverageSchema. Top-level for the same
    * one-level-spread-merge reason as `retrieval` above. */
   retrievalCoverage: RetrievalCoverageSchema.optional(),
+  /** See RetrievalFloorRejectionSchema. Top-level for the same reason as `retrieval` above. */
+  retrievalFloorRejection: RetrievalFloorRejectionSchema.optional(),
   functionCalls: z.array(PromptMetaFunctionCallSchema).optional(),
   /**
    * Names of the tools actually offered to the model this turn - the output of `buildTools`
@@ -840,6 +896,11 @@ export const PromptMetaZodSchema = z.object({
    * eval/measurement and for diagnosing the silent no-tool-offered state.
    */
   offeredTools: z.array(z.string()).optional(),
+  /** The public /api/chat request's `toolMode`, kept so tool-calling evals can split by it. Absent
+   * when the request set none, which includes every in-app turn. */
+  toolMode: ChatToolModeSchema.optional(),
+  /** The retired model id the turn was asked to run on, set only when it was redirected to `model.name`. */
+  redirectedFrom: z.string().optional(),
   performance: PromptMetaPerformanceSchema.optional(),
   session: PromptMetaSessionSchema.optional(),
   questId: z.string().optional(),
@@ -858,6 +919,28 @@ export const PromptMetaZodSchema = z.object({
    * letting the client render a truncated-artifact recovery affordance.
    */
   finishReason: z.string().optional(),
+  /**
+   * Why reply-choice buttons did or did not appear: `offered` is whether REPLY_CHOICES_GUIDANCE
+   * actually reached the model this turn - requested AND not evicted by the system-prompt budget
+   * (see SYSTEM_PROMPT_PRIORITY.replyChoices in systemPromptSources.ts) - `status`/`reason` the
+   * finalize outcome (see ReplyChoicesOutcome in ../utils/replyChoices.ts). Written once at
+   * finalize; absent on Research Mode turns (which skip finalize entirely) and any other turn that
+   * never finalized.
+   */
+  replyChoices: z
+    .object({
+      offered: z.boolean(),
+      status: z.enum(['parsed', 'absent', 'invalid']),
+      reason: z.enum(REPLY_CHOICES_INVALID_REASONS).optional(),
+    })
+    .optional(),
+  /**
+   * Set when finalize stripped a tool call the model wrote into its reply as text instead of
+   * calling it (see ../utils/narratedToolCalls.ts). The call never ran; `toolNames` are the
+   * offered tools it named. Absent when nothing was stripped. Consumers read this rather than
+   * matching the reply text, which no longer carries the call.
+   */
+  narratedToolCall: z.object({ toolNames: z.array(z.string()) }).optional(),
   /**
    * Set when an emitted artifact looks voluntarily abbreviated - placeholder comments in
    * place of real code, or calls into functions that were never defined. The complement to

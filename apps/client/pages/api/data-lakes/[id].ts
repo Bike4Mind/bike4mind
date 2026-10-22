@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
-import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import {
   withTransaction,
@@ -13,14 +13,15 @@ import {
 } from '@bike4mind/database';
 import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
-import { UpdateDataLakeRequestInput } from '@bike4mind/common';
+import { UpdateDataLakeRequestInput, dataLakeResponseSchema } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
-import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
+import { respond } from '@server/utils/respond';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
-import { isSessionActivatablePromptId } from '@server/utils/sessionActivatablePrompts';
+import { isSessionActivatablePromptId } from '@bike4mind/server-utils/utils/sessionActivatablePrompts';
 import { disableDriveConnectionForLake } from '@server/integrations/google/drive/common';
 import { disableGitHubConnectionForLake } from '@server/integrations/github/dataLake/githubLakeConnection';
 
@@ -77,9 +78,10 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     // supporting detail on this endpoint, and a lake that cannot be opened at all is much worse
     // than one whose counts are briefly missing. Logged so it is not silent.
     if (dataLakeService.isFallbackLake(dataLake)) {
+      // respond() stays outside the try: a response-boundary failure is a 500, not a stats outage.
+      let stats: { fileCount: number; totalSizeBytes: number } | undefined;
       try {
-        const stats = await fabFileRepository.computeDataLakeStats(dataLakeService.registryMembershipScope(dataLake));
-        return res.json({ ...redacted, fileCount: stats.fileCount, totalSizeBytes: stats.totalSizeBytes });
+        stats = await fabFileRepository.computeDataLakeStats(dataLakeService.registryMembershipScope(dataLake));
       } catch (error) {
         // `.error` not `.warn`, since a stats-lookup failure here is worth surfacing at error
         // level even though the endpoint still succeeds. `err` is the message, not the raw
@@ -89,8 +91,15 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
           lakeId: dataLake.id,
         });
       }
+      if (stats) {
+        return respond(res, dataLakeResponseSchema, {
+          ...redacted,
+          fileCount: stats.fileCount,
+          totalSizeBytes: stats.totalSizeBytes,
+        });
+      }
     }
-    return res.json(redacted);
+    return respond(res, dataLakeResponseSchema, redacted);
   })
   // PUT /api/data-lakes/:id - update a data lake (metadata only; not lifecycle)
   .put(async (req: Request, res) => {
@@ -118,8 +127,9 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     // retry re-runs the gates against live grants (see the SERIALIZATION note on grantLakeAccess).
     const updated = await withTransaction(async () => {
       // Gate first (org-aware, not-found-style denial) so this write path can't be used
-      // to probe existence or act cross-org - consistent with the lifecycle endpoint.
-      const lake = await dataLakeService.assertLakeAccess(id, ctx, {
+      // to probe existence or act cross-org - consistent with the lifecycle endpoint, including its
+      // id-only resolution: a slug skips a deleted lake and would update the next lake sharing it.
+      const lake = await dataLakeService.assertLakeAccessById(id, ctx, {
         db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
       });
       dataLakeService.assertLakeWritable(lake);
@@ -134,14 +144,14 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       });
     });
 
-    return res.json(updated);
+    return respond(res, dataLakeResponseSchema, updated);
   })
   // DELETE /api/data-lakes/:id - archive a data lake (reversible; full teardown)
   .delete(async (req: Request, res) => {
     assertDataLakeWriteScope(req);
     const { id } = req.query as { id: string };
     const ctx = await toAccessContext(req);
-    const lake = await dataLakeService.assertLakeAccess(id, ctx, {
+    const lake = await dataLakeService.assertLakeAccessById(id, ctx, {
       db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
     });
     dataLakeService.assertLakeWritable(lake);
@@ -169,7 +179,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       logger: req.logger,
     });
 
-    return res.json(archived);
+    return respond(res, dataLakeResponseSchema, archived);
   });
 
 export const config = {

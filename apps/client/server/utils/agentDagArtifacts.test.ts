@@ -1,0 +1,141 @@
+import { describe, it, expect } from 'vitest';
+import { collectDagChildArtifactBlocks } from './agentDagArtifacts';
+
+const artifact = (id: string, body = 'x') =>
+  `<artifact identifier="${id}" type="text/html" title="${id}">${body}</artifact>`;
+
+describe('collectDagChildArtifactBlocks', () => {
+  it('returns child artifact blocks the parent did not reproduce', () => {
+    const blocks = collectDagChildArtifactBlocks({
+      parentAnswer: 'Here is the summary.',
+      childAnswers: [`Chart done.\n${artifact('sales-chart')}`],
+    });
+    expect(blocks).toEqual([artifact('sales-chart')]);
+  });
+
+  it('dedups by identifier against the parent (parent already showed it)', () => {
+    const blocks = collectDagChildArtifactBlocks({
+      parentAnswer: `Combined view:\n${artifact('sales-chart')}`,
+      childAnswers: [`Chart done.\n${artifact('sales-chart')}`],
+    });
+    expect(blocks).toEqual([]);
+  });
+
+  it('dedups by identifier across multiple children (same id emitted twice)', () => {
+    const blocks = collectDagChildArtifactBlocks({
+      parentAnswer: 'Summary.',
+      childAnswers: [`A\n${artifact('shared')}`, `B\n${artifact('shared')}`],
+    });
+    expect(blocks).toEqual([artifact('shared')]);
+  });
+
+  it('drops a child draft the parent refined under the same explicit identifier', () => {
+    const blocks = collectDagChildArtifactBlocks({
+      parentAnswer: `Refined chart:\n${artifact('chart', 'graph TD; A-->B; B-->C')}`,
+      childAnswers: [`Draft chart:\n${artifact('chart', 'graph TD; A-->B')}`],
+    });
+    expect(blocks).toEqual([]);
+  });
+
+  it('keeps two children that pick the same explicit identifier for different content', () => {
+    const blocks = collectDagChildArtifactBlocks({
+      parentAnswer: 'Summary.',
+      childAnswers: [`A\n${artifact('report', '<p>first</p>')}`, `B\n${artifact('report', '<p>second</p>')}`],
+    });
+    expect(blocks).toEqual([artifact('report', '<p>first</p>'), artifact('report', '<p>second</p>')]);
+  });
+
+  it('does not read a promoted fence as an explicit id the parent used', () => {
+    // The parent's "sales-chart" is model-written; the child's same id is title-derived by promotion.
+    // Only an explicit id is an identity the parent can adopt, so the child's fence is a distinct card.
+    const blocks = collectDagChildArtifactBlocks({
+      parentAnswer: `Mine:\n${artifact('sales-chart', '<p>mine</p>')}`,
+      childAnswers: [
+        'Child:\n```html\n<!DOCTYPE html><html><head><title>Sales Chart</title></head><body>hi</body></html>\n```',
+      ],
+    });
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toContain('identifier="sales-chart"');
+  });
+
+  it('keeps two children whose different untitled scripts share a promoted id', () => {
+    const script = (n: number) => `\`\`\`python\nimport os\nx = ${n}\nprint(x)\n\`\`\``;
+    const blocks = collectDagChildArtifactBlocks({
+      parentAnswer: 'Summary.',
+      childAnswers: [`A\n${script(1)}`, `B\n${script(2)}`],
+    });
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0]).toContain('x = 1');
+    expect(blocks[1]).toContain('x = 2');
+  });
+
+  it('keeps distinct child artifacts and preserves child order', () => {
+    const blocks = collectDagChildArtifactBlocks({
+      parentAnswer: 'Summary.',
+      childAnswers: [`A\n${artifact('one')}`, `B\n${artifact('two')}`],
+    });
+    expect(blocks).toEqual([artifact('one'), artifact('two')]);
+  });
+
+  it('ignores empty / non-artifact child answers', () => {
+    const blocks = collectDagChildArtifactBlocks({
+      parentAnswer: 'Summary.',
+      childAnswers: ['', 'Just prose, no artifact here.', `Done.\n${artifact('real')}`],
+    });
+    expect(blocks).toEqual([artifact('real')]);
+  });
+
+  it('promotes fenced HTML documents to artifacts (parity with chat extraction)', () => {
+    const childAnswers = [
+      '```html\n<!DOCTYPE html><html><head><title>Report</title></head><body>hi</body></html>\n```',
+    ];
+    const blocks = collectDagChildArtifactBlocks({ parentAnswer: 'Summary.', childAnswers });
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toContain('<artifact');
+    expect(blocks[0]).toContain('</artifact>');
+  });
+
+  it('bubbles up an untyped child artifact, still deduped by identifier against the parent', () => {
+    const untyped = '<artifact identifier="notes" title="Notes">plain body</artifact>';
+    expect(collectDagChildArtifactBlocks({ parentAnswer: 'Summary.', childAnswers: [`Done.\n${untyped}`] })).toEqual([
+      untyped,
+    ]);
+    expect(
+      collectDagChildArtifactBlocks({ parentAnswer: `Mine:\n${untyped}`, childAnswers: [`Done.\n${untyped}`] })
+    ).toEqual([]);
+  });
+
+  it('returns nothing when there are no child artifacts', () => {
+    const blocks = collectDagChildArtifactBlocks({
+      parentAnswer: `Full answer with its own art:\n${artifact('parent-only')}`,
+      childAnswers: ['no artifacts', ''],
+    });
+    expect(blocks).toEqual([]);
+  });
+});
+
+describe('collectDagChildArtifactBlocks tool echoes', () => {
+  const PAGE =
+    '<!DOCTYPE html>\n<html><head><title>Fetched</title></head><body><p>Quoted verbatim from the fetched web page.</p></body></html>';
+  const echoAnswer = `Fetched:\n\`\`\`html\n${PAGE}\n\`\`\``;
+
+  it('does not bubble up web tool output a child quoted back', () => {
+    const blocks = collectDagChildArtifactBlocks({
+      parentAnswer: 'Summary.',
+      childAnswers: [echoAnswer, `Chart:\n${artifact('sales-chart')}`],
+      childSteps: [[{ type: 'observation', content: PAGE, metadata: { toolName: 'web_fetch' } }], undefined],
+    });
+    expect(blocks).toEqual([artifact('sales-chart')]);
+  });
+
+  it('still bubbles up the same html when the child authored it or read it from non-web content', () => {
+    const fromFile = collectDagChildArtifactBlocks({
+      parentAnswer: 'Summary.',
+      childAnswers: [echoAnswer],
+      childSteps: [[{ type: 'observation', content: PAGE, metadata: { toolName: 'file_read' } }]],
+    });
+    const noSteps = collectDagChildArtifactBlocks({ parentAnswer: 'Summary.', childAnswers: [echoAnswer] });
+    expect(fromFile).toHaveLength(1);
+    expect(noSteps).toEqual(fromFile);
+  });
+});

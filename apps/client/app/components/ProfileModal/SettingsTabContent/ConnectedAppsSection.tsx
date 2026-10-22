@@ -1,5 +1,9 @@
 import { useUser } from '@client/app/contexts/UserContext';
-import { useConnectGoogleDrive, useDisconnectGoogleDrive } from '@client/app/hooks/data/googleDrive';
+import {
+  type DriveDisconnectImpact,
+  useConnectGoogleDrive,
+  useDisconnectGoogleDrive,
+} from '@client/app/hooks/data/googleDrive';
 import {
   useConnectAtlassian,
   useDisconnectAtlassian,
@@ -42,6 +46,28 @@ const clearCookie = (name: string) => {
   document.cookie = `${name}=; Path=/; Max-Age=0`;
 };
 
+const pluralizeSyncs = (count: number, kind: string) =>
+  count === 1 ? `1 ${kind} Drive folder sync` : `${count} ${kind} Drive folder syncs`;
+
+/** The warning for the Drive folder syncs an unlink stopped, or null when it stopped none. */
+export const describeStoppedDriveSyncs = ({
+  affectedOrgConnections,
+  affectedPersonalConnections,
+}: DriveDisconnectImpact): string | null => {
+  const parts: string[] = [];
+  if (affectedOrgConnections > 0) {
+    parts.push(
+      `${pluralizeSyncs(affectedOrgConnections, 'organization')} used this account and now ${affectedOrgConnections === 1 ? 'needs' : 'need'} reconnecting.`
+    );
+  }
+  if (affectedPersonalConnections > 0) {
+    parts.push(
+      `${pluralizeSyncs(affectedPersonalConnections, 'personal')} stopped; link Google Drive again and reconnect ${affectedPersonalConnections === 1 ? 'it' : 'them'} to resume.`
+    );
+  }
+  return parts.length > 0 ? parts.join(' ') : null;
+};
+
 const ConnectedAppsSection = () => {
   const { t } = useTranslation();
   const currentUser = useUser(state => state.currentUser);
@@ -64,7 +90,7 @@ const ConnectedAppsSection = () => {
       type: 'danger',
       title: 'Unlink Google Drive',
       description:
-        "This revokes Bike4Mind's access to your Google Drive at Google. Any organization Drive folder sync authorized with this account will stop until an owner reconnects it. You can link Google Drive again at any time.",
+        "This revokes Bike4Mind's access to your Google Drive at Google. Any Drive folder sync authorized with this account, personal or organization, will stop until it is reconnected. You can link Google Drive again at any time.",
       okLabel: 'Unlink',
       onOk: () => runDisconnectGoogleDrive(),
     });
@@ -72,21 +98,17 @@ const ConnectedAppsSection = () => {
 
   const runDisconnectGoogleDrive = () => {
     disconnectGoogleDrive.mutate(undefined, {
-      onSuccess: affectedOrgConnections => {
+      onSuccess: impact => {
         // The card's connected state reads from the zustand `currentUser`, which only a /api/identify
         // round-trip rewrites - a React Query invalidation leaves it saying "Unlink" forever (same
         // reason the Okta and Atlassian handlers below refresh).
         void refreshUser();
-        // Disconnecting revokes the grant at Google, which also kills any organization Drive folder
-        // sync that was authorized with this account. Say so - otherwise the org's next ingest just
-        // starts failing with no visible cause.
-        if (affectedOrgConnections > 0) {
-          toast.warning(
-            affectedOrgConnections === 1
-              ? 'Google Drive disconnected. 1 organization Drive folder sync used this account and now needs reconnecting.'
-              : `Google Drive disconnected. ${affectedOrgConnections} organization Drive folder syncs used this account and now need reconnecting.`,
-            { duration: 8000 }
-          );
+        // Disconnecting revokes the grant at Google, which also stops every Drive folder sync that
+        // ran on this account. Say so - otherwise the next ingest just starts failing with no
+        // visible cause.
+        const warning = describeStoppedDriveSyncs(impact);
+        if (warning) {
+          toast.warning(`Google Drive disconnected. ${warning}`, { duration: 8000 });
           return;
         }
         toast.success('Google Drive disconnected.');

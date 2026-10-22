@@ -39,21 +39,33 @@ import {
   usePurgeLakeMemory,
 } from '@client/app/hooks/data/dataLakes';
 import PsychologyOutlinedIcon from '@mui/icons-material/PsychologyOutlined';
-import { toast } from 'sonner';
 import { useTranslation } from 'react-i18next';
 import { toWizardTargetLake, useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
-import useStartChatWithLake from '@client/app/hooks/useStartChatWithLake';
+import StartLakeChatButton from '@client/app/components/datalake/StartLakeChatButton';
 import DataLakeEmptyState from '@client/app/components/datalake/DataLakeEmptyState';
 import LakeHealthBadge from '@client/app/components/datalake/LakeHealthBadge';
 import DuplicateAdmissionsChip from '@client/app/components/datalake/DuplicateAdmissionDialog';
 import LakeFindingsChip from '@client/app/components/datalake/LakeFindingsDialog';
 import LakeDriveStatusChip from '@client/app/components/datalake/LakeDriveStatusChip';
-import { isDraftLake, lakeVisibilityLabel } from '@client/app/components/datalake/lakeVisibility';
-import type { IDataLakeBatchSummary } from '@bike4mind/common';
+import LakeSyncStatus from '@client/app/components/datalake/LakeSyncStatus';
+import LakeGitHubStatusChip from '@client/app/components/datalake/LakeGitHubStatusChip';
+import LakeSkippedFilesChip from '@client/app/components/datalake/LakeSkippedFilesChip';
+import {
+  canConnectLakeConnector,
+  isDraftLake,
+  lakeVisibilityLabel,
+} from '@client/app/components/datalake/lakeVisibility';
+import { REBUILD_PENDING_STALE_MS, isGeneratedLakeTagPrefix, type IDataLakeBatchSummary } from '@bike4mind/common';
+import LakeSourceConnectActions from '../steps/LakeSourceConnectActions';
 import AddExistingFilesModal from './AddExistingFilesModal';
+import FinishSourceConnectBanner from './FinishSourceConnectBanner';
 import type { ManagerLake } from './shared';
 
 // Right pane: selected lake's details + management actions
+
+// The rebuild door re-offers a stranded file after this window (findConvergencePausedFilesByScope's
+// stale-pending arm).
+const REBUILD_PENDING_HOURS = REBUILD_PENDING_STALE_MS / (60 * 60_000);
 
 export function LakeInfoPanel({
   lake,
@@ -95,32 +107,10 @@ export function LakeInfoPanel({
   const deleteLake = usePermanentDeleteDataLake();
   const promoteLake = usePromoteDataLake();
   const demoteLake = useDemoteDataLake();
-  const startChatWithLake = useStartChatWithLake();
-  const [startingChat, setStartingChat] = useState(false);
-  const [draftChatOpen, setDraftChatOpen] = useState(false);
-  const startChat = async (failureMessage = 'Could not start a chat with this lake') => {
-    setDraftChatOpen(false);
-    setStartingChat(true);
-    try {
-      await startChatWithLake(lake.id);
-    } catch (error) {
-      console.error('Start chat failed for lake', lake.id, error);
-      toast.error(failureMessage);
-    } finally {
-      // Reset in finally, not only on error: a success that does not unmount this panel
-      // (e.g. navigation interrupted) would otherwise leave the spinner stuck forever.
-      setStartingChat(false);
-    }
-  };
-  const publishAndStartChat = async () => {
-    try {
-      await promoteLake.mutateAsync(lake.id);
-    } catch {
-      // usePromoteDataLake already toasted the server reason.
-      return;
-    }
-    await startChat('Published, but could not start a chat');
-  };
+  // Move to draft and Delete each pull the lake out of every reader's grounding, and both sit in a
+  // row of everyday buttons, so neither fires from a single click.
+  const [demoteConfirmOpen, setDemoteConfirmOpen] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   // Mounted only while open so the picker's file query does not fire (and page through the
   // caller's whole knowledge base) until it is actually needed.
   const [addExistingOpen, setAddExistingOpen] = useState(false);
@@ -136,6 +126,7 @@ export function LakeInfoPanel({
   const { data: rebuildStatus } = useUnderChunkedCount(lake.id, !!lake.canRebuild);
   const underChunkedCount = rebuildStatus?.underChunkedCount ?? 0;
   const failedCount = rebuildStatus?.failedCount ?? 0;
+  const rebuildingCount = rebuildStatus?.rebuildingCount ?? 0;
   // Members embedded in a PREVIOUS embedding space, which retrieval withholds wholesale rather than
   // ranking badly - so this is the one lake defect with no symptom an owner can see in search
   // results, and the reason it gets its own affordance instead of folding into Rebuild passages.
@@ -213,67 +204,35 @@ export function LakeInfoPanel({
     >
       {/* pr clears the modal's absolutely-positioned ModalClose (top-right). */}
       <Box sx={{ px: 3, pr: 6, pt: 2.5, pb: 1.5, borderBottom: '1px solid', borderColor: 'divider' }}>
-        <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, mb: 1 }}>
-          <Typography level="h4" sx={{ flex: 1, minWidth: 0 }}>
-            {lake.name}
-          </Typography>
+        {/* The title gets its own row: sharing one with the action buttons (all flexShrink: 0)
+            squeezed it to zero width, leaving only the wrapped last word visible. */}
+        <Typography
+          level="h4"
+          data-testid={`datalake-manager-title-${lake.id}`}
+          sx={{ mb: 1, overflowWrap: 'anywhere' }}
+        >
+          {lake.name}
+        </Typography>
+        <FinishSourceConnectBanner lake={lake} fileCount={fileCount} />
+        {/* Same gate and test id as SelectedLakeHeader, so both surfaces expose the same source controls. */}
+        {canConnectLakeConnector(lake) && (
+          <Box data-testid="datalake-selected-lake-source" sx={{ mb: 1 }}>
+            <LakeSourceConnectActions key={lake.id} lake={lake} />
+          </Box>
+        )}
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', gap: 1, mb: 1 }}>
           {/* Start chat is available to ANY user who can reach the lake (not manage-gated; draft
               lakes confirm first): it opens a session scoped to this lake, applying the lake's preferred prompt server-side.
               Minimal placement for now - see useStartChatWithLake's note; polish is a design follow-up. */}
-          <Button
-            size="sm"
-            variant="soft"
-            color="primary"
+          <StartLakeChatButton
+            lake={lake}
             startDecorator={<ChatBubbleOutlineIcon sx={{ fontSize: 16 }} />}
-            aria-label={`Start chat with ${lake.name}`}
-            data-testid={`datalake-startchat-btn-${lake.id}`}
-            loading={startingChat}
-            onClick={() => (isDraftLake(lake) ? setDraftChatOpen(true) : void startChat())}
+            ariaLabel={`Start chat with ${lake.name}`}
+            testId={`datalake-startchat-btn-${lake.id}`}
             sx={{ flexShrink: 0, fontSize: '13px' }}
           >
             Start chat
-          </Button>
-          <Modal open={draftChatOpen} onClose={() => !promoteLake.isPending && setDraftChatOpen(false)}>
-            <ModalDialog data-testid="datalake-startchat-draft-modal" role="alertdialog">
-              <DialogTitle>This lake is a draft</DialogTitle>
-              <DialogContent>
-                <Typography level="body-sm">
-                  Drafts don{"'"}t ground answers, so the chat will find nothing in this lake until it is published.
-                </Typography>
-              </DialogContent>
-              <DialogActions>
-                {lake.canManage && (
-                  <Button
-                    variant="solid"
-                    color="primary"
-                    data-testid="datalake-startchat-draft-publish-btn"
-                    loading={promoteLake.isPending}
-                    onClick={publishAndStartChat}
-                  >
-                    Publish and start chat
-                  </Button>
-                )}
-                <Button
-                  variant="soft"
-                  color="neutral"
-                  data-testid="datalake-startchat-draft-anyway-btn"
-                  disabled={promoteLake.isPending}
-                  onClick={() => void startChat()}
-                >
-                  Start anyway
-                </Button>
-                <Button
-                  variant="plain"
-                  color="neutral"
-                  data-testid="datalake-startchat-draft-cancel-btn"
-                  disabled={promoteLake.isPending}
-                  onClick={() => setDraftChatOpen(false)}
-                >
-                  Cancel
-                </Button>
-              </DialogActions>
-            </ModalDialog>
-          </Modal>
+          </StartLakeChatButton>
           {/* Add files / Settings / Archive are owner-or-admin only (the backend enforces the
               same rule). The nav surfaces other users' read-only public lakes too. */}
           {lake.canManage && (
@@ -353,8 +312,7 @@ export function LakeInfoPanel({
                     color="neutral"
                     startDecorator={<UnpublishedOutlinedIcon sx={{ fontSize: 16 }} />}
                     data-testid={`datalake-demote-btn-${lake.id}`}
-                    loading={demoteLake.isPending}
-                    onClick={() => demoteLake.mutate(lake.id)}
+                    onClick={() => setDemoteConfirmOpen(true)}
                     sx={{ flexShrink: 0, fontSize: '13px' }}
                   >
                     Move to draft
@@ -590,9 +548,17 @@ export function LakeInfoPanel({
               {lake.ownerDisplayName ? `Owner: ${lake.ownerDisplayName}` : 'Owned by another user'}
             </Chip>
           )}
-          <Chip size="sm" variant="soft" color="neutral" sx={{ fontSize: '11px' }}>
-            {lake.fileTagPrefix}
-          </Chip>
+          {!isGeneratedLakeTagPrefix(lake) && (
+            <Chip
+              size="sm"
+              variant="soft"
+              color="neutral"
+              sx={{ fontSize: '11px' }}
+              data-testid={`datalake-manager-prefix-chip-${lake.id}`}
+            >
+              {lake.fileTagPrefix}
+            </Chip>
+          )}
           {lake.requiredUserTag && (
             <Chip size="sm" variant="soft" color="primary" sx={{ fontSize: '11px' }}>
               {lake.requiredUserTag}
@@ -610,8 +576,15 @@ export function LakeInfoPanel({
               }
               size="sm"
             >
-              <Chip size="sm" variant="outlined" color="neutral" sx={{ fontSize: '11px' }}>
-                {fileCount} {fileCount === 1 ? 'file' : 'files'} (as creator)
+              <Chip
+                size="sm"
+                variant="outlined"
+                color="neutral"
+                sx={{ fontSize: '11px' }}
+                data-testid={`datalake-manager-filecount-chip-${lake.id}`}
+              >
+                {fileCount} {fileCount === 1 ? 'file' : 'files'}
+                {lake.isCreator === false && " (creator's view)"}
               </Chip>
             </Tooltip>
           )}
@@ -640,12 +613,17 @@ export function LakeInfoPanel({
               Connector-fed
             </Chip>
           )}
-          {/* Attached-source marker: this panel is where a user comes to inspect or delete a lake,
+          {/* Attached-source markers: this panel is where a user comes to inspect or delete a lake,
               and it previously gave no sign a Drive folder was feeding it (#1645). */}
-          <LakeDriveStatusChip lakeId={lake.id} organizationId={lake.organizationId} />
+          <LakeDriveStatusChip lakeId={lake.id} organizationId={lake.organizationId} isCreator={lake.isCreator} />
+          <LakeGitHubStatusChip lakeId={lake.id} organizationId={lake.organizationId} isCreator={lake.isCreator} />
+          {lake.origin === 'connector-fed' && (
+            <LakeSyncStatus lakeId={lake.id} organizationId={lake.organizationId} isCreator={lake.isCreator} />
+          )}
+          <LakeSkippedFilesChip lakeId={lake.id} lakeName={lake.name} canManage={!!lake.canManage} />
           {/* Derived retrievability health (#1666): reachable-content share + affected-file drill-down.
               Advisory only. Fetched lazily for the lake in view; renders nothing for an empty lake. */}
-          <LakeHealthBadge lakeId={lake.id} failedFileCount={failedCount} />
+          <LakeHealthBadge lakeId={lake.id} failedFileCount={failedCount} viewerIsCreator={lake.isCreator} />
           {/* Same-identity duplicates (#2238): two generations of one document in this lake, with
               the decision that resolves them. The health badge beside it only COUNTS duplicates and
               is blind to what the owner already decided; this reads the ruling-aware door and is the
@@ -748,6 +726,28 @@ export function LakeInfoPanel({
               </Chip>
             </Tooltip>
           )}
+          {/* Reset files have no passages and no error until the rebuild commits or finally fails,
+              so without this chip a lake mid-rebuild reads as having nothing to rebuild. The
+              tooltip says the rebuild has not FINISHED rather than that it is running: a file whose
+              queue send was rejected keeps the same fresh stamp and is indistinguishable from a
+              working one in this count. */}
+          {(lake.canRebuild || lake.canManage) && rebuildingCount > 0 && (
+            <Tooltip
+              title={`These files were reset for a rebuild that has not finished yet, so they are not searchable. If a rebuild never finishes, they are offered as 'to rebuild' again within ${REBUILD_PENDING_HOURS} hours.`}
+              size="sm"
+            >
+              <Chip
+                size="sm"
+                variant="soft"
+                color="neutral"
+                startDecorator={<AutoFixHighIcon sx={{ fontSize: 12 }} />}
+                sx={{ fontSize: '11px' }}
+                data-testid={`datalake-manager-rebuilding-chip-${lake.id}`}
+              >
+                {rebuildingCount} rebuilding
+              </Chip>
+            </Tooltip>
+          )}
           {/* A rebuild badge reaching zero doesn't mean success if some files failed to process -
               those won't retry on their own, so surface them distinctly. Gated on canRebuild OR
               canManage (not canManage alone): failedCount now comes from the canRebuild-gated
@@ -825,8 +825,7 @@ export function LakeInfoPanel({
                 size="sm"
                 startDecorator={<DeleteOutlineIcon sx={{ fontSize: 16 }} />}
                 data-testid={`datalake-delete-active-btn-${lake.id}`}
-                loading={deleteLake.isPending}
-                onClick={() => deleteLake.mutate(lake.id, { onSuccess: onDeleted })}
+                onClick={() => setDeleteConfirmOpen(true)}
                 sx={{ flexShrink: 0, fontSize: '13px' }}
               >
                 Delete
@@ -852,6 +851,53 @@ export function LakeInfoPanel({
             )}
           </Box>
         )}
+        <Modal open={demoteConfirmOpen} onClose={() => setDemoteConfirmOpen(false)}>
+          <ModalDialog role="alertdialog" data-testid="datalake-demote-confirm" sx={{ maxWidth: '28rem' }}>
+            <DialogTitle>Move this lake back to draft?</DialogTitle>
+            <DialogContent>
+              {lake.name} stops grounding answers for everyone who can read it, including chats already scoped to it.
+              Its files stay stored and indexed, and publishing it again restores grounding.
+            </DialogContent>
+            <DialogActions>
+              <Button
+                variant="solid"
+                color="warning"
+                loading={demoteLake.isPending}
+                data-testid="datalake-demote-confirm-btn"
+                onClick={() => demoteLake.mutate(lake.id, { onSuccess: () => setDemoteConfirmOpen(false) })}
+              >
+                Move to draft
+              </Button>
+              <Button variant="plain" color="neutral" onClick={() => setDemoteConfirmOpen(false)}>
+                Cancel
+              </Button>
+            </DialogActions>
+          </ModalDialog>
+        </Modal>
+        <Modal open={deleteConfirmOpen} onClose={() => setDeleteConfirmOpen(false)}>
+          <ModalDialog role="alertdialog" data-testid="datalake-delete-confirm" sx={{ maxWidth: '28rem' }}>
+            <DialogTitle>Delete this lake?</DialogTitle>
+            <DialogContent>
+              {lake.name} leaves the active list and stops grounding answers for everyone who can read it. You can
+              restore it from the Deleted section until it is permanently purged.
+            </DialogContent>
+            <DialogActions>
+              <Button
+                variant="solid"
+                color="danger"
+                loading={deleteLake.isPending}
+                data-testid="datalake-delete-confirm-btn"
+                // No close on success: onDeleted exits the panel, which unmounts this dialog with it.
+                onClick={() => deleteLake.mutate(lake.id, { onSuccess: onDeleted })}
+              >
+                Delete
+              </Button>
+              <Button variant="plain" color="neutral" onClick={() => setDeleteConfirmOpen(false)}>
+                Cancel
+              </Button>
+            </DialogActions>
+          </ModalDialog>
+        </Modal>
         <Modal open={purgeMemoryConfirmOpen} onClose={() => setPurgeMemoryConfirmOpen(false)}>
           <ModalDialog role="alertdialog" data-testid="datalake-purge-memory-confirm" sx={{ maxWidth: '28rem' }}>
             <DialogTitle>Erase this lake&apos;s memory profile?</DialogTitle>

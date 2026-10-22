@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { processAttachments } from './processAttachments';
 import { SupportedFabFileMimeTypes } from '@bike4mind/common';
+import { resolveSupportedMimeType } from '@bike4mind/utils';
 import type { ParsedEmailObject, EmailIngestionAdapters } from './types';
 
 vi.mock('../fabFileService/create', () => ({
@@ -28,6 +29,7 @@ describe('emailIngestionService - processAttachments', () => {
           delete: vi.fn(),
           count: vi.fn(),
         },
+        organizations: { findById: vi.fn() },
         ingestedEmails: {
           findByMessageId: vi.fn(),
           findByThreadId: vi.fn(),
@@ -291,6 +293,43 @@ describe('emailIngestionService - processAttachments', () => {
     ]);
   });
 
+  it('passes a binary claim through unchanged, so an extensionless executable is refused', async () => {
+    const email = {
+      ...mockParsedEmail,
+      attachments: [
+        {
+          filename: 'payload',
+          contentType: 'application/x-msdownload',
+          size: 5000,
+          content: Buffer.from('MZ'),
+        },
+      ],
+    };
+
+    await processAttachments(email, 'user123', 'Test Email', mockAdapters);
+
+    const { mimeType } = vi.mocked(createFabFile).mock.calls[0][1] as { mimeType: string };
+    expect(mimeType).toBe('application/x-msdownload');
+    // createFabFile's own check (the real one) refuses it rather than storing it as text.
+    expect(
+      resolveSupportedMimeType('payload', mimeType, { extensionlessFallback: SupportedFabFileMimeTypes.TXT_PLAIN })
+        .supported
+    ).toBe(false);
+  });
+
+  it('does not relabel an octet-stream claim as text/plain', async () => {
+    const email = {
+      ...mockParsedEmail,
+      attachments: [
+        { filename: 'blob', contentType: 'application/octet-stream', size: 5000, content: Buffer.from('x') },
+      ],
+    };
+
+    await processAttachments(email, 'user123', 'Test Email', mockAdapters);
+
+    expect(vi.mocked(createFabFile).mock.calls[0][1]).toMatchObject({ mimeType: 'application/octet-stream' });
+  });
+
   it('should process attachments with proper MIME types', async () => {
     const email = {
       ...mockParsedEmail,
@@ -334,7 +373,7 @@ describe('emailIngestionService - processAttachments', () => {
     expect(result[0].filename).toBe('doc.pdf');
   });
 
-  it('should pass organizationId to createFabFile when provided', async () => {
+  it('should never put an organizationId on fabFileData (ownership derives from the lake)', async () => {
     const email = {
       ...mockParsedEmail,
       attachments: [
@@ -347,37 +386,11 @@ describe('emailIngestionService - processAttachments', () => {
       ],
     };
 
-    await processAttachments(email, 'user123', 'Test Email', mockAdapters, 'org456');
+    await processAttachments(email, 'user123', 'Test Email', mockAdapters);
 
     expect(createFabFile).toHaveBeenCalledWith(
       'user123',
-      expect.objectContaining({
-        organizationId: 'org456',
-      }),
-      expect.anything()
-    );
-  });
-
-  it('should not include organizationId in fabFileData when not provided', async () => {
-    const email = {
-      ...mockParsedEmail,
-      attachments: [
-        {
-          filename: 'doc.pdf',
-          contentType: 'application/pdf',
-          size: 5000, // Increased to avoid being filtered out (> 2KB minimum)
-          content: Buffer.from('PDF'),
-        },
-      ],
-    };
-
-    await processAttachments(email, 'user123', 'Test Email', mockAdapters, undefined);
-
-    expect(createFabFile).toHaveBeenCalledWith(
-      'user123',
-      expect.objectContaining({
-        organizationId: undefined,
-      }),
+      expect.not.objectContaining({ organizationId: expect.anything() }),
       expect.anything()
     );
   });

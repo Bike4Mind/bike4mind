@@ -14,15 +14,23 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { createMocks } from 'node-mocks-http';
 
-const { mockValidate, mockFindById, mockRateLimit, mockQuestFindById, mockQuestSettle, mockSessionFindById } =
-  vi.hoisted(() => ({
-    mockValidate: vi.fn(),
-    mockFindById: vi.fn(),
-    mockRateLimit: vi.fn(),
-    mockQuestFindById: vi.fn(),
-    mockQuestSettle: vi.fn(),
-    mockSessionFindById: vi.fn(),
-  }));
+const {
+  mockValidate,
+  mockFindById,
+  mockRateLimit,
+  mockQuestFindById,
+  mockQuestSettle,
+  mockSessionFindById,
+  mockDispatchQuestCallback,
+} = vi.hoisted(() => ({
+  mockValidate: vi.fn(),
+  mockFindById: vi.fn(),
+  mockRateLimit: vi.fn(),
+  mockQuestFindById: vi.fn(),
+  mockQuestSettle: vi.fn(),
+  mockSessionFindById: vi.fn(),
+  mockDispatchQuestCallback: vi.fn(),
+}));
 
 const RATE_LIMIT_HEADERS = {
   'X-RateLimit-Limit-Minute': '60',
@@ -39,7 +47,14 @@ vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   checkApiKeyRateLimit: (...a: unknown[]) => mockRateLimit(...a),
 }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
+  getGeneratedImageStorage: () => ({ getSignedUrl: async (key: string) => `https://signed.example.invalid/${key}` }),
+}));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+
+vi.mock('@server/generationCallback/dispatchQuestCallback', () => ({
+  dispatchQuestCallback: (...a: unknown[]) => mockDispatchQuestCallback(...a),
+}));
 
 vi.mock('@bike4mind/services', async orig => {
   const actual = await orig<Record<string, unknown>>();
@@ -86,7 +101,17 @@ vi.mock('@server/auth/auth', async orig => {
 
 import handler from '../index';
 import { ApiKeyScope } from '@bike4mind/common';
-import { QUEST_TIMEOUT_THRESHOLD_MS, UNFINISHED_REPLY_NOTICE } from '@server/chatCompletion/questTimeoutRecovery';
+import { Logger } from '@bike4mind/observability';
+import {
+  QUEST_TIMEOUT_THRESHOLD_MS,
+  STUCK_QUEST_RECOVERED_LOG,
+  UNFINISHED_REPLY_NOTICE,
+} from '@bike4mind/server-utils/chatCompletion/questTimeoutRecovery';
+
+// The real middleware chain attaches a real Logger to req (server/middlewares/logging.ts), so spy
+// on the prototype to assert the applied-recovery alert. `vi.clearAllMocks()` in beforeEach wipes
+// its call history between tests.
+const loggerError = vi.spyOn(Logger.prototype, 'error');
 
 const VALID_KEY = 'sk-test-valid-key';
 
@@ -188,9 +213,7 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
     expect(mockValidate).not.toHaveBeenCalled();
   });
 
-  it('resolves quest.images basenames into typed CDN file descriptors', async () => {
-    const prev = process.env.NEXT_PUBLIC_CDN_URL;
-    process.env.NEXT_PUBLIC_CDN_URL = 'https://cdn.example.com';
+  it('resolves quest.images basenames into typed presigned file descriptors', async () => {
     mockQuestFindById.mockResolvedValue({
       id: 'quest-1',
       sessionId: 'sess-1',
@@ -208,11 +231,36 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
     expect(res._getJSONData()).toMatchObject({
       images: ['a1b2c3.png', 'report.xlsx'],
       files: [
-        { name: 'a1b2c3.png', url: 'https://cdn.example.com/generated/a1b2c3.png', isImage: true },
-        { name: 'report.xlsx', url: 'https://cdn.example.com/generated/report.xlsx', isImage: false },
+        { name: 'a1b2c3.png', url: 'https://signed.example.invalid/a1b2c3.png', isImage: true },
+        { name: 'report.xlsx', url: 'https://signed.example.invalid/report.xlsx', isImage: false },
       ],
     });
-    process.env.NEXT_PUBLIC_CDN_URL = prev;
+  });
+
+  // The completion callback carries this same body (toQuestPollBody), so a video poll and a video
+  // callback must agree; parsing through the schema also proves the published spec keeps `videos`.
+  it('returns quest.videos and resolves them into files[] alongside images', async () => {
+    mockQuestFindById.mockResolvedValue({
+      id: 'quest-1',
+      sessionId: 'sess-1',
+      status: 'done',
+      reply: 'Here is your video.',
+      replies: [],
+      promptMeta: {},
+      videos: ['clip.mp4'],
+    });
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    const { req, res } = fire();
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    const body = res._getJSONData();
+    expect(body).toMatchObject({
+      images: [],
+      videos: ['clip.mp4'],
+      files: [{ name: 'clip.mp4', url: 'https://signed.example.invalid/clip.mp4', isImage: false, isVideo: true }],
+    });
+    const { QuestPollResponseSchema } = await import('@bike4mind/common');
+    expect(QuestPollResponseSchema.parse(body).videos).toEqual(['clip.mp4']);
   });
 
   it('returns empty images/files when the quest generated nothing', async () => {
@@ -342,6 +390,73 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
     });
   });
 
+  describe('fallbackInfo (which model actually answered)', () => {
+    const storedFallback = {
+      sessionId: 'sess-1',
+      primaryModel: 'claude-opus-4-8',
+      primaryModelName: 'Claude Opus 4.8',
+      fallbackModel: 'gpt-5',
+      fallbackModelName: 'GPT-5',
+      primaryModelBackend: 'anthropic',
+      fallbackModelBackend: 'openai',
+      reason: '529 overloaded',
+      timestamp: 1_760_000_000_000,
+    };
+
+    it('returns the requested model, the answering model and the reason on a fallback turn', async () => {
+      mockQuestFindById.mockResolvedValue({
+        id: 'quest-1',
+        sessionId: 'sess-1',
+        status: 'done',
+        type: 'message',
+        reply: 'answered by the fallback',
+        promptMeta: {},
+        fallbackInfo: storedFallback,
+      });
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire();
+      await handler(req, res);
+
+      const body = res._getJSONData();
+      // Exact match: the internal sessionId/backends/timestamp are not part of the published shape.
+      expect(body.fallbackInfo).toEqual({
+        primaryModel: 'claude-opus-4-8',
+        primaryModelName: 'Claude Opus 4.8',
+        fallbackModel: 'gpt-5',
+        fallbackModelName: 'GPT-5',
+        reason: '529 overloaded',
+      });
+      const { ChatQuestPollResultSchema } = await import('@bike4mind/common');
+      expect(ChatQuestPollResultSchema.parse(body).fallbackInfo).toEqual(body.fallbackInfo);
+    });
+
+    it('still serves the quest when the persisted fallbackInfo is a partial record', async () => {
+      mockQuestFindById.mockResolvedValue({
+        id: 'quest-1',
+        sessionId: 'sess-1',
+        status: 'done',
+        type: 'message',
+        reply: 'answered',
+        promptMeta: {},
+        fallbackInfo: { fallbackModel: 'gpt-5' },
+      });
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire();
+      await handler(req, res);
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData().reply).toBe('answered');
+      expect('fallbackInfo' in res._getJSONData()).toBe(false);
+    });
+
+    it('omits it on a turn the requested model answered', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire();
+      await handler(req, res);
+      expect('fallbackInfo' in res._getJSONData()).toBe(false);
+    });
+  });
+
   describe('toolPayloads (structured tool output for programmatic callers)', () => {
     const PROBLEM = { name: 'shop', jobs: [], machines: [] };
 
@@ -425,6 +540,7 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
 
     beforeEach(() => {
       mockQuestSettle.mockResolvedValue(true);
+      mockDispatchQuestCallback.mockResolvedValue(undefined);
     });
 
     it('recovers a stuck quest on GET and returns terminal status', async () => {
@@ -442,6 +558,24 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
         'quest-1',
         expect.objectContaining({ status: 'done', type: 'error' })
       );
+      // The recovery that actually settles this quest must reach the LiveOps Slack channel; the
+      // sweep never gets the chance once a poll has settled it.
+      expect(loggerError).toHaveBeenCalledWith(STUCK_QUEST_RECOVERED_LOG, {
+        questId: 'quest-1',
+        via: 'v1-poll',
+      });
+      const recoveryLogs = loggerError.mock.calls.filter(([msg]) => msg === STUCK_QUEST_RECOVERED_LOG);
+      expect(recoveryLogs).toHaveLength(1);
+    });
+
+    it('dispatches the generation callback once a recovery write is actually applied', async () => {
+      mockQuestFindById.mockResolvedValue(stuckQuest());
+      ownedByJwtUser();
+
+      const { req, res } = fire({ apiKey: null });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockDispatchQuestCallback).toHaveBeenCalledWith('quest-1', expect.anything());
     });
 
     it('preserves content on a stuck quest that has replies', async () => {
@@ -477,6 +611,8 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
       expect(res._getStatusCode()).toBe(200);
       expect(res._getJSONData().status).toBe('running');
       expect(mockQuestSettle).not.toHaveBeenCalled();
+      expect(mockDispatchQuestCallback).not.toHaveBeenCalled();
+      expect(loggerError.mock.calls.filter(([msg]) => msg === STUCK_QUEST_RECOVERED_LOG)).toHaveLength(0);
     });
 
     it('does not re-recover an already-terminal quest', async () => {
@@ -488,6 +624,8 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
       expect(res._getStatusCode()).toBe(200);
       expect(res._getJSONData().status).toBe('done');
       expect(mockQuestSettle).not.toHaveBeenCalled();
+      expect(mockDispatchQuestCallback).not.toHaveBeenCalled();
+      expect(loggerError.mock.calls.filter(([msg]) => msg === STUCK_QUEST_RECOVERED_LOG)).toHaveLength(0);
     });
 
     it('works for API-key callers (the actual bug: headless API clients never got recovery)', async () => {
@@ -513,6 +651,10 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
       await handler(req, res);
       expect(res._getStatusCode()).toBe(200);
       expect(res._getJSONData().status).toBe('running');
+      expect(mockDispatchQuestCallback).not.toHaveBeenCalled();
+      // A lost race means another settle site won and logs for itself - logging here would
+      // double every recovery.
+      expect(loggerError.mock.calls.filter(([msg]) => msg === STUCK_QUEST_RECOVERED_LOG)).toHaveLength(0);
     });
 
     it('still answers with the quest when the recovery write throws', async () => {
@@ -526,6 +668,9 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
       await handler(req, res);
       expect(res._getStatusCode()).toBe(200);
       expect(res._getJSONData().status).toBe('running');
+      expect(mockDispatchQuestCallback).not.toHaveBeenCalled();
+      // A failed write recovered nothing, so it must not alert either.
+      expect(loggerError.mock.calls.filter(([msg]) => msg === STUCK_QUEST_RECOVERED_LOG)).toHaveLength(0);
     });
 
     it('does not let a sharee read write a terminal status onto the owner quest', async () => {
@@ -539,6 +684,8 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
       expect(res._getStatusCode()).toBe(200);
       expect(res._getJSONData().status).toBe('running');
       expect(mockQuestSettle).not.toHaveBeenCalled();
+      expect(mockDispatchQuestCallback).not.toHaveBeenCalled();
+      expect(loggerError.mock.calls.filter(([msg]) => msg === STUCK_QUEST_RECOVERED_LOG)).toHaveLength(0);
     });
   });
 

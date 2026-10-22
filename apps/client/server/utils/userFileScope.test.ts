@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { getDataLakeTags } from '@bike4mind/common';
-import { buildUserFileScope } from './userFileScope';
+import { ApiKeyScope, getDataLakeTags } from '@bike4mind/common';
+import { buildUserFileScope, buildRequestFileScope } from './userFileScope';
 
 // `Opti` is the requiredUserTag of the only lake in the DATA_LAKES registry; without it the
 // derived set is empty and every assertion here would pass vacuously.
@@ -36,5 +36,32 @@ describe('buildUserFileScope', () => {
       userGroups: [],
       dataLakeTags: getDataLakeTags([]),
     });
+  });
+});
+
+describe('buildRequestFileScope', () => {
+  const USER = { groups: ['group-a'], tags: [GRANTING_TAG, 'some-arbitrary-tag'] };
+
+  it('gives a JWT caller (no apiKeyInfo) the full scope', () => {
+    const scope = buildRequestFileScope({}, USER);
+
+    expect(scope.dataLakeTags).toEqual(getDataLakeTags(USER.tags));
+    expect(scope.dataLakeTags).toContain(GRANTED_LAKE_TAG);
+  });
+
+  it('drops the lake tags for a key holding only files:read, and still passes the user groups through', () => {
+    const scope = buildRequestFileScope({ apiKeyInfo: { scopes: [ApiKeyScope.READ_FILES] } }, USER);
+
+    expect(scope.dataLakeTags).toEqual([]);
+    expect(scope.userGroups).toEqual(['group-a']);
+  });
+
+  it('keeps the full scope for a key holding datalake:read', () => {
+    const scope = buildRequestFileScope(
+      { apiKeyInfo: { scopes: [ApiKeyScope.READ_FILES, ApiKeyScope.DATALAKE_READ] } },
+      USER
+    );
+
+    expect(scope.dataLakeTags).toEqual(getDataLakeTags(USER.tags));
   });
 });

@@ -4,9 +4,9 @@ import { z } from 'zod';
 
 const searchUserCollectionSchema = z.object({
   userId: z.string(),
-  page: z.coerce.number().optional().prefault(1),
-  limit: z.coerce.number().optional().prefault(10),
-  search: z.string().optional().prefault(''),
+  page: z.coerce.number().prefault(1),
+  limit: z.coerce.number().prefault(10),
+  search: z.string().prefault(''),
   type: z.enum(CollectionType).optional(),
 });
 

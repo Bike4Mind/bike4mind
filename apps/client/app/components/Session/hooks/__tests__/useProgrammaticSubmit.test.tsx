@@ -46,6 +46,7 @@ vi.mock('@client/app/utils/briefcase/dispatchDedup', () => ({
 
 import { useProgrammaticSubmit } from '../useProgrammaticSubmit';
 import { ReadyState } from '@client/app/contexts/WebsocketContext';
+import { PROMPT_TEXT_MAX } from '@bike4mind/common';
 
 const SESSION = { id: 's1' } as unknown as ISessionDocument;
 
@@ -139,6 +140,46 @@ describe('useProgrammaticSubmit › programmaticLaunch', () => {
 
     expect(props.handleSendClick).toHaveBeenCalledTimes(1);
     expect(props.handleSendClick).toHaveBeenCalledWith('go', { toolsOverride: ['web_search'] });
+    expect(h.store.state.programmaticLaunch).toBeNull();
+  });
+
+  it('passes a launch systemContext to the send as an option, leaving the prompt text alone', () => {
+    h.store.state.programmaticLaunch = launch({ systemContext: 'Extra instructions for this send.' });
+    const props = baseProps();
+
+    renderSubmit(props);
+    act(() => void vi.advanceTimersByTime(150));
+
+    expect(props.handleSendClick).toHaveBeenCalledTimes(1);
+    expect(props.handleSendClick).toHaveBeenCalledWith('go', {
+      toolsOverride: ['web_search'],
+      systemContext: 'Extra instructions for this send.',
+    });
+  });
+
+  it('adds no systemContext key to the send options when the launch has none', () => {
+    h.store.state.programmaticLaunch = launch({ systemContext: '' });
+    const props = baseProps();
+
+    renderSubmit(props);
+    act(() => void vi.advanceTimersByTime(150));
+
+    const options = props.handleSendClick.mock.calls[0][1] as Record<string, unknown>;
+    expect(options).not.toHaveProperty('systemContext');
+  });
+
+  it('leaves trimming and the cap to the send: an over-cap value is handed over as-is, once', () => {
+    // The refusal lives in useSendMessage (resolveSystemContext), so every caller is capped.
+    const overCap = 'x'.repeat(PROMPT_TEXT_MAX + 1);
+    h.store.state.programmaticLaunch = launch({ systemContext: overCap });
+    const props = baseProps();
+
+    renderSubmit(props);
+    act(() => void vi.advanceTimersByTime(150));
+
+    expect(props.handleSendClick).toHaveBeenCalledTimes(1);
+    expect(props.handleSendClick).toHaveBeenCalledWith('go', { toolsOverride: ['web_search'], systemContext: overCap });
+    // Consumed, so the retry effect cannot fire it again after the send refuses it.
     expect(h.store.state.programmaticLaunch).toBeNull();
   });
 

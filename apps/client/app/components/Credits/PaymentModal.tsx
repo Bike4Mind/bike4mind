@@ -1,6 +1,6 @@
 import { Modal, ModalDialog, Typography } from '@mui/joy';
 import { Elements } from '@stripe/react-stripe-js';
-import CheckoutForm from './CheckoutForm';
+import CheckoutForm, { ConfirmResult } from './CheckoutForm';
 import { Stripe } from '@stripe/stripe-js';
 
 interface PaymentModalProps {
@@ -9,10 +9,21 @@ interface PaymentModalProps {
   stripePromise: Promise<Stripe | null>;
   clientSecret: string;
   onPayment: () => void;
+  onPaymentPending?: () => void;
+  onConfirmResult?: (result: ConfirmResult) => void;
   productName: string;
 }
 
-const PaymentModal = ({ isOpen, onClose, stripePromise, clientSecret, productName, onPayment }: PaymentModalProps) => {
+const PaymentModal = ({
+  isOpen,
+  onClose,
+  stripePromise,
+  clientSecret,
+  productName,
+  onPayment,
+  onPaymentPending,
+  onConfirmResult,
+}: PaymentModalProps) => {
   return (
     <Modal open={isOpen} onClose={onClose}>
       <ModalDialog
@@ -29,7 +40,12 @@ const PaymentModal = ({ isOpen, onClose, stripePromise, clientSecret, productNam
           Purchase {productName}
         </Typography>
         <Elements stripe={stripePromise} options={{ clientSecret }}>
-          <CheckoutForm clientSecret={clientSecret} onPayment={onPayment} />
+          <CheckoutForm
+            clientSecret={clientSecret}
+            onPayment={onPayment}
+            onPaymentPending={onPaymentPending}
+            onConfirmResult={onConfirmResult}
+          />
         </Elements>
       </ModalDialog>
     </Modal>

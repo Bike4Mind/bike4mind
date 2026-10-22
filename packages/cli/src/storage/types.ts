@@ -3,6 +3,9 @@ import type { AgentStep, SubagentConfig, ThoroughnessLevel } from '@bike4mind/ag
 import type { MessageContentObject } from '@bike4mind/common';
 import type { SandboxConfig, PartialSandboxConfig } from '../sandbox/types.js';
 
+/** Content of a pending assistant message before any reply text arrives; MessageItem hides it. */
+export const PENDING_ASSISTANT_CONTENT = '...';
+
 /**
  * Message in a conversation
  */
@@ -222,6 +225,12 @@ export interface CliConfig {
     enableParallelToolExecution?: boolean; // Enable parallel execution of read-only tools (default: false)
     enableDynamicAgentCreation?: boolean; // Enable dynamic agent creation (default: false, experimental)
     enableCoordinatorMode?: boolean; // Enable coordinator mode for complex task decomposition (default: false)
+    /**
+     * Type-check/lint files the agent edits in the background and feed the
+     * errors back into the agent's next turn (see diagnostics/PostEditDiagnostics.ts).
+     * Global config only. Default false.
+     */
+    postEditDiagnostics?: boolean;
     /** System-prompt variant. 'minimal' is a pi-style short prompt; 'current' is the historical default. */
     promptVariant?: 'current' | 'minimal';
     /** Show the agent's thought steps in the chat trace. Default true. */
@@ -260,6 +269,12 @@ export interface CliConfig {
    * are inert (not merged, not loaded, not spawned). See ConfigStore trust gate.
    */
   trustedProjects?: string[];
+  /**
+   * Per realpath'd project root, the sha256 fingerprints of repo MCP server
+   * definitions the user approved. Global-only, like trustedProjects: a repo
+   * server spawns only when its exact definition is listed here.
+   */
+  trustedMcpDefinitions?: Record<string, string[]>;
   // Sandbox configuration for OS-level filesystem isolation
   sandbox?: SandboxConfig;
   // Subagent configurations
@@ -285,7 +300,7 @@ export interface CliConfig {
  * The fields a generic `ConfigStore.save(patch)` is allowed to write into the
  * GLOBAL (user-owned) config layer. Excludes every repo-launderable field that
  * flows only through a dedicated mutator - the structural sets
- * (mcpServers/trustedTools/additionalDirectories/trustedProjects) and the
+ * (mcpServers/trustedTools/additionalDirectories/trustedProjects/trustedMcpDefinitions) and the
  * security-posture fields (tools/sandbox). A caller that spreads the merged
  * effective config into save() therefore cannot re-launder repo data into
  * ~/.bike4mind/config.json - the excluded keys are dropped at compile time
@@ -295,7 +310,14 @@ export interface CliConfig {
  */
 export type GlobalConfigPatch = Omit<
   Partial<CliConfig>,
-  'mcpServers' | 'trustedTools' | 'additionalDirectories' | 'trustedProjects' | 'tools' | 'sandbox' | 'preferences'
+  | 'mcpServers'
+  | 'trustedTools'
+  | 'additionalDirectories'
+  | 'trustedProjects'
+  | 'trustedMcpDefinitions'
+  | 'tools'
+  | 'sandbox'
+  | 'preferences'
 > & {
   /**
    * A patch may carry a PARTIAL preferences object; save() shallow-merges it
@@ -427,6 +449,11 @@ export interface CustomCommand {
   variables?: Record<string, string>;
   /** Tool patterns to allow during skill execution */
   allowedTools?: string[];
+  /**
+   * A Skill Market import (RemoteSkillSource `includeImports`): owned by the user, written by
+   * someone else. Must run wrapped as untrusted content, never as trusted local instructions.
+   */
+  untrusted?: boolean;
   /** Execution context: 'inline' (default) or 'fork' (runs in subagent) */
   context?: 'fork' | 'inline';
   /** When true, skill is hidden from AI's auto-loading in system prompt */

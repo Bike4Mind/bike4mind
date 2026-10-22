@@ -91,6 +91,8 @@ export function useStreamingMessageMerge({
           prompt: chatCompletion.quest.prompt || baseQuest.prompt,
           images: chatCompletion.quest.images || baseQuest.images,
           videos: chatCompletion.quest.videos || baseQuest.videos,
+          videoJobIds: chatCompletion.quest.videoJobIds ?? baseQuest.videoJobIds,
+          generationJobs: chatCompletion.quest.generationJobs ?? baseQuest.generationJobs,
           status: chatCompletion.quest.status || baseQuest.status,
           // Prefer the live streamed classifier so the error CTA renders immediately,
           // before the post-completion quest refetch backfills it from the DB.
@@ -100,6 +102,8 @@ export function useStreamingMessageMerge({
           // notice never renders blank in the window before `baseQuest` reflects it.
           reply: chatCompletion.quest.errorCode ? (chatCompletion.quest.reply ?? baseQuest.reply) : baseQuest.reply,
           promptMeta: mergedPromptMeta,
+          // baseQuest is the first frame's snapshot, and a stalled turn's retries only arrive later.
+          turnTiming: chatCompletion.quest.turnTiming ?? baseQuest.turnTiming,
         };
       }
       // Fallback: streaming chunks arrived before React Query loaded the quest.
@@ -114,6 +118,8 @@ export function useStreamingMessageMerge({
         reply: sq.replies?.[sq.replies.length - 1] ?? sq.reply ?? null,
         images: sq.images || [],
         videos: sq.videos || [],
+        videoJobIds: sq.videoJobIds,
+        generationJobs: sq.generationJobs,
         status: sq.status || 'running',
         type: sq.type || 'message',
         errorCode: sq.errorCode,
@@ -122,6 +128,7 @@ export function useStreamingMessageMerge({
         questMasterPlanId: sq.questMasterPlanId,
         // any: sq is the Zod-inferred StreamedChatCompletionAction['quest'] shape, which does not model promptMeta
         promptMeta: (sq as any).promptMeta,
+        turnTiming: sq.turnTiming,
       } as IChatHistoryItem;
     }
 

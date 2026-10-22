@@ -1,0 +1,1 @@
+{"error":{"message":"Invalid 'input[0].content[0].image_url': string does not match pattern. Expected a string that matches the pattern '^data:'.","type":"invalid_request_error","param":"input[0].content[0].image_url","code":"invalid_value"}}

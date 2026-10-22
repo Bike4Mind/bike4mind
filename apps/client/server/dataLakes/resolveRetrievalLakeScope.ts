@@ -25,7 +25,10 @@ import {
 } from '@bike4mind/database';
 import { getRequestEntitlements, getUserEntitlements, type EntitlementRequest } from '@server/entitlements';
 import type { Logger } from '@bike4mind/observability';
-import { getRequestMembershipOrgIds, type MembershipRequest } from './requestMembership';
+import {
+  getRequestMembershipOrgIds,
+  type MembershipRequest,
+} from '@bike4mind/server-utils/dataLakes/requestMembership';
 
 type RetrievalScopeRequest = EntitlementRequest & MembershipRequest;
 
@@ -114,7 +117,18 @@ export function withStaticRegistryBypass(
  * the widening here still buys the thing that matters - it is not in the scope every chat turn
  * resolves for every caller.
  */
-export async function resolveRetrievalLakeScope(req: RetrievalScopeRequest): Promise<RetrievalLakeScope> {
+export async function resolveRetrievalLakeScope(
+  req: RetrievalScopeRequest,
+  opts: {
+    /**
+     * Forwarded to resolveRetrievalLakeScopeForUser; default `true`. Pass `false` when the result
+     * must match what chat itself can reach, which never includes the privileged registry widening.
+     * The list-label route (resolveLakeListRetrievalScope) does, so an admin's registry lake is not
+     * labelled searchable when chat would not search it.
+     */
+    staticRegistryBypass?: boolean;
+  } = {}
+): Promise<RetrievalLakeScope> {
   const user = req.user!;
   // Thin memoizing wrapper over the request-free resolver below - the two MUST NOT drift, which is
   // why this holds no resolution logic of its own. All it adds is per-request memoization:
@@ -122,6 +136,7 @@ export async function resolveRetrievalLakeScope(req: RetrievalScopeRequest): Pro
   // every consumer, rather than once per call.
   return resolveRetrievalLakeScopeForUser(user, {
     logger: req.logger,
+    staticRegistryBypass: opts.staticRegistryBypass,
     entitlementKeys: await getRequestEntitlements(req),
     // The resolver derives membership itself from user.id; serve that lookup from the request memo
     // so one request resolves membership once across toAccessContext and this scope. Any other id
@@ -166,7 +181,9 @@ export async function resolveRetrievalLakeScopeForUser(
     /**
      * Default `true` - today's behaviour for every existing caller, none of which passes this
      * flag. Pass `false` to opt a caller OUT of the privileged static-registry widening below.
-     * The attachment door does this: that widening escalates registry reach from passages
+     * Two callers do. The list-label route (resolveLakeListRetrievalScope, via the request wrapper
+     * above) labels what chat searches, and chat never gets this widening. The attachment door
+     * (attachmentLakeAccess) does too: that widening escalates registry reach from passages
      * (semantic-search) to whole inlined documents, and the chat attachment door structurally
      * cannot follow it (`b4m-core/services` cannot import `@server/*`), so inheriting it here
      * would ship the two attachment doors disagreeing for exactly the caller class most likely

@@ -35,12 +35,13 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: vi.fn(), findBySettingName: vi.fn() },
   apiKeyRepository: { find: vi.fn() },
 }));
-vi.mock('./bedrockControlPlane', () => ({ createBedrockControlPlane }));
+vi.mock('@bike4mind/server-utils/modelDiscovery/bedrockControlPlane', () => ({ createBedrockControlPlane }));
 
 // Real factories, wrapped so the options each one was handed are readable.
 const captured = {
   openai: undefined as { knownModelIds?: () => unknown } | undefined,
-  bedrock: undefined as { client: unknown; activeModelIds?: () => unknown } | undefined,
+  bedrock: undefined as
+    { client: unknown; activeModelIds?: () => unknown; catalogModelIds?: () => unknown } | undefined,
   modelsDev: undefined as { targets: () => unknown; aliases?: unknown } | undefined,
   litellm: undefined as { targets: () => unknown; aliases?: unknown } | undefined,
 };
@@ -163,6 +164,25 @@ describe('bedrock wiring', () => {
     expect(active).toEqual(new Set(['claude-sonnet-5', 'grok-3-fast']));
     // The 'discovered' Bedrock id is absent, so it still gets its entitlement call.
     expect((active as Set<string>).has('us.anthropic.claude-sonnet-9')).toBe(false);
+  });
+
+  it('hands Bedrock its catalog ids so profile ids can carry their foundation lifecycle', async () => {
+    buildModelDiscoveryAdapters(logger);
+    expect(await captured.bedrock!.catalogModelIds!()).toEqual(['us.anthropic.claude-sonnet-9']);
+  });
+
+  it('passes only Bedrock ids from a mixed-backend catalog', async () => {
+    rowsInForce.mockResolvedValue([
+      catalogRow('claude-sonnet-5', 'anthropic', 'active'),
+      catalogRow('us.anthropic.claude-sonnet-9', 'bedrock', 'active'),
+      catalogRow('global.anthropic.claude-sonnet-9', 'bedrock', 'active'),
+      catalogRow('grok-3-fast', 'xai', 'active'),
+    ]);
+    buildModelDiscoveryAdapters(logger);
+    expect(await captured.bedrock!.catalogModelIds!()).toEqual([
+      'us.anthropic.claude-sonnet-9',
+      'global.anthropic.claude-sonnet-9',
+    ]);
   });
 
   it('asks again about an active model a source auto-disabled, so the disable can be lifted', async () => {

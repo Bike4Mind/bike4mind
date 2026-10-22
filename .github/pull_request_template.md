@@ -10,6 +10,13 @@ If applicable, add screenshots or a video to help explain your changes. This can
 Provide a detailed description of what this PR does. Explain the problem you're solving or the feature you're adding.
 -->
 
+## Customer note
+<!--
+Optional. One or two plain sentences a customer would understand, used for the in-app release notes.
+Leave empty (or write "none") for internal changes. No internal names, ticket numbers or links.
+Say only what the code does: no role names for who can see it, and no speed or quality claim you did not measure.
+-->
+
 ## Changes
 <!--
 List the changes you've made in this PR. This is to help the reviewers understand the impact of your changes.

@@ -71,7 +71,7 @@ describe('useSendSessionToDataLake', () => {
     expect(payload.content).toContain('**User:** Hello');
     expect(payload.content).toContain('**AI:** Hi there');
     expect(payload.content).toContain('**User:** Second question');
-    expect(payload.content).toContain('**AI:** First replySecond reply');
+    expect(payload.content).toContain('**AI:** First reply\n\nSecond reply');
     // One AI entry per turn, not per slot, and no reasoning leaks into grounding content.
     expect(payload.content.match(/\*\*AI:\*\*/g)).toHaveLength(2);
     expect(payload.content).not.toContain('<think>');

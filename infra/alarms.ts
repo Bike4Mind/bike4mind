@@ -11,139 +11,32 @@
  * that touch alarm/dashboard code).
  */
 
-import { modelDiscoveryFunction } from './cron';
+import {
+  modelDiscoveryCronEnabled,
+  modelDiscoveryFunction,
+  modelDiscoveryStalenessFunction,
+  voiceHoldSweepCron,
+} from './cron';
 import { whatsNewGenerationQueueSubscription, webhookDeliveryQueueSubscription } from './queues';
 import { subscribeQueryRoute, unsubscribeQueryRoute } from './subscriberFanout';
 import { dlqAlarmTopic } from './dlqAlarms';
-import { isMonitoredStage as _isMonitoredStage } from '@bike4mind/infra';
+import {
+  isMonitoredStage as _isMonitoredStage,
+  QUESTS_NAMESPACE,
+  QUEST_METRICS,
+  VOICE_NAMESPACE,
+  VOICE_METRICS,
+} from '@bike4mind/infra';
 
 const MONITORED_STAGES = ['dev', 'production'] as const;
 const isMonitoredStage = _isMonitoredStage($app.stage, MONITORED_STAGES, process.env.ENABLE_MONITORING);
 
-// --- Conditional SNS topic exports (undefined when not monitored) ---
-
-export const whatsNewFailureAlarm = isMonitoredStage ? new sst.aws.SnsTopic('WhatsNewFailureAlarm') : undefined;
-
-export const whatsNewDurationAlarm = isMonitoredStage ? new sst.aws.SnsTopic('WhatsNewDurationAlarm') : undefined;
-
-export const whatsNewCostAlarm = isMonitoredStage ? new sst.aws.SnsTopic('WhatsNewCostAlarm') : undefined;
-
-export const whatsNewLambdaErrorAlarm = isMonitoredStage ? new sst.aws.SnsTopic('WhatsNewLambdaErrorAlarm') : undefined;
-
-export const anthropicRateLimitAlarm = isMonitoredStage ? new sst.aws.SnsTopic('AnthropicRateLimitAlarm') : undefined;
-
-export const liveopsTriageFailureAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('LiveOpsTriageFailureAlarm')
-  : undefined;
-
-export const liveopsHighErrorVolumeAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('LiveOpsHighErrorVolumeAlarm')
-  : undefined;
-
-export const liveopsP0IssuesAlarm = isMonitoredStage ? new sst.aws.SnsTopic('LiveOpsP0IssuesAlarm') : undefined;
-
-export const liveopsP1IssuesAlarm = isMonitoredStage ? new sst.aws.SnsTopic('LiveOpsP1IssuesAlarm') : undefined;
-
-export const liveopsConsecutiveFailuresAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('LiveOpsConsecutiveFailuresAlarm')
-  : undefined;
-
-export const webhookDeliveryFailureAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('WebhookDeliveryFailureAlarm')
-  : undefined;
-
-export const webhookDeliveryLatencyAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('WebhookDeliveryLatencyAlarm')
-  : undefined;
-
-export const webhookDeliveryLambdaErrorAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('WebhookDeliveryLambdaErrorAlarm')
-  : undefined;
-
-export const rateLimitWarningAlarm = isMonitoredStage ? new sst.aws.SnsTopic('RateLimitWarningAlarm') : undefined;
-
-export const rateLimitHitAlarm = isMonitoredStage ? new sst.aws.SnsTopic('RateLimitHitAlarm') : undefined;
-
-export const integrationHealthSlackFailureAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('IntegrationHealthSlackFailureAlarm')
-  : undefined;
-
-export const integrationHealthGithubFailureAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('IntegrationHealthGithubFailureAlarm')
-  : undefined;
-
-export const integrationHealthJiraFailureAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('IntegrationHealthJiraFailureAlarm')
-  : undefined;
-
-export const integrationHealthConfluenceFailureAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('IntegrationHealthConfluenceFailureAlarm')
-  : undefined;
-
-export const integrationHealthLatencyAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('IntegrationHealthLatencyAlarm')
-  : undefined;
-
-export const integrationHealthAllDownAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('IntegrationHealthAllDownAlarm')
-  : undefined;
-
-export const circuitBreakerOpenAlarm = isMonitoredStage ? new sst.aws.SnsTopic('CircuitBreakerOpenAlarm') : undefined;
-
-export const agentInflightStepsPersistFailedAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('AgentInflightStepsPersistFailedAlarm')
-  : undefined;
-
-export const agentCheckpointDepthWarningAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('AgentCheckpointDepthWarningAlarm')
-  : undefined;
-
-export const agentCheckpointDepthExceededAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('AgentCheckpointDepthExceededAlarm')
-  : undefined;
-
-export const websocketRouteOomAlarm = isMonitoredStage ? new sst.aws.SnsTopic('WebSocketRouteOomAlarm') : undefined;
-
-export const largeApiResponseAlarm = isMonitoredStage ? new sst.aws.SnsTopic('LargeApiResponseAlarm') : undefined;
-
-export const modelDiscoveryFailureAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('ModelDiscoveryFailureAlarm')
-  : undefined;
-
-export const modelDiscoveryRowsRejectedAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('ModelDiscoveryRowsRejectedAlarm')
-  : undefined;
-
-export const modelDiscoveryPriceFlaggedAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('ModelDiscoveryPriceFlaggedAlarm')
-  : undefined;
-
-export const modelDiscoveryDocsParserShiftAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('ModelDiscoveryDocsParserShiftAlarm')
-  : undefined;
-
-export const deprecatedModelRequestAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('DeprecatedModelRequestAlarm')
-  : undefined;
-
-export const questProcessingFailureAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('QuestProcessingFailureAlarm')
-  : undefined;
-
-// Retained with no alarm pointing at it: the topic is deployed and removing the declaration would
-// destroy it. Unsubscribed, so nothing routes here - see the dlqAlarmTopic note below.
+// Retained: this topic was already orphaned before this PR -- no alarm ever pointed at it.
+// Unlike the 36 deleted topics (which each had an alarm, just no subscriber), removing this
+// declaration would destroy the deployed AWS resource without any alarm migration needed.
+// Kept so Pulumi does not destroy a resource that may have out-of-band subscribers.
 export const dataLakeStuckBatchesAlarm = isMonitoredStage
   ? new sst.aws.SnsTopic('DataLakeStuckBatchesAlarm')
-  : undefined;
-
-export const replSandboxUnavailableAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('ReplSandboxUnavailableAlarm')
-  : undefined;
-
-export const sessionReuseRevokedAlarm = isMonitoredStage ? new sst.aws.SnsTopic('SessionReuseRevokedAlarm') : undefined;
-
-export const sessionRecoveredHighRateAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('SessionRecoveredHighRateAlarm')
   : undefined;
 
 // --- MetricAlarm definitions (only created for monitored stages) ---
@@ -182,7 +75,7 @@ if (isMonitoredStage) {
     statistic: 'Sum',
     threshold: 0, // Any occurrence is noteworthy
     treatMissingData: 'notBreaching',
-    alarmActions: [agentCheckpointDepthWarningAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'AgentExecutor',
       Severity: 'Warning',
@@ -212,9 +105,40 @@ if (isMonitoredStage) {
     statistic: 'Sum',
     threshold: 0, // Any occurrence means an execution was forcibly terminated
     treatMissingData: 'notBreaching',
-    alarmActions: [agentCheckpointDepthExceededAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'AgentExecutor',
+      Severity: 'High',
+    },
+  });
+
+  /**
+   * Alarm: Ungranted Credit Purchases
+   *
+   * Fires when the daily reconciliation finds a succeeded Stripe credit purchase with no
+   * purchase transaction, a transaction whose balance increment never applied, or a
+   * transaction whose owner no longer exists (see UngrantedReason in the cron). The Slack
+   * post from the cron is best-effort; this alarm is the signal that cannot fail quietly. The metric is emitted once a day (0 when clean), so
+   * the period is one day.
+   *
+   * Metric emitted by: apps/workers/src/cron/creditPurchaseReconciliation.ts
+   * Namespace: Lumina5/CreditPurchases / UngrantedPurchases
+   */
+  new aws.cloudwatch.MetricAlarm('ungrantedCreditPurchases', {
+    name: `${$app.name}-${$app.stage}-ungranted-credit-purchases`,
+    alarmDescription: 'Stripe credit purchase succeeded but no credits were granted',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: 'UngrantedPurchases',
+    namespace: 'Lumina5/CreditPurchases',
+    dimensions: { Stage: $app.stage },
+    period: 86400, // matches the daily cron
+    statistic: 'Maximum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    alarmActions: [dlqAlarmTopic.arn],
+    tags: {
+      Application: 'CreditPurchases',
       Severity: 'High',
     },
   });
@@ -236,7 +160,7 @@ if (isMonitoredStage) {
     statistic: 'Sum',
     threshold: 2, // More than 2 failures
     treatMissingData: 'notBreaching',
-    alarmActions: [whatsNewFailureAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'WhatsNewGeneration',
       Severity: 'High',
@@ -260,7 +184,7 @@ if (isMonitoredStage) {
     statistic: 'Average',
     threshold: 120000, // 2 minutes in milliseconds
     treatMissingData: 'notBreaching',
-    alarmActions: [whatsNewDurationAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'WhatsNewGeneration',
       Severity: 'Medium',
@@ -284,7 +208,7 @@ if (isMonitoredStage) {
     statistic: 'Maximum',
     threshold: 0.05, // $0.05
     treatMissingData: 'notBreaching',
-    alarmActions: [whatsNewCostAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'WhatsNewGeneration',
       Severity: 'Medium',
@@ -311,7 +235,7 @@ if (isMonitoredStage) {
     dimensions: {
       FunctionName: whatsNewGenerationQueueSubscription.nodes.function.name,
     },
-    alarmActions: [whatsNewLambdaErrorAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'WhatsNewGeneration',
       Severity: 'High',
@@ -339,7 +263,7 @@ if (isMonitoredStage) {
     dimensions: {
       Stage: $app.stage,
     },
-    alarmActions: [anthropicRateLimitAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'AnthropicAPI',
       Severity: 'High',
@@ -363,7 +287,7 @@ if (isMonitoredStage) {
     statistic: 'Sum',
     threshold: 0, // Alert on any failure
     treatMissingData: 'notBreaching',
-    alarmActions: [liveopsTriageFailureAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'LiveOpsTriage',
       Severity: 'High',
@@ -387,7 +311,7 @@ if (isMonitoredStage) {
     statistic: 'Maximum',
     threshold: 50, // More than 50 errors
     treatMissingData: 'notBreaching',
-    alarmActions: [liveopsHighErrorVolumeAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'LiveOpsTriage',
       Severity: 'Critical',
@@ -414,7 +338,7 @@ if (isMonitoredStage) {
     dimensions: {
       Priority: 'P0',
     },
-    alarmActions: [liveopsP0IssuesAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'LiveOpsTriage',
       Severity: 'Critical',
@@ -441,7 +365,7 @@ if (isMonitoredStage) {
     dimensions: {
       Priority: 'P1',
     },
-    alarmActions: [liveopsP1IssuesAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'LiveOpsTriage',
       Severity: 'High',
@@ -466,7 +390,7 @@ if (isMonitoredStage) {
     statistic: 'Sum',
     threshold: 2, // 2 or more failures in 48 hours
     treatMissingData: 'notBreaching',
-    alarmActions: [liveopsConsecutiveFailuresAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'LiveOpsTriage',
       Severity: 'Critical',
@@ -490,7 +414,7 @@ if (isMonitoredStage) {
     statistic: 'Sum',
     threshold: 10, // More than 10 failures in 5 min
     treatMissingData: 'notBreaching',
-    alarmActions: [webhookDeliveryFailureAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'WebhookDelivery',
       Severity: 'High',
@@ -514,7 +438,7 @@ if (isMonitoredStage) {
     extendedStatistic: 'p95',
     threshold: 30000, // 30 seconds in milliseconds
     treatMissingData: 'notBreaching',
-    alarmActions: [webhookDeliveryLatencyAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'WebhookDelivery',
       Severity: 'Medium',
@@ -541,7 +465,7 @@ if (isMonitoredStage) {
     dimensions: {
       FunctionName: webhookDeliveryQueueSubscription.nodes.function.name,
     },
-    alarmActions: [webhookDeliveryLambdaErrorAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'WebhookDelivery',
       Severity: 'High',
@@ -565,7 +489,7 @@ if (isMonitoredStage) {
     statistic: 'Sum',
     threshold: 0, // Alert on any near-limit event
     treatMissingData: 'notBreaching',
-    alarmActions: [rateLimitWarningAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'IntegrationRateLimits',
       Severity: 'Medium',
@@ -589,7 +513,7 @@ if (isMonitoredStage) {
     statistic: 'Sum',
     threshold: 0, // Alert on any throttle event
     treatMissingData: 'notBreaching',
-    alarmActions: [rateLimitHitAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'IntegrationRateLimits',
       Severity: 'High',
@@ -614,7 +538,7 @@ if (isMonitoredStage) {
     threshold: 3,
     treatMissingData: 'notBreaching',
     dimensions: { Integration: 'slack' },
-    alarmActions: [integrationHealthSlackFailureAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'IntegrationHealth',
       Severity: 'High',
@@ -633,7 +557,7 @@ if (isMonitoredStage) {
     threshold: 3,
     treatMissingData: 'notBreaching',
     dimensions: { Integration: 'github' },
-    alarmActions: [integrationHealthGithubFailureAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'IntegrationHealth',
       Severity: 'High',
@@ -652,7 +576,7 @@ if (isMonitoredStage) {
     threshold: 3,
     treatMissingData: 'notBreaching',
     dimensions: { Integration: 'jira' },
-    alarmActions: [integrationHealthJiraFailureAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'IntegrationHealth',
       Severity: 'High',
@@ -671,7 +595,7 @@ if (isMonitoredStage) {
     threshold: 3,
     treatMissingData: 'notBreaching',
     dimensions: { Integration: 'confluence' },
-    alarmActions: [integrationHealthConfluenceFailureAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'IntegrationHealth',
       Severity: 'High',
@@ -695,7 +619,7 @@ if (isMonitoredStage) {
     extendedStatistic: 'p95',
     threshold: 5000, // 5 seconds in milliseconds
     treatMissingData: 'notBreaching',
-    alarmActions: [integrationHealthLatencyAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'IntegrationHealth',
       Severity: 'Medium',
@@ -720,7 +644,7 @@ if (isMonitoredStage) {
     statistic: 'Sum',
     threshold: 1, // Less than 1 success = zero successes
     treatMissingData: 'notBreaching',
-    alarmActions: [integrationHealthAllDownAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'IntegrationHealth',
       Severity: 'Critical',
@@ -745,7 +669,7 @@ if (isMonitoredStage) {
     statistic: 'Maximum',
     threshold: 0, // Alert when any integration's breaker opens (value = 1)
     treatMissingData: 'notBreaching',
-    alarmActions: [circuitBreakerOpenAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'CircuitBreaker',
       Severity: 'High',
@@ -775,7 +699,7 @@ if (isMonitoredStage) {
     statistic: 'Sum',
     threshold: 10,
     treatMissingData: 'notBreaching',
-    alarmActions: [agentInflightStepsPersistFailedAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'AgentExecutor',
       Severity: 'Medium',
@@ -835,7 +759,7 @@ if (isMonitoredStage) {
       statistic: 'Sum',
       threshold: 0, // Alert on any OOM/kill event
       treatMissingData: 'notBreaching',
-      alarmActions: [websocketRouteOomAlarm!.arn],
+      alarmActions: [dlqAlarmTopic.arn],
       tags: {
         Application: 'WebSocketRoutes',
         Severity: 'High',
@@ -870,7 +794,7 @@ if (isMonitoredStage) {
     statistic: 'Maximum',
     threshold: 0, // Alert on any occurrence
     treatMissingData: 'notBreaching',
-    alarmActions: [largeApiResponseAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'ApiResponse',
       Severity: 'Medium',
@@ -878,7 +802,7 @@ if (isMonitoredStage) {
   });
 
   /**
-   * The dimension set server/modelDiscovery/metrics.ts stamps on every datum.
+   * The dimension set apps/workers/src/modelDiscovery/metrics.ts stamps on every datum.
    * CloudWatch keys a custom metric by namespace + name + the exact dimension
    * set and never rolls up, so an alarm that omits these watches an empty
    * series and sits in INSUFFICIENT_DATA forever. Host is the hosted lambda's
@@ -894,7 +818,7 @@ if (isMonitoredStage) {
    * evaluation periods is three scheduled runs; a period with no run at all
    * does not breach, which keeps a disabled or preview stage quiet.
    *
-   * Metric emitted by: server/modelDiscovery/metrics.ts
+   * Metric emitted by: apps/workers/src/modelDiscovery/metrics.ts
    * Namespace: Lumina5/ModelDiscovery / RunFailures
    */
   new aws.cloudwatch.MetricAlarm('modelDiscoveryRunFailures', {
@@ -909,12 +833,65 @@ if (isMonitoredStage) {
     threshold: 0,
     treatMissingData: 'notBreaching',
     dimensions: modelDiscoveryDimensions,
-    alarmActions: [modelDiscoveryFailureAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'ModelDiscovery',
       Severity: 'High',
     },
   });
+
+  /**
+   * Alarm: Model Discovery no successful run (dead-man's switch)
+   *
+   * An independent check reads the last completed hosted 'ok' run every 15
+   * minutes. Partial runs do not refresh it. An independent schedule is needed
+   * because CloudWatch can reuse older healthy data beyond a missing 24h
+   * window when the watched discovery cron stops.
+   *
+   * Metric emitted by: apps/workers/src/cron/modelDiscoveryStaleness.ts
+   * Namespace: Lumina5/ModelDiscovery / NoSuccessfulRun
+   */
+  if (modelDiscoveryCronEnabled) {
+    new aws.cloudwatch.MetricAlarm('modelDiscoveryNoSuccessfulRun', {
+      name: `${$app.name}-${$app.stage}-model-discovery-no-successful-run`,
+      alarmDescription: 'No completed successful hosted model discovery run in 24h',
+      comparisonOperator: 'GreaterThanThreshold',
+      evaluationPeriods: 1,
+      metricName: 'NoSuccessfulRun',
+      namespace: 'Lumina5/ModelDiscovery',
+      period: 1800, // Two independent checks per period; any stale check breaches.
+      statistic: 'Maximum',
+      threshold: 0,
+      treatMissingData: 'breaching',
+      dimensions: modelDiscoveryDimensions,
+      alarmActions: [dlqAlarmTopic.arn],
+      tags: {
+        Application: 'ModelDiscovery',
+        Severity: 'High',
+      },
+    });
+
+    new aws.cloudwatch.MetricAlarm('modelDiscoveryStalenessCheckErrors', {
+      name: `${$app.name}-${$app.stage}-model-discovery-staleness-check-errors`,
+      alarmDescription: 'Model discovery staleness check failed; watchdog data may be unavailable',
+      comparisonOperator: 'GreaterThanThreshold',
+      evaluationPeriods: 1,
+      metricName: 'Errors',
+      namespace: 'AWS/Lambda',
+      period: 300,
+      statistic: 'Sum',
+      threshold: 0,
+      treatMissingData: 'notBreaching',
+      dimensions: {
+        FunctionName: modelDiscoveryStalenessFunction.name,
+      },
+      alarmActions: [dlqAlarmTopic.arn],
+      tags: {
+        Application: 'ModelDiscovery',
+        Severity: 'High',
+      },
+    });
+  }
 
   /**
    * Alarm: Model Discovery Lambda Errors
@@ -938,7 +915,7 @@ if (isMonitoredStage) {
     dimensions: {
       FunctionName: modelDiscoveryFunction.name,
     },
-    alarmActions: [modelDiscoveryFailureAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'ModelDiscovery',
       Severity: 'High',
@@ -963,7 +940,7 @@ if (isMonitoredStage) {
     threshold: 0,
     treatMissingData: 'notBreaching',
     dimensions: modelDiscoveryDimensions,
-    alarmActions: [modelDiscoveryRowsRejectedAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'ModelDiscovery',
       Severity: 'Medium',
@@ -989,7 +966,7 @@ if (isMonitoredStage) {
     threshold: 0,
     treatMissingData: 'notBreaching',
     dimensions: modelDiscoveryDimensions,
-    alarmActions: [modelDiscoveryPriceFlaggedAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'ModelDiscovery',
       Severity: 'Low',
@@ -1016,7 +993,7 @@ if (isMonitoredStage) {
     threshold: 0,
     treatMissingData: 'notBreaching',
     dimensions: modelDiscoveryDimensions,
-    alarmActions: [modelDiscoveryDocsParserShiftAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'ModelDiscovery',
       Severity: 'Low',
@@ -1037,7 +1014,7 @@ if (isMonitoredStage) {
    *
    * Routed to dlqAlarmTopic (Slack-subscribed) so alerts reach on-call directly.
    *
-   * Metric emitted by: server/modelDiscovery/metrics.ts -> buildDiscoveryMetricData
+   * Metric emitted by: apps/workers/src/modelDiscovery/metrics.ts -> buildDiscoveryMetricData
    * Namespace: Lumina5/ModelDiscovery / AggregatorJoinCoverage
    * Dimensions: { Stage, Host: 'hosted', Aggregator } -- all three required;
    * omitting Aggregator would watch an empty series (INSUFFICIENT_DATA forever).
@@ -1097,7 +1074,7 @@ if (isMonitoredStage) {
     dimensions: {
       Stage: $app.stage,
     },
-    alarmActions: [deprecatedModelRequestAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'ModelSunset',
       Severity: 'Medium',
@@ -1135,7 +1112,7 @@ if (isMonitoredStage) {
     dimensions: {
       Stage: $app.stage,
     },
-    alarmActions: [replSandboxUnavailableAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'ReplSandbox',
       Severity: 'High',
@@ -1150,8 +1127,8 @@ if (isMonitoredStage) {
    * noise (e.g. a browser tab closed mid-upload). Threshold 10 in one sample is a systemic
    * problem, not a one-off.
    *
-   * Metric emitted by: server/utils/cloudwatch.ts -> recordStuckBatchGauge, wired from
-   * server/cron/dataLakeBatchReconcile.ts's runStuckBatchSweep.
+   * Metric emitted by: packages/server-utils/src/utils/cloudwatch.ts -> recordStuckBatchGauge, wired from
+   * apps/workers/src/cron/dataLakeBatchReconcile.ts's runStuckBatchSweep.
    * Namespace: Lumina5/DataLakeBatch / StuckBatches
    */
   new aws.cloudwatch.MetricAlarm('dataLakeStuckBatchesHigh', {
@@ -1193,7 +1170,7 @@ if (isMonitoredStage) {
    * reachable by ordinary use rather than by an unusual overlap. Until now nothing watched it, and
    * the only other trace was a logger.warn nothing alarms on.
    *
-   * Metric emitted by: server/utils/cloudwatch.ts -> recordTaxonomyTagsApplySkipped, wired from
+   * Metric emitted by: packages/server-utils/src/utils/cloudwatch.ts -> recordTaxonomyTagsApplySkipped, wired from
    * pages/api/data-lakes/batches/[batchId]/apply-taxonomy.ts.
    * Namespace: Lumina5/DataLakeBatch / TaxonomyTagsApplySkipped
    */
@@ -1352,8 +1329,8 @@ if (isMonitoredStage) {
    * readable off ChunkRescueRuns's `outcome` dimension instead of by inference from a silent
    * counter - alarming on the counter's absence would page every quiet day.
    *
-   * Metric emitted by: server/utils/cloudwatch.ts -> recordChunkRescueSweep, wired from
-   * server/cron/dataLakeBatchReconcile.ts's rescue sweep.
+   * Metric emitted by: packages/server-utils/src/utils/cloudwatch.ts -> recordChunkRescueSweep, wired from
+   * apps/workers/src/cron/dataLakeBatchReconcile.ts's rescue sweep.
    * Namespace: Lumina5/DataLakeBatch / ChunkRescueFailures, dimension Stage=<this stage>. The
    * emitter writes both a stage-less and a `{ Stage }`-scoped stream (a dimensioned metric is a
    * distinct stream in CloudWatch); this alarm reads the scoped one so a dev-stage sweep failure
@@ -1397,8 +1374,8 @@ if (isMonitoredStage) {
    * individualLogGroups, so its logger.error is neither Slacked nor alarmed, and the function has
    * no AWS/Lambda Errors alarm either - the throw is caught, so the invocation succeeds.
    *
-   * Metric emitted by: server/utils/cloudwatch.ts -> recordChunkRescueSweep, with the 'failed'
-   * outcome supplied by server/cron/dataLakeBatchReconcile.ts's catch.
+   * Metric emitted by: packages/server-utils/src/utils/cloudwatch.ts -> recordChunkRescueSweep, with the 'failed'
+   * outcome supplied by apps/workers/src/cron/dataLakeBatchReconcile.ts's catch.
    * Namespace: Lumina5/DataLakeBatch / ChunkRescueRuns, dimensions outcome=failed + Stage=<this
    * stage>. Unlike the stage rollups elsewhere in this file, the scoped Runs stream keeps
    * `outcome` alongside `Stage` - a `{ Stage }`-only Runs stream counts every run, healthy ones
@@ -1441,7 +1418,7 @@ if (isMonitoredStage) {
    * Routed to the shared dlqAlarmTopic (not a dedicated topic) to reuse its existing
    * Slack-forwarding subscription rather than duplicating that wiring for a single alarm.
    *
-   * Metric emitted by: server/utils/cloudwatch.ts -> recordFeedbackDeliveryFailure, wired
+   * Metric emitted by: packages/server-utils/src/utils/cloudwatch.ts -> recordFeedbackDeliveryFailure, wired
    * from server/integrations/slack/slack.ts's postFeedbackToSlack and
    * pages/api/feedback/index.ts's email path.
    * Namespace: Lumina5/FeedbackDelivery / DeliveryFailed. Reads the coarse `{ Stage }`-only
@@ -1480,7 +1457,7 @@ if (isMonitoredStage) {
    * 'nonprod_unconfigured') do not emit the rollup this reads - see
    * buildFeedbackDeliverySkippedMetrics - so this alarm never pages for a setting an admin chose.
    *
-   * Metric emitted by: server/utils/cloudwatch.ts -> recordFeedbackDeliverySkipped, wired from
+   * Metric emitted by: packages/server-utils/src/utils/cloudwatch.ts -> recordFeedbackDeliverySkipped, wired from
    * the same two call sites as feedbackDeliveryFailures above.
    * Namespace: Lumina5/FeedbackDelivery / DeliverySkipped, Stage-scoped identically.
    */
@@ -1513,24 +1490,24 @@ if (isMonitoredStage) {
    * users before anyone noticed), so this alarms on the raw failure count rather than waiting for
    * a single error class to dominate.
    *
-   * Metric emitted by: apps/client/server/chatCompletion/internal/route.ts, in the
-   * processQuest(...).catch handler. Reads the Stage-only rollup datum (see the comment at that
-   * call site) - alarms match one exact dimension set, so the per-ErrorClass breakdown is a
-   * dashboard concern, not this alarm's.
+   * Metric emitted by: apps/client/server/chatCompletion/processingFailedMetric.ts, from the
+   * failure path of internal /process. The CLI SSE/WS and embed chat surfaces emit the same metric
+   * under their own Surface value but are deliberately not alarmed until a base rate exists: their
+   * failure definition differs and embed takes public traffic. Alarms match one exact dimension set.
    */
   new aws.cloudwatch.MetricAlarm('questProcessingFailures', {
     name: `${$app.name}-${$app.stage}-quest-processing-failures`,
-    alarmDescription: 'Quest processing is failing on the internal ChatCompletion /process path',
+    alarmDescription: 'Quest processing (/process) is failing on the ChatCompletion service',
     comparisonOperator: 'GreaterThanThreshold',
     evaluationPeriods: 1,
-    metricName: 'ProcessingFailed',
-    namespace: 'Lumina5/Quests',
+    metricName: QUEST_METRICS.ProcessingFailed,
+    namespace: QUESTS_NAMESPACE,
     period: 300, // 5 minutes
     statistic: 'Sum',
     threshold: 5,
     treatMissingData: 'notBreaching',
-    dimensions: { Stage: $app.stage },
-    alarmActions: [questProcessingFailureAlarm!.arn],
+    dimensions: { Stage: $app.stage, Surface: '/process' },
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'Quests',
       Severity: 'High',
@@ -1538,28 +1515,213 @@ if (isMonitoredStage) {
   });
 
   /**
-   * Alarm: Session Reuse Revoked
+   * Alarm: Quest callback delivery exhausted its retries
    *
-   * Fires on any occurrence of a refresh token being presented after its rotation window,
-   * which causes the session to be revoked. Each event is a presumed token theft: both
-   * the legitimate user and any attacker are logged out. Any single occurrence warrants
-   * investigation.
+   * A generation callback whose claim was lost or crashed on every redispatch was moved to
+   * `failed`. Steady state is 0. Webhook delivery failures never reach this metric (the delivery
+   * handler marks them failed itself; the generation-callback DLQ alarm covers them).
+   * Single period: each reclaim resets dispatchedAt for the whole cohort, so exhaustions land in
+   * one sweep run and a multi-period window would rarely see consecutive datapoints.
+   *
+   * Metric emitted by: apps/workers/src/cron/questTimeoutSweep.ts -> failExhaustedCallbacks.
+   * Namespace: QUESTS_NAMESPACE, dimensioned by Stage only (the sweep emits { Stage }).
+   */
+  new aws.cloudwatch.MetricAlarm('questCallbackLimitReached', {
+    name: `${$app.name}-${$app.stage}-quest-callback-limit-reached`,
+    alarmDescription: 'Quest generation callbacks are failing: redispatch retries exhausted',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: QUEST_METRICS.TimeoutSweepCallbacksFailedLimitReached,
+    namespace: QUESTS_NAMESPACE,
+    period: 300, // 5 minutes
+    statistic: 'Sum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    dimensions: { Stage: $app.stage },
+    alarmActions: [dlqAlarmTopic.arn],
+    tags: {
+      Application: 'Quests',
+      Severity: 'High',
+    },
+  });
+
+  /**
+   * Alarm: Quest callback past the redispatch horizon
+   *
+   * A callback whose last claim aged past the 72h redispatch horizon was failed. Steady state is
+   * ~0, so non-zero after the one-time historical backlog drain means a claim went unswept for
+   * 72h (the sweep was down or erroring and has since resumed). A sweep that is down right now
+   * emits nothing, which notBreaching reads as OK. Fires on a single period: any occurrence is a
+   * signal. The historical backlog was already drained when the sweep shipped, so deploying this
+   * alarm does not page.
+   *
+   * Metric emitted by: apps/workers/src/cron/questTimeoutSweep.ts -> failExhaustedCallbacks.
+   */
+  new aws.cloudwatch.MetricAlarm('questCallbackHorizonPassed', {
+    name: `${$app.name}-${$app.stage}-quest-callback-horizon-passed`,
+    alarmDescription: 'Quest generation callbacks aged past the 72h redispatch horizon and were failed',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: QUEST_METRICS.TimeoutSweepCallbacksFailedHorizonPassed,
+    namespace: QUESTS_NAMESPACE,
+    period: 300, // 5 minutes
+    statistic: 'Sum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    dimensions: { Stage: $app.stage },
+    alarmActions: [dlqAlarmTopic.arn],
+    tags: {
+      Application: 'Quests',
+      Severity: 'High',
+    },
+  });
+
+  /**
+   * Alarm: Quest callback re-enqueued after a lost claim
+   *
+   * The sweep re-enqueued callbacks stuck at `dispatched` whose queue message never arrived - a
+   * message lost after its claim, distinct from a claim never made. Some rate is normal; a
+   * sustained one means the queue is dropping claimed callbacks. Three periods to ride out a
+   * single stale re-send.
+   *
+   * Metric emitted by: apps/workers/src/cron/questTimeoutSweep.ts -> redispatchStaleCallbacks.
+   */
+  new aws.cloudwatch.MetricAlarm('questStaleCallbackReenqueued', {
+    name: `${$app.name}-${$app.stage}-quest-stale-callback-reenqueued`,
+    alarmDescription: 'Quest generation callbacks are being re-enqueued after their claim message was lost',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 3,
+    metricName: QUEST_METRICS.TimeoutSweepStaleCallbacksReenqueued,
+    namespace: QUESTS_NAMESPACE,
+    period: 300, // 5 minutes
+    statistic: 'Sum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    dimensions: { Stage: $app.stage },
+    alarmActions: [dlqAlarmTopic.arn],
+    tags: {
+      Application: 'Quests',
+      Severity: 'High',
+    },
+  });
+
+  /**
+   * Alarm: Stale voice credit hold settled by the sweep
+   *
+   * The stale-hold sweep settled a voice hold no client ever ended. Steady state is 0: a
+   * non-zero count means the client hold leak is back. A single genuine browser crash can also
+   * trip it, hence Medium.
+   *
+   * Metric emitted by: apps/workers/src/cron/voiceHoldSweep.ts -> handler.
+   * Namespace: VOICE_NAMESPACE, dimensioned by Stage only (the handler emits { Stage }).
+   */
+  new aws.cloudwatch.MetricAlarm('voiceStaleHoldsSettled', {
+    name: `${$app.name}-${$app.stage}-voice-stale-holds-settled`,
+    alarmDescription:
+      'The stale voice hold sweep settled a credit hold no client ended: the voice hold leak may be back',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: VOICE_METRICS.HoldSweepSettled,
+    namespace: VOICE_NAMESPACE,
+    period: 300, // 5 minutes, one sweep run
+    statistic: 'Sum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    dimensions: { Stage: $app.stage },
+    alarmActions: [dlqAlarmTopic.arn],
+    tags: {
+      Application: 'Voice',
+      Severity: 'Medium',
+    },
+  });
+
+  /**
+   * Alarm: Stale voice hold sweep cannot settle a hold
+   *
+   * A hold's settlement threw, or the whole run did (database unreachable, query error). The hold
+   * stays charged and the next run retries it, so failures in two of three runs are a stuck
+   * sweep, not a blip. Two of three rather than three in a row: a period with no run reads as
+   * not breaching and would reset the streak.
+   *
+   * Metric emitted by: apps/workers/src/cron/voiceHoldSweep.ts -> handler.
+   */
+  new aws.cloudwatch.MetricAlarm('voiceHoldSweepFailures', {
+    name: `${$app.name}-${$app.stage}-voice-hold-sweep-failures`,
+    alarmDescription: 'The stale voice hold sweep is failing to settle credit holds',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 3,
+    datapointsToAlarm: 2,
+    metricName: VOICE_METRICS.HoldSweepFailed,
+    namespace: VOICE_NAMESPACE,
+    period: 300, // 5 minutes
+    statistic: 'Sum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    dimensions: { Stage: $app.stage },
+    alarmActions: [dlqAlarmTopic.arn],
+    tags: {
+      Application: 'Voice',
+      Severity: 'High',
+    },
+  });
+
+  /**
+   * Alarm: Stale voice hold sweep Lambda errors
+   *
+   * A timeout, OOM or init crash never reaches the handler's emit, so it shows up here and nowhere
+   * else. A run that throws also counts in voiceHoldSweepFailures. Same 2-of-3 rule as that alarm.
+   */
+  // The sweep cron only exists on scheduled stages; an ENABLE_MONITORING preview has no Lambda to watch.
+  if (voiceHoldSweepCron) {
+    new aws.cloudwatch.MetricAlarm('voiceHoldSweepLambdaErrors', {
+      name: `${$app.name}-${$app.stage}-voice-hold-sweep-lambda-errors`,
+      alarmDescription: 'The stale voice hold sweep Lambda is erroring (timeout, OOM or crash)',
+      comparisonOperator: 'GreaterThanThreshold',
+      evaluationPeriods: 3,
+      datapointsToAlarm: 2,
+      metricName: 'Errors',
+      namespace: 'AWS/Lambda',
+      period: 300,
+      statistic: 'Sum',
+      threshold: 0,
+      treatMissingData: 'notBreaching',
+      dimensions: { FunctionName: voiceHoldSweepCron.nodes.function.name },
+      alarmActions: [dlqAlarmTopic.arn],
+      tags: {
+        Application: 'Voice',
+        Severity: 'High',
+      },
+    });
+  }
+
+  /**
+   * Alarm: Session Reuse Revoked Burst
+   *
+   * Fires when 3 or more sessions are revoked for refresh-token reuse within an hour. A single
+   * revocation is already contained by the revoke itself (whoever holds the stale token is signed
+   * out), and on production most single events have been benign: a second client on the user's
+   * own network holding a stale cookie, at a baseline of roughly one every three days. A burst is
+   * the signal worth a page - a client regression stranding tokens at scale, or tokens taken in
+   * bulk. Individual events stay queryable without paging: the metric, the
+   * `[auth] session_reuse_revoked` log line (user, request IP vs issuing IP, user agent, idle time)
+   * and the UserAuthAuditLog row.
    *
    * Metric emitted by: server/utils/authAudit.ts -> recordSessionReuseRevoked()
    * Namespace: Lumina5/AuthSecurity / SessionReuseRevoked
    */
-  new aws.cloudwatch.MetricAlarm('sessionReuseRevoked', {
-    name: `${$app.name}-${$app.stage}-session-reuse-revoked`,
-    alarmDescription: 'Refresh token reuse detected outside recovery window - presumed token theft; session revoked',
-    comparisonOperator: 'GreaterThanThreshold',
+  new aws.cloudwatch.MetricAlarm('sessionReuseRevokedBurst', {
+    name: `${$app.name}-${$app.stage}-session-reuse-revoked-burst`,
+    alarmDescription:
+      'Burst of refresh-token reuse revocations (>=3 in 1h) - possible bulk token theft or a client regression stranding tokens',
+    comparisonOperator: 'GreaterThanOrEqualToThreshold',
     evaluationPeriods: 1,
     metricName: 'SessionReuseRevoked',
     namespace: 'Lumina5/AuthSecurity',
-    period: 300, // 5 minutes
+    period: 3600, // 1 hour
     statistic: 'Sum',
-    threshold: 0, // Any occurrence is worth investigating
+    threshold: 3,
     treatMissingData: 'notBreaching',
-    alarmActions: [sessionReuseRevokedAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'Auth',
       Severity: 'Critical',
@@ -1588,7 +1750,7 @@ if (isMonitoredStage) {
     statistic: 'Sum',
     threshold: 10,
     treatMissingData: 'notBreaching',
-    alarmActions: [sessionRecoveredHighRateAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'Auth',
       Severity: 'Warning',

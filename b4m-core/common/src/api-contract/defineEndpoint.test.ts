@@ -48,4 +48,26 @@ describe('defineEndpoint', () => {
     expect(contract.pathParams).toBeDefined();
     expect(contract.queryParams).toBeDefined();
   });
+
+  describe('deprecated', () => {
+    it('accepts real dates with the sunset after since', () => {
+      const deprecated = { since: '2026-10-15', sunset: '2027-01-15', successor: '/api/v1/fixtures' };
+      expect(defineEndpoint({ ...base, deprecated }).deprecated).toEqual(deprecated);
+    });
+
+    it.each([
+      ['a non-ISO date', { since: '10/15/2026', sunset: '2027-01-15' }],
+      ['an impossible calendar date', { since: '2026-10-15', sunset: '2027-02-30' }],
+      ['a month past December', { since: '2026-10-15', sunset: '2027-13-01' }],
+      ['a month before January', { since: '2027-00-10', sunset: '2027-01-15' }],
+    ])('throws on %s', (_label, deprecated) => {
+      expect(() => defineEndpoint({ ...base, deprecated })).toThrow(/getFixture.*real YYYY-MM-DD dates/);
+    });
+
+    it('throws when the sunset is not after since', () => {
+      expect(() => defineEndpoint({ ...base, deprecated: { since: '2026-10-15', sunset: '2026-10-15' } })).toThrow(
+        /getFixture.*sunset \(2026-10-15\) must be after since/
+      );
+    });
+  });
 });

@@ -1,6 +1,7 @@
 import React from 'react';
 import { Box, Text } from 'ink';
 import SelectInput from 'ink-select-input';
+import { escapeTerminalControlChars } from './PermissionPrompt';
 
 export type FolderTrustChoice = 'trust' | 'not-now';
 
@@ -36,7 +37,7 @@ export function FolderTrustPrompt({ projectRoot, onSelect }: FolderTrustPromptPr
         <Text bold color="yellow">
           This project ships Bike4Mind config that can run code.
         </Text>
-        <Text dimColor>{projectRoot}</Text>
+        <Text dimColor>{escapeTerminalControlChars(projectRoot)}</Text>
         <Text>
           Repo-committed config, MCP servers, agents and skills stay inert until you trust this folder. Only trust
           folders you would run code from.

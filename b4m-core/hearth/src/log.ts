@@ -17,7 +17,7 @@ export class HearthLog {
   /** Validates and appends. Throws ZodError on malformed input. */
   async append(input: AppendEventInput): Promise<HearthEvent> {
     const parsed = appendEventInputSchema.parse(input);
-    return this.store.appendEvent(parsed as AppendEventInput);
+    return this.store.appendEvent(parsed);
   }
 
   /**

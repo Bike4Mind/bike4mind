@@ -1,5 +1,6 @@
 #!/usr/bin/env tsx
 
+import { BYTES_PER_STORAGE_MB } from '@bike4mind/common';
 import { connectDB, User } from '@bike4mind/database';
 import * as dotenv from 'dotenv';
 import { Resource } from 'sst';
@@ -54,7 +55,9 @@ async function listUsers() {
       console.log(`   Level:           ${user.level || 'N/A'}`);
       console.log(`   Tags:            ${user.tags?.join(', ') || 'None'}`);
       console.log(`   Credits:         ${user.currentCredits || 0}`);
-      console.log(`   Storage:         ${user.currentStorageSize || 0} / ${user.storageLimit || 0} MB`);
+      console.log(
+        `   Storage:         ${((user.currentStorageSize || 0) / BYTES_PER_STORAGE_MB).toFixed(1)} / ${user.storageLimit || 0} MB`
+      );
       console.log(`   Auth Providers:  ${user.authProviders?.map((p: any) => p.strategy).join(', ') || 'None'}`);
       console.log(`   Created:         ${user.createdAt || 'Unknown'}`);
       console.log(`   Login Records:   ${user.loginRecords?.length || 0} login(s)`);

@@ -2,6 +2,13 @@ import { RequestHandler } from 'express';
 import { ApiKeyAlertService, AnomalyDetectionRequest } from '@server/managers/apiKeyAlertService';
 import { isApiKeyAuth } from './apiKeyAuth';
 import { ApiKeyScope } from '@bike4mind/common';
+import { resolveRequestPathname, resolveRouteTemplate } from '@server/utils/resolveRouteTemplate';
+
+const EPHEMERAL_IP_SCOPES: ReadonlySet<ApiKeyScope> = new Set([
+  ApiKeyScope.OVERWATCH_INGEST_WRITE,
+  ApiKeyScope.QA_INGEST,
+  ApiKeyScope.RELEASE_NOTES_WRITE,
+]);
 
 /**
  * Middleware to detect anomalies in API key usage
@@ -17,10 +24,10 @@ export const apiKeyAnomalyDetection = (): RequestHandler => {
       return next();
     }
 
-    // Ingest keys emit from load-balanced product backends or CI runners with
-    // ephemeral IPs by design; detection would trip the commonIPs baseline.
+    // Ingest and release-video keys emit from load-balanced product backends or CI runners with
+    // ephemeral IPs by design; detection would trip the commonIPs baseline on every run.
     const scopes = req.apiKeyInfo?.scopes;
-    if (scopes?.includes(ApiKeyScope.OVERWATCH_INGEST_WRITE) || scopes?.includes(ApiKeyScope.QA_INGEST)) {
+    if (scopes?.some(scope => EPHEMERAL_IP_SCOPES.has(scope))) {
       return next();
     }
 
@@ -39,7 +46,8 @@ export const apiKeyAnomalyDetection = (): RequestHandler => {
 
     // Use IP address and endpoint already extracted by apiKeyAuth
     const ipAddress = usageInfo?.ipAddress || 'unknown';
-    const endpoint = usageInfo?.endpoint || req.originalUrl || req.url || req.path || req.baseUrl || 'unknown_endpoint';
+    const endpoint = usageInfo?.endpoint || resolveRouteTemplate(req);
+    const pathname = resolveRequestPathname(req);
 
     // Run after response finishes so detection never blocks or slows the request.
     res.once('finish', () => {
@@ -48,6 +56,7 @@ export const apiKeyAnomalyDetection = (): RequestHandler => {
         keyId: apiKeyInfo.keyId,
         ipAddress,
         endpoint,
+        pathname,
         timestamp: new Date(),
       };
 

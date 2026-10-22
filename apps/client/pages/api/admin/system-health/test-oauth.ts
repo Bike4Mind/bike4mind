@@ -1,10 +1,10 @@
 import { Request, Response } from 'express';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError, BadRequestError } from '@server/utils/errors';
+import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { logAuditEvent, AdminConfigAuditEvents } from '@server/utils/auditLog';
-import { Config } from '@server/utils/config';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { getOktaConfigStatus } from '@server/auth/oktaOidcClient';
 import axios, { AxiosError } from 'axios';
 import { z } from 'zod';
@@ -112,16 +112,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
       const latencyMs = Date.now() - startTime;
 
-      await logAuditEvent(
-        {
-          userId: req.user!.id,
-          action: AdminConfigAuditEvents.ADMIN_OAUTH_TEST,
-          ip: req.ip,
-          userAgent: req.headers['user-agent'] || 'unknown',
-          metadata: { provider, success: testResult.success },
-        },
-        req.logger
-      );
+      await recordAdminActionFromRequest(req, {
+        action: 'system_health.test_run',
+        target: { kind: 'system', id: 'system-health', displayName: 'System health' },
+        summary: `tested the ${provider} OAuth provider`,
+        details: { testType: 'oauth', provider, success: testResult.success },
+      });
 
       // Build details object, including configSource and diagnostics for Okta tests
       const details: TestOAuthResult['details'] = {

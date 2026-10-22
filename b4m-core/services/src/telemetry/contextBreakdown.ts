@@ -106,7 +106,11 @@ function buildLayers(details: SystemPromptDetail[] | undefined): ContextBreakdow
   }));
 }
 
-function buildTools(promptMeta: PromptMeta): ContextBreakdownTool[] {
+/**
+ * One row per tool the turn offered or called, joining `offeredTools` with `functionCalls`. Shared
+ * with the tool-calling scorecard (llm/evals/toolCalling) so both count a call the same way.
+ */
+export function buildToolUsage(promptMeta: Pick<PromptMeta, 'offeredTools' | 'functionCalls'>): ContextBreakdownTool[] {
   const byName = new Map<string, ContextBreakdownTool>();
   for (const name of promptMeta.offeredTools ?? []) {
     if (!byName.has(name)) byName.set(name, { name, offered: true, invocations: 0, successes: 0, failures: 0 });
@@ -207,7 +211,7 @@ export function buildContextBreakdown(
     model: { id: model?.name ?? null, backend: model?.backend ?? null },
     categories,
     layers,
-    tools: buildTools(promptMeta ?? {}),
+    tools: buildToolUsage(promptMeta ?? {}),
     retrieval: promptMeta?.retrieval ?? null,
     cache: {
       readTokens,

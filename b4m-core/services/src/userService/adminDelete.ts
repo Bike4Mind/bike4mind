@@ -1,6 +1,12 @@
-import { IAdminSettingsRepository, IUserDocument, IUserRepository } from '@bike4mind/common';
+import {
+  IAdminSettingsRepository,
+  IRealtimeConnectionRepository,
+  IUserDocument,
+  IUserRepository,
+} from '@bike4mind/common';
 import { NotFoundError, UnauthorizedError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
+import { endRealtimeConnections } from '../authSessionService/endRealtimeConnections';
 
 const adminDeleteUserSchema = z.object({
   id: z.string(),
@@ -12,6 +18,7 @@ interface AdminDeleteUserAdapters {
   db: {
     users: IUserRepository;
     adminSettings: IAdminSettingsRepository;
+    realtimeConnections: Pick<IRealtimeConnectionRepository, 'endConnections'>;
   };
   notify: {
     send: (message: string) => Promise<void>;
@@ -35,6 +42,7 @@ export const adminDeleteUser = async (
   if (!user) throw new NotFoundError(`User ${id} not found`);
 
   await db.users.delete(id);
+  await endRealtimeConnections({ userId: id }, { db });
 
   const [enableSlackNotification, enableEmailNotification] = await db.adminSettings.findBySettingNames([
     'EnableUserDeletionSlackNotification',

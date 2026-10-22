@@ -8,6 +8,7 @@ vi.mock('../apiKeyService', () => ({
 }));
 vi.mock('@bike4mind/llm-adapters', () => ({
   getAvailableModels: vi.fn().mockResolvedValue([{ id: 'test-model', disabled: false }]),
+  resolveSuccessorChain: (id: string) => id,
 }));
 
 import { ChatCompletionInvoke } from './ChatCompletionInvoke';
@@ -90,6 +91,13 @@ describe('ChatCompletionInvoke retry path session binding', () => {
       sessionId: SESSION,
       type: 'error',
       errorCode: 'insufficient_credits',
+      turnTiming: {
+        queueMs: 120,
+        semaphoreWaitMs: 0,
+        retries: [],
+        fallbackHops: 0,
+        totalMs: 99_000,
+      },
     });
 
     const quest = await invoke.invoke({ body: body as never, userId: 'user-A' });
@@ -104,8 +112,11 @@ describe('ChatCompletionInvoke retry path session binding', () => {
     // work; apps/client/server/chatCompletion/questRetryErrorCodeClear.e2e.test.ts re-reads a real
     // document to prove it.
     expect(quest?.errorCode).toBeUndefined();
+    // Same reset for the previous attempt's timing: the new attempt measures its own turn from
+    // the retry's timestamp, so a carried-over record would report the wrong total.
+    expect(quest?.turnTiming).toBeUndefined();
     expect(questsUpdate).toHaveBeenCalledWith(expect.objectContaining({ id: 'quest-1', status: 'running' }), {
-      unset: ['errorCode'],
+      unset: ['errorCode', 'turnTiming'],
     });
     // Pins the full reset: a key dropped from this partial is a retry field that silently stops
     // reaching the database.
@@ -113,6 +124,7 @@ describe('ChatCompletionInvoke retry path session binding', () => {
       [
         'agentIds',
         'fabFileIds',
+        'fallbackInfo',
         'id',
         'images',
         'prompt',
@@ -125,5 +137,25 @@ describe('ChatCompletionInvoke retry path session binding', () => {
         'type',
       ].sort()
     );
+  });
+
+  it('clears a stale fallbackInfo from a prior attempt on retry', async () => {
+    const { invoke, questsUpdate } = makeHarness({
+      id: 'quest-1',
+      sessionId: SESSION,
+      fallbackInfo: {
+        primaryModel: 'test-model',
+        primaryModelName: 'Test Model',
+        fallbackModel: 'other-model',
+        fallbackModelName: 'Other Model',
+        timestamp: Date.now(),
+      },
+    });
+
+    await invoke.invoke({ body: body as never, userId: 'user-A' });
+
+    // Without this, a retry that answers with the same model it originally requested would
+    // still show the prior attempt's "answered by <fallback>" note.
+    expect(questsUpdate).toHaveBeenCalledWith(expect.objectContaining({ fallbackInfo: null }), expect.anything());
   });
 });

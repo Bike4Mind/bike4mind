@@ -1,4 +1,5 @@
 import z from 'zod';
+import { generatedAudioRequestFields } from './generatedAudio';
 
 /**
  * Supported background-music generation vendors. Currently only ElevenLabs.
@@ -34,7 +35,7 @@ export const MIN_MUSIC_LENGTH_MS = 3_000;
  * Capped well below the provider's own 600s ceiling: generation happens inside a
  * time-limited serving function whose provider fetch carries its own abort
  * deadline (MUSIC_GENERATION_TIMEOUT_MS in ElevenLabsMusicGenerator). That abort
- * is what makes an over-budget request fail safe (reservation refunded); this cap
+ * is what turns an over-budget request into a refunded failure; this cap
  * only avoids accepting lengths that would predictably hit it. Conservative and
  * provisional: raise it once real ElevenLabs generation latency is measured.
  * Note this bounds output length, which correlates with - but is not - wall time.
@@ -59,6 +60,7 @@ export const musicRequestSchema = z.object({
   forceInstrumental: z.boolean().optional(),
   modelId: supportedMusicModel.default(DEFAULT_MUSIC_MODEL_ID),
   format: z.string().optional(),
+  ...generatedAudioRequestFields,
 });
 
 export type MusicRequest = z.infer<typeof musicRequestSchema>;

@@ -54,6 +54,7 @@ export function usePyodide() {
     loadedPackages: state.loadedPackages,
     error: state.error,
     isExecuting: state.isExecuting,
+    executionStatus: state.executionStatus,
     streamingOutput: state.streamingOutput,
 
     // Methods

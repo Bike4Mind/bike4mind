@@ -176,20 +176,24 @@ const ProjectCard: FC<{ project: IProjectDocument }> = ({ project: initialProjec
           zIndex: 2,
           display: 'flex',
           justifyContent: 'space-between',
-          alignItems: 'center',
+          alignItems: 'flex-start',
           gap: '8px',
         }}
       >
         <Tooltip title={project.name}>
           <Box
             data-testid="project-card-name"
+            title={project.name}
             sx={theme => ({
               color: theme.palette.text.primary,
               textDecoration: 'none',
+              display: '-webkit-box',
               overflow: 'hidden',
               textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-              maxWidth: 'calc(100% - 40px)',
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: 'vertical',
+              overflowWrap: 'anywhere',
+              minWidth: 0,
             })}
           >
             {project.name}

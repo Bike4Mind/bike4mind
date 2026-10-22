@@ -1,12 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { BadRequestError, MAX_TAG_PREFIX_LENGTH } from '@bike4mind/common';
+import { BadRequestError } from '@bike4mind/common';
 
 const createDataLakeMock = vi.fn();
 vi.mock('../../../../dataLakeService/createDataLake', () => ({
   createDataLake: (...args: unknown[]) => createDataLakeMock(...args),
 }));
 
-import { createDataLakeTool, prefixCandidate } from './createDataLake';
+import { createDataLakeTool } from './createDataLake';
 import { TAG_PREFIX_UNAVAILABLE_CODE } from '../../../../dataLakeService/tagPrefixCollision';
 import { NOT_AVAILABLE_MESSAGE, DATA_LAKES_DISABLED_MESSAGE } from './adapters';
 import type { ToolContext } from '../../base/types';
@@ -18,11 +18,19 @@ function makeContext({
   memberOf = [],
   enabled = true,
   withAdapters = true,
-}: { organizationId?: string; memberOf?: string[]; enabled?: boolean; withAdapters?: boolean } = {}): ToolContext {
+  apiKeyId,
+}: {
+  organizationId?: string;
+  memberOf?: string[];
+  enabled?: boolean;
+  withAdapters?: boolean;
+  apiKeyId?: string;
+} = {}): ToolContext {
   return {
     userId: 'u1',
     user: { id: 'u1' },
     organizationId,
+    apiKeyId,
     logger,
     statusUpdate: vi.fn().mockResolvedValue(undefined),
     db: {
@@ -54,6 +62,7 @@ describe('create_data_lake', () => {
       'u1',
       expect.objectContaining({ name: 'Research Notes', slug: 'research-notes', description: 'Q3 work' }),
       expect.anything(),
+      undefined,
       undefined
     );
     expect(createDataLakeMock.mock.calls[0][1].fileTagPrefix).toMatch(/:$/);
@@ -61,6 +70,26 @@ describe('create_data_lake', () => {
     expect(result).toContain('DRAFT');
     expect(result).toContain('personal');
     expect(result).toContain('save_content_to_data_lake');
+  });
+
+  it('attributes a key-driven create to the API key, keeping the owner as on-behalf-of', async () => {
+    createDataLakeMock.mockResolvedValue({ id: 'lake9', name: 'Notes' });
+
+    await run(makeContext({ apiKeyId: 'key1' }), { name: 'Notes' });
+
+    expect(createDataLakeMock.mock.calls[0][4]).toEqual({
+      principalKind: 'apiKey',
+      principalId: 'key1',
+      onBehalfOfUserId: 'u1',
+    });
+  });
+
+  it('passes no audit principal for a session create, so the audit falls back to the user', async () => {
+    createDataLakeMock.mockResolvedValue({ id: 'lake9', name: 'Notes' });
+
+    await run(makeContext(), { name: 'Notes' });
+
+    expect(createDataLakeMock.mock.calls[0][4]).toBeUndefined();
   });
 
   it('scopes the lake to the active org when the caller is a member', async () => {
@@ -76,6 +105,7 @@ describe('create_data_lake', () => {
     const result = await run(makeContext({ organizationId: 'org-x', memberOf: ['org1'] }), { name: 'Team' });
 
     expect(result).toContain('could not be created in the active organization');
+    expect(result).not.toContain('from chat');
     expect(result).toContain('Data Lakes manager');
     expect(result).not.toMatch(/not a member|does not belong/i);
     expect(createDataLakeMock).not.toHaveBeenCalled();
@@ -93,7 +123,7 @@ describe('create_data_lake', () => {
     expect(createDataLakeMock).toHaveBeenCalledTimes(2);
     const [first, second] = createDataLakeMock.mock.calls.map(call => call[1].fileTagPrefix);
     expect(first).toBe('research:');
-    expect(second).toBe('research-2:');
+    expect(second).toBe('research-1:');
     expect(result).toContain('id: lake9');
   });
 
@@ -173,24 +203,5 @@ describe('create_data_lake', () => {
   it('refuses when data lakes are disabled', async () => {
     await expect(run(makeContext({ enabled: false }), { name: 'Research' })).resolves.toBe(DATA_LAKES_DISABLED_MESSAGE);
     expect(createDataLakeMock).not.toHaveBeenCalled();
-  });
-});
-
-describe('prefixCandidate', () => {
-  it('keeps the base prefix on the first attempt', () => {
-    expect(prefixCandidate('acme:', 0)).toBe('acme:');
-  });
-
-  it('suffixes later attempts', () => {
-    expect(prefixCandidate('acme:', 1)).toBe('acme-2:');
-    expect(prefixCandidate('acme:', 4)).toBe('acme-5:');
-  });
-
-  it('stays within the maximum prefix length', () => {
-    const base = `${'a'.repeat(MAX_TAG_PREFIX_LENGTH - 1)}:`;
-    const candidate = prefixCandidate(base, 3);
-
-    expect(candidate.length).toBeLessThanOrEqual(MAX_TAG_PREFIX_LENGTH);
-    expect(candidate.endsWith('-4:')).toBe(true);
   });
 });

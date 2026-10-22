@@ -1,8 +1,8 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { userRepository, mcpServerRepository } from '@bike4mind/database';
 import { McpServerName } from '@bike4mind/common';
-import { getAtlassianOAuthConfig } from '@server/integrations/jira/atlassianConfig';
+import { getAtlassianOAuthConfig } from '@bike4mind/server-utils/integrations/jira/atlassianConfig';
 import { encryptToken, decryptToken, encryptEnvVariables } from '@server/security/tokenEncryption';
 
 interface TokenResponse {
@@ -46,7 +46,7 @@ const handler = baseApi().post(async (req, res) => {
     }
 
     const tokenData: TokenResponse = await tokenResponse.json();
-    const nextRefreshToken = tokenData.refresh_token ?? user.atlassianConnect.refreshToken;
+    const nextRefreshToken = tokenData.refresh_token ?? decryptToken(user.atlassianConnect.refreshToken);
     if (!nextRefreshToken) {
       throw new Error('Refresh token missing from Atlassian response');
     }
@@ -81,11 +81,14 @@ const handler = baseApi().post(async (req, res) => {
 
       await mcpServerRepository.update({
         id: server.id,
-        envVariables: encryptEnvVariables([
-          { key: 'ATLASSIAN_ACCESS_TOKEN', value: tokenData.access_token },
-          { key: 'ATLASSIAN_CLOUD_ID', value: primaryResource.id },
-          { key: 'ATLASSIAN_SITE_URL', value: siteUrl },
-        ]),
+        envVariables: encryptEnvVariables(
+          [
+            { key: 'ATLASSIAN_ACCESS_TOKEN', value: tokenData.access_token },
+            { key: 'ATLASSIAN_CLOUD_ID', value: primaryResource.id },
+            { key: 'ATLASSIAN_SITE_URL', value: siteUrl },
+          ],
+          server
+        ),
       });
     }
 

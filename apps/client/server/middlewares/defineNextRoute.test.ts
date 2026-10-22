@@ -78,8 +78,9 @@ vi.mock('@server/auth/auth', async orig => {
   return { ...actual, auth: authRouter };
 });
 
-import { ApiKeyScope, defineEndpoint } from '@bike4mind/common';
-import { UnauthorizedError } from '@server/utils/errors';
+import { ApiKeyScope, ScopeForbiddenErrorSchema, defineEndpoint, sessionCloneContract } from '@bike4mind/common';
+import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
+import { baseApi, methodNotAllowedHandler } from './baseApi';
 import { nextRouteForContract } from './defineNextRoute';
 
 const BodySchema = z.object({ message: z.string(), count: z.number().positive().default(1) });
@@ -193,10 +194,78 @@ describe('nextRouteForContract', () => {
       await route(req, res);
       expect(res._getStatusCode()).toBe(403);
       expect(handlerFn).not.toHaveBeenCalled();
+      // Names the scope the route needs, never the one the key holds.
+      const body = res._getJSONData();
+      expect(body.required_scopes).toEqual([ApiKeyScope.AI_CHAT]);
+      expect(JSON.stringify(body)).not.toContain(ApiKeyScope.READ_FILES);
+      // The published schema must describe the real wire body: strict, so a field renamed in
+      // apiKeyAuth fails here instead of silently drifting from the spec.
+      const parsed = ScopeForbiddenErrorSchema.strict().parse(body);
+      // The schema types scopes as plain strings (ApiKeyScope is not import-safe there), so pin
+      // that what goes on the wire is the real scope vocabulary.
+      expect(Object.values(ApiKeyScope)).toEqual(expect.arrayContaining(parsed.required_scopes ?? []));
     });
   });
 
   describe('middleware ordering', () => {
+    it('uses a contract legacy validation status instead of the default 422', async () => {
+      validKey([ApiKeyScope.AI_CHAT]);
+      const handlerFn = vi.fn();
+      const route = nextRouteForContract(makeContract({ validationErrorStatus: 400 })).post(handlerFn);
+
+      const { req, res } = fire({ apiKey: 'b4m_live_key', body: { message: 42 } });
+      await route(req, res);
+
+      expect(res._getStatusCode()).toBe(400);
+      expect(handlerFn).not.toHaveBeenCalled();
+    });
+
+    describe('sessionCloneContract', () => {
+      // Next hands a bodiless POST (no content-type, so text/plain) to the route as '', not undefined.
+      it.each(['', {}])('treats an absent body (%j) as inherit, not a 400', async body => {
+        validKey([ApiKeyScope.WRITE_NOTEBOOKS]);
+        let seenBody: unknown;
+        const route = nextRouteForContract(sessionCloneContract).post((req, res) => {
+          seenBody = req.validated;
+          res.status(200).json({ ok: true });
+        });
+        const { req, res } = fire({ apiKey: 'b4m_live_key', query: { id: 'sess-1' }, body });
+        await route(req, res);
+        expect(res._getStatusCode()).toBe(200);
+        expect(seenBody).toEqual({});
+      });
+
+      it.each(['not json', [], { targetSurface: 5 }])('400s a malformed body (%j)', async body => {
+        validKey([ApiKeyScope.WRITE_NOTEBOOKS]);
+        const handlerFn = vi.fn();
+        const route = nextRouteForContract(sessionCloneContract).post(handlerFn);
+        const { req, res } = fire({ apiKey: 'b4m_live_key', query: { id: 'sess-1' }, body });
+        await route(req, res);
+        expect(res._getStatusCode()).toBe(400);
+        expect(handlerFn).not.toHaveBeenCalled();
+      });
+
+      it('400s a missing session id before the handler runs', async () => {
+        validKey([ApiKeyScope.WRITE_NOTEBOOKS]);
+        const handlerFn = vi.fn();
+        const route = nextRouteForContract(sessionCloneContract).post(handlerFn);
+        const { req, res } = fire({ apiKey: 'b4m_live_key', query: {}, body: {} });
+        await route(req, res);
+        expect(res._getStatusCode()).toBe(400);
+        expect(handlerFn).not.toHaveBeenCalled();
+      });
+
+      it('403s a key without notebooks:write', async () => {
+        validKey([ApiKeyScope.AI_CHAT]);
+        const handlerFn = vi.fn();
+        const route = nextRouteForContract(sessionCloneContract).post(handlerFn);
+        const { req, res } = fire({ apiKey: 'b4m_live_key', query: { id: 'sess-1' }, body: {} });
+        await route(req, res);
+        expect(res._getStatusCode()).toBe(403);
+        expect(handlerFn).not.toHaveBeenCalled();
+      });
+    });
+
     it('runs caller-mounted middleware BEFORE contract validation', async () => {
       // The regression this guards: installing validation with `router.use()` at
       // construction time puts it ahead of everything the caller mounts, so a flood
@@ -249,16 +318,116 @@ describe('nextRouteForContract', () => {
       expect(seen).toEqual({ message: 'hi', count: 1 });
     });
 
-    it('404s a method the contract does not declare, rather than 422ing it', async () => {
-      // A `use`-mounted validator matches EVERY method, so GET would be validated and
-      // rejected as a bad POST body instead of falling through to next-connect's
-      // no-match 404. The body here is deliberately invalid: with a valid one both
-      // orderings end in 404 and the test would prove nothing.
+    it('405s a method the contract does not declare, with an Allow header', async () => {
+      // The body is deliberately invalid: a validator reached on GET would 422 instead.
       validKey([ApiKeyScope.AI_CHAT]);
       const route = nextRouteForContract(makeContract()).post((_req, res) => res.status(200).json({ ok: true }));
       const { req, res } = fire({ method: 'GET', apiKey: 'b4m_live_key', body: {} });
       await route(req, res);
+      expect(res._getStatusCode()).toBe(405);
+      expect(res.getHeader('Allow')).toBe('POST');
+      expect(res._getJSONData()).toEqual(expect.objectContaining({ error: expect.stringContaining('GET') }));
+    });
+
+    it('405s a wrong method before the scope gate can misreport it as a 403', async () => {
+      // An under-scoped key on the declared method is a 403 (see 'scopes' above); on an
+      // undeclared method the route has nothing to authorize, so the verb answer wins.
+      validKey([ApiKeyScope.READ_FILES]);
+      const handlerFn = vi.fn();
+      const route = nextRouteForContract(makeContract()).post(handlerFn);
+      const { req, res } = fire({ method: 'DELETE', apiKey: 'b4m_live_key' });
+      await route(req, res);
+      expect(res._getStatusCode()).toBe(405);
+      expect(handlerFn).not.toHaveBeenCalled();
+      // Load-bearing: the guard runs ahead of apiKeyAuth, not merely ahead of the handler.
+      expect(mockValidate).not.toHaveBeenCalled();
+    });
+
+    it('serves HEAD on a GET contract and advertises it in Allow', async () => {
+      const getContract = makeContract({ method: 'get', auth: 'public', scopes: undefined, request: undefined });
+      const handlerFn = vi.fn((_req, res) => res.status(200).json({ ok: true }));
+      const route = nextRouteForContract(getContract).get(handlerFn);
+
+      const head = fire({ method: 'HEAD', body: {} });
+      await route(head.req, head.res);
+      expect(head.res._getStatusCode()).toBe(200);
+      expect(handlerFn).toHaveBeenCalledTimes(1);
+
+      const wrong = fire({ method: 'DELETE', body: {} });
+      await route(wrong.req, wrong.res);
+      expect(wrong.res._getStatusCode()).toBe(405);
+      expect(wrong.res.getHeader('Allow')).toBe('GET, HEAD');
+    });
+  });
+
+  describe('baseApi allowedMethods', () => {
+    it('405s OPTIONS on a route that does not list it', async () => {
+      const route = baseApi({ auth: false, allowedMethods: ['post'] }).post((_req, res) => res.status(200).end());
+      const { req, res } = fire({ method: 'OPTIONS', body: {} });
+      await route(req, res);
+      expect(res._getStatusCode()).toBe(405);
+      expect(res.getHeader('Allow')).toBe('POST');
+    });
+
+    it('methodNotAllowedHandler 405s with the full Allow set, with no handler registered', async () => {
+      const handler = methodNotAllowedHandler(['get', 'post', 'delete']);
+      const { req, res } = fire({ method: 'PATCH', body: {} });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(405);
+      expect(res.getHeader('Allow')).toBe('GET, HEAD, POST, DELETE');
+      expect(res._getJSONData()).toEqual(expect.objectContaining({ request_id: expect.any(String) }));
+    });
+
+    it('leaves method matching to next-connect when the option is omitted', async () => {
+      const route = baseApi({ auth: false }).post((_req, res) => res.status(200).end());
+      const { req, res } = fire({ method: 'DELETE', body: {} });
+      await route(req, res);
       expect(res._getStatusCode()).toBe(404);
+      expect(res.getHeader('Allow')).toBeUndefined();
+    });
+  });
+
+  describe('deprecated contracts', () => {
+    const deprecated = { since: '2026-10-15', sunset: '2027-01-15', successor: '/api/v1/fixtures' };
+
+    it('sends Deprecation, Sunset and Link on a handled response', async () => {
+      validKey([ApiKeyScope.AI_CHAT]);
+      const route = nextRouteForContract(makeContract({ deprecated })).post((_req, res) => res.json({ ok: true }));
+      const { req, res } = fire({ apiKey: 'b4m_live_x' });
+      await route(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res.getHeader('Deprecation')).toBe('@1792022400');
+      expect(res.getHeader('Sunset')).toBe('Fri, 15 Jan 2027 00:00:00 GMT');
+      expect(res.getHeader('Link')).toBe('</api/v1/fixtures>; rel="successor-version"');
+    });
+
+    it('still sends them when the body fails validation', async () => {
+      validKey([ApiKeyScope.AI_CHAT]);
+      const route = nextRouteForContract(makeContract({ deprecated })).post((_req, res) => res.json({ ok: true }));
+      const { req, res } = fire({ apiKey: 'b4m_live_x', body: { message: 1 } });
+      await route(req, res);
+      expect(res._getStatusCode()).toBe(422);
+      expect(res.getHeader('Sunset')).toBe('Fri, 15 Jan 2027 00:00:00 GMT');
+    });
+
+    it('still sends them when the rateLimit option rejects the request', async () => {
+      validKey([ApiKeyScope.AI_CHAT]);
+      const limiter = (_req: unknown, res: { status: (code: number) => { json: (body: unknown) => void } }) =>
+        res.status(429).json({ error: 'slow down' });
+      // any: the fixture limiter isn't typed as the adapter's ValidatedReq handler.
+      const route = nextRouteForContract(makeContract({ deprecated }), { rateLimit: limiter as any }).post(vi.fn());
+      const { req, res } = fire({ apiKey: 'b4m_live_x' });
+      await route(req, res);
+      expect(res._getStatusCode()).toBe(429);
+      expect(res.getHeader('Sunset')).toBe('Fri, 15 Jan 2027 00:00:00 GMT');
+    });
+
+    it('sends none on a contract that is not deprecated', async () => {
+      validKey([ApiKeyScope.AI_CHAT]);
+      const route = nextRouteForContract(makeContract()).post((_req, res) => res.json({ ok: true }));
+      const { req, res } = fire({ apiKey: 'b4m_live_x' });
+      await route(req, res);
+      expect(res.getHeader('Deprecation')).toBeUndefined();
     });
   });
 

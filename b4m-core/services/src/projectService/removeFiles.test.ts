@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { InviteType, IUserDocument, Permission } from '@bike4mind/common';
 import { removeFiles } from './removeFiles';
 
@@ -28,7 +28,13 @@ describe('projectService - removeFiles (project-derived access revocation)', () 
   let project: any;
   let file: any;
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
     project = { id: PROJECT_ID, userId: OWNER_ID, fileIds: [FILE_ID], users: [] };
     file = { id: FILE_ID, userId: OWNER_ID, users: [] };
 
@@ -63,7 +69,13 @@ describe('projectService - removeFiles (project-derived access revocation)', () 
     await removeFiles(OWNER_ID, { projectId: PROJECT_ID, fileIds: [JUNK_ID] }, { db });
 
     expect(project.fileIds).toEqual([FILE_ID]);
-    expect(db.projects.update).toHaveBeenCalled();
+    expect(db.fabFiles.update).not.toHaveBeenCalled();
+    expect(db.projects.update).toHaveBeenCalledTimes(1);
+    expect(db.projects.update.mock.calls[0][0]).toStrictEqual({
+      id: PROJECT_ID,
+      fileIds: [FILE_ID],
+      updatedAt: new Date('2026-01-01T00:00:00Z'),
+    });
   });
 
   it('accepts an uppercase hex id, which resolves the same row', async () => {
@@ -81,7 +93,14 @@ describe('projectService - removeFiles (project-derived access revocation)', () 
     // Asserting the file is GONE, not merely that the call returned: a case-sensitive filter
     // answered 200 having removed nothing, which a status-only assertion happily accepts.
     expect(project.fileIds).toEqual([]);
-    expect(db.projects.update).toHaveBeenCalled();
+    expect(db.fabFiles.update).toHaveBeenCalledTimes(1);
+    expect(db.fabFiles.update.mock.calls[0][0]).toStrictEqual({ id: FILE_ID_HEX, users: [] });
+    expect(db.projects.update).toHaveBeenCalledTimes(1);
+    expect(db.projects.update.mock.calls[0][0]).toStrictEqual({
+      id: PROJECT_ID,
+      fileIds: [],
+      updatedAt: new Date('2026-01-01T00:00:00Z'),
+    });
   });
 
   it('still rejects a castable id that did not resolve, which is an access failure', async () => {

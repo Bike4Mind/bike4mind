@@ -22,7 +22,7 @@ const mockRefineText = vi.fn();
 vi.mock('@bike4mind/services', () => ({
   cacheService: { getCachedData: (...a: any[]) => mockGetCachedData(...a) },
 }));
-vi.mock('@bike4mind/services/llm', () => ({
+vi.mock('@bike4mind/services/llm/refineText', () => ({
   refineText: (...a: any[]) => mockRefineText(...a),
   // Real schema so validation + ZodError behave exactly as in production.
   refineTextLLMSchema: z.object({ text: z.string(), context: z.string().optional() }),

@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import { getTrustedHeaderClientIp } from '@bike4mind/server-utils/utils/trustedClientIpHeaders';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { z } from 'zod';
@@ -6,6 +8,7 @@ import { PublishedArtifact, shareTokenFilter } from '@bike4mind/database';
 import { parsePublishPath, segmentsFromViewerPathname } from '@server/services/publish/parsePublishPath';
 import { setGateProofCookie } from '@server/services/publish/publishGateToken';
 import { checkLock, recordFailure, clear } from '@server/services/publish/passphraseLockout';
+import { loadLiveOwner } from '@server/services/publish/loadLiveOwner';
 
 /**
  * POST /api/publish/gate/passphrase - verify a passphrase for a gated published
@@ -15,8 +18,8 @@ import { checkLock, recordFailure, clear } from '@server/services/publish/passph
  *
  * Anonymous by design (the whole point is viewers without accounts). Brute force
  * is bounded on two axes: the per-IP rate limit below throttles one client
- * across ALL gated artifacts (429), and the per-artifact lockout (passphraseLockout)
- * locks a single artifact after too many wrong attempts (423). Responses are
+ * across ALL gated artifacts (429), and the per-artifact/viewer lockout (passphraseLockout)
+ * locks that viewer after too many wrong attempts (423). Responses are
  * deliberately terse (404 unknown/ungated, 403 wrong passphrase, 423 locked) so
  * the endpoint confirms nothing an anonymous caller couldn't learn from the URL.
  */
@@ -29,6 +32,7 @@ const BodySchema = z.object({
 
 type GatedLean = {
   publicId: string;
+  ownerId: string;
   accessGate?: { kind: 'passphrase' | 'domain'; passphraseHash?: string | null } | null;
 } | null;
 
@@ -60,16 +64,30 @@ const handler = baseApi({ auth: false })
     // with a path-collision error (500 on every call, so no passphrase gate could
     // ever be unlocked). passphraseHash is select:false, hence the leading `+`.
     const artifact = await PublishedArtifact.findOne(query)
-      .select('publicId accessGate.kind +accessGate.passphraseHash')
+      .select('publicId ownerId accessGate.kind +accessGate.passphraseHash')
       .lean<GatedLean>();
 
     if (!artifact || artifact.accessGate?.kind !== 'passphrase' || !artifact.accessGate.passphraseHash) {
       return res.status(404).json({ error: 'Not found' });
     }
+    // The serve route 404s a page whose owner is deleted, banned or suspended; answer the same here
+    // so the gate cannot confirm such a page exists.
+    if (!(await loadLiveOwner(artifact.ownerId))) {
+      return res.status(404).json({ error: 'Not found' });
+    }
 
-    // Locked gates reject BEFORE bcrypt so a locked artifact stays locked even
+    // Locked viewers reject BEFORE bcrypt so they stay locked even
     // for a correct passphrase until the window closes.
-    const lock = await checkLock(artifact.publicId);
+    const viewerIp =
+      getTrustedHeaderClientIp(name => {
+        const value = req.headers[name];
+        return typeof value === 'string' ? value : undefined;
+      }) ??
+      req.socket?.remoteAddress ??
+      req.ip ??
+      'unknown';
+    const viewerId = createHash('sha256').update(viewerIp).digest('hex');
+    const lock = await checkLock(artifact.publicId, viewerId);
     if (lock.locked) {
       res.setHeader('Retry-After', Math.ceil(lock.retryAfterMs / 1000));
       return res.status(423).json({ error: 'Too many attempts' });
@@ -77,14 +95,14 @@ const handler = baseApi({ auth: false })
 
     const ok = await bcrypt.compare(parsed.data.passphrase, artifact.accessGate.passphraseHash);
     if (!ok) {
-      const failed = await recordFailure(artifact.publicId);
+      const failed = await recordFailure(artifact.publicId, viewerId);
       if (failed.locked) {
         res.setHeader('Retry-After', Math.ceil(failed.retryAfterMs / 1000));
         return res.status(423).json({ error: 'Too many attempts' });
       }
       return res.status(403).json({ error: 'Incorrect passphrase' });
     }
-    await clear(artifact.publicId);
+    await clear(artifact.publicId, viewerId);
     if (!setGateProofCookie(res, artifact.publicId)) {
       // publicId failed the cookie-name safety check - treat as unservable.
       return res.status(500).json({ error: 'Unable to grant access' });

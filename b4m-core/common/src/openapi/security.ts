@@ -29,7 +29,7 @@ export const apiKeyAuth = registry.registerComponent('securitySchemes', 'apiKeyA
 
 /**
  * JWT-only bearer auth. Distinct from `bearerAuth` (which also accepts a
- * `b4m_live_` key): the tools endpoint's handler (`apps/client/server/cli/tools.ts`)
+ * `b4m_live_` key): the tools endpoint's handler (`apps/workers/src/cli/tools.ts`)
  * runs `verifyJwtToken` only and rejects API keys, so operations backed by that
  * handler reference this scheme rather than `bearerAuth`/`apiKeyAuth`.
  */

@@ -1,4 +1,10 @@
-import { IOrganizationDocument, IOrganizationRepository, IUserDocument, WithId } from '@bike4mind/common';
+import {
+  canAdministerOrganization,
+  IOrganizationDocument,
+  IOrganizationRepository,
+  IUserDocument,
+  WithId,
+} from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/utils';
 import { secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
@@ -31,7 +37,7 @@ interface GetAdapters {
  * @param params - The parameters for the operation
  * @param adapters - The adapters for the operation
  * @returns The organization
- * @throws NotFoundError if the organization is not found
+ * @throws NotFoundError if the organization is missing or the caller is neither a member nor a roster administrator
  */
 export const get = async (
   user: IUserDocument,
@@ -43,9 +49,13 @@ export const get = async (
 
   let organization = await adapters.db.organizations.shareable.findAccessibleById(user, id);
 
-  // If the user is an admin, they can access all organizations
-  if (!organization && user.isAdmin) {
-    organization = await adapters.db.organizations.findById(id);
+  // A manager may administer the roster without being a member. Keep the membership ACL intact:
+  // it also backs the account switcher and must not make a manager an org-billed user.
+  if (!organization) {
+    const candidate = await adapters.db.organizations.findById(id);
+    if (candidate && canAdministerOrganization(user, candidate)) {
+      organization = candidate;
+    }
   }
 
   if (!organization) {

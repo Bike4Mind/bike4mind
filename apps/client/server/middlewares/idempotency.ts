@@ -1,7 +1,7 @@
 import { cacheRepository } from '@bike4mind/database';
 import { cacheService } from '@bike4mind/services';
 import { RequestHandler } from 'express';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 
 const IDEMPOTENCY_KEY_HEADER = 'Idempotency-Key';

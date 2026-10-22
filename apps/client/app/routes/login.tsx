@@ -1,5 +1,6 @@
 import MultiStepLogin from '@client/app/components/MultiStepLogin';
 import { clearClientCaches } from '@client/app/utils/clearClientCaches';
+import { useLLM } from '@client/app/contexts/LLMContext';
 import { usePublicConfig } from '@client/app/hooks/data/settings';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
@@ -18,6 +19,9 @@ const LoginPage = () => {
     let cancelled = false;
     clearClientCaches().then(() => {
       if (cancelled) return;
+      // clearClientCaches dropped the persisted 'llm-settings', but an in-app navigation here keeps
+      // the in-memory store, which would re-persist the previous identity's model on its next write.
+      useLLM.getState().resetSettings();
       // Preserve server-config-public: it contains only apiUrl + defaultTheme and is not user-specific.
       // The full server-config (auth'd) is intentionally purged on logout to prevent
       // bucket names and the PDF Express key from persisting in memory across sessions.

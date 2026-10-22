@@ -51,6 +51,7 @@ vi.mock('@server/security/tokenEncryption', () => ({
 vi.mock('@server/integrations/google/drive/common', () => ({
   getAuthUrl: () => 'https://accounts.google.example/authorize',
   refreshAccessToken: (...a: unknown[]) => mockRefresh(...a),
+  isInvalidGrantError: (e: unknown) => e instanceof Error && e.message === 'invalid_grant',
 }));
 
 const JWT_USER = { id: 'jwt-user', _id: 'jwt-user', isBanned: false, disputePending: false };
@@ -126,5 +127,32 @@ describe('GET /api/google-drive/token (jwtOnly)', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ accessToken: DRIVE_ACCESS_TOKEN });
     expect(mockRefresh).not.toHaveBeenCalled();
+  });
+
+  describe('with an expired access token', () => {
+    beforeEach(() => {
+      mockUserFindById.mockResolvedValue({
+        googleDrive: { accessToken: 'stale', refreshToken: 'gd_refresh', expiresAt: new Date(0) },
+      });
+    });
+
+    it('hands back a consent URL when the grant no longer refreshes', async () => {
+      mockRefresh.mockRejectedValue(new Error('invalid_grant'));
+      const { req, res } = fire({ bearer: 'live-jwt' });
+      await handler(req, res);
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData()).toEqual({ authUrl: 'https://accounts.google.example/authorize' });
+    });
+
+    // Re-sync redirects on an authUrl, so a blip must not masquerade as a dead grant.
+    it('fails rather than sending the user to consent on a transient refresh failure', async () => {
+      mockRefresh.mockRejectedValue(Object.assign(new Error('Backend Error'), { response: { status: 503 } }));
+      const { req, res } = fire({ bearer: 'live-jwt' });
+      await handler(req, res);
+
+      expect(res._getStatusCode()).toBe(500);
+      expect(JSON.stringify(res._getData())).not.toContain('authorize');
+    });
   });
 });

@@ -60,6 +60,9 @@ export const DEFAULT_MANIFEST = {
   SECOPS_ZAP_DISPATCH_TOKEN: { kind: 'secret', optional: true },
   SECOPS_ZAP_INGEST_TOKEN: { kind: 'secret', optional: true },
   SECRET_ENCRYPTION_KEY: { kind: 'secret' },
+  // Optional here so dev/local/self-host can run keyless; the key provider refuses to MINT a DEK on
+  // a deployed stage without it (packages/server-utils/src/memory/factCipher.ts).
+  MEMORY_KEY_SECRET: { kind: 'secret', optional: true },
   SECRET_ENCRYPTION_KEY_PREVIOUS: { kind: 'secret', optional: true },
   SESSION_SECRET: { kind: 'secret' },
   SLACK_ERROR_REPORTING_WEBHOOK_URL: { kind: 'secret', optional: true },
@@ -92,14 +95,9 @@ export const DEFAULT_MANIFEST = {
   // Read by the drive-sync route, the resync poll cron and the ingest handler's own redrive.
   // drive-sync takes the GLOBALLY unique driveFolderId claim before it enqueues, so an
   // unregistered key here left a folder reading "Connected" that could never sync, with the
-  // claim released only by hand.
-  //
-  // Registered even though nothing consumes it on self-host yet, which is the opposite of the
-  // call made for webhookDeliveryQueue (see manifestCoverage.test.ts). The distinction is the
-  // call site, not the queue: this one has NO degrade path and throws AFTER taking a global,
-  // cross-org claim, so leaving it unregistered trades a silent no-op for a data-integrity
-  // failure that needs a manual row deletion. webhookDeliveryQueue's two sites catch and return
-  // a clean 503, so there the silent no-op really is the worse of the two.
+  // claim released only by hand. Not optional: the self-host worker consumes it
+  // (apps/workers/src/selfhost/main.ts), and the route has no degrade path - it throws AFTER
+  // taking a global, cross-org claim, unlike webhookDeliveryQueue's sites (see manifestCoverage.test.ts).
   driveLakeIngestQueue: { kind: 'queue' },
   // Read by the Drive disconnect route (via sourceQueueUrls) and by its consumer's own slice
   // re-enqueue. Optional so an install that upgraded without the env var keeps the worker up; the
@@ -109,9 +107,9 @@ export const DEFAULT_MANIFEST = {
   // connect path reads it after the binding row is written, the same hazard as driveLakeIngestQueue above.
   githubLakeIngestQueue: { kind: 'queue' },
   // Read by the App's webhook (webhooks/github/lake.ts) only after it verifies the signature and
-  // resolves affected connections - no row is written first. Registered so the webhook resolves the
-  // key instead of throwing; the self-host worker runner (apps/workers/src/selfhost) has no consumer
-  // for this queue (nor githubLakeIngestQueue), so on a self-host the queued revokes still wait for one.
+  // resolves affected connections - no row is written first - and by a connection release that hands
+  // off a failed uninstall. Both GitHub lake queues are drained by the self-host worker
+  // (apps/workers/src/selfhost/main.ts).
   githubLakeRevokeQueue: { kind: 'queue' },
   emailAnalysisQueue: { kind: 'queue', optional: true },
   emailBatchQueue: { kind: 'queue' },
@@ -119,6 +117,12 @@ export const DEFAULT_MANIFEST = {
   emailJobQueue: { kind: 'queue' },
   fabFileChunkQueue: { kind: 'queue' },
   fabFileVectorizeQueue: { kind: 'queue' },
+  // Optional like the image queues below: delivers completion callbacks for their jobs, so an
+  // install without it just skips callback delivery instead of losing image/video generation.
+  generationCallbackQueue: { kind: 'queue', optional: true },
+  // Read by every video job enqueue and by the job handler's own re-enqueues; required because a video
+  // job accepted with nothing consuming it would hold credits until the sweeper fails it.
+  generationJobQueue: { kind: 'queue' },
   // Optional so an install that upgraded without adding the new env vars still boots the
   // worker (it warns and skips the consumer) instead of taking every other queue down with it.
   imageEditQueue: { kind: 'queue', optional: true },
@@ -139,6 +143,8 @@ export const DEFAULT_MANIFEST = {
   lakeInconsistencyModelQueue: { kind: 'queue', optional: true },
   liveOpsTriageQueue: { kind: 'queue' },
   notebookCurationQueue: { kind: 'queue', optional: true },
+  questExportQueue: { kind: 'queue', optional: true },
+  dataLakeCleanupQueue: { kind: 'queue', optional: true },
   researchEngineQueue: { kind: 'queue' },
   // Queue name -> URL map read by getSourceQueueUrl (dlqRegistry). Hosted links this as a
   // Linkable to the frontend Lambda instead of the individual queues; the shim computes it
@@ -151,7 +157,6 @@ export const DEFAULT_MANIFEST = {
   HistoryUploadCompleteFunction: { kind: 'function' },
   ImageProcessor: { kind: 'function' },
   NotebookImportCompleteFunction: { kind: 'function' },
-  SlackEventBus: { kind: 'function' },
   mcpHandler: { kind: 'function', optional: true },
   // --- service ---
   // Always-on chatCompletion HTTP service the frontend dispatches quests to

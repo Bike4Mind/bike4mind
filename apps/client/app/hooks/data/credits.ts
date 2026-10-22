@@ -7,13 +7,17 @@ export interface CreditsBalance {
   expiringSoon: { amount: number; expiresAt: string }[];
 }
 
+export const CREDITS_BALANCE_KEY = ['credits-balance'] as const;
+
+export async function fetchCreditsBalance(): Promise<CreditsBalance> {
+  const response = await api.get<CreditsBalance>('/api/credits/balance');
+  return response.data;
+}
+
 export function useGetCreditsBalance(options: { enabled?: boolean } = {}) {
   return useQuery<CreditsBalance>({
-    queryKey: ['credits-balance'],
-    queryFn: async () => {
-      const response = await api.get('/api/credits/balance');
-      return response.data;
-    },
+    queryKey: CREDITS_BALANCE_KEY,
+    queryFn: fetchCreditsBalance,
     enabled: options.enabled,
   });
 }

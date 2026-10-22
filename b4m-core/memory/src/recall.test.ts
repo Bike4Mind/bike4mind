@@ -16,7 +16,7 @@ describe('lexicalScorer', () => {
   it('scores token overlap and ignores stopwords/punctuation', () => {
     const b = belief({ fact: 'User runs discovery calls with pharma prospects.' });
     expect(lexicalScorer('pharma discovery', b)).toBeGreaterThan(0);
-    expect(lexicalScorer('quantum chemistry', b)).toBe(0);
+    expect(lexicalScorer('astronomy research', b)).toBe(0);
   });
 
   it('is 0 for an empty query or empty fact', () => {
@@ -27,18 +27,18 @@ describe('lexicalScorer', () => {
 
 describe('recall', () => {
   const pharma = belief({ id: 'pharma', fact: 'Targets pharma companies as clients', activation: 0.1 });
-  const quantum = belief({ id: 'quantum', fact: 'Work intersects quantum computing', activation: 0.2 });
+  const astronomy = belief({ id: 'astronomy', fact: 'Work intersects astronomy research', activation: 0.2 });
   const hobby = belief({ id: 'hobby', fact: 'Enjoys sailing on weekends', activation: 0.15 });
 
   it('ranks an on-topic belief above a more-active off-topic one', () => {
-    const out = recall([pharma, quantum, hobby], 'pharma clients', { activationWeight: 0.25 });
+    const out = recall([pharma, astronomy, hobby], 'pharma clients', { activationWeight: 0.25 });
     expect(out[0].belief.id).toBe('pharma');
     expect(out[0].relevance).toBeGreaterThan(0);
   });
 
   it('an empty query falls back to pure activation order (most top-of-mind first)', () => {
-    const out = recall([pharma, quantum, hobby], '');
-    expect(out.map(r => r.belief.id)).toEqual(['quantum', 'hobby', 'pharma']);
+    const out = recall([pharma, astronomy, hobby], '');
+    expect(out.map(r => r.belief.id)).toEqual(['astronomy', 'hobby', 'pharma']);
   });
 
   it('a cosine floor does NOT swallow an embedding-less belief that lexically matches', () => {
@@ -62,31 +62,31 @@ describe('recall', () => {
     const noVector = belief({ id: 'sailing', fact: 'Enjoys sailing on weekends' });
     const scorer = embeddingScorer([0, 1, 0]);
 
-    const out = recall([noVector], 'quantum pharmaceutical revenue', { scorer, minRelevance: 0.25 });
+    const out = recall([noVector], 'astronomy pharmaceutical revenue', { scorer, minRelevance: 0.25 });
 
     expect(out).toHaveLength(0); // Jaccard ~0, below the lexical floor -> not injected as noise
   });
 
   it('limits to k results', () => {
-    const out = recall([pharma, quantum, hobby], '', { k: 2 });
+    const out = recall([pharma, astronomy, hobby], '', { k: 2 });
     expect(out).toHaveLength(2);
   });
 
   it('minRelevance drops off-topic beliefs however active they are', () => {
-    // quantum is the most active belief but "sailing" does not match it; a relevance floor keeps
+    // astronomy is the most active belief but "sailing" does not match it; a relevance floor keeps
     // only the on-topic hobby, so a merely-hot belief is not injected into an unrelated context.
-    const out = recall([pharma, quantum, hobby], 'sailing', { minRelevance: 0.01 });
+    const out = recall([pharma, astronomy, hobby], 'sailing', { minRelevance: 0.01 });
     expect(out.map(r => r.belief.id)).toEqual(['hobby']);
   });
 
   it('uses an injected scorer (e.g. an embedding stand-in)', () => {
-    const scorer = (_q: string, b: Belief) => (b.id === 'quantum' ? 1 : 0);
-    const out = recall([pharma, quantum, hobby], 'anything', { scorer, activationWeight: 0.25 });
-    expect(out[0].belief.id).toBe('quantum');
+    const scorer = (_q: string, b: Belief) => (b.id === 'astronomy' ? 1 : 0);
+    const out = recall([pharma, astronomy, hobby], 'anything', { scorer, activationWeight: 0.25 });
+    expect(out[0].belief.id).toBe('astronomy');
   });
 
   it('is deterministic', () => {
-    const args = [[pharma, quantum, hobby], 'pharma quantum', { activationWeight: 0.25 }] as const;
+    const args = [[pharma, astronomy, hobby], 'pharma astronomy', { activationWeight: 0.25 }] as const;
     expect(recall(...args)).toEqual(recall(...args));
   });
 });

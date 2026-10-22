@@ -14,7 +14,7 @@ import {
   type SpendServerPayload,
 } from '@bike4mind/common';
 import { CacheKeys } from '@server/utils/cacheKeys';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { resolveUserNames } from '@server/utils/resolveUserNames';
 import { Request } from 'express';
 import { z } from 'zod';
@@ -93,7 +93,7 @@ function resolveWindows(dateFrom?: string, dateTo?: string) {
 const costPerRequest = (s: ISpendSummary): number => (s.totals.requests > 0 ? s.totals.cogsUsd / s.totals.requests : 0);
 
 // Timeouts fold into the error rate (both are failed calls); refusals are their
-// own rate. Refusals aren't recorded yet, so refusalRate reads 0 until they are.
+// own rate.
 const errorRate = (s: ISpendSummary): number =>
   s.status.total > 0 ? (s.status.errors + s.status.timeouts) / s.status.total : 0;
 

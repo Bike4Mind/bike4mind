@@ -141,6 +141,25 @@ describe('OrganizationModel.addMemberRaisingSeats (#1239)', () => {
     expect(fresh!.seats).toBe(ORGANIZATION_SUBSCRIPTION_MAX_SEATS);
   });
 
+  it('clamps at a caller-supplied ceiling (the teamPlanMaxSeats setting) instead of the constant', async () => {
+    // Owner + 3 members = 4 seats used; a configured ceiling of 5 admits exactly one more.
+    const created = await Organization.create({
+      name: 'Partner',
+      userId: 'owner',
+      seats: 4,
+      users: [member('a'), member('b'), member('c')],
+    });
+
+    const first = await organizationRepository.addMemberRaisingSeats(created.id, member('d'), 5);
+    expect(first).not.toBeNull();
+    const second = await organizationRepository.addMemberRaisingSeats(created.id, member('e'), 5);
+    expect(second).toBeNull();
+
+    const fresh = await readRaw(created.id);
+    expect(fresh!.users).toHaveLength(4);
+    expect(fresh!.seats).toBe(5);
+  });
+
   it('rejects a member at MAX-1 members because the owner fills the last seat (#1423 boundary)', async () => {
     // Owner-inclusive: MAX-1 members + the owner == MAX == full, so the clamp ($size < MAX-1) rejects.
     // The member-only accounting would have admitted this add, growing the org past the owner-inclusive

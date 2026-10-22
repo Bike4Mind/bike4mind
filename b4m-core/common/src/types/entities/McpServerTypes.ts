@@ -29,6 +29,12 @@ export interface IMcpServerDocument extends IMongoDocument {
   envVariables: { key: string; value: string }[];
   tools: string[];
   toolSchemas?: Array<{ name: string; description?: string; input_schema?: Record<string, unknown> }>;
+  /**
+   * When toolSchemas was last successfully fetched, empty or not. Unset means "never fetched"
+   * (or "invalidated": reconnect/OAuth/env changes clear it), so an empty toolSchemas with this
+   * set is a confirmed zero-tool server and does not need a live fetch every turn.
+   */
+  toolSchemasFetchedAt?: Date;
   enabled: boolean;
   metadata?: {
     githubLogin?: string;
@@ -43,7 +49,15 @@ export interface IMcpServerDocument extends IMongoDocument {
   };
 }
 
-// API response type - excludes sensitive envVariables
-export type IMcpServerResponse = Omit<IMcpServerDocument, 'envVariables'>;
+/**
+ * What the /api/mcp-servers routes send: env variable keys without their values, and no webhook
+ * secret. Enforced by mcpServerResponseSchema (../../schemas/mcpServer.ts).
+ */
+export type IMcpServerResponse = Omit<IMcpServerDocument, 'envVariables' | 'metadata'> & {
+  envVariables: { key: string }[];
+  metadata?: Omit<NonNullable<IMcpServerDocument['metadata']>, 'webhooks'> & {
+    webhooks?: { github?: Omit<IGitHubWebhookConfig, 'secret'> };
+  };
+};
 
 export interface IMcpServerRepository extends IBaseRepository<IMcpServerDocument> {}

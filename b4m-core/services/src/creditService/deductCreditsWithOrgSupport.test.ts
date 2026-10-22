@@ -350,6 +350,30 @@ describe('creditService - deductCreditsWithOrgSupport', () => {
       expect('questId' in calledWith).toBe(false);
     });
 
+    it('should handle speech_to_text_usage type (quest-less, questId omitted)', async () => {
+      const params: DeductCreditsParams = {
+        type: 'speech_to_text_usage',
+        user: mockUser,
+        organization: null,
+        credits: 12,
+        sessionId: 'session1',
+        model: 'openai',
+        source: 'api',
+      };
+
+      await deductCreditsWithOrgSupport(params, mockAdapters);
+
+      const [calledWith] = mockSubtractCredits.mock.calls.at(-1)!;
+      expect(calledWith).toMatchObject({
+        type: 'speech_to_text_usage',
+        ownerId: 'user1',
+        ownerType: CreditHolderType.User,
+        credits: 12,
+      });
+      // Quest-less: no questId key is forwarded for transcription.
+      expect('questId' in calledWith).toBe(false);
+    });
+
     it('should bill the org pool and track userDetails for org-billed sound effects', async () => {
       const params: DeductCreditsParams = {
         type: 'sound_effects_usage',
@@ -428,6 +452,38 @@ describe('creditService - deductCreditsWithOrgSupport', () => {
         }),
         expect.any(Object)
       );
+    });
+  });
+
+  describe('decision_usage', () => {
+    it('should forward token fields and apiKeyId without a questId', async () => {
+      const params: DeductCreditsParams = {
+        type: 'decision_usage',
+        user: mockUser,
+        organization: null,
+        credits: 3,
+        sessionId: 'session1',
+        model: 'claude-3-sonnet',
+        source: 'api',
+        inputTokens: 200,
+        outputTokens: 100,
+        apiKeyId: 'apikey-123',
+      };
+
+      await deductCreditsWithOrgSupport(params, mockAdapters);
+
+      const [calledWith] = mockSubtractCredits.mock.calls.at(-1)!;
+      expect(calledWith).toMatchObject({
+        type: 'decision_usage',
+        ownerId: 'user1',
+        ownerType: CreditHolderType.User,
+        credits: 3,
+        model: 'claude-3-sonnet',
+        inputTokens: 200,
+        outputTokens: 100,
+        apiKeyId: 'apikey-123',
+      });
+      expect('questId' in calledWith).toBe(false);
     });
   });
 

@@ -23,7 +23,6 @@ name: Lambda Bundle Guard
 
 on:
   pull_request:
-    branches-ignore: [prod]
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - '**/package.json'

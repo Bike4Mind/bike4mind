@@ -1,11 +1,11 @@
 export * from './ChatCompletionProcess';
 export * from './ChatCompletionInvoke';
+export * from './historyBudgetConstants';
 export * from './earlyStopStamp';
 export * from './mementoGating';
 export * from './artifactGating';
 export * from './forcedRetrievalAbstention';
 export * from './ImageGeneration';
-export * from './VideoGeneration';
 export * from './ChatCompletionFeatures';
 export * from './ImageEdit';
 export * from './imageModerationGate';
@@ -25,12 +25,14 @@ export {
 export * from './sharedToolBuilder';
 export * from './systemPromptDisclosure';
 export * from './toolAvailability';
+export * from './decisionProviders';
 export { ServerAgentStore, builtInAgentModelReferences } from './agents/ServerAgentStore';
 export type { ServerAgentStoreOverlays } from './agents/ServerAgentStore';
 export {
   ServerSubagentOrchestrator,
   SUBAGENT_TIMEOUT_BY_THOROUGHNESS,
   PARENT_DEADLINE_BUFFER_MS,
+  spentResultOf,
 } from './agents/ServerSubagentOrchestrator';
 export type {
   ServerSubagentTracker,
@@ -38,6 +40,7 @@ export type {
   SubagentDispatchConfig,
   ChildExecutionStatus,
   BackgroundDispatchResult,
+  SubagentToolPermissions,
 } from './agents/ServerSubagentOrchestrator';
 export * from './MementoEvaluationService';
 export * from './LakeMemoryExtractionService';
@@ -47,7 +50,13 @@ export * from './smallLLMHelpers';
 export * from './reranker';
 export { StatusManager } from './StatusManager';
 export { firecrawlFetch } from './tools/implementation/webfetch';
-export { serpApiSearch, resolveWebSearchProvider } from './tools/implementation/websearch';
+export {
+  serpApiSearch,
+  resolveWebSearchProvider,
+  resolveWebSearchProviders,
+  searchWithHedge,
+  safeHostname,
+} from './tools/implementation/websearch';
 export type { WebSearchOptions, WebSearchProvider, WebSearchProviderResult } from './tools/implementation/websearch';
 export { scrapeWithRetry } from './tools/implementation/webfetch/scrapeWithRetry';
 
@@ -60,3 +69,5 @@ export type {
   DagNodeHandle,
 } from './tools/implementation/coordinateTask';
 export * from './toolEchoSources';
+export { DecisionToolRequestSchema } from './tools/implementation/decide';
+export type { DecideToolFn, DecisionToolRequest } from './tools/base/types';

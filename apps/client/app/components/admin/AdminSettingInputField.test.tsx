@@ -12,7 +12,10 @@ let updatePending = false;
 // A factory mock replaces the whole module, so every hook the component tree imports from it has
 // to be listed here - ScopedSettingOverrides (rendered for any setting declaring `scope`) reaches
 // the three scoped-override hooks, and a missing one fails this file at import time.
+// Stands in for the hook's server-provided defaultEmbeddingModel; undefined leaves the field silent.
+let floorWarning: string | undefined;
 vi.mock('@client/app/hooks/data/settings', () => ({
+  useFloorAboveMeasuredWarning: (key: string) => (key === 'forcedRetrievalMinSimilarityPct' ? floorWarning : undefined),
   useUpdateSettings: () => ({ mutate, isPending: updatePending, error: updateError }),
   useScopedSettingOverrides: () => ({ data: [] }),
   useSetScopedSettingOverride: () => ({ mutate: vi.fn(), isPending: false, error: undefined }),
@@ -289,5 +292,104 @@ describe('AdminSettingInputField min-1 number setting', () => {
     fireEvent.click(sizeSaveButton());
 
     expect(mutate).toHaveBeenCalledWith({ key: 'MaxFileSize', value: 100 }, expect.anything());
+  });
+});
+
+describe('AdminSettingInputField clearDeletesRow number setting', () => {
+  const floorSetting = settingsMap.forcedRetrievalMinSimilarityPct;
+  const renderField = (setting: (typeof settingsMap)[keyof typeof settingsMap], defaultValue: number | null) =>
+    render(
+      <TestWrapper>
+        <AdminSettingInputField setting={setting} index={0} defaultValue={defaultValue} />
+      </TestWrapper>
+    );
+  const floorInput = () => screen.getByTestId(`admin-setting-${floorSetting.key}-input`) as HTMLInputElement;
+  const floorSave = () => screen.getByTestId(`admin-setting-${floorSetting.key}-save-btn`);
+
+  beforeEach(() => {
+    mutate.mockReset();
+    updateError = undefined;
+    updatePending = false;
+  });
+
+  it('renders an unset floor blank with its unset label, Save disabled', () => {
+    expect(floorSetting.clearDeletesRow).toBe(true);
+    renderField(floorSetting, null);
+
+    expect(floorInput().value).toBe('');
+    expect(floorInput()).toHaveAttribute('placeholder', 'per embedding space');
+    expect(floorSave()).toBeDisabled();
+  });
+
+  it('saves a 75 typed into an unset floor as 75', () => {
+    renderField(floorSetting, null);
+    fireEvent.change(floorInput(), { target: { value: '75' } });
+
+    expect(floorSave()).not.toBeDisabled();
+    fireEvent.click(floorSave());
+    expect(mutate).toHaveBeenCalledWith({ key: floorSetting.key, value: 75 }, expect.anything());
+  });
+
+  it('does not offer a save after typing into an unset floor and deleting it again', () => {
+    renderField(floorSetting, null);
+    fireEvent.change(floorInput(), { target: { value: '7' } });
+    fireEvent.change(floorInput(), { target: { value: '' } });
+
+    expect(floorSave()).toBeDisabled();
+  });
+
+  it('clears a stored floor and shows it unset once the server answers null', () => {
+    renderField(floorSetting, 60);
+    fireEvent.change(floorInput(), { target: { value: '' } });
+    fireEvent.click(floorSave());
+
+    expect(mutate).toHaveBeenCalledWith({ key: floorSetting.key, value: '' }, expect.anything());
+    const { onSuccess } = mutate.mock.calls[0][1];
+    act(() => onSuccess({ settingName: floorSetting.key, settingValue: null }));
+    expect(floorInput().value).toBe('');
+    // Synced to unset, not left at '': a second click must not re-send the clear for a deleted row.
+    fireEvent.click(floorSave());
+    expect(mutate).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the above-measured warning and confirms it on save', () => {
+    floorWarning = '75% is above the 58% minimum measured for text-embedding-3-small';
+    try {
+      renderField(floorSetting, null);
+      fireEvent.change(floorInput(), { target: { value: '75' } });
+
+      expect(screen.getByTestId(`admin-setting-${floorSetting.key}-helper`)).toHaveTextContent(floorWarning);
+      fireEvent.click(floorSave());
+      expect(mutate).toHaveBeenCalledWith(
+        { key: floorSetting.key, value: 75, confirmAboveMeasuredFloor: true },
+        expect.anything()
+      );
+    } finally {
+      floorWarning = undefined;
+    }
+  });
+
+  it('shows the above-measured warning even when an earlier save left an error on the field', () => {
+    // The save sends the confirm flag whenever the warning is truthy, so the warning must win the
+    // helper line over a stale error from a previous attempt - otherwise the flag is sent for a
+    // warning the admin never saw.
+    updateError = new Error('save failed earlier');
+    floorWarning = '75% is above the 58% minimum measured for text-embedding-3-small';
+    try {
+      renderField(floorSetting, null);
+      fireEvent.change(floorInput(), { target: { value: '75' } });
+
+      expect(screen.getByTestId(`admin-setting-${floorSetting.key}-helper`)).toHaveTextContent(floorWarning);
+    } finally {
+      floorWarning = undefined;
+      updateError = undefined;
+    }
+  });
+
+  it('gives a number setting without the flag no unset placeholder', () => {
+    expect(settingsMap.modelDiscoveryPriceBandPct.clearDeletesRow).toBeUndefined();
+    renderField(settingsMap.modelDiscoveryPriceBandPct, 50);
+
+    expect(screen.getByTestId('admin-setting-modelDiscoveryPriceBandPct-input')).not.toHaveAttribute('placeholder');
   });
 });

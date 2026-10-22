@@ -1,9 +1,8 @@
-import { useUpdateSession } from '@client/app/hooks/data/sessions';
+import { updateSessionsQueryData, useUpdateSession } from '@client/app/hooks/data/sessions';
 import { ISessionDocument } from '@bike4mind/common';
 import { Input, InputProps } from '@mui/joy';
 import { FC, useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { updateAllQueryData } from '@client/app/utils/react-query';
 import { useSessions } from '@client/app/contexts/SessionsContext';
 
 interface SessionRenameInputProps extends InputProps {
@@ -63,9 +62,7 @@ const SessionRenameInput: FC<SessionRenameInputProps> = ({ session, initialValue
           // Use canonical server result to update UI and caches
           setCurrentSession(result);
           queryClient.invalidateQueries({ queryKey: ['sessions', 'projects'] });
-          updateAllQueryData(queryClient, 'sessions', 'write', result, {
-            keysAllowedToCreate: [['sessions', 'own']],
-          });
+          updateSessionsQueryData(queryClient, 'write', result);
           onSuccess();
         },
       });

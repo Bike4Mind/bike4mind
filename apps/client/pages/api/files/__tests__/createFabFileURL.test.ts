@@ -4,33 +4,43 @@ const h = vi.hoisted(() => ({
   fabFileCreate: vi.fn(),
   createFabFileByUrl: vi.fn(),
   logEvent: vi.fn(),
+  signUrl: vi.fn(),
+  baseApiOptions: undefined as unknown,
 }));
 
 // Single-method chain: the route only calls `.use(...).post(...)`, and the ability check in
-// `.use` is not the subject here, so the middleware itself is dropped rather than run.
+// `.use` is not the subject here, so the middleware itself is dropped rather than run. Captures
+// the options for the scope-gate test below.
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({ use: () => ({ post: (h: unknown) => h }) }),
+  baseApi: (options: unknown) => {
+    h.baseApiOptions = options;
+    return { use: () => ({ post: (h: unknown) => h }) };
+  },
 }));
 
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: h.logEvent }));
-vi.mock('@server/utils/storage', () => ({
-  getFilesStorage: () => ({ upload: vi.fn(), getSignedUrl: vi.fn(async () => 'https://s3.test/get') }),
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
+  getFilesStorage: () => ({ upload: vi.fn(), getSignedUrl: h.signUrl }),
 }));
 
 // The spy that stands in for every FabFile write. The service is mocked below, so a call here can
 // only come from the route persisting a second time on its own.
 vi.mock('@bike4mind/database', () => ({
+  organizationRepository: {},
   adminSettingsRepository: {},
   scopedSettingsRepository: {},
   dataLakeRepository: {},
+  fabFileRepository: { update: vi.fn() },
+  userRepository: {},
   FabFile: { create: h.fabFileCreate },
   User: {},
   withTransaction: (fn: () => Promise<unknown>) => fn(),
 }));
 
-vi.mock('@bike4mind/services', () => ({
-  fabFilesService: { createFabFileByUrl: h.createFabFileByUrl },
-}));
+vi.mock('@bike4mind/services', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/services')>();
+  return { ...actual, fabFilesService: { ...actual.fabFilesService, createFabFileByUrl: h.createFabFileByUrl } };
+});
 
 import handler from '../createFabFileURL';
 
@@ -82,4 +92,26 @@ describe('POST /api/files/createFabFileURL', () => {
       fileUrl: 'https://example.test/page',
     });
   });
+
+  it('requires files:write at the baseApi route gate', () => {
+    expect(h.baseApiOptions).toEqual({ requiredScopes: ['files:write'] });
+  });
+});
+
+it('returns a browser URL without modifying the privately cached imported row', async () => {
+  const saved = {
+    ...PERSISTED,
+    moderationStatus: 'clean',
+    filePath: 'owned/import.txt',
+    fileUrl: 'http://private.test/import',
+    fileUrlExpireAt: new Date(Date.now() + 3600000),
+  };
+  h.createFabFileByUrl.mockResolvedValue(saved);
+  h.signUrl.mockResolvedValue('https://public.test/import');
+  const { res, json } = makeRes();
+  await run(res);
+  expect(json.mock.calls[0][0].fileUrl).toBe('https://public.test/import');
+  expect(saved.fileUrl).toBe('http://private.test/import');
+  expect(h.signUrl).toHaveBeenCalledWith('owned/import.txt', 'get', { expiresIn: 3600, audience: 'browser' });
+  expect(h.logEvent).toHaveBeenCalled();
 });

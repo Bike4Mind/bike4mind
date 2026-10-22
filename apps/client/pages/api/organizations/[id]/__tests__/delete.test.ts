@@ -45,6 +45,7 @@ const groupRepository = vi.hoisted(() => ({}));
 vi.mock('@bike4mind/database/social', () => ({ groupRepository }));
 
 const updateMany = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const clearOrganization = vi.hoisted(() => vi.fn().mockResolvedValue(0));
 const withTransaction = vi.hoisted(() =>
   vi.fn(async (fn: any) => {
     txn.depth++;
@@ -58,6 +59,7 @@ const withTransaction = vi.hoisted(() =>
 vi.mock('@bike4mind/database', () => ({
   userRepository: {},
   partnerSignupRuleRepository: { updateMany },
+  integrationRequestRepository: { clearOrganization },
   withTransaction,
 }));
 
@@ -76,16 +78,21 @@ describe('DELETE /api/organizations/[id]', () => {
   beforeEach(() => {
     deleteOrganization.mockClear();
     updateMany.mockClear();
+    clearOrganization.mockClear();
     invalidatePartnerRuleCache.mockClear();
     withTransaction.mockClear();
     findActiveSubscriptionsByOwner.mockClear().mockResolvedValue([]);
+    warn.mockClear();
     txn.depth = 0;
     txn.depthAtDelete = -1;
   });
 
+  const warn = vi.fn();
+
   const call = () => {
     const { req, res } = createMocks({ method: 'DELETE', query: { id: 'org1' } });
     (req as any).user = { id: 'admin1', isAdmin: true };
+    (req as any).logger = { warn };
     return mockRefs.deleteHandler!(req, res);
   };
 
@@ -121,12 +128,41 @@ describe('DELETE /api/organizations/[id]', () => {
     expect(invalidatePartnerRuleCache).toHaveBeenCalledTimes(1);
   });
 
+  it("drops the org from its members' integration requests after deleting", async () => {
+    await call();
+
+    expect(clearOrganization).toHaveBeenCalledWith('org1');
+  });
+
+  it('still answers the committed delete, and logs a warning, when clearing the integration requests fails', async () => {
+    clearOrganization.mockRejectedValueOnce(new Error('mongo down'));
+    const { req, res } = createMocks({ method: 'DELETE', query: { id: 'org1' } });
+    (req as any).user = { id: 'admin1', isAdmin: true };
+    (req as any).logger = { warn };
+
+    await mockRefs.deleteHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toEqual({ id: 'org1' });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toMatch(/org1.*mongo down/);
+    // The step before it ran, and the failure did not undo it.
+    expect(updateMany).toHaveBeenCalledWith({ organizationId: 'org1' }, { organizationId: null });
+    expect(invalidatePartnerRuleCache).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not warn when the integration requests clear cleanly', async () => {
+    await call();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it('does not clear the partner-rule reference if deleteOrganization throws', async () => {
     deleteOrganization.mockRejectedValueOnce(new Error('blocked'));
 
     await expect(call()).rejects.toThrow('blocked');
     expect(updateMany).not.toHaveBeenCalled();
     expect(invalidatePartnerRuleCache).not.toHaveBeenCalled();
+    expect(clearOrganization).not.toHaveBeenCalled();
   });
 
   it('still runs the active-subscriptions validation via canDeleteOrganization', async () => {

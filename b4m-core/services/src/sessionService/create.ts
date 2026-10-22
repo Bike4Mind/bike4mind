@@ -10,8 +10,12 @@ import {
   IFabFileRepository,
   IProjectRepository,
   ISessionDocument,
+  ISessionOrigin,
   ISessionRepository,
   IUserDocument,
+  MAX_TOOL_CALLS_CEILING,
+  userSetSessionFields,
+  type WorkspaceSessionSettingsTable,
 } from '@bike4mind/common';
 import { z } from 'zod';
 import { Logger } from '@bike4mind/observability';
@@ -40,6 +44,7 @@ const createSessionParametersSchema = z.object({
   // Marks the `retrievalTags` above as a deliberate selection, so an EMPTY one scopes the
   // lake-memory card to nothing instead of widening to every entitled lake.
   lakeScopeExplicit: z.boolean().optional(),
+  includeLibraryFiles: z.boolean().optional(),
   // Resolved from the lake at the create route (resolveLakeSessionDefaults) whenever `dataLakeId`
   // is set: the route deletes the client-sent value there, so the lake is authoritative. A session
   // that names a lake ONLY by `retrievalTags` keeps the caller's own mode, having no lake-defaults
@@ -56,7 +61,7 @@ const createSessionParametersSchema = z.object({
   retrievalVectorizedOnly: z.boolean().optional(),
   citationStyle: z.enum(['named', 'indexed']).optional(),
   temperature: z.number().optional(),
-  maxToolCalls: z.number().int().positive().optional(),
+  maxToolCalls: z.number().int().positive().max(MAX_TOOL_CALLS_CEILING).optional(),
   autoNamePlaceholder: z.string().optional(),
   tags: z.array(z.object({ name: z.string(), strength: z.number() })).optional(),
   summary: z.string().optional(),
@@ -111,6 +116,11 @@ export interface CreateSessionAdapters {
   resolveLakeAccess?: DeriveRetrievalTagsAdapters['resolveLakeAccess'];
   /** Lets a supplied lake-only file pass the access check - see filterAccessibleKnowledgeIds. */
   resolveAttachmentLakeAccess?: FilterAccessibleKnowledgeIdsAdapters['resolveAttachmentLakeAccess'];
+  /**
+   * Decides which workspace-ownable settings the new session records as the user's own. Without it a
+   * session created on a workspace records none, leaving every such value to that workspace.
+   */
+  workspaceSessionSettings?: WorkspaceSessionSettingsTable;
 }
 
 export interface CreateSessionOptions {
@@ -120,6 +130,15 @@ export interface CreateSessionOptions {
    * access filter would drop the source's lake files. Export still re-checks access on the copy.
    */
   knowledgeIdsFromSourceSession?: boolean;
+  /**
+   * Where the session is being created, resolved by the route from how the request authenticated
+   * (see resolveSessionOrigin in apps/client). An option, not a parameter: the parameters are
+   * parsed from request bodies, and a client must not be able to label its own origin. Copy paths
+   * (clone/fork/snip) leave it unset, so a copy carries no origin.
+   */
+  origin?: ISessionOrigin;
+  /** A copy's source's user-set fields; kept for those the copy still sets. Never from a request body. */
+  userSetFields?: readonly string[];
 }
 
 export const createSession = async (
@@ -174,6 +193,8 @@ export const createSession = async (
     : null;
   const authorizedAgentIds = accessibleAgentIds ? agentIds.filter(id => accessibleAgentIds.has(id)) : agentIds;
 
+  const userSetFields = userSetSessionFields(rest, adapters.workspaceSessionSettings, options.userSetFields);
+
   const buildData: Omit<ISessionDocument, 'id'> = {
     groups: [],
     users: [],
@@ -190,6 +211,8 @@ export const createSession = async (
     ...(forceKnowledgeRetrieval !== undefined ? { forceKnowledgeRetrieval } : {}),
     // A taggedAt with no tags would close the spider's gate on a notebook with nothing to show.
     taggedAt: rest.tags?.length ? rest.taggedAt : undefined,
+    ...(options.origin ? { origin: options.origin } : {}),
+    ...(userSetFields.length ? { userSetFields } : {}),
     userId: user.id,
     knowledgeIds,
     artifactIds,

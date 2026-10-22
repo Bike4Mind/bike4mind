@@ -1,7 +1,13 @@
+import { chatMessageResponseSchema, redactPromptMetaForViewer } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, NotFoundError } from '@server/utils/errors';
+import { respond } from '@server/utils/respond';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { questRepository, sessionRepository } from '@bike4mind/database';
-import { resolveQuestTimeoutRecovery } from '@server/chatCompletion/questTimeoutRecovery';
+import {
+  resolveQuestTimeoutRecovery,
+  STUCK_QUEST_RECOVERED_LOG,
+} from '@bike4mind/server-utils/chatCompletion/questTimeoutRecovery';
+import { dispatchQuestCallback } from '@server/generationCallback/dispatchQuestCallback';
 import type { Request } from 'express';
 
 const handler = baseApi().post(async (req: Request<{}, {}, {}, { id: string }>, res) => {
@@ -27,6 +33,9 @@ const handler = baseApi().post(async (req: Request<{}, {}, {}, { id: string }>, 
   if (!userHasAccess) {
     throw new NotFoundError('Quest not found');
   }
+  // A sharee reads the conversation, not what the owner's tools returned - same boundary as the
+  // sibling quest/chat routes; see redactPromptMetaForViewer.
+  const isOwner = session.userId === userId;
 
   // Recovery is a pure function of liveness (see resolveQuestTimeoutRecovery). A live quest keeps
   // its updatedAt fresh via the streaming heartbeat, so only a genuinely dead run is recovered.
@@ -35,17 +44,32 @@ const handler = baseApi().post(async (req: Request<{}, {}, {}, { id: string }>, 
   // intact).
   const recovery = resolveQuestTimeoutRecovery(quest, Date.now());
   if (!recovery) {
-    return res.json(quest);
+    return respond(res, chatMessageResponseSchema, {
+      ...quest,
+      promptMeta: redactPromptMetaForViewer(quest.promptMeta, isOwner),
+    });
   }
 
   // Conditional, so a real answer that landed after the read above is returned rather than
   // overwritten; the re-read returns whichever state won.
-  await questRepository.settleIfUnfinished(quest.id, recovery);
+  const applied = await questRepository.settleIfUnfinished(quest.id, recovery);
   const updatedQuest = await questRepository.findById(quest.id);
   if (!updatedQuest) {
     throw new NotFoundError('Quest not found');
   }
-  return res.json(updatedQuest);
+  // An applied recovery settles the quest; same settle-site dispatch as the poll route's recovery.
+  // A lost race means another settle site won and dispatches for itself.
+  if (applied) {
+    // Error level is what feeds the LiveOps Slack subscription on this Lambda's log group
+    // (infra/logMonitor.ts); this is the path that actually recovers a watched quest, so the
+    // sweep rarely gets the chance to log it.
+    req.logger.error(STUCK_QUEST_RECOVERED_LOG, { questId: quest.id, via: 'check-timeout' });
+    await dispatchQuestCallback(quest.id, req.logger);
+  }
+  return respond(res, chatMessageResponseSchema, {
+    ...updatedQuest,
+    promptMeta: redactPromptMetaForViewer(updatedQuest.promptMeta, isOwner),
+  });
 });
 
 export default handler;

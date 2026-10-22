@@ -2,12 +2,39 @@ import { type ChunkStallReason } from '../../constants/chunking';
 import type { MembershipArm } from '../../constants/lakeMembershipHealth';
 import { IBaseRepository, type IMongoDocument } from '.';
 import { IShareableStaticMethods, type IShareableDocument } from './ShareableDocumentTypes';
+import type { StorageUsageGroup } from '../../storageBreakdown';
+import type { OrganizationStorageUploaderGroup } from '../../organizationStorage';
 
 // Define a type for the MIME types
 export type MimeType =
   'text/plain' | 'application/pdf' | 'text/csv' | 'application/json' | 'text/markdown' | 'text/html';
 
 export const MimeTypes: MimeType[] = ['text/plain', 'text/markdown', 'application/pdf', 'application/json'];
+
+// Per-request cap on /api/files/tags/toggle. The route runs the whole batch in one transaction, one file
+// at a time, so an unbounded selection can outlive Mongo's 60s transaction lifetime; clients chunk.
+export const MAX_TOGGLE_TAGS_FILE_IDS = 100;
+
+// The Files type filter. getMimeTypeFilter (packages/database/src/queries/fabFileSearchQuery.ts) maps every value
+// to a query and FILE_TYPE_OPTIONS (apps/client/app/components/Files/Browser/constants.ts) labels every value.
+export const FAB_FILE_TYPE_FILTERS = [
+  'text',
+  'pdf',
+  'url',
+  'image',
+  'excel',
+  'word',
+  'json',
+  'csv',
+  'markdown',
+  'code',
+  'audio',
+  'video',
+] as const;
+export type FabFileTypeFilter = (typeof FAB_FILE_TYPE_FILTERS)[number];
+
+export const isFabFileTypeFilter = (value: unknown): value is FabFileTypeFilter =>
+  typeof value === 'string' && (FAB_FILE_TYPE_FILTERS as readonly string[]).includes(value);
 
 export enum KnowledgeType {
   /**
@@ -28,6 +55,8 @@ export enum KnowledgeType {
    * excluded from every LLM-attachment and vectorization path.
    */
   AUDIO = 'AUDIO',
+  /** Generated video. Media-only like AUDIO: storable and browsable, never ingested. */
+  VIDEO = 'VIDEO',
 }
 
 // Data Lake source types
@@ -39,6 +68,15 @@ export enum FabFileSourceType {
   /** Admitted by a human approving an acquisition proposal (#1671), never by the producer itself. */
   PROPOSAL_APPROVAL = 'proposal_approval',
   GITHUB = 'github',
+  /**
+   * Produced by a generator: an in-chat tool, a generation route or a generation job. Media saved
+   * through saveGeneratedAsset carries `sourceMetadata.generation` (GeneratedAssetMetadata).
+   * `sourceMetadata.sessionId`, when set, links it to the notebook it was made in - see
+   * persistGeneratedFileAsFabFile for why that link is not the top-level `sessionId`.
+   * `sourceMetadata.generatedCopyKey` names a second, generated-bucket copy that deletes also
+   * remove (see generatedCopyKeyOf).
+   */
+  TOOL_GENERATED = 'tool_generated',
 }
 
 /**
@@ -229,7 +267,11 @@ export interface IFabFile {
   mimeType: string;
 
   /**
-   * The organization ID that the file is associated with
+   * The organization that OWNS this file for storage accounting and file-owner scoped settings
+   * (scopeForFileOwner); absent means the uploading user owns it. Stamped at creation from the
+   * org-owned lakes the file is created into (pickOwnerOrganizationId) - never from a
+   * caller-supplied or "currently selected" org, which is a display preference, not ownership.
+   * Later lake membership changes do not re-stamp it.
    */
   organizationId?: string;
 
@@ -432,6 +474,37 @@ export interface IFabFile {
    * write bumps). Only meaningful while `moderationStatus === 'scanning'`.
    */
   moderationClaimedAt?: Date;
+
+  /**
+   * ETag of the stored object version the moderation verdict covers, recorded before the bytes are
+   * read, so a verdict always covers that version or a newer one. A landing with a different ETag
+   * (the object was overwritten) resets the verdict to `pending` for a rescan. Opaque: a multipart
+   * upload's ETag has a `-N` suffix and is never compared as a hash.
+   */
+  moderationETag?: string;
+
+  /** Monotonic identity of moderation-version writes; distinguishes A -> B -> A from unchanged A. */
+  moderationRevision?: number;
+
+  /**
+   * Set by the doors that hand a client a URL to PUT this row's bytes to (a presign, or the self-host
+   * proxy). Only such a row's landing is judged by the measured-size gate (apps/client/server/s3/uploadSizeGate.ts):
+   * a server-side door writes bytes it already holds, and judging those would discard its file.
+   */
+  clientUpload?: boolean;
+
+  /** Keeps rejected upload tombstones discoverable for object cleanup on event redelivery. */
+  uploadRejectedAt?: Date;
+
+  /**
+   * Compare-only watermark for charging `currentStorageSize`: an S3 event is charged only if its
+   * time is newer. Advanced by compare-and-set, so an upload is charged once whether the ObjectCreated
+   * handler or a notebook import charges it (packages/server-utils/src/s3/storageCharge.ts). Imported rows
+   * store the import's stamp time, not the upload time, so do not read it as one. Absent on rows that
+   * predate it or were never charged - whether a row counts as charged is `isStorageCharged`
+   * (common/src/storageCharge.ts), which also covers the pre-stamp legacy rows.
+   */
+  storageChargedAt?: Date;
 
   /**
    * How many moderation scan attempts have been made on this row and failed without reaching a
@@ -930,9 +1003,22 @@ export type DataLakeMembershipScope =
  * conjunct on the meta-tag arm (a contributor's file is a full member of someone else's lake), so
  * a sweep spanning several owners' files cannot be billed to one user.
  */
+/** A row's owner and charge fields: what findChargeState and commitContentRewrite's pre-image return. */
+export type FabFileChargeState = {
+  userId: string;
+  organizationId?: string;
+  fileSize?: number;
+  storageChargedAt?: Date;
+  status?: string;
+  createdAt?: Date;
+};
+
 export interface DataLakeSweptFile {
   id: string;
   userId: string;
+  /** The owning org (FabFile.organizationId); absent = personal. Routes the delta via storageOwnerOf. */
+  organizationId?: string;
+  /** Charged bytes (`chargedBytes`), not the raw `fileSize`: 0 for a row that was never charged. */
   fileSize: number;
 }
 
@@ -1080,13 +1166,54 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    */
   findByUserId(userId: string): Promise<IFabFileDocument[]>;
 
+  /** One newest-first page of the user's own live, unarchived files; see FabFileRepository. */
+  listOwnedBeforeId(
+    userId: string,
+    options: { beforeId?: string; limit: number; search?: string }
+  ): Promise<{ data: IFabFileDocument[]; hasMore: boolean }>;
+
   /**
-   * Sum the `fileSize` of every non-deleted file a user owns, via an aggregate
-   * so no documents are hydrated. A missing or null `fileSize` counts as 0.
+   * Sum the charged `fileSize` of a user's non-deleted PERSONAL files (no `organizationId`; org-owned
+   * rows count toward the org, see storageOwner.ts), via an aggregate so no documents are hydrated.
+   * A missing or null `fileSize` counts as 0.
    * @param userId - The ID of the user.
    * @returns A promise that resolves to the total size in bytes.
    */
   sumFileSizeByUserId(userId: string): Promise<number>;
+
+  /** The org counter's truth: charged `fileSize` of the non-deleted rows stamped with `organizationId`. */
+  sumFileSizeByOrganizationId(organizationId: string): Promise<number>;
+
+  /**
+   * The same charged rows `sumFileSizeByUserId` sums, grouped by provenance (see StorageUsageGroup).
+   * `maxTimeMS` bounds the aggregate for users with very large file counts.
+   */
+  summarizeChargedStorageByUserId(userId: string, options?: { maxTimeMS?: number }): Promise<StorageUsageGroup[]>;
+
+  /**
+   * The rows `sumFileSizeByOrganizationId` sums, grouped by uploader (`userId`), largest first and
+   * capped at `limit` groups. `maxTimeMS` bounds the aggregate for orgs with very large file counts.
+   */
+  summarizeChargedStorageByOrganizationId(
+    organizationId: string,
+    options: { limit: number; maxTimeMS?: number }
+  ): Promise<OrganizationStorageUploaderGroup[]>;
+
+  /**
+   * The live row's stored charge fields (see isStorageCharged in storageCharge.ts). Null when gone.
+   */
+  findChargeState(id: string): Promise<FabFileChargeState | null>;
+
+  /**
+   * The atomic write of a content rewrite: `$set`s `set` plus `storageChargedAt = now` on the live
+   * row matching `{ _id: id, ...filter }`, and returns the PRE-image's charge fields, or null when
+   * the filter missed. Accounting lives in fabFileService/rewriteStorage.ts; call it, not this.
+   */
+  commitContentRewrite(
+    id: string,
+    set: Record<string, unknown>,
+    filter?: Record<string, unknown>
+  ): Promise<FabFileChargeState | null>;
 
   /**
    * Find a file by its ID and the user's ID.
@@ -1165,6 +1292,14 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * Mixed `sourceMetadata` included) to answer a question about existence.
    */
   findExistingIdsByIds(ids: string[]): Promise<string[]>;
+  /**
+   * As `findExistingIdsByIds`, but a soft-deleted row counts as existing. The two answer different
+   * questions and a caller must pick deliberately: this one is "is there a row at all", which is the
+   * only safe basis for destroying a reference to it, because a soft delete is recoverable (a lake
+   * teardown soft-deletes its files and `restoreDeletedDataLake` revives them). Use the filtered
+   * sibling when the question is reachability - whether the document can be read right now.
+   */
+  findExistingIdsIncludingDeletedByIds(ids: string[]): Promise<string[]>;
   /** Just the projected lake-memory fields - the citability predicate's, plus the date - see `CitableFabFileFields`. */
   findCitableFieldsByIds(ids: string[]): Promise<CitableFabFileFields[]>;
   /** The same projection plus `tags`, for a caller that also needs lake identity - see `CitableFabFileFieldsWithTags`. */
@@ -1172,6 +1307,9 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
 
   /** Find every non-deleted file belonging to a data-lake ingest batch (source for the post-upload taxonomy analysis job). */
   findByBatchId(batchId: string): Promise<IFabFileDocument[]>;
+
+  /** Every non-deleted file an in-chat tool generated in the given session (`FabFileSourceType.TOOL_GENERATED`). */
+  findToolGeneratedBySessionId(sessionId: string): Promise<IFabFileDocument[]>;
 
   /**
    * Atomic per-channel claim: appends a `dispatchedNotifications` entry for `channel` only if one
@@ -1196,9 +1334,11 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
     search: string,
     filters: {
       tags?: string[];
-      type?: 'text' | 'pdf' | 'url' | 'image' | 'excel' | 'word' | 'json' | 'csv' | 'markdown' | 'code' | 'audio';
+      type?: FabFileTypeFilter;
       shared?: boolean;
       curated?: boolean;
+      /** Only files saved by a generation tool (tagged GENERATED_ASSET_TAG); ANDed with `tags`. */
+      generated?: boolean;
       fileIds?: string[]; // EXCLUDE these ids ($nin)
       restrictToFileIds?: string[]; // ALLOW-list ($in); present (incl. []) = hard restriction, [] matches nothing
     },
@@ -1211,6 +1351,7 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       dataLakeTags?: string[]; // Include files tagged with these datalake: meta-tags
       dataLakeTagPrefixes?: string[]; // OPEN static-registry prefixes (e.g. 'opti:') — ownership-bypass by design
       restrictToDataLake?: boolean; // Single-lake view: return ONLY this lake's files, not all owned files
+      admitFileIds?: string[]; // With restrictToDataLake: attached files admitted beside the lake arms, still access-checked
       /**
        * One arm per lake's membership scope, matching the whole-lake writes exactly. Server-
        * supplied only: each scope names the creator whose OWNED files its prefix arm matches, so
@@ -1292,8 +1433,9 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       userGroups?: string[];
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
+      restrictToDataLake?: boolean;
     }
-  ): Promise<{ tag: string; count: number }[]>;
+  ): Promise<{ tag: string; count: number; fileCount: number }[]>;
 
   /**
    * Count unique data-lake FILES (not tag occurrences) under the same scoping as
@@ -1415,6 +1557,20 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   pullTagsByFabFileId(fabFileId: string, tagNames: string[]): Promise<number>;
 
   /**
+   * Restamps a live file's owning org (unset when `nextOrganizationId` is undefined, so the file
+   * bills its uploader again), but only while the stamp, the fields `chargedBytes` reads, and the set
+   * of stored tag names the owner was derived from still equal `expected`. Returns false when a
+   * concurrent write moved any of them, so the caller can re-read instead of moving a stale byte
+   * count between counters or stamping an owner a concurrent tag write already changed. See
+   * reassignStorageOwner in b4m-core/services/src/fabFileService/reassignStorageOwner.ts.
+   */
+  setOwnerOrganizationIfUnchanged(
+    fabFileId: string,
+    expected: Pick<IFabFileDocument, 'organizationId' | 'fileSize' | 'storageChargedAt' | 'status' | 'tags'>,
+    nextOrganizationId: string | undefined
+  ): Promise<boolean>;
+
+  /**
    * Atomically add each of `tagNames` to one file's tags array, skipping any already present.
    * The add counterpart to `pullTagsByFabFileId`: one filtered `$push` per name, so concurrent
    * adds of DIFFERENT tags on the same file don't clobber each other and a re-add is a no-op
@@ -1462,6 +1618,12 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * write-time cycle-detection walk's own explicit opt-in - `findById` alone no longer surfaces it.
    */
   getLakeSupersessionWinner?(fabFileId: string, dataLakeId: string): Promise<string | null>;
+  /**
+   * Which of `fabFileIds` carry a curator supersede ruling for `dataLakeId`, as a subset of the
+   * input. The batched read behind the findings list's "Return to ranking"; `supersededInLakes` is
+   * `select: false`, so this opts in explicitly rather than leaning on a plain find.
+   */
+  listLakeSupersededIds?(fabFileIds: string[], dataLakeId: string): Promise<string[]>;
 
   /**
    * The single-name variant of `pushTagsByFabFileId` that returns the PRE-IMAGE of the file the
@@ -1575,6 +1737,20 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    */
   countByDriveConnectionIdInDataLake(driveConnectionId: string, datalakeTag: string): Promise<number>;
   /**
+   * Every live, non-member FabFile still carrying this connection's provenance - the disconnect
+   * backstop for a file the connector UNPICKED but never deleted. A file removed from the connected
+   * folder (or left behind by the edit path before this existed) keeps its `driveConnectionId`, its
+   * chunks and its stored object while losing the lake meta-tag, so it is invisible to
+   * `findByDriveConnectionIdInDataLake` (whose conjunct is the tag the unpick pulled) and would
+   * otherwise survive every disconnect, staying searchable and billed forever. The meta-tag check
+   * is deliberately `$ne` on the tag name: no element of `tags` may match. The default soft-delete
+   * filter stays ON (a soft-deleted row was already
+   * reaped by `deleteFabFile`) and `status: 'pending'` is excluded (an unconfirmed in-flight upload
+   * was never durable content). `archivedAt: null` is safe because archiving stamps members only
+   * (`archiveByDataLakeTag`), and a non-member is by definition not one.
+   */
+  findLiveNonMembersByDriveConnectionId(driveConnectionId: string, datalakeTag: string): Promise<IFabFileDocument[]>;
+  /**
    * Every live, uploaded file a GitHub connection has ingested into a lake (META-TAG ONLY, same filter as
    * findByDriveConnectionIdInDataLake). The set a re-sync diffs the repository tree against.
    *
@@ -1586,6 +1762,8 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
     datalakeTag: string,
     options?: { includeDeleted?: boolean }
   ): Promise<IFabFileDocument[]>;
+  /** countByDriveConnectionIdInDataLake's GitHub twin: the number a GitHub disconnect will purge. */
+  countByGitHubConnectionIdInDataLake(githubConnectionId: string, datalakeTag: string): Promise<number>;
   /**
    * The Drive file ids a given ingest batch has already UPLOADED a FabFile for. This is what a
    * resumed ingest slice subtracts from its fresh walk, so it must exclude a row whose bytes never
@@ -1860,6 +2038,8 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
     scope: DataLakeMembershipScope,
     embeddingModel: string
   ): Promise<{ id: string; userId: string }[]>;
+  /** Whether any live file on the deployment carries vectors labelled with `embeddingModel`. */
+  hasVectorizedFileInEmbeddingSpace(embeddingModel: string): Promise<boolean>;
   /**
    * The lake's files whose passages a HALTED convergence wave deleted, as {id, userId}. Chunkless
    * with no error, so they match neither `findChunkedFilesByScope` (needs chunked:true) nor
@@ -1892,7 +2072,7 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * (`chunkStallReason`, `noExtractableTextAt`), which is what makes reprocess the documented way
    * back in for a file the rescue sweep has written off.
    */
-  resetChunkStateByIds(ids: string[]): Promise<string[]>;
+  resetChunkStateByIds(ids: string[], options?: { concurrency?: number }): Promise<string[]>;
   /**
    * Mark a file as halted by the convergence kill switch's CHUNK arm, choosing between the two
    * chunkless reasons by whether a producer actually removed its passages, and clearing the
@@ -1909,6 +2089,12 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * "rebuild done" from "some files gave up".
    */
   countFailedFilesByScope(scope: DataLakeMembershipScope): Promise<number>;
+  /**
+   * Count the lake's files whose passages were reset for a rebuild that has not committed yet and
+   * is still inside REBUILD_PENDING_STALE_MS. They have no passages and no error, so without this
+   * a lake mid-rebuild reports nothing to rebuild and nothing failed.
+   */
+  countRebuildingFilesByScope(scope: DataLakeMembershipScope): Promise<number>;
   /**
    * Distinct live file counts per lake, keyed by `datalakeTag`. Same predicate as
    * computeDataLakeStats, so what a browse surface displays cannot disagree with a lake's
@@ -1937,15 +2123,6 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * "all lakes" figure sits above those per-lake rows, so the two describe one population.
    */
   countDistinctDataLakeFilesByMembership(scopes: DataLakeMembershipScope[]): Promise<number>;
-  /**
-   * The same distinct count narrowed to the files categorized under NONE of `tagPrefixes` - the
-   * bucket for a MERGED (all-lakes) tree. Not a sum of the per-lake `uncategorized` figures,
-   * which judge each lake on its own and so both double-count and over-count.
-   */
-  countDistinctUncategorizedDataLakeFilesByMembership(
-    scopes: DataLakeMembershipScope[],
-    tagPrefixes: string[]
-  ): Promise<number>;
   // The delete/restore pair is STAMP-KEYED. Phase-1 delete takes `at` and writes that one value
   // to every row it flips; it records the stamp on the lake and restore passes it back as
   // `stampedAt` to reverse exactly that batch. `stampedAt` matches by EQUALITY - deliberately not a
@@ -2064,9 +2241,16 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * already soft-deleted, and `findById` hides those rows behind the soft-delete plugin.
    *
    * Optional for the same source-compatibility reason as `setLakeSupersession` above; the purge
-   * requires it locally.
+   * requires it locally. Moderation state rides along so the purge can keep an evidence-held
+   * file's bytes (see isModerationEvidenceHold).
    */
-  findStorageKeysByIds?(
-    fabFileIds: string[]
-  ): Promise<Array<{ id: string; filePath?: string; versions?: Array<Pick<IFabFileVersion, 'filePath'>> }>>;
+  findStorageKeysByIds?(fabFileIds: string[]): Promise<
+    Array<
+      {
+        id: string;
+        filePath?: string;
+        versions?: Array<Pick<IFabFileVersion, 'filePath'>>;
+      } & Pick<IFabFile, 'moderationStatus' | 'blockReason'>
+    >
+  >;
 }

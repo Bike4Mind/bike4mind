@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { renderHook } from '@testing-library/react';
+import { renderHook, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import React from 'react';
 
@@ -58,12 +58,16 @@ vi.mock('@client/app/utils/uiSideEffectDispatcher', () => ({
   dispatchUiSideEffects: dispatchUiSideEffectsMock,
 }));
 
-import { useAgentExecutionSubscriptions, useAgentExecutionDispatch } from './useAgentExecution';
+import {
+  useAgentExecutionSubscriptions,
+  useAgentExecutionDispatch,
+  GATE_ACK_WINDOW_MS,
+  failedRunReply,
+} from './useAgentExecution';
 import { useAgentExecutionStore } from '@client/app/stores/useAgentExecutionStore';
 import { AGENT_TRACE_ROUTE } from '@client/app/utils/agentTraceLink';
 
-const mountSubscriptions = () => {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+const mountSubscriptions = (queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })) => {
   const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
     React.createElement(QueryClientProvider, { client: queryClient }, children);
   return renderHook(() => useAgentExecutionSubscriptions(), { wrapper });
@@ -348,13 +352,13 @@ describe('useAgentExecutionSubscriptions -- recovering a run after the socket co
     mountSubscriptions();
 
     expect(reconnectCalls()).toEqual([
-      { action: 'agent_execute', command: 'reconnect', sessionId: 'sess-1', executionId: 'exec-1' },
-    ]);
-    // The response does not echo the sessionId back, so it must be queued for
-    // `reconnect_result` to stamp on - keyed by executionId so a sweep over
-    // several runs cannot be mis-paired by arrival order.
-    expect(useAgentExecutionStore.getState().pendingReconnects).toEqual([
-      { sessionId: 'sess-1', executionId: 'exec-1' },
+      {
+        action: 'agent_execute',
+        command: 'reconnect',
+        requestId: expect.any(String),
+        sessionId: 'sess-1',
+        executionId: 'exec-1',
+      },
     ]);
   });
 
@@ -388,14 +392,14 @@ describe('useAgentExecutionSubscriptions -- recovering a run after the socket co
 });
 
 /**
- * A socket-open sweep asks about several runs at once, and each request is answered by an
- * independent server invocation whose cost scales with that run's child count - so the
- * responses routinely come back in a different order than they were sent. Correlating them
- * by arrival order would stamp a live run with another session's id, which is worse than the
- * spinner this recovery exists to clear: the run vanishes from the session the user is
- * looking at and reappears under one it does not belong to, and nothing corrects it.
+ * Reconnect requests are answered by independent server invocations whose cost scales with
+ * each run's child count, so responses routinely come back in a different order than they
+ * were sent - and a `found: false` answers nothing at all. The session a run belongs to must
+ * therefore come from the response itself, never from which request is "next": pairing by
+ * arrival order stamps a live run with another session's id (it vanishes from the session the
+ * user is looking at) or with none (it vanishes everywhere).
  */
-describe('useAgentExecutionSubscriptions -- reconnect responses pair with the run that asked', () => {
+describe('useAgentExecutionSubscriptions -- reconnect responses carry their own session', () => {
   beforeEach(() => {
     ws.sendJsonMessage.mockClear();
     ws.readyState = 3; // CLOSED
@@ -403,15 +407,19 @@ describe('useAgentExecutionSubscriptions -- reconnect responses pair with the ru
     useAgentExecutionStore.getState().clearAll();
   });
 
-  const reconnectResult = (executionId: string) =>
+  const found = (executionId: string, sessionId: string) =>
     handlers['reconnect_result']({
       action: 'reconnect_result',
       found: true,
       executionId,
+      sessionId,
       status: 'running',
     });
+  const notFound = () => handlers['reconnect_result']({ action: 'reconnect_result', found: false });
 
-  it('keeps each session on its own run when the responses arrive out of order', async () => {
+  const mountDispatch = () => renderHook(() => useAgentExecutionDispatch()).result.current;
+
+  it('keeps each session on its own run when sweep responses arrive out of order', async () => {
     const store = useAgentExecutionStore.getState();
     store.startExecution('exec-1', 'sess-A');
     store.startExecution('exec-2', 'sess-B');
@@ -419,25 +427,65 @@ describe('useAgentExecutionSubscriptions -- reconnect responses pair with the ru
 
     mountSubscriptions();
 
-    // exec-2 answers first - the case that arrival-order pairing gets wrong.
-    await reconnectResult('exec-2');
-    await reconnectResult('exec-1');
+    await found('exec-2', 'sess-B');
+    await found('exec-1', 'sess-A');
 
     const executions = useAgentExecutionStore.getState().executions;
     expect(executions['exec-2']?.sessionId).toBe('sess-B');
     expect(executions['exec-1']?.sessionId).toBe('sess-A');
-    expect(useAgentExecutionStore.getState().pendingReconnects).toEqual([]);
   });
 
-  it('still answers the mount-time probe, which has no execution id to key on', async () => {
-    // The probe asks "is anything running in this session?" before any id exists.
-    useAgentExecutionStore.getState().registerPendingReconnect('sess-C');
+  it.each([
+    ['the live run answers first', ['found', 'notFound']],
+    ['the idle probe answers first', ['notFound', 'found']],
+  ])('two concurrent mount probes: the live run lands on its own session when %s', async (_, order) => {
+    mountSubscriptions();
+    const { reconnect } = mountDispatch();
+    reconnect('sess-A'); // idle session
+    reconnect('sess-B'); // session with a live run
+
+    for (const response of order) {
+      await (response === 'found' ? found('exec-B', 'sess-B') : notFound());
+    }
+
+    expect(useAgentExecutionStore.getState().executions['exec-B']?.sessionId).toBe('sess-B');
+  });
+
+  it('a found:false for a gone swept run does not cost a concurrent probe its session', async () => {
+    useAgentExecutionStore.getState().startExecution('exec-gone', 'sess-stale');
+    ws.readyState = 1; // OPEN
+    mountSubscriptions();
+    mountDispatch().reconnect('sess-probe');
+
+    await notFound(); // the sweep's answer: the server no longer has exec-gone
+    await found('exec-live', 'sess-probe');
+
+    expect(useAgentExecutionStore.getState().executions['exec-live']?.sessionId).toBe('sess-probe');
+  });
+
+  it('a found:false changes nothing in the store', async () => {
+    useAgentExecutionStore.getState().startExecution('exec-1', 'sess-A');
+    mountSubscriptions();
+    const before = useAgentExecutionStore.getState().executions;
+
+    await notFound();
+
+    expect(useAgentExecutionStore.getState().executions).toEqual(before);
+  });
+
+  it('a found:true without a sessionId keeps the session the store already holds', async () => {
+    // A server that predates the echo: the sweep's run already knows its session.
+    useAgentExecutionStore.getState().startExecution('exec-1', 'sess-A');
     mountSubscriptions();
 
-    await reconnectResult('exec-9');
+    await handlers['reconnect_result']({
+      action: 'reconnect_result',
+      found: true,
+      executionId: 'exec-1',
+      status: 'running',
+    });
 
-    expect(useAgentExecutionStore.getState().executions['exec-9']?.sessionId).toBe('sess-C');
-    expect(useAgentExecutionStore.getState().pendingReconnects).toEqual([]);
+    expect(useAgentExecutionStore.getState().executions['exec-1']?.sessionId).toBe('sess-A');
   });
 });
 
@@ -466,7 +514,13 @@ describe('useAgentExecutionSubscriptions -- the sweep runs on the transition, no
     rerender();
 
     expect(reconnectCalls()).toEqual([
-      { action: 'agent_execute', command: 'reconnect', sessionId: 'sess-1', executionId: 'exec-1' },
+      {
+        action: 'agent_execute',
+        command: 'reconnect',
+        requestId: expect.any(String),
+        sessionId: 'sess-1',
+        executionId: 'exec-1',
+      },
     ]);
   });
 
@@ -489,18 +543,22 @@ describe('useAgentExecutionSubscriptions -- sweep hygiene', () => {
     useAgentExecutionStore.getState().clearAll();
   });
 
-  it('a swept run with no sessionId still gets a keyed queue entry (no send-without-enqueue)', () => {
-    // A stray event synthesises an active execution with no sessionId; the sweep
-    // must still enqueue for it, or its keyed response would drain a concurrent
-    // mount-time probe's un-keyed entry and stamp that session onto the wrong run.
+  it('a swept run with no sessionId takes its session from the server', async () => {
+    // A stray event synthesises an active execution with no sessionId; the server
+    // knows which session the run belongs to and echoes it.
     useAgentExecutionStore.getState().setStatus('exec-orphan', 'running');
     ws.readyState = 1; // OPEN
 
     mountSubscriptions();
+    await handlers['reconnect_result']({
+      action: 'reconnect_result',
+      found: true,
+      executionId: 'exec-orphan',
+      sessionId: 'sess-real',
+      status: 'running',
+    });
 
-    expect(useAgentExecutionStore.getState().pendingReconnects).toEqual([
-      { sessionId: undefined, executionId: 'exec-orphan' },
-    ]);
+    expect(useAgentExecutionStore.getState().executions['exec-orphan']?.sessionId).toBe('sess-real');
   });
 
   it('a churning dispatcher identity does not re-fire the sweep (the ref guard)', () => {
@@ -593,5 +651,595 @@ describe('useAgentExecutionSubscriptions -- toolCallId identity wire', () => {
         rememberForSession: false,
       })
     );
+  });
+});
+
+describe('useAgentExecutionSubscriptions -- generation jobs started mid-run', () => {
+  const questsKey = ['quests', 'session', 's1'];
+  const seeded = () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(questsKey, {
+      pages: [{ data: [{ id: 'q1', sessionId: 's1', prompt: 'make a song', replies: [] }], hasMore: false }],
+      pageParams: [{ page: 1 }],
+    });
+    return queryClient;
+  };
+  const cachedJobs = (queryClient: QueryClient) =>
+    (queryClient.getQueryData(questsKey) as { pages: Array<{ data: Array<{ generationJobs?: unknown }> }> }).pages[0]
+      .data[0].generationJobs;
+  const frame = (executionId: string) => ({
+    action: 'progress',
+    executionId,
+    questId: 'q1',
+    generationJobs: [{ id: 'job-1', kind: 'music' }],
+  });
+
+  beforeEach(() => {
+    Object.keys(handlers).forEach(k => delete handlers[k]);
+    useAgentExecutionStore.getState().clearAll();
+  });
+
+  it("puts a progress frame's jobs on the run's quest so the cards render live", async () => {
+    const queryClient = seeded();
+    mountSubscriptions(queryClient);
+    useAgentExecutionStore.getState().startExecution('e1', 's1');
+
+    await handlers['progress'](frame('e1'));
+
+    expect(cachedJobs(queryClient)).toEqual([{ id: 'job-1', kind: 'music' }]);
+  });
+
+  it('ignores a frame for an execution this tab does not know', async () => {
+    const queryClient = seeded();
+    mountSubscriptions(queryClient);
+
+    await handlers['progress'](frame('unknown'));
+
+    expect(cachedJobs(queryClient)).toBeUndefined();
+  });
+});
+
+describe('useAgentExecutionSubscriptions -- write preview raised mid-run', () => {
+  const questsKey = ['quests', 'session', 's1'];
+
+  beforeEach(() => {
+    Object.keys(handlers).forEach(k => delete handlers[k]);
+    useAgentExecutionStore.getState().clearAll();
+  });
+
+  it("puts a progress frame's pending action on the run's quest so the Confirm card renders live", async () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(questsKey, {
+      pages: [{ data: [{ id: 'q1', sessionId: 's1', prompt: 'file an issue', replies: [] }], hasMore: false }],
+      pageParams: [{ page: 1 }],
+    });
+    mountSubscriptions(queryClient);
+    useAgentExecutionStore.getState().startExecution('e1', 's1');
+    const pendingAction = { tool: 'create_issue', params: { title: 't' }, ts: 1 };
+
+    await handlers['progress']({ action: 'progress', executionId: 'e1', questId: 'q1', pendingAction });
+
+    const cached = queryClient.getQueryData(questsKey) as {
+      pages: Array<{ data: Array<{ pendingAction?: unknown }> }>;
+    };
+    expect(cached.pages[0].data[0].pendingAction).toEqual(pendingAction);
+  });
+});
+
+/**
+ * Confidence-gate wire: a paused run is only resumable if the client actually
+ * subscribes to `confidence_gate`, rehydrates `pendingGate` on reconnect, and
+ * can send `gate_response`. Each leg was previously untested and deletable.
+ */
+describe('useAgentExecutionSubscriptions -- confidence gate wire', () => {
+  beforeEach(() => {
+    ws.sendJsonMessage.mockClear();
+    ws.readyState = 3; // CLOSED
+    Object.keys(handlers).forEach(k => delete handlers[k]);
+    useAgentExecutionStore.getState().clearAll();
+  });
+
+  it('a live confidence_gate stores the gate and flips the run to paused', async () => {
+    mountSubscriptions();
+    useAgentExecutionStore.getState().startExecution('exec-gate-1', 'sess-1');
+
+    await handlers['confidence_gate']({
+      action: 'confidence_gate',
+      executionId: 'exec-gate-1',
+      iteration: 2,
+      confidence: 0.42,
+      reason: 'Iteration confidence 42% below threshold 60%',
+    });
+
+    const exec = useAgentExecutionStore.getState().executions['exec-gate-1'];
+    expect(exec.status).toBe('paused');
+    expect(exec.pendingGate).toEqual({
+      iteration: 2,
+      confidence: 0.42,
+      reason: 'Iteration confidence 42% below threshold 60%',
+      requestedAt: expect.any(Number),
+    });
+  });
+
+  it('reconnect_result restores pendingGate with an ISO requestedAt normalised to epoch ms', async () => {
+    useAgentExecutionStore.getState().startExecution('exec-gate-2', 'sess-2');
+    ws.readyState = 1; // OPEN
+    mountSubscriptions();
+
+    const requestedAt = '2026-10-20T12:00:00.000Z';
+
+    await handlers['reconnect_result']({
+      action: 'reconnect_result',
+      found: true,
+      executionId: 'exec-gate-2',
+      status: 'paused',
+      pendingGate: {
+        iteration: 4,
+        confidence: 0.31,
+        reason: 'Iteration confidence 31% below threshold 60%',
+        requestedAt,
+      },
+    });
+
+    const exec = useAgentExecutionStore.getState().executions['exec-gate-2'];
+    expect(exec.pendingGate).toEqual({
+      iteration: 4,
+      confidence: 0.31,
+      reason: 'Iteration confidence 31% below threshold 60%',
+      requestedAt: new Date(requestedAt).getTime(),
+    });
+  });
+
+  it('a resumed frame clears a gate restored by a stale reconnect', async () => {
+    ws.readyState = 1; // OPEN
+    mountSubscriptions();
+    useAgentExecutionStore.getState().startExecution('exec-gate-7', 'sess-7');
+    // A reconnect whose snapshot was read before an in-flight `gate_response`
+    // was applied restores `paused` + the gate.
+    useAgentExecutionStore.getState().hydrateFromReconnect({
+      executionId: 'exec-gate-7',
+      sessionId: 'sess-7',
+      status: 'paused',
+      totalCreditsUsed: 0,
+      iterationCount: 2,
+      pendingGate: { iteration: 2, confidence: 0.42, reason: 'below threshold', requestedAt: 1234 },
+    });
+    expect(useAgentExecutionStore.getState().executions['exec-gate-7'].pendingGate).toBeDefined();
+
+    // The resume frame then moves the run off `paused`. The gate must not
+    // survive it: the card is status-blind, so it would paint a dead
+    // Proceed/Stop over a live run whose responses the server drops.
+    await handlers['resumed']({ action: 'resumed', executionId: 'exec-gate-7' });
+
+    const exec = useAgentExecutionStore.getState().executions['exec-gate-7'];
+    expect(exec.status).toBe('running');
+    expect(exec.pendingGate).toBeUndefined();
+  });
+
+  it('respondToGate sends the matching gate_response for continue and stop', () => {
+    const { result } = renderHook(() => useAgentExecutionDispatch());
+
+    result.current.respondToGate('exec-gate-3', 'continue');
+    result.current.respondToGate('exec-gate-3', 'stop');
+
+    expect(ws.sendJsonMessage).toHaveBeenNthCalledWith(1, {
+      action: 'agent_execute',
+      command: 'gate_response',
+      executionId: 'exec-gate-3',
+      decision: 'continue',
+    });
+    expect(ws.sendJsonMessage).toHaveBeenNthCalledWith(2, {
+      action: 'agent_execute',
+      command: 'gate_response',
+      executionId: 'exec-gate-3',
+      decision: 'stop',
+    });
+  });
+
+  // `continue` has no ack of its own: the handler only re-invokes the executor,
+  // and a response for a pause the stale sweep already closed is dropped in
+  // silence. Without the re-ask the client would sit on a dead run.
+  describe('continue ack window', () => {
+    const GATE = {
+      iteration: 2,
+      confidence: 0.42,
+      reason: 'Iteration confidence 42% below threshold 60%',
+      requestedAt: Date.now(),
+    };
+
+    const mountPausedRun = (executionId: string, sessionId: string) => {
+      useAgentExecutionStore.getState().startExecution(executionId, sessionId);
+      useAgentExecutionStore.getState().setPendingGate(executionId, GATE);
+    };
+
+    it('re-asks the server when no frame moves the run off paused', async () => {
+      vi.useFakeTimers();
+      try {
+        ws.readyState = 1; // OPEN
+        mountSubscriptions();
+        mountPausedRun('exec-gate-4', 'sess-4');
+
+        const { result } = renderHook(() => useAgentExecutionDispatch());
+        result.current.respondToGate('exec-gate-4', 'continue');
+        ws.sendJsonMessage.mockClear();
+
+        act(() => {
+          vi.advanceTimersByTime(GATE_ACK_WINDOW_MS);
+        });
+
+        expect(ws.sendJsonMessage).toHaveBeenCalledTimes(1);
+        expect(ws.sendJsonMessage).toHaveBeenCalledWith({
+          action: 'agent_execute',
+          command: 'reconnect',
+          requestId: expect.any(String),
+          sessionId: 'sess-4',
+          executionId: 'exec-gate-4',
+        });
+
+        // The re-ask lands on the run's real terminal status, not a stale pause.
+        await handlers['reconnect_result']({
+          action: 'reconnect_result',
+          found: true,
+          executionId: 'exec-gate-4',
+          status: 'aborted',
+        });
+        expect(useAgentExecutionStore.getState().executions['exec-gate-4'].status).toBe('aborted');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not re-ask when a server frame resumes the run first', () => {
+      vi.useFakeTimers();
+      try {
+        mountPausedRun('exec-gate-5', 'sess-5');
+
+        const { result } = renderHook(() => useAgentExecutionDispatch());
+        result.current.respondToGate('exec-gate-5', 'continue');
+        ws.sendJsonMessage.mockClear();
+
+        // The executor's `resumed` frame lands inside the window.
+        useAgentExecutionStore.getState().setStatus('exec-gate-5', 'running');
+        act(() => {
+          vi.advanceTimersByTime(GATE_ACK_WINDOW_MS);
+        });
+
+        expect(ws.sendJsonMessage).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('re-asks the server when a stop is never answered', () => {
+      vi.useFakeTimers();
+      try {
+        mountPausedRun('exec-gate-6', 'sess-6');
+
+        const { result } = renderHook(() => useAgentExecutionDispatch());
+        result.current.respondToGate('exec-gate-6', 'stop');
+        ws.sendJsonMessage.mockClear();
+
+        // No `completed` frame: the pause was swept, so the server drops the
+        // stop and the run still reads paused.
+        act(() => {
+          vi.advanceTimersByTime(GATE_ACK_WINDOW_MS);
+        });
+
+        expect(ws.sendJsonMessage).toHaveBeenCalledTimes(1);
+        expect(ws.sendJsonMessage).toHaveBeenCalledWith({
+          action: 'agent_execute',
+          command: 'reconnect',
+          requestId: expect.any(String),
+          sessionId: 'sess-6',
+          executionId: 'exec-gate-6',
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+});
+
+describe('useAgentExecutionSubscriptions -- reconnect snapshot freshness', () => {
+  const gate = { iteration: 2, confidence: 0.42, reason: 'below threshold', requestedAt: 1234 };
+
+  beforeEach(() => {
+    ws.sendJsonMessage.mockClear();
+    ws.readyState = 3;
+    Object.keys(handlers).forEach(key => delete handlers[key]);
+    useAgentExecutionStore.getState().clearAll();
+    mountSubscriptions();
+  });
+
+  const requestReconnect = (sessionId = 'session-fresh', executionId?: string) => {
+    const { result } = renderHook(() => useAgentExecutionDispatch());
+    act(() => {
+      result.current.reconnect(sessionId, executionId);
+    });
+    const message = ws.sendJsonMessage.mock.lastCall?.[0] as { requestId: string };
+    return message.requestId;
+  };
+
+  const reply = (requestId: string | undefined, status: string, pendingGate?: typeof gate) =>
+    handlers['reconnect_result']({
+      action: 'reconnect_result',
+      found: true,
+      requestId,
+      executionId: 'exec-fresh',
+      sessionId: 'session-fresh',
+      status,
+      pendingGate,
+    });
+
+  it.each(['resumed', 'completed'])('does not restore an old gate after a live %s frame', async action => {
+    const store = useAgentExecutionStore.getState();
+    store.startExecution('exec-fresh', 'session-fresh');
+    store.setPendingGate('exec-fresh', gate);
+    const requestId = requestReconnect();
+    await handlers[action]({ action, executionId: 'exec-fresh', answer: 'done', totalCreditsUsed: 1 });
+
+    await reply(requestId, 'paused', gate);
+
+    const execution = useAgentExecutionStore.getState().executions['exec-fresh'];
+    expect(execution.status).toBe(action === 'resumed' ? 'running' : 'completed');
+    expect(execution.pendingGate).toBeUndefined();
+  });
+
+  it('does not erase a new gate with an older running snapshot', async () => {
+    useAgentExecutionStore.getState().startExecution('exec-fresh', 'session-fresh');
+    const requestId = requestReconnect();
+    await handlers['confidence_gate']({ action: 'confidence_gate', executionId: 'exec-fresh', ...gate });
+
+    await reply(requestId, 'running');
+
+    expect(useAgentExecutionStore.getState().executions['exec-fresh']).toMatchObject({
+      status: 'paused',
+      pendingGate: { iteration: gate.iteration },
+    });
+  });
+
+  it('restores a still-paused gate after a response was not accepted', async () => {
+    const store = useAgentExecutionStore.getState();
+    store.startExecution('exec-fresh', 'session-fresh');
+    store.setPendingGate('exec-fresh', gate);
+    store.setPendingGate('exec-fresh', undefined);
+    const requestId = requestReconnect();
+
+    await reply(requestId, 'paused', gate);
+
+    expect(useAgentExecutionStore.getState().executions['exec-fresh'].pendingGate).toEqual(gate);
+  });
+
+  it('accepts a snapshot after credits change without a lifecycle transition', async () => {
+    useAgentExecutionStore.getState().startExecution('exec-fresh', 'session-fresh');
+    const requestId = requestReconnect();
+    useAgentExecutionStore.getState().recordCredits('exec-fresh', 1);
+
+    await reply(requestId, 'paused', gate);
+
+    expect(useAgentExecutionStore.getState().executions['exec-fresh'].pendingGate).toEqual(gate);
+  });
+
+  it('restores missed trace steps from a completed snapshot after a live completion', async () => {
+    const store = useAgentExecutionStore.getState();
+    store.startExecution('exec-fresh', 'session-fresh');
+    const requestId = requestReconnect();
+    await handlers['completed']({
+      action: 'completed',
+      executionId: 'exec-fresh',
+      answer: 'done',
+      totalCreditsUsed: 1,
+    });
+
+    await handlers['reconnect_result']({
+      action: 'reconnect_result',
+      found: true,
+      requestId,
+      executionId: 'exec-fresh',
+      sessionId: 'session-fresh',
+      status: 'completed',
+      steps: [{ type: 'thought', content: 'A missed step', metadata: { iteration: 0, timestamp: 1234 } }],
+    });
+
+    const execution = useAgentExecutionStore.getState().executions['exec-fresh'];
+    expect(execution.status).toBe('completed');
+    expect(execution.iterations[0].step.content).toBe('A missed step');
+  });
+
+  it('does not replace a terminal outcome with a conflicting terminal snapshot', async () => {
+    const store = useAgentExecutionStore.getState();
+    store.startExecution('exec-fresh', 'session-fresh');
+    const requestId = requestReconnect();
+    store.markAborted('exec-fresh');
+
+    await reply(requestId, 'completed');
+
+    expect(useAgentExecutionStore.getState().executions['exec-fresh'].status).toBe('aborted');
+  });
+
+  it('accepts a terminal snapshot after a live status transition when completion was not pushed', async () => {
+    const store = useAgentExecutionStore.getState();
+    store.startExecution('exec-fresh', 'session-fresh');
+    store.setPendingGate('exec-fresh', gate);
+    const requestId = requestReconnect('session-fresh', 'exec-fresh');
+    await handlers['resumed']({ action: 'resumed', executionId: 'exec-fresh' });
+
+    await reply(requestId, 'completed');
+
+    expect(useAgentExecutionStore.getState().executions['exec-fresh'].status).toBe('completed');
+  });
+
+  it('re-asks once after a lifecycle conflict and accepts the current pause', async () => {
+    const store = useAgentExecutionStore.getState();
+    store.startExecution('exec-fresh', 'session-fresh');
+    const requestId = requestReconnect();
+    store.setStatus('exec-fresh', 'continuing');
+    const callsBeforeReply = ws.sendJsonMessage.mock.calls.length;
+
+    await reply(requestId, 'paused', gate);
+
+    expect(ws.sendJsonMessage).toHaveBeenCalledTimes(callsBeforeReply + 1);
+    const retryRequestId = (ws.sendJsonMessage.mock.lastCall?.[0] as { requestId: string }).requestId;
+    await reply(retryRequestId, 'paused', gate);
+    expect(useAgentExecutionStore.getState().executions['exec-fresh'].pendingGate).toEqual(gate);
+  });
+
+  it('does not create a retry loop if the retry is also overtaken by live status', async () => {
+    const store = useAgentExecutionStore.getState();
+    store.startExecution('exec-fresh', 'session-fresh');
+    const requestId = requestReconnect();
+    store.setStatus('exec-fresh', 'continuing');
+    await reply(requestId, 'paused', gate);
+    const retryRequestId = (ws.sendJsonMessage.mock.lastCall?.[0] as { requestId: string }).requestId;
+    store.setStatus('exec-fresh', 'running');
+    const callsBeforeRetryReply = ws.sendJsonMessage.mock.calls.length;
+
+    await reply(retryRequestId, 'paused', gate);
+
+    expect(ws.sendJsonMessage).toHaveBeenCalledTimes(callsBeforeRetryReply);
+    expect(useAgentExecutionStore.getState().executions['exec-fresh'].status).toBe('running');
+  });
+
+  it('equal running progress does not invalidate a reconnect', async () => {
+    const store = useAgentExecutionStore.getState();
+    store.startExecution('exec-fresh', 'session-fresh');
+    const requestId = requestReconnect();
+    await handlers['progress']({ action: 'progress', executionId: 'exec-fresh', status: 'running' });
+    const callsBeforeReply = ws.sendJsonMessage.mock.calls.length;
+
+    await reply(requestId, 'paused', gate);
+
+    expect(ws.sendJsonMessage).toHaveBeenCalledTimes(callsBeforeReply);
+    expect(useAgentExecutionStore.getState().executions['exec-fresh'].pendingGate).toEqual(gate);
+  });
+
+  it('a session-only probe discovers a run that was absent when the request was sent', async () => {
+    const requestId = requestReconnect('session-fresh', undefined);
+
+    await reply(requestId, 'paused', gate);
+
+    expect(useAgentExecutionStore.getState().executions['exec-fresh']).toMatchObject({
+      sessionId: 'session-fresh',
+      status: 'paused',
+      pendingGate: gate,
+    });
+  });
+
+  it('a session-only probe cannot overwrite a run started live while it was in flight', async () => {
+    const requestId = requestReconnect('session-fresh', undefined);
+    useAgentExecutionStore.getState().startExecution('exec-fresh', 'session-fresh');
+
+    await reply(requestId, 'paused', gate);
+
+    expect(useAgentExecutionStore.getState().executions['exec-fresh'].status).toBe('running');
+  });
+
+  it('the newer correlated snapshot wins when responses arrive in reverse order', async () => {
+    useAgentExecutionStore.getState().startExecution('exec-fresh', 'session-fresh');
+    const oldRequestId = requestReconnect();
+    const newRequestId = requestReconnect();
+    await reply(newRequestId, 'running');
+
+    await reply(oldRequestId, 'paused', gate);
+
+    expect(useAgentExecutionStore.getState().executions['exec-fresh'].status).toBe('running');
+  });
+
+  it('cleans up a correlated found:false without affecting another request', async () => {
+    const goneRequestId = requestReconnect('session-gone', 'exec-gone');
+    const liveRequestId = requestReconnect('session-fresh', undefined);
+    await handlers['reconnect_result']({ action: 'reconnect_result', found: false, requestId: goneRequestId });
+
+    expect(useAgentExecutionStore.getState().pendingReconnectRequests[goneRequestId]).toBeUndefined();
+    expect(useAgentExecutionStore.getState().pendingReconnectRequests[liveRequestId]).toBeDefined();
+    await reply(liveRequestId, 'paused', gate);
+    expect(useAgentExecutionStore.getState().executions['exec-fresh'].pendingGate).toEqual(gate);
+  });
+
+  it.each(['missing', 'expired'])('%s responses do not hydrate or retry an active run', async mode => {
+    vi.useFakeTimers();
+    try {
+      useAgentExecutionStore.getState().startExecution('exec-fresh', 'session-fresh');
+      const requestId = requestReconnect();
+      if (mode === 'expired') vi.advanceTimersByTime(60_000);
+      const callsBeforeReply = ws.sendJsonMessage.mock.calls.length;
+
+      await reply(mode === 'missing' ? 'unknown' : requestId, 'paused', gate);
+
+      expect(ws.sendJsonMessage).toHaveBeenCalledTimes(callsBeforeReply);
+      expect(useAgentExecutionStore.getState().executions['exec-fresh'].status).toBe('running');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['missing', 'expired', 'legacy'])('%s responses cannot roll a terminal run back', async mode => {
+    vi.useFakeTimers();
+    try {
+      useAgentExecutionStore.getState().startExecution('exec-fresh', 'session-fresh');
+      let requestId: string | undefined = requestReconnect();
+      useAgentExecutionStore.getState().markCompleted('exec-fresh', 'done', 1);
+      if (mode === 'missing') requestId = 'unknown';
+      if (mode === 'expired') vi.advanceTimersByTime(60_000);
+      if (mode === 'legacy') requestId = undefined;
+
+      await reply(requestId, 'paused', gate);
+
+      expect(useAgentExecutionStore.getState().executions['exec-fresh'].status).toBe('completed');
+      expect(useAgentExecutionStore.getState().executions['exec-fresh'].pendingGate).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('useAgentExecutionSubscriptions -- failed run reply', () => {
+  const questsKey = ['quests', 'session', 's1'];
+  const seeded = () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(questsKey, {
+      pages: [{ data: [{ id: 'q1', sessionId: 's1', prompt: 'post to slack', replies: [] }], hasMore: false }],
+      pageParams: [{ page: 1 }],
+    });
+    return queryClient;
+  };
+  const latestReplies = (queryClient: QueryClient) =>
+    (queryClient.getQueryData(questsKey) as { pages: Array<{ data: Array<{ replies?: string[] }> }> }).pages[0].data[0]
+      .replies;
+
+  beforeEach(() => {
+    Object.keys(handlers).forEach(k => delete handlers[k]);
+    useAgentExecutionStore.getState().clearAll();
+  });
+
+  it("shows the server's denial text instead of reporting a crash when a tool is denied", async () => {
+    const queryClient = seeded();
+    mountSubscriptions(queryClient);
+    useAgentExecutionStore.getState().startExecution('e1', 's1');
+
+    await handlers['failed']({
+      action: 'failed',
+      executionId: 'e1',
+      reason: 'tool_denied',
+      toolName: 'slack_post',
+      message: 'Execution stopped: you denied "slack_post".',
+    });
+
+    expect(latestReplies(queryClient)).toEqual(['Execution stopped: you denied "slack_post".']);
+  });
+
+  it('keeps the generic message for any other failure reason', async () => {
+    const queryClient = seeded();
+    mountSubscriptions(queryClient);
+    useAgentExecutionStore.getState().startExecution('e1', 's1');
+
+    await handlers['failed']({ action: 'failed', executionId: 'e1', reason: 'error', message: 'rate limited' });
+
+    expect(latestReplies(queryClient)).toEqual(['Agent execution failed.']);
+  });
+
+  it('still names the tool when a denial frame carries no message', () => {
+    expect(failedRunReply('tool_denied', 'slack_post')).toBe('Execution stopped: "slack_post" was denied.');
+    expect(failedRunReply('tool_denied')).toBe('Execution stopped: a tool call was denied.');
   });
 });

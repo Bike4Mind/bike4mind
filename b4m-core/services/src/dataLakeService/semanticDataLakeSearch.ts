@@ -103,6 +103,8 @@ export interface SemanticChunkResult {
   fileId: string;
   fileName: string;
   fileTags: string[];
+  /** The file's owner, needed so a dynamic lake's prefix arm can attribute the chip - see citableOriginFor. */
+  fileUserId?: string;
   /** The source document's own vintage (#3048), for the passage header. Null when it has none. */
   documentDate: Date | null;
   chunkText: string;
@@ -206,9 +208,10 @@ export interface SemanticSearchScanAccounting {
    */
   annModelsQueried: number;
   /**
-   * Scoped files per lake, keyed by the lake's `datalake:<slug>` meta-tag (or `prefix:<p>` for a
-   * registry lake that stamps none); the empty-string key holds files attributable to no lake -
-   * the caller's own and shared files, which `collectScopedFiles` admits via `includeShared`.
+   * Scoped files per lake, keyed by the lake's `datalake:<slug>` meta-tag (also for a registry
+   * lake paired through `lakes`; `prefix:<p>` for an unpaired registry prefix); the empty-string key
+   * holds files attributable to no lake - the caller's own and shared files, which
+   * `collectScopedFiles` admits via `includeShared`.
    *
    * This is what makes "which lakes were searched" checkable rather than assumed: the caller's
    * `dataLakeTags` says which lakes were REQUESTED, and a lake missing here (or present with 0)
@@ -346,6 +349,8 @@ export interface SemanticDataLakeSearchParams {
    * existing caller keeps the mixed corpus described on `collectScopedFiles`.
    */
   restrictToDataLake?: boolean;
+  /** Attached file ids admitted beside the lake arms under `restrictToDataLake` (still access-checked). */
+  admitFileIds?: string[];
   /**
    * One membership arm per SCOPED dynamic lake, each anchored to THAT lake's creator (see
    * `lakeMembershipsFrom`) - replaces the old caller-anchored `scopedTagPrefixes` prefix match, so
@@ -374,10 +379,12 @@ export interface SemanticDataLakeSearchParams {
    */
   vectorSearchEnabled?: boolean;
   /**
-   * The caller's resolved lakes, used ONLY to attribute a scoped file back to one lake so
-   * supersession can group per lake (see supersession.ts). Never a second way to resolve access:
-   * this module still takes its scope from `dataLakeTags`/`dataLakeTagPrefixes` exactly as before,
-   * and omitting this simply means nothing is attributable and nothing collapses.
+   * The caller's resolved lakes. Used to attribute a scoped file back to one lake so supersession
+   * can group per lake (see supersession.ts), and to pair a registry lake's open prefix with its
+   * meta-tag so fair ordering gives that lake one share, not two (see lakeFairOrder.ts). Never a
+   * second way to resolve access: this module still takes its scope from
+   * `dataLakeTags`/`dataLakeTagPrefixes` exactly as before. Omitting it means nothing is
+   * attributable, nothing collapses, and a registry lake's prefix arm stays its own bucket.
    */
   lakes?: AttributableLake[];
   /**
@@ -804,6 +811,7 @@ async function scanAndRank(args: {
           fileId: chunk.fabFileId,
           fileName: file.fileName,
           fileTags: file.fileTags,
+          fileUserId: file.userId,
           // `?? null` despite the field now being required above: the type stops a TYPED builder
           // from dropping it, this stops an undefined reaching the row from a structurally-typed
           // caller. SemanticChunkResult's contract is null-for-undated, and the render channels key
@@ -860,6 +868,7 @@ async function collectScopedFiles(args: {
   dataLakeTagPrefixes: string[];
   lakeMemberships: DataLakeMembershipScope[];
   restrictToDataLake: boolean;
+  admitFileIds?: string[];
   retrievalFilter: RetrievalExclusionOptions;
   maxFiles: number;
   filePageSize: number;
@@ -895,7 +904,7 @@ async function collectScopedFiles(args: {
         dataLakeTags: args.dataLakeTags,
         dataLakeTagPrefixes: args.dataLakeTagPrefixes,
         lakeMemberships: args.lakeMemberships,
-        ...(args.restrictToDataLake ? { restrictToDataLake: true } : {}),
+        ...(args.restrictToDataLake ? { restrictToDataLake: true, admitFileIds: args.admitFileIds } : {}),
         excludeContent: true,
         // supersededInLakes is select:false by default; this walk is the lake-scoped collapse's
         // own read, so it opts back in - see FabFileModel.executeSearch.
@@ -1608,6 +1617,7 @@ async function lakeScopedSearch(
     dataLakeTagPrefixes,
     lakeMemberships = [],
     restrictToDataLake = false,
+    admitFileIds,
     retrievalFilter = {},
     ownFilesOnly = false,
     logger,
@@ -1618,7 +1628,11 @@ async function lakeScopedSearch(
   // Gate on dataLakeTags, not on membership: it still names every accessible lake, dynamic or
   // registry, so a caller with only dynamic-lake access (all memberships, no meta-tags reachable
   // yet) is not mistaken for a lake-less one. Do not swap this for a memberships-based gate.
-  if (!query.trim() || (dataLakeTags.length === 0 && !ownFilesOnly)) return emptyResult(embeddingModel, budgets);
+  // A restricted caller with admitted attachments has a real corpus even with no lake in reach.
+  const admitsAttachments = restrictToDataLake && (admitFileIds?.length ?? 0) > 0;
+  if (!query.trim() || (dataLakeTags.length === 0 && !ownFilesOnly && !admitsAttachments)) {
+    return emptyResult(embeddingModel, budgets);
+  }
 
   // --- Scope the files (metadata only) within the accessible data lakes ---
   const scoped = await collectScopedFiles({
@@ -1630,6 +1644,7 @@ async function lakeScopedSearch(
     dataLakeTagPrefixes,
     lakeMemberships,
     restrictToDataLake,
+    admitFileIds,
     retrievalFilter,
     maxFiles: budgets.maxFiles,
     filePageSize: budgets.filePageSize,
@@ -1643,7 +1658,7 @@ async function lakeScopedSearch(
   // `fileName asc` sort over the union, and the chunk budget below is spent sequentially down
   // this order - so without the interleave a lake sorting late contributes nothing, and adding it
   // to a session leaves retrieval byte-identical. See lakeFairOrder.ts.
-  const orderScopes = lakeOrderScopes({ dataLakeTags, dataLakeTagPrefixes, lakeMemberships });
+  const orderScopes = lakeOrderScopes({ dataLakeTags, dataLakeTagPrefixes, lakeMemberships, lakes: params.lakes });
   const { ordered: scopedFiles, filesByLake } = orderFilesFairlyAcrossLakes(
     admitted,
     orderScopes,

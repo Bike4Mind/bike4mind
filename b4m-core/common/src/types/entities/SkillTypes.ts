@@ -1,5 +1,6 @@
-import { IBaseRepository } from './BaseTypes';
+import { IBaseRepository, RepositoryUpdateOptions } from './BaseTypes';
 import { IShareableDocument, IShareableStaticMethods } from './ShareableDocumentTypes';
+import type { ISkillImportedFrom } from './SkillMarketTypes';
 
 /**
  * A Skill is a reusable instruction template - markdown body authored by a user
@@ -29,6 +30,9 @@ export interface ISkill {
   userId?: string;
   organizationId?: string;
   isSystem?: boolean;
+
+  /** Set when this skill is a Skill Market import; drives the "update available" badge. */
+  importedFrom?: ISkillImportedFrom;
 
   createdAt: Date;
   updatedAt: Date;
@@ -79,4 +83,14 @@ export interface ISkillRepository extends IBaseRepository<ISkillDocument> {
    * `findByNamesForUser` for the chat mention resolver.
    */
   findAccessibleByNamesForUser(userId: string, names: string[]): Promise<ISkill[]>;
+  /**
+   * Last-writer-wins `update` that only lands while the skill is still not global (neither
+   * `isGlobalRead` nor `isGlobalWrite`). For a write that skipped the global-skill content scan: a
+   * concurrent flip to global makes it throw ConcurrencyConflictError (409) instead of landing
+   * unscanned content on a skill everyone now sees. Resolves `null` when the skill is gone.
+   */
+  updateIfNonGlobal(
+    data: Partial<ISkillDocument>,
+    options?: RepositoryUpdateOptions<ISkillDocument>
+  ): Promise<ISkillDocument | null>;
 }

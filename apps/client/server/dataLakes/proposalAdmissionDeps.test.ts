@@ -10,6 +10,7 @@ const h = vi.hoisted(() => ({
   fabFiles: { kind: 'fabFiles', findByIdAndDelete: vi.fn() },
 }));
 vi.mock('@bike4mind/database', () => ({
+  organizationRepository: {},
   adminSettingsRepository: h.adminSettings,
   scopedSettingsRepository: h.scopedSettings,
   dataLakeRepository: h.dataLakes,
@@ -18,7 +19,9 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/database/auth', () => ({ User: h.users }));
 vi.mock('@bike4mind/database/content', () => ({ FabFile: h.fabFiles }));
 vi.mock('@bike4mind/services', () => ({ fabFilesService: { createFabFileByUrl: h.createFabFileByUrl } }));
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ upload: vi.fn(), getSignedUrl: vi.fn() }) }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
+  getFilesStorage: () => ({ upload: vi.fn(), getSignedUrl: vi.fn() }),
+}));
 
 import { admitProposedSource } from './proposalAdmissionDeps';
 

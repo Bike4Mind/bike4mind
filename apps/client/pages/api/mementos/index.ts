@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { Memento } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
-import { isValidObjectId } from '@server/utils/objectId';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { z } from 'zod';
 
 /**

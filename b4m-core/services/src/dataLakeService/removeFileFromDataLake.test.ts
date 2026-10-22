@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { removeFileFromDataLake } from './removeFileFromDataLake';
+import { withStorageOwnerFakes } from '../__tests__/utils/storageOwnerTransferFakes';
 
 const lake = {
   id: 'lake1',
@@ -24,7 +25,7 @@ const actor = { userId: 'owner', isAdmin: false };
 
 const makeAdapters = (overrides: { fileById?: unknown } = {}) => {
   const order: string[] = [];
-  const db = {
+  const db = withStorageOwnerFakes({
     dataLakes: {
       findById: vi.fn().mockResolvedValue(lake),
       setStats: vi.fn().mockResolvedValue(undefined),
@@ -48,7 +49,7 @@ const makeAdapters = (overrides: { fileById?: unknown } = {}) => {
         return {};
       }),
     },
-  };
+  });
   const logger = { warn: vi.fn(), error: vi.fn() };
   return { db, logger, order };
 };
@@ -142,5 +143,15 @@ describe('removeFileFromDataLake', () => {
       restoreTokenMinted: true,
       statsUpdated: false,
     });
+  });
+
+  it('a deferred recompute skips the aggregate but still mints the restore record', async () => {
+    const { db, logger, order } = makeAdapters();
+
+    const result = await removeFileFromDataLake(actor, 'lake1', 'f1', { db, logger }, { deferStatsRecompute: true });
+
+    expect(order).toEqual(['pullTagsByFabFileId', 'upsertRemoval']);
+    expect(db.fabFiles.computeDataLakeStats).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ restoreTokenMinted: true, statsUpdated: false });
   });
 });

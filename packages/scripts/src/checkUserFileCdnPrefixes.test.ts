@@ -21,7 +21,7 @@ import path from 'node:path';
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const ROUTER_TS = path.join(REPO_ROOT, 'infra', 'router.ts');
 const BUCKETS_TS = path.join(REPO_ROOT, 'infra', 'buckets.ts');
-const APP_FILE_PROXY_TS = path.join(REPO_ROOT, 'apps', 'client', 'server', 'utils', 'appFileProxy.ts');
+const APP_FILE_PROXY_TS = path.join(REPO_ROOT, 'packages', 'server-utils', 'src', 'utils', 'appFileProxy.ts');
 
 // tavern-sounds / tavern-icons are registered by the tavern overlay in gitignored
 // infra/premium-generated (contributeTavernInfra), so their routeBucket calls are not in the

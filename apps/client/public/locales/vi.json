@@ -30,7 +30,8 @@
     "title": "Nhật ký thay đổi"
   },
   "feedback": {
-    "send": "Gửi phản hồi"
+    "send": "Gửi phản hồi",
+    "rollupTitle": "Phản hồi của bạn"
   },
   "terms_policies": "Điều khoản & Chính sách",
   "login": "Đăng nhập",
@@ -166,7 +167,8 @@
     "messages": "Tin nhắn",
     "invites": "Lời mời",
     "sendMessage": "Gửi một tin nhắn",
-    "noMessages": "Không có tin nhắn"
+    "noMessages": "Không có tin nhắn",
+    "title_unread": "Hộp thư, có mục chưa đọc"
   },
   "addSomething": "Thêm {{ name }}",
   "deleteAllSomething": "Xóa tất cả {{ name }}",
@@ -286,7 +288,30 @@
     "renews_on": "Tự động gia hạn vào {{ date }}"
   },
   "billing": {
-    "title": "Hóa đơn"
+    "title": "Hóa đơn",
+    "balance": "Số dư",
+    "credits_heading": "Nạp tín dụng",
+    "credits_sub": "Gói mua một lần, cộng vào số dư. Không cần đăng ký.",
+    "credits_sub_with_plan": "Gói mua một lần, cộng thêm vào hạn mức hằng tháng.",
+    "free_plan": "Miễn phí",
+    "free_plan_detail": "Trả theo mức dùng bằng gói tín dụng",
+    "low_org": "Quản trị viên tổ chức có thể thêm tín dụng cho tài khoản này.",
+    "low_with_plan": "Nạp thêm để tiếp tục làm việc cho đến khi hạn mức được gia hạn.",
+    "low_without_plan": "Gói đăng ký cộng tín dụng mỗi tháng; gói mua lẻ nạp ngay.",
+    "payment_failed": "Thanh toán thất bại",
+    "plan": "Gói",
+    "plan_fallback": "Đăng ký",
+    "plan_unavailable": "Không khả dụng",
+    "plan_unavailable_detail": "Không thể tải gói của bạn.",
+    "plans_change": "Gói của bạn",
+    "plans_change_sub": "Quản lý, thay đổi hoặc hủy đăng ký.",
+    "plans_heading": "Các gói",
+    "plans_heading_sub": "Gói hằng tháng kèm hạn mức tín dụng.",
+    "plans_upgrade": "Nâng cấp",
+    "plans_upgrade_sub": "Nhận hạn mức tín dụng hằng tháng thay vì tự nạp.",
+    "retry": "Thử lại",
+    "see_plans": "Xem các gói",
+    "top_up": "Nạp thêm"
   },
   "credits": {
     "title": "Tín dụng",
@@ -314,7 +339,8 @@
     "usage_pattern": "Dựa trên mẫu sử dụng của bạn trong {{days}} ngày qua",
     "credits_used": "Tín dụng đã sử dụng",
     "credits_purchased": "Tín dụng đã mua",
-    "net_credits": "Tín dụng ròng"
+    "net_credits": "Tín dụng ròng",
+    "unit": "tín dụng"
   },
   "time": {
     "last_7_days": "7 ngày qua",
@@ -362,7 +388,15 @@
       "completed": "Đã hoàn thành",
       "pending": "Đang chờ",
       "failed": "Thất bại"
-    }
+    },
+    "buy_pack": "Mua {{credits}} tín dụng với giá {{price}}",
+    "choose_pack": "Chọn một gói tín dụng",
+    "history_usage_hint": "Mục này chỉ liệt kê giao dịch mua.",
+    "organization_credits_active": "Tín dụng tổ chức đang hoạt động",
+    "rate_per_thousand": "{{rate}} cho mỗi 1.000 tín dụng",
+    "see_usage": "Xem mức sử dụng",
+    "shared_rate": "Mọi gói đều cùng mức giá: {{rate}} cho mỗi 1.000 tín dụng.",
+    "switch_to_personal": "Chuyển sang tài khoản cá nhân để mua tín dụng dùng cho cá nhân."
   },
   "settings": {
     "title": "Cài đặt",
@@ -531,7 +565,7 @@
   },
   "subscription_modal": {
     "title": "Đăng ký",
-    "description": "Truy cập mọi mô hình AI lớn qua một giao diện thống nhất. Chạy các mô hình nâng cao như Deepseek R1 một cách riêng tư.",
+    "description": "Truy cập mọi mô hình AI lớn qua một giao diện thống nhất.",
     "no_free_tier": "KHÔNG CÓ CẤP MIỄN PHÍ - TẬP TRUNG VÀO CÁC CHUYÊN GIA.",
     "credits_rollover": "Tín dụng không sử dụng sẽ chuyển sang tháng tiếp theo trong 3 tháng.",
     "monthly_billing": "Thanh toán hàng tháng",
@@ -543,7 +577,9 @@
     "personal": "Cá nhân",
     "business": "Doanh nghiệp",
     "team": "Nhóm",
-    "enterprise": "Doanh nghiệp"
+    "enterprise": "Doanh nghiệp",
+    "audience_label": "Loại gói",
+    "includes": "Bao gồm"
   },
   "agents": {
     "title": "Đại lý",
@@ -572,5 +608,13 @@
   "skills": {
     "title": "Kỹ năng",
     "command_palette_description": "Quản lý mẫu hướng dẫn có thể tái sử dụng"
+  },
+  "apiKeys": {
+    "title": "Khóa API"
+  },
+  "connections": {
+    "menuTooltip": "Các tích hợp như Google Drive và Slack, cùng khóa API cho mã của riêng bạn",
+    "sections": "Các mục kết nối",
+    "title": "Kết nối"
   }
 }

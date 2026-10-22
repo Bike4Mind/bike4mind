@@ -1,5 +1,5 @@
 import { cacheRepository } from '@bike4mind/database';
-import { UserApiKeyEvents, IUserApiKeyRateLimit } from '@bike4mind/common';
+import { UserApiKeyEvents, IUserApiKeyRateLimit, type ApiKeyRateLimitHeader } from '@bike4mind/common';
 import { logEvent } from '@server/utils/analyticsLog';
 
 const MINUTE_IN_MS = 60_000;
@@ -12,14 +12,7 @@ export interface RateLimitResult {
   retryAfter?: number;
   limitType?: 'minute' | 'day';
   currentCount?: number;
-  headers: {
-    'X-RateLimit-Limit-Minute': number;
-    'X-RateLimit-Remaining-Minute': number;
-    'X-RateLimit-Reset-Minute': number;
-    'X-RateLimit-Limit-Day': number;
-    'X-RateLimit-Remaining-Day': number;
-    'X-RateLimit-Reset-Day': number;
-  };
+  headers: Record<ApiKeyRateLimitHeader, number>;
 }
 
 export interface RateLimitContext {

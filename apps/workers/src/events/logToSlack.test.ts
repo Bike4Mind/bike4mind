@@ -10,7 +10,7 @@ const mockResolveFullConfig = vi.fn();
 const mockClassifyError = vi.fn();
 const mockNotifyEventLogsToSlack = vi.fn();
 
-vi.mock('@server/utils/sqs', () => ({
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({
   sendToQueue: (...args: unknown[]) => mockSendToQueue(...args),
 }));
 
@@ -21,7 +21,7 @@ vi.mock('sst', () => ({
   },
 }));
 
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: {
     STAGE: 'dev',
     MONGODB_URI: 'mongodb://localhost:27017/%STAGE%',
@@ -101,6 +101,24 @@ describe('logToSlack.ingest — SRE dispatch', () => {
     expect(payload.source).toBe('CLOUDWATCH');
     expect(payload.classification).toBe('MEDIUM');
     expect(payload.repoSlug).toBe('MillionOnMars/lumina5');
+  });
+
+  it('dispatches a raw-JSON Fargate line with the parsed message (no tab prefix)', async () => {
+    // ChatCompletion's container log line is the logger's raw JSON, so the SRE intake
+    // must parse the whole message rather than reading a positional tab field.
+    const fargateLine = JSON.stringify({
+      severity: 'error',
+      message: 'Drain window expired with in-flight quests',
+      functionName: 'chatCompletion',
+    });
+
+    await ingest(makeCwEvent(fargateLine, '/sst/cluster/dev/ChatCompletion'), ctx);
+
+    expect(mockSendToQueue).toHaveBeenCalledTimes(1);
+    const [, payload] = mockSendToQueue.mock.calls[0] as [string, Record<string, unknown>];
+    expect(payload.errorMessage).toBe('Drain window expired with in-flight quests');
+    expect(payload.functionName).toBe('chatCompletion');
+    expect(payload.logGroup).toBe('/sst/cluster/dev/ChatCompletion');
   });
 
   it('sets dryRun on the dispatched payload when the repo is in dry-run mode', async () => {

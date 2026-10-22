@@ -11,7 +11,7 @@ import { distinctIdCount } from '../utils/objectIds';
 
 const createProjectSchema = z.object({
   name: z.string().min(1),
-  description: z.string().min(1),
+  description: z.string().optional(),
   sessionIds: z.array(z.string()).optional(),
   fileIds: z.array(z.string()).optional(),
 });
@@ -56,7 +56,7 @@ export const createProject = async (
 
   const buildProject: Omit<IProjectDocument, 'id'> = {
     name,
-    description,
+    description: description ?? '',
     userId,
 
     sessionIds: resolvedSessionIds,

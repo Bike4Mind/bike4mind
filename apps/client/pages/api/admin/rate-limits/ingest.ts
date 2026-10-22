@@ -1,12 +1,16 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimitSnapshotRepository, type IntegrationType } from '@bike4mind/database';
-import { recordRateLimitEvent } from '@server/utils/cloudwatch';
-import { normalizeEndpoint, isNearLimit, RATE_LIMIT_INTEGRATIONS } from '@bike4mind/common';
+import { persistRateLimitEvents } from '@server/utils/mcpRateLimitSnapshots';
 import { Resource } from 'sst';
 import { safeCompareTokens } from '@bike4mind/auth/crypto';
 import type { Request } from 'express';
+import { z } from 'zod';
 
-const VALID_INTEGRATIONS = new Set<string>(RATE_LIMIT_INTEGRATIONS);
+// tenantKey comes from the MCP handler Lambda (resolveMcpTenantKey); the ingest token is what
+// makes it trustworthy. Events are validated one by one in persistRateLimitEvents.
+const IngestBodySchema = z.object({
+  events: z.array(z.unknown()).min(1),
+  tenantKey: z.string().min(1).max(64),
+});
 
 const handler = baseApi({ auth: false }).post(async (req: Request, res) => {
   const ingestToken = Resource.RATE_LIMIT_INGEST_TOKEN?.value || process.env.RATE_LIMIT_INGEST_TOKEN;
@@ -20,53 +24,13 @@ const handler = baseApi({ auth: false }).post(async (req: Request, res) => {
     return res.status(403).json({ error: 'Invalid ingest token.' });
   }
 
-  const events = req.body?.events;
-  if (!Array.isArray(events) || events.length === 0) {
-    return res.status(400).json({ error: 'events array required' });
+  const parsed = IngestBodySchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: 'events array and tenantKey required' });
   }
 
-  let persisted = 0;
-  for (const event of events) {
-    if (!event.integration || !VALID_INTEGRATIONS.has(event.integration)) continue;
-
-    const usagePercent = event.usagePercent ?? null;
-    const limit = event.limit ?? null;
-    const remaining = event.remaining ?? null;
-    const resetAt = event.resetAt ? new Date(event.resetAt) : null;
-    const retryAfterMs = event.retryAfterMs ?? null;
-    const wasThrottled = event.type === 'RATE_LIMIT_ERROR';
-
-    try {
-      await rateLimitSnapshotRepository.create({
-        integration: event.integration as IntegrationType,
-        userId: 'system',
-        endpoint: event.endpoint || '',
-        limit,
-        remaining,
-        resetAt,
-        usagePercent,
-        wasThrottled,
-        retryAfterMs,
-        timestamp: new Date(),
-      });
-      persisted++;
-    } catch (err) {
-      console.error('[RateLimit] Ingest: failed to persist event', err);
-    }
-
-    if (isNearLimit({ limit, remaining, resetAt, retryAfterMs, usagePercent })) {
-      console.warn(
-        `[RateLimit] WARNING: ${event.integration} at ${usagePercent}% usage (${remaining}/${limit} remaining)`
-      );
-    }
-
-    try {
-      const normalizedEndpoint = normalizeEndpoint(event.endpoint || '');
-      await recordRateLimitEvent(event.integration, usagePercent, wasThrottled, normalizedEndpoint || undefined);
-    } catch {
-      // CloudWatch failures are non-critical
-    }
-  }
+  const { events, tenantKey } = parsed.data;
+  const persisted = await persistRateLimitEvents(events, tenantKey);
 
   return res.json({ persisted });
 });

@@ -158,6 +158,7 @@ export async function getOrCreateNotebookForSlackUser(
             userId,
             {
               name: notebookName,
+              origin: { channel: 'slack' },
               slackMetadata: {
                 channelId,
                 threadTs,
@@ -297,6 +298,7 @@ export async function getOrCreateNotebookForSlackUser(
     {
       ...sessionManager.getDefaultSession(userId),
       name: fallbackNotebookName,
+      origin: { channel: 'slack' },
       slackMetadata: {
         channelId,
         threadTs,

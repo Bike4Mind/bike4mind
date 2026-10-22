@@ -173,6 +173,7 @@ export async function getCounterTotalsForLast24Hours(
         totalUniqueUsers,
         internalUsers,
         externalUsers: totalUniqueUsers - internalUsers,
+        weeklyActiveUsers: aggregationResult.weeklyActiveUsers?.[0]?.count || 0,
         topUsers: (aggregationResult.topUsers || []).map((user: TopUserResult) => ({
           _id: user._id,
           email: user.email || user._id,

@@ -8,9 +8,10 @@ export interface FacetResults {
   lastMonth?: Array<{ _id: string; count: number }>;
   allUsers?: Array<{ count: number }>;
   internalUsers?: Array<{ count: number }>;
+  weeklyActiveUsers?: Array<{ count: number }>;
   topUsers?: Array<{
     _id: string;
-    email: string;
+    email: string | null;
     interactions: number;
     rankChange?: 'up' | 'down' | 'new' | 'same';
     lastWeekRank?: number | 'new' | '>#20';
@@ -44,7 +45,7 @@ export interface FacetResults {
     avgEvents: number;
   };
   /**
-   * Counter-log events grouped by `metadata.source` (web/cli/api/agent/system)
+   * Counter-log events grouped by `metadata.source` (web/cli/desktop/api/agent/system)
    * for the current period. Drives the "Usage by Source" line in the daily/
    * weekly report. Empty when no events carry `metadata.source` yet (pre-
    * instrumentation history).

@@ -3,6 +3,7 @@ import {
   CreditHolderType,
   DATA_LAKE_SEARCH_MAX_FILES_DEFAULT,
   IScopedSetting,
+  isCustomMcpEnabled,
   MIN_PASSAGE_TOKEN_TARGET,
   ScopeRef,
   SettingScope,
@@ -14,6 +15,7 @@ import {
   computeCandidateRefs,
   pickOverride,
   resolveScopedSetting,
+  resolveScopedSettingEntries,
   resolveScopedSettingFromOverrides,
   resolveScopedSettingValues,
   scopeForCaller,
@@ -272,7 +274,58 @@ describe('applyClamp (safety rail)', () => {
   });
 });
 
+describe('resolveScopedSettingEntries (stored)', () => {
+  const scope = { organizationId: 'o1', owner };
+  const storedFor = async (platform: Record<string, string>, overrides: ReturnType<typeof override>[] = []) =>
+    (await resolveScopedSettingEntries([KEY], scope, makeDb(platform, overrides)))[KEY];
+
+  it('is false for a key no rung stores, even though value is the coded default', async () => {
+    expect(await storedFor({})).toMatchObject({ value: DATA_LAKE_SEARCH_MAX_FILES_DEFAULT, stored: false });
+  });
+
+  it('is true for a parseable platform row, including one equal to the default', async () => {
+    expect(await storedFor({ [KEY]: String(DATA_LAKE_SEARCH_MAX_FILES_DEFAULT) })).toMatchObject({ stored: true });
+  });
+
+  it('is false for an unparseable platform row, which resolves to the default', async () => {
+    expect(await storedFor({ [KEY]: 'not-a-number' })).toMatchObject({ stored: false });
+  });
+
+  it('is false for a blank platform row, which the schema would preprocess into the default', async () => {
+    expect(await storedFor({ [KEY]: '' })).toMatchObject({ stored: false });
+    expect(await storedFor({ [KEY]: '  ' })).toMatchObject({ stored: false });
+  });
+
+  it('is true when an override wins over no platform row', async () => {
+    expect(await storedFor({}, [override(SettingScopeLevel.Organization, 'o1', '2000')])).toMatchObject({
+      value: 2000,
+      stored: true,
+    });
+  });
+
+  it('flags platformRejected for a non-blank platform row that failed the schema', async () => {
+    expect(await storedFor({ [KEY]: 'not-a-number' })).toMatchObject({ platformRejected: true });
+  });
+
+  it('does not flag platformRejected for an unset platform row', async () => {
+    expect(await storedFor({})).not.toHaveProperty('platformRejected');
+  });
+
+  it('does not flag platformRejected for a blank platform row', async () => {
+    expect(await storedFor({ [KEY]: '' })).not.toHaveProperty('platformRejected');
+  });
+
+  it('does not flag platformRejected for a valid platform row', async () => {
+    expect(await storedFor({ [KEY]: '2000' })).not.toHaveProperty('platformRejected');
+  });
+});
+
 describe('resolveScopedSetting (integration, through the real settingsMap)', () => {
+  it('carries neither stored nor platformRejected, even for a platform row that failed the schema', async () => {
+    const r = await resolveScopedSetting(KEY, {}, makeDb({ [KEY]: 'not-a-number' }));
+    expect(r).toEqual({ value: DATA_LAKE_SEARCH_MAX_FILES_DEFAULT, source: SettingScopeLevel.Platform });
+  });
+
   it('returns the platform value with an empty scope', async () => {
     const db = makeDb({ [KEY]: '3000' });
     const r = await resolveScopedSetting(KEY, {}, db);
@@ -559,5 +612,86 @@ describe('resolveScopedSettingFromOverrides (the bulk, pure resolver - #2157)', 
       source: SettingScopeLevel.Platform,
       ignoredOverrides: [{ scopeLevel: SettingScopeLevel.Owner, scopeId: 'u2', reason: 'unparseable' }],
     });
+  });
+});
+
+describe('custom MCP connector settings (org-scoped object and flag)', () => {
+  const orgScope: SettingScope = { organizationId: 'o1', owner };
+
+  it('resolves the coded policy default with no rows', async () => {
+    const r = await resolveScopedSetting('customMcpPolicy', orgScope, makeDb({}));
+    expect(r.value).toMatchObject({ mode: 'presets_only', maxConnectionsPerUser: 20 });
+    expect(r.source).toBe(SettingScopeLevel.Platform);
+  });
+
+  it('an org policy override, stored as JSON, beats the platform row', async () => {
+    const db = makeDb({ customMcpPolicy: JSON.stringify({ mode: 'any' }) }, [
+      override(
+        SettingScopeLevel.Organization,
+        'o1',
+        JSON.stringify({ mode: 'allowlist', allowedHostPatterns: ['*.example.com'] }),
+        'customMcpPolicy'
+      ),
+    ]);
+    const r = await resolveScopedSetting('customMcpPolicy', orgScope, db);
+    expect(r.source).toBe(SettingScopeLevel.Organization);
+    expect(r.value).toMatchObject({ mode: 'allowlist', allowedHostPatterns: ['*.example.com'], allowWriteTools: true });
+  });
+
+  it('an org cannot turn the platform flag on, and an owner row is ignored', async () => {
+    const db = makeDb({ EnableCustomMcpConnectors: 'false' }, [
+      override(SettingScopeLevel.Organization, 'o1', 'true', 'EnableCustomMcpConnectors'),
+      override(SettingScopeLevel.Owner, 'u1', 'true', 'EnableCustomMcpConnectors'),
+    ]);
+    const r = await resolveScopedSetting('EnableCustomMcpConnectors', orgScope, db);
+    expect(r).toMatchObject({ value: false, source: SettingScopeLevel.Platform });
+  });
+
+  it('an org closes connectors with policy mode off, which wins over a platform on', async () => {
+    const db = makeDb({ EnableCustomMcpConnectors: 'true', customMcpPolicy: JSON.stringify({ mode: 'any' }) }, [
+      override(SettingScopeLevel.Organization, 'o1', JSON.stringify({ mode: 'off' }), 'customMcpPolicy'),
+    ]);
+    const flag = await resolveScopedSetting('EnableCustomMcpConnectors', orgScope, db);
+    const policy = await resolveScopedSetting('customMcpPolicy', orgScope, db);
+    expect(isCustomMcpEnabled(flag.value, policy.value)).toBe(false);
+    expect(isCustomMcpEnabled(flag.value, { mode: 'any' })).toBe(true);
+  });
+});
+
+describe('strict security-setting reads', () => {
+  it('rejects a failed org-policy lookup instead of reopening a disabled org', async () => {
+    const db = makeDb(
+      { customMcpPolicy: JSON.stringify({ mode: 'any' }) },
+      [override(SettingScopeLevel.Organization, 'o1', JSON.stringify({ mode: 'off' }), 'customMcpPolicy')],
+      { throwOverrides: true }
+    );
+    await expect(
+      resolveScopedSettingEntries(['customMcpPolicy'], fullScope, db, {
+        readFailureMode: 'throw',
+      })
+    ).rejects.toThrow('overlay down');
+  });
+
+  it('rejects a failed platform blocklist lookup instead of treating it as empty', async () => {
+    const db = makeDb({}, [], { throwPlatform: true });
+    await expect(
+      resolveScopedSettingEntries(['customMcpBlockedHosts'], fullScope, db, {
+        readFailureMode: 'throw',
+      })
+    ).rejects.toThrow('settings table down');
+  });
+
+  it('threads strict resolution through the single-key and values APIs', async () => {
+    const db = makeDb({}, [], { throwPlatform: true });
+    await expect(
+      resolveScopedSetting('customMcpPolicy', fullScope, db, {
+        readFailureMode: 'throw',
+      })
+    ).rejects.toThrow('settings table down');
+    await expect(
+      resolveScopedSettingValues(['customMcpPolicy'], fullScope, db, {
+        readFailureMode: 'throw',
+      })
+    ).rejects.toThrow('settings table down');
   });
 });

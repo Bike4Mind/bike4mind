@@ -36,6 +36,7 @@ on:
           - Skills
           - Credits
           - WebSocket Auth
+          - Static Asset
         default: All tests
       pr_number:
         description: 'PR number for preview env (overrides stage, e.g. 123)'
@@ -92,6 +93,7 @@ jobs:
             "Skills")           ARGS="--project=skills" ;;
             "Credits")          ARGS="--project=credits" ;;
             "WebSocket Auth")   ARGS="--project=websocket-auth" ;;
+            "Static Asset")     ARGS="--project=static-asset" ;;
             *)                  ARGS="" ; echo "Unknown selection '$TEST_PROJECT' — running full suite" ;;
           esac
           echo "playwright_args=$ARGS" >> "$GITHUB_OUTPUT"

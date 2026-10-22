@@ -1,7 +1,8 @@
-import { ApiKeyType, VoiceGenerationVendor } from '@bike4mind/common';
+import { VoiceGenerationVendor } from '@bike4mind/common';
 import { apiKeyService, voiceService } from '@bike4mind/services';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { apiKeyRepository, adminSettingsRepository, voiceRepository } from '@bike4mind/database';
+import { AUDIO_VENDOR_API_KEY_TYPE } from './audioVendorApiKeyType';
 
 // Thrown when the selected provider has no usable key (and, for ElevenLabs, no
 // voice). Callers map this to a 401 - it's a configuration problem, not a bug.
@@ -25,6 +26,16 @@ export interface ResolvedTtsProvider {
   voice: string | undefined;
 }
 
+export async function hasTtsProviderKey(provider: VoiceGenerationVendor, userId: string): Promise<boolean> {
+  return Boolean(
+    await apiKeyService.getEffectiveApiKey(
+      userId,
+      { type: AUDIO_VENDOR_API_KEY_TYPE[provider], nullIfMissing: true },
+      { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository } }
+    )
+  );
+}
+
 // Resolves the per-provider API key and effective voice, centralizing the key
 // lookup + voice-default logic shared by the unified /api/ai/tts route and the
 // legacy per-provider adapters.
@@ -41,7 +52,7 @@ export async function resolveTtsProvider({
   if (provider === 'openai') {
     const apiKey = await apiKeyService.getEffectiveApiKey(
       userId,
-      { type: ApiKeyType.openai, nullIfMissing: true },
+      { type: AUDIO_VENDOR_API_KEY_TYPE[provider], nullIfMissing: true },
       { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository } }
     );
     if (!apiKey) {
@@ -70,7 +81,7 @@ export async function resolveTtsProvider({
   const [apiKey, storedVoiceId] = await Promise.all([
     apiKeyService.getEffectiveApiKey(
       userId,
-      { type: ApiKeyType.elevenlabs, nullIfMissing: true },
+      { type: AUDIO_VENDOR_API_KEY_TYPE[provider], nullIfMissing: true },
       { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository } }
     ),
     voiceService.getVoiceId(userId, { db: { voices: voiceRepository } }),

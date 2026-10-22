@@ -38,6 +38,7 @@ describe('registerUser', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     mockInvite = {
+      id: 'invite-1',
       code: 'INVITE123',
       used: null,
       userId: 'inviterId',
@@ -71,6 +72,7 @@ describe('registerUser', () => {
         },
         creditTransactions: {
           createTransaction: vi.fn().mockResolvedValue({ id: 'transactionId', type: 'generic_add' }),
+          findOne: vi.fn().mockResolvedValue(null),
         },
       },
       logger: { info: vi.fn(), error: vi.fn(), warn: vi.fn() },
@@ -93,14 +95,17 @@ describe('registerUser', () => {
     // This path is OTC-only (the sole caller always passes password: ''), so the
     // account is passwordless by construction regardless of what `password` was set to here.
     expect(createdUser.hasUsablePassword).toBe(false);
-    expect(mockAdapters.db.registrationInvites.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        status: RegInviteStatusType.used,
-        usedbyId: 'newUserId',
-        usageHistory: [expect.objectContaining({ userId: 'newUserId' })],
-      }),
-      undefined
-    );
+    expect(mockAdapters.db.registrationInvites.update).toHaveBeenCalledTimes(1);
+    expect(mockAdapters.db.registrationInvites.update.mock.calls[0][0]).toStrictEqual({
+      id: 'invite-1',
+      usageHistory: [{ userId: 'newUserId', usedAt: expect.any(Date) }],
+      used: expect.any(Date),
+      usedbyId: 'newUserId',
+      status: RegInviteStatusType.used,
+    });
+    const limitedInvite = mockAdapters.db.registrationInvites.update.mock.calls[0][0];
+    expect(limitedInvite.used).toBe(limitedInvite.usageHistory[0].usedAt);
+    expect(mockAdapters.db.registrationInvites.update.mock.calls[0][1]).toBeUndefined();
   });
 
   // --- disposable-email blocking ---
@@ -191,6 +196,21 @@ describe('registerUser', () => {
     await expect(registerUser(baseParams, mockAdapters)).rejects.toThrow(BadRequestError);
   });
 
+  it('rejects a username outside the allowed characters before any lookup', async () => {
+    await expect(registerUser({ ...baseParams, username: '<b>x</b>' }, mockAdapters)).rejects.toThrow(
+      "Usernames can contain letters, numbers, spaces and . _ - ' (up to 64 characters)."
+    );
+    expect(mockAdapters.db.users.findByUsernameOrEmail).not.toHaveBeenCalled();
+    expect(mockAdapters.db.users.create).not.toHaveBeenCalled();
+  });
+
+  it('stores the username trimmed', async () => {
+    await registerUser({ ...baseParams, username: '  testuser  ' }, mockAdapters);
+
+    expect(mockAdapters.db.users.findByUsernameOrEmail).toHaveBeenCalledWith('testuser', baseParams.email);
+    expect(mockAdapters.db.users.create).toHaveBeenCalledWith(expect.objectContaining({ username: 'testuser' }));
+  });
+
   it('throws if invite code is invalid', async () => {
     mockAdapters.db.registrationInvites.findByCode.mockResolvedValue(null);
     await expect(registerUser(baseParams, mockAdapters)).rejects.toThrow('Invalid invite code');
@@ -234,10 +254,16 @@ describe('registerUser', () => {
 
     await expect(registerUser(reuseParams, mockAdapters)).resolves.toBeDefined();
 
+    expect(mockAdapters.db.registrationInvites.update).toHaveBeenCalledTimes(2);
     const updatedUnlimitedInvite = mockAdapters.db.registrationInvites.update.mock.calls.at(-1)?.[0];
-    expect(updatedUnlimitedInvite?.status).toBe(RegInviteStatusType.open);
-    expect(updatedUnlimitedInvite?.used).toBeUndefined();
-    expect(updatedUnlimitedInvite?.usedbyId).toBeUndefined();
+    expect(updatedUnlimitedInvite).toStrictEqual({
+      id: 'invite-1',
+      usageHistory: [
+        { userId: 'newUserId', usedAt: expect.any(Date) },
+        { userId: 'newUserId', usedAt: expect.any(Date) },
+      ],
+      status: RegInviteStatusType.open,
+    });
     expect(mockAdapters.db.registrationInvites.update.mock.calls.at(-1)?.[1]).toEqual({ unset: ['used', 'usedbyId'] });
     expect(updatedUnlimitedInvite?.usageHistory?.length).toBe(2);
   });
@@ -261,10 +287,17 @@ describe('registerUser', () => {
 
   it('marks invite as used and updates status', async () => {
     await registerUser(baseParams, mockAdapters);
+    expect(mockAdapters.db.registrationInvites.update).toHaveBeenCalledTimes(1);
     const updatedInvite = mockAdapters.db.registrationInvites.update.mock.calls[0][0];
-    expect(updatedInvite.used).toBeInstanceOf(Date);
-    expect(updatedInvite.status).toBe(RegInviteStatusType.used);
-    expect(updatedInvite.usageHistory?.length).toBe(1);
+    expect(updatedInvite).toStrictEqual({
+      id: 'invite-1',
+      usageHistory: [{ userId: 'newUserId', usedAt: expect.any(Date) }],
+      used: expect.any(Date),
+      usedbyId: 'newUserId',
+      status: RegInviteStatusType.used,
+    });
+    expect(updatedInvite.used).toBe(updatedInvite.usageHistory[0].usedAt);
+    expect(mockAdapters.db.registrationInvites.update.mock.calls[0][1]).toBeUndefined();
   });
 
   // P0-B abuse gate: server-side enforcement, independent of the UI checkboxes.
@@ -373,6 +406,7 @@ describe('registerViaOTC', () => {
         registrationInvites: { findByCode: vi.fn().mockResolvedValue(null), update: vi.fn() },
         creditTransactions: {
           createTransaction: vi.fn().mockResolvedValue({ id: 'transactionId', type: 'generic_add' }),
+          findOne: vi.fn().mockResolvedValue(null),
         },
       },
       logger: { info: vi.fn(), error: vi.fn(), warn: vi.fn() },
@@ -399,7 +433,7 @@ describe('registerViaOTC', () => {
       expect.objectContaining({
         ownerId: 'newUserId',
         credits: 100,
-        transactionId: 'otc-register-grant:newUserId',
+        transactionId: 'verify-grant:newUserId',
       }),
       expect.anything()
     );
@@ -417,6 +451,24 @@ describe('registerViaOTC', () => {
       tags: ['Customer'],
       pendingCreditGrant: null,
     });
+  });
+
+  it('grants the default credits for an admitted no-invite signup while open registration is off', async () => {
+    mockAdapters.db.adminSettings.findBySettingName.mockImplementation(async (name: string) => {
+      if (name === 'allowOpenRegistration') return { settingValue: false };
+      if (name === 'defaultFreeCredits') return { settingValue: '100' };
+      return null;
+    });
+
+    const result = await registerViaOTC(otcParams, { ...mockAdapters, skipInviteCheck: true });
+
+    expect(mockAddCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ ownerId: 'newUserId', credits: 100, transactionId: 'verify-grant:newUserId' }),
+      expect.anything()
+    );
+    expect(result).toMatchObject({ emailVerified: true, currentCredits: 100 });
+    expect(result.tags).not.toContain(PENDING_FREE_CREDITS_TAG);
+    expect(mockAdapters.db.registrationInvites.findByCode).not.toHaveBeenCalled();
   });
 
   it('keeps the pending tag (still verifies) when the credit grant throws', async () => {
@@ -462,7 +514,7 @@ describe('registerViaOTC', () => {
       expect.objectContaining({
         ownerId: 'newUserId',
         credits: 500,
-        transactionId: 'otc-register-grant:newUserId',
+        transactionId: 'verify-grant:newUserId',
       }),
       expect.anything()
     );
@@ -475,6 +527,54 @@ describe('registerViaOTC', () => {
       emailVerifiedAt: expect.any(Date),
       tags: ['Customer'],
       pendingCreditGrant: null,
+    });
+  });
+  describe('OAuth source tag', () => {
+    const activeClient = { clientId: 'b4m_acme_app_0a1b2c3d', isActive: true };
+    const sourceTagsOf = () =>
+      (mockAdapters.db.users.update.mock.calls[0][0].tags as string[]).filter(t => t.startsWith('source:'));
+
+    it('stamps source:<slug> for an active client and keeps it through the OTC tag rewrite', async () => {
+      mockAdapters.db.oauthClients = { findByClientId: vi.fn().mockResolvedValue(activeClient) };
+      await registerViaOTC({ ...otcParams, sourceClientId: activeClient.clientId }, mockAdapters);
+      expect(mockAdapters.db.oauthClients.findByClientId).toHaveBeenCalledWith(activeClient.clientId);
+      expect(sourceTagsOf()).toEqual(['source:acme_app']);
+      expect(mockAdapters.db.users.update.mock.calls[0][0].tags).toContain('Customer');
+    });
+
+    it('stamps nothing for an inactive client', async () => {
+      mockAdapters.db.oauthClients = {
+        findByClientId: vi.fn().mockResolvedValue({ ...activeClient, isActive: false }),
+      };
+      await registerViaOTC({ ...otcParams, sourceClientId: activeClient.clientId }, mockAdapters);
+      expect(sourceTagsOf()).toEqual([]);
+    });
+
+    it('stamps nothing for an unknown client', async () => {
+      mockAdapters.db.oauthClients = { findByClientId: vi.fn().mockResolvedValue(null) };
+      await registerViaOTC({ ...otcParams, sourceClientId: 'b4m_nope_0a1b2c3d' }, mockAdapters);
+      expect(sourceTagsOf()).toEqual([]);
+    });
+
+    it('skips the lookup when no client id is supplied', async () => {
+      mockAdapters.db.oauthClients = { findByClientId: vi.fn().mockResolvedValue(activeClient) };
+      await registerViaOTC(otcParams, mockAdapters);
+      expect(mockAdapters.db.oauthClients.findByClientId).not.toHaveBeenCalled();
+      expect(sourceTagsOf()).toEqual([]);
+    });
+
+    it('stamps nothing when the caller passes no client lookup', async () => {
+      await registerViaOTC({ ...otcParams, sourceClientId: activeClient.clientId }, mockAdapters);
+      expect(sourceTagsOf()).toEqual([]);
+    });
+
+    it('still creates the user when the client lookup throws', async () => {
+      mockAdapters.db.oauthClients = { findByClientId: vi.fn().mockRejectedValue(new Error('db down')) };
+      const result = await registerViaOTC({ ...otcParams, sourceClientId: activeClient.clientId }, mockAdapters);
+      expect(result).toBeDefined();
+      expect(mockAdapters.db.users.create).toHaveBeenCalledTimes(1);
+      expect(sourceTagsOf()).toEqual([]);
+      expect(mockAdapters.logger.warn).toHaveBeenCalledWith(expect.stringContaining(activeClient.clientId));
     });
   });
 });

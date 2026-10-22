@@ -1,11 +1,11 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { subscriberRepository, registrationInviteRepository } from '@bike4mind/database';
 import { generateCode } from '@server/managers/regInviteManager';
 import { RegInviteStatusType, requireEnv } from '@bike4mind/common';
 import { EmailEvents } from '@server/utils/eventBus';
-import { getLogoUrl, buildEmailLogoImg } from '@server/utils/mailer/emailHelpers';
+import { getLogoUrl, buildEmailLogoImg, escapeHtml } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 import { z } from 'zod';
 
 const generateInviteSchema = z.object({
@@ -16,7 +16,7 @@ const generateInviteSchema = z.object({
   startingCredits: z.number().min(0, 'Starting credits must be non-negative').prefault(500),
   startingStorage: z.number().min(0, 'Starting storage must be non-negative').prefault(1000),
   emailBody: z.string().optional(),
-  unlimitedUse: z.boolean().optional().prefault(false),
+  unlimitedUse: z.boolean().prefault(false),
   expiresAt: z.string().optional(),
 });
 
@@ -171,7 +171,7 @@ ${brand ? `The ${brand} Team` : 'The Team'}`;
           </div>
 
           <div>
-            ${(emailBody || defaultEmailBody).replace(/\n/g, '<br/>')}
+            ${escapeHtml(emailBody || defaultEmailBody).replace(/\n/g, '<br/>')}
           </div>
 
           <div class="invite-code">

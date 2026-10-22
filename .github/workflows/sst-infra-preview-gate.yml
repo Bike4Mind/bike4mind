@@ -101,12 +101,13 @@ jobs:
 
           # Deploy-affecting paths that always need a preview: the root infra/
           # dir, the @bike4mind/infra package (b4m-core/infra/, imported directly
-          # by the deploy layer), and sst.config.ts.
+          # by the deploy layer), sst.config.ts, and apps/client/open-next.config.ts
+          # (read only by the OpenNext build SST runs at deploy, so CI never exercises it).
           # Anchored so it does NOT match data-model dirs like
           # packages/database/src/models/infra/.
-          if grep -qE '^(infra/|b4m-core/infra/|sst\.config\.ts$)' /tmp/files_glob.txt; then
+          if grep -qE '^(infra/|b4m-core/infra/|sst\.config\.ts$|apps/client/open-next\.config\.ts$)' /tmp/files_glob.txt; then
             applicable=1
-            reason="infra/, b4m-core/infra/, or sst.config.ts changed"
+            reason="infra/, b4m-core/infra/, sst.config.ts, or apps/client/open-next.config.ts changed"
           fi
 
           # A changed sst pin in any package.json. Fail closed if a package.json

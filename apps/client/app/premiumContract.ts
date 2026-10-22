@@ -1,3 +1,4 @@
+import type { WorkspaceDeniedToolsTable, WorkspaceSessionSettingsTable } from '@bike4mind/common';
 import type { ComponentType } from 'react';
 
 /**
@@ -26,6 +27,14 @@ export interface PremiumRouteDescriptor {
   path: string;
   lazyImport: () => Promise<{ default: ComponentType }>;
   /**
+   * STRUCTURAL field: optional card on the admin landing page, linking to the literal `path`.
+   * `partitionPremiumRoutes` throws when it is set on a path with a `$param` segment.
+   */
+  adminDashboard?: {
+    label: string;
+    description: string;
+  };
+  /**
    * STRUCTURAL field (like `path`/`lazyImport`, NOT a gating prop - the
    * "gating fields map 1:1 to RestrictedPage" rule above does not apply to it).
    * Selects the route's parent in the SPA tree:
@@ -38,6 +47,23 @@ export interface PremiumRouteDescriptor {
    *    page/tab within the app rather than a standalone product.
    */
   appShell?: boolean;
+  /**
+   * STRUCTURAL field, meaningful only with `appShell: true`. `true` -> the notebook
+   * layout drops its content padding on this route (and its sub-paths) so the page
+   * runs edge to edge; every other route keeps the default gutter. Read by
+   * `getContentPadding` in components/layouts/Notebook/index.tsx.
+   */
+  edgeToEdge?: boolean;
+  /**
+   * STRUCTURAL field, meaningful only with `appShell: true`. A registered workspace id (see
+   * `WORKSPACE_SURFACES` in @bike4mind/common): the notebook sidebar on this route draws that
+   * workspace's conversation list - the `notebookSidenavExport` component - in place of the default
+   * notebook list, as it does on the workspace's own route. Omitted -> the default list. An id this
+   * repo does not register is inert. Matched against the route's `path`, where a `$param` segment
+   * stands for any one segment. `partitionPremiumRoutes` throws when it is set without `appShell`,
+   * since only the notebook layout has a sidebar to draw the list in.
+   */
+  hostsWorkspace?: string;
   /**
    * STRUCTURAL field, like `appShell`. `true` -> the route renders for signed-out
    * visitors: parented under the root route with no `RestrictedPage`, no
@@ -89,21 +115,43 @@ export interface PremiumNavDescriptor {
   requireEntitlement?: string;
   /** Show only when the user carries the tag; OR with `requireEntitlement` when both set. */
   requireFeatureTag?: string;
+  /**
+   * `true` -> also render the item as a row in the primary notebook sidebar (SidenavNav), under the
+   * same visibility rule. Omitted -> the "More" flyout only. Use for a product's main launch point.
+   */
+  sidebar?: boolean;
 }
 
 /**
- * A premium package's full-surface notebook sidenav - a component that REPLACES
- * the default notebook sidenav body on the package's own appShell route (e.g.
- * OptiHashi's `/opti` surface). Contributed via `b4mContributions.notebookSidenavExport`
- * (a module default-exporting the component) and consumed by the Notebook layout's
- * `Sidenav` through the generated `premiumNotebookSidenav.generated.ts`.
+ * A premium package's full-surface notebook sidenav - a component that REPLACES the default
+ * notebook sidenav body on the route the package claims. The route is the overlay's knowledge,
+ * not core's, so it rides in the contribution:
  *
- * `null` is the absent (open-core fork) form: the same annotate-both-forms rule as
- * routes/nav keeps the consumer's type stable whether or not an overlay is installed,
- * and - critically - the generated glue is the ONLY place the premium package specifier
- * appears, so core never statically imports an absent package (the fork build stays green).
+ *     "notebookSidenavExport": { "path": "/<surface>", "exportFrom": "<pkg>/client/sidenav" }
+ *
+ * Contributed via `b4mContributions.notebookSidenavExport` (a module default-exporting the
+ * component) and consumed by the Notebook layout's `Sidenav` through the generated
+ * `premiumNotebookSidenavs.generated.ts`. `path` is matched against `location.pathname` exactly;
+ * the exact route wins, otherwise - for a workspace core registers in `WORKSPACE_SURFACES` - the
+ * entry whose `path` is its `routePrefix` on any app-shell route that declares `hostsWorkspace`
+ * (see `hostedWorkspaceAt`). No match means the default sidenav.
+ *
+ * Exact, not prefix, deliberately: an overlay's sub-routes get the default sidenav, as they did
+ * before the slot became per-route, and prefix-matching would be a visible change to an overlay's
+ * own UX - that overlay's call to ask for. Whoever takes it: match on segment boundaries (`/x`
+ * must not claim `/xyz`) and prefer the longest match.
+ *
+ * The empty array is the absent (open-core fork) form: the same annotate-both-forms rule as
+ * routes/nav keeps the consumer's type stable whether or not an overlay is installed, and the
+ * generated glue is the ONLY place the premium package specifier appears, so core never statically
+ * imports an absent package (the fork build stays green).
  */
-export type PremiumNotebookSidenav = ComponentType | null;
+export interface PremiumNotebookSidenavEntry {
+  /** The appShell route this sidenav owns, matched against `pathname` exactly. */
+  path: string;
+  /** The sidenav body, rendered in place of the default notebook list. */
+  component: ComponentType;
+}
 
 /**
  * A premium overlay's crawler policy for the routes it contributes, consumed by
@@ -177,6 +225,91 @@ export interface PremiumRouteIndexing {
  * identity change. Never declare one that also matches a core key.
  */
 export type PremiumLocalStorageKeyPrefixes = string[];
+
+/**
+ * Extra entitlements, per registered workspace id, whose holders may fork, snip or clone a session
+ * that lives in that workspace and keep the copy there. Contributed as literal data in
+ * `b4mContributions.workspaceCopyEntitlements` (`{ "<surface id>": ["<entitlement key>"] }`) and
+ * enforced by `canCopyWithinSurface` (@bike4mind/common surfaces.ts) on the server and in the
+ * clone/fork menus alike.
+ *
+ * Core cannot hold this table without naming an overlay's workspace, so the overlay declares it.
+ * A grant only keeps a copy where its source already lives: creating a session in the workspace,
+ * moving one into it, or naming it as an explicit copy target still needs the workspace's own
+ * `requiredEntitlement`. An id this repo does not register as a workspace is inert.
+ *
+ * Every granted key must also pass the workspace's own route gate AND its API gates. A kept copy
+ * carries the workspace's surface, so it leaves the main list; if those gates then turn its owner
+ * away, the owner holds a session no list shows and no page opens. Core cannot see those gates, so
+ * the overlay declares them alongside the grants, as data of the same shape, in
+ * `b4mContributions.workspaceGateEntitlements`: every key the workspace's route and API gates admit
+ * (the route descriptor's `requireEntitlement`, plus whatever an in-page or API check accepts).
+ * Codegen fails the build when a package grants a key that its own gate declaration for that
+ * workspace does not list. The declaration is the overlay's promise, so keep it in step with the
+ * gates themselves; widening the gates and declaring a grant belong in the same change.
+ *
+ * DATA, like `PremiumLocalStorageKeyPrefixes`: read straight out of package.json, so server-side
+ * enforcement sees it without importing overlay code. Grants from several overlays are merged.
+ *
+ * An entry may also be an object, `{ "key": "<entitlement key>", "label": "...", "sessionHref": "..." }`,
+ * which grants `key` exactly as the bare string does and also says how the workspace is shown to a
+ * user who reaches it only through that key (see `PremiumWorkspaceGrantDisplay`). This table keeps
+ * only the keys; the display half lands in `premiumWorkspaceGrantDisplays.generated.ts`.
+ */
+export type PremiumWorkspaceCopyEntitlements = Readonly<Record<string, readonly string[]>>;
+
+/**
+ * Tools denied, per workspace id, to every session whose current `surface` matches. Contributed as
+ * literal data in `b4mContributions.workspaceDeniedTools` (`{ "<surface id>": ["<tool name>"] }`) and
+ * unioned with the session's own `disabledTools` at read time, on the server and in the client alike.
+ * Nothing is written onto the session, so a copy or move takes on its destination's denials.
+ * Entries from several overlays are merged.
+ */
+export type PremiumWorkspaceDeniedTools = WorkspaceDeniedToolsTable;
+
+/**
+ * Session fields owned, per workspace id, by the workspace a session is in, resolved at read time.
+ * Contributed via `b4mContributions.workspaceSessionSettingsExport` (`{ "<surface id>": "<module>" }`,
+ * each module exporting `workspaceSessionSettings: WorkspaceSessionSettingsEntry`). A fork, clone or
+ * snip drops the owned fields and a move unsets them, so a session takes on its current workspace's
+ * values. One overlay per workspace id. The id must be registered in `WORKSPACE_SURFACES` or in
+ * the same package's `b4mContributions.workspaceSurfaceIds` (an array of lowercase surface ids).
+ * Guarded workspaces declare their ids there so their identity stays out of shared core.
+ * Unknown ids fail codegen rather than silently emitting an entry no session can match.
+ */
+export type PremiumWorkspaceSessionSettings = WorkspaceSessionSettingsTable;
+
+/**
+ * How a workspace is named and opened for a user whose access to it comes through a copy grant: one
+ * who holds `key` but cannot use the workspace outright (`canUseSurface` is false). Without it that
+ * user sees the registry's label and link, which name a product they do not hold. Declared as the
+ * object form of a `workspaceCopyEntitlements` entry; everyone else keeps the registry's values.
+ */
+export interface PremiumWorkspaceGrantDisplay {
+  /** The granted entitlement key, lowercased. */
+  key: string;
+  /** Name shown for the workspace in the clone/fork/move menus and dialogs, in place of the registry label. */
+  label: string;
+  /**
+   * Same-origin path template with exactly one `{sessionId}` slot, e.g. `/route?session={sessionId}`,
+   * that opens a session for this user. Its path (before `?`) also stands in for the registry's
+   * `routePrefix` when checking the build ships the route. Omitted -> the registry's link.
+   */
+  sessionHref?: string;
+}
+
+/** Grant displays per registered workspace id, in declaration order; a user holding several gets the first. */
+export type PremiumWorkspaceGrantDisplays = Readonly<Record<string, readonly PremiumWorkspaceGrantDisplay[]>>;
+
+/**
+ * Names shown for an overlay's LLM tools wherever a reply lists the tools it used (`getToolDisplayName`
+ * in app/utils/toolMapping.ts), keyed by tool id. Contributed as literal data in
+ * `b4mContributions.toolDisplayLabels` (`{ "<tool id>": "Label" }`), like the copy grants above, so the
+ * labels reach the client without importing overlay code. A core tool keeps its own name; a tool with
+ * no label from either gets a humanized form of its id. Two overlays naming one tool differently fail
+ * the build.
+ */
+export type PremiumToolDisplayLabels = Readonly<Record<string, string>>;
 
 /** What core hands a reply accessory about the reply it sits under. */
 export interface PremiumReplyAccessoryProps {

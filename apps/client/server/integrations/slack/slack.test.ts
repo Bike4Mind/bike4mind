@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 // Mock the SST-backed Config so the test never touches `Resource`.
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: mocks.config,
 }));
 
@@ -45,7 +45,7 @@ vi.mock('@bike4mind/services', () => ({
   escapeSlackText: (value: string) => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'),
 }));
 
-vi.mock('@server/utils/cloudwatch', () => ({
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   recordFeedbackDeliverySuccess: vi.fn(),
   recordFeedbackDeliveryFailure: vi.fn(),
   recordFeedbackDeliverySkipped: vi.fn(),
@@ -54,6 +54,7 @@ vi.mock('@server/utils/cloudwatch', () => ({
 import {
   resolveSlackWebhookUrl,
   resolveFeedbackSlackRoute,
+  postMessageToSlack,
   postFeedbackToSlack,
   postEmailMirrorToSlack,
   EMAIL_MIRROR_TIMEOUT_MS,
@@ -63,7 +64,7 @@ import {
   recordFeedbackDeliverySuccess,
   recordFeedbackDeliveryFailure,
   recordFeedbackDeliverySkipped,
-} from '@server/utils/cloudwatch';
+} from '@bike4mind/server-utils/utils/cloudwatch';
 
 describe('resolveSlackWebhookUrl', () => {
   const channelUrl = 'https://hooks.slack.com/services/channel';
@@ -200,6 +201,45 @@ describe('resolveFeedbackSlackRoute', () => {
       stageClass: 'nonprod',
       reason: 'nonprod_unconfigured',
     });
+  });
+});
+
+describe('postMessageToSlack', () => {
+  const liveopsUrl = 'https://hooks.slack.com/services/liveops';
+
+  beforeEach(() => {
+    // No secret fallback, so an empty settings map is genuinely unconfigured.
+    mocks.config.SLACK_WEBHOOK_URL = '';
+    mocks.post.mockReset();
+    vi.mocked(Logger.error).mockClear();
+  });
+
+  it('returns false when no webhook is configured', async () => {
+    mocks.getSettingsMap.mockResolvedValue({});
+
+    await expect(postMessageToSlack('ops alert')).resolves.toBe(false);
+    expect(mocks.post).not.toHaveBeenCalled();
+    expect(Logger.error).toHaveBeenCalled();
+  });
+
+  it('returns false when the post rejects, so a caller does not mark the alert sent', async () => {
+    mocks.getSettingsMap.mockResolvedValue({ SlackLiveopsWebhookUrl: liveopsUrl });
+    mocks.post.mockRejectedValue(new Error('slack down'));
+
+    await expect(postMessageToSlack('ops alert')).resolves.toBe(false);
+    expect(Logger.error).toHaveBeenCalled();
+  });
+
+  it('returns true once the post succeeds', async () => {
+    mocks.getSettingsMap.mockResolvedValue({ SlackLiveopsWebhookUrl: liveopsUrl });
+    mocks.post.mockResolvedValue({ status: 200 });
+
+    await expect(postMessageToSlack('ops alert')).resolves.toBe(true);
+    expect(mocks.post).toHaveBeenCalledWith(
+      liveopsUrl,
+      { text: 'ops alert' },
+      { headers: { 'Content-Type': 'application/json' } }
+    );
   });
 });
 
@@ -399,5 +439,18 @@ describe('postEmailMirrorToSlack', () => {
     mocks.post.mockRejectedValue(Object.assign(new Error('timeout of 5000ms exceeded'), { code: 'ECONNABORTED' }));
     await expect(postEmailMirrorToSlack(payload)).resolves.toBeUndefined();
     expect(Logger.error).toHaveBeenCalledTimes(1);
+  });
+
+  it('stays silent when only a general webhook is configured', async () => {
+    // The mirror carries private email content, so it must never fall back to the default or
+    // feedback channel: an audit webhook that is not set means no mirror at all.
+    mocks.getSettingsMap.mockResolvedValue({
+      SlackDefaultWebhookUrl: 'https://hooks.slack.com/services/general',
+      SlackFeedbackWebhookUrl: 'https://hooks.slack.com/services/feedback',
+    });
+
+    await postEmailMirrorToSlack(payload);
+
+    expect(mocks.post).not.toHaveBeenCalled();
   });
 });

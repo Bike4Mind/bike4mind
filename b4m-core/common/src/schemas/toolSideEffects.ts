@@ -2,7 +2,7 @@ import type { B4MLLMTools } from './llm';
 
 /**
  * How much of the world a tool disturbs when it runs. This is the input the agent-mode
- * permission gate classifies on (see apps/client/server/queueHandlers/agentExecutorUtils/
+ * permission gate classifies on (see apps/workers/src/queueHandlers/agentExecutorUtils/
  * toolPermissions.ts); it is deliberately about blast radius, not about usefulness.
  *
  * - `none`     Reads only. Returns a computation or a public/read-only lookup. Nothing the
@@ -59,6 +59,10 @@ const CORE_TOOL_SIDE_EFFECTS: Record<B4MLLMTools, ToolSideEffects> = {
   bob_panel_read: 'none',
   // Expands a stored instruction template into text for the next turn; writes nothing.
   skill: 'none',
+  // Classifies text the caller already holds: no stored write, no outbound action on anyone's
+  // behalf. Its spend is capped by the same up-front credit reservation the route uses, which is
+  // why auto-allowing it is the same call deep_research makes.
+  decide: 'none',
 
   // Emit an <artifact> block or a UI suggestion and nothing else.
   recharts: 'local',
@@ -75,6 +79,7 @@ const CORE_TOOL_SIDE_EFFECTS: Record<B4MLLMTools, ToolSideEffects> = {
   edit_image: 'external',
   music_generation: 'external',
   audio_generation: 'external',
+  video_generation: 'external',
   excel_generation: 'external',
   create_data_lake: 'external',
   save_content_to_data_lake: 'external',
@@ -121,7 +126,6 @@ const EXTERNAL_REGISTRY_SIDE_EFFECTS: Record<string, ToolSideEffects> = {
   notebook_status: 'none',
   share_curated_file: 'external',
   notebook_new: 'external',
-  confirm_pending_action: 'external',
   cancel_pending_action: 'external',
 
   // Premium overlay
@@ -131,7 +135,6 @@ const EXTERNAL_REGISTRY_SIDE_EFFECTS: Record<string, ToolSideEffects> = {
   send_slack_message: 'external',
   coordinate_task: 'external',
   code_execute: 'external',
-  video_generation: 'external',
 };
 
 const TOOL_SIDE_EFFECTS: Readonly<Record<string, ToolSideEffects>> = {
@@ -151,4 +154,57 @@ export function getToolSideEffects(toolName: string): ToolSideEffects | undefine
 /** Test/introspection accessor. Prefer `getToolSideEffects` for lookups. */
 export function listDeclaredToolSideEffects(): Readonly<Record<string, ToolSideEffects>> {
   return TOOL_SIDE_EFFECTS;
+}
+
+export type ToolPermissionResult = 'allowed' | 'denied' | 'needs_approval';
+
+/**
+ * The tools that spawn another agent. The agent executor exempts them from its permission gate
+ * (the toolbelt decides whether they are offered at all) and the subagent gate in
+ * ServerSubagentOrchestrator exempts them the same way: the child they spawn is gated in turn.
+ */
+export const DELEGATION_TOOLS = ['delegate_to_agent', 'coordinate_task'] as const;
+
+/**
+ * Classify whether a tool can be executed, needs approval, or is denied.
+ *
+ * Priority:
+ * 1. Explicitly denied tools -> denied
+ * 2. Explicitly approved tools -> allowed
+ * 3. MCP tools (prefixed with mcp__) -> needs_approval regardless of any declaration:
+ *    they are third-party and their risk is not knowable locally, so a declaration
+ *    shipped alongside one would not be evidence of anything.
+ * 4. Tools declaring `none` / `local` side effects -> allowed
+ * 5. Everything else, including every undeclared tool -> needs_approval (safe default)
+ *
+ * Rule 4 is the inversion that matters: the classification lives next to the tool-name
+ * enum and is exhaustive over it, so a read-only tool is correct the day it is added
+ * rather than the day someone notices it prompting in production.
+ *
+ * Shared by the agent executor's interactive gate (apps/workers/.../toolPermissions.ts)
+ * and the non-interactive subagent gate (ServerSubagentOrchestrator) - the two must agree.
+ */
+export function classifyToolPermission(
+  toolName: string,
+  approvedTools: readonly string[],
+  deniedTools: readonly string[]
+): ToolPermissionResult {
+  if (deniedTools.includes(toolName)) {
+    return 'denied';
+  }
+
+  if (approvedTools.includes(toolName)) {
+    return 'allowed';
+  }
+
+  if (toolName.startsWith('mcp__')) {
+    return 'needs_approval';
+  }
+
+  const sideEffects = getToolSideEffects(toolName);
+  if (sideEffects === 'none' || sideEffects === 'local') {
+    return 'allowed';
+  }
+
+  return 'needs_approval';
 }

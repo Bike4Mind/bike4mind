@@ -16,12 +16,13 @@
  *
  * Progress updates are streamed via WebSocket with action: 'jupyter_notebook_progress'
  */
+import { GoneException } from '@aws-sdk/client-apigatewaymanagementapi';
 import { baseApi } from '@server/middlewares/baseApi';
 import { Resource } from 'sst';
 import { sendToConnection } from '@server/websocket/utils';
 import { Connection } from '@bike4mind/database/social';
 import { Quest } from '@bike4mind/database/content';
-import { isValidObjectId } from '@server/utils/objectId';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { randomUUID } from 'crypto';
 import { z } from 'zod';
 
@@ -145,8 +146,10 @@ const handler = baseApi({ auth: true }).post(async (req, res) => {
     } catch (err) {
       // Connection likely stale - try next one
       lastError = err;
-      // Clean up stale connection record asynchronously
-      Connection.deleteOne({ connectionId: connection.connectionId }).catch(() => {});
+      // Clean up the record only when the socket is gone; any other failure leaves a live row.
+      if (err instanceof GoneException) {
+        Connection.deleteOne({ connectionId: connection.connectionId }).catch(() => {});
+      }
       continue;
     }
   }

@@ -4,15 +4,22 @@ import {
   ISessionRepository,
   IUserRepository,
   rebindPromptMetaSession,
+  stripSurfaceOwnedFields,
+  userSetSessionFields,
   toPersistedSummaryTrigger,
+  MAX_TOOL_CALLS_CEILING,
+  type WorkspaceSessionSettingsTable,
 } from '@bike4mind/common';
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { createSession, CreateSessionAdapters } from './create';
+import { resolveCopySurface, targetSurfaceSchema, type ResolveSurfaceAccess } from './surfaceTransition';
 
 const forkSessionSchema = z.object({
   sessionId: z.string(),
   messageId: z.string(),
+  // Absent: the fork inherits the source's surface. Present: checked by assertSurfaceTransition.
+  targetSurface: targetSurfaceSchema,
 });
 
 type ForkSessionParameters = z.infer<typeof forkSessionSchema>;
@@ -27,11 +34,15 @@ type ForkSessionAdapters = {
       'findBySessionIdAndId' | 'findAllBySessionIdAndLessThanOrEqualToTimestamp' | 'create'
     >;
   };
+  /** Required to honor `targetSurface`; without it a targeted fork is refused. */
+  resolveSurfaceAccess?: ResolveSurfaceAccess;
+  /** Fields the source's workspace owns, dropped from the copy. */
+  workspaceSessionSettings: WorkspaceSessionSettingsTable;
 } & CreateSessionAdapters;
 
 export const forkSession = async (userId: string, parameters: ForkSessionParameters, adapters: ForkSessionAdapters) => {
   const { db } = adapters;
-  const { sessionId, messageId } = secureParameters(parameters, forkSessionSchema);
+  const { sessionId, messageId, targetSurface } = secureParameters(parameters, forkSessionSchema);
 
   const user = await db.users.findById(userId);
   if (!user) throw new NotFoundError('User not found');
@@ -42,34 +53,62 @@ export const forkSession = async (userId: string, parameters: ForkSessionParamet
   const message = await db.chatHistories.findBySessionIdAndId(sessionId, messageId);
   if (!message) throw new NotFoundError('Message not found');
 
+  const surface = await resolveCopySurface(session.surface, targetSurface, adapters.resolveSurfaceAccess);
+
   const newSession = await createSession(
     user,
-    {
-      name: `Forked ${session.name}`,
-      knowledgeIds: session.knowledgeIds,
-      tags: session.tags,
-      summary: session.summary,
-      summaryAt: session.summaryAt,
-      summaryTrigger: toPersistedSummaryTrigger(session.summaryTrigger),
-      taggedAt: session.taggedAt,
-      forkedSourceId: session.id,
-      // Carried from the source, not re-derived: the parent's scope is already correct and explicit,
-      // and re-deriving it here would go through the OWNERSHIP arm alone (no resolveLakeAccess is
-      // threaded to this path), which cannot see a teammate-authored organization-lake file. That
-      // derives an EMPTY list, and an empty list is not a narrow scope - fabFileSearchQuery skips its
-      // tag clause, so the copy would silently widen to every lake the caller can reach. Copying also
-      // takes createSession's "explicit wins" arm, so it costs no DB read.
-      retrievalTags: session.retrievalTags,
-      lakeScopeExplicit: session.lakeScopeExplicit,
-      // Carried so a persisted opt-out (`false`) survives the copy: createSession reads an explicit
-      // lake scope as forced retrieval, and omitting this would turn that opt-out back ON here.
-      // An ABSENT flag is deliberately left to that implication rather than pinned to `false`, so a
-      // copy of a lake session predating it picks up the corrected behavior; the copy then forces
-      // retrieval where its source does not, until the source is itself updated.
-      forceKnowledgeRetrieval: session.forceKnowledgeRetrieval,
-    },
+    stripSurfaceOwnedFields(
+      {
+        name: `Forked ${session.name}`,
+        knowledgeIds: session.knowledgeIds,
+        tags: session.tags,
+        summary: session.summary,
+        summaryAt: session.summaryAt,
+        summaryTrigger: toPersistedSummaryTrigger(session.summaryTrigger),
+        taggedAt: session.taggedAt,
+        forkedSourceId: session.id,
+        // The session's home: without it a fork made inside a product surface lands in the main list.
+        surface,
+        // Carried from the source, not re-derived: the parent's scope is already correct and explicit,
+        // and re-deriving it here would go through the OWNERSHIP arm alone (no resolveLakeAccess is
+        // threaded to this path), which cannot see a teammate-authored organization-lake file. That
+        // derives an EMPTY list, and an empty list is not a narrow scope - fabFileSearchQuery skips its
+        // tag clause, so the copy would silently widen to every lake the caller can reach. Copying also
+        // takes createSession's "explicit wins" arm, so it costs no DB read.
+        retrievalTags: session.retrievalTags,
+        lakeScopeExplicit: session.lakeScopeExplicit,
+        includeLibraryFiles: session.includeLibraryFiles,
+        // Carried so a persisted opt-out (`false`) survives the copy: createSession reads an explicit
+        // lake scope as forced retrieval, and omitting this would turn that opt-out back ON here.
+        // An ABSENT flag is deliberately left to that implication rather than pinned to `false`, so a
+        // copy of a lake session predating it picks up the corrected behavior; the copy then forces
+        // retrieval where its source does not, until the source is itself updated.
+        forceKnowledgeRetrieval: session.forceKnowledgeRetrieval,
+        // Create-only (not in SessionUpdateRequestSchema), so a copy that drops them can never get them back.
+        citationStyle: session.citationStyle,
+        systemPromptText: session.systemPromptText,
+        temperature: session.temperature,
+        // A stored value can predate MAX_TOOL_CALLS_CEILING, which createSession enforces.
+        maxToolCalls: session.maxToolCalls && Math.min(session.maxToolCalls, MAX_TOOL_CALLS_CEILING),
+        corpusGroundingMode: session.corpusGroundingMode,
+        retrievalExcludeFilenameMarkers: session.retrievalExcludeFilenameMarkers,
+        retrievalVectorizedOnly: session.retrievalVectorizedOnly,
+        enabledTools: session.enabledTools,
+        // Keeps the fork's tool list identical to the source's, which the provider's prompt cache
+        // keys on. Safe to carry: each tool's eligibility is re-checked against the reader every turn.
+        autoAddedTools: session.autoAddedTools,
+        disabledTools: session.disabledTools,
+        disableUserIntegrations: session.disableUserIntegrations,
+        systemPromptId: session.systemPromptId,
+      },
+      adapters.workspaceSessionSettings,
+      session
+    ),
     adapters,
-    { knowledgeIdsFromSourceSession: true }
+    {
+      knowledgeIdsFromSourceSession: true,
+      userSetFields: userSetSessionFields(session, adapters.workspaceSessionSettings, session.userSetFields),
+    }
   );
 
   const messagesToFork = await db.chatHistories.findAllBySessionIdAndLessThanOrEqualToTimestamp(

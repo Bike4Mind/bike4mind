@@ -5,13 +5,15 @@ import { Logger } from '@bike4mind/observability';
 import {
   fallbackImageSize,
   IMAGE_SIZE_CONSTRAINTS,
+  clampImageQualityForModel,
   ImageModels,
   isGPTImageModel,
-  isGPTImage2Model,
   isSupportedImageSize,
+  rejectsTransparentBackground,
   resolveGptImageGenerateSize,
   type ImageOutputFormat,
   type OpenAIImageBackground,
+  type OpenAIImageQuality,
 } from '@bike4mind/common';
 import { invokeImageProcessor, downloadImageAsBuffer } from './imageProcessorUtils';
 
@@ -34,9 +36,15 @@ const ALTERNATIVE_IMAGE_MODELS = 'Flux Pro, Flux Dev, or Grok';
 // (dall-e-2/3's 'standard'/'hd' included), but the SDK's own per-model prose on that field
 // ("high, medium and low are supported for the GPT image models") plus the live
 // /images/edits behavior. DALL-E's legacy 'standard'/'hd' pair is mapped away by
-// mapQualityForModel upstream before it reaches here.
-const GPT_IMAGE_QUALITY_VALUES = ['low', 'medium', 'high', 'auto'] as const;
+// mapQualityForModel upstream before it reaches here. 'xhigh'/'max' are gpt-image-2.5 only and
+// are stepped down to 'high' for other models (clampImageQualityForModel).
+const GPT_IMAGE_QUALITY_VALUES = ['low', 'medium', 'high', 'xhigh', 'max', 'auto'] as const;
 type GptImageQuality = (typeof GPT_IMAGE_QUALITY_VALUES)[number];
+
+// openai 6.x's `quality` unions predate gpt-image-2.5's 'xhigh'/'max', which the API accepts.
+// Narrowed to the SDK's spelling here, the one place a quality crosses into an SDK call.
+type SdkGptImageQuality = 'low' | 'medium' | 'high' | 'auto';
+const toSdkQuality = (quality: GptImageQuality): SdkGptImageQuality => quality as SdkGptImageQuality;
 
 function isGptImageQuality(value: unknown): value is GptImageQuality {
   return typeof value === 'string' && (GPT_IMAGE_QUALITY_VALUES as readonly string[]).includes(value);
@@ -61,8 +69,14 @@ function isGptImageQuality(value: unknown): value is GptImageQuality {
  * the render matches the charge. The edit path does not pin, and is priced separately.
  * Keep this a pure mapper - the pin belongs with the code that also holds the credits.
  */
-export function toGptImageQuality(quality?: string | null): GptImageQuality | undefined {
-  const mapped = quality === 'standard' ? 'medium' : quality === 'hd' ? 'high' : quality;
+export function toGptImageQuality(
+  quality: string | null | undefined,
+  model: string | null | undefined
+): GptImageQuality | undefined {
+  const mapped = clampImageQualityForModel(
+    model,
+    quality === 'standard' ? 'medium' : quality === 'hd' ? 'high' : quality
+  );
   return isGptImageQuality(mapped) ? mapped : undefined;
 }
 
@@ -85,7 +99,23 @@ const truncatePromptForLog = (prompt: string): string => (prompt.length > 100 ? 
  */
 const CONTENT_POLICY_ERROR_CODES = ['moderation_blocked', 'content_policy_violation'];
 
-export function buildModerationBlockedError(error: InstanceType<typeof OpenAI.APIError>): Error | null {
+/**
+ * The provider refused the prompt on content-policy grounds. An expected, user-caused outcome:
+ * callers log it below error level so it does not page the on-call alert channel.
+ */
+export class ImageModerationBlockedError extends Error {
+  constructor(
+    message: string,
+    readonly requestId: string
+  ) {
+    super(message);
+    this.name = 'ImageModerationBlockedError';
+  }
+}
+
+export function buildModerationBlockedError(
+  error: InstanceType<typeof OpenAI.APIError>
+): ImageModerationBlockedError | null {
   const isModerationBlocked = typeof error.code === 'string' && CONTENT_POLICY_ERROR_CODES.includes(error.code);
   const isUnspecified400 = error.status === 400 && !error.code;
   if (!isModerationBlocked && !isUnspecified400) {
@@ -93,17 +123,19 @@ export function buildModerationBlockedError(error: InstanceType<typeof OpenAI.AP
   }
 
   const requestId = (error as { requestID?: string }).requestID || 'unknown';
-  return new Error(
+  return new ImageModerationBlockedError(
     `⚠️ Your image request was blocked by OpenAI's content policy. This can happen for various reasons:\n\n` +
       `1. The prompt may contain terms that trigger safety filters\n` +
       `2. Try rephrasing your prompt with more neutral language\n` +
       `3. Avoid potentially sensitive topics or explicit content\n\n` +
       `Tip: Switch to an alternative model with different content policies — e.g. ${ALTERNATIVE_IMAGE_MODELS} — which may accept this prompt.\n\n` +
-      `If you believe this is an error, you can report it to OpenAI with request ID: ${requestId}`
+      `If you believe this is an error, you can report it to OpenAI with request ID: ${requestId}`,
+    requestId
   );
 }
 
-export type OpenAIImageGenerationOptions = Omit<ImageGenerateParams, 'prompt'> & {
+export type OpenAIImageGenerationOptions = Omit<ImageGenerateParams, 'prompt' | 'quality'> & {
+  quality?: OpenAIImageQuality | null;
   safety_tolerance?: number;
   prompt_upsampling?: boolean;
   seed?: number | null;
@@ -148,9 +180,9 @@ export function resolveGptImageOutputOptions(
   if (outputFormat) {
     resolved.output_format = outputFormat;
   }
-  if (background === 'transparent' && isGPTImage2Model(model)) {
+  if (background === 'transparent' && rejectsTransparentBackground(model)) {
     delete resolved.background;
-    warnings.push("gpt-image-2 does not support background: 'transparent'; background parameter removed");
+    warnings.push(`${model} does not support background: 'transparent'; background parameter removed`);
   }
   if (resolved.background === 'transparent' && outputFormat === 'jpeg') {
     resolved.output_format = 'png';
@@ -244,9 +276,9 @@ export class OpenAIImageService extends AIImageService {
         // GPT-Image models bill by quality tier (see validateUserCredits upstream), so an
         // accepted value must actually reach OpenAI - only an unmappable value is dropped.
         if (openaiOptions.quality) {
-          const mappedQuality = toGptImageQuality(openaiOptions.quality);
+          const mappedQuality = toGptImageQuality(openaiOptions.quality, modelName);
           if (mappedQuality) {
-            openaiOptions.quality = mappedQuality;
+            openaiOptions.quality = toSdkQuality(mappedQuality);
           } else {
             parameterWarnings.push(
               `Quality parameter ('${openaiOptions.quality}') is not supported by ${modelName} and was removed`
@@ -334,7 +366,7 @@ export class OpenAIImageService extends AIImageService {
           // never asked to produce. (edit() below has its own, narrower n handling - see its
           // own comment - this invariant does not extend to that method.) The background/output_format
           // alpha controls are resolved above alongside the other gpt-image parameter validation.
-          const editQuality = toGptImageQuality(openaiOptions.quality);
+          const editQuality = toGptImageQuality(openaiOptions.quality, editModel);
           const editSize = isSupportedImageSize(editModel, openaiOptions.size) ? openaiOptions.size : undefined;
 
           // Style anchors follow the primary image; a mask (not sent on this path) would
@@ -354,10 +386,10 @@ export class OpenAIImageService extends AIImageService {
             ...gptImageOutputOptions,
           });
           result = await openai.images.edit({
-            model: editModel as 'gpt-image-1' | 'gpt-image-1.5' | 'gpt-image-1-mini' | 'gpt-image-2',
+            model: editModel,
             image: imageFiles,
             prompt,
-            ...(editQuality ? { quality: editQuality } : {}),
+            ...(editQuality ? { quality: toSdkQuality(editQuality) } : {}),
             ...(editSize ? { size: editSize } : {}),
             ...(openaiOptions.n ? { n: openaiOptions.n } : {}),
             ...gptImageOutputOptions,
@@ -383,9 +415,12 @@ export class OpenAIImageService extends AIImageService {
         }
       } else {
         this.logger.log('OpenAI image generation request:', { prompt: truncatePromptForLog(prompt), ...openaiOptions });
+        const { quality: generateQuality, ...generateOptions } = openaiOptions;
         result = await openai.images.generate({
           prompt,
-          ...openaiOptions,
+          ...generateOptions,
+          // Already mapped for GPT-Image above; the cast is only the SDK-union gap (see toSdkQuality).
+          ...(generateQuality ? { quality: generateQuality as ImageGenerateParams['quality'] } : {}),
           ...gptImageOutputOptions,
         });
       }
@@ -394,6 +429,16 @@ export class OpenAIImageService extends AIImageService {
 
       return images;
     } catch (error) {
+      // Before any error-level log: those forward to the Slack alert channel, and a content-policy
+      // block is the user's prompt being refused, not an incident.
+      if (error instanceof OpenAI.APIError) {
+        const moderationError = buildModerationBlockedError(error);
+        if (moderationError) {
+          this.logModerationBlocked(options.model, error, moderationError);
+          throw moderationError;
+        }
+      }
+
       Logger.globalInstance.error('[DEBUG] Error in OpenAI image generation:', {
         model: options.model,
         error: error,
@@ -408,12 +453,6 @@ export class OpenAIImageService extends AIImageService {
           type: error.type,
           param: error.param,
         });
-
-        // Handle moderation errors with user-friendly message
-        const moderationError = buildModerationBlockedError(error);
-        if (moderationError) {
-          throw moderationError;
-        }
 
         // Surface billing/auth/rate-limit failures with an actionable message instead of the raw
         // "Request failed with status code 402" the SDK throws. GPT Image models in particular
@@ -435,6 +474,28 @@ export class OpenAIImageService extends AIImageService {
 
       throw error instanceof Error ? error : new Error('OpenAI image generation error: Unknown error');
     }
+  }
+
+  /**
+   * Warn level keeps it out of the Slack alert channel. No prompt is logged; the provider's message/type/param
+   * are kept so an unspecified 400 that is not really a policy block can still be diagnosed.
+   */
+  private logModerationBlocked(
+    model: string | null | undefined,
+    error: InstanceType<typeof OpenAI.APIError>,
+    moderationError: ImageModerationBlockedError
+  ): void {
+    this.logger.warn('OpenAI image request blocked by content policy:', {
+      model,
+      status: error.status,
+      code: error.code,
+      type: error.type,
+      param: error.param,
+      message: error.message,
+      matchedBy:
+        typeof error.code === 'string' && CONTENT_POLICY_ERROR_CODES.includes(error.code) ? 'code' : 'unspecified400',
+      requestId: moderationError.requestId,
+    });
   }
 
   private imageResponseToUrl(response: OpenAI.Images.ImagesResponse): string[] {
@@ -542,7 +603,7 @@ export class OpenAIImageService extends AIImageService {
       const forwardSize = isSupportedImageSize(editModel, size);
       // Callers bill against the requested tier before getting here, so it has to reach
       // OpenAI; an unmappable value is dropped rather than 400-ing the whole request.
-      const editQuality = toGptImageQuality(quality);
+      const editQuality = toGptImageQuality(quality, editModel);
 
       this.logger.log('OpenAI image edit request:', {
         model: editModel,
@@ -559,12 +620,12 @@ export class OpenAIImageService extends AIImageService {
       const response = await openai.images.edit(
         isGPTImageModel(editModel)
           ? {
-              model: editModel as 'gpt-image-1' | 'gpt-image-1.5' | 'gpt-image-1-mini' | 'gpt-image-2',
+              model: editModel,
               image: [imageFile, ...referenceImageFiles],
               prompt,
               ...(forwardSize ? { size } : {}),
               ...(maskFile ? { mask: maskFile } : {}),
-              ...(editQuality ? { quality: editQuality } : {}),
+              ...(editQuality ? { quality: toSdkQuality(editQuality) } : {}),
               ...gptImageOutputOptions,
             }
           : // dall-e-2 supports: model, image (single), prompt, mask, n, size, response_format, user
@@ -603,17 +664,18 @@ export class OpenAIImageService extends AIImageService {
       throw new Error('No image was generated');
     } catch (error) {
       if (error instanceof OpenAI.APIError) {
+        // Same guidance as generate(), checked before the error-level log for the same reason.
+        const moderationError = buildModerationBlockedError(error);
+        if (moderationError) {
+          this.logModerationBlocked(model, error, moderationError);
+          throw moderationError;
+        }
+
         Logger.globalInstance.error('[DEBUG] OpenAI API error details:', {
           status: error.status,
           message: error.message,
           code: error.code,
         });
-
-        // Handle moderation errors with the same user-friendly guidance as generate()
-        const moderationError = buildModerationBlockedError(error);
-        if (moderationError) {
-          throw moderationError;
-        }
       }
       throw error instanceof Error ? error : new Error('OpenAI image edit error: Unknown error');
     }

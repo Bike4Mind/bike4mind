@@ -14,21 +14,24 @@ const {
   mockGetBreaker,
   mockClassifyOperation,
   mockRecordCircuitBreakerRejection,
+  mockFlushBreakerMetrics,
 } = vi.hoisted(() => ({
   mockIsMcpServerAvailable: vi.fn(),
   mockLocalMcpHandler: vi.fn(),
   mockGetBreaker: vi.fn(),
   mockClassifyOperation: vi.fn(),
   mockRecordCircuitBreakerRejection: vi.fn(),
+  mockFlushBreakerMetrics: vi.fn(),
 }));
 
-vi.mock('@server/services/integrationCircuitBreaker', () => ({
+vi.mock('@bike4mind/server-utils/services/integrationCircuitBreaker', () => ({
   isMcpServerAvailable: mockIsMcpServerAvailable,
 }));
 
 vi.mock('@server/services/mcpCircuitBreakers', () => ({
   getBreaker: mockGetBreaker,
   classifyOperation: mockClassifyOperation,
+  flushBreakerMetrics: mockFlushBreakerMetrics,
   CircuitBreakerError,
 }));
 
@@ -51,7 +54,7 @@ vi.mock('@bike4mind/database', () => ({
   INTEGRATION_AUDIT_INTEGRATION_NAMES: ['github', 'atlassian', 'slack', 'linear', 'notion', 'optihashi'],
 }));
 
-vi.mock('@server/utils/cloudwatch', () => ({
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   recordRateLimitEvent: vi.fn(),
   recordCircuitBreakerRejection: mockRecordCircuitBreakerRejection,
 }));
@@ -75,6 +78,8 @@ vi.mock('@bike4mind/common', async importOriginal => ({
 vi.stubEnv('IS_LOCAL', 'true');
 
 import { invokeMcpHandler } from './invokeMcpHandler';
+
+const USER_ID = 'user-1';
 
 // Mock breaker whose execute() runs the given function
 function createMockBreaker() {
@@ -100,6 +105,7 @@ describe('invokeMcpHandler circuit breaker', () => {
     mockGetBreaker.mockReturnValue(createMockBreaker());
     mockClassifyOperation.mockReturnValue('read');
     mockRecordCircuitBreakerRejection.mockResolvedValue(undefined);
+    mockFlushBreakerMetrics.mockResolvedValue(undefined);
   });
 
   describe('DB-backed circuit breaker (Layer 1)', () => {
@@ -151,13 +157,24 @@ describe('invokeMcpHandler circuit breaker', () => {
       const mockBreaker = createMockBreaker();
       mockGetBreaker.mockReturnValue(mockBreaker);
 
-      const payload = { name: 'github', action: 'callTool', params: {} } as Parameters<typeof invokeMcpHandler>[0];
+      const payload = { name: 'github', action: 'callTool', userId: USER_ID, params: {} } as Parameters<
+        typeof invokeMcpHandler
+      >[0];
 
       await invokeMcpHandler(payload);
 
       expect(mockClassifyOperation).toHaveBeenCalledWith('callTool', undefined);
-      expect(mockGetBreaker).toHaveBeenCalledWith('github', 'read');
+      expect(mockGetBreaker).toHaveBeenCalledWith(USER_ID, 'github', 'read');
       expect(mockBreaker.execute).toHaveBeenCalledOnce();
+    });
+
+    it('should run a call with no user outside any shared breaker', async () => {
+      const payload = { name: 'github', action: 'callTool', params: {} } as Parameters<typeof invokeMcpHandler>[0];
+
+      await expect(invokeMcpHandler(payload)).resolves.toEqual({ result: 'ok' });
+
+      expect(mockGetBreaker).not.toHaveBeenCalled();
+      expect(mockLocalMcpHandler).toHaveBeenCalledOnce();
     });
 
     it('should pass "write" op type for write operations', async () => {
@@ -165,14 +182,18 @@ describe('invokeMcpHandler circuit breaker', () => {
       const mockBreaker = createMockBreaker();
       mockGetBreaker.mockReturnValue(mockBreaker);
 
-      const payload = { name: 'github', action: 'callTool', toolName: 'create_issue', params: {} } as Parameters<
-        typeof invokeMcpHandler
-      >[0];
+      const payload = {
+        name: 'github',
+        action: 'callTool',
+        toolName: 'create_issue',
+        userId: USER_ID,
+        params: {},
+      } as Parameters<typeof invokeMcpHandler>[0];
 
       await invokeMcpHandler(payload);
 
       expect(mockClassifyOperation).toHaveBeenCalledWith('callTool', 'create_issue');
-      expect(mockGetBreaker).toHaveBeenCalledWith('github', 'write');
+      expect(mockGetBreaker).toHaveBeenCalledWith(USER_ID, 'github', 'write');
     });
 
     it('should pass "read" op type for read operations', async () => {
@@ -180,20 +201,26 @@ describe('invokeMcpHandler circuit breaker', () => {
       const mockBreaker = createMockBreaker();
       mockGetBreaker.mockReturnValue(mockBreaker);
 
-      const payload = { name: 'github', action: 'callTool', toolName: 'get_issue', params: {} } as Parameters<
-        typeof invokeMcpHandler
-      >[0];
+      const payload = {
+        name: 'github',
+        action: 'callTool',
+        toolName: 'get_issue',
+        userId: USER_ID,
+        params: {},
+      } as Parameters<typeof invokeMcpHandler>[0];
 
       await invokeMcpHandler(payload);
 
       expect(mockClassifyOperation).toHaveBeenCalledWith('callTool', 'get_issue');
-      expect(mockGetBreaker).toHaveBeenCalledWith('github', 'read');
+      expect(mockGetBreaker).toHaveBeenCalledWith(USER_ID, 'github', 'read');
     });
 
     it('should convert CircuitBreakerError to user-friendly message', async () => {
       mockGetBreaker.mockReturnValue(createOpenBreaker('github'));
 
-      const payload = { name: 'github', action: 'callTool', params: {} } as Parameters<typeof invokeMcpHandler>[0];
+      const payload = { name: 'github', action: 'callTool', userId: USER_ID, params: {} } as Parameters<
+        typeof invokeMcpHandler
+      >[0];
 
       await expect(invokeMcpHandler(payload)).rejects.toThrow(
         'github integration is temporarily unavailable due to repeated failures'
@@ -203,11 +230,71 @@ describe('invokeMcpHandler circuit breaker', () => {
     it('should emit CloudWatch rejection metric when circuit breaker rejects', async () => {
       mockGetBreaker.mockReturnValue(createOpenBreaker('github'));
 
-      const payload = { name: 'github', action: 'callTool', params: {} } as Parameters<typeof invokeMcpHandler>[0];
+      const payload = { name: 'github', action: 'callTool', userId: USER_ID, params: {} } as Parameters<
+        typeof invokeMcpHandler
+      >[0];
 
       await expect(invokeMcpHandler(payload)).rejects.toThrow();
 
       expect(mockRecordCircuitBreakerRejection).toHaveBeenCalledWith('github');
+    });
+
+    // The throw ends the invocation, so the rejection metric must land before it.
+    it('does not throw the rejection until the rejection metric has settled', async () => {
+      mockGetBreaker.mockReturnValue(createOpenBreaker('github'));
+      let releaseMetric: () => void = () => {};
+      mockRecordCircuitBreakerRejection.mockReturnValueOnce(
+        new Promise<void>(resolve => {
+          releaseMetric = resolve;
+        })
+      );
+      let settled = false;
+
+      const call = invokeMcpHandler({
+        name: 'github',
+        action: 'callTool',
+        userId: USER_ID,
+        params: {},
+      } as Parameters<typeof invokeMcpHandler>[0]).catch((error: unknown) => {
+        settled = true;
+        throw error;
+      });
+      const outcome = expect(call).rejects.toThrow('temporarily unavailable');
+
+      await vi.waitFor(() => expect(mockRecordCircuitBreakerRejection).toHaveBeenCalledWith('github'));
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(settled).toBe(false);
+
+      releaseMetric();
+      await outcome;
+    });
+
+    // Transition metrics are started inside the breaker; the invocation must drain them before it returns.
+    it('does not settle until pending breaker transition metrics are flushed', async () => {
+      let releaseFlush: () => void = () => {};
+      mockFlushBreakerMetrics.mockReturnValueOnce(
+        new Promise<void>(resolve => {
+          releaseFlush = resolve;
+        })
+      );
+      let settled = false;
+
+      const call = invokeMcpHandler({
+        name: 'github',
+        action: 'callTool',
+        userId: USER_ID,
+        params: {},
+      } as Parameters<typeof invokeMcpHandler>[0]).then(result => {
+        settled = true;
+        return result;
+      });
+
+      await vi.waitFor(() => expect(mockFlushBreakerMetrics).toHaveBeenCalled());
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(settled).toBe(false);
+
+      releaseFlush();
+      await expect(call).resolves.toEqual({ result: 'ok' });
     });
 
     it('should propagate non-CircuitBreakerError errors unchanged', async () => {
@@ -218,7 +305,9 @@ describe('invokeMcpHandler circuit breaker', () => {
       };
       mockGetBreaker.mockReturnValue(mockBreaker);
 
-      const payload = { name: 'github', action: 'callTool', params: {} } as Parameters<typeof invokeMcpHandler>[0];
+      const payload = { name: 'github', action: 'callTool', userId: USER_ID, params: {} } as Parameters<
+        typeof invokeMcpHandler
+      >[0];
 
       await expect(invokeMcpHandler(payload)).rejects.toThrow('MCP handler invocation failed: 502');
     });
@@ -232,7 +321,9 @@ describe('invokeMcpHandler circuit breaker', () => {
       const mockBreaker = createMockBreaker();
       mockGetBreaker.mockReturnValue(mockBreaker);
 
-      const payload = { name: 'github', action: 'callTool', params: {} } as Parameters<typeof invokeMcpHandler>[0];
+      const payload = { name: 'github', action: 'callTool', userId: USER_ID, params: {} } as Parameters<
+        typeof invokeMcpHandler
+      >[0];
 
       await expect(invokeMcpHandler(payload)).rejects.toThrow('github blocked by admin');
 

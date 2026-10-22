@@ -1,0 +1,235 @@
+import { api } from '@client/app/contexts/ApiContext';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { GitHubLakeConnectionStatus, GitHubLakeRepositoryChoicesResponse } from '@bike4mind/common';
+import { dataLakeKeys } from '@client/app/hooks/data/dataLakeKeys';
+import { invalidateLakeFileQueries } from '@client/app/hooks/data/invalidateLakeFileQueries';
+
+/**
+ * Wire shape of GET /api/data-lakes/:id/github-connection - IOrgGitHubLakeConnectionResponse with
+ * its dates serialized. Must stay in sync with toGitHubLakeConnectionResponse (githubLakeConnection.ts).
+ */
+export type LakeGitHubConnection = {
+  id: string;
+  accountLogin: string;
+  repositoryId: number;
+  repositoryFullName: string;
+  connectedBy: string;
+  connectedAt: string;
+  enabled: boolean;
+  status: GitHubLakeConnectionStatus;
+  lastError: string | null;
+  defaultBranch: string | null;
+  lastSyncedAt: string | null;
+  lastSyncedCommitSha: string | null;
+  /** The latest tree read's split under the sync rules (GitHubLakeTreeCounts); null until a sync read it. */
+  candidateCount: number | null;
+  skippedCount: number | null;
+  /** 'syncing' whose claim went stale (a crashed run): re-syncable, and not worth fast-polling. */
+  syncStale: boolean;
+  /** Files this connection has ingested into the lake - disconnecting deletes all of them. */
+  fileCount: number;
+  /** A disconnect was accepted and its file purge is running in the background. */
+  disconnecting: boolean;
+  /** The pending purge has made no progress for GITHUB_DISCONNECT_STALL_MS, so a retry may re-queue it. */
+  disconnectStalled: boolean;
+  /** Where the Access lost state's "Fix on GitHub" goes; null when the App is unconfigured. */
+  fixAccessUrl: string | null;
+};
+
+export const GITHUB_CONNECTION_ACTIVE_POLL_MS = 4_000;
+/** Keeps polling once connected for the same reason as DRIVE_CONNECTION_IDLE_POLL_MS (googleDrive.ts). */
+export const GITHUB_CONNECTION_IDLE_POLL_MS = 20_000;
+
+export function gitHubConnectionPollInterval(connection: LakeGitHubConnection | null | undefined): number | false {
+  if (!connection) return false;
+  const active = connection.disconnecting || (connection.status === 'syncing' && !connection.syncStale);
+  return active ? GITHUB_CONNECTION_ACTIVE_POLL_MS : GITHUB_CONNECTION_IDLE_POLL_MS;
+}
+
+/**
+ * The repository feeding a lake, or null (a personal lake resolves null rather than 404, as Drive's
+ * does). `isError` is a genuine failure: missing lake, or a caller with no standing on its org.
+ * Every GitHub lake route 403s while EnableDataLakeGitHub is off: a caller that can mount without the
+ * flag passes it as `enabled` (LakeSourceConnectActions, LakeGitHubStatusChip); GitHubConnectAction
+ * only ever mounts behind it.
+ */
+export function useLakeGitHubConnection(dataLakeId?: string, enabled = true) {
+  const options = useLakeGitHubConnectionOptions(dataLakeId, enabled);
+  return useQuery({ ...options, select: response => response.connection });
+}
+
+/**
+ * Whether the caller may connect, re-sync or disconnect the lake's repository. The status read also
+ * admits an appointed org admin, who can see the connection but not operate it, so the controls key
+ * off this. Shares useLakeGitHubConnection's query; a payload without the flag reads as `false`, so a dropped field fails closed.
+ */
+export function useLakeGitHubCanManage(dataLakeId?: string, enabled = true) {
+  const options = useLakeGitHubConnectionOptions(dataLakeId, enabled);
+  return useQuery({ ...options, select: response => response.canManage === true });
+}
+
+type LakeGitHubConnectionResponse = { connection: LakeGitHubConnection | null; canManage: boolean };
+
+function useLakeGitHubConnectionOptions(dataLakeId: string | undefined, enabled: boolean) {
+  const queryClient = useQueryClient();
+  return {
+    queryKey: dataLakeKeys.gitHubConnection(dataLakeId),
+    enabled: !!dataLakeId && enabled,
+    queryFn: async (): Promise<LakeGitHubConnectionResponse> => {
+      const response = await api.get<LakeGitHubConnectionResponse>(`/api/data-lakes/${dataLakeId}/github-connection`);
+      const next = response.data.connection;
+      // A sync ingests in the background, so the lake's file lists and counts only go stale as it
+      // lands; refresh them whenever a poll shows the ingested set changed or a sync finished.
+      const cached = queryClient.getQueryData<LakeGitHubConnectionResponse>(dataLakeKeys.gitHubConnection(dataLakeId));
+      const previous = cached?.connection;
+      const syncFinished = previous?.status === 'syncing' && next?.status !== 'syncing';
+      // `null` (no connection yet) still counts as a known prior state: a first sync that lands before
+      // the first poll after connecting must refresh the file lists too.
+      if (dataLakeId && cached !== undefined && (syncFinished || next?.fileCount !== previous?.fileCount)) {
+        void invalidateLakeFileQueries(queryClient, dataLakeId);
+      }
+      return response.data;
+    },
+    refetchInterval: (query: { state: { data?: LakeGitHubConnectionResponse } }) =>
+      enabled ? gitHubConnectionPollInterval(query.state.data?.connection) : false,
+  };
+}
+
+/**
+ * Mint the signed authorize URL for a lake (POST /api/data-lakes/:id/github-connection).
+ * `ensureConnectorFed` has the server switch a curated lake to connector-fed in the same request, only
+ * once the start is accepted. The lake's origin and config history are marked stale once the switching
+ * start settles (even on a lost response, since the server may have committed): the browser usually
+ * leaves for GitHub before a refetch lands, so they refresh on the next mount (the callback return,
+ * or Back), or right away if the handoff fails and the page stays.
+ */
+export function useStartLakeGitHubConnect() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ dataLakeId, ensureConnectorFed }: { dataLakeId: string; ensureConnectorFed?: boolean }) => {
+      const response = await api.post<{ authorizeUrl: string }>(
+        `/api/data-lakes/${dataLakeId}/github-connection`,
+        ensureConnectorFed ? { ensureConnectorFed: true } : undefined
+      );
+      return response.data;
+    },
+    onSettled: (_data, _error, { dataLakeId, ensureConnectorFed }) => {
+      if (!ensureConnectorFed) return;
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(dataLakeId) });
+    },
+  });
+}
+
+/**
+ * The authorize leg's exchange (POST /api/data-lakes/github-callback): hands GitHub's `code` back
+ * with the `state` that minted it, and gets back which lake to reopen the repository picker for.
+ * Binds nothing - the server only holds the user's GitHub token for the picker to read.
+ */
+export function useAuthorizeLakeGitHubConnect() {
+  return useMutation({
+    mutationFn: async (input: { state: string; code: string }) => {
+      const response = await api.post<{ dataLakeId: string }>('/api/data-lakes/github-callback', input);
+      return response.data;
+    },
+  });
+}
+
+/**
+ * The repository picker's list for one lake's connect flow (GET .../github-connection/repositories),
+ * read with the GitHub user token the authorize exchange left held server-side. `retry: false`
+ * because a failure here is a 403 (the flow expired) - retrying it cannot succeed. No polling and no
+ * refetch-on-focus: the user drives freshness explicitly with the picker's Refresh button.
+ */
+export function useLakeGitHubRepositoryChoices(dataLakeId: string | undefined, enabled: boolean) {
+  return useQuery({
+    queryKey: dataLakeKeys.gitHubRepositoryChoices(dataLakeId),
+    enabled: !!dataLakeId && enabled,
+    retry: false,
+    staleTime: 0,
+    refetchOnWindowFocus: false,
+    queryFn: async () => {
+      const response = await api.get<GitHubLakeRepositoryChoicesResponse>(
+        `/api/data-lakes/${dataLakeId}/github-connection/repositories`
+      );
+      return response.data;
+    },
+  });
+}
+
+/** Bind the repository picked from the list (POST /api/data-lakes/:id/github-connection/complete). */
+export function useCompleteLakeGitHubConnect() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { dataLakeId: string; installationId: number; repositoryId: number }) => {
+      const { dataLakeId, ...body } = input;
+      const response = await api.post<{ connection: LakeGitHubConnection }>(
+        `/api/data-lakes/${dataLakeId}/github-connection/complete`,
+        body
+      );
+      return response.data.connection;
+    },
+    onSuccess: (connection, { dataLakeId }) => {
+      // Seed the bound connection and refetch in the background: an awaited invalidation would hold
+      // the picker's spinner until every observer of the key refetched.
+      // Only a caller who passed the connect gate reaches here, so the seeded envelope can manage.
+      queryClient.setQueryData<LakeGitHubConnectionResponse>(dataLakeKeys.gitHubConnection(dataLakeId), {
+        connection,
+        canManage: true,
+      });
+      void queryClient.invalidateQueries({ queryKey: dataLakeKeys.gitHubConnection(dataLakeId) });
+      // The picker's list is now stale (the bound repository must show as taken); a closed picker
+      // just refetches fresh next time it opens rather than carrying this invalidation forward.
+      queryClient.removeQueries({ queryKey: dataLakeKeys.gitHubRepositoryChoices(dataLakeId) });
+    },
+  });
+}
+
+/** Queue a manual re-sync (POST /api/data-lakes/:id/github-connection/sync, 202). */
+export function useResyncLakeGitHub() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (dataLakeId: string) => {
+      await api.post(`/api/data-lakes/${dataLakeId}/github-connection/sync`);
+    },
+    onSuccess: (_data, dataLakeId) => {
+      void queryClient.invalidateQueries({ queryKey: dataLakeKeys.gitHubConnection(dataLakeId) });
+    },
+  });
+}
+
+/**
+ * Disconnect a lake's repository. The route only queues the purge (202), so the connection reads
+ * back as `disconnecting` until the purge releases it (useLakeGitHubConnection keeps the file lists
+ * fresh); a 204 means there was no connection to disconnect.
+ */
+export function useDisconnectLakeGitHub() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (dataLakeId: string) => {
+      const response = await api.delete(`/api/data-lakes/${dataLakeId}/github-connection`);
+      // Keyed on the status, not the body's `queued` (whether a NEW purge message was sent): a repeat
+      // disconnect answers 202 with `queued: false` while the first purge is still running.
+      return { disconnecting: response.status === 202 };
+    },
+    onSuccess: ({ disconnecting }, dataLakeId) => {
+      // Show the outcome now and refresh in the background: awaiting the refetches (the tag-count
+      // prefix spans every lake) held the confirm spinner for the length of the slowest one.
+      // The disconnect route is manage-gated, so the caller can manage whichever envelope this leaves behind.
+      queryClient.setQueryData<LakeGitHubConnectionResponse>(dataLakeKeys.gitHubConnection(dataLakeId), previous =>
+        disconnecting
+          ? previous && {
+              ...previous,
+              connection: previous.connection && {
+                ...previous.connection,
+                disconnecting: true,
+                disconnectStalled: false,
+              },
+            }
+          : { connection: null, canManage: true }
+      );
+      void queryClient.invalidateQueries({ queryKey: dataLakeKeys.gitHubConnection(dataLakeId) });
+      void invalidateLakeFileQueries(queryClient, dataLakeId);
+    },
+  });
+}

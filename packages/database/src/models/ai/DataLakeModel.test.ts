@@ -340,6 +340,23 @@ describe('DataLakeRepository.countGateExcludedLakes', () => {
     expect(await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob')).toBe(0);
   });
 
+  it('counts a gated lake in an org the caller administers but is not a member of, and not for a stranger', async () => {
+    await dataLakeRepository.create(
+      baseLake({ slug: 'gated-in-x', organizationId: 'orgX', createdByUserId: 'alice', requiredUserTag: 'tag' })
+    );
+
+    expect(
+      await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob', { administeredOrgIds: ['orgX'] })
+    ).toBe(1);
+    expect(
+      await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob', { administeredOrgIds: ['orgY'] })
+    ).toBe(0);
+    expect(await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob', { administeredOrgIds: [] })).toBe(
+      0
+    );
+    expect(await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob')).toBe(0);
+  });
+
   it('counts a gated PUBLIC lake app-wide, even with no shared org', async () => {
     await dataLakeRepository.create(
       baseLake({ slug: 'public-gated', organizationId: 'orgB', isPublic: true, requiredUserTag: 'tag' })
@@ -451,6 +468,257 @@ describe('DataLakeRepository.countGateExcludedLakes', () => {
         restrictToTags: ['datalake:does-not-exist'],
       })
     ).toBe(0);
+  });
+
+  describe('restrictToTags (identity-named lakes)', () => {
+    it('counts a named PRIVATE gateless lake owned by someone else when the caller may see every lake', async () => {
+      const privateLake = await dataLakeRepository.create(
+        baseLake({ slug: 'private-other', organizationId: 'orgA', createdByUserId: 'alice' })
+      );
+      await dataLakeRepository.create(baseLake({ slug: 'mine', createdByUserId: 'bob' }));
+
+      expect(
+        await dataLakeRepository.countGateExcludedLakes([], [], [], 'bob', {
+          restrictToTags: [privateLake.datalakeTag],
+          callerMaySeeAllLakes: true,
+        })
+      ).toBe(1);
+    });
+
+    it('counts a named lake in another org, gated or not, when the caller may see every lake', async () => {
+      const gated = await dataLakeRepository.create(
+        baseLake({ slug: 'gated-in-b', organizationId: 'orgB', requiredUserTag: 'tag' })
+      );
+      const gateless = await dataLakeRepository.create(baseLake({ slug: 'open-in-b', organizationId: 'orgB' }));
+
+      expect(
+        await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob', {
+          restrictToTags: [gated.datalakeTag, gateless.datalakeTag],
+          callerMaySeeAllLakes: true,
+        })
+      ).toBe(2);
+    });
+
+    it('counts a named org lake for a non-member who administers that org, and still not for a stranger', async () => {
+      const orgLake = await dataLakeRepository.create(
+        baseLake({ slug: 'org-x-private', organizationId: 'orgX', createdByUserId: 'alice', requiredUserTag: 'tag' })
+      );
+      const restrictToTags = [orgLake.datalakeTag];
+
+      expect(
+        await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob', {
+          restrictToTags,
+          administeredOrgIds: ['orgX'],
+        })
+      ).toBe(1);
+      expect(
+        await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob', {
+          restrictToTags,
+          administeredOrgIds: ['orgY'],
+        })
+      ).toBe(0);
+      expect(
+        await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob', {
+          restrictToTags,
+          administeredOrgIds: [],
+        })
+      ).toBe(0);
+    });
+
+    it('does not let an administered org widen reach: a gateless org lake still counts for a non-member admin', async () => {
+      const gateless = await dataLakeRepository.create(
+        baseLake({ slug: 'org-x-gateless', organizationId: 'orgX', createdByUserId: 'alice' })
+      );
+      expect(
+        await dataLakeRepository.countGateExcludedLakes([], [], [], 'bob', {
+          restrictToTags: [gateless.datalakeTag],
+          administeredOrgIds: ['orgX'],
+        })
+      ).toBe(1);
+    });
+
+    it('never counts a named lake the caller could not already see exist (guessed tag), unless they may see all', async () => {
+      const hidden = await dataLakeRepository.create(
+        baseLake({ slug: 'hidden-private', organizationId: 'orgB', createdByUserId: 'alice', requiredUserTag: 'tag' })
+      );
+      const restrictToTags = [hidden.datalakeTag];
+
+      expect(await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob', { restrictToTags })).toBe(0);
+      expect(
+        await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob', {
+          restrictToTags,
+          callerMaySeeAllLakes: false,
+        })
+      ).toBe(0);
+      expect(
+        await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob', {
+          restrictToTags,
+          callerMaySeeAllLakes: true,
+        })
+      ).toBe(1);
+    });
+
+    it('counts a named lake visible to a non-admin (own org, gated) that they cannot reach', async () => {
+      const gated = await dataLakeRepository.create(
+        baseLake({ slug: 'gated-in-a', organizationId: 'orgA', requiredUserTag: 'tag' })
+      );
+
+      expect(
+        await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob', {
+          restrictToTags: [gated.datalakeTag],
+        })
+      ).toBe(1);
+    });
+
+    it('drives the public arm: a public gateless lake is reachable, a public gated lake is counted only where the caller could see it', async () => {
+      const open = await dataLakeRepository.create(
+        baseLake({ slug: 'public-open', organizationId: 'orgB', isPublic: true })
+      );
+      const gatedElsewhere = await dataLakeRepository.create(
+        baseLake({ slug: 'public-gated', organizationId: 'orgB', isPublic: true, requiredUserTag: 'tag' })
+      );
+      const gatedInOwnOrg = await dataLakeRepository.create(
+        baseLake({ slug: 'public-gated-own-org', organizationId: 'orgA', isPublic: true, requiredUserTag: 'tag' })
+      );
+      const count = (tag: string, callerMaySeeAllLakes?: boolean) =>
+        dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob', {
+          restrictToTags: [tag],
+          callerMaySeeAllLakes,
+        });
+
+      expect(await count(open.datalakeTag)).toBe(0);
+      expect(await count(open.datalakeTag, true)).toBe(0);
+      // Hidden from the caller by its gate, so a guessed tag must not confirm it exists.
+      expect(await count(gatedElsewhere.datalakeTag)).toBe(0);
+      expect(await count(gatedElsewhere.datalakeTag, true)).toBe(1);
+      expect(await count(gatedInOwnOrg.datalakeTag)).toBe(1);
+    });
+
+    it('counts an org-less private lake owned by someone else only for a caller who may see every lake', async () => {
+      const orgless = await dataLakeRepository.create(baseLake({ slug: 'private-orgless', createdByUserId: 'alice' }));
+      const restrictToTags = [orgless.datalakeTag];
+
+      expect(
+        await dataLakeRepository.countGateExcludedLakes([], [], [], 'bob', {
+          restrictToTags,
+          callerMaySeeAllLakes: true,
+        })
+      ).toBe(1);
+      expect(await dataLakeRepository.countGateExcludedLakes([], [], [], 'bob', { restrictToTags })).toBe(0);
+      expect(await dataLakeRepository.countGateExcludedLakes([], [], undefined, undefined, { restrictToTags })).toBe(0);
+    });
+
+    it('takes the account-wide branch for an empty restrictToTags rather than matching nothing', async () => {
+      await dataLakeRepository.create(baseLake({ slug: 'gated-in-a', organizationId: 'orgA', requiredUserTag: 'tag' }));
+
+      expect(await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob', { restrictToTags: [] })).toBe(1);
+    });
+
+    it('splits the named lakes into exactly the set retrieval returns and the set the count reports (parity)', async () => {
+      const fixtures = [
+        baseLake({ slug: 'own', createdByUserId: 'bob' }),
+        baseLake({ slug: 'org-open', organizationId: 'orgA' }),
+        baseLake({ slug: 'org-gated', organizationId: 'orgA', requiredUserTag: 'tag' }),
+        baseLake({ slug: 'org-entitled', organizationId: 'orgA', requiredEntitlement: 'medlib:pro' }),
+        baseLake({ slug: 'public-open', organizationId: 'orgB', isPublic: true }),
+        baseLake({ slug: 'public-gated', organizationId: 'orgB', isPublic: true, requiredUserTag: 'tag' }),
+        baseLake({ slug: 'other-org', organizationId: 'orgB', createdByUserId: 'alice' }),
+        baseLake({ slug: 'private-other', createdByUserId: 'alice' }),
+      ];
+      const created = await Promise.all(fixtures.map(f => dataLakeRepository.create(f)));
+      const tagOf = new Map(created.map(l => [l.slug, l.datalakeTag]));
+      const callerArgs = [[], [], ['orgA'], 'bob'] as const;
+      const countOf = (slugs: string[]) =>
+        dataLakeRepository.countGateExcludedLakes(...callerArgs, {
+          restrictToTags: slugs.map(slug => tagOf.get(slug) as string),
+          callerMaySeeAllLakes: true,
+        });
+
+      const reachable = (await dataLakeRepository.findActiveByUserTagsAndEntitlements(...callerArgs))
+        .map(l => l.slug)
+        .sort();
+      const unreachable = fixtures.map(f => f.slug).filter(slug => !reachable.includes(slug));
+
+      expect(reachable).toEqual(['org-open', 'own', 'public-open']);
+      expect(await countOf(reachable)).toBe(0);
+      expect(await countOf(unreachable)).toBe(unreachable.length);
+      expect(unreachable).toHaveLength(5);
+    });
+
+    it('does not count a named lake the caller reaches (own lake, gateless org lake, held tag, user grant)', async () => {
+      const own = await dataLakeRepository.create(baseLake({ slug: 'own', createdByUserId: 'bob' }));
+      const orgOpen = await dataLakeRepository.create(baseLake({ slug: 'org-open', organizationId: 'orgA' }));
+      const tagged = await dataLakeRepository.create(
+        baseLake({ slug: 'tagged', organizationId: 'orgA', requiredUserTag: 'medlib' })
+      );
+      const granted = await dataLakeRepository.create(
+        baseLake({ slug: 'granted', organizationId: 'orgB', createdByUserId: 'alice' })
+      );
+
+      expect(
+        await dataLakeRepository.countGateExcludedLakes(['medlib'], [], ['orgA'], 'bob', {
+          grantedLakeIds: [granted.id],
+          restrictToTags: [own.datalakeTag, orgOpen.datalakeTag, tagged.datalakeTag, granted.datalakeTag],
+        })
+      ).toBe(0);
+    });
+
+    it('counts a named lake the caller created but no longer owns (superseded)', async () => {
+      const transferred = await dataLakeRepository.create(baseLake({ slug: 'transferred', createdByUserId: 'alice' }));
+
+      expect(
+        await dataLakeRepository.countGateExcludedLakes([], [], [], 'alice', {
+          supersededOwnLakeIds: [transferred.id],
+          restrictToTags: [transferred.datalakeTag],
+        })
+      ).toBe(1);
+    });
+
+    it('an ORG grant exempts a named lake only in its own org (multi-org caller)', async () => {
+      const inB = await dataLakeRepository.create(
+        baseLake({ slug: 'named-in-b', organizationId: 'orgB', createdByUserId: 'alice', requiredUserTag: 'tag' })
+      );
+
+      expect(
+        await dataLakeRepository.countGateExcludedLakes([], [], ['orgA', 'orgB'], 'bob', {
+          orgGrantedLakes: { orgB: [inB.id] },
+          restrictToTags: [inB.datalakeTag],
+        })
+      ).toBe(0);
+      expect(
+        await dataLakeRepository.countGateExcludedLakes([], [], ['orgA', 'orgB'], 'bob', {
+          orgGrantedLakes: { orgA: [inB.id] },
+          restrictToTags: [inB.datalakeTag],
+        })
+      ).toBe(1);
+    });
+
+    it('counts a named lake gated only by an entitlement the caller lacks, and not one the caller holds', async () => {
+      const gated = await dataLakeRepository.create(
+        baseLake({ slug: 'entitled', organizationId: 'orgA', requiredEntitlement: 'medlib:pro' })
+      );
+
+      expect(
+        await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob', {
+          restrictToTags: [gated.datalakeTag],
+        })
+      ).toBe(1);
+      expect(
+        await dataLakeRepository.countGateExcludedLakes([], ['medlib:pro'], ['orgA'], 'bob', {
+          restrictToTags: [gated.datalakeTag],
+        })
+      ).toBe(0);
+    });
+
+    it('does not count a named lake that is not active', async () => {
+      const draft = await dataLakeRepository.create(
+        baseLake({ slug: 'draft-other', createdByUserId: 'alice', status: 'draft' })
+      );
+
+      expect(
+        await dataLakeRepository.countGateExcludedLakes([], [], [], 'bob', { restrictToTags: [draft.datalakeTag] })
+      ).toBe(0);
+    });
   });
 
   it('never returns a lake document - count only, defense-in-depth stays with the caller', async () => {
@@ -1487,6 +1755,29 @@ describe('DataLakeBatchRepository.markTerminalIfActive — completionReason', ()
     const finalized = await dataLakeBatchRepository.markTerminalIfActive(batch.id, 'completed');
     expect(finalized?.status).toBe('completed');
     expect(finalized?.completionReason).toBeUndefined();
+  });
+});
+
+describe('DataLakeBatchRepository.claimUploadHistory - one upload History row per batch', () => {
+  setupMongoTest();
+
+  it('lets exactly one caller claim, and a reopen does not release the claim', async () => {
+    const batch = await dataLakeBatchRepository.create({
+      dataLakeId: 'lake1',
+      userId: 'u1',
+      files: [{ fabFileId: 'f1', fileName: 'a.txt', status: 'failed', error: 'enqueue: boom' }],
+    });
+    await dataLakeBatchRepository.markTerminalIfActive(batch.id, 'completed_with_errors');
+    expect(await dataLakeBatchRepository.claimUploadHistory(batch.id)).toBe(true);
+    expect(await dataLakeBatchRepository.claimUploadHistory(batch.id)).toBe(false);
+
+    const reopened = await dataLakeBatchRepository.reopenFinalizedWithErrors(batch.id, {
+      fabFileId: 'f1',
+      errorPrefix: 'enqueue:',
+    });
+    expect(reopened?.status).toBe('processing');
+    await dataLakeBatchRepository.markTerminalIfActive(batch.id, 'completed');
+    expect(await dataLakeBatchRepository.claimUploadHistory(batch.id)).toBe(false);
   });
 });
 
@@ -2829,7 +3120,7 @@ describe('DataLakeRepository purge-accept claims (#1744)', () => {
     expect(await dataLakeRepository.releasePurgingToDeleted(created.id, 'claim-a')).toBe(true);
     const released = await DataLakeModel.findById(created.id).lean();
     expect(released?.status).toBe('deleted');
-    expect(released).not.toHaveProperty('purgeClaimId');
+    expect(released?.purgeClaimId).toBe('claim-a');
   });
 
   it('releases nothing when the lake is not purging, so it can never resurrect another transition', async () => {
@@ -3528,5 +3819,83 @@ describe('origin', () => {
         origin: 'machine-fed',
       })
     ).rejects.toThrow();
+  });
+});
+
+describe('DataLakeRepository - pendingConnector', () => {
+  setupMongoTest();
+
+  it.each(['github', 'googleDrive'] as const)('round-trips %s', async connector => {
+    const created = await dataLakeRepository.create(
+      baseLake({ slug: `pending-${connector}`, pendingConnector: connector })
+    );
+    const found = await dataLakeRepository.findById(created.id);
+    expect(found?.pendingConnector).toBe(connector);
+  });
+
+  it('rejects a value outside the connector enum', async () => {
+    await expect(
+      DataLakeModel.create({
+        name: 'Bad',
+        slug: 'bad-pending-connector',
+        fileTagPrefix: 'bad:',
+        datalakeTag: 'datalake:bad-pending-connector',
+        createdByUserId: 'user-1',
+        pendingConnector: 'dropbox',
+      })
+    ).rejects.toThrow();
+  });
+
+  it('reads back undefined on a lake created without it, and clearing it is a no-op', async () => {
+    const created = await dataLakeRepository.create(baseLake({ slug: 'no-pending-connector' }));
+    expect((await dataLakeRepository.findById(created.id))?.pendingConnector).toBeUndefined();
+
+    await expect(dataLakeRepository.clearPendingConnector(created.id)).resolves.toBeUndefined();
+    expect((await dataLakeRepository.findById(created.id))?.pendingConnector).toBeUndefined();
+  });
+
+  it('clearPendingConnector removes the key rather than writing null', async () => {
+    const created = await dataLakeRepository.create(baseLake({ slug: 'clear-pending', pendingConnector: 'github' }));
+
+    await dataLakeRepository.clearPendingConnector(created.id);
+
+    const raw = await DataLakeModel.collection.findOne({ _id: new mongoose.Types.ObjectId(created.id) });
+    expect(raw).not.toBeNull();
+    expect(raw).not.toHaveProperty('pendingConnector');
+  });
+});
+
+describe('DataLakeRepository - renameIfPlaceholderAndClearPending', () => {
+  setupMongoTest();
+  const PLACEHOLDER = 'Placeholder lake';
+
+  it('renames a placeholder lake and clears its pending connector, leaving slug and tags alone', async () => {
+    const created = await dataLakeRepository.create(
+      baseLake({ slug: 'gh-placeholder', name: PLACEHOLDER, pendingConnector: 'github' })
+    );
+
+    const before = await dataLakeRepository.renameIfPlaceholderAndClearPending(created.id, PLACEHOLDER, 'acme/repo');
+
+    expect(before?.name).toBe(PLACEHOLDER);
+    const after = await DataLakeModel.findById(created.id).lean();
+    expect(after?.name).toBe('acme/repo');
+    expect(after).not.toHaveProperty('pendingConnector');
+    expect(after?.slug).toBe(created.slug);
+    expect(after?.datalakeTag).toBe(created.datalakeTag);
+    expect(after?.fileTagPrefix).toBe(created.fileTagPrefix);
+  });
+
+  it('keeps a name the user already changed but still clears the pending connector', async () => {
+    const created = await dataLakeRepository.create(
+      baseLake({ slug: 'gh-renamed', name: 'My own name', pendingConnector: 'github' })
+    );
+
+    await expect(
+      dataLakeRepository.renameIfPlaceholderAndClearPending(created.id, PLACEHOLDER, 'acme/repo')
+    ).resolves.toBeNull();
+
+    const after = await DataLakeModel.findById(created.id).lean();
+    expect(after?.name).toBe('My own name');
+    expect(after).not.toHaveProperty('pendingConnector');
   });
 });

@@ -20,6 +20,8 @@ vi.mock('fs', () => ({
     readFile: vi.fn(),
     readdir: vi.fn(),
     unlink: vi.fn(),
+    rename: vi.fn(),
+    rm: vi.fn(),
   },
 }));
 
@@ -83,11 +85,12 @@ describe('SessionStore', () => {
       await sessionStore.save(session);
 
       expect(fs.mkdir).toHaveBeenCalledWith(mockBasePath, { recursive: true });
-      expect(fs.writeFile).toHaveBeenCalledWith(
-        '/test-sessions/test-session-1.json',
-        JSON.stringify(session, null, 2),
-        'utf-8'
-      );
+      // Written to a temp file beside the target, then renamed over it.
+      const [tempPath, data, encoding] = vi.mocked(fs.writeFile).mock.calls[0];
+      expect(tempPath).toMatch(/^\/test-sessions\/test-session-1\.json\..+\.tmp$/);
+      expect(data).toBe(JSON.stringify(session, null, 2));
+      expect(encoding).toBe('utf-8');
+      expect(fs.rename).toHaveBeenCalledWith(tempPath, '/test-sessions/test-session-1.json');
     });
 
     it('should call init before saving', async () => {
@@ -108,6 +111,8 @@ describe('SessionStore', () => {
       const session = createMockSession();
 
       await expect(sessionStore.save(session)).rejects.toThrow('Disk full');
+      expect(fs.rename).not.toHaveBeenCalled();
+      expect(fs.rm).toHaveBeenCalledWith(expect.stringMatching(/\.tmp$/), { force: true });
     });
 
     it('should format JSON with proper indentation', async () => {

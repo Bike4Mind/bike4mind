@@ -35,6 +35,8 @@ import {
   useLakeConfigHistory,
   useReviewDataLakeProposal,
   reviewProposalFailureMessage,
+  serverRefusalMessage,
+  type LakeVisibilityChoice,
   useSetLakeVisibility,
   useStartDataLakeResearchRun,
   useUpdateDataLake,
@@ -57,6 +59,7 @@ import {
 } from '@bike4mind/common';
 import type { DataLakeGroundingMode, DataLakeOrigin } from '@bike4mind/common';
 import { useStartChatWithLakes } from '@client/app/hooks/useStartChatWithLake';
+import { gateWriteWidensReadership } from '@bike4mind/services/lakeGateWideningRule';
 import { DataLakeSpendPanel } from './DataLakeSpendPanel';
 import { LakeConfigHistorySection } from './LakeConfigHistorySection';
 import { DataLakeProposalsPanel, type ProposalsView } from './DataLakeProposalsPanel';
@@ -149,6 +152,8 @@ export interface EditableLake {
    * Origin, Required passage size).
    */
   canManage: boolean;
+  /** Owner per isEffectiveOwner, server-computed (see ManageableDataLakeConfig.isOwn). Gates who may widen sharing. */
+  isOwn: boolean;
   /**
    * Lifetime embedding-spend meter, ALWAYS present (defaulted to 0) when canManage - its
    * presence, not its value, is the signal that gates the Spend tab (see
@@ -182,8 +187,12 @@ const formSeed = (lake: EditableLake) => ({
  * mistake can be returned to ungated. Ungated is NOT world-readable - the lake falls back
  * to its Visibility (private/organization/public), per Private-by-default on the server.
  */
+
+const ownerOnlyMsg = "Only the lake's owner can change who it is shared with.";
+
 export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | null; onClose: () => void }) {
-  const updateLake = useUpdateDataLake();
+  // Save toasts per call so it can say when a visibility change made in this modal was refused.
+  const updateLake = useUpdateDataLake({ notifySuccess: false });
   const setVisibility = useSetLakeVisibility();
   const [tab, setTab] = useState<DataLakeSettingsTab>('settings');
   const [spendDays, setSpendDays] = useState<30 | 60 | 90>(30);
@@ -235,7 +244,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
   const startResearchRun = useStartDataLakeResearchRun(lake?.id ?? '');
   // Shown to a manager even with no configuration: this tab is where one is CREATED.
   const showResearchTab = !!lake?.canManage && !researchConfigs.isForbidden;
-  const { data: modelCatalog } = useModelInfo();
+  const { data: modelCatalog, isLoading: modelsLoading } = useModelInfo();
   const researchModelOptions = useMemo(() => researchJudgeModelOptions(modelCatalog ?? []), [modelCatalog]);
   const researchDefaultModel = useMemo(() => researchDefaultModelLabel(modelCatalog ?? []), [modelCatalog]);
   const confirm = useConfirmation();
@@ -258,11 +267,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
       ? 'settings'
       : tab;
   const showTabs = showSpendTab || showHistoryTab || showProposalsTab || showResearchTab;
-  // Two DIFFERENT facts about a tab that merely coincide today, kept apart on purpose: collapsing
-  // them means a future narrow read-only tab silently gets a Save button it must not have.
-  // Every non-settings panel is tabular and needs the room; the settings form does not.
-  const isWideTab =
-    activeTab === 'spend' || activeTab === 'history' || activeTab === 'proposals' || activeTab === 'research';
+  const dialogWidth = showTabs ? '44rem' : '28rem';
   // Research saves through its own per-configuration buttons, so the modal's Save must stay away
   // from it - it would submit the lake settings form the user is not looking at.
   const isReadOnlyTab =
@@ -286,6 +291,18 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
   // Publishing exposes every file in the lake to all users, so it takes an explicit confirm.
   const [confirmPublicOpen, setConfirmPublicOpen] = useState(false);
   const [confirmDiscardOpen, setConfirmDiscardOpen] = useState(false);
+  // The radio snaps back on a refusal, so keep the reason on screen next to it, not just in a toast.
+  const [visibilityError, setVisibilityError] = useState<string | null>(null);
+  const changeVisibility = (id: string, next: LakeVisibilityChoice, onSettled?: () => void) => {
+    setVisibilityError(null);
+    setVisibility.mutate(
+      { id, visibility: next },
+      {
+        onSettled,
+        onError: e => setVisibilityError(serverRefusalMessage(e) || 'Visibility was not changed.'),
+      }
+    );
+  };
   const [researchDirty, setResearchDirty] = useState(false);
   const [proposalsDirty, setProposalsDirty] = useState(false);
   // Snapshotted with the form, not rebuilt from the live `lake`: a background refetch that brings in
@@ -362,6 +379,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setConfirmPublicOpen(false);
     setConfirmDiscardOpen(false);
+    setVisibilityError(null);
   }, [lake?.id]);
 
   const settingsDirty =
@@ -406,8 +424,23 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
       parsedTarget < MIN_PASSAGE_TOKEN_TARGET ||
       parsedTarget > OVERSIZED_PASSAGE_TOKEN_THRESHOLD);
 
+  // Mirrors the server rule in updateDataLake: a non-owner may narrow a gate but not widen readership.
+  const widensAsNonOwner =
+    !!lake &&
+    !lake.isOwn &&
+    gateWriteWidensReadership(lake, {
+      requiredUserTag: requiredUserTag.trim(),
+      requiredEntitlement: requiredEntitlement.trim(),
+    });
+
   const handleSave = () => {
     if (!lake) return;
+    // Nothing to write. A PUT here would still toast success and touch lastUpdatedByUserId for no change.
+    if (!settingsDirty) {
+      onClose();
+      return;
+    }
+    if (widensAsNonOwner) return;
     const trimmedName = name.trim();
     if (!trimmedName) return;
     if (targetInvalid) return;
@@ -452,7 +485,12 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
         // to be able to return to: it is what turns convergence back off for this lake.
         ...(lake.canManage ? { requiredPassageTokenTarget: parsedTarget } : {}),
       },
-      { onSuccess: onClose }
+      {
+        onSuccess: () => {
+          toast.success(visibilityError ? 'Data lake updated. Visibility was not changed.' : 'Data lake updated');
+          onClose();
+        },
+      }
     );
   };
 
@@ -514,7 +552,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
             data-testid="datalake-systemprompt-input"
           />
           <FormHelperText data-testid="datalake-systemprompt-help">
-            {`Extra instructions added to answers on turns that actually pull content from this lake. They apply to you, to anyone holding an owner or curator grant on this lake, to members of this lake's organization, and to a manager testing it in a scoped session. Users given read-only access by tag, entitlement, or a reader grant don't get them unless you turn on "Apply to readers" below. They never fire on turns that don't use the lake. Your organization's prompt stays authoritative on conflict, and only people who can manage this lake can read this text in the app.${
+            {`Extra instructions added to answers on turns that pull content from this lake, and never on turns that don't use it. They reach you, anyone holding an owner or curator grant on this lake, members of its organization, and a manager testing it in a scoped session. Users given read-only access by tag or entitlement don't get them unless you turn on "Apply to readers". Users with only a reader grant never get them. Your organization's prompt stays authoritative on conflict. Only people who can manage this lake can read this text.${
               // Count what SAVE will persist (trimmed), not the raw field contents.
               systemPrompt.trim() ? ` (${systemPrompt.trim().length} characters)` : ''
             }`}
@@ -618,8 +656,9 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
             ))}
           </Select>
           <FormHelperText data-testid="datalake-settings-origin-help">
-            Connector-fed lakes accept content a connected Drive folder adds on its own; curated lakes accept only files
-            someone adds by hand. Either way, a connected folder can still remove files it previously added.
+            Connector-fed lakes accept content a connected source (a Drive folder or GitHub repository) adds on its own;
+            curated lakes accept only files someone adds by hand. Either way, a connected source can still remove files
+            it previously added.
           </FormHelperText>
         </FormControl>
       )}
@@ -683,21 +722,36 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
               setConfirmPublicOpen(true);
               return;
             }
-            setVisibility.mutate({ id: lake.id, visibility: next });
+            changeVisibility(lake.id, next);
           }}
           data-testid="datalake-settings-visibility"
         >
-          <Radio value="private" label="Private" disabled={setVisibility.isPending} />
+          {/* Non-owner rules must stay in sync with setLakeVisibility's owner-only checks (b4m-core/services). */}
+          <Radio
+            value="private"
+            label="Private"
+            disabled={
+              setVisibility.isPending || (!lake?.isOwn && visibility !== 'private' && !!lake?.organizationId && hasGate)
+            }
+          />
           <Radio
             value="organization"
             label="Organization"
-            disabled={setVisibility.isPending || (!canShareToOrg && visibility !== 'organization')}
+            disabled={
+              setVisibility.isPending ||
+              (!canShareToOrg && visibility !== 'organization') ||
+              (!lake?.isOwn && visibility !== 'organization')
+            }
             data-testid="datalake-settings-visibility-org"
           />
           <Radio
             value="public"
             label="Public"
-            disabled={setVisibility.isPending || (hasGate && visibility !== 'public')}
+            disabled={
+              setVisibility.isPending ||
+              (hasGate && visibility !== 'public') ||
+              (!lake?.isOwn && visibility !== 'public')
+            }
             data-testid="datalake-settings-visibility-public"
           />
         </RadioGroup>
@@ -714,13 +768,21 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                     ? 'Private. Switch to your team account (the profile card at the bottom left) to share with your organization, or make it public.'
                     : 'Private. Make it public to share with everyone, or join an organization to share with a team.'}
         </FormHelperText>
+        {visibilityError && (
+          <FormHelperText data-testid="datalake-settings-visibility-error" sx={{ color: 'danger.plainColor' }}>
+            {visibilityError}
+          </FormHelperText>
+        )}
+        {lake && !lake.isOwn && (
+          <FormHelperText data-testid="datalake-settings-visibility-owner-only">{ownerOnlyMsg}</FormHelperText>
+        )}
       </FormControl>
       <FormControl>
         <FormLabel>Access tag</FormLabel>
         <Input
           value={requiredUserTag}
           onChange={e => setRequiredUserTag(e.target.value)}
-          placeholder="e.g. Opti"
+          placeholder="e.g. LegalTeam"
           data-testid="datalake-settings-usertag"
         />
         <FormHelperText data-testid="datalake-settings-usertag-help">
@@ -743,6 +805,11 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
             : 'Namespaced key (e.g. \u201Cproduct:pro\u201D). Leave blank for no entitlement gate.'}
         </FormHelperText>
       </FormControl>
+      {widensAsNonOwner && (
+        <FormHelperText sx={{ color: 'danger.plainColor' }} data-testid="datalake-settings-gate-owner-only">
+          {ownerOnlyMsg}
+        </FormHelperText>
+      )}
     </Stack>
   );
 
@@ -758,8 +825,8 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
         <ModalDialog
           data-testid="datalake-settings-modal"
           sx={{
-            width: { xs: '95%', sm: isWideTab ? '44rem' : '28rem' },
-            maxWidth: isWideTab ? '44rem' : '28rem',
+            width: { xs: '95%', sm: dialogWidth },
+            maxWidth: dialogWidth,
           }}
         >
           <ModalClose aria-label="Close data lake settings" data-testid="datalake-settings-close-btn" />
@@ -870,6 +937,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                       error={researchConfigs.isForbidden ? null : (researchConfigs.error ?? researchRuns.error)}
                       pendingProposals={researchConfigs.pendingProposals}
                       modelOptions={researchModelOptions}
+                      modelsLoading={modelsLoading}
                       defaultModelLabel={researchDefaultModel}
                       isCreating={createResearchConfig.isPending}
                       savingConfigId={updateResearchConfig.isPending ? updateResearchConfig.variables?.configId : null}
@@ -897,7 +965,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                 variant="solid"
                 color="primary"
                 loading={updateLake.isPending}
-                disabled={!name.trim() || targetInvalid}
+                disabled={!name.trim() || targetInvalid || widensAsNonOwner}
                 onClick={handleSave}
                 data-testid="datalake-settings-save-btn"
               >
@@ -963,10 +1031,8 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
               data-testid="datalake-publish-confirm-btn"
               onClick={() => {
                 if (!lake) return;
-                setVisibility.mutate(
-                  { id: lake.id, visibility: 'public' },
-                  { onSuccess: () => setConfirmPublicOpen(false) }
-                );
+                // Closed on a refusal too, so the inline reason under Visibility is not hidden behind it.
+                changeVisibility(lake.id, 'public', () => setConfirmPublicOpen(false));
               }}
             >
               Make public

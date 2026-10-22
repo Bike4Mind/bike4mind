@@ -71,8 +71,6 @@ export type { BuildSystemPromptOptions, ParsedDataLakeCommand, DataLakeSubcomman
 export { generateHelpMessage } from './tools/slackbotHelp';
 export { listCuratedFiles, getCuratedFiles } from './tools/listCuratedFiles';
 export type { ListCuratedFilesParams, ListCuratedFilesResult } from './tools/listCuratedFiles';
-export { shareCuratedFile } from './tools/shareCuratedFile';
-export type { ShareCuratedFileParams, ShareCuratedFileResult } from './tools/shareCuratedFile';
 export { notebookNew } from './tools/notebookNew';
 export type { NotebookNewParams, NotebookNewResult } from './tools/notebookNew';
 export { notebookStatus } from './tools/notebookStatus';
@@ -87,7 +85,7 @@ export { customAgentToPersona } from './custom-agent-adapter';
 
 // ─── Installer / OAuth ───────────────────────────────────────────────────────
 export { createInstallProvider, getDefaultInstallUrlOptions, getInstallUrlOptionsForWorkspace } from './installer';
-export type { InstallationMetadata } from './installer';
+export type { InstallationMetadata, StateBinding } from './installer';
 
 // ─── Org Slack Helpers ───────────────────────────────────────────────────────
 export {
@@ -111,7 +109,12 @@ export { processMarkdownForSlack } from './utils/slackMarkdown';
 export type { SlackFormattedResult } from './utils/slackMarkdown';
 
 // ─── Confirmation ────────────────────────────────────────────────────────────
-export { buildAttachmentDownloadButtons, buildConfirmationButtons, formatPreviewFromParams } from './confirmation';
+export {
+  buildAttachmentDownloadButtons,
+  buildConfirmationButtons,
+  formatPreviewFromParams,
+  parseConfirmationButtonValue,
+} from './confirmation';
 export { buildImageModelPicker, getImageModelDisplayName, IMAGE_GEN_MODEL_ACTION_ID } from './confirmation';
 export type {
   AttachmentDownloadInfo,
@@ -323,3 +326,6 @@ export {
   SLACK_USER_ERROR_MESSAGE_PATTERNS,
 } from './slack-export-errors';
 export type { SlackUserValidationError, SlackErrorType, SlackErrorMetadata } from './slack-export-errors';
+
+export { resolveNotificationDestination } from './notificationDestination';
+export { findVerifiedGitHubAccounts } from './github/verifiedIdentity';

@@ -7,15 +7,23 @@ import { ComponentProps, useMemo } from 'react';
 
 interface SubscribeButtonProps {
   priceId: string;
+  onSubscriptionChanged?: () => void;
   /**
    * The user's non-terminal subscriptions. A delinquent (past_due/unpaid) row is
    * deliberately included: it is still the subscription they need to cancel, and
    * holding it back is what left a dunned user with no way to stop the emails.
    */
   cancellableSubscriptions: IUserSubscription[];
+  /** Names the plan in the accessible name, so a screen reader hears which plan each button acts on. */
+  planName?: string;
 }
 
-const SubscribeButton = ({ priceId, cancellableSubscriptions }: SubscribeButtonProps) => {
+const SubscribeButton = ({
+  priceId,
+  cancellableSubscriptions,
+  planName,
+  onSubscriptionChanged,
+}: SubscribeButtonProps) => {
   const subscribe = useSubscribePlan();
   const cancelSubscription = useCancelSubscription();
   const changeSubscription = useChangeSubscription();
@@ -55,10 +63,10 @@ const SubscribeButton = ({ priceId, cancellableSubscriptions }: SubscribeButtonP
       case 'cancel':
         return cancelSubscription.mutate(priceId);
       case 'change':
-        return changeSubscription.mutate({
-          priceId,
-          callbackUrl: window.location.href,
-        });
+        return changeSubscription.mutate(
+          { priceId, callbackUrl: window.location.href },
+          { onSuccess: () => onSubscriptionChanged?.() }
+        );
     }
   };
 
@@ -75,13 +83,26 @@ const SubscribeButton = ({ priceId, cancellableSubscriptions }: SubscribeButtonP
 
   const buttonText =
     type === 'subscribe' ? 'Subscribe' : type === 'cancel' ? 'Cancel Subscription' : 'Change Subscription';
+  const ariaLabel = planName
+    ? type === 'subscribe'
+      ? `Subscribe to ${planName}`
+      : type === 'cancel'
+        ? `Cancel ${planName} subscription`
+        : `Change subscription to ${planName}`
+    : undefined;
   const buttonProps: ComponentProps<typeof Button> = {
-    color: type === 'subscribe' ? 'neutral' : type === 'cancel' ? 'neutral' : 'primary',
+    color: type === 'cancel' ? 'neutral' : 'primary',
     variant: type === 'subscribe' ? 'solid' : type === 'cancel' ? 'outlined' : 'solid',
   };
 
   return (
-    <Button className="subscription-action-button" loading={isLoading} onClick={handleClick} {...buttonProps}>
+    <Button
+      className="subscription-action-button"
+      aria-label={ariaLabel}
+      loading={isLoading}
+      onClick={handleClick}
+      {...buttonProps}
+    >
       {buttonText}
     </Button>
   );

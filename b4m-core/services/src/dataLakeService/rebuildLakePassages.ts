@@ -138,3 +138,9 @@ export const countFailedLakeFiles = async (
   lake: ScopeSourceLake,
   { db }: { db: { fabFiles: Pick<IFabFileRepository, 'countFailedFilesByScope'> } }
 ): Promise<number> => db.fabFiles.countFailedFilesByScope(resolveLakeMembershipScope(lake));
+
+/** How many of the lake's files are mid-rebuild: reset, not yet committed, not yet stale. */
+export const countRebuildingLakeFiles = async (
+  lake: ScopeSourceLake,
+  { db }: { db: { fabFiles: Pick<IFabFileRepository, 'countRebuildingFilesByScope'> } }
+): Promise<number> => db.fabFiles.countRebuildingFilesByScope(resolveLakeMembershipScope(lake));

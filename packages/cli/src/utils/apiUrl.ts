@@ -1,4 +1,7 @@
+import { selectApiEndpoint, type ApiEndpoint } from '@bike4mind/client-auth';
 import type { ApiConfig } from '../storage/types';
+
+export { LOCAL_DEV_URL, parseApiUrl, type ApiEndpoint } from '@bike4mind/client-auth';
 
 /**
  * Default service endpoint, baked in at build time via tsdown's `env` option
@@ -10,38 +13,6 @@ import type { ApiConfig } from '../storage/types';
  */
 export function getDefaultApiUrl(): string {
   return process.env.B4M_DEFAULT_API_URL ?? '';
-}
-
-/** Local development server the `--dev` flag points the CLI at. */
-export const LOCAL_DEV_URL = 'http://localhost:3000';
-
-/**
- * Normalize and validate a user-supplied API URL. The single source of truth for
- * what counts as an acceptable endpoint, shared by the `--api-url` flag
- * (apiCommand.ts) and the first-run `EnvironmentPicker`. Trims surrounding
- * whitespace, strips trailing slashes, and requires an http(s) origin.
- *
- * Returns a discriminated result rather than throwing so each caller can render
- * the failure in its own idiom (a CLI `process.exit`, an Ink error line, …).
- */
-export function parseApiUrl(raw: string): { url: string } | { error: string } {
-  const url = raw.trim().replace(/\/+$/, '');
-  if (!url) {
-    return { error: 'Please enter a URL.' };
-  }
-
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return { error: `Invalid URL: ${url}` };
-  }
-
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    return { error: `Only http:// and https:// URLs are supported (got ${parsed.protocol}//)` };
-  }
-
-  return { url };
 }
 
 /**
@@ -68,48 +39,18 @@ export function getCreditsUrl(): string {
 }
 
 /**
- * The backend the CLI talks to, modeled as a discriminated union so that
- * "no endpoint configured" is a distinct, explicit state rather than an empty
- * string masquerading as a URL. This keeps a missing endpoint from silently
- * reaching the network layer, where it surfaced as a cryptic axios
- * "Invalid URL" three layers away from the actual configuration problem.
- *
- * `source` records how the URL was resolved:
- * - `custom`        - the user set it via `--api-url` / `/set-api`
- * - `baked-default` - the build-time default baked into the published binary
- * - `dev-default`   - the local dev server, auto-selected for a source-mode run
- *                     that has no custom or baked URL (see {@link isSourceMode})
- */
-export type ApiEndpoint =
-  | { status: 'configured'; url: string; source: 'custom' | 'baked-default' | 'dev-default' }
-  | { status: 'unconfigured' };
-
-/**
- * Resolve which backend the CLI should talk to. Precedence:
- *  1. a configured custom URL (`--api-url` / `/set-api`);
- *  2. the build-time default service baked into a published binary;
- *  3. the local dev server, when running from source (contributors almost always
- *     want their local stack, and source runs never have a baked default);
- *  4. otherwise unconfigured (a published, unbranded fork) - the caller then
- *     prompts the user to choose a backend.
+ * Resolve which backend the CLI should talk to, feeding the CLI's build-time brand
+ * defaults into the shared precedence rule (custom URL, then baked default, then the
+ * local dev server for a source run, then unconfigured).
  *
  * Never returns an empty URL - callers get `unconfigured` instead.
  */
 export function resolveApiEndpoint(configApiConfig?: ApiConfig): ApiEndpoint {
-  if (configApiConfig?.customUrl) {
-    return { status: 'configured', url: configApiConfig.customUrl, source: 'custom' };
-  }
-
-  const bakedDefault = getDefaultApiUrl();
-  if (bakedDefault) {
-    return { status: 'configured', url: bakedDefault, source: 'baked-default' };
-  }
-
-  if (isSourceMode()) {
-    return { status: 'configured', url: LOCAL_DEV_URL, source: 'dev-default' };
-  }
-
-  return { status: 'unconfigured' };
+  return selectApiEndpoint({
+    customUrl: configApiConfig?.customUrl,
+    bakedDefault: getDefaultApiUrl(),
+    devFallback: isSourceMode(),
+  });
 }
 
 /**

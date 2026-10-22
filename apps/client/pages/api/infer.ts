@@ -59,10 +59,8 @@ const handler = baseApi().post(async (req: Request, res: Response) => {
     );
     return res.json({ result });
   } catch (error: unknown) {
-    return res.status(500).json({
-      ...(error as Error),
-      message: (error as Error).message,
-    });
+    req.logger.error('Error running inference:', error);
+    return res.status(500).json({ message: 'Inference request failed' });
   }
 });
 

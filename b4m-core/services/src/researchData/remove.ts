@@ -1,12 +1,16 @@
 import {
-  IOrganizationRepository,
+  chargedBytes,
+  IProjectRepository,
   IResearchAgentRepository,
   IResearchDataRepository,
   IUserRepository,
+  storageOwnerOf,
 } from '@bike4mind/common';
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { DeleteFabFileAdapter } from '../fabFileService';
+import { cleanUpDeletedFileReferences } from '../fabFileService/cleanUpDeletedFileReferences';
+import { adjustOwnerStorage, type OwnerStorageCounters } from '../fabFileService/ownerStorage';
 import { deleteFabFile } from '../fabFileService/delete';
 
 const researchDataRemoveSchema = z.object({
@@ -17,11 +21,11 @@ const researchDataRemoveSchema = z.object({
 type ResarchDataRemoveParams = z.infer<typeof researchDataRemoveSchema>;
 
 type ResearchDataRemoveAdapters = DeleteFabFileAdapter & {
-  db: {
+  db: OwnerStorageCounters & {
+    users: Pick<IUserRepository, 'findById' | 'update' | 'pullSystemFilesForUsers'>;
+    projects?: Pick<IProjectRepository, 'pullFileReferences'>;
     researchDatas: Pick<IResearchDataRepository, 'delete' | 'findByIdAndResearchAgentId'>;
     researchAgents: Pick<IResearchAgentRepository, 'findByIdAndUserId'>;
-    organizations: Pick<IOrganizationRepository, 'incrementCurrentStorage'>;
-    users: Pick<IUserRepository, 'incrementCurrentStorage'>;
   };
 };
 
@@ -51,10 +55,14 @@ export const remove = async (
   // if the file was already soft-deleted by a concurrent request.
   const result = await deleteFabFile(userId, { id: researchData.fabFileId }, adapters);
   if (result.action === 'deleted' && result.fabFile) {
-    if (result.fabFile.organizationId) {
-      await adapters.db.organizations.incrementCurrentStorage(result.fabFile.organizationId, -result.fabFile.fileSize);
-    } else {
-      await adapters.db.users.incrementCurrentStorage(result.fabFile.userId, -result.fabFile.fileSize);
-    }
+    await adjustOwnerStorage(adapters.db, storageOwnerOf(result.fabFile), -chargedBytes(result.fabFile));
+  }
+  if (result.references) {
+    // No logger: this adapter's logger is the narrower LakeConfigAuditLogger, and the unlink only
+    // logs its own failures.
+    await cleanUpDeletedFileReferences(result.references, {
+      users: adapters.db.users,
+      projects: adapters.db.projects,
+    });
   }
 };

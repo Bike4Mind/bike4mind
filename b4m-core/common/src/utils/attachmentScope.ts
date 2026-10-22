@@ -38,3 +38,12 @@ export function resolveAttachScope(mode: AttachScopeMode, mimeType?: string | nu
   if (mode !== 'auto') return mode;
   return isImageAttachment(mimeType) ? 'message' : 'notebook';
 }
+
+/**
+ * Whether a message attachment of this mime type is pinned to its session when sent: the 'auto'
+ * rule, so documents stay and images do not. Shared by the server pin
+ * (apps/client/server/managers/sessionCrud.ts) and the composer's mirror of it.
+ */
+export function isSessionPinnableAttachment(mimeType?: string | null): boolean {
+  return resolveAttachScope('auto', mimeType) === 'notebook';
+}

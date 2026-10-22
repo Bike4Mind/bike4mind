@@ -1,17 +1,20 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 
 vi.mock('next/server', () => {
   class MockNextResponse {
     public status: number;
     public headers: Headers;
+    public forwardedRequestHeaders?: Headers;
 
     constructor(_body?: string, init?: { status?: number }) {
       this.status = init?.status ?? 200;
       this.headers = new Headers();
     }
 
-    static next() {
-      return new MockNextResponse();
+    static next(init?: { request?: { headers?: Headers } }) {
+      const response = new MockNextResponse();
+      response.forwardedRequestHeaders = init?.request?.headers;
+      return response;
     }
   }
   return { NextResponse: MockNextResponse };
@@ -40,19 +43,14 @@ describe('proxy CSP header', () => {
   it('global style-src does not contain the blanket https: wildcard', () => {
     const response = proxy(makeRequest('https://app.bike4mind.com/dashboard'));
     const csp = response.headers.get('Content-Security-Policy') ?? '';
-    // style-src https: was narrowed — HTML artifacts load from /api/artifact-sandbox
-    // which sets its own per-response CSP with style-src https:. The global
-    // style-src keeps the explicit MailerLite host (the only external stylesheet
-    // the app itself loads) but no longer permits arbitrary https: stylesheets.
-    expect(csp).toContain("style-src 'self' 'unsafe-inline' https://assets.mailerlite.com");
-    // Ensure the blanket `https:` wildcard is not present (only the explicit MailerLite host).
+    expect(csp).toContain("style-src 'self' 'unsafe-inline'");
     expect(csp).not.toMatch(/style-src [^;]*\bhttps:(?!\/\/)/);
   });
 
-  it('global style-src includes the MailerLite host so universal.css loads on app pages', () => {
+  it('does not admit executable or other resources from the retired marketing vendor', () => {
     const response = proxy(makeRequest('https://app.bike4mind.com/new'));
     const csp = response.headers.get('Content-Security-Policy') ?? '';
-    expect(csp).toContain('https://assets.mailerlite.com');
+    expect(csp).not.toContain('https://assets.mailerlite.com');
   });
 
   it('allow-lists every host the ad pixels need, in each directive that governs them', () => {
@@ -215,6 +213,109 @@ describe('proxy security blocking', () => {
     const response = proxy(req);
     expect(response.status).toBe(400);
   });
+
+  describe('logged source address', () => {
+    function blockTraversal(headers: Record<string, string>): string {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      proxy({
+        nextUrl: { pathname: '/../etc/passwd', hostname: 'app.bike4mind.com' },
+        url: 'https://app.bike4mind.com/../etc/passwd',
+        method: 'GET',
+        headers: new Headers(headers),
+      } as unknown as NextRequest);
+      return String(warn.mock.calls.at(-1)?.[0]);
+    }
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+      vi.unstubAllEnvs();
+    });
+
+    it('logs the CloudFront viewer address, not the client-supplied x-forwarded-for', () => {
+      const line = blockTraversal({
+        'cloudfront-viewer-address': '198.51.100.7:51234',
+        'x-forwarded-for': '203.0.113.66',
+      });
+      expect(line).toContain('from 198.51.100.7');
+      expect(line).not.toContain('203.0.113.66');
+    });
+
+    it('logs unknown when only x-forwarded-for is present', () => {
+      expect(blockTraversal({ 'x-forwarded-for': '203.0.113.66' })).toContain('from unknown');
+    });
+
+    it('applies the same rule to the malformed-encoding line', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      proxy({
+        nextUrl: { pathname: '/%25zz', hostname: 'app.bike4mind.com' },
+        url: 'https://app.bike4mind.com/%25zz',
+        method: 'GET',
+        headers: new Headers({ 'x-forwarded-for': '203.0.113.66' }),
+      } as unknown as NextRequest);
+      const line = String(warn.mock.calls.at(-1)?.[0]);
+      expect(line).toContain('malformed URL encoding');
+      expect(line).toContain('from unknown');
+    });
+
+    it('logs the trusted x-forwarded-for hop on self-host', () => {
+      vi.stubEnv('B4M_SELF_HOST', 'true');
+      vi.stubEnv('TRUSTED_PROXY_HOPS', '1');
+      const line = blockTraversal({ 'x-forwarded-for': '203.0.113.66, 198.51.100.7' });
+      expect(line).toContain('from 198.51.100.7');
+      expect(line).not.toContain('203.0.113.66');
+    });
+  });
+});
+
+describe('proxy CSP for the pdf.js worker', () => {
+  it("allows wasm compilation via 'wasm-unsafe-eval' on the worker script, without JS eval", () => {
+    const csp = proxy(makeRequest('https://app.bike4mind.com/pdf.worker-6.3.289.min.mjs')).headers.get(
+      'Content-Security-Policy'
+    );
+    const scriptSrc = (csp ?? '').split(';').find(d => d.trim().startsWith('script-src')) ?? '';
+    expect(scriptSrc).toContain("'wasm-unsafe-eval'");
+    expect(scriptSrc).not.toContain(" 'unsafe-eval'");
+  });
+
+  it("allows 'wasm-unsafe-eval' on the legacy unversioned worker path", () => {
+    const csp = proxy(makeRequest('https://app.bike4mind.com/pdf.worker.min.mjs')).headers.get(
+      'Content-Security-Policy'
+    );
+    expect(csp).toContain("'wasm-unsafe-eval'");
+  });
+
+  it.each([
+    '/foo/pdf.worker-6.3.289.min.mjs',
+    '/pdf.worker-6.3.289.min.mjs.map',
+    '/pdf.worker-x.mjs',
+    '/pdf.worker.min.mjs/x',
+    '/pdf.worker-x.min.mjs',
+    '/pdf.workerXminXmjs',
+    '/pdf.worker-6.3.min.mjs',
+    '/pdf.worker-6.3.289.mjs',
+  ])("keeps 'wasm-unsafe-eval' off near-miss path %s", path => {
+    const csp = proxy(makeRequest(`https://app.bike4mind.com${path}`)).headers.get('Content-Security-Policy');
+    expect(csp).not.toContain("'wasm-unsafe-eval'");
+  });
+
+  it("adds both 'wasm-unsafe-eval' and dev 'unsafe-eval' on the worker path in development", () => {
+    vi.stubEnv('NODE_ENV', 'development');
+    try {
+      const csp = proxy(makeRequest('https://app.bike4mind.com/pdf.worker-6.3.289.min.mjs')).headers.get(
+        'Content-Security-Policy'
+      );
+      const scriptSrc = (csp ?? '').split(';').find(d => d.trim().startsWith('script-src')) ?? '';
+      expect(scriptSrc).toContain("'wasm-unsafe-eval'");
+      expect(scriptSrc).toContain("'unsafe-eval'");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("keeps 'wasm-unsafe-eval' off app pages", () => {
+    const csp = proxy(makeRequest('https://app.bike4mind.com/dashboard')).headers.get('Content-Security-Policy');
+    expect(csp).not.toContain("'wasm-unsafe-eval'");
+  });
 });
 
 describe('proxy CSP script-src — dev-only unsafe-eval boundary', () => {
@@ -287,5 +388,154 @@ describe('proxy CSP - optional PYODIDE_BASE_URL mirror', () => {
     vi.stubEnv('PYODIDE_BASE_URL', 'not a url');
     expect(proxy(makeRequest(url)).headers.get('Content-Security-Policy')).toBe(baseline);
     warn.mockRestore();
+  });
+});
+
+describe('proxy origin verification', () => {
+  const SECRET = 'a'.repeat(48);
+  type Forwarded = { status: number; forwardedRequestHeaders?: Headers };
+
+  beforeEach(() => {
+    vi.stubEnv('ORIGIN_VERIFY_SECRET', SECRET);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it('passes a request carrying the secret and strips the header before handlers see it', () => {
+    const response = proxy(
+      makeRequest('https://app.bike4mind.com/api/health', { 'x-b4m-origin-verify': SECRET, 'x-other': '1' })
+    ) as unknown as Forwarded;
+    expect(response.status).toBe(200);
+    expect(response.forwardedRequestHeaders?.has('x-b4m-origin-verify')).toBe(false);
+    expect(response.forwardedRequestHeaders?.get('x-other')).toBe('1');
+  });
+
+  it.each(['/api/health', '/api/v1/chat', '/dashboard'])('403s %s when the header is missing', path => {
+    expect(proxy(makeRequest(`https://abc.lambda-url.us-east-2.on.aws${path}`)).status).toBe(403);
+  });
+
+  it.each([
+    ['wrong', 'b'.repeat(48)],
+    ['short', 'a'.repeat(47)],
+    ['long', 'a'.repeat(49)],
+  ])('403s a %s header value', (_label, value) => {
+    const response = proxy(makeRequest('https://app.bike4mind.com/api/health', { 'x-b4m-origin-verify': value }));
+    expect(response.status).toBe(403);
+  });
+
+  it('never logs the header value', () => {
+    proxy(makeRequest('https://app.bike4mind.com/api/health', { 'x-b4m-origin-verify': 'leaked-value' }));
+    expect(String(vi.mocked(console.warn).mock.calls)).not.toContain('leaked-value');
+  });
+
+  it('does not gate or rewrite request headers when the secret is unset', () => {
+    vi.stubEnv('ORIGIN_VERIFY_SECRET', '');
+    const response = proxy(makeRequest('https://app.bike4mind.com/api/health')) as unknown as Forwarded;
+    expect(response.status).toBe(200);
+    expect(response.forwardedRequestHeaders).toBeUndefined();
+  });
+});
+
+describe('proxy configured object-store origin', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  const policy = () => proxy(makeRequest('https://app.example.invalid/home')).headers.get('Content-Security-Policy')!;
+  const directives = (csp: string) =>
+    Object.fromEntries(
+      csp
+        .split(';')
+        .filter(part => part.trim())
+        .map(part => {
+          const [name, ...sources] = part.trim().split(/\s+/);
+          return [name, sources];
+        })
+    );
+
+  it.each([
+    [' http://127.0.0.1:19000/ ', 'http://127.0.0.1:19000'],
+    ['https://objects.example.invalid/prefix?value=1#fragment', 'https://objects.example.invalid'],
+    ['https://user:fixture@objects.example.invalid:443/path', 'https://objects.example.invalid'],
+  ])('adds only the normalized object-store origin for %s', (configured, origin) => {
+    vi.stubEnv('S3_PRESIGN_ENDPOINT', '');
+    const baseline = directives(policy());
+    vi.stubEnv('S3_PRESIGN_ENDPOINT', configured);
+    const actual = directives(policy());
+    expect(Object.keys(actual)).toEqual(Object.keys(baseline));
+    for (const [name, sources] of Object.entries(baseline)) {
+      expect(actual[name]).toEqual(
+        ['connect-src', 'img-src', 'media-src'].includes(name) ? [...sources, origin] : sources
+      );
+    }
+  });
+
+  it('keeps the complete default policy unchanged when unset or blank', () => {
+    vi.stubEnv('S3_PRESIGN_ENDPOINT', undefined);
+    const baseline = policy();
+    for (const blank of ['', '   ']) {
+      vi.stubEnv('S3_PRESIGN_ENDPOINT', blank);
+      expect(policy()).toBe(baseline);
+    }
+  });
+
+  it.each([
+    'not-a-url',
+    'ftp://objects.example.invalid',
+    'https://objects.example.invalid;extra',
+    'https://objects.example.invalid\n.other',
+    'https://*.example.invalid',
+    'https://objects,example.invalid',
+    'https://objects.example.invalid\u0001',
+    'https://objects.example.invalid\u007f',
+  ])('omits invalid configuration with a value-free diagnostic: %s', configured => {
+    vi.stubEnv('S3_PRESIGN_ENDPOINT', '');
+    const baseline = policy();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.stubEnv('S3_PRESIGN_ENDPOINT', configured);
+    expect(policy()).toBe(baseline);
+    expect(warn).toHaveBeenCalledExactlyOnceWith('[csp] ignoring invalid S3_PRESIGN_ENDPOINT');
+  });
+
+  it.each(['/api/files', '/p/example', '/embed/chat'])('preserves policy exclusions for %s', path => {
+    vi.stubEnv('S3_PRESIGN_ENDPOINT', 'https://objects.example.invalid');
+    expect(proxy(makeRequest(`https://app.example.invalid${path}`)).headers.get('Content-Security-Policy')).toBeNull();
+  });
+});
+
+describe("proxy upstream What's New feed origin", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  const policy = () => proxy(makeRequest('https://app.example.invalid/home')).headers.get('Content-Security-Policy')!;
+  const sourcesOf = (csp: string, name: string) =>
+    csp
+      .split(';')
+      .map(part => part.trim().split(/\s+/))
+      .find(([directive]) => directive === name)!
+      .slice(1);
+
+  it('lets media, posters and the service worker load from the upstream origin', () => {
+    vi.stubEnv('WHATS_NEW_FEED_URL', 'https://upstream.example.invalid/api/v1/whats-new');
+    const csp = policy();
+    for (const name of ['connect-src', 'img-src', 'media-src']) {
+      expect(sourcesOf(csp, name)).toContain('https://upstream.example.invalid');
+    }
+    expect(sourcesOf(csp, 'script-src')).not.toContain('https://upstream.example.invalid');
+  });
+
+  it('adds nothing for an unset or non-https feed', () => {
+    vi.stubEnv('WHATS_NEW_FEED_URL', '');
+    const baseline = policy();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.stubEnv('WHATS_NEW_FEED_URL', 'http://upstream.example.invalid/api/v1/whats-new');
+    expect(policy()).toBe(baseline);
   });
 });

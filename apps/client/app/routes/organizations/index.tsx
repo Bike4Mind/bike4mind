@@ -3,6 +3,8 @@ import { useCreateTeamModal } from '@client/app/components/organizations/CreateT
 import { useUser } from '@client/app/contexts/UserContext';
 import { useGetUserOrganizations, useOrganizationSeats } from '@client/app/hooks/data/organizations';
 import { useGetSubscriptionsByOwner } from '@client/app/hooks/data/subscriptions';
+import { useTeamPlanAvailable } from '@client/app/hooks/data/teamPlanSettings';
+import { TEAM_PLAN_UNAVAILABLE_MESSAGE } from '@bike4mind/server-utils/lib/subscriptions/constants';
 import {
   SubscriptionOwnerType,
   isDelinquentSubscriptionStatus,
@@ -22,6 +24,7 @@ import {
   LinearProgress,
   Skeleton,
   Stack,
+  Tooltip,
   Typography,
 } from '@mui/joy';
 import { useNavigate } from '@tanstack/react-router';
@@ -44,6 +47,7 @@ const OrganizationCard: FC<{ organization: IOrganizationDocument }> = ({ organiz
   const { currentSeats } = useOrganizationSeats(organization.id);
 
   const isOwner = organization.userId === currentUser?.id;
+  const isManager = !!currentUser && (organization.adminUserIds ?? []).includes(currentUser.id) && !isOwner;
 
   return (
     <Card variant="outlined" sx={{ height: '100%', borderColor: isOwner ? 'primary.solidBg' : undefined }}>
@@ -64,9 +68,14 @@ const OrganizationCard: FC<{ organization: IOrganizationDocument }> = ({ organiz
                   {t('organization.owner')}
                 </Chip>
               )}
+              {isManager && (
+                <Chip size="sm" variant="soft" color="primary">
+                  Manager
+                </Chip>
+              )}
             </Box>
             <Typography level="body-sm" color="neutral">
-              {organization.personal ? 'Personal Organization' : 'Team Organization'}
+              {organization.personal ? 'Personal team' : 'Shared team'}
             </Typography>
           </Box>
         </Box>
@@ -153,13 +162,21 @@ const OrganizationCardSkeleton: FC = () => (
 const OrganizationListPage: FC = () => {
   const { t } = useTranslation();
   const { currentUser } = useUser();
-  const { data: organizations, isLoading, isFetching } = useGetUserOrganizations(currentUser?.id);
+  const {
+    data: memberOrganizations,
+    isLoading: membersLoading,
+    isFetching: membersFetching,
+  } = useGetUserOrganizations(currentUser?.id);
   const [searchQuery, setSearchQuery] = useState('');
   const openCreateTeamModal = useCreateTeamModal(state => state.open);
+  const teamPlanAvailable = useTeamPlanAvailable();
 
-  useDocumentTitle('Organizations');
+  useDocumentTitle('Teams');
 
-  const filteredOrganizations = organizations?.filter(
+  const organizations = [...(memberOrganizations ?? [])].sort((a, b) => a.name.localeCompare(b.name));
+  const isLoading = membersLoading;
+  const isFetching = membersFetching;
+  const filteredOrganizations = organizations.filter(
     org =>
       org.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       org.description?.toLowerCase().includes(searchQuery.toLowerCase())
@@ -170,12 +187,44 @@ const OrganizationListPage: FC = () => {
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 4 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <Typography level="h2">{t('organization.organizations')}</Typography>
-          <ContextHelpButton helpId="features/organizations-teams" tooltipText="Learn about Organizations" />
+          <ContextHelpButton helpId="features/organizations-teams" tooltipText="Learn about Teams" />
         </Box>
-        <Button startDecorator={<AddIcon />} color="primary" onClick={openCreateTeamModal}>
-          {t('organization.create')}
-        </Button>
+        <Tooltip title={teamPlanAvailable ? undefined : TEAM_PLAN_UNAVAILABLE_MESSAGE} placement="bottom">
+          {/* Span so the tooltip still fires on hover/focus while the button is disabled. */}
+          <span tabIndex={teamPlanAvailable ? undefined : 0}>
+            <Button
+              startDecorator={<AddIcon />}
+              color="primary"
+              onClick={openCreateTeamModal}
+              disabled={!teamPlanAvailable}
+              data-testid="organizations-create-team-btn"
+            >
+              {t('organization.create')}
+            </Button>
+          </span>
+        </Tooltip>
       </Box>
+
+      <Card variant="soft" sx={{ mb: 3 }}>
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems={{ sm: 'center' }}>
+          <Box sx={{ flex: 1 }}>
+            <Typography level="title-md">Explore Team administration before subscribing</Typography>
+            <Typography level="body-sm">
+              See sample members, monthly credit limits and usage, plus which controls each role can access.
+            </Typography>
+          </Box>
+          <Button
+            component="a"
+            href="https://docs.bike4mind.com/features/team-admin-preview"
+            target="_blank"
+            rel="noopener noreferrer"
+            variant="outlined"
+            data-testid="organizations-admin-preview-link"
+          >
+            Preview Team administration
+          </Button>
+        </Stack>
+      </Card>
 
       <Box sx={{ position: 'relative', mb: 4 }}>
         <Input
@@ -204,7 +253,7 @@ const OrganizationListPage: FC = () => {
           </>
         ) : (
           <>
-            {filteredOrganizations?.map(org => (
+            {filteredOrganizations.map(org => (
               <Grid key={org.id} xs={12} sm={6} md={4}>
                 <OrganizationCard organization={org} />
               </Grid>
@@ -213,7 +262,7 @@ const OrganizationListPage: FC = () => {
         )}
       </Grid>
 
-      {!isLoading && filteredOrganizations?.length === 0 && (
+      {!isLoading && filteredOrganizations.length === 0 && (
         <Box sx={{ textAlign: 'center', py: 8 }}>
           <Typography level="body-lg" color="neutral">
             {t('organization.no_organizations')}

@@ -6,17 +6,44 @@ import {
   userRepository,
   friendshipRepository,
   creditTransactionRepository,
-  withTransaction,
   TelemetryAuditLogModel,
+  realtimeConnectionRepository,
 } from '@bike4mind/database';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { userService } from '@bike4mind/services';
-import { ApiKeyScope, redactUserSecretsForSelf } from '@bike4mind/common';
+import { commitWithSessionEnd, type SessionEndReason } from '@server/auth/endUserSessions';
+import {
+  ApiKeyScope,
+  ForbiddenError,
+  redactUserSecretsForSelf,
+  selfUserProfileResponseSchema,
+} from '@bike4mind/common';
+import { respond } from '@server/utils/respond';
 import { triggerTelemetryDeletion } from '@server/utils/telemetryDeletion';
-import { getClientIp, truncateIp } from '@server/utils/ip';
+import { getClientIp, truncateIp } from '@bike4mind/server-utils/utils/ip';
 import * as z from 'zod';
+import { requireStepUp } from '@server/auth/stepUp';
+import {
+  denySelfAdminAction,
+  isSameUserId,
+  isSelfOrImpersonator,
+  parseAdminActionReason,
+  recordAdminActionFromRequest,
+} from '@server/utils/adminAudit';
 
 const idParamSchema = z.object({ id: z.string() });
+
+const updateUserResponseSchema = selfUserProfileResponseSchema.extend({
+  ignoredFields: z.array(z.string()).optional(),
+});
+
+/** Fields that change how the account signs in; see the credential gates in the handler. */
+const CREDENTIAL_FIELDS = ['password', 'email'] as const;
+
+const writesCredentialFields = (body: unknown): boolean => {
+  const fields = (body ?? {}) as Record<string, unknown>;
+  return CREDENTIAL_FIELDS.some(field => fields[field] !== undefined && fields[field] !== null);
+};
 
 async function getPreviousConsentLevel(
   userId: string,
@@ -93,14 +120,65 @@ async function handleTelemetryConsentChange(
   }
 }
 
+type AccountStateSnapshot = Parameters<typeof userService.entersBlockedState>[0] & {
+  isAdmin?: boolean;
+  email?: string | null;
+};
+
+type AuditTargetSnapshot = {
+  isAdmin?: boolean;
+  currentCredits?: number;
+  name?: string;
+  username?: string;
+  email?: string | null;
+};
+
+const userAuditTarget = (userId: string, user: AuditTargetSnapshot | null) => ({
+  kind: 'user' as const,
+  id: userId,
+  displayName: user?.name || user?.username || user?.email || userId,
+});
+
+/** Whether an admin update body asks to move the balance; mirrors adminUpdateUser's delta rule. */
+const requestsCreditChange = (body: userService.AdminUpdateUserParameters, currentCredits: number | undefined) =>
+  body.creditDelta !== undefined
+    ? body.creditDelta !== 0
+    : body.currentCredits !== undefined && body.currentCredits !== (currentCredits ?? 0);
+
+/**
+ * Why an admin edit must sign the target out everywhere, if it must. Entering a blocked state wins
+ * so the audit names the strongest cause when one edit does several things.
+ */
+function adminEditSessionEndReason(
+  passwordSet: boolean,
+  before: AccountStateSnapshot | null,
+  after: AccountStateSnapshot | null
+): SessionEndReason | undefined {
+  if (!before || !after) return undefined;
+  if (userService.entersBlockedState(before, after)) return 'account_blocked';
+  if (passwordSet) return 'password_changed';
+  if (after.email !== before.email) return 'email_changed';
+  return undefined;
+}
+
 const handler = baseApi().put(
   asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
     const { id: userId } = idParamSchema.parse(req.query);
     const currentUser = req.user;
 
+    const isSelf = isSameUserId(currentUser.id, userId);
+
     // Non-admin users can only update their own profile
-    if (!currentUser.isAdmin && currentUser.id !== userId) {
+    if (!currentUser.isAdmin && !isSelf) {
       return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    // Changing your OWN sign-in credentials needs a browser session that recently re-verified, so
+    // an API key can never do it. Only the admin schema accepts `email`. An admin writing ANOTHER
+    // user's credentials or granting the admin role is held to the same bar in the admin branch.
+    if (isSelf && writesCredentialFields(req.body)) {
+      if (req.apiKeyInfo) throw new ForbiddenError('Password and email cannot be changed with an API key.');
+      await requireStepUp(req);
     }
 
     if (currentUser.isAdmin) {
@@ -113,7 +191,22 @@ const handler = baseApi().put(
       // middleware here would pull the whole auth/ability/model chain into a route that
       // needs one field off the request.
       if (req.apiKeyInfo && !req.apiKeyInfo.scopes.includes(ApiKeyScope.ADMIN)) {
-        return res.status(403).json({ error: 'Insufficient API key permissions' });
+        throw new ForbiddenError('Insufficient API key permissions', { required_scopes: [ApiKeyScope.ADMIN] });
+      }
+
+      // Another user's credentials and the admin role are session-only changes: an API key is
+      // refused, a browser session must have recently re-verified. Both run before any write.
+      // Revoking the role, bans and every other field stay ungated.
+      if (!isSelf) {
+        const grantsAdminRole =
+          (req.body as Record<string, unknown> | undefined)?.isAdmin === true &&
+          !((await User.findById(userId).select('isAdmin').lean()) as { isAdmin?: boolean } | null)?.isAdmin;
+        if (writesCredentialFields(req.body) || grantsAdminRole) {
+          if (req.apiKeyInfo) {
+            throw new ForbiddenError('Credential and admin-role changes require a signed-in session.');
+          }
+          await requireStepUp(req);
+        }
       }
 
       // Parse with the admin schema -- includes email, isAdmin, tags, credits, etc.
@@ -128,21 +221,40 @@ const handler = baseApi().put(
       // id comes from the route param; the spread ensures it wins over any id in the body.
       const body = userService.adminUpdateUserSchema.parse({ ...rawBody, id: userId });
 
-      // Lockout guard: an explicit demote (isAdmin -> false) must not remove the
-      // ONLY remaining Super Admin, and an admin must not remove their OWN Super
-      // Admin role (self-demote). The old checkbox UI allowed both - a pre-existing
-      // footgun the Roles radio (admin-roles-product-access-redesign M1) closes here,
-      // at the actual write path, not just in the UI.
-      if (body.isAdmin === false) {
-        const targetUser = (await User.findById(userId).select('isAdmin').lean()) as Record<string, unknown> | null;
-        if (targetUser?.isAdmin) {
-          if (currentUser.id === userId) {
-            return res.status(400).json({ error: 'You cannot remove your own Super Admin role.' });
-          }
-          const adminCount = await userRepository.count({ isAdmin: true });
-          if (adminCount <= 1) {
-            return res.status(400).json({ error: 'Cannot remove the last remaining Super Admin.' });
-          }
+      const targetBefore = (await User.findById(userId)
+        .select('isAdmin currentCredits name username email')
+        .lean()) as AuditTargetSnapshot | null;
+      const auditTarget = userAuditTarget(userId, targetBefore);
+      const changesRole = body.isAdmin !== undefined && body.isAdmin !== !!targetBefore?.isAdmin;
+      const changesCredits = requestsCreditChange(body, targetBefore?.currentCredits);
+
+      // No self-service privilege: an admin cannot move their own balance or change their own
+      // admin flag. The attempt is recorded as a critical denied entry and answered with a 403.
+      const deniesSelf = isSelfOrImpersonator(currentUser, userId);
+      if (deniesSelf && changesRole) {
+        await denySelfAdminAction(req, {
+          action: 'user.role.denied',
+          attempted: body.isAdmin ? 'user.role.admin_granted' : 'user.role.admin_revoked',
+          target: auditTarget,
+        });
+      }
+      if (deniesSelf && changesCredits) {
+        await denySelfAdminAction(req, {
+          action: 'user.credits.denied',
+          attempted: 'user.credits.adjusted',
+          target: auditTarget,
+        });
+      }
+
+      // Validated before any write so a missing reason never leaves a half-applied update.
+      const roleChangeReason = changesRole ? parseAdminActionReason(body.roleChangeReason) : undefined;
+      const creditReason = changesCredits ? parseAdminActionReason(body.creditReason) : undefined;
+
+      // Lockout guard: an explicit demote must not remove the ONLY remaining Super Admin.
+      if (changesRole && body.isAdmin === false) {
+        const adminCount = await userRepository.count({ isAdmin: true });
+        if (adminCount <= 1) {
+          return res.status(400).json({ error: 'Cannot remove the last remaining Super Admin.' });
         }
       }
 
@@ -151,18 +263,59 @@ const handler = baseApi().put(
         ? await getPreviousConsentLevel(userId, incomingTelemetryLevel, body.preferences)
         : undefined;
 
-      req.logger.updateMetadata({ body: req.body });
-      await withTransaction(() =>
-        userService.adminUpdateUser(currentUser.id, body, {
-          db: {
-            users: userRepository,
-            organizations: Organization,
-            friendship: friendshipRepository,
-            userApiKeys: userApiKeyRepository,
-            // Audits admin `currentCredits` changes as CreditTransactions.
-            creditTransactions: creditTransactionRepository,
-          },
-        })
+      req.logger.updateMetadata({ updatedFields: Object.keys(body) });
+      await commitWithSessionEnd(
+        req,
+        async () => {
+          // Read inside the transaction so the reason sees the state the write saw; an
+          // outside read can be stale by the time the write commits.
+          const snapshot = (await User.findById(userId)
+            .select('isAdmin email isBanned disputePending moderation')
+            .lean()) as AccountStateSnapshot | null;
+          const { user: updated, creditAdjustment } = await userService.adminUpdateUser(
+            currentUser.id,
+            changesCredits ? { ...body, creditReason } : { ...body, currentCredits: undefined, creditReason },
+            {
+              db: {
+                users: userRepository,
+                organizations: Organization,
+                friendship: friendshipRepository,
+                userApiKeys: userApiKeyRepository,
+                realtimeConnections: realtimeConnectionRepository,
+                creditTransactions: creditTransactionRepository,
+              },
+            }
+          );
+
+          // Both entries are strict: a failed audit write aborts this transaction, so neither the
+          // role change nor the balance change can commit without its record.
+          if (changesRole && snapshot?.isAdmin !== updated?.isAdmin) {
+            await recordAdminActionFromRequest(req, {
+              action: updated?.isAdmin ? 'user.role.admin_granted' : 'user.role.admin_revoked',
+              target: auditTarget,
+              summary: updated?.isAdmin ? 'granted the admin role' : 'revoked the admin role',
+              reason: roleChangeReason,
+              changes: [{ field: 'isAdmin', before: !!snapshot?.isAdmin, after: !!updated?.isAdmin }],
+            });
+          }
+          if (creditAdjustment) {
+            const { credits, previousBalance, resultingBalance } = creditAdjustment;
+            await recordAdminActionFromRequest(req, {
+              action: 'user.credits.adjusted',
+              target: auditTarget,
+              summary: `${credits > 0 ? 'granted' : 'deducted'} ${Math.abs(credits)} credits`,
+              reason: creditAdjustment.note,
+              changes: [{ field: 'currentCredits', before: previousBalance, after: resultingBalance }],
+              details: { credits },
+            });
+          }
+          return { snapshot, updated };
+        },
+        // adminUpdateUser returns the user as written, read inside the same transaction.
+        ({ snapshot, updated }) => {
+          const reason = adminEditSessionEndReason(typeof body.password === 'string', snapshot, updated);
+          return reason && { userId, reason, actorUserId: currentUser.id !== userId ? currentUser.id : undefined };
+        }
       );
 
       // Log consent change only after successful update
@@ -179,7 +332,11 @@ const handler = baseApi().put(
       });
       // safeUser is null when the row vanished mid-request; spreading null there would
       // turn the response into a bare { ignoredFields } that reads as a user document.
-      return res.json(safeUser && ignoredFields.length > 0 ? { ...safeUser, ignoredFields } : safeUser);
+      return respond(
+        res,
+        updateUserResponseSchema.nullable(),
+        safeUser && ignoredFields.length > 0 ? { ...safeUser, ignoredFields } : safeUser
+      );
     } else {
       // Parse with the self-service schema -- excludes isAdmin, tags, email, etc.
       // secureParameters inside the service strips any keys not in this allowlist.
@@ -197,11 +354,21 @@ const handler = baseApi().put(
         ? await getPreviousConsentLevel(userId, incomingTelemetryLevel, body.preferences)
         : undefined;
 
-      await userService.updateUser(userId, body, {
-        db: {
-          users: userRepository,
-        },
-      });
+      const update = () =>
+        userService.updateUser(userId, body, {
+          db: {
+            users: userRepository,
+          },
+        });
+      // Only a password change needs the transaction; ordinary profile and preference saves skip it.
+      // The service treats `""` as a password to write (it only skips undefined/null), so the gate
+      // matches that rule rather than truthiness - otherwise an empty-string password changes the
+      // credential without ending the sessions minted under it.
+      if (typeof body.password === 'string') {
+        await commitWithSessionEnd(req, update, () => ({ userId, reason: 'password_changed' }));
+      } else {
+        await update();
+      }
 
       // Log consent change only after successful update
       if (incomingTelemetryLevel) {
@@ -214,7 +381,11 @@ const handler = baseApi().put(
       const safeUser = redactUserSecretsForSelf(finalUser, { keep: ['securityQuestions'] });
       // safeUser is null when the row vanished mid-request; spreading null there would
       // turn the response into a bare { ignoredFields } that reads as a user document.
-      return res.json(safeUser && ignoredFields.length > 0 ? { ...safeUser, ignoredFields } : safeUser);
+      return respond(
+        res,
+        updateUserResponseSchema.nullable(),
+        safeUser && ignoredFields.length > 0 ? { ...safeUser, ignoredFields } : safeUser
+      );
     }
   })
 );

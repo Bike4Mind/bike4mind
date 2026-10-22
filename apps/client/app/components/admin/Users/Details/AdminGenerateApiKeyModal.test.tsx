@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
+import { ApiKeyScope } from '@bike4mind/common';
+import { GENERIC_MODAL_API_KEY_SCOPES, genericApiKeyScopesFor } from '@client/app/constants/apiKeyScopes';
 import AdminGenerateApiKeyModal from './AdminGenerateApiKeyModal';
 
 const h = vi.hoisted(() => ({
@@ -16,6 +18,13 @@ const h = vi.hoisted(() => ({
   // Records who the list was scoped to, so a regression back to the caller-scoped hook is caught
   // here rather than as a 400 at mint time (#2945).
   askedForUserId: undefined as string | undefined,
+  hasOptiAccess: true,
+}));
+
+vi.mock('@client/app/hooks/data/opti', () => ({ useOptiAccess: () => h.hasOptiAccess }));
+vi.mock('@client/app/hooks/data/productScopeAccess', () => ({
+  useOverwatchAccess: () => true,
+  useHearthEnabled: () => true,
 }));
 
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
@@ -54,6 +63,7 @@ beforeEach(() => {
   h.lakesLoading = false;
   h.lakesError = false;
   h.askedForUserId = undefined;
+  h.hasOptiAccess = true;
   h.refetchLakes.mockClear();
   h.mutate.mockClear();
 });
@@ -131,5 +141,79 @@ describe('AdminGenerateApiKeyModal - pre-authorized lakes', () => {
 
     fireEvent.click(screen.getByTestId('admin-generate-key-lake-checkbox-lakeA').querySelector('input')!);
     expect(screen.getByTestId('admin-generate-key-lakes-count').textContent).toContain('1 selected');
+  });
+});
+
+describe('AdminGenerateApiKeyModal - ingest scopes', () => {
+  const GENERIC = GENERIC_MODAL_API_KEY_SCOPES[0].value;
+  const scopeInput = (value: string) => screen.getByTestId(`admin-generate-key-scope-${value}`).querySelector('input')!;
+
+  const submitScopes = () => {
+    fireEvent.change(screen.getByPlaceholderText(/Data Lake Upload/i), { target: { value: 'ci ingest' } });
+    fireEvent.click(screen.getByText('Generate API Key'));
+    return h.mutate.mock.calls[0][0].data.scopes;
+  };
+
+  it('offers QA ingest but not Overwatch ingest, which needs a productId this path never sends', () => {
+    renderModal();
+    expect(screen.getByText('QA: Ingest')).toBeTruthy();
+    expect(screen.queryByTestId(`admin-generate-key-scope-${ApiKeyScope.OVERWATCH_INGEST_WRITE}`)).toBeNull();
+  });
+
+  it('the generic counter ignores a selected ingest scope, and Select All replaces it', () => {
+    renderModal();
+    const counter = () => screen.getByTestId('admin-generate-key-scopes-count').textContent;
+    fireEvent.click(scopeInput(ApiKeyScope.QA_INGEST));
+    expect(counter()).toContain(`(0/${GENERIC_MODAL_API_KEY_SCOPES.length} selected)`);
+
+    fireEvent.click(screen.getByText('Select All'));
+    expect(counter()).toContain(
+      `(${GENERIC_MODAL_API_KEY_SCOPES.length}/${GENERIC_MODAL_API_KEY_SCOPES.length} selected)`
+    );
+    expect(scopeInput(ApiKeyScope.QA_INGEST).checked).toBe(false);
+
+    fireEvent.click(screen.getByText('Clear All'));
+    expect(counter()).toContain(`(0/${GENERIC_MODAL_API_KEY_SCOPES.length} selected)`);
+    expect(scopeInput(ApiKeyScope.QA_INGEST).checked).toBe(false);
+  });
+
+  it('an ingest scope replaces the selection, since it must be the only scope', () => {
+    renderModal();
+    fireEvent.click(scopeInput(GENERIC));
+    fireEvent.click(scopeInput(ApiKeyScope.QA_INGEST));
+    expect(submitScopes()).toEqual([ApiKeyScope.QA_INGEST]);
+  });
+
+  it('a generic scope drops a selected ingest scope', () => {
+    renderModal();
+    fireEvent.click(scopeInput(ApiKeyScope.QA_INGEST));
+    fireEvent.click(scopeInput(GENERIC));
+    expect(submitScopes()).toEqual([GENERIC]);
+  });
+});
+
+describe('AdminGenerateApiKeyModal - premium scopes', () => {
+  const PREMIUM = [ApiKeyScope.OPTIHASHI_READ, ApiKeyScope.OPTIHASHI_COMPUTE];
+  const scopeRow = (value: string) => screen.queryByTestId(`admin-generate-key-scope-${value}`);
+
+  it('hides the premium scopes, and keeps Select All from granting them, without Opti access', () => {
+    h.hasOptiAccess = false;
+    renderModal();
+    for (const scope of PREMIUM) expect(scopeRow(scope)).toBeNull();
+
+    fireEvent.click(screen.getByText('Select All'));
+    const offered = genericApiKeyScopesFor({
+      hasOptiAccess: false,
+      hasOverwatchAccess: true,
+      hearthEnabled: true,
+    }).length;
+    expect(screen.getByTestId('admin-generate-key-scopes-count').textContent).toContain(
+      `(${offered}/${offered} selected)`
+    );
+  });
+
+  it('offers the premium scopes with Opti access', () => {
+    renderModal();
+    for (const scope of PREMIUM) expect(scopeRow(scope)).not.toBeNull();
   });
 });

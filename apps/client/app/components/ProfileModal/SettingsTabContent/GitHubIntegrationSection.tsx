@@ -54,7 +54,7 @@ interface GitHubRepository {
 
 const GitHubIntegrationSection = ({ userId }: GitHubIntegrationProps) => {
   const { currentUser } = useUser();
-  const isSlackLinked = Boolean(currentUser?.slackSettings?.slackUserId);
+  const isSlackLinked = Boolean(currentUser?.slackSettings?.slackUserId && currentUser?.slackSettings?.slackTeamId);
   const [status, setStatus] = useState<GitHubStatus>({ connected: false });
   const [connecting, setConnecting] = useState(false);
   const [showDisconnectModal, setShowDisconnectModal] = useState(false);
@@ -324,7 +324,7 @@ const GitHubIntegrationSection = ({ userId }: GitHubIntegrationProps) => {
                     Select Repositories for Integration
                   </Typography>
                   <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-                    Choose which repositories can be used to create issues from Slack
+                    Choose which repositories AI tools can access. With none selected, all repositories are available.
                   </Typography>
                 </Box>
 

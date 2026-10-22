@@ -1,17 +1,16 @@
 import { Organization, organizationRepository } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { AdminOrgAuditEvents, logAuditEvent } from '@server/utils/auditLog';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { createCustomer, CustomerType, stripe } from '@server/integrations/stripe/stripe';
+import { USD_CHECKOUT_SESSION_PARAMS } from '@server/integrations/stripe/checkoutCurrency';
 import { isAllowedCallbackOrigin } from '@server/integrations/stripe/callbackUrl';
-import { Config } from '@server/utils/config';
-import {
-  ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
-  ORGANIZATION_SUBSCRIPTION_PRICE_ID,
-} from '@client/lib/subscriptions/constants';
+import { Config } from '@bike4mind/server-utils/utils/config';
+import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@bike4mind/server-utils/lib/subscriptions/constants';
+import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
 import { StripeSubscriptionMetadataSchema } from '@client/lib/subscriptions/schema';
 import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
 import { subscriptionRepository } from '@server/models/Subscription';
@@ -53,9 +52,10 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
       throw new BadRequestError('Organization has no active admin grant to convert');
     }
 
-    if (organization.seats < ORGANIZATION_SUBSCRIPTION_MIN_SEATS) {
+    const { minSeats } = await getTeamPlanSettings();
+    if (organization.seats < minSeats) {
       throw new BadRequestError(
-        `Org has ${organization.seats} seats; Stripe minimum is ${ORGANIZATION_SUBSCRIPTION_MIN_SEATS}. Adjust seats up before converting.`
+        `Org has ${organization.seats} seats; Stripe minimum is ${minSeats}. Adjust seats up before converting.`
       );
     }
 
@@ -101,6 +101,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
     // Stripe accepted - bypassing our org-internal floor.
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
+      ...USD_CHECKOUT_SESSION_PARAMS,
       customer: organization.stripeCustomerId,
       payment_method_types: ['card'],
       line_items: [
@@ -108,7 +109,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
           price: ORGANIZATION_SUBSCRIPTION_PRICE_ID,
           quantity: organization.seats,
           // adjustable_quantity intentionally omitted (defaults to disabled).
-          // ORGANIZATION_SUBSCRIPTION_MAX_SEATS is enforced at admin endpoint
+          // The teamPlanMaxSeats ceiling is enforced at admin endpoint
           // boundaries; the convert endpoint above already gates seats >= MIN.
         },
       ],
@@ -117,21 +118,17 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
       subscription_data: { metadata },
     });
 
-    await logAuditEvent(
-      {
-        userId: organization.userId,
-        action: AdminOrgAuditEvents.ORG_CONVERT_INITIATED,
-        adminUserId: req.user!.id,
-        adminUsername: req.user!.username,
-        metadata: {
-          organizationId: organization.id,
-          seats: organization.seats,
-          stripeCustomerId: organization.stripeCustomerId,
-          checkoutSessionId: session.id,
-        },
+    await recordAdminActionFromRequest(req, {
+      action: 'org.conversion.initiated',
+      target: { kind: 'organization', id: organization.id, displayName: organization.name },
+      summary: 'initiated conversion to a paid subscription',
+      details: {
+        seats: organization.seats,
+        stripeCustomerId: organization.stripeCustomerId,
+        checkoutSessionId: session.id,
+        ownerId: organization.userId,
       },
-      req.logger
-    );
+    });
 
     return res.status(200).json({ checkoutUrl: session.url });
   })

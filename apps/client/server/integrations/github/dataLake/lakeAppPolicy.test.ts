@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { findInstallationPolicyViolation, pickRepositoryToBind } from './lakeAppPolicy';
-import type { GitHubLakeRepository } from './lakeAppClient';
+import { findInstallationPolicyViolation } from './lakeAppPolicy';
 
 describe('findInstallationPolicyViolation', () => {
   it('accepts selected-repositories with exactly contents:read + metadata:read', () => {
@@ -55,30 +54,5 @@ describe('findInstallationPolicyViolation', () => {
         permissions: { contents: 'read', metadata: 'read', issues: undefined },
       })
     ).toBeNull();
-  });
-});
-
-describe('pickRepositoryToBind', () => {
-  const repo = (id: number, fullName: string): GitHubLakeRepository => ({ id, fullName });
-
-  it('picks the single unbound repository', () => {
-    const result = pickRepositoryToBind([repo(1, 'acme/one'), repo(2, 'acme/two')], new Set([1]));
-    expect(result).toEqual({ kind: 'picked', repository: repo(2, 'acme/two') });
-  });
-
-  it('reports none_unbound when the visible list is empty', () => {
-    expect(pickRepositoryToBind([], new Set())).toEqual({ kind: 'none_unbound' });
-  });
-
-  it('reports none_unbound when every visible repository is already bound', () => {
-    expect(pickRepositoryToBind([repo(1, 'acme/one')], new Set([1]))).toEqual({ kind: 'none_unbound' });
-  });
-
-  it('reports ambiguous with the unbound count when more than one repository is unclaimed', () => {
-    const result = pickRepositoryToBind(
-      [repo(1, 'acme/one'), repo(2, 'acme/two'), repo(3, 'acme/three')],
-      new Set([3])
-    );
-    expect(result).toEqual({ kind: 'ambiguous', unboundCount: 2 });
   });
 });

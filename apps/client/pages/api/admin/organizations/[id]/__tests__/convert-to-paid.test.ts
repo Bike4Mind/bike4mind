@@ -37,14 +37,16 @@ vi.mock('@server/models/Subscription', () => ({
   },
 }));
 
-// Needed only so importing the handler resolves; the guard rejects long before it is reached.
-vi.mock('@server/services/organizationService', () => ({ resolveSubscriptionSource: vi.fn() }));
-
-const mockLogAuditEvent = vi.fn();
-vi.mock('@server/utils/auditLog', () => ({
-  AdminOrgAuditEvents: { ORG_CONVERT_INITIATED: 'org_convert_initiated' },
-  logAuditEvent: (...args: unknown[]) => mockLogAuditEvent(...args),
+const mockResolveSubscriptionSource = vi.fn();
+vi.mock('@server/services/organizationService', () => ({
+  resolveSubscriptionSource: (...args: unknown[]) => mockResolveSubscriptionSource(...args),
 }));
+
+vi.mock('@bike4mind/server-utils/services/teamPlanSettings', () => ({
+  getTeamPlanSettings: async () => ({ minSeats: 3, maxSeats: 100 }),
+}));
+
+vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn().mockResolvedValue(null) }));
 
 // Drive the origin verdict per test rather than hard-coding it: a stub pinned to `true` would
 // make the rejection path untestable, which is exactly the gap this file closes.
@@ -53,7 +55,7 @@ vi.mock('@server/integrations/stripe/callbackUrl', async importOriginal => {
   const actual = await importOriginal<typeof import('@server/integrations/stripe/callbackUrl')>();
   return { ...actual, isAllowedCallbackOrigin: (...args: unknown[]) => mockIsAllowedCallbackOrigin(...args) };
 });
-vi.mock('@server/utils/config', () => ({ Config: { STAGE: 'test' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { STAGE: 'test' } }));
 
 const mockSessionsCreate = vi.fn();
 const mockCreateCustomer = vi.fn();
@@ -65,6 +67,7 @@ vi.mock('@server/integrations/stripe/stripe', () => ({
   },
 }));
 
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import handler from '../convert-to-paid';
 
 type HandlerFn = (req: unknown, res: unknown) => Promise<unknown>;
@@ -117,7 +120,7 @@ describe('POST /api/admin/organizations/[id]/convert-to-paid - callbackUrl origi
     expect(mockFindActiveByOwner).not.toHaveBeenCalled();
     expect(mockCreateCustomer).not.toHaveBeenCalled();
     expect(mockSessionsCreate).not.toHaveBeenCalled();
-    expect(mockLogAuditEvent).not.toHaveBeenCalled();
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
   });
 
   it('lets an allowed origin through to the organization lookup', async () => {
@@ -134,5 +137,53 @@ describe('POST /api/admin/organizations/[id]/convert-to-paid - callbackUrl origi
 
     expect(mockIsAllowedCallbackOrigin).toHaveBeenCalledWith(CALLBACK_URL);
     expect(mockOrgFindById).toHaveBeenCalledWith('org_1');
+  });
+});
+
+describe('POST /api/admin/organizations/[id]/convert-to-paid - checkout currency', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsAllowedCallbackOrigin.mockReturnValue(true);
+    mockOrgFindById.mockResolvedValue({
+      id: '507f1f77bcf86cd799439011',
+      userId: '507f1f77bcf86cd799439012',
+      name: 'Org One',
+      seats: 5,
+      stripeCustomerId: 'cus_org',
+    });
+    mockFindActiveByOwner.mockResolvedValue([{ id: 'sub_grant' }]);
+    mockResolveSubscriptionSource.mockReturnValue('admin_grant');
+    mockSessionsCreate.mockResolvedValue({ id: 'cs_1', url: 'https://checkout.stripe/session' });
+  });
+
+  it('pins the session to USD with Adaptive Pricing off, whatever the visitor location', async () => {
+    const { req, res } = makeReq();
+
+    await (handler as HandlerFn)(req, res);
+
+    expect(mockSessionsCreate).toHaveBeenCalledTimes(1);
+    expect(mockSessionsCreate.mock.calls[0][0]).toMatchObject({
+      currency: 'usd',
+      adaptive_pricing: { enabled: false },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('records org.conversion.initiated against the organization', async () => {
+    const { req, res } = makeReq();
+
+    await (handler as HandlerFn)(req, res);
+
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'org.conversion.initiated',
+        target: expect.objectContaining({
+          kind: 'organization',
+          id: '507f1f77bcf86cd799439011',
+          displayName: 'Org One',
+        }),
+      })
+    );
   });
 });

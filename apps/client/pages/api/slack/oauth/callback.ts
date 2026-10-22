@@ -8,6 +8,7 @@ import type { InstallationMetadata } from '@bike4mind/slack';
 import { CallbackOptions } from '@slack/oauth';
 import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
 import { randomUUID } from 'crypto';
+import { readStateNonceHash, clearStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
 
 /**
  * Slack OAuth Callback Endpoint
@@ -18,7 +19,7 @@ import { randomUUID } from 'crypto';
  * instead. Same pattern as auth/github/mcp-callback.ts.
  *
  * Handles OAuth callback from Slack with:
- * - CSRF validation (state parameter)
+ * - CSRF validation (signed state parameter, bound to the initiating browser by the nonce cookie)
  * - Token exchange
  * - Workspace storage (via installationStore)
  *
@@ -54,10 +55,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Track installation metadata for success redirect
     let metadata: InstallationMetadata = { isReinstall: false, teamName: 'your workspace', teamId: '' };
 
-    const installer = await createInstallProvider((installMetadata: InstallationMetadata) => {
-      metadata = installMetadata;
-    });
-
     const callbackOptions: CallbackOptions = {
       success: async (installation, _installOptions, _req, _res) => {
         Logger.info('✅ Slack OAuth success', {
@@ -87,7 +84,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     };
 
     // handleCallback validates state, exchanges code for token, and calls installationStore
-    await installer.handleCallback(req, res, callbackOptions);
+    try {
+      const installer = await createInstallProvider(
+        (installMetadata: InstallationMetadata) => {
+          metadata = installMetadata;
+        },
+        { expectedNonceHash: readStateNonceHash(req, NONCE_SLOT.slackAppInstall) }
+      );
+      await installer.handleCallback(req, res, callbackOptions);
+    } finally {
+      // Bolt overwrites Set-Cookie during state verification (legacy mode too), so burn the nonce after handleCallback;
+      // provider creation sits inside this try so a throw there burns it too.
+      clearStateNonce(res, NONCE_SLOT.slackAppInstall);
+    }
 
     // If failure callback was called, redirect to error page
     if (oauthErrorMessage && !res.writableEnded) {

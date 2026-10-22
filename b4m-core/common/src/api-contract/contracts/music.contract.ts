@@ -4,13 +4,17 @@ import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
 // (the barrel drags in @bike4mind/hearth, unbuilt in the CI openapi job).
 import { musicRequestSchema } from '../../musicGeneration';
 import { ApiErrorSchema, InsufficientCreditsErrorSchema } from '../../schemas/chat';
-import { generatedAudioBody } from './audioResponses';
+import { generatedAudioResponseSchema, generatedAudioTooLargeSchema } from '../../generatedAudio';
+import { GENERATED_AUDIO_CONTENT_TYPES, GENERATED_AUDIO_DESCRIPTION, generatedAudioResponses } from './audioResponses';
 
 /**
- * Contract for POST /api/ai/music - background-music generation.
+ * Contract for POST /api/ai/music - synchronous background-music generation.
  *
- * The success body is raw audio bytes, so the 200 declares no schema - only the
- * media types the vendor can emit.
+ * Deprecated in favour of the async job resource (musicGeneration.contract.ts);
+ * served until the sunset, then replaced by a 410 tombstone.
+ *
+ * Responses (raw bytes, base64 JSON, oversized-audio 303/URL) are the shared
+ * generated-audio ones; see audioResponses.ts.
  */
 export const generateMusicContract = defineEndpoint({
   method: 'post',
@@ -18,28 +22,32 @@ export const generateMusicContract = defineEndpoint({
   operationId: 'generateMusic',
   summary: 'Generate background music',
   description:
-    'Generates an instrumental or vocal background-music track from a text prompt and returns the raw ' +
-    'audio bytes. `lengthMs` (3000-120000, default 10000) is forced on the provider, so the generated ' +
-    'track always matches the billed length; credits are reserved before generation and refunded if it ' +
-    'fails. Generated audio is saved to the file browser by default (opt out via the saveGeneratedAudio ' +
-    'preference); the outcome is reported via the `X-B4M-Audio-Saved` / `X-B4M-Audio-Fab-File-Id` / ' +
-    '`X-B4M-Audio-File-Url` response headers - use `X-B4M-Audio-File-Url` to fetch the saved copy, since ' +
-    '`GET /api/files/{id}` fails closed until moderation completes. Authenticate with an API key ' +
-    '(`b4m_live_`) or a JWT.',
+    'Generates an instrumental or vocal background-music track from a text prompt. `lengthMs` ' +
+    '(3000-120000, default 10000) is forced on the provider, so the generated track always matches the ' +
+    'billed length; credits are reserved before generation and refunded if it fails. ' +
+    GENERATED_AUDIO_DESCRIPTION,
   tags: ['Audio'],
+  deprecated: { since: '2026-10-15', sunset: '2027-01-15', successor: '/api/v1/music-generations' },
   auth: 'apiKeyOrJwt',
   scopes: [ApiKeyScope.AI_GENERATE],
   request: musicRequestSchema,
   requestExample: { prompt: 'calm lo-fi study beat with soft piano', lengthMs: 30000, forceInstrumental: true },
   responses: {
-    200: {
-      description: 'Raw audio bytes; the Content-Type follows the requested `format` (mp3 by default).',
-      ...generatedAudioBody(),
-    },
+    ...generatedAudioResponses({
+      description:
+        'Music generated. Binary bodies carry a Content-Type that follows the requested `format` (mp3 by default).',
+      json: {
+        schema: generatedAudioResponseSchema,
+        example: { delivery: 'inline', audio: 'SUQzBAAAAAAA...', contentType: 'audio/mpeg', saved: true },
+      },
+      binaryContentTypes: GENERATED_AUDIO_CONTENT_TYPES,
+      tooLargeSchema: generatedAudioTooLargeSchema,
+    }),
     400: { description: 'The billing user or organization could not be resolved.', schema: ApiErrorSchema },
     422: {
       description:
-        'Request body failed validation, or the caller cannot afford the track - the latter is tagged ' +
+        'Request body failed validation (including a `format` whose codec the provider cannot produce), or ' +
+        'the caller cannot afford the track - the latter is tagged ' +
         '`errorCode: "insufficient_credits"` (the balance is short, or the org member credit cap is exhausted).',
       schema: InsufficientCreditsErrorSchema,
     },

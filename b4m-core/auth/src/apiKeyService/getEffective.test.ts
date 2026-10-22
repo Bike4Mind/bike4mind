@@ -56,6 +56,22 @@ describe('getEffectiveLLMApiKeys', () => {
     expect(names).toContain('geminiDemoKey');
     expect(names).toContain('EnableOllama');
     expect(names).toContain('ollamaBackend');
+    expect(names).toContain('typesafeApiKey');
+  });
+
+  it('resolves the TypeSafe key from the user key, then the admin setting', async () => {
+    const userKey = { type: ApiKeyType.typesafe, apiKey: 'ts-user' } as IApiKeyDocument;
+    const withUserKey = await getEffectiveLLMApiKeys('user-123', {
+      db: { apiKeys: makeApiKeyRepo([userKey]), adminSettings: makeAdminSettingsRepo() },
+      getSettingsByNames: makeGetSettingsByNames({ typesafeApiKey: 'ts-admin' }),
+    });
+    expect(withUserKey.typesafe).toBe('ts-user');
+
+    const adminOnly = await getEffectiveLLMApiKeys('user-123', {
+      db: { apiKeys: makeApiKeyRepo(), adminSettings: makeAdminSettingsRepo() },
+      getSettingsByNames: makeGetSettingsByNames({ typesafeApiKey: 'ts-admin' }),
+    });
+    expect(adminOnly.typesafe).toBe('ts-admin');
   });
 
   it('returns null keys when userId is null and no admin demo keys are set', async () => {
@@ -227,6 +243,7 @@ describe('getEffectiveLLMApiKeys', () => {
           OPENAI_API_KEY: 'sk-oai-env',
           XAI_API_KEY: 'xai-env',
           BFL_API_KEY: 'bfl-env',
+          TYPESAFE_API_KEY: 'ts-env',
         },
         async () => {
           const result = await getEffectiveLLMApiKeys(null, {
@@ -239,6 +256,7 @@ describe('getEffectiveLLMApiKeys', () => {
           expect(result.openai).toBe('sk-oai-env');
           expect(result.xai).toBe('xai-env');
           expect(result.bfl).toBe('bfl-env');
+          expect(result.typesafe).toBe('ts-env');
           // Only the documented .env.selfhost provider keys get the fallback.
           expect(result.voyageai).toBeNull();
         }
@@ -377,15 +395,21 @@ describe('getSearxngUrl / getWebSearchProviderSetting', () => {
     });
   });
 
-  it('ignores SEARXNG_BASE_URL outside self-host', async () => {
+  it('falls back to SEARXNG_BASE_URL even outside self-host (not a secret, unlike envKey())', async () => {
     await withEnv({ B4M_SELF_HOST: undefined, SEARXNG_BASE_URL: 'http://searxng:8080' }, async () => {
-      expect(await getSearxngUrl(adapters({}))).toBeNull();
+      expect(await getSearxngUrl(adapters({}))).toBe('http://searxng:8080');
     });
   });
 
   it('prefers the admin SearxngUrl over the env fallback', async () => {
     await withEnv({ B4M_SELF_HOST: 'true', SEARXNG_BASE_URL: 'http://searxng:8080' }, async () => {
       expect(await getSearxngUrl(adapters({ SearxngUrl: 'http://admin:8080' }))).toBe('http://admin:8080');
+    });
+  });
+
+  it('treats a blank SEARXNG_BASE_URL as unset (whitespace does not enable the provider)', async () => {
+    await withEnv({ B4M_SELF_HOST: undefined, SEARXNG_BASE_URL: '   ' }, async () => {
+      expect(await getSearxngUrl(adapters({}))).toBeNull();
     });
   });
 

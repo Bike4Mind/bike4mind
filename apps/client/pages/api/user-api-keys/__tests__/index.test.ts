@@ -70,6 +70,15 @@ vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe }));
 const getUserEntitlements = vi.hoisted(() => vi.fn().mockResolvedValue([]));
 vi.mock('@server/entitlements', () => ({ getUserEntitlements }));
 
+// Product-scope access of the minting user; every product on by default so the embed/org cases
+// below are unaffected. The resolver itself is covered in server/entitlements/apiKeyScopeAccess.test.ts.
+const scopeAccess = vi.hoisted(() => ({
+  current: { hasOptiAccess: true, hasOverwatchAccess: true, hearthEnabled: true },
+}));
+vi.mock('@server/entitlements/apiKeyScopeAccess', () => ({
+  resolveApiKeyScopeAccess: vi.fn(async () => scopeAccess.current),
+}));
+
 import { CreditHolderType } from '@bike4mind/common';
 import '@pages/api/user-api-keys/index';
 
@@ -402,11 +411,32 @@ describe('POST /api/user-api-keys - scope allowlist guard', () => {
     expect(createUserApiKey).not.toHaveBeenCalled();
   });
 
+  it.each([false, true])('rejects release-notes:write (admin-provisioned only) with isAdmin=%s', async isAdmin => {
+    const { req, res } = post({ name: 'release', scopes: ['release-notes:write'] }, { isAdmin });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/Scope not allowed/i);
+    expect(createUserApiKey).not.toHaveBeenCalled();
+  });
+
   it('allows a valid self-service scope through (notebooks:read)', async () => {
     const { req, res } = post({ name: 'plain', scopes: ['notebooks:read'] });
     await mockRefs.postHandler!(req, res);
     expect(res._getStatusCode()).toBe(201);
     expect(createUserApiKey).toHaveBeenCalled();
+  });
+
+  // The service picks the per-user cap pool from metadata.createdFrom, so a body that could
+  // set it would let a dashboard mint dodge the 10-key cap (see ApiKeyCapPool).
+  it('ignores a body-supplied metadata, so a dashboard mint cannot claim the oauth-exchange cap pool', async () => {
+    const { req, res } = post({
+      name: 'plain',
+      scopes: ['notebooks:read'],
+      metadata: { createdFrom: 'oauth-exchange', oauthClientId: 'spoofed-client' },
+    });
+    await mockRefs.postHandler!(req, res);
+    expect(res._getStatusCode()).toBe(201);
+    const [, forwarded] = createUserApiKey.mock.calls[0];
+    expect(forwarded.metadata.createdFrom).toBe('dashboard');
+    expect(forwarded.metadata).not.toHaveProperty('oauthClientId');
   });
 
   it('allows embed:chat through the user endpoint', async () => {
@@ -543,6 +573,47 @@ describe('POST /api/user-api-keys - caller key scopes forwarded for containment'
       'u1',
       expect.anything(),
       expect.objectContaining({ callerExpiresAt: expiresAt })
+    );
+  });
+});
+
+describe('POST /api/user-api-keys - product scope entitlement', () => {
+  beforeEach(() => {
+    createUserApiKey.mockClear();
+    scopeAccess.current = { hasOptiAccess: false, hasOverwatchAccess: false, hearthEnabled: false };
+  });
+
+  it.each(['hearth:read', 'overwatch:read', 'marketing-reports:write', 'optihashi:compute'])(
+    'refuses %s to a user without that product and never calls the service',
+    async scope => {
+      const { req, res } = post({ name: 'k', scopes: ['me:read', scope] });
+      await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(`Scope not available on your account: ${scope}`);
+      expect(createUserApiKey).not.toHaveBeenCalled();
+    }
+  );
+
+  it('mints a product scope once the user has the product', async () => {
+    scopeAccess.current = { ...scopeAccess.current, hearthEnabled: true };
+    const { req, res } = post({ name: 'k', scopes: ['hearth:read'] });
+    await mockRefs.postHandler!(req, res);
+    expect(res._getStatusCode()).toBe(201);
+  });
+
+  it('mints ungated scopes without any product', async () => {
+    const { req, res } = post({ name: 'k', scopes: ['me:read', 'files:read'] });
+    await mockRefs.postHandler!(req, res);
+    expect(res._getStatusCode()).toBe(201);
+  });
+
+  it('mints both Bob scopes without any product', async () => {
+    // Every signed-in account can use Bob, so neither scope waits on a product flag.
+    const { req, res } = post({ name: 'k', scopes: ['bob:read', 'bob:run'] });
+    await mockRefs.postHandler!(req, res);
+    expect(res._getStatusCode()).toBe(201);
+    expect(createUserApiKey).toHaveBeenCalledWith(
+      'u1',
+      expect.objectContaining({ scopes: ['bob:read', 'bob:run'] }),
+      expect.anything()
     );
   });
 });

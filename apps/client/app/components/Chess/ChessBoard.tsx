@@ -147,6 +147,7 @@ const ChessBoard: React.FC<ChessBoardProps> = ({
               return (
                 <Box
                   key={`${rank}${file}`}
+                  data-testid={`chess-square-${sq}`}
                   onClick={isClickable ? () => onSquareClick(sq) : undefined}
                   sx={{
                     width: squareSize,

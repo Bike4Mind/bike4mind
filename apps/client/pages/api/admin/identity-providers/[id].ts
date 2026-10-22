@@ -1,7 +1,7 @@
 import { identityProviderRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, NotFoundError, ForbiddenError } from '@server/utils/errors';
+import { BadRequestError, NotFoundError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { clearConfigurationCache } from '@server/auth/oktaOidcClient';
 import { ApiKeyScope } from '@bike4mind/common';
 

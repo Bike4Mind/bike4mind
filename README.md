@@ -20,7 +20,7 @@ An open-core AI knowledge platform — a multi-model workspace where notebooks, 
 Bike4Mind is an AI-powered knowledge platform that wires a superset of AI technologies together behind one workspace. Bring your own models, keep your data, and let agents do the heavy lifting.
 
 - **Notebooks** — the core workspace: chat, documents, and context in one place, across any model.
-- **Multi-LLM by design** — swap freely between **Anthropic, OpenAI, Google Gemini, xAI, Ollama** (local), and more, plus image models (FLUX, DALL·E 3, Stable Diffusion).
+- **Multi-LLM by design** — swap freely between **Anthropic, OpenAI, Google Gemini, xAI, Ollama** (local), and more, plus image models (GPT-Image-2, Nano Banana, FLUX).
 - **Quest Master** — autonomous, multi-step task planning: text and image generation, vision review, web search, math, code, and human-in-the-loop steps, run in parallel.
 - **AI Agents** — autonomous ReAct-style agents that carry out complex tasks against your tools and knowledge.
 - **Knowledge Engine** — RAG over your documents: smart chunking, vector search, collections, and tagging so agents can reason about what you know.
@@ -66,6 +66,8 @@ pnpm turbo:test        # run tests
 ```
 
 Project layout: `apps/client` (Next.js SPA + pages API backend), `packages/cli` (interactive CLI + ReAct agent), `b4m-core/*` (the `@bike4mind/*` engine packages), `packages/database` (Mongoose models + migrations). Realtime WebSocket fanout ships as a separate `@bike4mind/subscriber-fanout` image. See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full guide.
+
+Building an app that signs users in with Bike4Mind and bills AI usage to their accounts? See [Building an app on Bike4Mind](docs-site/docs/developers/building-on-b4m.md).
 
 ## Contributing
 

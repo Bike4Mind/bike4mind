@@ -1,4 +1,5 @@
 import { PermissionDeniedError, getQuestErrorCode } from '@bike4mind/common';
+import type { ICompletionOptionTools } from './backend';
 
 /** Default concurrency cap to prevent resource exhaustion (DB pools, rate limits, memory) */
 export const DEFAULT_MAX_PARALLEL_TOOLS = 8;
@@ -9,9 +10,38 @@ export type TaskOutcome<T> = { ok: true; result: T } | { ok: false; error: unkno
  * A tool failure that must end the turn rather than be fed back to the model as a
  * recoverable observation: a declined tool (PermissionDeniedError) or an out-of-credits
  * error (tagged via `getQuestErrorCode`), neither of which any retry can satisfy.
+ * Also exempts these from the services tool failure guard (toolFailureGuard.ts).
  */
-function isTerminalToolError(error: unknown): boolean {
+export function isTerminalToolError(error: unknown): boolean {
   return error instanceof PermissionDeniedError || getQuestErrorCode(error) !== undefined;
+}
+
+/** Whether the named tool is flagged `endsTurnAfterText` in the offered tool list. */
+export function isTurnEndingTool(
+  name: string,
+  tools: readonly Pick<ICompletionOptionTools, 'toolSchema' | 'endsTurnAfterText'>[] | undefined
+): boolean {
+  return tools?.find(tool => tool.toolSchema.name === name)?.endsTurnAfterText === true;
+}
+
+/**
+ * Whether the tool loop should end the turn after this round's tool batch instead of making
+ * the follow-up model call. True only when the round already streamed non-empty answer text
+ * AND every tool it called is flagged `endsTurnAfterText`: the follow-up round would only
+ * repeat the answer. A tool-only round still recurses so the model gets to answer.
+ *
+ * The single decision point for every adapter's tool loop - keep them from drifting.
+ */
+export function shouldEndTurnAfterTools(
+  calledToolNames: readonly (string | null | undefined)[],
+  tools: readonly Pick<ICompletionOptionTools, 'toolSchema' | 'endsTurnAfterText'>[] | undefined,
+  roundText: string | null | undefined
+): boolean {
+  // Nameless slots are not calls: adapters index tool calls by content-block index, so a text
+  // block ahead of the tool leaves an empty entry in the list.
+  const names = calledToolNames.filter((name): name is string => Boolean(name));
+  if (names.length === 0 || !roundText?.trim()) return false;
+  return names.every(name => isTurnEndingTool(name, tools));
 }
 
 /**

@@ -164,6 +164,19 @@ describe('POST /api/oauth/code PKCE hardening', () => {
     expect(res.body?.error_description).toMatch(/admin:everything/);
     expect(h.generateAuthCode).not.toHaveBeenCalled();
   });
+
+  it('rejects offline_access for a first-party client not registered for it', async () => {
+    (h.validateClient as Mock).mockResolvedValue({
+      tokenEndpointAuthMethod: 'client_secret_post',
+      allowedScopes: ['openid', 'email', 'profile'],
+    });
+
+    const res = await call({ ...baseBody, scope: 'openid offline_access' });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body?.error).toBe('invalid_scope');
+    expect(h.generateAuthCode).not.toHaveBeenCalled();
+  });
 });
 
 /**
@@ -216,6 +229,17 @@ describe('POST /api/oauth/code relying-party consent gate', () => {
     expect(h.generateAuthCode).toHaveBeenCalledOnce();
   });
 
+  it('admits offline_access for a relying party whose allowedScopes lack it', async () => {
+    (h.validateClient as Mock).mockResolvedValue(relyingParty);
+    (h.findGrant as Mock).mockResolvedValue(null);
+    (h.decideConsent as Mock).mockReturnValue('mint');
+
+    const res = await call({ ...baseBody, scope: 'openid offline_access', consent: true });
+
+    expect(res.body?.code).toBe('the-code');
+    expect(h.upsertGrant).toHaveBeenCalledWith(expect.objectContaining({ scopes: ['openid', 'offline_access'] }));
+  });
+
   it('parses prompt as a space-delimited set: "login consent" still forces consent', async () => {
     // OIDC Core 3.1.2.1: prompt is a space-delimited set. A bare `prompt === "consent"` would skip
     // forced consent for `prompt=login consent`.
@@ -236,5 +260,54 @@ describe('POST /api/oauth/code relying-party consent gate', () => {
     await call({ ...baseBody, scope: 'openid email', prompt: 'login' });
 
     expect(h.decideConsent).toHaveBeenCalledWith(expect.objectContaining({ forceConsent: false }));
+  });
+});
+
+describe('POST /api/oauth/code error logging', () => {
+  const registered = { tokenEndpointAuthMethod: 'none', allowedScopes: ['openid', 'email', 'profile'] };
+  const pkceBody = { ...baseBody, code_challenge: VALID_CHALLENGE, code_challenge_method: 'S256' };
+
+  const callLogged = async (body: Record<string, unknown>, user: unknown = { id: 'u1' }) => {
+    const res = mockRes();
+    const logger = { warn: vi.fn(), info: vi.fn() };
+    await (handler as unknown as (req: unknown, res: Res) => Promise<unknown>)({ body, user, logger }, res);
+    return {
+      res,
+      lines: logger.warn.mock.calls.map(c => String(c[0])).filter(l => l.startsWith('[OAUTH_ERROR]')),
+    };
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (h.generateAuthCode as Mock).mockResolvedValue('the-code');
+    (h.validateClient as Mock).mockResolvedValue(registered);
+  });
+
+  it.each<[string, Record<string, unknown>, unknown, string, number]>([
+    ['no user', pkceBody, null, 'Unauthorized', 401],
+    ['schema failure', { ...pkceBody, redirect_uri: 'not-a-url' }, undefined, 'invalid_request', 400],
+    ['challenge without S256', { ...baseBody, code_challenge: VALID_CHALLENGE }, undefined, 'invalid_request', 400],
+    ['unknown client', { ...pkceBody, client_id: 'nope' }, undefined, 'unauthorized_client', 400],
+    ['PKCE required', baseBody, undefined, 'invalid_request', 400],
+    ['disallowed scope', { ...pkceBody, scope: 'openid admin' }, undefined, 'invalid_scope', 400],
+  ])('%s logs one [OAUTH_ERROR] line', async (_name, body, user, error, status) => {
+    if (body.client_id === 'nope') (h.validateClient as Mock).mockResolvedValue(null);
+    const { res, lines } = await callLogged(body, user === undefined ? { id: 'u1' } : user);
+
+    expect(res.statusCode).toBe(status);
+    expect(res.body?.error).toBe(error);
+    expect(lines).toEqual([`[OAUTH_ERROR] route=oauth/code client=${body.client_id} error=${error} status=${status}`]);
+    expect(lines[0]).not.toContain(VALID_CHALLENGE);
+  });
+
+  it('logs nothing when consent is required (not an error)', async () => {
+    (h.validateClient as Mock).mockResolvedValue({ ...registered, clientType: 'relying-party' });
+    (h.findGrant as Mock).mockResolvedValue(null);
+    (h.decideConsent as Mock).mockReturnValue('consent_required');
+
+    const { res, lines } = await callLogged(pkceBody);
+
+    expect(res.statusCode).toBe(200);
+    expect(lines).toEqual([]);
   });
 });

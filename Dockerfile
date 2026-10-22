@@ -35,7 +35,15 @@ COPY packages ./packages
 # pnpm hashes every patchedDependencies entry during install, so a missing patches/
 # fails the install with ENOENT rather than silently skipping the patch.
 COPY patches ./patches
-RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --frozen-lockfile
+# A hydrated premium overlay is a workspace member the tracked lockfile never lists,
+# so the build links it and installs unfrozen. Without one the install stays frozen.
+COPY scripts/link-premium-overlays.mjs ./scripts/
+RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
+    if ls packages/premium/*/package.json >/dev/null 2>&1; then \
+      node scripts/link-premium-overlays.mjs && pnpm install --no-frozen-lockfile; \
+    else \
+      pnpm install --frozen-lockfile; \
+    fi
 
 # ── Builder: build all @bike4mind/* packages, then the Next app (shim active) ─
 FROM deps AS builder
@@ -64,6 +72,11 @@ RUN set -eu; \
 # Then assert what actually ships: anything beyond the five entries a healthy standalone build
 # emits means file tracing swept the app source tree in behind us.
 RUN node apps/client/scripts/check-standalone-tree.mjs apps/client/.next/standalone/apps/client
+# Then require each built API route, so a module the bundler left external fails here (naming
+# package and route) instead of 500ing at module load. Runs after the prune; the template env and
+# the standalone copy that keeps the builder's node_modules out of resolution are in the header.
+COPY .env.selfhost.example ./
+RUN NODE_ENV=production node --env-file=.env.selfhost.example apps/client/scripts/check-api-routes-cjs-require.mjs apps/client/.next/standalone apps/client/.next
 
 # ── Runner: minimal image, standalone output only ───────────────────────────
 FROM node:${NODE_VERSION}-slim AS runner

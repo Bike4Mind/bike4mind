@@ -27,6 +27,14 @@ describe('redactSessionForClient', () => {
     expect(input.systemPromptText).toBe('PROPRIETARY SERVER-OWNED PROMPT');
   });
 
+  it('strips origin.apiKeyId but keeps origin.channel, without mutating the input', () => {
+    const input = { ...base, origin: { channel: 'api' as const, apiKeyId: 'key-123' } };
+    const out = redactSessionForClient(input);
+    expect(out.origin).toEqual({ channel: 'api' });
+    expect(JSON.stringify(out)).not.toContain('key-123');
+    expect(input.origin.apiKeyId).toBe('key-123');
+  });
+
   it('passes null/undefined through unchanged', () => {
     expect(redactSessionForClient(null)).toBeNull();
     expect(redactSessionForClient(undefined)).toBeUndefined();

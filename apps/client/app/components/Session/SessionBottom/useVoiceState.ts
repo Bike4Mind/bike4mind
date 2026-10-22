@@ -25,6 +25,7 @@ export function useVoiceState({ currentSessionId }: UseVoiceStateParams): UseVoi
   const { currentUser, isDeveloper } = useUser();
   const { subscribeToAction } = useWebsocket();
   const adminEnableVoiceSession = useGetSettingsValue('enableVoiceSession');
+  const voiceV2Enabled = useGetSettingsValue('voiceV2Enabled');
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
@@ -32,7 +33,9 @@ export function useVoiceState({ currentSessionId }: UseVoiceStateParams): UseVoi
   const [debugDrawerOpen, setDebugDrawerOpen] = useState(false);
   const [creditsExhaustedByVoice, setCreditsExhaustedByVoice] = useState(false);
 
-  const isVoiceSessionEnabled = !!(adminEnableVoiceSession && (currentUser?.isAdmin || isDeveloper));
+  // The admin-only v1 session gives way to Voice v2 (ConversationalVoiceButton) when both are on, so
+  // the composer never shows two voice-session buttons side by side.
+  const isVoiceSessionEnabled = !!(adminEnableVoiceSession && !voiceV2Enabled && (currentUser?.isAdmin || isDeveloper));
 
   // Listen for server signal that voice session exhausted credits
   useEffect(() => {

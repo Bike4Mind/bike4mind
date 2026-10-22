@@ -1,9 +1,17 @@
-import type { IDataLakeAccessGrantRepository, IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
+import type {
+  DataLakePendingConnector,
+  IDataLakeAccessGrantRepository,
+  IDataLakeDocument,
+  IDataLakeRepository,
+  LakeAuditPrincipal,
+  LakeConfigChangeField,
+} from '@bike4mind/common';
 import {
   CreateDataLakeRequestInput,
   DATA_LAKES,
   MAX_DATA_LAKE_SLUG_LENGTH,
   normalizeEntitlementKey,
+  slugifyDataLakeName,
 } from '@bike4mind/common';
 import { secureParameters, BadRequestError } from '@bike4mind/utils';
 import {
@@ -11,17 +19,25 @@ import {
   collidesWithRegistryPrefix,
   findCollidingPrefixLakes,
 } from './tagPrefixCollision';
+import { diffLakeConfig } from './diffLakeConfig';
+import { recordLakeConfigChange, type LakeConfigAuditAdapters } from './recordLakeConfigChange';
 import type { z } from 'zod';
 
 type CreateDataLakeParams = z.infer<typeof CreateDataLakeRequestInput>;
 
 interface CreateDataLakeAdapters {
-  db: {
+  db: LakeConfigAuditAdapters['db'] & {
     dataLakes: Pick<IDataLakeRepository, 'create' | 'find'>;
     dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'upsertGrant'>;
   };
-  logger?: { warn: (msg: string, ...args: unknown[]) => void };
+  logger?: LakeConfigAuditAdapters['logger'] & { warn: (msg: string, ...args: unknown[]) => void };
 }
+
+/**
+ * Left out of the `create` history row: the principal column already says who created the lake,
+ * and the org id and join meta-tag are internal ids an owner cannot act on.
+ */
+const CREATE_ROW_OMITTED_FIELDS = new Set<LakeConfigChangeField>(['createdByUserId', 'organizationId', 'datalakeTag']);
 
 /**
  * Builds the unique join meta-tag. Org-scoped lakes get `datalake:<org>:<slug>`;
@@ -90,9 +106,13 @@ function withDisambiguatingSuffix(baseSlug: string, attempt: number): string {
  * `datalakeTag` cannot see that second collision - and the meta-tag is an ownership BYPASS in
  * buildOwnershipConditions, so a lake minting `datalake:<registry-slug>` would read every
  * tenant's files in that registry lake.
+ *
+ * Also taken if any lake, in any scope, already carries the tag it would mint: setLakeVisibility
+ * moves a lake between scopes without re-minting its tag, so the scope check alone can pass a slug
+ * whose tag the globally unique index then rejects.
  */
 async function disambiguateSlug(
-  db: CreateDataLakeAdapters['db'],
+  db: { dataLakes: Pick<IDataLakeRepository, 'find'> },
   baseSlug: string,
   organizationId?: string
 ): Promise<string> {
@@ -100,13 +120,29 @@ async function disambiguateSlug(
   const reservedTags = new Set(DATA_LAKES.map(lake => lake.datalakeTag));
   for (let attempt = 0; attempt < 50; attempt++) {
     const slug = attempt === 0 ? baseSlug : withDisambiguatingSuffix(baseSlug, attempt);
-    if (reservedTags.has(buildDatalakeTag(slug, organizationId))) continue;
+    const datalakeTag = buildDatalakeTag(slug, organizationId);
+    if (reservedTags.has(datalakeTag)) continue;
     const existing = await db.dataLakes.find({ ...scope, slug });
-    if (existing.length === 0) return slug;
+    if (existing.length > 0) continue;
+    const tagHolders = await db.dataLakes.find({ datalakeTag });
+    if (tagHolders.length === 0) return slug;
   }
   throw new BadRequestError(
     `Could not find an available slug for "${baseSlug}" after 50 attempts — choose another name`
   );
+}
+
+/**
+ * The slug `createDataLake` would mint for `name` right now, `-N` suffix included, so the wizard
+ * can show it before create. Advisory only: a concurrent create can still take it first. Lakes in
+ * any status count as taken, including deleted ones (they keep their slug for restore).
+ */
+export async function previewDataLakeSlug(
+  db: { dataLakes: Pick<IDataLakeRepository, 'find'> },
+  name: string,
+  organizationId?: string
+): Promise<string> {
+  return disambiguateSlug(db, slugifyDataLakeName(name), organizationId);
 }
 
 /**
@@ -155,7 +191,11 @@ export const createDataLake = async (
   // The lake's org scope. The route resolves this from the caller's active-switcher org and
   // authorization-validates it (resolveActiveOrg) before passing it here - the service trusts
   // it as an already-checked value and never re-derives it from the raw request body.
-  organizationId?: string
+  organizationId?: string,
+  /** Set by a route that accepts API-key auth, so a key-driven create is attributed to the key. */
+  auditPrincipal?: LakeAuditPrincipal,
+  // Server-decided, never read from the request body: only a connector-first create route sets it.
+  options?: { pendingConnector?: DataLakePendingConnector }
 ): Promise<IDataLakeDocument> => {
   const params = secureParameters(parameters, CreateDataLakeRequestInput);
 
@@ -190,6 +230,7 @@ export const createDataLake = async (
       createdByUserId: userId,
       organizationId,
       status: 'draft',
+      ...(options?.pendingConnector ? { pendingConnector: options.pendingConnector } : {}),
       fileCount: 0,
       totalSizeBytes: 0,
       totalChunkedChars: 0,
@@ -216,6 +257,16 @@ export const createDataLake = async (
         { dataLakeId: dataLake.id, err: grantErr }
       );
     }
+
+    await recordLakeConfigChange(
+      {
+        actor: { userId, isAdmin: false, administeredOrgIds: [], auditPrincipal },
+        lake: dataLake,
+        action: 'create',
+        changes: diffLakeConfig({}, dataLake).filter(change => !CREATE_ROW_OMITTED_FIELDS.has(change.field)),
+      },
+      { db, logger }
+    );
 
     return dataLake;
   } catch (err) {

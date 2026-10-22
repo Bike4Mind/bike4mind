@@ -317,6 +317,10 @@ declare module "sst" {
       "type": "sst.sst.Secret"
       "value": string
     }
+    "MEMORY_KEY_SECRET": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
     "SECRET_ENCRYPTION_KEY": {
       "type": "sst.sst.Secret"
       "value": string
@@ -377,11 +381,6 @@ declare module "sst" {
       "arn": string
       "type": "sst.aws.SnsTopic"
     }
-    "SlackEventBus": {
-      "arn": string
-      "name": string
-      "type": "sst.aws.Bus"
-    }
     "SlackQuestProcessor": {
       "name": string
       "type": "sst.aws.Function"
@@ -417,6 +416,10 @@ declare module "sst" {
     "attackSimulationFunction": {
       "name": string
       "type": "sst.aws.Function"
+    }
+    "dataLakeCleanupQueue": {
+      "type": "sst.aws.Queue"
+      "url": string
     }
     "dataLakeResearchQueue": {
       "type": "sst.aws.Queue"
@@ -468,6 +471,8 @@ declare module "sst" {
       "email-job": string
       "fab-file-chunk": string
       "fab-file-vectorize": string
+      "generation-callback": string
+      "generation-job": string
       "github-lake-revoke": string
       "github-webhook": string
       "image-edit": string
@@ -484,9 +489,8 @@ declare module "sst" {
       "sre-job": string
       "tavern-heartbeat": string
       "type": "sst.sst.Linkable"
-      "video-generation": string
       "webhook-delivery": string
-      "whats-new-generation": string
+      "release-notes": string
       "whats-new-highlights": string
     }
     "emailAnalysisQueue": {
@@ -552,6 +556,22 @@ declare module "sst" {
     "generatedImagesBucket": {
       "name": string
       "type": "sst.aws.Bucket"
+    }
+    "generationCallbackQueue": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
+    "generationCallbackQueueDLQ": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
+    "generationJobDLQ": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
+    "generationJobQueue": {
+      "type": "sst.aws.Queue"
+      "url": string
     }
     "githubWebhookQueue": {
       "type": "sst.aws.Queue"
@@ -687,6 +707,8 @@ declare module "sst" {
       "emailJobQueue": string
       "fabFileChunkQueue": string
       "fabFileVectorizeQueue": string
+      "generationCallbackQueue": string
+      "generationJobQueue": string
       "githubLakeRevokeQueue": string
       "githubWebhookQueue": string
       "imageEditQueue": string
@@ -703,7 +725,6 @@ declare module "sst" {
       "sreJobQueue": string
       "tavernHeartbeatQueue": string
       "type": "sst.sst.Linkable"
-      "videoGenerationQueue": string
       "webhookDeliveryQueue": string
       "whatsNewGenerationQueue": string
       "whatsNewHighlightsQueue": string
@@ -738,14 +759,6 @@ declare module "sst" {
     "userActivityReportFunction": {
       "name": string
       "type": "sst.aws.Function"
-    }
-    "videoGenerationDLQ": {
-      "type": "sst.aws.Queue"
-      "url": string
-    }
-    "videoGenerationQueue": {
-      "type": "sst.aws.Queue"
-      "url": string
     }
     "webhookDeliveryQueue": {
       "type": "sst.aws.Queue"

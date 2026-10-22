@@ -1,19 +1,21 @@
-import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError } from '@server/utils/errors';
+import { FILES_READ_SCOPES } from '@server/files/fileScopes';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 import { Request } from 'express';
-import { Resource } from 'sst';
 import { FabFile, fabFileRepository } from '@bike4mind/database';
 import { isImageServeable } from '@bike4mind/common';
 import { isFileInAccessibleLake, resolveAccessibleLakes } from '@server/dataLakes';
-
-const s3Client = new S3Client();
+import { holdsDataLakeReadScope } from '@server/dataLakes/dataLakeScopes';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 
 const GetPresignedUrlRequestInput = z.object({
   filePaths: z.array(z.string()),
-  expiresIn: z.number().optional().prefault(3600), // Default to 1 hour
+  expiresIn: z.number().prefault(3600), // Default to 1 hour
+  // `server` exists for the in-process RLM `getArticle` loopback (see server/tavern/rlm/tools.ts),
+  // whose container may not reach the browser origin. It only picks the signing client: the
+  // moderation/ACL/lake gates all run before signing, and the SigV4 signature is host-bound.
+  audience: z.enum(['browser', 'server']).prefault('browser'),
 });
 
 /** Minimal shape a FabFile lookup needs to expose for the moderation + ownership gates below. */
@@ -70,17 +72,30 @@ export async function filterServeableFilePaths(
   );
 }
 
-const handler = baseApi().get(
-  async (req: Request<unknown, unknown, unknown, { 'filePaths[]'?: string | string[]; expiresIn?: string }>, res) => {
+const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(
+  async (
+    req: Request<
+      unknown,
+      unknown,
+      unknown,
+      { 'filePaths[]'?: string | string[]; expiresIn?: string; audience?: string }
+    >,
+    res
+  ) => {
     let filePathsQuery = req.query['filePaths[]'];
 
     if (typeof filePathsQuery === 'string') {
       filePathsQuery = [filePathsQuery];
     }
 
-    const { filePaths: validatedFilePaths, expiresIn } = GetPresignedUrlRequestInput.parse({
+    const {
+      filePaths: validatedFilePaths,
+      expiresIn,
+      audience,
+    } = GetPresignedUrlRequestInput.parse({
       filePaths: filePathsQuery,
       expiresIn: req.query.expiresIn ? parseInt(req.query.expiresIn as string, 10) : undefined,
+      audience: req.query.audience,
     });
 
     try {
@@ -104,6 +119,9 @@ const handler = baseApi().get(
           const id = String(fabFile._id);
           if (await fabFileRepository.shareable.findAccessibleById(req.user, id)) return true;
           if (fabFile.deletedAt) return false; // soft-deleted lake article must not sign (mirrors files/[id])
+          // A key scoped to files alone must not reach lake files through this fallback -
+          // mirrors the identical gate in loadAccessibleFabFile's single-file fallback (files/[id]).
+          if (!holdsDataLakeReadScope(req)) return false;
           const lakes = await accessibleLakes();
           return isFileInAccessibleLake(lakes, fabFile);
         }
@@ -112,11 +130,10 @@ const handler = baseApi().get(
       const presignedUrls = await Promise.all(
         serveableFileKeys.map(decodedFilePath => {
           if (!decodedFilePath) return null;
-          const command = new GetObjectCommand({
-            Bucket: Resource.fabFileBucket.name,
-            Key: decodedFilePath,
+          return getFilesStorage().getSignedUrl(decodedFilePath, 'get', {
+            expiresIn,
+            ...(audience === 'browser' && { audience: 'browser' as const }),
           });
-          return getSignedUrl(s3Client, command, { expiresIn });
         })
       );
 

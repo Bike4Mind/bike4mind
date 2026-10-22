@@ -13,7 +13,11 @@ import type {
   IDataLakeBatchDocument,
   IDataLakeBatchSummary,
   IDataLakeFindingDocument,
+  ILakeFindingListItem,
+  LakeSkippedFilesResponse,
   InconsistencyKind,
+  LakeCorpusAction,
+  LakeCorpusActionTarget,
   LakeInconsistencyScanSummary,
   LakeFindingStatus,
   IDataLakeSpendResponse,
@@ -27,6 +31,7 @@ import type {
   LakeMemoryHealth,
   LakeConfigHistoryView,
   ManageableDataLakeConfig,
+  RetrievabilityLabeledDataLake,
   TaxonomyTag,
   TransitionalDataLakeSummary,
   TransitionalRetryAction,
@@ -37,6 +42,7 @@ import {
   BATCH_NON_TERMINAL_STATUSES,
   DATA_LAKES,
   isResearchRunInFlight,
+  MAX_TOGGLE_TAGS_FILE_IDS,
   normalizeTagPrefix,
   tagPrefixesOverlap,
   TAXONOMY_NON_TERMINAL_STATUSES,
@@ -58,6 +64,8 @@ import { useSelectedAccount } from '@client/app/components/Credits/AccountSelect
 import { invalidateGearsStatusWhileLocked } from '@client/app/hooks/useGearsStatus';
 import { dataLakeKeys } from '@client/app/hooks/data/dataLakeKeys';
 import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
+import { orgIdOfAccount } from '@client/app/components/datalake/lakeSourceShared';
+import chunk from 'lodash/chunk';
 
 /**
  * The server's own refusal text, if it sent one. The body key is `error`, per
@@ -74,7 +82,7 @@ import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
  * Declared here rather than beside its first caller so all of them can read it without a
  * forward reference.
  */
-function serverRefusalMessage(error: unknown): string | undefined {
+export function serverRefusalMessage(error: unknown): string | undefined {
   if (!isAxiosError(error)) return undefined;
   return (error.response?.data as { error?: string } | undefined)?.error || undefined;
 }
@@ -98,7 +106,7 @@ function isPermissionRejection(error: unknown): boolean {
  */
 export function activeOrgId(): string | undefined {
   const { selectedAccount } = useSelectedAccount.getState();
-  return selectedAccount && !selectedAccount.personal ? selectedAccount.id : undefined;
+  return orgIdOfAccount(selectedAccount);
 }
 
 // ── Lake catalog & lifecycle ────────────────────────────────────────────────
@@ -132,6 +140,30 @@ export function useGetDataLakes(
     },
     refetchOnWindowFocus: opts?.refetchOnWindowFocus ?? false,
     staleTime: opts?.staleTime ?? 1000 * 60 * 2,
+  });
+}
+
+/**
+ * The lake list labelled with `retrievable` (contract: DataLakeRetrievabilityLabel). Pass the
+ * current session id so the server counts that session's pre-authorizations; `null` for none.
+ */
+export function useGetDataLakesWithRetrievability(sessionId: string | null | undefined, enabled = true) {
+  const sid = sessionId || null;
+  return useQuery({
+    queryKey: dataLakeKeys.listWithRetrievability(sid),
+    enabled,
+    retry: false,
+    queryFn: async () => {
+      const response = await api.get<{ data: RetrievabilityLabeledDataLake[] }>('/api/data-lakes', {
+        params: { includeRetrievability: 'true', ...(sid ? { sessionId: sid } : {}) },
+      });
+      return response.data.data;
+    },
+    // A new session id is a new key; keep the previous rows (only `retrievable` differs) so the
+    // explorer's selection does not empty out and widen the scope while the label refetches.
+    placeholderData: keepPreviousData,
+    refetchOnWindowFocus: false,
+    staleTime: 1000 * 60 * 2,
   });
 }
 
@@ -550,6 +582,30 @@ export async function downloadLakeAccessCsv(dataLakeId: string): Promise<void> {
 }
 
 /**
+ * The slug and tag prefix the server would mint for a new lake named `name` in the active org,
+ * `-N` suffix included. `tagPrefix` is the first free prefix starting from the given one, or from
+ * the name-derived default when it is omitted, and null when that base is unusable. The client
+ * cannot compute either: disambiguation counts lakes it cannot see (deleted, archived, gated).
+ * Advisory (create stays authoritative), and never cached, since any create or delete can change
+ * the answer.
+ */
+export function useDataLakeSlugPreview(name: string, tagPrefix: string | undefined, enabled = true) {
+  const orgId = activeOrgId();
+  return useQuery({
+    queryKey: dataLakeKeys.slugPreview(name, orgId, tagPrefix),
+    enabled,
+    retry: false,
+    staleTime: 0,
+    queryFn: async () => {
+      const response = await api.get<{ slug: string; tagPrefix: string | null }>('/api/data-lakes/slug-preview', {
+        params: { name, ...(orgId ? { organizationId: orgId } : {}), ...(tagPrefix ? { tagPrefix } : {}) },
+      });
+      return response.data;
+    },
+  });
+}
+
+/**
  * The data lake in the current create scope whose `fileTagPrefix` would overlap `prefix`, if any.
  *
  * Two lakes sharing a prefix share their prefix-tagged files, so permanently deleting one would
@@ -608,9 +664,10 @@ export function useCreateDataLake(options?: { onSuccess?: (data: DataLakeConfig)
 }
 
 /**
- * Updates an existing data lake configuration.
+ * Updates an existing data lake configuration. `notifySuccess: false` drops the success toast for a
+ * write whose caller raises its own (e.g. DataLakeSettingsModal's follow-up write).
  */
-export function useUpdateDataLake() {
+export function useUpdateDataLake({ notifySuccess = true }: { notifySuccess?: boolean } = {}) {
   const queryClient = useQueryClient();
 
   return useMutation({
@@ -630,7 +687,7 @@ export function useUpdateDataLake() {
       // so without this they keep rendering the pre-change verdict against the new policy.
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(id) });
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.convergencePlan(id) });
-      toast.success('Data lake updated');
+      if (notifySuccess) toast.success('Data lake updated');
     },
     onError: (error: Error) => {
       toast.error(serverRefusalMessage(error) || error.message || 'Failed to update data lake');
@@ -775,13 +832,18 @@ function invalidateAfterLifecycle(queryClient: ReturnType<typeof useQueryClient>
   queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(id) });
 }
 
-function useLifecycleMutation(action: LifecycleAction, successMessage: string, errorMessage: string) {
+function useLifecycleMutation(
+  action: LifecycleAction,
+  successMessage: string,
+  errorMessage: string,
+  successToast?: Parameters<typeof toast.success>[1]
+) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => postLifecycle(id, action),
     onSuccess: (_data, id) => {
       invalidateAfterLifecycle(queryClient, id);
-      toast.success(successMessage);
+      toast.success(successMessage, successToast);
     },
     onError: (error: Error) => {
       toast.error(serverRefusalMessage(error) || error.message || errorMessage);
@@ -809,7 +871,12 @@ export function useRestoreDeletedDataLake() {
  * draft -> active flip. A draft lake is excluded from grounding until this runs.
  */
 export function usePromoteDataLake() {
-  return useLifecycleMutation('promote', 'Data lake published', 'Failed to publish data lake');
+  // Longer and more descriptive than the other lifecycle toasts: publishing changes what every reader's
+  // answers draw on, and the default toast was gone before most people saw it.
+  return useLifecycleMutation('promote', 'Data lake published', 'Failed to publish data lake', {
+    description: 'It now grounds answers for everyone who can read it.',
+    duration: 8000,
+  });
 }
 
 /** Moves an active lake back to draft, pulling it out of grounding. Reverses promote. */
@@ -1211,6 +1278,11 @@ export function useReprocessFabFile(dataLakeId: string | null) {
  * `useRemoveFileFromDataLake` and `useAddFileToDataLake` cannot drift apart on what "membership
  * changed" invalidates.
  *
+ * Beyond the membership-derived lake views it also refreshes the findings queue and the retag
+ * seed: both are read from lake membership, and a corpus action's Undo restores through
+ * `useAddFileToDataLake`, so a fan-out scoped only to the lake surfaces would leave the queue and
+ * the seed stale after an Undo. See `useApplyCorpusAction`.
+ *
  * Exported so a future hook for `PUT /api/data-lakes/:id/files/:fabFileId/tags`
  * (`setDataLakeFileTags`) can reuse it: that door can also change a file's tags under this lake's
  * prefix (and, via a prefix-arm join, another lake's membership), which is exactly the same
@@ -1244,6 +1316,16 @@ export function invalidateLakeFileMembershipQueries(
   // Bare prefix: the tag list carries a fileCount derived from the files that hold each tag,
   // so a membership change stales the list too, not only the counts endpoint.
   queryClient.invalidateQueries({ queryKey: ['file-tags'] });
+  // A finding cites lake members, so the findings queue moves when membership does; the forward
+  // corpus action and the supersede Undo already refresh it, and folding it in here gives the
+  // merge Undo (which mutates only through `useAddFileToDataLake`) the same refresh.
+  const findingsRefetch = queryClient.invalidateQueries({ queryKey: dataLakeKeys.findingsOf(dataLakeId) });
+  // The retag seed is read from membership too; a stale seed would under-report the file's current
+  // tags and, under replace semantics, strip the ones it missed.
+  queryClient.invalidateQueries({ queryKey: dataLakeKeys.lakeFileTagsOf(dataLakeId) });
+  // Only the findings refetch is returned, so a mutation returning it keeps `isPending` true until
+  // the list the UI reads has refreshed and a fast second click cannot act on stale rows.
+  return findingsRefetch;
 }
 
 /** How long the Undo toast stays visible - long enough to notice, short of feeling stuck open.
@@ -1252,6 +1334,8 @@ export function invalidateLakeFileMembershipQueries(
  *  removed" panel, so once it closes the restore is reachable only by calling the route directly.
  *  The non-owner confirmation copy says so, because for a non-owner there is no second way back. */
 const UNDO_TOAST_DURATION_MS = 15000;
+
+const returnedToRankingMessage = (name: string) => `"${name}" returned to ranking.`;
 
 /** `toastId` is presentation, not payload - the server reads nothing but the two ids from the
  *  route. It travels in the variables so `useAddFileToDataLake`'s callbacks can live at the
@@ -1474,6 +1558,8 @@ export function usePurgeDataLakeDocument(dataLakeId: string | null) {
         toast.success(
           `Deleted permanently: the document and its ${receipt.chunksBefore} chunk(s) and vectors are gone.`
         );
+      } else if (receipt.heldForModeration) {
+        toast.warning('Kept under moderation hold: the document and its stored copies were preserved.');
       } else {
         toast.error(`Deletion did not finish: ${receipt.chunksRemaining} chunk(s) still remain.`);
       }
@@ -1513,6 +1599,8 @@ export function usePurgeDataLakeDocument(dataLakeId: string | null) {
 export type LakeRebuildStatus = {
   underChunkedCount: number;
   failedCount: number;
+  /** Files reset for a rebuild that has not committed yet: no passages, no error. */
+  rebuildingCount: number;
   /**
    * Members retrieval is withholding for being embedded in a previous embedding space, or `null`
    * when the server could not resolve the space to compare against. Null is deliberately NOT 0: it
@@ -1537,37 +1625,48 @@ export type RebuildPollState = { sawBacklog: boolean; settlePolls: number };
 export const INITIAL_REBUILD_POLL_STATE: RebuildPollState = { sawBacklog: false, settlePolls: 0 };
 
 /**
- * The REPAIRABLE work outstanding on a lake: both counts that drain to zero as waves complete.
- * Pure and exported for the same reason `nextRebuildPoll` is - it decides when the badge stops
- * polling, and a closure inside the hook is not executed by anything.
+ * The work outstanding on a lake: the two REPAIRABLE counts, plus the files whose rebuild has not
+ * committed yet. Pure and exported for the same reason `nextRebuildPoll` is - it decides when the
+ * badge stops polling, and a closure inside the hook is not executed by anything.
  *
  * A re-embed is normally run on a lake whose under-chunked count is already zero, so summing is
  * what keeps the badge alive for that wave rather than going quiet the moment it starts. A `null`
  * stale count contributes nothing: unknown is not a backlog, and polling on it would never end.
+ *
+ * `rebuildingCount` is in FLIGHT, not repairable - a reset file leaves the count when its own chunk
+ * job commits or fails - so it is here only because the chip still has to refresh when that
+ * happens. `nextRebuildPoll` keeps a backlog made only of these off the fast cadence.
  */
 export const rebuildBacklog = (
-  status?: Pick<LakeRebuildStatus, 'underChunkedCount' | 'staleEmbeddingSpaceCount'>
-): number => (status?.underChunkedCount ?? 0) + (status?.staleEmbeddingSpaceCount ?? 0);
+  status?: Pick<LakeRebuildStatus, 'underChunkedCount' | 'staleEmbeddingSpaceCount'> &
+    Partial<Pick<LakeRebuildStatus, 'rebuildingCount'>>
+): number =>
+  (status?.underChunkedCount ?? 0) + (status?.staleEmbeddingSpaceCount ?? 0) + (status?.rebuildingCount ?? 0);
 
 /**
  * Poll cadence for the rebuild badge, as a pure function so it can be tested without mounting the
  * hook (the two defects this logic has carried both shipped because nothing executed it).
  *
- * `backlog` is the sum of the two REPAIRABLE counts - under-chunked and stale-embedding-space -
- * because each drains to zero on its own as waves complete. `failedCount` deliberately is NOT in
- * it: a failed file never retries (see countFailedFilesByScope - it is invisible to both the
- * detection query and the rescue sweep), so including it gives a term that can never reach zero and
- * the badge polls forever on any lake holding one. But the counts alone stop too early: they drop
- * the instant a wave is RESET, minutes before those chunk jobs finish, and a job that then fails
- * surfaces only in failedCount. So once the backlog clears we keep polling a bounded number of
- * extra times to catch that, then stop for good.
+ * `backlog` is what `rebuildBacklog` sums and `rebuilding` is the in-flight slice of it. The size
+ * tiers read the TOTAL backlog, because each tick is a full lake rescan, so one straggler beside a
+ * 1000-file wave stays on the slow lane. The in-flight slice only parks a backlog with nothing
+ * repairable left at the slow cadence, since a rebuild in flight commits on the chunk worker's own
+ * clock. `failedCount` deliberately is NOT in the sum: a failed file never
+ * retries (see countFailedFilesByScope - it is invisible to both the detection query and the rescue
+ * sweep), so including it gives a term that can never reach zero and the badge polls forever on any
+ * lake holding one. But the backlog alone still stops too early: a wave is RESET minutes before
+ * those chunk jobs finish, so a job that later fails lands in failedCount after this sum has
+ * already read zero. So once the backlog clears we keep polling a bounded number of extra times to
+ * catch that, then stop for good.
  */
 export function nextRebuildPoll(
   backlog: number,
-  prev: RebuildPollState
+  prev: RebuildPollState,
+  rebuilding = 0
 ): { interval: number | false; next: RebuildPollState } {
   if (backlog > 0) {
-    const interval = backlog > 200 ? 30_000 : backlog > 50 ? 15_000 : 5_000;
+    const repairable = backlog - rebuilding;
+    const interval = repairable <= 0 || backlog > 200 ? 30_000 : backlog > 50 ? 15_000 : 5_000;
     return { interval, next: { sawBacklog: true, settlePolls: 0 } };
   }
   // Never had anything to rebuild in this session - nothing to settle for.
@@ -1594,6 +1693,7 @@ export function useUnderChunkedCount(dataLakeId: string | null, enabled = true) 
       return {
         underChunkedCount: res.data.underChunkedCount,
         failedCount: res.data.failedCount ?? 0,
+        rebuildingCount: res.data.rebuildingCount ?? 0,
         // `?? null`, not `?? 0`: an older server omits the field entirely, and defaulting that to a
         // zero would advertise "no stale files" on a lake nobody has measured.
         staleEmbeddingSpaceCount: res.data.staleEmbeddingSpaceCount ?? null,
@@ -1605,7 +1705,12 @@ export function useUnderChunkedCount(dataLakeId: string | null, enabled = true) 
     // Tick down as waves complete; coarser cadence while the backlog is large (each poll is a full
     // lake rescan), then a bounded settle window before going quiet. See nextRebuildPoll.
     refetchInterval: query => {
-      const { interval, next } = nextRebuildPoll(rebuildBacklog(query.state.data), pollState.current);
+      const status = query.state.data;
+      const { interval, next } = nextRebuildPoll(
+        rebuildBacklog(status),
+        pollState.current,
+        status?.rebuildingCount ?? 0
+      );
       pollState.current = next;
       return interval;
     },
@@ -1986,11 +2091,16 @@ export function useAddFilesToLake() {
       lake: { id: string; datalakeTag: string };
       skippedCount?: number;
     }) => {
-      const res = await api.post<IFabFileDocument[]>('/api/files/tags/toggle', {
-        ids: fileIds,
-        tags: [lake.datalakeTag],
-      });
-      return { files: res.data, lake, skippedCount };
+      // Sequential, one transaction per chunk: the server caps a toggle at MAX_TOGGLE_TAGS_FILE_IDS.
+      const files: IFabFileDocument[] = [];
+      for (const ids of chunk(fileIds, MAX_TOGGLE_TAGS_FILE_IDS)) {
+        const res = await api.post<IFabFileDocument[]>('/api/files/tags/toggle', {
+          ids,
+          tags: [lake.datalakeTag],
+        });
+        files.push(...res.data);
+      }
+      return { files, lake, skippedCount };
     },
     onSuccess: ({ files, skippedCount }) => {
       toast.success(
@@ -2007,8 +2117,8 @@ export function useAddFilesToLake() {
       }
       toast.error(error.message || 'Failed to add files to the data lake');
     },
-    // A mid-batch failure can still leave some of the batch's files written (toggleTags is not
-    // transactional across files - see its docblock), so invalidation must run on every outcome,
+    // A failed chunk rolls back only itself, so earlier chunks' files stay written and invalidation
+    // must run on every outcome,
     // not only success: an onSuccess-only invalidation left the cache reporting the pre-add state
     // after a partial failure, and the client's own non-member filter (Content.tsx) reads from
     // that same cache before the next attempt.
@@ -2023,31 +2133,29 @@ export function useAddFilesToLake() {
 
 export interface DataLakeArticlesParams {
   id?: string;
+  lakeId?: string[];
   tags?: string[];
   search?: string;
   page?: number;
   limit?: number;
   sortBy?: 'fileName' | 'createdAt';
   sortDir?: 'asc' | 'desc';
-  /**
-   * The merged tree's Uncategorized bucket: lake members categorized under none of the caller's
-   * lake prefixes. Sized by `totalUncategorizedFileCount` on the tag-counts payload. For ONE
-   * lake's bucket use useGetDataLakeUncategorizedFiles - this route has no lake-scope parameter.
-   */
-  uncategorized?: boolean;
 }
 
 /** Response shape for the tag-counts endpoint. */
 export interface DataLakeTagCountsResponse {
-  /** Tag-occurrence sums that drive the Data Lake Explorer's tag tree. */
-  tagCounts: { tag: string; count: number }[];
+  /**
+   * One row per tag-tree path (ancestors included) driving the Data Lake Explorer's tag tree:
+   * `count` is files tagged with exactly `tag`, `fileCount` distinct files at or under it. See
+   * countDataLakeTagsByPrefix.
+   */
+  tagCounts: { tag: string; count: number; fileCount: number }[];
   /** Distinct-file counts: combined total + per-prefix breakdown (keyed by lake tag prefix, e.g. 'opti:'). */
   uniqueArticleCounts: { total: number; byPrefix: Record<string, number> };
   /**
    * Distinct live files per lake, keyed by `datalakeTag`. This is the number to show for a
    * LAKE: it counts membership, so it stays truthful for files that carry no taxonomy tag and
-   * counts a multi-tagged file once. The prefix/occurrence counts above still drive the tag
-   * tree's branches.
+   * counts a multi-tagged file once. `tagCounts` above still drives the tag tree's branches.
    */
   lakeFileCounts: Record<string, number>;
   /**
@@ -2074,12 +2182,6 @@ export interface DataLakeTagCountsResponse {
    * meta-tag contributes 0 there while its own row reads its full size.
    */
   totalLakeFileCount: number;
-  /**
-   * The merged (all-lakes) tree's bucket: distinct members categorized under NO accessible
-   * prefix. Not a sum of `uncategorizedFileCounts` - those judge each lake separately, so a file
-   * categorized in lake A but not in lake B is reachable under A's branch and must not appear.
-   */
-  totalUncategorizedFileCount: number;
 }
 
 /**
@@ -2103,6 +2205,33 @@ export function useGetDataLakeTagCounts(source: DataLakeBrowseSource = 'opti') {
       const response = await api.get<DataLakeTagCountsResponse>(`${browseBase(source)}/tag-counts`);
       return response.data;
     },
+    refetchOnWindowFocus: false,
+    staleTime: 1000 * 60 * 5,
+  });
+}
+
+/** Response shape for the tag-counts endpoint when scoped to selected lakes (`?lakeId=`). */
+export interface DataLakeScopedTagCountsResponse {
+  tagCounts: { tag: string; count: number; fileCount: number }[];
+}
+
+/**
+ * Tag-tree counts for the selected lakes only, counted server-side over their membership. The
+ * unscoped payload is merged by prefix, and two creators' lakes may share a prefix, so it cannot
+ * be narrowed to one lake on the client. Disabled for an empty selection.
+ */
+export function useGetScopedDataLakeTagCounts(source: DataLakeBrowseSource, lakeIds: readonly string[]) {
+  return useQuery({
+    queryKey: dataLakeKeys.tagCountsScoped(source, lakeIds),
+    queryFn: async () => {
+      const search = new URLSearchParams();
+      for (const id of lakeIds) search.append('lakeId', id);
+      const response = await api.get<DataLakeScopedTagCountsResponse>(
+        `${browseBase(source)}/tag-counts?${search.toString()}`
+      );
+      return response.data;
+    },
+    enabled: lakeIds.length > 0,
     refetchOnWindowFocus: false,
     staleTime: 1000 * 60 * 5,
   });
@@ -2272,9 +2401,10 @@ export function reviewProposalFailureMessage(error: unknown): string {
 
 /**
  * Approve, decline, or restore (declined back to pending) one proposal. An approval admits the source
- * into the lake through the ordinary ingestion door, so it invalidates the lake's file list and health
- * alongside the queue - the file appears immediately, and its health badge stops reflecting a corpus
- * that just changed.
+ * into the lake through the ordinary ingestion door, so it invalidates every membership-derived cache
+ * (files, health, the lake list, tag counts) alongside the queue - the file appears immediately, and
+ * the header file count and health badge stop reflecting a corpus that just changed. Every decision
+ * also refreshes the lake list, because the pending count moves.
  */
 export function useReviewDataLakeProposal(dataLakeId: string) {
   const queryClient = useQueryClient();
@@ -2300,10 +2430,9 @@ export function useReviewDataLakeProposal(dataLakeId: string) {
       // config's `reviewBacklogLimit`, so a queue that drains below the limit must clear the
       // paused state without the manager having to reopen the tab.
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.researchConfigs(dataLakeId) });
-      if (decision === 'approve') {
-        queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(dataLakeId) });
-        queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(dataLakeId) });
-      }
+      // The lake list carries `pendingProposalCount` (the "N sources to review" chip), which every decision moves.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
+      if (decision === 'approve') invalidateLakeFileMembershipQueries(queryClient, dataLakeId);
       toast.success(
         decision === 'approve'
           ? `Added "${proposal.title}" to the lake`
@@ -2373,7 +2502,7 @@ export function useDataLakeFindings(
     queryKey: dataLakeKeys.findings(dataLakeId, filters),
     initialPageParam: 0,
     queryFn: async ({ pageParam }) => {
-      const { data } = await api.get<{ data: IDataLakeFindingDocument[]; hasMore: boolean }>(
+      const { data } = await api.get<{ data: ILakeFindingListItem[]; hasMore: boolean }>(
         `/api/data-lakes/${dataLakeId}/findings`,
         { params: { ...filters, offset: pageParam } }
       );
@@ -2405,14 +2534,45 @@ export function useDataLakeFindings(
   };
 }
 
+const SKIPPED_FILES_PAGE_SIZE = 25;
+
+/** One lake's files the connected source holds but the sync did not ingest. Manage-gated server-side. */
+export function useDataLakeSkippedFiles(dataLakeId: string | undefined, enabled: boolean) {
+  const query = useInfiniteQuery({
+    queryKey: dataLakeKeys.skippedFiles(dataLakeId ?? null),
+    initialPageParam: 0,
+    queryFn: async ({ pageParam }) => {
+      const { data } = await api.get<LakeSkippedFilesResponse>(`/api/data-lakes/${dataLakeId}/skipped-files`, {
+        params: { limit: SKIPPED_FILES_PAGE_SIZE, offset: pageParam },
+      });
+      return data;
+    },
+    getNextPageParam: (lastPage, allPages) =>
+      lastPage.hasMore ? allPages.reduce((loaded, page) => loaded + page.data.length, 0) : undefined,
+    enabled: !!dataLakeId && enabled,
+    retry: false,
+    refetchOnWindowFocus: false,
+    staleTime: 1000 * 60,
+  });
+  const files = useMemo(() => query.data?.pages.flatMap(page => page.data) ?? [], [query.data]);
+  return {
+    ...query,
+    files,
+    total: query.data?.pages[0]?.total ?? 0,
+    hasMore: query.hasNextPage,
+    loadMore: query.fetchNextPage,
+    isLoadingMore: query.isFetchingNextPage,
+  };
+}
+
 /** The run summary POST /api/data-lakes/:id/inconsistencies answers with - the fields read here. */
 type LakeScanResult = Pick<LakeInconsistencyScanSummary, 'countsByKind' | 'memberCount'>;
 
 function describeScanResult({ countsByKind, memberCount }: LakeScanResult): string {
   // Zero members read is "nothing to scan", never "clean" - the detector draws the same line.
-  if (memberCount === 0) return 'Scan complete. No document in this lake has text to compare yet.';
+  if (memberCount === 0) return 'Scanned 0 documents. No document in this lake has text to compare yet.';
   const total = Object.values(countsByKind).reduce((sum, count) => sum + count, 0);
-  return `Scan complete: ${total} finding(s) across ${memberCount} document(s).`;
+  return `Scanned ${memberCount} document(s), found ${total} finding(s).`;
 }
 
 /**
@@ -2522,6 +2682,170 @@ export function useRuleOnDataLakeFinding(dataLakeId: string) {
     onError: (error: unknown) => {
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.findingsOf(dataLakeId) });
       toast.error(serverRefusalMessage(error) || 'Could not record that ruling. Try again shortly.');
+    },
+  });
+}
+
+// -- Corpus actions (merge / supersede / retag, #3046) ----------------------
+
+/** One file's current tag names under one lake's prefix - the seed the retag editor starts from. */
+export interface LakeFileTags {
+  prefix: string;
+  current: string[];
+}
+
+/**
+ * One file's current prefixed tags for one lake (GET .../files/:fabFileId/tags), so a retag editor
+ * starts from the real set rather than a stale snapshot. `staleTime: 0`: the write it seeds is
+ * replace-semantics, so a cached seed that missed a change since would silently strip whatever it
+ * did not know about. Gated server-side on the lake's manage rung, so a refusal simply hides the
+ * control (the caller passes `enabled` from the finding's open state).
+ */
+export function useLakeFileTags(dataLakeId: string | null, fabFileId: string | null, opts?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: dataLakeKeys.lakeFileTags(dataLakeId ?? '', fabFileId ?? ''),
+    queryFn: async () => {
+      const { data } = await api.get<LakeFileTags>(`/api/data-lakes/${dataLakeId}/files/${fabFileId}/tags`);
+      return data;
+    },
+    enabled: !!dataLakeId && !!fabFileId && (opts?.enabled ?? true),
+    retry: false,
+    staleTime: 0,
+  });
+}
+
+/**
+ * The `POST .../findings/:findingId/corpus-action` request union. Re-declared here rather than
+ * imported: the contract lives in the route (a zod discriminated union) and in
+ * `@bike4mind/services`' internal type, neither of which the browser bundle may reach. The client
+ * sends `unsupersede` from two places: the findings detail's "Return to ranking" button (only for a
+ * file the list reports in `supersededFabFileIds`) and the supersede Undo toast (which posts it
+ * directly, for a file the list has not reported yet).
+ */
+export type CorpusActionBody =
+  | { action: 'merge'; keepFabFileId: string; retireFabFileIds: string[]; note?: string }
+  | { action: 'supersede'; keepFabFileId: string; retireFabFileId: string; note?: string }
+  | { action: 'unsupersede'; fabFileId: string; note?: string }
+  | { action: 'retag'; fabFileId: string; tags: string[]; note?: string };
+
+export interface ApplyCorpusActionVariables {
+  dataLakeId: string;
+  findingId: string;
+  body: CorpusActionBody;
+}
+
+/** The route's `{ data }` envelope, unwrapped. */
+export interface ApplyCorpusActionSuccess {
+  action: LakeCorpusAction;
+  findingId: string;
+  targets: LakeCorpusActionTarget[];
+  detail: Record<string, unknown>;
+}
+
+const corpusActionUrl = (dataLakeId: string, findingId: string) =>
+  `/api/data-lakes/${dataLakeId}/findings/${findingId}/corpus-action`;
+
+/**
+ * Act on a finding by changing the corpus (#3046): merge (retire documents' membership), supersede
+ * (retire one from ranking), retag (rewrite one's prefixed tags). The finding stays OPEN - the
+ * server does not close it, and the supersede Undo needs it open (`unsupersede` requires exactly
+ * that), so this hook never rules on the finding.
+ *
+ * The Undo toasts live at the MUTATION level, not per-`mutate()`: the confirming dialog unmounts on
+ * success, and a per-call callback would be dropped with it while the toast is still on screen -
+ * the same reason `useAddFileToDataLake` and `useRemoveFileFromDataLake` keep them here.
+ */
+export function useApplyCorpusAction() {
+  const queryClient = useQueryClient();
+  const addFileToDataLake = useAddFileToDataLake();
+
+  /** Everything a corpus action can stale: the row's own detail, membership, and the tag seed.
+   *  `invalidateLakeFileMembershipQueries` now carries the findings and seed keys too, so the
+   *  Undo paths (which go through `useAddFileToDataLake`) get the identical fan-out. */
+  const refresh = (dataLakeId: string) => invalidateLakeFileMembershipQueries(queryClient, dataLakeId);
+
+  return useMutation({
+    mutationFn: async ({ dataLakeId, findingId, body }: ApplyCorpusActionVariables) => {
+      const { data } = await api.post<{ data: ApplyCorpusActionSuccess }>(corpusActionUrl(dataLakeId, findingId), body);
+      return data.data;
+    },
+    // Returning the refresh keeps `isPending` true until the findings list has refetched, so the
+    // "Return to ranking" button cannot be clicked again against a row that still reads superseded.
+    onSuccess: (result, { dataLakeId, findingId }) => {
+      const refreshed = refresh(dataLakeId);
+
+      if (result.action === 'merge') {
+        const removed = result.targets.filter(target => target.role === 'retired');
+        if (removed.length === 0) {
+          toast.success('Merged. No document left this lake.');
+          return refreshed;
+        }
+        const toastId = toast.success(
+          `Removed ${removed.length} ${removed.length === 1 ? 'document' : 'documents'} from this lake.`,
+          {
+            duration: UNDO_TOAST_DURATION_MS,
+            action: {
+              label: 'Undo',
+              onClick: () => {
+                // One restore per removed member - the server's own 30-minute removal records are
+                // what `useAddFileToDataLake` spends, exactly as the browse's own removal Undo does.
+                // Every restore addresses THIS toast, so a later success can overwrite an earlier
+                // refusal and the last one to land is what the curator reads - the accepted shape
+                // `useRecordMembershipDecision` uses for the same multi-restore case.
+                for (const target of removed) {
+                  addFileToDataLake.mutate({ dataLakeId, fabFileId: target.fabFileId, toastId });
+                }
+              },
+            },
+          }
+        );
+        return refreshed;
+      }
+
+      if (result.action === 'supersede') {
+        const retired = result.targets.find(target => target.role === 'retired');
+        if (!retired) {
+          toast.success('Superseded.');
+          return refreshed;
+        }
+        const name = retired.fileName ?? 'The older document';
+        const retiredFabFileId = retired.fabFileId;
+        const toastId = toast.success(`"${name}" retired from ranking. It stays in this lake.`, {
+          duration: UNDO_TOAST_DURATION_MS,
+          action: {
+            label: 'Undo',
+            onClick: () => {
+              // `unsupersede` is a corpus action, not a member restoration, so it goes back through
+              // the same door. Valid because the finding stays open - see this hook's docblock.
+              api
+                .post(corpusActionUrl(dataLakeId, findingId), { action: 'unsupersede', fabFileId: retiredFabFileId })
+                .then(() => {
+                  refresh(dataLakeId);
+                  toast.success(returnedToRankingMessage(name), { id: toastId });
+                })
+                .catch((error: unknown) => {
+                  toast.error(serverRefusalMessage(error) || 'Could not undo the supersede', { id: toastId });
+                });
+            },
+          },
+        });
+        return refreshed;
+      }
+
+      if (result.action === 'unsupersede') {
+        const restored = result.targets.find(target => target.role === 'restored');
+        toast.success(returnedToRankingMessage(restored?.fileName ?? 'The document'));
+        return refreshed;
+      }
+
+      if (result.action === 'retag') toast.success('Tags updated.');
+      return refreshed;
+    },
+    // A refusal can mean this client's rows are stale (another curator already changed the ruling),
+    // so the list is refreshed rather than left showing a chip or button that no longer applies.
+    onError: (error: Error, { dataLakeId }) => {
+      refresh(dataLakeId);
+      toast.error(serverRefusalMessage(error) || error.message || 'Could not change the corpus');
     },
   });
 }

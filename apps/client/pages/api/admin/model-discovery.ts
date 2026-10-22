@@ -3,7 +3,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { adminSettingsRepository, modelDiscoveryRunRepository } from '@bike4mind/database';
 import type { IModelDiscoveryRun } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
-import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { DiscoveryDispatchUnavailableError, dispatchDiscoveryRunNow } from '@server/modelDiscovery/runNow';
 
 /**
@@ -115,6 +115,7 @@ const fullRun = (run: IModelDiscoveryRun) => ({
   // stored array is complete.
   detailTotals: run.detailTotals ?? {},
   unmatchedIds: run.unmatchedIds ?? [],
+  frozenProfileIds: run.frozenProfileIds ?? [],
   droppedRecords: run.droppedRecords ?? [],
 });
 

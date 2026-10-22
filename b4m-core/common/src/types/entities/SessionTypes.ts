@@ -10,6 +10,9 @@ import type { IUserDocument } from './UserTypes';
 import type { DataLakeGroundingMode } from '../../constants/dataLakes';
 import type { PersistedSessionSummaryTrigger } from '../../constants/sessionSummary';
 import type { ApiErrorCode } from '../../apiErrorCodes';
+import type { GenerationJobRef } from './GenerationJobTypes';
+import type { IQuestCallback } from '../../schemas/generationCallback';
+import type { SuggestedChoices } from '../../utils/replyChoices';
 
 /** Pending action for Slack/Web button-based confirmation flow */
 export interface IPendingAction {
@@ -136,6 +139,65 @@ export interface IAttachmentDelivery {
   droppedIds: string[];
 }
 
+/**
+ * Why a turn's LLM call was retried. Timeouts we raise ourselves are classified ahead of
+ * overload, because their error text says "may be overloaded" and would otherwise read as a
+ * provider fault. Must stay in sync with classifyTurnRetryReason in @bike4mind/services.
+ */
+export const TURN_RETRY_REASONS = [
+  'stream_idle_timeout',
+  'stream_truncated',
+  'request_timeout',
+  'rate_limit',
+  'overloaded',
+  'server_error',
+  'transport',
+  'tool_pairing',
+  'other',
+] as const;
+export type TurnRetryReason = (typeof TURN_RETRY_REASONS)[number];
+
+/**
+ * Cap on the retries persisted per turn. A pathological turn stops growing the quest record
+ * here, so a full list means "at least this many" - the UI renders it as "50+".
+ */
+export const MAX_RECORDED_TURN_RETRIES = 50;
+
+/** One retry of the LLM call, recorded at the moment the retry was scheduled. */
+export interface ITurnRetry {
+  reason: TurnRetryReason;
+  /** HTTP status of the failed attempt, when the error carried one. */
+  status?: number;
+  /** The provider's Retry-After, in ms. */
+  retryAfterMs?: number;
+  /** The provider's request id for the failed attempt - what a provider support ticket needs. */
+  requestId?: string;
+  /** Backoff before the next attempt, in ms. */
+  delayMs: number;
+  model: string;
+  at: Date;
+}
+
+/**
+ * Where one turn's wall-clock time went, persisted so a slow reply can be diagnosed from the
+ * quest instead of from logs. All durations are ms. TTFB/TTFVT live in
+ * `promptMeta.performance` (firstChunkTime/firstTokenTime) and the final model in `fallbackInfo`,
+ * so neither is repeated here.
+ */
+export interface ITurnTiming {
+  /** Turn started (the quest's timestamp) to processing started: request handling plus queue delay. */
+  queueMs: number;
+  /** Processing started to the first LLM request: context, history, data sources, tools. */
+  contextBuildMs?: number;
+  /** Summed wait for a provider concurrency slot, across every tool round. */
+  semaphoreWaitMs: number;
+  /** Turn started to the reply completing (or the turn failing). Unset while it is running. */
+  totalMs?: number;
+  retries: ITurnRetry[];
+  /** Models switched to after the requested one failed. */
+  fallbackHops: number;
+}
+
 export interface IChatHistoryItem {
   id?: string;
   sessionId: string;
@@ -192,6 +254,18 @@ export interface IChatHistoryItem {
   /** Path to the video in the storage bucket */
   videos?: string[];
 
+  /** Legacy: video jobs started before `generationJobs`; read through questGenerationJobs, never written. */
+  videoJobIds?: string[];
+
+  /** Generation jobs (video, music) this quest started, one live card each. Read through questGenerationJobs. */
+  generationJobs?: GenerationJobRef[];
+
+  /** Agent-mode video clips this run has claimed; the per-run cap's counter (QuestRepository.claimAgentGenerationSlot). */
+  agentVideoClipsClaimed?: number;
+
+  /** Agent-mode songs this run has claimed; the per-run cap's counter (QuestRepository.claimAgentGenerationSlot). */
+  agentMusicTracksClaimed?: number;
+
   /** TODO unclear purpose: Possibly out-of-band data such as link to website? */
   oob?: string;
   promptMeta?: PromptMeta;
@@ -207,6 +281,12 @@ export interface IChatHistoryItem {
    * the reply bubble); extend the union as other errors gain bespoke UI.
    */
   errorCode?: QuestErrorCode;
+
+  /**
+   * Completion callback armed by an API caller's `callbackUrl` (generation jobs only). Never
+   * part of any client or poll payload: it names the caller's endpoint and signing key.
+   */
+  callback?: IQuestCallback;
 
   /**
    * The ID of the QuestMaster plan that was created from this chat history item
@@ -241,6 +321,14 @@ export interface IChatHistoryItem {
    * (previous answer, what the user said was wrong, corrected answer).
    */
   correctsQuestId?: string;
+
+  /**
+   * Ms from the client sending the prompt to rendering the first token, posted back by the client
+   * mid-stream (quests/[id]/client-timing). Top-level rather than under `promptMeta.performance`
+   * because the completion pipeline saves `promptMeta` whole from an in-memory copy that never has
+   * it, so the stream's final save would erase it. Older quests carry it at the promptMeta path.
+   */
+  clientFirstTokenTime?: number;
 
   /**
    * Provenance of the routing decision that produced this quest (M4).
@@ -303,7 +391,8 @@ export interface IChatHistoryItem {
   };
 
   /**
-   * Fallback model information when a fallback occurred during generation
+   * Fallback model information when a fallback occurred during generation. `null` clears a value
+   * persisted by an earlier attempt: repository updates are a `$set`, which drops `undefined`.
    */
   fallbackInfo?: {
     sessionId: string;
@@ -314,8 +403,9 @@ export interface IChatHistoryItem {
     /** Provider path of each side; see FallbackInfoSchema for why these are optional. */
     primaryModelBackend?: string;
     fallbackModelBackend?: string;
+    reason?: string;
     timestamp: number;
-  };
+  } | null;
 
   /**
    * Prompt enhancement information for image generation
@@ -380,6 +470,9 @@ export interface IChatHistoryItem {
    */
   attachmentDelivery?: IAttachmentDelivery;
 
+  /** Where this turn's time went - see {@link ITurnTiming}. Absent on turns that predate it. */
+  turnTiming?: ITurnTiming;
+
   /**
    * Navigation intents from the navigate_view tool.
    * Rendered as inline action buttons in the chat response.
@@ -392,6 +485,13 @@ export interface IChatHistoryItem {
     target: string;
     reason: string;
   }>;
+
+  /**
+   * Next-step options parsed from the reply's trailing choices block (see utils/replyChoices).
+   * Rendered with navigationIntents as one numbered button row; the block itself is stripped
+   * from the stored reply text.
+   */
+  suggestedChoices?: SuggestedChoices;
 
   /**
    * Attachment list for interactive download buttons (Slack and web UI)
@@ -562,6 +662,42 @@ export interface IConversationContext {
 
 ////////
 
+/** Where a session was created. Absent on sessions that predate the field; render those as 'web'. */
+export const SESSION_ORIGIN_CHANNELS = ['web', 'api', 'slack', 'cli', 'agent'] as const;
+export type SessionOriginChannel = (typeof SESSION_ORIGIN_CHANNELS)[number];
+
+export interface ISessionOrigin {
+  channel: SessionOriginChannel;
+  /**
+   * The API key that created the session, set only for channel 'api'. Never serialized to a
+   * client (see redactSessionForClient), so a viewer the session is shared with cannot see it.
+   */
+  apiKeyId?: string;
+}
+
+/** List filters on top of the existing search/surface/pagination params (see searchOwnSessions). */
+export interface SessionListFilters {
+  /** Only sessions from this channel. 'web' also matches sessions with no recorded origin. */
+  origin?: SessionOriginChannel;
+  /** Exclude sessions from this channel. Excluding 'web' also excludes sessions with no origin. */
+  excludeOrigin?: SessionOriginChannel;
+  /** true: only sessions with generated images; false: only sessions without. */
+  hasImages?: boolean;
+}
+
+/** Keyset page of a user's own sessions, newest first by id (GET /api/v1/sessions). */
+export type ListSessionsByUserQuery = {
+  userId: string;
+  /** Same semantics as searchByUserId: case-insensitive match on name, summary or tag name. */
+  search?: string;
+  /** Same semantics as searchByUserId: unset lists only sessions with no surface. */
+  surface?: string;
+  filters?: SessionListFilters;
+  /** Exclusive: only sessions whose id sorts before this one (the previous page's last id). */
+  beforeId?: string;
+  limit: number;
+};
+
 export interface ISession {
   id: string;
   name: string;
@@ -610,6 +746,13 @@ export interface ISession {
    */
   disabledTools?: string[];
   /**
+   * Server-owned: tools the completion path added on its own because a turn's message called for them
+   * (blog, data-lake save, skill). Only ever grows, so the tool list a session sends stays the same
+   * from turn to turn: any change to it invalidates the provider's whole prompt cache. Never written
+   * from a client.
+   */
+  autoAddedTools?: string[];
+  /**
    * When true, suppress the user's personal integrations for this session - their
    * MCP servers and agent delegation are not layered onto the session's toolset, so
    * it runs only its curated, server-owned tools. Generic capability - lets a product
@@ -645,6 +788,12 @@ export interface ISession {
    * attaching a lake file does not silently re-scope a session the user scoped by hand.
    */
   lakeScopeExplicit?: boolean;
+  /**
+   * Whether a lake-scoped chat also grounds on the user's own library (owned, shared and group
+   * files) alongside the lake. Unset falls back to "only when no lake is named", which is the
+   * pre-existing behavior; resolve it through effectiveIncludeLibraryFiles, never read it raw.
+   */
+  includeLibraryFiles?: boolean;
   /**
    * Lake ids a manager was admitted to for THIS session even though they are not a member of the
    * lake (manage-but-not-member admission) - set ONLY by pages/api/v1/sessions/index.ts, AFTER its
@@ -713,6 +862,13 @@ export interface ISession {
    */
   maxToolCalls?: number;
   /**
+   * Fields the user set explicitly that a contributed workspace may own. On that workspace its resolver
+   * still decides them; moving or copying off it keeps them (see `WorkspaceSessionSettingsTable` in
+   * surfaces.ts). Recorded at
+   * create for each such field set where the session's workspace does not own it; copies carry it.
+   */
+  userSetFields?: string[];
+  /**
    * The placeholder name a product surface stamped on this session at create
    * time. Generic capability - auto-naming treats a session still bearing its
    * placeholder as rename-eligible (bypassing the recent-update duplicate
@@ -744,6 +900,13 @@ export interface ISession {
   curatedAt?: Date; // When the notebook was last curated
   curationContentHash?: string; // Hash of the last curation's inputs (content + type + options); lets an unchanged re-curation reuse the file and skip the LLM
   messageCount?: number; // Lazy-loaded count of messages in this session - calculated on first read
+  /** Set once at creation (see ISessionOrigin); the schema marks it immutable. */
+  origin?: ISessionOrigin;
+  /**
+   * Running total of images generated into this session's quests. Monotonic: deleting a quest
+   * does not decrement it, so treat it as "has ever held generated images", not a live tally.
+   */
+  imageCount?: number;
   slackMetadata?: {
     channelId: string;
     threadTs?: string; // Optional - undefined for non-threaded DMs
@@ -768,6 +931,28 @@ export interface ISession {
    * Used to enforce the 60-minute hard cap.
    */
   voiceSessionStartedAt?: Date | null;
+
+  /**
+   * When the open voice call was first seen connected (the client's connect report or the first
+   * provider turn). Null until then and cleared when the hold settles; a call that never
+   * connected is not billed.
+   */
+  voiceConnectedAt?: Date | null;
+
+  /** Latest sign of life from the open voice call (client heartbeat, provider turn or transcript frame). */
+  voiceLastActivityAt?: Date | null;
+
+  /**
+   * Credits billed so far against the open realtime voice hold, one response at a time.
+   * Set to 0 when a realtime hold opens and removed when it closes; absent for other holds.
+   */
+  voiceBilledCredits?: number;
+
+  /**
+   * Who paid the open voice hold's reserve, set when it opens and cleared when it settles. Every
+   * refund and debit against the hold goes to this user, never to whoever sends the closing frame.
+   */
+  voiceHoldUserId?: string | null;
 }
 
 ///////////
@@ -851,6 +1036,16 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
     data: Partial<ISessionDocument> & { id: string },
     opts?: { includeGlobalWrite?: boolean }
   ) => Promise<ISessionDocument | null>;
+  /**
+   * updateWithUpdateAccess that adds `knowledgeIds` ($addToSet) rather than replacing the stored list,
+   * so a concurrent detach is not undone by a caller's stale read.
+   */
+  addKnowledgeIdsWithUpdateAccess: (
+    user: Pick<IUserDocument, 'id' | 'groups'>,
+    data: Partial<Omit<ISessionDocument, 'knowledgeIds'>> & { id: string },
+    knowledgeIds: string[],
+    opts?: { includeGlobalWrite?: boolean }
+  ) => Promise<ISessionDocument | null>;
   upsertByOpenaiConversationId: <Txn>(
     openaiConversationId: string,
     update: Partial<ISession>,
@@ -914,6 +1109,18 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
   pullKnowledgeIds: (fabFileIds: string[]) => Promise<number>;
 
   /**
+   * As `pullKnowledgeIds`, but for ONE session only. Resolves to whether that session was modified.
+   */
+  pullKnowledgeIdsFromSession: (sessionId: string, fabFileIds: string[]) => Promise<boolean>;
+
+  /**
+   * As `pullKnowledgeIds`, but only from live sessions OWNED by one of `userIds` - bounded by the
+   * (deletedAt, userId) indexes, where the unscoped form has to scan for the unindexed knowledgeIds.
+   * Resolves to the sessions modified.
+   */
+  pullKnowledgeIdsForUsers: (userIds: string[], fabFileIds: string[]) => Promise<number>;
+
+  /**
    * Search for sessions by user ID
    *
    * @param search - The search query
@@ -924,8 +1131,20 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
   searchByUserId: (
     search: string | undefined,
     userId: string,
-    options: SearchOptions<ISessionDocument>
+    options: SearchOptions<ISessionDocument>,
+    surface?: string,
+    filters?: SessionListFilters
   ) => Promise<{ data: ISessionDocument[]; hasMore: boolean }>;
+
+  /**
+   * Cursor-paginated twin of searchByUserId: ordered by `_id` descending and bounded by `limit`,
+   * so a page boundary stays put while sessions are added or edited (lastUpdated moves, _id does
+   * not). Callers pass `limit + 1` to learn whether another page exists without a count query.
+   */
+  listByUserId: (query: ListSessionsByUserQuery) => Promise<ISessionDocument[]>;
+
+  /** Atomically adds `count` generated images to the session's imageCount (one $inc). */
+  incrementImageCount: (sessionId: string, count: number) => Promise<void>;
 
   /**
    * Find the most recently updated session by user ID
@@ -960,6 +1179,15 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
    * @returns The updated session
    */
   attachAgent: (sessionId: string, agentId: string) => Promise<ISessionDocument>;
+
+  /**
+   * Record tools the completion path auto-added, atomically and add-only ($addToSet), so concurrent
+   * turns cannot drop one another's entries.
+   *
+   * @param sessionId - The session ID
+   * @param toolNames - Tool names to add to `autoAddedTools`
+   */
+  addAutoAddedTools: (sessionId: string, toolNames: string[]) => Promise<void>;
 
   /**
    * Detach an agent from a session
@@ -1035,4 +1263,67 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
    * @returns The count of active voice sessions
    */
   countActiveVoiceSessionsByUserId: (userId: string) => Promise<number>;
+
+  /**
+   * Add `credits` to the billed total of the voice hold that started at `startedAt`. Resolves the
+   * total billed before this charge, or null when that hold is no longer open.
+   */
+  addVoiceBilledCredits: (sessionId: string, startedAt: Date, credits: number) => Promise<number | null>;
+
+  /**
+   * Oldest-first sessions whose voice credit hold was reserved before `startedBefore` (or, for a
+   * realtime hold, before `realtimeStartedBefore`) and never settled, at most `limit` of them.
+   * `realtime` marks a hold billed per response (it carries `voiceBilledCredits`).
+   */
+  findStaleVoiceHolds: (
+    startedBefore: Date,
+    realtimeStartedBefore: Date,
+    limit: number
+  ) => Promise<
+    Array<{
+      id: string;
+      userId: string;
+      voiceReservedCredits: number;
+      voiceSessionStartedAt: Date;
+      voiceConnectedAt: Date | null;
+      voiceLastActivityAt: Date | null;
+      realtime: boolean;
+    }>
+  >;
+
+  /**
+   * Record that the session's open voice call is connected and alive at `at`: sets
+   * voiceConnectedAt the first time and advances voiceLastActivityAt. With `holdStartedAt`, only the
+   * hold that started then is touched; with `realtimeOnly`, only a realtime hold (one carrying
+   * voiceBilledCredits). Resolves false (and writes nothing) when no matching open hold exists.
+   */
+  recordVoiceActivity: (
+    sessionId: string,
+    at: Date,
+    holdStartedAt?: Date | null,
+    options?: { realtimeOnly?: boolean }
+  ) => Promise<boolean>;
+
+  /**
+   * Atomically clear the voice hold that started at `startedAt`. Resolves, for the single caller
+   * that cleared it, what realtime responses had billed against it (null for a hold never billed per
+   * response); null when it was already settled or replaced by a newer call. With `realtimeOnly`,
+   * a hold without the realtime marker (an ElevenLabs call) is left untouched and resolves null.
+   */
+  claimVoiceHold: (
+    sessionId: string,
+    startedAt: Date,
+    options?: { realtimeOnly?: boolean }
+  ) => Promise<{ billedCredits: number | null; payerId: string | null } | null>;
+
+  /**
+   * Write a fresh call's hold, only while the session still holds `priorStartedAt` (the hold read
+   * before the reserve was taken) or no hold at all. A realtime hold gets the billed-credits marker;
+   * any other has it removed. Resolves false (and writes nothing) when a concurrent bootstrap won.
+   */
+  openVoiceHold: (
+    sessionId: string,
+    priorStartedAt: Date | null,
+    hold: { voiceReservedCredits: number | null; voiceSessionStartedAt: Date; realtime: boolean; payerId: string }
+  ) => Promise<boolean>;
 }

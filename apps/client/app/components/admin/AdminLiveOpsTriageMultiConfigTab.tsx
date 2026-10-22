@@ -43,7 +43,11 @@ import { toast } from 'sonner';
 import { getErrorMessage } from '@client/app/utils/error';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import { LIVEOPS_TRIAGE_VALIDATION_LIMITS } from '@bike4mind/common';
-import { getNextScheduledRun, formatNextRun, getIntervalDescription } from '@client/shared/liveopsScheduleUtils';
+import {
+  getNextScheduledRun,
+  formatNextRun,
+  getIntervalDescription,
+} from '@bike4mind/server-utils/shared/liveopsScheduleUtils';
 
 // Icons
 import AddIcon from '@mui/icons-material/Add';
@@ -72,7 +76,7 @@ import ForumIcon from '@mui/icons-material/Forum';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 
 // Template variable docs
-import { TEMPLATE_VARIABLE_DOCS } from '@server/services/liveopsTriagePrompt';
+import { TEMPLATE_VARIABLE_DOCS } from '@bike4mind/server-utils/services/liveopsTriagePrompt';
 
 // Types
 interface LiveopsTriageConfig {

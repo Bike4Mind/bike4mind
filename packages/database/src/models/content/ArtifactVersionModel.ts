@@ -20,6 +20,11 @@ export interface IArtifactVersionDocument extends Document<string> {
   isActive: boolean;
 }
 
+export type ArtifactVersionListItem = Pick<
+  IArtifactVersionDocument,
+  '_id' | 'version' | 'versionTag' | 'changeDescription' | 'createdAt'
+>;
+
 // Artifact Version schema - tracks all versions of an artifact
 const ArtifactVersionSchema = new Schema(
   {
@@ -136,6 +141,23 @@ export class ArtifactVersionRepository extends BaseRepository<IArtifactVersionDo
 
   async findByArtifactId(artifactId: string) {
     return this.find({ artifactId }, { sort: { version: -1 } });
+  }
+
+  /** One page of an artifact's versions in version order, for the public versions list. */
+  async listByArtifactAfterVersion(
+    artifactId: string,
+    { afterVersion, limit }: { afterVersion?: number; limit: number }
+  ): Promise<{ data: ArtifactVersionListItem[]; hasMore: boolean }> {
+    const result: ArtifactVersionListItem[] = await this.model
+      .find({ artifactId, ...(afterVersion !== undefined && { version: { $gt: afterVersion } }) })
+      .select('version versionTag changeDescription createdAt')
+      .sort({ version: 1 })
+      .limit(limit + 1)
+      .lean()
+      .exec();
+
+    const hasMore = result.length > limit;
+    return { data: result.slice(0, limit), hasMore };
   }
 
   async findActiveVersion(artifactId: string) {

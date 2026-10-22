@@ -1,12 +1,14 @@
 import React from 'react';
 import { Box, Text } from 'ink';
-import type { Message } from '../storage';
+import { PENDING_ASSISTANT_CONTENT, type Message } from '../storage';
 import type { AgentStep } from '@bike4mind/agents';
 import { DEGENERATE_FINISH_REASON } from '@bike4mind/common';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { useStdoutDimensions } from '../hooks/useStdoutDimensions.js';
 import {
+  splitLiveRows,
   windowLiveTrace,
+  wrapReplyRows,
   truncateValue,
   ACTION_ARG_LIMIT,
   OBSERVATION_LIMIT,
@@ -18,12 +20,12 @@ interface MessageItemProps {
   /** When false, the agent's thought steps are suppressed in the action trace. Defaults to true. */
   showThoughts?: boolean;
   /**
-   * Row budget for the step trace, set only for the pending message rendered in
-   * Ink's live frame. Omit it for <Static> history, which must render the whole
-   * trace into scrollback. See liveStepWindow.ts for why the live frame has to
-   * stay shorter than the viewport.
+   * Row budget for the step trace and the streaming reply, set only for the
+   * pending message rendered in Ink's live frame. Omit it for <Static> history,
+   * which must render everything into scrollback. See liveStepWindow.ts for why
+   * the live frame has to stay shorter than the viewport.
    */
-  liveTraceRows?: number;
+  liveRows?: number;
 }
 
 // Tools whose arguments are noisy (large old_string/new_string diffs etc.)
@@ -31,10 +33,13 @@ interface MessageItemProps {
 // already shows whether the edit succeeded.
 const TOOLS_WITH_HIDDEN_ARGS = new Set(['edit_local_file']);
 
+/** Left padding of the reply body, in columns. */
+const REPLY_INDENT = 2;
+
 export const MessageItem = React.memo(function MessageItem({
   message,
   showThoughts = true,
-  liveTraceRows,
+  liveRows,
 }: MessageItemProps) {
   const isUser = message.role === 'user';
   const [terminalCols] = useStdoutDimensions();
@@ -42,16 +47,26 @@ export const MessageItem = React.memo(function MessageItem({
   // Live frame: every trace line is truncated to one row and whitespace-collapsed
   // so the window's row budget is exact. See liveStepWindow.ts - the height bound
   // depends on this, and relaxing it reintroduces the scrollback wipe.
-  const isLive = liveTraceRows !== undefined;
+  const isLive = liveRows !== undefined;
   const traceWrap = isLive ? 'truncate-end' : 'wrap';
   const oneLine = (text: string) => (isLive ? text.replace(/\s+/g, ' ') : text);
 
+  const hasReply = !isUser && message.content !== PENDING_ASSISTANT_CONTENT;
   const allSteps = message.metadata?.steps;
+
+  // Live frame: the streaming reply renders as plain one-row lines (its tail
+  // only), sharing the row budget with the trace; markdown renders at commit.
+  const liveSplit = React.useMemo(() => {
+    if (liveRows === undefined) return undefined;
+    const replyRows = hasReply ? wrapReplyRows(message.content, terminalCols - REPLY_INDENT) : [];
+    return splitLiveRows(liveRows, { steps: allSteps ?? [], replyRows, showThoughts });
+  }, [liveRows, hasReply, message.content, terminalCols, allSteps, showThoughts]);
+
   const { steps: traceSteps, hiddenSteps }: LiveTraceWindow = React.useMemo(() => {
     if (!allSteps) return { steps: [], hiddenSteps: 0 };
-    if (liveTraceRows === undefined) return { steps: allSteps, hiddenSteps: 0 };
-    return windowLiveTrace(allSteps, { rows: liveTraceRows, showThoughts });
-  }, [allSteps, liveTraceRows, showThoughts]);
+    if (liveSplit === undefined) return { steps: allSteps, hiddenSteps: 0 };
+    return windowLiveTrace(allSteps, { rows: liveSplit.traceRows, showThoughts });
+  }, [allSteps, liveSplit, showThoughts]);
 
   const visibleTraceSteps = traceSteps.filter(
     s => (showThoughts && s.type === 'thought') || s.type === 'action'
@@ -83,8 +98,8 @@ export const MessageItem = React.memo(function MessageItem({
         <Box paddingLeft={2} flexDirection="column" marginBottom={1}>
           {hiddenSteps > 0 && (
             <Text dimColor wrap="truncate-end">
-              {/* Deliberately does not promise the trace later: a turn the user
-                  aborts with ESC discards its steps instead of printing them. */}
+              {/* Deliberately does not promise the trace later: a turn that fails
+                  with an error discards its steps instead of printing them. */}
               {`... ${hiddenSteps} earlier ${hiddenSteps === 1 ? 'step' : 'steps'} hidden`}
             </Text>
           )}
@@ -117,7 +132,7 @@ export const MessageItem = React.memo(function MessageItem({
                         the pair to a single row; nested <Text> keeps the colours. */}
                     <Text wrap={traceWrap}>
                       <Text color="yellow">{formattedToolName}</Text>
-                      {toolInput && !hideArgs && (
+                      {!!toolInput && !hideArgs && (
                         <Text dimColor>{` • ${oneLine(truncateValue(toolInput, ACTION_ARG_LIMIT))}`}</Text>
                       )}
                     </Text>
@@ -140,9 +155,17 @@ export const MessageItem = React.memo(function MessageItem({
       )}
 
       {/* Final answer / message content (shown AFTER reasoning trace) */}
-      {/* Don't show '...' for pending messages, and don't show for user messages (handled above) */}
-      {!isUser && message.content !== '...' && (
-        <Box paddingLeft={2} marginBottom={1}>
+      {liveSplit && liveSplit.replyRows.length > 0 && (
+        <Box paddingLeft={REPLY_INDENT} marginBottom={1} flexDirection="column">
+          {liveSplit.replyRows.map((row, idx) => (
+            <Text key={idx} wrap="truncate-end">
+              {row || ' '}
+            </Text>
+          ))}
+        </Box>
+      )}
+      {!isLive && hasReply && (
+        <Box paddingLeft={REPLY_INDENT} marginBottom={1}>
           {message.metadata?.permissionDenied ? (
             <Text color="yellow">⚠️ {message.content}</Text>
           ) : (
@@ -164,7 +187,7 @@ export const MessageItem = React.memo(function MessageItem({
       )}
 
       {/* Show usage metrics (tokens and credits) after assistant message */}
-      {!isUser && message.content !== '...' && message.metadata && (
+      {!isLive && hasReply && message.metadata && (
         <Box paddingLeft={2} marginBottom={1}>
           {(message.metadata.tokenUsage?.total || message.metadata.creditsUsed) && (
             <Text dimColor>

@@ -13,6 +13,7 @@
 // ZERO requests to /api/auth/refreshToken, which is rate-limited per IP.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import handler from '../widget';
+import { ACCESS_TOKEN_STORAGE_KEY } from '@client/app/hooks/useAccessToken';
 
 /** Render the widget exactly as the route serves it. */
 function widgetSource(): string {
@@ -167,7 +168,12 @@ describe('publish comment widget - credential path', () => {
     clickLauncher();
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(getItem).not.toHaveBeenCalled();
+    // The only read is the persisted session FLAG (sign-up CTA handling), never a token.
+    expect(getItem.mock.calls.every(([key]) => key === ACCESS_TOKEN_STORAGE_KEY)).toBe(true);
+    for (const call of calls) {
+      const auth = (call.init?.headers as Record<string, string> | undefined)?.Authorization;
+      if (auth) expect(auth).toBe('Bearer fresh.token');
+    }
   });
 
   it('costs an anonymous reader of a public artifact ZERO auth requests', async () => {
@@ -506,5 +512,228 @@ describe('publish widget - Save as PDF binder', () => {
 
     expect(() => eval(widgetSource())).not.toThrow();
     expect((document.querySelector('.b4m-bar-print') as HTMLButtonElement).hidden).toBe(true);
+  });
+});
+
+describe('publish widget - sign-up CTAs for a signed-in viewer', () => {
+  let winListeners: Array<[string, EventListener]> = [];
+  const realWindowAdd = window.addEventListener.bind(window);
+
+  beforeEach(() => {
+    winListeners = [];
+    window.addEventListener = ((type: string, fn: EventListener, opts?: AddEventListenerOptions) => {
+      winListeners.push([type, fn]);
+      realWindowAdd(type, fn, opts);
+    }) as typeof window.addEventListener;
+  });
+
+  afterEach(() => {
+    winListeners.forEach(([type, fn]) => window.removeEventListener(type, fn));
+    window.addEventListener = realWindowAdd as typeof window.addEventListener;
+    window.localStorage.clear();
+    vi.restoreAllMocks();
+    document.body.innerHTML = '';
+  });
+
+  function persistSession(state: { hasSession: boolean; expired: boolean }): void {
+    window.localStorage.setItem(
+      ACCESS_TOKEN_STORAGE_KEY,
+      JSON.stringify({ state: { ...state, expiredReason: null }, version: 1 })
+    );
+  }
+
+  /** The wrapper around a gated render: hidden bar CTA + a frame marked as carrying the bridge. */
+  function mountGatedWrapper(marked = true): { cta: HTMLAnchorElement; post: ReturnType<typeof vi.fn>; frame: Window } {
+    document.body.innerHTML =
+      `<iframe${marked ? ' data-b4m-gate' : ''}></iframe>` +
+      '<div class="b4m-bar"><a class="b4m-bar-cta" href="https://acme.example/" hidden>Try Acme</a></div>';
+    const frame = (document.querySelector('iframe') as HTMLIFrameElement).contentWindow as Window;
+    const post = vi.fn();
+    frame.postMessage = post as unknown as Window['postMessage'];
+    return { cta: document.querySelector('.b4m-bar-cta') as HTMLAnchorElement, post, frame };
+  }
+
+  it('reveals the bar CTA and asks the frame to drop the gate', () => {
+    persistSession({ hasSession: true, expired: false });
+    const { cta, post } = mountGatedWrapper();
+
+    eval(widgetSource());
+
+    expect(cta.hidden).toBe(false);
+    expect(post).toHaveBeenCalledWith({ b4m: 'member' }, '*');
+  });
+
+  it('re-sends when the bridge announces itself after the widget ran', () => {
+    persistSession({ hasSession: true, expired: false });
+    const { post, frame } = mountGatedWrapper();
+
+    eval(widgetSource());
+    post.mockClear();
+    window.dispatchEvent(new MessageEvent('message', { data: { b4m: 'gate-ready' }, source: frame }));
+
+    expect(post).toHaveBeenCalledWith({ b4m: 'member' }, '*');
+  });
+
+  it('ignores a gate-ready from anything but the frame', () => {
+    persistSession({ hasSession: true, expired: false });
+    const { post } = mountGatedWrapper();
+
+    eval(widgetSource());
+    post.mockClear();
+    window.dispatchEvent(new MessageEvent('message', { data: { b4m: 'gate-ready' }, source: window }));
+
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it('leaves an anonymous viewer the gate and no bar CTA', () => {
+    const { cta, post } = mountGatedWrapper();
+
+    eval(widgetSource());
+
+    expect(cta.hidden).toBe(true);
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it('treats an ended session as anonymous', () => {
+    persistSession({ hasSession: false, expired: true });
+    const { cta, post } = mountGatedWrapper();
+
+    eval(widgetSource());
+
+    expect(cta.hidden).toBe(true);
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it('never tells a frame without a gate that the viewer is signed in', () => {
+    persistSession({ hasSession: true, expired: false });
+    const { cta, post } = mountGatedWrapper(false);
+
+    eval(widgetSource());
+
+    expect(cta.hidden).toBe(false);
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it('does not throw on unreadable storage', () => {
+    window.localStorage.setItem(ACCESS_TOKEN_STORAGE_KEY, '{not json');
+    const { cta } = mountGatedWrapper();
+
+    expect(() => eval(widgetSource())).not.toThrow();
+    expect(cta.hidden).toBe(true);
+  });
+});
+
+describe('publish widget - Published-gear view report', () => {
+  const VIEW = '/api/publish/view';
+  const SESSION_KEY = 'access-token-storage';
+
+  let docListeners: Array<[string, EventListener]> = [];
+  const realDocumentAdd = document.addEventListener.bind(document);
+
+  beforeEach(() => {
+    calls = [];
+    docListeners = [];
+    document.addEventListener = ((type: string, fn: EventListener, opts?: AddEventListenerOptions) => {
+      docListeners.push([type, fn]);
+      realDocumentAdd(type, fn, opts);
+    }) as typeof document.addEventListener;
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    docListeners.forEach(([type, fn]) => document.removeEventListener(type, fn));
+    document.addEventListener = realDocumentAdd as typeof document.addEventListener;
+    window.localStorage.clear();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    document.body.innerHTML = '';
+  });
+
+  /** A comments-off wrapper, with or without the serve route's count-view marker. */
+  function mountWrapper({ marked, comments = false }: { marked: boolean; comments?: boolean }): void {
+    document.body.innerHTML =
+      (comments
+        ? '<div id="b4m-annotate-root" data-public-id="pub_1" data-comment-policy="open" data-title="T"></div>'
+        : '') +
+      '<iframe></iframe>' +
+      `<script src="/api/publish/widget"${marked ? ' data-b4m-count-view' : ''} defer></script>`;
+  }
+
+  /** The app's persisted session flag, shaped as zustand persist writes it. */
+  function believeSignedIn(hasSession: boolean): void {
+    window.localStorage.setItem(SESSION_KEY, JSON.stringify({ state: { hasSession }, version: 1 }));
+  }
+
+  const viewCalls = () => calls.filter(c => c.url.includes(VIEW));
+
+  it('reports a signed-in viewer with a Bearer and the page path', async () => {
+    mountWrapper({ marked: true });
+    believeSignedIn(true);
+    stubFetch({ signedIn: true });
+
+    await runWidget();
+
+    expect(viewCalls()).toHaveLength(1);
+    const { init } = viewCalls()[0];
+    expect(init?.method).toBe('POST');
+    expect((init?.headers as Record<string, string>).Authorization).toBe('Bearer fresh.token');
+    // A passphrase gate's proof cookie must be able to ride along.
+    expect(init?.credentials).toBe('same-origin');
+    expect(JSON.parse(String(init?.body))).toEqual({ path: window.location.pathname });
+  });
+
+  it('costs a reader with no session flag ZERO auth requests', async () => {
+    mountWrapper({ marked: true });
+    stubFetch({ signedIn: false });
+
+    await runWidget();
+
+    expect(refreshCalls()).toHaveLength(0);
+    expect(viewCalls()).toHaveLength(0);
+  });
+
+  it('does not report when the exchange finds no live session behind the flag', async () => {
+    mountWrapper({ marked: true });
+    believeSignedIn(true);
+    stubFetch({ signedIn: false });
+
+    await runWidget();
+
+    expect(refreshCalls()).toHaveLength(1);
+    expect(viewCalls()).toHaveLength(0);
+  });
+
+  it('does nothing once the serve route stops marking the tag', async () => {
+    mountWrapper({ marked: false });
+    believeSignedIn(true);
+    stubFetch({ signedIn: true });
+
+    await runWidget();
+
+    expect(refreshCalls()).toHaveLength(0);
+    expect(viewCalls()).toHaveLength(0);
+  });
+
+  it('shares one exchange with the comment overlay once its panel is opened', async () => {
+    mountWrapper({ marked: true, comments: true });
+    believeSignedIn(true);
+    stubFetch({ signedIn: true });
+
+    await runWidget();
+    clickLauncher();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(viewCalls()).toHaveLength(1);
+    expect(refreshCalls()).toHaveLength(1);
+  });
+
+  it('survives a malformed session flag', async () => {
+    mountWrapper({ marked: true });
+    window.localStorage.setItem(SESSION_KEY, '{not json');
+    stubFetch({ signedIn: true });
+
+    await expect(runWidget()).resolves.toBeUndefined();
+    expect(viewCalls()).toHaveLength(0);
   });
 });

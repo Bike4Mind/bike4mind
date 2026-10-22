@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
@@ -15,7 +16,9 @@ const VALID_ID = '507f1f77bcf86cd799439011';
 const mockRefs = vi.hoisted(() => ({ getHandler: null as null | ((req: any, res: any) => unknown) }));
 
 vi.mock('@server/middlewares/baseApi', () => {
-  const chain: any = {
+  // Callable like the real next-connect router, so the route's default export can dispatch to it.
+  const chain: any = (req: any, res: any) => mockRefs.getHandler!(req, res);
+  Object.assign(chain, {
     use: () => chain,
     get: (fn: any) => {
       mockRefs.getHandler = fn;
@@ -23,7 +26,7 @@ vi.mock('@server/middlewares/baseApi', () => {
     },
     post: () => chain,
     delete: () => chain,
-  };
+  });
   return { baseApi: () => chain };
 });
 
@@ -53,7 +56,46 @@ vi.mock('@server/managers/inviteManager', async importOriginal => {
   return { ...actual, getInviteDetails };
 });
 
-import '@pages/api/[type]/[id]/index';
+import handler from '@pages/api/[type]/[id]/index';
+
+describe('/api/[type]/[id] - type segment dispatch', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it.each([
+    ['GET', 'foo'],
+    ['GET', 'constructor'],
+    ['GET', 'Files'],
+    ['POST', 'foo'],
+  ])('answers %s /api/%s/:id with the shared 404 envelope without touching invites', async (method, type) => {
+    const { req, res } = createMocks(
+      {
+        method: method as 'GET',
+        url: `/api/${type}/${VALID_ID}`,
+        query: { type, id: VALID_ID },
+        headers: { 'x-request-id': 'req-404-test' },
+      },
+      { eventEmitter: EventEmitter }
+    );
+
+    await handler(req as any, res as any);
+
+    expect(res.statusCode).toBe(404);
+    expect(res._getJSONData()).toMatchObject({ error: 'No API route matches this path', request_id: 'req-404-test' });
+    expect(resolveRedeemableInvite).not.toHaveBeenCalled();
+  });
+
+  it.each(['files', 'groups', 'tools', 'Project'])('still looks up the invite for GET /api/%s/:id', async type => {
+    resolveRedeemableInvite.mockResolvedValue(null);
+
+    const { req, res } = createMocks({ method: 'GET', query: { type, id: VALID_ID } });
+    (req as any).user = { id: 'u1', email: 'me@x.com' };
+    await handler(req as any, res as any);
+
+    expect(resolveRedeemableInvite).toHaveBeenCalledWith(VALID_ID, expect.anything());
+    expect(res._getStatusCode()).toBe(404);
+    expect(res._getJSONData()).toEqual({ message: 'Invite Not Found' });
+  });
+});
 
 describe('GET /api/[type]/[id] - authorization gate', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -72,6 +114,26 @@ describe('GET /api/[type]/[id] - authorization gate', () => {
     await mockRefs.getHandler!(req, res);
 
     expect(res._getStatusCode()).toBe(404);
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
+    expect(getInviteDetails).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 (not 410) to a stranger requesting an expired named invite', async () => {
+    resolveRedeemableInvite.mockResolvedValue({
+      id: 'inv-1',
+      type: 'FabFile',
+      documentId: 'doc-1',
+      expiresAt: new Date(Date.now() - 60_000).toISOString(),
+      recipients: { pending: ['other@x.com'], accepted: [], refused: [] },
+    });
+    authorizeByInviteType.mockRejectedValue(new Error('Unauthorized'));
+
+    const { req, res } = createMocks({ method: 'GET', query: { type: 'files', id: VALID_ID } });
+    (req as any).user = { id: 'u1', email: 'stranger@x.com' };
+    await mockRefs.getHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(404);
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
     expect(getInviteDetails).not.toHaveBeenCalled();
   });
 
@@ -89,6 +151,7 @@ describe('GET /api/[type]/[id] - authorization gate', () => {
     await mockRefs.getHandler!(req, res);
 
     expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
     expect(authorizeByInviteType).not.toHaveBeenCalled();
     expect(getInviteDetails).toHaveBeenCalled();
   });
@@ -108,7 +171,28 @@ describe('GET /api/[type]/[id] - authorization gate', () => {
     await mockRefs.getHandler!(req, res);
 
     expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
     expect(getInviteDetails).toHaveBeenCalled();
+  });
+
+  it('returns 410 with no invite details for a named recipient of an expired invite', async () => {
+    resolveRedeemableInvite.mockResolvedValue({
+      id: 'inv-1',
+      type: 'FabFile',
+      documentId: 'doc-1',
+      recipients: { pending: ['me@x.com'], accepted: [], refused: [] },
+      expiresAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+    authorizeByInviteType.mockRejectedValue(new Error('Unauthorized'));
+
+    const { req, res } = createMocks({ method: 'GET', query: { type: 'files', id: VALID_ID } });
+    (req as any).user = { id: 'u1', email: 'me@x.com' };
+    await mockRefs.getHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(410);
+    expect(res._getJSONData()).toEqual({ message: 'Invite has expired' });
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
+    expect(getInviteDetails).not.toHaveBeenCalled();
   });
 
   it('returns 404 when the invite does not exist', async () => {
@@ -119,6 +203,7 @@ describe('GET /api/[type]/[id] - authorization gate', () => {
     await mockRefs.getHandler!(req, res);
 
     expect(res._getStatusCode()).toBe(404);
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
   });
 
   // This route used to read the model directly, which left the whole bearer-token narrowing behind
@@ -133,6 +218,7 @@ describe('GET /api/[type]/[id] - authorization gate', () => {
 
     expect(resolveRedeemableInvite).toHaveBeenCalledWith(VALID_ID, expect.anything());
     expect(res._getStatusCode()).toBe(404);
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
   });
 
   // The guard that used to sit in front of the lookup rejected anything that was not ObjectId-shaped,
@@ -152,6 +238,7 @@ describe('GET /api/[type]/[id] - authorization gate', () => {
     await mockRefs.getHandler!(req, res);
 
     expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
     expect(resolveRedeemableInvite).toHaveBeenCalledWith(token, expect.anything());
   });
 
@@ -175,6 +262,7 @@ describe('GET /api/[type]/[id] - authorization gate', () => {
     await mockRefs.getHandler!(req, res);
 
     expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
     expect(res._getJSONData().recipients).toEqual({ pending: ['me@x.com'], accepted: [], refused: [] });
     expect(JSON.stringify(res._getJSONData())).not.toContain('other@x.com');
   });
@@ -198,6 +286,17 @@ describe('GET /api/[type]/[id] - authorization gate', () => {
     await mockRefs.getHandler!(req, res);
 
     expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
     expect(JSON.stringify(res._getJSONData())).not.toContain('other@x.com');
+  });
+
+  it('keeps the no-store header when the resolver throws', async () => {
+    resolveRedeemableInvite.mockRejectedValue(new Error('db down'));
+
+    const { req, res } = createMocks({ method: 'GET', query: { type: 'files', id: VALID_ID } });
+    (req as any).user = { id: 'u1', email: 'me@x.com' };
+    await expect(mockRefs.getHandler!(req, res)).rejects.toThrow('db down');
+
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
   });
 });

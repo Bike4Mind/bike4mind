@@ -1,12 +1,17 @@
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { auth as googleAuth } from '@googleapis/drive';
 import dayjs from 'dayjs';
 import type { Response } from 'express';
 import { User, orgGoogleDriveConnectionRepository } from '@bike4mind/database';
+import { lakeConnectionOwnerOf, type LakeConnectionOwner } from '@bike4mind/common';
 import { encryptToken, decryptToken } from '@server/security/tokenEncryption';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { createStateToken } from '@server/auth/jwtStateStore';
 import { issueStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
+import { DRIVE_RECONNECT_REQUIRED_MESSAGE } from '@server/integrations/google/drive/driveClient';
+import { isInvalidGrantError, isTerminalDriveGrantError } from '@server/integrations/google/drive/driveGrantErrors';
+
+export { isInvalidGrantError, isTerminalDriveGrantError };
 
 const SCOPES = ['https://www.googleapis.com/auth/drive.readonly'];
 
@@ -64,6 +69,8 @@ export async function revokeToken(accessToken: string) {
   await oauth2Client.revokeToken(accessToken);
 }
 
+const REVOKE_TIMEOUT_MS = 10_000;
+
 /** Outcome of a grant revocation attempt. `already_invalid` and `revoked` both mean nothing is live at Google. */
 export type RevokeOutcome = 'revoked' | 'already_invalid' | 'no_credential' | 'failed';
 
@@ -105,7 +112,12 @@ export async function revokeDriveGrant(
   }
 
   try {
-    await revokeToken(token);
+    // revokeToken takes no timeout and retries, so bound it: callers run inline in a Lambda request.
+    const timeout = AbortSignal.timeout(REVOKE_TIMEOUT_MS);
+    await Promise.race([
+      revokeToken(token),
+      new Promise<never>((_, reject) => timeout.addEventListener('abort', () => reject(timeout.reason))),
+    ]);
     console.log(`[googleDrive] revoked grant at Google (${context})`);
     return 'revoked';
   } catch (e) {
@@ -152,7 +164,7 @@ async function personalRefreshTokenOf(userId: string): Promise<string | null> {
 }
 
 /**
- * Tear down an org Drive connection: revoke its org-owned credential at Google (unless it is BORROWED
+ * Tear down a Drive connection: revoke its org-owned credential at Google (unless it is BORROWED
  * - see below), then hard-delete the row, which releases the global driveFolderId claim.
  *
  * This is the single teardown seam on purpose - the revoke belongs to *releasing a connection*, not to
@@ -172,9 +184,15 @@ async function personalRefreshTokenOf(userId: string): Promise<string | null> {
  * profile (which now genuinely revokes). A credential the user no longer holds has no such owner, so
  * this connection is its last live handle and it does get revoked.
  */
-export async function releaseDriveConnection(connectionId: string, organizationId: string): Promise<boolean> {
-  const connection = await orgGoogleDriveConnectionRepository.findByIdWithCredentials(connectionId, organizationId);
+export async function releaseDriveConnection(connectionId: string, owner: LakeConnectionOwner): Promise<boolean> {
+  const connection = await orgGoogleDriveConnectionRepository.findByIdWithCredentials(connectionId, owner);
   if (!connection) return false;
+
+  // A personal connection holds no credential of its own - it syncs on its owner's live grant, which
+  // only that owner's profile disconnect may revoke - so dropping the row is its whole teardown.
+  if (!connection.oauthRefreshToken) {
+    return orgGoogleDriveConnectionRepository.release(connectionId, owner);
+  }
 
   const connectionToken = decryptStoredToken(connection.oauthRefreshToken);
   const isBorrowed = !!connectionToken && connectionToken === (await personalRefreshTokenOf(connection.connectedBy));
@@ -186,13 +204,13 @@ export async function releaseDriveConnection(connectionId: string, organizationI
     await revokeDriveGrant(connection.oauthRefreshToken, `org connection ${connectionId}`);
   }
 
-  return orgGoogleDriveConnectionRepository.release(connectionId, organizationId);
+  return orgGoogleDriveConnectionRepository.release(connectionId, owner);
 }
 
 /**
  * Tear down whatever Drive connection feeds a lake, for a caller that only has the lake id - the
  * phase-2 purge sweep. Resolves the connection GLOBALLY and regardless of `enabled` (see
- * findByDataLakeIdAny) and takes the organizationId off the row itself, because the purge runs while
+ * findByDataLakeIdAny) and takes the owner off the row itself, because the purge runs while
  * the lake document is on its way out and must not depend on re-deriving the org from it.
  *
  * Without this the purge left the row behind, and because driveFolderId is globally unique with no
@@ -205,7 +223,7 @@ export async function releaseDriveConnection(connectionId: string, organizationI
 export async function releaseDriveConnectionForLake(dataLakeId: string): Promise<boolean> {
   const connection = await orgGoogleDriveConnectionRepository.findByDataLakeIdAny(dataLakeId);
   if (!connection) return false;
-  return releaseDriveConnection(connection.id, connection.organizationId);
+  return releaseDriveConnection(connection.id, lakeConnectionOwnerOf(connection));
 }
 
 /**
@@ -242,11 +260,18 @@ export async function enableDriveConnectionForLake(dataLakeId: string): Promise<
  * credential, refreshing + persisting it if expired. Throws if the user has no connection or the
  * refresh fails - the caller decides whether to surface a re-auth prompt.
  *
+ * `forceRefresh` skips a still-unexpired cached token. Pass it after Drive rejected that token
+ * (isDriveAuthError): a grant revoked at Google kills the token before its stored expiresAt,
+ * and only a refresh reaches the invalid_grant verdict that says "reconnect".
+ *
  * NOTE: `pages/api/google-drive/token.ts` has parallel inline logic tuned to return an authUrl on
  * failure for the browser attach flow; this helper is the throw-on-failure form for server jobs.
  * Keep the two in sync if the refresh/persist shape changes.
  */
-export async function getValidUserDriveAccessToken(userId: string): Promise<string> {
+export async function getValidUserDriveAccessToken(
+  userId: string,
+  { forceRefresh = false }: { forceRefresh?: boolean } = {}
+): Promise<string> {
   const user = await User.findById(userId, 'googleDrive');
   // Expected user states (not connected / needs reconnect) are BadRequestError, not bare Error:
   // errorHandler only maps status-bearing errors, so a bare Error here becomes a 500 logged at
@@ -263,7 +288,7 @@ export async function getValidUserDriveAccessToken(userId: string): Promise<stri
     accessToken = null;
   }
   const isExpired = !expiresAt || dayjs().isAfter(dayjs(expiresAt));
-  if (!isExpired && accessToken) return accessToken;
+  if (!forceRefresh && !isExpired && accessToken) return accessToken;
 
   // Same corrupt-credential shape as the cached access token: an undecryptable refresh token
   // (post key-rotation / partial restore) must be a reconnect (400), not a bare Error -> 500.
@@ -275,7 +300,17 @@ export async function getValidUserDriveAccessToken(userId: string): Promise<stri
   }
   if (!refreshToken) throw new BadRequestError('Google Drive refresh token unreadable - reconnect required');
 
-  const credentials = await refreshAccessToken(refreshToken);
+  const credentials = await refreshAccessToken(refreshToken).catch(async (e: unknown) => {
+    if (!isInvalidGrantError(e)) throw e;
+    // The cached access token died with the grant. Left in date, pages/api/google-drive/token.ts keeps
+    // handing it to the browser, whose grant check then never sends the user to consent. Best-effort:
+    // a write failure must not mask the reconnect verdict below.
+    await User.updateOne({ _id: userId }, { 'googleDrive.expiresAt': new Date(0) }).catch((writeError: unknown) =>
+      console.warn('[googleDrive] could not expire a revoked access token', writeError)
+    );
+    // A revoked/expired grant is a reconnect (400), not a server fault: left raw, drive-sync 500s on it.
+    throw new BadRequestError(DRIVE_RECONNECT_REQUIRED_MESSAGE);
+  });
   if (!credentials.access_token) throw new BadRequestError('Google Drive token refresh returned no access token');
 
   await User.updateOne(
@@ -295,37 +330,55 @@ export async function getValidUserDriveAccessToken(userId: string): Promise<stri
 }
 
 /**
- * Resolve a valid Drive access token for an ORG connection (the ingest job's credential).
+ * Resolve a valid Drive access token for a connection (the ingest job's credential).
  *
- * Prefers the connection's own org-owned refresh token; until the org-owned connect flow (issue D)
- * populates it, falls back to the connecting user's personal Drive credential (`connectedBy`). On a
- * credential failure it marks the connection `credential_error` so the failure is observable rather
- * than silent. Loads the encrypted token via the org-scoped credential accessor (the caller passes
- * the connection's organizationId), never a default read.
+ * An org connection uses its own org-owned refresh token. A connection without one - every personal
+ * connection, and an org row from before the org-owned copy existed - uses the connecting user's live
+ * `User.googleDrive` grant (`connectedBy`). A terminal grant failure either way marks the connection
+ * `credential_error` so it is observable rather than silent; a transient one is rethrown untouched so
+ * the ingest handler releases the claim and the next poll retries. Loads the encrypted token via
+ * the owner-scoped credential accessor (the caller passes the connection's owner), never a default read.
+ * `forceRefresh` reaches only the user-grant path: the org copy is refreshed on every call already.
  */
 export async function getValidConnectionDriveAccessToken(
   connectionId: string,
-  organizationId: string
+  owner: LakeConnectionOwner,
+  options: { forceRefresh?: boolean } = {}
 ): Promise<string> {
-  const connection = await orgGoogleDriveConnectionRepository.findByIdWithCredentials(connectionId, organizationId);
+  const connection = await orgGoogleDriveConnectionRepository.findByIdWithCredentials(connectionId, owner);
   if (!connection) throw new Error('Google Drive connection not found');
 
-  if (connection.oauthRefreshToken) {
-    try {
-      const refreshToken = decryptToken(connection.oauthRefreshToken);
+  try {
+    if (connection.oauthRefreshToken) {
+      const refreshToken = decryptConnectionRefreshToken(connection.oauthRefreshToken);
       if (refreshToken) {
-        const credentials = await refreshAccessToken(refreshToken);
+        // Same verdict as the user-grant path: raw invalid_grant would record Google's error string
+        // as lastError, and it is a reconnect (400) rather than a server fault.
+        const credentials = await refreshAccessToken(refreshToken).catch((e: unknown) => {
+          if (isInvalidGrantError(e)) throw new BadRequestError(DRIVE_RECONNECT_REQUIRED_MESSAGE);
+          throw e;
+        });
         if (credentials.access_token) return credentials.access_token;
       }
-    } catch (e) {
+    }
+    return await getValidUserDriveAccessToken(connection.connectedBy, options);
+  } catch (e) {
+    if (isTerminalDriveGrantError(e)) {
       await orgGoogleDriveConnectionRepository.updateHealth(connection.id, {
         status: 'credential_error',
         lastError: e instanceof Error ? e.message : String(e),
       });
-      throw e;
     }
+    throw e;
   }
+}
 
-  // Fallback: the connecting user's personal Drive token (today's connect flow stores there).
-  return getValidUserDriveAccessToken(connection.connectedBy);
+// An undecryptable org copy (post key-rotation / partial restore) cannot heal on retry, so it is a
+// reconnect - the same shape getValidUserDriveAccessToken gives the user's own unreadable token.
+function decryptConnectionRefreshToken(encrypted: string): string | null {
+  try {
+    return decryptToken(encrypted);
+  } catch {
+    throw new BadRequestError('Google Drive connection token unreadable - reconnect required');
+  }
 }

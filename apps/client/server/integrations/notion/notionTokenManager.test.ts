@@ -56,6 +56,7 @@ const mockFetch = vi.fn();
 global.fetch = mockFetch;
 
 import { NotionTokenManager, NotionReconnectRequiredError } from './notionTokenManager';
+import { encryptEnvVariables } from '@server/security/tokenEncryption';
 
 describe('NotionTokenManager', () => {
   beforeEach(() => {
@@ -289,6 +290,7 @@ describe('NotionTokenManager', () => {
       await NotionTokenManager.syncMcpServer('user-123', 'access-token', 'ws-123');
 
       expect(mockCreate).toHaveBeenCalledWith({
+        _id: expect.stringMatching(/^[a-f0-9]{24}$/),
         userId: 'user-123',
         name: 'notion',
         envVariables: expect.arrayContaining([
@@ -298,6 +300,11 @@ describe('NotionTokenManager', () => {
         enabled: true,
         tools: [],
       });
+      expect(encryptEnvVariables).toHaveBeenCalledWith(expect.any(Array), {
+        userId: 'user-123',
+        name: 'notion',
+        id: mockCreate.mock.calls[0][0]._id,
+      });
     });
 
     it('should update existing MCP server', async () => {
@@ -305,14 +312,18 @@ describe('NotionTokenManager', () => {
 
       await NotionTokenManager.syncMcpServer('user-123', 'access-token', 'ws-123');
 
-      expect(mockMcpUpdate).toHaveBeenCalledWith({
-        id: 'mcp-123',
-        envVariables: expect.arrayContaining([
-          expect.objectContaining({ key: 'NOTION_ACCESS_TOKEN' }),
-          expect.objectContaining({ key: 'NOTION_WORKSPACE_ID' }),
-        ]),
-        enabled: true,
-      });
+      expect(mockMcpUpdate).toHaveBeenCalledWith(
+        {
+          id: 'mcp-123',
+          envVariables: expect.arrayContaining([
+            expect.objectContaining({ key: 'NOTION_ACCESS_TOKEN' }),
+            expect.objectContaining({ key: 'NOTION_WORKSPACE_ID' }),
+          ]),
+          enabled: true,
+        },
+        // Reconnect clears the confirmed-empty tool marker before the tool fetch.
+        { unset: ['toolSchemasFetchedAt'] }
+      );
     });
 
     it('should fetch and store MCP tools', async () => {
@@ -330,6 +341,8 @@ describe('NotionTokenManager', () => {
             expect.objectContaining({ name: 'notion_create_page' }),
             expect.objectContaining({ name: 'notion_read_page' }),
           ]),
+          // The confirmed-empty marker is stamped on a successful fetch, empty or not.
+          toolSchemasFetchedAt: expect.any(Date),
         })
       );
     });

@@ -17,7 +17,7 @@ This guide covers common issues and solutions across all Bike4Mind integrations.
 |---|---|---|
 | "Unauthorized" or "Token expired" | OAuth token expired or revoked | [Authentication Issues](#authentication-issues) |
 | Agent says "not connected" | Integration not set up | [Connection Issues](#connection-issues) |
-| Webhook not delivering events | Signature, URL, or circuit breaker | [Webhook Issues](#webhook-issues) |
+| Webhook not delivering events | Signature, URL, or circuit breaker | [Webhook Issues](#webhooks) |
 | "Rate limit exceeded" / 429 error | Too many API calls | [Rate Limit Issues](#rate-limit-issues) |
 | "Permission denied" / 403 error | Insufficient access on external service | [Permission Issues](#permission-issues) |
 | Slack bot doesn't respond | Bot not in channel or scopes missing | [Slack Issues](#slack) |

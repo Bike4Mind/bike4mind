@@ -63,13 +63,13 @@ describe('/api/skills/[id]/share', () => {
   it('lets the owner replace the share list', async () => {
     const { req, res } = makeReqRes(OWNER, {
       users: [{ userId: 'new-user', permissions: ['read', 'update'] }],
-      isGlobalRead: true,
+      isGlobalRead: false,
     });
     await handler(req, res);
     expect(res._getStatusCode()).toBe(200);
     const patch = mockUpdate.mock.calls[0][0];
     expect(patch.users).toEqual([{ userId: 'new-user', permissions: ['read', 'update'] }]);
-    expect(patch.isGlobalRead).toBe(true);
+    expect(patch.isGlobalRead).toBe(false);
   });
 
   it('rejects a bare share-grantee — management is owner/admin/org-admin only', async () => {
@@ -121,9 +121,14 @@ describe('/api/skills/[id]/share', () => {
   });
 
   it('coerces isGlobalRead to true when isGlobalWrite is set (write implies read)', async () => {
-    // The API otherwise accepts the flags à la carte; enforce the invariant the
+    // The API otherwise accepts the flags a la carte; enforce the invariant the
     // UI couples so a direct caller can't persist global-write without global-read.
-    const { req, res } = makeReqRes(OWNER, { isGlobalWrite: true, isGlobalRead: false });
+    const { req, res } = createMocks({
+      method: 'PUT',
+      query: { id: 'skill-1' },
+      body: { isGlobalWrite: true, isGlobalRead: false },
+    });
+    (req as unknown as { user: unknown }).user = { id: 'admin-1', isAdmin: true };
     await handler(req, res);
     const patch = mockUpdate.mock.calls[0][0];
     expect(patch.isGlobalWrite).toBe(true);
@@ -134,5 +139,20 @@ describe('/api/skills/[id]/share', () => {
     const { req, res } = makeReqRes(OWNER, { users: [{ userId: 'x', permissions: [] }] });
     await expect(handler(req, res)).rejects.toBeTruthy();
     expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  describe('global flags are super-admin only (publishing goes through the Skill Market)', () => {
+    it.each([{ isGlobalRead: true }, { isGlobalWrite: true }])('refuses an owner setting %o', async body => {
+      const { req, res } = makeReqRes(OWNER, body);
+      await expect(handler(req, res)).rejects.toBeInstanceOf(ForbiddenError);
+      expect(mockUpdate).not.toHaveBeenCalled();
+    });
+
+    it('still lets an owner retract a legacy global skill', async () => {
+      mockFindById.mockResolvedValue(skillDoc({ isGlobalRead: true, isGlobalWrite: true }));
+      const { req, res } = makeReqRes(OWNER, { isGlobalRead: false, isGlobalWrite: false });
+      await handler(req, res);
+      expect(mockUpdate.mock.calls[0][0]).toMatchObject({ isGlobalRead: false, isGlobalWrite: false });
+    });
   });
 });

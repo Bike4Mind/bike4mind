@@ -1,9 +1,10 @@
 import { mcpServerRepository } from '@bike4mind/database';
 import { McpServerName } from '@bike4mind/common';
+import { GITHUB_REPOSITORY_FULL_NAME_PATTERN } from '@bike4mind/mcp/github/constants';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, InternalServerError, NotFoundError } from '@server/utils/errors';
-import { decryptToken } from '@server/security/tokenEncryption';
+import { BadRequestError, InternalServerError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { decryptEnvVariables } from '@server/security/tokenEncryption';
 import { z } from 'zod';
 
 // Security fix: this used to be a raw NextApiRequest with no auth - any
@@ -14,8 +15,9 @@ import { z } from 'zod';
 // Maximum number of repositories to fetch (safety limit)
 const MAX_REPOS = 500;
 
+// The GitHub MCP server refuses to start on a malformed name, so only "owner/repo" is accepted.
 const SaveSelectionInput = z.object({
-  selectedRepositories: z.array(z.string()),
+  selectedRepositories: z.array(z.string().regex(GITHUB_REPOSITORY_FULL_NAME_PATTERN, 'Expected "owner/repo"')),
 });
 
 /**
@@ -44,7 +46,9 @@ const getRepositoriesHandler = asyncHandler(async (req, res) => {
     throw new BadRequestError('GitHub not connected');
   }
 
-  const tokenVar = mcpServer.envVariables.find(env => env.key === 'GITHUB_ACCESS_TOKEN');
+  const tokenVar = decryptEnvVariables(mcpServer.envVariables, mcpServer).find(
+    env => env.key === 'GITHUB_ACCESS_TOKEN'
+  );
 
   if (!tokenVar || !tokenVar.value) {
     throw new BadRequestError('GitHub token not found');
@@ -56,7 +60,7 @@ const getRepositoriesHandler = asyncHandler(async (req, res) => {
   });
 
   const headers: Record<string, string> = {
-    Authorization: `Bearer ${decryptToken(tokenVar.value)}`,
+    Authorization: `Bearer ${tokenVar.value}`,
     Accept: 'application/vnd.github.v3+json',
   };
 

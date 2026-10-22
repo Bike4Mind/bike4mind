@@ -186,6 +186,21 @@ describe('ReActAgent pre-execution tool gate', () => {
     expect(agent.takeIterationConfidence()).toBeNull();
   });
 
+  it('takeIterationConfidence leaves out replayed calls that failed to run', async () => {
+    const calls: string[] = [];
+    const tool = createTool('image_generation', calls);
+    const agent = new ReActAgent(
+      buildContext([tool], createMockLlm([{ name: 'image_generation', arguments: '{}', id: 'toolu_1' }]))
+    );
+    const gatedResult = await agent.runIteration('draw a cat', { toolGate: () => true });
+
+    tool.toolFn.mockRejectedValueOnce(new Error('queue is not linked'));
+    await agent.executeGatedToolCall(gatedResult.gatedToolCalls![0]);
+
+    // Nothing left to score: a host gate must not pause on a call a human cannot fix.
+    expect(agent.takeIterationConfidence()).toBeNull();
+  });
+
   it('refuses to replay before running the tool when the backend cannot record the result', async () => {
     const calls: string[] = [];
     const tool = createTool('image_generation', calls);

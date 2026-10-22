@@ -1,7 +1,14 @@
 import { EventEmitter } from 'events';
-import { PermissionDeniedError, type IMessage, type MessageContent, type ICacheStrategy } from '@bike4mind/common';
+import {
+  PermissionDeniedError,
+  type IMessage,
+  type MessageContent,
+  type ICacheStrategy,
+  type TurnUsage,
+} from '@bike4mind/common';
 import type { ICompletionOptionTools, CompletionInfo } from '@bike4mind/llm-adapters';
 import { isContextLimitError } from './errors';
+import { isJsonObjectString, isPlainObject, isRepaired, repairTranscript } from './transcript';
 import type {
   AgentCheckpoint,
   AgentContext,
@@ -9,6 +16,7 @@ import type {
   AgentResult,
   AgentRunOptions,
   AgentStep,
+  FeedbackDrainPhase,
   GatedToolCall,
   IterationResult,
   RunIterationOptions,
@@ -63,25 +71,35 @@ export type CompletionFoldBaselines = {
  * field is `baseline + latest-cumulative`, NEVER `+=` - the prior `+=` re-added
  * the whole prompt-token count on every chunk and multiplied a single
  * iteration's input tokens by the chunk count. Every field guards on VALUE
- * presence (not object presence) so a trailing token-less frame - or a
- * cacheStats object with a zero sub-field - can't zero a running total; absent
- * fields return `current` unchanged.
+ * presence (not object presence) so a trailing token-less frame - or a zero
+ * cache field - can't zero a running total; absent fields return `current` unchanged.
+ *
+ * Cache tokens come only from the top-level cacheReadInputTokens/cacheCreationInputTokens, the
+ * billing convention (disjoint from inputTokens) that settlement and turnUsage use. `cacheStats`
+ * is never folded: every adapter whose inputTokens excludes cache (Anthropic, Bedrock, OpenAI,
+ * Kimi, DeepSeek) also sets the top-level fields on the same frame, while the ones that set
+ * cacheStats alone (Gemini and xAI, and after their per-request split only for models without a
+ * published cache-read rate) keep the cached tokens INSIDE inputTokens, so adding cacheStats
+ * there would count them twice. Ollama sets neither.
  *
  * Extracted so the two identical fold sites (`run()` and `runIteration()`) -
  * which carried the original `+=` bug in both places - share one implementation.
  */
 export function foldCompletionInfo(
-  info: Pick<CompletionInfo, 'inputTokens' | 'outputTokens' | 'creditsUsed' | 'cacheStats'>,
+  info: Pick<
+    CompletionInfo,
+    'inputTokens' | 'outputTokens' | 'creditsUsed' | 'cacheReadInputTokens' | 'cacheCreationInputTokens'
+  >,
   baselines: CompletionFoldBaselines,
   current: CompletionFoldBaselines
 ): CompletionFoldBaselines & { totalTokens: number } {
   const inputTokens = info.inputTokens ? baselines.inputTokens + info.inputTokens : current.inputTokens;
   const outputTokens = info.outputTokens ? baselines.outputTokens + info.outputTokens : current.outputTokens;
-  const cacheReadTokens = info.cacheStats?.cacheReadTokens
-    ? baselines.cacheReadTokens + info.cacheStats.cacheReadTokens
+  const cacheReadTokens = info.cacheReadInputTokens
+    ? baselines.cacheReadTokens + info.cacheReadInputTokens
     : current.cacheReadTokens;
-  const cacheWriteTokens = info.cacheStats?.cacheWriteTokens
-    ? baselines.cacheWriteTokens + info.cacheStats.cacheWriteTokens
+  const cacheWriteTokens = info.cacheCreationInputTokens
+    ? baselines.cacheWriteTokens + info.cacheCreationInputTokens
     : current.cacheWriteTokens;
   const credits = info.creditsUsed ? baselines.credits + info.creditsUsed : current.credits;
   return {
@@ -130,6 +148,33 @@ function appendWorkflowReminder(messages: IMessage[], provider?: () => string | 
   }
 }
 
+const TOOL_RESULTS_NUDGE =
+  'Based on the tool results above, please provide a complete answer. If I asked for multiple things, make sure to address all of them.';
+
+/**
+ * The end-of-iteration nudge, with any drained host feedback folded in. Folding
+ * (rather than pushing a second plain-string user message) keeps exactly one
+ * iteration boundary for findIterationBoundary's trimming heuristic.
+ */
+function buildToolResultsNudge(feedback: string | null): string {
+  return feedback ? `${TOOL_RESULTS_NUDGE}\n\n${feedback}` : TOOL_RESULTS_NUDGE;
+}
+
+/** Calls the host's feedback drain. A failing drain is logged and treated as empty - it must never fail the run. */
+async function drainHostFeedback(
+  drain: AgentRunOptions['drainFeedback'],
+  phase: FeedbackDrainPhase,
+  logger: AgentContext['logger']
+): Promise<string | null> {
+  if (!drain) return null;
+  try {
+    return (await drain(phase))?.trim() || null;
+  } catch (error) {
+    logger.warn(`[ReActAgent] drainFeedback(${phase}) failed; continuing without feedback:`, error);
+    return null;
+  }
+}
+
 /**
  * Build the per-iteration prompt-cache strategy. History caching anchors on the
  * last message so the cached prefix grows each turn (standard Anthropic
@@ -175,6 +220,11 @@ function observationForResult(result: ToolResult | undefined): string {
   return `Error: ${message}`;
 }
 
+/** True when `observationForResult` reported a real tool failure (not a cancellation). */
+function isFailedResult(result: ToolResult | undefined): boolean {
+  return result?.status === 'rejected' && observationForResult(result) !== CANCELLED_TOOL_RESULT;
+}
+
 /**
  * True when an error is an abort/cancellation (user stop or execution timeout)
  * rather than a real failure. Aborts are benign and must NOT be logged at error
@@ -212,6 +262,12 @@ export class ReActAgent extends EventEmitter {
   private totalCredits = 0;
   private totalCacheReadTokens = 0;
   private totalCacheWriteTokens = 0;
+  /**
+   * One entry per provider request (see CompletionInfo.turnUsage), so cost callers can price
+   * each request on its own long-context tier. Every iteration calls the model with
+   * executeTools: false, i.e. exactly one request.
+   */
+  private turnUsage: TurnUsage[] = [];
   private toolCallCount = 0;
   /**
    * Provider stop reason of the last LLM completion, preserve-last-non-null.
@@ -229,6 +285,10 @@ export class ReActAgent extends EventEmitter {
   }> = [];
   /** Confidence scores collected during the current iteration (reset each iteration) */
   private iterationConfidences: number[] = [];
+  /** Parallel to `iterationConfidences`: whether that score came from a failed tool call */
+  private iterationToolFailed: boolean[] = [];
+  /** Ids of calls `executeToolWithQueueFallback` saw fail; drained by `takeToolFailure`. */
+  private failedToolCallIds = new Set<string>();
 
   // --- State for runIteration() / checkpoint support ---
   /** Conversation history, promoted from run()-local to instance for checkpoint/resume */
@@ -370,9 +430,10 @@ export class ReActAgent extends EventEmitter {
     this.totalCredits = 0;
     this.totalCacheReadTokens = 0;
     this.totalCacheWriteTokens = 0;
+    this.turnUsage = [];
     this.toolCallCount = 0;
     this.confidenceLog = [];
-    this.iterationConfidences = [];
+    this.resetIterationConfidences();
     this.lastStopReason = undefined;
     this.repeatedCallGuard.reset();
     this.isReadOnlyToolFn = options.isReadOnlyTool ?? defaultIsReadOnlyTool;
@@ -409,6 +470,9 @@ export class ReActAgent extends EventEmitter {
         },
       ];
       this.messages = messages; // Keep instance state in sync for toCheckpoint()
+      // Repaired before the protected-prefix length is taken: a repair inside previousMessages
+      // changes its length, and a stale count would let trimming cut the current query.
+      this.repairTranscriptBeforeRequest(messages);
       this.initialMessageCount = messages.length;
 
       messages.forEach((msg, i) => {
@@ -435,6 +499,7 @@ export class ReActAgent extends EventEmitter {
               totalCredits: this.totalCredits > 0 ? this.totalCredits : undefined,
               totalCacheReadTokens: this.totalCacheReadTokens > 0 ? this.totalCacheReadTokens : undefined,
               totalCacheWriteTokens: this.totalCacheWriteTokens > 0 ? this.totalCacheWriteTokens : undefined,
+              turnUsage: this.turnUsage.length > 0 ? [...this.turnUsage] : undefined,
               iterations,
               toolCalls: this.toolCallCount,
               reachedMaxIterations: false,
@@ -476,6 +541,7 @@ export class ReActAgent extends EventEmitter {
         }
 
         appendWorkflowReminder(messages, options.workflowReminder);
+        this.repairTranscriptBeforeRequest(messages);
 
         // Build cache strategy for prompt caching (system prompt + tools are static
         // across iterations; conversation history uses a moving breakpoint - see
@@ -498,6 +564,8 @@ export class ReActAgent extends EventEmitter {
         const preCallTotalCredits = this.totalCredits;
         const preCallCacheReadTokens = this.totalCacheReadTokens;
         const preCallCacheWriteTokens = this.totalCacheWriteTokens;
+        const preCallTurnCount = this.turnUsage.length;
+        let reportedTurns: TurnUsage[] | undefined;
         const preCallStepsLength = this.steps.length;
 
         try {
@@ -506,6 +574,7 @@ export class ReActAgent extends EventEmitter {
             messages,
             {
               stream: true,
+              streamText: options.streamText ?? this.hasTextDeltaListener(),
               tools: this.context.tools,
               maxTokens,
               temperature,
@@ -553,6 +622,13 @@ export class ReActAgent extends EventEmitter {
                 this.totalCacheReadTokens = folded.cacheReadTokens;
                 this.totalCacheWriteTokens = folded.cacheWriteTokens;
                 this.totalCredits = folded.credits;
+                if (completionInfo.turnUsage?.length) reportedTurns = completionInfo.turnUsage;
+                this.setIterationTurns(preCallTurnCount, reportedTurns, {
+                  inputTokens: preCallTotalInputTokens,
+                  outputTokens: preCallTotalOutputTokens,
+                  cacheReadTokens: preCallCacheReadTokens,
+                  cacheWriteTokens: preCallCacheWriteTokens,
+                });
 
                 // Preserve the last non-null stop reason (see lastStopReason).
                 // Early streaming frames carry none; the final frame does.
@@ -632,7 +708,11 @@ export class ReActAgent extends EventEmitter {
                       const observation = observationForResult(result);
 
                       this.appendToolMessages(messages, toolUse, observation, thinkingBlocks);
-                      this.emitObservationStep(toolUse.name, observation);
+                      this.emitObservationStep(
+                        toolUse.name,
+                        observation,
+                        isFailedResult(result) || this.takeToolFailure(toolUse)
+                      );
                     }
                   } else {
                     // SEQUENTIAL EXECUTION PATH
@@ -655,7 +735,7 @@ export class ReActAgent extends EventEmitter {
                         this.appendToolMessages(messages, toolUse, observation, thinkingBlocks);
                       }
 
-                      this.emitObservationStep(toolUse.name, observation);
+                      this.emitObservationStep(toolUse.name, observation, this.takeToolFailure(toolUse));
                     }
                   }
                 }
@@ -665,7 +745,7 @@ export class ReActAgent extends EventEmitter {
         } catch (completionError) {
           if (!reactiveCompactionAttempted && options.onContextLimit && isContextLimitError(completionError)) {
             reactiveCompactionAttempted = true;
-            const compacted = await options.onContextLimit(messages);
+            const compacted = await options.onContextLimit(messages, this.initialMessageCount);
 
             if (compacted && compacted.length > 0 && compacted.length < messages.length) {
               this.context.logger.info(
@@ -679,6 +759,7 @@ export class ReActAgent extends EventEmitter {
               this.totalCredits = preCallTotalCredits;
               this.totalCacheReadTokens = preCallCacheReadTokens;
               this.totalCacheWriteTokens = preCallCacheWriteTokens;
+              this.turnUsage.length = preCallTurnCount;
               this.steps.length = preCallStepsLength;
 
               messages.length = 0;
@@ -701,7 +782,13 @@ export class ReActAgent extends EventEmitter {
         // was visible mid-stream. When subagent LLM calls use `stream: true`,
         // an in-callback guard would fire on the model's preamble before
         // tool_use blocks assembled, terminating tool-using runs at iteration 1.
-        if (!hadToolCalls && currentText.trim()) {
+        const finalFeedback =
+          !hadToolCalls && currentText.trim() && iterations < maxIterations
+            ? await drainHostFeedback(options.drainFeedback, 'final', this.context.logger)
+            : null;
+        if (finalFeedback) {
+          this.reopenAnswerWithFeedback(messages, currentText.trim(), finalFeedback);
+        } else if (!hadToolCalls && currentText.trim()) {
           finalAnswer = currentText.trim();
 
           // preCall* is the pre-LLM-call snapshot; nothing mutates the token
@@ -761,15 +848,13 @@ export class ReActAgent extends EventEmitter {
         }
 
         // Reset iteration confidences for next iteration
-        this.iterationConfidences = [];
+        this.resetIterationConfidences();
 
         // After tools complete, nudge the agent to provide the final answer
         // This prevents the agent from forgetting the user's specific requirements (e.g., "list in detail")
         if (!iterationComplete && hadToolCalls) {
-          messages.push({
-            role: 'user',
-            content: `Based on the tool results above, please provide a complete answer. If I asked for multiple things, make sure to address all of them.`,
-          });
+          const feedback = await drainHostFeedback(options.drainFeedback, 'turn', this.context.logger);
+          messages.push({ role: 'user', content: buildToolResultsNudge(feedback) });
         }
 
         // Cost backstop: if cumulative tokens exceed the configured ceiling, exit cleanly.
@@ -837,6 +922,7 @@ export class ReActAgent extends EventEmitter {
           totalCredits: this.totalCredits > 0 ? this.totalCredits : undefined,
           totalCacheReadTokens: this.totalCacheReadTokens > 0 ? this.totalCacheReadTokens : undefined,
           totalCacheWriteTokens: this.totalCacheWriteTokens > 0 ? this.totalCacheWriteTokens : undefined,
+          turnUsage: this.turnUsage.length > 0 ? [...this.turnUsage] : undefined,
           iterations,
           toolCalls: this.toolCallCount,
           reachedMaxIterations,
@@ -865,6 +951,9 @@ export class ReActAgent extends EventEmitter {
             totalInputTokens: this.totalInputTokens,
             totalOutputTokens: this.totalOutputTokens,
             totalCredits: this.totalCredits > 0 ? this.totalCredits : undefined,
+            totalCacheReadTokens: this.totalCacheReadTokens > 0 ? this.totalCacheReadTokens : undefined,
+            totalCacheWriteTokens: this.totalCacheWriteTokens > 0 ? this.totalCacheWriteTokens : undefined,
+            turnUsage: this.turnUsage.length > 0 ? [...this.turnUsage] : undefined,
             iterations,
             toolCalls: this.toolCallCount,
             reachedMaxIterations: false,
@@ -942,6 +1031,25 @@ BEHAVIOR GUIDELINES:
 - Only ask for clarification after exhausting reasonable attempts
 
 Remember: You are an autonomous AGENT. Act independently and solve problems proactively.`;
+  }
+
+  /** Live text is requested only for a listening view; without one, the backend keeps full retry. */
+  private hasTextDeltaListener(): boolean {
+    return this.listenerCount('text_delta') > 0;
+  }
+
+  /**
+   * Demote a would-be final answer to a thought and hand the model drained host
+   * feedback (see AgentRunOptions.drainFeedback) as the next user message, so
+   * the loop runs another iteration instead of ending. The user message is a
+   * plain string and so is a normal iteration boundary for trimming.
+   */
+  private reopenAnswerWithFeedback(messages: IMessage[], answer: string, feedback: string): AgentStep {
+    const thoughtStep: AgentStep = { type: 'thought', content: answer, metadata: { timestamp: Date.now() } };
+    this.steps.push(thoughtStep);
+    this.emit('thought', thoughtStep);
+    messages.push({ role: 'assistant', content: answer }, { role: 'user', content: feedback });
+    return thoughtStep;
   }
 
   /**
@@ -1044,6 +1152,41 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
     return this.context.llm.getLatestToolCallId(this.messages, toolName);
   }
 
+  /** The totals accrued since `base`, as one turn; empty when nothing accrued. */
+  private totalsAsTurn(base: {
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+    cacheWriteTokens: number;
+  }): TurnUsage[] {
+    const inputTokens = this.totalInputTokens - base.inputTokens;
+    const outputTokens = this.totalOutputTokens - base.outputTokens;
+    const cacheRead = this.totalCacheReadTokens - base.cacheReadTokens;
+    const cacheWrite = this.totalCacheWriteTokens - base.cacheWriteTokens;
+    if (inputTokens + outputTokens + cacheRead + cacheWrite <= 0) return [];
+    return [
+      {
+        inputTokens,
+        outputTokens,
+        ...(cacheRead > 0 ? { cacheReadInputTokens: cacheRead } : {}),
+        ...(cacheWrite > 0 ? { cacheCreationInputTokens: cacheWrite } : {}),
+      },
+    ];
+  }
+
+  /**
+   * Replace the current iteration's entries (from `start`) with the adapter's per-request
+   * breakdown, or with the iteration's totals as one turn when the adapter reports none.
+   */
+  private setIterationTurns(
+    start: number,
+    reported: TurnUsage[] | undefined,
+    base: Parameters<ReActAgent['totalsAsTurn']>[0]
+  ): void {
+    this.turnUsage.length = start;
+    this.turnUsage.push(...(reported?.length ? reported : this.totalsAsTurn(base)));
+  }
+
   /**
    * Serialize the agent's current execution state for persistence.
    *
@@ -1061,6 +1204,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
       totalOutputTokens: this.totalOutputTokens,
       totalCacheReadTokens: this.totalCacheReadTokens,
       totalCacheWriteTokens: this.totalCacheWriteTokens,
+      turnUsage: [...this.turnUsage],
       totalCredits: this.totalCredits,
       toolCallCount: this.toolCallCount,
       confidenceLog: structuredClone(this.confidenceLog),
@@ -1088,10 +1232,16 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
     this.totalOutputTokens = checkpoint.totalOutputTokens;
     this.totalCacheReadTokens = checkpoint.totalCacheReadTokens;
     this.totalCacheWriteTokens = checkpoint.totalCacheWriteTokens;
+    // A checkpoint saved before turns were tracked carries only totals: keep them as one turn so
+    // sum(turnUsage) still matches the totals.
+    this.turnUsage = checkpoint.turnUsage
+      ? [...checkpoint.turnUsage]
+      : this.totalsAsTurn({ inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 });
     this.totalCredits = checkpoint.totalCredits;
     this.toolCallCount = checkpoint.toolCallCount;
     this.confidenceLog = structuredClone(checkpoint.confidenceLog);
     this.iterationConfidences = [...checkpoint.iterationConfidences];
+    this.iterationToolFailed = checkpoint.iterationConfidences.map(() => false);
     // Fall back to messages.length for legacy checkpoints written before this
     // field existed; safe because at the point fromCheckpoint runs, no iteration
     // messages have been appended yet for the resumed run.
@@ -1157,9 +1307,11 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
       this.totalCredits = 0;
       this.totalCacheReadTokens = 0;
       this.totalCacheWriteTokens = 0;
+      this.turnUsage = [];
       this.toolCallCount = 0;
       this.confidenceLog = [];
-      this.iterationConfidences = [];
+      this.resetIterationConfidences();
+      this.failedToolCallIds.clear();
       this.lastStopReason = undefined;
       this.iterations = 0;
       this.repeatedCallGuard.reset();
@@ -1176,6 +1328,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
         { role: 'user', content: query },
       ] as IMessage[];
 
+      this.repairTranscriptBeforeRequest(this.messages);
       this.initialMessageCount = this.messages.length;
       this.iterationInitialized = true;
     }
@@ -1220,7 +1373,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
     const preIterationCheckpoint = this.toCheckpoint();
 
     this.iterations++;
-    this.iterationConfidences = [];
+    this.resetIterationConfidences();
     const iterationSteps: AgentStep[] = [];
 
     try {
@@ -1243,6 +1396,12 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
       }
 
       appendWorkflowReminder(this.messages, options.workflowReminder);
+      // A resumed checkpoint can need repair inside its protected prefix; keep the prefix ending at the
+      // same message so trimming never drops the query.
+      const lastProtected = this.messages[this.initialMessageCount - 1];
+      this.repairTranscriptBeforeRequest(this.messages);
+      const lastProtectedIndex = lastProtected ? this.messages.indexOf(lastProtected) : -1;
+      if (lastProtectedIndex >= 0) this.initialMessageCount = lastProtectedIndex + 1;
 
       let iterationComplete = false;
       let currentText = '';
@@ -1257,6 +1416,8 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
       const iterStartCacheReadTokens = this.totalCacheReadTokens;
       const iterStartCacheWriteTokens = this.totalCacheWriteTokens;
       const iterStartCredits = this.totalCredits;
+      const iterStartTurnCount = this.turnUsage.length;
+      let reportedTurns: TurnUsage[] | undefined;
 
       const cacheStrategy = buildCacheStrategy(this.messages, options.enableCaching, this.context.tools.length > 0);
 
@@ -1268,6 +1429,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
         this.messages,
         {
           stream: true,
+          streamText: options.streamText ?? this.hasTextDeltaListener(),
           tools: this.context.tools,
           maxTokens,
           temperature,
@@ -1315,6 +1477,13 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
             this.totalCacheReadTokens = folded.cacheReadTokens;
             this.totalCacheWriteTokens = folded.cacheWriteTokens;
             this.totalCredits = folded.credits;
+            if (completionInfo.turnUsage?.length) reportedTurns = completionInfo.turnUsage;
+            this.setIterationTurns(iterStartTurnCount, reportedTurns, {
+              inputTokens: iterStartInputTokens,
+              outputTokens: iterStartOutputTokens,
+              cacheReadTokens: iterStartCacheReadTokens,
+              cacheWriteTokens: iterStartCacheWriteTokens,
+            });
 
             // Preserve the last non-null stop reason (see lastStopReason).
             // A prior tool_use turn is overwritten by the final completion.
@@ -1364,9 +1533,9 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
                   options.parallelExecution &&
                   shouldUseParallelExecution(unprocessedTools, options.isReadOnlyTool ?? defaultIsReadOnlyTool)
                 ) {
-                  // Keyed by the provider `tool_use` id (not `getToolId`, which is
-                  // name+stringified-args and collides when a batch calls the same
-                  // tool twice with identical arguments). `withholdIfGated` assigns
+                  // Keyed by the provider `tool_use` id (not `getToolId`, whose
+                  // name+args fallback for id-less calls collides when a batch calls
+                  // the same tool twice with identical arguments). `withholdIfGated` assigns
                   // `toolUse.id` when the provider omitted one, so every entry here
                   // is guaranteed to have it set by the time this map is read.
                   const withheld = new Map<string, GatedToolCall>();
@@ -1395,7 +1564,11 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
                     const result = results.get(getToolId(toolUse));
                     const observation = observationForResult(result);
                     this.appendToolMessages(this.messages, toolUse, observation, thinkingBlocks);
-                    const obsStep = this.buildObservationStep(toolUse.name, observation);
+                    const obsStep = this.buildObservationStep(
+                      toolUse.name,
+                      observation,
+                      isFailedResult(result) || this.takeToolFailure(toolUse)
+                    );
                     iterationSteps.push(obsStep);
                   }
                 } else {
@@ -1421,7 +1594,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
                       observation = await this.executeToolWithQueueFallback(toolUse);
                       this.appendToolMessages(this.messages, toolUse, observation, thinkingBlocks);
                     }
-                    const obsStep = this.buildObservationStep(toolUse.name, observation);
+                    const obsStep = this.buildObservationStep(toolUse.name, observation, this.takeToolFailure(toolUse));
                     iterationSteps.push(obsStep);
                   }
                 }
@@ -1433,7 +1606,13 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
 
       // Final-answer decision deferred from the streaming callback. See the
       // matching comment in `run()` for full rationale.
-      if (!hadToolCalls && currentText.trim()) {
+      const finalFeedback =
+        !hadToolCalls && currentText.trim() && this.iterations < maxIterations
+          ? await drainHostFeedback(options.drainFeedback, 'final', this.context.logger)
+          : null;
+      if (finalFeedback) {
+        iterationSteps.push(this.reopenAnswerWithFeedback(this.messages, currentText.trim(), finalFeedback));
+      } else if (!hadToolCalls && currentText.trim()) {
         finalAnswer = currentText.trim();
 
         const iterInputTokens = this.totalInputTokens - iterStartInputTokens;
@@ -1491,15 +1670,12 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
       }
 
       // Reset iteration confidences for next iteration
-      this.iterationConfidences = [];
+      this.resetIterationConfidences();
 
       // Add nudge for next iteration if tools were called but no final answer
       if (!iterationComplete && hadToolCalls) {
-        this.messages.push({
-          role: 'user',
-          content:
-            'Based on the tool results above, please provide a complete answer. If I asked for multiple things, make sure to address all of them.',
-        } as IMessage);
+        const feedback = await drainHostFeedback(options.drainFeedback, 'turn', this.context.logger);
+        this.messages.push({ role: 'user', content: buildToolResultsNudge(feedback) });
       }
 
       // Cost backstop: if cumulative tokens exceeded the ceiling, terminate this run.
@@ -1670,7 +1846,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
    * Build an observation step, score confidence, push to steps, and emit.
    * Returns the step for callers that need to collect iteration steps.
    */
-  private buildObservationStep(toolName: string, observation: string): AgentStep {
+  private buildObservationStep(toolName: string, observation: string, toolFailed = false): AgentStep {
     const confidence = this.scoreToolResult(toolName, observation);
     const confidenceSource: 'deterministic' | 'default' = observation.startsWith('Error:')
       ? 'deterministic'
@@ -1678,6 +1854,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
 
     this.confidenceLog.push({ toolName, confidence, source: confidenceSource, timestamp: Date.now() });
     this.iterationConfidences.push(confidence);
+    this.iterationToolFailed.push(toolFailed);
 
     const observationStep: AgentStep = {
       type: 'observation',
@@ -1688,6 +1865,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
         iteration: this.iterations - 1,
         confidence,
         confidenceSource,
+        ...(toolFailed ? { toolFailed: true } : {}),
       },
     };
     this.steps.push(observationStep);
@@ -1698,8 +1876,8 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
   /**
    * Create and emit an observation step, scoring confidence for the result
    */
-  private emitObservationStep(toolName: string, observation: string): void {
-    this.buildObservationStep(toolName, observation);
+  private emitObservationStep(toolName: string, observation: string, toolFailed = false): void {
+    this.buildObservationStep(toolName, observation, toolFailed);
   }
 
   /**
@@ -1795,13 +1973,14 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
         `ReActAgent.executeGatedToolCall: backend (${this.context.llm.currentModel}) cannot record a replayed tool result, so an approval-gated tool cannot be run on it`
       );
     }
-    const observation = await this.executeToolWithQueueFallback({
+    const toolUse: ToolUseInfo = {
       id: call.id,
       name: call.name,
       arguments: typeof call.input === 'string' || call.input === undefined ? call.input : JSON.stringify(call.input),
-    });
+    };
+    const observation = await this.executeToolWithQueueFallback(toolUse);
     this.replaceLastToolResultObservation(call.id, observation);
-    this.buildObservationStep(call.name, observation);
+    this.buildObservationStep(call.name, observation, this.takeToolFailure(toolUse));
     return observation;
   }
 
@@ -1817,15 +1996,29 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
    * `iterationConfidences` at its own start regardless, discarding the score
    * before anything reads it. The host calls this right after replaying an
    * approved batch (see `resumeApprovedPause` / `gateReplayConfidence`) so a
-   * replayed tool that failed still gets the same low-confidence pause a normal
-   * iteration would have gotten - resetting `iterationConfidences` here is a
-   * no-op for the next `runIteration()`, which resets it again anyway.
+   * replayed tool gets the same low-confidence pause a normal iteration would
+   * have gotten - resetting `iterationConfidences` here is a no-op for the next
+   * `runIteration()`, which resets it again anyway.
+   *
+   * Scores from calls that failed to run (`toolFailed`) are left out, matching the
+   * web executor's iteration gate (`evaluateConfidenceGate`); `null` when every
+   * scored call failed.
    */
   takeIterationConfidence(): number | null {
-    if (this.iterationConfidences.length === 0) return null;
-    const avg = this.iterationConfidences.reduce((a, b) => a + b, 0) / this.iterationConfidences.length;
+    const scores = this.iterationConfidences.filter((_, i) => !this.iterationToolFailed[i]);
+    this.resetIterationConfidences();
+    if (scores.length === 0) return null;
+    return scores.reduce((a, b) => a + b, 0) / scores.length;
+  }
+
+  private resetIterationConfidences(): void {
     this.iterationConfidences = [];
-    return avg;
+    this.iterationToolFailed = [];
+  }
+
+  /** True (once) when `executeToolWithQueueFallback` recorded this call as failed. */
+  private takeToolFailure(toolUse: ToolUseInfo): boolean {
+    return this.failedToolCallIds.delete(getToolId(toolUse));
   }
 
   /**
@@ -1872,6 +2065,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
       // low-confidence error (they key off `startsWith('Error:')`), but add an explicit
       // instruction to stop retrying and PROCEED - without forcing the whole turn to end, in
       // case the missing tool was peripheral and the plan has other valid steps left.
+      this.failedToolCallIds.add(getToolId(toolUse));
       return (
         `Error: Tool "${toolUse.name}" is not available in this context and cannot be called. ` +
         `Do NOT attempt to call it again. Proceed without it — call other available tools if your ` +
@@ -1900,6 +2094,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
       const message = error instanceof Error ? error.message : String(error);
       observation = `Error: ${message}`;
       succeeded = false;
+      this.failedToolCallIds.add(getToolId(toolUse));
     }
 
     // Track this call's result. A changed result resets the counter (progress);
@@ -1927,16 +2122,56 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
     observation: string,
     thinkingBlocks: unknown[]
   ): void {
-    const params = this.parseToolArguments(toolUse.arguments);
     const toolId = toolUse.id || `${toolUse.name}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    const parameters = typeof toolUse.arguments === 'string' ? toolUse.arguments : JSON.stringify(params);
 
     this.context.llm.pushToolMessages(
       messages as Parameters<typeof this.context.llm.pushToolMessages>[0],
-      { id: toolId, name: toolUse.name, parameters },
+      { id: toolId, name: toolUse.name, parameters: this.serializeToolArguments(toolUse) },
       observation,
       thinkingBlocks
     );
+  }
+
+  /**
+   * The call's arguments as a JSON object string, raw bytes kept when they already are one. Malformed
+   * arguments are recorded as `{}`: the tool has already run (and reported the parse error as its
+   * observation), and throwing here would abort the turn with earlier calls left unanswered.
+   */
+  private serializeToolArguments(toolUse: ToolUseInfo): string {
+    const args = toolUse.arguments;
+    if (typeof args === 'string' && isJsonObjectString(args)) return args;
+    try {
+      const parsed = this.parseToolArguments(args);
+      if (isPlainObject(parsed)) return JSON.stringify(parsed);
+    } catch {
+      // Unrecoverable JSON; recorded as {} below.
+    }
+    this.context.logger.warn(`[ReActAgent] Recording malformed arguments for tool "${toolUse.name}" as {}`);
+    return '{}';
+  }
+
+  /**
+   * The transcript owner's check before every model request: see `repairTranscript`. Missing results
+   * are synthesized through the backend's own `pushToolMessages`, so their shape matches what that
+   * backend appends for a real result.
+   */
+  private repairTranscriptBeforeRequest(messages: IMessage[]): void {
+    const report = repairTranscript(messages, (call, observation) => {
+      const pair: IMessage[] = [];
+      try {
+        this.context.llm.pushToolMessages(pair, { id: call.id, name: call.name, parameters: '{}' }, observation);
+      } catch (error) {
+        // Some backends (Bedrock models without tool support) throw here; the call is then sent as is.
+        this.context.logger.debug(`[ReActAgent] Cannot synthesize a tool result: ${String(error)}`);
+        return [];
+      }
+      // slice(1) relies on the backend pushing exactly one assistant message first. Some (Bedrock-Anthropic)
+      // also consume pending reasoning state here, harmless since repair only runs before a request.
+      return pair.slice(1);
+    });
+    if (isRepaired(report)) {
+      this.context.logger.warn(`[ReActAgent] Repaired transcript before model request: ${JSON.stringify(report)}`);
+    }
   }
 }
 

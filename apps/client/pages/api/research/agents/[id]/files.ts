@@ -3,7 +3,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { researchAgentRepository } from '@bike4mind/database';
 import { researchDataRepository } from '@bike4mind/database';
-import { NotFoundError } from '@server/utils/errors';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { FabFile } from '@bike4mind/database';
 
 const handler = baseApi({ auth: true }).get(

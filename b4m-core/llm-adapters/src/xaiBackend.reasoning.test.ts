@@ -154,3 +154,26 @@ describe('XAIBackend streaming reasoning', () => {
     expect(joined).toBe('<think>thinking</think>The answer is 42');
   });
 });
+
+describe('XAIBackend streaming usage', () => {
+  it('reads output as a running total when usage repeats on several chunks, instead of summing the repeats', async () => {
+    // Usage counts are cumulative wherever a provider repeats them across chunks; prompt_tokens was
+    // already read as a running max, so output must be too or it is billed once per repeat.
+    const { backend } = streamingBackend([
+      [
+        { choices: [{ index: 0, delta: { content: 'the ' } }], usage: { prompt_tokens: 10, completion_tokens: 1 } },
+        {
+          choices: [{ index: 0, delta: { content: 'answer' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 10, completion_tokens: 2 },
+        },
+        { choices: [], usage: { prompt_tokens: 10, completion_tokens: 2 } },
+      ],
+    ]);
+
+    const frames = await runStream(backend, ChatModels.GROK_4_5);
+    const last = frames.filter(f => f.info?.outputTokens).at(-1)!.info;
+
+    expect(last.inputTokens).toBe(10);
+    expect(last.outputTokens).toBe(2);
+  });
+});

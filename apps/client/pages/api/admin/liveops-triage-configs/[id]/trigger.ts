@@ -15,11 +15,14 @@ import {
 } from '@bike4mind/database';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, NotFoundError, ForbiddenError } from '@server/utils/errors';
+import { BadRequestError, NotFoundError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
-import { isValidObjectId } from '@server/utils/objectId';
-import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
-import type { LiveOpsTriageJobMessage } from '@server/cron/liveopsTriageDispatcher';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
+import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
+import {
+  LiveOpsTriageJobMessageSchema,
+  type LiveOpsTriageJobMessage,
+} from '@bike4mind/server-utils/utils/liveopsTriageJobMessage';
 
 const DEBOUNCE_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -28,7 +31,8 @@ const DEBOUNCE_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
  */
 const TriggerRequestSchema = z.object({
   dryRun: z.boolean().optional().default(false),
-  lookbackHours: z.number().int().min(1).max(168).optional(),
+  // Reuse the queue-message bound so the route cannot accept a window the worker drops.
+  lookbackHours: LiveOpsTriageJobMessageSchema.shape.lookbackHours,
 });
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {

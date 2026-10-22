@@ -8,7 +8,8 @@ import BaseRepository from '@bike4mind/db-core';
  * The `kind` discriminator is generic (v1 writes only `comment`); annotations
  * are immutable except for body edits and resolution, and soft-deleted (never
  * hard-deleted) so the collection doubles as an audit trail for the future
- * approval/signature surfaces.
+ * approval/signature surfaces. The one exception is the deleted-account
+ * dustbin below, which expires a closed account's annotations 90 days on.
  *
  * Indexes are declared via schema.index() per the repo's MongoDB Index
  * Guidelines (no `index: true` on fields).
@@ -20,6 +21,10 @@ export interface IAnnotationDocument extends Omit<AnnotationData, 'id' | 'create
   softDelete(deletedBy?: string): Promise<IAnnotationDocument>;
   restore(): Promise<IAnnotationDocument>;
 }
+
+/** `deletedBy` on annotations hidden because their author's account was deleted. */
+export const DELETED_AUTHOR_ANNOTATION_MARKER = 'system:author-account-deleted';
+export const DELETED_AUTHOR_ANNOTATION_TTL_SECONDS = 90 * 24 * 60 * 60;
 
 const AnchorSubSchema = new Schema(
   {
@@ -83,6 +88,16 @@ AnnotationSchema.index({ publicId: 1, kind: 1, deletedAt: 1 });
 AnnotationSchema.index({ authorId: 1, createdAt: -1 });
 // Threaded replies under a root.
 AnnotationSchema.index({ threadRootId: 1 });
+// Deleted-account dustbin: rows hidden by hideDeletedAuthorAnnotations are removed for good
+// DELETED_AUTHOR_ANNOTATION_TTL_SECONDS after deletedAt. Scoped by the deletedBy marker so a
+// comment deleted any other way stays in the audit trail.
+AnnotationSchema.index(
+  { deletedAt: 1 },
+  {
+    expireAfterSeconds: DELETED_AUTHOR_ANNOTATION_TTL_SECONDS,
+    partialFilterExpression: { deletedAt: { $type: 'date' }, deletedBy: DELETED_AUTHOR_ANNOTATION_MARKER },
+  }
+);
 
 AnnotationSchema.virtual('isDeleted').get(function () {
   return this.deletedAt != null;
@@ -127,4 +142,17 @@ export class AnnotationRepository extends BaseRepository<IAnnotationDocument> {
 }
 
 export const annotationRepository = new AnnotationRepository(Annotation);
+
+/**
+ * Soft-delete every live annotation `authorId` wrote, for when that account is deleted. Every
+ * read path filters `deletedAt: null`, so they disappear at once; the TTL index above removes
+ * them permanently 90 days later. Returns the number hidden. Idempotent.
+ */
+export async function hideDeletedAuthorAnnotations(authorId: string): Promise<number> {
+  const result = await Annotation.updateMany(
+    { authorId, deletedAt: null },
+    { $set: { deletedAt: new Date(), deletedBy: DELETED_AUTHOR_ANNOTATION_MARKER } }
+  );
+  return result.modifiedCount;
+}
 export default Annotation;

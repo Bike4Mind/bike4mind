@@ -22,3 +22,36 @@ describe('the scheduled task isolates the two passes', () => {
     }
   });
 });
+
+describe('long-running queue registrations', () => {
+  // Source-shape guard for the same reason as above: the registrations live in the boot closure.
+  // A missing consumer leaves every message parked forever, and a dropped batchSize/runBudgetMs
+  // lets a slow run outlive its visibility window and be redelivered mid-run - neither fails loudly.
+  const registration = (src: string, queue: string) =>
+    src.match(new RegExp(`registerQueueHandler\\(\\s*'${queue}',[\\s\\S]*?\\}\\s*\\)`))?.[0];
+
+  it.each(['driveLakeIngestQueue', 'githubLakeIngestQueue', 'githubLakeRevokeQueue'])(
+    'registers %s with the shared single-message, hosted-deadline options',
+    async queue => {
+      const src = await readFile(resolve(__dirname, 'main.ts'), 'utf8');
+      expect(src).toMatch(/const sourceLakeQueueOpts = \{[^}]*runBudgetMs:[^}]*batchSize: 1,[^}]*\}/);
+      expect(registration(src, queue), `${queue} is not registered`).toContain('...sourceLakeQueueOpts');
+    }
+  );
+
+  it('purges one Drive disconnect per dispatch', async () => {
+    const src = await readFile(resolve(__dirname, 'main.ts'), 'utf8');
+    expect(registration(src, 'driveDisconnectPurgeQueue')).toContain('batchSize: 1');
+  });
+});
+
+it('preserves five application-event attempts before native dead-letter retention', async () => {
+  const source = await readFile(resolve(__dirname, 'main.ts'), 'utf8');
+  const broker = await readFile(resolve(__dirname, '../../../../elasticmq.conf'), 'utf8');
+  const eventRegistration = source.match(/worker\.registerQueueHandler\(\s*'selfHostEventQueue',[\s\S]*?\n {4}\);/);
+  expect(eventRegistration).not.toBeNull();
+  expect(eventRegistration![0]).toMatch(/maxReceiveCount: 5/);
+  expect(broker).toMatch(
+    /selfHostEventQueue\s*\{\s*deadLettersQueue\s*\{\s*name = "selfHostEventQueueDLQ", maxReceiveCount = 5/
+  );
+});

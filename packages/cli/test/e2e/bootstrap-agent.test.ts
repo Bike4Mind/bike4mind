@@ -16,7 +16,7 @@ import type { AgentContext } from '../../src/utils';
 import { createFauxBackend } from './faux-llm.js';
 
 function makeInput(over: Partial<BuildAgentInput> = {}): BuildAgentInput {
-  const agentContext: AgentContext = { currentAgent: null, observationQueue: [] };
+  const agentContext: AgentContext = { currentAgent: null };
   return {
     config: createMockConfig(),
     modelId: 'faux-model',

@@ -1,0 +1,81 @@
+/**
+ * Skills, as the renderer needs to see them.
+ *
+ * A skill is a markdown file with frontmatter - `.claude/skills/<name>/SKILL.md`,
+ * `.claude/commands/<name>.md` or the `.bike4mind/commands/` equivalents - whose body becomes
+ * the prompt when the user runs `/<name>`. Discovery and parsing are the CLI's
+ * (`@bike4mind/cli/skills`); this is only the shape that crosses the IPC boundary.
+ *
+ * The BODY is deliberately not here. It is repo- or user-authored instructions that reach the
+ * model, it can be long, and expanding it is main's job - so the renderer sends `/name args`
+ * and never holds the text that gets sent on its behalf.
+ */
+
+/**
+ * Where a skill came from. `project` means it arrived with the checked-out repository; `account`
+ * means it is a Bike4Mind web skill (`/api/skills`) available to the signed-in user.
+ */
+export type SkillSource = 'global' | 'project' | 'account';
+
+export interface SkillSummary {
+  /** What the user types after the slash. Derived from the filename or the SKILL.md parent dir. */
+  name: string;
+  /** Frontmatter `name`, when it differs from the one above. */
+  displayName?: string;
+  description: string;
+  /** Frontmatter `argument-hint`, e.g. "[file] [priority]". Shown beside the name in the picker. */
+  argumentHint?: string;
+  source: SkillSource;
+  /** A Skill Market import: someone else wrote it, so it runs wrapped as untrusted content. */
+  imported?: boolean;
+  /**
+   * Absolute path, shown as the tooltip so a project skill can be read before it is run. For an
+   * `account` skill it is `b4m:/api/skills/<id>`, never a file on disk.
+   */
+  filePath: string;
+}
+
+/**
+ * What the composer's picker draws.
+ *
+ * `untrustedProject` is the whole point of the extra field: a bound project whose skills have
+ * NOT been trusted yet contributes nothing to `skills`, and the picker has to be able to say so
+ * rather than silently showing a shorter list. See ProjectTrustStore.
+ */
+export interface SkillsState {
+  skills: SkillSummary[];
+  /** The project root that contributed project skills, or null when none did. */
+  projectDirectory: string | null;
+  /** Set to the bound project root when it exists but has not been trusted. */
+  untrustedProject: string | null;
+}
+
+/** The empty state, for a session that has none and for a failed read. */
+export const NO_SKILLS: SkillsState = { skills: [], projectDirectory: null, untrustedProject: null };
+
+/** A `/name` token in a draft. `start` is the slash, `end` is exclusive. */
+export interface SkillMention {
+  name: string;
+  start: number;
+  end: number;
+}
+
+/**
+ * A slash at the start or after whitespace, a command-shaped name, then a word boundary. The
+ * boundary is what keeps paths (`/etc/hosts`, `src/a.ts`) and URLs out; the name may not END on
+ * `:` or `-` so `/review: now` names `review`. Same charset as parseSkillInvocation in main.
+ */
+const MENTION_RE = /(^|\s)\/([A-Za-z0-9](?:[A-Za-z0-9_:-]*[A-Za-z0-9_])?)(?=$|[\s.,!?;:'")\]])/g;
+
+/**
+ * Every `/name` token in `text`, known skill or not - the caller decides which names are real.
+ * Shared by the composer's highlight and main's inline-skill note so the two never disagree
+ * about what counts as a mention. Close to the web's detectSkillMentions (b4m-core/common), but
+ * desktop names are not kebab-only (`plugin:name`, `Some_Skill`), and positions are needed.
+ */
+export function findSkillMentions(text: string): SkillMention[] {
+  return Array.from(text.matchAll(MENTION_RE), match => {
+    const start = (match.index ?? 0) + match[1].length;
+    return { name: match[2], start, end: start + 1 + match[2].length };
+  });
+}

@@ -26,9 +26,13 @@ export interface StreamedSideEffect {
 
 export interface DispatchOptions {
   /**
-   * Whether these effects are arriving live from a streaming completion, as
-   * opposed to being replayed when an existing session loads. Handlers decide
-   * what live vs replay means for their effect types.
+   * True only for the first dispatch of a reply that arrived (finished
+   * streaming) in this client session: "this just happened, apply it". Anything
+   * else - a session load, a reload, a refetch or remount of an older reply - is
+   * a replay and must leave this unset, because a handler may auto-apply live
+   * effects over state the user has changed since. Render-path callers gate it
+   * with claimLiveDispatch(). Handlers decide what live vs replay means for their
+   * effect types.
    */
   live?: boolean;
   /**
@@ -37,6 +41,71 @@ export interface DispatchOptions {
    * (streaming-completion handler and render-pipeline dispatcher).
    */
   dedupeKey?: string;
+}
+
+// In-memory ledger of which replies (keyed by quest/message id) have been dispatched,
+// shared by every dispatch path so each reply is applied live at most once and
+// replayed at most once per view of its session. Deliberately not persisted: a reply
+// that finished before this page loaded was never seen in flight, so a reload can
+// only replay it.
+/** Reply key -> the session it was last seen streaming in, so leaving that session settles it. */
+const inFlightKeys = new Map<string, string>();
+const liveClaimedKeys = new Set<string>();
+/** Dispatched (live or replay) reply key -> the session it belongs to. */
+const dispatchedKeys = new Map<string, string>();
+
+/** Record that the reply with this key was seen unfinished (streaming) in this client session. */
+export function noteReplyInFlight(key: string, sessionId = ''): void {
+  if (!liveClaimedKeys.has(key)) inFlightKeys.set(key, sessionId);
+}
+
+/**
+ * Stop treating a reply as in flight without dispatching: it finished with no effects, so
+ * a later refetch that brings some is a replay, not a live arrival.
+ */
+export function settleReplyInFlight(key: string): void {
+  inFlightKeys.delete(key);
+}
+
+/**
+ * Claim the single live dispatch for a reply. Returns true at most once per key,
+ * and only for a reply noted in flight in this client session; every later call
+ * (remount, refetch, the other live dispatch path) returns false.
+ */
+export function claimLiveDispatch(key: string, sessionId = ''): boolean {
+  if (!inFlightKeys.has(key) || liveClaimedKeys.has(key)) return false;
+  inFlightKeys.delete(key);
+  liveClaimedKeys.add(key);
+  dispatchedKeys.set(key, sessionId);
+  return true;
+}
+
+/**
+ * Claim the replay (a dispatch without `live`) of a finished reply. Returns true once
+ * per reply until its session is released with forgetSessionDispatches; false for a
+ * reply already dispatched in this view of the session, or one still in flight (its
+ * completion will be live). Handlers may rebuild derived state from replays, so a
+ * reply must not be replayed twice into the same view.
+ */
+export function claimReplayDispatch(key: string, sessionId = ''): boolean {
+  if (inFlightKeys.has(key) || dispatchedKeys.has(key)) return false;
+  dispatchedKeys.set(key, sessionId);
+  return true;
+}
+
+/**
+ * Release a session's replies so the next view of it replays them again (live claims stay
+ * spent). A reply still streaming when the session is left is settled too: its remaining
+ * frames are dropped, so without this a later view would mistake its completion for a live
+ * arrival. Called when the session view is left (SessionMiddle).
+ */
+export function forgetSessionDispatches(sessionId: string): void {
+  for (const [key, owner] of inFlightKeys) {
+    if (owner === sessionId) inFlightKeys.delete(key);
+  }
+  for (const [key, owner] of dispatchedKeys) {
+    if (owner === sessionId) dispatchedKeys.delete(key);
+  }
 }
 
 /** Returns the number of effects it dispatched. */

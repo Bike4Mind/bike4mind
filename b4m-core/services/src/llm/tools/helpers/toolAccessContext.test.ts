@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { buildToolAccessContext } from './toolAccessContext';
 import type { ToolContext } from '../base/types';
 
-function makeContext(user: Record<string, unknown>, entitlementKeys?: string[]) {
+function makeContext(user: Record<string, unknown>, entitlementKeys?: string[], apiKeyId?: string) {
   const organizations = {
     findMembershipOrgIds: vi.fn().mockResolvedValue(['org1', 'org2']),
     findIdsWithAdminRights: vi.fn().mockResolvedValue(['org1']),
@@ -11,8 +11,9 @@ function makeContext(user: Record<string, unknown>, entitlementKeys?: string[]) 
     userId: 'u1',
     user: { id: 'u1', ...user },
     entitlementKeys,
+    apiKeyId,
     db: { organizations },
-  } as unknown as Pick<ToolContext, 'userId' | 'user' | 'entitlementKeys' | 'db'>;
+  } as unknown as Pick<ToolContext, 'userId' | 'user' | 'entitlementKeys' | 'db' | 'apiKeyId'>;
   return { context, organizations };
 }
 
@@ -48,5 +49,14 @@ describe('buildToolAccessContext', () => {
 
     expect(ctx.userTags).toEqual([]);
     expect(ctx.entitlementKeys).toEqual([]);
+  });
+
+  it('attributes a key-driven turn to the key, with the owner as on-behalf-of', async () => {
+    const { context } = makeContext({}, undefined, 'key1');
+
+    const ctx = await buildToolAccessContext(context);
+
+    expect(ctx.userId).toBe('u1');
+    expect(ctx.auditPrincipal).toEqual({ principalKind: 'apiKey', principalId: 'key1', onBehalfOfUserId: 'u1' });
   });
 });

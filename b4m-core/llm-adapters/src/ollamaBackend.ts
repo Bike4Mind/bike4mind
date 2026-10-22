@@ -19,11 +19,11 @@ import {
   ICompletionOptions,
   ICompletionOptionTools,
 } from './backend';
-import { Ollama, Message as OllamaMessage, ModelResponse, Options as OllamaOptions, Tool, ToolCall } from 'ollama';
+import { Ollama, Message as OllamaMessage, Options as OllamaOptions, Tool, ToolCall } from 'ollama';
 import { ILogger, Logger } from '@bike4mind/observability';
 import { Agent } from 'undici';
 import { convertMessagesToOpenAIFormat } from './messageFormatConverter';
-import { executeToolsBatch } from './executeToolsBatch';
+import { executeToolsBatch, shouldEndTurnAfterTools } from './executeToolsBatch';
 import { attachFullToolResult, truncateToolResult } from './recordToolResult';
 import {
   declaredArtifactType,
@@ -40,6 +40,42 @@ interface NormalizedToolCall {
   /** JSON-stringified arguments. */
   arguments: string;
   id: string;
+}
+
+/**
+ * Ollama's native /api/chat requires tool-call arguments as an object and rejects a JSON string
+ * with a 400. Unparseable or non-object input is kept under `_raw` rather than dropped.
+ */
+function toOllamaToolArguments(args: unknown): Record<string, unknown> {
+  if (args !== null && typeof args === 'object' && !Array.isArray(args)) return args as Record<string, unknown>;
+  if (typeof args !== 'string' || args.trim() === '') return {};
+  try {
+    const parsed: unknown = JSON.parse(args);
+    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // Falls through to the _raw wrapper.
+  }
+  return { _raw: args };
+}
+
+export interface OllamaModelInfo {
+  name: string;
+  modified_at: Date;
+  model: string;
+  size: number;
+  digest: string;
+  details: {
+    parent_model: string;
+    format: string;
+    family: string;
+    families: string[];
+    parameter_size: string;
+    quantization_level: string;
+  };
+  expires_at: Date;
+  size_vram: number;
 }
 
 export class OllamaBackend implements ICompletionBackend {
@@ -91,72 +127,63 @@ export class OllamaBackend implements ICompletionBackend {
     return new Ollama({ host: this._clientHost, headers: this._clientHeaders, fetch: fetchWithTimeout });
   }
 
+  /** Rejects when Ollama is unreachable; getAvailableModels needs a down host to differ from an empty one. */
   async getModelInfo(): Promise<ModelInfo[]> {
-    try {
-      const models = await this._api.list();
+    const models = await this._api.list();
 
-      // In self-host, Ollama runs on the operator's own hardware, so describe
-      // it as local; otherwise it is served remotely by the hosted platform.
-      const isSelfHost = process.env.B4M_SELF_HOST === 'true';
+    // In self-host, Ollama runs on the operator's own hardware, so describe
+    // it as local; otherwise it is served remotely by the hosted platform.
+    const isSelfHost = process.env.B4M_SELF_HOST === 'true';
 
-      // Ollama /api/list doesn't include per-model capabilities or context
-      // length, so fetch them via /api/show (one call per model, in parallel).
-      // This is what tells us whether a model can use tools or accept images,
-      // and its real context window. Without it every local model defaults to
-      // "no tools" (disabling the tools picker even for tool-capable models
-      // like Qwen) and a placeholder context size.
-      return await Promise.all(
-        models.models.map(async model => {
-          const { capabilities, contextWindow: reportedContextWindow } = await this.getModelDetailsCached(model.name);
-          // Advertise the window we will actually allocate, not the one the
-          // model was trained for: callers size history against this number, so
-          // publishing an uncapped 262K would have them build prompts Ollama
-          // then truncates from the front.
-          const contextWindow = OllamaBackend.effectiveContextWindow(reportedContextWindow);
-          const modelInfo = {
-            id: model.name,
-            type: 'text',
-            name: model.name,
-            backend: ModelBackend.Ollama,
-            contextWindow,
-            max_tokens: OllamaBackend.advertisedOutputCap(contextWindow),
-            supportsImageVariation: false,
-            // Local models are free. pricing is a tier map keyed by a token
-            // threshold (consumed by getTextModelCost), not a flat {input,output}
-            // object; a flat shape resolves to an undefined tier and crashes cost
-            // accounting in post-processing.
-            pricing: {
-              [contextWindow]: { input: 0, output: 0 },
-            },
-            // Deliberately costless: suppresses the [UNPRICED_MODEL] alarm.
-            freeToRun: true,
-            // Derived from the model's own reported capabilities rather than
-            // hardcoded; falls back to false when /api/show is unavailable.
-            supportsVision: capabilities.includes('vision'),
-            supportsTools: capabilities.includes('tools'),
-            can_think: capabilities.includes('thinking'),
-            can_stream: true,
-            logoFile: 'Ollama_Logo.svg',
-            rank: 1,
-            description: isSelfHost
-              ? 'Runs locally on your own hardware via Ollama. No API key required, and nothing leaves your machine. Performance and capabilities vary by model.'
-              : // Brand externalized for open-core; generic phrasing when APP_NAME is unset.
-                `This model is served from ${
-                  process.env.APP_NAME ? `${process.env.APP_NAME}'s` : 'the platform'
-                } Ollama servers using publicly available open-source models. Performance and capabilities vary by model.`,
-          } as ModelInfo;
-          return modelInfo;
-        })
-      );
-    } catch (error) {
-      let errorMessage = error instanceof Error ? error.message : String(error);
-      if (error instanceof Error && error.message.includes('503 Service Temporarily Unavailable')) {
-        errorMessage = 'Ollama server is temporarily unavailable. Please try again later.';
-      }
-      // Connection errors here usually mean the Ollama server is down or the host is misconfigured.
-      this._logger.warn('[OllamaBackend] Error fetching model info from Ollama:', errorMessage);
-      return [];
-    }
+    // Ollama /api/list doesn't include per-model capabilities or context
+    // length, so fetch them via /api/show (one call per model, in parallel).
+    // This is what tells us whether a model can use tools or accept images,
+    // and its real context window. Without it every local model defaults to
+    // "no tools" (disabling the tools picker even for tool-capable models
+    // like Qwen) and a placeholder context size.
+    return await Promise.all(
+      models.models.map(async model => {
+        const { capabilities, contextWindow: reportedContextWindow } = await this.getModelDetailsCached(model.name);
+        // Advertise the window we will actually allocate, not the one the
+        // model was trained for: callers size history against this number, so
+        // publishing an uncapped 262K would have them build prompts Ollama
+        // then truncates from the front.
+        const contextWindow = OllamaBackend.effectiveContextWindow(reportedContextWindow);
+        const modelInfo = {
+          id: model.name,
+          type: 'text',
+          name: model.name,
+          backend: ModelBackend.Ollama,
+          contextWindow,
+          max_tokens: OllamaBackend.advertisedOutputCap(contextWindow),
+          supportsImageVariation: false,
+          // Local models are free. pricing is a tier map keyed by a token
+          // threshold (consumed by getTextModelCost), not a flat {input,output}
+          // object; a flat shape resolves to an undefined tier and crashes cost
+          // accounting in post-processing.
+          pricing: {
+            [contextWindow]: { input: 0, output: 0 },
+          },
+          // Deliberately costless: suppresses the [UNPRICED_MODEL] alarm.
+          freeToRun: true,
+          // Derived from the model's own reported capabilities rather than
+          // hardcoded; falls back to false when /api/show is unavailable.
+          supportsVision: capabilities.includes('vision'),
+          supportsTools: capabilities.includes('tools'),
+          can_think: capabilities.includes('thinking'),
+          can_stream: true,
+          logoFile: 'Ollama_Logo.svg',
+          rank: 1,
+          description: isSelfHost
+            ? 'Runs locally on your own hardware via Ollama. No API key required, and nothing leaves your machine. Performance and capabilities vary by model.'
+            : // Brand externalized for open-core; generic phrasing when APP_NAME is unset.
+              `This model is served from ${
+                process.env.APP_NAME ? `${process.env.APP_NAME}'s` : 'the platform'
+              } Ollama servers using publicly available open-source models. Performance and capabilities vary by model.`,
+        } as ModelInfo;
+        return modelInfo;
+      })
+    );
   }
 
   /** Ollama's default when a model doesn't report a context length. */
@@ -444,6 +471,30 @@ export class OllamaBackend implements ICompletionBackend {
       // than issuing up to maxToolCalls more model calls and tool executions.
       if (options.abortSignal?.aborted) {
         await (artifactGuard?.callback ?? callback)([''], { inputTokens, outputTokens, toolsUsed: executedToolsUsed });
+        if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
+        return;
+      }
+
+      // Content is only the answer when the calls were native; a parsed call IS the content (JSON).
+      // Tool rounds buffer content, so unlike streaming adapters it is delivered here.
+      if (
+        round.toolCalls.length > 0 &&
+        shouldEndTurnAfterTools(
+          toolCalls.map(tc => tc.name),
+          options.tools,
+          round.content
+        )
+      ) {
+        this._logger.info('[Tool Execution] Ending turn: answer already produced, only end-of-turn tools ran', {
+          model,
+          toolsExecuted: toolCalls.map(tc => tc.name),
+        });
+        await (artifactGuard?.callback ?? callback)([round.content], {
+          inputTokens,
+          outputTokens,
+          toolsUsed: executedToolsUsed,
+          stopReason: 'tool_use',
+        });
         if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
         return;
       }
@@ -749,15 +800,6 @@ export class OllamaBackend implements ICompletionBackend {
     result: string,
     _thinkingBlocks?: unknown[]
   ) {
-    // Parse the parameters string back to an object - Ollama's native format
-    // requires arguments as an object, not a JSON string.
-    let argumentsObj: Record<string, unknown>;
-    try {
-      argumentsObj = JSON.parse(tool.parameters);
-    } catch {
-      argumentsObj = { _raw: tool.parameters };
-    }
-
     messages.push({
       content: '',
       role: 'assistant',
@@ -765,7 +807,7 @@ export class OllamaBackend implements ICompletionBackend {
         {
           function: {
             name: tool.name,
-            arguments: argumentsObj,
+            arguments: toOllamaToolArguments(tool.parameters),
           },
         },
       ],
@@ -840,9 +882,14 @@ export class OllamaBackend implements ICompletionBackend {
         mapped.content = msg.content != null ? String(msg.content) : '';
       }
 
-      // Carry through tool_calls and tool_name so the conversation history is intact
+      // Carry through tool_calls and tool_name so the conversation history is intact.
+      // Client-replayed history (tool_use blocks) arrives here in OpenAI shape, with
+      // string arguments that Ollama rejects.
       if (Array.isArray(raw.tool_calls)) {
-        mapped.tool_calls = raw.tool_calls as ToolCall[];
+        mapped.tool_calls = (raw.tool_calls as ToolCall[]).map(call => ({
+          ...call,
+          function: { ...call.function, arguments: toOllamaToolArguments(call.function?.arguments) },
+        }));
       }
       if (typeof raw.tool_name === 'string') {
         mapped.tool_name = raw.tool_name;
@@ -851,12 +898,12 @@ export class OllamaBackend implements ICompletionBackend {
     });
   }
 
-  async listModels(): Promise<ModelResponse[]> {
+  async listModels(): Promise<OllamaModelInfo[]> {
     try {
       this._logger.debug('[OllamaBackend] Listing models from Ollama');
       const response = await this._api.list();
       this._logger.debug('[OllamaBackend] Models listed from Ollama:', response.models);
-      return response.models;
+      return response.models; // fails the build if an ollama upgrade stops fitting OllamaModelInfo
     } catch (error: any) {
       this._logger.error('[OllamaBackend] Error listing models from Ollama:', error);
       if (error.message?.includes('ECONNREFUSED') || error.message?.includes('Failed to fetch')) {

@@ -88,7 +88,7 @@ describe('ContextBreakdownModal', () => {
     renderModal();
 
     const rows = [...screen.getByTestId('context-breakdown-categories-table').querySelectorAll('tbody tr')];
-    const lakeRow = rows.find(row => row.querySelector('td')?.textContent === 'Lake retrieval');
+    const lakeRow = rows.find(row => row.querySelector('td')?.textContent === 'Lake content');
     expect(lakeRow?.querySelectorAll('td')[1].textContent).toBe('340');
     // The shared distribution bar colours and labels the same bucket.
     expect(screen.getByText('Lake: 340')).toBeTruthy();
@@ -98,7 +98,7 @@ describe('ContextBreakdownModal', () => {
     renderModal();
 
     const rows = [...screen.getByTestId('context-breakdown-categories-table').querySelectorAll('tbody tr')];
-    const lakeRow = rows.find(row => row.querySelector('td')?.textContent === 'Lake retrieval');
+    const lakeRow = rows.find(row => row.querySelector('td')?.textContent === 'Lake content');
     expect(lakeRow?.querySelectorAll('td')[1].textContent).toBe('-');
     // A zero-token segment would misreport "unknown" as "none", so it is omitted entirely.
     expect(screen.queryByText('Lake: 0')).toBeNull();
@@ -139,6 +139,55 @@ describe('ContextBreakdownModal', () => {
     renderModal();
 
     expect(screen.queryByTestId('context-breakdown-excluded-lakes-chip')).toBeNull();
+  });
+
+  it('shows the not-serving-lakes chip when the turn recorded a draft lake', () => {
+    mockUseQuestContextBreakdown.mockReturnValue({
+      data: {
+        ...breakdown,
+        retrieval: { ...breakdown.retrieval, notServingLakes: { count: 1, reason: 'draft' } },
+      },
+      isLoading: false,
+      error: null,
+    });
+    renderModal();
+
+    expect(screen.getByTestId('context-breakdown-not-serving-lakes-chip').textContent).toContain(
+      'not serving: 1 (draft)'
+    );
+  });
+
+  it('omits the not-serving-lakes chip on a recorded zero', () => {
+    mockUseQuestContextBreakdown.mockReturnValue({
+      data: {
+        ...breakdown,
+        retrieval: { ...breakdown.retrieval, notServingLakes: { count: 0, reason: 'draft' } },
+      },
+      isLoading: false,
+      error: null,
+    });
+    renderModal();
+
+    expect(screen.queryByTestId('context-breakdown-not-serving-lakes-chip')).toBeNull();
+  });
+
+  it('labels injected volume clearly as all-surfaces total', () => {
+    mockUseQuestContextBreakdown.mockReturnValue({
+      data: {
+        ...breakdown,
+        retrieval: {
+          ...breakdown.retrieval!,
+          injected: { chunks: 5, chars: 8451 },
+        },
+      },
+      isLoading: false,
+      error: null,
+    });
+    renderModal();
+
+    expect(screen.getByTestId('context-breakdown-retrieval').textContent).toContain(
+      'injected (all surfaces): 5 chunks / 8,451 chars'
+    );
   });
 
   it('omits the excluded-lakes chip on a recorded zero, not just on absence', () => {

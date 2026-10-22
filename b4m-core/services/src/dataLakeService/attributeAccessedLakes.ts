@@ -1,4 +1,9 @@
-import { openLakeTagPrefix, prefixArmTagNames, type DataLakeMembershipScope } from '@bike4mind/common';
+import {
+  openLakeTagPrefix,
+  prefixArmTagNames,
+  type CitableSourceOrigin,
+  type DataLakeMembershipScope,
+} from '@bike4mind/common';
 import { datalakeTagsFrom } from './getDataLakePrompts';
 
 /**
@@ -96,6 +101,29 @@ export function attributeFileToLakeIds(tags: string[], lakes: AttributableLake[]
     }
   }
   return [...ids];
+}
+
+/**
+ * Per-chip use of the per-file rule: the lake(s) one cited file belongs to, else a library origin.
+ *
+ * Deliberately NO full-scope fallback (unlike `attributeAccessedLakeIds`): a private file reached
+ * through a mixed-corpus search must not be labelled with every selected lake. A dynamic lake's
+ * prefix arm needs `ownerUserId`, so a caller that omits it reads such a file as library.
+ */
+export function citableOriginFor(
+  file: { tags: string[]; ownerUserId?: string; callerUserId: string },
+  lakes: Array<AttributableLake & { name: string }>
+): CitableSourceOrigin {
+  const attributed = new Set(attributeFileToLakeIds(file.tags, lakes, file.ownerUserId));
+  const seen = new Set<string>();
+  const matched: Array<{ id: string; name: string }> = [];
+  for (const lake of lakes) {
+    if (!attributed.has(lake.id) || seen.has(lake.id)) continue;
+    seen.add(lake.id);
+    matched.push({ id: lake.id, name: lake.name });
+  }
+  if (matched.length > 0) return { kind: 'lake', lakes: matched };
+  return { kind: 'library', owned: !!file.ownerUserId && file.ownerUserId === file.callerUserId };
 }
 
 /**

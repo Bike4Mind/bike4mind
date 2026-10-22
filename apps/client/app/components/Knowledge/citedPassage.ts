@@ -23,9 +23,6 @@ export type CitedPassage = {
   passage: string;
 };
 
-/** The clip marker `servedPassageText` appends; never present in the document itself. */
-const CLIP_MARKER = '\u2026';
-
 type NormalizedText = {
   /** Whitespace-collapsed text, suitable for `indexOf` against another normalization of it. */
   text: string;
@@ -76,7 +73,9 @@ export type PassageRange = { start: number; end: number };
  * narrowing this needs a chunk-offset field at the assembly sites, not a smarter match here.
  */
 export function locateCitedPassage(source: string, passage: string): PassageRange | null {
-  const withoutClipMarker = passage.endsWith(CLIP_MARKER) ? passage.slice(0, -CLIP_MARKER.length) : passage;
+  // Clip markers stripped before matching: `servedPassageText` appends U+2026, and finding excerpts
+  // (`excerpt()` in corpusInconsistency.ts) append ASCII `...`.
+  const withoutClipMarker = passage.replace(/(?:\u2026|\.\.\.)$/, '');
   const needle = normalizeWithOffsets(withoutClipMarker);
   if (needle.text.length === 0) return null;
 

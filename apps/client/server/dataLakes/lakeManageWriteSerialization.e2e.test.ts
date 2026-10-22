@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
-import type { AccessContext } from '@bike4mind/common';
+import type { AccessContext, DataLakeStatus } from '@bike4mind/common';
 // createMongoReplSet is not exported from the package barrel / dist; deep-import the source.
 import {
   createMongoReplSet,
@@ -13,13 +13,15 @@ import {
   DataLakeModel,
   DataLakeAccessGrantModel,
   LakeConfigChangeEventModel,
+  DataLakeResearchConfigModel,
   dataLakeRepository,
+  dataLakeResearchConfigRepository,
   dataLakeAccessGrantRepository,
   userRepository,
   lakeConfigChangeEventRepository,
   withTransaction,
 } from '@bike4mind/database';
-import { dataLakeService } from '@bike4mind/services';
+import { dataLakeResearchService, dataLakeService } from '@bike4mind/services';
 
 // Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND
 // hooks in one place (see MONGO_TEST_TIMEOUT_MS for why 30s is not enough).
@@ -40,7 +42,13 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
 
 let replSet: MongoMemoryReplSet;
 
-const MODELS = [User, DataLakeModel, DataLakeAccessGrantModel, LakeConfigChangeEventModel] as const;
+const MODELS = [
+  User,
+  DataLakeModel,
+  DataLakeAccessGrantModel,
+  LakeConfigChangeEventModel,
+  DataLakeResearchConfigModel,
+] as const;
 
 beforeAll(async () => {
   replSet = await createMongoReplSet();
@@ -82,7 +90,7 @@ const createUser = (name: string, s: string) =>
     hasUsablePassword: false,
   });
 
-const seed = async (status: 'draft' | 'active' | 'deleted') => {
+const seed = async (status: DataLakeStatus, organizationId?: string) => {
   const s = suffix();
   const [owner, curator] = await Promise.all(['owner', 'curator'].map(name => createUser(name, s)));
   const lake = await dataLakeRepository.create({
@@ -93,6 +101,7 @@ const seed = async (status: 'draft' | 'active' | 'deleted') => {
     createdByUserId: owner.id,
     isPublic: false,
     status,
+    organizationId,
   } as never);
   await dataLakeAccessGrantRepository.upsertGrant({
     dataLakeId: lake.id,
@@ -149,6 +158,40 @@ const revokeAsOwner = (owner: { id: string }, lakeId: string, curatorId: string)
         },
       }
     );
+  });
+
+/**
+ * Shaped like the research-config route: gate inside the callback, a write to a collection other than
+ * the lake, then the lake touch. `touch: false` is the control showing the touch is what collides.
+ */
+const createConfigAsCurator = (
+  curatorId: string,
+  lakeId: string,
+  grantsRepo: typeof dataLakeAccessGrantRepository,
+  { touch }: { touch: boolean },
+  onAttempt: () => void
+) =>
+  withTransaction(async () => {
+    onAttempt();
+    const ctx = ctxFor(curatorId);
+    const { lake, grants } = await dataLakeService.assertLakeAccessWithGrants(lakeId, ctx, {
+      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: grantsRepo },
+    });
+    if (!dataLakeService.canManageLake(lake, ctx, grants)) throw new Error('not a manager');
+    const created = await dataLakeResearchService.createResearchConfig(
+      lake,
+      ctx,
+      grants,
+      { name: 'written by a revoked curator', query: 'anything' },
+      {
+        db: {
+          dataLakeResearchConfigs: dataLakeResearchConfigRepository,
+          lakeConfigChangeEvents: lakeConfigChangeEventRepository,
+        },
+      }
+    );
+    if (touch) await dataLakeRepository.touchIfStable(lake.id);
+    return created;
   });
 
 describe('lake manage writes vs a concurrent grant revoke (replica set)', () => {
@@ -305,5 +348,102 @@ describe('lake manage writes vs a concurrent grant revoke (replica set)', () => 
 
     const after = (await dataLakeRepository.findById(lake.id))!.updatedAt;
     expect(new Date(after!).getTime()).toBeGreaterThan(before.getTime());
+  });
+
+  it('aborts a curator write to another collection once it touches the lake, and the retry refuses it', async () => {
+    const { owner, curator, lake } = await seed('active');
+    const { repo, atGate, release } = pausingGrants();
+    let attempts = 0;
+
+    const outcome = createConfigAsCurator(curator.id, lake.id, repo, { touch: true }, () => attempts++).then(
+      () => null,
+      (e: unknown) => e
+    );
+
+    await atGate;
+    await expect(revokeAsOwner(owner, lake.id, curator.id)).resolves.toEqual({ revoked: true });
+    release();
+
+    expect(String(await outcome)).toMatch(/Data lake not found/);
+    expect(attempts).toBeGreaterThanOrEqual(2);
+    expect(await dataLakeResearchConfigRepository.listByLake(lake.id)).toEqual([]);
+  });
+
+  // The control for the case above: the same write WITHOUT the touch shares no document with the
+  // revoke, so it commits on its stale grant read. If this ever starts failing, the touch above is
+  // no longer what the collision rests on.
+  it('commits the same write when it does not touch the lake - the residual the touch closes', async () => {
+    const { owner, curator, lake } = await seed('active');
+    const { repo, atGate, release } = pausingGrants();
+    let attempts = 0;
+
+    const outcome = createConfigAsCurator(curator.id, lake.id, repo, { touch: false }, () => attempts++);
+
+    await atGate;
+    await expect(revokeAsOwner(owner, lake.id, curator.id)).resolves.toEqual({ revoked: true });
+    release();
+
+    await expect(outcome).resolves.toBeTruthy();
+    expect(attempts).toBe(1);
+    expect(await dataLakeResearchConfigRepository.listByLake(lake.id)).toHaveLength(1);
+  });
+
+  it('aborts a curator write when a departure lapses their curator grant mid-request', async () => {
+    const orgId = new mongoose.Types.ObjectId().toString();
+    const { owner, curator, lake } = await seed('active', orgId);
+    const { repo, atGate, release } = pausingGrants();
+    let attempts = 0;
+
+    const outcome = createConfigAsCurator(curator.id, lake.id, repo, { touch: true }, () => attempts++).then(
+      () => null,
+      (e: unknown) => e
+    );
+
+    await atGate;
+    const lapse = withTransaction(() =>
+      dataLakeService.lapseDepartedMemberLakeAccess(
+        curator.id,
+        { id: orgId, userId: owner.id },
+        { userId: owner.id },
+        {
+          db: {
+            dataLakes: dataLakeRepository,
+            dataLakeAccessGrants: dataLakeAccessGrantRepository,
+            lakeConfigChangeEvents: lakeConfigChangeEventRepository,
+          },
+        }
+      )
+    );
+    await expect(lapse).resolves.toMatchObject({ lapsedLakeIds: [lake.id] });
+    release();
+
+    expect(String(await outcome)).toMatch(/Data lake not found/);
+    expect(attempts).toBeGreaterThanOrEqual(2);
+    expect(await dataLakeResearchConfigRepository.listByLake(lake.id)).toEqual([]);
+  });
+});
+
+describe('dataLakeRepository.touchIfStable (replica set)', () => {
+  const backdate = (id: string) =>
+    DataLakeModel.updateOne({ _id: id }, { $set: { updatedAt: new Date(0) } }, { timestamps: false });
+
+  it('moves updatedAt on a lake at rest', async () => {
+    const { lake } = await seed('active');
+    await backdate(lake.id);
+
+    await expect(dataLakeRepository.touchIfStable(lake.id)).resolves.toBe(true);
+
+    const after = (await dataLakeRepository.findById(lake.id))!.updatedAt;
+    expect(new Date(after!).getTime()).toBeGreaterThan(0);
+  });
+
+  it('leaves a transitional lake alone, so its stranded clock keeps running', async () => {
+    const { lake } = await seed('archiving');
+    await backdate(lake.id);
+
+    await expect(dataLakeRepository.touchIfStable(lake.id)).resolves.toBe(false);
+
+    const after = (await dataLakeRepository.findById(lake.id))!.updatedAt;
+    expect(new Date(after!).getTime()).toBe(0);
   });
 });

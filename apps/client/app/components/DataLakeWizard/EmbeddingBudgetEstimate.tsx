@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { Alert, Typography } from '@mui/joy';
 import { useEffectiveEmbeddingModel, useGetSettingsValue } from '@client/app/hooks/data/settings';
+import { formatUsd } from '@client/app/utils/formatUsd';
 import { estimateEmbeddingCostUsd, estimateEmbeddingTokens } from '@client/app/utils/embeddingCostEstimate';
 
 /** A stored admin setting arrives as a raw string ('true'/'false') from the server, but the
@@ -53,23 +54,22 @@ export function EmbeddingBudgetEstimate({ files }: EmbeddingBudgetEstimateProps)
       </Alert>
     );
   }
-  // Silent (return null, not a $0 banner) whenever there's nothing worth warning about: no
-  // usable budget figure, no model resolved yet, nothing selected, or the estimate settles at
-  // exactly 0 (a zero-price self-host model, or an unpriced one - both are correctly silent,
-  // never a misleading "estimated cost: $0.00").
+  // Silent when there is nothing to warn about: no budget, model, or files, or a cost that is zero or
+  // unusable (zero-price or unpriced model).
   if (perRunBudgetUsd === undefined || !Number.isFinite(perRunBudgetUsd) || perRunBudgetUsd <= 0) return null;
   if (!model) return null;
   if (files.length === 0) return null;
-  if (estimatedCostUsd === 0) return null;
+  if (!Number.isFinite(estimatedCostUsd) || estimatedCostUsd <= 0) return null;
 
   const overBudget = estimatedCostUsd > perRunBudgetUsd;
-  const roundedCost = estimatedCostUsd < 1 ? estimatedCostUsd.toFixed(4) : estimatedCostUsd.toFixed(2);
+  const shownCost = formatUsd(estimatedCostUsd);
+  const approx = shownCost.startsWith('<') ? '' : '~';
 
   if (!overBudget) {
     return (
       <Typography level="body-xs" color="neutral" data-testid="datalake-estimate-line">
-        Estimated embedding cost: ~$
-        <span data-testid="datalake-estimate-total">{roundedCost}</span> (approximate, based on file size)
+        Estimated embedding cost: {approx}
+        <span data-testid="datalake-estimate-total">{shownCost}</span> (approximate, based on file size)
       </Typography>
     );
   }
@@ -81,8 +81,8 @@ export function EmbeddingBudgetEstimate({ files }: EmbeddingBudgetEstimateProps)
           instead of flowing as one paragraph. Wrapping in a single Typography (matching the
           "Adding files to..." Alert elsewhere in this file's own directory) keeps it one item. */}
       <Typography level="body-sm">
-        This upload may exceed the per-run embedding budget. Rough estimate: ~$
-        <span data-testid="datalake-estimate-total">{roundedCost}</span> for {files.length.toLocaleString()} file
+        This upload may exceed the per-run embedding budget. Rough estimate: {approx}
+        <span data-testid="datalake-estimate-total">{shownCost}</span> for {files.length.toLocaleString()} file
         {files.length === 1 ? '' : 's'}, against ~$
         <span data-testid="datalake-estimate-remaining">{perRunBudgetUsd.toFixed(2)}</span> for this run. The estimate
         is approximate - it is based on file size, not the text actually extracted, and rounds up. You can still upload.

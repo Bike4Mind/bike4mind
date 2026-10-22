@@ -8,11 +8,12 @@ import type { IUserSubscription } from '@client/lib/userSubscriptions/types';
 import SubscribeButton from './SubscribeButton';
 
 const cancelMutate = vi.fn();
+const changeMutate = vi.fn();
 
 vi.mock('@client/app/hooks/data/subscriptions', () => ({
   useSubscribePlan: () => ({ mutate: vi.fn(), isPending: false }),
   useCancelSubscription: () => ({ mutate: (...args: unknown[]) => cancelMutate(...args), isPending: false }),
-  useChangeSubscription: () => ({ mutate: vi.fn(), isPending: false }),
+  useChangeSubscription: () => ({ mutate: (...args: unknown[]) => changeMutate(...args), isPending: false }),
 }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -31,20 +32,34 @@ const subRow = (overrides: Partial<IUserSubscription> = {}) =>
     status: 'active',
     canceledAt: null,
     periodStartsAt: new Date('2026-01-01T00:00:00Z'),
-    periodEndsAt: new Date('2026-02-01T00:00:00Z'),
+    // Midday UTC so the formatted local date stays February 1 across every
+    // timezone this suite runs under (including America/Los_Angeles and
+    // Pacific/Auckland), not just UTC.
+    periodEndsAt: new Date('2026-02-01T10:00:00Z'),
     ...overrides,
   }) as unknown as IUserSubscription;
 
-const renderButton = (subscriptions: IUserSubscription[], priceId = 'price_pro') =>
+const renderButton = (subscriptions: IUserSubscription[], priceId = 'price_pro', planName?: string) =>
   render(
     <TestWrapper>
-      <SubscribeButton priceId={priceId} cancellableSubscriptions={subscriptions} />
+      <SubscribeButton priceId={priceId} cancellableSubscriptions={subscriptions} planName={planName} />
     </TestWrapper>
   );
 
 describe('SubscribeButton', () => {
   beforeEach(() => {
     cancelMutate.mockReset();
+    changeMutate.mockReset();
+  });
+
+  it.each([
+    ['no plan', [] as IUserSubscription[], 'Subscribe to Professional'],
+    ['this plan', [subRow()], 'Cancel Professional subscription'],
+    ['another plan', [subRow({ priceId: 'price_other' })], 'Change subscription to Professional'],
+  ])('names the plan it acts on for a screen reader (holding %s)', (_label, subs, name) => {
+    renderButton(subs, 'price_pro', 'Professional');
+
+    expect(screen.getByRole('button', { name })).toBeEnabled();
   });
 
   // The issue's repro, as far as this component is concerned: a dunned row in the list
@@ -64,6 +79,40 @@ describe('SubscribeButton', () => {
     renderButton([]);
 
     expect(screen.getByRole('button', { name: 'Subscribe' })).toBeEnabled();
+  });
+
+  it('does not report a cancellation as a subscription purchase', async () => {
+    const onSubscriptionChanged = vi.fn();
+    render(
+      <TestWrapper>
+        <SubscribeButton
+          priceId="price_pro"
+          cancellableSubscriptions={[subRow()]}
+          onSubscriptionChanged={onSubscriptionChanged}
+        />
+      </TestWrapper>
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel Subscription' }));
+    expect(cancelMutate).toHaveBeenCalledWith('price_pro');
+    expect(onSubscriptionChanged).not.toHaveBeenCalled();
+  });
+
+  it('notifies an in-place subscription change only after success', async () => {
+    const onSubscriptionChanged = vi.fn();
+    render(
+      <TestWrapper>
+        <SubscribeButton
+          priceId="price_other"
+          cancellableSubscriptions={[subRow()]}
+          onSubscriptionChanged={onSubscriptionChanged}
+        />
+      </TestWrapper>
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Change Subscription' }));
+    expect(onSubscriptionChanged).not.toHaveBeenCalled();
+    const options = changeMutate.mock.calls[0][1] as { onSuccess: () => void };
+    options.onSuccess();
+    expect(onSubscriptionChanged).toHaveBeenCalledTimes(1);
   });
 
   it('offers Change for another plan while the user keeps theirs', () => {

@@ -1,3 +1,4 @@
+import { VERIFIED_SLACK_IDENTITY_FILTER } from '@bike4mind/common';
 /**
  * Global Shortcut Handlers
  *
@@ -104,6 +105,7 @@ async function findUserBySlackId(slackUserId: string): Promise<IUserDocument | n
   const { User } = getSlackDb();
   const user = await (User as any).findOne({
     'slackSettings.slackUserId': slackUserId,
+    ...VERIFIED_SLACK_IDENTITY_FILTER,
   });
   return user;
 }
@@ -631,9 +633,14 @@ export async function handleCreateNotebookSubmission(
     const ability = defineAbilitiesForCreate(dbUser);
 
     // Create the notebook
-    const session = await (sessionManager as any).createSession(userId, { name: finalName }, ability, {
-      setLastNotebook: true,
-    });
+    const session = await (sessionManager as any).createSession(
+      userId,
+      { name: finalName, origin: { channel: 'slack' } },
+      ability,
+      {
+        setLastNotebook: true,
+      }
+    );
 
     logger.info('[Slack Shortcut] Created notebook from shortcut', {
       userId,
@@ -897,7 +904,7 @@ async function processQuickAskInDM(
     if (!sessionId) {
       const session = await (smQuick as any).createSession(
         b4mUserId,
-        { name: `Slack Chat ${new Date().toLocaleDateString()}` },
+        { name: `Slack Chat ${new Date().toLocaleDateString()}`, origin: { channel: 'slack' } },
         ability,
         { setLastNotebook: true }
       );
@@ -912,7 +919,7 @@ async function processQuickAskInDM(
       if (!existingSession || existingSession.deletedAt) {
         const session = await (smQuick as any).createSession(
           b4mUserId,
-          { name: `Slack Chat ${new Date().toLocaleDateString()}` },
+          { name: `Slack Chat ${new Date().toLocaleDateString()}`, origin: { channel: 'slack' } },
           ability,
           { setLastNotebook: true }
         );
@@ -970,7 +977,7 @@ async function processQuickAskInDM(
 
     // Use ChatCompletionInvoke to properly trigger AI processing
     // This handles all the quest setup and EventBridge publishing correctly
-    const { ChatCompletionInvoke } = await import('@bike4mind/services/llm');
+    const { ChatCompletionInvoke } = await import('@bike4mind/services/llm/ChatCompletionInvoke');
     const { SQSService } = await import('@bike4mind/utils');
 
     // any: defaultChatCompletionOptions provides remaining IChatCompletionServiceOptions fields at runtime
@@ -1012,6 +1019,8 @@ async function processQuickAskInDM(
         enableAgents: false,
       },
       userId: b4mUserId,
+      // A Slack-linked user, not a B4M session or a b4m_live_ key (see ToolContext.authOrigin).
+      authOrigin: 'internal',
     });
 
     logger.info('[Slack Shortcut] Quick ask triggered for async processing', {

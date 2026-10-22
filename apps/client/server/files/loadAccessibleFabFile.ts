@@ -10,8 +10,45 @@ import { normalizeId } from '@bike4mind/utils/normalizeId';
 import { grantingLakes, resolveAccessibleLakes } from '@server/dataLakes';
 import { holdsDataLakeReadScope } from '@server/dataLakes/dataLakeScopes';
 import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
-import { getFilesStorage } from '@server/utils/storage';
-import type { Request } from 'express';
+import type { EntitlementRequest } from '@server/entitlements';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
+import type { Logger } from '@bike4mind/observability';
+
+/**
+ * The authenticated-request slice these file read doors need. Any Express.Request is assignable
+ * to it, and a caller with no HTTP request (the decisions runner behind a tool call) can build one,
+ * which is what keeps this ACL off the Express request. The three memo fields are the per-request
+ * caches `resolveAccessibleLakes` writes - forwarded so a batched caller reuses its lookups.
+ */
+export type FabFileAccessRequest = Omit<EntitlementRequest, 'apiKeyInfo'> & {
+  apiKeyInfo?: Pick<Express.ApiKeyInfo, 'keyId' | 'scopes'>;
+  logger: Logger;
+};
+
+/** Storage and repository adapter shared by the file read doors. */
+export function buildFabFileAdapter(req: FabFileAccessRequest) {
+  // Browser URLs only differ from private ones when S3_PRESIGN_ENDPOINT is set (see S3Storage), and only
+  // then must they stay out of the shared URL cache. Without it the cached URL is valid for every reader.
+  const browserSigningIsDistinct = Boolean(process.env.S3_PRESIGN_ENDPOINT?.trim());
+  return {
+    db: {
+      fabFiles: fabFileRepository,
+      users: userRepository,
+      adminSettings: adminSettingsRepository,
+    },
+    storage: {
+      ...(browserSigningIsDistinct && { signedUrlCache: 'bypass' as const }),
+      generateSignedUrl: async (path: string, expireInSeconds: number) => {
+        try {
+          return await getFilesStorage().getSignedUrl(path, 'get', { expiresIn: expireInSeconds, audience: 'browser' });
+        } catch (error) {
+          req.logger.error('Error generating signed URL:', { error, path });
+          throw error;
+        }
+      },
+    },
+  };
+}
 
 /**
  * Loads one FabFile the caller may read, with a fresh signed `fileUrl` when it is serveable
@@ -21,27 +58,14 @@ import type { Request } from 'express';
  * Shared by the SPA-internal `GET /api/files/{id}` and the public `GET /api/v1/files/{id}`, so
  * the two doors cannot authorize differently.
  */
-export async function loadAccessibleFabFile(req: Request, id: string) {
-  const adapter = {
-    db: {
-      fabFiles: fabFileRepository,
-      users: userRepository,
-      adminSettings: adminSettingsRepository,
-    },
-    storage: {
-      generateSignedUrl: async (path: string, expireInSeconds: number) => {
-        try {
-          return await getFilesStorage().getSignedUrl(path, 'get', { expiresIn: expireInSeconds });
-        } catch (error) {
-          req.logger.error('Error generating signed URL:', { error, path });
-          throw error;
-        }
-      },
-    },
-  };
+export async function loadAccessibleFabFile(req: FabFileAccessRequest, id: string) {
+  const adapter = buildFabFileAdapter(req);
+  const { user } = req;
+  // Every door here is authenticated; a caller that built the slice without a user is a wiring bug.
+  if (!user) throw new NotFoundError('Fabfile not found');
 
   try {
-    return await fabFilesService.getFabFile(req.user.id, { id }, adapter);
+    return await fabFilesService.getFabFile(user.id, { id }, adapter);
   } catch (error) {
     if (!(error instanceof NotFoundError)) throw error;
     // The same lake read through /api/data-lakes/articles needs datalake:read, so a key scoped to
@@ -74,8 +98,8 @@ export async function loadAccessibleFabFile(req: Request, id: string) {
     await dataLakeService.recordLakeAccessEvent(
       lakeAccessEventRepository,
       {
-        ...resolveAuditPrincipal(req.user, req.apiKeyInfo),
-        organizationId: normalizeId(req.user.organizationId),
+        ...resolveAuditPrincipal(user, req.apiKeyInfo),
+        organizationId: normalizeId(user.organizationId),
         resolvedLakeIds: grantors.map(lake => lake.id),
         fileIds: [candidate.id],
         surface: 'data-lake-file-fallback',

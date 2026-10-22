@@ -266,7 +266,7 @@ describe('/api/admin/mementos/reembed', () => {
 
   it('surfaces per-memento failures with the owning userId, not just a count', async () => {
     // totals.failed already told the operator a memento failed somewhere; without this, finding WHICH
-    // one meant reading server logs. Mirrors migrateLedgerVectorsForUser's own errors: string[].
+    // one meant reading server logs. Mirrors migrateLedgerVectorsForPrincipal's own errors: string[].
     userIdPage = [{ _id: 'u1' }, { _id: 'u2' }];
     reembedMock
       .mockResolvedValueOnce({

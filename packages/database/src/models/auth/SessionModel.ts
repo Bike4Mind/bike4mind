@@ -12,7 +12,11 @@ import {
   ISessionDocument,
   ISessionRepository,
   IUserDocument,
+  ListSessionsByUserQuery,
   SearchOptions,
+  SESSION_ORIGIN_CHANNELS,
+  SessionListFilters,
+  SessionOriginChannel,
   tagAttemptDueFilter,
 } from '@bike4mind/common';
 import { softDeletePlugin, usableObjectIds } from '../../utils/mongo';
@@ -39,6 +43,66 @@ const TagSchema = new Schema(
   }
 );
 
+const SessionOriginSchema = new Schema(
+  {
+    channel: { type: String, enum: [...SESSION_ORIGIN_CHANNELS], required: true },
+    apiKeyId: { type: String, required: false },
+  },
+  {
+    _id: false,
+    id: false,
+    versionKey: false,
+  }
+);
+
+/**
+ * Mongo filter clauses for SessionListFilters; {} when none is set. Shared by the own-list
+ * (searchByUserId) and the shared-list query (apps/client getSharedSessionsByUser) so the two agree.
+ *
+ * A session with no recorded origin predates the field and renders as 'web', so it matches 'web'
+ * and is excluded with it. The origin arm is an `$in` over the remaining channels (not `$ne`/`$nin`)
+ * so the planner can use point bounds on the userId + origin.channel + lastUpdated index below and
+ * merge-sort them. The image arm uses `$not: { $gt: 0 }` so a row with no imageCount counts as none.
+ */
+export function sessionListFilterQuery(filters: SessionListFilters = {}): Record<string, unknown> {
+  const q: Record<string, unknown> = {};
+  if (filters.origin || filters.excludeOrigin) {
+    const channels: (SessionOriginChannel | null)[] = SESSION_ORIGIN_CHANNELS.filter(
+      channel => (!filters.origin || channel === filters.origin) && channel !== filters.excludeOrigin
+    );
+    if (channels.includes('web')) channels.push(null);
+    q['origin.channel'] = { $in: channels };
+  }
+  if (filters.hasImages === true) q.imageCount = { $gt: 0 };
+  if (filters.hasImages === false) q.imageCount = { $not: { $gt: 0 } };
+  return q;
+}
+
+/** The own-list filter shared by searchByUserId (offset, SPA) and listByUserId (cursor, public API). */
+function ownSessionListQuery(
+  userId: string,
+  search: string | undefined,
+  surface: string | undefined,
+  filters: SessionListFilters = {}
+): Record<string, unknown> {
+  // Surface scoping: a specific surface returns only that product's sessions; otherwise the main
+  // list excludes product-surface sessions ({ surface: null } matches null OR absent).
+  const q: Record<string, unknown> = { userId, surface: surface ? surface : null };
+
+  Object.assign(q, sessionListFilterQuery(filters));
+
+  if (search) {
+    // Search name, summary, and tags via $or for better discovery.
+    const escapedSearch = escapeRegex(search);
+    q['$or'] = [
+      { name: { $regex: escapedSearch, $options: 'si' } },
+      { summary: { $regex: escapedSearch, $options: 'si' } },
+      { 'tags.name': { $regex: escapedSearch, $options: 'si' } },
+    ];
+  }
+  return q;
+}
+
 export interface ISessionModel extends Model<ISessionDocument> {}
 
 const SessionSchema = new Schema<ISession, ISessionModel, {}>(
@@ -57,12 +121,16 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     surface: { type: String, required: false },
     enabledTools: [{ type: String, required: false }],
     disabledTools: [{ type: String, required: false }],
+    autoAddedTools: [{ type: String, required: false }],
     disableUserIntegrations: { type: Boolean, required: false },
+    userSetFields: { type: [String], required: false, default: undefined },
     forceKnowledgeRetrieval: { type: Boolean, required: false },
     retrievalTags: [{ type: String, required: false }],
     // DELIBERATELY no default: absent must stay distinguishable from false, since `retrievalTags`
     // itself hydrates to [] either way. See SessionTypes.lakeScopeExplicit.
     lakeScopeExplicit: { type: Boolean, required: false },
+    // No default: unset falls back to the lake selection (see effectiveIncludeLibraryFiles).
+    includeLibraryFiles: { type: Boolean, required: false },
     // default: undefined (not []) - keeps "field present" a meaningful marker of manage-but-not-
     // member admission, distinct from an ordinary session that never went through it. Written ONLY
     // by pages/api/v1/sessions/index.ts, as a separate authorized write AFTER its own canManageLake
@@ -105,6 +173,10 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     curatedAt: { type: Date, required: false }, // When the notebook was last curated
     curationContentHash: { type: String, required: false }, // Hash of the last curation's inputs (content + type + options); lets an unchanged re-curation reuse the file and skip the LLM
     messageCount: { type: Number, required: false }, // Lazy-loaded count of messages - calculated on first read
+    // Stamped once at creation by the create paths (see ISessionOrigin); never rewritten.
+    origin: { type: SessionOriginSchema, required: false, immutable: true },
+    // Only ever moved by incrementImageCount's $inc; see ISession.imageCount.
+    imageCount: { type: Number, required: false, default: 0, min: 0 },
     slackMetadata: {
       type: {
         channelId: { type: String, required: true },
@@ -205,6 +277,11 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     },
     voiceReservedCredits: { type: Number, required: false, default: null },
     voiceSessionStartedAt: { type: Date, required: false, default: null },
+    voiceConnectedAt: { type: Date, required: false, default: null },
+    voiceLastActivityAt: { type: Date, required: false, default: null },
+    // No default: $inc needs the field absent or numeric, never null.
+    voiceBilledCredits: { type: Number, required: false },
+    voiceHoldUserId: { type: String, required: false },
     ...ShareableDocumentSchema,
   },
   {
@@ -318,6 +395,28 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     );
   }
 
+  /**
+   * updateWithUpdateAccess that ADDS `knowledgeIds` ($addToSet) instead of `$set`-ing the whole list,
+   * so a detach or attach that lands between the caller's read and this write survives it.
+   */
+  async addKnowledgeIdsWithUpdateAccess(
+    user: Pick<IUserDocument, 'id' | 'groups'>,
+    data: Partial<Omit<ISessionDocument, 'knowledgeIds'>> & { id: string },
+    knowledgeIds: string[],
+    opts?: { includeGlobalWrite?: boolean }
+  ): Promise<ISessionDocument | null> {
+    // `knowledgeIds` is written by the `$addToSet` below, so it must not also reach the `$set` - a
+    // hydrated doc passes the parameter type structurally. `__v` is stripped by _plainUpdate.
+    const { id, knowledgeIds: _replacedList, ...setData } = data as typeof data & { knowledgeIds?: unknown };
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
+    return this._plainUpdate(
+      { _id: convertId(id), deletedAt: null, $or: updateAccessArms(user, opts) },
+      setData as Record<string, unknown>,
+      undefined,
+      { $addToSet: { knowledgeIds: { $each: knowledgeIds } } }
+    );
+  }
+
   async upsertByOpenaiConversationId(openaiConversationId: string, update: Partial<ISession>) {
     // Scope the match to the owner: the conversation id is client-controlled (it comes
     // straight from the uploaded export), so without userId a forged id colliding with
@@ -358,6 +457,10 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     }
     return query;
   }
+  async incrementImageCount(sessionId: string, count: number) {
+    if (count <= 0 || !mongoose.isObjectIdOrHexString(sessionId)) return;
+    await this.sessionModel.updateOne({ _id: sessionId }, { $inc: { imageCount: count } });
+  }
   async findByIdAndUserId(id: string, userId: string) {
     // A non-ObjectId id can never address a row - report no such row, not a CastError the
     // calling route cannot attribute. Same contract as `BaseRepository.findById`.
@@ -377,26 +480,10 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     search: string | undefined,
     userId: string,
     options: SearchOptions<ISessionDocument>,
-    surface?: string
+    surface?: string,
+    filters: SessionListFilters = {}
   ) {
-    const q: Record<string, unknown> = {
-      userId: userId,
-    };
-
-    // Surface scoping: a specific surface returns only that product's sessions;
-    // otherwise the main list excludes product-surface sessions ({ surface: null }
-    // matches docs where the field is null OR absent).
-    q.surface = surface ? surface : null;
-
-    if (search) {
-      // Search name, summary, and tags via $or for better discovery.
-      const escapedSearch = escapeRegex(search);
-      q['$or'] = [
-        { name: { $regex: escapedSearch, $options: 'si' } },
-        { summary: { $regex: escapedSearch, $options: 'si' } },
-        { 'tags.name': { $regex: escapedSearch, $options: 'si' } },
-      ];
-    }
+    const q = ownSessionListQuery(userId, search, surface, filters);
 
     const { pagination, orderBy } = options || {};
 
@@ -417,6 +504,14 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
       hasMore,
     };
   }
+  async listByUserId({ userId, search, surface, filters, beforeId, limit }: ListSessionsByUserQuery) {
+    // A non-ObjectId cursor id can never bound a page; callers validate it first (422), so this
+    // only keeps a stray one from surfacing as a BSON cast 500.
+    if (beforeId !== undefined && !mongoose.isObjectIdOrHexString(beforeId)) return [];
+    const q = ownSessionListQuery(userId, search, surface, filters);
+    if (beforeId !== undefined) q._id = { $lt: new mongoose.Types.ObjectId(beforeId) };
+    return this.sessionModel.find(q).sort({ _id: -1 }).limit(limit);
+  }
   async findAllWithKnowledgeId(knowledgeId: string) {
     return this.sessionModel.find({ knowledgeIds: { $in: [knowledgeId] } });
   }
@@ -424,6 +519,25 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     if (fabFileIds.length === 0) return 0;
     const result = await this.sessionModel.updateMany(
       { knowledgeIds: { $in: fabFileIds } },
+      { $pull: { knowledgeIds: { $in: fabFileIds } } }
+    );
+    return result.modifiedCount;
+  }
+  async pullKnowledgeIdsFromSession(sessionId: string, fabFileIds: string[]) {
+    if (fabFileIds.length === 0 || !mongoose.isObjectIdOrHexString(sessionId)) return false;
+    // Matching on the ids too means a session holding none of them is not written at all, so its
+    // timestamps are not bumped (which would reorder it in the session list).
+    const result = await this.sessionModel.updateOne(
+      { _id: sessionId, knowledgeIds: { $in: fabFileIds } },
+      { $pull: { knowledgeIds: { $in: fabFileIds } } }
+    );
+    return result.modifiedCount > 0;
+  }
+  async pullKnowledgeIdsForUsers(userIds: string[], fabFileIds: string[]) {
+    if (userIds.length === 0 || fabFileIds.length === 0) return 0;
+    // `deletedAt: null` puts this on the (deletedAt, userId, lastUpdated) index and skips deleted notebooks.
+    const result = await this.sessionModel.updateMany(
+      { deletedAt: null, userId: { $in: userIds }, knowledgeIds: { $in: fabFileIds } },
       { $pull: { knowledgeIds: { $in: fabFileIds } } }
     );
     return result.modifiedCount;
@@ -444,6 +558,11 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
       throw new NotFoundError('Session not found');
     }
     return session;
+  }
+
+  async addAutoAddedTools(sessionId: string, toolNames: string[]) {
+    if (toolNames.length === 0) return;
+    await this.sessionModel.updateOne({ _id: sessionId }, { $addToSet: { autoAddedTools: { $each: toolNames } } });
   }
 
   async detachAgent(sessionId: string, agentId: string) {
@@ -532,7 +651,7 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
    * the spider itself already runs at.
    *
    * Must stay in step with the handler's gate (`determineSessionOperations` in
-   * apps/client/server/utils/sessionOperations.ts): quest existence AND the retry backoff. Both halves of
+   * packages/server-utils/src/utils/sessionOperations.ts): quest existence AND the retry backoff. Both halves of
    * the backoff are declared together in `@bike4mind/common` so they cannot drift.
    */
   async countTaggableNotebooks(userId: string): Promise<number> {
@@ -557,6 +676,140 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
       userId,
       voiceSessionStartedAt: { $gte: sixtyMinutesAgo },
     });
+  }
+
+  async addVoiceBilledCredits(sessionId: string, startedAt: Date, credits: number) {
+    // Only a realtime hold (opened with the marker) is billed per response; a response frame against
+    // any other hold gets null and is charged from the balance, so it can never re-price that hold.
+    const before = await this.sessionModel.findOneAndUpdate(
+      { _id: sessionId, voiceSessionStartedAt: startedAt, voiceBilledCredits: { $exists: true } },
+      { $inc: { voiceBilledCredits: credits } },
+      { new: false, projection: { voiceBilledCredits: 1 } }
+    );
+    return before ? (before.voiceBilledCredits ?? 0) : null;
+  }
+
+  async findStaleVoiceHolds(startedBefore: Date, realtimeStartedBefore: Date, limit: number) {
+    // Served by the partial voiceSessionStartedAt_1_openVoiceHold index; keep the top-level
+    // `voiceReservedCredits: { $gt: 0 }`, which is what lets the planner use it.
+    const sessions = await this.sessionModel
+      .find(
+        {
+          voiceReservedCredits: { $gt: 0 },
+          $or: [
+            { voiceBilledCredits: { $exists: false }, voiceSessionStartedAt: { $lt: startedBefore } },
+            { voiceBilledCredits: { $exists: true }, voiceSessionStartedAt: { $lt: realtimeStartedBefore } },
+          ],
+        },
+        {
+          userId: 1,
+          voiceReservedCredits: 1,
+          voiceSessionStartedAt: 1,
+          voiceConnectedAt: 1,
+          voiceLastActivityAt: 1,
+          voiceBilledCredits: 1,
+        }
+      )
+      .sort({ voiceSessionStartedAt: 1 })
+      .limit(limit)
+      .lean();
+    return sessions.map(s => ({
+      id: s._id.toString(),
+      userId: s.userId,
+      voiceReservedCredits: s.voiceReservedCredits as number,
+      voiceSessionStartedAt: s.voiceSessionStartedAt as Date,
+      voiceConnectedAt: s.voiceConnectedAt ?? null,
+      voiceLastActivityAt: s.voiceLastActivityAt ?? null,
+      realtime: s.voiceBilledCredits != null,
+    }));
+  }
+
+  async recordVoiceActivity(
+    sessionId: string,
+    at: Date,
+    holdStartedAt?: Date | null,
+    options: { realtimeOnly?: boolean } = {}
+  ) {
+    // Keyed on the hold's start when the signal names it, so a call still running elsewhere can
+    // never mark a newer hold on the same session connected.
+    // One pipeline update: the first signal sets voiceConnectedAt, and $max never moves activity back.
+    const { matchedCount } = await this.sessionModel.updateOne(
+      {
+        _id: sessionId,
+        voiceSessionStartedAt: holdStartedAt ?? { $ne: null },
+        ...(options.realtimeOnly ? { voiceBilledCredits: { $exists: true } } : {}),
+      },
+      [
+        {
+          $set: {
+            voiceConnectedAt: { $ifNull: ['$voiceConnectedAt', at] },
+            voiceLastActivityAt: { $max: ['$voiceLastActivityAt', at] },
+          },
+        },
+      ]
+    );
+    return matchedCount === 1;
+  }
+
+  async claimVoiceHold(sessionId: string, startedAt: Date, options?: { realtimeOnly?: boolean }) {
+    // Matching on startedAt makes the claim one-shot per hold: only one of a concurrent
+    // end, sweep or settlement frame wins, and a newer call's hold is never touched. The
+    // pre-update billed total includes every response frame that charged the hold before it.
+    // realtimeOnly matches only a hold carrying the realtime marker, as addVoiceBilledCredits does.
+    const before = await this.sessionModel.findOneAndUpdate(
+      {
+        _id: sessionId,
+        voiceSessionStartedAt: startedAt,
+        ...(options?.realtimeOnly ? { voiceBilledCredits: { $exists: true } } : {}),
+      },
+      {
+        $set: {
+          voiceReservedCredits: null,
+          voiceSessionStartedAt: null,
+          voiceConnectedAt: null,
+          voiceLastActivityAt: null,
+        },
+        $unset: { voiceBilledCredits: '', voiceHoldUserId: '' },
+      },
+      { new: false, projection: { voiceBilledCredits: 1, voiceHoldUserId: 1 } }
+    );
+    return before
+      ? { billedCredits: before.voiceBilledCredits ?? null, payerId: before.voiceHoldUserId ?? null }
+      : null;
+  }
+
+  async openVoiceHold(
+    sessionId: string,
+    priorStartedAt: Date | null,
+    hold: { voiceReservedCredits: number | null; voiceSessionStartedAt: Date; realtime: boolean; payerId: string }
+  ) {
+    // Conditional on the hold the bootstrap read: once it is settled (null) or, if it held no reserve
+    // and so was never claimed, still that start. A concurrent bootstrap that already wrote its own
+    // hold makes this match nothing, so only one of them keeps a reserve. The prior start matches
+    // only without a reserve: a reserved hold whose settlement failed still owes it (settleVoiceHold),
+    // so it must not be overwritten.
+    const { matchedCount } = await this.sessionModel.updateOne(
+      {
+        _id: sessionId,
+        $or: [
+          { voiceSessionStartedAt: null },
+          ...(priorStartedAt ? [{ voiceSessionStartedAt: priorStartedAt, voiceReservedCredits: null }] : []),
+        ],
+      },
+      {
+        $set: {
+          voiceReservedCredits: hold.voiceReservedCredits,
+          voiceSessionStartedAt: hold.voiceSessionStartedAt,
+          voiceConnectedAt: null,
+          voiceLastActivityAt: null,
+          voiceHoldUserId: hold.payerId,
+          // Realtime holds are billed per response against this marker (server/websocket/voiceSessionEnded.ts).
+          ...(hold.realtime ? { voiceBilledCredits: 0 } : {}),
+        },
+        ...(hold.realtime ? {} : { $unset: { voiceBilledCredits: '' } }),
+      }
+    );
+    return matchedCount === 1;
   }
 
   async findSessionIdsByUserId(userId: string) {
@@ -685,6 +938,13 @@ SessionSchema.plugin(softDeletePlugin);
 // Optimize session listing - used on homepage and many screens
 SessionSchema.index({ deletedAt: 1, userId: 1, lastUpdated: -1 });
 
+// Session list filtered by origin (sidebar "Only API" / "Hide API"); see sessionListFilterQuery.
+SessionSchema.index({ deletedAt: 1, userId: 1, 'origin.channel': 1, lastUpdated: -1 });
+
+// Keyset pagination for GET /api/v1/sessions (listByUserId): equality on deletedAt/userId, then an
+// index-ordered walk of _id, so a page reads limit+1 rows instead of sorting every session the user has.
+SessionSchema.index({ deletedAt: 1, userId: 1, _id: -1 });
+
 // Optimize permission and sharing queries
 SessionSchema.index({ deletedAt: 1, 'users.permissions': 1, 'users.userId': 1 });
 
@@ -718,6 +978,15 @@ SessionSchema.index(
 
 // Index for countActiveVoiceSessionsByUserId - runs on every voice session creation
 SessionSchema.index({ userId: 1, voiceSessionStartedAt: 1 }, { sparse: true });
+// Index for findStaleVoiceHolds (the stale voice hold sweep). Partial on the sweep's own top-level
+// `voiceReservedCredits: { $gt: 0 }`, so only open paid holds are indexed and the planner can prove
+// the query is covered by the filter. A `{ voiceSessionStartedAt: { $type: 'date' } }` filter is not
+// implied by the sweep's `$lt` ranges, so that index was never chosen. Named so it can coexist with
+// that index until migration 20260921235986_ensure-stale-voice-hold-index drops it.
+SessionSchema.index(
+  { voiceSessionStartedAt: 1 },
+  { name: 'voiceSessionStartedAt_1_openVoiceHold', partialFilterExpression: { voiceReservedCredits: { $gt: 0 } } }
+);
 
 export const Session: ISessionModel =
   (mongoose.models[ModelName] as unknown as ISessionModel) ?? model<ISession, ISessionModel>(ModelName, SessionSchema);

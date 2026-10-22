@@ -10,6 +10,7 @@ import StatusTiles from '@client/app/components/QaStatus/StatusTiles';
 import StatusCharts from '@client/app/components/QaStatus/StatusCharts';
 import FlakyTable from '@client/app/components/QaStatus/FlakyTable';
 import RunList from '@client/app/components/QaStatus/RunList';
+import StatusHeader from '@client/app/components/QaStatus/StatusHeader';
 import RunExpanded from '@client/app/components/QaStatus/RunExpanded';
 
 const QaStatusPage: FC = () => {
@@ -30,16 +31,18 @@ const QaStatusPage: FC = () => {
   const openTest = (testKey: string) => navigate({ to: '/status/tests/$testKey', params: { testKey } });
 
   return (
-    <Box sx={{ p: 3, overflow: 'auto', height: '100%' }}>
+    <Box sx={{ p: 3 }}>
       <Stack spacing={3}>
-        <Typography level="h3">QA status</Typography>
+        <StatusHeader>
+          <Typography level="h3">QA status</Typography>
+        </StatusHeader>
         <StatusFilters search={effective} facets={facets.data} onChange={onChange} />
         {allFacets.data && allFacets.data.products.length === 0 && <Alert>No QA runs ingested yet.</Alert>}
         {(overview.isError || runs.isError) && <Alert color="danger">Could not load QA status.</Alert>}
         {overview.data && (
           <>
             <StatusTiles tiles={overview.data.tiles} onOpenRun={openRun} />
-            <StatusCharts series={overview.data.series} />
+            <StatusCharts series={overview.data.series} range={effective.range} />
             <FlakyTable rows={overview.data.flaky} onOpenTest={openTest} />
           </>
         )}

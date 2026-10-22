@@ -1,5 +1,7 @@
 import OpenAI from 'openai';
 import { Logger } from '@bike4mind/observability';
+import { BedrockRuntimeClient, ApplyGuardrailCommand } from '@aws-sdk/client-bedrock-runtime';
+import { bedrockClientConfig } from '@bike4mind/common';
 
 export interface ModerationService {
   /**
@@ -21,6 +23,86 @@ export class FlaggedContentError extends Error {
   ) {
     super(message);
     this.name = 'FlaggedContentError';
+  }
+}
+
+/**
+ * Bedrock Guardrails moderation. Used as a fallback when no OpenAI key is
+ * available, so Bedrock-routed traffic gets the same prompt-moderation coverage.
+ * The client is constructed lazily so a missing BEDROCK_AWS_* config on self-host
+ * only rejects at the first checkPrompt call, not at construction time.
+ */
+export class BedrockGuardrailsService implements ModerationService {
+  private _client: BedrockRuntimeClient | null = null;
+
+  constructor(
+    private readonly guardrailId: string,
+    private readonly guardrailVersion: string,
+    private readonly logger: Logger
+  ) {}
+
+  private get client(): BedrockRuntimeClient {
+    if (!this._client) {
+      this._client = new BedrockRuntimeClient({
+        region: process.env.AWS_REGION || 'us-east-2',
+        ...bedrockClientConfig(),
+      });
+    }
+    return this._client;
+  }
+
+  async checkPrompt(prompt: string): Promise<void> {
+    const response = await this.client.send(
+      new ApplyGuardrailCommand({
+        guardrailIdentifier: this.guardrailId,
+        guardrailVersion: this.guardrailVersion,
+        source: 'INPUT',
+        content: [{ text: { text: prompt } }],
+      })
+    );
+
+    if (response.action === 'GUARDRAIL_INTERVENED') {
+      const categories: string[] = [];
+      for (const assessment of response.assessments ?? []) {
+        for (const topic of assessment.topicPolicy?.topics ?? []) {
+          if (topic.action === 'BLOCKED' && topic.name) categories.push(topic.name);
+        }
+        for (const filter of assessment.contentPolicy?.filters ?? []) {
+          if (filter.action === 'BLOCKED' && filter.type) categories.push(filter.type);
+        }
+        for (const word of assessment.wordPolicy?.customWords ?? []) {
+          if (word.action === 'BLOCKED' && word.match) categories.push(`word:${word.match}`);
+        }
+        for (const word of assessment.wordPolicy?.managedWordLists ?? []) {
+          if (word.action === 'BLOCKED' && word.type) categories.push(`word:${word.type}`);
+        }
+        for (const pii of assessment.sensitiveInformationPolicy?.piiEntities ?? []) {
+          if (pii.action === 'BLOCKED' && pii.type) categories.push(`pii:${pii.type}`);
+        }
+        for (const re of assessment.sensitiveInformationPolicy?.regexes ?? []) {
+          if (re.action === 'BLOCKED' && re.name) categories.push(`regex:${re.name}`);
+        }
+        for (const grounding of assessment.contextualGroundingPolicy?.filters ?? []) {
+          if (grounding.action === 'BLOCKED' && grounding.type) categories.push(`grounding:${grounding.type}`);
+        }
+      }
+      // GUARDRAIL_INTERVENED is also raised for non-blocking actions (e.g. PII anonymization).
+      // Only throw when at least one policy entry was actually BLOCKED.
+      if (categories.length === 0) {
+        this.logger.info(
+          'Bedrock Guardrails intervened with no BLOCKED entries (e.g. PII anonymization); allowing prompt',
+          {
+            guardrailId: this.guardrailId,
+          }
+        );
+        return;
+      }
+      this.logger.error('Prompt flagged by Bedrock Guardrails:', { guardrailId: this.guardrailId, categories });
+      throw new FlaggedContentError(
+        `We're sorry, your prompt has been flagged for potential harmful content on the following categories: ${categories.join(', ')}`,
+        categories
+      );
+    }
   }
 }
 

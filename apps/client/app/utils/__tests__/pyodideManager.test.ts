@@ -50,25 +50,44 @@ describe('pyodideManager', () => {
       expect(packages).toContain('numpy');
     });
 
-    it('should detect seaborn import', () => {
+    it('does not detect seaborn (not bundled with Pyodide, so it can never load)', () => {
       const code = 'import seaborn as sns\nsns.heatmap(data)';
       const packages = detectPackages(code);
-      expect(packages).toContain('seaborn');
+      expect(packages).not.toContain('seaborn');
     });
 
     it('should detect sklearn import with direct import', () => {
-      // The current regex only matches the top-level module name
-      // 'from sklearn.linear_model' extracts 'sklearn' as the module
       const code = 'import sklearn';
       const packages = detectPackages(code);
       expect(packages).toContain('sklearn');
     });
 
     it('should detect sklearn from submodule import', () => {
-      // from sklearn.X import Y extracts 'sklearn'
-      const code = 'from sklearn import linear_model';
+      const code = 'from sklearn.linear_model import LinearRegression';
       const packages = detectPackages(code);
-      expect(packages).toContain('sklearn');
+      expect(packages).toEqual(['sklearn']);
+    });
+
+    it('should detect scipy from a dotted from-import with several names', () => {
+      const code = 'from scipy.optimize import milp, LinearConstraint, Bounds\nimport numpy as np';
+      const packages = detectPackages(code);
+      expect(packages).toContain('scipy');
+      expect(packages).toContain('numpy');
+    });
+
+    it('should detect every module in a comma-separated import', () => {
+      const code = 'import numpy as np, scipy.optimize, json  # stdlib is ignored';
+      const packages = detectPackages(code);
+      expect(packages.sort()).toEqual(['numpy', 'scipy']);
+    });
+
+    it('should detect indented imports', () => {
+      const code = 'def solve():\n    from scipy.optimize import linprog\n    return linprog';
+      expect(detectPackages(code)).toEqual(['scipy']);
+    });
+
+    it('should ignore relative imports', () => {
+      expect(detectPackages('from .numpy import thing')).toHaveLength(0);
     });
 
     it('should not detect unsupported packages', () => {
@@ -90,7 +109,7 @@ import seaborn as sns
       expect(packages).toContain('pandas');
       expect(packages).toContain('matplotlib');
       expect(packages).toContain('scipy');
-      expect(packages).toContain('seaborn');
+      expect(packages).not.toContain('seaborn');
     });
 
     it('should not duplicate packages', () => {
@@ -181,7 +200,7 @@ from numpy import array
       expect(packages).toContain('pandas');
       expect(packages).toContain('matplotlib');
       expect(packages).toContain('scipy');
-      expect(packages).toContain('seaborn');
+      expect(packages).not.toContain('seaborn');
       expect(packages).toContain('scikit-learn');
     });
   });
@@ -361,6 +380,57 @@ describe('sandbox transport', () => {
     }
   });
 
+  it('settles a run waiting on the runtime load when it is interrupted', async () => {
+    const { pyodideManager, pending } = await readySandbox();
+    void pending.catch(() => {});
+    const run = pyodideManager.execute('print(1)').then(
+      () => 'resolved',
+      (error: Error) => error.message
+    );
+
+    pyodideManager.interrupt();
+
+    await expect(run).resolves.toBe('Execution interrupted');
+    // The replacement load is the live one, not marked failed by the interrupted load.
+    expect(pyodideManager.getState().error).toBeNull();
+  });
+
+  it('an interrupt during the handshake does not leave a timer that tears down the next sandbox', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.resetModules();
+      const { pyodideManager, PYODIDE_SANDBOX_SRC } = await import('../pyodideManager');
+      const first = pyodideManager.initialize().then(
+        () => 'resolved',
+        (error: Error) => error.message
+      );
+      await Promise.resolve();
+
+      pyodideManager.interrupt();
+      await expect(first).resolves.toBe('Execution interrupted');
+
+      const replacement = document.querySelector(`iframe[src="${PYODIDE_SANDBOX_SRC}"]`) as HTMLIFrameElement;
+      expect(replacement).not.toBeNull();
+      // Keep the replacement's own handshake alive past the first one's 15s deadline.
+      Object.defineProperty(replacement, 'contentWindow', { configurable: true, value: { postMessage: () => {} } });
+      window.dispatchEvent(
+        new MessageEvent('message', { data: { type: 'pyodide-sandbox-ready' }, source: replacement.contentWindow })
+      );
+      await vi.advanceTimersByTimeAsync(14_000);
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: { type: 'initializing', progress: 10, message: 'loading' },
+          source: replacement.contentWindow,
+        })
+      );
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      expect(replacement.isConnected).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('lets a slow load keep going as long as it reports progress', async () => {
     vi.useFakeTimers();
     try {
@@ -384,6 +454,75 @@ describe('sandbox transport', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('execution results', () => {
+  const readySandbox = async () => {
+    vi.resetModules();
+    const { pyodideManager } = await import('../pyodideManager');
+    const pending = pyodideManager.initialize();
+    void pending.catch(() => {});
+    await Promise.resolve();
+
+    const frame = document.querySelector('iframe') as HTMLIFrameElement;
+    Object.defineProperty(frame, 'contentWindow', { configurable: true, value: { postMessage: () => {} } });
+    const fromSandbox = (data: unknown) =>
+      window.dispatchEvent(new MessageEvent('message', { data, source: frame.contentWindow }));
+
+    fromSandbox({ type: 'pyodide-sandbox-ready' });
+    await Promise.resolve();
+    await Promise.resolve();
+    fromSandbox({ type: 'ready' });
+    await pending;
+
+    return { pyodideManager, fromSandbox };
+  };
+
+  afterEach(() => {
+    document.querySelectorAll('iframe').forEach(node => node.remove());
+  });
+
+  it('rejects a second run while one is pending instead of orphaning the first', async () => {
+    const { pyodideManager, fromSandbox } = await readySandbox();
+    const first = pyodideManager.execute('print(1)');
+
+    await expect(pyodideManager.execute('print(2)')).rejects.toThrow('Another Python script is already running');
+
+    fromSandbox({ type: 'result', result: { success: true, output: '1\n', plots: [], executionTime: 1 } });
+    await expect(first).resolves.toMatchObject({ success: true, output: '1\n' });
+  });
+
+  it('surfaces the worker status while a run is loading packages', async () => {
+    const { pyodideManager, fromSandbox } = await readySandbox();
+    const run = pyodideManager.execute('from scipy.optimize import milp');
+    await Promise.resolve();
+
+    fromSandbox({ type: 'executing', message: 'Loading scipy, openblas' });
+    expect(pyodideManager.getState().executionStatus).toBe('Loading scipy, openblas');
+
+    fromSandbox({ type: 'result', result: { success: true, output: '', plots: [], executionTime: 1 } });
+    await run;
+    expect(pyodideManager.getState().executionStatus).toBeNull();
+  });
+
+  it('explains an unavailable package and keeps the traceback', async () => {
+    const { pyodideManager, fromSandbox } = await readySandbox();
+    const run = pyodideManager.execute('import highspy');
+    await Promise.resolve();
+
+    const traceback =
+      'Traceback (most recent call last):\n  File "<exec>", line 1, in <module>\nModuleNotFoundError: No module named \'highspy\'\n';
+    fromSandbox({
+      type: 'result',
+      result: { success: false, output: '', error: traceback, plots: [], executionTime: 1 },
+    });
+
+    const result = await run;
+    expect(result.error).toMatch(
+      /^`highspy` is not available in the browser Python runtime\. Use scipy\.optimize\.milp/
+    );
+    expect(result.error).toContain(traceback);
   });
 });
 

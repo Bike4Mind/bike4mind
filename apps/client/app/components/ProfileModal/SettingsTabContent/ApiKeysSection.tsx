@@ -218,6 +218,7 @@ const PROVIDER_LABELS: Record<ApiKeyType, string | null> = {
   [ApiKeyType.deepseek]: 'DeepSeek',
   [ApiKeyType.bfl]: 'Black Forest Labs',
   [ApiKeyType.voyageai]: 'Voyage AI',
+  [ApiKeyType.typesafe]: 'TypeSafe',
   [ApiKeyType.elevenlabs]: 'ElevenLabs',
   [ApiKeyType.serpapi]: null,
   [ApiKeyType.ollama]: null,
@@ -249,13 +250,16 @@ const ApiKeysSection = () => {
 
   return (
     <>
-      <SectionContainer title="API Keys">
+      <SectionContainer
+        title="Provider keys (BYOK)"
+        subtitle="Your own keys for model providers such as OpenAI or Anthropic, used when the app calls those models. They are not keys to this app's API."
+      >
         {query.isFetching && <LinearProgress />}
 
         <Tabs value={activeTab} onChange={(_, value) => setActiveTab(value as number)}>
           <TabList sx={{ gap: '2px' }}>
             <StyledTab value={0}>
-              <Typography sx={{ color: 'text.primary' }}>API Keys</Typography>
+              <Typography sx={{ color: 'text.primary' }}>Model providers</Typography>
             </StyledTab>
             <StyledTab value={1}>
               <Typography sx={{ color: 'text.primary' }}>Speech</Typography>

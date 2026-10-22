@@ -1,86 +1,174 @@
-import { Typography, Tooltip, Button, useTheme, Box } from '@mui/joy';
-import Bike4MindIcon from '../svgs/icons/Bike4MindIcon';
-import { FC, useState, useMemo } from 'react';
-import CreditsModal from '../subscription/CreditsModal';
+import { Box, Button, Tooltip, Typography } from '@mui/joy';
+import InfoRoundedIcon from '@mui/icons-material/InfoRounded';
+import type { ISessionDocument } from '@bike4mind/common';
+import { useCreditPayerNote } from './CreditPayerNote';
+import { STATUS_ITEM_HEIGHT, useStatusLineCompact } from './SessionBottom/ComposerStatusLine';
+import { FC, useState } from 'react';
+import CreditIcon from '../svgs/icons/CreditIcon';
+import { orange } from '@client/app/utils/themes/colors';
+import BillingModal from '../subscription/BillingModal';
+import { useEffectiveCredits } from '@client/app/hooks/useEffectiveCredits';
+import { useGetSettingsValue } from '@client/app/hooks/data/settings';
+import { formatCreditBalance } from '@client/app/utils/formatCredits';
+import { FirstRunEvents, LOW_CREDITS_THRESHOLD_DEFAULT } from '@bike4mind/common';
+import { useLowCreditsThreshold } from '@client/app/hooks/data/teamPlanSettings';
+import { useLLM } from '@client/app/contexts/LLMContext';
+import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
+import { estimateAnswerCount, typicalAnswerCredits } from '@client/app/utils/creditEstimate';
+import { useLogEvent } from '@client/app/hooks/data/analytics';
 
 /**
- * Threshold below which credits are considered "low".
- * Used by both CreditButton (visual warning state) and LowCreditsWarning (overlay prompt).
+ * Default threshold below which credits are considered "low". The live value is the
+ * `lowCreditsThreshold` admin setting - read it with `useLowCreditsThreshold()`.
  */
-export const LOW_CREDITS_THRESHOLD = 1000;
+export const LOW_CREDITS_THRESHOLD = LOW_CREDITS_THRESHOLD_DEFAULT;
 
-interface CreditsButtonProps {
-  currentCredits?: number;
+function balanceTooltip(credits: number, lowCreditsThreshold: number): string {
+  if (credits <= 0) return 'No credits left. Subscribe or top up to continue. Your chats and files are safe.';
+  if (credits < lowCreditsThreshold) return 'Running low. Subscribe or top up so your work is not interrupted.';
+  return 'About how many typical answers are left on the current model. Click to see plans and top up.';
 }
 
-const SessionCreditsButton: FC<CreditsButtonProps> = ({ currentCredits = 0 }) => {
-  const theme = useTheme();
-  const isDarkMode = theme.palette.mode === 'dark';
+/**
+ * The balance as quiet text, coloured only when it runs low; no data of its own, so a preview can
+ * render any balance. CreditBalanceChip feeds it the live one.
+ */
+export const CreditBalanceChipView: FC<{
+  credits: number;
+  lowCreditsThreshold: number;
+  onClick: () => void;
+  answersLeft?: number | null;
+  modelName?: string;
+  /** Who pays, in a notebook the user does not own (useCreditPayerNote): an info mark and the tooltip's first line. */
+  payerNote?: string | null;
+}> = ({ credits, lowCreditsThreshold, onClick, answersLeft, modelName, payerNote }) => {
+  const color = credits <= 0 ? 'danger' : credits < lowCreditsThreshold ? 'warning' : 'neutral';
+  const balanceText = balanceTooltip(credits, lowCreditsThreshold);
+  // Out of room on the status line: the number without "credits" (the icon says it; the name keeps it).
+  const compact = useStatusLineCompact();
+  const hasEstimate = answersLeft !== undefined && answersLeft !== null;
+  const count = hasEstimate ? (credits <= 0 ? 0 : answersLeft) : null;
+  const noun = count === 1 ? 'answer' : 'answers';
+  const shown =
+    count === null
+      ? formatCreditBalance(credits)
+      : count < 1
+        ? credits <= 0
+          ? compact
+            ? '0'
+            : '0 answers'
+          : compact
+            ? '<1'
+            : '<1 answer'
+        : `~${count.toLocaleString('en-US')}${compact ? '' : ` ${noun}`}`;
+  const answerPhrase =
+    count === null
+      ? null
+      : count < 1
+        ? credits <= 0
+          ? '0 answers'
+          : 'less than 1 typical answer'
+        : `about ${count.toLocaleString('en-US')} typical ${noun}`;
+  const ariaLabel =
+    credits <= 0
+      ? `No credits left.${payerNote ? ` ${payerNote}.` : ''} See plans and top up`
+      : `${answerPhrase ?? formatCreditBalance(credits)} left${modelName ? ` on ${modelName}` : ''}.` +
+        `${answerPhrase ? ` ${formatCreditBalance(credits)}.` : ''}${payerNote ? ` ${payerNote}.` : ''} See plans and top up`;
+  const title = payerNote ? (
+    <Box sx={{ maxWidth: 280, display: 'flex', flexDirection: 'column', gap: '4px' }}>
+      <Typography level="body-xs" textColor="inherit" sx={{ fontWeight: 600 }}>
+        {payerNote}
+      </Typography>
+      <Typography level="body-xs" textColor="inherit">
+        {balanceText}
+      </Typography>
+    </Box>
+  ) : (
+    balanceText
+  );
+  return (
+    <Tooltip title={title} placement="top" variant="soft">
+      <Button
+        size="sm"
+        variant="plain"
+        color={color}
+        onClick={onClick}
+        data-testid="credit-balance-chip"
+        aria-label={ariaLabel}
+        startDecorator={<CreditIcon sx={{ fontSize: 14 }} />}
+        endDecorator={
+          payerNote ? (
+            <InfoRoundedIcon data-testid="credit-payer-mark" sx={{ fontSize: 14, color: 'inherit' }} />
+          ) : undefined
+        }
+        sx={{
+          height: STATUS_ITEM_HEIGHT,
+          minHeight: STATUS_ITEM_HEIGHT,
+          px: 0.75,
+          gap: 0.25,
+          borderRadius: '6px',
+          whiteSpace: 'nowrap',
+          fontSize: '12px',
+          fontWeight: 400,
+          fontVariantNumeric: 'tabular-nums',
+          ...(color === 'neutral' && {
+            '--variant-plainColor': 'var(--joy-palette-text-tertiary)',
+            '--variant-plainHoverColor': 'var(--joy-palette-text-secondary)',
+          }),
+          // Low: the same orange and neutral hover as Research Mode's no-models state
+          // (ResearchModeIndicator), not the paler warning.plainColor.
+          ...(color === 'warning' && {
+            '--variant-plainColor': orange[450],
+            '--variant-plainHoverColor': orange[450],
+            '--variant-plainHoverBg': 'var(--joy-palette-neutral-plainHoverBg)',
+            '--variant-plainActiveBg': 'var(--joy-palette-neutral-plainActiveBg)',
+          }),
+        }}
+      >
+        {shown}
+      </Button>
+    </Tooltip>
+  );
+};
+
+/**
+ * Labeled credit balance for the status line above the composer (ComposerStatusLine); opens the
+ * credits modal (packages + transaction history). Quiet text at rest, coloured only when the
+ * balance runs low. Renders nothing while `enforceCredits` is off, matching the profile menu -
+ * nothing decrements then, so a balance would mislead. Uses the display (not live) balance so it
+ * holds steady through a turn's reservation dip (see useEffectiveCredits).
+ */
+const CreditBalanceChip: FC<{ session?: ISessionDocument | null }> = ({ session }) => {
+  const enforceCredits = !!useGetSettingsValue('enforceCredits');
+  const payerNote = useCreditPayerNote(session);
+  const credits = useEffectiveCredits();
+  const lowCreditsThreshold = useLowCreditsThreshold();
+  const model = useLLM(state => state.model);
+  const { data: models } = useModelInfo();
+  const selected = models?.find(candidate => candidate.id === model);
+  const answerCost = selected ? typicalAnswerCredits(selected) : null;
+  const answersLeft = answerCost ? estimateAnswerCount(credits, answerCost) : null;
   const [isOpen, setIsOpen] = useState(false);
+  const { mutate: logEvent } = useLogEvent();
 
-  const buttonColor = currentCredits <= 0 ? 'danger' : currentCredits < LOW_CREDITS_THRESHOLD ? 'warning' : 'neutral';
-
-  const tooltipTitle = useMemo(() => {
-    // Common message for low/no credits
-    const creditWarningMessage = "Buy more credits to make sure your work won't be interrupted";
-
-    if (currentCredits <= 0) {
-      return <CreditTooltipContent title="Ready for Refill" message={creditWarningMessage} />;
-    } else if (currentCredits < LOW_CREDITS_THRESHOLD) {
-      return <CreditTooltipContent title="Low on Credits!" message={creditWarningMessage} />;
-    } else {
-      return 'Credits';
-    }
-  }, [currentCredits]);
+  if (!enforceCredits) return null;
 
   return (
     <>
-      <Tooltip
-        title={tooltipTitle}
-        arrow
-        variant="outlined"
-        placement="top"
-        color={buttonColor}
-        sx={{
-          borderColor: theme.palette[buttonColor][400],
-          backgroundColor: isDarkMode ? theme.palette[buttonColor][800] : theme.palette[buttonColor][100],
-          '& .MuiTooltip-arrow:before': {
-            borderTopColor: theme.palette[buttonColor][400],
-            borderRightColor: theme.palette[buttonColor][400],
-          },
+      <CreditBalanceChipView
+        credits={credits}
+        lowCreditsThreshold={lowCreditsThreshold}
+        onClick={() => {
+          logEvent({ type: FirstRunEvents.CREDITS_CHIP_CLICKED });
+          setIsOpen(true);
         }}
-      >
-        <Button
-          variant="outlined"
-          sx={{
-            gap: '8px',
-            borderColor: theme.palette[buttonColor][400],
-            backgroundColor: isDarkMode ? theme.palette[buttonColor][800] : theme.palette[buttonColor][100],
-          }}
-          onClick={() => setIsOpen(true)}
-        >
-          <Bike4MindIcon size="15px" fill={theme.palette[buttonColor][400]} />
-          <Typography
-            level="body-sm"
-            sx={{
-              color: theme.palette[buttonColor][400],
-            }}
-          >
-            {currentCredits}
-          </Typography>
-        </Button>
-      </Tooltip>
-      <CreditsModal open={isOpen} onClose={() => setIsOpen(false)} />
+        answersLeft={answersLeft}
+        modelName={selected?.name}
+        payerNote={payerNote}
+      />
+      <BillingModal open={isOpen} entry="credits_chip" onClose={() => setIsOpen(false)} />
     </>
   );
 };
 
-// Helper component for tooltip content
-const CreditTooltipContent = ({ title, message }: { title: string; message: string }) => (
-  <Box sx={{ p: '10px', maxWidth: '268px' }}>
-    <Typography sx={{ fontWeight: 500, fontSize: '16px', lineHeight: '16px', mb: '8px' }}>{title}</Typography>
-    <Typography sx={{ fontSize: '14px', lineHeight: '140%', opacity: 0.5 }}>{message}</Typography>
-  </Box>
-);
-
-export default SessionCreditsButton;
+export default CreditBalanceChip;

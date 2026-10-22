@@ -3,10 +3,10 @@ import { z } from 'zod';
 import { Logger } from '@bike4mind/observability';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { MongoDeepAgentStore } from '@server/deepAgent/store';
-import { createLlmReviewStep, runReviewWake } from '@server/deepAgent/reviewWake';
+import { MongoDeepAgentStore } from '@bike4mind/server-utils/deepAgent/store';
+import { createLlmReviewStep, runReviewWake } from '@bike4mind/server-utils/deepAgent/reviewWake';
 import { bridgeReviewToSession } from '@server/deepAgent/missionSessionBridge';
-import { DEFAULT_WAKE_MODEL_ID, resolveDeepAgentBackend } from '@server/deepAgent/resolveBackend';
+import { DEFAULT_WAKE_MODEL_ID, resolveDeepAgentBackend } from '@bike4mind/server-utils/deepAgent/resolveBackend';
 
 /**
  * POST /api/deep-agent/review  (admin/dev only)

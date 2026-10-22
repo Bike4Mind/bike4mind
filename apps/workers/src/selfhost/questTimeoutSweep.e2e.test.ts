@@ -3,17 +3,20 @@ import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { Quest, questRepository } from '@bike4mind/database';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
-import { emitMetric } from '@server/utils/cloudwatch';
-import { resolveQuestTimeoutRecovery, UNFINISHED_REPLY_NOTICE } from '@server/chatCompletion/questTimeoutRecovery';
+import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
+import {
+  resolveQuestTimeoutRecovery,
+  UNFINISHED_REPLY_NOTICE,
+} from '@bike4mind/server-utils/chatCompletion/questTimeoutRecovery';
 import { RUN_TIMED_OUT_FINISH_REASON } from '@bike4mind/common';
-import * as sweepModule from '@server/cron/questTimeoutSweep';
+import * as sweepModule from '@workers/cron/questTimeoutSweep';
 import { SelfHostWorker } from './selfHostWorker';
 import { QUEST_TIMEOUT_SWEEP_INTERVAL_MS, registerQuestTimeoutSweep } from './questTimeoutSweep';
 
 vi.mock('sst', () => ({ Resource: { App: { stage: 'selfhost' } } }));
-vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'unused' } }));
-vi.mock('@server/utils/sqs', () => ({ receiveFromQueue: vi.fn(), deleteFromQueue: vi.fn() }));
-vi.mock('@server/utils/cloudwatch', () => ({ emitMetric: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'unused' } }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ receiveFromQueue: vi.fn(), deleteFromQueue: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetric: vi.fn() }));
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 const SECOND = 1000;

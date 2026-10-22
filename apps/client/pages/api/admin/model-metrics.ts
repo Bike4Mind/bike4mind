@@ -3,7 +3,7 @@ import { ApiKeyScope, IChatHistoryItemDocument } from '@bike4mind/common';
 import { cacheService } from '@bike4mind/services';
 import { CacheKeys } from '@server/utils/cacheKeys';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { resolveQuestModelType } from '@server/utils/questModelType';
 import { Request } from 'express';
 import { z } from 'zod';
@@ -67,6 +67,10 @@ interface ModelMetricResponse {
   status: string;
   /** Per-stage request lifecycle log, for the status-log timeline. */
   statusLog?: Array<{ status: string; timestamp: string }>;
+}
+
+function getClientFirstTokenTime(quest: IChatHistoryItemDocument): number | undefined {
+  return quest.clientFirstTokenTime ?? quest.promptMeta?.performance?.clientFirstTokenTime;
 }
 
 function getProcessPickupTime(quest: IChatHistoryItemDocument): number | undefined {
@@ -155,6 +159,7 @@ async function fetchModelMetrics(filters: ModelMetricsFilters): Promise<ModelMet
       modelInferenceTime: quest.promptMeta?.performance?.modelInferenceTime,
       firstTokenTime: quest.promptMeta?.performance?.firstTokenTime,
       firstChunkTime: quest.promptMeta?.performance?.firstChunkTime,
+      clientFirstTokenTime: getClientFirstTokenTime(quest),
       processPickupTime: getProcessPickupTime(quest),
       streamingPerformance: quest.promptMeta?.performance?.streamingPerformance
         ? {

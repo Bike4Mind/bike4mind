@@ -32,7 +32,7 @@ const createInviteSchema = z.object({
   permissions: z.array(z.enum(Permission)),
   recipients: z.string().array().optional(),
   description: z.string().optional(),
-  expiresAt: z.date().optional().prefault(defaultExpiration()),
+  expiresAt: z.date().prefault(defaultExpiration()),
   // No prefault here: the default depends on recipients.length (below), which this schema
   // cannot see. No caller currently sets this explicitly.
   available: z.number().optional(),
@@ -43,9 +43,8 @@ interface CreateInviteAdapters {
     // TODO: Use Invite model create type def
     invites: IInviteRepository;
     users: Pick<IUserRepository, 'findAllByEmailsOrUsernames' | 'findById' | 'findByIds'>;
-    // add findShareAccessById to fabFiles
-    fabFiles: Pick<IFabFileRepository, 'findByIdAndUserId' | 'shareable'>;
-    sessions: Pick<ISessionRepository, 'findByIdAndUserId'>;
+    fabFiles: Pick<IFabFileRepository, 'shareable'>;
+    sessions: Pick<ISessionRepository, 'shareable'>;
     projects: Pick<IProjectRepository, 'shareable'>;
     // TODO: Use Organization model create type def
     organizations: IOrganizationRepository;
@@ -79,7 +78,7 @@ export const createInvite = async (
       name = (doc as IFabFileDocument)?.fileName;
       break;
     case InviteType.Session:
-      doc = await db.sessions.findByIdAndUserId(id, user.id);
+      doc = await db.sessions.shareable.findShareAccessById(user, id);
       name = doc?.name;
       break;
     case InviteType.Organization:
@@ -196,9 +195,31 @@ export const createInvite = async (
     // could view it and accept it. Emails/usernames are accepted here too so a caller that sends
     // those instead of ids keeps working.
     const byId = await db.users.findByIds(recipientsArray);
-    pending = Array.from(
-      new Set([...users, ...byId].map(u => u.email).filter((email): email is string => Boolean(email)))
+    // Same rule as the FabFile/Session arm: an email-shaped recipient resolves against the email
+    // field only, so a self-set username that looks like an address cannot claim the invite.
+    const matchedByEmailOrName = users.filter(u =>
+      recipientsArray.some(recipient =>
+        recipient.includes('@')
+          ? u.email?.toLowerCase() === recipient.trim().toLowerCase()
+          : u.username?.toLowerCase() === recipient.toLowerCase()
+      )
     );
+    const resolvedEmails = [...matchedByEmailOrName, ...byId]
+      .map(u => u.email)
+      .filter((email): email is string => Boolean(email));
+    // A Project invite may name someone with no account yet by exact address: they register with
+    // that email and find the invite waiting. Stored lowercased; an SSO signup keeps the provider's
+    // casing, which is why accept.ts and refuseWholeInvite.ts match pending case-insensitively.
+    // Built the same whether or not the address belongs to an account, so the response reveals
+    // nothing new (toSharerInviteViews lowercases typed addresses for the same reason).
+    const resolvedLower = new Set(resolvedEmails.map(email => email.toLowerCase()));
+    const unregistered =
+      type === InviteType.Project
+        ? recipientsArray
+            .map(recipient => recipient.trim().toLowerCase())
+            .filter(recipient => z.email().safeParse(recipient).success && !resolvedLower.has(recipient))
+        : [];
+    pending = Array.from(new Set([...resolvedEmails, ...unregistered]));
     // An invite naming only unresolvable recipients can never be viewed or accepted by anyone now
     // that those gates key on `pending`, so fail loudly at mint time instead of persisting a row
     // that silently does nothing.
@@ -214,6 +235,12 @@ export const createInvite = async (
       throw new BadRequestError('Could not find a user for any recipient');
     }
   }
+
+  // Only an address the inviter typed may be shown back to them; anything resolved from an id or a
+  // username is withheld by the sharer-facing invite views. Recorded against `pending` so a typed
+  // address that matched nobody is not listed.
+  const typedEmails = new Set(recipientsArray.filter(r => r.includes('@')).map(r => r.trim().toLowerCase()));
+  const typedRecipients = pending.map(email => email.toLowerCase()).filter(email => typedEmails.has(email));
 
   // No caller sets `available` explicitly today. Defaulting it to a flat 1 regardless of
   // recipient count meant a multi-recipient By-Users share minted one invite whose single
@@ -244,10 +271,10 @@ export const createInvite = async (
     name,
     // username of the user who is sharing instead of owner of the file
     username: user.username,
-    // Who minted the invite -- accept.ts's Session arm caps propagated file grants to
-    // what this user actually holds, so an attached file the inviter cannot share
-    // does not silently inherit the invite's permissions.
+    // Who minted the invite. accept.ts re-checks this user's current access on every shareable arm
+    // (refusing or capping the grant) and caps a notebook's propagated file grants to what they hold.
     inviterId: user.id,
+    typedRecipients,
   };
 
   const invite = await db.invites.create(build);

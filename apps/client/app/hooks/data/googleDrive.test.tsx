@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
 import React from 'react';
 import { renderHook, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -6,17 +6,21 @@ import { api } from '@client/app/contexts/ApiContext';
 import { dataLakeKeys } from '@client/app/hooks/data/dataLakeKeys';
 import {
   useLakeDriveConnection,
+  useLakeDriveCanManage,
   useDisconnectLakeDrive,
+  useConnectDriveFolderToLake,
   driveConnectionPollInterval,
+  startGoogleDriveConnect,
   DRIVE_CONNECTION_ACTIVE_POLL_MS,
   DRIVE_CONNECTION_IDLE_POLL_MS,
   type LakeDriveConnection,
 } from './googleDrive';
 
-vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: vi.fn(), delete: vi.fn() } }));
+vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: vi.fn(), post: vi.fn(), delete: vi.fn() } }));
 
 const get = api.get as unknown as Mock;
 const del = api.delete as unknown as Mock;
+const post = api.post as unknown as Mock;
 
 const renderLakeDriveConnection = (lakeId: string) => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -30,6 +34,22 @@ const axiosError = (status: number) =>
   Object.assign(new Error(`Request failed with status code ${status}`), {
     response: { status },
   });
+
+describe('startGoogleDriveConnect', () => {
+  it('sends the browser to the consent URL the connect route returns', async () => {
+    const realLocation = window.location;
+    Object.defineProperty(window, 'location', { configurable: true, value: { href: '' } });
+    post.mockResolvedValue({ data: { authUrl: 'https://accounts.google.com/o/oauth2/auth?x=1' } });
+
+    try {
+      await startGoogleDriveConnect();
+      expect(post).toHaveBeenCalledWith('/api/google-drive/connect');
+      expect(window.location.href).toBe('https://accounts.google.com/o/oauth2/auth?x=1');
+    } finally {
+      Object.defineProperty(window, 'location', { configurable: true, value: realLocation });
+    }
+  });
+});
 
 describe('useLakeDriveConnection', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -85,6 +105,96 @@ describe('useLakeDriveConnection', () => {
     const invalidatedKeys = invalidateSpy.mock.calls.map(([arg]) => (arg as { queryKey: unknown[] }).queryKey);
     expect(invalidatedKeys).toContainEqual(dataLakeKeys.filesOf('lake_1'));
     expect(invalidatedKeys).toContainEqual(dataLakeKeys.tagCountsRoot);
+    expect(invalidatedKeys).toContainEqual(dataLakeKeys.skippedFilesOf('lake_1'));
+  });
+
+  it('refreshes the not-ingested list once a sync finishes', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    get.mockResolvedValueOnce({ data: { connection: { id: 'c1', status: 'syncing', fileCount: 3 } } });
+    const { result } = renderHook(() => useLakeDriveConnection('lake_1'), { wrapper });
+    await waitFor(() => expect(result.current.data).toMatchObject({ status: 'syncing' }));
+    expect(invalidateSpy).not.toHaveBeenCalled();
+
+    get.mockResolvedValueOnce({ data: { connection: { id: 'c1', status: 'connected', fileCount: 3 } } });
+    await act(async () => {
+      await result.current.refetch();
+    });
+
+    const invalidatedKeys = invalidateSpy.mock.calls.map(([arg]) => (arg as { queryKey: unknown[] }).queryKey);
+    expect(invalidatedKeys).toContainEqual(dataLakeKeys.skippedFilesOf('lake_1'));
+  });
+});
+
+// The query data is { connection, canManage } while consumers read only the connection, so the poll
+// cadence has to key off `data.connection` - reading the wrapper would silently stop polling.
+describe('useLakeDriveConnection polling', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it('keeps polling an existing connection at the idle cadence', async () => {
+    get.mockResolvedValue({
+      data: { connection: { id: 'c1', status: 'connected', syncStale: false, disconnecting: false, fileCount: 1 } },
+    });
+    renderLakeDriveConnection('lake_1');
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(get).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(DRIVE_CONNECTION_IDLE_POLL_MS);
+    expect(get).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not poll when the lake has no connection', async () => {
+    get.mockResolvedValue({ data: { connection: null, canManage: false } });
+    renderLakeDriveConnection('lake_1');
+
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(DRIVE_CONNECTION_IDLE_POLL_MS * 3);
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('useLakeDriveCanManage', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const renderBoth = (lakeId: string) => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    return renderHook(
+      () => ({ connection: useLakeDriveConnection(lakeId), canManage: useLakeDriveCanManage(lakeId) }),
+      {
+        wrapper,
+      }
+    );
+  };
+
+  it('reads false for an appointed admin, and shares one request with the connection hook', async () => {
+    get.mockResolvedValue({ data: { connection: { id: 'conn1' }, canManage: false } });
+    const { result } = renderBoth('lake1');
+
+    await waitFor(() => expect(result.current.canManage.data).toBe(false));
+    expect(result.current.connection.data).toEqual({ id: 'conn1' });
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads true for a manager', async () => {
+    get.mockResolvedValue({ data: { connection: null, canManage: true } });
+    const { result } = renderBoth('lake1');
+    await waitFor(() => expect(result.current.canManage.data).toBe(true));
+  });
+
+  it('fails closed (false) when the payload carries no flag', async () => {
+    get.mockResolvedValue({ data: { connection: null } });
+    const { result } = renderBoth('lake2');
+    await waitFor(() => expect(result.current.canManage.data).toBe(false));
   });
 });
 
@@ -112,6 +222,27 @@ describe('useDisconnectLakeDrive', () => {
   });
 });
 
+// A refused Re-sync can park the connection server-side (credential_error, needs_reconnect); the card
+// only offers Reconnect if the failure refetches the status too.
+describe('useConnectDriveFolderToLake', () => {
+  it('refetches the connection status when the connect fails', async () => {
+    post.mockRejectedValue(axiosError(400));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+
+    const { result } = renderHook(() => useConnectDriveFolderToLake(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync({ dataLakeId: 'lake_1', driveFolderId: 'folder_1' }).catch(() => undefined);
+    });
+
+    const invalidatedKeys = invalidateSpy.mock.calls.map(([arg]) => (arg as { queryKey: unknown[] }).queryKey);
+    expect(invalidatedKeys).toContainEqual(dataLakeKeys.driveConnection('lake_1'));
+  });
+});
+
 // A fresh connect writes status:'connected' immediately, before the queued ingest job claims it
 // into 'syncing' - a poll that only ran while 'syncing' would never re-fetch past that pre-claim
 // gap and could cache fileCount: 0 forever.
@@ -126,6 +257,8 @@ describe('driveConnectionPollInterval', () => {
     lastError: null,
     lastUsedAt: null,
     connectedAt: null,
+    lastPolledAt: null,
+    syncSchedule: { mode: 'manual' },
     fileCount: 0,
     disconnecting: false,
     disconnectStalled: false,

@@ -2,7 +2,7 @@ import express, { type Request, type Response } from 'express';
 import { connectDB, mongoose } from '@bike4mind/database';
 import { registerProcessErrorHandlers } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { registerInternalRoutes } from './internal/route';
 import { registerExternalRoutes } from './external/sseRoute';
 import { registerWsCompletionRoutes } from './external/wsRoute';
@@ -36,14 +36,13 @@ import { registerEmbedRoutes } from './external/embedRoute';
 const PORT = Number(process.env.PORT) || 8788;
 const bootLogger = new Logger({ metadata: { service: 'chatCompletion' } });
 
-// How long SIGTERM lets in-flight work finish before the process exits. Kept in
-// lock-step with the ECS task `stopTimeout` (infra/chatCompletion.ts) - ECS
-// sends SIGKILL at stopTimeout, so draining any longer is pointless. 120s is the ECS
-// stopTimeout ceiling. NOTE: work still running past this window (e.g. a multi-minute
-// deep-research generation) is still cut off by a deploy/scale-in SIGTERM - see the PR
-// description's trade-off note. The container removes the cold-start + 15-min Lambda
-// ceiling for the steady-state path; it does not make shutdown-time cancellation free.
-const DRAIN_TIMEOUT_MS = 120_000;
+// How long SIGTERM lets in-flight work finish before the process exits: ~10s under the ECS task
+// `stopTimeout` (infra/chatCompletion.ts) so the drain-expiry error below can log before SIGKILL -
+// a window equal to stopTimeout starts after SIGTERM and can never fire. The margin is pinned by
+// server.test.ts; work still running when the window closes (e.g. a multi-minute deep-research
+// generation) is still cut off. Requires node as PID 1 with tsx loaded in-process (see
+// Dockerfile.chatcompletion) - a wrapper that exits first SIGKILLs the drain.
+export const DRAIN_TIMEOUT_MS = 110_000;
 
 // In-flight processing promises, tracked so SIGTERM can drain before exit. Both route
 // modules register their work here via the shared `track` callback.
@@ -52,6 +51,39 @@ const track = (p: Promise<void>) => {
   inFlight.add(p);
   void p.finally(() => inFlight.delete(p));
 };
+
+interface DrainLogger {
+  error(message: string, metadata?: Record<string, unknown>): void;
+}
+
+/**
+ * Wait for the tracked in-flight work to settle, bounded by `drainTimeoutMs`. Exported
+ * so a test can drive the cut-off branch without booting the service. Returns whether the
+ * work drained or the window won; on the cut-off branch it emits an error naming the count
+ * so LiveOps triage sees the quests a deploy/scale-in is about to SIGKILL (the WARN/INFO
+ * line this replaces was invisible to the ERROR-level log subscription).
+ */
+export async function drainInFlight({
+  inFlight,
+  logger,
+  drainTimeoutMs = DRAIN_TIMEOUT_MS,
+}: {
+  inFlight: Set<Promise<void>>;
+  logger: DrainLogger;
+  drainTimeoutMs?: number;
+}): Promise<'drained' | 'timed-out'> {
+  const drainTimeout = new Promise<'timed-out'>(resolve => setTimeout(() => resolve('timed-out'), drainTimeoutMs));
+  const settled = Promise.allSettled([...inFlight]).then(() => 'drained' as const);
+  const outcome = await Promise.race([settled, drainTimeout]);
+
+  // `allSettled` winning means every promise's `track` cleanup already ran, so a non-empty
+  // set here can only mean the timeout won with work still running.
+  if (outcome === 'timed-out' && inFlight.size > 0) {
+    logger.error('Drain window expired with in-flight quests - they will be cut off', { count: inFlight.size });
+  }
+
+  return outcome;
+}
 
 /**
  * Build the Express app (no `listen`, no DB connect, no signal handlers). Split out from
@@ -127,8 +159,7 @@ async function main() {
   const shutdown = (signal: string) => {
     bootLogger.info(`${signal} received - draining ${inFlight.size} in-flight request(s)`);
     server.close();
-    const drainTimeout = new Promise<void>(resolve => setTimeout(resolve, DRAIN_TIMEOUT_MS));
-    Promise.race([Promise.allSettled([...inFlight]), drainTimeout]).finally(() => {
+    void drainInFlight({ inFlight, logger: bootLogger }).finally(() => {
       bootLogger.info('Drain complete - exiting');
       process.exit(0);
     });

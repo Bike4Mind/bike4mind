@@ -30,9 +30,18 @@ beforeEach(async () => {
 });
 
 let seq = 0;
-const artifact = (over: Record<string, unknown> = {}) => {
+/**
+ * Inserted through the RAW collection rather than `PublishedArtifact.create`.
+ *
+ * #3523 removed `shareToken` / `shareTokenUpdatedAt` from the schema, and Mongoose's strict mode
+ * silently drops an off-schema key on the way in - so a `create()` here would write a row with no
+ * legacy token and every assertion below would be testing the migration against nothing. This
+ * migration exists precisely to repair rows written before that field was removed, which is a
+ * state only a raw write can now reproduce.
+ */
+const artifact = async (over: Record<string, unknown> = {}) => {
   seq += 1;
-  return PublishedArtifact.create({
+  const doc = {
     publicId: `pub-${seq}`,
     tier: 'user',
     scopeId: 'scope1',
@@ -40,8 +49,12 @@ const artifact = (over: Record<string, unknown> = {}) => {
     title: 'T',
     ownerId: 'owner1',
     source: { kind: 'bundle' },
+    shareTokens: [],
+    deletedAt: null,
     ...over,
-  });
+  };
+  await PublishedArtifact.collection.insertOne(doc as never);
+  return doc as { publicId: string };
 };
 
 const entriesOf = async (publicId: string) => {

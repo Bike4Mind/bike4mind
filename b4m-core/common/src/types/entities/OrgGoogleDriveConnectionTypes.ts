@@ -1,5 +1,6 @@
 import { IBaseRepository } from './BaseTypes';
 import { IMongoDocument } from './common';
+import type { LakeConnectionOwner } from './LakeConnectionOwner';
 
 /**
  * Auth method for an org-level Google Drive connection.
@@ -18,9 +19,14 @@ export type GoogleDriveConnectionAuthMode = 'oauth' | 'service_account';
  */
 export type GoogleDriveConnectionStatus = 'connected' | 'syncing' | 'needs_reconnect' | 'credential_error';
 
+/** The states an ingest run may leave its connection in when it ends its own claim (releaseSyncClaim). */
+export type GoogleDriveReleaseStatus = Extract<GoogleDriveConnectionStatus, 'connected' | 'needs_reconnect'>;
+
 /**
- * Organization-level Google Drive connection: binds a single Drive folder to a single
- * data lake so the folder's contents are ingested and kept in sync.
+ * Google Drive connection: binds a single Drive folder to a single data lake so the folder's
+ * contents are ingested and kept in sync. Usually organization-owned (described below); a PERSONAL
+ * connection feeds an org-less lake, has no organizationId, keeps no credential copy, and is owned
+ * by `connectedBy` (see LakeConnectionOwner).
  *
  * Unlike the per-user `User.googleDrive`, the credential is org-owned and lives here, so a
  * reconnect is an explicit admin action rather than a silent outage when the connecting
@@ -32,8 +38,11 @@ export type GoogleDriveConnectionStatus = 'connected' | 'syncing' | 'needs_recon
  * folder (v1). See OrgGoogleDriveConnectionModel for the indexes that enforce this.
  */
 export interface IOrgGoogleDriveConnection {
-  /** Organization that owns this connection (required - no system-default row). */
-  organizationId: string;
+  /**
+   * Organization that owns this connection. Absent on a PERSONAL connection (one feeding a lake with
+   * no organization), which is owned by `connectedBy` instead - see LakeConnectionOwner.
+   */
+  organizationId?: string;
 
   /** Authentication method (v1: 'oauth'). */
   authMode: GoogleDriveConnectionAuthMode;
@@ -48,7 +57,8 @@ export interface IOrgGoogleDriveConnection {
   targetDataLakeId: string;
 
   /**
-   * OAuth refresh token for the org-owned Google connection, ENCRYPTED at rest.
+   * OAuth refresh token for the org-owned Google connection, ENCRYPTED at rest. Never set on a
+   * personal connection, which always syncs on its owner's live `User.googleDrive` grant.
    * SECURITY: `select: false` in the schema; only ever read via findByIdWithCredentials
    * and decrypted server-side. Never include in an API response.
    */
@@ -56,7 +66,7 @@ export interface IOrgGoogleDriveConnection {
 
   // === Metadata ===
 
-  /** User id who created the connection. */
+  /** User id who created the connection. On a personal connection this is also its owner. */
   connectedBy: string;
 
   /** When the connection was created. */
@@ -153,7 +163,8 @@ export interface IOrgGoogleDriveConnectionDocument extends IOrgGoogleDriveConnec
  */
 export interface IOrgGoogleDriveConnectionResponse {
   id: string;
-  organizationId: string;
+  /** Absent on a personal connection. */
+  organizationId?: string;
   authMode: GoogleDriveConnectionAuthMode;
   driveFolderId: string;
   folderName?: string;
@@ -209,15 +220,18 @@ export interface IOrgGoogleDriveConnectionRepository extends IBaseRepository<IOr
   findByOrganizationIdAny(organizationId: string): Promise<IOrgGoogleDriveConnectionDocument[]>;
 
   /**
-   * The ENABLED connection feeding a given lake in a given org, if any (excludes credentials).
-   * organizationId is REQUIRED so a missing tenant scope is a compile error, not a review catch.
+   * The ENABLED connection feeding a given lake for a given owner, if any (excludes credentials).
+   * The owner is REQUIRED so a missing tenant scope is a compile error, not a review catch.
    * `enabled: false` is a real state now that archiving/soft-deleting a lake disables its
    * connection, so a caller that must still reach the row - anything that revokes the grant,
    * releases the folder claim, or re-enables - wants findByDataLakeIdAny plus its own org check.
    * That leaves this one with no production callers today; it survives as the enabled-only
    * semantic the e2e uses to assert a disabled row really is invisible to the poll's view.
    */
-  findByDataLakeId(targetDataLakeId: string, organizationId: string): Promise<IOrgGoogleDriveConnectionDocument | null>;
+  findByDataLakeId(
+    targetDataLakeId: string,
+    owner: LakeConnectionOwner
+  ): Promise<IOrgGoogleDriveConnectionDocument | null>;
 
   /**
    * The connection bound to a given lake, whatever its `enabled` state, and deliberately WITHOUT an
@@ -226,11 +240,11 @@ export interface IOrgGoogleDriveConnectionRepository extends IBaseRepository<IOr
    * `findByDataLakeId`'s enabled-only view would leave exactly the strand this exists to prevent;
    * the lake-lifecycle disable/enable seam and the per-lake disconnect route likewise have to see an
    * already-disabled row. Excludes credentials.
-   * SECURITY: server-side only; never hand it to a cross-org caller. A caller that answers a tenant
-   * must authorize the CALLER against the owning lake's org first - the drive-connection route does
-   * that in resolveOrgLake via verifyOrgAccess. Comparing the returned row's organizationId to a
+   * SECURITY: server-side only; never hand it to a cross-tenant caller. A caller that answers a
+   * tenant must authorize the CALLER against the owning lake first - the drive-connection route does
+   * that in resolveLake via authorizeLakeConnectorAccess. Comparing the returned row's owner to a
    * server-derived one is a consistency check, not an authorization boundary; on its own it would
-   * hand any org's connection to anyone who can name a lake id.
+   * hand any tenant's connection to anyone who can name a lake id.
    */
   findByDataLakeIdAny(targetDataLakeId: string): Promise<IOrgGoogleDriveConnectionDocument | null>;
 
@@ -245,7 +259,8 @@ export interface IOrgGoogleDriveConnectionRepository extends IBaseRepository<IOr
   /**
    * Every connection whose stored credential belongs to a given user. `connectedBy` is re-stamped
    * together with the credential (see updateCredential), so it always names the credential's owner -
-   * which makes this the set of connections a profile-level Google revoke breaks. Deliberately
+   * which makes this the set of connections a profile-level Google revoke breaks, along with every
+   * personal connection the user owns (those ride the profile grant directly). Deliberately
    * CROSS-ORG for that reason; excludes credentials.
    */
   findByConnectedBy(connectedBy: string): Promise<IOrgGoogleDriveConnectionDocument[]>;
@@ -260,16 +275,25 @@ export interface IOrgGoogleDriveConnectionRepository extends IBaseRepository<IOr
   findDueForPoll(cutoff: Date, limit: number): Promise<IOrgGoogleDriveConnectionDocument[]>;
 
   /**
-   * Load a connection WITH its encrypted credential, scoped to an org.
-   * organizationId is REQUIRED so this accessor cannot hand one org's Google credential to another.
+   * Up to `limit` connections whose targetDataLakeId names no DataLake document, regardless of enabled
+   * or status. A soft-deleted lake keeps its document, so only a missing one makes an orphan. The
+   * orphan reaper's scan: such a row would otherwise hold its unique driveFolderId claim forever.
+   * Excludes credentials.
+   */
+  findOrphaned(limit: number): Promise<IOrgGoogleDriveConnectionDocument[]>;
+
+  /**
+   * Load a connection WITH its encrypted credential, scoped to its owner.
+   * The owner is REQUIRED so this accessor cannot hand one tenant's Google credential to another.
    * SECURITY: server-side only; decrypt before use; never expose in a response.
    */
-  findByIdWithCredentials(id: string, organizationId: string): Promise<IOrgGoogleDriveConnectionDocument | null>;
+  findByIdWithCredentials(id: string, owner: LakeConnectionOwner): Promise<IOrgGoogleDriveConnectionDocument | null>;
 
   /**
    * (Re)write the org-owned encrypted refresh token and re-stamp `connectedBy` to the re-syncing
-   * user, scoped to an org. organizationId is REQUIRED so one org can never overwrite another org's
-   * credential. Credential + connectedBy are written unconditionally; status/lastError heal to
+   * user, scoped to the owner, which is REQUIRED so one tenant can never overwrite another's
+   * credential. A null token clears the stored copy - what a personal connection passes, since it
+   * syncs on its owner's live grant. Credential + connectedBy are written unconditionally; status/lastError heal to
    * `connected` only from a non-`syncing` state, so a Re-sync during an in-flight ingest cannot flip
    * the claim and start a duplicate run (see the model note). `enabled` is re-stamped true as well,
    * which is the ONLY repair for a lifecycle re-enable that was lost - callers must therefore refuse
@@ -279,8 +303,8 @@ export interface IOrgGoogleDriveConnectionRepository extends IBaseRepository<IOr
    */
   updateCredential(
     id: string,
-    organizationId: string,
-    encryptedRefreshToken: string,
+    owner: LakeConnectionOwner,
+    encryptedRefreshToken: string | null,
     connectedBy: string
   ): Promise<IOrgGoogleDriveConnectionDocument | null>;
 
@@ -322,12 +346,12 @@ export interface IOrgGoogleDriveConnectionRepository extends IBaseRepository<IOr
    * pending before) - only a creator may roll it back via cancelDisconnect - and the `enabled`
    * value the row had just before. The purge consumer
    * re-runs it before each slice, which is what keeps the stamp fresh while the purge progresses.
-   * organizationId is REQUIRED, matching `updateCredential`/`release`, so this cannot disable a
-   * connection outside the caller's own org even if a route ever forgot its own gate.
+   * The owner is REQUIRED, matching `updateCredential`/`release`, so this cannot disable a
+   * connection outside the caller's own tenant even if a route ever forgot its own gate.
    */
   markDisconnecting(
     id: string,
-    organizationId: string
+    owner: LakeConnectionOwner
   ): Promise<{ stamp: Date; created: boolean; previousEnabled: boolean } | null>;
 
   /**
@@ -335,7 +359,7 @@ export interface IOrgGoogleDriveConnectionRepository extends IBaseRepository<IOr
    * `stamp` that call wrote, so a concurrent DELETE or purge run that re-stamped the row since is
    * left alone. On a match clears the stamp and restores `enabled`; returns whether it matched.
    */
-  cancelDisconnect(id: string, organizationId: string, stamp: Date, enabled: boolean): Promise<boolean>;
+  cancelDisconnect(id: string, owner: LakeConnectionOwner, stamp: Date, enabled: boolean): Promise<boolean>;
 
   /**
    * Re-enable a connection (lake unarchive/restore) unless a disconnect is pending, in one atomic
@@ -348,7 +372,7 @@ export interface IOrgGoogleDriveConnectionRepository extends IBaseRepository<IOr
    * Refresh an existing `disconnectRequestedAt` without touching `enabled` or `status`, so a purge
    * deferring behind a sync keeps reading as live. Never creates a stamp; returns whether it matched.
    */
-  touchDisconnect(id: string, organizationId: string): Promise<boolean>;
+  touchDisconnect(id: string, owner: LakeConnectionOwner): Promise<boolean>;
 
   /**
    * Continuation-only claim take-over: refreshes `syncClaimedAt` iff the connection is still 'syncing'
@@ -382,18 +406,21 @@ export interface IOrgGoogleDriveConnectionRepository extends IBaseRepository<IOr
    * that already lost the claim cannot release the NEW owner's - which would flip a live ingest back
    * to 'connected' and let a poll start a competing walk. Losing that race returns null and is not an
    * error; the new owner releases when it finishes. `lastError` is required and nullable because both
-   * exits share this method: a string records the failure, null heals.
+   * exits share this method: a string records the failure, null heals. `status` defaults to
+   * 'connected'; a run that found the connected folder itself gone (un-shared / trashed) passes
+   * 'needs_reconnect' instead, so the poll stops re-walking it until the user re-picks the folder.
    */
   releaseSyncClaim(
     id: string,
     expectedToken: string,
-    lastError: string | null
+    lastError: string | null,
+    status?: GoogleDriveReleaseStatus
   ): Promise<IOrgGoogleDriveConnectionDocument | null>;
 
   /**
-   * Delete a connection (org-scoped), releasing its GLOBAL Drive-folder claim so the folder can be
+   * Delete a connection (owner-scoped), releasing its GLOBAL Drive-folder claim so the folder can be
    * connected elsewhere. Must HARD delete: a merely-disabled row still holds the unique driveFolderId
    * index and would keep blocking re-claim. Returns true if a row was removed.
    */
-  release(id: string, organizationId: string): Promise<boolean>;
+  release(id: string, owner: LakeConnectionOwner): Promise<boolean>;
 }

@@ -74,7 +74,7 @@ const stripComments = (source: string): string => {
   return out.join('');
 };
 
-// `\b` keeps this off `WARMER_CONCURRENCY:`; the lookahead keeps it off `==` and `=>`.
+// `\b` keeps this off `FOO_CONCURRENCY:`; the lookahead keeps it off `==` and `=>`.
 const CONCURRENCY_KEY = /\bconcurrency\s*\??\s*[:=](?![=>])/g;
 const OPENERS = '{[(';
 const CLOSERS = '}])';

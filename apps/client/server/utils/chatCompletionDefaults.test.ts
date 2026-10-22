@@ -10,6 +10,9 @@ const { getEffectiveLLMApiKeysMock, getAvailableModelsMock, getLlmByModelMock } 
   getLlmByModelMock: vi.fn(),
 }));
 
+const runDecisionToolMock = vi.hoisted(() => vi.fn());
+vi.mock('@server/decisions/runDecisionTool', () => ({ runDecisionTool: runDecisionToolMock }));
+
 vi.mock('@bike4mind/services', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/services')>();
   return {
@@ -35,7 +38,7 @@ vi.mock('@bike4mind/llm-adapters', async importOriginal => {
 // asserting the chat-completion-specific keys (`websocket`, `SECRET_ENCRYPTION_KEY`,
 // `mcpHandler`) are NOT touched at import but ARE touched when the factory is invoked.
 // Storage and database modules are mocked to isolate this module's own contract from
-// upstream Resource access via `@server/utils/config`.
+// upstream Resource access via `@bike4mind/server-utils/utils/config`.
 
 const resourceAccessLog: string[] = [];
 
@@ -56,20 +59,28 @@ vi.mock('sst', () => ({
   }),
 }));
 
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: vi.fn(() => ({ __mock: 'filesStorage' })),
   getGeneratedImageStorage: vi.fn(() => ({ __mock: 'generatedImageStorage' })),
 }));
 
-// Mock `@server/utils/config` - its module body eagerly reads several `Resource.X.value`
+// Mock `@bike4mind/server-utils/utils/config` - its module body eagerly reads several `Resource.X.value`
 // (notably `SECRET_ENCRYPTION_KEY`, `MONGODB_URI`, etc.) and would pollute the access
 // log with import-time noise. That's a separate, pre-existing eager-Resource concern
 // outside this PR's scope. Mocking here isolates the assertion to chatCompletionDefaults'
 // own factory body.
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: new Proxy({} as Record<string, unknown>, {
     get: (_, key) => `mock-config-${String(key)}`,
   }),
+}));
+
+// A sentinel so the assertion below is identity, not deep equality: the factory must hand the
+// generated table through untouched, and a placeholder `{}` would otherwise pass a deep check.
+const workspaceDeniedToolsSentinel = vi.hoisted(() => ({ 'sentinel-surface': ['sentinel_tool'] }));
+
+vi.mock('@server/premium-generated/premiumWorkspaceDeniedTools.generated', () => ({
+  premiumWorkspaceDeniedTools: workspaceDeniedToolsSentinel,
 }));
 
 describe('chatCompletionDefaults factory lazy contract', () => {
@@ -105,6 +116,13 @@ describe('chatCompletionDefaults factory lazy contract', () => {
     const first = mod.getDefaultChatCompletionOptions();
     const second = mod.getDefaultChatCompletionOptions();
     expect(first).toBe(second);
+  }, 20000);
+
+  // Optional prop: dropping this line typechecks, and `decide` then refuses on the chat surface
+  // even though availability advertises it. Pinned here because the wire-up has no other caller.
+  it('wires the decide tool seam into the default options', async () => {
+    const mod = await import('./chatCompletionDefaults');
+    expect(typeof mod.getDefaultChatCompletionOptions().decide).toBe('function');
   }, 20000);
 });
 
@@ -173,6 +191,38 @@ describe('resolveDefaultChatModel', () => {
     const { resolveDefaultChatModel } = await import('./chatCompletionDefaults');
     const result = await resolveDefaultChatModel({ configuredModel: ChatModels.GPT5, userId: 'u1' });
     expect(result.model).toBe(ChatModels.GPT5);
+  }, 20000);
+
+  it('self-host with BEDROCK_AWS_*: keeps an explicit admin Bedrock default', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    vi.stubEnv('BEDROCK_AWS_ACCESS_KEY_ID', 'AKIAIOSFODNN7EXAMPLE');
+    vi.stubEnv('BEDROCK_AWS_SECRET_ACCESS_KEY', 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY');
+    getEffectiveLLMApiKeysMock.mockResolvedValue({ anthropic: 'sk-ant' });
+    getAvailableModelsMock.mockResolvedValue([
+      makeModel(ChatModels.CLAUDE_5_SONNET_BEDROCK, ModelBackend.Bedrock),
+      makeModel(ChatModels.CLAUDE_5_SONNET, ModelBackend.Anthropic),
+    ]);
+    getLlmByModelMock.mockReturnValue({ backend: 'bedrock' });
+    const { resolveDefaultChatModel } = await import('./chatCompletionDefaults');
+    const explicit = await resolveDefaultChatModel({
+      configuredModel: ChatModels.CLAUDE_5_SONNET_BEDROCK,
+      userId: 'u1',
+    });
+    expect(explicit.model).toBe(ChatModels.CLAUDE_5_SONNET_BEDROCK);
+    const unset = await resolveDefaultChatModel({ configuredModel: undefined, userId: 'u1' });
+    expect(unset.model).toBe(ChatModels.CLAUDE_5_SONNET);
+  }, 20000);
+
+  it('self-host without BEDROCK_AWS_*: maps an explicit Bedrock default to its direct-API twin', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    vi.stubEnv('BEDROCK_AWS_ACCESS_KEY_ID', '');
+    vi.stubEnv('BEDROCK_AWS_SECRET_ACCESS_KEY', '');
+    getEffectiveLLMApiKeysMock.mockResolvedValue({ anthropic: 'sk-ant' });
+    getAvailableModelsMock.mockResolvedValue([makeModel(ChatModels.CLAUDE_5_SONNET, ModelBackend.Anthropic)]);
+    getLlmByModelMock.mockReturnValue({ backend: 'anthropic' });
+    const { resolveDefaultChatModel } = await import('./chatCompletionDefaults');
+    const result = await resolveDefaultChatModel({ configuredModel: ChatModels.CLAUDE_5_SONNET_BEDROCK, userId: 'u1' });
+    expect(result.model).toBe(ChatModels.CLAUDE_5_SONNET);
   }, 20000);
 
   it('hosted: passes a non-default configured model through untouched with zero probing', async () => {
@@ -306,7 +356,23 @@ describe('isChatModelUsable', () => {
 describe('getDefaultChatCompletionOptions', () => {
   beforeEach(() => {
     vi.resetModules();
+    runDecisionToolMock.mockReset();
   });
+
+  it('forwards the trusted key and active workspace into the decision host', async () => {
+    const { getDefaultChatCompletionOptions } = await import('./chatCompletionDefaults');
+    const params = {
+      userId: 'user-1',
+      user: { id: 'user-1' } as never,
+      logger: {} as never,
+      authOrigin: 'apiKey' as const,
+      apiKeyId: 'key-1',
+      organizationId: 'active-org',
+      request: { input: 'text', questions: [{ type: 'predicate' as const, name: 'urgent', instructions: 'Urgent?' }] },
+    };
+    await getDefaultChatCompletionOptions().decide!(params);
+    expect(runDecisionToolMock).toHaveBeenCalledWith({ ...params, source: 'api' });
+  }, 20000);
 
   it('wires the save_content_to_data_lake audit adapters', async () => {
     const { getDefaultChatCompletionOptions } = await import('./chatCompletionDefaults');
@@ -318,5 +384,13 @@ describe('getDefaultChatCompletionOptions', () => {
     expect(db.lakeMembershipRemovals).toBeDefined();
     expect(db.lakeConfigChangeEvents).toBeDefined();
     expect(db.lakeMembershipChangeEvents).toBeDefined();
+  }, 20000);
+
+  // Every ChatCompletionProcess this factory feeds applies the surface denials from this option;
+  // losing it here silently re-opens them on chat, opti, voice, Slack and the API for one route.
+  it('carries the contributed surface denials into the options', async () => {
+    const { getDefaultChatCompletionOptions } = await import('./chatCompletionDefaults');
+
+    expect(getDefaultChatCompletionOptions().workspaceDeniedTools).toBe(workspaceDeniedToolsSentinel);
   }, 20000);
 });

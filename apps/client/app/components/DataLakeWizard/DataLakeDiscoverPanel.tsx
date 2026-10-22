@@ -4,6 +4,7 @@ import SearchIcon from '@mui/icons-material/Search';
 import CloseIcon from '@mui/icons-material/Close';
 import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
 import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined';
+import { isGeneratedLakeTagPrefix, type DataLakeOrigin } from '@bike4mind/common';
 import { useBrowsePublicDataLakes } from '@client/app/hooks/data/dataLakes';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import { formatBytes } from '@client/app/utils/folderTreeParser';
@@ -20,7 +21,12 @@ import DataLakeEmptyState from '@client/app/components/datalake/DataLakeEmptySta
  */
 export default function DataLakeDiscoverPanel() {
   const { value: search, debouncedValue: debouncedSearch, setValue: setSearch } = useDebounceValue('', 300);
-  const [viewingLake, setViewingLake] = useState<{ id: string; name: string; tagPrefix: string } | null>(null);
+  const [viewingLake, setViewingLake] = useState<{
+    id: string;
+    name: string;
+    tagPrefix: string;
+    origin?: DataLakeOrigin;
+  } | null>(null);
 
   const { data, isLoading, isFetchingNextPage, isError, fetchNextPage, hasNextPage } =
     useBrowsePublicDataLakes(debouncedSearch);
@@ -110,7 +116,9 @@ export default function DataLakeDiscoverPanel() {
                 variant="outlined"
                 data-testid={`datalake-discover-card-${lake.id}`}
                 sx={{ p: 1.5, cursor: 'pointer', '&:hover': { borderColor: 'primary.300' } }}
-                onClick={() => setViewingLake({ id: lake.id, name: lake.name, tagPrefix: lake.fileTagPrefix })}
+                onClick={() =>
+                  setViewingLake({ id: lake.id, name: lake.name, tagPrefix: lake.fileTagPrefix, origin: lake.origin })
+                }
               >
                 <Stack direction="row" alignItems="flex-start" gap={1.5}>
                   <DataLakeIcon sx={{ fontSize: 20, color: 'primary.400', mt: 0.25 }} />
@@ -141,9 +149,17 @@ export default function DataLakeDiscoverPanel() {
                       </Typography>
                     )}
                     <Stack direction="row" gap={0.5} flexWrap="wrap" sx={{ mt: 0.5 }}>
-                      <Chip size="sm" variant="soft" color="neutral" sx={{ fontSize: '10px' }}>
-                        {lake.fileTagPrefix}
-                      </Chip>
+                      {!isGeneratedLakeTagPrefix(lake) && (
+                        <Chip
+                          size="sm"
+                          variant="soft"
+                          color="neutral"
+                          sx={{ fontSize: '10px' }}
+                          data-testid={`datalake-discover-prefix-${lake.id}`}
+                        >
+                          {lake.fileTagPrefix}
+                        </Chip>
+                      )}
                       {lake.ownerDisplayName && !lake.isOwn && (
                         <Chip
                           size="sm"
@@ -204,6 +220,7 @@ export default function DataLakeDiscoverPanel() {
               dataLakeId={viewingLake.id}
               dataLakeName={viewingLake.name}
               tagPrefix={viewingLake.tagPrefix}
+              origin={viewingLake.origin}
               canManage={false}
               onClose={() => setViewingLake(null)}
             />

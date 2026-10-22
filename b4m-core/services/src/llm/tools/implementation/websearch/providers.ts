@@ -20,7 +20,7 @@ export interface WebSearchProviderResult {
 
 /**
  * Per-call search constraints beyond the query itself. Optional and additive: the chat `web_search`
- * tool passes none, so its behaviour is unchanged.
+ * tool passes only `locationInQuery`, and only on a place search.
  */
 export interface WebSearchOptions {
   /**
@@ -34,6 +34,20 @@ export interface WebSearchOptions {
    * where an under-wide one silently hides pages the caller wanted.
    */
   recencyDays?: number;
+  /**
+   * The query names the place it is about ("coffee near Shibuya Crossing"), so the search must not
+   * be geo-targeted anywhere else. SerpAPI's default US `location`/`gl` otherwise pulls a local-
+   * intent query toward US pages - a Tokyo query came back as US mall and airport "shops" sites.
+   */
+  locationInQuery?: boolean;
+  /**
+   * Throw on a timeout, network error or non-OK response instead of resolving to no hits. SerpAPI
+   * always throws; SearXNG fails soft unless this is set. The chat tool sets it when hedging, so it
+   * can tell a dead provider from an empty result; deep research and lake research rely on fail-soft.
+   */
+  throwOnError?: boolean;
+  /** Caps SerpAPI's organic attempts (default SERPAPI_MAX_ATTEMPTS). Used to bound a hedged backup. */
+  maxAttempts?: number;
 }
 
 /**
@@ -51,6 +65,57 @@ export interface WebSearchImageResult {
   source: string;
 }
 
+/**
+ * Per-process cache for web-search results. Keyed on normalized query + result count, with a
+ * short TTL so repeated/similar searches within a turn or across back-to-back turns reuse the
+ * same provider response. The cache lives in the Fargate container's memory and is never shared
+ * across containers or persisted.
+ */
+const SEARCH_CACHE_TTL_MS = 5 * 60 * 1000;
+const SEARCH_CACHE_MAX_ENTRIES = 200;
+
+interface CachedSearch {
+  results: WebSearchProviderResult[];
+  expiresAt: number;
+}
+
+const searchCache = new Map<string, CachedSearch>();
+
+function searchCacheKey(query: string, numResults: number, placeSearch?: boolean): string {
+  return `${query.trim().toLowerCase()}::${numResults}${placeSearch ? '::places' : ''}`;
+}
+
+function searchCacheGet(
+  query: string,
+  numResults: number,
+  placeSearch?: boolean
+): WebSearchProviderResult[] | undefined {
+  const key = searchCacheKey(query, numResults, placeSearch);
+  const entry = searchCache.get(key);
+  if (!entry) return undefined;
+  if (Date.now() > entry.expiresAt) {
+    searchCache.delete(key);
+    return undefined;
+  }
+  return entry.results;
+}
+
+function searchCacheSet(
+  query: string,
+  numResults: number,
+  results: WebSearchProviderResult[],
+  placeSearch?: boolean
+): void {
+  if (searchCache.size >= SEARCH_CACHE_MAX_ENTRIES) {
+    const firstKey = searchCache.keys().next().value;
+    if (firstKey !== undefined) searchCache.delete(firstKey);
+  }
+  searchCache.set(searchCacheKey(query, numResults, placeSearch), {
+    results,
+    expiresAt: Date.now() + SEARCH_CACHE_TTL_MS,
+  });
+}
+
 /** A web-search backend. `search` never assumes results exist and tolerates malformed responses. */
 export interface WebSearchProvider {
   name: 'serpapi' | 'searxng';
@@ -62,7 +127,7 @@ export interface WebSearchProvider {
    * pages that are mostly absent from the same response - so relying on it alone leaves a visual
    * question answered in prose.
    */
-  searchImages?(query: string, limit?: number): Promise<WebSearchImageResult[]>;
+  searchImages?(query: string, limit?: number, options?: WebSearchOptions): Promise<WebSearchImageResult[]>;
   /**
    * Place search with provider coordinates, for a query the model flagged as location-based. The
    * inline map pins come ONLY from here, never from coordinates the model writes. Optional, and
@@ -106,14 +171,27 @@ const SERPAPI_MAX_ATTEMPTS = 2;
 // Fixed delay before the retry.
 const SERPAPI_RETRY_DELAY_MS = 500;
 /**
- * The longest one web_search call can hold a turn: the organic search's attempts and retry delay,
- * then the image/places calls, which run in parallel AFTER it. An inline chat turn runs inside the
- * 60s server Lambda (infra/web.ts) and has already spent part of that on retrieval and the first
- * model call before the tool starts. If this is anywhere near 60s, a stalled provider never errors
- * back to the model: the Lambda is hard-killed mid-call and the turn dies with a partial answer.
+ * How long the lead provider gets before the backup is started alongside it (sooner if the lead
+ * fails or comes back empty first). Just past SerpAPI's normal response time in production: answers come back in about
+ * 1s typically and 3s at the 90th percentile, while a stalled request usually never answers.
  */
-export const WEB_SEARCH_WORST_CASE_MS =
-  SERPAPI_MAX_ATTEMPTS * SERPAPI_ATTEMPT_TIMEOUT_MS + SERPAPI_RETRY_DELAY_MS + SEARCH_TIMEOUT_MS;
+export const WEB_SEARCH_HEDGE_DELAY_MS = 3_000;
+// A SerpAPI backup gets one attempt, so a hedge never stacks a full retry cycle onto the budget.
+export const SERPAPI_BACKUP_ATTEMPTS = 1;
+const SERPAPI_ORGANIC_MS = SERPAPI_MAX_ATTEMPTS * SERPAPI_ATTEMPT_TIMEOUT_MS + SERPAPI_RETRY_DELAY_MS;
+const SERPAPI_BACKUP_MS = SERPAPI_BACKUP_ATTEMPTS * SERPAPI_ATTEMPT_TIMEOUT_MS;
+// The backup starts by WEB_SEARCH_HEDGE_DELAY_MS at the latest, so when both providers fail the
+// organic search ends when the slower of the lead and the backup does.
+const HEDGED_BACKUP_MS = WEB_SEARCH_HEDGE_DELAY_MS + Math.max(SEARCH_TIMEOUT_MS, SERPAPI_BACKUP_MS);
+/**
+ * The longest one web_search call can hold a turn: the slowest organic path (a SerpAPI lead with its
+ * retry, or a hedged backup started at the hedge delay), then the image/places calls, which run in
+ * parallel AFTER it. An inline chat turn runs inside the 60s server Lambda (infra/web.ts) and has
+ * already spent part of that on retrieval and the first model call before the tool starts. If this
+ * is anywhere near 60s, a stalled provider never errors back to the model: the Lambda is hard-killed
+ * mid-call and the turn dies with a partial answer.
+ */
+export const WEB_SEARCH_WORST_CASE_MS = Math.max(SERPAPI_ORGANIC_MS, HEDGED_BACKUP_MS) + SEARCH_TIMEOUT_MS;
 // Citables are persisted with the quest, so keep the per-hit image list bounded.
 const MAX_IMAGES_PER_RESULT = 4;
 // Enough to build a card row from without flooding the model's context with URLs.
@@ -284,21 +362,51 @@ function isAbortError(error: unknown): boolean {
   return typeof error === 'object' && error !== null && (error as { name?: unknown }).name === 'AbortError';
 }
 
+function setSerpApiGeoTargeting(searchParams: URLSearchParams, options?: WebSearchOptions): void {
+  if (options?.locationInQuery) return;
+  searchParams.set('location', 'United States');
+  searchParams.set('gl', 'us');
+}
+
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
+
+// An allowlist, not a copy minus api_key: the key rides in the query string, so logging the URL or
+// the raw params would leak it, and a deny-list would miss any secret param added later.
+const SERPAPI_LOGGED_PARAMS = ['q', 'num', 'tbs', 'location', 'gl'] as const;
+
+/** The log-safe subset of a SerpAPI request, so an off-topic result set can be traced to what was sent. */
+function summarizeSerpApiRequest(url: URL): Record<string, string> {
+  const summary: Record<string, string> = {};
+  for (const key of SERPAPI_LOGGED_PARAMS) {
+    const value = url.searchParams.get(key);
+    if (value !== null) summary[key] = value;
+  }
+  return summary;
+}
+
+function logSerpApiAttemptFailure(retryable: boolean, message: string, details: Record<string, unknown>): void {
+  if (retryable) Logger.globalInstance.warn(message, details);
+  else Logger.globalInstance.error(message, details);
+}
 
 /**
  * One SerpAPI organic-search attempt, bounded by SERPAPI_ATTEMPT_TIMEOUT_MS. Never throws -
  * failures (timeout, network error, non-OK response) come back as a tagged result so
  * serpApiSearch can decide whether to retry without duplicating the timeout/abort bookkeeping.
+ * A transient failure logs at warn, not error: the retry or the hedged backup provider often
+ * recovers it, and the error-level alert belongs to whichever caller sees the final failure. A
+ * non-transient one (e.g. a revoked key) stays at error, since no retry or backup can fix it.
  */
 async function attemptSerpApiRequest(url: URL, attempt: number): Promise<SerpApiAttemptResult> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), SERPAPI_ATTEMPT_TIMEOUT_MS);
   const startedAt = Date.now();
+  const request = summarizeSerpApiRequest(url);
   try {
     const response = await fetch(url.toString(), { method: 'GET', signal: controller.signal });
     Logger.globalInstance.log('📡 WebSearch Tool: SerpAPI response', {
       attempt,
+      request,
       status: response.status,
       elapsedMs: Date.now() - startedAt,
     });
@@ -306,16 +414,18 @@ async function attemptSerpApiRequest(url: URL, attempt: number): Promise<SerpApi
     if (response.ok) return { ok: true, data: (await response.json()) as SerpApiResponse };
 
     const errorText = await response.text();
-    Logger.globalInstance.error('❌ WebSearch Tool: API error details:', {
+    const retryable = response.status === 429 || response.status >= 500;
+    logSerpApiAttemptFailure(retryable, '❌ WebSearch Tool: API error details:', {
       status: response.status,
       statusText: response.statusText,
       errorText,
       endpoint: url.origin,
       attempt,
+      request,
     });
     return {
       ok: false,
-      retryable: response.status === 429 || response.status >= 500,
+      retryable,
       timedOut: false,
       status: response.status,
       error: new Error(`SERP API error: ${response.statusText} - ${errorText}`),
@@ -325,8 +435,9 @@ async function attemptSerpApiRequest(url: URL, attempt: number): Promise<SerpApi
     // A network-level failure (DNS, connection reset, TLS, ...) surfaces from fetch as a
     // TypeError; anything else is unexpected and is not treated as transient.
     const retryable = timedOut || error instanceof TypeError;
-    Logger.globalInstance.error('❌ WebSearch Tool: SerpAPI request failed:', {
+    logSerpApiAttemptFailure(retryable, '❌ WebSearch Tool: SerpAPI request failed:', {
       attempt,
+      request,
       timedOut,
       elapsedMs: Date.now() - startedAt,
       error: error instanceof Error ? error.message : String(error),
@@ -398,24 +509,24 @@ export async function serpApiSearch(
     engine: 'google',
     api_key: apiKey,
     q: query,
-    location: 'United States',
     google_domain: 'google.com',
-    gl: 'us',
     hl: 'en',
     num: (num_results || DEFAULT_NUM_RESULTS).toString(),
   });
+  setSerpApiGeoTargeting(searchParams, options);
 
   const bucket = recencyBucket(options?.recencyDays);
   if (bucket) searchParams.set('tbs', SERPAPI_QDR[bucket]);
 
   url.search = searchParams.toString();
 
+  const maxAttempts = Math.min(Math.max(1, options?.maxAttempts ?? SERPAPI_MAX_ATTEMPTS), SERPAPI_MAX_ATTEMPTS);
   const failures: SerpApiAttemptFailure[] = [];
-  for (let attempt = 1; attempt <= SERPAPI_MAX_ATTEMPTS; attempt++) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const outcome = await attemptSerpApiRequest(url, attempt);
     if (outcome.ok) return outcome.data;
     failures.push(outcome);
-    if (!outcome.retryable || attempt === SERPAPI_MAX_ATTEMPTS) break;
+    if (!outcome.retryable || attempt === maxAttempts) break;
     Logger.globalInstance.log('📡 WebSearch Tool: retrying SerpAPI after transient failure', {
       attempt,
       status: outcome.status,
@@ -435,22 +546,23 @@ export async function serpApiSearch(
 async function serpApiImageSearch(
   adapters: GetEffectiveApiKeyAdapters,
   query: string,
-  limit: number
+  limit: number,
+  options?: WebSearchOptions
 ): Promise<WebSearchImageResult[]> {
   const apiKey = await getSerperKey(adapters);
   if (!apiKey) return [];
 
   const url = new URL('https://serpapi.com/search');
-  url.search = new URLSearchParams({
+  const searchParams = new URLSearchParams({
     engine: 'google_images',
     api_key: apiKey,
     q: query,
-    location: 'United States',
     google_domain: 'google.com',
-    gl: 'us',
     hl: 'en',
     safe: 'active',
-  }).toString();
+  });
+  setSerpApiGeoTargeting(searchParams, options);
+  url.search = searchParams.toString();
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
@@ -574,7 +686,8 @@ function safeHost(url: string): string {
 export function createSerpApiProvider(adapters: GetEffectiveApiKeyAdapters): WebSearchProvider {
   return {
     name: 'serpapi',
-    searchImages: (query, limit) => serpApiImageSearch(adapters, query, limit ?? DEFAULT_IMAGE_RESULTS),
+    searchImages: (query, limit, options) =>
+      serpApiImageSearch(adapters, query, limit ?? DEFAULT_IMAGE_RESULTS, options),
     searchPlaces: (query, limit) => serpApiPlaceSearch(adapters, query, limit ?? DEFAULT_PLACE_RESULTS),
     async search(query, numResults, options) {
       const data = await serpApiSearch(adapters, query, numResults, options);
@@ -660,6 +773,24 @@ function parseSearxngPlaces(data: unknown, limit: number): WebSearchPlace[] {
 }
 
 /**
+ * Under throwOnError a hedge owns the outcome (the other provider may still answer) and alerts on
+ * the final failure itself, so a transient attempt logs at warn: a network/abort error (no status)
+ * or a retryable HTTP 429/5xx. A permanent client error (any other 4xx) cannot be recovered by the
+ * backup, so it stays at error. Fail-soft returns [] and this log is the only record, so it stays
+ * at error there too.
+ */
+function logSearxngFailure(
+  options: WebSearchOptions | undefined,
+  message: string,
+  details: Record<string, unknown>,
+  status?: number
+): void {
+  const transient = status === undefined || status === 429 || status >= 500;
+  if (options?.throwOnError && transient) Logger.globalInstance.warn(message, details);
+  else Logger.globalInstance.error(message, details);
+}
+
+/**
  * SearXNG provider. Calls the admin-configured JSON search endpoint (trusted config, so NOT subject
  * to the SSRF guard). Any transport/parse failure (including the abort timeout) resolves to [] so a
  * flaky local instance degrades to "no results" instead of throwing, matching how search is best-
@@ -705,22 +836,44 @@ export function createSearxngProvider(baseUrl: string): WebSearchProvider {
       if (bucket) params.set('time_range', bucket);
       url.search = params.toString();
 
+      const request = { q: query, ...(bucket && { time_range: bucket }), limit };
+
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
       try {
         const response = await fetch(url.toString(), { method: 'GET', signal: controller.signal });
         if (!response.ok) {
-          Logger.globalInstance.error('❌ WebSearch Tool: SearXNG error', {
-            status: response.status,
-            statusText: response.statusText,
-          });
+          logSearxngFailure(
+            options,
+            '❌ WebSearch Tool: SearXNG error',
+            {
+              request,
+              status: response.status,
+              statusText: response.statusText,
+            },
+            response.status
+          );
+          if (options?.throwOnError) throw new Error(`SearXNG error: HTTP ${response.status}`);
           return [];
         }
         const data: unknown = await response.json();
-        return parseSearxngResults(data, limit);
+        const results = parseSearxngResults(data, limit);
+        Logger.globalInstance.log('WebSearch Tool: SearXNG response', {
+          status: response.status,
+          request,
+          hits: results.length,
+        });
+        return results;
       } catch (error) {
-        Logger.globalInstance.error('❌ WebSearch Tool: SearXNG request failed:', error);
-        return [];
+        logSearxngFailure(options, '❌ WebSearch Tool: SearXNG request failed:', {
+          request,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        if (!options?.throwOnError) return [];
+        if (isAbortError(error)) {
+          throw new Error(`Web search timed out: SearXNG did not respond within ${SEARCH_TIMEOUT_MS / 1000}s`);
+        }
+        throw error;
       } finally {
         clearTimeout(timeoutId);
       }
@@ -731,17 +884,34 @@ export function createSearxngProvider(baseUrl: string): WebSearchProvider {
 /**
  * Resolve the active web-search provider, or null when none is configured. Precedence:
  *   - explicit admin choice ('serpapi' | 'searxng') forces that provider (null if it's unconfigured)
- *   - 'auto' (default): SearXNG if a URL is configured (admin setting or SEARXNG_BASE_URL env),
- *     else SerpAPI if a Serper key is set, else null.
+ *   - 'auto' (default): SerpAPI if a Serper key is set, else SearXNG if a URL is configured (admin
+ *     setting or SEARXNG_BASE_URL env), else null. SerpAPI stays first so a deployed SearXNG never
+ *     changes the lead unless an admin opts in; SearXNG-only self-host installs still get search.
  * Mirrored by computeToolAvailability in serverConfig.ts so the picker's gating matches the tool.
  */
 export async function resolveWebSearchProvider(
   adapters: GetEffectiveApiKeyAdapters
 ): Promise<WebSearchProvider | null> {
+  return pickPrimaryProvider(adapters, await readProviderSettings(adapters));
+}
+
+interface ProviderSettings {
+  choice: string;
+  searxngUrl: string | null | undefined;
+  serperKey: string | null | undefined;
+}
+
+async function readProviderSettings(adapters: GetEffectiveApiKeyAdapters): Promise<ProviderSettings> {
   const choice = (await getWebSearchProviderSetting(adapters)) ?? 'auto';
   const searxngUrl = await getSearxngUrl(adapters);
   const serperKey = await getSerperKey(adapters);
+  return { choice, searxngUrl, serperKey };
+}
 
+function pickPrimaryProvider(
+  adapters: GetEffectiveApiKeyAdapters,
+  { choice, searxngUrl, serperKey }: ProviderSettings
+): WebSearchProvider | null {
   if (choice === 'searxng') {
     return searxngUrl ? createSearxngProvider(searxngUrl) : null;
   }
@@ -749,7 +919,31 @@ export async function resolveWebSearchProvider(
     return serperKey ? createSerpApiProvider(adapters) : null;
   }
   // auto
-  if (searxngUrl) return createSearxngProvider(searxngUrl);
   if (serperKey) return createSerpApiProvider(adapters);
+  if (searxngUrl) return createSearxngProvider(searxngUrl);
   return null;
 }
+
+/**
+ * Returns [lead, backup] for searchWithHedge. The lead is exactly what
+ * resolveWebSearchProvider picks: the admin's WebSearchProvider choice, or under 'auto' SerpAPI
+ * when a key is set, else SearXNG. The backup is the other provider when it is configured too. An
+ * unconfigured explicit choice yields no lead at all; it is never quietly replaced by the other.
+ */
+export async function resolveWebSearchProviders(
+  adapters: GetEffectiveApiKeyAdapters
+): Promise<[WebSearchProvider | null, WebSearchProvider | null]> {
+  const settings = await readProviderSettings(adapters);
+  const lead = pickPrimaryProvider(adapters, settings);
+  if (!lead) return [null, null];
+  if (lead.name === 'serpapi') {
+    return [lead, settings.searxngUrl ? createSearxngProvider(settings.searxngUrl) : null];
+  }
+  return [lead, settings.serperKey ? createSerpApiProvider(adapters) : null];
+}
+
+function searchCacheClear(): void {
+  searchCache.clear();
+}
+
+export { searchCacheGet, searchCacheSet, searchCacheClear };

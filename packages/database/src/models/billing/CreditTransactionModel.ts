@@ -48,6 +48,7 @@ const CreditTransactionSchema = new Schema<ICreditTransactionDocument>(
         'realtime_voice_usage',
         'tool_usage',
         'completion_api_usage',
+        'decision_usage',
         'speech_to_text_usage',
         'text_to_speech_usage',
         'sound_effects_usage',
@@ -121,6 +122,17 @@ CreditTransactionSchema.index({ stripeRefundId: 1 }, { unique: true, sparse: tru
 CreditTransactionSchema.index({ transactionId: 1 }, { unique: true, sparse: true });
 
 export type ICreditTransactionModel = Model<ICreditTransactionDocument>;
+
+/**
+ * Admin adjustments are the generic_add / generic_deduct rows adminUpdateUser writes with reason
+ * `admin_adjustment` against a User holder. Shared by the admin ledger page and the per-user credit
+ * chart so the two can never disagree about what counts as an adjustment.
+ */
+const ADMIN_ADJUSTMENT_FILTER = {
+  ownerType: CreditHolderType.User,
+  type: { $in: ['generic_add', 'generic_deduct'] },
+  reason: 'admin_adjustment',
+};
 
 export class CreditTransactionRepository
   extends BaseRepository<ICreditTransactionDocument>
@@ -235,15 +247,42 @@ export class CreditTransactionRepository
     return { data, total };
   }
 
+  async dailyNetCreditsForOwner(
+    ownerId: string,
+    ownerType: CreditHolderType,
+    from: Date,
+    to: Date
+  ): Promise<Array<{ day: string; netCredits: number }>> {
+    // Rides the {ownerId, ownerType, createdAt} index; usage rows are numerous, so sum server-side.
+    // Bounded at both ends so the sum and the balance snapshot describe the same instant.
+    const rows = await this.model.aggregate<{ _id: string; netCredits: number }>([
+      { $match: { ownerId, ownerType, createdAt: { $gte: from, $lte: to } } },
+      {
+        $group: {
+          _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: 'UTC' } },
+          netCredits: { $sum: '$credits' },
+        },
+      },
+      { $sort: { _id: 1 } },
+    ]);
+    return rows.map(({ _id, netCredits }) => ({ day: _id, netCredits }));
+  }
+
+  async findAdminAdjustmentsForUser(
+    userId: string,
+    from: Date,
+    to: Date,
+    limit: number
+  ): Promise<ICreditTransactionDocument[]> {
+    return this.model
+      .find({ ...ADMIN_ADJUSTMENT_FILTER, ownerId: userId, createdAt: { $gte: from, $lte: to } })
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .exec();
+  }
+
   async queryAdminAdjustmentsPage(options: { days?: number; limit: number; skip: number }): Promise<ILedgerPage> {
-    // Admin adjustments are the generic_add / generic_deduct rows adminUpdateUser
-    // writes with reason `admin_adjustment` against a User holder. Scoping to that
-    // reason keeps out OTC/registration grants and other generic writes.
-    const query: Record<string, unknown> = {
-      ownerType: CreditHolderType.User,
-      type: { $in: ['generic_add', 'generic_deduct'] },
-      reason: 'admin_adjustment',
-    };
+    const query: Record<string, unknown> = { ...ADMIN_ADJUSTMENT_FILTER };
 
     if (options.days !== undefined) {
       const from = new Date();

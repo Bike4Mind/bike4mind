@@ -1,4 +1,11 @@
-import { IMongoDocument, IBaseRepository } from '@bike4mind/common';
+import {
+  IMongoDocument,
+  IBaseRepository,
+  OAUTH_CLIENT_TYPES,
+  OAUTH_FEDERATED_SUBJECT_SOURCES,
+  type OAuthClientType,
+  type OAuthFederatedIdpConfig,
+} from '@bike4mind/common';
 import bcrypt from 'bcryptjs';
 import mongoose, { Schema, model, Model } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
@@ -16,9 +23,8 @@ import BaseRepository from '@bike4mind/db-core';
  *  - `'sub'`: the app signs its users in against B4M's OIDC provider directly, so the
  *    B4M user id is the token's `sub` and there is no Cognito hop at all.
  *
- * NOTE: this schema is hand-duplicated in `packages/scripts/src/seed-oauth-client.ts`
- * (the seed script has no dependency on this package). Any field added here must be
- * mirrored there or seeding silently strips it.
+ * The enums and `subjectSource` type come from `@bike4mind/common` (schemas/oauthClient.ts);
+ * OAuthFederatedIdpConfig there mirrors this interface, so keep the two in sync.
  */
 export interface IOAuthClientFederatedIdp {
   /** Expected `iss` of the ID token, e.g. `https://cognito-idp.<region>.amazonaws.com/<poolId>` or B4M's own APP_URL. */
@@ -40,7 +46,7 @@ export interface IOAuthClientFederatedIdp {
    * Where the B4M user id lives in the verified token. Absent means `'identities'`,
    * which is what keeps every already-registered client on its existing code path.
    */
-  subjectSource?: 'identities' | 'sub';
+  subjectSource?: OAuthFederatedIdpConfig['subjectSource'];
 }
 
 export interface IOAuthClientDocument extends IMongoDocument {
@@ -68,7 +74,7 @@ export interface IOAuthClientDocument extends IMongoDocument {
    * Defaults to 'first-party' so existing clients grandfather in with no behavior change; a client
    * is opted into the restricted treatment only by an explicit reclassification.
    */
-  clientType: 'first-party' | 'relying-party';
+  clientType: OAuthClientType;
   isActive: boolean;
   /** Populated only for Pattern-A federated clients; gates the AI-token exchange. */
   federatedIdp?: IOAuthClientFederatedIdp;
@@ -93,13 +99,13 @@ type IOAuthClientModel = Model<IOAuthClientDocument>;
  */
 type FederatedIdpValidationContext = { subjectSource?: string };
 
-function requiredWhenSubjectSourceIs(source: 'identities' | 'sub') {
+function requiredWhenSubjectSourceIs(source: (typeof OAUTH_FEDERATED_SUBJECT_SOURCES)[number]) {
   return function (this: FederatedIdpValidationContext) {
     return this.subjectSource === source;
   };
 }
 
-function requiredWhenSubjectSourceIsNot(source: 'identities' | 'sub') {
+function requiredWhenSubjectSourceIsNot(source: (typeof OAUTH_FEDERATED_SUBJECT_SOURCES)[number]) {
   return function (this: FederatedIdpValidationContext) {
     return this.subjectSource !== source;
   };
@@ -113,7 +119,7 @@ const OAuthClientSchema = new Schema<IOAuthClientDocument>(
     redirectUris: [{ type: String, required: true }],
     allowedScopes: { type: [String], default: ['openid', 'email', 'profile'] },
     tokenEndpointAuthMethod: { type: String, enum: ['none', 'client_secret_post'], default: 'none' },
-    clientType: { type: String, enum: ['first-party', 'relying-party'], default: 'first-party' },
+    clientType: { type: String, enum: [...OAUTH_CLIENT_TYPES], default: 'first-party' },
     isActive: { type: Boolean, default: true },
     // Pattern-A federated trust config. Absent (default) for ordinary "Sign in with B4M" clients;
     // its presence is the gate for the AI-token exchange endpoint. `_id: false` - it's an inline value.
@@ -128,7 +134,7 @@ const OAuthClientSchema = new Schema<IOAuthClientDocument>(
           jwksUri: { type: String, required: requiredWhenSubjectSourceIs('sub') },
           audience: { type: String, required: true },
           providerName: { type: String, required: requiredWhenSubjectSourceIsNot('sub') },
-          subjectSource: { type: String, enum: ['identities', 'sub'] },
+          subjectSource: { type: String, enum: [...OAUTH_FEDERATED_SUBJECT_SOURCES] },
         },
         { _id: false }
       ),

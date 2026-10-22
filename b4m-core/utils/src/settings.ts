@@ -5,6 +5,9 @@ import {
   ScopeRef,
   SettingKey,
   settingsMap,
+  resolveTeamPlanSettings,
+  TEAM_PLAN_SETTING_KEYS,
+  type TeamPlanSettings,
 } from '@bike4mind/common';
 import { z } from 'zod';
 import { AdminSettingsCache } from './cache/AdminSettingsCache';
@@ -128,7 +131,11 @@ export async function getSettingsMap(
 ): Promise<Record<string, string>> {
   const logger = options?.logger;
 
-  // Allow bypassing cache for testing or when explicit fresh data is needed
+  // Bypasses the per-process cache, which only invalidates locally: an admin write made in
+  // another process is otherwise invisible here for up to the cache TTL (5 min). Reserve it for a
+  // billing/security flag that must reflect that write on the next request/turn; it costs one
+  // read per call - `findBySettingNames` (indexed) when `names` is given, a full `findAll`
+  // otherwise - so never call it per chunk or loop iteration.
   if (options?.skipCache) {
     const settings = options?.names
       ? await db.adminSettings.findBySettingNames(options.names)
@@ -225,6 +232,21 @@ export async function getSettingsByNames(
   });
 
   return result;
+}
+
+/**
+ * The team-plan seat floor/ceiling and credits-per-seat, read through the settings cache and
+ * validated by `resolveTeamPlanSettings` (defaults: the ORGANIZATION_SUBSCRIPTION_* constants).
+ * Every server-side seat or team-credit check reads this rather than the constants.
+ */
+export async function loadTeamPlanSettings(
+  db: {
+    adminSettings: Pick<IAdminSettingsRepository, 'findBySettingNames' | 'findAll'>;
+  },
+  options?: { logger?: Logger; skipCache?: boolean }
+): Promise<TeamPlanSettings> {
+  const raw = await getSettingsByNames([...TEAM_PLAN_SETTING_KEYS], db, options);
+  return resolveTeamPlanSettings(raw);
 }
 
 /**

@@ -4,6 +4,7 @@
  * These prompts define the core behavior and workflows for the autonomous AI assistant.
  */
 
+import { buildDeferredToolDirectory } from '@bike4mind/agents';
 import type { AgentStore } from '../agents/AgentStore.js';
 import type { CustomCommand } from '../storage/types.js';
 import { buildSkillsPromptSection } from './skillsPrompt.js';
@@ -55,29 +56,6 @@ export interface SystemPromptConfig {
 }
 
 /**
- * Render the deferred-tool directory: names only, no descriptions.
- * Following Claude Code's pattern, MCP tools have self-describing names
- * (e.g. mcp__github__create_pull_request) that the model parses without
- * needing extra text. The model can also call `tool_search` with free-text
- * keywords for non-obvious names.
- */
-export function buildDeferredToolDirectory(names: string[]): string {
-  if (names.length === 0) return '';
-  const sorted = [...names].sort();
-  return `
-
-## Deferred tool schemas
-
-The following ${sorted.length} tool(s) are available but their parameter schemas are NOT loaded by default to save context. Calling them directly will fail with "Tool not found". Use the \`tool_search\` tool to load schemas on demand:
-- Exact selection: \`tool_search(query="select:<name>[,<name>...]")\`
-- Keyword search: \`tool_search(query="<free text>")\`
-
-Once a tool's schema is loaded, it becomes callable in subsequent turns. Deferred tool names:
-
-${sorted.join('\n')}`;
-}
-
-/**
  * Plan-mode section: tells the model that write tools are blocked and where to put the plan.
  * Appended dynamically when the user cycles into plan mode via Shift+Tab.
  *
@@ -100,7 +78,7 @@ The user has cycled into plan mode (Shift+Tab). Plan mode restricts WRITING, not
 - \`get_file_structure\` — AST overview of a file
 - \`agent_delegate\` — delegate to read-only subagents (e.g. 'explore', 'plan')
 - \`ask_user_question\` — ask the user clarifying questions
-- \`current_datetime\`, \`math_evaluate\`, \`web_search\`, \`web_fetch\` — also fine
+- \`current_datetime\`, \`math_evaluate\`, \`web_search\`, \`web_fetch\`, \`decide\` - also fine
 
 **Tools blocked in plan mode:**
 - \`bash_execute\`, \`edit_local_file\`, \`create_file\`, \`delete_file\` — and any other tool that mutates state.

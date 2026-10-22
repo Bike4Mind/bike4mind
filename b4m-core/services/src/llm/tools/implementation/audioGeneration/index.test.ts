@@ -7,7 +7,7 @@ import type { AudioGenerationToolCall } from '@bike4mind/common';
 const mockSynthesize = vi.fn();
 const mockGenerate = vi.fn();
 const mockGetEffectiveApiKey = vi.fn();
-const mockPersistFab = vi.fn().mockResolvedValue(undefined);
+const mockSaveAsset = vi.fn().mockResolvedValue(undefined);
 
 vi.mock('@bike4mind/utils', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/utils')>();
@@ -24,7 +24,7 @@ vi.mock('../../../../apiKeyService', async importOriginal => {
 });
 
 vi.mock('../../helpers/persistGeneratedFile', () => ({
-  persistGeneratedFileAsFabFile: mockPersistFab,
+  saveGeneratedAssetFromTool: mockSaveAsset,
 }));
 
 // Imported after the mocks so the tool picks up the mocked dependencies.
@@ -63,7 +63,7 @@ describe('audio_generation tool', () => {
     mockSynthesize.mockReset();
     mockGenerate.mockReset();
     mockGetEffectiveApiKey.mockReset();
-    mockPersistFab.mockClear();
+    mockSaveAsset.mockClear();
     mockSynthesize.mockResolvedValue({
       audio: Buffer.from('fake-mp3'),
       contentType: 'audio/mpeg',
@@ -148,15 +148,17 @@ describe('audio_generation tool', () => {
     expect(context.onFinish).not.toHaveBeenCalled();
   });
 
-  it('sanitizes the provider error in the tool result (logs detail) without storing or billing', async () => {
+  it('sanitizes the provider error in the tool result and logs without storing or billing', async () => {
     mockSynthesize.mockRejectedValue(new Error('provider exploded: key sk-abc123 rejected at https://api.example'));
     const context = createFakeContext();
     const result = await run(context, { kind: 'speech', text: 'boom' }, { ttsProvider: 'openai' });
     // The model sees a generic message; the raw vendor string (key hint / URL) must not leak.
     expect(result).toBe('Error: TTS request rejected by the openai provider.');
     expect(result).not.toMatch(/sk-abc123|api\.example/);
-    // The detail is still logged for operators.
-    expect(context.logger.error).toHaveBeenCalledWith(expect.stringContaining('provider exploded'));
+    expect(context.logger.error).toHaveBeenCalledWith('[audio_generation] speech generation failed', {
+      errorType: 'Error',
+    });
+    expect(JSON.stringify(vi.mocked(context.logger.error).mock.calls)).not.toMatch(/sk-abc123|api\.example/);
     expect(context.imageGenerateStorage.upload).not.toHaveBeenCalled();
     // A failed generation must not settle a charge - onFinish is never reached.
     expect(context.onFinish).not.toHaveBeenCalled();
@@ -260,18 +262,34 @@ describe('audio_generation tool', () => {
     expect(mockSynthesize).not.toHaveBeenCalled();
   });
 
-  it('honors saveGeneratedAudio=false: uploads for inline playback but skips the KB FabFile copy', async () => {
+  it('always saves a speech copy with its generation metadata (no user preference gate)', async () => {
     const context = createFakeContext();
     (context as { user: unknown }).user = { preferences: { saveGeneratedAudio: false } };
     const result = await run(context, { kind: 'speech', text: 'hello world' });
     expect(context.imageGenerateStorage.upload).toHaveBeenCalledTimes(1);
-    expect(mockPersistFab).not.toHaveBeenCalled();
+    expect(mockSaveAsset).toHaveBeenCalledTimes(1);
+    expect(mockSaveAsset).toHaveBeenCalledWith(context, {
+      bytes: Buffer.from('fake-mp3'),
+      contentType: 'audio/mpeg',
+      generation: {
+        generator: 'speech',
+        provider: expect.any(String),
+        modelId: expect.any(String),
+        prompt: 'hello world',
+      },
+      generatedCopyKey: 'stored-key.mp3',
+    });
     expect(result).toBe('Successfully generated speech');
   });
 
-  it('persists the KB FabFile copy when saveGeneratedAudio is unset (defaults on)', async () => {
+  it('saves a sound-effect copy with its duration', async () => {
     const context = createFakeContext();
-    await run(context, { kind: 'speech', text: 'hello world' });
-    expect(mockPersistFab).toHaveBeenCalledTimes(1);
+    await run(context, { kind: 'sound_effect', text: 'dog barking', durationSeconds: 5 });
+    expect(mockSaveAsset).toHaveBeenCalledWith(context, {
+      bytes: Buffer.from('fake-sfx'),
+      contentType: 'audio/mpeg',
+      generation: { generator: 'sound_effect', provider: 'elevenlabs', prompt: 'dog barking', durationSeconds: 5 },
+      generatedCopyKey: 'stored-key.mp3',
+    });
   });
 });

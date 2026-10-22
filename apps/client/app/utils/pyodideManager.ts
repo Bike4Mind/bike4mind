@@ -20,6 +20,11 @@
  */
 
 import type { PyodideWorkerMessage, PyodideWorkerResponse, ExecutionResult } from '@client/app/workers/pyodide/types';
+import {
+  SUPPORTED_PYTHON_PACKAGES,
+  describePythonImportError,
+  detectPythonPackages,
+} from '@client/app/utils/pythonPackages';
 
 /** The sandbox route. Framed with `allow-scripts` ONLY - never `allow-same-origin`. */
 export const PYODIDE_SANDBOX_SRC = '/api/pyodide-sandbox';
@@ -70,17 +75,10 @@ export interface PyodideManagerState {
   error: string | null;
   isReady: boolean;
   isExecuting: boolean;
+  // What the worker is doing during a run (e.g. loading packages), for the Run status line.
+  executionStatus: string | null;
   streamingOutput: string;
 }
-
-// Supported packages (pre-built in Pyodide)
-const SUPPORTED_PACKAGES = ['numpy', 'pandas', 'matplotlib', 'scipy', 'seaborn', 'scikit-learn'];
-
-// Package name mapping (npm name -> Pyodide package name)
-const PACKAGE_NAME_MAP: Record<string, string> = {
-  'scikit-learn': 'sklearn',
-  sklearn: 'sklearn',
-};
 
 class PyodideManager {
   private state: PyodideManagerState = {
@@ -90,6 +88,7 @@ class PyodideManager {
     error: null,
     isReady: false,
     isExecuting: false,
+    executionStatus: null,
     streamingOutput: '',
   };
 
@@ -105,6 +104,9 @@ class PyodideManager {
   private initResolver: (() => void) | null = null;
   private initRejecter: ((error: Error) => void) | null = null;
   private initIdleTimer: ReturnType<typeof setTimeout> | null = null;
+  // Settles a still-pending handshake (and clears its timer) when the frame is torn down, so
+  // a stale timer can never tear down the frame that replaced it.
+  private abortHandshake: ((error: Error) => void) | null = null;
   private listeners: Set<(state: PyodideManagerState) => void> = new Set();
 
   /**
@@ -145,6 +147,7 @@ class PyodideManager {
           reject(new Error('Python sandbox did not start. Reload the page and try again.'));
         });
       }, SANDBOX_HANDSHAKE_TIMEOUT_MS);
+      this.abortHandshake = error => settle(() => reject(error));
 
       this.messageListener = (event: MessageEvent) => {
         // Provenance is the source window: an opaque origin reports "null", so the event's
@@ -154,7 +157,10 @@ class PyodideManager {
         if (!data || typeof data !== 'object') return;
 
         if (data.type === SANDBOX_READY) {
-          settle(resolve);
+          settle(() => {
+            this.abortHandshake = null;
+            resolve();
+          });
           return;
         }
 
@@ -180,6 +186,9 @@ class PyodideManager {
   /** Drop the sandbox, which takes the Worker inside it with it. */
   private teardownSandbox(): void {
     this.clearInitWatchdog();
+    const abortHandshake = this.abortHandshake;
+    this.abortHandshake = null;
+    abortHandshake?.(new Error('Execution interrupted'));
     if (this.messageListener) {
       window.removeEventListener('message', this.messageListener);
       this.messageListener = null;
@@ -248,7 +257,7 @@ class PyodideManager {
         break;
 
       case 'executing':
-        this.updateState({ isExecuting: true, streamingOutput: '' });
+        this.updateState({ isExecuting: true, executionStatus: msg.message, streamingOutput: '' });
         break;
 
       case 'output':
@@ -258,9 +267,10 @@ class PyodideManager {
         break;
 
       case 'result':
-        this.updateState({ isExecuting: false });
+        this.updateState({ isExecuting: false, executionStatus: null });
         if (this.executeResolver) {
-          this.executeResolver(msg.result);
+          const { result } = msg;
+          this.executeResolver(result.error ? { ...result, error: describePythonImportError(result.error) } : result);
           this.executeResolver = null;
           this.executeRejecter = null;
         }
@@ -271,6 +281,7 @@ class PyodideManager {
         this.updateState({
           isLoading: false,
           isExecuting: false,
+          executionStatus: null,
           error: msg.error,
         });
         if (this.initRejecter) {
@@ -310,7 +321,7 @@ class PyodideManager {
       return this.initPromise;
     }
 
-    this.initPromise = this.spawnSandbox()
+    const initPromise: Promise<void> = this.spawnSandbox()
       .then(
         () =>
           new Promise<void>((resolve, reject) => {
@@ -321,6 +332,8 @@ class PyodideManager {
           })
       )
       .catch(error => {
+        // An interrupt has already started a replacement load; this failure is the old one's.
+        if (this.initPromise !== initPromise) throw error;
         // A sandbox that never came up must not leave initialize() permanently memoized -
         // the next Run should try again rather than report a stale failure forever.
         this.initPromise = null;
@@ -331,8 +344,9 @@ class PyodideManager {
         });
         throw error;
       });
+    this.initPromise = initPromise;
 
-    return this.initPromise;
+    return initPromise;
   }
 
   /**
@@ -350,12 +364,19 @@ class PyodideManager {
     if (!this.frame) {
       throw new Error('Python sandbox not available');
     }
+    // One sandbox, one run: a second caller would replace the first one's resolver and leave
+    // its promise unsettled forever.
+    if (this.executeResolver) {
+      throw new Error('Another Python script is already running');
+    }
 
     return new Promise<ExecutionResult>((resolve, reject) => {
       this.executeResolver = resolve;
       this.executeRejecter = reject;
 
-      this.updateState({ isExecuting: true });
+      // Cleared here, not only on the worker's first message, so a run never shows the
+      // previous run's output.
+      this.updateState({ isExecuting: true, streamingOutput: '' });
 
       this.postToSandbox({ type: 'execute', code, packages, timeoutMs });
     });
@@ -373,13 +394,18 @@ class PyodideManager {
 
     // Removing the frame destroys the Worker inside it, which is what actually stops a
     // `while True:`. A 'cancel' message would only be observed between steps.
+    // Settle a load still in flight (teardown settles a pending handshake), so a caller
+    // awaiting initialize() hears about the interrupt instead of hanging on it.
+    const rejectInit = this.initRejecter;
     this.teardownSandbox();
     this.initPromise = null;
     this.initResolver = null;
     this.initRejecter = null;
+    rejectInit?.(new Error('Execution interrupted'));
 
     this.updateState({
       isExecuting: false,
+      executionStatus: null,
       isReady: false,
       loadProgress: 0,
       loadedPackages: new Set(),
@@ -404,25 +430,7 @@ class PyodideManager {
 
   /** Detect required packages from import statements. */
   detectPackages(code: string): string[] {
-    const packages: Set<string> = new Set();
-
-    const importPatterns = [/^import\s+(\w+)/gm, /^from\s+(\w+)\s+import/gm];
-
-    for (const pattern of importPatterns) {
-      let match;
-      while ((match = pattern.exec(code)) !== null) {
-        const pkg = match[1];
-        if (
-          SUPPORTED_PACKAGES.includes(pkg) ||
-          Object.keys(PACKAGE_NAME_MAP).includes(pkg) ||
-          Object.values(PACKAGE_NAME_MAP).includes(pkg)
-        ) {
-          packages.add(pkg);
-        }
-      }
-    }
-
-    return Array.from(packages);
+    return detectPythonPackages(code);
   }
 
   private updateState(partial: Partial<PyodideManagerState>): void {
@@ -444,7 +452,7 @@ class PyodideManager {
   }
 
   getSupportedPackages(): string[] {
-    return [...SUPPORTED_PACKAGES];
+    return [...SUPPORTED_PYTHON_PACKAGES];
   }
 }
 

@@ -1,10 +1,18 @@
-import { ApiKeyScope, IOrganizationRepository, IUserApiKeyRepository } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  IOrganizationRepository,
+  IRealtimeConnectionRepository,
+  IUserApiKeyRepository,
+} from '@bike4mind/common';
 import { ForbiddenError, NotFoundError, secureParameters } from '@bike4mind/utils';
 import { randomBytes } from 'crypto';
-import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { KEY_PREFIX_LENGTH } from './constants';
 import { resolveOwnedApiKey } from './resolveOwnedApiKey';
+import { assertNoScopeEscalation } from './assertNoScopeEscalation';
+import { generateCallbackSigningSecret } from './callbackSigningSecret';
+import { computeKeyDigest } from './keyDigest';
+import { endRealtimeConnections } from '../authSessionService/endRealtimeConnections';
 
 const rotateUserApiKeySchema = z.object({
   keyId: z.string(),
@@ -16,6 +24,9 @@ interface RotateUserApiKeyAdapters {
   db: {
     userApiKeys: IUserApiKeyRepository;
     organizations: Pick<IOrganizationRepository, 'findIdsAdministeredBy'>;
+    // Optional only so existing overlay callers keep compiling; when omitted, sockets opened with
+    // the rotated-away secret stay up until the gateway's 2h cap. In-repo callers always pass it.
+    realtimeConnections?: Pick<IRealtimeConnectionRepository, 'endConnections'>;
   };
   /**
    * Scopes of the API key making the request, when the caller authenticated with one.
@@ -32,25 +43,31 @@ export interface RotateUserApiKeyResult {
   key: string; // Only returned once during rotation
   /** Set only when rotation re-owned the key; the user it belonged to before. */
   previousOwnerUserId?: string;
+  /**
+   * Set only on a re-own: the fresh completion-callback signing secret, since the previous
+   * owner knew the old one and could otherwise forge callbacks to the new owner's receiver.
+   * Only returned once, like `key`.
+   */
+  callbackSigningSecret?: string;
 }
 
 /**
  * Generate a new secure API key maintaining the same prefix format
  */
-function generateNewApiKey(): { key: string; keyPrefix: string; keyHash: string } {
+function generateNewApiKey(): { key: string; keyPrefix: string; keyDigest: string } {
   const randomPart = randomBytes(16).toString('hex'); // 32 chars
   const key = `b4m_live_${randomPart}`;
   const keyPrefix = key.substring(0, KEY_PREFIX_LENGTH);
-  const keyHash = bcrypt.hashSync(key, 12);
+  const keyDigest = computeKeyDigest(key);
 
-  return { key, keyPrefix, keyHash };
+  return { key, keyPrefix, keyDigest };
 }
 
 /**
  * Rotate a key's secret, scoped by resolveOwnedApiKey (the key's minter, or an
  * admin of the org it is billed to).
  *
- * Rotation RE-OWNS the key to whoever rotated it. Previously only `keyHash` and
+ * Rotation RE-OWNS the key to whoever rotated it. Previously only the secret and
  * `keyPrefix` were rewritten, never `userId` - so an org admin rotating a
  * teammate's org-billed key walked away with a plaintext credential that
  * authenticated as that teammate. Re-owning keeps the org-admin capability (the
@@ -83,21 +100,11 @@ export const rotateUserApiKey = async (
   // an API-key caller may only rotate a key whose scopes it already holds - otherwise a
   // deliberately narrow key could name its owner's admin:* key and be answered with one.
   // A browser/JWT caller is unrestricted: they already hold the whole account.
-  //
-  // Containment is LITERAL and deliberately does not treat `admin:*` as a superset of
-  // other scopes (unlike hearthWire's grant check): rotation mints a credential, so a
-  // caller must prove it literally holds every scope on the target, not merely a wildcard
-  // that would expand to them. `callerScopes` present (even the empty array) means an
-  // API-key caller and enters the check; an empty array therefore DENIES every scoped key
-  // rather than being read as "unrestricted". Only an absent `callerScopes` (browser/JWT)
-  // skips it.
-  if (adapters.callerScopes) {
-    const callerScopes = adapters.callerScopes;
-    const escalating = (apiKey.scopes ?? []).filter(scope => !callerScopes.includes(scope));
-    if (escalating.length > 0) {
-      throw new ForbiddenError('Cannot rotate a key holding scopes the calling key does not have');
-    }
-  }
+  assertNoScopeEscalation(
+    adapters.callerScopes,
+    apiKey.scopes ?? [],
+    'Cannot rotate a key holding scopes the calling key does not have'
+  );
 
   const previousOwnerUserId = apiKey.userId?.toString();
   const reOwned = !!previousOwnerUserId && previousOwnerUserId !== userId;
@@ -119,21 +126,35 @@ export const rotateUserApiKey = async (
     );
   }
 
-  const { key, keyPrefix, keyHash } = generateNewApiKey();
+  const { key, keyPrefix, keyDigest } = generateNewApiKey();
 
-  apiKey.keyHash = keyHash;
+  apiKey.keyDigest = keyDigest;
   apiKey.keyPrefix = keyPrefix;
   if (reOwned) {
     apiKey.userId = userId;
   }
 
-  await db.userApiKeys.update({ id: apiKey.id, keyHash, keyPrefix, ...(reOwned ? { userId } : {}) });
+  // A legacy key's bcrypt hash goes too, so nothing of the rotated-away secret can authenticate.
+  await db.userApiKeys.update(
+    { id: apiKey.id, keyDigest, keyPrefix, ...(reOwned ? { userId } : {}) },
+    { unset: ['keyHash'] }
+  );
+
+  const callbackSigningSecret = reOwned ? generateCallbackSigningSecret() : undefined;
+  if (callbackSigningSecret) {
+    await db.userApiKeys.setCallbackSigningSecret(apiKey.id, callbackSigningSecret, new Date());
+  }
+
+  // Rotation keeps the key id, so sockets opened with the old secret would otherwise stay live.
+  if (db.realtimeConnections) {
+    await endRealtimeConnections({ apiKeyId: apiKey.id }, { db: { realtimeConnections: db.realtimeConnections } });
+  }
 
   return {
     id: apiKey.id,
     name: apiKey.name,
     keyPrefix: apiKey.keyPrefix,
     key, // This is the only time the raw key is returned
-    ...(reOwned ? { previousOwnerUserId } : {}),
+    ...(reOwned ? { previousOwnerUserId, callbackSigningSecret } : {}),
   };
 };

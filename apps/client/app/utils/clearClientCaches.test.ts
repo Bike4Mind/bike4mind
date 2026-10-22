@@ -14,6 +14,7 @@ vi.mock('idb-keyval', () => ({ del: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('./dexie', () => ({ dexie: { delete: vi.fn().mockResolvedValue(undefined) } }));
 vi.mock('./tagCache', () => ({ tagCacheManager: { clearAllCaches: vi.fn().mockResolvedValue(undefined) } }));
 
+import { FIRST_SIGNUP_SESSION_KEY } from './firstSignupSession';
 import { clearClientCaches } from './clearClientCaches';
 
 function setPrefixes(prefixes: string[]) {
@@ -67,5 +68,21 @@ describe('clearClientCaches premium localStorage sweep', () => {
     await clearClientCaches();
 
     expect(Object.keys(localStorage)).toEqual([]);
+  });
+});
+
+describe('clearClientCaches identity-scoped stores', () => {
+  it('ends first-session modal suppression on identity teardown', async () => {
+    localStorage.setItem(FIRST_SIGNUP_SESSION_KEY, 'new-user');
+    await clearClientCaches();
+    expect(localStorage.getItem(FIRST_SIGNUP_SESSION_KEY)).toBeNull();
+  });
+
+  it('drops the persisted model pick so the next account starts from its own default', async () => {
+    localStorage.setItem('llm-settings', JSON.stringify({ state: { model: 'some-model' }, version: 6 }));
+
+    await clearClientCaches();
+
+    expect(localStorage.getItem('llm-settings')).toBeNull();
   });
 });

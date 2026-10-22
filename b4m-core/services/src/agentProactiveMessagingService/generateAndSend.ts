@@ -1,4 +1,4 @@
-import { BaseStorage } from '@bike4mind/utils';
+import { BaseStorage, isStoppedBeforeReply } from '@bike4mind/utils';
 import { stripToolOutputMarker } from '@bike4mind/utils/artifactParser';
 import {
   getLlmByModel,
@@ -26,6 +26,14 @@ import {
   IScopedSettingsRepository,
 } from '@bike4mind/common';
 import { b4mTools, generateTools } from '../llm/tools';
+
+/**
+ * This host builds the whole tool registry but injects no `ToolContext.decide` runner, so `decide`
+ * would be advertised with a toolFn that can only throw. `buildSharedTools` derives the same rule
+ * from its deps; a registry-wide build has to drop the entry itself.
+ */
+const { decide: _noDecisionRunner, ...proactiveMessageTools } = b4mTools;
+export { proactiveMessageTools };
 
 interface GenerateAndSendProactiveMessageAdapters {
   config: ISessionAgentConfigDocument;
@@ -143,7 +151,13 @@ export async function generateAndSendProactiveMessage({
           usageEvents: db.usageEvents,
           organizations: db.organizations,
           scopedSettings: db.scopedSettings,
+          // Owner lookup for edit_image's generated-image keys (resolveOwnedGeneratedImageUrl). Narrow on
+          // purpose: the whole repo would enable incrementImageCount for images no quest here holds.
+          quests: db.quests,
+          sessions: { findAllByIds: db.sessions.findAllByIds.bind(db.sessions) },
         },
+        // The agent speaks first, on a schedule - no user request authenticated this turn.
+        authOrigin: 'internal',
       },
       storage,
       imageGenerateStorage,
@@ -156,7 +170,7 @@ export async function generateAndSendProactiveMessage({
       { web_search: { imageUrlSigningSecret } },
       model,
       undefined, // imageProcessorLambdaName
-      b4mTools, // tools: full server-side tool set
+      proactiveMessageTools, // tools: full server-side tool set, minus the host-injected `decide`
       undefined, // allowedDirectories
       undefined, // entitlementKeys
       session.id, // sessionId: attribute proactive-message tool spend to its session
@@ -244,7 +258,7 @@ export async function generateAndSendProactiveMessage({
 /**
  * Builds messages array for LLM to generate a proactive message
  */
-function buildProactiveMessageMessages({
+export function buildProactiveMessageMessages({
   agent,
   config,
   session,
@@ -286,6 +300,7 @@ function buildProactiveMessageMessages({
     const contextMessages = recentMessages.slice(-5);
 
     for (const msg of contextMessages) {
+      if (isStoppedBeforeReply(msg)) continue;
       if (msg.prompt) {
         messages.push({
           role: 'user',

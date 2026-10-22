@@ -24,14 +24,19 @@ function escapeRegExp(value: string): string {
  * exactly and case-insensitively: the equality arm is index-friendly for the
  * common same-case hit, and the anchored, escaped $regex arm covers case
  * variants without letting email metacharacters (`.`, `+`) over-match a
- * different address.
+ * different address. Expired invites are excluded (null also matches a missing expiresAt).
  */
 function pendingEmailMatch(pendingEmail: string) {
   return {
     'recipients.pending': { $exists: true, $ne: [] },
-    $or: [
-      { 'recipients.pending': pendingEmail },
-      { 'recipients.pending': { $regex: `^${escapeRegExp(pendingEmail)}$`, $options: 'i' } },
+    $and: [
+      {
+        $or: [
+          { 'recipients.pending': pendingEmail },
+          { 'recipients.pending': { $regex: `^${escapeRegExp(pendingEmail)}$`, $options: 'i' } },
+        ],
+      },
+      { $or: [{ expiresAt: null }, { expiresAt: { $gt: new Date() } }] },
     ],
   };
 }
@@ -88,6 +93,14 @@ export const InviteSchema = new Schema<IInviteDocument>(
     inviterId: {
       type: String,
       required: false,
+    },
+    // See IBaseInvite.typedRecipients. `default: undefined` keeps it absent on legacy rows: a
+    // Mongoose array path otherwise defaults to [], which would read as "typed nothing" and make
+    // every legacy row look like a new one.
+    typedRecipients: {
+      type: [String],
+      required: false,
+      default: undefined,
     },
     // Names nobody by design (a redeemable share link), as opposed to a named invite whose
     // recipients did not resolve. Absent on invites created before this field existed.

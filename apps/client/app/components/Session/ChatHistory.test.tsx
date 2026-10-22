@@ -34,17 +34,22 @@ vi.mock('react-virtuoso', () => ({
     data,
     itemContent,
     firstItemIndex = 0,
+    components,
   }: {
     data: IChatHistoryItem[];
     itemContent: (index: number, item: IChatHistoryItem) => React.ReactNode;
     firstItemIndex?: number;
-  }) => (
-    <div>
-      {data.map((item, i) => (
-        <div key={item.id ?? i}>{itemContent(i + firstItemIndex, item)}</div>
-      ))}
-    </div>
-  ),
+    components?: { Scroller?: React.ComponentType<{ children?: React.ReactNode }> };
+  }) => {
+    const Scroller = components?.Scroller ?? 'div';
+    return (
+      <Scroller>
+        {data.map((item, i) => (
+          <div key={item.id ?? i}>{itemContent(i + firstItemIndex, item)}</div>
+        ))}
+      </Scroller>
+    );
+  },
 }));
 
 vi.mock('./FallbackModelBadge', () => ({ default: () => null }));
@@ -114,6 +119,15 @@ const completionByMessage = () =>
       props.chatCompletion !== undefined,
     ])
   );
+
+describe('ChatHistory - transcript landmark', () => {
+  it('exposes the scroller as a named region, not a live log', () => {
+    const { getByRole, queryByRole } = renderHistory([quest('a')], null);
+
+    expect(getByRole('region', { name: 'Conversation' })).toBeTruthy();
+    expect(queryByRole('log')).toBeNull();
+  });
+});
 
 describe('ChatHistory - streaming state is scoped to one message', () => {
   beforeEach(() => {

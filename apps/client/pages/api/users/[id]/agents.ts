@@ -1,6 +1,6 @@
 import { Agent } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
 /**
  * GET /api/users/[id]/agents

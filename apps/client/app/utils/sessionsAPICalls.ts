@@ -5,19 +5,23 @@ import {
   IChatHistoryItemDocument,
   ISessionDocument,
   ISessionFavoriteItem,
+  SessionListFilters,
   SessionUpdateRequest,
 } from '@bike4mind/common';
 import { getSurfaceChatContext } from '@client/app/utils/surfaceChatContext';
 
 export const getSessionsFromServer = async (
   search: string = '',
-  options: { pagination: { page: number; limit: number }; surface?: string } = { pagination: { page: 1, limit: 10 } }
+  options: { pagination: { page: number; limit: number }; surface?: string; filters?: SessionListFilters } = {
+    pagination: { page: 1, limit: 10 },
+  }
 ) => {
   const response = await api.get<{ data: ISessionDocument[]; hasMore: boolean }>(`/api/sessions`, {
     params: {
       search,
       pagination: options.pagination,
       ...(options.surface ? { surface: options.surface } : {}),
+      ...options.filters,
     },
   });
 
@@ -26,12 +30,15 @@ export const getSessionsFromServer = async (
 
 export const getSharedSessionsFromServer = async (
   search: string = '',
-  options = { pagination: { page: 1, limit: 10 } }
+  options: { pagination: { page: number; limit: number }; filters?: SessionListFilters } = {
+    pagination: { page: 1, limit: 10 },
+  }
 ) => {
   const response = await api.get<{ data: ISessionDocument[]; hasMore: boolean }>(`/api/sessions/shared`, {
     params: {
       query: search,
       pagination: options.pagination,
+      ...options.filters,
     },
   });
 
@@ -65,10 +72,20 @@ export const getSessionByIdFromServer = async (sessionId: string): Promise<ISess
  * key to accidentally carry, so the server's parse drops it rather than reading the echoed
  * `retrievalTags: []` Mongoose hydrates onto every session as a deliberate "ground on no lake".
  */
-export type SessionUpdatePayload = Partial<ISessionDocument> & Pick<SessionUpdateRequest, 'lakeScope'>;
+export type SessionUpdatePayload = Omit<Partial<ISessionDocument>, 'includeLibraryFiles'> &
+  Pick<SessionUpdateRequest, 'lakeScope'> & { includeLibraryFilesChoice?: boolean };
 
+// `includeLibraryFiles` is stripped because a whole-session echo (a rename) would otherwise resend a
+// possibly stale cached value over a newer toggle. The client-only `includeLibraryFilesChoice` (no
+// cached session carries it) is the one way to write the flag, so it can ride in the same PUT as
+// the scope change that defaults it.
 export const updateSessionToServer = async (sessionData: SessionUpdatePayload & { id: string }) => {
-  const response = await api.put(`/api/sessions/${sessionData.id}`, sessionData);
+  const { includeLibraryFilesChoice, ...rest } = sessionData;
+  // Omit only rejects a literal key: a spread cached session still carries it at runtime.
+  const body: Record<string, unknown> = { ...rest };
+  delete body.includeLibraryFiles;
+  if (includeLibraryFilesChoice !== undefined) body.includeLibraryFiles = includeLibraryFilesChoice;
+  const response = await api.put(`/api/sessions/${sessionData.id}`, body);
   return response.data;
 };
 
@@ -188,8 +205,18 @@ export const generateSessionTags = async (sessionId: string) => {
   return response.data;
 };
 
-export const cloneSession = async (sessionId: string) => {
-  const response = await api.post<ISessionDocument>(`/api/sessions/${sessionId}/clone`);
+/** `targetSurface` omitted = the clone stays in the source's workspace; null = the main notebook list. */
+export const cloneSession = async (sessionId: string, targetSurface?: string | null) => {
+  const response = await api.post<ISessionDocument>(
+    `/api/sessions/${sessionId}/clone`,
+    targetSurface === undefined ? undefined : { targetSurface }
+  );
+  return response.data;
+};
+
+/** Moves a session the caller owns into another workspace (null = the main notebook list). */
+export const moveSessionToSurface = async (sessionId: string, targetSurface: string | null) => {
+  const response = await api.patch<ISessionDocument>(`/api/sessions/${sessionId}/surface`, { targetSurface });
   return response.data;
 };
 
@@ -198,7 +225,12 @@ export const getChatMessage = async (sessionId: string, messageId: string): Prom
   return response.data;
 };
 
-export const updateChatMessage = async (sessionId: string, messageId: string, update: Partial<IChatHistoryItem>) => {
+export const updateChatMessage = async (
+  sessionId: string,
+  messageId: string,
+  // selectedChoiceIndex: the server owns the options, so a pick is sent as an index, never as suggestedChoices
+  update: Partial<IChatHistoryItem> & { selectedChoiceIndex?: number }
+) => {
   const response = await api.put(`/api/sessions/${sessionId}/chat/${messageId}`, update);
   return response.data;
 };

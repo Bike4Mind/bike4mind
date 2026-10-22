@@ -19,6 +19,7 @@ import {
   DATA_LAKE_SEARCH_MAX_CHUNKS_PER_FILE_DEFAULT,
   SEARCH_BUDGET_SETTING_KEYS,
   FORCED_RETRIEVAL_SETTING_KEYS,
+  isBlankSettingValue,
   type SettingKey,
 } from './settings';
 import {
@@ -45,6 +46,39 @@ import {
 } from '../constants/knowledgeBaseSearch';
 import { SRE_SECRET_PLACEHOLDER } from '../types/entities/SreTypes';
 import { SettingScopeLevel } from '../types/entities/ScopedSettingTypes';
+
+describe('boolean setting legacy representations', () => {
+  it.each([
+    [true, true],
+    [false, false],
+    ['true', true],
+    ['TRUE', true],
+    ['false', false],
+    ['FALSE', false],
+  ])('parses %j as %j without changing its meaning', (stored, expected) => {
+    expect(settingsMap.EnableMCPServer.schema.parse(stored)).toBe(expected);
+    expect(settingsMap.enforceCredits.schema.parse(stored)).toBe(expected);
+  });
+
+  it.each(['', ' ', 'yes', 'no', '01', ' 1 ', 2, -1, null, {}, []])('rejects unsupported stored value %j', stored => {
+    expect(settingsMap.EnableMCPServer.schema.safeParse(stored).success).toBe(false);
+    expect(settingsMap.enforceCredits.schema.safeParse(stored).success).toBe(false);
+  });
+
+  it.each([1, 0, '1', '0'])('limits numeric compatibility to Team plans: %j', stored => {
+    expect(settingsMap.enableTeamPlan.schema.parse(stored)).toBe(stored === 1 || stored === '1');
+    for (const setting of Object.values(settingsMap)) {
+      if (setting.type === 'boolean' && setting.key !== 'enableTeamPlan') {
+        expect(setting.schema.safeParse(stored).success, setting.key).toBe(false);
+      }
+    }
+  });
+
+  it('preserves the declared default for an absent setting', () => {
+    expect(settingsMap.EnableMCPServer.schema.parse(undefined)).toBe(false);
+    expect(settingsMap.enforceCredits.schema.parse(undefined)).toBe(true);
+  });
+});
 
 describe('makeObjectSetting JSON preprocess', () => {
   // Test using contextTelemetryAlerts as a representative object setting
@@ -163,6 +197,7 @@ describe('other object settings use makeObjectSetting', () => {
     'contextTelemetryAlerts',
     'logoSettings',
     'RapidReplySettings',
+    'releaseNotesConfig',
     'whatsNewConfig',
     'whatsNewSyncConfig',
   ] as const;
@@ -172,6 +207,24 @@ describe('other object settings use makeObjectSetting', () => {
     // All object settings should handle JSON strings
     const result = schema.safeParse('{}');
     expect(result.success).toBe(true);
+  });
+});
+
+describe('releaseNotesConfig', () => {
+  it('defaults to disabled', () => {
+    expect(settingsMap.releaseNotesConfig.schema.parse('{}')).toEqual({
+      enabled: false,
+      modelId: 'gpt-4o-mini',
+      embargoHours: 12,
+      denylist: [],
+    });
+  });
+});
+
+describe('first-session feature defaults', () => {
+  it('keeps Hearth off until a user opts in', () => {
+    expect(settingsMap.EnableHearthDefault.defaultValue).toBe(false);
+    expect(settingsMap.EnableHearthDefault.schema.parse(undefined)).toBe(false);
   });
 });
 
@@ -248,6 +301,21 @@ describe('public settings projection (M2.5 security boundary)', () => {
     });
   });
 
+  describe('recommendedModelIds', () => {
+    it('is user-readable and defaults to empty, which the picker resolves to DefaultAPIModel', () => {
+      expect(userReadableSettingKeys()).toContain('recommendedModelIds');
+      expect(settingsMap.recommendedModelIds.defaultValue).toEqual([]);
+    });
+
+    it('accepts a string array, including its JSON-string storage form, and rejects other shapes', () => {
+      const { schema } = settingsMap.recommendedModelIds;
+      expect(schema.safeParse(['a', 'b']).success).toBe(true);
+      expect(schema.safeParse('["a","b"]').success).toBe(true);
+      expect(schema.safeParse('a').success).toBe(false);
+      expect(schema.safeParse([1]).success).toBe(false);
+    });
+  });
+
   describe('publicSafeSettingKeys', () => {
     it('returns only keys explicitly tagged publicSafe', () => {
       const keys = publicSafeSettingKeys();
@@ -277,6 +345,7 @@ describe('public settings projection (M2.5 security boundary)', () => {
         'deepseekApiKey',
         'geminiDemoKey',
         'voyageApiKey',
+        'typesafeApiKey',
       ]) {
         expect(keys).not.toContain(secret);
       }
@@ -617,6 +686,30 @@ describe('forcedRetrievalCharBudget agrees with the forced-retrieval fallback (#
     expect(settingsMap.forcedRetrievalCharBudget.max).toBe(100_000);
     expect(() => settingsMap.forcedRetrievalCharBudget.schema.parse(100_001)).toThrow();
     expect(settingsMap.forcedRetrievalCharBudget.schema.parse(100_000)).toBe(100_000);
+  });
+});
+
+describe('isBlankSettingValue', () => {
+  // The single definition of "nobody stored a choice": the scoped resolver, the forced-retrieval
+  // reads and the update route all route through it, so its edge behavior is a contract, not a
+  // helper detail. `0` / `'0'` / `false` are real stored values and must NOT read as blank.
+  it.each([undefined, null, '', ' ', '\t'])('reads %j as no stored choice', raw => {
+    expect(isBlankSettingValue(raw)).toBe(true);
+  });
+
+  it.each([0, '0', false, 'false', 75, '75'])('leaves a real stored value %j alone', raw => {
+    expect(isBlankSettingValue(raw)).toBe(false);
+  });
+
+  it('pins the settings whose blank save deletes the platform row', () => {
+    // The clearDeletesRow gate is what makes "clear the field" mean unset for this one key. A second
+    // key opting in silently would change that key's clear semantics, so pin the set here.
+    const clearing = (Object.keys(settingsMap) as SettingKey[]).filter(
+      key => settingsMap[key].clearDeletesRow === true
+    );
+    expect(clearing).toEqual(['forcedRetrievalMinSimilarityPct']);
+    // update.ts returns before materializing the public settings artifact on a row delete.
+    expect(clearing.filter(key => settingsMap[key].publicSafe)).toEqual([]);
   });
 });
 

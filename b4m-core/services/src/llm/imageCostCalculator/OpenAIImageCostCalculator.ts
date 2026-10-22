@@ -1,8 +1,16 @@
-import { GPTImage1Size, IMAGE_SIZE_CONSTRAINTS, ImageModels } from '@bike4mind/common';
+import {
+  clampImageQualityForModel,
+  GPTImage1Size,
+  IMAGE_SIZE_CONSTRAINTS,
+  ImageModels,
+  isGPTImage25Model,
+  OPENAI_IMAGE_MODELS,
+  type ExtendedGptImageQuality,
+  type OpenAIImageQuality,
+} from '@bike4mind/common';
 import { CostCalculator } from './types';
 
-export type OpenAIModel =
-  ImageModels.GPT_IMAGE_1 | ImageModels.GPT_IMAGE_1_5 | ImageModels.GPT_IMAGE_1_MINI | ImageModels.GPT_IMAGE_2 | string;
+export type OpenAIModel = (typeof OPENAI_IMAGE_MODELS)[number] | string;
 
 export interface BaseOpenAIInput {
   model: OpenAIModel;
@@ -13,17 +21,24 @@ export interface BaseOpenAIInput {
 // null, or an arbitrary 'WxH' string (gpt-image-2 supports flexible sizing).
 export interface OpenAIGPTImageInput extends BaseOpenAIInput {
   model: OpenAIModel;
-  quality?: 'standard' | 'hd' | 'low' | 'medium' | 'high' | 'auto';
+  quality?: OpenAIImageQuality;
   size?: GPTImage1Size | (string & {}) | null;
+  /**
+   * Images sent to OpenAI alongside the prompt (references, plus the primary on edits).
+   * Billed once per request, not per output image - see getInputImageCost.
+   */
+  inputImageCount?: number;
 }
 
 export type OpenAICostInput = OpenAIGPTImageInput;
 
-type Tier = 'low' | 'medium' | 'high';
+type BaseTier = 'low' | 'medium' | 'high';
+type Tier = BaseTier | ExtendedGptImageQuality;
 // The priced sizes are exactly the gpt-image-1 tier's. Widening that list breaks the
 // PriceKey-keyed tables below until a price is supplied for each new size, which is the point.
 type KnownSize = GPTImage1Size;
-type PriceKey = `${Tier}_${KnownSize}`;
+type PriceKey = `${BaseTier}_${KnownSize}`;
+type ExtendedPriceKey = `${Tier}_${KnownSize}`;
 
 /**
  * The tier a GPT-Image request that names no quality is billed at - and, since #3007, the
@@ -32,13 +47,13 @@ type PriceKey = `${Tier}_${KnownSize}`;
  * generate-image route/queue, resolveImageArgs for the agent tool). Exported so the pin and
  * the price can never be edited apart. See normalizeInput's doc comment for the policy.
  */
-export const OMITTED_QUALITY_TIER: Tier = 'medium';
+export const OMITTED_QUALITY_TIER: BaseTier = 'medium';
 // OpenAI picks the render effort for `quality: 'auto'` per request and never tells us which
-// tier it used, so we bill the ceiling it could have rendered. The prose counterpart of this
+// tier it used, so we bill the ceiling it could have rendered - 'high', or 'max' on the 2.5 models. The prose counterpart of this
 // constant lives in OpenAIImageService.toGptImageQuality (utils), which cannot import it. Under-billing is unrecoverable
 // (the credit hold is set once, before the call, and never reconciled); over-billing an
 // 'auto' request the user opted into is the survivable side of that trade.
-const AUTO_TIER: Tier = 'high';
+const autoTierFor = (model: string): Tier => (isGPTImage25Model(model) ? 'max' : 'high');
 const DEFAULT_SIZE: KnownSize = IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_1.defaultSize;
 
 /**
@@ -105,21 +120,70 @@ const GPT_IMAGE_1_MINI_PRICES: Record<PriceKey, number> = {
   high_1536x1024: 0.052,
 };
 
-const PRICE_TABLES: Partial<Record<ImageModels, Record<PriceKey, number>>> = {
+// Per-image output cost at $30/1M output tokens, from the token formula behind OpenAI's
+// image-generation cost calculator. Sunburst and Flare share token rates and token counts.
+// 2.5 spends far fewer tokens than gpt-image-2 per tier: its 'high' costs what 2's 'medium'
+// does, and its 'max' what 2's 'high' does.
+const GPT_IMAGE_2_5_PRICES: Record<ExtendedPriceKey, number> = {
+  low_1024x1024: 0.00588,
+  low_1024x1536: 0.00474,
+  low_1536x1024: 0.00474,
+  medium_1024x1024: 0.01317,
+  medium_1024x1536: 0.01029,
+  medium_1536x1024: 0.01029,
+  high_1024x1024: 0.05268,
+  high_1024x1536: 0.04116,
+  high_1536x1024: 0.04116,
+  xhigh_1024x1024: 0.09366,
+  xhigh_1024x1536: 0.07377,
+  xhigh_1536x1024: 0.07377,
+  max_1024x1024: 0.21072,
+  max_1024x1536: 0.16464,
+  max_1536x1024: 0.16464,
+};
+
+// Only the 2.5 tables carry xhigh/max rows; clampImageQualityForModel keeps every other model off them.
+const PRICE_TABLES: Partial<Record<ImageModels, Partial<Record<ExtendedPriceKey, number>>>> = {
   [ImageModels.GPT_IMAGE_1]: GPT_IMAGE_1_PRICES,
   [ImageModels.GPT_IMAGE_1_5]: GPT_IMAGE_1_5_PRICES,
   [ImageModels.GPT_IMAGE_1_MINI]: GPT_IMAGE_1_MINI_PRICES,
   [ImageModels.GPT_IMAGE_2]: GPT_IMAGE_2_PRICES,
+  [ImageModels.GPT_IMAGE_2_5_SUNBURST]: GPT_IMAGE_2_5_PRICES,
+  [ImageModels.GPT_IMAGE_2_5_FLARE]: GPT_IMAGE_2_5_PRICES,
 };
+
+// Worst-case input tokens per image, from OpenAI's GPT Image input formula: 65 base + 129 per
+// 512px tile, at most 4 tiles (581). High fidelity adds up to 6240 for a non-square image.
+// gpt-image-2 always runs inputs at high fidelity; 2.5 is undocumented, so assumed high. We
+// never send input_fidelity, so the older models use the 'low' default.
+const LOW_FIDELITY_MAX_INPUT_TOKENS = 581;
+const HIGH_FIDELITY_MAX_INPUT_TOKENS = 6240 + LOW_FIDELITY_MAX_INPUT_TOKENS;
+const inputImageUsd = (tokens: number, usdPerMillion: number) => (tokens * usdPerMillion) / 1_000_000;
+
+// ponytail: fixed worst case per image, because the credit hold runs before the input images
+// are fetched and FabFile stores no dimensions; price real dimensions once it does.
+const INPUT_IMAGE_USD: Partial<Record<ImageModels, number>> = {
+  [ImageModels.GPT_IMAGE_1]: inputImageUsd(LOW_FIDELITY_MAX_INPUT_TOKENS, 10),
+  [ImageModels.GPT_IMAGE_1_5]: inputImageUsd(LOW_FIDELITY_MAX_INPUT_TOKENS, 8),
+  [ImageModels.GPT_IMAGE_1_MINI]: inputImageUsd(LOW_FIDELITY_MAX_INPUT_TOKENS, 2.5),
+  [ImageModels.GPT_IMAGE_2]: inputImageUsd(HIGH_FIDELITY_MAX_INPUT_TOKENS, 8),
+  [ImageModels.GPT_IMAGE_2_5_SUNBURST]: inputImageUsd(HIGH_FIDELITY_MAX_INPUT_TOKENS, 8),
+  [ImageModels.GPT_IMAGE_2_5_FLARE]: inputImageUsd(HIGH_FIDELITY_MAX_INPUT_TOKENS, 8),
+};
+// A GPT model missing from the table is billed at the highest rate: under-billing is unrecoverable.
+const MAX_INPUT_IMAGE_USD = Math.max(...Object.values(INPUT_IMAGE_USD));
 
 /**
  * Normalize versioned model IDs to their base model for pricing lookup.
- * 'gpt-image-2-2026-04-21' -> GPT_IMAGE_2, 'gpt-image-1.5-preview' -> GPT_IMAGE_1_5, etc.
+ * 'gpt-image-2-2026-04-21' -> GPT_IMAGE_2, 'gpt-image-2.5-flare-2026-09-08' -> GPT_IMAGE_2_5_FLARE, etc.
  */
 function normalizeModelId(modelId: string): ImageModels | null {
   if (Object.values(ImageModels).includes(modelId as ImageModels)) {
     return modelId as ImageModels;
   }
+  // The 2.5 ids also start with 'gpt-image-2', so they must be matched first.
+  if (modelId.startsWith(ImageModels.GPT_IMAGE_2_5_SUNBURST)) return ImageModels.GPT_IMAGE_2_5_SUNBURST;
+  if (modelId.startsWith(ImageModels.GPT_IMAGE_2_5_FLARE)) return ImageModels.GPT_IMAGE_2_5_FLARE;
   if (modelId.startsWith('gpt-image-2')) return ImageModels.GPT_IMAGE_2;
   if (modelId.startsWith('gpt-image-1.5')) return ImageModels.GPT_IMAGE_1_5;
   if (modelId.startsWith('gpt-image-1-mini')) return ImageModels.GPT_IMAGE_1_MINI;
@@ -133,7 +197,7 @@ function normalizeModelId(modelId: string): ImageModels | null {
  * There is NO reconciliation step for image credits: ImageGeneration.process() calls getCost()
  * once, before the OpenAI call, and sets quest.creditsUsed from it. Whatever this returns is
  * what the user pays, so an input that leaves the render effort up to OpenAI ('auto') is priced
- * at the ceiling rather than at a guess - see AUTO_TIER.
+ * at the ceiling rather than at a guess - see autoTierFor.
  *
  * An OMITTED quality reaches the same dynamic OpenAI selection but is answered the other way
  * round (#3007): rather than reprice it, the generation dispatch sites pin the forwarded
@@ -151,18 +215,21 @@ function normalizeModelId(modelId: string): ImageModels | null {
  * prompt field.
  */
 function normalizeInput(input: OpenAIGPTImageInput): { tier: Tier; size: KnownSize } {
+  const quality = clampImageQualityForModel(input.model, input.quality);
   const tier: Tier = (() => {
-    switch (input.quality) {
+    switch (quality) {
       case 'standard':
         return 'medium';
       case 'hd':
         return 'high';
       case 'auto':
-        return AUTO_TIER;
+        return autoTierFor(input.model);
       case 'low':
       case 'medium':
       case 'high':
-        return input.quality;
+      case 'xhigh':
+      case 'max':
+        return quality;
       default:
         // undefined or any unrecognized value
         return OMITTED_QUALITY_TIER;
@@ -187,6 +254,23 @@ export class OpenAIImageCostCalculator implements CostCalculator<OpenAICostInput
     }
 
     const { tier, size } = normalizeInput(input);
-    return prices[`${tier}_${size}`];
+    const price = prices[`${tier}_${size}`];
+    if (price === undefined) {
+      throw new Error(`No ${tier} price for ${input.model} at ${size}`);
+    }
+    return price;
+  }
+
+  /**
+   * USD for the input images of one request, independent of tier, size and n: OpenAI bills
+   * the inputs once however many images it renders, so callers add this outside the `* n`.
+   * A missing or negative count is 0, never a throw (same leniency as normalizeInput).
+   */
+  getInputImageCost(input: OpenAICostInput): number {
+    const count = Math.max(0, Math.floor(input.inputImageCount ?? 0));
+    if (!count) return 0;
+    const normalizedModel = normalizeModelId(input.model as string);
+    const perImage = (normalizedModel && INPUT_IMAGE_USD[normalizedModel]) ?? MAX_INPUT_IMAGE_USD;
+    return count * perImage;
   }
 }

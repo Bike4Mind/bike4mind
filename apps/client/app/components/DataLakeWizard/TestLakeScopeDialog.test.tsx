@@ -6,14 +6,22 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { TestLakeScopeDialog } from './TestLakeScopeDialog';
 
-type MockLake = { id: string; name: string; datalakeTag: string; isOwn?: boolean; canPreauthorize?: boolean };
+type MockLake = {
+  id: string;
+  name: string;
+  datalakeTag: string;
+  isOwn?: boolean;
+  ownerDisplayName?: string;
+  canPreauthorize?: boolean;
+  retrievable?: boolean;
+};
 
 const useGetDataLakesMock = vi.fn<
   [],
   { data: MockLake[] | undefined; isLoading: boolean; isError: boolean; refetch: () => void }
 >();
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
-  useGetDataLakes: () => useGetDataLakesMock(),
+  useGetDataLakesWithRetrievability: () => useGetDataLakesMock(),
 }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -102,6 +110,34 @@ describe('TestLakeScopeDialog', () => {
     expect(screen.queryByTestId('test-lake-scope-owner-icon-lake-a')).not.toBeInTheDocument();
   });
 
+  it('gives the owner icon an accessible name without an svg title', () => {
+    render(
+      <Wrapper>
+        <TestLakeScopeDialog anchorLakeId="lake-a" onClose={vi.fn()} onConfirm={vi.fn()} />
+      </Wrapper>
+    );
+
+    const icon = screen.getByRole('img', { name: 'Owned by another user' });
+    expect(icon.querySelector('title')).toBeNull();
+  });
+
+  it('names the owner in the icon label when the lake carries ownerDisplayName', () => {
+    useGetDataLakesMock.mockReturnValue({
+      data: [{ ...LAKES[1], ownerDisplayName: 'Dana' }],
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+    render(
+      <Wrapper>
+        <TestLakeScopeDialog anchorLakeId="lake-b" onClose={vi.fn()} onConfirm={vi.fn()} />
+      </Wrapper>
+    );
+
+    const icon = screen.getByRole('img', { name: 'Owned by Dana' });
+    expect(icon.querySelector('title')).toBeNull();
+  });
+
   it('disables confirm once every lake is unchecked', async () => {
     const user = userEvent.setup();
     render(
@@ -166,5 +202,27 @@ describe('TestLakeScopeDialog', () => {
 
     await user.click(screen.getByTestId('test-lake-scope-cancel-btn'));
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks a lake chat cannot search unless the test session will pre-authorize it', () => {
+    useGetDataLakesMock.mockReturnValue({
+      data: [
+        { id: 'lake-a', name: 'Alpha Lake', datalakeTag: 'datalake:alpha', canPreauthorize: true, retrievable: false },
+        { id: 'lake-b', name: 'Beta Lake', datalakeTag: 'datalake:beta', canPreauthorize: false, retrievable: false },
+        { id: 'lake-c', name: 'Gamma Lake', datalakeTag: 'datalake:gamma', canPreauthorize: false },
+      ],
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+    render(
+      <Wrapper>
+        <TestLakeScopeDialog anchorLakeId="lake-a" onClose={vi.fn()} onConfirm={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.getByTestId('test-lake-scope-unsearchable-lake-b')).toBeInTheDocument();
+    expect(screen.queryByTestId('test-lake-scope-unsearchable-lake-a')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('test-lake-scope-unsearchable-lake-c')).not.toBeInTheDocument();
   });
 });

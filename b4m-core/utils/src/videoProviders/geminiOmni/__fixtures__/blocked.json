@@ -1,0 +1,264 @@
+{
+  "scenario": "blocked",
+  "recordedAt": "2026-10-08T18:27:19.298Z",
+  "exchanges": [
+    {
+      "name": "submit",
+      "request": {
+        "method": "POST",
+        "path": "/v1beta/interactions",
+        "body": {
+          "model": "gemini-omni-1.1-flash",
+          "input": "<redacted:blocked-prompt>",
+          "background": true,
+          "response_format": {
+            "type": "video",
+            "delivery": "uri",
+            "aspect_ratio": "16:9",
+            "resolution": "720p",
+            "duration": "3s"
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "id": "v1_ChdnZURIYXMzWElkZWF2cjBQeFpyR29BZxIXZ2VESGFzM1hJZGVhdnIwUHhackdvQWc",
+          "status": "in_progress",
+          "created": "2026-10-08T18:27:16Z",
+          "updated": "2026-10-08T18:27:16Z",
+          "service_tier": "standard",
+          "object": "interaction",
+          "model": "gemini-omni-1.1-flash"
+        }
+      }
+    },
+    {
+      "name": "poll_first",
+      "request": {
+        "method": "GET",
+        "path": "/v1beta/interactions/v1_ChdnZURIYXMzWElkZWF2cjBQeFpyR29BZxIXZ2VESGFzM1hJZGVhdnIwUHhackdvQWc"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "id": "v1_ChdnZURIYXMzWElkZWF2cjBQeFpyR29BZxIXZ2VESGFzM1hJZGVhdnIwUHhackdvQWc",
+          "status": "completed",
+          "usage": {
+            "total_tokens": 105,
+            "total_input_tokens": 14,
+            "input_tokens_by_modality": [
+              {
+                "modality": "text",
+                "tokens": 14
+              }
+            ],
+            "total_cached_tokens": 0,
+            "total_output_tokens": 15,
+            "total_tool_use_tokens": 0,
+            "total_thought_tokens": 76,
+            "raw_prompt_token": 19916,
+            "model_invocation_token_counts": [
+              {
+                "prompt_tokens_details": [
+                  {
+                    "modality": "text",
+                    "tokens": 1797
+                  }
+                ],
+                "candidates_tokens_details": [
+                  {
+                    "modality": "text",
+                    "tokens": 19
+                  }
+                ],
+                "thoughts_tokens_details": [
+                  {
+                    "modality": "text",
+                    "tokens": 76
+                  }
+                ]
+              }
+            ],
+            "non_grounding_model_invocation_token_counts": [
+              {
+                "prompt_tokens_details": [
+                  {
+                    "modality": "text",
+                    "tokens": 1797
+                  }
+                ],
+                "candidates_tokens_details": [
+                  {
+                    "modality": "text",
+                    "tokens": 19
+                  }
+                ],
+                "thoughts_tokens_details": [
+                  {
+                    "modality": "text",
+                    "tokens": 76
+                  }
+                ]
+              }
+            ]
+          },
+          "created": "2026-10-08T18:27:15Z",
+          "updated": "2026-10-08T18:27:15Z",
+          "service_tier": "standard",
+          "steps": [
+            {
+              "type": "user_input",
+              "content": [
+                {
+                  "text": "<redacted:blocked-prompt>",
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "content": [
+                {
+                  "text": "<redacted:blocked-prompt>",
+                  "type": "text"
+                }
+              ],
+              "type": "model_output"
+            },
+            {
+              "signature": "<redacted:signature 1304 chars>",
+              "type": "thought"
+            }
+          ],
+          "object": "interaction",
+          "response_format": {
+            "delivery": "uri",
+            "aspect_ratio": "16:9",
+            "duration": "3s",
+            "resolution": "720p",
+            "type": "video"
+          },
+          "model": "gemini-omni-1.1-flash"
+        }
+      }
+    },
+    {
+      "name": "poll_terminal",
+      "request": {
+        "method": "GET",
+        "path": "/v1beta/interactions/v1_ChdnZURIYXMzWElkZWF2cjBQeFpyR29BZxIXZ2VESGFzM1hJZGVhdnIwUHhackdvQWc"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "id": "v1_ChdnZURIYXMzWElkZWF2cjBQeFpyR29BZxIXZ2VESGFzM1hJZGVhdnIwUHhackdvQWc",
+          "status": "completed",
+          "usage": {
+            "total_tokens": 105,
+            "total_input_tokens": 14,
+            "input_tokens_by_modality": [
+              {
+                "modality": "text",
+                "tokens": 14
+              }
+            ],
+            "total_cached_tokens": 0,
+            "total_output_tokens": 15,
+            "total_tool_use_tokens": 0,
+            "total_thought_tokens": 76,
+            "raw_prompt_token": 19916,
+            "model_invocation_token_counts": [
+              {
+                "prompt_tokens_details": [
+                  {
+                    "modality": "text",
+                    "tokens": 1797
+                  }
+                ],
+                "candidates_tokens_details": [
+                  {
+                    "modality": "text",
+                    "tokens": 19
+                  }
+                ],
+                "thoughts_tokens_details": [
+                  {
+                    "modality": "text",
+                    "tokens": 76
+                  }
+                ]
+              }
+            ],
+            "non_grounding_model_invocation_token_counts": [
+              {
+                "prompt_tokens_details": [
+                  {
+                    "modality": "text",
+                    "tokens": 1797
+                  }
+                ],
+                "candidates_tokens_details": [
+                  {
+                    "modality": "text",
+                    "tokens": 19
+                  }
+                ],
+                "thoughts_tokens_details": [
+                  {
+                    "modality": "text",
+                    "tokens": 76
+                  }
+                ]
+              }
+            ]
+          },
+          "created": "2026-10-08T18:27:15Z",
+          "updated": "2026-10-08T18:27:15Z",
+          "service_tier": "standard",
+          "steps": [
+            {
+              "type": "user_input",
+              "content": [
+                {
+                  "text": "<redacted:blocked-prompt>",
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "content": [
+                {
+                  "text": "<redacted:blocked-prompt>",
+                  "type": "text"
+                }
+              ],
+              "type": "model_output"
+            },
+            {
+              "signature": "<redacted:signature 1304 chars>",
+              "type": "thought"
+            }
+          ],
+          "object": "interaction",
+          "response_format": {
+            "delivery": "uri",
+            "aspect_ratio": "16:9",
+            "duration": "3s",
+            "resolution": "720p",
+            "type": "video"
+          },
+          "model": "gemini-omni-1.1-flash"
+        }
+      }
+    }
+  ]
+}

@@ -1,5 +1,5 @@
 import { IActivityDocument, IActivityRepository } from '@bike4mind/common';
-import mongoose, { Schema, Model, model } from 'mongoose';
+import mongoose, { Schema, Model, model, Document } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 import { projectRepository } from './ProjectModel';
 

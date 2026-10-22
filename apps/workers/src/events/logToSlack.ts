@@ -1,9 +1,9 @@
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { CloudWatchLogsEvent, Context } from 'aws-lambda';
 import { notifyEventLogsToSlack } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { Resource } from 'sst';
-import { sendToQueue } from '@server/utils/sqs';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { connectDB } from '@bike4mind/database';
 import { extractErrorType, normalizeErrorMessage } from '@server/services/liveopsFingerprint';
@@ -78,8 +78,10 @@ export const ingest = async (event: CloudWatchLogsEvent, _context: Context) => {
     for (const logEvent of logData.logEvents || []) {
       // Extract the JSON message from tab-separated fields
       // Format: timestamp\trequestId\tlogLevel\tjsonPayload\n
+      // Fargate lines carry no prefix - the whole message is the raw JSON payload - so
+      // only take a positional field when the line is actually tab-separated.
       const parts: string[] = logEvent.message.split('\t');
-      const rawMessage = parts[3] || logEvent.message;
+      const rawMessage = parts.length > 1 ? parts[3] || logEvent.message : logEvent.message;
 
       // Try to parse structured JSON for richer metadata
       let errorMessage = rawMessage;

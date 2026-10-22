@@ -1,14 +1,24 @@
 import { AuthStrategy, IAuthProviders } from '@bike4mind/common';
-import { User, authSessionRepository } from '@bike4mind/database';
+import { User, authSessionRepository, realtimeConnectionRepository, type IUserObject } from '@bike4mind/database';
+import { Logger } from '@bike4mind/observability';
+import { authSessionService } from '@bike4mind/services';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { omit } from 'lodash';
 import { requireNonSystemUser } from '@server/auth/requireNonSystemUser';
-import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
-import { ForbiddenError } from '@server/utils/errors';
+import {
+  applyEmailVerifiedGrants,
+  isEligibleForFreeCredits,
+  releaseVerifiedPendingFreeCredits,
+} from '@server/auth/emailVerifiedGrants';
+import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
+import { emitEmailVerifiedFunnelEvents } from '@server/analytics/funnel';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { isProviderEmailVerified, selectProviderEmail, decideAutoLink, applyAccountLink } from './oauthAccountLink';
 import { createUniqueOAuthUser, deriveOAuthUsername } from './createOAuthUser';
 import { OAuthFailureReason } from './oauthFailureReason';
 import { isOpenRegistrationAllowed } from './openRegistration';
+import { isPartnerDomainSignupAllowed } from './partnerSignupBypass';
+import { applyOAuthSignupDomainGrant } from './oauthSignupGrants';
 
 /**
  * Strategies where anyone on the internet can present an identity, so a first login
@@ -18,6 +28,13 @@ import { isOpenRegistrationAllowed } from './openRegistration';
  * are invite-only for the public.
  */
 const SELF_SERVE_STRATEGIES: ReadonlySet<AuthStrategy> = new Set([AuthStrategy.Google, AuthStrategy.Github]);
+
+/** The user `done` hands the callback endpoints, with the transient flags this module sets (never persisted). */
+export type OAuthUser = IUserObject & {
+  isNewUser?: boolean;
+  isNewOAuthLink?: boolean;
+  signupCreditsGranted?: number;
+};
 
 // Core authentication logic shared by all strategies
 const authenticateUser = async (
@@ -141,6 +158,23 @@ const authenticateUser = async (
         currentTokenVersion: user.tokenVersion,
       });
       await User.updateOne({ _id: user._id }, update);
+      // Promotion is this account's email verification, so its grants are applied here: once
+      // emailVerified is set, OTC login no longer releases them and Resend is refused. Promotion
+      // implies the provider email matched the local one, so `email` is set; the check narrows it.
+      if (promoteEmailVerified && email) {
+        const grants = await applyEmailVerifiedGrants({
+          user: { id: String(user._id), tags: user.tags, pendingCreditGrant: user.pendingCreditGrant },
+          verifiedEmail: email,
+          trigger: 'oauth-link-verification',
+          releaseReason: 'OAuth account link (email verified)',
+          logger: Logger.globalInstance,
+        });
+        await emitEmailVerifiedFunnelEvents({
+          user,
+          method: strategy,
+          creditsGranted: grants.creditsGranted + grants.subscriptionCreditsGranted,
+        });
+      }
 
       // Invariant: a tokenVersion bump must also revoke AuthSessions, or an opaque refresh token
       // (which carries no tokenVersion and is never checked against it) would rotate straight into a
@@ -149,7 +183,11 @@ const authenticateUser = async (
       // link, so gate the revoke on the same condition. Safe to revoke ALL here: the session for THIS
       // login is minted later, in the callback handler, so it is created fresh and unaffected.
       if (isNewProvider) {
-        await authSessionRepository.revokeAllByUserId(String(user._id));
+        await authSessionService.revokeAllUserSessions(
+          String(user._id),
+          {},
+          { db: { authSessions: authSessionRepository, realtimeConnections: realtimeConnectionRepository } }
+        );
       }
 
       const linkedUser = omit(user, ['password']) as typeof user & {
@@ -172,7 +210,14 @@ const authenticateUser = async (
       //
       // Enterprise SSO is deliberately exempt (see SELF_SERVE_STRATEGIES): registering
       // the IdP is itself the admin's authorization for that domain's users.
-      if (SELF_SERVE_STRATEGIES.has(strategy) && !(await isOpenRegistrationAllowed())) {
+      //
+      // A provider-verified email on an enabled partner-domain rule may still register
+      // (the same bypass the OTC path applies, via the shared helper).
+      if (
+        SELF_SERVE_STRATEGIES.has(strategy) &&
+        !(await isOpenRegistrationAllowed()) &&
+        !(await isPartnerDomainSignupAllowed(email, isProviderEmailVerified(profile)))
+      ) {
         done(null, undefined, { code: 'registration_closed' });
         return;
       }
@@ -187,12 +232,44 @@ const authenticateUser = async (
       // their email; sibling OAuth create paths must apply the same gate.
       const emailForNewAccount = isProviderEmailVerified(profile) ? email : null;
       const baseUsername = deriveOAuthUsername(username, name, emailForNewAccount);
-      user = await createUniqueOAuthUser({ name, baseUsername, email: emailForNewAccount, oauthCredentials });
+      // The provider-verified email is the proof of ownership registerViaOTC gets from the code,
+      // so a self-serve account is created tagged and the flat grant released right away; a
+      // failed release leaves the tag for the backfill script. Okta/SAML get no flat grant.
+      const pendingFreeCredits =
+        SELF_SERVE_STRATEGIES.has(strategy) &&
+        !!emailForNewAccount &&
+        (await isEligibleForFreeCredits(emailForNewAccount, Logger.globalInstance));
+      user = await createUniqueOAuthUser({
+        name,
+        baseUsername,
+        email: emailForNewAccount,
+        oauthCredentials,
+        pendingFreeCredits,
+      });
+      const newUserId = String(user._id);
+      let creditsGranted = 0;
+      if (pendingFreeCredits) {
+        const release = await releaseVerifiedPendingFreeCredits(
+          { id: newUserId, tags: user.tags, pendingCreditGrant: user.pendingCreditGrant },
+          'OAuth signup (provider-verified email)',
+          Logger.globalInstance
+        );
+        creditsGranted += release.creditsGranted;
+      }
+      // These accounts never reach /api/email/verify, so the domain grant runs here for every strategy.
+      if (emailForNewAccount) {
+        const domainGrant = await applyOAuthSignupDomainGrant(newUserId, emailForNewAccount);
+        creditsGranted += domainGrant.creditsGranted + domainGrant.subscriptionCreditsGranted;
+      }
       // Transient flag (not persisted), mirroring isNewOAuthLink above: lets
       // the callback endpoint log the registration and forward a one-shot
       // signup signal to the client for ad-conversion tracking.
-      const createdUser = omit(user, ['password']) as typeof user & { isNewUser?: boolean };
+      const createdUser = omit(user, ['password']) as typeof user & {
+        isNewUser?: boolean;
+        signupCreditsGranted?: number;
+      };
       createdUser.isNewUser = true;
+      createdUser.signupCreditsGranted = creditsGranted;
       done(null, createdUser);
     }
   } catch (e) {

@@ -27,9 +27,9 @@ import {
   getSeverityEmoji,
   formatPrimaryAnomaly,
 } from '@server/services/telemetryFingerprint';
-import { escapeMarkdown } from '@server/utils/markdownEscape';
-import { checkFingerprintDedup, type IssueForDedup } from '@server/services/issueDedup';
-import { type Priority, REQUIRED_TELEMETRY_LABELS } from '@server/services/issueLabels';
+import { escapeMarkdown } from '@bike4mind/server-utils/utils/markdownEscape';
+import { checkFingerprintDedup, type IssueForDedup } from '@bike4mind/server-utils/services/issueDedup';
+import { type Priority, REQUIRED_TELEMETRY_LABELS } from '@bike4mind/server-utils/services/issueLabels';
 import {
   computeHistoricalBaselines,
   generateRuleBasedAnalysis,

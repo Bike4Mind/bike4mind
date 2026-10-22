@@ -2,14 +2,15 @@ import { MIN_PASSAGE_TOKEN_TARGET, OVERSIZED_PASSAGE_TOKEN_THRESHOLD, Permission
 import { getFabFileById } from '@server/managers/fabFileManager';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, NotFoundError } from '@server/utils/errors';
-import { sendToQueue } from '@server/utils/sqs';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { sendToClient } from '@server/websocket/utils';
 import { Request } from 'express';
-import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
+import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
+import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
 import { Resource } from 'sst';
 
-const handler = baseApi().post(
+const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(
   asyncHandler(async (req: Request<{ fabFileId: string; chunkSize?: string }>, res) => {
     const { fabFileId, chunkSize } = req.body;
     if (!fabFileId || !chunkSize) throw new BadRequestError('Missing parameters: fabFileId or chunkSize');

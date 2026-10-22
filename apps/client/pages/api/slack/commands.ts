@@ -1,3 +1,4 @@
+import { VERIFIED_SLACK_IDENTITY_FILTER } from '@bike4mind/common';
 import { initializeSlackPackage } from '@server/integrations/slack/slackPackageInit';
 initializeSlackPackage();
 
@@ -10,11 +11,10 @@ import { slackDevWorkspaceRepository } from '@bike4mind/database/infra';
 import { createSession } from '@server/managers/sessionManager';
 import { Logger } from '@bike4mind/observability';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { decryptToken } from '@server/security/tokenEncryption';
 import {
   SlackAuditLogger,
-  getClientIp,
   handleB4mCommand,
   SlackClient,
   handleChannelCommand,
@@ -28,6 +28,7 @@ import {
 } from '@bike4mind/slack';
 import { Quest } from '@bike4mind/database/content';
 import { triggerImageGeneration } from '@bike4mind/slack';
+import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 
 // Slack slash command schema
 const SlackCommandSchema = z.object({
@@ -47,6 +48,7 @@ const SlackCommandSchema = z.object({
 async function findUserBySlackId(slackUserId: string) {
   const user = await User.findOne({
     'slackSettings.slackUserId': slackUserId,
+    ...VERIFIED_SLACK_IDENTITY_FILTER,
   });
   return user;
 }
@@ -64,6 +66,7 @@ const withTimeout = <T>(promise: Promise<T>, timeoutMs: number, errorMessage: st
 async function findUserBySlackIdWithToken(slackUserId: string) {
   const user = await User.findOne({
     'slackSettings.slackUserId': slackUserId,
+    ...VERIFIED_SLACK_IDENTITY_FILTER,
   }).select('+slackSettings.slackUserToken');
 
   // Debug: log what we found to verify stored slackUserId matches
@@ -304,7 +307,11 @@ async function createNotebookResponse(dbUser: any, slackUserId: string, customNa
       })}`;
 
     const ability = { can: () => true };
-    const newSession = await createSession(dbUser.id, { name: notebookName }, ability as any);
+    const newSession = await createSession(
+      dbUser.id,
+      { name: notebookName, origin: { channel: 'slack' } },
+      ability as any
+    );
 
     // Update user's slack settings
     const slackSettings = dbUser.slackSettings || {};

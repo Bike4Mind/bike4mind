@@ -34,6 +34,45 @@ describe('PartnerSignupRuleModel', () => {
     expect(found?.signupCredits).toBe(150_000);
   });
 
+  it('defaults tags to an empty list and stores them case-preserved', async () => {
+    const untagged = await partnerSignupRuleRepository.create({
+      domain: 'untagged.com',
+      entitlements: [],
+      signupCredits: 0,
+      enabled: true,
+    });
+    const tagged = await partnerSignupRuleRepository.create({
+      domain: 'tagged.com',
+      entitlements: [],
+      signupCredits: 0,
+      tags: ['Partner', 'cohort-a'],
+      enabled: true,
+    });
+
+    expect(untagged.tags).toEqual([]);
+    expect(tagged.tags).toEqual(['Partner', 'cohort-a']);
+  });
+
+  it('round-trips the subscription and defaults it to null', async () => {
+    const plain = await partnerSignupRuleRepository.create({
+      domain: 'plain.com',
+      entitlements: [],
+      signupCredits: 0,
+      enabled: true,
+    });
+    await partnerSignupRuleRepository.create({
+      domain: 'subscribed.com',
+      entitlements: [],
+      signupCredits: 0,
+      subscription: { priceId: 'price_pro', durationMonths: 3 },
+      enabled: true,
+    });
+
+    expect(plain.subscription ?? null).toBeNull();
+    const found = await partnerSignupRuleRepository.findByDomain('subscribed.com');
+    expect(found?.subscription).toEqual({ priceId: 'price_pro', durationMonths: 3 });
+  });
+
   it('enforces a unique domain', async () => {
     await partnerSignupRuleRepository.create({
       domain: 'partner.com',

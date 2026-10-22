@@ -1,6 +1,9 @@
-import { lazy, Suspense, useState } from 'react';
+import { FC, lazy, LazyExoticComponent, Suspense, useState } from 'react';
 import { captureUtmParams } from '@client/app/utils/utmCapture';
 import { beaconVisit } from '@client/app/utils/visitBeacon';
+import type { GitHubLakeCallbackSearch } from '@client/app/utils/githubLakeCallbackStep';
+import { captureGitHubLakeCallbackSearch, GITHUB_LAKE_CALLBACK_PATH } from '@client/app/utils/githubLakeCallbackSearch';
+import { requireGitHubLakeCallbackSession } from '@client/app/utils/githubLakeCallbackGuard';
 import {
   createRouter,
   createRoute,
@@ -8,12 +11,14 @@ import {
   createBrowserHistory,
   Outlet,
   redirect,
+  useRouterState,
 } from '@tanstack/react-router';
 import { TanStackRouterDevtools } from '@tanstack/router-devtools';
 import { CircularProgress, Box, Typography } from '@mui/joy';
 import NotebookLayout from '@client/app/components/layouts/Notebook';
 import { useUser } from '@client/app/contexts/UserContext';
 import { buildRedirectTo } from '@client/app/utils/authRedirect';
+import { billingLandingHref, parseBillingView } from '@client/app/utils/billingDeepLink';
 import { enforceConsentRedirect } from '@client/app/utils/consentGuard';
 import { bootstrapSession } from '@client/app/utils/sessionBootstrap';
 import useDataLakeMode from '@client/app/hooks/useDataLakeMode';
@@ -27,7 +32,11 @@ import { premiumRoutes } from './premium-generated/premiumRoutes.generated';
 import { partitionPremiumRoutes } from './premiumRoutePartition';
 import { defaultFeedbackRollupWindow } from './utils/feedbackRollupWindow';
 import { lazyWithPreload } from './utils/lazyWithPreload';
+import { parseStudioModality } from './components/Studio/studioModality';
 import { parseQaStatusSearch } from './hooks/data/qaStatus';
+import { parseAdminSearch } from './components/admin/adminTabParams';
+import { optionalStringSearchValue } from './utils/optionalStringSearchValue';
+import { isIntegrationsPageSource, type IntegrationsPageSource } from '@bike4mind/common';
 
 // Lazy load all route components for code splitting
 // /new and /notebooks/$id render through one shell (see notebookShellRoute).
@@ -36,8 +45,10 @@ const ProjectsPage = lazy(() => import('./routes/projects'));
 const ProjectPage = lazy(() => import('./routes/projects/$id'));
 const ProfilePage = lazy(() => import('./routes/profile/index'));
 const GearsPage = lazy(() => import('./routes/gears/index'));
+const IntegrationsPage = lazy(() => import('./routes/integrations/index'));
 const ProfileDetailPage = lazy(() => import('./routes/profile/$id'));
 const SubscriptionsCheckoutPage = lazy(() => import('./routes/subscriptions/checkout'));
+const BillingDeepLinkModals = lazy(() => import('./components/subscription/BillingDeepLinkModals'));
 const AgentsPage = lazy(() => import('./routes/agents'));
 const NewAgentPage = lazy(() => import('./routes/agents/new'));
 const AgentDetailPage = lazy(() => import('./routes/agents/$id'));
@@ -46,6 +57,11 @@ const SkillsPage = lazy(() => import('./routes/skills'));
 const NewSkillPage = lazy(() => import('./routes/skills/new'));
 const SkillDetailPage = lazy(() => import('./routes/skills/$id'));
 const EditSkillPage = lazy(() => import('./routes/skills/$id/edit'));
+const SkillMarketPage = lazy(() => import('./routes/skills/market'));
+const SkillListingPage = lazy(() => import('./routes/skills/market/$listingId'));
+const UnlistedSkillListingPage = lazy(() => import('./routes/skills/market/u/$token'));
+const MySkillListingsPage = lazy(() => import('./routes/skills/market/mine'));
+const SkillReviewQueuePage = lazy(() => import('./routes/skills/market/review'));
 const AgentExecutionHistoryPage = lazy(() => import('./routes/agent-executions'));
 const FeedbackRollupPage = lazy(() => import('./routes/feedback/rollup'));
 const MissionDossierPage = lazy(() => import('./routes/agents/$id/missions/$missionId'));
@@ -68,6 +84,7 @@ const SubscribePage = lazy(() => import('./routes/subscribe'));
 const ArtifactsDemoPage = lazy(() => import('./routes/artifacts-demo'));
 const AdminEmergencyPage = lazy(() => import('./routes/admin-emergency'));
 const GoogleDriveCallbackPage = lazy(() => import('./routes/google-drive/callback'));
+const GitHubLakeCallbackPage = lazy(() => import('./routes/data-lakes/github/callback'));
 const HomePage = lazy(() => import('./routes/index'));
 const Admin = lazy(() => import('./routes/admin'));
 const QuestsPage = lazy(() => import('./routes/quests'));
@@ -80,14 +97,14 @@ const ActivatePage = lazy(() => import('./routes/activate'));
 const OAuthAuthorizePage = lazy(() => import('./routes/oauth/authorize'));
 const HudPage = lazy(() => import('./routes/hud'));
 const HearthPage = lazy(() => import('./routes/hearth'));
+const StudioPage = lazy(() => import('./routes/studio/$modality'));
 const QuestMasterV5Page = lazy(() => import('./routes/quests-v5'));
 
 // Shared coercion for the optional string search params nearly every route declares.
-// Identical to the inline form it replaces: falsy (missing or empty) becomes undefined,
-// anything else is String()-coerced. A few routes below deliberately keep a stricter
-// `typeof === 'string'` guard instead, which is not the same thing - do not fold those in.
+// A few routes below deliberately keep a stricter `typeof === 'string'` guard instead,
+// which is not the same thing - do not fold those in.
 const optionalStringParam = (search: Record<string, unknown>, key: string): string | undefined =>
-  search[key] ? String(search[key]) : undefined;
+  optionalStringSearchValue(search[key]);
 
 // AI-themed loading messages for route transitions
 const loadingMessages = [
@@ -192,9 +209,18 @@ const builtAppShellPremiumRoutes = premiumPartition.appShell.map(descriptor => {
 
 // Root route that wraps all other routes
 function RootComponent() {
+  // NotebookLayout draws its own main beside the sidebar nav, so only pages outside it get one here.
+  // display: contents keeps the page a direct child of the providers' grid.
+  const inNotebookLayout = useRouterState({ select: s => s.matches.some(m => m.routeId === layoutRoute.id) });
   return (
     <>
-      <Outlet />
+      {inNotebookLayout ? (
+        <Outlet />
+      ) : (
+        <Box component="main" sx={{ display: 'contents' }}>
+          <Outlet />
+        </Box>
+      )}
       {process.env.NEXT_PUBLIC_ENABLE_DEVTOOLS === 'true' && <TanStackRouterDevtools position="top-right" />}
     </>
   );
@@ -266,6 +292,9 @@ const layoutRoute = createRoute({
       <ProviderBundle>
         <NotebookLayout>
           <Outlet />
+          <Suspense fallback={null}>
+            <BillingDeepLinkModals />
+          </Suspense>
         </NotebookLayout>
       </ProviderBundle>
     </RestrictedPage>
@@ -301,18 +330,19 @@ const notebookShellRoute = createRoute({
 });
 
 // New notebook route (replaces /new.tsx)
-const newRoute = createRoute({
+export const newRoute = createRoute({
   getParentRoute: () => notebookShellRoute,
   path: '/new',
   validateSearch: (
     search: Record<string, unknown>
-  ): { projectId?: string; questmaster?: string; goal?: string; article?: string } => {
+  ): { projectId?: string; questmaster?: string; goal?: string; article?: string; passage?: string } => {
     return {
       projectId: optionalStringParam(search, 'projectId'),
       questmaster: optionalStringParam(search, 'questmaster'),
       goal: optionalStringParam(search, 'goal'),
       // Data Lake article deep link, forwarded here from the retired /data-lakes route (#1943).
       article: optionalStringParam(search, 'article'),
+      passage: optionalStringParam(search, 'passage'),
     };
   },
 });
@@ -338,6 +368,25 @@ const gearsRoute = createRoute({
   component: () => (
     <Suspense fallback={<RouteLoadingFallback />}>
       <GearsPage />
+    </Suspense>
+  ),
+});
+
+// Integrations - the directory of every integration and model provider, with roadmap requests.
+// Exported so the page reads `?source=` (its analytics entry point) with integrationsRoute.useSearch().
+export const CONNECTIONS_TABS = ['integrations', 'api-keys'] as const;
+export type ConnectionsTab = (typeof CONNECTIONS_TABS)[number];
+
+export const integrationsRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/integrations',
+  validateSearch: (search: Record<string, unknown>): { source?: IntegrationsPageSource; tab?: ConnectionsTab } => ({
+    source: isIntegrationsPageSource(search.source) ? search.source : undefined,
+    tab: CONNECTIONS_TABS.find(t => t === search.tab),
+  }),
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <IntegrationsPage />
     </Suspense>
   ),
 });
@@ -431,6 +480,34 @@ const subscriptionsCheckoutRoute = createRoute({
   },
 });
 
+// Shareable billing entry points (/billing/credits, /billing/plans) for emails and marketing CTAs.
+// Under layoutRoute so a signed-out visitor goes through /login?redirectTo= and lands here after.
+export const billingRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/billing/$view',
+  beforeLoad: ({ params }) => {
+    throw redirect({ href: billingLandingHref(parseBillingView(params.view)), replace: true });
+  },
+});
+
+// Guessed URLs with no page of their own. Chats are listed in the sidenav, so /notebooks lands on
+// the app home; /subscriptions opens the plans modal the way /billing/plans does.
+export const notebooksIndexRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/notebooks',
+  beforeLoad: () => {
+    throw redirect({ to: '/', replace: true });
+  },
+});
+
+export const subscriptionsIndexRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/subscriptions',
+  beforeLoad: () => {
+    throw redirect({ href: billingLandingHref('plans'), replace: true });
+  },
+});
+
 const AGENT_FEATURE_GATE = {
   feature: 'enableAgents' as const,
   featureName: 'Agents',
@@ -460,6 +537,24 @@ const hearthRoute = createRoute({
       </Suspense>
     </ExperimentalFeatureGate>
   ),
+});
+
+// Studio: one page per generation modality (/studio/video), each a CapabilityForm and the gallery of the user's jobs.
+export const studioRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/studio/$modality',
+  params: {
+    parse: ({ modality }) => ({ modality: parseStudioModality(modality) }),
+    stringify: ({ modality }) => ({ modality }),
+  },
+  component: function StudioRouteComponent() {
+    const { modality } = studioRoute.useParams();
+    return (
+      <Suspense fallback={<RouteLoadingFallback />}>
+        <StudioPage modality={modality} />
+      </Suspense>
+    );
+  },
 });
 
 // Agents index route (replaces /agents/index.tsx)
@@ -538,6 +633,24 @@ const newSkillRoute = createRoute({
   ),
 });
 
+// Skill Market. Static `market` segments outrank the `/skills/$id` param route in Tanstack's
+// ranking, so /skills/market never resolves as a skill id.
+const marketRoute = <TPath extends string>(path: TPath, Page: LazyExoticComponent<FC>) =>
+  createRoute({
+    getParentRoute: () => layoutRoute,
+    path,
+    component: () => (
+      <Suspense fallback={<RouteLoadingFallback />}>
+        <Page />
+      </Suspense>
+    ),
+  });
+const skillMarketRoute = marketRoute('/skills/market', SkillMarketPage);
+const mySkillListingsRoute = marketRoute('/skills/market/mine', MySkillListingsPage);
+const skillReviewQueueRoute = marketRoute('/skills/market/review', SkillReviewQueuePage);
+const unlistedSkillListingRoute = marketRoute('/skills/market/u/$token', UnlistedSkillListingPage);
+const skillListingRoute = marketRoute('/skills/market/$listingId', SkillListingPage);
+
 const skillDetailRoute = createRoute({
   getParentRoute: () => layoutRoute,
   path: '/skills/$id',
@@ -607,10 +720,25 @@ const deepAgentsRoute = createRoute({
   ),
 });
 
+// Layout for the QA status pages: layoutRoute's providers and consent guard without the notebook
+// sidenav/header. A rootRoute child like adminRoute; the login redirect comes from RestrictedPage.
+const qaStatusLayoutRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  id: 'qa-status-layout',
+  beforeLoad: ({ location }) => enforceConsentRedirect(location),
+  component: () => (
+    <RestrictedPage requireAdmin={false}>
+      <ProviderBundle>
+        <Outlet />
+      </ProviderBundle>
+    </RestrictedPage>
+  ),
+});
+
 // QA status (admin only). Exported so pages read typed search/params via
 // `qaStatusRoute.useSearch()` etc.; filters live in the URL so links deep-link.
 export const qaStatusRoute = createRoute({
-  getParentRoute: () => layoutRoute,
+  getParentRoute: () => qaStatusLayoutRoute,
   path: '/status',
   validateSearch: parseQaStatusSearch,
   component: () => (
@@ -623,7 +751,7 @@ export const qaStatusRoute = createRoute({
 });
 
 export const qaRunRoute = createRoute({
-  getParentRoute: () => layoutRoute,
+  getParentRoute: () => qaStatusLayoutRoute,
   path: '/status/runs/$id',
   component: () => (
     <RestrictedPage requireAdmin>
@@ -637,7 +765,7 @@ export const qaRunRoute = createRoute({
 // The router encodes the key into one segment (it contains / > ? #); the page
 // re-sends it as ?testKey=.
 export const qaTestRoute = createRoute({
-  getParentRoute: () => layoutRoute,
+  getParentRoute: () => qaStatusLayoutRoute,
   path: '/status/tests/$testKey',
   component: () => (
     <RestrictedPage requireAdmin>
@@ -843,6 +971,25 @@ const googleDriveCallbackRoute = createRoute({
   },
 });
 
+// Data-lake GitHub App return: its OAuth Callback URL points here, and with OAuth-during-install on, the install return lands here too.
+const gitHubLakeCallbackRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: GITHUB_LAKE_CALLBACK_PATH,
+  beforeLoad: ({ location }) => requireGitHubLakeCallbackSession(location),
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <GitHubLakeCallbackPage />
+    </Suspense>
+  ),
+  validateSearch: (search: Record<string, unknown>): GitHubLakeCallbackSearch => ({
+    installation_id: optionalStringParam(search, 'installation_id'),
+    code: optionalStringParam(search, 'code'),
+    state: optionalStringParam(search, 'state'),
+    error: optionalStringParam(search, 'error'),
+    setup_action: optionalStringParam(search, 'setup_action'),
+  }),
+});
+
 // Subscribe route (replaces /subscribe.tsx)
 const subscribeRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -900,12 +1047,14 @@ const questsV5Route = createRoute({
 // surface (DataLakeChatSurface). This route survives ONLY to keep already-shared `?article=`
 // deep links working: it turns Data Lake mode on and forwards into a fresh chat, which opens the
 // article in the viewer. There is no page component behind it.
-const dataLakesRoute = createRoute({
+export const dataLakesRoute = createRoute({
   getParentRoute: () => layoutRoute,
   path: '/data-lakes',
-  validateSearch: (search: Record<string, unknown>): { article?: string } => ({
+  validateSearch: (search: Record<string, unknown>): { article?: string; passage?: string } => ({
     // Shareable deep link to a specific article within a lake.
     article: typeof search.article === 'string' && search.article ? search.article : undefined,
+    // Cited passage to highlight once the article opens (from a findings "Open document" link).
+    passage: optionalStringParam(search, 'passage'),
   }),
   beforeLoad: ({ search }) => {
     // The store is the mode's source of truth on /new (no session exists yet to carry
@@ -915,7 +1064,10 @@ const dataLakesRoute = createRoute({
     // "off" and break the deep link for entitled users. DataLakeChatSurface re-checks the flag
     // before rendering, so an unentitled arrival leaves this flag set but inert.
     useDataLakeMode.getState().setEnabled(true);
-    throw redirect({ to: '/new', search: search.article ? { article: search.article } : {} });
+    throw redirect({
+      to: '/new',
+      search: search.article ? { article: search.article, ...(search.passage ? { passage: search.passage } : {}) } : {},
+    });
   },
   component: () => null,
 });
@@ -1017,7 +1169,7 @@ const activateRoute = createRoute({
 });
 
 // Admin route (replaces /admin/index.tsx)
-const adminRoute = createRoute({
+export const adminRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/admin',
   beforeLoad: ({ location }) => enforceConsentRedirect(location),
@@ -1031,18 +1183,10 @@ const adminRoute = createRoute({
       </ProviderBundle>
     </RestrictedPage>
   ),
-  // `tab` and `feedbackId` make the console addressable: a feedback deep link opens the Feedback
-  // tab focused on one record. `tab` is a stable slug, never the positional AdminTab enum value -
-  // see common/utils/deepLinks for why, and adminTabSlugs.ts for the slug <-> enum mapping.
-  validateSearch: (
-    search: Record<string, unknown>
-  ): { emergency_access?: string; tab?: string; feedbackId?: string } => {
-    return {
-      emergency_access: optionalStringParam(search, 'emergency_access'),
-      tab: optionalStringParam(search, 'tab'),
-      feedbackId: optionalStringParam(search, 'feedbackId'),
-    };
-  },
+  // `tab` (a stable slug, never the positional AdminTab enum value - see common/utils/deepLinks)
+  // makes the console addressable, and each tab's own params come from the registry in
+  // adminTabParams.ts, which the tab-sync hook rebuilds the URL from too.
+  validateSearch: parseAdminSearch,
 });
 
 // Email unsubscribe route - public page for managing email preferences
@@ -1101,12 +1245,16 @@ const routeTree = rootRoute.addChildren([
     indexRoute,
     notebookShellRoute.addChildren([newRoute, notebookRoute]),
     gearsRoute,
+    integrationsRoute,
     projectsRoute,
     projectRoute,
     profileRoute,
     profileDetailRoute,
     feedbackRollupRoute,
     subscriptionsCheckoutRoute,
+    billingRoute,
+    notebooksIndexRoute,
+    subscriptionsIndexRoute,
     agentsRoute,
     newAgentRoute,
     agentDetailRoute,
@@ -1115,12 +1263,14 @@ const routeTree = rootRoute.addChildren([
     newSkillRoute,
     skillDetailRoute,
     editSkillRoute,
+    skillMarketRoute,
+    mySkillListingsRoute,
+    skillReviewQueueRoute,
+    unlistedSkillListingRoute,
+    skillListingRoute,
     agentExecutionHistoryRoute,
     agentMissionRoute,
     deepAgentsRoute,
-    qaStatusRoute,
-    qaRunRoute,
-    qaTestRoute,
     shareRoute,
     reportPublicRoute,
     organizationsRoute,
@@ -1131,8 +1281,11 @@ const routeTree = rootRoute.addChildren([
     dataLakesRoute,
     hudRoute,
     hearthRoute,
+    studioRoute,
     ...builtAppShellPremiumRoutes,
   ]),
+  // QA status pages (admin layout without the sidenav)
+  qaStatusLayoutRoute.addChildren([qaStatusRoute, qaRunRoute, qaTestRoute]),
   // Standalone auth routes (no layout)
   authCallbackRoute,
   authSuccessRoute,
@@ -1143,6 +1296,7 @@ const routeTree = rootRoute.addChildren([
   verifyEmailChangeRoute,
   adminEmergencyRoute,
   googleDriveCallbackRoute,
+  gitHubLakeCallbackRoute,
   subscribeRoute,
   activateRoute,
   adminRoute,
@@ -1176,6 +1330,9 @@ function createNextCompatibleHistory() {
 // guard redirects an unauthenticated landing to /login (which strips the query string). See
 // captureUtmParams() for why this cannot live in a React effect.
 captureUtmParams();
+
+// Same constraint for the data-lake GitHub App return: the router's first resolve rewrites its query.
+captureGitHubLakeCallbackSearch();
 
 // Then tell the server a visit is happening. Order matters: the beacon is the request the
 // server reads the campaign cookie from, so it has to follow the line above.

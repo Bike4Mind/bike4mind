@@ -11,6 +11,7 @@ import {
   getSessionsFromServer,
   getSharedSessionsFromServer,
   updateSessionToServer,
+  moveSessionToSurface,
 } from '@client/app/utils/sessionsAPICalls';
 import type { SessionUpdatePayload } from '@client/app/utils/sessionsAPICalls';
 import {
@@ -30,6 +31,8 @@ import {
   ISessionDocument,
   ISessionFavoriteItem,
   FavoriteDocumentType,
+  SessionListFilters,
+  normalizeSurfaceId,
 } from '@bike4mind/common';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useSessions, useWorkBenchFiles } from '@client/app/contexts/SessionsContext';
@@ -42,7 +45,7 @@ import { useJobStatus } from '@client/app/hooks/useJobStatus';
 import useSessionLayout from '@client/app/hooks/useSessionLayout';
 import { isOptimisticId } from '@client/app/utils/llm';
 import { formatSessionTitle } from '@client/app/utils/sessionTitle';
-import { visibleReplyForExport } from '@client/app/utils/replyUtils';
+import { visibleReplyForExport } from '@bike4mind/server-utils/shared/replyUtils';
 import { getInsufficientCreditsMessage } from '@client/app/utils/error';
 import { useSendToDataLakeStore } from '@client/app/stores/useSendToDataLakeStore';
 
@@ -63,18 +66,105 @@ export function useDeleteAllSessions(options: { onSuccess?: () => void } = {}) {
     },
     onError: error => {
       console.error(error);
-      toast.error('Failed to download files');
+      toast.error('Failed to delete notebooks');
     },
   });
 }
 
+/** Number of notebooks the caller owns: the same set DELETE /api/sessions removes. */
+export function useOwnSessionCount() {
+  return useQuery({
+    // Deliberately NOT under ['sessions']: updateAllQueryData walks every ['sessions', ...] entry
+    // and assumes a list shape, so a cached number there throws on the next session write.
+    // gcTime 0 so each open of the confirm refetches instead of showing a stale count.
+    queryKey: ['own-session-count'],
+    queryFn: async () => (await api.get<{ count: number }>('/api/sessions/count')).data.count,
+    gcTime: 0,
+    refetchOnWindowFocus: false,
+  });
+}
+
 export const OWN_SESSIONS_LIMIT = 20;
-export function useGetOwnSessions(search: string = '', surface?: string) {
+/**
+ * Query-key suffix for server-side list filters: empty when none is set, so the default list keeps
+ * its existing key (other code reads and writes it by that exact shape).
+ */
+const listFiltersKey = (filters?: SessionListFilters) => (filters ? [filters] : []);
+
+/**
+ * True when a session satisfies every filter in `filters` (or `filters` is undefined, i.e. the
+ * unfiltered list). Must stay in lockstep with the server's sessionListFilterQuery
+ * (packages/database/src/models/auth/SessionModel.ts) - a session with no recorded origin
+ * predates the field and counts as 'web' on both sides. See updateSessionsQueryData below for
+ * why this exists: it is not a request-shaping helper, it gates a *local cache* write.
+ *
+ * Assumes origin is immutable and imageCount only increases (true for both as of this writing -
+ * see SessionTypes.ts / recordGeneratedImages.ts), so a session already cached under a filter
+ * never needs to be *removed* for having stopped matching it. If either becomes mutable in the
+ * other direction, updateSessionsQueryData must also gate the update-path, not just the create-path.
+ */
+export function sessionMatchesListFilters(
+  session: Pick<ISessionDocument, 'imageCount' | 'origin'>,
+  filters: SessionListFilters | undefined
+): boolean {
+  if (!filters) return true;
+  const channel = session.origin?.channel ?? 'web';
+  if (filters.hasImages !== undefined && (session.imageCount ?? 0) > 0 !== filters.hasImages) return false;
+  if (filters.origin !== undefined && channel !== filters.origin) return false;
+  if (filters.excludeOrigin !== undefined && channel === filters.excludeOrigin) return false;
+  return true;
+}
+
+/** The SessionListFilters fragment of a `['sessions', 'own'|'shared', ...]` queryKey, if any - see
+ *  listFiltersKey. Filters are the only plain-object element either key shape ever carries. */
+const filtersFromQueryKey = (queryKey: readonly unknown[]): SessionListFilters | undefined =>
+  queryKey.find((part): part is SessionListFilters => typeof part === 'object' && part !== null);
+
+/**
+ * True unless `queryKey` is a `['sessions', 'own', search, surface, ...]` list scoped to a different
+ * surface than the session's ('' = the main list). Mirrors the surface scoping in the server's
+ * ownSessionListQuery (packages/database/src/models/auth/SessionModel.ts). Other key shapes carry
+ * no surface slot.
+ */
+const sessionMatchesKeySurface = (queryKey: readonly unknown[], session: Pick<ISessionDocument, 'surface'>) => {
+  if (queryKey[1] !== 'own') return true;
+  const slot = typeof queryKey[3] === 'string' ? queryKey[3] : undefined;
+  return normalizeSurfaceId(slot) === normalizeSurfaceId(session.surface);
+};
+
+/**
+ * updateAllQueryData scoped to the 'sessions' collection, with sessionMatchesListFilters and
+ * sessionMatchesKeySurface checked before the create-path insert. Every create-capable 'sessions'
+ * cache write (create, rename, the `session.created` realtime fan-out, clone/fork/snip, ...) should
+ * go through this instead of calling updateAllQueryData directly: without the filter check, a
+ * session that doesn't match a given cached list's Content/Origin filter (sidenavFilters.ts) would
+ * still get spliced into that list's first page the moment any write touches it - silently undoing
+ * the filter the user chose (e.g. an API-created session appearing while viewing "Hide API").
+ * Likewise a product-surface session must not land in the main list, nor a main-list session in a
+ * surface list. Routing every create-capable write through this one gate means a future call site
+ * can't reintroduce that gap by omission; a caller that only updates already-cached entries passes
+ * no keysAllowedToCreate and may use updateAllQueryData directly.
+ */
+export function updateSessionsQueryData(
+  queryClient: QueryClient,
+  type: 'write' | 'delete',
+  session: ISessionDocument,
+  keysAllowedToCreate: Array<string[]> = [['sessions', 'own']]
+) {
+  updateAllQueryData(queryClient, 'sessions', type, session, {
+    keysAllowedToCreate,
+    canCreateAt: (queryKey, data) =>
+      sessionMatchesKeySurface(queryKey, data) && sessionMatchesListFilters(data, filtersFromQueryKey(queryKey)),
+  });
+}
+
+export function useGetOwnSessions(search: string = '', surface?: string, filters?: SessionListFilters) {
   const { currentUser } = useUser();
   const queryClient = useQueryClient();
+  const queryKey = ['sessions', 'own', search, surface ?? '', ...listFiltersKey(filters)];
 
   return useInfiniteQuery({
-    queryKey: ['sessions', 'own', search, surface ?? ''],
+    queryKey,
     initialPageParam: { page: 1 },
     queryFn: async params => {
       const { page = 1 } = params.pageParam || {};
@@ -84,6 +174,7 @@ export function useGetOwnSessions(search: string = '', surface?: string) {
           limit: OWN_SESSIONS_LIMIT,
         },
         surface,
+        filters,
       });
 
       result.data.forEach(session => {
@@ -107,18 +198,15 @@ export function useGetOwnSessions(search: string = '', surface?: string) {
     // Mirrors useGetSharedSessions. The initial cold fetch (no cached data) still
     // runs once - refetchOnMount only governs refetch of EXISTING data.
     refetchOnMount: () => {
-      queryClient.setQueryData<InfiniteData<{ data: ISessionDocument[]; hasMore: boolean }>>(
-        ['sessions', 'own', search, surface ?? ''],
-        data => {
-          if (!data) {
-            return;
-          }
-          return {
-            pages: data.pages.slice(0, 1),
-            pageParams: data.pageParams.slice(0, 1),
-          };
+      queryClient.setQueryData<InfiniteData<{ data: ISessionDocument[]; hasMore: boolean }>>(queryKey, data => {
+        if (!data) {
+          return;
         }
-      );
+        return {
+          pages: data.pages.slice(0, 1),
+          pageParams: data.pageParams.slice(0, 1),
+        };
+      });
       return false;
     },
     // Keep the sidebar list cached briefly so it doesn't refetch on every
@@ -129,15 +217,16 @@ export function useGetOwnSessions(search: string = '', surface?: string) {
   });
 }
 
-export function useGetSharedSessions(search?: string) {
+export function useGetSharedSessions(search?: string, filters?: SessionListFilters) {
   const queryClient = useQueryClient();
   const { currentUser } = useUser();
+  const queryKey = ['sessions', 'shared', search, ...listFiltersKey(filters)];
 
   // Set true to use mock data for shared-notebooks UI testing
   const USE_MOCK_SHARED_NOTEBOOKS = false;
 
   return useInfiniteQuery({
-    queryKey: ['sessions', 'shared', search],
+    queryKey,
     initialPageParam: { page: 1 },
     queryFn: async params => {
       const { page = 1 } = params.pageParam || {};
@@ -161,6 +250,7 @@ export function useGetSharedSessions(search?: string) {
           page,
           limit: 10,
         },
+        filters,
       });
 
       result.data.forEach(session => {
@@ -170,19 +260,16 @@ export function useGetSharedSessions(search?: string) {
       return result;
     },
     refetchOnMount: () => {
-      queryClient.setQueryData<InfiniteData<{ data: ISessionDocument[]; hasMore: boolean }>>(
-        ['sessions', 'shared', search],
-        data => {
-          if (!data) {
-            return;
-          }
-
-          return {
-            pages: data.pages.slice(0, 1),
-            pageParams: data.pageParams.slice(0, 1),
-          };
+      queryClient.setQueryData<InfiniteData<{ data: ISessionDocument[]; hasMore: boolean }>>(queryKey, data => {
+        if (!data) {
+          return;
         }
-      );
+
+        return {
+          pages: data.pages.slice(0, 1),
+          pageParams: data.pageParams.slice(0, 1),
+        };
+      });
 
       return false;
     },
@@ -299,9 +386,7 @@ export function useDeleteSession(successCallback?: (sessionId: string) => void) 
       // OPTIMISTIC UPDATE
       const session = queryClient.getQueryData<ISessionDocument>(['sessions', id]);
       if (session) {
-        updateAllQueryData(queryClient, 'sessions', 'delete', session, {
-          keysAllowedToCreate: [['sessions', 'own']],
-        });
+        updateSessionsQueryData(queryClient, 'delete', session);
       }
 
       const { newLastNotebookId } = await deleteSessionFromServer(id);
@@ -340,9 +425,7 @@ export function useDeleteSessions() {
       for (const sessionId of sessionIds) {
         const session = queryClient.getQueryData<ISessionDocument>(['sessions', sessionId]);
         if (session) {
-          updateAllQueryData(queryClient, 'sessions', 'delete', session, {
-            keysAllowedToCreate: [['sessions', 'own']],
-          });
+          updateSessionsQueryData(queryClient, 'delete', session);
         }
       }
 
@@ -444,24 +527,24 @@ export function useUpdateSession(callback?: { onSuccess?: (session: ISessionDocu
     mutationFn: async (session: UpdateSessionInput) => {
       const result = (await updateSessionToServer(session)) as ISessionDocument;
 
-      updateAllQueryData(queryClient, 'sessions', 'write', result, {
-        keysAllowedToCreate: [['sessions', 'own']],
-      });
+      updateSessionsQueryData(queryClient, 'write', result);
       return result;
     },
     onSuccess: callback?.onSuccess,
   });
 }
 
+/** A session id clones in place; `targetSurface` (null = the main list) clones into another workspace. */
+export type CloneSessionInput = string | { sessionId: string; targetSurface?: string | null };
+
 export const useCloneSession = () => {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (sessionId: string) => {
-      const result = await cloneSession(sessionId);
-      updateAllQueryData(queryClient, 'sessions', 'write', result, {
-        keysAllowedToCreate: [['sessions', 'own']],
-      });
+    mutationFn: async (input: CloneSessionInput) => {
+      const { sessionId, targetSurface } = typeof input === 'string' ? { sessionId: input } : input;
+      const result = await cloneSession(sessionId, targetSurface);
+      updateSessionsQueryData(queryClient, 'write', result);
       return result;
     },
     onSuccess: result => {
@@ -655,9 +738,7 @@ export const useSubscribeToSession = (sessionId?: string) => {
         prevSessionRef.current = null;
       }
 
-      updateAllQueryData(queryClient, 'sessions', type === 'delete' ? 'delete' : 'write', val, {
-        keysAllowedToCreate: [['sessions', 'own']],
-      });
+      updateSessionsQueryData(queryClient, type === 'delete' ? 'delete' : 'write', val);
     },
     [queryClient, endJob, isJobRunning]
   );
@@ -752,9 +833,7 @@ export const useCreateNewSession = (callbacks?: {
       return newSession;
     },
     onSuccess: session => {
-      updateAllQueryData(queryClient, 'sessions', 'write', session, {
-        keysAllowedToCreate: [['sessions', 'own']],
-      });
+      updateSessionsQueryData(queryClient, 'write', session);
       if (projectId) {
         queryClient.invalidateQueries({ queryKey: ['sessions', 'projects', projectId] });
         queryClient.invalidateQueries({ queryKey: ['projects', projectId] });
@@ -769,21 +848,45 @@ export const useCreateNewSession = (callbacks?: {
 export const useForkSession = () => {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (params: { sessionId: string; messageId: string }) => {
-      const { sessionId, messageId } = params;
+    // `targetSurface` omitted = the fork stays in the source's workspace; null = the main notebook list.
+    mutationFn: (params: { sessionId: string; messageId: string; targetSurface?: string | null }) => {
+      const { sessionId, messageId, targetSurface } = params;
       const result = api
-        .post<ISessionDocument>(`/api/sessions/${sessionId}/chat/${messageId}/fork`)
+        .post<ISessionDocument>(
+          `/api/sessions/${sessionId}/chat/${messageId}/fork`,
+          targetSurface === undefined ? undefined : { targetSurface }
+        )
         .then(data => data?.data);
       return result;
     },
     onSuccess: result => {
-      updateAllQueryData(queryClient, 'sessions', 'write', result, {
-        keysAllowedToCreate: [['sessions', 'own']],
-      });
+      updateSessionsQueryData(queryClient, 'write', result);
       toast.success('Session forked successfully');
     },
     onError: () => {
       toast.error('Failed to fork session');
+    },
+  });
+};
+
+/** Moves a session the caller owns into another workspace and refreshes every session list. */
+export const useMoveSession = () => {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ sessionId, targetSurface }: { sessionId: string; targetSurface: string | null }) =>
+      moveSessionToSurface(sessionId, targetSurface),
+    onSuccess: result => {
+      queryClient.setQueryData(['sessions', result.id], result);
+      // The lists are filtered by surface server-side, so a moved session must be re-placed by refetch.
+      queryClient.invalidateQueries({ queryKey: ['sessions', 'own'] });
+      queryClient.invalidateQueries({ queryKey: ['sessions', 'shared'] });
+      queryClient.invalidateQueries({ queryKey: ['sessions', 'favorites'] });
+      queryClient.invalidateQueries({ queryKey: ['sessions', 'projects'] });
+      toast.success(`Moved ${formatSessionTitle(result.name)}`);
+    },
+    onError: () => {
+      toast.error('Failed to move notebook');
     },
   });
 };
@@ -801,9 +904,7 @@ export const useSnipSession = () => {
       return result;
     },
     onSuccess: result => {
-      updateAllQueryData(queryClient, 'sessions', 'write', result, {
-        keysAllowedToCreate: [['sessions', 'own']],
-      });
+      updateSessionsQueryData(queryClient, 'write', result);
       toast.success('Session snipped successfully');
     },
     onError: () => {
@@ -843,12 +944,10 @@ export const useAutoRenameSession = () => {
       return result;
     },
     onSuccess: result => {
-      updateAllQueryData(queryClient, 'sessions', 'write', result, {
-        keysAllowedToCreate: [
-          ['sessions', 'own'],
-          ['sessions', 'projects'],
-        ],
-      });
+      updateSessionsQueryData(queryClient, 'write', result, [
+        ['sessions', 'own'],
+        ['sessions', 'projects'],
+      ]);
       toast.success('Notebook renamed successfully');
     },
     onError: () => {

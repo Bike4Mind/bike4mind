@@ -78,6 +78,11 @@ export function trackRedditEvent(eventName: string, params?: RedditEventParams):
   }
 }
 
+/** Whether this build has a Reddit pixel; the consent banner names Reddit only when it does. */
+export function isRedditPixelConfigured(): boolean {
+  return Boolean(process.env.NEXT_PUBLIC_REDDIT_PIXEL_ID);
+}
+
 /**
  * Load the real pixel script, flushing anything queued. Call ONLY once the
  * visitor has granted cookie consent. Idempotent.

@@ -145,11 +145,11 @@ export const emailAnalysisQueue = new sst.aws.Queue('emailAnalysisQueue', {
  * - Rejects unauthorized emails with bounce notification
  * - Validates platform email address exists in UserModel
  *
- * Handler: apps/client/server/emailIngestion/emailParser.dispatch
+ * Handler: apps/workers/src/emailIngestion/emailParser.dispatch
  */
 export const emailParserQueueSubscription = emailIngestionQueue.subscribe(
   {
-    handler: 'apps/client/server/emailIngestion/emailParser.dispatch',
+    handler: 'apps/workers/src/emailIngestion/emailParser.dispatch',
     runtime: 'nodejs24.x',
     timeout: '5 minutes',
     memory: '512 MB',
@@ -163,9 +163,6 @@ export const emailParserQueueSubscription = emailIngestionQueue.subscribe(
       generatedImagesBucket,
       websocketApi,
     ],
-    logging: {
-      retention: '1 week',
-    },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -227,7 +224,7 @@ const sesReceiptRule = sesReceiptRuleSet
         name: `${$app.stage}-email-ingest`, // Shortened to stay under 32 char limit
         recipients: [], // Empty array = catch-all for verified domain
         enabled: true,
-        scanEnabled: true, // Spam and virus scanning
+        scanEnabled: true, // Spam/virus scanning and SPF/DKIM/DMARC verdicts, which authenticateSender gates ingestion on
         tlsPolicy: 'Optional',
         s3Actions: [
           {
@@ -302,19 +299,16 @@ const emailIngestionBucketNotification = emailIngestionBucket.notify({
  * - Configurable via AdminSettings (model, temperature, custom prompt)
  * - DLQ retry on failures
  *
- * Handler: apps/client/server/emailIngestion/emailAnalyzer.dispatch
+ * Handler: apps/workers/src/emailIngestion/emailAnalyzer.dispatch
  */
 const emailAnalyzerQueueSubscription = emailAnalysisQueue.subscribe(
   {
-    handler: 'apps/client/server/emailIngestion/emailAnalyzer.dispatch',
+    handler: 'apps/workers/src/emailIngestion/emailAnalyzer.dispatch',
     runtime: 'nodejs24.x',
     timeout: '2 minutes',
     memory: '512 MB',
     vpc: lambdaVpc,
     link: [...allSecrets, websocketApi, fabFileBucket, generatedImagesBucket],
-    logging: {
-      retention: '1 week',
-    },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },

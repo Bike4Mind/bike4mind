@@ -37,8 +37,20 @@ vi.mock('@client/app/contexts/UserContext', () => ({
 // Renders citedPassage as well as content: a mock that drops the prop cannot tell a working
 // passthrough from a panel that never forwards the anchor at all.
 vi.mock('@client/app/components/Knowledge/MarkdownViewer', () => ({
-  default: ({ content, citedPassage }: { content?: string; citedPassage?: string }) => (
-    <div data-testid="mock-markdown" data-cited-passage={citedPassage ?? ''}>
+  default: ({
+    content,
+    citedPassage,
+    stripFrontmatter,
+  }: {
+    content?: string;
+    citedPassage?: string;
+    stripFrontmatter?: boolean;
+  }) => (
+    <div
+      data-testid="mock-markdown"
+      data-cited-passage={citedPassage ?? ''}
+      data-strip-frontmatter={String(Boolean(stripFrontmatter))}
+    >
       {content}
     </div>
   ),
@@ -293,6 +305,7 @@ describe('DataLakeArticlePanel cited passage passthrough', () => {
     );
 
     expect(screen.getByTestId('mock-markdown')).toHaveAttribute('data-cited-passage', 'Holidays accrue monthly.');
+    expect(screen.getByTestId('mock-markdown')).toHaveAttribute('data-strip-frontmatter', 'true');
   });
 
   it('forwards nothing when the anchor points at a DIFFERENT file', () => {

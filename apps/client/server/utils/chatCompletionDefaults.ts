@@ -9,7 +9,6 @@ import {
   defineAbilitiesFor,
   fabFileChunkRepository,
   fabFileRepository,
-  imageModerationIncidentRepository,
   lakeAccessEventRepository,
   latticeModelRepository,
   mcpServerRepository,
@@ -24,7 +23,6 @@ import {
   rapidReplyResultRepository,
   Session,
   scopedSettingsRepository,
-  lakeMembershipRemovalRepository,
   sessionRepository,
   skillRepository,
   usageEventRepository,
@@ -33,10 +31,10 @@ import {
   dataLakeRepository,
   fallbackLakeSettingsRepository,
 } from '@bike4mind/database';
-import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
-import { lakeMembershipAuditDb } from '@server/dataLakes/lakeMembershipAuditDb';
+import { lakeWriteToolDb } from '@server/dataLakes/lakeWriteToolDb';
 import {
   ChatModels,
+  bedrockClientCredentials,
   ContextTelemetry,
   ContextTelemetryAlerts,
   IMcpServerDocument,
@@ -47,22 +45,26 @@ import {
 } from '@bike4mind/common';
 import { MCPClient } from '@bike4mind/mcp';
 import { apiKeyService } from '@bike4mind/services';
-import { IChatCompletionServiceOptions } from '@bike4mind/services/llm';
+import type { IChatCompletionServiceOptions } from '@bike4mind/services/llm';
 import { ApiKeyTable, getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { getSettingsByNames, ITokenizer, TiktokenTokenizer } from '@bike4mind/utils';
 import { ILogger, Logger } from '@bike4mind/observability';
 import { accessibleBy } from '@casl/mongoose';
+import { runDecisionTool } from '@server/decisions/runDecisionTool';
 import { logEvent } from '@server/utils/analyticsLog';
 import { recallMementosV2 } from '@server/memory/recallMementosV2';
 import { recallLakeMemoryForSession } from '@server/memory/lakeMemoryRecall';
 import { loadSystemPromptById } from '@server/utils/sessionSystemPromptResolver';
 import { summarizeSession, contextSummarizeSession } from '@server/managers/sessionManager';
 import { getUserEntitlements } from '@server/entitlements';
-import { Config } from '@server/utils/config';
-import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
+import { Config } from '@bike4mind/server-utils/utils/config';
+import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { Resource } from 'sst';
+import { premiumWorkspaceDeniedTools } from '@server/premium-generated/premiumWorkspaceDeniedTools.generated';
+import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';
 import { buildMcpEnvVariables } from '@server/utils/mcpEnv';
 import { LLMEvents, TelemetryEvents } from '@server/utils/eventBus';
+import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
 
 /**
  * Publish telemetry alert events to EventBridge for async processing.
@@ -124,7 +126,7 @@ type DefaultChatCompletionOptions = Omit<
 // pulled this file in (e.g. just to grab `getSharedTokenizer`).
 //
 // The factory below defers all Resource access to first invocation, matching the lazy
-// pattern in `@server/utils/storage` and the queueHandler service factories. Memoization
+// pattern in `@bike4mind/server-utils/utils/storage` and the queueHandler service factories. Memoization
 // preserves the prior reference-equality semantics for callers that spread the object.
 let _defaultChatCompletionOptions: DefaultChatCompletionOptions | undefined;
 
@@ -183,14 +185,10 @@ export const getDefaultChatCompletionOptions = (): DefaultChatCompletionOptions 
       // Audit trail for images blocked by the image_generation/edit_image tools'
       // moderation gate. The gate itself is unconditional (constructed inline
       // in the tool) - this only wires the incident record, not the block.
-      imageModerationIncidents: imageModerationIncidentRepository,
+      imageModerationIncidents,
       lakeAccessEvents: lakeAccessEventRepository,
       scopedSettings: scopedSettingsRepository,
-      // Read by save_content_to_data_lake (-> addFileToDataLake). Without them that tool answers
-      // "not available on this surface" rather than failing mid-write.
-      lakeMembershipRemovals: lakeMembershipRemovalRepository,
-      lakeConfigChangeEvents: lakeConfigAuditDb.lakeConfigChangeEvents,
-      lakeMembershipChangeEvents: lakeMembershipAuditDb.lakeMembershipChangeEvents,
+      ...lakeWriteToolDb,
     },
     storage: getFilesStorage(),
     imageGenerateStorage: getGeneratedImageStorage(),
@@ -200,6 +198,8 @@ export const getDefaultChatCompletionOptions = (): DefaultChatCompletionOptions 
     // to avoid credential expiration issues.
     // @deprecated: Use scope instead
     abilityGetter: defineAbilitiesFor,
+    workspaceDeniedTools: premiumWorkspaceDeniedTools,
+    workspaceSessionSettings: premiumWorkspaceSessionSettings,
     getScopeFilter: (user: IUserDocument, permission: Permission, modelName: string) =>
       accessibleBy(defineAbilitiesFor(user), permission).ofType(mongoose.models[modelName]),
     // Resolve entitlement keys so ALL chat surfaces (chat/opti/voice/ai-llm/rapid-reply/slack)
@@ -281,6 +281,9 @@ export const getDefaultChatCompletionOptions = (): DefaultChatCompletionOptions 
         },
       };
     },
+    // The `decide` tool's host seam: the same runner, credit hold and retry the public decisions
+    // route uses, so a tool answer and an API answer are one code path.
+    decide: params => runDecisionTool({ ...params, source: params.authOrigin === 'apiKey' ? 'api' : 'web' }),
     logEvent: logEvent,
     cacheRepository: cacheRepository,
     publishTelemetryAlert: publishTelemetryAlertCallback,
@@ -358,8 +361,9 @@ export interface ResolvedDefaultChatModel {
  * Hosted (B4M_SELF_HOST !== 'true'): the Bedrock-backed schema default is always
  * reachable via IAM, so return it directly with zero extra work.
  *
- * Self-host: Bedrock never works, so the schema default maps to its direct-API
- * Anthropic twin - but a local-only box may have no ANTHROPIC_API_KEY at all. Probe
+ * Self-host: Bedrock needs the opt-in BEDROCK_AWS_* pair, so the schema default maps to its
+ * direct-API Anthropic twin (an admin's explicit Bedrock pick is kept when that pair is set).
+ * But a local-only box may have no ANTHROPIC_API_KEY at all. Probe
  * the effective keys and the live model list, then keep the configured default when
  * its provider key is usable, else fall back to the first local Ollama chat model
  * (needs no key; embedding models are skipped), else return the (unusable) default so
@@ -377,8 +381,11 @@ export async function resolveDefaultChatModel(params: {
     return { model: cloudDefault };
   }
 
+  const keepExplicitBedrock = !!params.configuredModel && bedrockClientCredentials() !== null;
   const configuredDefault =
-    cloudDefault === ChatModels.CLAUDE_5_SONNET_BEDROCK ? ChatModels.CLAUDE_5_SONNET : cloudDefault;
+    cloudDefault === ChatModels.CLAUDE_5_SONNET_BEDROCK && !keepExplicitBedrock
+      ? ChatModels.CLAUDE_5_SONNET
+      : cloudDefault;
 
   const logger = params.logger ?? new Logger();
   const apiKeys = (await apiKeyService.getEffectiveLLMApiKeys(

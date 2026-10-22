@@ -17,7 +17,7 @@ import { Quest, questRepository } from '../QuestModel';
 // artifacts[].type is the live example, since parseArtifacts emits 'html', never 'text'.
 const FULL_PROMPT_META = {
   model: {
-    name: 'claude-opus-5',
+    name: 'claude-opus-5-5',
     type: 'text',
     backend: 'anthropic',
     contextWindow: 200000,
@@ -149,6 +149,8 @@ const FULL_PROMPT_META = {
     // #3055: exercises the new subdoc's default:undefined behavior and its Number/String cast on
     // the $set path, same reason as the fields above - the parity test only checks path names.
     excludedLakes: { count: 2, reason: 'access' },
+    // Sibling of excludedLakes, same subdoc shape and the same reason to round-trip it here.
+    notServingLakes: { count: 1, reason: 'draft' },
   },
   // Top-level for the same reason as `retrieval` above. The chat coverage banner keys on this
   // field surviving the round-trip, so a shape that persists but fails the Zod re-parse would
@@ -157,6 +159,7 @@ const FULL_PROMPT_META = {
     partial: true,
     reasons: ['more than the 100-document candidate cap matched, so some were never considered'],
   },
+  retrievalFloorRejection: { floorPct: 75, measuredPct: 58, embeddingModel: 'text-embedding-3-small' },
   functionCalls: [
     {
       name: 'web_search',
@@ -169,6 +172,9 @@ const FULL_PROMPT_META = {
       id: 'toolu_01',
     },
   ],
+  offeredTools: ['web_search'],
+  toolMode: 'smart',
+  redirectedFrom: 'claude-opus-5',
   performance: {
     totalResponseTime: 1000,
     contextRetrievalTime: 100,
@@ -196,6 +202,8 @@ const FULL_PROMPT_META = {
   warnings: ['a warning'],
   generatedAt: '2026-07-30T00:00:00.000Z',
   finishReason: 'end_turn',
+  replyChoices: { offered: true, status: 'invalid', reason: 'too_few' },
+  narratedToolCall: { toolNames: ['web_search'] },
   artifacts: [{ type: 'html', content: '<div />', metadata: { source: 'tool_result' }, timestamp: new Date() }],
   toolHealth: [
     {
@@ -321,6 +329,33 @@ describe('QuestModel promptMeta persistence', () => {
     const sources = (raw.promptMeta.context?.systemPromptSources ?? []) as Record<string, unknown>[];
     expect(sources.length).toBeGreaterThan(0);
     expect(sources.every(source => source.content === undefined)).toBe(true);
+  });
+
+  // default: undefined is what keeps "not measured" distinct from a recorded zero; a schema that
+  // auto-vivified the subdoc would store `{}`, which fails the Zod re-parse (count is required).
+  it('leaves the measured-lake subdocs absent on a retrieval write that carries neither', async () => {
+    const quest = await Quest.create({ sessionId: 'session-2', type: 'message', timestamp: new Date(), prompt: 'hi' });
+    await questRepository.update({
+      id: quest.id,
+      promptMeta: { retrieval: { attempted: false, surfaces: [], dataLakeTags: [] } },
+    });
+    const doc = await Quest.collection.findOne({ _id: new mongoose.Types.ObjectId(quest.id) });
+    expect(doc?.promptMeta.retrieval).toBeDefined();
+    expect('excludedLakes' in doc!.promptMeta.retrieval).toBe(false);
+    expect('notServingLakes' in doc!.promptMeta.retrieval).toBe(false);
+  });
+
+  it('rejects a toolMode outside the public /api/chat modes', async () => {
+    await expect(
+      Quest.create({
+        sessionId: 'session-3',
+        type: 'message',
+        timestamp: new Date(),
+        prompt: 'hi',
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        promptMeta: { toolMode: 'turbo' } as any, // any: the value is deliberately outside the PromptMeta type.
+      })
+    ).rejects.toThrow(/toolMode/);
   });
 
   it('survives the ingress parse that runs on every subsequent turn', () => {

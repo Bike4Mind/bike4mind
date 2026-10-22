@@ -1,5 +1,6 @@
 import { Request } from 'express';
 import { baseApi } from '@client/server/middlewares/baseApi';
+import { AGENTS_WRITE_SCOPES } from '@server/agents/agentScopes';
 import {
   agentRepository,
   agentOpsSettingsRepository,
@@ -15,11 +16,11 @@ import { BadRequestError, ForbiddenError, NotFoundError, getFileContent, getSett
 import { stripToolOutputMarker } from '@bike4mind/utils/artifactParser';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
-import { getFilesStorage } from '@server/utils/storage';
-import { isValidObjectId } from '@server/utils/objectId';
-import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
+import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 import { apiKeyService } from '@bike4mind/services';
-import { createAttachmentLakeAccess } from '@server/queueHandlers/agentExecutor.attachmentLakeAccess';
+import { createAttachmentLakeAccess } from '@server/dataLakes/attachmentLakeAccess';
 import { v4 as uuidv4 } from 'uuid';
 
 interface CreateFromContextRequest {
@@ -366,7 +367,9 @@ IMPORTANT: Return ONLY valid JSON with no additional text, no markdown formattin
   return agent;
 }
 
-const handler = baseApi().post<Request<{}, CreateFromContextResponse, CreateFromContextRequest>>(async (req, res) => {
+const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
+  Request<{}, CreateFromContextResponse, CreateFromContextRequest>
+>(async (req, res) => {
   const { agentName, sessionId } = req.body;
   const authenticatedUserId = req.user!.id;
 

@@ -8,7 +8,7 @@
  * pure `getUserEntitlements` path.
  */
 import { sendToClient } from '@server/websocket/utils';
-import { emitMetric } from '@server/utils/cloudwatch';
+import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { Resource } from 'sst';
 import type { Logger } from '@bike4mind/observability';
 
@@ -41,5 +41,20 @@ export async function pushEntitlementInvalidation(userId: string, logger: Logger
     ]);
   } catch (error) {
     logger.warn('Failed to push entitlement invalidation:', error);
+  }
+}
+
+/**
+ * Push `invalidate_query ['subscriptions']` after a server-side subscription grant that has no
+ * Stripe webhook behind it (mirrors the admin grant route). Best-effort like the entitlement push.
+ */
+export async function pushSubscriptionsInvalidation(userId: string, logger: Logger): Promise<void> {
+  try {
+    await sendToClient(userId, Resource.websocket.managementEndpoint, {
+      action: 'invalidate_query',
+      queryKey: ['subscriptions'],
+    });
+  } catch (error) {
+    logger.warn('Failed to push subscriptions invalidation:', error);
   }
 }

@@ -37,7 +37,7 @@ function elasticMqQueueNames(): string[] {
 /** Queue names taken from the last path segment of each `*_QUEUE=` URL in the env template. */
 function envTemplateQueueNames(): string[] {
   const contents = fs.readFileSync(path.join(REPO_ROOT, '.env.selfhost.example'), 'utf8');
-  return [...contents.matchAll(/^[A-Z0-9_]+_QUEUE=\S*\/(\w+)$/gm)].map(match => match[1]);
+  return [...contents.matchAll(/^[A-Z0-9_]+_QUEUE(?:_DLQ)?=\S*\/(\w+)$/gm)].map(match => match[1]);
 }
 
 const manifestQueueNames = Object.entries(DEFAULT_MANIFEST)

@@ -216,13 +216,12 @@ const MIN_REVALIDATE_DELAY_MS = 5_000;
 const UNREADABLE_EXP_FALLBACK_MS = 5 * 60_000;
 
 /** Small positive margin PAST the exp claim, not a pre-expiry buffer like
- *  REVALIDATE_EXPIRY_BUFFER_MS above. The server only rotates the token once it has actually
- *  expired (pages/api/identify.ts's own refresh branch), and the standard JWT auth middleware
- *  already rejects an expired token before that - so a probe fired BEFORE the deadline just
- *  gets the unchanged token back and, since the delay floors at MIN_REVALIDATE_DELAY_MS as
- *  expiry approaches, would otherwise poll every few seconds for nothing until the deadline
- *  actually arrives. This margin only exists to tolerate clock skew between this tab and the
- *  server, not to refresh early. */
+ *  REVALIDATE_EXPIRY_BUFFER_MS above. /api/identify never rotates the token; only an expired one
+ *  gets the 401 from the JWT auth middleware that sends the client through the refresh route -
+ *  so a probe fired BEFORE the deadline just gets the unchanged token echoed back and, since
+ *  the delay floors at MIN_REVALIDATE_DELAY_MS as expiry approaches, would otherwise poll every
+ *  few seconds for nothing until the deadline actually arrives. This margin only exists to
+ *  tolerate clock skew between this tab and the server, not to refresh early. */
 const POST_EXPIRY_PROBE_MARGIN_MS = 2_000;
 
 /**

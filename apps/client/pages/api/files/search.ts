@@ -1,8 +1,8 @@
 import { Permission } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@server/utils/errors';
-import { buildUserFileScope } from '@server/utils/userFileScope';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { buildRequestFileScope } from '@server/utils/userFileScope';
 import { fabFilesService } from '@bike4mind/services';
 import qs from 'qs';
 import {
@@ -12,9 +12,10 @@ import {
   projectRepository,
   userRepository,
 } from '@bike4mind/database';
-import { getFilesStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { FILES_READ_SCOPES } from '@server/files/fileScopes';
 
-const handler = baseApi().get(
+const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(
   asyncHandler<{}, unknown, unknown>(async (req, res) => {
     if (!req.ability?.can(Permission.read, FabFile)) {
       throw new ForbiddenError('Unauthorized');
@@ -29,12 +30,17 @@ const handler = baseApi().get(
     // from the shared-only branch.
     const isSharedView = Boolean(filters.shared);
     const isCuratedView = Boolean(filters.curated);
+    // Strict, matching the service's own parse of `owned`: the string 'false' must not narrow the list.
+    const isOwnedView = filters.owned === true || filters.owned === 'true';
 
     // Include shared/data-lake files in the default view so total count reflects all files the
     // user can access, not just owned files. The shared and curated views carry their own
-    // ownership predicate, so widening them would be wrong as well as pointless.
+    // ownership predicate, so widening them would be wrong as well as pointless. The owned view asks
+    // for exactly the unwidened list.
     const scope =
-      !isSharedView && !isCuratedView ? { includeShared: true, ...buildUserFileScope(req.user) } : undefined;
+      !isSharedView && !isCuratedView && !isOwnedView
+        ? { includeShared: true, ...buildRequestFileScope(req, req.user) }
+        : undefined;
 
     const result = await fabFilesService.search(
       req.user.id,
@@ -47,9 +53,13 @@ const handler = baseApi().get(
           adminSettings: adminSettingsRepository,
         },
         storage: {
+          ...(process.env.S3_PRESIGN_ENDPOINT?.trim() && { signedUrlCache: 'bypass' as const }),
           generateSignedUrl: async (path: string, expireInSeconds: number) => {
             try {
-              return await getFilesStorage().getSignedUrl(path, 'get', { expiresIn: expireInSeconds });
+              return await getFilesStorage().getSignedUrl(path, 'get', {
+                expiresIn: expireInSeconds,
+                audience: 'browser',
+              });
             } catch (e) {
               req.logger.error('Error generating signed URL for file', {
                 error: e,

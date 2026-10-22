@@ -3,7 +3,7 @@ import { IBaseRepository } from './BaseTypes';
 import { IMongoDocument } from './common';
 import { CreditHolderType } from './CreditHolderTypes';
 import { NamedApiKeyUsage, ISourceUsage } from './CreditTransactionTypes';
-import { COMPLETION_SOURCES, CompletionSource, IPlatformEndpointUsage } from '../analytics';
+import { ApiKeyCompletionSource, COMPLETION_SOURCES, CompletionSource, IPlatformEndpointUsage } from '../analytics';
 
 /**
  * Which product surface generated the provider call.
@@ -27,6 +27,8 @@ export const USAGE_EVENT_FEATURES = [
   'operations',
   // Query-embedding spend (e.g. every search_knowledge_base semantic search).
   'embedding',
+  // Synchronous POST /api/v1/decisions calls.
+  'decision',
 ] as const;
 
 export type UsageEventFeature = (typeof USAGE_EVENT_FEATURES)[number];
@@ -38,6 +40,37 @@ export type UsageEventFeature = (typeof USAGE_EVENT_FEATURES)[number];
 export const USAGE_EVENT_STATUSES = ['ok', 'error', 'timeout', 'refusal', 'degenerate'] as const;
 
 export type UsageEventStatus = (typeof USAGE_EVENT_STATUSES)[number];
+
+/** Where a UsageEvent's rates came from: a ModelPrice catalog row, or the adapter literal fallback. */
+export const USAGE_PRICE_SOURCES = ['catalog', 'literal'] as const;
+
+export type UsagePriceSource = (typeof USAGE_PRICE_SOURCES)[number];
+
+/** USD per token for the pricing tier that priced a call (see AppliedRates in models.ts). */
+export const UsageEventRates = z.object({
+  /** The pricing-map key (input-token threshold) of the tier applied. */
+  tierKey: z.number(),
+  input: z.number(),
+  output: z.number(),
+  cacheRead: z.number().optional(),
+  cacheWrite: z.number().optional(),
+});
+
+export type IUsageEventRates = z.infer<typeof UsageEventRates>;
+
+/** One provider request of a multi-turn completion, with the tier it was priced on. */
+export const UsageEventTurn = z.object({
+  inputTokens: z.number(),
+  outputTokens: z.number(),
+  cacheReadTokens: z.number().optional(),
+  cacheWriteTokens: z.number().optional(),
+  tierKey: z.number(),
+});
+
+export type IUsageEventTurn = z.infer<typeof UsageEventTurn>;
+
+/** Most turns one UsageEvent stores; a longer completion keeps the first N-1 plus one aggregated tail entry. */
+export const USAGE_EVENT_TURN_USAGE_CAP = 100;
 
 /**
  * One row per provider API call. Ties true COGS (costUsd, frozen
@@ -105,6 +138,34 @@ export const UsageEvent = z.object({
   /** API key that authed the call; present only for API-key-authed usage. */
   apiKeyId: z.string().optional(),
 
+  // Price stamp, written at text-model settlement so a refund or audit can recompute the
+  // charge from the rates actually applied. All optional: rows written before the stamp, and
+  // non-text features (image, voice, ...), leave them unset.
+  /** 'catalog' when a ModelPrice row priced the call, 'literal' when the adapter literal did. */
+  priceSource: z.enum(USAGE_PRICE_SOURCES).optional(),
+  /** The ModelPrice row in force; set only when priceSource is 'catalog'. */
+  priceRowId: z.string().optional(),
+  /**
+   * Rates of the tier applied. A multi-turn row whose turns hit different tiers carries the
+   * tier of its largest turn; turnUsage has each turn's own tierKey, but not that tier's rates,
+   * so only a single-tier text charge is recomputable from its own fields. Provider-basis chat
+   * rows use providerInputTokens/providerOutputTokens plus the cache buckets. Local-estimate chat
+   * rows use input * (inputTokens - cachedInputTokens) + cacheRead * cachedInputTokens
+   * + output * outputTokens. Operational and CLI rows use disjoint input/cache buckets instead:
+   * input * inputTokens + cacheRead * cachedInputTokens + cacheWrite * cacheWriteTokens
+   * + output * outputTokens, even when settledBasis is 'local' or unset.
+   * Local-estimate chat rows are inexact when a fallback uses a different tokenEstimateMultiplier:
+   * inputTokens remains in the requested model's units. Tool spend on other models is not covered.
+   */
+  rates: UsageEventRates.optional(),
+  /**
+   * Per-turn usage, written only when the completion settled over more than one provider
+   * request (tool loops bill turn by turn). Capped at USAGE_EVENT_TURN_USAGE_CAP entries.
+   */
+  turnUsage: z.array(UsageEventTurn).optional(),
+  /** True when turnUsage was capped: its last entry is the sum of every turn from there on. */
+  turnUsageTruncated: z.boolean().optional(),
+
   createdAt: z.date(),
   updatedAt: z.date(),
 });
@@ -115,6 +176,12 @@ export type IUsageEventDocument = IUsageEvent & IMongoDocument;
 
 /** Input for recording an event (server sets id/timestamps). */
 export type IUsageEventInput = Omit<IUsageEvent, 'id' | 'createdAt' | 'updatedAt'>;
+
+/** The price-stamp fields of a UsageEvent, as built by buildUsagePriceStamp. */
+export type UsagePriceStamp = Pick<
+  IUsageEventInput,
+  'priceSource' | 'priceRowId' | 'rates' | 'turnUsage' | 'turnUsageTruncated'
+>;
 
 /** One aggregation bucket of v_margin_by_model_day (schema-doc naming). */
 export interface IModelDayMargin {
@@ -284,7 +351,7 @@ export interface IUsageDashboardResponse {
   byMember: NamedOwnerSpendMember[];
   byModel: IOwnerSpendModel[];
   byFeature: IOwnerSpendFeature[];
-  /** API-token spend grouped by key (from the ledger; only completion_api_usage carries a key). */
+  /** API-token spend grouped by key (from the ledger; only completion_api_usage and decision_usage carry a key). */
   byApiKey: NamedApiKeyUsage[];
   /**
    * Spend grouped by originating surface (from the ledger, the only source
@@ -298,9 +365,9 @@ export interface IUsageDashboardResponse {
 /**
  * Wire shape of GET /api/admin/platform-usage: the platform-wide usage summary
  * (feature/COGS/credits from UsageEvent, source- and ownerType-filterable) with
- * consumers resolved to key/owner labels, plus a distinct endpoint/latency
- * section (request counts only, from ApiKeyUsageLog). The two sections are kept
- * separate on purpose so the frontend never implies COGS-per-endpoint.
+ * consumers resolved to key/owner labels. Endpoint/latency data is a separate
+ * route (IPlatformEndpointUsageResponse) so the frontend never implies
+ * COGS-per-endpoint.
  */
 export interface IPlatformUsageDashboardResponse {
   /** Trailing window the UsageEvent summary covers. */
@@ -314,14 +381,20 @@ export interface IPlatformUsageDashboardResponse {
   byConsumer: NamedPlatformConsumerUsage[];
   byModel: IOwnerSpendModel[];
   totals: IUsageSpendBucket;
-  /**
-   * Endpoint/latency section from ApiKeyUsageLog (request counts only, no
-   * COGS/credits). Null when the source filter excludes API-key traffic (only
-   * api/cli requests are logged there). `endpointWindowDays` is clamped to the
-   * collection's 90-day TTL.
-   */
-  endpoints: IPlatformEndpointUsage | null;
-  endpointWindowDays: number;
+}
+
+/**
+ * Wire shape of GET /api/admin/platform-usage/endpoints: the endpoint/latency
+ * rollup from ApiKeyUsageLog (request counts only, no COGS/credits). Served
+ * separately from the credit summary so its filter is independent of the
+ * dashboard-wide source/owner/window controls.
+ */
+export interface IPlatformEndpointUsageResponse {
+  /** Echo of the source filter, if any (default: all API-key sources). */
+  source?: ApiKeyCompletionSource;
+  /** Always the log's full TTL; mirrors ENDPOINT_TTL_DAYS in pages/api/admin/platform-usage/endpoints.ts. */
+  windowDays: number;
+  endpoints: IPlatformEndpointUsage;
 }
 
 /** A spend bucket that also carries token quantities, for session-level detail. */
@@ -389,9 +462,10 @@ export interface ISpendLatency {
  * Request-outcome counts over the window. The error rate folds `errors` and
  * `timeouts` together (both are failed calls); `refusals` and `degenerates` are counted
  * separately so each COULD read as its own rate rather than an error - a degenerate call did
- * return content and bill normally, it just stopped making progress first. Today only
- * `degenerates` has a writer (see `earlyStopStamp.ts`) and its own `degenerateRate` KPI;
- * `refusals` has no writer anywhere in the repo yet.
+ * return content and bill normally, it just stopped making progress first. `degenerates` are
+ * written via `earlyStopStamp.ts`; `refusals` there too for a settled refusal, and by the
+ * chat/CLI completion paths for a safety-classifier refusal that fell back (an unbilled row
+ * per refused call, so the fallback's own row still counts in `total`).
  */
 export interface ISpendStatusCounts {
   total: number;
@@ -626,4 +700,7 @@ export interface IUsageEventRepository extends IBaseRepository<IUsageEventDocume
    * data-lake spend view.
    */
   lakeUsageSummary(dataLakeId: string, days?: number): Promise<ILakeUsageSummary>;
+
+  /** Lifetime USD COGS of research spend attributed to one data lake (feature: 'operations'). */
+  lakeResearchLifetimeUsd(dataLakeId: string): Promise<number>;
 }

@@ -1,4 +1,9 @@
-import { IChatHistoryItemDocument, IQuestMasterPlanDocument, SubQuestStatus } from '@bike4mind/common';
+import {
+  IChatHistoryItemDocument,
+  IQuestMasterPlanDocument,
+  SubQuestStatus,
+  SuggestedChoices,
+} from '@bike4mind/common';
 import type { ContextBreakdown } from '@bike4mind/services';
 import { api } from '@client/app/contexts/ApiContext';
 import { updateAllQueryData } from '@client/app/utils/react-query';
@@ -48,6 +53,31 @@ export const useUpdateQuest = (queryClient: QueryClient) => {
       toast.error('Failed to update response');
     },
   });
+};
+
+/**
+ * Marks a reply choice as picked: cache first, so the button row settles at once, then the server.
+ * No toast on failure - the pick's text is sent as the user's reply regardless, so the only loss
+ * is the highlight on reload.
+ */
+export const recordReplyChoice = async (
+  queryClient: QueryClient,
+  {
+    sessionId,
+    questId,
+    suggestedChoices,
+    index,
+  }: { sessionId: string; questId: string; suggestedChoices: SuggestedChoices; index: number }
+) => {
+  updateAllQueryData(queryClient, 'quests', 'write', {
+    id: questId,
+    suggestedChoices: { ...suggestedChoices, selectedIndex: index },
+  });
+  try {
+    await updateChatMessage(sessionId, questId, { selectedChoiceIndex: index });
+  } catch (error) {
+    console.error('Failed to record reply choice', error);
+  }
 };
 
 export const useGetQuest = (sessionId: string, questId: string, enabled = true) => {

@@ -6,7 +6,7 @@
 // so the file lives at that suffix. This is the canonical (and only) location
 // of the handler.
 import { DATA_LAKE_TOOL_NAMES } from '@bike4mind/common';
-import { adminSettingsRepository, questRepository, userRepository } from '@bike4mind/database';
+import { adminSettingsRepository, questRepository, sessionRepository, userRepository } from '@bike4mind/database';
 import {
   ChatCompletionFeature,
   ChatCompletionInvoke,
@@ -34,6 +34,7 @@ import { getDefaultChatCompletionOptions, getSharedTokenizer } from '@server/uti
 import { baseApi } from '@server/middlewares/baseApi';
 import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
 import { verifyVoiceSessionToken, type VoiceSessionContext } from '@server/voice/voiceSessionToken';
+import { voiceSessionTokenExpiresAtMs } from '@bike4mind/server-utils/voice/voiceSessionLimits';
 
 // Built-in tools enabled for voice turns. Curated to ones that execute INLINE
 // (no SQS/Lambda dispatch): web search, knowledge-base RAG, datetime,
@@ -150,13 +151,20 @@ async function runFullPipeline(
     enableQuestMaster: false,
     enableMementos: false,
     enableAgents: false,
+    // Speech streams from the raw reply, so a choices block would be read aloud; there are no buttons.
+    skipReplyChoices: true,
     // Inject the voice agent's system prompt (ElevenLabs-rendered, incl. per-user
     // override) at the top of the context so it drives the response persona.
     ...(systemPrompt ? { extraContextMessages: [{ role: 'system' as const, content: systemPrompt }] } : {}),
   };
 
   const invokeService = new ChatCompletionInvoke(chatCompletionOptions);
-  const quest = await invokeService.invoke({ body: invokeBody, userId: sessionCtx.userId });
+  const quest = await invokeService.invoke({
+    body: invokeBody,
+    userId: sessionCtx.userId,
+    authOrigin: sessionCtx.authOrigin,
+    apiKeyId: sessionCtx.apiKeyId,
+  });
   if (!quest) throw new Error('Voice v2: failed to create quest');
   // Surface the quest id so the handler can stop it if the client disconnects.
   onQuestCreated(quest.id);
@@ -167,6 +175,10 @@ async function runFullPipeline(
       ...invokeBody,
       questId: quest.id,
       userId: sessionCtx.userId,
+      // From the verified token, never the request body. process() reads the tool context's auth
+      // from this body only.
+      authOrigin: sessionCtx.authOrigin,
+      apiKeyId: sessionCtx.apiKeyId,
       embeddingModel,
       queryComplexity: 'simple',
       dashboardParams: undefined,
@@ -223,6 +235,27 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
   }
 
   const model = sessionCtx.reasoningModelId;
+
+  // ElevenLabs calling the proxy with a valid token is server-to-server proof the call is live
+  // (it also calls on user silence), so it marks the hold connected without trusting the browser.
+  // The same write gates the turn: a token naming a hold that is no longer open (ended, swept, or
+  // settled by a newer call) gets a 402 so ElevenLabs ends the call instead of talking for free.
+  // A turn is also refused when the token names no hold, when the hold's window
+  // (VOICE_SESSION_TOKEN_TTL_SECONDS from its start) has passed, or when the write fails: any of
+  // them would otherwise serve turns the reserve does not cover.
+  const holdStartedAt = sessionCtx.voiceHoldStartedAt ? new Date(sessionCtx.voiceHoldStartedAt) : null;
+  const now = new Date();
+  const holdOpen =
+    holdStartedAt !== null &&
+    now.getTime() <= voiceSessionTokenExpiresAtMs(holdStartedAt) &&
+    (await sessionRepository.recordVoiceActivity(sessionCtx.sessionId, now, holdStartedAt).catch((err: unknown) => {
+      req.logger.warn({ err }, '[voice-v2/llm-proxy] failed to record voice activity');
+      return false;
+    }));
+  if (!holdOpen) {
+    req.logger.info({ sessionId: sessionCtx.sessionId }, '[voice-v2/llm-proxy] voice hold is no longer open');
+    return res.status(402).json({ error: 'Voice session has ended', request_id: req.requestId });
+  }
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache, no-transform');

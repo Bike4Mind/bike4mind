@@ -8,12 +8,13 @@ import {
   modelDiscoveryStateRepository,
   modelPriceRepository,
 } from '@bike4mind/database';
+import { ModelBackend } from '@bike4mind/common';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { resolveCatalogRecords, resolveDispatchForRecord } from '@bike4mind/llm-adapters';
 import { modelDiscoveryService } from '@bike4mind/services';
 import type { Logger } from '@bike4mind/observability';
 import { Resource } from 'sst';
-import { createBedrockControlPlane } from './bedrockControlPlane';
+import { createBedrockControlPlane } from '@bike4mind/server-utils/modelDiscovery/bedrockControlPlane';
 
 type ModelDiscoveryAdapters = modelDiscoveryService.ModelDiscoveryAdapters;
 type DiscoveryEnv = modelDiscoveryService.DiscoveryEnv;
@@ -127,6 +128,8 @@ function buildSources(catalogView: CatalogViewReader): ModelDiscoveryAdapters['s
       // whose credentials never reach Bedrock pays nothing for the wiring.
       client: () => createBedrockControlPlane(),
       activeModelIds: async () => (await catalogView.read()).activeModelIds,
+      catalogModelIds: async () =>
+        (await targets()).filter(target => target.backend === ModelBackend.Bedrock).map(target => target.modelId),
     }),
     modelDiscoveryService.createModelsDevSource({ targets, aliases: MODEL_ID_ALIASES }),
     modelDiscoveryService.createLiteLlmSource({ targets, aliases: MODEL_ID_ALIASES }),

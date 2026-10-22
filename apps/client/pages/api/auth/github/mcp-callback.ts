@@ -1,7 +1,8 @@
+import { Types } from 'mongoose';
 import { baseApi } from '@server/middlewares/baseApi';
 import { mcpServerRepository, userRepository } from '@bike4mind/database';
-import { Config } from '@server/utils/config';
-import { InternalServerError } from '@server/utils/errors';
+import { Config } from '@bike4mind/server-utils/utils/config';
+import { InternalServerError } from '@bike4mind/server-utils/utils/errors';
 import { McpServerName } from '@bike4mind/common';
 import jwt from 'jsonwebtoken';
 import { randomUUID } from 'crypto';
@@ -10,6 +11,7 @@ import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
 import { encryptEnvVariables } from '@server/security/tokenEncryption';
+import { buildMcpToolCacheUpdate } from '@bike4mind/services/llm';
 
 function getJwtSecret(): string {
   // Never fall back to a hardcoded secret. Fail closed.
@@ -247,7 +249,12 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
 
     // Prepare environment variables for MCP server
     const plaintextEnvVariables = [{ key: 'GITHUB_ACCESS_TOKEN', value: access_token }];
-    const encryptedEnvVariables = encryptEnvVariables(plaintextEnvVariables);
+    const recordId = recentConnection?.id ?? new Types.ObjectId().toHexString();
+    const encryptedEnvVariables = encryptEnvVariables(plaintextEnvVariables, {
+      userId,
+      name: McpServerName.Github,
+      id: recordId,
+    });
 
     // Store or update MCP server configuration (reuse recentConnection from idempotency check)
     // Initially save with empty tools array - we'll discover tools dynamically next
@@ -284,19 +291,26 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
         sameAccount = true;
       }
       githubServer = sameAccount
-        ? await mcpServerRepository.update({
-            id: recentConnection.id,
-            ...connectionFields,
-            'metadata.githubLogin': connectionMetadata.githubLogin,
-            'metadata.githubUserId': connectionMetadata.githubUserId,
-            'metadata.connectedAt': connectionMetadata.connectedAt,
-            'metadata.scope': connectionMetadata.scope,
-          })
-        : await mcpServerRepository.update({
-            id: recentConnection.id,
-            ...connectionFields,
-            metadata: connectionMetadata,
-          });
+        ? await mcpServerRepository.update(
+            {
+              id: recentConnection.id,
+              ...connectionFields,
+              'metadata.githubLogin': connectionMetadata.githubLogin,
+              'metadata.githubUserId': connectionMetadata.githubUserId,
+              'metadata.connectedAt': connectionMetadata.connectedAt,
+              'metadata.scope': connectionMetadata.scope,
+            },
+            // Reconnect: drop any prior "confirmed empty" marker so the fetch below is trusted.
+            { unset: ['toolSchemasFetchedAt'] }
+          )
+        : await mcpServerRepository.update(
+            {
+              id: recentConnection.id,
+              ...connectionFields,
+              metadata: connectionMetadata,
+            },
+            { unset: ['toolSchemasFetchedAt'] }
+          );
       req.logger.info('[GitHub OAuth] Updated GitHub MCP server config', {
         userId,
         githubLogin: githubUser.login,
@@ -304,6 +318,7 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
       });
     } else {
       githubServer = await mcpServerRepository.create({
+        ...{ _id: recordId },
         userId,
         name: McpServerName.Github,
         enabled: true,
@@ -338,11 +353,7 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
       const toolNames = tools.map((tool: any) => tool.name);
 
       if (githubServer) {
-        await mcpServerRepository.update({
-          id: githubServer.id,
-          tools: toolNames,
-          toolSchemas: tools,
-        });
+        await mcpServerRepository.update(buildMcpToolCacheUpdate(githubServer.id, tools));
       }
 
       req.logger.info('[GitHub OAuth] GitHub MCP server configured', {

@@ -878,3 +878,46 @@ describe('ReActAgent Checkpoint & Resume', () => {
     });
   });
 });
+
+// A host can hand the first runIteration() a per-run `context`. It must land in the system
+// message, ride the checkpoint, and survive a resume that never passes it again - a
+// continuation invocation has no copy of the original start request.
+describe('ReActAgent runIteration() context', () => {
+  it('appends context to the system message and keeps it across checkpoint/resume', async () => {
+    const llm = createScriptedLlm([
+      { text: 'Calling tool', toolsUsed: [{ name: 'lookup', arguments: '{}' }] },
+      { text: 'Done' },
+    ]);
+    const first = new ReActAgent(createContext(llm, [createSimpleTool('lookup', 'ok')]));
+
+    const { checkpoint } = await first.runIteration('go', {
+      maxIterations: 5,
+      context: 'Extra instructions for this send.',
+    });
+
+    const system = checkpoint.messages[0];
+    expect(system.role).toBe('system');
+    expect(system.content).toContain('Additional context:\nExtra instructions for this send.');
+    // The user turn is untouched.
+    expect(checkpoint.messages.find(m => m.role === 'user')?.content).toBe('go');
+
+    const resumed = new ReActAgent(createContext(llm, [createSimpleTool('lookup', 'ok')]));
+    resumed.fromCheckpoint(checkpoint);
+    const next = await resumed.runIteration(undefined, { maxIterations: 5 });
+    expect(next.checkpoint.messages[0].content).toContain('Extra instructions for this send.');
+  });
+
+  it('leaves the system message unchanged when no context is given', async () => {
+    const llm = createScriptedLlm([{ text: 'Done' }]);
+    const withContext = new ReActAgent(createContext(llm, []));
+    const without = new ReActAgent(createContext(createScriptedLlm([{ text: 'Done' }]), []));
+
+    const a = await withContext.runIteration('go', { maxIterations: 5, context: 'Extra instructions for this send.' });
+    const b = await without.runIteration('go', { maxIterations: 5 });
+
+    expect(b.checkpoint.messages[0].content).not.toContain('Additional context');
+    expect(a.checkpoint.messages[0].content).toBe(
+      `${b.checkpoint.messages[0].content}\n\nAdditional context:\nExtra instructions for this send.`
+    );
+  });
+});

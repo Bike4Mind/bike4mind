@@ -8,6 +8,10 @@ import { resetSessionBootstrap } from '@client/app/utils/sessionBootstrap';
 import { parseAuthParams } from '@client/app/utils/authParams';
 import { applyRedirect } from '@client/app/utils/authRedirect';
 import { trackSignupConversion } from '@client/app/utils/signupConversion';
+import { markFirstSignupSession } from '@client/app/utils/firstSignupSession';
+import { usePublicConfig } from '@client/app/hooks/data/settings';
+import { useMfaChallenge } from '@client/app/hooks/useMfaChallenge';
+import MFAModal from '@client/app/components/common/MFAModal';
 
 const AuthSuccessPage = () => {
   const navigate = useNavigate();
@@ -16,6 +20,35 @@ const AuthSuccessPage = () => {
   const { currentUser, setCurrentUser } = useUser();
   const { setVerifiedSession } = useAccessToken();
   const hasProcessed = useRef(false);
+  const { data: publicConfig } = usePublicConfig();
+  const redirectTo = (search as { redirectTo?: string }).redirectTo;
+  // Set when an SSO signup arrives still owing a second factor: the conversion fires once
+  // the session exists, as it does for a direct sign-in.
+  const pendingFirstSignupSession = useRef(false);
+  const pendingSignupMethod = useRef<string | null>(null);
+  const mfaChallenge = useMfaChallenge({
+    allowRememberDevice: publicConfig?.allowTrustedDevices ?? false,
+    onComplete: ({ user }) => {
+      if (pendingFirstSignupSession.current) markFirstSignupSession(user.id);
+      setCurrentUser(user);
+      if (pendingSignupMethod.current) trackSignupConversion(pendingSignupMethod.current);
+      applyRedirect(router.history, redirectTo);
+    },
+    onCancel: mode => {
+      // A handoff that lands while this browser still believes it holds a session (the challenge
+      // left it intact): /login would clear its caches and reset the model choice, so send the user
+      // back where they were and let the destination's bootstrap settle whether the session is
+      // real. Otherwise the sign-in never completed and /login is where it resumes.
+      if (useAccessToken.getState().hasSession) {
+        applyRedirect(router.history, redirectTo);
+        return;
+      }
+      navigate({
+        to: '/login',
+        search: { error: mode === 'setup' ? 'mfa_setup_required' : 'mfa_required', ...(redirectTo && { redirectTo }) },
+      });
+    },
+  });
 
   useEffect(() => {
     // Guard against Strict Mode double-invoke and React 18 Concurrent Mode
@@ -24,11 +57,33 @@ const AuthSuccessPage = () => {
     hasProcessed.current = true;
 
     const handleAuthSuccess = async () => {
-      const { token, error, userId, isNewUser, signupMethod } = parseAuthParams(search as Record<string, unknown>);
+      const { token, error, userId, isNewUser, firstSignupSession, signupMethod, mfa } = parseAuthParams(
+        search as Record<string, unknown>
+      );
 
       if (error) {
         console.error('Authentication error:', error);
         navigate({ to: '/login', search: { error: error as string } });
+        return;
+      }
+
+      if (mfa && userId) {
+        // Same identity rule as the token path below: a handoff for a different user never
+        // replaces the signed-in one. A same-user handoff proceeds; the challenge mints a fresh
+        // session.
+        if (currentUser?.id && currentUser.id !== userId) {
+          console.warn('[auth/success] Ignoring MFA handoff for a different user than the active session');
+          applyRedirect(router.history, redirectTo);
+          return;
+        }
+        pendingFirstSignupSession.current = !!(firstSignupSession || isNewUser);
+        if (isNewUser) pendingSignupMethod.current = signupMethod || 'oauth';
+        await mfaChallenge.begin({
+          userId,
+          mfaToken: mfa.token,
+          mode: mfa.mode,
+          passkeyAvailable: mfa.passkeyAvailable,
+        });
         return;
       }
 
@@ -39,7 +94,7 @@ const AuthSuccessPage = () => {
         // login (no currentUser) or a re-login as the same user proceeds normally.
         if (currentUser?.id && currentUser.id !== userId) {
           console.warn('[auth/success] Ignoring URL token for a different user than the active session');
-          applyRedirect(router.history, (search as { redirectTo?: string }).redirectTo);
+          applyRedirect(router.history, redirectTo);
           return;
         }
 
@@ -59,6 +114,7 @@ const AuthSuccessPage = () => {
 
           if (response.ok) {
             const userData = await response.json();
+            if (firstSignupSession || isNewUser) markFirstSignupSession(userId);
             setCurrentUser(userData);
 
             // Fire the signup ad conversion for brand-new OAuth accounts.
@@ -79,7 +135,7 @@ const AuthSuccessPage = () => {
             // query string survives - e.g. the OAuth authorize URL
             // `/oauth/authorize?client_id=...&redirect_uri=...`, which navigate({ to })
             // would URL-encode into the path and break.
-            applyRedirect(router.history, (search as { redirectTo?: string }).redirectTo);
+            applyRedirect(router.history, redirectTo);
           } else {
             throw new Error(`Failed to fetch user data: ${response.statusText}`);
           }
@@ -98,7 +154,7 @@ const AuthSuccessPage = () => {
         // they hold a valid session, so forwarding them is the correct outcome.
         const { accessToken } = useAccessToken.getState();
         if (accessToken) {
-          applyRedirect(router.history, (search as { redirectTo?: string }).redirectTo);
+          applyRedirect(router.history, redirectTo);
         } else {
           navigate({ to: '/login', search: { error: 'missing_tokens' } });
         }
@@ -129,6 +185,7 @@ const AuthSuccessPage = () => {
           Please wait while we set up your session.
         </Typography>
       </Box>
+      <MFAModal {...mfaChallenge.modalProps} />
     </Container>
   );
 };

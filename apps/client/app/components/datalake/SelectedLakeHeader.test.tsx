@@ -4,7 +4,7 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import SelectedLakeHeader from './SelectedLakeHeader';
-import { DATA_LAKES, type ManageableDataLakeConfig } from '@bike4mind/common';
+import type { ManageableDataLakeConfig } from '@bike4mind/common';
 
 // The strip's two buttons are its whole reason to exist, and both are store writers - so the
 // store is a real spy pair rather than a partial stub. A stub missing one of these makes the
@@ -21,9 +21,23 @@ vi.mock('@client/app/stores/useDataLakeWizardStore', async importOriginal => ({
     selector({ openWizardForLake, openManager }),
 }));
 
-// DriveConnectAction fetches Drive status; this suite owns the strip's own wiring, not that chain.
+// LakeSourceConnectActions itself stays real: it gates GitHub on the lake's scope and creator, so a
+// header that forwards a trimmed lake silently drops the GitHub control. Only its data and leaves are stubbed.
+const h = vi.hoisted(() => ({ gitHubFlag: { current: true } }));
+vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
+  useFeatureEnabled: () => ({
+    isAdminFeatureEnabled: (key: string) => key === 'EnableDataLakeGitHub' && h.gitHubFlag.current,
+    isFeatureEnabled: vi.fn(),
+    isLoading: false,
+  }),
+}));
+vi.mock('@client/app/hooks/data/googleDrive', () => ({ useLakeDriveConnection: () => ({ data: null }) }));
+vi.mock('@client/app/hooks/data/githubLake', () => ({ useLakeGitHubConnection: () => ({ data: null }) }));
 vi.mock('@client/app/components/DataLakeWizard/steps/DriveConnectAction', () => ({
   default: () => <div data-testid="drive-connect-action" />,
+}));
+vi.mock('@client/app/components/DataLakeWizard/steps/GitHubConnectAction', () => ({
+  default: () => <div data-testid="github-connect-action" />,
 }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -42,6 +56,7 @@ const lake = (over: Partial<ManageableDataLakeConfig> = {}): ManageableDataLakeC
     requiredEntitlement: undefined,
     organizationId: 'org-1',
     isOwn: true,
+    isCreator: true,
     canRebuild: false,
     canManage: true,
     ...over,
@@ -57,9 +72,18 @@ const renderHeader = (over: Partial<ManageableDataLakeConfig> = {}) =>
 beforeEach(() => {
   openWizardForLake.mockClear();
   openManager.mockClear();
+  h.gitHubFlag.current = true;
 });
 
 describe('SelectedLakeHeader', () => {
+  it("shows a typed prefix but hides a GitHub connector lake's generated one", () => {
+    const { unmount } = renderHeader();
+    expect(screen.getByTestId('datalake-selected-lake-prefix')).toHaveTextContent('ops:');
+    unmount();
+    renderHeader({ origin: 'connector-fed', fileTagPrefix: 'gh-1a2b3c4d:' });
+    expect(screen.queryByTestId('datalake-selected-lake-prefix')).not.toBeInTheDocument();
+  });
+
   it('opens the append wizard targeting the scoped lake', () => {
     renderHeader();
 
@@ -85,7 +109,6 @@ describe('SelectedLakeHeader', () => {
 
     expect(screen.queryByTestId('datalake-selected-lake-addfiles-btn')).not.toBeInTheDocument();
     expect(screen.getByTestId('datalake-selected-lake-manage-btn')).toBeInTheDocument();
-    expect(screen.getByTestId('datalake-selected-lake-prefix')).toHaveTextContent('ops:');
   });
 
   it('offers the Drive control only on an org lake the caller manages', () => {
@@ -93,33 +116,56 @@ describe('SelectedLakeHeader', () => {
     expect(screen.getByTestId('datalake-selected-lake-source')).toBeInTheDocument();
   });
 
+  it('offers both Drive and GitHub on an org lake with GitHub enabled', () => {
+    renderHeader();
+    expect(screen.getByTestId('drive-connect-action')).toBeInTheDocument();
+    expect(screen.getByTestId('github-connect-action')).toBeInTheDocument();
+  });
+
+  it('offers the Drive control on a personal lake the caller created', () => {
+    // A personal lake's connection syncs on its creator's own Google grant (authorizeLakeConnectorAccess),
+    // so creation - not org management, and not effective ownership - is the gate here. GitHub uses
+    // the same gate.
+    renderHeader({ organizationId: undefined, isCreator: true });
+    expect(screen.getByTestId('datalake-selected-lake-source')).toBeInTheDocument();
+    expect(screen.getByTestId('drive-connect-action')).toBeInTheDocument();
+    expect(screen.getByTestId('github-connect-action')).toBeInTheDocument();
+  });
+
+  it('withholds the Drive control on a personal lake the caller owns but did not create', () => {
+    // After an ownership transfer, isOwn is true but isCreator is false - membership and the
+    // ingest's admin-actor writes are anchored to createdByUserId, so the control must follow
+    // isCreator, not isOwn.
+    renderHeader({ organizationId: undefined, isOwn: true, isCreator: false });
+    expect(screen.queryByTestId('datalake-selected-lake-source')).not.toBeInTheDocument();
+  });
+
+  it('offers the Drive control on a personal lake the caller created but no longer owns', () => {
+    renderHeader({ organizationId: undefined, isOwn: false, isCreator: true });
+    expect(screen.getByTestId('datalake-selected-lake-source')).toBeInTheDocument();
+  });
+
   it.each([
-    ['a personal lake', { organizationId: undefined }],
+    ['a personal lake the caller did not create', { organizationId: undefined, isCreator: false }],
     ['an org lake the caller cannot manage', { canManage: false }],
   ])('withholds the Drive control on %s', (_label, over) => {
-    // Server-side a personal lake has no org to hold a connection and the status route 404s for a
-    // non-manager, so a control here could only ever fail.
+    // Server-side the status route 404s for anyone but an org lake's owner/manager or a personal
+    // lake's own creator, so a control here could only ever fail.
     renderHeader(over as Partial<ManageableDataLakeConfig>);
     expect(screen.queryByTestId('datalake-selected-lake-source')).not.toBeInTheDocument();
   });
 
-  it('flags a draft lake as not grounding answers', () => {
-    renderHeader({ status: 'draft' });
-    expect(screen.getByTestId('datalake-selected-draft-chip')).toHaveTextContent('Draft - not grounding answers');
-  });
-
-  it('flags a user lake with no status as not grounding answers', () => {
-    renderHeader({ status: undefined });
-    expect(screen.getByTestId('datalake-selected-draft-chip')).toBeInTheDocument();
-  });
-
-  it('shows no draft chip for an active lake', () => {
-    renderHeader({ status: 'active' });
+  it('shows the visibility and prefix the strip lacks, leaving draft and not-searched state to it', () => {
+    renderHeader({
+      status: 'draft',
+      retrievable: false,
+      fileTagPrefix: 'acme:',
+      isPublic: false,
+      organizationId: 'org-1',
+    });
+    expect(screen.getByTestId('datalake-selected-lake-visibility')).toHaveTextContent('Organization');
+    expect(screen.getByTestId('datalake-selected-lake-prefix')).toHaveTextContent('acme:');
     expect(screen.queryByTestId('datalake-selected-draft-chip')).not.toBeInTheDocument();
-  });
-
-  it('shows no draft chip for a built-in lake with no status', () => {
-    renderHeader({ id: DATA_LAKES[0].id, status: undefined });
-    expect(screen.queryByTestId('datalake-selected-draft-chip')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-selected-lake-unsearchable')).not.toBeInTheDocument();
   });
 });

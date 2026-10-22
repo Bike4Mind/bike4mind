@@ -45,6 +45,12 @@ describe('locateCitedPassage', () => {
   it('returns null for a whitespace-only passage rather than matching at offset 0', () => {
     expect(locateCitedPassage(DOC, '   \n  ')).toBeNull();
   });
+
+  it('strips an ASCII clip marker so a clipped finding excerpt still locates', () => {
+    const range = locateCitedPassage(DOC, 'Holidays accrue monthly.\nUnused days...');
+    expect(range).not.toBeNull();
+    expect(DOC.slice(range!.start, range!.end)).toBe('Holidays accrue monthly.\nUnused days');
+  });
 });
 
 describe('blockIntersectsPassage', () => {

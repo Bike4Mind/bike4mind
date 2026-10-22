@@ -5,10 +5,8 @@ interface CountBadgeProps {
   count: number;
   /** Custom color for the badge (default: green[800]) */
   color?: string;
-  /** Custom background color opacity (default: '1A' for 10% opacity) */
+  /** Custom background color opacity (default: '26' for 15% opacity) */
   backgroundOpacity?: string;
-  /** Custom border opacity (default: 'BF' for 75% opacity) */
-  borderOpacity?: string;
   /** Font size for the count text (default: '13px') */
   fontSize?: string;
   /** Font weight for the count text (default: '500') */
@@ -30,8 +28,7 @@ interface CountBadgeProps {
 const CountBadge = ({
   count,
   color = green[800],
-  backgroundOpacity = '1A',
-  borderOpacity = 'BF',
+  backgroundOpacity = '26',
   fontSize = '13px',
   fontWeight = '500',
   width = '30px',
@@ -46,11 +43,11 @@ const CountBadge = ({
   return (
     <Box
       className="count-badge"
+      // Fill only, no outline: the badge sits inside an outlined button already.
       sx={{
         backgroundColor: `${color}${backgroundOpacity}`,
         color: color,
         borderRadius: borderRadius,
-        border: `1px solid ${color}${borderOpacity}`,
         fontSize: fontSize,
         fontWeight: fontWeight,
         width: width,

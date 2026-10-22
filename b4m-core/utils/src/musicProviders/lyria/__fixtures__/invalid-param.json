@@ -1,0 +1,33 @@
+{
+  "scenario": "invalid-param",
+  "recordedAt": "2026-10-13T03:50:58.775Z",
+  "exchanges": [
+    {
+      "name": "generate",
+      "request": {
+        "method": "POST",
+        "path": "/v1beta/interactions",
+        "body": {
+          "model": "lyria-3.5",
+          "input": "A song",
+          "response_format": {
+            "type": "audio",
+            "duration": "30s"
+          }
+        }
+      },
+      "response": {
+        "status": 400,
+        "headers": {
+          "content-type": "application/json; charset=UTF-8"
+        },
+        "body": {
+          "error": {
+            "message": "Unknown parameter 'duration' at 'response_format'.",
+            "code": "invalid_request"
+          }
+        }
+      }
+    }
+  ]
+}

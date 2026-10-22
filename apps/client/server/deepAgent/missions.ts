@@ -14,7 +14,7 @@ import {
   serializeHandoff,
 } from '@bike4mind/database';
 import { enrollDeepAgent } from './enroll';
-import type { AgentRosterItem } from './consoleReads';
+import type { AgentRosterItem } from '@bike4mind/server-utils/deepAgent/consoleReads';
 
 /**
  * Missions - the deep-agent capability surfaced on existing B4M Agents.

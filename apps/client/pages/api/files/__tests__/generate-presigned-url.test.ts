@@ -12,11 +12,16 @@ const h = vi.hoisted(() => ({
   getSettingsValue: vi.fn(),
   findOverrides: vi.fn(),
   s3ClientConfigs: [] as unknown[],
+  baseApiOptions: undefined as unknown,
 }));
 
-// The route calls `baseApi().post(...)` directly, with no `.use(...)` in the chain.
+// The route calls `baseApi().post(...)` directly, with no `.use(...)` in the chain. Captures the
+// options `baseApi` was called with, so the scope-gate test below can assert on them directly.
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({ post: (h: unknown) => h }),
+  baseApi: (options: unknown) => {
+    h.baseApiOptions = options;
+    return { post: (fn: unknown) => fn };
+  },
 }));
 
 vi.mock('sst', () => ({ Resource: { fabFileBucket: { name: 'test-bucket' } } }));
@@ -107,6 +112,12 @@ const tagNamesOf = (callIndex = 0) => {
   const persisted = h.createFabFile.mock.calls[callIndex][0] as { tags?: { name: string }[] };
   return persisted.tags?.map(t => t.name).sort();
 };
+
+describe('POST /api/files/generate-presigned-url - scope gate', () => {
+  it('admits files:write and ai:generate at the baseApi route gate', () => {
+    expect(h.baseApiOptions).toEqual({ requiredScopes: ['files:write', 'ai:generate'] });
+  });
+});
 
 describe('POST /api/files/generate-presigned-url - S3 client config', () => {
   it('sets requestChecksumCalculation to WHEN_REQUIRED (#1535)', () => {
@@ -330,7 +341,16 @@ describe('POST /api/files/generate-presigned-url - MaxFileSize resolution', () =
     vi.mocked(getSettingsMap).mockResolvedValue({ MaxFileSize: stored });
     const { res } = makeRes();
 
-    await expect(run(body({ fileSize: mb(DEFAULT_MB + 5) }), res)).rejects.toThrow(/maximum file size/i);
+    await expect(run(body({ fileSize: mb(DEFAULT_MB + 5) }), res)).rejects.toMatchObject({
+      message: expect.stringMatching(/maximum file size/i),
+      info: {
+        errorCode: 'file_too_large',
+        owner: 'user',
+        used_bytes: 0,
+        limit_bytes: mb(DEFAULT_MB),
+        requested_bytes: mb(DEFAULT_MB + 5),
+      },
+    });
     expect(h.createFabFile).not.toHaveBeenCalled();
   });
 

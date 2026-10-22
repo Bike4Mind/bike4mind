@@ -1,0 +1,929 @@
+{
+ "data": {
+  "viewer": {
+   "login": "octo-dev"
+  },
+  "p0": {
+   "autoMergeAllowed": false,
+   "squashMergeAllowed": true,
+   "mergeCommitAllowed": true,
+   "rebaseMergeAllowed": true,
+   "viewerDefaultMergeMethod": "MERGE",
+   "pullRequest": {
+    "id": "PR_example611",
+    "number": 611,
+    "title": "fix: remove a legacy job path",
+    "url": "https://github.com/example-org/widgets/pull/611",
+    "state": "OPEN",
+    "isDraft": false,
+    "mergedAt": null,
+    "author": {
+     "login": "octo-dev"
+    },
+    "headRefName": "agent/fix-issue",
+    "headRefOid": "abc123",
+    "baseRefName": "main",
+    "additions": 47,
+    "deletions": 670,
+    "mergeable": "MERGEABLE",
+    "mergeStateStatus": "CLEAN",
+    "reviewDecision": "APPROVED",
+    "autoMergeRequest": null,
+    "isMergeQueueEnabled": true,
+    "mergeQueueEntry": null,
+    "timelineItems": {
+     "nodes": []
+    },
+    "commits": {
+     "nodes": [
+      {
+       "commit": {
+        "statusCheckRollup": {
+         "contexts": {
+          "nodes": [
+           {
+            "__typename": "CheckRun",
+            "databaseId": 1002,
+            "name": "preview gate",
+            "status": "COMPLETED",
+            "conclusion": "FAILURE",
+            "isRequired": true,
+            "checkSuite": {
+             "app": {
+              "slug": "github-actions"
+             },
+             "workflowRun": {
+              "event": "pull_request",
+              "workflow": {
+               "name": "SST / infra preview gate"
+              }
+             }
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "databaseId": 1034,
+            "name": "preview gate",
+            "status": "COMPLETED",
+            "conclusion": "FAILURE",
+            "isRequired": true,
+            "checkSuite": {
+             "app": {
+              "slug": "github-actions"
+             },
+             "workflowRun": {
+              "event": "pull_request",
+              "workflow": {
+               "name": "SST / infra preview gate"
+              }
+             }
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "databaseId": 1029,
+            "name": "preview gate",
+            "status": "COMPLETED",
+            "conclusion": "FAILURE",
+            "isRequired": true,
+            "checkSuite": {
+             "app": {
+              "slug": "github-actions"
+             },
+             "workflowRun": {
+              "event": "pull_request",
+              "workflow": {
+               "name": "SST / infra preview gate"
+              }
+             }
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "databaseId": 1038,
+            "name": "preview gate",
+            "status": "COMPLETED",
+            "conclusion": "FAILURE",
+            "isRequired": true,
+            "checkSuite": {
+             "app": {
+              "slug": "github-actions"
+             },
+             "workflowRun": {
+              "event": "pull_request",
+              "workflow": {
+               "name": "SST / infra preview gate"
+              }
+             }
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "databaseId": 1041,
+            "name": "preview gate",
+            "status": "COMPLETED",
+            "conclusion": "FAILURE",
+            "isRequired": true,
+            "checkSuite": {
+             "app": {
+              "slug": "github-actions"
+             },
+             "workflowRun": {
+              "event": "pull_request",
+              "workflow": {
+               "name": "SST / infra preview gate"
+              }
+             }
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "databaseId": 1042,
+            "name": "preview gate",
+            "status": "COMPLETED",
+            "conclusion": "FAILURE",
+            "isRequired": true,
+            "checkSuite": {
+             "app": {
+              "slug": "github-actions"
+             },
+             "workflowRun": {
+              "event": "pull_request",
+              "workflow": {
+               "name": "SST / infra preview gate"
+              }
+             }
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "databaseId": 1031,
+            "name": "E2E Tests",
+            "status": "COMPLETED",
+            "conclusion": "SKIPPED",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "slug": "github-actions"
+             },
+             "workflowRun": {
+              "event": "pull_request",
+              "workflow": {
+               "name": "E2E Tests (on label)"
+              }
+             }
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "databaseId": 1030,
+            "name": "E2E Tests",
+            "status": "COMPLETED",
+            "conclusion": "SKIPPED",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "slug": "github-actions"
+             },
+             "workflowRun": {
+              "event": "pull_request",
+              "workflow": {
+               "name": "E2E Tests (on label)"
+              }
+             }
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "databaseId": 1039,
+            "name": "E2E Tests",
+            "status": "COMPLETED",
+            "conclusion": "SKIPPED",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "slug": "github-actions"
+             },
+             "workflowRun": {
+              "event": "pull_request",
+              "workflow": {
+               "name": "E2E Tests (on label)"
+              }
+             }
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "databaseId": 1044,
+            "name": "E2E Tests",
+            "status": "COMPLETED",
+            "conclusion": "SKIPPED",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "slug": "github-actions"
+             },
+             "workflowRun": {
+              "event": "pull_request",
+              "workflow": {
+               "name": "E2E Tests (on label)"
+              }
+             }
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "databaseId": 1033,
+            "name": "review",
+            "status": "COMPLETED",
+            "conclusion": "SKIPPED",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "slug": "github-actions"
+             },
+             "workflowRun": {
+              "event": "pull_request",
+              "workflow": {
+               "name": "pr-bot-review"
+              }
+             }
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "databaseId": 1032,
+            "name": "review",
+            "status": "COMPLETED",
+            "conclusion": "SKIPPED",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "slug": "github-actions"
+             },
+             "workflowRun": {
+              "event": "pull_request",
+              "workflow": {
+               "name": "pr-bot-review"
+              }
+             }
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "databaseId": 1040,
+            "name": "review",
+            "status": "COMPLETED",
+            "conclusion": "SKIPPED",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "slug": "github-actions"
+             },
+             "workflowRun": {
+              "event": "pull_request",
+              "workflow": {
+               "name": "pr-bot-review"
+              }
+             }
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "databaseId": 1045,
+            "name": "review",
+            "status": "COMPLETED",
+            "conclusion": "SKIPPED",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "slug": "github-actions"
+             },
+             "workflowRun": {
+              "event": "pull_request",
+              "workflow": {
+               "name": "pr-bot-review"
+              }
+             }
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "databaseId": 1010,
+            "name": "auto-changeset",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "slug": "github-actions"
+             },
+             "workflowRun": {
+              "event": "pull_request",
+              "workflow": {
+               "name": "Auto Changeset"
+              }
+             }
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "databaseId": 1008,
+            "name": "Assign PR Author",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "slug": "github-actions"
+             },
+             "workflowRun": {
+              "event": "pull_request_target",
+              "workflow": {
+               "name": "Auto-Assign PR Author"
+              }
+             }
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "databaseId": 1004,
+            "name": "changes",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "slug": "github-actions"
+             },
+             "workflowRun": {
+              "event": "pull_request",
+              "workflow": {
+               "name": "CI"
+              }
+             }
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "databaseId": 1009,
+            "name": "cla",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "slug": "github-actions"
+             },
+             "workflowRun": {
+              "event": "pull_request_target",
+              "workflow": {
+               "name": "CLA"
+              }
+             }
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "databaseId": 1003,
+            "name": "Dependency Audit Gate",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "slug": "github-actions"
+             },
+             "workflowRun": {
+              "event": "pull_request",
+              "workflow": {
+               "name": "Dependency Audit Gate"
+              }
+             }
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "databaseId": 1006,
+            "name": "check",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "slug": "github-actions"
+             },
+             "workflowRun": {
+              "event": "pull_request",
+              "workflow": {
+               "name": "Lockfile Integrity"
+              }
+             }
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "databaseId": 1043,
+            "name": "preview gate",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "isRequired": true,
+            "checkSuite": {
+             "app": {
+              "slug": "github-actions"
+             },
+             "workflowRun": {
+              "event": "pull_request",
+              "workflow": {
+               "name": "SST / infra preview gate"
+              }
+             }
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "databaseId": 1005,
+            "name": "Build amd64",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "slug": "github-actions"
+             },
+             "workflowRun": {
+              "event": "pull_request",
+              "workflow": {
+               "name": "Self-host image"
+              }
+             }
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "databaseId": 1001,
+            "name": "validate",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "isRequired": true,
+            "checkSuite": {
+             "app": {
+              "slug": "github-actions"
+             },
+             "workflowRun": {
+              "event": "pull_request",
+              "workflow": {
+               "name": "Semantic PR Title"
+              }
+             }
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "databaseId": 1011,
+            "name": "Dependency Audit (main)",
+            "status": "COMPLETED",
+            "conclusion": "SKIPPED",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "slug": "github-actions"
+             },
+             "workflowRun": {
+              "event": "pull_request",
+              "workflow": {
+               "name": "Dependency Audit Gate"
+              }
+             }
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "databaseId": 1037,
+            "name": "Merge multi-arch manifest",
+            "status": "COMPLETED",
+            "conclusion": "SKIPPED",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "slug": "github-actions"
+             },
+             "workflowRun": {
+              "event": "pull_request",
+              "workflow": {
+               "name": "Self-host image"
+              }
+             }
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "databaseId": 1013,
+            "name": "Core Build",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "slug": "github-actions"
+             },
+             "workflowRun": {
+              "event": "pull_request",
+              "workflow": {
+               "name": "CI"
+              }
+             }
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "databaseId": 1007,
+            "name": "Overrides agree with declared ranges",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "slug": "github-actions"
+             },
+             "workflowRun": {
+              "event": "pull_request",
+              "workflow": {
+               "name": "Lockfile Integrity"
+              }
+             }
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "databaseId": 1012,
+            "name": "OpenAPI Spec",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "slug": "github-actions"
+             },
+             "workflowRun": {
+              "event": "pull_request",
+              "workflow": {
+               "name": "CI"
+              }
+             }
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "databaseId": 1015,
+            "name": "Type Check",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "slug": "github-actions"
+             },
+             "workflowRun": {
+              "event": "pull_request",
+              "workflow": {
+               "name": "CI"
+              }
+             }
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "databaseId": 1014,
+            "name": "Lint",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "slug": "github-actions"
+             },
+             "workflowRun": {
+              "event": "pull_request",
+              "workflow": {
+               "name": "CI"
+              }
+             }
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "databaseId": 1022,
+            "name": "Run Tests (client 1/3)",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "slug": "github-actions"
+             },
+             "workflowRun": {
+              "event": "pull_request",
+              "workflow": {
+               "name": "CI"
+              }
+             }
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "databaseId": 1024,
+            "name": "Run Tests (client 2/3)",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "slug": "github-actions"
+             },
+             "workflowRun": {
+              "event": "pull_request",
+              "workflow": {
+               "name": "CI"
+              }
+             }
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "databaseId": 1025,
+            "name": "Run Tests (client 3/3)",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "slug": "github-actions"
+             },
+             "workflowRun": {
+              "event": "pull_request",
+              "workflow": {
+               "name": "CI"
+              }
+             }
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "databaseId": 1017,
+            "name": "Run Tests (client-integration 1/3)",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "slug": "github-actions"
+             },
+             "workflowRun": {
+              "event": "pull_request",
+              "workflow": {
+               "name": "CI"
+              }
+             }
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "databaseId": 1018,
+            "name": "Run Tests (client-integration 2/3)",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "slug": "github-actions"
+             },
+             "workflowRun": {
+              "event": "pull_request",
+              "workflow": {
+               "name": "CI"
+              }
+             }
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "databaseId": 1020,
+            "name": "Run Tests (client-integration 3/3)",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "slug": "github-actions"
+             },
+             "workflowRun": {
+              "event": "pull_request",
+              "workflow": {
+               "name": "CI"
+              }
+             }
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "databaseId": 1026,
+            "name": "Run Tests (workers-integration)",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "slug": "github-actions"
+             },
+             "workflowRun": {
+              "event": "pull_request",
+              "workflow": {
+               "name": "CI"
+              }
+             }
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "databaseId": 1023,
+            "name": "Run Tests (services)",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "slug": "github-actions"
+             },
+             "workflowRun": {
+              "event": "pull_request",
+              "workflow": {
+               "name": "CI"
+              }
+             }
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "databaseId": 1027,
+            "name": "Run Tests (cli-slack)",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "slug": "github-actions"
+             },
+             "workflowRun": {
+              "event": "pull_request",
+              "workflow": {
+               "name": "CI"
+              }
+             }
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "databaseId": 1021,
+            "name": "Run Tests (data)",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "slug": "github-actions"
+             },
+             "workflowRun": {
+              "event": "pull_request",
+              "workflow": {
+               "name": "CI"
+              }
+             }
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "databaseId": 1019,
+            "name": "Run Tests (misc)",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "slug": "github-actions"
+             },
+             "workflowRun": {
+              "event": "pull_request",
+              "workflow": {
+               "name": "CI"
+              }
+             }
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "databaseId": 1016,
+            "name": "CLI e2e harness",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "slug": "github-actions"
+             },
+             "workflowRun": {
+              "event": "pull_request",
+              "workflow": {
+               "name": "CI"
+              }
+             }
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "databaseId": 1028,
+            "name": "Help Docs Guards",
+            "status": "COMPLETED",
+            "conclusion": "SKIPPED",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "slug": "github-actions"
+             },
+             "workflowRun": {
+              "event": "pull_request",
+              "workflow": {
+               "name": "CI"
+              }
+             }
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "databaseId": 1035,
+            "name": "Run Tests",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "isRequired": true,
+            "checkSuite": {
+             "app": {
+              "slug": "github-actions"
+             },
+             "workflowRun": {
+              "event": "pull_request",
+              "workflow": {
+               "name": "CI"
+              }
+             }
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "databaseId": 1036,
+            "name": "CI Complete",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "isRequired": true,
+            "checkSuite": {
+             "app": {
+              "slug": "github-actions"
+             },
+             "workflowRun": {
+              "event": "pull_request",
+              "workflow": {
+               "name": "CI"
+              }
+             }
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "databaseId": 1000,
+            "name": ".github/dependabot.yml",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "slug": "dependabot"
+             },
+             "workflowRun": null
+            }
+           },
+           {
+            "__typename": "StatusContext",
+            "context": "preview/deploy",
+            "state": "SUCCESS",
+            "isRequired": false
+           }
+          ]
+         }
+        }
+       }
+      }
+     ]
+    }
+   }
+  }
+ }
+}

@@ -3,7 +3,7 @@ import type { CustomCommandStore } from '../storage/CustomCommandStore.js';
 import type { SubagentOrchestrator } from '../agents/SubagentOrchestrator.js';
 import type { AgentConfig } from '../storage/types.js';
 import type { InteractionMode } from '../bootstrap/types.js';
-import { substituteArguments } from '../utils/argumentSubstitution.js';
+import { parseArguments, substituteArguments } from '../utils/argumentSubstitution.js';
 import { processFileReferences } from '../utils/processFileReferences.js';
 import { logger } from '../utils/Logger.js';
 import { runShellCommand } from '../utils/shellRunner.js';
@@ -122,45 +122,6 @@ function parseAgentConfig(agent: AgentConfig | undefined): {
     return { name: agent, thoroughness: undefined };
   }
   return { name: agent.type, thoroughness: agent.thoroughness };
-}
-
-/**
- * Parse arguments string into array, handling quoted strings
- * Examples:
- *   "hello world" -> ["hello", "world"]
- *   '"hello world" test' -> ["hello world", "test"]
- *   "'one two' three" -> ["one two", "three"]
- */
-function parseArguments(argsString: string): string[] {
-  const args: string[] = [];
-  let current = '';
-  let inQuotes = false;
-  let quoteChar = '';
-
-  for (let i = 0; i < argsString.length; i++) {
-    const char = argsString[i];
-
-    if (!inQuotes && (char === '"' || char === "'")) {
-      inQuotes = true;
-      quoteChar = char;
-    } else if (inQuotes && char === quoteChar) {
-      inQuotes = false;
-      quoteChar = '';
-    } else if (!inQuotes && char === ' ') {
-      if (current.length > 0) {
-        args.push(current);
-        current = '';
-      }
-    } else {
-      current += char;
-    }
-  }
-
-  if (current.length > 0) {
-    args.push(current);
-  }
-
-  return args;
 }
 
 /**

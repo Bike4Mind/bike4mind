@@ -540,4 +540,35 @@ describe('mergeRetrievalSummary', () => {
       expect(merged?.excludedLakes).toEqual({ count: 2, reason: 'access' });
     });
   });
+
+  // Same seed and same first-writer-wins rule as excludedLakes above. This is the field that lets
+  // the diagnosis tell a draft-lake abstain apart from a real zero, and the outcome merge ranks the
+  // forced arm's 'no_lakes' below a tool's 'ok', so it must survive whatever a surface writes.
+  describe('notServingLakes', () => {
+    const seed = base({ lakeScope: [], notServingLakes: { count: 1, reason: 'draft' } });
+    const toolOk = base({
+      attempted: true,
+      outcome: 'ok',
+      surfaces: ['knowledgeBaseSearch'],
+      injected: { chunks: 0, chars: 0 },
+    });
+
+    it('keeps the seed value when the seed is written first', () => {
+      expect(mergeRetrievalSummary(seed, toolOk)?.notServingLakes).toEqual({ count: 1, reason: 'draft' });
+    });
+
+    it('keeps the seed value when the seed is merged onto an earlier tool write', () => {
+      expect(mergeRetrievalSummary(toolOk, seed)?.notServingLakes).toEqual({ count: 1, reason: 'draft' });
+    });
+
+    it('does not sum two writes', () => {
+      const merged = mergeRetrievalSummary(seed, base({ notServingLakes: { count: 3, reason: 'draft' } }));
+      expect(merged?.notServingLakes).toEqual({ count: 1, reason: 'draft' });
+    });
+
+    it('stays absent on a turn nothing measured', () => {
+      const merged = mergeRetrievalSummary(base(), toolOk);
+      expect(merged && 'notServingLakes' in merged).toBe(false);
+    });
+  });
 });

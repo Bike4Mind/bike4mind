@@ -45,7 +45,6 @@ interface User {
   emailVerificationSentAt?: Date;
   emailVerificationExpires?: Date;
   pendingEmail?: string;
-  pendingEmailToken?: string;
   pendingEmailSentAt?: Date;
   pendingEmailExpires?: Date;
   createdAt: Date;

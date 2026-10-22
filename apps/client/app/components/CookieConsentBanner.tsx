@@ -6,9 +6,9 @@ import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import Typography from '@mui/joy/Typography';
 import { APP_NAME } from '@client/config/general';
-import { loadMetaPixel } from '@client/app/utils/metaPixel';
-import { loadRedditPixel } from '@client/app/utils/redditPixel';
-import { CONSENT_KEY, resolveConsent } from '@client/app/utils/consentRegion';
+import { CONSENT_VENDORS, loadConsentVendors } from '@client/app/utils/consentVendors';
+import { clearTrackingCookies } from '@client/app/utils/trackingCookies';
+import { CONSENT_KEY, publishResolvedConsent, resolveConsent } from '@client/app/utils/consentRegion';
 import { clearAttributionCookies, flushUtmCapture } from '@client/app/utils/utmCapture';
 
 type Consent = 'granted' | 'denied';
@@ -22,24 +22,44 @@ export const useCookieSettings = create<{ isOpen: boolean; open: () => void; clo
   close: () => set({ isOpen: false }),
 }));
 
-/** Point the trackers at a consent state. Deliberately does not persist it, so an
- * auto-allow is re-derived each load rather than freezing the answer for someone
- * who travels. */
+/**
+ * Records the current page with GA's cookie, once, if the landing page_view went out
+ * without one. The inline tag (utils/gaConsentBootstrap.ts) applies any decision it can read
+ * before that page_view; when there was none to read - a first visit in the opt-in region, or
+ * a visitor who had declined - the page was recorded cookieless, and without this the cookied
+ * session a grant starts would begin on a later event, with no source: "(not set)".
+ */
+function recordPageOnGrant() {
+  if (window.__b4mGaConsentDefault === 'granted') return;
+  window.__b4mGaConsentDefault = 'granted';
+  gtag('event', 'page_view');
+}
+
+/** Point the trackers at a consent state. Deliberately does not persist it as a DECISION, so
+ * an auto-allow is re-derived each load rather than freezing the answer for someone who
+ * travels. The cookie published below is not that: it caches the resolution this load reached
+ * so the server can read it, is rewritten every load, and is cleared when the resolution goes
+ * back to 'unset' - see publishResolvedConsent. */
 function activateConsent(value: Consent) {
+  // Before the trackers, so a handler that beats them still sees the right answer. The server
+  // cannot read localStorage, and an OAuth signup is credited by a request, not by this page.
+  // This is also what carries a later withdrawal (Cookie settings -> Decline) to the server.
+  publishResolvedConsent(value);
+
   if (typeof gtag !== 'undefined') {
     gtag('consent', 'update', { analytics_storage: value });
+    if (value === 'granted') recordPageOnGrant();
   }
-  // The ads pixels have no consent-mode equivalent: granted == load the scripts
-  // (until then they only queue in memory), denied == they never load. Each
-  // no-ops when its own pixel id is unconfigured.
+  // The other vendors have no consent-mode equivalent: granted == load the scripts
+  // (until then the pixels only queue in memory), denied == they never load.
   if (value === 'granted') {
-    loadRedditPixel();
-    loadMetaPixel();
+    loadConsentVendors();
     // The campaign this visitor landed on, held unwritten since module load if they were
     // still being asked at the time. No-op once written, or when there was none.
     flushUtmCapture();
   } else {
     clearAttributionCookies();
+    clearTrackingCookies();
   }
 }
 
@@ -53,6 +73,22 @@ function applyConsent(value: Consent) {
   activateConsent(value);
 }
 
+function joinList(items: string[]): string {
+  return items.length > 1 ? `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}` : items[0];
+}
+
+/** Names each configured third party by category, e.g. "advertising (Meta, Reddit)". */
+function describeCookieKinds(): string {
+  const namesByCategory = new Map<string, string[]>();
+  for (const vendor of CONSENT_VENDORS) {
+    if (!vendor.isConfigured()) continue;
+    namesByCategory.set(vendor.category, [...(namesByCategory.get(vendor.category) ?? []), vendor.name]);
+  }
+  const kinds = [...namesByCategory].map(([category, names]) => `${category} (${names.join(', ')})`);
+  // First-party, so it has no vendor to name.
+  return joinList([...kinds, 'campaign attribution']);
+}
+
 export function CookieConsentBanner() {
   const [asking, setAsking] = useState(false);
   const settingsOpen = useCookieSettings(s => s.isOpen);
@@ -63,6 +99,10 @@ export function CookieConsentBanner() {
   useEffect(() => {
     const consent = resolveConsent();
     if (consent === 'unset') {
+      // No decision anywhere: withdraw any cookie a previous load published, so a visitor who
+      // carried an auto-allow into the opt-in region is suppressed server-side while they are
+      // being asked here, rather than attributed off a resolution that no longer holds.
+      publishResolvedConsent('unset');
       setAsking(true);
       return;
     }
@@ -90,12 +130,7 @@ export function CookieConsentBanner() {
   // With nothing in force yet there is nothing to manage, so a reopen shows the first-run ask.
   const current = resolveConsent();
   const managing = settingsOpen && current !== 'unset';
-  const kinds = [
-    process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID && 'analytics',
-    (process.env.NEXT_PUBLIC_REDDIT_PIXEL_ID || process.env.NEXT_PUBLIC_META_PIXEL_ID) && 'advertising',
-    'campaign attribution',
-  ].filter(Boolean) as string[];
-  const cookieKinds = kinds.length > 1 ? `${kinds.slice(0, -1).join(', ')} and ${kinds[kinds.length - 1]}` : kinds[0];
+  const cookieKinds = describeCookieKinds();
 
   const choose = (value: Consent) => {
     applyConsent(value);
@@ -129,37 +164,38 @@ export function CookieConsentBanner() {
         flexWrap: 'wrap',
       }}
     >
-      {/* textColor is explicit because a bare body-sm resolves to text.tertiary, which this
-          theme defines at 50% alpha - 2.23:1 light and 4.35:1 dark on this surface, under WCAG AA. */}
-      <Typography level="body-sm" textColor="text.primary" sx={{ flex: 1, minWidth: 200 }}>
-        {managing ? (
-          <>
-            <Typography component="span" fontWeight="lg" textColor="inherit">
-              Cookie settings.
-            </Typography>{' '}
-            You are currently {current === 'granted' ? 'allowing' : 'declining'} {cookieKinds} cookies.
-            {current === 'granted' && ' Declining reloads the page so the change takes effect right away.'}
-          </>
-        ) : (
-          <>
-            {/* brand externalized */}
-            We use cookies to understand how you use {APP_NAME || 'this app'} and to improve your experience. By
-            clicking &ldquo;Accept&rdquo;, you consent to our use of {cookieKinds} cookies.
-          </>
-        )}
-      </Typography>
+      <Box sx={{ flex: 1, minWidth: 200, display: 'flex', flexDirection: 'column', gap: 0.25 }}>
+        <Typography level="title-sm" textColor="text.primary">
+          {managing ? 'Cookie settings' : 'Cookies'}
+        </Typography>
+        {/* text.tertiary clears WCAG AA on this surface: about 5.1:1 light and 7.5:1 dark. */}
+        <Typography level="body-sm" textColor="text.tertiary" sx={{ fontSize: '13px' }}>
+          {managing ? (
+            <>
+              You are currently {current === 'granted' ? 'allowing' : 'declining'} {cookieKinds} cookies.
+              {current === 'granted' && ' Declining reloads the page so the change takes effect right away.'}
+            </>
+          ) : (
+            <>
+              {/* brand externalized */}
+              We use cookies to understand how you use {APP_NAME || 'this app'} and to improve your experience. By
+              clicking &ldquo;Accept&rdquo;, you consent to our use of {cookieKinds} cookies.
+            </>
+          )}
+        </Typography>
+      </Box>
       <Box sx={{ display: 'flex', gap: 1, flexShrink: 0 }}>
-        {/* Focus lands where a stray Enter does least: Cancel when managing, Decline on the first-run ask. */}
+        {/* Focus lands where a stray Enter does least: Close when managing, Decline on the first-run ask. */}
         {managing && (
           <Button
-            variant="plain"
+            variant="outlined"
             color="neutral"
             size="sm"
             onClick={closeSettings}
             ref={firstActionRef}
-            data-testid="cookie-consent-cancel-btn"
+            data-testid="cookie-consent-close-btn"
           >
-            Cancel
+            Close
           </Button>
         )}
         <Button

@@ -4,9 +4,9 @@ import type { MongoMemoryServer } from 'mongodb-memory-server';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { agentExecutionRepository, questRepository, Quest, type AgentExecutionStatus } from '@bike4mind/database';
-import { settleStrandedQuests } from './settleStrandedQuests';
+import { settleStrandedQuests } from '@bike4mind/server-utils/utils/settleStrandedQuests';
 import { RUN_ABANDONED_FINISH_REASON } from '@bike4mind/common';
-import { ABANDONED_REPLY, UNFINISHED_REPLY_NOTICE } from '@server/chatCompletion/questTimeoutRecovery';
+import { ABANDONED_REPLY, UNFINISHED_REPLY_NOTICE } from '@bike4mind/server-utils/chatCompletion/questTimeoutRecovery';
 
 /**
  * The one test that spans the seam this whole path is built on: a real execution
@@ -22,9 +22,9 @@ import { ABANDONED_REPLY, UNFINISHED_REPLY_NOTICE } from '@server/chatCompletion
  * rather than good: a run that produced a partial answer, and a run that
  * finished naturally just as the sweep landed. Both must come out untouched.
  *
- * Lives in apps/client because that is where `settleStrandedQuests` lives, and
- * consumes the built dist of @bike4mind/database, so `pnpm turbo:core:build`
- * must be current.
+ * Stays in apps/client, which has the e2e lane that @bike4mind/server-utils
+ * lacks. It consumes the built dist of @bike4mind/database, so
+ * `pnpm turbo:core:build` must be current.
  */
 
 // Boots a real mongod, so lift the whole file off the shard's unit-test budget

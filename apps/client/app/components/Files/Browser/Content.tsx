@@ -1,4 +1,12 @@
-import { IFabFileDocument, InviteType, isAudioMimeType, KnowledgeType } from '@bike4mind/common';
+import {
+  DEFAULT_STORAGE_LIMIT_MB,
+  IFabFileDocument,
+  InviteType,
+  isFabFileTypeFilter,
+  isMediaOnlyMimeType,
+  KnowledgeType,
+  storageLimitToBytes,
+} from '@bike4mind/common';
 import { useSessions, useWorkBenchFiles, useWorkBenchStore } from '@client/app/contexts/SessionsContext';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useLLM } from '@client/app/contexts/LLMContext';
@@ -26,6 +34,7 @@ import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { useShallow } from 'zustand/react/shallow';
 import FileStorageBar from '../../common/FileStorageBar';
+import StorageBreakdown from '../../common/StorageBreakdown';
 import ShareDocumentModal from '../../common/ShareModal';
 import CreateKnowledgeFromUrl from '../../Knowledge/CreateKnowledgeFromUrl';
 import { useKnowledgeModal } from '../../Knowledge/KnowledgeModal';
@@ -33,6 +42,7 @@ import TagForm from '../../Tag/Form';
 import { useFileBrowserInstance } from './instanceContext';
 import FileBrowserActions from './Actions';
 import FileBrowserFilter from './Filter';
+import { withGeneratedFilter } from './GeneratedFilterToggle';
 import FileBrowserList, { type FileBrowserListProps } from './List';
 import ResearchEngineModal from '../../ResarchEngine/Modal';
 import FileBrowserViewActions, { ViewMode } from './ViewActions';
@@ -50,6 +60,14 @@ import { useQueryClient } from '@tanstack/react-query';
 
 // Pagination constants
 const FILES_PER_PAGE = 20;
+
+// Desktop toolbar widths (px) at which its rows merge. The widest translated Research label (ru) is 34px
+// wider than the English one, putting tabs + actions at ~804 and tabs + filters + actions at ~1294, so each
+// switch sits above that with roughly 35px and 25px of headroom. Re-measure if the view tabs (fixed at 360px
+// in ViewActions.tsx) or the action labels change: a label that outgrows the headroom spills across the row
+// instead of wrapping.
+const TOOLBAR_TWO_ROW_MIN_WIDTH_PX = 840;
+const TOOLBAR_SINGLE_ROW_MIN_WIDTH_PX = 1320;
 
 const FileBrowserContent = () => {
   const { t } = useTranslation();
@@ -146,7 +164,9 @@ const FileBrowserContent = () => {
 
   const availableOptions = fileTags?.filter(tag => !filter.filters?.tags?.includes(tag.name)) || [];
 
-  const hasFilters = Boolean(filter.search || filter.filters?.tags?.length || filter.filters?.type);
+  const hasFilters = Boolean(
+    filter.search || filter.filters?.tags?.length || filter.filters?.type || filter.filters?.generated
+  );
 
   const allFiles = data?.data || [];
   const totalFiles = data?.total || 0;
@@ -255,17 +275,16 @@ const FileBrowserContent = () => {
 
     const requestedFiles = selectedFiles.filter(f => !workBenchFiles.some(w => w.id === f.id));
 
-    // Audio (generated TTS / sound effects) can be browsed and replayed but is
-    // never attachable to a chat: no model accepts audio input. Filter it out of
-    // the workbench add with a toast. (The backend chokepoint in
+    // Generated audio/video can be browsed and replayed but is never attachable to a chat: no model
+    // accepts it as input. Filter it out of the workbench add with a toast. (The backend chokepoint in
     // processFileInParallel is the authoritative guard; this is UX-level.)
-    const audioFiles = requestedFiles.filter(f => isAudioMimeType(f.mimeType));
-    const applicableFiles = requestedFiles.filter(f => !isAudioMimeType(f.mimeType));
-    if (audioFiles.length) {
+    const mediaFiles = requestedFiles.filter(f => isMediaOnlyMimeType(f.mimeType));
+    const applicableFiles = requestedFiles.filter(f => !isMediaOnlyMimeType(f.mimeType));
+    if (mediaFiles.length) {
       toast.error(
-        audioFiles.length === 1
-          ? `"${audioFiles[0].fileName}" is audio and can't be added to a chat.`
-          : `${audioFiles.length} audio files can't be added to a chat.`
+        mediaFiles.length === 1
+          ? `"${mediaFiles[0].fileName}" is a media file and can't be added to a chat.`
+          : `${mediaFiles.length} media files can't be added to a chat.`
       );
     }
     if (applicableFiles.length === 0) {
@@ -402,7 +421,8 @@ const FileBrowserContent = () => {
     setSelectedIds(new Set<string>());
 
     // Auto-switch to list view when filters are applied from Home or Tags
-    const hasActiveFilters = filter.search || filter.filters?.tags?.length || filter.filters?.type;
+    const hasActiveFilters =
+      filter.search || filter.filters?.tags?.length || filter.filters?.type || filter.filters?.generated;
     if (hasActiveFilters && (viewAction.viewMode === 'home' || viewAction.viewMode === 'tags')) {
       setViewActions({ ...viewAction, viewMode: 'list' });
     }
@@ -598,13 +618,15 @@ const FileBrowserContent = () => {
               filter.filters?.shared === true ? 'shared' : filter.filters?.curated === true ? 'curated' : 'all'
             }
             onFileFilterChange={handleFileFilterChange}
+            generatedOnly={filter.filters?.generated === true}
+            onGeneratedChange={generated => handleFilterChange(withGeneratedFilter(filter, generated))}
             fileTypeValue={filter.filters?.type || 'all'}
             onFileTypeChange={type => {
               handleFilterChange({
                 ...filter,
                 filters: {
                   ...filter.filters,
-                  type: type === 'all' ? undefined : (type as any),
+                  type: isFabFileTypeFilter(type) ? type : undefined,
                 },
               });
             }}
@@ -687,50 +709,73 @@ const FileBrowserContent = () => {
                 gap: '10px',
                 maxWidth: { xs: '100%', md: '430px' },
                 flex: { xs: 0, md: 1 },
-                height: { xs: 'auto', md: '32px' },
                 mt: { xs: '0px', md: '8px' },
               }}
             >
               <FileStorageBar
                 currentStorageInBytes={currentUser?.currentStorageSize ?? 0}
-                storageLimitInBytes={(currentUser?.storageLimit ?? 1000) * 1000000}
+                storageLimitInBytes={storageLimitToBytes(currentUser?.storageLimit ?? DEFAULT_STORAGE_LIMIT_MB)}
               />
+              <StorageBreakdown />
             </Box>
           </Stack>
 
-          {/* Desktop Actions - Always visible */}
-          <Stack
+          {/* Desktop toolbar: sized by the dialog's width, not the viewport's, since it renders in dialogs of
+              different widths. */}
+          <Box
             className="file-browser-desktop-actions"
-            direction={{ xs: 'column', sm: 'row' }}
-            gap={{ xs: '8px', sm: '10px' }}
-            sx={{
-              display: { xs: 'none', md: 'flex' },
-              flexWrap: { sm: 'wrap' },
-            }}
+            sx={{ display: { xs: 'none', md: 'block' }, containerType: 'inline-size' }}
           >
-            <Stack direction={{ xs: 'column', sm: 'row' }} gap={{ xs: '8px', sm: '10px' }} sx={{ flex: 1 }}>
-              <FileBrowserViewActions
-                value={viewAction}
-                onChange={f => {
-                  setNavigatedFromTags(false);
-                  setViewActions(f);
-                }}
-              />
-              <FileBrowserFilter value={filter} onChange={handleFilterChange} />
-
-              {isResearchEngineFeatureEnabled && <ResearchEngineModal />}
-            </Stack>
-            <Stack
-              direction={{ xs: 'column', sm: 'row' }}
-              gap={{ xs: '8px', sm: '10px' }}
+            <Box
               sx={{
-                width: { xs: '100%', sm: 'auto' },
+                display: 'grid',
+                alignItems: 'center',
+                gap: '10px',
+                gridTemplateColumns: 'minmax(0, 1fr)',
+                gridTemplateAreas: '"views" "actions" "filters"',
+                [`@container (min-width: ${TOOLBAR_TWO_ROW_MIN_WIDTH_PX}px)`]: {
+                  gridTemplateColumns: 'auto minmax(0, 1fr)',
+                  gridTemplateAreas: '"views actions" "filters filters"',
+                },
+                [`@container (min-width: ${TOOLBAR_SINGLE_ROW_MIN_WIDTH_PX}px)`]: {
+                  // globals.css sets `min-width: 0` on everything, so without this floor the filters column
+                  // collapses and its controls overlap the actions.
+                  gridTemplateColumns: 'auto minmax(min-content, 1fr) auto',
+                  gridTemplateAreas: '"views filters actions"',
+                },
               }}
             >
-              <UploadDropdown isLoading={isLoading} />
-              <GenerateAudioButton />
-            </Stack>
-          </Stack>
+              <Box sx={{ gridArea: 'views' }}>
+                <FileBrowserViewActions
+                  value={viewAction}
+                  onChange={f => {
+                    setNavigatedFromTags(false);
+                    setViewActions(f);
+                  }}
+                />
+              </Box>
+              <Box data-testid="file-browser-toolbar-filters" sx={{ gridArea: 'filters', display: 'flex' }}>
+                <FileBrowserFilter value={filter} onChange={handleFilterChange} />
+              </Box>
+              <Stack
+                direction="row"
+                gap="10px"
+                data-testid="file-browser-toolbar-actions"
+                sx={{
+                  gridArea: 'actions',
+                  // Keep each action at its full label width; globals.css `min-width: 0` would otherwise let the
+                  // grid squeeze them until labels clip or wrap.
+                  whiteSpace: 'nowrap',
+                  '& > *': { flexShrink: 0 },
+                  [`@container (min-width: ${TOOLBAR_TWO_ROW_MIN_WIDTH_PX}px)`]: { justifySelf: 'end' },
+                }}
+              >
+                {isResearchEngineFeatureEnabled && <ResearchEngineModal />}
+                <UploadDropdown isLoading={isLoading} />
+                <GenerateAudioButton />
+              </Stack>
+            </Box>
+          </Box>
 
           {viewAction.viewMode === 'home' && (
             <HomeViewPanel
@@ -948,6 +993,7 @@ const FileBrowserContent = () => {
             name={fileToShare.fileName}
             type={InviteType.FabFile}
             users={fileToShare.users}
+            ownerId={fileToShare.userId}
           />
         )}
 

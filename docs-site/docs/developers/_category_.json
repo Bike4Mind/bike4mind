@@ -1,0 +1,9 @@
+{
+  "label": "Developers",
+  "position": 5,
+  "link": {
+    "type": "generated-index",
+    "title": "Building on Bike4Mind",
+    "description": "Guides for developers building apps that sign users in with Bike4Mind and bill AI usage to their accounts."
+  }
+}

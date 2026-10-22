@@ -26,6 +26,7 @@ vi.mock('@client/app/contexts/WebsocketContext', () => ({
 
 import { useSubscribeChatCompletion } from './useSubscribeChatCompletion';
 import useSessionLayout from './useSessionLayout';
+import { useStreamingState } from './useStreamingState';
 import {
   OPTIMISTIC_GENERATING_STATUS,
   adoptSentQuest,
@@ -157,6 +158,50 @@ describe('useSubscribeChatCompletion - stuck Stop regressions', () => {
       await latestStreamHandler()(frame('q-late', 'session-a', 'running', 'Running...'));
     });
     expect(result.current.chatCompletion.completed).toBe(true);
+  });
+});
+
+describe('useSubscribeChatCompletion - terminal frame for a session the view has left', () => {
+  beforeEach(() => {
+    subscribeToAction.mockClear();
+    useStreamingState.getState().resetStreaming('session-a');
+  });
+
+  it("clears the left session's streaming entry, so isAnyStreaming() does not stay stuck", async () => {
+    const { rerender } = mount('session-a');
+
+    await act(async () => {
+      await latestStreamHandler()(frame('q-a', 'session-a', 'running'));
+    });
+    expect(useStreamingState.getState().isStreamingSession('session-a')).toBe(true);
+
+    rerender({ sessionId: 'session-b' });
+    expect(useStreamingState.getState().isStreamingSession('session-a')).toBe(true);
+
+    await act(async () => {
+      await latestStreamHandler()(frame('q-a', 'session-a', 'done'));
+    });
+    expect(useStreamingState.getState().isAnyStreaming()).toBe(false);
+  });
+
+  it("leaves the other session's newer turn alone on a late terminal frame of an earlier quest", async () => {
+    mount('session-b');
+    useStreamingState.getState().startStreaming('session-a', 'q-new');
+
+    await act(async () => {
+      await latestStreamHandler()(frame('q-old', 'session-a', 'done'));
+    });
+    expect(useStreamingState.getState().isStreamingSession('session-a')).toBe(true);
+  });
+
+  it("leaves the other session's entry alone on a non-terminal frame", async () => {
+    mount('session-b');
+    useStreamingState.getState().startStreaming('session-a', 'q-a');
+
+    await act(async () => {
+      await latestStreamHandler()(frame('q-a', 'session-a', 'running'));
+    });
+    expect(useStreamingState.getState().isStreamingSession('session-a')).toBe(true);
   });
 });
 
@@ -446,6 +491,70 @@ describe('useSubscribeChatCompletion - first turn in the notebook shell (one pro
 
     expect(result.current.chatCompletion.completed).toBe(true);
     expect(isChatCompletionActiveFor(result.current.chatCompletion, TMP_ID)).toBe(false);
+  });
+});
+
+describe('useSubscribeChatCompletion - reply UI side effects', () => {
+  const effects = [{ type: 'plugin-effect', payload: {} }];
+  const handler = vi.fn((_effects: unknown[], _options: { live?: boolean; dedupeKey?: string }) => 1);
+  let unregister: () => void = () => {};
+
+  beforeEach(async () => {
+    subscribeToAction.mockClear();
+    handler.mockClear();
+    unregister();
+    const { registerUiSideEffectHandler } = await import('../utils/uiSideEffectDispatcher');
+    unregister = registerUiSideEffectHandler(handler);
+  });
+
+  const effectFrame = (id: string, sessionId: string, status: 'running' | 'done', withEffects: boolean) => ({
+    action: 'streamed_chat_completion',
+    quest: {
+      id,
+      sessionId,
+      type: 'message',
+      status,
+      replies: ['answer'],
+      ...(withEffects ? { uiSideEffects: effects } : {}),
+    },
+  });
+
+  const stream = async (msg: unknown) => {
+    await act(async () => {
+      await latestStreamHandler()(msg);
+    });
+  };
+
+  it('dispatches a streamed completion live exactly once', async () => {
+    mount('session-live-1');
+
+    await stream(effectFrame('live-q1', 'session-live-1', 'running', false));
+    expect(handler).not.toHaveBeenCalled();
+
+    await stream(effectFrame('live-q1', 'session-live-1', 'done', true));
+    await stream(effectFrame('live-q1', 'session-live-1', 'done', true));
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith(effects, { live: true, dedupeKey: 'live-q1' });
+  });
+
+  it('does not dispatch live a completion whose stream this client never saw running', async () => {
+    mount('session-live-2');
+
+    await stream(effectFrame('live-q2', 'session-live-2', 'done', true));
+
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('treats effects a later refetch adds as a replay when the stream finished without any', async () => {
+    mount('session-live-3');
+    const { claimLiveDispatch, claimReplayDispatch } = await import('../utils/uiSideEffectDispatcher');
+
+    await stream(effectFrame('live-q3', 'session-live-3', 'running', false));
+    await stream(effectFrame('live-q3', 'session-live-3', 'done', false));
+
+    expect(claimLiveDispatch('live-q3', 'session-live-3')).toBe(false);
+    expect(claimReplayDispatch('live-q3', 'session-live-3')).toBe(true);
   });
 });
 

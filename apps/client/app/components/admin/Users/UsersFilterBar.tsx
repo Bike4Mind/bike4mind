@@ -12,11 +12,10 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import UnfoldLessIcon from '@mui/icons-material/UnfoldLess';
 import { Badge, Box, Button, Card, Chip, IconButton, Input, Option, Select, Stack, Tooltip } from '@mui/joy';
 import React from 'react';
-import { useShallow } from 'zustand/react/shallow';
 import OrganizationsFilter from './filters/OrganizationsFilter';
 import SortControls from './filters/SortControls';
 import UserTagsFilter from './filters/UserTagsFilter';
-import { CLEARED_FILTER_PARAMS, countActiveFilters, useUsersTab } from './useUsersTabParams';
+import { CLEARED_FILTER_PARAMS, countActiveFilters, useUsersParams } from './useUsersTabParams';
 
 export type UsersDisplayMode = 'full' | 'slim' | 'userJourney' | 'recentActivity';
 
@@ -54,7 +53,7 @@ const UsersFilterBar: React.FC<UsersFilterBarProps> = ({
   onOpenFilters,
 }) => {
   const isMobile = useIsMobile();
-  const [params, setParams] = useUsersTab(useShallow(state => [state.params, state.setParams]));
+  const [params, setParams] = useUsersParams();
   const activeFilterCount = countActiveFilters(params);
 
   const searchInput = (

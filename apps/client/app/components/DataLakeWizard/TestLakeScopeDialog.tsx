@@ -15,8 +15,13 @@ import {
   Typography,
 } from '@mui/joy';
 import SearchIcon from '@mui/icons-material/Search';
-import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
-import { useGetDataLakes } from '@client/app/hooks/data/dataLakes';
+import { useGetDataLakesWithRetrievability } from '@client/app/hooks/data/dataLakes';
+import {
+  isUnsearchableInNewTestSession,
+  willPreauthorizeInNewTestSession,
+  UnsearchableLakeIcon,
+} from '@client/app/components/datalake/lakeRetrievability';
+import LakeOwnerIcon from '@client/app/components/datalake/LakeOwnerIcon';
 
 /** Below this many lakes a filter box is noise rather than help - mirrors DataLakeLakePicker. */
 const SEARCH_THRESHOLD = 8;
@@ -41,7 +46,7 @@ export interface TestLakeScopeDialogProps {
  * lake list, not a second copy of that list's fetch/loading/error handling.
  */
 export function TestLakeScopeDialog({ anchorLakeId, onClose, onConfirm, confirming }: TestLakeScopeDialogProps) {
-  const { data: lakes, isLoading, isError, refetch } = useGetDataLakes();
+  const { data: lakes, isLoading, isError, refetch } = useGetDataLakesWithRetrievability(null);
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<Set<string>>(() => new Set([anchorLakeId]));
 
@@ -79,7 +84,7 @@ export function TestLakeScopeDialog({ anchorLakeId, onClose, onConfirm, confirmi
   // degraded-but-working button into a hard failure. Ids the caller cannot admit are simply omitted;
   // the route re-authorizes every id it does receive, so this filter is an affordance, not the gate.
   const preauthorizedLakeIds = useMemo(
-    () => (lakes ?? []).filter(l => selected.has(l.id) && l.canPreauthorize).map(l => l.id),
+    () => (lakes ?? []).filter(l => selected.has(l.id) && willPreauthorizeInNewTestSession(l)).map(l => l.id),
     [lakes, selected]
   );
 
@@ -136,13 +141,19 @@ export function TestLakeScopeDialog({ anchorLakeId, onClose, onConfirm, confirmi
                     onChange={() => toggle(lake.id)}
                     data-testid={`test-lake-scope-checkbox-${lake.id}`}
                     label={
-                      <Stack direction="row" gap={0.5} alignItems="center">
+                      // Joy's checkbox action overlay (zIndex 1) covers the label and would swallow icon tooltip hovers.
+                      <Stack
+                        direction="row"
+                        gap={0.5}
+                        alignItems="center"
+                        sx={{ position: 'relative', zIndex: 2, cursor: 'pointer' }}
+                      >
                         <Typography level="body-sm">{lake.name}</Typography>
                         {lake.isOwn === false && (
-                          <PersonOutlineIcon
-                            data-testid={`test-lake-scope-owner-icon-${lake.id}`}
-                            sx={{ fontSize: 14, color: 'warning.400' }}
-                          />
+                          <LakeOwnerIcon lake={lake} testId={`test-lake-scope-owner-icon-${lake.id}`} />
+                        )}
+                        {isUnsearchableInNewTestSession(lake) && (
+                          <UnsearchableLakeIcon lake={lake} testId={`test-lake-scope-unsearchable-${lake.id}`} />
                         )}
                       </Stack>
                     }

@@ -40,6 +40,43 @@ export function isLatencyObservation(err: unknown): err is StreamingTimeoutError
   return err instanceof StreamingTimeoutError;
 }
 
+/** One poll of the chat UI while waiting for a reply to finish. */
+export type StreamSnapshot = {
+  stopVisible: boolean;
+  /** innerText of the newest reply's body (root container when no body is mounted); '' when none. */
+  text: string;
+};
+
+/**
+ * Whether the turn just sent has finished, given the latest poll.
+ *
+ * Done means the stop button is gone AND this turn demonstrably happened: either the stop button
+ * was seen at some point (it can flash by too fast to catch on a short reply) or the newest reply
+ * differs from the pre-send baseline. A stop button that never hides is never done - the caller
+ * fails it as a StreamingTimeoutError instead of guessing from stable text. One recovery is not
+ * distinguishable here: if the app gives up on a stalled turn itself it marks it complete and
+ * hides the button, which looks like a finished reply. That still fails the latency budget on
+ * time, but it is recorded as a slow success, not as incomplete.
+ */
+export function isStreamComplete(snapshot: StreamSnapshot, previousResponse: string, sawStopButton: boolean): boolean {
+  if (snapshot.stopVisible) return false;
+  if (sawStopButton) return true;
+  // Safe only on the plain chat path, where the stop button shows optimistically on send
+  // (OPTIMISTIC_GENERATING_STATUS in useSendMessage, read by app/hooks/chatCompletionState.ts).
+  // Slash commands and agent_executor skip it, and mid-stream chrome has text too.
+  return snapshot.text !== '' && snapshot.text !== previousResponse;
+}
+
+/** Why a streaming wait ran out, for the StreamingTimeoutError message. */
+export function describeStall(snapshot: StreamSnapshot): string {
+  if (!snapshot.stopVisible) return 'no new reply and the stop button never appeared';
+  // An empty reply means the turn never reached token output; a non-empty one means the stream
+  // (or its completion signal) stalled. Different fixes, so say which.
+  return snapshot.text === ''
+    ? 'no text streamed yet (tool work still in flight?)'
+    : 'reply streamed but stop button never hid';
+}
+
 /** ms -> s at 1 ms granularity. One helper so every duration field rounds the same way. */
 export function msToSec(ms: number): number {
   return Math.round(ms) / 1000;
@@ -110,13 +147,22 @@ function baseResult(scenario: PromptScenario) {
   };
 }
 
+/**
+ * `artifactRendered` is whether an artifact card (or its placeholder) was on the newest reply. On a
+ * prompt that does not declare generatesArtifact that is a silent mode switch: the model built an
+ * artifact instead of answering in chat (observed on an unflagged analysis prompt), so the stream
+ * window times artifact generation. The result leaves the gated average but is flagged
+ * unexpectedArtifact so the switch is reported instead of hidden.
+ */
 export function completedResult(
   scenario: PromptScenario,
-  args: { response: string; responseTimeMs: number; renderTimeMs: number }
+  args: { response: string; responseTimeMs: number; renderTimeMs: number; artifactRendered?: boolean }
 ): PromptResult {
   const responseTimeSec = msToSec(args.responseTimeMs);
+  const unexpectedArtifact = Boolean(args.artifactRendered) && !scenario.generatesArtifact && !scenario.expectsImage;
   return {
     ...baseResult(scenario),
+    ...(unexpectedArtifact && { measuresDeliverable: true, unexpectedArtifact: true }),
     response: args.response,
     responseTimeMs: args.responseTimeMs,
     responseTimeSec,
@@ -161,4 +207,33 @@ export function gatedAverageSec(results: PromptResult[]): number {
   const gated = results.filter(r => !r.measuresDeliverable);
   if (gated.length === 0) return 0;
   return Math.round((gated.reduce((sum, r) => sum + r.responseTimeSec, 0) / gated.length) * 1000) / 1000;
+}
+
+/** Ids of unflagged prompts whose reply turned out to be an artifact (excluded from the gate). */
+export function unexpectedArtifactIds(results: PromptResult[]): string[] {
+  return results.filter(r => r.unexpectedArtifact).map(r => r.id);
+}
+
+/**
+ * The cell's latency verdict: a failure message when it breached thresholdSec, null otherwise.
+ *
+ * Must stay in sync with the aggregate step's Latency column in .github/workflows/e2e-ai-latency.yml:
+ * a breach is an average over thresholdSec OR any abandoned gated prompt (an abandoned prompt has no
+ * upper bound, so two fast prompts could otherwise average it away). No gated result is "No Data"
+ * there, not a breach, so it returns null here too.
+ */
+export function latencyBreach(results: PromptResult[], thresholdSec: number): string | null {
+  const gated = results.filter(r => !r.measuresDeliverable);
+  if (gated.length === 0) return null;
+
+  const averageSec = gatedAverageSec(results);
+  const abandoned = gated.filter(r => r.incomplete).map(r => r.id);
+  if (averageSec <= thresholdSec && abandoned.length === 0) return null;
+
+  const causes: string[] = [];
+  if (averageSec > thresholdSec)
+    causes.push(`average AI latency ${averageSec}s exceeds the ${thresholdSec}s threshold`);
+  if (abandoned.length > 0) causes.push(`${abandoned.length} prompt(s) never finished: ${abandoned.join(', ')}`);
+  const timings = gated.map(r => `${r.id}=${r.responseTimeSec}s${r.incomplete ? ' (incomplete)' : ''}`);
+  return `Latency breach - ${causes.join('; ')} [${timings.join(', ')}]`;
 }

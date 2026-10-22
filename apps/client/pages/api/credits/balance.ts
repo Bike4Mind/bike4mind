@@ -5,7 +5,8 @@ import { baseApi } from '@server/middlewares/baseApi';
 
 const EXPIRING_SOON_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
 
-const handler = baseApi().get(async (req, res) => {
+// SPA-only. API keys read their balance through the GET /api/v1/credits contract.
+const handler = baseApi({ auth: 'jwtOnly' }).get(async (req, res) => {
   const { user } = req;
   if (!user) {
     return res.status(401).json({ error: 'Unauthorized' });

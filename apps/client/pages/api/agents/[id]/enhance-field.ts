@@ -1,5 +1,7 @@
 import { Request } from 'express';
 import { baseApi } from '@client/server/middlewares/baseApi';
+import { AGENTS_WRITE_SCOPES } from '@server/agents/agentScopes';
+import { assertAgentAccess } from '@server/agents/assertAgentAccess';
 import { agentRepository, apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
 import { IMessage } from '@bike4mind/common';
 import { NotFoundError, ForbiddenError, BadRequestError, getSettingsByNames } from '@bike4mind/utils';
@@ -124,7 +126,9 @@ const FIELD_DESCRIPTIONS: Record<string, { label: string; description: string; s
   },
 };
 
-const handler = baseApi().post<Request<{ id: string }, EnhanceFieldResponse, EnhanceFieldRequest>>(async (req, res) => {
+const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
+  Request<{ id: string }, EnhanceFieldResponse, EnhanceFieldRequest>
+>(async (req, res) => {
   const { id } = req.query;
   const userId = req.user!.id;
   const { fieldName, currentValue, agentName } = req.body;
@@ -145,14 +149,7 @@ const handler = baseApi().post<Request<{ id: string }, EnhanceFieldResponse, Enh
 
   // Find the agent
   const agent = await agentRepository.findById(id);
-  if (!agent) {
-    throw new NotFoundError('Agent not found');
-  }
-
-  // Check ownership
-  if (agent.userId !== userId) {
-    throw new ForbiddenError("You don't have permission to modify this agent");
-  }
+  assertAgentAccess(agent, userId, 'own');
 
   try {
     // Get API keys and available models

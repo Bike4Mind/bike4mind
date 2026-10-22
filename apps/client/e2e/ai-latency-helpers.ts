@@ -2,7 +2,7 @@ import type { ModelSelectorPage } from './pages/ModelSelectorPage';
 
 /**
  * Extracts the leading version number from a model display name as shown in the AI
- * Settings modal, e.g. "GPT-5.4" -> 5.4, "Claude 4.7 Opus" -> 4.7. Returns null when
+ * Settings modal, e.g. "GPT-5.4" -> 5.4, "Claude Opus 4.7" -> 4.7. Returns null when
  * the name carries no version (so it can be filtered out of "latest" comparisons).
  */
 export function parseModelVersion(name: string): number | null {
@@ -21,7 +21,7 @@ function latestByVersion(names: string[]): string | undefined {
 export interface LatestModels {
   /** Latest available GPT text model, e.g. "GPT-5.5". undefined when none are enabled. */
   gpt?: string;
-  /** Latest available Claude (Opus preferred), e.g. "Claude 4.8 Opus". undefined when none. */
+  /** Latest available Claude (Opus preferred), e.g. "Claude Opus 4.8". undefined when none. */
   claude?: string;
 }
 
@@ -33,8 +33,8 @@ export interface LatestModels {
  *
  * Single source of truth for "latest": the CI discovery job calls it to build the
  * full-matrix model list, and resolveSelectedModel calls it for local runs. Replaces the
- * old hard-coded ['GPT-5.4', 'Claude 4.7 Opus'] pair, which silently went stale as models
- * came and went across deployments (staging may expose Claude 4.8 Opus while a preview env
+ * old hard-coded ['GPT-5.4', 'Claude Opus 4.7'] pair, which silently went stale as models
+ * came and went across deployments (staging may expose Claude Opus 4.8 while a preview env
  * only has 4.7, and a hard-coded name simply fails to select).
  */
 export async function getLatestModels(modelSelector: ModelSelectorPage): Promise<LatestModels> {
@@ -124,9 +124,9 @@ export interface PromptScenario {
   /**
    * Per-response streaming budget, in seconds, for a prompt whose long pole is tool work rather
    * than token output. A web-search-heavy turn can spend minutes gathering sources before it emits
-   * a single character, and until then there is no partial text for the stabilisation fallback in
-   * ChatPage.waitForStreamingComplete to settle on - so a budget sized for plain streaming fails it
-   * as a hang. Omit for prompts that start streaming promptly; the suite's thresholdSec applies.
+   * a single character, and until then the streaming wait has no reply text of its own to finish
+   * on - so a budget sized for plain streaming fails it as a hang. Omit for prompts that start
+   * streaming promptly; the suite's thresholdSec applies.
    *
    * TEXT prompts only. Image/artifact prompts always take TIMEOUTS.IMAGE_GENERATION, so setting
    * this alongside expectsImage/generatesArtifact would be silently ignored - the suite factory
@@ -147,11 +147,19 @@ export interface PromptResult {
   renderTimeMs: number;
   renderTimeSec: number;
   /**
-   * True for image/artifact prompts. Even measured stream-only their window runs for minutes, so
-   * they are excluded from the gated latency average, which must stay a text-streaming signal that
-   * still catches a real text regression. Absent (falsy) for text prompts.
+   * True when the stream window timed a deliverable: declared up front (image/artifact prompt) or
+   * detected afterwards (see unexpectedArtifact). Even measured stream-only their window runs for
+   * minutes, so they are excluded from the gated latency average, which must stay a text-streaming
+   * signal that still catches a real text regression. Absent (falsy) for chat replies.
    */
   measuresDeliverable?: boolean;
+  /**
+   * A prompt NOT flagged generatesArtifact answered with an artifact card instead of a chat reply.
+   * Its stream window then times artifact generation, not chat streaming, so the result is also
+   * marked measuresDeliverable (out of the gated average) and surfaced in the summary and the
+   * workflow table rather than dropped silently. Absent (falsy) otherwise.
+   */
+  unexpectedArtifact?: boolean;
   /**
    * The prompt never finished: responseTimeSec is the elapsed time when it was abandoned, a FLOOR
    * on the real latency rather than a measurement of it. Recorded so a timed-out prompt still

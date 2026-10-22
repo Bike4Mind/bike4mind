@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 vi.mock('../utils/updateChecker.js', () => ({
   INSTALL_CMD: 'npm install -g @bike4mind/cli@latest',
   REEXEC_GUARD_ENV: 'B4M_UPDATED_REEXEC',
-  checkForUpdate: vi.fn(),
+  readCachedUpdate: vi.fn(),
   forceCheckForUpdate: vi.fn(),
   isNpmPrefixWritable: vi.fn(),
   getAutoUpdatePreference: vi.fn(),
@@ -31,7 +31,7 @@ vi.mock('readline', () => ({
 import { execSync, spawnSync } from 'child_process';
 import { createInterface } from 'readline';
 import {
-  checkForUpdate,
+  readCachedUpdate,
   isNpmPrefixWritable,
   getAutoUpdatePreference,
   setAutoUpdatePreference,
@@ -41,7 +41,7 @@ import { maybeAutoUpdateOnLaunch } from './updateCommand.js';
 
 const mockedExecSync = vi.mocked(execSync);
 const mockedSpawnSync = vi.mocked(spawnSync);
-const mockedCheck = vi.mocked(checkForUpdate);
+const mockedCheck = vi.mocked(readCachedUpdate);
 const mockedWritable = vi.mocked(isNpmPrefixWritable);
 const mockedPref = vi.mocked(getAutoUpdatePreference);
 const mockedSetPref = vi.mocked(setAutoUpdatePreference);
@@ -306,17 +306,7 @@ describe('maybeAutoUpdateOnLaunch', () => {
     });
   });
 
-  it('no-ops when the update check throws', async () => {
-    mockedCheck.mockRejectedValue(new Error('network down'));
-
-    await maybeAutoUpdateOnLaunch();
-
-    expect(mockedExecSync).not.toHaveBeenCalled();
-    expect(mockedSpawnSync).not.toHaveBeenCalled();
-  });
-
-  it('no-ops when the check times out (race resolves null)', async () => {
-    // Simulates the 3s race timing out before checkForUpdate resolves.
+  it('no-ops when nothing is cached yet (the app refreshes the cache for next launch)', async () => {
     mockedCheck.mockResolvedValue(null);
 
     await maybeAutoUpdateOnLaunch();

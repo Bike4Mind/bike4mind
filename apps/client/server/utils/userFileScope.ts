@@ -1,4 +1,6 @@
 import { getDataLakeTags } from '@bike4mind/common';
+import { holdsDataLakeReadScope } from '@server/dataLakes/dataLakeScopes';
+import type { ScopedRequest } from '@server/middlewares/apiKeyScopeGate';
 
 /**
  * The set of files this user can reach, for the surfaces that count them and the one that lists
@@ -32,4 +34,18 @@ export function buildUserFileScope(user: { groups?: string[] | null; tags?: stri
     userGroups: user.groups ?? [],
     dataLakeTags: getDataLakeTags(user.tags ?? []),
   };
+}
+
+/**
+ * buildUserFileScope for a request: an API key without datalake:read gets the scope with its lake
+ * arm dropped, so the files doors that list/count by this scope reach no further into data lakes
+ * than GET /api/files/{id} does (loadAccessibleFabFile, byIds and presigned-url make the same cut).
+ * JWT callers keep the full scope. Every caller of the three surfaces above must go through this.
+ */
+export function buildRequestFileScope(
+  req: ScopedRequest,
+  user: Parameters<typeof buildUserFileScope>[0]
+): ReturnType<typeof buildUserFileScope> {
+  const scope = buildUserFileScope(user);
+  return holdsDataLakeReadScope(req) ? scope : { ...scope, dataLakeTags: [] };
 }

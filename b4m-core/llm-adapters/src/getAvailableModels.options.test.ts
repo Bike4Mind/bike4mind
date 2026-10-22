@@ -38,9 +38,13 @@ beforeEach(() => {
   // Also resets the module-level model cache, so each case re-runs the fan-out.
   setModelPriceRowsProvider(null);
   delete process.env.B4M_SELF_HOST;
+  // A developer shell exporting BEDROCK_AWS_* would otherwise make self-host list Bedrock.
+  vi.stubEnv('BEDROCK_AWS_ACCESS_KEY_ID', '');
+  vi.stubEnv('BEDROCK_AWS_SECRET_ACCESS_KEY', '');
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   setModelPriceRowsProvider(null);
   if (savedSelfHost === undefined) delete process.env.B4M_SELF_HOST;
   else process.env.B4M_SELF_HOST = savedSelfHost;
@@ -72,6 +76,20 @@ describe('getAvailableModels options', () => {
     const selfHost = await getAvailableModels(null, { isSelfHost: true });
     expect(selfHost.some(m => m.backend === ModelBackend.Bedrock)).toBe(false);
     expect(selfHost.some(m => m.backend === ModelBackend.AWS)).toBe(false);
+  });
+
+  it('lists Bedrock but not AWS under self-host once BEDROCK_AWS_* credentials are set', async () => {
+    vi.stubEnv('BEDROCK_AWS_ACCESS_KEY_ID', 'AKIAIOSFODNN7EXAMPLE');
+    vi.stubEnv('BEDROCK_AWS_SECRET_ACCESS_KEY', 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY');
+    const selfHost = await getAvailableModels(null, { isSelfHost: true });
+    expect(selfHost.some(m => m.backend === ModelBackend.Bedrock)).toBe(true);
+    expect(selfHost.some(m => m.backend === ModelBackend.AWS)).toBe(false);
+  });
+
+  it('lists Bedrock for an isSelfHost:false caller on a self-host env with no BEDROCK_AWS_* pair', async () => {
+    process.env.B4M_SELF_HOST = 'true';
+    const models = await getAvailableModels(null, { isSelfHost: false });
+    expect(models.some(m => m.backend === ModelBackend.Bedrock)).toBe(true);
   });
 
   it('defaults isSelfHost to B4M_SELF_HOST', async () => {
@@ -192,6 +210,15 @@ describe('getAvailableModels module cache', () => {
 
     expect(hosted.some(m => m.backend === ModelBackend.Bedrock)).toBe(true);
     expect(selfHost.some(m => m.backend === ModelBackend.Bedrock)).toBe(false);
+  });
+
+  it('separates self-host callers with and without Bedrock credentials', async () => {
+    // A list cached before the credentials were set must not keep hiding Bedrock.
+    const without = await getAvailableModels(null, { isSelfHost: true, bedrockReachable: false });
+    const withCreds = await getAvailableModels(null, { isSelfHost: true, bedrockReachable: true });
+
+    expect(without.some(m => m.backend === ModelBackend.Bedrock)).toBe(false);
+    expect(withCreds.some(m => m.backend === ModelBackend.Bedrock)).toBe(true);
   });
 
   it('separates a timed-out caller from an unbounded one, so a degraded list is not reused', async () => {

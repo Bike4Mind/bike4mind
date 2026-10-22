@@ -9,7 +9,13 @@ import {
   PublishTagsSchema,
   normalizePublishTags,
 } from '@bike4mind/common';
-import { resolveVisibility, invalidatePublishCdn, toCacheTarget, validateEmbedOrigins } from '@server/services/publish';
+import {
+  resolveVisibility,
+  invalidatePublishCdn,
+  restrictDuplicatePublications,
+  toCacheTarget,
+  validateEmbedOrigins,
+} from '@server/services/publish';
 import { registrableDomain } from '@bike4mind/utils/registrableDomain';
 
 /**
@@ -105,7 +111,7 @@ const handler = baseApi()
     // Exclude the share-token capability: this GET is reachable by ANY viewer of a public
     // artifact, and .lean() bypasses the schema's toJSON strip - so project it out here.
     const artifact = await PublishedArtifact.findOne({ publicId, deletedAt: null })
-      .select('-shareToken -shareTokenUpdatedAt -shareTokens.token')
+      .select('-shareTokens.token')
       .lean<(Record<string, unknown> & { ownerId: string; visibility: string }) | null>();
     if (!artifact) {
       return res.status(404).json({ error: 'Artifact not found' });
@@ -140,6 +146,10 @@ const handler = baseApi()
     if (!canManage(artifact, req.user)) {
       return res.status(403).json({ error: 'Not authorized to update this artifact' });
     }
+    // Both are rendered into the cached share page (header, <title>, link-preview card, markdown export).
+    const displayChanged =
+      (parsed.data.title !== undefined && parsed.data.title !== artifact.title) ||
+      (parsed.data.description !== undefined && parsed.data.description !== (artifact.description ?? ''));
     if (parsed.data.title !== undefined) artifact.title = parsed.data.title;
     if (parsed.data.description !== undefined) artifact.description = parsed.data.description;
     // Normalize at the write site rather than in the schema: the API conventions forbid a
@@ -222,6 +232,9 @@ const handler = baseApi()
         code: 'GATE_REQUIRES_ENFORCING_SURFACE',
       });
     }
+    // The serve route renders the comment widget only for a policy other than 'none' (absent === 'none').
+    const commentPolicyChanged =
+      parsed.data.commentPolicy !== undefined && parsed.data.commentPolicy !== (artifact.commentPolicy ?? 'none');
     if (parsed.data.commentPolicy !== undefined) artifact.commentPolicy = parsed.data.commentPolicy;
     const discoverableBefore = !!artifact.discoverable;
     if (parsed.data.discoverable !== undefined) artifact.discoverable = parsed.data.discoverable;
@@ -259,14 +272,26 @@ const handler = baseApi()
     await artifact.save();
 
     // Any change that alters the CACHED public response must purge the CDN, or the
-    // stale copy keeps serving up to its TTL. Three triggers: (a) leaving open-public
+    // stale copy keeps serving up to its TTL. Five triggers: (a) leaving open-public
     // (downgrade OR newly-gated) removes the page from cache-eligibility; (b) the
     // embed allowlist changed while still open-public - the served frame-ancestors
     // CSP header is part of the cached bytes; (c) discoverability changed - the robots
     // header and <meta> are cached too, and an owner turning discovery OFF must not
-    // keep serving an indexable copy for up to an hour. Fire-and-forget, best-effort.
-    if ((wasOpenPublic && !isOpenPublicNow) || (isOpenPublicNow && (embedOriginsChanged || discoverableChanged))) {
-      void invalidatePublishCdn(toCacheTarget(artifact), req.logger);
+    // keep serving an indexable copy for up to an hour; (d) the title or description
+    // changed, so the page does not show the old ones while the owner's list shows the new;
+    // (e) the comment policy changed - the comment widget is part of the cached markup.
+    // Best-effort; awaited because a Lambda can freeze before a dangling promise sends,
+    // and this is the revoke the owner is waiting on.
+    if (
+      (wasOpenPublic && !isOpenPublicNow) ||
+      (isOpenPublicNow && (embedOriginsChanged || discoverableChanged || displayChanged || commentPolicyChanged))
+    ) {
+      await invalidatePublishCdn(toCacheTarget(artifact), req.logger);
+    }
+    // A reply/file published before one-record-per-owner+source may have an older copy still
+    // serving; a downgrade here must reach it too (restrictDuplicatePublications only narrows).
+    if (parsed.data.visibility !== undefined) {
+      await restrictDuplicatePublications(artifact, req.logger);
     }
     const json = artifact.toJSON() as Record<string, unknown> & {
       accessGate?: { passphraseHash?: string | null } | null;

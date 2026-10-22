@@ -1,4 +1,4 @@
-import { isObjectIdOrHexString } from 'mongoose';
+const OBJECT_ID_HEX = /^[0-9a-fA-F]{24}$/;
 
 /**
  * Is this value shaped like something Mongoose can cast to an `_id`?
@@ -17,7 +17,12 @@ import { isObjectIdOrHexString } from 'mongoose';
  *
  * NOT usable for artifact ids (`artifact_<...>`), which are matched on a string `id` field rather
  * than `_id` - see `createArtifactId` in @bike4mind/common.
+ *
+ * A copy of Mongoose's `isObjectIdOrHexString` (an ObjectId instance, recognised by its
+ * `_bsontype` tag, or a 24-hex string) rather than an import of it: this module is reached from
+ * the CLI's tool registry, and importing mongoose there costs every CLI launch ~100-200 ms.
  */
 export function isObjectIdShaped(id: unknown): boolean {
-  return isObjectIdOrHexString(id);
+  if (typeof id === 'string') return OBJECT_ID_HEX.test(id);
+  return typeof id === 'object' && id !== null && (id as { _bsontype?: unknown })._bsontype === 'ObjectId';
 }

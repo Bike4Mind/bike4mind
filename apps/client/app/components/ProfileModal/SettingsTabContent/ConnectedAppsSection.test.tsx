@@ -1,3 +1,4 @@
+import type { DriveDisconnectImpact } from '@client/app/hooks/data/googleDrive';
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
@@ -75,6 +76,11 @@ const acceptConfirm = async () => {
   await opts.onOk();
 };
 
+const impact = (affectedOrgConnections: number, affectedPersonalConnections = 0): DriveDisconnectImpact => ({
+  affectedOrgConnections,
+  affectedPersonalConnections,
+});
+
 describe('ConnectedAppsSection - Google Drive disconnect gate', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -102,7 +108,7 @@ describe('ConnectedAppsSection - Google Drive disconnect gate', () => {
     const { description } = h.confirm.mock.calls[0][0] as { description: string };
     expect(description).toMatch(/revokes/i);
     // The org-sync consequence is the whole reason this dialog exists.
-    expect(description).toMatch(/organization Drive folder sync/i);
+    expect(description).toMatch(/Drive folder sync .*personal or organization/i);
     // Without this the copy reads as permanent, and scarier than the truth.
     expect(description).toMatch(/link Google Drive again/i);
   });
@@ -136,7 +142,9 @@ describe('ConnectedAppsSection - Google Drive disconnect gate', () => {
 
   it('warns with singular grammar when exactly one org sync is affected', async () => {
     const user = userEvent.setup();
-    h.disconnectDrive.mockImplementation((_v: unknown, opts: { onSuccess: (n: number) => void }) => opts.onSuccess(1));
+    h.disconnectDrive.mockImplementation((_v: unknown, opts: { onSuccess: (impact: DriveDisconnectImpact) => void }) =>
+      opts.onSuccess(impact(1))
+    );
     renderSection();
 
     await user.click(cardButton('Google Drive', /unlink/i));
@@ -149,7 +157,9 @@ describe('ConnectedAppsSection - Google Drive disconnect gate', () => {
 
   it('uses plural grammar for more than one affected sync', async () => {
     const user = userEvent.setup();
-    h.disconnectDrive.mockImplementation((_v: unknown, opts: { onSuccess: (n: number) => void }) => opts.onSuccess(3));
+    h.disconnectDrive.mockImplementation((_v: unknown, opts: { onSuccess: (impact: DriveDisconnectImpact) => void }) =>
+      opts.onSuccess(impact(3))
+    );
     renderSection();
 
     await user.click(cardButton('Google Drive', /unlink/i));
@@ -159,9 +169,27 @@ describe('ConnectedAppsSection - Google Drive disconnect gate', () => {
     expect(h.toastWarning.mock.calls[0][0]).toMatch(/3 organization Drive folder syncs .*need reconnecting/);
   });
 
+  it('names stopped personal lake syncs alongside org ones, with how to resume them', async () => {
+    const user = userEvent.setup();
+    h.disconnectDrive.mockImplementation((_v: unknown, opts: { onSuccess: (impact: DriveDisconnectImpact) => void }) =>
+      opts.onSuccess(impact(1, 2))
+    );
+    renderSection();
+
+    await user.click(cardButton('Google Drive', /unlink/i));
+    await acceptConfirm();
+
+    await waitFor(() => expect(h.toastWarning).toHaveBeenCalled());
+    const message = h.toastWarning.mock.calls[0][0];
+    expect(message).toMatch(/1 organization Drive folder sync .*needs reconnecting/);
+    expect(message).toMatch(/2 personal Drive folder syncs stopped; link Google Drive again and reconnect them/);
+  });
+
   it('shows a plain success (no warning) when nothing else was affected', async () => {
     const user = userEvent.setup();
-    h.disconnectDrive.mockImplementation((_v: unknown, opts: { onSuccess: (n: number) => void }) => opts.onSuccess(0));
+    h.disconnectDrive.mockImplementation((_v: unknown, opts: { onSuccess: (impact: DriveDisconnectImpact) => void }) =>
+      opts.onSuccess(impact(0))
+    );
     renderSection();
 
     await user.click(cardButton('Google Drive', /unlink/i));
@@ -173,7 +201,9 @@ describe('ConnectedAppsSection - Google Drive disconnect gate', () => {
 
   it('refreshes the user so the card reflects the disconnect without a reload', async () => {
     const user = userEvent.setup();
-    h.disconnectDrive.mockImplementation((_v: unknown, opts: { onSuccess: (n: number) => void }) => opts.onSuccess(0));
+    h.disconnectDrive.mockImplementation((_v: unknown, opts: { onSuccess: (impact: DriveDisconnectImpact) => void }) =>
+      opts.onSuccess(impact(0))
+    );
     renderSection();
 
     await user.click(cardButton('Google Drive', /unlink/i));

@@ -1,18 +1,30 @@
+import { Types } from 'mongoose';
 import { mcpServerRepository } from '@bike4mind/database';
+import { mcpServerResponseSchema } from '@bike4mind/common';
+import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
 import { MCPClient } from '@bike4mind/mcp';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { respond } from '@server/utils/respond';
+import { assertMcpServerEnabled } from '@server/utils/mcpServerFlag';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { encryptEnvVariables, decryptEnvVariables } from '@server/security/tokenEncryption';
 import { mcpServerCreateBodySchema } from '@server/validators/mcpServerValidators';
 import { assertNoForbiddenMcpEnvKeys } from '@server/utils/mcpEnvValidation';
+import { shouldLiveFetchTools, buildMcpToolCacheUpdate } from '@bike4mind/services/llm';
 
 // Skip schema refresh if the server was updated within this TTL (avoids unnecessary Lambda calls
 // on repeated Settings visits). Schemas are always refreshed after TTL expires to pick up newly
 // deployed MCP tools without manual reconnection.
 const SCHEMA_REFRESH_TTL_MS = 5 * 60 * 1000;
+
+// The record is written before the connect, so a failed connect still answers with the saved
+// server and says why it has no tools, instead of a 400 that reads as "nothing was saved".
+const mcpServerCreateResponseSchema = mcpServerResponseSchema.extend({
+  connectionError: z.string().optional(),
+});
 
 const handler = baseApi()
   .get(async (req, res) => {
@@ -25,35 +37,37 @@ const handler = baseApi()
 
     const servers = await mcpServerRepository.find({ userId: req.user.id });
 
-    // Refresh schemas for enabled servers that either have no cached schemas or
-    // whose cache has expired (older than SCHEMA_REFRESH_TTL_MS).
+    // Refresh schemas for enabled servers whose cache has expired (older than
+    // SCHEMA_REFRESH_TTL_MS). A server with no cached schemas is only refetched when it was
+    // never fetched, or its empty result has aged past the marker TTL - otherwise a confirmed
+    // zero-tool server was refetched on every Settings visit.
     const now = Date.now();
     const serversNeedingSchemas = servers.filter(s => {
       if (!s.enabled) return false;
       const hasCachedSchemas = s.toolSchemas && s.toolSchemas.length > 0;
-      if (!hasCachedSchemas) return true;
-      const age = now - new Date(s.updatedAt).getTime();
-      return age > SCHEMA_REFRESH_TTL_MS;
+      if (hasCachedSchemas) {
+        const age = now - new Date(s.updatedAt).getTime();
+        return age > SCHEMA_REFRESH_TTL_MS;
+      }
+      return shouldLiveFetchTools(s, now);
     });
     if (serversNeedingSchemas.length > 0) {
       await Promise.all(
         serversNeedingSchemas.map(async server => {
           try {
             const result = await invokeMcpHandler<MCPClient['tools']>({
-              envVariables: decryptEnvVariables(server.envVariables),
+              envVariables: decryptEnvVariables(server.envVariables, server),
               name: server.name,
               action: 'getTools',
               userId: req.user.id,
             });
             const tools = Array.isArray(result) ? result : [result].flat();
-            await mcpServerRepository.update({
-              id: server.id,
-              tools: tools.map((tool: { name: string }) => tool.name),
-              toolSchemas: tools,
-            });
+            const fetchedAt = new Date();
+            await mcpServerRepository.update(buildMcpToolCacheUpdate(server.id, tools, fetchedAt));
             // Update in-memory for the response
             server.tools = tools.map((tool: { name: string }) => tool.name);
             server.toolSchemas = tools;
+            server.toolSchemasFetchedAt = fetchedAt;
           } catch (error) {
             console.warn(`[MCP] Failed to populate toolSchemas for ${server.name}:`, error);
           }
@@ -61,9 +75,10 @@ const handler = baseApi()
       );
     }
 
-    res.json(servers);
+    respond(res, z.array(mcpServerResponseSchema), servers);
   })
   .post(async (req, res) => {
+    await assertMcpServerEnabled();
     // Guarded before the findOne below, not just before the write: `name` is part of that
     // filter, and a filter casts too -- an object or array there throws a `CastError` on the
     // route's very first statement.
@@ -76,13 +91,19 @@ const handler = baseApi()
 
     let server = await mcpServerRepository.findOne({ name, userId: req.user.id });
 
-    const encryptedVars = encryptEnvVariables(envVariables);
+    const recordId = server?.id ?? new Types.ObjectId().toHexString();
+    const encryptedVars = encryptEnvVariables(envVariables, { userId: req.user.id, name, id: recordId });
     if (server) {
-      server = await mcpServerRepository.update({
-        id: server.id,
-        envVariables: encryptedVars,
-        enabled,
-      });
+      // New credentials mean the cached "confirmed empty" marker is no longer trustworthy.
+      // Clear it before the fetch below so a failed reconnect retries instead of staying empty.
+      server = await mcpServerRepository.update(
+        {
+          id: server.id,
+          envVariables: encryptedVars,
+          enabled,
+        },
+        { unset: ['toolSchemasFetchedAt'] }
+      );
     } else {
       // `enabled` is optional in the request but `required: true` in the schema, and the two
       // branches differ on what that means: the update above drops `enabled: undefined` from the
@@ -91,6 +112,7 @@ const handler = baseApi()
       // mongoose as `undefined`, so a request that omitted it failed validation with a 500 rather
       // than creating a disabled server. Nothing was relying on that.
       server = await mcpServerRepository.create({
+        ...{ _id: recordId },
         userId: req.user.id,
         name,
         envVariables: encryptedVars,
@@ -98,6 +120,7 @@ const handler = baseApi()
         tools: [],
       });
     }
+    let connectionError: string | undefined;
     if (server) {
       try {
         const result = await invokeMcpHandler<MCPClient['tools']>({
@@ -107,18 +130,17 @@ const handler = baseApi()
           userId: req.user.id,
         });
         const tools = Array.isArray(result) ? result : [result].flat();
-        server = await mcpServerRepository.update({
-          id: server.id,
-          tools: tools.map(tool => tool.name),
-          toolSchemas: tools,
-        });
+        server = await mcpServerRepository.update(buildMcpToolCacheUpdate(server.id, tools));
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Failed to connect to MCP server.';
-        throw new BadRequestError('Unable to connect to MCP server', { reason: message });
+        connectionError = error instanceof Error ? error.message : 'Failed to connect to MCP server.';
       }
     }
+    if (!server) {
+      // Deleted mid-request: update() found nothing to write.
+      throw new NotFoundError('MCP Server not found');
+    }
 
-    res.json(server);
+    respond(res, mcpServerCreateResponseSchema, { ...server, connectionError });
   });
 
 export default handler;

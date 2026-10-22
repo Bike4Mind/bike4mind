@@ -1,5 +1,5 @@
 import { Box, Checkbox, Chip, Typography } from '@mui/joy';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import AddIcon from '@mui/icons-material/Add';
 import { debounce } from 'lodash';
 import { useTranslation } from 'react-i18next';
@@ -69,6 +69,9 @@ export default function AddExistingFilesModal({ lake, open, onClose }: AddExisti
   // POST window, which survives this modal's own unmount since it is a `useMutation` option).
   const addInFlight = useIsMutating({ mutationKey: addFilesToLakeMutationKey }) > 0;
   const debouncedSearch = useMemo(() => debounce(setSearch, 300), []);
+  // The trailing edge otherwise fires setSearch after unmount, which can hit a torn-down
+  // environment (surfaces as an uncaught "window is not defined" under Vitest).
+  useEffect(() => () => debouncedSearch.cancel(), [debouncedSearch]);
 
   const files = useMemo(() => filesData?.pages?.map(page => page.data).flat() ?? [], [filesData]);
   const selectedFileIds = useMemo(() => [...selectedFiles.keys()], [selectedFiles]);

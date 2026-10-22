@@ -1,4 +1,4 @@
-import { withEventContext } from '@server/utils/eventContext';
+import { withEventContext } from '@workers/utils/eventContext';
 import { EmailEvents } from '@server/utils/eventBus';
 import mailer from '@server/utils/mailer';
 

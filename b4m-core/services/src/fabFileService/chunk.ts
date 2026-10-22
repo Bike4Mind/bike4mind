@@ -24,7 +24,7 @@ const chunkFileSchema = z.object({
   // than unknown - dropping a correctly-embedded file from retrieval and telling the user to
   // re-embed it. See isForeignEmbeddingModel (dataLakeService/embeddingMismatch.ts) for the
   // canonical list of those readers and why the match is not case-folded. The sole caller already
-  // guards with isSupportedEmbeddingModel (queueHandlers/fabFileChunk.ts), so this rejects nothing
+  // guards with isSupportedEmbeddingModel (apps/workers/src/queueHandlers/fabFileChunk.ts), so this rejects nothing
   // sent today - it stops a future writer persisting a label the readers cannot match.
   embeddingModel: SupportedEmbeddingModelSchema,
   // Soft chunk-size cap in tokens (see DEFAULT_PASSAGE_TOKEN_TARGET). Optional: the

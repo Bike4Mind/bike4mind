@@ -1,7 +1,9 @@
 import { FC } from 'react';
 import { Box, Button, Card, Chip, Link, Stack, Typography } from '@mui/joy';
 import type { QaMediaView, QaRunDetail, QaTestView } from '@client/app/hooks/data/qaStatus';
-import { formatDuration, formatTime, stateLabel } from './format';
+import { commitUrl, formatDelta, formatDuration, formatTime, stateLabel } from './format';
+import RunDiff from './RunDiff';
+import RunTests from './RunTests';
 
 const TRACE_HINT = 'npx playwright show-trace trace.zip';
 
@@ -82,12 +84,15 @@ const TestCard: FC<{ test: QaTestView; compact: boolean; onOpenTest: (k: string)
 interface Props {
   detail: QaRunDetail;
   onOpenTest: (testKey: string) => void;
+  /** Opens the previous run linked from the diff; without it the link is plain text. */
+  onOpenRun?: (runId: string) => void;
   /** Inline expansion in the run list: thumbnails, no error bodies. */
   compact?: boolean;
 }
 
-const RunDetail: FC<Props> = ({ detail, onOpenTest, compact = false }) => {
-  const { run, report } = detail;
+const RunDetail: FC<Props> = ({ detail, onOpenTest, onOpenRun, compact = false }) => {
+  const { run, report, medianDurationMs } = detail;
+  const shaUrl = commitUrl(run.ciRunUrl, run.sha);
   return (
     <Stack spacing={2}>
       {!compact && (
@@ -103,8 +108,33 @@ const RunDetail: FC<Props> = ({ detail, onOpenTest, compact = false }) => {
           )}
           <Typography level="body-sm">
             {formatTime(run.startedAt)} . {run.branch} . {run.counts.passed}/{run.counts.ran} .{' '}
-            {formatDuration(run.durationMs)}
+            <span data-testid="qa-run-duration">
+              {formatDuration(run.durationMs)}
+              {medianDurationMs !== null && run.durationMs > 0
+                ? ` (${formatDelta(run.durationMs - medianDurationMs, formatDuration)} vs 7d median)`
+                : ''}
+            </span>
           </Typography>
+          <Typography data-testid="qa-run-trigger" level="body-sm">
+            {run.trigger}
+          </Typography>
+          {run.sha &&
+            (shaUrl ? (
+              <Link
+                data-testid="qa-run-sha"
+                href={shaUrl}
+                target="_blank"
+                rel="noreferrer"
+                level="body-sm"
+                sx={{ fontFamily: 'code' }}
+              >
+                {run.sha.slice(0, 7)}
+              </Link>
+            ) : (
+              <Typography data-testid="qa-run-sha" level="body-sm" sx={{ fontFamily: 'code' }}>
+                {run.sha.slice(0, 7)}
+              </Typography>
+            ))}
           <Link href={run.ciRunUrl} target="_blank" rel="noreferrer" level="body-sm">
             CI run
           </Link>
@@ -119,19 +149,26 @@ const RunDetail: FC<Props> = ({ detail, onOpenTest, compact = false }) => {
           ) : null}
         </Stack>
       )}
-      <Stack data-testid="qa-run-suites" direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-        {run.suiteSummary.map(s => (
-          <Chip
-            key={s.name}
-            size="sm"
-            variant="soft"
-            color={s.passed === s.ran && s.notRun === 0 ? 'success' : 'danger'}
-          >
-            {s.name} {s.passed}/{s.ran}
-            {s.notRun > 0 ? ` (${s.notRun} did not run)` : ''}
-          </Chip>
-        ))}
-      </Stack>
+      {run.suiteSummary.length > 0 && (
+        <Stack data-testid="qa-run-suites" direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+          {run.suiteSummary.map(s => (
+            <Chip
+              key={s.name}
+              size="sm"
+              variant="soft"
+              color={s.passed === s.ran && s.notRun === 0 ? 'success' : 'danger'}
+            >
+              {s.name} {s.passed}/{s.ran}
+              {s.notRun > 0 ? ` (${s.notRun} did not run)` : ''}
+            </Chip>
+          ))}
+        </Stack>
+      )}
+      {run.source === 'slack-backfill' && (
+        <Typography data-testid="qa-run-backfill-note" level="body-sm" sx={{ color: 'text.tertiary' }}>
+          Imported from Slack: counts only, no per-test data
+        </Typography>
+      )}
       {!compact && run.metrics.length > 0 && (
         <Stack data-testid="qa-run-metrics" direction="row" spacing={1} flexWrap="wrap" useFlexGap>
           {run.metrics.map((m, i) => (
@@ -147,6 +184,7 @@ const RunDetail: FC<Props> = ({ detail, onOpenTest, compact = false }) => {
           ))}
         </Stack>
       )}
+      {!compact && detail.diff && <RunDiff diff={detail.diff} onOpenTest={onOpenTest} onOpenRun={onOpenRun} />}
       {detail.failedTests.map((t, i) => (
         <TestCard key={`${t.testKey}-${i}`} test={t} compact={compact} onOpenTest={onOpenTest} />
       ))}
@@ -158,6 +196,7 @@ const RunDetail: FC<Props> = ({ detail, onOpenTest, compact = false }) => {
           ))}
         </>
       )}
+      {!compact && detail.tests.length > 0 && <RunTests tests={detail.tests} onOpenTest={onOpenTest} />}
     </Stack>
   );
 };

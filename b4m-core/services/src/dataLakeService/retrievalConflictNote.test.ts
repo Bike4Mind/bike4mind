@@ -109,10 +109,10 @@ describe('buildRetrievalConflictSignal', () => {
   /**
    * The kinds this surface deliberately does NOT assert - see DISAGREEMENT_INCONSISTENCY_KINDS. The
    * lake health scan still reports all of them; a note that tells a model "these documents disagree"
-   * cannot be built on a rule that fires when they agree.
+   * cannot be built on a rule that cannot tell agreement from conflict.
    */
   describe('kinds that cannot support an assertion of disagreement', () => {
-    it('says nothing about two documents carrying the IDENTICAL superlative sentence', () => {
+    it('says nothing about two documents carrying the IDENTICAL superlative sentence, which the detector does not report at all', () => {
       const sentence = 'The largest data center is in Oregon.';
       expect(noteFor(passage('file-a', sentence), passage('file-b', sentence))).toBe('');
     });
@@ -240,11 +240,11 @@ describe('buildRetrievalConflictSignal', () => {
   });
 
   it('counts only the asserted findings, not every finding the detector returned', () => {
-    // The repeated superlative sentence is a second finding the detector returns and this surface
+    // The differing superlative sentences are a second finding the detector returns and this surface
     // drops, so a count taken from `findings` would claim two conflicts and name one kind.
     const note = noteFor(
       passage('file-a', 'Uptime is 99.9%.\nThe largest data center is in Oregon.'),
-      passage('file-b', 'Uptime is 95%.\nThe largest data center is in Oregon.')
+      passage('file-b', 'Uptime is 95%.\nThe largest data center is in Ohio.')
     );
     expect(note).toContain('1 cross-document conflict detected (metric-disagreement)');
   });

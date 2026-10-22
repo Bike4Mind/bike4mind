@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { Quest } from '@bike4mind/database';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { resolveQuestModelType } from '@server/utils/questModelType';
 import { ApiKeyScope, IChatHistoryItemDocument } from '@bike4mind/common';
 
@@ -50,6 +50,10 @@ interface AnalyticsMetricResponse {
   status: string;
 }
 
+function getClientFirstTokenTime(quest: IChatHistoryItemDocument): number | undefined {
+  return quest.clientFirstTokenTime ?? quest.promptMeta?.performance?.clientFirstTokenTime;
+}
+
 function getProcessPickupTime(quest: IChatHistoryItemDocument): number | undefined {
   const processingTimeLog = (quest.promptMeta?.statusLog || []).find(
     log => log.status === 'Processing your request...'
@@ -88,6 +92,7 @@ function mapQuestToAnalyticsMetric(quest: IChatHistoryItemDocument): AnalyticsMe
       modelInferenceTime: quest.promptMeta?.performance?.modelInferenceTime,
       firstTokenTime: quest.promptMeta?.performance?.firstTokenTime,
       firstChunkTime: quest.promptMeta?.performance?.firstChunkTime,
+      clientFirstTokenTime: getClientFirstTokenTime(quest),
       processPickupTime: getProcessPickupTime(quest),
       streamingPerformance: quest.promptMeta?.performance?.streamingPerformance
         ? {

@@ -13,6 +13,8 @@ const EXPECTED_CONFINED: ReadonlySet<ApiKeyScope> = new Set([
   ApiKeyScope.EMBED_CHAT,
   ApiKeyScope.OVERWATCH_INGEST_WRITE,
   ApiKeyScope.QA_INGEST,
+  ApiKeyScope.SKILLS_READ,
+  ApiKeyScope.RELEASE_NOTES_WRITE,
 ]);
 
 const EXPECTED_NOT_CONFINED: ReadonlySet<ApiKeyScope> = new Set([
@@ -21,9 +23,12 @@ const EXPECTED_NOT_CONFINED: ReadonlySet<ApiKeyScope> = new Set([
   ApiKeyScope.READ_FILES,
   ApiKeyScope.WRITE_FILES,
   ApiKeyScope.AI_GENERATE,
+  ApiKeyScope.AI_DECIDE,
   ApiKeyScope.AI_CHAT,
   ApiKeyScope.READ_PROJECTS,
   ApiKeyScope.WRITE_PROJECTS,
+  ApiKeyScope.READ_AGENTS,
+  ApiKeyScope.WRITE_AGENTS,
   ApiKeyScope.ME_READ,
   ApiKeyScope.ADMIN,
   ApiKeyScope.MARKETING_REPORTS_READ,
@@ -37,6 +42,8 @@ const EXPECTED_NOT_CONFINED: ReadonlySet<ApiKeyScope> = new Set([
   ApiKeyScope.DATALAKE_SHARE,
   ApiKeyScope.DATALAKE_QUERY,
   ApiKeyScope.OVERWATCH_READ,
+  ApiKeyScope.BOB_READ,
+  ApiKeyScope.BOB_RUN,
 ]);
 
 describe('CONFINED_API_KEY_SCOPES', () => {
