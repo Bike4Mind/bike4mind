@@ -2098,7 +2098,6 @@ export const API_SERVICE_GROUPS = {
       { key: 'CSMandCTAFlag', order: 3 },
       { key: 'defaultSeats', order: 4 },
       { key: 'defaultTags', order: 5 },
-      { key: 'enforceCredits', order: 6 },
     ],
   },
   CREDITS: {
@@ -2106,15 +2105,12 @@ export const API_SERVICE_GROUPS = {
     name: 'Credits System',
     description: 'Credit system and pricing configuration',
     icon: 'Payments',
+    // Signup, starter-credit, pricing and team-plan keys are edited only on the admin Growth and
+    // Pricing tab (AdminGrowthPricingTab); this group links there instead of repeating them.
     settings: [
-      { key: 'pricePerCredit', order: 1 },
-      { key: 'enforceCredits', order: 2 },
-      { key: 'billOperationalUsage', order: 3 },
-      { key: 'enableTeamPlan', order: 4 },
-      { key: 'teamPlanMinSeats', order: 5 },
-      { key: 'teamPlanMaxSeats', order: 6 },
-      { key: 'teamPlanCreditsPerSeat', order: 7 },
-      { key: 'lowCreditsThreshold', order: 8 },
+      { key: 'billOperationalUsage', order: 1 },
+      { key: 'blockDisposableEmails', order: 2 },
+      { key: 'syntheticUserEmailDomains', order: 3 },
     ],
   },
   KNOWLEDGE: {
@@ -3060,8 +3056,6 @@ export const settingsMap = {
     defaultValue: 50,
     description: `The price in USD of one credit bought pay-as-you-go. Cannot be set below ${formatUsdPerCredit(MIN_PRICE_PER_CREDIT_USD)}, the per-credit sale price including markup.`,
     category: 'Users',
-    group: API_SERVICE_GROUPS.CREDITS.id,
-    order: 1,
   }),
   // Per-user request rate limits for /chat and /opti, keyed by the caller's
   // subscription tier. Admins and developer-tagged users bypass these.
@@ -3499,7 +3493,6 @@ export const settingsMap = {
     // client and server resolve the same default.
     defaultValue: process.env.B4M_SELF_HOST === 'true' ? false : true,
     description: 'Whether to enforce credits for users',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   billOperationalUsage: makeBooleanSetting({
@@ -3521,7 +3514,6 @@ export const settingsMap = {
     name: 'Enable Team Plan',
     defaultValue: false,
     description: 'Whether to enable team plans',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   allowOpenRegistration: makeBooleanSetting({
@@ -3530,7 +3522,6 @@ export const settingsMap = {
     defaultValue: false,
     description:
       'Master switch for self-serve signup. When OFF (default), a valid invite code is required to register. When ON, users may register without an invite code; the Default Free Credits grant is then applied after they verify their email (anti-spam — see Default Free Credits). Safe to enable: the pre-request credit reservation caps every free user at the credits they are granted.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   blockDisposableEmails: makeBooleanSetting({
@@ -3550,7 +3541,6 @@ export const settingsMap = {
     defaultValue: 0,
     description:
       'Base credits granted after email verification to a user who registers WITHOUT an invite code, including eligible partner signups when Allow Open Registration is OFF. Partner-rule credits are added on top of this amount. An unverified account receives no credits. A free user cannot spend beyond their total granted balance.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   teamPlanMinSeats: makeNumberSetting({
@@ -3564,7 +3554,6 @@ export const settingsMap = {
     max: TEAM_PLAN_SEATS_HARD_LIMIT,
     description:
       'Fewest seats a paid team subscription can be bought with. Enforced at checkout, on seat changes from Stripe and on admin conversion to paid. Admin grants may still go down to 1. If set above the maximum seats, the maximum wins.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   teamPlanMaxSeats: makeNumberSetting({
@@ -3577,7 +3566,6 @@ export const settingsMap = {
     max: TEAM_PLAN_SEATS_HARD_LIMIT,
     description:
       'Most seats any team can hold (owner + members + pending invites). Enforced at checkout, on every seat change, on admin grants and on the partner-signup auto-raise. Lowering it below a team that is already larger does not remove anyone; that team can only be set down to this cap.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   teamPlanCreditsPerSeat: makeNumberSetting({
@@ -3589,7 +3577,6 @@ export const settingsMap = {
     max: 100_000_000,
     description:
       'Credits added to a team pool per paid seat each billing cycle (and per seat-month on admin team grants). Applies to invoices issued after the change; credits already granted are not adjusted.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
     // The Team plan card quotes the pool size to every signed-in user.
     userReadable: true,
@@ -3605,7 +3592,6 @@ export const settingsMap = {
     max: 100_000_000,
     description:
       'Below this many credits a user sees the low-credit warning state. Set to 0 to show warnings only once credits run out.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   syntheticUserEmailDomains: makeStringSetting({

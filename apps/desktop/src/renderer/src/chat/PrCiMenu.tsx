@@ -70,7 +70,7 @@ export function PrCiMenu({
       </MenuButton>
       <Menu
         size="sm"
-        placement="top-end"
+        placement="bottom-end"
         sx={{ minWidth: 300, maxWidth: 420, p: 1.25, gap: 0.75 }}
         data-testid="pr-ci-menu"
       >

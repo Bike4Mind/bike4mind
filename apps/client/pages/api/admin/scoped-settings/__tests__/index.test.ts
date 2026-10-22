@@ -7,11 +7,33 @@ import { ApiKeyScope } from '@bike4mind/common';
 const find = vi.fn();
 const writeScopedOverride = vi.fn();
 const clearScopedOverride = vi.fn();
+const findOverrides = vi.fn();
+const recordAdminActionFromRequest = vi.fn();
+const order: string[] = [];
 
 vi.mock('@bike4mind/database/infra', () => ({
-  scopedSettingsRepository: { find: (...args: unknown[]) => find(...args) },
+  scopedSettingsRepository: {
+    find: (...args: unknown[]) => find(...args),
+    findOverrides: (...args: unknown[]) => findOverrides(...args),
+  },
+}));
+// Passthrough: the audit write must run inside this callback so a throw from it propagates to the caller.
+vi.mock('@bike4mind/database', () => ({
+  withTransaction: async (fn: () => Promise<unknown>) => {
+    order.push('tx:start');
+    const result = await fn();
+    order.push('tx:end');
+    return result;
+  },
+}));
+vi.mock('@server/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: (...args: unknown[]) => {
+    order.push('audit');
+    return recordAdminActionFromRequest(...args);
+  },
 }));
 vi.mock('@bike4mind/services', () => ({
+  adminAuditService: { REDACTED_PLACEHOLDER: '[REDACTED]' },
   scopedSettingsService: {
     writeScopedOverride: (...args: unknown[]) => writeScopedOverride(...args),
     clearScopedOverride: (...args: unknown[]) => clearScopedOverride(...args),
@@ -61,6 +83,12 @@ const invoke = async (
 
 const expectStatus = (method: 'get' | 'put' | 'delete', req: Parameters<typeof invoke>[1], statusCode: number) =>
   expect(invoke(method, req)).rejects.toMatchObject({ statusCode });
+
+beforeEach(() => {
+  order.length = 0;
+  findOverrides.mockResolvedValue([]);
+  recordAdminActionFromRequest.mockResolvedValue(null);
+});
 
 const lakePause = {
   settingName: 'PauseLakeConvergence',
@@ -315,5 +343,98 @@ describe('admin/scoped-settings inventory', () => {
 
     expect(await invoke('get')).toBe(rows);
     expect(find).toHaveBeenCalledWith({});
+  });
+});
+
+describe('admin/scoped-settings audit entries', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const address = { settingName: 'PauseLakeConvergence', scopeLevel: 'lake', scopeId: 'lake-1' };
+
+  it('PUT records a strict settings entry targeting the override address with before and after', async () => {
+    findOverrides.mockResolvedValue([{ settingValue: 'false' }]);
+    writeScopedOverride.mockResolvedValue(undefined);
+
+    await invoke('put', { body: lakePause });
+
+    expect(findOverrides).toHaveBeenCalledWith([{ scopeLevel: 'lake', scopeId: 'lake-1' }], ['PauseLakeConvergence']);
+    expect(recordAdminActionFromRequest).toHaveBeenCalledTimes(1);
+    expect(recordAdminActionFromRequest.mock.calls[0][1]).toMatchObject({
+      action: 'settings.admin_settings.updated',
+      target: {
+        kind: 'settings',
+        id: 'PauseLakeConvergence@lake:lake-1',
+        displayName: 'PauseLakeConvergence (lake lake-1)',
+      },
+      changes: [{ field: 'PauseLakeConvergence', before: 'false', after: 'true' }],
+      details: { scopeLevel: 'lake', scopeId: 'lake-1' },
+    });
+  });
+
+  it('PUT over an address with no override records before as null', async () => {
+    writeScopedOverride.mockResolvedValue(undefined);
+
+    await invoke('put', { body: lakePause });
+
+    expect(recordAdminActionFromRequest.mock.calls[0][1].changes).toEqual([
+      { field: 'PauseLakeConvergence', before: null, after: 'true' },
+    ]);
+  });
+
+  it('PUT runs the write and the audit inside one transaction, audit last', async () => {
+    writeScopedOverride.mockImplementation(async () => {
+      order.push('write');
+    });
+
+    await invoke('put', { body: lakePause });
+
+    expect(order).toEqual(['tx:start', 'write', 'audit', 'tx:end']);
+  });
+
+  it('PUT does not report success when the audit write rejects', async () => {
+    writeScopedOverride.mockResolvedValue(undefined);
+    recordAdminActionFromRequest.mockRejectedValue(new Error('audit down'));
+    const json = vi.fn();
+
+    await expect(routes.__put({ user: { isAdmin: true }, logger, body: lakePause }, { json })).rejects.toThrow(
+      'audit down'
+    );
+    expect(json).not.toHaveBeenCalled();
+    expect(order).not.toContain('tx:end');
+  });
+
+  it('DELETE of an existing override records the cleared value against the same target', async () => {
+    findOverrides.mockResolvedValue([{ settingValue: 'true' }]);
+    clearScopedOverride.mockResolvedValue(undefined);
+
+    await invoke('delete', { query: address });
+
+    expect(recordAdminActionFromRequest.mock.calls[0][1]).toMatchObject({
+      action: 'settings.admin_settings.updated',
+      target: { id: 'PauseLakeConvergence@lake:lake-1' },
+      summary: expect.stringContaining('cleared'),
+      changes: [{ field: 'PauseLakeConvergence', before: 'true', after: null }],
+    });
+  });
+
+  it('DELETE of an address with no override writes no audit entry', async () => {
+    clearScopedOverride.mockResolvedValue(undefined);
+
+    await invoke('delete', { query: address });
+
+    expect(clearScopedOverride).toHaveBeenCalledTimes(1);
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
+  });
+
+  it('DELETE does not report success when the audit write rejects', async () => {
+    findOverrides.mockResolvedValue([{ settingValue: 'true' }]);
+    clearScopedOverride.mockResolvedValue(undefined);
+    recordAdminActionFromRequest.mockRejectedValue(new Error('audit down'));
+    const json = vi.fn();
+
+    await expect(routes.__delete({ user: { isAdmin: true }, logger, query: address }, { json })).rejects.toThrow(
+      'audit down'
+    );
+    expect(json).not.toHaveBeenCalled();
   });
 });

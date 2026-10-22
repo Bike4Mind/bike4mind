@@ -1126,6 +1126,16 @@ The worker records health snapshots for active data lakes at 06:00 UTC, using th
 
 Snapshots upsert by lake and UTC day. Failed lakes are isolated and their attempted-check timestamp advances so they cannot starve other lakes. The existing 2,000-lake cap and five concurrent computations remain; these are count bounds, not cancellation of a hung database request. This job reports health only. It neither repairs content nor runs inconsistency detection: absent or stale stored inconsistency results remain absent or stale. Other hosted maintenance jobs are not enabled by this registration.
 
+### Integration health checks
+
+The worker probes Slack, GitHub and Atlassian reachability every five minutes with the same unauthenticated checks hosted deployments run, and stores each result in MongoDB for the admin Integration Health dashboard. It emits no CloudWatch metrics and does not probe at startup, so a fresh container waits one full interval. Stored checks become eligible for MongoDB TTL cleanup after 25 hours.
+
+An install with no outbound HTTPS to `slack.com`, `api.github.com` or `api.atlassian.com` records those integrations as unhealthy on every run. Three consecutive failures open that integration's platform-wide circuit breaker, which blocks its callers: Slack message sends and updates return without sending, and GitHub and Atlassian MCP requests are refused as unavailable. Those integrations cannot work without that egress anyway, so there is no opt-out switch.
+
+A successful probe taking more than five seconds is also recorded as unhealthy. Three consecutive slow probes can therefore open the same circuit breaker even while the provider still responds.
+
+Probes use global `fetch`. If proxy support is added to an integration client, the probes must use equivalent proxy routing so a failed direct connection does not mark a working proxied integration as unavailable.
+
 ### Daily telemetry retention
 
 The single worker removes `promptMeta.contextTelemetry` from eligible Quest records older than 90 days at 03:00 UTC. The existing hosted cleanup and local worker share the same 5,000-record batches and database writes. The cutoff is fixed once per run using UTC calendar days; the exact cutoff remains excluded. Conversation content and other prompt metadata remain intact.
@@ -1140,7 +1150,10 @@ Focused tests use disposable Mongo, exact retention boundaries and an injected l
 VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/cron/telemetryCleanup.test.ts src/mongoTestTimeoutBudget.test.ts
 VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/selfhost/telemetryCleanup.test.ts
 TZ=America/New_York VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test:integration src/cron/telemetryCleanup.retention.e2e.test.ts
+pnpm --filter @bike4mind/workers test src/selfhost/selfHostWorker.dst.test.ts
 ```
+
+The last command covers the worker scheduler itself, not just this task. It switches the process to `America/New_York` at runtime and checks that daily UTC tasks keep their UTC slot across both transitions and across a restart, and that interval tasks restart their cadence from the moment the worker starts again.
 
 ## Daily API-key usage baselines
 

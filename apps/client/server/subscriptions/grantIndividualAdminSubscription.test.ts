@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockAddCredits = vi.fn();
 vi.mock('@bike4mind/services', () => ({
-  creditService: { addCredits: (...a: unknown[]) => mockAddCredits(...a) },
+  creditService: { addCreditsWithLedgerRow: (...a: unknown[]) => mockAddCredits(...a) },
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -43,7 +43,7 @@ describe('grantIndividualAdminSubscription', () => {
     mockFindByPriceId.mockResolvedValue(null);
     mockFindNonTerminalSubs.mockResolvedValue([]);
     mockCreate.mockResolvedValue({ id: 'sub-1' });
-    mockAddCredits.mockResolvedValue({ currentCredits: 500 });
+    mockAddCredits.mockResolvedValue({ creditHolder: { currentCredits: 500 }, creditTransactionId: 'tx-ind' });
   });
 
   it('creates an admin-grant row and adds plan credits times months', async () => {
@@ -89,6 +89,14 @@ describe('grantIndividualAdminSubscription', () => {
     expect(await grantIndividualAdminSubscription(params)).toEqual({ status: 'already_active' });
     expect(mockCreate).not.toHaveBeenCalled();
     expect(mockAddCredits).not.toHaveBeenCalled();
+  });
+
+  it('hands the ledger row id to onGranted', async () => {
+    const onGranted = vi.fn();
+
+    await grantIndividualAdminSubscription({ ...params, onGranted });
+
+    expect(onGranted).toHaveBeenCalledWith({ credits: plan.credits * 3, creditTransactionId: 'tx-ind' });
   });
 
   it('reports the post-grant balance', async () => {

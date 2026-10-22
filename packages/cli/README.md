@@ -658,6 +658,32 @@ tail -f ~/.bike4mind/debug/[session-id].txt
 - Without `--verbose`: Debug logs only written to file (clean console output)
 - With `--verbose`: Debug logs shown in console AND written to file
 
+### Hearth hook troubleshooting
+
+If the standalone `bin/hearth-hook.mjs` reporter is not reaching Hearth, enable its diagnostic:
+
+```bash
+export B4M_HEARTH_DEBUG=1
+echo '{}' | node packages/cli/bin/hearth-hook.mjs
+```
+
+Set `B4M_API_URL` and `B4M_API_KEY` first. With missing credentials the hook makes no request.
+Diagnostics are off by default; an empty `B4M_HEARTH_DEBUG` or exactly `0` also disables them.
+Other nonempty values enable one stderr line on failure:
+
+- `POST /api/hearth/events failed: HTTP 401`: check whether the API key is valid.
+- `POST /api/hearth/events error: ECONNREFUSED`: check the endpoint and server availability.
+- `POST /api/hearth/events error: TimeoutError`: check connectivity and server responsiveness.
+- `stdin payload error: SyntaxError`: the hook received malformed JSON.
+- `configuration error: ERR_INVALID_URL`: check that `B4M_API_URL` is a valid absolute URL.
+- `configuration error: missing B4M_API_URL or B4M_API_KEY`: set both variables before running the hook.
+
+Each line starts with `hearth-hook:`. Errors expose a native error code or name, never the error
+message, API key, URL, or hook payload. The hook still exits `0` on reporting failures. With debugging
+enabled, the request gets 2.75 seconds and the diagnostic flush gets up to 250 ms within the 3-second
+request/diagnostic budget. A closed or stalled stderr can lose the diagnostic; reporting remains
+best-effort. Unset `B4M_HEARTH_DEBUG` after troubleshooting to keep routine hook events quiet.
+
 ## Development
 
 This section covers the contributor workflow for hacking on the CLI from a checkout of the monorepo. For end-user installation see [Installation](#installation) above.

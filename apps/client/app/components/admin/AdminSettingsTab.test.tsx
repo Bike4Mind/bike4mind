@@ -38,7 +38,10 @@ vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => router.navigate,
 }));
 
-import AdminSettingsTab from './AdminSettingsTab';
+import AdminSettingsTab, { GROWTH_PRICING_ONLY_KEYS } from './AdminSettingsTab';
+import { GROWTH_PRICING_SECTIONS } from './AdminGrowthPricingTab';
+import { AdminTab } from './adminSidebarConfig';
+import { useAdminModal } from './useAdminModal';
 import { SEARCH_TERM_URL_DEBOUNCE_MS } from './useAdminSettingsSearchParams';
 
 /** The search the component's most recent navigate would produce from `previous`. */
@@ -272,5 +275,50 @@ describe('AdminSettingsTab field default value', () => {
     renderAiTab();
 
     expect(passedDefault('forcedRetrievalSpreadFloorPct')).toBe(settingsMap.forcedRetrievalSpreadFloorPct.defaultValue);
+  });
+});
+
+describe('AdminSettingsTab Credits System group', () => {
+  const renderCreditsTab = () => renderTab(findTab(settingsMap.billOperationalUsage.category));
+
+  it('lists only keys the Growth and Pricing tab edits', () => {
+    const growthPricingKeys = new Set<string>(GROWTH_PRICING_SECTIONS.flatMap(section => section.keys));
+    for (const key of GROWTH_PRICING_ONLY_KEYS) expect(growthPricingKeys.has(key), key).toBe(true);
+  });
+
+  it('renders no editor for the Growth and Pricing keys and keeps the rest of the group', () => {
+    renderCreditsTab();
+
+    for (const key of GROWTH_PRICING_ONLY_KEYS) {
+      expect(screen.queryByTestId(`generic-setting-${key}`), key).toBeNull();
+    }
+    for (const key of ['billOperationalUsage', 'blockDisposableEmails', 'syntheticUserEmailDomains']) {
+      expect(screen.getByTestId(`generic-setting-${key}`), key).toBeTruthy();
+    }
+  });
+
+  it('links to the Growth and Pricing tab', () => {
+    useAdminModal.getState().setActiveTab(AdminTab.AdminSettings);
+    renderCreditsTab();
+
+    fireEvent.click(screen.getByTestId('admin-settings-credits-growth-pricing-link'));
+    expect(useAdminModal.getState().activeTab).toBe(AdminTab.GrowthPricing);
+  });
+
+  it('points a search for a Growth and Pricing key to that tab', () => {
+    useAdminModal.getState().setActiveTab(AdminTab.AdminSettings);
+    router.search = { tab: 'admin-settings', q: 'price per credit' };
+    renderSettings();
+
+    expect(screen.queryByTestId('generic-setting-pricePerCredit')).toBeNull();
+    fireEvent.click(screen.getByTestId('admin-settings-search-growth-pricing-link'));
+    expect(useAdminModal.getState().activeTab).toBe(AdminTab.GrowthPricing);
+  });
+
+  it('shows no Growth and Pricing pointer for an unrelated search', () => {
+    router.search = { tab: 'admin-settings', q: 'slack' };
+    renderSettings();
+
+    expect(screen.queryByTestId('admin-settings-search-growth-pricing-hint')).toBeNull();
   });
 });
