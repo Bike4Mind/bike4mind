@@ -12,6 +12,7 @@ import PersonOutlineRoundedIcon from '@mui/icons-material/PersonOutlineRounded';
 import VerifiedUserOutlinedIcon from '@mui/icons-material/VerifiedUserOutlined';
 import DesktopAppPreview from '@client/app/components/DesktopAppPromo/DesktopAppPreview';
 import { useCopyToClipboard } from '@client/app/hooks/useCopyToClipboard';
+import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
 import { useLatestDesktopRelease } from '@client/app/hooks/data/desktopRelease';
 import { detectPlatform, detectPlatformFromUserAgent, type DetectedPlatform } from '@client/app/utils/desktopPlatform';
 import {
@@ -266,6 +267,7 @@ function OtherPlatformRow({ platform, release }: { platform: PlatformId; release
 }
 
 export default function DesktopDownloadPage() {
+  useDocumentTitle('Bike4Mind desktop app');
   const detected = useDetectedPlatform();
   const { data: release } = useLatestDesktopRelease();
   const primary = primaryPlatform(detected);

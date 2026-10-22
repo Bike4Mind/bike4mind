@@ -156,6 +156,13 @@ describe('DesktopDownloadPage', () => {
     );
   });
 
+  it('names the tab after the page instead of keeping the previous page title', () => {
+    document.title = 'New Notebook | Notebook';
+    setUserAgent(UA.linux);
+    renderPage();
+    expect(document.title).toBe('Bike4Mind desktop app');
+  });
+
   it('never sends credentials to the GitHub API', async () => {
     setUserAgent(UA.linux);
     renderPage();
