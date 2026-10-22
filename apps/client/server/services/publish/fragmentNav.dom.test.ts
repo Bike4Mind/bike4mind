@@ -144,6 +144,12 @@ describe('hash bridge (parent) navigate handling', () => {
     expect(fetchDownload).toHaveBeenCalledWith(`${BASE}/files/deck.pdf?download=1`);
   });
 
+  it('accepts a file whose name holds a literal percent sign', () => {
+    runParentBridge(BASE);
+    fromFrame({ b4m: 'navigate', path: `${BASE}/files/100%25%20done.pdf` });
+    expect(fetchDownload).toHaveBeenCalledWith(`${BASE}/files/100%25%20done.pdf`);
+  });
+
   it('navigates the top-level context to a page under the bundle, keeping its fragment', () => {
     runParentBridge(`${BASE}/guide/intro.html`);
     // jsdom performs only same-document navigations, so the target is this page plus a
@@ -171,6 +177,8 @@ describe('hash bridge (parent) navigate handling', () => {
     ['?download=1 on a page', `${BASE}/guide/next.html?download=1`],
     ['?download=1 on the bundle root', `${BASE}?download=1`],
     ['a query string in the fragment', `${BASE}/report.pdf#a?b`],
+    ['a double-encoded slash', `${BASE}/..%252fapi/report.pdf`],
+    ['a double-encoded single dot', `${BASE}/%252e/report.pdf`],
     ['an absolute URL', `https://elsewhere.example${BASE}/report.pdf`],
     ['a protocol-relative URL', `//elsewhere.example${BASE}/report.pdf`],
     ['a non-string', 42],
