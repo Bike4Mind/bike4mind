@@ -38,11 +38,16 @@ const DISPLAYED_TIMESTAMPS = [
   'pendingEmailExpires',
 ];
 
+const call = async () => {
+  const { req, res } = createMocks({ method: 'GET', query: {} });
+  (req as unknown as Record<string, unknown>).user = { id: 'a1', isAdmin: true };
+  await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
+  return res;
+};
+
 describe('GET /api/admin/users/email-verification', () => {
   it('selects only the display fields and none of the user secret fields', async () => {
-    const { req, res } = createMocks({ method: 'GET', query: {} });
-    (req as any).user = { id: 'a1', isAdmin: true };
-    await (handler as any)(req, res);
+    const res = await call();
 
     expect(res._getStatusCode()).toBe(200);
     const selected = String(mockSelect.mock.calls[0][0]).split(/\s+/);
@@ -55,9 +60,7 @@ describe('GET /api/admin/users/email-verification', () => {
     mockLean.mockResolvedValueOnce([
       { _id: 'u1', username: 'u', email: 'u@example.com', emailVerificationToken: 'tok', passwordHash: 'hash' },
     ]);
-    const { req, res } = createMocks({ method: 'GET', query: {} });
-    (req as any).user = { id: 'a1', isAdmin: true };
-    await (handler as any)(req, res);
+    const res = await call();
 
     expect(res._getStatusCode()).toBe(200);
     const body = res._getJSONData();
