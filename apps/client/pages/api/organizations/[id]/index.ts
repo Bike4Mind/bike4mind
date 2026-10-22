@@ -64,11 +64,10 @@ const applyAdminCreditEdit = async (req: Request, orgId: string, requestedBalanc
     metadata,
   } as const;
 
-  if (credits > 0) {
-    await creditService.addCredits({ ...ledgerEntry, type: 'generic_add' }, creditAdapters);
-  } else {
-    await creditService.subtractCredits({ ...ledgerEntry, type: 'generic_deduct' }, creditAdapters);
-  }
+  const { creditTransactionId } =
+    credits > 0
+      ? await creditService.addCreditsWithLedgerRow({ ...ledgerEntry, type: 'generic_add' }, creditAdapters)
+      : await creditService.subtractCreditsWithLedgerRow({ ...ledgerEntry, type: 'generic_deduct' }, creditAdapters);
   await recordAdminActionFromRequest(req, {
     action: 'org.credits.adjusted',
     target: { kind: 'organization', id: organization.id, displayName: organization.name },
@@ -76,6 +75,7 @@ const applyAdminCreditEdit = async (req: Request, orgId: string, requestedBalanc
     reason,
     changes: [{ field: 'currentCredits', before: previousBalance, after: requestedBalance }],
     details: { credits, ownerId: organization.userId },
+    related: creditTransactionId ? { creditTransactionId } : undefined,
   });
 };
 

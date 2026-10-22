@@ -31,7 +31,7 @@ vi.mock('@bike4mind/server-utils/utils/errors', () => ({
 const mockAddCredits = vi.fn();
 vi.mock('@bike4mind/services', () => ({
   creditService: {
-    addCredits: (...a: unknown[]) => mockAddCredits(...a),
+    addCreditsWithLedgerRow: (...a: unknown[]) => mockAddCredits(...a),
     // The route distinguishes a replayed key from a real failure by type, so this has to be the
     // class the route reads, not a stand-in.
     DuplicateCreditTransactionError: class DuplicateCreditTransactionError extends Error {},
@@ -93,7 +93,7 @@ describe('POST /api/admin/organizations/[id]/top-up', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockOrgFindById.mockResolvedValue({ id: 'org-1', userId: 'owner-1' });
-    mockAddCredits.mockResolvedValue(undefined);
+    mockAddCredits.mockResolvedValue({ creditHolder: {}, creditTransactionId: 'tx-topup' });
     mockTxFindOne.mockResolvedValue(null);
   });
 
@@ -128,7 +128,18 @@ describe('POST /api/admin/organizations/[id]/top-up', () => {
         action: 'org.credits.topped_up',
         target: expect.objectContaining({ kind: 'organization', id: 'org-1' }),
         reason: 'Support goodwill top-up',
+        related: { creditTransactionId: 'tx-topup' },
       })
+    );
+  });
+
+  it('omits related when the ledger write reports no row (idempotent retry)', async () => {
+    mockAddCredits.mockResolvedValue({ creditHolder: {}, creditTransactionId: undefined });
+    const { run } = call({});
+    await run();
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ related: undefined })
     );
   });
 

@@ -8,6 +8,7 @@ import {
 } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { logAuthAudit } from '@server/utils/authAudit';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 /**
  * Admin action: force-logout a user by revoking all their sessions (tokenVersion bump).
@@ -17,6 +18,8 @@ import { logAuthAudit } from '@server/utils/authAudit';
 const handler = baseApi().post(
   asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
     const targetId = req.query.id!;
+    // Read before the revoke so the audit entry can name the user without a lookup after the change.
+    const target = await userRepository.findById(targetId);
     const tokenVersion = await userService.adminRevokeUserSessions(
       req.user.id,
       { id: targetId },
@@ -48,6 +51,17 @@ const handler = baseApi().post(
         metadata: { revoked: revokedDevices, scope: 'all', reason: 'session_revoked' },
       });
     }
+    // Mirrors the UserAuthAuditLog row into the admin audit log; best-effort, so it never fails the revoke.
+    await recordAdminActionFromRequest(req, {
+      action: 'user.sessions.revoked',
+      target: {
+        kind: 'user',
+        id: targetId,
+        displayName: target?.name || target?.username || target?.email || targetId,
+      },
+      summary: 'signed the user out of every session',
+      details: { tokenVersion, revokedDevices },
+    });
     return res.status(200).json({ message: 'Sessions revoked', userId: targetId, tokenVersion });
   })
 );
