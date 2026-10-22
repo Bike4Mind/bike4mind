@@ -152,7 +152,7 @@ describe('POST /api/admin/organizations/[id]/top-up', () => {
 });
 
 describe('POST /api/admin/organizations/[id]/top-up credit kind', () => {
-  const body = { credits: 100, idempotencyKey: 'idem-key-12345' };
+  const body = { credits: 100, idempotencyKey: 'idem-key-12345', reason: 'Support goodwill top-up' };
   const dedupeKey = 'admin_topup_org-1_idem-key-12345';
   const refundKey = 'admin_refund_org-1_idem-key-12345';
 
@@ -173,7 +173,7 @@ describe('POST /api/admin/organizations/[id]/top-up credit kind', () => {
       credits: 100,
       type: 'subscription',
       stripePaymentIntentId: dedupeKey,
-      metadata: { adminUserId: 'admin-1', reason: undefined, source: 'admin_topup' },
+      metadata: { adminUserId: 'admin-1', reason: 'Support goodwill top-up', source: 'admin_topup' },
     });
     expect(mockTxFindOne).not.toHaveBeenCalled();
     expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
@@ -243,6 +243,15 @@ describe('POST /api/admin/organizations/[id]/top-up credit kind', () => {
         details: { credits: 100, ownerId: 'owner-1', kind: 'refund' },
       })
     );
+  });
+
+  it('answers 400 for a refund with no reason, before any lookup or credit write', async () => {
+    const { reason: _omitted, ...noReason } = body;
+    const { run } = call({ body: { ...noReason, kind: 'refund' } });
+    await expect(run()).rejects.toMatchObject({ statusCode: 400 });
+    expect(mockTxFindOne).not.toHaveBeenCalled();
+    expect(mockAddCredits).not.toHaveBeenCalled();
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
   });
 
   it('keys a refund apart from a top-up submitted with the same idempotency key', async () => {

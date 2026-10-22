@@ -4842,6 +4842,8 @@ describe('ChatCompletionProcess', () => {
       });
       const fallbackModel = {
         id: 'claude-opus-4-8',
+        priceSource: 'catalog' as const,
+        priceRowId: 'fallback-price-row',
         type: 'text' as const,
         name: 'Claude Opus 4.8',
         backend: ModelBackend.Anthropic,
@@ -4869,7 +4871,13 @@ describe('ChatCompletionProcess', () => {
       await service.process({ body: reservationBody(), logger: mockLogger });
 
       expect(usageEventsRecord).toHaveBeenCalledTimes(1);
-      expect(usageEventsRecord.mock.calls[0][0]).toMatchObject({ model: 'claude-opus-4-8', status: 'error' });
+      expect(usageEventsRecord.mock.calls[0][0]).toMatchObject({
+        model: 'claude-opus-4-8',
+        status: 'error',
+        priceSource: 'catalog',
+        priceRowId: 'fallback-price-row',
+        rates: { tierKey: 200_000, input: 0, output: 60 / 1_000_000 },
+      });
       expect(usageEventsRecord.mock.calls[0][0].costUsd).toBeCloseTo((1000 * 60) / 1_000_000, 9);
       expect(mockDb.creditTransactions.createTransaction).toHaveBeenCalledWith(
         'text_generation_usage',
@@ -4881,6 +4889,8 @@ describe('ChatCompletionProcess', () => {
     // folded into input at the full rate.
     it("prices and records a thrown abort's provider-reported cache tokens", async () => {
       const { complete } = reservationOrgSetup({
+        priceSource: 'catalog',
+        priceRowId: 'cached-price-row',
         pricing: { 200000: { input: 10 / 1_000_000, output: 30 / 1_000_000 } },
       });
       complete.mockImplementation(async (_model: string, _messages: unknown, _opts: unknown, cb: any) => {
@@ -4900,7 +4910,20 @@ describe('ChatCompletionProcess', () => {
       await service.process({ body: reservationBody(), logger: mockLogger });
 
       const event = usageEventsRecord.mock.calls[0][0];
-      expect(event).toMatchObject({ inputTokens: 10, cachedInputTokens: 50_000, cacheWriteTokens: 2_000 });
+      expect(event).toMatchObject({
+        inputTokens: 10,
+        cachedInputTokens: 50_000,
+        cacheWriteTokens: 2_000,
+        priceSource: 'catalog',
+        priceRowId: 'cached-price-row',
+        rates: {
+          tierKey: 200_000,
+          input: 10 / 1_000_000,
+          output: 30 / 1_000_000,
+          cacheRead: expect.closeTo(1 / 1_000_000, 12),
+          cacheWrite: expect.closeTo(12.5 / 1_000_000, 12),
+        },
+      });
       // 10 uncached + 50K read at 0.1x + 2K written at 1.25x, and 1000 output.
       expect(event.costUsd).toBeCloseTo((10 * 10 + 50_000 * 1 + 2_000 * 12.5 + 1000 * 30) / 1_000_000, 9);
     });

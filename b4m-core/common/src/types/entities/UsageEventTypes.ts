@@ -148,7 +148,14 @@ export const UsageEvent = z.object({
   /**
    * Rates of the tier applied. A multi-turn row whose turns hit different tiers carries the
    * tier of its largest turn; turnUsage has each turn's own tierKey, but not that tier's rates,
-   * so only a single-tier row is exactly recomputable from its own fields.
+   * so only a single-tier text charge is recomputable from its own fields. Provider-basis chat
+   * rows use providerInputTokens/providerOutputTokens plus the cache buckets. Local-estimate chat
+   * rows use input * (inputTokens - cachedInputTokens) + cacheRead * cachedInputTokens
+   * + output * outputTokens. Operational and CLI rows use disjoint input/cache buckets instead:
+   * input * inputTokens + cacheRead * cachedInputTokens + cacheWrite * cacheWriteTokens
+   * + output * outputTokens, even when settledBasis is 'local' or unset.
+   * Local-estimate chat rows are inexact when a fallback uses a different tokenEstimateMultiplier:
+   * inputTokens remains in the requested model's units. Tool spend on other models is not covered.
    */
   rates: UsageEventRates.optional(),
   /**

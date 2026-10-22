@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { CompletionInfo } from '@bike4mind/common';
+import type { CompletionInfo, IUsageEventRepository } from '@bike4mind/common';
 
 const perM = (usd: number) => usd / 1_000_000;
 
@@ -31,6 +31,7 @@ vi.mock('./creditService', async importOriginal => ({
   subtractCredits: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('@bike4mind/llm-adapters', () => ({
+  buildApiKeyTable: (keys: object) => keys,
   reasonsWithinOutputBudget: vi.fn(() => false),
   isAdaptiveThinkingByDefault: vi.fn(() => false),
   resolveOutputMaxTokens: vi.fn(
@@ -52,20 +53,20 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   getSettingsByNames: vi.fn(),
 }));
 
-import { executeCompletion } from './cliCompletions';
+import { executeCompletion, type CompletionParams } from './cliCompletions';
 
-// any: partial repository doubles - only the methods executeCompletion calls are stubbed.
+// Only the repository methods used by this completion path need doubles.
 function buildDb() {
   const user = { id: 'user1', currentCredits: 1_000_000 };
   return {
-    adminSettings: {} as any,
-    apiKeys: {} as any,
-    creditTransactions: {} as any,
+    adminSettings: {},
+    apiKeys: {},
+    creditTransactions: {},
     users: {
       incrementCredits: vi.fn().mockResolvedValue(user),
       findById: vi.fn().mockResolvedValue(user),
-    } as any,
-    usageEvents: { record: vi.fn().mockResolvedValue(undefined) } as any,
+    },
+    usageEvents: { record: vi.fn<IUsageEventRepository['record']>().mockResolvedValue(null) },
   };
 }
 
@@ -77,7 +78,8 @@ async function runAndGetEvent(info: CompletionInfo, opts: { fail?: boolean } = {
     userId: 'user1',
     model: 'tiered-model',
     messages: [{ role: 'user', content: 'hi' }],
-    db,
+    // The real repositories have unrelated methods this focused double does not exercise.
+    db: db as unknown as CompletionParams['db'],
     onChunk: vi.fn().mockResolvedValue(undefined),
     alwaysRecordUsage: true,
   });
@@ -150,7 +152,7 @@ describe('executeCompletion - UsageEvent price stamp', () => {
     });
     expect(event.turnUsage).toHaveLength(100);
     expect(event.turnUsageTruncated).toBe(true);
-    expect(event.turnUsage.at(-1)).toEqual({ inputTokens: 20, outputTokens: 2, tierKey: 200_000 });
+    expect(event.turnUsage?.at(-1)).toEqual({ inputTokens: 20, outputTokens: 2, tierKey: 200_000 });
   });
 
   it('stamps the errored-run usage event the same way', async () => {

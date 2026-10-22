@@ -32,7 +32,11 @@ vi.mock('@server/utils/errors', () => ({
 }));
 
 vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn() }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn(async () => null) }));
+// parseAdminActionReason stays real so the route's required-reason check runs here too.
+vi.mock('@server/utils/adminAudit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@server/utils/adminAudit')>()),
+  recordAdminActionFromRequest: vi.fn(async () => null),
+}));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws-endpoint' } } }));
 
 const mockAudit = vi.mocked((await import('@server/utils/adminAudit')).recordAdminActionFromRequest);
