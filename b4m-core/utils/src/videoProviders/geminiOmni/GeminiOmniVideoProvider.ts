@@ -14,6 +14,7 @@ import {
   type ProviderJobHandle,
   type ProviderOutput,
   type ProviderPollResult,
+  findInputImage,
   type ResolvedInputs,
   type VideoProvider,
   type VideoProviderContext,
@@ -57,11 +58,12 @@ const isUnknownInteraction = (raw: unknown): boolean => {
 const isBlockedHandle = (handle: ProviderJobHandle): boolean => handle.data.blocked === true;
 
 const buildSubmitBody = (request: ValidatedVideoRequest, inputs: ResolvedInputs) => {
+  const firstFrame = findInputImage(inputs, 'first_frame');
   let input: unknown = request.prompt;
   if (request.mode === 'image_to_video') {
-    if (!inputs.inputImage) throw new ProviderSubmitError('gemini_omni_missing_input_image', true, undefined, false);
+    if (!firstFrame) throw new ProviderSubmitError('gemini_omni_missing_input_image', true, undefined, false);
     input = [
-      { type: 'image', data: inputs.inputImage.bytes.toString('base64'), mime_type: inputs.inputImage.mimeType },
+      { type: 'image', data: firstFrame.bytes.toString('base64'), mime_type: firstFrame.mimeType },
       { type: 'text', text: request.prompt },
     ];
   }

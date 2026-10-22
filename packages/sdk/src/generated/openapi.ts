@@ -3896,6 +3896,7 @@ export interface components {
         | 'unsupported_mode'
         | 'missing_input_image'
         | 'unexpected_input_image'
+        | 'unsupported_input_role'
         | 'unsupported_audio_option'
         | 'invalid_request'
         | 'model_disabled'
@@ -3921,6 +3922,7 @@ export interface components {
         | 'unsupported_mode'
         | 'missing_input_image'
         | 'unexpected_input_image'
+        | 'unsupported_input_role'
         | 'unsupported_audio_option'
         | 'invalid_request'
         | 'model_disabled'
@@ -3941,7 +3943,7 @@ export interface components {
       model: string;
       prompt: string;
       /**
-       * @description Defaults to image_to_video when input_image_file_id is set, else text_to_video.
+       * @description Defaults to image_to_video when a first_frame input (or input_image_file_id) is set, else text_to_video.
        * @enum {string}
        */
       mode?: 'text_to_video' | 'image_to_video';
@@ -3951,7 +3953,13 @@ export interface components {
       aspect_ratio?: '16:9' | '9:16' | '1:1' | '4:3' | '3:4' | '3:2' | '2:3' | '21:9';
       /** @enum {string} */
       resolution?: '360p' | '480p' | '720p' | '1080p' | '4k';
-      /** @description An image file you own, for image_to_video. */
+      /** @description Image files you own, each tagged with what it is for. image_to_video needs a first_frame. The roles a model accepts, and how many of each, are its input_roles in GET /api/v1/video-models. */
+      inputs?: {
+        file_id: string;
+        /** @enum {string} */
+        role: 'first_frame' | 'last_frame' | 'reference' | 'style';
+      }[];
+      /** @description Deprecated: send inputs with role first_frame instead. Cannot be combined with inputs. */
       input_image_file_id?: string;
       audio?: boolean;
       /** @description The organization to bill: one you belong to, or null for your personal credits. Omitted bills your home organization, or your personal credits if you have none. An organization-billed API key always bills its own organization: omit this or set it to the key's organization; any other value, null included, is rejected with a 403 (`errorCode: billing_organization_mismatch`). */
@@ -4095,6 +4103,11 @@ export interface components {
         display_name: string;
         provider: string;
         modes: ('text_to_video' | 'image_to_video')[];
+        /** @description The inputs[] roles this model accepts and the most of each one request may carry. Roles today: first_frame, last_frame, reference, style; ignore any you do not know. */
+        input_roles?: {
+          role: string;
+          max: number;
+        }[];
         duration:
           | {
               /** @enum {string} */
@@ -11391,7 +11404,7 @@ export interface operations {
           'application/json': components['schemas']['createVideoGenerationResponse403'];
         };
       };
-      /** @description `input_image_file_id` does not name an image you own (`errorCode: input_image_not_found`). A nonexistent `organization_id` is `404` only for an admin caller; for anyone else it is `403`. */
+      /** @description An `inputs` file (or `input_image_file_id`) does not name an image you own (`errorCode: input_image_not_found`). A nonexistent `organization_id` is `404` only for an admin caller; for anyone else it is `403`. */
       404: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -11427,7 +11440,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The request cannot run: a body or capability violation (`errorCode` names it, e.g. `unsupported_duration`), an unknown or unavailable model (`model_unavailable`), a model your administrator disabled (`model_disabled`), too few credits (`insufficient_credits`), or an Idempotency-Key problem (`invalid_idempotency_key`, `idempotency_key_reused`). */
+      /** @description The request cannot run: a body or capability violation (`errorCode` names it, e.g. `unsupported_duration`, or `unsupported_input_role` for an input role the model does not take), an unknown or unavailable model (`model_unavailable`), a model your administrator disabled (`model_disabled`), too few credits (`insufficient_credits`), or an Idempotency-Key problem (`invalid_idempotency_key`, `idempotency_key_reused`). */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
