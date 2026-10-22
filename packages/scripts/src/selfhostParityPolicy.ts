@@ -719,7 +719,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     {
       source: 'apps/workers/src/selfhost/integrationHealthCheck.ts',
       symbol: 'registerIntegrationHealthCheck',
-      fingerprint: '8a4b740cf866946f329ab72221ffecd73a239515250f720a52355cd55c443162',
+      fingerprint: '8db42864301d582151bd835a485f99e2d3c5a5a48241e198a9d7e09089f07523',
     },
     ['cloudwatch:PutMetricData']
   ),
