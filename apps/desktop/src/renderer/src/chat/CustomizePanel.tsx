@@ -333,17 +333,26 @@ function SkillsSettings({
 
   return (
     <Stack spacing={2.5} data-testid="skills-settings">
-      <Input
-        size="sm"
-        value={query}
-        onChange={event => {
-          setQuery(event.target.value);
-          setCollapsedWhileFiltering(new Set());
-        }}
-        placeholder="Filter skills"
-        startDecorator={<SearchIcon />}
-        slotProps={{ input: { 'data-testid': 'skills-filter-input', 'aria-label': 'Filter skills' } }}
-      />
+      {/* Collapse all sits beside the filter because it covers the Bike4Mind group above Your skills too. */}
+      <Stack direction="row" spacing={1} alignItems="center">
+        <Input
+          size="sm"
+          value={query}
+          onChange={event => {
+            setQuery(event.target.value);
+            setCollapsedWhileFiltering(new Set());
+          }}
+          placeholder="Filter skills"
+          startDecorator={<SearchIcon />}
+          slotProps={{ input: { 'data-testid': 'skills-filter-input', 'aria-label': 'Filter skills' } }}
+          sx={{ flex: 1 }}
+        />
+        {collapsibleKeys.length > 0 && (
+          <Button size="sm" variant="plain" color="neutral" onClick={toggleAll} data-testid="skills-collapse-all-btn">
+            {anyOpen ? 'Collapse all' : 'Expand all'}
+          </Button>
+        )}
+      </Stack>
       {shownAccountGroup && (
         <SkillGroup
           group={shownAccountGroup}
@@ -360,12 +369,6 @@ function SkillsSettings({
           <Chip size="sm" variant="soft" color="neutral">
             {userSkillCount}
           </Chip>
-          <Box sx={{ flex: 1 }} />
-          {collapsibleKeys.length > 0 && (
-            <Button size="sm" variant="plain" color="neutral" onClick={toggleAll} data-testid="skills-collapse-all-btn">
-              {anyOpen ? 'Collapse all' : 'Expand all'}
-            </Button>
-          )}
         </Stack>
         {userGroups.length === 0 ? (
           <Sheet variant="soft" sx={{ borderRadius: 'md', px: 1.5, py: 1.25 }}>
