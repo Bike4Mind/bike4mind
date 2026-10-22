@@ -45,14 +45,14 @@ const wired = (
 
 // Reviewed snapshots, never automatically refreshed by CI. Portable means wiring only.
 export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
-  gap('event:infra/eventBus.ts:email-send', 'dc02074bef62eff726cebf1a226ea2788040941b8db0e3dec3e672a5b1fd347f'),
+  gap('event:infra/eventBus.ts:email-send', '0e48a9898460b91767ef235281d7b6467842413da9edc30ecc70883dbd9b07b0'),
   gap(
     'event:infra/eventBus.ts:notebook-curation-complete-analytics',
-    'f9919e513644fa6c9609ef01d57f90e51f3673b32a3b02c70a61bce2b1e960a4'
+    '7e807bda4de2e0da8fe5ca0c9758b33fba25e044799037c9dbb601fb25096c57'
   ),
   wired(
     'event:infra/eventBus.ts:notebook-curation-start',
-    'cab051f1d3bc732ab76434d7bade46b4376f5333f0ac097eaa5571bbed1118ac',
+    'f1e5e2a91a154abc94d2b167acd516c108b31b004be17790f925c10dd7c73c16',
     {
       source: 'apps/workers/src/selfhost/eventDispatch.ts',
       symbol: 'event:notebook.curation.start',
@@ -100,18 +100,18 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     },
     ['bedrock:*']
   ),
-  gap('event:infra/eventBus.ts:spider-start', 'e98531ff4418a86b9df57341a45ee0b66d1f05c29a04b7e3619453faf2360136', [
+  gap('event:infra/eventBus.ts:spider-start', 'a16745e42ae1d031375245e97dc1b33c92c074bffc6eb77d95f07a25881b2a63', [
     'bedrock:*',
   ]),
   gap('event:infra/eventBus.ts:SreFixDispatch', 'fa1122e45e2de82ee4a61c73ce860a679f2f5ce735bc628dd56a35c82977a648'),
   gap(
     'event:infra/eventBus.ts:stripe-customer-subscription-updated',
-    '9323d25fdf383adea905680d672974564d4822f6ca0460835a48c2467546f876',
+    '7ce1847e6308abbb3d34b12d41306bfdfcb409de40daa7d94670aa8433234fc6',
     ['cloudwatch:PutMetricData']
   ),
   gap(
     'event:infra/eventBus.ts:stripe-invoice-payment-succeeded',
-    '316503ee48b058f3c6ee3ae0baf0484d05d8f14f04109919374f7d08fb5faffc',
+    '737799a76fe25e475bcf687ca3867145f703e8f25e9fde088ef9d91d90700dc2',
     ['cloudwatch:PutMetricData']
   ),
   gap('event:infra/eventBus.ts:telemetry-alert', 'a84bb98b72fccf9647ea90dd53ccff2db7ca562a064dabdf4355e211990ffaa5', [
@@ -119,7 +119,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ]),
   wired(
     'event:infra/llm.ts:create-memento',
-    'fa32f692e2414afdd751b6900f04f08e71b6b31493dad8ef9a7f25cc970cd2a6',
+    '2d3976b916feadd7570c505066bd99b572ea6e2d8d7f6940778cb2e0972a1374',
     {
       source: 'apps/workers/src/selfhost/eventDispatch.ts',
       symbol: 'event:completion.completed',
@@ -219,12 +219,38 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     '6d6a3df0afbdc622c4cac46865a7875da157e26a9f0d4295a491faf9ec1d2968'
   ),
   broker(
+    'queue:infra/eventBus.ts:emailSendRuleDLQ',
+    'bdbd76198f0b80d11d722d73e452835742b5f010a8a55bdf2f21a9945d8f8b2b'
+  ),
+  broker(
+    'queue:infra/eventBus.ts:notebookCurationAnalyticsRuleDLQ',
+    '0759a0f658ad0c64497f7be100e73045168c1123d50a7b7731f1f2a138209dbc'
+  ),
+  broker(
+    'queue:infra/eventBus.ts:notebookCurationStartRuleDLQ',
+    '21fd502d907caaac993ca13cccc0f3226963c99829a723ce9c87054f3acbd1de'
+  ),
+  broker(
     'queue:infra/eventBus.ts:sessionEnrichmentDLQ',
     'afb741bc0a0d45baea9c5c3f0665664c72d01869c76cb22c2c1cdae9ff47035a'
+  ),
+  broker('queue:infra/eventBus.ts:spiderRuleDLQ', 'f55a7cd58c7139980caa09bc48b2eb99cc1f321b4cf7253c581a0b31d822f91e'),
+  broker(
+    'queue:infra/eventBus.ts:stripeCustomerSubscriptionUpdatedRuleDLQ',
+    '121e93b121f68ff3659099dfd3a775de2055c7cea68d3faf6bafb2368892c3b5'
+  ),
+  broker(
+    'queue:infra/eventBus.ts:stripeInvoicePaymentSucceededRuleDLQ',
+    '54cd64cd75d7e09f8b0430a217a97b90393abb30020a785e20b864c9604d5a89'
   ),
   broker(
     'queue:infra/eventBus.ts:telemetryAlertRuleDLQ',
     '65f5b9e522854e4e0dc8eab7245b7e37acfc5ad1be8139a52be0d75d981b46a0'
+  ),
+  broker('queue:infra/llm.ts:createMementoRuleDLQ', '05934de58f7756e87b8b93371f64016745c3bab526cbcef46005618362052fdb'),
+  broker(
+    'queue:infra/llm.ts:slackCompletionStartRuleDLQ',
+    '4c8209cdfbc05bbc54e990877a65805eada3a74e209986e554011222c5296bc9'
   ),
   gap(
     'queue:infra/queues.ts:agentContinuationQueue',
