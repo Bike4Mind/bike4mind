@@ -31,6 +31,11 @@ const gap = (id: string, fingerprint: string, signals: string[] = []): ParityPol
   reviewed(id, fingerprint, 'pending', signals);
 const broker = (id: string, fingerprint: string, signals: string[] = []): ParityPolicyEntry =>
   reviewed(id, fingerprint, 'excluded', signals);
+// Excluded because the capability only exists on the hosted deployment, so the reason is per entry.
+const hostedOnly = (id: string, fingerprint: string, reason: string, signals: string[] = []): ParityPolicyEntry => ({
+  ...reviewed(id, fingerprint, 'excluded', signals),
+  reason,
+});
 const wired = (
   id: string,
   fingerprint: string,
@@ -627,11 +632,16 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
       fingerprint: '0c849457ddc4e06c07e6ad9a52d4098359838ad885f25824720da1795e75e606',
     }
   ),
-  gap(
+  hostedOnly(
     'schedule:infra/cron.ts:attackSimulationCron',
-    '493f4ece19e6b0e52c0e9c8fb43fc08245e69c98fb763ce06c8ed67c474e85e8'
+    '493f4ece19e6b0e52c0e9c8fb43fc08245e69c98fb763ce06c8ed67c474e85e8',
+    'Inspects the hosted cloud account or dispatches hosted CI; not applicable to a portable deployment.'
   ),
-  gap('schedule:infra/cron.ts:CloudSecurityScan', 'e4c54adf04e623e4ddabdc158aa2d3304bf8d0a29fd6c68cd9018f3e1893194b'),
+  hostedOnly(
+    'schedule:infra/cron.ts:CloudSecurityScan',
+    'e4c54adf04e623e4ddabdc158aa2d3304bf8d0a29fd6c68cd9018f3e1893194b',
+    'Inspects the hosted cloud account or dispatches hosted CI; not applicable to a portable deployment.'
+  ),
   wired(
     'schedule:infra/cron.ts:creditHoldSweep',
     '89a0eb8abf6a7ec5b2e6ce52e61b52df542e3e62b422a9ef03952b1abadaf0ce',
@@ -652,9 +662,10 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'ff04c893f2101dd6edb7d0ca04a576b7ff75fb28cb45fcf3add98cd6f1948032',
     ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
   ),
-  gap(
+  hostedOnly(
     'schedule:infra/cron.ts:dailyUserActivityReport',
-    '25dad0aee60758280848e2628a46a060b37d86cfc642c5082b03c41684992fbc'
+    '25dad0aee60758280848e2628a46a060b37d86cfc642c5082b03c41684992fbc',
+    'Hosted production analytics report; not applicable to a portable deployment.'
   ),
   wired(
     'schedule:infra/cron.ts:dataLakeBatchReconcile',
@@ -736,9 +747,10 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     },
     ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
   ),
-  gap(
+  hostedOnly(
     'schedule:infra/cron.ts:liveopsTriageDispatcherCron',
     '48ebe9d6b063f00792cc820bb1c2c6557b0649273addde5bf55be7034722fe39',
+    'Hosted error triage and auto-fix dispatch; not applicable to a portable deployment.',
     ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
   ),
   wired(
@@ -794,9 +806,10 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'schedule:infra/cron.ts:secretRotationNotifier',
     '53ce6957dc65b2898314c65405ebf7a4b16a7471bedb6ccd8ed642e0ced5ed2e'
   ),
-  gap(
+  hostedOnly(
     'schedule:infra/cron.ts:securityScanScheduler',
     '937c351074f20bfa1f240fab190968f89b0acecae4f8e6cf38620b97ba44ff21',
+    'Inspects the hosted cloud account or dispatches hosted CI; not applicable to a portable deployment.',
     ['events:*']
   ),
   wired(
@@ -814,13 +827,15 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     '57c3ffee025c3ca6cc34b1a3659e0b3997e4dab02136a084c5a67da657c75624',
     ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
   ),
-  gap(
+  hostedOnly(
     'schedule:infra/cron.ts:signupBaselineReport',
-    'c5e21ed10e3d8b48ba363af2d0422119287414d2a0fce925897b7925e55b1a27'
+    'c5e21ed10e3d8b48ba363af2d0422119287414d2a0fce925897b7925e55b1a27',
+    'Hosted production analytics report; not applicable to a portable deployment.'
   ),
-  gap(
+  hostedOnly(
     'schedule:infra/cron.ts:SreStaleDispatchCron',
-    '40b5809d38bd8ac7c195c309c64f592d07dfed93c9fad1541765c4d94cc70dbd'
+    '40b5809d38bd8ac7c195c309c64f592d07dfed93c9fad1541765c4d94cc70dbd',
+    'Hosted error triage and auto-fix dispatch; not applicable to a portable deployment.'
   ),
   wired('schedule:infra/cron.ts:telemetryCleanup', '720c1dfcfd8c320446a2334585ef3b6d08af343aae67c8b6f3a12bc2388cff9d', {
     source: 'apps/workers/src/selfhost/telemetryCleanup.ts',
@@ -837,18 +852,23 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     },
     ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
   ),
-  gap(
+  hostedOnly(
     'schedule:infra/cron.ts:weeklyUserActivityReport',
-    '1b96e0c9771ef7c02e7791e814f07c88cf23e8c02f0408d10d3de9b583111f70'
+    '1b96e0c9771ef7c02e7791e814f07c88cf23e8c02f0408d10d3de9b583111f70',
+    'Hosted production analytics report; not applicable to a portable deployment.'
   ),
-  gap(
+  hostedOnly(
     'schedule:infra/cron.ts:whatsNewHighlightsCron',
     'be68c74f51033aa9ad7f4a49c7d85ec9acdb9d88e202eb00dbfe96cf0953063c',
+    'Imports hosted announcements and is disabled even on hosted; not applicable to a portable deployment.',
     ['cloudwatch:PutMetricData']
   ),
-  gap('schedule:infra/cron.ts:whatsNewSyncCron', 'c22c6f1da3086a35aef715f6e018e820751605f3b9bd9015ec3066fb890198cd', [
-    'cloudwatch:PutMetricData',
-  ]),
+  hostedOnly(
+    'schedule:infra/cron.ts:whatsNewSyncCron',
+    'c22c6f1da3086a35aef715f6e018e820751605f3b9bd9015ec3066fb890198cd',
+    'Imports hosted announcements; not applicable to a portable deployment.',
+    ['cloudwatch:PutMetricData']
+  ),
   gap(
     'schedule:infra/securityAlerts.ts:SecurityAlertsSchedule',
     'aa4dee6442687bf18f254f1de11a4180049760781332890f006025e80f059ca6',
