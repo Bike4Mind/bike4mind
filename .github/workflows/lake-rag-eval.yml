@@ -2,7 +2,7 @@ name: Lake RAG Eval (staging)
 
 # Runs the live lake retrieval eval (b4m-core/services/src/llm/evals/lakeRag/run.live.test.ts)
 # against staging and fails when a banded metric leaves the noise band in that directory's README
-# (10 points pass rate, 5 points retrieval rate) relative to the committed baseline.
+# (10 points pass rate, 5 points retrieval rate, 10 points multi-lake drop) relative to the committed baseline.
 # The band is two-sided: an out-of-band improvement fails too, and is fixed by re-recording.
 #
 # The baseline comparison does not check which model produced the baseline, so a gated run takes
@@ -170,7 +170,8 @@ jobs:
           {
             echo '## Lake RAG eval (staging)'
             echo '```'
-            sed -n '/^lake RAG eval:/,/^$/p' "$RUNNER_TEMP/lakerag-output.txt" 2>/dev/null || echo 'No report printed (the run failed before scoring).'
+            OUT=$(sed -n '/^lake RAG eval:/,/^$/p' "$RUNNER_TEMP/lakerag-output.txt" 2>/dev/null)
+            echo "${OUT:-No report printed (the run failed before scoring).}"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -213,7 +214,7 @@ jobs:
           else
             SUMMARY='_No report: the run failed before scoring._'
           fi
-          # Keep the payload valid JSON: the verdict line can carry quotes from a metric name.
+          # Defensive: every field in SUMMARY is a fixed string or number today; strip quotes so a future free-text field cannot break the payload.
           SUMMARY=$(printf '%s' "$SUMMARY" | tr -d '"')
           echo "text=$SUMMARY" >> "$GITHUB_OUTPUT"
 
