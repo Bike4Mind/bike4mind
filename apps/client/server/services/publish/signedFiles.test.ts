@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   bufferedContentType,
   inlineTypeFor,
+  isRedirectedFetchDest,
   isSafeSignedOrigin,
   isStreamedFile,
   mediaLinkTtlSeconds,
@@ -112,4 +113,20 @@ describe('signed link lifetimes', () => {
     // Another gate (no proof cookie) gets the ceiling.
     expect(mediaLinkTtlSeconds(null)).toBe(2 * 60 * 60);
   });
+});
+
+describe('isRedirectedFetchDest', () => {
+  it.each(['video', 'audio', 'track', 'document', 'iframe', 'frame', 'embed', 'object'])(
+    'redirects a %s load',
+    dest => {
+      expect(isRedirectedFetchDest(dest)).toBe(true);
+    }
+  );
+
+  it.each([['empty'], ['script'], ['style'], ['image'], ['font'], ['worker'], [undefined], [['video', 'audio']]])(
+    'keeps a %s request on the buffered path',
+    dest => {
+      expect(isRedirectedFetchDest(dest as string | string[] | undefined)).toBe(false);
+    }
+  );
 });

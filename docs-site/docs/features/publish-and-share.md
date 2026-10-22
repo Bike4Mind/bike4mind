@@ -111,6 +111,10 @@ display name or username does not select a publishing namespace.
   page expires (at most 2 hours). Unpublishing an artifact or changing its passphrase
   does not revoke links already issued. Treat a passphrase change as taking effect once
   those windows have passed.
+- A script in the page that loads its own audio, video or PDF (for example with `fetch`)
+  gets the file from the page's own address, so it works as long as the file is under
+  about 4 MB. Larger files, and files played by a plain `<video>`/`<audio>` element, come
+  from file storage.
 - Other files (archives, SVG, data files) download when opened. Add `?download=1` to any
   file's URL, a page's included, to download it instead of viewing it.
 - WebAssembly modules are served as `application/octet-stream`, so

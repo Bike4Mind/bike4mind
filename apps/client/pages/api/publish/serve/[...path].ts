@@ -33,8 +33,10 @@ import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import { parsePublishPath } from '@server/services/publish/parsePublishPath';
 import { HASH_BRIDGE_JS } from '@server/services/publish/fragmentNav';
 import {
+  BUFFERED_FILE_MAX_BYTES,
   SIGNED_LINK_TTL_SECONDS,
   bufferedContentType,
+  isRedirectedFetchDest,
   mediaLinkTtlSeconds,
   inlineTypeFor,
   isSafeSignedOrigin,
@@ -768,7 +770,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     }
     const wantsDownload = req.query.download === '1';
     // One URL answers with a redirect or with bytes depending on how it was requested.
-    res.setHeader('Vary', 'Sec-Fetch-Dest');
+    res.setHeader('Vary', 'Sec-Fetch-Dest, Sec-Fetch-Mode');
     // `?sign=1`: the loader shell's Bearer-authorized request for a signed link it can open
     // at top level (a plain navigation there carries no credential). Gate already passed.
     if (req.query.sign === '1') {
@@ -776,10 +778,17 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
       res.setHeader('Cache-Control', 'private, no-store');
       return url ? res.status(200).json({ url }) : res.status(404).json({ error: 'Not found' });
     }
-    // Video/audio/PDF always, and anything opened at top level or asked for as a download:
-    // storage serves it (Range, any size, byte-exact). Subresources such as CSS keep the
-    // buffered path below. A missing Sec-Fetch-Dest (older UA, scripts) also stays buffered.
-    if (wantsDownload || isStreamedFile(assetPath) || req.headers['sec-fetch-dest'] === 'document') {
+    // Storage serves a file (Range, any size, byte-exact) when it is a download, too large to
+    // buffer, or loaded by a media element, a frame or a top-level navigation. Everything else
+    // keeps the buffered same-origin path below: subresources such as CSS, and script loads
+    // (`fetch`/XHR, a `crossorigin` media element), which arrive with an empty or missing
+    // Sec-Fetch-Dest or in CORS mode. A redirect would break those, because the isolated
+    // origin's CSP has `connect-src 'self'` and the bucket's CORS does not list it.
+    if (
+      wantsDownload ||
+      (fileEntry.size ?? 0) > BUFFERED_FILE_MAX_BYTES ||
+      (isRedirectedFetchDest(req.headers['sec-fetch-dest']) && req.headers['sec-fetch-mode'] !== 'cors')
+    ) {
       const url = await signFile(assetPath, wantsDownload, SIGNED_LINK_TTL_SECONDS);
       if (url) {
         res.setHeader('Cache-Control', 'private, no-store');
@@ -1539,7 +1548,7 @@ interface PublishedArtifactLean {
   discoverable?: boolean;
   ownerId: string;
   storageKeyPrefix: string;
-  manifest: Array<{ path: string; mimeType: string }>;
+  manifest: Array<{ path: string; mimeType: string; size?: number }>;
   renderedBody?: string;
   /** Snapshot of the source reply's citables, so a `b4m_map` fence in `renderedBody` resolves
    *  even after the source Quest changes or is deleted. Reply source only. */

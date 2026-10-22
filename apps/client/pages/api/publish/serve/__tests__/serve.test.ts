@@ -109,6 +109,7 @@ type RunOpts = {
   download?: boolean;
   sign?: boolean;
   fetchDest?: string;
+  fetchMode?: string;
 };
 const run = (
   segments: string[],
@@ -127,6 +128,7 @@ const run = (
     download,
     sign,
     fetchDest,
+    fetchMode,
   }: RunOpts = {}
 ) => {
   const query: Record<string, unknown> = { path: segments };
@@ -144,6 +146,7 @@ const run = (
   if (cookie) headers.cookie = cookie;
   if (userAgent) headers['user-agent'] = userAgent;
   if (fetchDest) headers['sec-fetch-dest'] = fetchDest;
+  if (fetchMode) headers['sec-fetch-mode'] = fetchMode;
   const { req, res } = createMocks({ method: 'GET', query, headers });
   if (user) (req as Record<string, unknown>).user = user;
   return { res, promise: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res) };
@@ -3546,6 +3549,7 @@ describe('GET /api/publish/serve - signed file delivery', () => {
     { path: 'index.html', mimeType: 'text/html' },
     { path: 'player.html', mimeType: 'text/html' },
     { path: 'media/clip.mp4', mimeType: 'video/mp4' },
+    { path: 'media/sound.mp3', mimeType: 'audio/mpeg' },
     { path: 'media/still.jpg', mimeType: 'image/jpeg' },
     { path: 'files/deck.pdf', mimeType: 'application/pdf' },
     { path: 'files/evil.pdf', mimeType: 'text/html' },
@@ -3559,6 +3563,10 @@ describe('GET /api/publish/serve - signed file delivery', () => {
       '<html><body><video controls src="media/clip.mp4" poster="media/still.jpg"></video>' +
       '<a href="index.html">Back</a></body></html>',
     'user/scope123/my-slug/media/still.jpg': 'JPEG',
+    'user/scope123/my-slug/media/clip.mp4': 'MP4',
+    'user/scope123/my-slug/media/sound.mp3': 'MP3',
+    'user/scope123/my-slug/files/deck.pdf': '%PDF',
+    'user/scope123/my-slug/files/evil.pdf': '<script>1</script>',
     'user/scope123/my-slug/style.css': 'body{}',
     'user/scope123/my-slug/files/drawing.svg': '<svg/>',
   };
@@ -3655,6 +3663,55 @@ describe('GET /api/publish/serve - signed file delivery', () => {
   });
 
   it.each([
+    ['media/clip.mp4', 'video', undefined],
+    ['media/sound.mp3', 'audio', undefined],
+    ['media/sound.mp3', 'audio', 'no-cors'],
+    ['files/deck.pdf', 'document', 'navigate'],
+    ['files/deck.pdf', 'iframe', 'navigate'],
+    ['files/deck.pdf', 'embed', 'no-cors'],
+    ['files/deck.pdf', 'object', 'no-cors'],
+    ['media/still.jpg', 'document', 'navigate'],
+  ])('redirects %s loaded as a %s (mode %s) to signed storage', async (file, fetchDest, fetchMode) => {
+    mockArtifactFindOne.mockReturnValue(bundle({ manifest: FILES }));
+    const { res, promise } = run(['u', 'scope123', 'my-slug', ...file.split('/')], { fetchDest, fetchMode });
+    await promise;
+    expect(res._getStatusCode()).toBe(302);
+    expect(signedKey(res.getHeader('Location') as string)).toBe(`user/scope123/my-slug/${file}`);
+  });
+
+  it.each([
+    // fetch()/XHR: a library loading its own sound or document.
+    ['media/sound.mp3', 'empty', 'cors'],
+    ['files/deck.pdf', 'empty', 'cors'],
+    ['media/clip.mp4', 'empty', 'same-origin'],
+    // A UA that sends no fetch metadata.
+    ['media/clip.mp4', undefined, undefined],
+    // A `crossorigin` media element (Web Audio, a video drawn to a canvas).
+    ['media/sound.mp3', 'audio', 'cors'],
+    ['media/clip.mp4', 'video', 'cors'],
+  ])('serves %s loaded as %s (mode %s) same-origin from the buffered path', async (file, fetchDest, fetchMode) => {
+    mockArtifactFindOne.mockReturnValue(bundle({ manifest: FILES }));
+    const { res, promise } = run(['u', 'scope123', 'my-slug', ...file.split('/')], { fetchDest, fetchMode });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('Location')).toBeUndefined();
+    expect(res._getData().toString()).toBe(storage[`user/scope123/my-slug/${file}`]);
+    expect(mockGetSignedUrl).not.toHaveBeenCalled();
+  });
+
+  it('redirects a script load of a file too large for the buffered path', async () => {
+    const manifest = FILES.map(f => (f.path === 'media/clip.mp4' ? { ...f, size: 5 * 1024 * 1024 } : f));
+    mockArtifactFindOne.mockReturnValue(bundle({ manifest }));
+    const { res, promise } = run(['u', 'scope123', 'my-slug', 'media', 'clip.mp4'], {
+      fetchDest: 'empty',
+      fetchMode: 'cors',
+    });
+    await promise;
+    expect(res._getStatusCode()).toBe(302);
+    expect(mockDownload).not.toHaveBeenCalled();
+  });
+
+  it.each([
     ['the app host', 'https://app.bike4mind.com'],
     ['an artifact usercontent host', 'https://pub1.usercontent.app.bike4mind.com'],
   ])('refuses to hand out signed links on %s and falls back to the buffered path', async (_label, origin) => {
@@ -3692,13 +3749,13 @@ describe('GET /api/publish/serve - signed file delivery', () => {
     const nav = run(['u', 'scope123', 'my-slug', 'media', 'still.jpg'], { fetchDest: 'document' });
     await nav.promise;
     expect(nav.res._getStatusCode()).toBe(302);
-    expect(nav.res.getHeader('Vary')).toBe('Sec-Fetch-Dest');
+    expect(nav.res.getHeader('Vary')).toBe('Sec-Fetch-Dest, Sec-Fetch-Mode');
 
     mockArtifactFindOne.mockReturnValue(bundle({ manifest: FILES }));
     const img = run(['u', 'scope123', 'my-slug', 'media', 'still.jpg'], { fetchDest: 'image' });
     await img.promise;
     expect(img.res._getStatusCode()).toBe(200);
-    expect(img.res.getHeader('Vary')).toBe('Sec-Fetch-Dest');
+    expect(img.res.getHeader('Vary')).toBe('Sec-Fetch-Dest, Sec-Fetch-Mode');
   });
 
   it('caps media links in a gated render at the remaining proof lifetime', async () => {
@@ -3766,7 +3823,6 @@ describe('GET /api/publish/serve - signed file delivery', () => {
     const indexHtml = index.res._getData() as string;
     expect(indexHtml).not.toContain('passphrase-protected');
     expect(indexHtml).toContain('href=&quot;https://app.bike4mind.com/p/u/scope123/my-slug/player.html&quot;');
-
     // 3. Player page: no second prompt, the video and poster point at signed storage URLs, and
     //    the wrapper CSP (which the srcdoc inherits) admits exactly that storage origin.
     mockArtifactFindOne.mockReturnValue(gated());

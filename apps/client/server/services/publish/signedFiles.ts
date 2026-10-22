@@ -65,6 +65,20 @@ export function mediaLinkTtlSeconds(proofSecondsLeft: number | null): number {
   return Math.max(MIN_MEDIA_TTL_SECONDS, Math.min(SIGNED_MEDIA_TTL_SECONDS, proofSecondsLeft));
 }
 
+/**
+ * Largest file the buffered path is asked to send; anything bigger goes by signed link
+ * whatever the request, since the buffered response caps out at roughly 4.5 MB.
+ */
+export const BUFFERED_FILE_MAX_BYTES = 4 * 1024 * 1024;
+
+/** Sec-Fetch-Dest values whose loader follows a cross-origin redirect: media, frames, navigations. */
+const REDIRECTED_FETCH_DESTS = new Set(['video', 'audio', 'track', 'document', 'iframe', 'frame', 'embed', 'object']);
+
+/** True when a request with this `Sec-Fetch-Dest` may be answered by a redirect to signed storage. */
+export function isRedirectedFetchDest(dest: string | string[] | undefined): boolean {
+  return typeof dest === 'string' && REDIRECTED_FETCH_DESTS.has(dest);
+}
+
 function extensionOf(path: string): string {
   const name = path.slice(path.lastIndexOf('/') + 1);
   const dot = name.lastIndexOf('.');
