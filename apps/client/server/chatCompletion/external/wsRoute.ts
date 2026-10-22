@@ -3,6 +3,7 @@ import express, { type Request, type Response, type Express } from 'express';
 import {
   CompletionRequestSchema,
   buildCompletionStreamEvent,
+  HTTPError,
   IMessage,
   normalizeCompletionRequest,
   resolveApiCompletionSource,
@@ -279,7 +280,8 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
             logger,
           });
         } catch (error) {
-          logger.error('[CLI_WS_HTTP] Completion error:', error);
+          const level = error instanceof HTTPError && error.statusCode < 500 ? 'warn' : 'error';
+          logger[level]('[CLI_WS_HTTP] Completion error:', error);
           track(emitProcessingFailed('cli-ws', error));
 
           // The 202 is long gone - the error must reach the CLI over the WebSocket.

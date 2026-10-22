@@ -77,6 +77,11 @@ describe('buildOpenApiDocument', () => {
     expect(tools.responses['500'].content['application/json'].schema).toEqual(ref('executeToolResponse500'));
   });
 
+  it('publishes the completions message minimum from the shared request schema', () => {
+    const requestSchema = doc.components.schemas.createCompletionRequest;
+    expect(requestSchema.properties.messages.minItems).toBe(1);
+  });
+
   it('provides request AND response examples for both operations', () => {
     expect(doc.components.schemas.createCompletionRequest.example).toBeDefined();
     expect(doc.components.schemas.createCompletionResponse200.example).toBeDefined();

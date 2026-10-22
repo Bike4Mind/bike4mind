@@ -2,6 +2,7 @@ import { createCompletionCreditHolds } from '@server/billing/completionCreditHol
 import {
   CliCompletionRequestAction,
   buildCompletionStreamEvent,
+  HTTPError,
   IMessage,
   type CompletionSource,
   type TurnUsage,
@@ -231,7 +232,8 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       logger: logger as unknown as Logger,
     });
   } catch (error) {
-    logger.error('[CLI_WS] Completion error:', error);
+    const level = error instanceof HTTPError && error.statusCode < 500 ? 'warn' : 'error';
+    logger[level]('[CLI_WS] Completion error:', error);
 
     // Send error to client
     await sendToConnection(connectionId, endpoint, {

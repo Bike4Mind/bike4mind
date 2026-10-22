@@ -247,7 +247,13 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       }
 
       const parsed = CompletionRequestSchema.safeParse(req.body);
-      if (!parsed.success) throw new UnprocessableEntityError(fromZodError(parsed.error).message);
+      if (!parsed.success) {
+        const errorMessage = fromZodError(parsed.error).message;
+        const emptyMessages = parsed.error.issues.some(
+          issue => issue.code === 'too_small' && issue.path.length === 1 && issue.path[0] === 'messages'
+        );
+        throw emptyMessages ? new BadRequestError(errorMessage) : new UnprocessableEntityError(errorMessage);
+      }
       body = normalizeCompletionRequest(parsed.data);
 
       let authResult;

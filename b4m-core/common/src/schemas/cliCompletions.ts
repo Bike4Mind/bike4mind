@@ -199,7 +199,7 @@ export type CompletionMessage = z.infer<typeof CompletionMessageSchema>;
  */
 export const CompletionRequestSchema = z.object({
   model: z.string().max(256),
-  messages: z.array(CompletionMessageSchema),
+  messages: z.array(CompletionMessageSchema).min(1),
   response_format: ResponseFormatSchema.optional(),
   stream: z.boolean().optional(),
   tools: z.array(CompletionToolSchema).optional(),
