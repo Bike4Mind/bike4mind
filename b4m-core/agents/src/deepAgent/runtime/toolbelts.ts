@@ -86,7 +86,8 @@ function isToolbeltShaped(profile: ToolbeltProfile): boolean {
     Number.isInteger(profile.maxIterations) &&
     profile.maxIterations > 0 &&
     Number.isFinite(profile.maxTotalTokens) &&
-    Number.isFinite(profile.temperature)
+    Number.isFinite(profile.temperature) &&
+    (profile.codeExecute === undefined || typeof profile.codeExecute === 'boolean')
   );
 }
 

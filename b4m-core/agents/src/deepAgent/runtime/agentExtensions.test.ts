@@ -197,13 +197,34 @@ describe('createAgentExtensionRegistry', () => {
         { id: 'p6', surface: 's6', build: () => ({ ...base, defaultThoroughness: 'exhaustive' }) as never },
         { id: 'p7', surface: 's7', build: () => ({ ...base, allowedTools: [{ name: 'x' }] }) as never },
         { id: 'p8', surface: 's8', build: () => ({ ...base, deniedTools: [7] }) as never },
+        { id: 'p9', surface: 's9', build: () => ({ ...base, confidenceGateThreshold: Number.NaN }) },
+        { id: 'p10', surface: 's10', build: () => ({ ...base, confidenceGateThreshold: 1.5 }) },
       ],
     });
-    for (const surface of ['s1', 's2', 's3', 's4', 's6', 's7', 's8']) {
+    for (const surface of ['s1', 's2', 's3', 's4', 's6', 's7', 's8', 's9', 's10']) {
       expect(registry.resolveSurfaceProfile(surface, { ...profileCtx, logger: runLogger })).toBeUndefined();
     }
-    expect(runLogger.warn).toHaveBeenCalledTimes(7);
+    expect(runLogger.warn).toHaveBeenCalledTimes(9);
     expect(registry.resolveSurfaceProfile('s5', { ...profileCtx, logger: runLogger })).toBe(base);
+  });
+
+  it('hands a contributed guard a copy, so an in-place mutation cannot reach the original map', () => {
+    const { registry } = newRegistry();
+    registry.registerContribution({
+      toolMapGuards: [
+        {
+          id: 'mutator',
+          priority: 1,
+          apply: (tools: Tools) => {
+            tools.x = 'mutated';
+            return tools;
+          },
+        },
+      ],
+    });
+    const original: Tools = { t: 'x' };
+    registry.applyToolMapGuards(original, { executionId: 'e', logger, runState: { calls: [] } });
+    expect(original).not.toHaveProperty('x');
   });
 
   it('skips a contributed guard that returns a promise instead of a map', () => {

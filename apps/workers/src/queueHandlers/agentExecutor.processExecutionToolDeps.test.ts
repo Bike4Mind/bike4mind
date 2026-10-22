@@ -728,6 +728,12 @@ describe('processExecution tool deps', () => {
 
     it('resolves the surface profile on a continuation, then guards the contributed tools', async () => {
       const { resolve, guard } = await registry();
+      guard.mockImplementationOnce(
+        tools =>
+          Object.fromEntries(
+            Object.entries(tools).map(([k, t]) => [k, { ...(t as object), guarded: true }])
+          ) as typeof tools
+      );
       await runWithSession({ ...baseSession, surface: OPTI_SURFACE });
 
       expect(resolve).toHaveBeenCalledWith(
@@ -750,6 +756,8 @@ describe('processExecution tool deps', () => {
         sessionDisabledTools: string[];
       };
       expect(externalTools.fixture_tool).toBe(guarded.fixture_tool);
+      expect(externalTools.fixture_tool).not.toBe(tools.fixture_tool);
+      expect(externalTools.fixture_tool).toHaveProperty('guarded', true);
       // The resolved profile, not the execution doc, is what shapes the toolbelt: its denials reach the build.
       expect(sessionDisabledTools).toEqual(expect.arrayContaining(profile.deniedTools));
       expect(enabledTools).toContain('fixture_tool');
