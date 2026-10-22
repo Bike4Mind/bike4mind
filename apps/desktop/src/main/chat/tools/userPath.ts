@@ -19,7 +19,7 @@ export function resolveUserPath(): Promise<string> {
       .join(delimiter);
     execFile(
       process.env.SHELL || '/bin/zsh',
-      ['-ilc', `printf '%s' "${PATH_MARKER}$PATH${PATH_MARKER}"`],
+      ['-ilc', `printf '%s' "${PATH_MARKER}\${PATH}${PATH_MARKER}"`],
       { timeout: SHELL_PATH_TIMEOUT_MS, env: { ...process.env, TERM: 'dumb' } },
       (error, stdout) => {
         const found = error ? undefined : new RegExp(`${PATH_MARKER}(.*)${PATH_MARKER}`).exec(stdout)?.[1];

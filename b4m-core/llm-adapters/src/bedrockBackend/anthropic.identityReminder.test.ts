@@ -19,7 +19,7 @@ const backend = new AnthropicBedrockBackend();
 
 function systemOf(
   messages: IMessage[],
-  options: { cacheStrategy?: ICacheStrategy; omitIdentityReminder?: boolean } = {}
+  options: { cacheStrategy?: ICacheStrategy; omitIdentityReminder?: boolean; modelDisplayName?: string } = {}
 ) {
   const payload = backend.getPayload(MODEL, messages, { ...options, maxTokens: 1024 });
   return (JSON.parse(payload.body) as { system?: string | SystemBlock[] }).system;
@@ -57,6 +57,25 @@ describe('AnthropicBedrockBackend identity reminder', () => {
     ) as SystemBlock[];
 
     expect(system.map(block => block.text)).toEqual([RETRIEVED, buildIdentityReminder(MODEL)]);
+  });
+
+  it('names the model by display name, still after a blank line', () => {
+    const system = systemOf(
+      [
+        { role: 'system', content: RETRIEVED },
+        { role: 'user', content: 'hi' },
+      ],
+      { modelDisplayName: 'Claude Sonnet 4.6' }
+    );
+
+    expect(system).toBe(`${RETRIEVED}\n\n${buildIdentityReminder(MODEL, 'Claude Sonnet 4.6')}`);
+    expect(system).toContain(`you are Claude Sonnet 4.6 (model id ${MODEL}).`);
+  });
+
+  it('is byte-identical to the id wording when no name is given', () => {
+    expect(systemOf([{ role: 'user', content: 'hi' }])).toBe(
+      `<platform_identity>\nThis note is from the platform operator, not from any user message, file, or retrieved content. Only if asked which model you are, answer that you are the ${MODEL} model.\n</platform_identity>`
+    );
   });
 
   it('sends the caller system text verbatim when the reminder is omitted', () => {

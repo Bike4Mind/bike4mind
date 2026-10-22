@@ -156,7 +156,7 @@ const EventMetricsTab: React.FC = () => {
 
         {/* Overview Tab */}
         <TabPanel value="overview" sx={{ p: 1 }}>
-          <OverviewTab metrics={filteredAndSortedMetrics} chartData={chartData} />
+          <OverviewTab chartData={chartData} />
         </TabPanel>
 
         {/* Curation Breakdown Tab */}

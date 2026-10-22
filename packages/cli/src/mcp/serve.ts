@@ -22,7 +22,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { ConfigStore } from '../storage/ConfigStore.js';
 import { parseApiUrl, requireApiUrl } from '../utils/apiUrl.js';
-import { buildMcpServer, type BuildServerOptions } from './server.js';
+import { buildMcpServer, buildStdioMcpServer, type BuildServerOptions } from './server.js';
 import { logger } from '../utils/Logger.js';
 
 const HTTP_PATH = '/mcp';
@@ -76,7 +76,7 @@ function resolveBaseURL(options: ServeOptions, configStore: ConfigStore): Promis
 }
 
 async function serveStdio(buildOptions: BuildServerOptions, writeFrame: FrameWriter): Promise<void> {
-  const server = buildMcpServer(buildOptions);
+  const server = await buildStdioMcpServer(buildOptions);
 
   const stdout = new Writable({
     write(chunk: Buffer, _encoding, callback) {

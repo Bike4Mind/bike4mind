@@ -3,13 +3,14 @@ import type { AddressInfo } from 'net';
 import type { Server } from 'http';
 import express from 'express';
 import { BadRequestError, CliCompletionChunkAction } from '@bike4mind/common';
-import { checkRateLimit, verifyJwtToken } from '@server/cli/auth';
+import { checkRateLimit, verifyApiKey, verifyJwtToken } from '@server/cli/auth';
+import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
 import { executeCompletion } from '@bike4mind/services/cliCompletions';
 import { Connection } from '@bike4mind/database/social';
 import { sendToConnection } from '@server/websocket/utils';
 import { emitMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { ForbiddenError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 
 // Real entitlements pull in mongoose models at import time, which the @bike4mind/database mock lacks.
 vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
@@ -111,6 +112,43 @@ describe('JWT rate limiting', () => {
   it('answers 401 when the limiter rejects', async () => {
     vi.mocked(checkRateLimit).mockRejectedValue(new Error('Rate limit exceeded.'));
     expect((await postAs({ 'user-agent': 'b4m-cli/1.0.0' })).status).toBe(401);
+  });
+});
+
+describe('API-key auth failures', () => {
+  it('answers 503 with Retry-After and no driver text when the database is unreachable, without consulting JWT', async () => {
+    vi.mocked(verifyApiKey).mockRejectedValueOnce(
+      toApiKeyAuthError(Object.assign(new Error('connect ECONNREFUSED 10.0.0.1:27017'), { name: 'MongoNetworkError' }))
+    );
+
+    const response = await postAs({ 'user-agent': 'b4m-cli/1.0.0' });
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get('retry-after')).toBe('5');
+    const body = await response.json();
+    expect(body).toEqual({ error: 'Authentication temporarily unavailable' });
+    expect(JSON.stringify(body)).not.toMatch(/ECONNREFUSED|10\.0\.0\.1/);
+    expect(vi.mocked(verifyJwtToken)).not.toHaveBeenCalled();
+  });
+
+  it('answers 500 with a fixed message for an unexpected key-check failure', async () => {
+    vi.mocked(verifyApiKey).mockRejectedValueOnce(toApiKeyAuthError(new Error('boom')));
+
+    const response = await postAs({ 'user-agent': 'b4m-cli/1.0.0' });
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: 'Authentication failed' });
+    expect(vi.mocked(verifyJwtToken)).not.toHaveBeenCalled();
+  });
+
+  it('answers 401 for an unknown key and an invalid JWT', async () => {
+    vi.mocked(verifyApiKey).mockRejectedValueOnce(new UnauthorizedError('Invalid or expired API key'));
+    vi.mocked(verifyJwtToken).mockRejectedValueOnce(new Error('Invalid authorization token'));
+
+    const response = await postAs({ 'user-agent': 'b4m-cli/1.0.0' });
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ error: 'Authentication failed' });
   });
 });
 

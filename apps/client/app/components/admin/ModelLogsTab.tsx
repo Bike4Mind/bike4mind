@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import {
   Box,
   Card,
@@ -22,6 +22,15 @@ import InfoIcon from '@mui/icons-material/Info';
 import { DateFilterComponent } from './Analytics/filters/DateFilterComponent';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { useModelLogs, ModelLog } from '@client/app/hooks/useModelLogs';
+import {
+  MODEL_LOGS_MODEL_OPTIONS,
+  MODEL_LOGS_PAGE_SIZE_OPTIONS,
+  MODEL_LOGS_SEARCH_PARSERS,
+  type ModelLogsView,
+} from './modelLogsTabSearch';
+import { useModelLogsView } from './useModelLogsView';
+
+const ALL_MODELS = 'all';
 
 interface ModelLogsTabProps {
   loading?: boolean;
@@ -63,7 +72,7 @@ const PaginationControls = ({
           value={itemsPerPage}
           onChange={e => onItemsPerPageChange(Number(e.target.value))}
         >
-          {[10, 25, 50].map(value => (
+          {MODEL_LOGS_PAGE_SIZE_OPTIONS.map(value => (
             <Radio key={value} value={value} label={`${value} per page`} size="sm" sx={{ mr: 2 }} />
           ))}
         </RadioGroup>
@@ -76,21 +85,30 @@ const PaginationControls = ({
 );
 
 export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }) => {
-  const [currentPage, setCurrentPage] = useState(1);
-  const [itemsPerPage, setItemsPerPage] = useState(10);
-  const [dateRange, setDateRange] = useState({
-    startDate: dayjs().subtract(7, 'days').format('YYYY-MM-DD'),
-    endDate: dayjs().format('YYYY-MM-DD'),
-  });
-  const [modelFilter, setModelFilter] = useState<string>('all');
+  const [view, updateView] = useModelLogsView();
+  const { page: currentPage, limit: itemsPerPage, startDate, endDate } = view;
+  const modelFilter = view.model ?? ALL_MODELS;
   const [searchQuery, setSearchQuery] = useState('');
 
   const modelLogsQuery = useModelLogs({
-    startDate: dateRange.startDate,
-    endDate: dateRange.endDate,
-    model: modelFilter !== 'all' ? modelFilter : undefined,
+    startDate,
+    endDate,
+    model: view.model,
     search: searchQuery || undefined,
   });
+
+  // Any filter change goes back to the first page.
+  const setDateRange = (range: Partial<Pick<ModelLogsView, 'startDate' | 'endDate'>>) =>
+    updateView({ ...range, page: 1 });
+  const selectLastDays = (days: number) =>
+    setDateRange({
+      startDate: dayjs().subtract(days, 'day').format('YYYY-MM-DD'),
+      endDate: dayjs().format('YYYY-MM-DD'),
+    });
+  const handleSearchChange = (query: string) => {
+    setSearchQuery(query);
+    if (currentPage !== 1) updateView({ page: 1 });
+  };
 
   const handleRefresh = () => {
     modelLogsQuery.refetch();
@@ -103,6 +121,14 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
   }, [modelLogsQuery.data]);
 
   const totalPages = Math.ceil((logs?.length || 0) / itemsPerPage);
+
+  // A linked page can be past the end of the current results; clamp once they have loaded.
+  const lastPage = Math.max(totalPages, 1);
+  const isPagePastEnd = modelLogsQuery.isSuccess && currentPage > lastPage;
+  useEffect(() => {
+    if (isPagePastEnd) updateView({ page: lastPage });
+  }, [isPagePastEnd, lastPage, updateView]);
+
   const currentItems = logs?.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage) || [];
 
   if (loading || modelLogsQuery.isLoading) {
@@ -127,16 +153,11 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
         <Card variant="outlined" sx={{ p: 2, mb: 3 }}>
           <Stack spacing={2}>
             <DateFilterComponent
-              startDate={dateRange.startDate}
-              endDate={dateRange.endDate}
-              onStartDateChange={date => setDateRange(prev => ({ ...prev, startDate: date }))}
-              onEndDateChange={date => setDateRange(prev => ({ ...prev, endDate: date }))}
-              onRangeSelect={days => {
-                setDateRange({
-                  startDate: dayjs().subtract(days, 'day').format('YYYY-MM-DD'),
-                  endDate: dayjs().format('YYYY-MM-DD'),
-                });
-              }}
+              startDate={startDate}
+              endDate={endDate}
+              onStartDateChange={date => setDateRange({ startDate: date })}
+              onEndDateChange={date => setDateRange({ endDate: date })}
+              onRangeSelect={selectLastDays}
             />
           </Stack>
         </Card>
@@ -170,35 +191,39 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
           <Grid container spacing={2}>
             <Grid xs={12} md={4}>
               <DateFilterComponent
-                startDate={dateRange.startDate}
-                endDate={dateRange.endDate}
-                onStartDateChange={date => setDateRange(prev => ({ ...prev, startDate: date }))}
-                onEndDateChange={date => setDateRange(prev => ({ ...prev, endDate: date }))}
-                onRangeSelect={days => {
-                  setDateRange({
-                    startDate: dayjs().subtract(days, 'day').format('YYYY-MM-DD'),
-                    endDate: dayjs().format('YYYY-MM-DD'),
-                  });
-                }}
+                startDate={startDate}
+                endDate={endDate}
+                onStartDateChange={date => setDateRange({ startDate: date })}
+                onEndDateChange={date => setDateRange({ endDate: date })}
+                onRangeSelect={selectLastDays}
               />
             </Grid>
             <Grid xs={12} md={4}>
               <FormControl>
                 <Select
                   value={modelFilter}
-                  onChange={(_, value) => setModelFilter(value || 'all')}
+                  // The parser reads "All Models" (and anything unknown) as no model filter.
+                  onChange={(_, value) =>
+                    updateView({ model: MODEL_LOGS_SEARCH_PARSERS.modelLogsModel(value), page: 1 })
+                  }
                   placeholder="Filter by Model"
+                  data-testid="model-logs-model-select"
                 >
-                  <Option value="all">All Models</Option>
-                  <Option value="gpt-4">GPT-4</Option>
-                  <Option value="gpt-3.5-turbo">GPT-3.5 Turbo</Option>
-                  <Option value="claude-3-opus">Claude 3 Opus</Option>
-                  <Option value="claude-3-sonnet">Claude 3 Sonnet</Option>
+                  <Option value={ALL_MODELS}>All Models</Option>
+                  {MODEL_LOGS_MODEL_OPTIONS.map(option => (
+                    <Option key={option.value} value={option.value}>
+                      {option.label}
+                    </Option>
+                  ))}
                 </Select>
               </FormControl>
             </Grid>
             <Grid xs={12} md={4}>
-              <Input placeholder="Search logs..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
+              <Input
+                placeholder="Search logs..."
+                value={searchQuery}
+                onChange={e => handleSearchChange(e.target.value)}
+              />
             </Grid>
           </Grid>
         </Stack>
@@ -291,12 +316,9 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
           <PaginationControls
             currentPage={currentPage}
             totalPages={totalPages}
-            onPageChange={setCurrentPage}
+            onPageChange={page => updateView({ page })}
             itemsPerPage={itemsPerPage}
-            onItemsPerPageChange={size => {
-              setItemsPerPage(size);
-              setCurrentPage(1);
-            }}
+            onItemsPerPageChange={size => updateView({ limit: size, page: 1 })}
             totalCount={logs?.length || 0}
           />
         </>

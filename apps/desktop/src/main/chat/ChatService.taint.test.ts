@@ -52,6 +52,8 @@ describe('ChatService untrusted content in a reply', () => {
   let root: string;
   let fetchFails: boolean;
   let rules: PermissionRuleSet;
+  let store: SessionStore;
+  let post: ReturnType<typeof vi.fn>;
   /** Mutated per test: the service holds this object, so a test can shrink a budget before it runs. */
   const turnLimits: ChatServiceDeps['turnLimits'] = {};
 
@@ -75,7 +77,7 @@ describe('ChatService untrusted content in a reply', () => {
     for (const key of Object.keys(turnLimits) as (keyof typeof turnLimits)[]) delete turnLimits[key];
     const testEvents: ChatStreamEvent[] = [];
     const testStreams: PassThrough[] = [];
-    const post = vi.fn().mockImplementation(() => {
+    post = vi.fn().mockImplementation(() => {
       const stream = new PassThrough();
       testStreams.push(stream);
       return Promise.resolve({ data: stream, status: 200 });
@@ -84,7 +86,7 @@ describe('ChatService untrusted content in a reply', () => {
     streams = testStreams;
 
     service = new ChatService({
-      store: new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-taint-sessions-')), 'test-model'),
+      store: (store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-taint-sessions-')), 'test-model')),
       access: { list: async () => [root] } as unknown as AccessStore,
       approvals,
       permissions: { rulesFor: async () => rules, rememberAllows: vi.fn(), invalidate: vi.fn() },
@@ -223,6 +225,42 @@ describe('ChatService untrusted content in a reply', () => {
 
     const asked = await awaitCall('bash_execute', 'awaiting-approval');
     expect(asked.approvalDetail).toContain('read content from the web (web_fetch).');
+  });
+
+  it('treats a continued Claude import as having read untrusted content, and replays its tools as prose', async () => {
+    const at = new Date().toISOString();
+    await store.putImported({
+      id: 'cc-imported',
+      title: 'Imported',
+      model: 'test-model',
+      createdAt: at,
+      updatedAt: at,
+      mode: 'chat',
+      approvalMode: 'ask',
+      reasoningEffort: 'default',
+      importOrigin: { kind: 'claude-code', sourceId: 'imported', importedAt: at, sourceUpdatedAt: at },
+      messages: [
+        { id: 'cc-u1', role: 'user', content: 'List the files', createdAt: at },
+        {
+          id: 'cc-a1',
+          role: 'assistant',
+          content: 'Done.',
+          createdAt: at,
+          toolCalls: [
+            { id: 'toolu_x', name: 'Agent', input: { prompt: 'look around' }, status: 'done', preview: 'two files' },
+          ],
+        },
+      ],
+    });
+    await service.setApprovalMode('cc-imported', 'auto');
+    await reply('cc-imported', [build(root)]);
+
+    const asked = await awaitCall('bash_execute', 'awaiting-approval');
+    expect(asked.approvalDetail).toContain('read content from a conversation imported from Claude');
+    const body = JSON.stringify(post.mock.calls[0]);
+    expect(body).toContain('[Earlier tool call: Agent look around]');
+    expect(body).not.toContain('toolu_x');
+    expect((await store.get('cc-imported'))!.importOrigin!.forkedAt).toBeTruthy();
   });
 
   it('runs the same command unasked in a reply that read nothing untrusted', async () => {

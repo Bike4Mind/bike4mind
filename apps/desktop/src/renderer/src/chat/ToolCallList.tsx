@@ -615,7 +615,10 @@ function ToolGroupRow({ group, onMove }: { group: ToolCallGroup; onMove?: MoveCa
       {group.calls.map(call => (
         <Box key={call.id}>
           {call.notice && <NoticeBanner notice={call.notice} />}
-          <MediaAttachments media={call.media ?? []} />
+          <MediaAttachments
+            media={call.media ?? []}
+            nameHint={call.name === BROWSER_SCREENSHOT_TOOL_NAME ? 'screenshot' : 'image'}
+          />
           {call.name === GENERATE_VIDEO_TOOL_NAME && <VideoJobsForCall callId={call.id} />}
         </Box>
       ))}
@@ -624,6 +627,7 @@ function ToolGroupRow({ group, onMove }: { group: ToolCallGroup; onMove?: MoveCa
 }
 
 const GENERATE_VIDEO_TOOL_NAME = 'generate_video';
+const BROWSER_SCREENSHOT_TOOL_NAME = 'browser_screenshot';
 
 export function ToolCallList({
   calls,

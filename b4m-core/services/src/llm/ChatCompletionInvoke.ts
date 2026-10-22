@@ -132,6 +132,7 @@ export class ChatCompletionInvoke {
       allowedAgents,
       enableSlackTools,
       toolMode,
+      timezone,
     } = ChatCompletionInvokeParamsSchema.parse(body);
 
     // Parallelize independent operations: API keys, session, organization, and the correction
@@ -510,6 +511,7 @@ export class ChatCompletionInvoke {
         extraContextMessages,
         allowedAgents,
         enableSlackTools,
+        timezone,
       });
 
       if (this.invokeLambda && this.questStartParams) {

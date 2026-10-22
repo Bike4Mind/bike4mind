@@ -144,7 +144,7 @@ export interface paths {
      *
      *     TOOL SEARCH. On a model whose `GET /api/v1/models` row has `supports_tool_search: true` and `backend: "anthropic"`, a `tools` entry may set `toolSchema.defer_loading: true`, and a `{ "serverTool": { "type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex" } }` (or the `bm25` pair) entry adds Anthropic's tool search, so deferred definitions load only when the model searches for them. The stream then carries `provider_block` events (`{ type, provider: "anthropic", block }`) for the server-run search; echo each block back verbatim, in order, in the assistant `messages` content of the next request, and never answer one with a `tool_result`. When the server-run search loop hits its iteration limit the stream ends with `stopReason: "pause_turn"`; continue by re-sending the conversation with that assistant turn's provider blocks echoed. A client-side search may return `{ "type": "tool_reference", "tool_name": "..." }` blocks inside a `tool_result`'s content. On every other model, Bedrock-served Claude included, `defer_loading` is ignored (every tool is sent as usual) and a server tool, a `tool_reference` or an echoed tool search block is refused with a `400` rather than run without it.
      *
-     *     ERRORS. Everything checked before the model provider is called fails with a JSON error body and a real HTTP status, before any stream opens: a malformed or otherwise invalid request or an unknown `model` `400` (`errorCode: "unknown_model"` for the latter), a bad credential `401`, a key without a required scope `403` (with `required_scopes`), a body over 25 MB `413`, a body that fails schema validation `422`, insufficient credits `422` with `errorCode: "insufficient_credits"` (personal or org balance, or an org per-member credit cap), a rate limit `429` with `Retry-After`, and a catalogued model whose provider is not configured on this deployment `503` with `errorCode: "provider_not_configured"` (retryable). Once the stream has opened the status stays `200` and a failure arrives as one terminal in-band `error` event. Branch on that event's `code`, never on `message`, which is prose and may change: `insufficient_credits` (buy credits) when credits run out mid-generation, `provider_rejected` when the model provider refused our credentials, `content_blocked` when the model declined the request (do not retry it unchanged), and `provider_error` for any other provider failure. Treat `code` as optional.
+     *     ERRORS. Everything checked before the model provider is called fails with a JSON error body and a real HTTP status, before any stream opens: a malformed or otherwise invalid request or an unknown `model` `400` (`errorCode: "unknown_model"` for the latter), a bad credential `401`, a key without a required scope `403` (with `required_scopes`), a body over 25 MB `413`, a body that fails schema validation `422`, insufficient credits `422` with `errorCode: "insufficient_credits"` (personal or org balance, or an org per-member credit cap), a rate limit `429` with `Retry-After`, and a catalogued model whose provider is not configured on this deployment, or a model that could only come from a self-hosted model server (Ollama, local image) that is currently unreachable, `503` with `errorCode: "provider_not_configured"` (retryable). Once the stream has opened the status stays `200` and a failure arrives as one terminal in-band `error` event. Branch on that event's `code`, never on `message`, which is prose and may change: `insufficient_credits` (buy credits) when credits run out mid-generation, `provider_rejected` when the model provider refused our credentials, `content_blocked` when the model declined the request (do not retry it unchanged), and `provider_error` for any other provider failure. Treat `code` as optional.
      */
     post: operations['createCompletion'];
     delete?: never;
@@ -830,6 +830,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/whats-new/media/{id}/{asset}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get release note media
+     * @description Redirects to one file of a published release note video: `landscape` and `portrait` are the 16:9 and 9:16 MP4s, the `-poster` assets their still images. The `video` URLs that listWhatsNew returns for uploaded files point here, so a browser can use them as `src` and `poster` as they are. Public: no credentials are needed, and the note must be one listWhatsNew would show. The redirect is cacheable for up to 10 minutes and its target is signed for 1 hour, longer than that, so follow it rather than storing the target. Rate limited per client IP.
+     */
+    get: operations['getWhatsNewMedia'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/v1/projects': {
     parameters: {
       query?: never;
@@ -1007,7 +1027,7 @@ export interface paths {
      * Transcribe audio
      * @description Transcribes an upload minted by `POST /api/v1/transcriptions/uploads` and returns the text. Call it within 5 minutes of minting the upload. Credits are charged by file size. The uploaded audio is deleted when the call returns, whether it succeeds or fails, so each upload can be transcribed once.
      *
-     *     **Limit:** this call is synchronous. The request times out after about 60 seconds, while the AWS speech backend can take up to about 5 minutes on long audio, so a long recording can fail with a gateway timeout (`504`) instead of returning text. A timed-out upload may not be deleted right away (it expires on its own), so do not retry with the same `file_key`: mint a new upload, or send shorter audio.
+     *     **Limit:** this call is synchronous. Provider work stops being awaited after 45 seconds from request arrival, leaving time to return reserved credits and delete the upload before the hosted server stops at 60 seconds. A slow recording returns a gateway timeout (`504`) instead of text. AWS batch jobs cannot be cancelled remotely and may finish later; their output expires automatically. Do not retry with the same `file_key`: mint a new upload and send shorter audio. If cleanup fails, the upload may not be deleted right away (it expires on its own).
      */
     post: operations['createTranscription'];
     delete?: never;
@@ -1066,6 +1086,46 @@ export interface paths {
      * @description Updates an agent you own. Omitted fields are left unchanged. Only the owner can update an agent. Unknown body fields are rejected.
      */
     patch: operations['updateAgent'];
+    trace?: never;
+  };
+  '/api/v1/skills/market/claude-marketplace.json': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get an organization's Claude Code plugin marketplace
+     * @description Returns a Claude Code `marketplace.json` listing the organization's approved Organization-visibility Skill Market listings, one `archive` plugin each, pinned by `sha256`. Public and unlisted listings are not included. Responses are never cacheable. Authenticate with an API key (`b4m_live_`) carrying `skills:read`, sent as `Authorization: Bearer`. Claude Code sends that header when it is set as the marketplace source's `headers` in its settings, and forwards it to the same-origin plugin archives.
+     */
+    get: operations['getClaudeMarketplace'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/skills/market/{id}/claude-plugin.zip': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Download a Skill Market listing as a Claude Code plugin
+     * @description A zip holding an approved version as `skills/<name>/SKILL.md`. The optional `version` query pins the listing version advertised by the feed, so later approvals do not change its bytes or `sha256`. Without it, returns the current approved version. Authenticate with an API key (`b4m_live_`) carrying `skills:read`, sent as `Authorization: Bearer`. Claude Code sends that header when it is set as the marketplace source's `headers` in its settings, and forwards it to the same-origin plugin archives.
+     */
+    get: operations['getClaudePluginZip'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
     trace?: never;
   };
 }
@@ -4602,6 +4662,12 @@ export interface components {
           text: string;
           importance: number;
         }[];
+        video?: {
+          landscape_url?: string | null;
+          landscape_poster_url?: string | null;
+          portrait_url?: string | null;
+          portrait_poster_url?: string | null;
+        } | null;
       }[];
       next_cursor: string | null;
     };
@@ -5224,6 +5290,45 @@ export interface components {
       denied_tools?: string[];
       /** @description Mentions (for example `@research`) that invoke the agent in chat. */
       trigger_words?: string[];
+    };
+    /**
+     * @example {
+     *       "name": "b4m-org-664f1c2b9a1e4d0012ab34cd",
+     *       "owner": {
+     *         "name": "Acme"
+     *       },
+     *       "forceRemoveDeletedPlugins": true,
+     *       "plugins": [
+     *         {
+     *           "name": "review-pr",
+     *           "description": "Review a pull request against the team checklist.",
+     *           "version": "3",
+     *           "source": {
+     *             "source": "archive",
+     *             "url": "https://app.bike4mind.com/api/v1/skills/market/664f1c2b9a1e4d0012ab34cd/claude-plugin.zip?version=3",
+     *             "sha256": "a3f1c0de9b8e7d6c5b4a39281706f5e4d3c2b1a09f8e7d6c5b4a392817060f5e"
+     *           }
+     *         }
+     *       ]
+     *     }
+     */
+    getClaudeMarketplaceResponse200: {
+      name: string;
+      owner: {
+        name: string;
+      };
+      forceRemoveDeletedPlugins: boolean;
+      plugins: {
+        name: string;
+        description: string;
+        version: string;
+        source: {
+          /** @enum {string} */
+          source: 'archive';
+          url: string;
+          sha256: string;
+        };
+      }[];
     };
   };
   responses: never;
@@ -6611,7 +6716,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description Temporarily unavailable: the model's provider is not configured on this deployment (`errorCode: "provider_not_configured"`), or the database is unreachable (no `errorCode`). Retry later. */
+      /** @description Temporarily unavailable: the model's provider is not configured on this deployment, or the self-hosted model server that lists it (Ollama, local image) is unreachable (`errorCode: "provider_not_configured"`), or the database is unreachable (no `errorCode`). Retry later. */
       503: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -12879,6 +12984,88 @@ export interface operations {
       };
     };
   };
+  getWhatsNewMedia: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+        asset: 'landscape' | 'landscape-poster' | 'portrait' | 'portrait-poster';
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description `Location` is a time-limited signed GET for the file. */
+      303: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Signed URL of the file. */
+          Location?: string;
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description No published note has this id, or the note has no such file, or the file is not an upload this deployment serves (a linked URL is listed as is, not through this route). */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request failed validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Per-IP rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Unexpected server error. */
+      500: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
   listProjects: {
     parameters: {
       query?: {
@@ -15001,6 +15188,29 @@ export interface operations {
           'application/json': components['schemas']['createTranscriptionResponse503'];
         };
       };
+      /** @description The transcription exceeded the request deadline; reserved credits are returned. */
+      504: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
     };
   };
   listAgents: {
@@ -15714,6 +15924,289 @@ export interface operations {
           'X-RateLimit-Remaining-Day'?: number;
           /** @description Unix epoch (seconds) when the day window resets. */
           'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  getClaudeMarketplace: {
+    parameters: {
+      query: {
+        orgId: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The marketplace. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['getClaudeMarketplaceResponse200'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks `skills:read`, or the caller is not a member of the organization. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request failed validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  getClaudePluginZip: {
+    parameters: {
+      query?: {
+        version?: number;
+      };
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The plugin archive. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/zip': string;
+        };
+      };
+      /** @description Invalid version query. */
+      400: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks `skills:read`. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description No Organization listing with that id is visible to the caller. A listing in an org you are not in, a public or unlisted listing, and a malformed id are all reported as 404. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
           [name: string]: unknown;
         };
         content: {

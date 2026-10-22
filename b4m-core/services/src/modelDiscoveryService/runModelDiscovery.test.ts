@@ -955,6 +955,59 @@ describe('runModelDiscovery', () => {
         return runModelDiscovery(harnessed.adapters, harnessed.options);
       };
 
+      describe('a future date an aggregator repeats after the provider reported the model undated', () => {
+        const FUTURE = '2026-12-01';
+        const undated = sunset({ status: 'active' }, 'typed');
+        const aggregator = () =>
+          stubSource({
+            name: 'models.dev',
+            kind: 'aggregator',
+            records: [
+              {
+                modelId: 'gpt-6',
+                patch: { lifecycle: { status: 'active', deprecationDate: FUTURE } },
+                lifecycleEvidence: 'typed',
+              },
+            ],
+          });
+        const writtenDates = (harnessed: Harness) =>
+          harnessed.catalog.rows
+            .filter(row => row.modelId === 'gpt-6')
+            .map(row => (row.patch.lifecycle as { deprecationDate?: string } | undefined)?.deprecationDate)
+            .filter(date => date !== undefined);
+
+        /** A second provider on the backend keeps the aggregator from being gap-fill only. */
+        const azure = () =>
+          stubSource({ name: 'azure', kind: 'provider', records: [gpt6], authoritativeFor: [ModelBackend.OpenAI] });
+
+        const firstPass = async (harnessed: Harness) => {
+          harnessed.adapters.sources = [openaiSource([undated]), azure(), aggregator()];
+          await runModelDiscovery(harnessed.adapters, harnessed.options);
+          expect(writtenDates(harnessed)).toEqual([]);
+          harnessed.advance(60_000);
+        };
+
+        it.each([
+          {
+            name: 'stays refused on a run where the provider fetch fails',
+            openai: () => stubSource({ name: 'openai', kind: 'provider', result: { ok: false, error: 'HTTP 503' } }),
+            expected: [] as string[],
+          },
+          {
+            name: 'is written once the provider is not configured, so it cannot be reporting',
+            openai: () => stubSource({ name: 'openai', kind: 'provider', configured: false }),
+            expected: [FUTURE],
+          },
+        ])('$name', async ({ openai, expected }) => {
+          await firstPass(bench);
+          bench.adapters.sources = [openai(), azure(), aggregator()];
+
+          await runModelDiscovery(bench.adapters, bench.options);
+
+          expect(writtenDates(bench)).toEqual(expected);
+        });
+      });
+
       it('transitions on the first run a typed source reports it', async () => {
         const result = await secondRun(bench, [
           openaiSource([sunset({ status: 'legacy', deprecationDate: '2026-07-30' }, 'typed')]),

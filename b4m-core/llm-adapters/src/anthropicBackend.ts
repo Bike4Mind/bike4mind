@@ -45,6 +45,7 @@ import {
 } from './toolPairingUtils';
 import { capCacheControlMarkers, getCachingAdapter, logCacheStats } from './caching/adapters';
 import { systemContentToText } from './systemContent';
+import { sortToolsForStableCacheKey } from './caching/stableToolOrder';
 import { toAnthropicContent } from './anthropicContent';
 import { anthropicBetaHeader, PROMPT_CACHING_BETA, TOOL_CHANGES_BETA } from './toolChanges';
 import {
@@ -1026,7 +1027,9 @@ export class AnthropicBackend implements ICompletionBackend {
     // bust the cache key on every model identifier change).
     // Omitted for callers whose contract is a bare completion (API promptMode raw) -
     // with no system messages left either, the request then carries no system at all.
-    const identityReminder = options.omitIdentityReminder ? null : buildIdentityReminder(model);
+    const identityReminder = options.omitIdentityReminder
+      ? null
+      : buildIdentityReminder(model, options.modelDisplayName);
     let system: string | Array<{ type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }> | undefined;
     if (anySystemCacheControlled) {
       const systemMessages = messages.filter(m => m.role === 'system' && !isToolChangeMessage(m));
@@ -1342,20 +1345,26 @@ export class AnthropicBackend implements ICompletionBackend {
 
     // Apply prompt caching if enabled
     const cacheStrategy = options.cacheStrategy;
-    if (cacheStrategy?.enableCaching) {
+    // The caller flags its own mid-history breakpoint on the message ahead of the current turn and
+    // turns this anchor off, because on the FIRST call the end of the array is that volatile turn.
+    // A tool round appends the previous round's tool_use/tool_result instead, which the next round
+    // re-sends verbatim - so the end of the array is history again and is worth anchoring.
+    const roundCacheStrategy =
+      toolCallCount > 0 && cacheStrategy ? { ...cacheStrategy, cacheConversationHistory: true } : cacheStrategy;
+    if (roundCacheStrategy?.enableCaching) {
       const adapter = getCachingAdapter(ModelBackend.Anthropic);
       const cachedParams = adapter.applyCaching(
         apiParams as unknown as Record<string, unknown>,
-        cacheStrategy,
+        roundCacheStrategy,
         this.logger
       );
       Object.assign(apiParams, cachedParams);
 
       this.logger.debug('[Anthropic] Applying cache control', {
-        cacheSystemPrompt: cacheStrategy.cacheSystemPrompt,
-        cacheTools: cacheStrategy.cacheTools,
-        cacheHistory: cacheStrategy.cacheConversationHistory,
-        cacheTTL: cacheStrategy.cacheTTL,
+        cacheSystemPrompt: roundCacheStrategy.cacheSystemPrompt,
+        cacheTools: roundCacheStrategy.cacheTools,
+        cacheHistory: roundCacheStrategy.cacheConversationHistory,
+        cacheTTL: roundCacheStrategy.cacheTTL,
       });
     }
     Object.assign(apiParams, capCacheControlMarkers(apiParams as unknown as Record<string, unknown>, this.logger));
@@ -3058,7 +3067,7 @@ export class AnthropicBackend implements ICompletionBackend {
   }
 
   formatTools(tools: ICompletionOptionTools[] = [], providerTools: ToolSearchServerTool[] = []) {
-    const customTools = tools.map(tool => {
+    const customTools = sortToolsForStableCacheKey(tools).map(tool => {
       const { parameters, ...rest } = tool.toolSchema;
       // `strict` is an OpenAI-only tool field. Anthropic rejects it with
       // "tools.N.custom.strict: Extra inputs are not permitted", so strip it from the

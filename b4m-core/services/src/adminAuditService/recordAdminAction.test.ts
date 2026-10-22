@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { AuditActor, AuditContext, AuditEntry, AuditTarget, NewAdminAuditEntry } from '@bike4mind/common';
+import type { AuditActor, StoredAuditContext, AuditEntry, AuditTarget, NewAdminAuditEntry } from '@bike4mind/common';
 import { recordAdminAction, type RecordAdminActionInput } from './recordAdminAction';
 
 const actor: AuditActor = { kind: 'user', scope: 'platform', userId: 'u1', name: 'Admin', wasAdmin: true };
-const context: AuditContext = { source: 'admin_ui' };
+const context: StoredAuditContext = { source: 'admin_ui' };
 const userTarget: AuditTarget = { kind: 'user', id: 'u2', displayName: 'User' };
 const orgTarget: AuditTarget = { kind: 'organization', id: 'org1', displayName: 'Org' };
 

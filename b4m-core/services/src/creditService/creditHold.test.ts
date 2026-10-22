@@ -192,6 +192,36 @@ describe('settleCreditHold', () => {
     expect(state.user).toBe(70);
   });
 
+  // Speech is quest-less but not special: it settles through the same org-aware ledger writer as
+  // everything else, so a member's speech spend reaches the same usage rollup.
+  it.each(['text_to_speech_usage', 'speech_to_text_usage'] as const)(
+    'settles %s through the shared refund policy and the org-aware ledger writer',
+    async type => {
+      const { adapters, state } = makeAdapters({ user: 100 });
+      const hold = await holdCredits(
+        { userId: 'u1', organizationId: null, requiredCredits: 30, featureLabel: 'speech', logger },
+        adapters
+      );
+
+      const charged = await settleCreditHold(
+        hold,
+        20,
+        { type, model: 'speech-model', sessionId: 's1' },
+        { featureLabel: 'speech', logger },
+        adapters
+      );
+
+      expect(charged).toBe(20);
+      expect(state.user).toBe(80);
+      expect(deductCreditsWithOrgSupport).toHaveBeenCalledWith(
+        expect.objectContaining({ type, credits: 20, model: 'speech-model', sessionId: 's1' }),
+        expect.anything(),
+        expect.objectContaining({ skipBalanceUpdate: true })
+      );
+      expect(adapters.users.incrementCredits).toHaveBeenCalledTimes(2);
+    }
+  );
+
   it('settles a hold that went through JSON, as a different process would', async () => {
     const { adapters, state } = makeAdapters({ user: 100 });
     const hold = await holdCredits(

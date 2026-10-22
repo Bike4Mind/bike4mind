@@ -26,6 +26,7 @@ import { Logger } from '@bike4mind/observability';
 import { BaseBedrockBackend } from './base';
 import { capCacheControlMarkers, getCachingAdapter } from '../caching/adapters';
 import { systemContentToText } from '../systemContent';
+import { sortToolsForStableCacheKey } from '../caching/stableToolOrder';
 import { DispatchModel } from '../dispatchModel';
 import {
   buildThinkingParams,
@@ -916,7 +917,9 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
     // Append model identity so the model correctly identifies itself when asked.
     // Skipped for bare-completion callers (API promptMode raw) - must stay in sync
     // with the same flag in anthropicBackend.
-    const identityReminder = options.omitIdentityReminder ? null : buildIdentityReminder(model);
+    const identityReminder = options.omitIdentityReminder
+      ? null
+      : buildIdentityReminder(model, options.modelDisplayName);
 
     let systemMessage = systemBlocks.map(block => block.text).join('\n');
     if (identityReminder) {
@@ -944,18 +947,41 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
     // makes the flag a silent no-op. Gated on the same two checks as applyCaching below so a model
     // that rejects cache_control never sees one. Must stay in sync with anthropicBackend, which
     // makes the same string-vs-blocks choice.
-    const cacheStrategy = options.cacheStrategy;
+    // A tool round appends the previous round's tool_use/tool_result, which the next round re-sends
+    // verbatim, so the end of the array is history again - unlike the first call, where it is the
+    // volatile current turn the caller anchors ahead of itself. See the same override in
+    // anthropicBackend.
+    const cacheStrategy =
+      (options._internal?.toolCallCount ?? 0) > 0 && options.cacheStrategy
+        ? { ...options.cacheStrategy, cacheConversationHistory: true }
+        : options.cacheStrategy;
     const modelSupportsCaching = !BEDROCK_NO_PROMPT_CACHING_MODELS.has(modelId);
-    const emitSystemCacheBreakpoint =
-      Boolean(cacheStrategy?.enableCaching) && modelSupportsCaching && systemBlocks.some(block => block.cache);
+    const emitCaching = Boolean(cacheStrategy?.enableCaching) && modelSupportsCaching;
+    const emitSystemCacheBreakpoint = emitCaching && systemBlocks.some(block => block.cache);
+    // Same TTL as applyCaching gives the other breakpoints: Anthropic constrains how
+    // mixed-TTL breakpoints may be ordered, and matching sidesteps that entirely.
+    const cacheControl = {
+      type: 'ephemeral' as const,
+      ...(cacheStrategy?.cacheTTL === '1h' ? { ttl: cacheStrategy.cacheTTL } : {}),
+    };
+
+    // A `cache: true` user/assistant message declares a mid-history breakpoint (see
+    // markHistoryCacheAnchor in @bike4mind/services). This backend forwards IMessage objects into
+    // the request body, so the control flag has to become cache_control on the message's last
+    // content block - and must never be serialized, since the wire has no such field.
+    body.messages = filteredMessages.map(message => {
+      const { cache, ...wire } = message;
+      if (!emitCaching || cache !== true) return wire;
+      const content =
+        typeof wire.content === 'string'
+          ? [{ type: 'text' as const, text: wire.content }]
+          : [...(wire.content as Array<Record<string, unknown>>)];
+      if (content.length === 0) return wire;
+      content[content.length - 1] = { ...content[content.length - 1], cache_control: cacheControl };
+      return { ...wire, content };
+    });
 
     if (emitSystemCacheBreakpoint) {
-      // Same TTL as applyCaching gives the other breakpoints: Anthropic constrains how
-      // mixed-TTL breakpoints may be ordered, and matching sidesteps that entirely.
-      const cacheControl = {
-        type: 'ephemeral' as const,
-        ...(cacheStrategy?.cacheTTL === '1h' ? { ttl: cacheStrategy.cacheTTL } : {}),
-      };
       const blocks: Array<Record<string, unknown>> = systemBlocks.map(block =>
         block.cache
           ? { type: 'text', text: block.text, cache_control: cacheControl }
@@ -1426,7 +1452,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
   }
 
   formatTools(tools: ICompletionOptionTools[] = []) {
-    return tools.map(tool => {
+    return sortToolsForStableCacheKey(tools).map(tool => {
       const { parameters, ...rest } = tool.toolSchema;
       // `strict` is an OpenAI-only tool field. Anthropic rejects it with
       // "tools.N.custom.strict: Extra inputs are not permitted", so strip it from the

@@ -1,5 +1,10 @@
 # @bike4mind/client
 
+## Unreleased
+
+- Show typical answers remaining alongside the credit balance, with plans and top-ups available directly from the balance.
+- Offer lower-cost models only when their estimated context and credit requirements fit; accepting an offer keeps the saved default model unchanged.
+
 ## 0.1.97
 
 ### Patch Changes

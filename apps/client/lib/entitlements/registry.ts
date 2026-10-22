@@ -171,9 +171,11 @@ const TAG_GRANT_ROWS: TagGrantRow[] = [
   // the tag->entitlement cutover (M3.5 migration). Call sites still use the legacy
   // tag predicates until M3.5 migrates them to `requestHasTavernAccess`.
   { tag: 'tavern', entitlements: ['tavern:pro'] },
-  // [DELETION-FOOTPRINT] Bob comp grant: the `bob` tag bridges to `bob:pro`, which
-  // gates Bob's `/bob` route and its nav entry (the premium-bob overlay). No Stripe
-  // price yet; granted-only initially. Removed when Bob is extracted.
+  // [DELETION-FOOTPRINT] Bob comp grant: the `bob` tag bridges to `bob:pro`. Bob is now
+  // open to every signed-in account, so nothing checks `bob:pro` (not the `/bob` route,
+  // its nav entry, or the `bob:read`/`bob:run` API-key scopes, which are deliberately
+  // ungated in GATED_API_KEY_SCOPES). The row is kept so the key stays known to existing
+  // grants and the admin Product Access panel. No Stripe price. Removed when Bob is extracted.
   { tag: 'bob', entitlements: ['bob:pro'] },
   // [DELETION-FOOTPRINT] Interactive Meetings comp grant: the `meetings` tag bridges to
   // `meetings:pro`, which gates the `/meetings` route and its rail entry (the

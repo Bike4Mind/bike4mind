@@ -108,7 +108,7 @@ export function backendForAdapterFamily(
     }
     case 'local-image': {
       const baseUrl = keyOrThrow(apiKeyTable['local-image'], 'Local image');
-      return baseUrl ? new LocalImageBackend(baseUrl, logger) : null;
+      return baseUrl ? new LocalImageBackend(baseUrl) : null;
     }
     case 'bedrock-anthropic':
       return new AnthropicBedrockBackend();

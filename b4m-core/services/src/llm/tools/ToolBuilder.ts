@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import {
   CreditHolderType,
   IChatHistoryItemDocument,
@@ -28,7 +29,7 @@ import {
   stripCitationIndices,
 } from './citationNumbering';
 import { ToolDefinition, type ToolContext } from './base/types';
-import { validateUserCredits, validateAudioCredits } from './base/utils';
+import { validateImageCredits, validateAudioCredits } from './base/utils';
 import { estimateImageCredits } from '../../imageCost';
 import {
   toImageCostInput,
@@ -439,6 +440,8 @@ export interface BuildToolsArgs {
     adminSettingsEnforceCredits: boolean;
     models: ModelInfo[];
   };
+  /** See `ToolBuilderDeps.subagentModels`. */
+  subagentModels?: ModelInfo[];
   agentOnlyMcpServers?: string[];
   apiKeyTable?: ApiKeyTable;
   getAbortSignal?: () => AbortSignal | undefined;
@@ -494,6 +497,20 @@ export interface BuildToolPromptArgs {
   extraContextMessages: ExtraContextMessage[];
 }
 
+// The tools whose onToolStart records a gate estimate (gateImageCredits, gateAudioCredits).
+const GATED_TOOL_NAMES = new Set(['image_generation', 'edit_image', 'audio_generation']);
+// Reuse one async context store for the process; each tool invocation gets a unique token.
+const gatedToolInvocation = new AsyncLocalStorage<symbol>();
+
+/**
+ * The tool prompt, split by who shares it. `guidance` depends only on which tools are offered and
+ * on admin settings, so it is identical across users and belongs in the shareable cached prefix
+ * (source `toolPrompt`); `context` carries the user's timezone, their MCP integrations, the
+ * session's conversation entities and the agent roster (source `toolContext`), and must sit
+ * behind that prefix - see PER_CALLER_AUTHORED_SOURCES in systemPromptSources.ts.
+ */
+export type ToolPromptMessages = { guidance: IMessage | null; context: IMessage | null };
+
 export class ToolBuilder {
   constructor(private readonly deps: ToolBuilderConfig) {}
 
@@ -514,6 +531,8 @@ export class ToolBuilder {
     const queue = this.deps.toolCreditsMap.get(toolName) ?? [];
     queue.push(credits);
     this.deps.toolCreditsMap.set(toolName, queue);
+    // This call's gate estimate is now superseded by its settled charge.
+    this.releaseGatedToolCredits(toolName);
     // Only a charging call contributes: a zero-credit call is absent from the aggregate
     // ledger row's amount, so recording anything for it would be misleading.
     // ASSUMES this queue only ever carries positive charges, which every call site holds
@@ -530,6 +549,54 @@ export class ToolBuilder {
     if (credits > 0) this.deps.toolCreditModels.add(model ?? UNATTRIBUTED_TOOL_CHARGE);
   }
 
+  /** Each invocation owns its estimate, including when same-name calls finish out of order. */
+  private readonly gatedToolCredits = new Map<string, Map<symbol, number>>();
+
+  private trackGatedCalls(tools: ICompletionOptionTools[]): ICompletionOptionTools[];
+  private trackGatedCalls(tools: ICompletionOptionTools[] | undefined): ICompletionOptionTools[] | undefined;
+  private trackGatedCalls(tools: ICompletionOptionTools[] | undefined): ICompletionOptionTools[] | undefined {
+    return tools?.map(tool => {
+      const name = tool.toolSchema.name;
+      if (!GATED_TOOL_NAMES.has(name)) return tool;
+      const toolFn: ICompletionOptionTools['toolFn'] = (...args) => {
+        const invocation = Symbol(name);
+        return gatedToolInvocation.run(invocation, async () => {
+          try {
+            return await tool.toolFn(...args);
+          } finally {
+            this.gatedToolCredits.get(name)?.delete(invocation);
+          }
+        });
+      };
+      return { ...tool, toolFn };
+    });
+  }
+
+  private releaseGatedToolCredits(toolName: string): void {
+    const estimates = this.gatedToolCredits.get(toolName);
+    // Direct gate/settle callers are sequential; wrapped tools carry their invocation across awaits.
+    const invocation = gatedToolInvocation.getStore() ?? estimates?.keys().next().value;
+    if (invocation !== undefined) estimates?.delete(invocation);
+  }
+
+  /** Credits this turn has committed to tool calls: settled charges plus in-flight gate estimates. */
+  private committedToolCredits(): number {
+    let total = 0;
+    for (const queue of this.deps.toolCreditsMap.values()) {
+      for (const credits of queue) total += credits;
+    }
+    for (const estimates of this.gatedToolCredits.values()) {
+      for (const credits of estimates.values()) total += credits;
+    }
+    return total;
+  }
+
+  private recordGatedToolCredits(toolName: string, credits: number): void {
+    const estimates = this.gatedToolCredits.get(toolName) ?? new Map<symbol, number>();
+    estimates.set(gatedToolInvocation.getStore() ?? Symbol(toolName), credits);
+    this.gatedToolCredits.set(toolName, estimates);
+  }
+
   /**
    * Up-front affordability gate for audio_generation (onToolStart): throws
    * insufficient_credits before the paid provider call. Speech is gated on a conservative
@@ -539,7 +606,14 @@ export class ToolBuilder {
    */
   gateAudioCredits(data: AudioCostInput, enforceCredits: boolean, organization?: IOrganizationDocument | null): void {
     if (!enforceCredits || !this.deps.db.creditTransactions) return;
-    validateAudioCredits(this.deps.user, data, this.deps.logger, organization);
+    const { requiredCredits } = validateAudioCredits(
+      this.deps.user,
+      data,
+      this.deps.logger,
+      organization,
+      this.committedToolCredits()
+    );
+    this.recordGatedToolCredits('audio_generation', requiredCredits);
   }
 
   /**
@@ -657,14 +731,16 @@ export class ToolBuilder {
   ): Promise<void> {
     const modelInfo = this.resolveBilledImageModel(data, enforceCredits, availableModels);
     if (!modelInfo) return;
-    await validateUserCredits(
+    const { requiredCredits } = validateImageCredits(
       this.deps.user,
       modelInfo,
       data.n || 1,
       toImageCostInput(toolName, data),
       this.deps.logger,
-      organization
+      organization,
+      this.committedToolCredits()
     );
+    this.recordGatedToolCredits(toolName, requiredCredits);
   }
 
   /**
@@ -865,6 +941,7 @@ export class ToolBuilder {
     model,
     organization,
     precomputed,
+    subagentModels,
     agentOnlyMcpServers = [],
     apiKeyTable,
     getAbortSignal,
@@ -873,7 +950,7 @@ export class ToolBuilder {
     externalTools,
     toolAvailability,
   }: BuildToolsArgs): ICompletionOptionTools[] | undefined {
-    return buildSharedTools(
+    const tools = buildSharedTools(
       {
         userId: this.deps.user.id,
         user: this.deps.user,
@@ -901,6 +978,7 @@ export class ToolBuilder {
         llm,
         model,
         precomputed,
+        subagentModels,
         apiKeyTable,
         thinking,
         agentStore,
@@ -1103,14 +1181,18 @@ export class ToolBuilder {
         getAbortSignal,
         externalTools,
         toolAvailability,
+        // Subagents get the same wrapper the returned array does, so a failed inner call drops
+        // its gate estimate instead of leaving this turn looking over-committed.
+        wrapChildTools: childTools => this.trackGatedCalls(childTools),
       }
     );
+    return this.trackGatedCalls(tools);
   }
 
   /**
-   * Build a single tool-related system prompt combining: tool prompt from DB, blog draft workflow,
-   * MCP integration guidance, conversation context, and agent delegation guidance.
-   * Returns a single IMessage or null if there's nothing to add.
+   * Build the tool-related system prompts: tool prompt from DB, blog draft workflow, MCP integration
+   * guidance, conversation context, and agent delegation guidance, split into the shareable
+   * `guidance` and the per-caller `context` (see ToolPromptMessages). Either is null when empty.
    *
    * NOTE: not pure. Every invocation writes to the session via
    * `extractAndSaveEntitiesFromUserMessage` to persist entities for later reference resolution
@@ -1134,8 +1216,9 @@ export class ToolBuilder {
     processStartTime,
     agentStore,
     extraContextMessages,
-  }: BuildToolPromptArgs): Promise<IMessage | null> {
+  }: BuildToolPromptArgs): Promise<ToolPromptMessages> {
     const sections: string[] = [];
+    const contextSections: string[] = [];
 
     // 1. Tool prompt from DB (custom prompt attached to tool)
     if (toolPromptId) {
@@ -1239,14 +1322,17 @@ Both calls happen in the same response — do NOT ask the user to repeat their m
     // it deliberately omits the time of day, so the model must call the tool for
     // anything clock-level.
     if (hasCurrentDateTime) {
-      const timezoneHint = userTimezone
-        ? ` The user's timezone is \`${userTimezone}\` — pass it as the \`timezone\` parameter.`
-        : '';
       sections.push(
         `# CURRENT TIME\n\n` +
           `For the current time of day, or to timestamp an action at the moment it executes, ` +
-          `call the \`current_datetime\` tool — never guess or invent the time.${timezoneHint}`
+          `call the \`current_datetime\` tool \u2014 never guess or invent the time.`
       );
+      // Per user, so it lives in the context half rather than in the shared guidance above.
+      if (userTimezone) {
+        contextSections.push(
+          `The user's timezone is \`${userTimezone}\` - pass it as the \`timezone\` parameter to \`current_datetime\`.`
+        );
+      }
     }
 
     // 3c. Web-search freshness nudge. Gated on the tool actually being enabled: the ambient
@@ -1292,7 +1378,7 @@ Both calls happen in the same response — do NOT ask the user to repeat their m
         })
         .join('\n');
 
-      sections.push(`## Connected Integrations
+      contextSections.push(`## Connected Integrations
 
 You have access to the following external integrations:
 
@@ -1322,7 +1408,7 @@ ${integrationList}
 
       const contextMessage = await getConversationContextSystemMessage(sessionId, this.deps.db.sessions);
       if (contextMessage) {
-        sections.push(contextMessage.content);
+        contextSections.push(contextMessage.content);
         logger.info('🧠 [ConversationContext] Added context to tool prompt');
       }
     } catch (contextErr) {
@@ -1345,7 +1431,7 @@ ${integrationList}
       const agents = agentStore.getAllAgents();
       const agentList = agents.map(a => `- **${a.name}**: ${a.description}`).join('\n');
 
-      sections.push(`## Agent Delegation
+      contextSections.push(`## Agent Delegation
 
 You have the \`delegate_to_agent\` tool which lets you delegate tasks to specialized autonomous agents. Each agent runs independently with its own reasoning loop and tools.
 
@@ -1363,10 +1449,8 @@ ${agentList}
       });
     }
 
-    if (sections.length === 0) {
-      return null;
-    }
-
-    return { role: 'system', content: sections.join('\n\n') };
+    const toMessage = (parts: string[]): IMessage | null =>
+      parts.length === 0 ? null : { role: 'system', content: parts.join('\n\n') };
+    return { guidance: toMessage(sections), context: toMessage(contextSections) };
   }
 }

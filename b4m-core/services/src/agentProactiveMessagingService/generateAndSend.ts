@@ -1,4 +1,4 @@
-import { BaseStorage } from '@bike4mind/utils';
+import { BaseStorage, isStoppedBeforeReply } from '@bike4mind/utils';
 import { stripToolOutputMarker } from '@bike4mind/utils/artifactParser';
 import {
   getLlmByModel,
@@ -264,7 +264,7 @@ export async function generateAndSendProactiveMessage({
 /**
  * Builds messages array for LLM to generate a proactive message
  */
-function buildProactiveMessageMessages({
+export function buildProactiveMessageMessages({
   agent,
   config,
   session,
@@ -306,6 +306,7 @@ function buildProactiveMessageMessages({
     const contextMessages = recentMessages.slice(-5);
 
     for (const msg of contextMessages) {
+      if (isStoppedBeforeReply(msg)) continue;
       if (msg.prompt) {
         messages.push({
           role: 'user',

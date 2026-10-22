@@ -54,6 +54,7 @@ import {
   embedConversationRepository,
 } from '@bike4mind/database';
 import { verifyEmbedApiKey, type ApiKeyInfo } from '@server/cli/auth';
+import { isAuthInfraFailure, setAuthInfraFailureHeaders } from '@server/auth/apiKeyAuthFailure';
 import { extractBearer, resolveEmbedSessionToken } from '@server/embed/resolveEmbedSessionToken';
 import { reauthorizeIdentifiedSession } from '@server/embed/identifiedEmbedUser';
 import { isEmbedOriginAllowed } from '@server/embed/firstPartyOrigin';
@@ -418,6 +419,11 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       try {
         ctx = await resolveEmbedContext(headers);
       } catch (authErr) {
+        // The key check itself failed (database unreachable): retryable, not a bad credential.
+        if (isAuthInfraFailure(authErr)) {
+          setAuthInfraFailureHeaders(res, authErr);
+          return res.status(authErr.statusCode).json({ error: 'server_error', error_description: authErr.message });
+        }
         const message = authErr instanceof Error ? authErr.message : 'Unauthorized';
         return res.status(401).json({ error: 'unauthorized', error_description: message });
       }

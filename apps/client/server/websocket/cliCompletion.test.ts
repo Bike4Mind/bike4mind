@@ -39,7 +39,8 @@ vi.mock('@server/websocket/utils', () => ({
 }));
 
 import { checkApiKeyRateLimitOrThrow, checkRateLimit, verifyApiKey, verifyJwtToken } from '@server/cli/auth';
-import { TooManyRequestsError } from '@bike4mind/server-utils/utils/errors';
+import { TooManyRequestsError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
+import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
 import { sendToConnection } from '@server/websocket/utils';
 import { func } from './cliCompletion';
 
@@ -245,5 +246,51 @@ describe('cliCompletion websocket handler', () => {
       requestId: '7f0c3f0e-5b1a-4c58-9a57-2f1e8f6f3a11',
       error: 'Internal server error',
     });
+  });
+});
+
+const databaseUnreachable = () =>
+  toApiKeyAuthError(Object.assign(new Error('connect ECONNREFUSED 10.0.0.1:27017'), { name: 'MongoNetworkError' }));
+const expectNoDriverLeak = (value: unknown) => {
+  const serialized = JSON.stringify(value);
+  expect(serialized).not.toContain('ECONNREFUSED');
+  expect(serialized).not.toContain('10.0.0.1');
+};
+
+describe('cliCompletion websocket handler - API-key check outcome', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockExecuteCompletion.mockResolvedValue(undefined);
+  });
+
+  it('reports a retryable unavailable frame when the database is unreachable, without trying the JWT', async () => {
+    vi.mocked(verifyApiKey).mockRejectedValueOnce(databaseUnreachable());
+
+    await run();
+
+    const frame = vi.mocked(sendToConnection).mock.calls[0][2];
+    expect(frame).toMatchObject({
+      action: 'cli_completion_error',
+      error: 'Authentication temporarily unavailable',
+      retryAfter: 5,
+    });
+    expectNoDriverLeak(vi.mocked(sendToConnection).mock.calls);
+    expect(verifyJwtToken).not.toHaveBeenCalled();
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('keeps the auth-failed frame for an unknown key that the JWT check also rejects', async () => {
+    vi.mocked(verifyApiKey).mockRejectedValueOnce(new UnauthorizedError('Invalid or expired API key'));
+    vi.mocked(verifyJwtToken).mockRejectedValueOnce(new Error('bad token'));
+
+    await run();
+
+    const frame = vi.mocked(sendToConnection).mock.calls[0][2];
+    expect(frame).toMatchObject({
+      action: 'cli_completion_error',
+      error: 'Authentication failed. Provide a valid API key or JWT token.',
+    });
+    expect(frame).not.toHaveProperty('retryAfter');
+    expect(verifyJwtToken).toHaveBeenCalled();
   });
 });

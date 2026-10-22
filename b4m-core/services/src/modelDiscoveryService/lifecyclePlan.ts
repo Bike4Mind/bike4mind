@@ -103,12 +103,12 @@ export interface LifecycleSignals {
   /** Every docs lifecycle row this run, allowed through or not; the suggestion channel reads it. */
   docs: Map<string, DocsLifecycleSignal>;
   /**
-   * Provider name per model a PROVIDER reported this run in a non-sunset status with no
-   * deprecationDate. Docs-tier claims count: catalogWrite only lets this remove a future date.
+   * Provider names, in registration order, per model a PROVIDER reported this run in a non-sunset
+   * status with no deprecationDate. Docs-tier claims count: catalogWrite only lets this remove a future date.
    * A docs page that lags a deprecation announcement can therefore outrank an aggregator's
    * future date until the page catches up.
    */
-  providerUndated: Map<string, string>;
+  providerUndated: Map<string, string[]>;
   /**
    * Aggregator sunsets withheld from the overlay: one aggregator alone may not
    * deprecate a model the catalog already holds, because the field overlay lets
@@ -160,7 +160,7 @@ export function planLifecycleSignals({
 
   const docs = new Map<string, DocsLifecycleSignal>();
   const aggregatorSunsets = new Map<string, AggregatorSunsetSignal>();
-  const providerUndated = new Map<string, string>();
+  const providerUndated = new Map<string, string[]>();
   const sanitized = ordered.map(contribution => ({
     ...contribution,
     records: contribution.records.map(record => {
@@ -174,10 +174,9 @@ export function planLifecycleSignals({
         contribution.kind === 'provider' &&
         lifecycle.status !== undefined &&
         !LIFECYCLE_SUNSET_STATUSES.has(lifecycle.status) &&
-        lifecycle.deprecationDate === undefined &&
-        !providerUndated.has(record.modelId)
+        lifecycle.deprecationDate === undefined
       ) {
-        providerUndated.set(record.modelId, contribution.name);
+        providerUndated.set(record.modelId, [...(providerUndated.get(record.modelId) ?? []), contribution.name]);
       }
       if (
         typed &&

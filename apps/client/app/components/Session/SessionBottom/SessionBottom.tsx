@@ -90,6 +90,9 @@ import ResearchModeIndicator from '@client/app/components/Session/AISettings/Res
 import { pickerAttachedAgents } from './resolveDispatchAgent';
 import { SlashCommandSuggestions } from '@client/app/components/common/CommandSuggestions';
 import { useContentTransformDetector } from '@client/app/hooks/useContentTransformDetector';
+import { AffordableModelOffer } from '../AffordableModelOffer';
+import { useAffordableModelOffer } from '../useAffordableModelOffer';
+import { estimateNextInputTokens } from '@client/app/utils/creditEstimate';
 import { FirstRunEvents } from '@bike4mind/common';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
 
@@ -184,6 +187,9 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   // LLM state needed for rendering (send logic reads its own slice internally)
   const model = useLLM(s => s.model);
   const max_tokens = useLLM(s => s.max_tokens);
+  const thinking = useLLM(s => s.thinking);
+  const researchModeEnabled = useLLM(s => s.researchMode.enabled);
+  const agentModeEnabled = useLLM(s => s.agentMode.enabled);
   const sessionFilesOpen = useAdvancedAISettings(state => state.sessionFilesOpen);
   const setSessionFilesOpen = useAdvancedAISettings(state => state.setSessionFilesOpen);
   const [stream, setStream] = useState<boolean>(true);
@@ -220,6 +226,12 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   // 30MB (`MaxFileSize`'s schema default), not the old unrelated 100MB.
   const maxFileSize = Number(useGetSettingsValue('MaxFileSize')) || 30;
   const enforceCredits = !!useGetSettingsValue('enforceCredits');
+  const affordableOffer = useAffordableModelOffer({
+    enforceCredits: enforceCredits,
+    modelsLoaded: !!modelInfo,
+    selectedModelId: model,
+    sessionId: currentSessionId,
+  });
 
   // Out of credits replaces the message box outright (see CreditsWarning); the low-credits
   // notice sits above it without blocking typing.
@@ -587,6 +599,25 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
         ref={notesRef}
         sx={[aboveBoxSx, { display: 'flex', flexDirection: 'column', gap: '8px', '&:not(:empty)': { mb: '8px' } }]}
       >
+        {affordableOffer.show && (
+          <AffordableModelOffer
+            enabled={!researchModeEnabled && !agentModeEnabled && displayAgents.length === 0}
+            models={modelInfo ?? []}
+            accessibleModelIds={accessibleModels.map(candidate => candidate.id)}
+            selectedModelId={model}
+            credits={effectiveCredits}
+            inputTokens={estimateNextInputTokens(
+              contextUsage?.actualInputTokens,
+              chatInputValue,
+              model,
+              contextUsage?.inputModelId
+            )}
+            selectedMaxTokens={max_tokens}
+            thinking={thinking}
+            onSelect={affordableOffer.onSelect}
+            onDismiss={affordableOffer.onDismiss}
+          />
+        )}
         <LowCreditsWarning
           show={creditUi.lowCreditsNotice}
           currentCredits={effectiveCredits}
