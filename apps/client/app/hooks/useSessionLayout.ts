@@ -292,6 +292,19 @@ export const setSessionLayout = (
 };
 
 /**
+ * Writes a viewer's saved `content` into the open tab `id` (stored as `savedId` when the save
+ * re-created the artifact under a new id) and makes that tab the open artifact. Starts from the tab,
+ * not `artifactData`: that is only the artifact opened last, which opening another tab replaces and
+ * sending a message clears while the tabs stay open. No-op when `id` has no tab.
+ */
+export const saveOpenArtifactContent = (id: string, content: ArtifactData['content'], savedId: string = id) => {
+  const { layout, recentArtifacts } = useSessionLayout.getState();
+  const tab = recentArtifacts.find(a => a.id === id);
+  if (!tab) return;
+  setSessionLayout({ layout, artifactData: { ...tab, content, id: savedId } });
+};
+
+/**
  * Opens a file in the chat's own KnowledgeViewer, beside the conversation, through the transient
  * `previewFile` slot - viewing never attaches the file to the notebook. For hosts whose chat embeds
  * the viewer (SessionContainer renders it once the layout is `vertical`); docked-chat hosts render
