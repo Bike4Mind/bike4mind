@@ -13,6 +13,7 @@ import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import { useGetFriendRequests, useReturnToAdmin, useUserLogout } from '@client/app/hooks/data/user';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { useAppVersion } from '@client/app/hooks/useAppVersion';
+import { useDesktopPromoEnabled } from '@client/app/hooks/useDesktopPromoEnabled';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { useIsTablet } from '@client/app/hooks/useIsMobile';
 import { useEntitlements } from '@client/app/hooks/data/entitlements';
@@ -44,6 +45,7 @@ import ExtensionIcon from '@mui/icons-material/ExtensionOutlined';
 import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
 import FeedbackOutlinedIcon from '@mui/icons-material/FeedbackOutlined';
 import PowerOutlinedIcon from '@mui/icons-material/PowerOutlined';
+import DesktopMacOutlinedIcon from '@mui/icons-material/DesktopMacOutlined';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesomeOutlined';
 import LocalFireDepartmentOutlinedIcon from '@mui/icons-material/LocalFireDepartmentOutlined';
 import LogoDevIcon from '@mui/icons-material/LogoDev';
@@ -268,6 +270,7 @@ const ProfileMenu = () => {
   const { data: entitlements } = useEntitlements();
   const visiblePremiumNavItems = filterVisiblePremiumNavItems(premiumNavItems, entitlements, currentUser?.tags);
   const isCreditsEnabled = !!useGetSettingsValue('enforceCredits');
+  const isDesktopPromoEnabled = useDesktopPromoEnabled();
 
   const toggleReferralModal = useReferralModal(s => s.toggle);
   const openCookieSettings = useCookieSettings(s => s.open);
@@ -502,6 +505,16 @@ const ProfileMenu = () => {
               toggleReferralModal();
             }}
           />
+          {isDesktopPromoEnabled && (
+            <MenuRow
+              testId="profile-menu-desktop-app"
+              icon={<DesktopMacOutlinedIcon sx={{ fontSize: '18px' }} />}
+              label={t('desktopApp.getTheApp', 'Get the desktop app')}
+              onClick={() => {
+                navigateFromMenu('/desktop', () => navigate({ to: '/desktop' }));
+              }}
+            />
+          )}
           {isCreditsEnabled && (
             <MenuRow
               testId="profile-menu-billing"

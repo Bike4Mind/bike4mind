@@ -82,6 +82,13 @@ describe('proxy CSP header', () => {
     expect(values).toContain('https://tile.openstreetmap.org');
   });
 
+  it('connect-src allows the GitHub API the desktop download page reads its latest release from', () => {
+    const response = proxy(makeRequest('https://app.bike4mind.com/desktop'));
+    const csp = response.headers.get('Content-Security-Policy') ?? '';
+    const connectSrc = (csp.match(/connect-src ([^;]*)/)?.[1] ?? '').split(/\s+/);
+    expect(connectSrc).toContain('https://api.github.com');
+  });
+
   it('frame-src allows only the -nocookie YouTube host', () => {
     const response = proxy(makeRequest('https://app.bike4mind.com/dashboard'));
     const csp = response.headers.get('Content-Security-Policy') ?? '';
