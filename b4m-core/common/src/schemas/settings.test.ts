@@ -1379,6 +1379,11 @@ describe('ARTIFACT_EMISSION_PROMPT multi-file wording', () => {
     expect(ARTIFACT_EMISSION_PROMPT).toContain('must still be a single file');
   });
 
+  it('ties export default to the entry file so the React rules do not contradict the split', () => {
+    expect(ARTIFACT_EMISSION_PROMPT).toContain('exactly ONE entry file, the one nothing else imports, has');
+    expect(ARTIFACT_EMISSION_PROMPT).not.toContain('REACT ARTIFACTS: ONE file with ONE');
+  });
+
   it('no longer claims the publish transpiler rejects TypeScript', () => {
     expect(ARTIFACT_EMISSION_PROMPT).not.toContain('has no TS preset');
   });
