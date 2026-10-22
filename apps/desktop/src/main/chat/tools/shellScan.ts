@@ -823,7 +823,7 @@ const PACKAGE_FLAGS = new Set([
 ]);
 
 /** Options that open a server or debugger port a page could then talk to. */
-const VITEST_SERVES = /^--(api|ui|open|inspect|inspect-brk|host)([.=]|$)/;
+const VITEST_SERVES = /^--(browser\.)?(api|ui|open|inspect|inspect-brk|host)([.=]|$)/;
 
 /** Turbo options that read from or write to a remote cache. */
 const TURBO_REMOTE = /^--(api|token|team|login|cache|remote-only|remote-cache-read-only|preflight)(=|$)/;
@@ -1052,7 +1052,8 @@ export async function scanShell(
         text: normalised.join(' '),
         always: `${arityPrefix(normalised).join(' ')} *`,
         coverable,
-        words: coverable ? tokens.join(' ') : original,
+        // A harmless assignment stays in `words` so a deny or ask rule naming it still matches.
+        words: coverable ? [...assignments.map(child => child?.text ?? ''), ...tokens].join(' ') : original,
         ...(opaque ? { opaque } : {}),
       });
       const reason = outboundReason(tokens, readsStdin(node));
