@@ -1,6 +1,7 @@
 import { appendFile, mkdir, rename, stat } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import type { ChatApprovalMode, ChatToolApproval } from '@shared/chat';
+import { redact } from '../../devlog/redact';
 
 /** One line of the log: one approval decision. */
 export type ApprovalLogEntry = {
@@ -21,13 +22,14 @@ const INPUT_SUMMARY_MAX = 500;
 
 /**
  * What a call was asked to do, short enough for a log line: the command for a shell tool, the
- * path for a file tool, otherwise the arguments as JSON. Capped at INPUT_SUMMARY_MAX characters.
+ * path for a file tool, otherwise the arguments as JSON. Credentials are scrubbed, because the
+ * log outlives the conversation; capped at INPUT_SUMMARY_MAX characters.
  */
 export function summarizeToolInput(input: Record<string, unknown>): string {
   const named = [input.command, input.path, input.file_path, input.url].find(
     (value): value is string => typeof value === 'string'
   );
-  const text = named ?? JSON.stringify(input);
+  const text = redact(named ?? JSON.stringify(input));
   return text.length > INPUT_SUMMARY_MAX ? `${text.slice(0, INPUT_SUMMARY_MAX)}...` : text;
 }
 
@@ -74,8 +76,13 @@ export class ApprovalLog {
         throw error;
       }
     );
-    // Only the one previous file is kept; the rename replaces any older one.
-    if (size > 0 && size + Buffer.byteLength(line) > this.maxBytes) await rename(this.filePath, this.rotatedPath);
+    // Only the one previous file is kept; the rename replaces any older one. On Windows a file
+    // held open by another process cannot be renamed; keep appending rather than drop entries.
+    if (size > 0 && size + Buffer.byteLength(line) > this.maxBytes) {
+      await rename(this.filePath, this.rotatedPath).catch((error: NodeJS.ErrnoException) => {
+        if (!['EPERM', 'EBUSY', 'EACCES'].includes(error.code ?? '')) throw error;
+      });
+    }
     await appendFile(this.filePath, line, { encoding: 'utf8', mode: 0o600 });
   }
 }

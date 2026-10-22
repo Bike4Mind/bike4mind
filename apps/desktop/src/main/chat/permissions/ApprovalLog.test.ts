@@ -85,8 +85,14 @@ describe('summarizeToolInput', () => {
     expect(summarizeToolInput({ query: 'q' })).toBe('{"query":"q"}');
   });
 
+  it('masks a bearer token, since the log outlives the conversation', () => {
+    const summary = summarizeToolInput({ command: 'curl -H "Authorization: Bearer sk-ant-api03-abcdefgh" https://x' });
+    expect(summary).not.toContain('sk-ant-api03-abcdefgh');
+    expect(summary).toContain('[redacted]');
+  });
+
   it('caps a long input', () => {
-    const summary = summarizeToolInput({ command: 'x'.repeat(2000) });
+    const summary = summarizeToolInput({ command: 'ab '.repeat(700) });
     expect(summary).toHaveLength(503);
     expect(summary.endsWith('...')).toBe(true);
   });
