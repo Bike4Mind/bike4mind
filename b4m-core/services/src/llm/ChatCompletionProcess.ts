@@ -7244,7 +7244,9 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     try {
       logger.info(`⏱️ [${Date.now() - processStartTime}ms] Background admin settings fetch started`);
 
-      const adminSettings = await getSettingsMap(this.db, { logger });
+      // skipCache: the billing/access flags in this map gate money, and this process outlives an
+      // admin write made by another one. One read here, once per turn - not per chunk.
+      const adminSettings = await getSettingsMap(this.db, { logger, skipCache: true });
 
       const fetchTime = Date.now() - adminSettingsStartTime;
       logger.info(`⏱️ [${Date.now() - processStartTime}ms] Background admin settings completed in ${fetchTime}ms`);
@@ -7252,8 +7254,15 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       return adminSettings;
     } catch (error) {
       logger.warn(`Background admin settings fetch failed after ${Date.now() - adminSettingsStartTime}ms:`, error);
-      // Return defaults if background fetch fails
-      return this.getDefaultAdminSettings();
+      // A stale-but-real map beats fabricated defaults here: getDefaultAdminSettings() hardcodes
+      // enforceCredits 'true', which would charge a deployment whose admin turned metering off.
+      // Fall back to the cached map, and to the defaults only when there is no cached map either.
+      try {
+        return await getSettingsMap(this.db, { logger });
+      } catch (cacheError) {
+        logger.warn('Cached admin settings fallback failed too; using defaults:', cacheError);
+        return this.getDefaultAdminSettings();
+      }
     }
   }
 

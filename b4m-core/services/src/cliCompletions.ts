@@ -597,8 +597,9 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     );
   }
 
-  // Credit enforcement: Fail-fast if model info is missing
-  const settings = await getSettingsMap(db);
+  // Credit enforcement: Fail-fast if model info is missing.
+  // skipCache: this flag gates money and the serving process may outlive the admin's write to it.
+  const settings = await getSettingsMap(db, { names: ['enforceCredits'], skipCache: true });
   const enforceCredits = getSettingsValue('enforceCredits', settings);
 
   if (enforceCredits) {

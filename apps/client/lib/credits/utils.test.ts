@@ -4,12 +4,14 @@ import { MIN_PRICE_PER_CREDIT_USD } from '@bike4mind/common';
 import { TransactionType } from './types';
 
 let storedSettings: Record<string, unknown> = {};
+const { getSettingsMap } = vi.hoisted(() => ({ getSettingsMap: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({ adminSettingsRepository: {} }));
 vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/utils')>()),
-  getSettingsMap: () => Promise.resolve(storedSettings),
+  getSettingsMap,
 }));
 
+import { adminSettingsRepository } from '@bike4mind/database';
 import { handlePerCreditTransaction } from './utils';
 
 const logger = { error: vi.fn() };
@@ -20,6 +22,15 @@ describe('handlePerCreditTransaction', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     storedSettings = { pricePerCredit: String(MIN_PRICE_PER_CREDIT_USD) };
+    getSettingsMap.mockImplementation(async () => storedSettings);
+  });
+
+  it('reads the current credit price directly for each purchase', async () => {
+    await buy(1000);
+    expect(getSettingsMap).toHaveBeenCalledExactlyOnceWith(
+      { adminSettings: adminSettingsRepository },
+      { names: ['pricePerCredit'], skipCache: true }
+    );
   });
 
   it('never charges less than the floor price for the credits sold', async () => {

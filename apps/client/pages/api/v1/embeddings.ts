@@ -108,7 +108,10 @@ const handler = nextRouteForContract(createEmbeddingsContract, { maxBodySize: 4 
       });
     }
 
-    const settings = await getSettingsMap({ adminSettings: adminSettingsRepository }, { names: ['enforceCredits'] });
+    const settings = await getSettingsMap(
+      { adminSettings: adminSettingsRepository },
+      { names: ['enforceCredits'], skipCache: true }
+    );
     const costUsd = getEmbeddingModelCost(model, promptTokens);
     // Gate on USD, not usdToCredits' one-credit floor: a free embedder (Ollama) reserves nothing.
     // An unpriced model never gets here (rejected above), so cost 0 always means a genuine 0 rate.

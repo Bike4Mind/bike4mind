@@ -26,6 +26,7 @@ import {
   usdToCredits,
   usdToCreditsStochastic,
   getSettingsValue,
+  getSettingsMap,
   processFabFilesServer,
   fetchAndConvertFabFiles,
   ClientMessageSender,
@@ -194,6 +195,7 @@ const mockedGetLlmWithFallback = vi.mocked(getLlmWithFallback);
 const mockedUsdToCredits = vi.mocked(usdToCredits);
 const mockedUsdToCreditsStochastic = vi.mocked(usdToCreditsStochastic);
 const mockedGetSettingsValue = vi.mocked(getSettingsValue);
+const mockedGetSettingsMap = vi.mocked(getSettingsMap);
 // Turns on boolean admin flags that ChatCompletionProcess reads through getSettingsValue, keeping
 // whatever the test already wired for other keys; restored when the test finishes.
 const enableAdminFlags = (...keys: string[]) => {
@@ -364,6 +366,62 @@ describe('ChatCompletionProcess', () => {
     queryComplexity: 'simple',
     promptMeta: {},
   };
+
+  describe('loadAdminSettingsAsync (cross-process freshness)', () => {
+    const settingsLoader = () =>
+      service as unknown as {
+        loadAdminSettingsAsync: (
+          logger: typeof mockLogger,
+          processStartTime: number
+        ) => Promise<Record<string, string>>;
+      };
+    // The Fargate service is always-on, so a cached settings map can lag an admin
+    // write from another process until its TTL expires. This read gates billing, so it must
+    // come from the store on every turn.
+    it('bypasses the process cache so an admin flip is honoured on the next turn', async () => {
+      vi.mocked(settingsLoader().loadAdminSettingsAsync).mockRestore();
+
+      await settingsLoader().loadAdminSettingsAsync(mockLogger, 0);
+
+      expect(mockedGetSettingsMap).toHaveBeenCalledWith(mockDb, { logger: mockLogger, skipCache: true });
+    });
+
+    it('falls back to the cached map when the fresh read fails, never to the fabricated defaults', async () => {
+      vi.mocked(settingsLoader().loadAdminSettingsAsync).mockRestore();
+      mockedGetSettingsMap.mockClear();
+      mockedGetSettingsMap
+        .mockRejectedValueOnce(new Error('AdminSettings read timed out'))
+        .mockResolvedValueOnce({ enforceCredits: 'false' });
+
+      const settings = await settingsLoader().loadAdminSettingsAsync(mockLogger, 0);
+
+      // The fabricated default is 'true'; using it would charge a deployment that disabled metering.
+      expect(settings.enforceCredits).toBe('false');
+      expect(mockedGetSettingsMap).toHaveBeenNthCalledWith(1, mockDb, { logger: mockLogger, skipCache: true });
+      expect(mockedGetSettingsMap).toHaveBeenNthCalledWith(2, mockDb, { logger: mockLogger });
+    });
+
+    it('logs both failures and uses secure defaults only when neither read succeeds', async () => {
+      vi.mocked(settingsLoader().loadAdminSettingsAsync).mockRestore();
+      mockedGetSettingsMap.mockClear();
+      const freshError = new Error('fresh settings unavailable');
+      const cachedError = new Error('cached settings unavailable');
+      mockedGetSettingsMap.mockRejectedValueOnce(freshError).mockRejectedValueOnce(cachedError);
+
+      const settings = await settingsLoader().loadAdminSettingsAsync(mockLogger, 0);
+
+      expect(settings.enforceCredits).toBe('true');
+      expect(mockedGetSettingsMap).toHaveBeenCalledTimes(2);
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('Background admin settings fetch failed'),
+        freshError
+      );
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        'Cached admin settings fallback failed too; using defaults:',
+        cachedError
+      );
+    });
+  });
 
   describe('resolveEntitlementKeys (fail-safe entitlement resolution)', () => {
     it('returns the injected keys and memoizes (resolves once per process)', async () => {
