@@ -76,7 +76,10 @@ describe('POST /api/v1/text-refinements', () => {
     await handler(req, res);
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ text: 'A golden retriever on a sunlit beach' });
-    expect(mockRefineText).toHaveBeenCalledWith({ text: 'a dog on a beach', context: 'image prompt' }, expect.anything());
+    expect(mockRefineText).toHaveBeenCalledWith(
+      { text: 'a dog on a beach', context: 'image prompt' },
+      expect.anything()
+    );
   });
 
   it('serves the second identical request from the cache', async () => {

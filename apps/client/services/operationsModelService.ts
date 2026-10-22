@@ -362,7 +362,9 @@ export class OperationsModelService {
     });
 
     if (!llm) {
-      throw new OperationsModelUnavailableError(`Failed to initialize hardcoded default operations model ${modelInfo.id}`);
+      throw new OperationsModelUnavailableError(
+        `Failed to initialize hardcoded default operations model ${modelInfo.id}`
+      );
     }
 
     this.logger.info(`Using hardcoded default operations model: ${modelInfo.id} (${modelInfo.backend})`);
