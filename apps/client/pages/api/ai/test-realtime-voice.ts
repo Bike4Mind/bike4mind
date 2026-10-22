@@ -5,7 +5,11 @@ import { ApiKeyType, estimateTtsCreditCost, type ApiErrorCode } from '@bike4mind
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
 import { deductTtsCredits } from '@server/utils/deductTtsCredits';
-import { assertPreflightCredits, InsufficientCreditsPreflightError } from '@server/utils/creditPreflight';
+import {
+  holdPreflightCredits,
+  InsufficientCreditsPreflightError,
+  type PreflightCreditHold,
+} from '@server/utils/creditPreflight';
 import { isCreditsEnforced } from '@server/billing/meterPlatformCompletion';
 import { resolveAudioBillingOrgId } from '@server/billing/resolveAudioBillingOrgId';
 
@@ -53,15 +57,16 @@ const handler = baseApi().post(async (req, res) => {
 
   console.log('[DEBUG] Test Realtime Voice - Selected voice:', selectedVoice);
 
-  // Same credit gate as pages/api/ai/tts.ts: refuse before the provider call, charge after it. Unlike
+  // Same durable hold as pages/api/ai/tts.ts: reserve before the provider call, settle after it. Unlike
   // tts.ts the charge is skipped when enforceCredits is off, so a credits-off deployment moves no balance.
   const userId = req.user?.id;
   const billingOrganizationId = await resolveAudioBillingOrgId(req, undefined, 'user');
-  if (userId) {
+  let hold: PreflightCreditHold | undefined;
+  if (userId && req.user && (await isCreditsEnforced())) {
     try {
-      await assertPreflightCredits({
-        userId,
-        estimatedCredits: estimateTtsCreditCost('openai', TTS_MODEL, text.length),
+      hold = await holdPreflightCredits({
+        req: { user: req.user, apiKeyInfo: req.apiKeyInfo, logger: req.logger },
+        requiredCredits: estimateTtsCreditCost('openai', TTS_MODEL, text.length),
         featureLabel: 'voice preview',
         billingOrganizationId,
       });
@@ -91,19 +96,21 @@ const handler = baseApi().post(async (req, res) => {
       speed: 1.0, // Normal speed to match real-time API
     });
 
-    // Convert response to buffer
-    const buffer = Buffer.from(await response.arrayBuffer());
-
-    if (userId && (await isCreditsEnforced())) {
+    if (hold && userId) {
+      const settling = hold;
+      hold = undefined;
       await deductTtsCredits({
+        hold: settling,
         userId,
         vendor: 'openai',
         model: TTS_MODEL,
         characters: text.length,
-        billingOrganizationId,
         logger: req.logger,
       });
     }
+
+    // Synthesis already incurred its cost, even if reading or delivering the response fails.
+    const buffer = Buffer.from(await response.arrayBuffer());
 
     // Set appropriate headers for audio response
     res.setHeader('Content-Type', 'audio/mpeg');
@@ -113,6 +120,7 @@ const handler = baseApi().post(async (req, res) => {
 
     return res.send(buffer);
   } catch (error: any) {
+    await hold?.release();
     console.error('Test Realtime Voice error:', error);
 
     if (error.status === 400) {
