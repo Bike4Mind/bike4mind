@@ -922,7 +922,8 @@ async function waitUntilFixtureEmbedded(request: APIRequestContext, token: strin
 /** Returns the healthy fixture lake, rebuilding it first if needed; `fresh` is true when recently embedded. */
 async function ensureLargeLakeFixture(
   request: APIRequestContext,
-  token: string
+  token: string,
+  attempt = 0
 ): Promise<{ lake: DataLake; fresh: boolean }> {
   // isOwn: the list also returns other users' public lakes. The list projection has no createdAt,
   // which the age checks below need, so each match is re-read.
@@ -944,10 +945,20 @@ async function ensureLargeLakeFixture(
   }
 
   await Promise.all(candidates.map(l => apiDeleteDataLake(request, token, l.id)));
-  const lake = await apiCreateDataLake(request, token, {
-    name: FIXTURE_LAKE_NAME,
-    fileTagPrefix: FIXTURE_LAKE_TAG_PREFIX,
-  });
+  let lake: DataLake;
+  try {
+    lake = await apiCreateDataLake(request, token, {
+      name: FIXTURE_LAKE_NAME,
+      fileTagPrefix: FIXTURE_LAKE_TAG_PREFIX,
+    });
+  } catch (err) {
+    // The prefix stays claimed until the purge finishes, or while another run's lake holds it.
+    if (/failed: 400\b/.test(String(err)) && attempt < 6) {
+      await new Promise(resolve => setTimeout(resolve, 10_000));
+      return ensureLargeLakeFixture(request, token, attempt + 1);
+    }
+    throw err;
+  }
   const files = largeLakeFiles();
   for (let i = 0; i < files.length; i += SEED_CONCURRENCY) {
     await Promise.all(files.slice(i, i + SEED_CONCURRENCY).map(file => apiSeedLakeArticle(request, token, lake, file)));
@@ -969,6 +980,11 @@ test.describe('Data Lake - asking a large lake', () => {
     chatPage,
     loginAsUser,
   }) => {
+    // Preview stages do not run scheduled jobs (runsScheduledJobs in infra/constants.ts).
+    test.skip(
+      /\/\/app\.pr\d+\./.test(process.env.API_URL ?? ''),
+      'Preview stages run no vector-index keep-warm, so a cold index fails this retries:0 test'
+    );
     // Only a rebuild of the fixture lake needs this long; a reused one answers in about a minute.
     test.setTimeout(10 * 60_000);
     const owner = await apiLoginStandingUser(request, FIXTURE_LAKE_OWNER);
