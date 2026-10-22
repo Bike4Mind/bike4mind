@@ -27,11 +27,32 @@ export interface InfraResourceContributions {
 
 export const EMPTY_INFRA_RESOURCE_CONTRIBUTIONS: InfraResourceContributions = { secrets: [], rotations: [] };
 
-const RESOURCE_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_]*$/;
-const RESERVED_NAMES = new Set(['constructor', 'prototype', 'hasOwnProperty', 'toString', 'valueOf']);
+// Upper snake case only: a contributed name doubles as an env var (the env option and the
+// self-host fallback), and toEnvKey maps any other casing onto a different variable, so
+// 'MongodbUri' would read MONGODB_URI.
+const RESOURCE_NAME_PATTERN = /^[A-Z][A-Z0-9_]*$/;
+// Variables the runtime, the platform or core already own; a contribution must not set or read them.
+const RESERVED_ENV_PREFIXES = ['AWS_', 'AMAZON_', 'LAMBDA_', 'ECS_', 'LD_', 'NODE_', 'NPM_', 'SST_', 'NEXT_', 'B4M_'];
+const RESERVED_ENV_NAMES = new Set([
+  'PATH',
+  'HOME',
+  'PWD',
+  'SHELL',
+  'USER',
+  'HOSTNAME',
+  'LANG',
+  'TZ',
+  'TMPDIR',
+  'PORT',
+]);
 
 export function isValidContributedResourceName(name: unknown): name is string {
-  return typeof name === 'string' && RESOURCE_NAME_PATTERN.test(name) && !RESERVED_NAMES.has(name);
+  return (
+    typeof name === 'string' &&
+    RESOURCE_NAME_PATTERN.test(name) &&
+    !RESERVED_ENV_NAMES.has(name) &&
+    !RESERVED_ENV_PREFIXES.some(prefix => name.startsWith(prefix))
+  );
 }
 
 export interface PartitionedContributions<T> {
@@ -40,7 +61,7 @@ export interface PartitionedContributions<T> {
   coreCollisions: string[];
   /** Names declared more than once. The first declaration wins. */
   duplicates: string[];
-  /** Names that fail validation (empty, bad characters, reserved). */
+  /** Names that fail validation (empty, not upper snake case, a reserved env var). */
   rejected: string[];
 }
 

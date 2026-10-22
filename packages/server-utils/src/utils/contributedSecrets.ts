@@ -4,9 +4,8 @@ import {
   type ContributedSecretSpec,
   type PartitionedContributions,
 } from '@bike4mind/infra';
-import { toEnvKey } from '@bike4mind/resource';
 import { Resource } from 'sst';
-import { contributedInfraResources, coreSecretNames } from '../premium-generated/infraResources.generated';
+import { contributedInfraResources, coreResourceNames } from '../premium-generated/infraResources.generated';
 
 const registeredSecrets = new Set<string>();
 let loaded = false;
@@ -14,11 +13,16 @@ let loaded = false;
 /**
  * Register overlay-declared secrets so readContributedSecret will resolve them. Applies
  * the same drop rules as infra/secrets.ts: core names win, the first duplicate wins.
+ * Registers nothing when codegen could not read the core names.
  */
 export function registerContributedSecrets(
   specs: readonly ContributedSecretSpec[]
 ): PartitionedContributions<ContributedSecretSpec> {
-  const result = partitionContributed(specs, spec => spec.name, new Set(coreSecretNames));
+  if (coreResourceNames === null) {
+    console.warn('[config] core resource names unknown (codegen ran without infra/); no contributed secret registered');
+    return { registered: [], coreCollisions: [], duplicates: [], rejected: specs.map(spec => String(spec.name)) };
+  }
+  const result = partitionContributed(specs, spec => spec.name, new Set(coreResourceNames));
   const fresh = result.registered.filter(spec => !registeredSecrets.has(spec.name));
   result.duplicates.push(...result.registered.filter(spec => registeredSecrets.has(spec.name)).map(spec => spec.name));
   result.registered = fresh;
@@ -43,7 +47,8 @@ export function isContributedSecret(name: string): boolean {
 /**
  * Value of a registered contributed secret, or undefined when the name is not registered
  * or the secret is not linked. The self-host Resource shim only knows its own manifest,
- * so an unlinked read falls back to the env var the shim would have used.
+ * so an unlinked read falls back to the env var of the same name: registered names are
+ * upper snake case, which is also what infra/secrets.ts writes and what toEnvKey maps to.
  */
 export function readContributedSecret(name: string): string | undefined {
   if (!isContributedSecret(name)) return undefined;
@@ -55,7 +60,7 @@ export function readContributedSecret(name: string): string | undefined {
   } catch {
     // Unlinked: the real SST runtime and the self-host shim both throw in the getter.
   }
-  return process.env[toEnvKey(name)];
+  return process.env[name];
 }
 
 export function resetContributedSecretsForTests(): void {

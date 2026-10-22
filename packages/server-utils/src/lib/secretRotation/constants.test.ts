@@ -9,10 +9,13 @@ const ROTATION = {
   rotationProcess: 'Rotate upstream, then sst secret set',
 };
 
-async function load(declared: { secrets: { name: string }[]; rotations: (typeof ROTATION)[] }) {
+async function load(
+  declared: { secrets: { name: string }[]; rotations: (typeof ROTATION)[] },
+  coreResourceNames: string[] | null = ['MONGODB_URI', 'JWT_SECRET']
+) {
   vi.doMock('../../premium-generated/infraResources.generated', () => ({
     contributedInfraResources: declared,
-    coreSecretNames: ['MONGODB_URI', 'JWT_SECRET'],
+    coreResourceNames,
   }));
   return import('./constants');
 }
@@ -35,6 +38,22 @@ describe('secret rotation registry', () => {
     });
     expect(getSecretRotationConfig()).toEqual(SECRET_ROTATION_CONFIG);
     expect(getUnregisteredContributedRotations()).toEqual([]);
+  });
+
+  it('tells a tree that declares rotations from one that declares none', async () => {
+    expect((await load({ secrets: [], rotations: [] })).declaresContributedRotations()).toBe(false);
+    vi.resetModules();
+    const declared = await load({ secrets: [{ name: 'EXAMPLE_API_TOKEN' }], rotations: [ROTATION] });
+    expect(declared.declaresContributedRotations()).toBe(true);
+  });
+
+  it('registers no rotation when codegen could not read the core names', async () => {
+    const { getSecretRotationConfig, getUnregisteredContributedRotations } = await load(
+      { secrets: [{ name: 'EXAMPLE_API_TOKEN' }], rotations: [ROTATION] },
+      null
+    );
+    expect(getSecretRotationConfig().EXAMPLE_API_TOKEN).toBeUndefined();
+    expect(getUnregisteredContributedRotations()).toEqual(['EXAMPLE_API_TOKEN']);
   });
 
   it('adds a declared rotation for a declared secret', async () => {
