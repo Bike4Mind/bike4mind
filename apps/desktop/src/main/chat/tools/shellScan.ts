@@ -50,10 +50,8 @@ export interface ShellScan {
   sends: { reason: string; target: RepositoryWrite | null }[];
   /**
    * True when every command is one `containedCommand` accepts and nothing in the script sets the
-   * environment beyond a `harmlessAssignment` on a local toolchain command, so no part of it can
-   * carry data to a host of the caller's choosing - short of code the project itself defines (see
-   * localToolchainCommand). A reply that has read untrusted content still runs these unasked; see
-   * ChatService's DirectoryTurn.untrusted.
+   * environment, so no part of it can carry data to a host of the caller's choosing. A reply that
+   * has read untrusted content still runs these unasked; see ChatService's DirectoryTurn.untrusted.
    */
   contained: boolean;
   /** Files the script writes by redirect, `tee`, or as a `cp`/`mv`/`install`/`ln` destination. */
@@ -892,12 +890,9 @@ function packageTask(manager: string, args: readonly string[]): boolean {
  * Whether a command is an ordinary local test, typecheck, lint, format or build run: `vitest`,
  * `jest`, `tsc`, `eslint`, `prettier`, a dev-task `turbo` pipeline or a `node` script inside the
  * folder, directly or through `pnpm`/`npm`/`yarn`/`npx`, with no option that opens a port, reads a
- * remote cache or installs a package. Nothing here downloads code: `dlx`, `add` and `install` are
- * not on it, and `npx` only names a listed tool.
- *
- * These run code the project defines (package scripts, configs, tests), which an injected page could
- * have had the model write first. That is accepted: writes inside the project already run unasked in
- * 'auto', so asking before the test runner would be friction without a barrier.
+ * remote cache or installs a package. Only decides whether a tuning env prefix keeps the command
+ * coverable. It is NOT contained: these run code the project defines, which a tainted reply can
+ * write unasked first, so running one is the barrier the taint check keeps.
  */
 function localToolchainCommand(raw: readonly string[]): boolean {
   if (raw.length === 0 || raw.some(isDynamic)) return false;
@@ -912,18 +907,16 @@ function localToolchainCommand(raw: readonly string[]): boolean {
 
 /**
  * Whether one simple command provably keeps to this computer, or only reads from GitHub as the
- * user, or is a local toolchain run (see localToolchainCommand). Deliberately an allowlist:
- * anything it does not recognise - another interpreter, a build tool, a wrapper that runs another
- * program - is not contained. `git` is not on it: a repository's own config can name a program
- * for `status`, `diff` and the rest to run (`core.fsmonitor`, `filter.*.clean`, `diff.external`),
- * and no scan of the argv can rule that out.
+ * user. Deliberately an allowlist: anything it does not recognise - an interpreter, a build tool,
+ * a wrapper that runs another program - is not contained. `git` is not on it: a repository's own
+ * config can name a program for `status`, `diff` and the rest to run (`core.fsmonitor`,
+ * `filter.*.clean`, `diff.external`), and no scan of the argv can rule that out.
  */
 export function containedCommand(raw: readonly string[]): boolean {
   if (raw.length === 0) return false;
   const tokens = raw.map(unquote);
   const [program, ...args] = tokens;
   if (isDynamic(raw[0])) return false;
-  if (localToolchainCommand(raw)) return true;
   if (LOCAL_PROGRAMS.has(program)) {
     if (program === 'sort') return !sortRunsOrWrites(args);
     const runs = RUNS_A_PROGRAM[program];
@@ -1026,8 +1019,8 @@ export async function scanShell(
 
       const normalised = commandTokens(tokens);
       const assignments = node.namedChildren.filter(child => child?.type === 'variable_assignment');
-      // A tuning variable in front of a toolchain run is neither unsafe syntax for a remembered
-      // pattern nor a reason the run is not contained; every other assignment is both.
+      // A tuning variable in front of a toolchain run is not unsafe syntax for a remembered
+      // pattern or a rule; every other assignment is.
       const assigns =
         assignments.length > 0 &&
         !(

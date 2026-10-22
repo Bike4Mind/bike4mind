@@ -4597,8 +4597,8 @@ export class ChatService {
    * 'auto' follows opencode: everything runs except a call that names a reason to stop - a
    * repeat of the last two calls, a read of a `.env` file, a script that does not parse, a
    * command that can send data out, an outbound call after the reply read untrusted content
-   * (see DirectoryTurn.untrusted) unless it is a contained shell command - which includes local
-   * test, typecheck, lint and build runs - or a path outside the project the user has not allowed.
+   * (see DirectoryTurn.untrusted) unless it is a contained shell command, or a path outside the
+   * project the user has not allowed.
    */
   private autoApproves(
     mode: ChatApprovalMode,
