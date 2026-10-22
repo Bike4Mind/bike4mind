@@ -465,8 +465,6 @@ apps/client/pages/api/friends/index.ts
 apps/client/pages/api/gears/stamp.ts
 apps/client/pages/api/gears/status.ts
 apps/client/pages/api/generated-content/[ref].ts
-apps/client/pages/api/google-calendar/available.ts
-apps/client/pages/api/google-calendar/create-event.ts
 apps/client/pages/api/google-drive/callback.ts
 apps/client/pages/api/google-drive/connect.ts
 apps/client/pages/api/google-drive/disconnect.ts
@@ -497,7 +495,6 @@ apps/client/pages/api/inbox/admin-send.ts
 apps/client/pages/api/inbox/create.ts
 apps/client/pages/api/inbox/index.ts
 apps/client/pages/api/inbox/read.ts
-apps/client/pages/api/infer.ts
 apps/client/pages/api/integrations/[integration]/rotate-token.ts
 apps/client/pages/api/internal/s3/object-created.ts
 apps/client/pages/api/internal/ws/[action].ts
