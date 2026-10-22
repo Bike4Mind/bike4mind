@@ -33,7 +33,7 @@ import {
   getBlobBytes,
   getRecursiveTree,
   gitHubRateLimitDelaySeconds,
-} from '@server/integrations/github/dataLake/lakeAppClient';
+} from '@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient';
 import {
   checkLakeFileContent,
   classifyTreeEntry,

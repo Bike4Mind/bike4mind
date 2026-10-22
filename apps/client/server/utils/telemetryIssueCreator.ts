@@ -26,7 +26,7 @@ import {
   extractSemanticFingerprintFromBody,
   getSeverityEmoji,
   formatPrimaryAnomaly,
-} from '@server/services/telemetryFingerprint';
+} from '@bike4mind/server-utils/services/telemetryFingerprint';
 import { escapeMarkdown } from '@bike4mind/server-utils/utils/markdownEscape';
 import { checkFingerprintDedup, type IssueForDedup } from '@bike4mind/server-utils/services/issueDedup';
 import { type Priority, REQUIRED_TELEMETRY_LABELS } from '@bike4mind/server-utils/services/issueLabels';

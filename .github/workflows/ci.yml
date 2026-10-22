@@ -85,7 +85,7 @@ jobs:
       - name: Check for API files missing baseApi()
         run: bash scripts/check-no-baseapi.sh
 
-      - name: Check v1 public endpoints use the contract abstraction
+      - name: Check v1 endpoints use the contract abstraction and non-v1 handlers are jwtOnly
         run: bash scripts/check-contract-gate.sh
 
       - name: Check user $lookup field projections
@@ -544,6 +544,11 @@ jobs:
             filter: '--filter @bike4mind/workers'
             workers: '2'
             script: 'test:integration'
+          # Same split for packages/server-utils' real-Mongo suites. See its vitest.config.mts.
+          - name: server-utils-integration
+            filter: '--filter @bike4mind/server-utils'
+            workers: '2'
+            script: 'test:integration'
           - name: services
             filter: '--filter @bike4mind/services'
             workers: ''
@@ -652,9 +657,9 @@ jobs:
       - name: Mark shard start
         run: echo "SHARD_START_SECONDS=$(date +%s)" >> "$GITHUB_ENV"
 
-      # `matrix.shard.script` is unset on every shard but the integration ones (client and
-      # workers), and an unset matrix value is the empty string here, so `||` falls back
-      # to the unit `test` script. `matrix.shard.args` is likewise set only on the
+      # `matrix.shard.script` is unset on every shard but the integration ones (client,
+      # workers and server-utils), and an unset matrix value is the empty string here, so
+      # `||` falls back to the unit `test` script. `matrix.shard.args` is likewise set only on the
       # shard legs (three client, three client-integration), where it carries
       # `--shard=i/3` - deliberately with no `--` separator before it, see the matrix
       # entries above for why that is load-bearing.
@@ -702,13 +707,17 @@ jobs:
           # oversubscription by construction. vitestWorkerBudget.test.ts pins this.
           pnpm --recursive --workspace-concurrency=1 "${filter_args[@]}" "$SHARD_SCRIPT" "${script_args[@]}"
 
-      - name: Verify telemetry retention across DST
+      # The scheduler suite is a unit test, so it runs under `test` (the integration lane collects
+      # only *.e2e.test.ts). It sets TZ itself at runtime; this step's TZ is for the retention file.
+      - name: Verify telemetry retention and worker scheduling across DST
         if: matrix.shard.name == 'workers-integration'
         env:
           TZ: America/New_York
           VITEST_MAX_WORKERS: '2'
           TMPDIR: /dev/shm
-        run: pnpm --filter @bike4mind/workers test:integration src/cron/telemetryCleanup.retention.e2e.test.ts
+        run: |
+          pnpm --filter @bike4mind/workers test:integration src/cron/telemetryCleanup.retention.e2e.test.ts
+          pnpm --filter @bike4mind/workers test src/selfhost/selfHostWorker.dst.test.ts
 
       # Tests that live outside every pnpm workspace, which the sharded run above cannot reach:
       # infra/ has no package.json, and scripts/codemods and scripts/__tests__ are not in

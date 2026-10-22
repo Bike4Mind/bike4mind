@@ -52,7 +52,7 @@ vi.mock('@bike4mind/database', () => ({
   withTransaction: <T>(fn: (session: unknown) => Promise<T>) => fn({}),
 }));
 vi.mock('@bike4mind/server-utils/s3/storageCharge', () => ({ chargeUploadedObject: chargeMock }));
-vi.mock('@server/s3/uploadSizeGate', () => ({ admitLandedUpload: admitMock }));
+vi.mock('@bike4mind/server-utils/s3/uploadSizeGate', () => ({ admitLandedUpload: admitMock }));
 vi.mock('@server/s3/recordRejectedUploadBatch', () => ({ recordRejectedUploadBatch: recordRejectedBatchMock }));
 vi.mock('@server/s3/moderationScan', () => ({
   normalizeETag: (eTag?: string) => eTag?.replace(/^"|"$/g, '') || undefined,
@@ -78,7 +78,9 @@ vi.mock('sst', () => ({
 }));
 vi.mock('@server/s3/historyUploadComplete', () => ({ dispatch: historyDispatchMock }));
 vi.mock('@server/s3/notebookImportComplete', () => ({ dispatch: notebookDispatchMock }));
-vi.mock('@server/s3/moderateImportedKnowledgeFiles', () => ({ moderateImportedKnowledgeFiles: moderateFilesMock }));
+vi.mock('@bike4mind/server-utils/s3/moderateImportedKnowledgeFiles', () => ({
+  moderateImportedKnowledgeFiles: moderateFilesMock,
+}));
 vi.mock('@server/s3/knowledgeModerationDeps', () => ({ buildKnowledgeModerationDeps: buildDepsMock }));
 
 const handler = (await import('../object-created')).default as (req: Request, res: Response) => Promise<unknown>;

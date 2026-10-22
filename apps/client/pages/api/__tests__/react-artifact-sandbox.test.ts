@@ -107,6 +107,14 @@ describe('GET /api/react-artifact-sandbox', () => {
     expect(csp).toMatch(/script-src [^;]*'unsafe-eval'/);
   });
 
+  it('keeps the CDN script hosts it loads from in its own script-src', () => {
+    const { res, headers } = makeRes();
+    handler(makeReq('GET'), res);
+    const csp = headers['Content-Security-Policy'];
+    expect(csp).toMatch(/script-src [^;]*https:\/\/unpkg\.com/);
+    expect(csp).toMatch(/script-src [^;]*https:\/\/cdn\.tailwindcss\.com/);
+  });
+
   it('sets connect-src none so artifact content cannot exfiltrate', () => {
     const { res, headers } = makeRes();
     handler(makeReq('GET'), res);

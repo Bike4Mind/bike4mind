@@ -140,6 +140,12 @@ describe('ReplyMarkdown', () => {
       expect(html).toContain('href="https://example.com/a"');
     });
 
+    it('renders a bare url as a link, without the punctuation after it', () => {
+      const html = render('Read https://example.com/a. Then go.');
+      expect(html).toContain('data-testid="chat-markdown-link"');
+      expect(html).toContain('href="https://example.com/a"');
+    });
+
     it('does not give a link a target, which would ask Electron for a window', () => {
       expect(render('[docs](https://example.com)')).not.toContain('target=');
     });

@@ -81,7 +81,7 @@ vi.mock('@server/integrations/github/WebhookAuditLogger', () => ({
   extractWebhookMetadata: vi.fn(() => ({})),
 }));
 
-vi.mock('@server/integrations/integrationAuditLogger', () => ({
+vi.mock('@bike4mind/server-utils/integrations/integrationAuditLogger', () => ({
   IntegrationAuditLogger: {
     create: vi.fn(() => ({ failure: vi.fn(), success: vi.fn(), setUserId: vi.fn() })),
   },

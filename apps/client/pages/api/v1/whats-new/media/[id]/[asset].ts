@@ -9,7 +9,7 @@ import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { Resource } from 'sst';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { findDeniedInNote, loadReleaseNotesConfig } from '@server/releaseNotes/adminReleaseNotes';
+import { findDeniedInNote, loadReleaseNotesConfig } from '@bike4mind/server-utils/releaseNotes/adminReleaseNotes';
 import { ownModalMediaKey } from '@server/releaseNotes/publicMedia';
 
 // Seconds. The URL is signed for longer than the redirect may be cached (both figures are published in

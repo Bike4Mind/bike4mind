@@ -11,6 +11,12 @@ Bike4Mind supports a wide range of state-of-the-art AI models for text generatio
 
 > **Model Availability:** Model availability is managed at the organizational level by your administrator. If you don't see a model or provider listed below in your model selector, it may be disabled for your organization or restricted to certain user roles. Contact your organization administrator to request access to additional models or providers.
 
+## Choosing a model
+
+Each provider lists current models first. Expand **Older models** at the bottom of a provider group to select a superseded model. Search includes older models even when their group is collapsed, and clearing the search restores the group's previous state.
+
+If your session or agent already uses an older model, its selected card stays visible without expanding the group. Older models also remain available in your Favorites and Recommended sections. Models that are no longer available are still hidden.
+
 ## Supported Text Models
 
 Bike4Mind offers 60+ AI models. The lists below cover everything currently offered; your model picker shows exactly what is enabled for your organization.

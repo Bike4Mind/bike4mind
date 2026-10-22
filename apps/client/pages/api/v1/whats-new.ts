@@ -10,7 +10,7 @@ import {
   encodeTimeIdCursor,
   type TimeIdKeyset,
 } from '@server/utils/cursorPagination';
-import { findDeniedInNote, loadReleaseNotesConfig } from '@server/releaseNotes/adminReleaseNotes';
+import { findDeniedInNote, loadReleaseNotesConfig } from '@bike4mind/server-utils/releaseNotes/adminReleaseNotes';
 import { fetchUpstreamFeed, getWhatsNewFeedUrl } from '@server/releaseNotes/upstreamFeed';
 import { toPublicFeedVideo } from '@server/releaseNotes/publicMedia';
 

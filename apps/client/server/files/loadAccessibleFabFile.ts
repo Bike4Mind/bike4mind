@@ -9,7 +9,7 @@ import { NotFoundError } from '@bike4mind/utils';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
 import { grantingLakes, resolveAccessibleLakes } from '@server/dataLakes';
 import { holdsDataLakeReadScope } from '@server/dataLakes/dataLakeScopes';
-import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
+import { resolveAuditPrincipal } from '@bike4mind/server-utils/dataLakes/resolveAuditPrincipal';
 import type { EntitlementRequest } from '@server/entitlements';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import type { Logger } from '@bike4mind/observability';

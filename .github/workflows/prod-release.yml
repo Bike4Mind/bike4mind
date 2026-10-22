@@ -210,8 +210,10 @@ jobs:
         continue-on-error: true
         uses: actions/create-github-app-token@v3
         with:
-          client-id: ${{ secrets.RELEASE_VIDEO_APP_CLIENT_ID }}
-          private-key: ${{ secrets.RELEASE_VIDEO_APP_KEY }}
+          # The release App, installed on the video repo; the token is narrowed to that repo and to contents.
+          client-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
           owner: ${{ steps.video-repo.outputs.owner }}
           repositories: ${{ steps.video-repo.outputs.name }}
 

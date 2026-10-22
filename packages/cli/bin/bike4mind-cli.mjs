@@ -217,6 +217,10 @@ const argv = await yargs(hideBin(process.argv))
             type: 'string',
             description: 'Bike4Mind API URL (overrides B4M_API_URL and the configured backend)',
           })
+          .option('token', {
+            type: 'string',
+            description: 'Bearer token required by --http mode (overrides B4M_MCP_TOKEN; generated and printed when unset). Visible in process listings; prefer B4M_MCP_TOKEN',
+          })
           .example('b4m mcp serve', 'Serve over stdio for Claude Desktop and other local clients')
           .example('b4m mcp serve --http --port 7000', 'Serve over streamable HTTP on port 7000');
       }, async () => {

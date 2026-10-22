@@ -13,7 +13,7 @@ import { Request } from 'express';
 import { z } from 'zod';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
-import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
+import { resolveAuditPrincipal } from '@bike4mind/server-utils/dataLakes/resolveAuditPrincipal';
 
 // Coerce + clamp the browse query. Strings arrive from the query string; empty search is
 // dropped so it isn't sent to the repo as a no-op regex. Paging bounds mirror the repo clamp.

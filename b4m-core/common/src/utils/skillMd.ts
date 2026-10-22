@@ -138,8 +138,12 @@ export function parseSkillMd(input: string): ParseSkillMdResult {
       case 'argument-hint':
         fields.argumentHint = toText(value);
         break;
+      // Either key opts out, in any order, matching the CLI's parseCommandFile.
       case 'disable-model-invocation':
-        fields.disableModelInvocation = value === true || value === 'true';
+        fields.disableModelInvocation = fields.disableModelInvocation || value === true || value === 'true';
+        break;
+      case 'autoinvoke':
+        fields.disableModelInvocation = fields.disableModelInvocation || value === false || value === 'false';
         break;
       // Everything else is reported as dropped, allowed-tools included: Claude Code tool names
       // (Bash/Read/Edit) are not B4M tools.
