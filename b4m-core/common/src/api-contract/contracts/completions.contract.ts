@@ -37,7 +37,7 @@ export const createCompletionContract = defineEndpoint({
     'OpenAI Chat (`image_url`), OpenAI Responses (`input_image`) or Anthropic (`image` with a ' +
     '`source`) form and are translated to whatever the target model speaks. ' +
     'Authenticate with an API key (`b4m_live_`) or a JWT.\n\n' +
-    'TOOL SEARCH. On a model whose `GET /api/v1/models` row has `supports_tool_search: true` and `backend: "anthropic"`, ' +
+    'TOOL SEARCH. On a model whose `GET /api/v1/models` row has `supports_tool_search: true` (`backend` `"anthropic"` or `"bedrock"`), ' +
     'a `tools` entry may set `toolSchema.defer_loading: true`, and a `{ "serverTool": { "type": ' +
     '"tool_search_tool_regex_20251119", "name": "tool_search_tool_regex" } }` (or the `bm25` pair) entry adds ' +
     "Anthropic's tool search, so deferred definitions load only when the model searches for them. The stream then " +
@@ -46,7 +46,7 @@ export const createCompletionContract = defineEndpoint({
     '`tool_result`. When the server-run search loop hits its iteration limit the stream ends with `stopReason: ' +
     '"pause_turn"`; continue by re-sending the conversation with that assistant turn\'s provider blocks echoed. ' +
     'A client-side search may return `{ "type": "tool_reference", "tool_name": "..." }` blocks inside ' +
-    "a `tool_result`'s content. On every other model, Bedrock-served Claude included, `defer_loading` is ignored (every " +
+    "a `tool_result`'s content. On every other model `defer_loading` is ignored (every " +
     'tool is sent as usual) and a server tool, a `tool_reference` or an echoed tool search block is refused with a ' +
     '`400` rather than run without it.\n\n' +
     'ERRORS. Everything checked before the model provider is called fails with a JSON error body and ' +
