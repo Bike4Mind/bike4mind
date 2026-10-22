@@ -199,4 +199,17 @@ describe('OperationsModelService.getOperationsModel without the configured backe
     await expect(pending).rejects.toThrow('Failed to initialize hardcoded default operations model');
     await expect(pending).rejects.toBeInstanceOf(OperationsModelUnavailableError);
   });
+
+  // Only the no-model states are typed. A DB/network failure is not "unconfigured", and the
+  // route maps the type to provider_not_configured - so it must stay the original error.
+  it('rethrows a dependency failure as itself, not as the typed unavailable error', async () => {
+    const dbDown = new Error('MongoNetworkError');
+    mockGetEffectiveLLMApiKeys.mockRejectedValue(dbDown);
+    mockGetAvailableModels.mockResolvedValue([LEGACY_HAIKU]);
+
+    const pending = OperationsModelService.getOperationsModel();
+
+    await expect(pending).rejects.toBe(dbDown);
+    await expect(pending).rejects.not.toBeInstanceOf(OperationsModelUnavailableError);
+  });
 });
