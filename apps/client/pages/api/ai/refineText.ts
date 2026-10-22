@@ -3,7 +3,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { refineTextLLMSchema } from '@bike4mind/services/llm/refineText';
 import { ApiKeyScope } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
-import { refineTextRequest } from '@server/ai/refineTextRequest';
+import { RefineFailedError, refineTextRequest } from '@server/ai/refineTextRequest';
 import { z } from 'zod';
 
 // POST (not GET): this triggers an LLM completion, so it isn't a safe/idempotent
@@ -21,7 +21,17 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_GENERATE] }).post(
       throw err;
     }
 
-    const enhancedText = await refineTextRequest(params, { logger: req.logger });
+    let enhancedText: string;
+    try {
+      enhancedText = await refineTextRequest(params, { logger: req.logger });
+    } catch (error) {
+      // v1 maps the wrapper to 502; this route must keep the behaviour it had before the wrapper
+      // existed, where the provider's own error reached errorHandler and its numeric `status`
+      // set the response (429/401/400, logged at warn). An empty refinement has no cause, so it
+      // stays a RefineFailedError and errorHandler's default 500.
+      if (error instanceof RefineFailedError) throw error.cause ?? error;
+      throw error;
+    }
 
     res.json({ text: enhancedText });
   })

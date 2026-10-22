@@ -37,6 +37,7 @@ vi.mock('@client/services/operationsModelService', async orig => ({
 }));
 
 import handler from '@pages/api/ai/refineText';
+import errorHandler from '@server/middlewares/errorHandler';
 import { CacheKeys } from '@server/utils/cacheKeys';
 import { OperationsModelUnavailableError } from '@client/services/operationsModelService';
 
@@ -112,5 +113,46 @@ describe('POST /api/ai/refineText', () => {
     expect(res._getJSONData()).toEqual({ text: 'cached refined' });
     expect(mockGetOperationsModel).not.toHaveBeenCalled();
     expect(mockRefineText).not.toHaveBeenCalled();
+  });
+
+  it('passes a provider failure through so errorHandler keeps its 429 and warn level', async () => {
+    mockGetCachedData.mockImplementation(async (_key: string, cb: () => Promise<string>) => cb());
+    mockGetOperationsModel.mockResolvedValue({ modelId: 'ops-model', llm: { complete: vi.fn() } });
+    // An OpenAI/Anthropic SDK APIError: a numeric `status` on the error.
+    const providerError = Object.assign(new Error('rate limited'), { status: 429 });
+    mockRefineText.mockRejectedValue(providerError);
+
+    const { req, res } = createMocks({ method: 'POST', body: { text: 'hello' } });
+    const logger = { error: vi.fn(), warn: vi.fn() };
+    Object.assign(req, { logger, requestId: 'trace-legacy-1' });
+
+    const thrown = await handler(req as any, res as any).catch((e: unknown) => e);
+    // The provider's own error, not RefineFailedError: the wrapper carries no `status`, so
+    // errorHandler would answer 500 at `error` - the alarm path - instead of 429 at `warn`.
+    expect(thrown).toBe(providerError);
+
+    errorHandler(thrown, req as any, res as any);
+    expect(res._getStatusCode()).toBe(429);
+    expect(res._getJSONData()).toMatchObject({ error: 'rate limited', request_id: 'trace-legacy-1' });
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('429'));
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it('keeps an empty refinement a 500 on the legacy route', async () => {
+    mockGetCachedData.mockImplementation(async (_key: string, cb: () => Promise<string>) => cb());
+    mockGetOperationsModel.mockResolvedValue({ modelId: 'ops-model', llm: { complete: vi.fn() } });
+    mockRefineText.mockResolvedValue('');
+
+    const { req, res } = createMocks({ method: 'POST', body: { text: 'hello' } });
+    Object.assign(req, { logger: { error: vi.fn(), warn: vi.fn() }, requestId: 'trace-legacy-2' });
+
+    const thrown = await handler(req as any, res as any).catch((e: unknown) => e);
+    // No cause to unwrap - an empty output is not a provider error - so the wrapper stands and
+    // errorHandler's default 500 applies, as it did before the wrapper existed.
+    expect(thrown).toMatchObject({ name: 'RefineFailedError' });
+    expect((thrown as { cause?: unknown }).cause).toBeUndefined();
+
+    errorHandler(thrown, req as any, res as any);
+    expect(res._getStatusCode()).toBe(500);
   });
 });

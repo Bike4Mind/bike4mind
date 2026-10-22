@@ -78,7 +78,8 @@ export const refineTextRequest = async (
           }
         );
       } catch (error) {
-        // The original message stays on the wrapper so the legacy route's 500 body is unchanged.
+        // Wrapped so v1 can answer 502; the original rides along as `cause`, which the legacy
+        // route rethrows (it needs the provider error's numeric `status`) and v1 logs.
         throw new RefineFailedError(error instanceof Error ? error.message : 'Text refinement failed', error);
       }
       // getCachedData stores whatever the producer returns, so an empty output has to throw:

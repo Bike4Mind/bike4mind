@@ -54,6 +54,7 @@ vi.mock('@server/auth/auth', async orig => (await import('@server/generations/__
 import handler from '../text-refinements';
 import { OperationsModelUnavailableError } from '@client/services/operationsModelService';
 import { Logger } from '@bike4mind/observability';
+import { CacheKeys } from '@server/utils/cacheKeys';
 
 const post = (body: Record<string, unknown>) => fire({ method: 'POST', url: '/api/v1/text-refinements', body });
 
@@ -194,5 +195,18 @@ describe('POST /api/v1/text-refinements', () => {
     // A cached empty result would answer every retry for the whole TTL without calling the model.
     expect(mockRefineText).toHaveBeenCalledTimes(2);
     expect(cacheStore.size).toBe(0);
+  });
+
+  it('502s on an empty refinement cached before the helper stopped writing one', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    // The legacy route cached whatever the model returned, so a '' can still be inside the TTL.
+    // The guard is a product decision - the response schema is z.string() and would accept '' -
+    // so without it this becomes a 200 with no refinement.
+    cacheStore.set(CacheKeys.refineText('hello'), '');
+    const { req, res } = post({ text: 'hello' });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(502);
+    expect(res._getJSONData()).toEqual({ error: 'The model returned no refined text' });
+    expect(mockRefineText).not.toHaveBeenCalled();
   });
 });

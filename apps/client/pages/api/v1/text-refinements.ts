@@ -31,8 +31,9 @@ const handler = nextRouteForContract(createTextRefinementContract).post(async (r
     throw error;
   }
 
-  // The helper throws on an empty refinement, so this only catches one cached before that
-  // change. A typed public client cannot parse an empty 200.
+  // Deliberate product decision, not a schema requirement: TextRefinementResponseSchema is
+  // `text: z.string()`, which accepts ''. The helper refuses to cache an empty refinement now, so
+  // this only catches one cached before that change (the legacy route cached whatever it got).
   if (!refined) {
     return res.status(502).json({ error: 'The model returned no refined text' });
   }
