@@ -3,6 +3,7 @@ name: Lake RAG Eval (staging)
 # Runs the live lake retrieval eval (b4m-core/services/src/llm/evals/lakeRag/run.live.test.ts)
 # against staging and fails when a banded metric leaves the noise band in that directory's README
 # (10 points pass rate, 5 points retrieval rate) relative to the committed baseline.
+# The band is two-sided: an out-of-band improvement fails too, and is fixed by re-recording.
 #
 # The baseline comparison does not check which model produced the baseline, so a gated run takes
 # its model FROM the baseline file rather than from an input: the two cannot drift apart.

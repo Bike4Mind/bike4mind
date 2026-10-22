@@ -124,7 +124,7 @@ Run it twice with the same model before reading a change as signal. The noise ba
 
 ## Scheduled run
 
-`.github/workflows/lake-rag-eval.yml` runs the live half against staging every Monday at 08:00 UTC and fails when a banded metric leaves the noise band above, relative to `baseline.staging.json` in this directory.
+`.github/workflows/lake-rag-eval.yml` runs the live half against staging every Monday at 08:00 UTC and fails when a banded metric leaves the noise band above, relative to `baseline.staging.json` in this directory. The band is two-sided, so an improvement that leaves it (closing a retrieval miss the baseline records, say) fails the run and posts `:x: Failed` the same way a regression does; read the direction in the verdict line, and if the move is real, re-record the baseline as below.
 
 - **Model.** A gated run uses the model named in the baseline file. `compareLakeRagReports` does not check the model, so taking it from the file is what keeps a baseline from being compared against a different model's run.
 - **Alerting.** Every run, pass or fail, posts to Slack through the `SLACK_E2E_WEBHOOK_URL` repo secret that `e2e-run.yml` uses, with the status, model, pass and retrieval rate per arm, and the baseline verdict. A Monday with no post means the run did not happen.
