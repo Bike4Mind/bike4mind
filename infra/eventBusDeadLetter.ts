@@ -14,7 +14,10 @@
  * register the queue with createDlqAlarms in infra/dlqAlarms.ts, not DLQ_DESCRIPTORS.
  * Guarded by infra/__tests__/eventBusDlq.test.ts.
  */
-type RuleSubscription = { nodes: { rule: { arn: $util.Output<string> } } };
+// eventBus.subscribe returns an Output, so the rule ARN is read inside apply: lifting `.nodes`
+// off the Output resolves every node, and `nodes.function` throws for a subscriber that
+// targets an existing function by ARN (slack-completion-start in infra/llm.ts).
+type RuleSubscription = $util.Output<{ nodes: { rule: { arn: $util.Output<string> } } }>;
 
 export function createEventBusDeadLetter(name: string, queue: sst.aws.Queue) {
   return {
@@ -30,7 +33,10 @@ export function createEventBusDeadLetter(name: string, queue: sst.aws.Queue) {
       new aws.sqs.QueuePolicy(`${name}Policy`, {
         queueUrl: queue.url,
         policy: $util
-          .all([queue.arn, $util.all(subscriptions.map(subscription => subscription.nodes.rule.arn))])
+          .all([
+            queue.arn,
+            $util.all(subscriptions.map(subscription => subscription.apply(subscriber => subscriber.nodes.rule.arn))),
+          ])
           .apply(([queueArn, ruleArns]) =>
             JSON.stringify({
               Version: '2012-10-17',

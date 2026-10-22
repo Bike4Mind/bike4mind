@@ -40,14 +40,14 @@ const wired = (
 
 // Reviewed snapshots, never automatically refreshed by CI. Portable means wiring only.
 export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
-  gap('event:infra/eventBus.ts:email-send', '5cedb503854dd715dd773fbdca4b2a1b919d38ff1e59465245b7c477c6380f0b'),
+  gap('event:infra/eventBus.ts:email-send', '9e9896c54aca5fc6d07c90f6f7ae27992f6807c779ec4c4fd7fe416bbb1e4558'),
   gap(
     'event:infra/eventBus.ts:notebook-curation-complete-analytics',
-    '27ada0f407306ace653afa9db6360cbd0200905e24d5abf0a4ae6dacf51a5329'
+    '1d997f1177639b3d10a09609145a4a49177153f36011f3de8b56415f1a5e1738'
   ),
   wired(
     'event:infra/eventBus.ts:notebook-curation-start',
-    '109b20e55ab71fb269097f1662ce7eb4e1273eb724c2783ba4039d26a5ab2675',
+    'bf5d99aa5131537d18bc56bfac5c671ef4755ef27a2f933e40563010f27587cd',
     {
       source: 'apps/workers/src/selfhost/eventDispatch.ts',
       symbol: 'event:notebook.curation.start',
@@ -95,18 +95,18 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     },
     ['bedrock:*']
   ),
-  gap('event:infra/eventBus.ts:spider-start', '7a55b80c621ed0599112723fbd8ded3b6e00302583adb652d17d100a92943703', [
+  gap('event:infra/eventBus.ts:spider-start', 'cbb4891b0ea5fdfb21f631d010b2c7e7968c1599e19eff7d5cf949c7089895ce', [
     'bedrock:*',
   ]),
   gap('event:infra/eventBus.ts:SreFixDispatch', 'fa1122e45e2de82ee4a61c73ce860a679f2f5ce735bc628dd56a35c82977a648'),
   gap(
     'event:infra/eventBus.ts:stripe-customer-subscription-updated',
-    'bc003e10a67a0649bd82e4af28a34ba9a272ec60a0efc8a3bed91f6cc358b3c6',
+    '32a1ab0495e8d79599096b34bf9bb7d53776de052d073baeb07a07b0d61bef9c',
     ['cloudwatch:PutMetricData']
   ),
   gap(
     'event:infra/eventBus.ts:stripe-invoice-payment-succeeded',
-    '9411dc88f76cc1c1cedfdb7e9bc8aca023ff747c783e8fab674e59fabce8c083',
+    'd3aac5a794c140a7a408997a51feb3390c098bb39cad43b35ff74be4d43304d0',
     ['cloudwatch:PutMetricData']
   ),
   gap('event:infra/eventBus.ts:telemetry-alert', '49273cf2bd685f9c7eb2f3cc873d8700bee51f78b655774ed0a72f5670f1ec6c', [
