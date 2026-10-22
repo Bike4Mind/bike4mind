@@ -1,3 +1,4 @@
+import { VERIFIED_SLACK_IDENTITY_FILTER } from '@bike4mind/common';
 import {
   AuthStrategy,
   CollectionType,
@@ -778,6 +779,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   async findBySlackUserId(slackUserId: string): Promise<IUserDocument | null> {
     const result = await this.model.findOne({
       'slackSettings.slackUserId': slackUserId,
+      ...VERIFIED_SLACK_IDENTITY_FILTER,
       deletedAt: { $exists: false },
     });
     return result?.toJSON() ?? null;
@@ -998,6 +1000,7 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     // Slack integration settings
     slackSettings: {
       slackUserId: { type: String, required: false },
+      slackTeamId: { type: String, required: false },
       slackUserToken: { type: String, required: false, select: false }, // User token for reminders API (protected by select: false)
       slackUserScopes: { type: [String], required: false, default: [] }, // OAuth scopes granted by user
       defaultNotebookId: { type: String, required: false },

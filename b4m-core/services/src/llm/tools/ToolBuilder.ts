@@ -1102,7 +1102,10 @@ export class ToolBuilder {
           });
         },
         onPendingAction: async action => {
-          quest.pendingAction = action;
+          // Monotonic so a Confirm button's ts always identifies the action it was rendered for.
+          quest.pendingAction = quest.pendingAction
+            ? { ...action, ts: Math.max(action.ts, quest.pendingAction.ts + 1) }
+            : action;
           await saveQuest(quest);
           this.deps.logger.debug(`[MCP] pendingAction saved to quest ${quest.id}`);
         },
@@ -1113,6 +1116,13 @@ export class ToolBuilder {
         },
         sessionId: quest.sessionId,
         questId: quest.id,
+        slackDestination: quest.slackNotification
+          ? {
+              workspaceId: quest.slackNotification.workspaceId,
+              channelId: quest.slackNotification.channelId,
+              threadTs: quest.slackNotification.threadTs,
+            }
+          : undefined,
         // Synchronous so parallel tool calls cannot claim the same numbers: the stamped citables
         // land on the live quest before the next call reads its length.
         numberCitables:
