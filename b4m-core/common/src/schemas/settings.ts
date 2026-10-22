@@ -377,6 +377,7 @@ export const SettingKeySchema = z.enum([
   'serverStatus',
   'defaultSeats',
   'CSMandCTAFlag',
+  'showDesktopAppPromo',
   'SystemFiles',
   'OpenWeatherKey',
   'SerperKey',
@@ -2149,6 +2150,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'InstagramLink', order: 6 },
       { key: 'YoutubeLink', order: 7 },
       { key: 'RedditLink', order: 8 },
+      { key: 'showDesktopAppPromo', order: 9 },
     ],
   },
   ADMIN: {
@@ -3670,6 +3672,18 @@ export const settingsMap = {
     category: 'Users',
     group: API_SERVICE_GROUPS.USER_MANAGEMENT.id,
     order: 3,
+  }),
+  showDesktopAppPromo: makeBooleanSetting({
+    key: 'showDesktopAppPromo',
+    name: 'Promote the Desktop App',
+    defaultValue: true,
+    description:
+      'Show signed-in users the "Try the desktop app" button and the profile-menu link to the desktop download page. Turn off for deployments that do not want to point users at the published desktop builds.',
+    category: 'Branding',
+    group: API_SERVICE_GROUPS.BRANDING.id,
+    order: 9,
+    // DesktopAppPromoButton and the profile menu read it for every user.
+    userReadable: true,
   }),
   SystemFiles: makeStringSetting({
     key: 'SystemFiles',

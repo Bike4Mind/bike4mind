@@ -149,6 +149,7 @@ const UserPreferencesSchema = new Schema(
     agentModeDefault: { type: String, enum: ['off', 'auto', 'on'] },
     showFunTools: { type: Boolean },
     showSplashCards: { type: Boolean },
+    desktopPromoDismissed: { type: Boolean },
   },
   { _id: false }
 );

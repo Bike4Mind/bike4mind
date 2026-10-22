@@ -761,5 +761,10 @@
     "menuTooltip": "Integrations like Google Drive and Slack, plus API keys for your own code",
     "sections": "Connections sections",
     "title": "Connections"
+  },
+  "desktopApp": {
+    "dismissSuggestion": "Dismiss desktop app suggestion",
+    "getTheApp": "Get the desktop app",
+    "tryTheApp": "Try the desktop app"
   }
 }
