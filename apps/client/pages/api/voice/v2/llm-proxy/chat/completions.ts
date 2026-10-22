@@ -34,7 +34,7 @@ import { getDefaultChatCompletionOptions, getSharedTokenizer } from '@server/uti
 import { baseApi } from '@server/middlewares/baseApi';
 import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
 import { getCreateVideoJobDeps, getVideoJobDeps } from '@server/generationJobs/wiring';
-import { buildVideoToolConfig } from '@server/videoGenerations/buildVideoToolConfig';
+import { buildVideoToolConfig } from '@bike4mind/server-utils/videoGenerations/buildVideoToolConfig';
 import { getVoiceVideoToolConfigResolver } from '@server/videoGenerations/voiceVideoToolConfig';
 import { verifyVoiceSessionToken, type VoiceSessionContext } from '@server/voice/voiceSessionToken';
 import { voiceSessionTokenExpiresAtMs } from '@bike4mind/server-utils/voice/voiceSessionLimits';
