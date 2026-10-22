@@ -14,10 +14,9 @@ import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { getApiKeyRateLimitUsage, type RateLimitUsage } from '@server/utils/apiKeyRateLimitCheck';
 
-// Hydrated docs only emit schema paths through toJSON; plain objects (tests) pass through.
+// Hydrated docs only emit schema paths (and drop the key hashes) through toJSON.
 function serializeKey(key: IUserApiKeyDocument): IUserApiKey {
-  const doc = key as IUserApiKeyDocument & { toJSON?: () => IUserApiKey };
-  return typeof doc.toJSON === 'function' ? doc.toJSON() : { ...key };
+  return (key as IUserApiKeyDocument & { toJSON: () => IUserApiKey }).toJSON();
 }
 
 /**
