@@ -170,7 +170,7 @@ describe('POST /api/admin/organizations/[id]/top-up credit kind', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockOrgFindById.mockResolvedValue({ id: 'org-1', userId: 'owner-1', name: 'Org One' });
-    mockAddCredits.mockResolvedValue(undefined);
+    mockAddCredits.mockResolvedValue({ creditHolder: {}, creditTransactionId: undefined });
     mockTxFindOne.mockResolvedValue(null);
   });
 
