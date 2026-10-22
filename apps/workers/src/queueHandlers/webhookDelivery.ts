@@ -249,9 +249,10 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         // POST to an address it never checked.
         redirect: 'manual',
       },
-      { allowHttp: true }
+      { allowHttp: true, discardBody: true }
     );
     clearTimeout(timeoutId);
+    await response.body?.cancel().catch(() => undefined);
 
     const processingDurationMs = Date.now() - startTime;
 

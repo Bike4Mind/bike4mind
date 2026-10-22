@@ -136,14 +136,18 @@ async function attemptDelivery(
 
   let response: Response;
   try {
-    response = await fetchPinned(callback.url, {
-      method: 'POST',
-      headers,
-      body,
-      // Not followed: the target was validated, a redirect hop was not.
-      redirect: 'manual',
-      signal: AbortSignal.timeout(WEBHOOK_HTTP_TIMEOUT_MS),
-    });
+    response = await fetchPinned(
+      callback.url,
+      {
+        method: 'POST',
+        headers,
+        body,
+        // Not followed: the target was validated, a redirect hop was not.
+        redirect: 'manual',
+        signal: AbortSignal.timeout(WEBHOOK_HTTP_TIMEOUT_MS),
+      },
+      { discardBody: true }
+    );
   } catch (error) {
     if (error instanceof SsrfError) {
       logger.warn('SECURITY: generation callback target blocked', { error: error.message });
@@ -156,6 +160,7 @@ async function attemptDelivery(
     };
   }
 
+  await response.body?.cancel().catch(() => undefined);
   if (response.ok) return { kind: 'delivered', statusCode: response.status };
   if (response.status >= 300 && response.status < 400) {
     return {

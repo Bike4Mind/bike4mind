@@ -44,7 +44,7 @@ export interface PinnedFetchOptions {
   allowPrivateCidrs?: string[];
   /** Permit plain http. Default false. */
   allowHttp?: boolean;
-  /** Cap on DECODED body bytes per response (after content-encoding). Default 2 MiB. */
+  /** Cap on DECODED body bytes per response (after content-encoding). Default 2 MiB; `Infinity` disables it. */
   maxBodyBytes?: number;
   /** Deadline for the whole request including the body, in ms. Default 30000. */
   timeoutMs?: number;

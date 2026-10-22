@@ -242,6 +242,12 @@ describe('fetchPinned and safeFetch - shared pinned client', () => {
     expect(pinned.create).toHaveBeenCalledWith({ allowHttp: true, maxBodyBytes: undefined });
   });
 
+  it('builds an uncapped client for discardBody callers', async () => {
+    pinned.fetch = vi.fn().mockResolvedValue({ status: 200, ok: true });
+    await fetchPinned('http://93.184.216.34/hook', {}, { allowHttp: true, discardBody: true, maxBodyBytes: 1024 });
+    expect(pinned.create).toHaveBeenCalledWith({ allowHttp: true, maxBodyBytes: Infinity });
+  });
+
   it('reports a blocked address from the pinned client as SsrfError', async () => {
     pinned.fetch = vi
       .fn()

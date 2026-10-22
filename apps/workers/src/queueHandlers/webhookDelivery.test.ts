@@ -95,6 +95,7 @@ describe('webhookDelivery dispatch', () => {
 
     expect(h.fetchMock).toHaveBeenCalledWith(TARGET_URL, expect.objectContaining({ method: 'POST' }), {
       allowHttp: true,
+      discardBody: true,
     });
     expect(globalFetch).not.toHaveBeenCalled();
   });
@@ -136,5 +137,19 @@ describe('webhookDelivery dispatch', () => {
 
     expect(h.createIfNotExists.mock.calls[0][0]).toMatchObject({ status: WebhookDeliveryStatus.Success });
     expect(h.resetConsecutiveFailures).toHaveBeenCalledWith('sub-1');
+  });
+
+  it('records a 200 with a large response body as delivered and cancels the body', async () => {
+    const cancel = vi.fn();
+    const body = new ReadableStream<Uint8Array>({ pull: c => c.enqueue(new Uint8Array(1024)), cancel });
+    h.fetchMock.mockResolvedValue(
+      new Response(body, { status: 200, headers: { 'content-length': String(50 * 1024 * 1024) } })
+    );
+
+    await expect(runDispatch()).resolves.toBeUndefined();
+
+    expect(cancel).toHaveBeenCalled();
+    expect(h.createIfNotExists.mock.calls[0][0]).toMatchObject({ status: WebhookDeliveryStatus.Success });
+    expect(h.incrementConsecutiveFailuresAtomic).not.toHaveBeenCalled();
   });
 });

@@ -84,6 +84,7 @@ describe('POST /api/organizations/[id]/webhooks/github/test', () => {
 
     expect(h.fetchMock).toHaveBeenCalledWith(TARGET_URL, expect.objectContaining({ method: 'POST' }), {
       allowHttp: true,
+      discardBody: true,
     });
     expect(globalFetch).not.toHaveBeenCalled();
   });
@@ -100,6 +101,19 @@ describe('POST /api/organizations/[id]/webhooks/github/test', () => {
     expect(h.fetchMock).toHaveBeenCalledTimes(1);
     expect(h.fetchMock.mock.calls[0][0]).toBe(TARGET_URL);
     expect(h.fetchMock.mock.calls[0][1]).toMatchObject({ redirect: 'manual' });
+  });
+
+  it('reports success for a 200 with a large response body and cancels the body', async () => {
+    const cancel = vi.fn();
+    const stream = new ReadableStream<Uint8Array>({ pull: c => c.enqueue(new Uint8Array(1024)), cancel });
+    h.fetchMock.mockResolvedValue(
+      new Response(stream, { status: 200, headers: { 'content-length': String(50 * 1024 * 1024) } })
+    );
+
+    const body = jsonBody(await sendTestPing()) as { success: boolean; statusCode: number };
+
+    expect(cancel).toHaveBeenCalled();
+    expect(body).toMatchObject({ success: true, statusCode: 200 });
   });
 
   it('reports a redirect response without echoing the endpoint-controlled reason phrase', async () => {

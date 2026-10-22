@@ -372,8 +372,25 @@ describe('generationCallback dispatch', () => {
 
     await dispatch(makeEvent(MESSAGE), {} as never, logger);
 
-    expect(h.fetchPinned).toHaveBeenCalledWith(CALLBACK_DISPATCHED.url, expect.objectContaining({ method: 'POST' }));
+    expect(h.fetchPinned).toHaveBeenCalledWith(CALLBACK_DISPATCHED.url, expect.objectContaining({ method: 'POST' }), {
+      discardBody: true,
+    });
     expect(globalFetch).not.toHaveBeenCalled();
+  });
+
+  it('records delivered on a 200 with a large response body and cancels the body', async () => {
+    const cancel = vi.fn();
+    const body = new ReadableStream<Uint8Array>({ pull: c => c.enqueue(new Uint8Array(1024)), cancel });
+    stubFetch(
+      vi
+        .fn()
+        .mockResolvedValue(new Response(body, { status: 200, headers: { 'content-length': String(50 * 1024 * 1024) } }))
+    );
+
+    await expect(dispatch(makeEvent(MESSAGE), {} as never, logger)).resolves.toBeUndefined();
+
+    expect(cancel).toHaveBeenCalled();
+    expect(h.recordCallbackAttempt).toHaveBeenCalledWith('quest-1', 'event-1', { state: 'delivered', statusCode: 200 });
   });
 
   it('fails permanently when the pinned fetch refuses the dialed address', async () => {

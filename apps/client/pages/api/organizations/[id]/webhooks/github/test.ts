@@ -141,9 +141,10 @@ const handler = baseApi().post(
           // bounce this signed POST to an address it never checked.
           redirect: 'manual',
         },
-        { allowHttp: true }
+        { allowHttp: true, discardBody: true }
       );
       clearTimeout(timeoutId);
+      await response.body?.cancel().catch(() => undefined);
 
       const latencyMs = Date.now() - startTime;
 

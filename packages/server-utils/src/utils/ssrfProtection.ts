@@ -166,15 +166,21 @@ export interface FetchPinnedOptions {
   allowHttp?: boolean;
   /** Cap on decoded response body bytes. Default 2 MiB (createPinnedFetch's default). */
   maxBodyBytes?: number;
+  /**
+   * For callers that read only the status: no body cap, so a large reply cannot fail the request. The
+   * caller must cancel `response.body` to release the connection. Overrides `maxBodyBytes`.
+   */
+  discardBody?: boolean;
 }
 
 const pinnedClients = new Map<string, PinnedFetch>();
 
-function getPinnedClient({ allowHttp = false, maxBodyBytes }: FetchPinnedOptions): PinnedFetch {
-  const key = `${allowHttp}:${maxBodyBytes ?? 'default'}`;
+function getPinnedClient({ allowHttp = false, maxBodyBytes, discardBody = false }: FetchPinnedOptions): PinnedFetch {
+  const cap = discardBody ? Infinity : maxBodyBytes;
+  const key = `${allowHttp}:${cap ?? 'default'}`;
   let client = pinnedClients.get(key);
   if (!client) {
-    client = createPinnedFetch({ allowHttp, maxBodyBytes });
+    client = createPinnedFetch({ allowHttp, maxBodyBytes: cap });
     pinnedClients.set(key, client);
   }
   return client;
