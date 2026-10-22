@@ -55,8 +55,11 @@ export const desktopTheme = extendTheme({
           700: DARK_PALETTE.stroke,
           800: DARK_PALETTE.raised,
           900: DARK_PALETTE.panel,
-          // Default is neutral 800, which would vanish on the sidebar (level1 is that same step).
+          // These default to neutral 800, which would vanish on the sidebar and on popups (level1
+          // and popup are that same step).
           plainHoverBg: inkAt(0.06),
+          outlinedHoverBg: inkAt(0.06),
+          softBg: inkAt(0.08),
         },
         background: {
           body: DARK_PALETTE.page,
