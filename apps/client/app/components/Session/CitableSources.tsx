@@ -1,13 +1,11 @@
 import { FC, useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Stack, Tooltip, Typography } from '@mui/joy';
-import {
-  Language as WebIcon,
-  Description as DocumentIcon,
-  Storage as DatasetIcon,
-  Extension as McpIcon,
-  WarningAmberRounded as TruncatedIcon,
-  CompareArrowsRounded as ConflictIcon,
-} from '@mui/icons-material';
+import WebIcon from '@mui/icons-material/Language';
+import DocumentIcon from '@mui/icons-material/Description';
+import DatasetIcon from '@mui/icons-material/Storage';
+import McpIcon from '@mui/icons-material/Extension';
+import TruncatedIcon from '@mui/icons-material/WarningAmberRounded';
+import ConflictIcon from '@mui/icons-material/CompareArrowsRounded';
 import { CitableSource, CitableSourceType, findCitationMarkers, sourceNamedIn } from '@bike4mind/common';
 import { DATA_LAKE, PERSONAL_LIBRARY, SHARED_LIBRARY } from '@client/app/components/datalake/dataLakeBranding';
 import { useCitableSourceClick } from './useCitableSourceClick';

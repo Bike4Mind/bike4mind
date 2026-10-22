@@ -19,7 +19,7 @@ import { ISessionDocument, IProjectDocument } from '@bike4mind/common';
 import CompareArrowsIcon from '@mui/icons-material/CompareArrows';
 import TuneIcon from '@mui/icons-material/Tune';
 import { Box, Badge, Divider, CircularProgress, Typography, Tooltip, Stack, IconButton } from '@mui/joy';
-import { debounce } from 'lodash';
+import debounce from 'lodash/debounce';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNotebookLayout } from '..';
 import { useShallow } from 'zustand/react/shallow';

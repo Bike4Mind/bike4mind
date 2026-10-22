@@ -10,16 +10,14 @@ import {
   Input,
   Button,
 } from '@mui/joy';
-import {
-  Science as JupyterIcon,
-  PlayArrow,
-  CheckCircle,
-  ExpandMore,
-  Code,
-  Storage,
-  Settings,
-  LinkOff,
-} from '@mui/icons-material';
+import JupyterIcon from '@mui/icons-material/Science';
+import PlayArrow from '@mui/icons-material/PlayArrow';
+import CheckCircle from '@mui/icons-material/CheckCircle';
+import ExpandMore from '@mui/icons-material/ExpandMore';
+import Code from '@mui/icons-material/Code';
+import Storage from '@mui/icons-material/Storage';
+import Settings from '@mui/icons-material/Settings';
+import LinkOff from '@mui/icons-material/LinkOff';
 import { useState, useCallback } from 'react';
 import SectionContainer from '../SectionContainer';
 import { gray } from '../../../utils/themes/colors';

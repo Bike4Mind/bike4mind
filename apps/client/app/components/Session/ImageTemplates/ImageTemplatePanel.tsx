@@ -1,6 +1,7 @@
 import { FC, useMemo, useState } from 'react';
 import { Box, Button, Card, Chip, CircularProgress, IconButton, Input, Sheet, Tooltip, Typography } from '@mui/joy';
-import { Delete as DeleteIcon, InfoOutlined as InfoIcon } from '@mui/icons-material';
+import DeleteIcon from '@mui/icons-material/Delete';
+import InfoIcon from '@mui/icons-material/InfoOutlined';
 import { toast } from 'sonner';
 import { IMAGE_TEMPLATE_NAME_MAX, type ImageGenerationTemplateInputType } from '@bike4mind/common';
 import { useLLM } from '@client/app/contexts/LLMContext';

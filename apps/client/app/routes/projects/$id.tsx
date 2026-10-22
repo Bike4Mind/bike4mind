@@ -23,7 +23,7 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import { FC, useCallback, useEffect, useMemo, useState } from 'react';
 import { useGetProjectSessions } from '@client/app/hooks/data/sessions';
 import { useParams, useNavigate } from '@tanstack/react-router';
-import { debounce } from 'lodash';
+import debounce from 'lodash/debounce';
 import SearchIcon from '@mui/icons-material/Search';
 import { IProjectDocument, ISessionDocument } from '@bike4mind/common';
 import { useGetProject } from '@client/app/hooks/data/projects';
