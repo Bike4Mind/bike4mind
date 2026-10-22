@@ -4,6 +4,7 @@ import { withTransaction } from '@bike4mind/database';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { userRepository } from '@bike4mind/database/auth';
 import { logEvent } from '@server/utils/analyticsLog';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { EmailEvents } from '@server/utils/eventBus';
@@ -144,6 +145,23 @@ const handler = baseApi().post(async (req, res) => {
   if (createdUsers.length === 0) {
     throw new BadRequestError('No users were migrated. Check server logs for details.');
   }
+
+  // Best effort: each user is created and added on its own, so a partial run is normal and there
+  // is no single transaction to tie a strict entry to; record the outcome once the loop finishes.
+  await recordAdminActionFromRequest(req, {
+    action: 'user.reg_invite.migrated',
+    target: orgId
+      ? { kind: 'organization', id: orgId, displayName: orgId }
+      : { kind: 'system', id: 'reg_invite_migration', displayName: 'user migration' },
+    summary: `migrated ${createdUsers.length} of ${usersData.length} users`,
+    details: {
+      requested: usersData.length,
+      migrated: createdUsers.length,
+      failed: usersData.length - createdUsers.length,
+      organizationId: orgId ?? null,
+      sendEmail,
+    },
+  });
 
   return res.json({ message: 'User migration initiated successfully', createdUsers });
 });

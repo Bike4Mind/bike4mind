@@ -196,6 +196,17 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'settings.rapid_reply_mapping.bulk_updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
   'settings.rapid_reply.test_run': { category: 'settings', severity: 'info', write: 'bestEffort' },
 
+  // Handler coverage: signup and org access
+  'org.partner_signup_rule.created': { category: 'access', severity: 'notice', write: 'strict' },
+  'org.partner_signup_rule.updated': { category: 'access', severity: 'notice', write: 'strict' },
+  'org.partner_signup_rule.deleted': { category: 'access', severity: 'notice', write: 'strict' },
+  'org.partner_signup_rule.backfilled': { category: 'access', severity: 'notice', write: 'bestEffort' },
+  'user.reg_invite.migrated': { category: 'account', severity: 'critical', write: 'bestEffort' },
+  'user.reg_invite.updated': { category: 'access', severity: 'notice', write: 'strict' },
+  'user.reg_invite.created': { category: 'access', severity: 'notice', write: 'strict' },
+  'user.waitlist_subscriber.deleted': { category: 'support', severity: 'info', write: 'bestEffort' },
+  'org.created': { category: 'org', severity: 'notice', write: 'bestEffort' },
+
   'audit.exported': { category: 'support', severity: 'info', write: 'bestEffort' },
 } as const satisfies Record<string, AdminAuditCatalogueEntry>;
 

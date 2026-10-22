@@ -5,6 +5,7 @@ const h = vi.hoisted(() => ({
   findByEmail: vi.fn(),
   createUser: vi.fn(),
   publish: vi.fn(),
+  audit: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -23,6 +24,7 @@ vi.mock('@bike4mind/services', () => ({
   organizationService: { addMember: vi.fn() },
 }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: h.publish } } }));
 
 process.env.APP_URL = 'https://app.test';
@@ -67,5 +69,31 @@ describe('POST /api/reg-invites/migrate', () => {
 
     const { body } = h.publish.mock.calls[0][0] as { body: string };
     expect(body).toContain('Hello &lt;i&gt;x&lt;/i&gt; &#39;q&#39;,');
+  });
+
+  it('records one best-effort .migrated entry with the counts after the loop', async () => {
+    h.createUser.mockRejectedValueOnce(new Error('boom'));
+    await run([
+      { email: 'a@b.test', name: 'A' },
+      { email: 'c@d.test', name: 'C' },
+    ]);
+
+    expect(h.audit).toHaveBeenCalledTimes(1);
+    expect(h.audit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'user.reg_invite.migrated',
+        target: { kind: 'system', id: 'reg_invite_migration', displayName: 'user migration' },
+        details: expect.objectContaining({ requested: 2, migrated: 1, failed: 1 }),
+      })
+    );
+    const lastCreate = h.createUser.mock.invocationCallOrder.at(-1) ?? 0;
+    expect(lastCreate).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
+  });
+
+  it('does not audit a run that migrated nobody', async () => {
+    h.createUser.mockRejectedValue(new Error('boom'));
+    await expect(run([{ email: 'a@b.test', name: 'A' }])).rejects.toThrow(/no users were migrated/i);
+    expect(h.audit).not.toHaveBeenCalled();
   });
 });

@@ -1,10 +1,11 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
-import { subscriberRepository, registrationInviteRepository } from '@bike4mind/database';
+import { subscriberRepository, registrationInviteRepository, withTransaction } from '@bike4mind/database';
 import { generateCode } from '@server/managers/regInviteManager';
 import { RegInviteStatusType, requireEnv } from '@bike4mind/common';
 import { EmailEvents } from '@server/utils/eventBus';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { getLogoUrl, buildEmailLogoImg, escapeHtml } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 import { z } from 'zod';
 
@@ -61,26 +62,44 @@ const handler = baseApi().post(
     }
 
     try {
-      const registrationInvite = await registrationInviteRepository.create({
-        userId: req.user.id, // Admin who created the invite
-        email: email,
-        code: inviteCode,
-        status: RegInviteStatusType.open,
-        unlimitedUse,
-        ...(expiresAtDate ? { expiresAt: expiresAtDate } : {}),
-        usageHistory: [],
-        // Credits/storage are recorded here for reference; applied when the user registers
-        title: `Invite for ${firstName} ${lastName}`,
-        description: `Generated from subscriber request. Credits: ${startingCredits}, Storage: ${startingStorage}MB`,
-      });
+      // The invite code is a credential, so the audit entry records who it is for, never the code.
+      const registrationInvite = await withTransaction(async () => {
+        const invite = await registrationInviteRepository.create({
+          userId: req.user.id, // Admin who created the invite
+          email: email,
+          code: inviteCode,
+          status: RegInviteStatusType.open,
+          unlimitedUse,
+          ...(expiresAtDate ? { expiresAt: expiresAtDate } : {}),
+          usageHistory: [],
+          // Credits/storage are recorded here for reference; applied when the user registers
+          title: `Invite for ${firstName} ${lastName}`,
+          description: `Generated from subscriber request. Credits: ${startingCredits}, Storage: ${startingStorage}MB`,
+        });
 
-      await subscriberRepository.markInviteGenerated(
-        subscriberId,
-        inviteCode,
-        req.user.id,
-        startingCredits,
-        startingStorage
-      );
+        await subscriberRepository.markInviteGenerated(
+          subscriberId,
+          inviteCode,
+          req.user.id,
+          startingCredits,
+          startingStorage
+        );
+
+        await recordAdminActionFromRequest(req, {
+          action: 'user.reg_invite.created',
+          target: { kind: 'settings', id: invite.id, displayName: `invite for ${email}` },
+          summary: `created registration invite for ${email}`,
+          details: {
+            subscriberId,
+            email,
+            startingCredits,
+            startingStorage,
+            unlimitedUse,
+            expiresAt: expiresAtDate?.toISOString() ?? null,
+          },
+        });
+        return invite;
+      });
 
       const brand = process.env.APP_NAME || '';
       const logoUrl = getLogoUrl();
