@@ -29,6 +29,9 @@ import { ModelPicker } from './ModelPicker';
 import { ReasoningEffortPicker } from './ReasoningEffortPicker';
 import { GrantedFolderChips, SessionChips } from './SessionChips';
 import { PrStatusBar } from './PrStatusBar';
+import { ChangesBar } from './ChangesBar';
+import { createPullRequestPrompt } from './changesBarModel';
+import { useWorkspaceChanges } from './useWorkspaceChanges';
 import { openInSessionBrowser } from './prLinks';
 import { usePrSummaries, usePullRequest } from './usePullRequest';
 import { SessionList } from './SessionList';
@@ -65,6 +68,8 @@ import { useSidebarSections } from './useSidebarSections';
 import { usePromptSuggestion } from './usePromptSuggestion';
 import { useFileDrop } from './useFileDrop';
 import { useSkills } from './useSkills';
+import { useSessionStartTiming } from './useSessionStartTiming';
+import { SpawnFailureToast } from './SpawnFailureToast';
 
 function SessionHeader({ title, onRename }: { title: string; onRename: (title: string) => void }) {
   const [editing, setEditing] = useState(false);
@@ -194,6 +199,15 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
   // transcript under this one's id until the read lands.
   const opening = settling || (!!activeId && conversation.session?.id !== activeId);
   const spawnSuggestions = useSpawnSuggestions(conversation.session);
+  const markSessionStart = useSessionStartTiming(sessions);
+  const startSuggestion = spawnSuggestions.start;
+  const onStartSuggestion = useCallback(
+    (request: Parameters<typeof startSuggestion>[0]) => {
+      if (request.placement !== 'here') markSessionStart('suggestion');
+      return startSuggestion(request);
+    },
+    [startSuggestion, markSessionStart]
+  );
   const background = useBackgroundProcesses(activeId);
   const videoJobs = useVideoJobs(activeId);
   const skills = useSkills(activeId);
@@ -341,6 +355,15 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
   const turnOpen = conversation.streaming || sessionStatus === 'processing' || sessionStatus === 'needs-action';
   const plan = useMemo(() => activeTodos(conversation.messages, turnOpen), [conversation.messages, turnOpen]);
 
+  const workspaceChanges = useWorkspaceChanges(
+    screen === 'conversation' ? activeId : null,
+    conversation.session?.project,
+    conversation.settledTurns
+  );
+  // The sidebar summary as well as the bar: a dismissed PR bar reports no binding, but the PR is
+  // still this session's, and offering to open a second one for the same branch would be wrong.
+  const hasPullRequest = !!pullRequest?.binding || (!!activeId && prSummaries.has(activeId));
+
   /**
    * What the composer's usage indicator reports: how full the window is, and what is left.
    *
@@ -460,9 +483,10 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
    */
   const onCreate = useCallback(async () => {
     setScreen('conversation');
+    markSessionStart('new');
     const created = await startSession();
     if (created) setActiveId(created);
-  }, [startSession]);
+  }, [startSession, markSessionStart]);
 
   /**
    * New, from a user section's header or menu: the same session New makes, but in that section
@@ -516,6 +540,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
       const sibling = projectForGroup(sessions, directory);
       if (!sibling) return;
       clearCodeError();
+      markSessionStart('project');
       // Before the screen switches, so the git calls never leave the previous session's
       // composer live under the new one's id.
       const inWorktree =
@@ -524,7 +549,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
       const created = await createCode(newSessionInProject(sibling, inWorktree));
       if (created) setActiveId(created);
     },
-    [sessions, createCode, clearCodeError]
+    [sessions, createCode, clearCodeError, markSessionStart]
   );
 
   const onDelete = useCallback(
@@ -537,6 +562,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
 
   return (
     <Box sx={{ position: 'relative', display: 'flex', height: '100vh', bgcolor: 'background.body' }} {...drop.handlers}>
+      <SpawnFailureToast />
       {drop.over && (
         <Box
           sx={{
@@ -806,6 +832,16 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
             </Box>
           )}
 
+          {!hasPullRequest && (
+            <ChangesBar
+              changes={workspaceChanges}
+              busy={turnOpen}
+              // Straight to the conversation, not through onSend: that one also sends whatever
+              // is attached in the composer, which the user staged for a different message.
+              onCreatePullRequest={changes => void conversation.send(createPullRequestPrompt(changes))}
+            />
+          )}
+
           <PrStatusBar
             // Keyed so an action error on one conversation's bar does not follow the user to the next.
             key={activeId ?? 'none'}
@@ -824,7 +860,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
 
           <SpawnSuggestionTray
             suggestions={spawnSuggestions.suggestions}
-            onStart={spawnSuggestions.start}
+            onStart={onStartSuggestion}
             onDismiss={spawnSuggestions.dismiss}
           />
 
@@ -839,6 +875,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
               binding={conversation.project}
               settledTurns={conversation.settledTurns}
               inUse={conversation.messages.length > 0}
+              preparing={conversation.preparing !== null}
             />
           )}
           {conversation.session && conversation.session.mode !== 'code' && (

@@ -62,6 +62,8 @@ import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import { usePromptMetaInspector } from '@client/app/components/Session/PromptMetaInspector';
 import { AnswerFeedbackPrompt } from '@client/app/components/Session/AnswerFeedbackPrompt';
 import HiveIcon from '@mui/icons-material/Hive';
+import FingerprintIcon from '@mui/icons-material/Fingerprint';
+import { copyTextWithToast } from '@client/app/utils/copyToClipboard';
 import ContextBreakdownModal from '@client/app/components/Session/ContextBreakdownModal';
 import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
 import DonutSmallIcon from '@mui/icons-material/DonutSmall';
@@ -428,6 +430,7 @@ const MessageContent: React.FC<ContentProps> = memo(
           ...fetchedQuest.promptMeta,
           createdAt: fetchedQuest.createdAt,
           updatedAt: fetchedQuest.updatedAt,
+          turnTiming: fetchedQuest.turnTiming,
         };
         openPromptMetaInspector(promptMetaWithTimestamps, fetchedQuest.replies || null);
         return;
@@ -455,6 +458,7 @@ const MessageContent: React.FC<ContentProps> = memo(
           creditsUsed: fetchedQuest.creditsUsed,
           createdAt: fetchedQuest.createdAt,
           updatedAt: fetchedQuest.updatedAt,
+          turnTiming: fetchedQuest.turnTiming,
         };
         openPromptMetaInspector(questPromptMeta, fetchedQuest.replies || null);
       }
@@ -490,6 +494,7 @@ const MessageContent: React.FC<ContentProps> = memo(
             ...fetchedQuest.promptMeta,
             createdAt: fetchedQuest.createdAt,
             updatedAt: fetchedQuest.updatedAt,
+            turnTiming: fetchedQuest.turnTiming,
           };
           openPromptMetaInspector(promptMetaWithTimestamps, fetchedQuest.replies || null);
         } else {
@@ -508,6 +513,7 @@ const MessageContent: React.FC<ContentProps> = memo(
             creditsUsed: fetchedQuest.creditsUsed,
             createdAt: fetchedQuest.createdAt,
             updatedAt: fetchedQuest.updatedAt,
+            turnTiming: fetchedQuest.turnTiming,
           };
           openPromptMetaInspector(questPromptMeta, fetchedQuest.replies || null);
         }
@@ -751,6 +757,18 @@ const MessageContent: React.FC<ContentProps> = memo(
           </ListItemDecorator>
           {ANSWER_DIAGNOSIS_TITLE}
         </MenuItem>
+        {/* An optimistic id names no quest, so there is nothing for support to look up. */}
+        {messageData.id && isPersistedMessage && (
+          <MenuItem
+            data-testid="message-copy-turn-id-btn"
+            onClick={() => messageData.id && copyTextWithToast(messageData.id, 'Turn ID copied')}
+          >
+            <ListItemDecorator>
+              <FingerprintIcon />
+            </ListItemDecorator>
+            Copy turn ID
+          </MenuItem>
+        )}
         {contextBreakdownAvailable && (
           <MenuItem data-testid="message-context-breakdown-btn" onClick={() => setShowContextBreakdown(true)}>
             <ListItemDecorator>

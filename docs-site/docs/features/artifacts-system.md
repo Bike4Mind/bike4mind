@@ -50,8 +50,8 @@ HTML previews load images and media only from the app and its configured file CD
 Use embedded data URLs for other assets. Stylesheets and fonts use an explicit CDN
 allowlist. If an asset is missing, check its source and the browser's CSP error.
 
-Markdown images in assistant replies display a **Load image** button with the
-destination host. You choose whether to fetch each image; the preview appears after
+Markdown images in assistant replies and in your own prompts display a **Load image**
+button with the destination host. You choose whether to fetch each image; the preview appears after
 you click the button.
 
 ### SVG Graphics

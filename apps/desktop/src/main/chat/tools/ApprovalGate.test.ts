@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ApprovalGate, patternMatches } from './ApprovalGate';
 import { commandTokens } from './bashArity';
+import type { ChatApprovalAnswer } from '@shared/chat';
 import type { ApprovalAlways } from './types';
 
 /**
@@ -136,6 +137,60 @@ describe('ApprovalGate', () => {
       await allow(gate, always(['ls *'], ['ls']));
       gate.forgetSession('s');
       expect(gate.coversCommands('s', always(['ls *'], ['ls']))).toBe(false);
+    });
+  });
+
+  describe('pending cards a later answer covers', () => {
+    function waiting(gate: ApprovalGate, sessionId: string, recheck?: () => Promise<ChatApprovalAnswer | null>) {
+      let approvalId = '';
+      const answer = gate.request(sessionId, 'k', new AbortController().signal, id => (approvalId = id), {
+        ...(recheck ? { recheck } : {}),
+      });
+      return { answer, approvalId: () => approvalId };
+    }
+
+    it("settles this conversation's covered cards and leaves the rest waiting", async () => {
+      const gate = new ApprovalGate();
+      const covered = waiting(gate, 'a', async () => ({ decision: 'once' }));
+      const notCovered = waiting(gate, 'a', async () => null);
+      const elsewhere = waiting(gate, 'b', async () => ({ decision: 'once' }));
+      const noRecheck = waiting(gate, 'a');
+
+      await gate.settleCovered('a');
+      await expect(covered.answer).resolves.toEqual({ decision: 'once' });
+
+      gate.resolve(notCovered.approvalId(), { decision: 'deny' });
+      gate.resolve(noRecheck.approvalId(), { decision: 'deny' });
+      await expect(notCovered.answer).resolves.toEqual({ decision: 'deny' });
+      await expect(noRecheck.answer).resolves.toEqual({ decision: 'deny' });
+
+      // Every conversation's, once a rule is saved.
+      await gate.settleCovered();
+      await expect(elsewhere.answer).resolves.toEqual({ decision: 'once' });
+    });
+
+    it('keeps waiting when a recheck fails', async () => {
+      const gate = new ApprovalGate();
+      const card = waiting(gate, 'a', async () => {
+        throw new Error('rules unreadable');
+      });
+      await gate.settleCovered();
+      gate.resolve(card.approvalId(), { decision: 'deny' });
+      await expect(card.answer).resolves.toEqual({ decision: 'deny' });
+    });
+
+    it('marks an "always" given on a tainted card as standing over the taint', async () => {
+      const gate = new ApprovalGate();
+      let approvalId = '';
+      const answer = gate.request('a', 'k', new AbortController().signal, id => (approvalId = id), { tainted: true });
+      gate.resolve(approvalId, { decision: 'always' });
+      await answer;
+      expect(gate.isStanding('a', 'k')).toEqual({ overTaint: true });
+
+      const plain = ask(gate, 'a', 'other');
+      gate.resolve(plain.approvalId(), { decision: 'always' });
+      await plain.answer;
+      expect(gate.isStanding('a', 'other')).toEqual({});
     });
   });
 });

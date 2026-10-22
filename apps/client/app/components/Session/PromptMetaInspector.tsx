@@ -18,6 +18,7 @@ import { ModelTraining, Thermostat, Token, Speed, Close, Timer, Code, Warning, C
 import {
   ANSWER_DIAGNOSIS_TITLE,
   CLIENT_UNLIMITED_HISTORY_VALUE,
+  type ITurnTiming,
   PromptMeta,
   RAW_METADATA_DISCLOSURE_LABEL,
   ttfvtState,
@@ -43,6 +44,8 @@ import dayjs from 'dayjs';
 import ContextVisualizer from './ContextVisualizer';
 import { AnswerDiagnosisPanel } from './AnswerDiagnosisPanel';
 import StatusTimeline from './StatusTimeline';
+import { TurnTimingDetails } from './TurnTimingDetails';
+import { turnTimingMarkdown } from './turnTimingFormat';
 import { toast } from 'sonner';
 
 export const usePromptMetaInspector = create<{
@@ -60,12 +63,16 @@ export const usePromptMetaInspector = create<{
 }));
 
 /**
- * createdAt/updatedAt are not part of PromptMetaZodSchema - they are the parent quest
- * document's own timestamps, spliced onto this object by MessageContent.tsx before it opens
+ * createdAt/updatedAt/turnTiming are not part of PromptMetaZodSchema - they are fields of the
+ * parent quest document, spliced onto this object by MessageContent.tsx before it opens
  * the inspector. Extending the type here (rather than casting `as any` at each read) documents
  * that splice as the real contract instead of an unexplained escape hatch.
  */
-type PromptMetaWithQuestTimestamps = PromptMeta & { createdAt?: string; updatedAt?: string };
+type PromptMetaWithQuestTimestamps = PromptMeta & {
+  createdAt?: string;
+  updatedAt?: string;
+  turnTiming?: ITurnTiming;
+};
 
 /**
  * `offeredTools` is absent, not empty, when the turn's promptMeta was never populated at all -
@@ -168,6 +175,8 @@ ${promptMeta.redirectedFrom ? `- **Redirected from**: ${promptMeta.redirectedFro
       }[ttfvtState(promptMeta.performance?.firstTokenTime, promptMeta.performance?.firstChunkTime)]
     }
 - **First Chunk (any kind, thinking included)**: ${promptMeta.performance?.firstChunkTime ?? 'N/A'} ms
+
+${turnTimingMarkdown((promptMeta as PromptMetaWithQuestTimestamps).turnTiming)}
 
 ## Context
 - **Prompt**: ${promptMeta.prompt?.substring(0, 200) ?? 'N/A'}${(promptMeta.prompt?.length || 0) > 200 ? '...' : ''}
@@ -379,6 +388,8 @@ ${promptMeta.promptErrors?.length ? promptMeta.promptErrors.map((e: string) => `
                         </Chip>
                       </Stack>
                     </Box>
+
+                    <TurnTimingDetails timing={(promptMeta as PromptMetaWithQuestTimestamps).turnTiming} />
 
                     {/* Session Information */}
                     <Box sx={{ mt: 2 }}>

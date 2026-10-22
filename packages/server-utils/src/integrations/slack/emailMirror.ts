@@ -47,6 +47,8 @@ export function redactEmailContentForMirror(input: string | null | undefined): s
   //    inside the kept URL base (e.g. /verify/<64-hex>) - collapses to <redacted>.
   out = out.replace(/[A-Za-z0-9_-]{24,}/g, '<redacted>');
 
+  out = out.replace(/\d{4,}/g, '<redacted>');
+  out = out.replace(/\b[A-Z0-9]{4}(?:-[A-Z0-9]{4}){3}\b/gi, '<redacted>');
   return out;
 }
 
@@ -61,6 +63,7 @@ export function inferEmailType(subject: string | null | undefined): string {
   if (/(email\s*change|change.*email|new email)/.test(s)) return 'email-change';
   if (/(reset|forgot).*(password)|password.*reset/.test(s)) return 'password-reset';
   if (/verif|confirm your email|activate/.test(s)) return 'email-verification';
+  if (/sign.?in|log.?in|one.?time|verification code|authentication code/.test(s)) return 'sign-in';
   if (/invit/.test(s)) return 'invite';
   if (/welcome/.test(s)) return 'welcome';
   if (/credit/.test(s)) return 'credit-grant';
@@ -98,9 +101,15 @@ export function extractBodyPreview(data: unknown, maxChars: number = EMAIL_PREVI
   return `${redacted.slice(0, maxChars)}…`;
 }
 
+export function isSecurityEmail(emailType: string): boolean {
+  return ['sign-in', 'invite', 'password-reset', 'email-change', 'email-verification'].includes(emailType);
+}
+
 /** Build the Slack message text for a mirrored email. Assumes `bodyPreview` is already redacted. */
 export function buildEmailMirrorMessage(payload: EmailMirrorPayload): string {
-  const { to, subject, emailType, bodyPreview } = payload;
+  const { to, emailType } = payload;
+  const subject = isSecurityEmail(emailType) ? '[Security email]' : redactEmailContentForMirror(payload.subject);
+  const bodyPreview = isSecurityEmail(emailType) ? '' : redactEmailContentForMirror(payload.bodyPreview);
   const lines = [
     `:email: *Outbound email* — \`${emailType}\``,
     `*To:* ${to}`,

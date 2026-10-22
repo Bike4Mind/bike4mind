@@ -25,6 +25,7 @@ const {
 }));
 
 vi.mock('@bike4mind/database', () => ({
+  memoryLedgerRepository: { markSourceShredded: vi.fn().mockResolvedValue(0) },
   organizationRepository: { incrementCurrentStorage: mockIncrementCurrentStorage },
   changeStorageSize: mockChangeStorageSize,
   dataLakeRepository: {},

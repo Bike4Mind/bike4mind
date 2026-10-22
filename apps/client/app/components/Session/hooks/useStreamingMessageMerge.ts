@@ -102,6 +102,8 @@ export function useStreamingMessageMerge({
           // notice never renders blank in the window before `baseQuest` reflects it.
           reply: chatCompletion.quest.errorCode ? (chatCompletion.quest.reply ?? baseQuest.reply) : baseQuest.reply,
           promptMeta: mergedPromptMeta,
+          // baseQuest is the first frame's snapshot, and a stalled turn's retries only arrive later.
+          turnTiming: chatCompletion.quest.turnTiming ?? baseQuest.turnTiming,
         };
       }
       // Fallback: streaming chunks arrived before React Query loaded the quest.
@@ -126,6 +128,7 @@ export function useStreamingMessageMerge({
         questMasterPlanId: sq.questMasterPlanId,
         // any: sq is the Zod-inferred StreamedChatCompletionAction['quest'] shape, which does not model promptMeta
         promptMeta: (sq as any).promptMeta,
+        turnTiming: sq.turnTiming,
       } as IChatHistoryItem;
     }
 

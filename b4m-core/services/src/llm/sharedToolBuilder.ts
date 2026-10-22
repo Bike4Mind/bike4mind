@@ -248,6 +248,7 @@ export interface ToolBuilderCallbacks {
   /** Quest (turn) id, for lake-access audit rows to join back to their turn - see
    * ToolContext['questId']'s own doc comment for the agent-mode caveat. */
   questId?: string;
+  slackDestination?: ToolContext['slackDestination'];
 
   /** See ToolContext['numberCitables']; the chat path supplies it for indexed-citation sessions. */
   numberCitables?: ToolContext['numberCitables'];
@@ -420,6 +421,8 @@ export function buildSharedTools(
       authOrigin,
       apiKeyId,
       questId: callbacks.questId,
+      requestConfirmation: callbacks.onPendingAction,
+      slackDestination: callbacks.slackDestination,
       numberCitables: callbacks.numberCitables,
       decide: deps.decide,
       getAbortSignal,

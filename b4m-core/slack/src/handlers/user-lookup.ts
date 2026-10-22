@@ -1,3 +1,4 @@
+import { VERIFIED_SLACK_IDENTITY_FILTER } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { getSlackDb } from '../di/registry';
 
@@ -12,6 +13,7 @@ export async function findUserBySlackId(slackUserId: string) {
     const user = await (User as any)
       .findOne({
         'slackSettings.slackUserId': slackUserId,
+        ...VERIFIED_SLACK_IDENTITY_FILTER,
       })
       .maxTimeMS(5000); // 5 second timeout instead of default 10 seconds
 
@@ -74,8 +76,6 @@ export async function handleUnlinkedUser(
       '1. Go to your profile settings in the B4M Web App',
       '2. Navigate to the Slack Integration section',
       '3. Click "Connect with Slack" to link your Slack account and start using the B4M Slack Integration',
-      "4. If you're having trouble, you may enter your Slack Member ID manually: Find your Slack Member ID: Click your profile → More → Copy member ID",
-      "5. Enter your Member ID and hit the 'Save Member ID' button",
       '',
       "✅ Once linked, you can chat with me and I'll save our conversations to your notebooks!",
     ].join('\n');

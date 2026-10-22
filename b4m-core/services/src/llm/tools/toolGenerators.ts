@@ -49,6 +49,8 @@ export const generateTools = (
     authOrigin,
     apiKeyId,
     questId,
+    requestConfirmation,
+    slackDestination,
     numberCitables,
     decide,
     getAbortSignal,
@@ -70,6 +72,8 @@ export const generateTools = (
     authOrigin: ToolContext['authOrigin'];
     apiKeyId?: ToolContext['apiKeyId'];
     questId?: ToolContext['questId'];
+    requestConfirmation?: ToolContext['requestConfirmation'];
+    slackDestination?: ToolContext['slackDestination'];
     numberCitables?: ToolContext['numberCitables'];
     decide?: ToolContext['decide'];
     getAbortSignal?: ToolContext['getAbortSignal'];
@@ -101,6 +105,8 @@ export const generateTools = (
     user,
     sessionId,
     questId,
+    requestConfirmation,
+    slackDestination,
     logger,
     db,
     storage,
@@ -262,7 +268,7 @@ export const generateMcpTools = async (
     const optionTools: ICompletionOptionTools = {
       toolFn: async (args: any) => {
         // Use original tool name when calling the MCP server
-        Logger.debug(`Calling ${originalToolName} tool via ${mcpData.serverName}`, args);
+        Logger.debug(`Calling ${originalToolName} tool via ${mcpData.serverName}`);
         try {
           const toolResult = await mcpData.callTool(originalToolName, stripServerOnlyArgs(args));
           const contentBlocks = (toolResult as any)?.content;
@@ -275,7 +281,7 @@ export const generateMcpTools = async (
                 return JSON.stringify(entry);
               })
               .join('\n');
-            Logger.debug(`[Tool Result] ${originalToolName}:`, normalized);
+            Logger.debug(`[Tool Result] ${originalToolName}:`, { resultLength: normalized.length });
             return normalized;
           }
 
@@ -344,7 +350,7 @@ export const generateMcpToolsFromCache = (
     const parameters = normalizeToolParameters(rest as Record<string, unknown>);
     const optionTools: ICompletionOptionTools = {
       toolFn: async (args: unknown) => {
-        Logger.debug(`Calling ${originalToolName} tool via ${serverName}`, args);
+        Logger.debug(`Calling ${originalToolName} tool via ${serverName}`);
         try {
           const toolResult = await callTool(originalToolName, stripServerOnlyArgs(args));
           const contentBlocks = (toolResult as Record<string, unknown>)?.content;
@@ -357,7 +363,7 @@ export const generateMcpToolsFromCache = (
                 return JSON.stringify(entry);
               })
               .join('\n');
-            Logger.debug(`[Tool Result] ${originalToolName}:`, normalized);
+            Logger.debug(`[Tool Result] ${originalToolName}:`, { resultLength: normalized.length });
             return normalized;
           }
 

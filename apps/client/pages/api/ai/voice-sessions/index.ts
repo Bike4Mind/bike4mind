@@ -75,8 +75,12 @@ const handler = baseApi().post(async (req, res) => {
         'voiceSessionAiVoice',
         'voiceSessionVadType',
         'voiceSessionVadEagerness',
+        'voiceSessionTranscriptionModel',
         'enforceCredits',
       ],
+      // Every key this handler reads must be named above: under skipCache an unlisted key comes
+      // back absent and silently reverts to its coded default (e.g. whisper-1 for the model).
+      skipCache: true,
     }
   );
   const enableVoiceSession = getSettingsValue('enableVoiceSession', settings);

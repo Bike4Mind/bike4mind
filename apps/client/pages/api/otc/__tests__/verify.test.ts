@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { CreditHolderType, PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
 import { signupCreditsForEmail } from '@client/lib/entitlements/registry';
+import { SECRET_USER_FIELDS, expectSelfUserStripped } from '@server/auth/__tests__/sessionUserSecrets';
 
 // Middleware is stripped so the handler body runs directly (same pattern as the
 // email/verify suite). baseApi().use(...).use(...).post(fn) must chain and hand back
@@ -62,6 +63,11 @@ vi.mock('jsonwebtoken', () => ({
 const mockPartnerGrant = vi.fn();
 vi.mock('@server/entitlements/partnerRules', () => ({
   partnerSignupGrantForEmail: (...a: any[]) => mockPartnerGrant(...a),
+}));
+// Identity redactor: the response schema alone has to drop secrets from the login/registration bodies.
+vi.mock('@bike4mind/common', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/common')>()),
+  redactUserSecretsForSelf: (user: unknown) => user,
 }));
 vi.mock('@server/entitlements/invalidate', () => ({ pushEntitlementInvalidation: vi.fn() }));
 
@@ -388,6 +394,22 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
       touches: { firstTouch: { source: 'widgets' } },
       method: 'otc',
     });
+  });
+
+  it('strips secrets and undeclared fields from the registered user in the response', async () => {
+    mockRegisterViaOTC.mockResolvedValue({
+      id: 'user-1',
+      tokenVersion: 0,
+      currentCredits: 1000,
+      ...SECRET_USER_FIELDS,
+    });
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+
+    await handler(req, res);
+
+    const body = res._getJSONData();
+    expect(body.accessToken).toBe('a');
+    expectSelfUserStripped(body.user, body);
   });
 
   it('persists the signup touches and reports email_verified and credits_granted for the new user', async () => {
@@ -732,6 +754,17 @@ describe('/api/otc/verify - existing user verification and pending free credits'
       organizationId: 'org-partner',
       tags: ['Partner'],
     });
+
+  it('strips secrets and undeclared fields from the flat login body', async () => {
+    mockFindByEmail.mockResolvedValue(pendingUser({ ...SECRET_USER_FIELDS }));
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+
+    await handler(req, res);
+
+    const body = res._getJSONData();
+    expect(body.accessToken).toBe('a');
+    expectSelfUserStripped(body, body);
+  });
 
   it('stamps emailVerified first, then strips the pending-credit tag in a separate write', async () => {
     mockFindByEmail.mockResolvedValue(pendingUser({ pendingCreditGrant: 250 }));

@@ -7,6 +7,7 @@ import {
   CompletionInfo,
   getTextModelCost,
   getTurnsCost,
+  buildUsagePriceStamp,
   type TurnUsage,
   pricingTierForTokens,
   publishesCacheReadRate,
@@ -597,8 +598,9 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     );
   }
 
-  // Credit enforcement: Fail-fast if model info is missing
-  const settings = await getSettingsMap(db);
+  // Credit enforcement: Fail-fast if model info is missing.
+  // skipCache: this flag gates money and the serving process may outlive the admin's write to it.
+  const settings = await getSettingsMap(db, { names: ['enforceCredits'], skipCache: true });
   const enforceCredits = getSettingsValue('enforceCredits', settings);
 
   if (enforceCredits) {
@@ -749,6 +751,13 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
           finalInputTokens + finalCacheReadTokens + finalCacheCreationTokens
         );
 
+  // Provenance of the rates settledUsdCost applied: the same turns, else the same tier basis.
+  const settledPriceStamp = (pricedModel: ModelInfo) =>
+    buildUsagePriceStamp(pricedModel, {
+      turns: finalTurnUsage,
+      tierBasisTokens: finalInputTokens + finalCacheReadTokens + finalCacheCreationTokens,
+    });
+
   const wrappedOnChunk = async (text: (string | null | undefined)[], info?: CompletionInfo) => {
     if (info?.inputTokens) finalInputTokens = info.inputTokens;
     if (info?.outputTokens) finalOutputTokens = info.outputTokens;
@@ -836,6 +845,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
             cacheWriteTokens: finalCacheCreationTokens,
             costUsd: settledUsdCost(modelInfo),
             creditsCharged: 0,
+            ...settledPriceStamp(modelInfo),
             status: isRefusal ? 'refusal' : 'error',
             latencyMs: Date.now() - completionStartTime,
           })
@@ -929,6 +939,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         cacheWriteTokens: finalCacheCreationTokens,
         costUsd: finalUsdCost,
         creditsCharged,
+        ...settledPriceStamp(modelInfo!),
         // Same refund key the web chat path records: a stream aborted as degenerate is
         // priced normally (the provider tokens were spent) but must not read as a clean,
         // fully-valued success. See usageEventStatusForFinish.

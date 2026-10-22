@@ -266,8 +266,13 @@ const saveToGeneratedBucket: VideoJobDeps['saveToGeneratedBucket'] = async ({ ke
   return { s3Key: key };
 };
 
+// Both are read once per job on a long-lived queue host, and decide whether the job debits, so
+// they bypass the process cache (names lists must stay complete under skipCache).
 const getSettings: VideoJobDeps['getSettings'] = async () => {
-  const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
+  const settings = await getSettingsMap(
+    { adminSettings: adminSettingsRepository },
+    { names: ['enforceCredits', 'videoGeneration'], skipCache: true }
+  );
   return {
     enforceCredits: Boolean(getSettingsValue('enforceCredits', settings)),
     videoGeneration: getSettingsValue('videoGeneration', settings),
@@ -275,7 +280,10 @@ const getSettings: VideoJobDeps['getSettings'] = async () => {
 };
 
 const getMusicSettings: MusicJobDeps['getSettings'] = async () => {
-  const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
+  const settings = await getSettingsMap(
+    { adminSettings: adminSettingsRepository },
+    { names: ['enforceCredits', 'musicGeneration'], skipCache: true }
+  );
   return {
     enforceCredits: Boolean(getSettingsValue('enforceCredits', settings)),
     musicGeneration: getSettingsValue('musicGeneration', settings),

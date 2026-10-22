@@ -8,10 +8,11 @@ type Repo = object | undefined;
  * Methods the test already supplies win over these defaults.
  */
 export function withStorageOwnerFakes<
-  T extends { fabFiles?: Repo; dataLakes?: Repo; users?: Repo; organizations?: Repo },
+  T extends { fabFiles?: Repo; dataLakes?: Repo; users?: Repo; organizations?: Repo; memoryLedger?: Repo },
 >(db: T) {
   return {
     ...db,
+    memoryLedger: { markSourceShredded: vi.fn().mockResolvedValue(0), ...db.memoryLedger },
     fabFiles: {
       findById: vi.fn().mockResolvedValue(null),
       setOwnerOrganizationIfUnchanged: vi.fn().mockResolvedValue(true),
@@ -28,12 +29,15 @@ export function withStorageOwnerFakes<
       incrementCurrentStorage: vi.fn().mockResolvedValue(undefined),
       ...db.organizations,
     },
-  } as Omit<T, 'fabFiles' | 'dataLakes' | 'users' | 'organizations'> & {
-    fabFiles: NeutralFabFiles & NonNullable<T['fabFiles']>;
-    dataLakes: NeutralDataLakes & NonNullable<T['dataLakes']>;
-    users: NeutralCounters & NonNullable<T['users']>;
-    organizations: NeutralCounters & NonNullable<T['organizations']>;
-  };
+  } as { memoryLedger: { markSourceShredded: Mock } } & Omit<
+    T,
+    'fabFiles' | 'dataLakes' | 'users' | 'organizations'
+  > & {
+      fabFiles: NeutralFabFiles & NonNullable<T['fabFiles']>;
+      dataLakes: NeutralDataLakes & NonNullable<T['dataLakes']>;
+      users: NeutralCounters & NonNullable<T['users']>;
+      organizations: NeutralCounters & NonNullable<T['organizations']>;
+    };
 }
 
 type NeutralFabFiles = { findById: Mock; setOwnerOrganizationIfUnchanged: Mock };

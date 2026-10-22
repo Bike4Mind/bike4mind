@@ -36,7 +36,8 @@
     "eventsource-parser": "^3.1.0",
     "gray-matter": "^4.0.3",
     "node-pty": "1.2.0-beta.15",
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "zustand": "^5.0.15"
   },
   "devDependencies": {
     "@bike4mind/agents": "workspace:*",

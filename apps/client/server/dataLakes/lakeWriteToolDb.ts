@@ -10,6 +10,7 @@ import { lakeMembershipAuditDb } from '@bike4mind/server-utils/dataLakes/lakeMem
  * drift apart; embedRoute.ts does not, since no embed opt-in tool writes a lake (embedToolResolver.ts).
  */
 export const lakeWriteToolDb = Object.freeze({
+  memoryLedger: lakeMembershipAuditDb.memoryLedger,
   lakeMembershipRemovals: lakeMembershipRemovalRepository,
   lakeConfigChangeEvents: lakeConfigAuditDb.lakeConfigChangeEvents,
   lakeMembershipChangeEvents: lakeMembershipAuditDb.lakeMembershipChangeEvents,
