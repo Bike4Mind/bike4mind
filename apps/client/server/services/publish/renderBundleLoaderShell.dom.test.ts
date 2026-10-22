@@ -170,3 +170,87 @@ describe('loader shell bootstrap - execution', () => {
     expect((document.getElementById('b4m-frame') as HTMLIFrameElement).srcdoc).toBe('<h1>recovered</h1>');
   });
 });
+
+describe('loader shell bootstrap - same-bundle file downloads', () => {
+  beforeEach(() => {
+    calls = [];
+    vi.useFakeTimers();
+    mountShell();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    delete (window as { __b4mFetchDownload?: unknown }).__b4mFetchDownload;
+    delete (URL as { createObjectURL?: unknown }).createObjectURL;
+    delete (URL as { revokeObjectURL?: unknown }).revokeObjectURL;
+  });
+
+  type Hook = (path: string) => void;
+  const hook = () => (window as unknown as { __b4mFetchDownload: Hook }).__b4mFetchDownload;
+
+  /** Session OK; `sign` answers the `?sign=1` request, `file` the plain file fetch. */
+  function stubSession(sign: () => Response, file: () => Response) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string, init?: RequestInit) => {
+        calls.push({ url, init });
+        if (url.includes('/api/auth/refreshToken'))
+          return Promise.resolve(json(200, { accessToken: 'fresh.access.token' }));
+        if (url.endsWith('?sign=1')) return Promise.resolve(sign());
+        if (url.includes('/files/')) return Promise.resolve(file());
+        return Promise.resolve(html(200, '<h1>ok</h1>'));
+      })
+    );
+  }
+
+  it('asks for a signed link with the recovered Bearer and does not fetch the bytes itself', async () => {
+    stubSession(
+      () => json(200, { url: 'https://files.storage.example/report.pdf?X-Amz-Signature=abc' }),
+      () => {
+        throw new Error('file must not be fetched when a signed link is available');
+      }
+    );
+    await runBootstrap();
+
+    hook()('/p/u/scope123/my-slug/files/report.pdf');
+    await vi.advanceTimersByTimeAsync(0);
+
+    const signCall = calls.find(c => c.url === '/p/u/scope123/my-slug/files/report.pdf?sign=1');
+    expect(signCall?.init?.headers).toEqual({ Authorization: 'Bearer fresh.access.token' });
+    expect(signCall?.init?.credentials).toBe('omit');
+    expect(calls.some(c => c.url === '/p/u/scope123/my-slug/files/report.pdf')).toBe(false);
+  });
+
+  it('falls back to fetching the file with the Bearer and saving it when signing is unavailable', async () => {
+    const blob = new Blob(['%PDF-1.4']);
+    stubSession(
+      () => json(404, {}),
+      () => ({ status: 200, blob: () => Promise.resolve(blob) }) as Response
+    );
+    const createUrl = vi.fn(() => 'blob:report');
+    Object.assign(URL, { createObjectURL: createUrl, revokeObjectURL: vi.fn() });
+    const clicked: Array<{ href: string; download: string }> = [];
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      clicked.push({ href: this.href, download: this.download });
+    });
+    await runBootstrap();
+
+    hook()('/p/u/scope123/my-slug/files/My%20Report.pdf');
+    await vi.advanceTimersByTimeAsync(0);
+
+    const fileCall = calls.find(c => c.url === '/p/u/scope123/my-slug/files/My%20Report.pdf');
+    expect(fileCall?.init?.headers).toEqual({ Authorization: 'Bearer fresh.access.token' });
+    expect(createUrl).toHaveBeenCalledWith(blob);
+    expect(clicked).toEqual([{ href: 'blob:report', download: 'My Report.pdf' }]);
+  });
+
+  it('does nothing before a credential is recovered', async () => {
+    stubFetch({ refresh: () => json(401, {}) });
+    await runBootstrap();
+    hook()('/p/u/scope123/my-slug/files/report.pdf');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls.map(c => c.url)).toEqual(['/api/auth/refreshToken']);
+  });
+});

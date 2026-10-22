@@ -113,6 +113,40 @@ export function renderBundleLoaderShell(): string {
       })
       .catch(function () { if (attempt < 4) { setTimeout(load, attempt * 600); } else { show('This shared item could not be loaded.'); } });
   }
+  // Same-bundle file links reach here through the hash bridge (fragmentNav.ts). A plain
+  // navigation carries no Bearer, so it would land on a 401. Ask the route for a signed
+  // storage link instead and open it at top level: it views in the browser where its type
+  // allows (PDF, video) and downloads otherwise. Where signing is unavailable, fetch the
+  // attachment with the token and save the bytes. The bridge has already confined the path
+  // to this bundle.
+  function saveBlob(path) {
+    fetch(path, { headers: { Authorization: 'Bearer ' + token }, credentials: 'omit' })
+      .then(function (res) { return res.status === 200 ? res.blob() : null; })
+      .then(function (blob) {
+        if (!blob) return;
+        var href = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        var name = path.slice(path.lastIndexOf('/') + 1);
+        try { name = decodeURIComponent(name); } catch (e) {}
+        a.href = href;
+        a.download = name || 'download';
+        document.body.appendChild(a);
+        a.click();
+        a.parentNode.removeChild(a);
+        setTimeout(function () { URL.revokeObjectURL(href); }, 60000);
+      })
+      .catch(function () {});
+  }
+  window.__b4mFetchDownload = function (path) {
+    if (!token) return;
+    fetch(path + '?sign=1', { headers: { Authorization: 'Bearer ' + token }, credentials: 'omit' })
+      .then(function (res) { return res.status === 200 ? res.json() : null; })
+      .then(function (data) {
+        if (data && typeof data.url === 'string' && /^https?:/.test(data.url)) { location.assign(data.url); return; }
+        saveBlob(path);
+      })
+      .catch(function () { saveBlob(path); });
+  };
   authenticate();
 })();`;
 

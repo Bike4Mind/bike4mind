@@ -1,17 +1,28 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { VIEWER_SANDBOX } from '@server/services/publish/viewerSecurity';
 
-const { mockArtifactFindOne, mockProjectFindOne, mockDownload, mockUpdateOne, mockUserFindById, mockStarterCredits } =
-  vi.hoisted(() => ({
-    mockArtifactFindOne: vi.fn(),
-    mockProjectFindOne: vi.fn(),
-    mockDownload: vi.fn(),
-    mockUpdateOne: vi.fn(() => Promise.resolve()),
-    // Domain access gates look the viewer's verified email up through User (checkVisibility).
-    mockUserFindById: vi.fn(),
-    mockStarterCredits: vi.fn(() => Promise.resolve(0)),
-  }));
+const {
+  mockArtifactFindOne,
+  mockProjectFindOne,
+  mockDownload,
+  mockUpdateOne,
+  mockUserFindById,
+  mockStarterCredits,
+  mockGetSignedUrl,
+  signing,
+} = vi.hoisted(() => ({
+  mockArtifactFindOne: vi.fn(),
+  mockProjectFindOne: vi.fn(),
+  mockDownload: vi.fn(),
+  mockUpdateOne: vi.fn(() => Promise.resolve()),
+  // Domain access gates look the viewer's verified email up through User (checkVisibility).
+  mockUserFindById: vi.fn(),
+  mockStarterCredits: vi.fn(() => Promise.resolve(0)),
+  mockGetSignedUrl: vi.fn(),
+  // Signing is off unless a suite turns it on, so the buffered path stays the default here.
+  signing: { enabled: false },
+}));
 
 // baseApi mock: callable chain routed by req.method; .use() no-op; last fn per verb is handler.
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -45,7 +56,10 @@ vi.mock('@server/utils/starterCredits', () => ({
 }));
 
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
-  getPublishedArtifactsStorage: () => ({ download: mockDownload }),
+  getPublishedArtifactsStorage: () => ({
+    download: mockDownload,
+    ...(signing.enabled ? { getSignedUrl: mockGetSignedUrl } : {}),
+  }),
 }));
 
 // The share-token helpers are stubbed rather than re-exported from the real module (importing it
@@ -90,12 +104,32 @@ type RunOpts = {
   embed?: boolean;
   a?: string;
   exportAs?: unknown;
+  download?: boolean;
+  sign?: boolean;
+  fetchDest?: string;
 };
 const run = (
   segments: string[],
-  { user, host = 'app.bike4mind.com', raw, v, uc, format, cookie, userAgent, embed, a, exportAs }: RunOpts = {}
+  {
+    user,
+    host = 'app.bike4mind.com',
+    raw,
+    v,
+    uc,
+    format,
+    cookie,
+    userAgent,
+    embed,
+    a,
+    exportAs,
+    download,
+    sign,
+    fetchDest,
+  }: RunOpts = {}
 ) => {
   const query: Record<string, unknown> = { path: segments };
+  if (download) query.download = '1';
+  if (sign) query.sign = '1';
   if (raw) query.raw = '1';
   if (v) query.v = v;
   if (format) query.format = format;
@@ -107,6 +141,7 @@ const run = (
   const headers: Record<string, string> = { host: effectiveHost };
   if (cookie) headers.cookie = cookie;
   if (userAgent) headers['user-agent'] = userAgent;
+  if (fetchDest) headers['sec-fetch-dest'] = fetchDest;
   const { req, res } = createMocks({ method: 'GET', query, headers });
   if (user) (req as Record<string, unknown>).user = user;
   return { res, promise: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res) };
@@ -3301,20 +3336,64 @@ describe('isolated origin and secondary document boundaries', () => {
     expect(res.getHeader('Cache-Control')).toBe('private, no-store');
     expect(mockDownload).not.toHaveBeenCalled();
   });
+  // A secondary page is decided by its extension, never by the publisher-supplied MIME type,
+  // and is never handed to the browser as its own document: the wrapper frames it instead.
   it.each(['text/html', 'application/xhtml+xml', 'image/svg+xml', ' text/html ; charset=utf-8', ''])(
-    'makes secondary %s documents inert attachments',
+    'renders a secondary .html page declared as %s through the sandboxed wrapper',
     async mimeType => {
       mockArtifactFindOne.mockReturnValue(bundle({ manifest: [{ path: 'secondary.html', mimeType }] }));
       mockDownload.mockResolvedValue(
-        Buffer.from('<meta http-equiv="refresh" content="0;url=https://attacker.example">')
+        Buffer.from('<meta http-equiv="refresh" content="0;url=https://attacker.example"><p>Second</p>')
       );
       const { res, promise } = run(['u', 'scope123', 'my-slug', 'secondary.html']);
       await promise;
       expect(res._getStatusCode()).toBe(200);
-      expect(res.getHeader('Content-Disposition')).toBe('attachment');
-      expect(res.getHeader('Content-Security-Policy')).toMatch(/(?:^|; )sandbox(?:;|$)/);
+      expect(res.getHeader('Content-Disposition')).toBeUndefined();
+      const data = res._getData() as string;
+      expect(data).toContain('src="https://pub1.usercontent.app.bike4mind.com/uc/u/scope123/my-slug/secondary.html"');
+      // Author bytes ride only inside the isolated frame, never in the app-origin wrapper.
+      expect(data).not.toContain('attacker.example');
+      expect(mockDownload).toHaveBeenCalledWith('user/scope123/my-slug/secondary.html');
     }
   );
+  it('serves the secondary page itself on the isolated origin, with the redirect stripped', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ manifest: [{ path: 'secondary.html', mimeType: 'text/html' }] }));
+    mockDownload.mockResolvedValue(
+      Buffer.from('<meta http-equiv="refresh" content="0;url=https://attacker.example"><p>Second</p>')
+    );
+    const { res, promise } = run(['u', 'scope123', 'my-slug', 'secondary.html'], { uc: 'pub1' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    expect(data).toContain('<p>Second</p>');
+    expect(data).not.toContain('attacker.example');
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
+  });
+  it.each([
+    ['secondary.svg', 'image/svg+xml'],
+    ['secondary.xhtml', 'application/xhtml+xml'],
+    ['secondary.bin', 'text/html'],
+    ['secondary.html.txt', 'text/html'],
+  ])('keeps non-page %s (declared %s) an inert attachment', async (path, mimeType) => {
+    mockArtifactFindOne.mockReturnValue(bundle({ manifest: [{ path, mimeType }] }));
+    mockDownload.mockResolvedValue(Buffer.from('<meta http-equiv="refresh" content="0;url=https://attacker.example">'));
+    const { res, promise } = run(['u', 'scope123', 'my-slug', path]);
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('Content-Disposition')).toBe('attachment');
+    expect(res.getHeader('Content-Security-Policy')).toMatch(/(?:^|; )sandbox(?:;|$)/);
+  });
+  it('downloads a page as an inert attachment when asked to (?download=1)', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ manifest: [{ path: 'secondary.html', mimeType: 'text/html' }] }));
+    mockDownload.mockResolvedValue(Buffer.from('<p>Second</p>'));
+    const { res, promise } = run(['u', 'scope123', 'my-slug', 'secondary.html'], { download: true });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('Content-Disposition')).toBe('attachment');
+    expect(res.getHeader('Content-Security-Policy')).toMatch(/(?:^|; )sandbox(?:;|$)/);
+    expect(res._getData().toString()).toBe('<p>Second</p>');
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store, must-revalidate');
+  });
   it('loads blessed scripts from the app and never caches isolated responses across hosts', async () => {
     mockArtifactFindOne.mockReturnValue(bundle());
     mockDownload.mockResolvedValue(Buffer.from('<script src="/static/lib/chart.js@4.x.js"></script>'));
@@ -3323,5 +3402,344 @@ describe('isolated origin and secondary document boundaries', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(res._getData()).toContain('src="https://app.bike4mind.com/static/lib/chart.js@4.x.js"');
     expect(res.getHeader('Cache-Control')).toBe('private, no-store');
+  });
+});
+
+describe('GET /api/publish/serve - multi-page bundles', () => {
+  const PAGES = [
+    { path: 'index.html', mimeType: 'text/html' },
+    { path: 'guide/intro.html', mimeType: 'text/html' },
+    { path: 'guide/figure.png', mimeType: 'image/png' },
+    { path: 'files/report.pdf', mimeType: 'application/octet-stream' },
+  ];
+  const gated = (over: Record<string, unknown> = {}) =>
+    bundle({ accessGate: { kind: 'passphrase' }, manifest: PAGES, commentPolicy: 'open', ...over });
+  const proofCookie = async () => {
+    const { signGateToken } = await import('@server/services/publish/publishGateToken');
+    return `b4m_pg_pub1=${signGateToken({ publicId: 'pub1' })}`;
+  };
+  const storage: Record<string, string> = {
+    'user/scope123/my-slug/index.html': '<html><body><a href="guide/intro.html">Guide</a></body></html>',
+    'user/scope123/my-slug/guide/intro.html':
+      '<html><head></head><body><h1>Lorem ipsum</h1><img src="figure.png">' +
+      '<a href="../index.html">Home</a> <a href="../files/report.pdf">Report</a>' +
+      '<iframe src="/login"></iframe><script src="https://cdn.example/x.js"></script></body></html>',
+    'user/scope123/my-slug/guide/figure.png': 'PNGDATA',
+    'user/scope123/my-slug/files/report.pdf': '%PDF-1.4',
+  };
+  beforeEach(() => {
+    mockDownload.mockImplementation((key: string) =>
+      key in storage ? Promise.resolve(Buffer.from(storage[key])) : Promise.reject(new Error('missing'))
+    );
+  });
+
+  it('renders a gated sub-page in the sandboxed wrapper once the bundle is unlocked', async () => {
+    mockArtifactFindOne.mockReturnValue(gated());
+    const { res, promise } = run(['u', 'scope123', 'my-slug', 'guide', 'intro.html'], { cookie: await proofCookie() });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('Content-Disposition')).toBeUndefined();
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store, must-revalidate');
+    const data = res._getData() as string;
+    expect(data).toContain(`<iframe sandbox="${VIEWER_SANDBOX}"`);
+    expect(data).toContain('Lorem ipsum');
+    // Page-relative asset inlined from the pre-fetched (credentialed) bytes.
+    expect(data).toContain(`data:image/png;base64,${Buffer.from('PNGDATA').toString('base64')}`);
+    // Page-relative links resolve against the page's directory, not the wrapper URL.
+    expect(data).toContain('href=&quot;https://app.bike4mind.com/p/u/scope123/my-slug&quot;');
+    expect(data).toContain('href=&quot;https://app.bike4mind.com/p/u/scope123/my-slug/files/report.pdf&quot;');
+    // Bundle links are routed to the parent bridge, which the wrapper carries.
+    expect(data).toContain("b4m:'navigate'");
+    expect(data).toContain('&quot;bases&quot;:[&quot;/p/u/scope123/my-slug&quot;]');
+    // What validation rejects on the index is stripped from a secondary page.
+    expect(data).not.toContain('/login');
+    expect(data).not.toContain('cdn.example');
+    // Pins belong to the index.
+    expect(data).not.toContain('b4m-annotate-root');
+    // Other pages are navigated to, never inlined.
+    expect(mockDownload).not.toHaveBeenCalledWith('user/scope123/my-slug/index.html');
+  });
+
+  it('routes the index page links into sub-pages the same way', async () => {
+    mockArtifactFindOne.mockReturnValue(gated());
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { cookie: await proofCookie() });
+    await promise;
+    const data = res._getData() as string;
+    expect(data).toContain('href=&quot;https://app.bike4mind.com/p/u/scope123/my-slug/guide/intro.html&quot;');
+    expect(data).toContain('b4m-annotate-root');
+  });
+
+  it('prompts for the passphrase on a sub-page navigated without a proof (one unlock covers the bundle)', async () => {
+    mockArtifactFindOne.mockReturnValue(gated());
+    const { res, promise } = run(['u', 'scope123', 'my-slug', 'guide', 'intro.html']);
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData() as string).toContain('passphrase-protected');
+    expect(mockDownload).not.toHaveBeenCalled();
+  });
+
+  it('still hard-fails a gated file request without a proof', async () => {
+    mockArtifactFindOne.mockReturnValue(gated());
+    const { res, promise } = run(['u', 'scope123', 'my-slug', 'files', 'report.pdf']);
+    await promise;
+    expect(res._getStatusCode()).toBe(401);
+    expect(mockDownload).not.toHaveBeenCalled();
+  });
+
+  it('downloads a gated file as an attachment with the proof cookie', async () => {
+    mockArtifactFindOne.mockReturnValue(gated());
+    const { res, promise } = run(['u', 'scope123', 'my-slug', 'files', 'report.pdf'], {
+      cookie: await proofCookie(),
+    });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('Content-Disposition')).toBe('attachment');
+    expect(res._getData().toString()).toBe('%PDF-1.4');
+  });
+
+  it('404s an unlocked sub-page that is not in the manifest', async () => {
+    mockArtifactFindOne.mockReturnValue(gated());
+    const { res, promise } = run(['u', 'scope123', 'my-slug', 'guide', 'missing.html'], {
+      cookie: await proofCookie(),
+    });
+    await promise;
+    expect(res._getStatusCode()).toBe(404);
+    expect(mockDownload).not.toHaveBeenCalled();
+  });
+
+  it('recovers a Bearer-gated sub-page through the loader shell, then renders it for ?raw=1', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ visibility: 'private', manifest: PAGES }));
+    const shell = run(['u', 'scope123', 'my-slug', 'guide', 'intro.html']);
+    await shell.promise;
+    expect(shell.res._getStatusCode()).toBe(200);
+    const shellHtml = shell.res._getData() as string;
+    expect(shellHtml).toContain("'raw=1'");
+    expect(shellHtml).toContain('__b4mFetchDownload');
+
+    mockArtifactFindOne.mockReturnValue(bundle({ visibility: 'private', manifest: PAGES }));
+    const raw = run(['u', 'scope123', 'my-slug', 'guide', 'intro.html'], { raw: true, user: { id: 'owner1' } });
+    await raw.promise;
+    expect(raw.res._getStatusCode()).toBe(200);
+    expect(raw.res.getHeader('Content-Type')).toBe('text/plain; charset=utf-8');
+    expect(raw.res._getData() as string).toContain('Lorem ipsum');
+  });
+
+  it('renders a sub-page of a share link through the same wrapper', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ manifest: PAGES, shareToken: 'tok' }));
+    const { res, promise } = run(['a', 'tok', 'guide', 'intro.html']);
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    expect(data).toContain(`<iframe sandbox="${VIEWER_SANDBOX}"`);
+    expect(data).toContain('Lorem ipsum');
+    expect(data).toContain('<base href=&quot;https://app.bike4mind.com/a/tok/guide/&quot;>');
+    expect(res.getHeader('Referrer-Policy')).toBe('no-referrer');
+  });
+});
+
+describe('GET /api/publish/serve - signed file delivery', () => {
+  const BUCKET = 'https://bundles-bucket.s3.us-east-2.amazonaws.com';
+  const FILES = [
+    { path: 'index.html', mimeType: 'text/html' },
+    { path: 'player.html', mimeType: 'text/html' },
+    { path: 'media/clip.mp4', mimeType: 'video/mp4' },
+    { path: 'media/still.jpg', mimeType: 'image/jpeg' },
+    { path: 'files/deck.pdf', mimeType: 'application/pdf' },
+    { path: 'files/evil.pdf', mimeType: 'text/html' },
+    { path: 'files/drawing.svg', mimeType: 'image/svg+xml' },
+    { path: 'style.css', mimeType: 'text/css' },
+  ];
+  const storage: Record<string, string> = {
+    'user/scope123/my-slug/index.html':
+      '<html><body><h1>Index</h1><a href="player.html">Watch</a><a href="files/deck.pdf">Deck</a></body></html>',
+    'user/scope123/my-slug/player.html':
+      '<html><body><video controls src="media/clip.mp4" poster="media/still.jpg"></video>' +
+      '<a href="index.html">Back</a></body></html>',
+    'user/scope123/my-slug/media/still.jpg': 'JPEG',
+    'user/scope123/my-slug/style.css': 'body{}',
+    'user/scope123/my-slug/files/drawing.svg': '<svg/>',
+  };
+  const gated = (over: Record<string, unknown> = {}) =>
+    bundle({ accessGate: { kind: 'passphrase' }, manifest: FILES, ...over });
+  const proofCookie = async () => {
+    const { signGateToken } = await import('@server/services/publish/publishGateToken');
+    return `b4m_pg_pub1=${signGateToken({ publicId: 'pub1' })}`;
+  };
+  const signedKey = (url: string) => new URL(url).pathname.slice(1);
+
+  beforeEach(() => {
+    signing.enabled = true;
+    mockGetSignedUrl
+      .mockReset()
+      .mockImplementation((key: string) => Promise.resolve(`${BUCKET}/${key}?X-Amz-Signature=sig`));
+    mockDownload.mockImplementation((key: string) =>
+      key in storage ? Promise.resolve(Buffer.from(storage[key])) : Promise.reject(new Error('missing'))
+    );
+  });
+  afterEach(() => {
+    signing.enabled = false;
+  });
+
+  it('pins the signed Content-Type from the extension: a renamed page opens as a PDF, never as HTML', async () => {
+    mockArtifactFindOne.mockReturnValue(gated());
+    const { res, promise } = run(['u', 'scope123', 'my-slug', 'files', 'evil.pdf'], {
+      cookie: await proofCookie(),
+      fetchDest: 'document',
+    });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(302);
+    const location = res.getHeader('Location') as string;
+    expect(new URL(location).origin).toBe(BUCKET);
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
+    expect(mockGetSignedUrl).toHaveBeenCalledWith('user/scope123/my-slug/files/evil.pdf', 'get', {
+      audience: 'browser',
+      expiresIn: 7200,
+      ResponseContentType: 'application/pdf',
+      ResponseContentDisposition: `inline; filename="evil.pdf"; filename*=UTF-8''evil.pdf`,
+    });
+    // No bytes went through this route.
+    expect(mockDownload).not.toHaveBeenCalled();
+  });
+
+  it('signs ?download=1 as an opaque attachment', async () => {
+    mockArtifactFindOne.mockReturnValue(gated());
+    const { res, promise } = run(['u', 'scope123', 'my-slug', 'files', 'deck.pdf'], {
+      cookie: await proofCookie(),
+      download: true,
+    });
+    await promise;
+    expect(res._getStatusCode()).toBe(302);
+    expect(mockGetSignedUrl).toHaveBeenCalledWith(
+      'user/scope123/my-slug/files/deck.pdf',
+      'get',
+      expect.objectContaining({
+        ResponseContentType: 'application/octet-stream',
+        ResponseContentDisposition: `attachment; filename="deck.pdf"; filename*=UTF-8''deck.pdf`,
+      })
+    );
+  });
+
+  it('never signs an off-allowlist type inline, even on a top-level navigation', async () => {
+    mockArtifactFindOne.mockReturnValue(gated());
+    const { res, promise } = run(['u', 'scope123', 'my-slug', 'files', 'drawing.svg'], {
+      cookie: await proofCookie(),
+      fetchDest: 'document',
+    });
+    await promise;
+    expect(res._getStatusCode()).toBe(302);
+    expect(mockGetSignedUrl).toHaveBeenCalledWith(
+      'user/scope123/my-slug/files/drawing.svg',
+      'get',
+      expect.objectContaining({ ResponseContentType: 'application/octet-stream' })
+    );
+  });
+
+  it('redirects video for a public bundle element request, but keeps subresources like CSS buffered', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ manifest: FILES }));
+    const video = run(['u', 'scope123', 'my-slug', 'media', 'clip.mp4'], { fetchDest: 'video' });
+    await video.promise;
+    expect(video.res._getStatusCode()).toBe(302);
+    expect(signedKey(video.res.getHeader('Location') as string)).toBe('user/scope123/my-slug/media/clip.mp4');
+
+    mockArtifactFindOne.mockReturnValue(bundle({ manifest: FILES }));
+    const css = run(['u', 'scope123', 'my-slug', 'style.css'], { fetchDest: 'style' });
+    await css.promise;
+    expect(css.res._getStatusCode()).toBe(200);
+    expect(css.res._getData().toString()).toBe('body{}');
+  });
+
+  it.each([
+    ['the app host', 'https://app.bike4mind.com'],
+    ['an artifact usercontent host', 'https://pub1.usercontent.app.bike4mind.com'],
+  ])('refuses to hand out signed links on %s and falls back to the buffered path', async (_label, origin) => {
+    mockGetSignedUrl.mockImplementation((key: string) => Promise.resolve(`${origin}/${key}?X-Amz-Signature=sig`));
+    mockArtifactFindOne.mockReturnValue(bundle({ manifest: FILES }));
+    const { res, promise } = run(['u', 'scope123', 'my-slug', 'media', 'still.jpg'], { fetchDest: 'document' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('Content-Disposition')).toBe('attachment');
+    expect(res.getHeader('Location')).toBeUndefined();
+  });
+
+  it('answers the loader shell ?sign=1 request with a signed link once the gate passes', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ visibility: 'private', manifest: FILES }));
+    const denied = run(['u', 'scope123', 'my-slug', 'files', 'deck.pdf'], { sign: true });
+    await denied.promise;
+    expect(denied.res._getStatusCode()).toBe(401);
+    expect(mockGetSignedUrl).not.toHaveBeenCalled();
+
+    mockArtifactFindOne.mockReturnValue(bundle({ visibility: 'private', manifest: FILES }));
+    const ok = run(['u', 'scope123', 'my-slug', 'files', 'deck.pdf'], { sign: true, user: { id: 'owner1' } });
+    await ok.promise;
+    expect(ok.res._getStatusCode()).toBe(200);
+    expect(signedKey((ok.res._getJSONData() as { url: string }).url)).toBe('user/scope123/my-slug/files/deck.pdf');
+  });
+
+  it('walks the gated package journey on one unlock: index, player page with signed video, PDF, back', async () => {
+    // 1. First visit: one passphrase prompt.
+    mockArtifactFindOne.mockReturnValue(gated());
+    const prompt = run(['u', 'scope123', 'my-slug']);
+    await prompt.promise;
+    expect(prompt.res._getData() as string).toContain('passphrase-protected');
+
+    // The one proof cookie the gate sets is the only credential used from here on.
+    const cookie = await proofCookie();
+
+    // 2. Index renders; its player link points at the bundle's own player page.
+    mockArtifactFindOne.mockReturnValue(gated());
+    const index = run(['u', 'scope123', 'my-slug'], { cookie, fetchDest: 'document' });
+    await index.promise;
+    const indexHtml = index.res._getData() as string;
+    expect(indexHtml).not.toContain('passphrase-protected');
+    expect(indexHtml).toContain('href=&quot;https://app.bike4mind.com/p/u/scope123/my-slug/player.html&quot;');
+
+    // 3. Player page: no second prompt, the video and poster point at signed storage URLs, and
+    //    the wrapper CSP (which the srcdoc inherits) admits exactly that storage origin.
+    mockArtifactFindOne.mockReturnValue(gated());
+    const player = run(['u', 'scope123', 'my-slug', 'player.html'], { cookie, fetchDest: 'document' });
+    await player.promise;
+    expect(player.res._getStatusCode()).toBe(200);
+    const playerHtml = player.res._getData() as string;
+    expect(playerHtml).not.toContain('passphrase-protected');
+    expect(playerHtml).toContain(`src=&quot;${BUCKET}/user/scope123/my-slug/media/clip.mp4?X-Amz-Signature=sig&quot;`);
+    expect(playerHtml).toContain('poster=&quot;data:image/jpeg;base64,');
+    const csp = player.res.getHeader('Content-Security-Policy') as string;
+    expect(csp).toMatch(new RegExp(`media-src [^;]*${BUCKET.replace(/\./g, '\\.')}`));
+    expect(mockDownload).not.toHaveBeenCalledWith('user/scope123/my-slug/media/clip.mp4');
+
+    // 4. The deck opens in the browser's own viewer from storage, inline.
+    mockArtifactFindOne.mockReturnValue(gated());
+    const deck = run(['u', 'scope123', 'my-slug', 'files', 'deck.pdf'], { cookie, fetchDest: 'document' });
+    await deck.promise;
+    expect(deck.res._getStatusCode()).toBe(302);
+    expect(signedKey(deck.res.getHeader('Location') as string)).toBe('user/scope123/my-slug/files/deck.pdf');
+    expect(mockGetSignedUrl).toHaveBeenCalledWith(
+      'user/scope123/my-slug/files/deck.pdf',
+      'get',
+      expect.objectContaining({ ResponseContentType: 'application/pdf' })
+    );
+
+    // 5. Back to the index: same cookie, renders again, no prompt.
+    mockArtifactFindOne.mockReturnValue(gated());
+    const back = run(['u', 'scope123', 'my-slug'], { cookie, fetchDest: 'document' });
+    await back.promise;
+    expect(back.res._getStatusCode()).toBe(200);
+    expect(back.res._getData() as string).toContain('Index');
+    expect(back.res._getData() as string).not.toContain('passphrase-protected');
+  });
+});
+
+describe('GET /api/publish/serve - buffered binary bodies', () => {
+  it('sends a type the edge adapter would text-convert as octet-stream, byte-exact', async () => {
+    const bytes = Buffer.from([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0xff, 0xfe, 0x80]);
+    mockArtifactFindOne.mockReturnValue(bundle({ manifest: [{ path: 'clip.mp4', mimeType: 'video/mp4' }] }));
+    mockDownload.mockResolvedValue(bytes);
+    const { res, promise } = run(['u', 'scope123', 'my-slug', 'clip.mp4']);
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('Content-Type')).toBe('application/octet-stream');
+    expect(Buffer.compare(res._getData() as Buffer, bytes)).toBe(0);
   });
 });

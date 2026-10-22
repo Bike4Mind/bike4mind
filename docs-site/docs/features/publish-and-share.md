@@ -98,5 +98,13 @@ display name or username does not select a publishing namespace.
 - If a user-scoped upload returns 403, check that `scopeId` is your user ID.
 - After too many incorrect passphrase attempts, wait for the retry interval before
   trying again. The limit applies to your IP address for that artifact.
-- A file in a published bundle downloads when opened directly as an asset URL.
-  Open the published page's main link to view the artifact.
+- A bundle can hold several pages. Any other `.html` file in it opens at its own URL
+  (for example `/p/u/{scopeId}/{slug}/guide/intro.html`) in the same protected viewer as
+  the main page, and one passphrase unlock covers every page in the bundle. Link pages
+  to each other with relative links such as `guide/intro.html` or `../index.html`.
+- PDFs, MP4/WebM video, audio and common image formats in a bundle open in the browser
+  when linked, and `<video>`/`<audio>` elements play with seeking, including on
+  passphrase-protected pages. They are delivered from file storage through short-lived
+  links issued after the access check. Use MP4 rather than HLS for video.
+- Other files (archives, SVG, data files) download when opened. Add `?download=1` to any
+  file's URL, a page's included, to download it instead of viewing it.

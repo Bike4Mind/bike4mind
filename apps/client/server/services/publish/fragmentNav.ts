@@ -26,10 +26,22 @@
  *     is a known gap there). Forwards location.hash into the iframe and mirrors
  *     in-bundle jumps back via history.replaceState (fragment-only, validated).
  *
+ * Same-bundle links (another page of a multi-page bundle, or a file in it) get the same
+ * treatment for the same reason: navigating the sandboxed frame drops the proof cookie,
+ * and a download started inside the sandbox is blocked (no `allow-downloads`). When
+ * `bundleBases` is set, FRAGMENT_NAV hands such a click to the parent instead:
+ *       iframe -> parent : { b4m: 'navigate', path: '/p/.../page.html#x' }
+ * and the parent navigates its OWN top-level browsing context there. The parent accepts
+ * only a path under the bundle it is itself showing (derived from its own location),
+ * so a bundle can never steer the viewer anywhere else. A `target=_blank` link to a page
+ * is left to the browser: the sandbox lets it open as an escaped top-level tab, which
+ * carries the SameSite=Lax proof cookie. Files are always routed, whatever their target,
+ * because a download started from the sandbox is blocked even in an escaped popup.
+ *
  * Both scripts run on the opaque origin / app origin respectively and exchange only
- * the fragment string. Message types must stay disjoint from the pin bridge's
- * ('pinmode'/'pins'/'scrollto'/'ready'/'pin-dropped'/'pin-activate') - both sides
- * ignore unknown types. Neither script may contain a literal `</script>`.
+ * the fragment string or a same-bundle path. Message types must stay disjoint from the
+ * pin bridge's ('pinmode'/'pins'/'scrollto'/'ready'/'pin-dropped'/'pin-activate') - both
+ * sides ignore unknown types. Neither script may contain a literal `</script>`.
  */
 
 export interface FragmentNavConfig {
@@ -37,6 +49,11 @@ export interface FragmentNavConfig {
   origins: string[];
   /** URL paths that identify this page (canonical /p path, /a/<token>, /uc alias). */
   paths: string[];
+  /**
+   * URL paths of the bundle root(s) whose other pages and files should be navigated at
+   * top level via the parent. Empty disables routing (isolated origin, no parent bridge).
+   */
+  bundleBases?: string[];
 }
 
 const FRAGMENT_NAV_JS = String.raw`(function(){
@@ -63,12 +80,21 @@ const FRAGMENT_NAV_JS = String.raw`(function(){
     else{
       var u;try{u=new URL(String(a.href));}catch(err){return;}
       if(CFG.origins.indexOf(u.origin)===-1){return;}
-      if(CFG.paths.indexOf(norm(u.pathname))===-1){return;}
+      var p=norm(u.pathname);
+      if(CFG.paths.indexOf(p)===-1){
+        if(!inBundle(p)){return;}
+        var page=CFG.bases.indexOf(p)!==-1||/\.html?$/i.test(p);
+        if(page&&(a.getAttribute('target')||'').toLowerCase()==='_blank'){return;}
+        e.preventDefault();
+        try{window.parent.postMessage({b4m:'navigate',path:p+u.hash},'*');}catch(err){}
+        return;
+      }
       hash=u.hash;
     }
     e.preventDefault();
     jump(hash,true);
   });
+  function inBundle(p){for(var i=0;i<CFG.bases.length;i++){if(p===CFG.bases[i]||p.indexOf(CFG.bases[i]+'/')===0){return true;}}return false;}
   window.addEventListener('message',function(e){
     if(e.source!==window.parent){return;}
     var d=e.data||{};
@@ -85,6 +111,7 @@ export function buildFragmentNavScriptTag(config: FragmentNavConfig): string {
   const cfg = {
     origins: [...new Set(config.origins.filter(Boolean))],
     paths: [...new Set(config.paths.filter(Boolean).map(p => (p.length > 1 ? p.replace(/\/+$/, '') : p)))],
+    bases: [...new Set((config.bundleBases ?? []).filter(Boolean).map(p => p.replace(/\/+$/, '')))],
   };
   const json = JSON.stringify(cfg).replace(/</g, '\\u003c');
   return `<script>${FRAGMENT_NAV_JS.replace('__B4M_FRAGMENT_CFG__', json)}</script>`;
@@ -96,6 +123,14 @@ export function buildFragmentNavScriptTag(config: FragmentNavConfig): string {
  * injection) and on hashchange; accepts fragment updates back and mirrors them into
  * the address bar. Incoming hashes are fragment-only by construction (regex-gated
  * `#...` or empty), so replaceState can never change path or query.
+ *
+ * Also answers `navigate` (see the file header): the path must be the bundle root this
+ * page itself is showing or sit under it, with no query, no empty/dot segments and no
+ * percent-encoded dots, so the only places a bundle can send the viewer are its own pages
+ * and files. Files go through `window.__b4mFetchDownload` when a host page defines one
+ * (the loader shell, whose viewer authorizes by Bearer and so cannot download by plain
+ * navigation); otherwise a top-level navigation to the file's attachment response
+ * downloads it without leaving the page.
  */
 export const HASH_BRIDGE_JS = String.raw`(function(){
   var frame=document.querySelector('iframe');
@@ -103,9 +138,25 @@ export const HASH_BRIDGE_JS = String.raw`(function(){
   function send(){try{frame.contentWindow.postMessage({b4m:'hash',hash:location.hash||''},'*');}catch(e){}}
   frame.addEventListener('load',send);
   window.addEventListener('hashchange',send);
+  var base=(/^\/(?:p\/(?:u|pj|o)\/[^/]+\/[^/]+|a\/[^/]+)(?=\/|$)/.exec(location.pathname)||[''])[0];
+  function navigate(path){
+    if(typeof path!=='string'||!base||path.length>2048){return;}
+    var m=/^(\/[^?#\s\\]*)(#\S{0,512})?$/.exec(path);
+    if(!m){return;}
+    var page=m[1]===base;
+    if(!page){
+      if(m[1].indexOf(base+'/')!==0){return;}
+      var segs=m[1].slice(base.length+1).split('/');
+      for(var i=0;i<segs.length;i++){if(segs[i]===''||segs[i]==='.'||segs[i]==='..'||/^%2e/i.test(segs[i])){return;}}
+      page=/\.html?$/i.test(m[1]);
+    }
+    if(!page&&typeof window.__b4mFetchDownload==='function'){window.__b4mFetchDownload(m[1]);return;}
+    location.assign(path);
+  }
   window.addEventListener('message',function(e){
     if(e.source!==frame.contentWindow){return;}
     var d=e.data||{};
+    if(d.b4m==='navigate'){navigate(d.path);return;}
     if(d.b4m!=='fragment'||typeof d.hash!=='string'){return;}
     if(d.hash!==''&&!/^#\S{1,512}$/.test(d.hash)){return;}
     try{history.replaceState(null,'',location.pathname+location.search+d.hash);}catch(err){}
