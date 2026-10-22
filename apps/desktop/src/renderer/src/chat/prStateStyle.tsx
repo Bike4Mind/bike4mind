@@ -19,6 +19,7 @@ export type ThemeMode = 'light' | 'dark';
 export const PR_STATE_LABEL: Record<PrDisplayState, string> = {
   open: 'Open',
   draft: 'Draft',
+  queued: 'Queued to merge',
   merged: 'Merged',
   closed: 'Closed',
 };
@@ -30,6 +31,8 @@ export function prStateColor(state: PrDisplayState, mode: ThemeMode): string {
       return 'success.plainColor';
     case 'draft':
       return 'text.tertiary';
+    case 'queued':
+      return 'warning.plainColor';
     case 'merged':
       return MERGED_COLOR[mode];
     case 'closed':
@@ -45,6 +48,7 @@ export function prStateOpacity(state: PrDisplayState): number {
 const ICONS: Record<PrDisplayState, typeof PullRequestIcon> = {
   open: PullRequestIcon,
   draft: PullRequestIcon,
+  queued: PullRequestIcon,
   merged: MergedIcon,
   closed: PullRequestClosedIcon,
 };
