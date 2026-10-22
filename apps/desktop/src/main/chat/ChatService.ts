@@ -3970,6 +3970,7 @@ export class ChatService {
     // enough reason to skip asking. The gate refuses to record one for these either.
     const standingAnswer = (): ChatApprovalAnswer | null => {
       if (prompt.irreversible || stuck || askedByRule) return null;
+      const currentlyTainted = mode === 'auto' && sendsOut(call.name) && !prompt.contained && !!directories.untrusted;
       const standing = gate.isStanding(
         sessionId,
         prompt.key,
@@ -3977,14 +3978,14 @@ export class ChatService {
       );
       // Over a tainted reply only an answer given knowing about the taint, or one for a tool
       // whose "always" already accepted whatever the content could steer it to, still stands.
-      if (standing && (!tainted || standing.overTaint || alwaysOverridesTaint(call.name))) {
+      if (standing && (!currentlyTainted || standing.overTaint || alwaysOverridesTaint(call.name))) {
         return {
           decision: 'once',
           ...(standing.optionId ? { optionId: standing.optionId } : {}),
           ...(standing.value === undefined ? {} : { value: standing.value }),
         };
       }
-      if (tainted) return null;
+      if (currentlyTainted) return null;
 
       // A shell command whose every sub-command was allowed before, by prefix, runs - but not
       // past a directory outside the project that the user has not allowed too.
@@ -4051,13 +4052,21 @@ export class ChatService {
         tainted: !!tainted,
         // Another card's "always", or a rule saved from it, may cover this one while it waits.
         recheck: async () => {
-          if (prompt.irreversible || stuck || askedByRule) return null;
-          const fresh = await this.deps.permissions?.rulesFor(permissionScope);
-          const decision = fresh?.size ? fresh.evaluate(subject).decision : null;
-          if (decision === 'deny') return { decision: 'deny' };
-          if (decision === 'ask') return null;
-          if (decision === 'allow') return { decision: 'once', ...(runnable[0] ? { optionId: runnable[0].id } : {}) };
-          return standingAnswer();
+          try {
+            const fresh = await this.deps.permissions?.rulesFor(permissionScope);
+            // Rules may have appeared since this card opened, and a symlink may have changed.
+            const currentSubject = fresh?.size
+              ? await resolveSubject(permissionSubject(call, gatedPrompt, context))
+              : subject;
+            const decision = fresh?.size ? fresh.evaluate(currentSubject).decision : null;
+            if (decision === 'deny') return { decision: 'deny' };
+            if (prompt.irreversible || stuck || askedByRule || decision === 'ask') return null;
+            if (decision === 'allow') return { decision: 'once', ...(runnable[0] ? { optionId: runnable[0].id } : {}) };
+            return standingAnswer();
+          } catch (error) {
+            this.deps.logger.warn(`PERMISSIONS: could not recheck ${call.name}: ${String(error)}`);
+            return null;
+          }
         },
         ...(prompt.always ? { always: prompt.always } : {}),
         // Only the options that RUN the call may become standing. The card offers no "always"
