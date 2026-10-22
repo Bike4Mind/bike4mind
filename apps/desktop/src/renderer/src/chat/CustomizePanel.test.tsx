@@ -159,14 +159,14 @@ describe('the Customize screen', () => {
     expect(single[0]?.querySelector('[data-testid="skills-group-toggle-btn"]')).toBeNull();
 
     const groups = allByTestId('skill-group');
-    expect(text(groups[0])).toContain('synced');
-    expect(text(groups[0])).toContain('/pdf');
-    expect(text(groups[0])).toContain('/docx');
+    expect(text(groups[0])).toContain('Bike4Mind skills');
+    expect(text(groups[0])).toContain('No Bike4Mind account skills loaded.');
+    expect(text(groups[1])).toContain('synced');
+    expect(text(groups[1])).toContain('/pdf');
+    expect(text(groups[1])).toContain('/docx');
     expect(text(container)).not.toContain('Project skills');
     expect(text(container)).not.toContain('/my-review');
     expect(text(container)).not.toContain('/legacy-command');
-    expect(text(groups[1])).toContain('Bike4Mind skills');
-    expect(text(groups[1])).toContain('No Bike4Mind account skills loaded.');
   });
 
   it('shows an explicit empty state for either skill group', () => {

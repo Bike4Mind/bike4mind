@@ -344,6 +344,16 @@ function SkillsSettings({
         startDecorator={<SearchIcon />}
         slotProps={{ input: { 'data-testid': 'skills-filter-input', 'aria-label': 'Filter skills' } }}
       />
+      {shownAccountGroup && (
+        <SkillGroup
+          group={shownAccountGroup}
+          open={isOpen(ACCOUNT_GROUP_KEY)}
+          onToggle={toggle}
+          empty="No Bike4Mind account skills loaded."
+          imports={imports}
+          onOpenListing={onOpenSkillMarket}
+        />
+      )}
       <Box component="section" data-testid="user-skill-scopes">
         <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
           <Typography level="title-md">Your skills</Typography>
@@ -389,16 +399,6 @@ function SkillsSettings({
           </Stack>
         )}
       </Box>
-      {shownAccountGroup && (
-        <SkillGroup
-          group={shownAccountGroup}
-          open={isOpen(ACCOUNT_GROUP_KEY)}
-          onToggle={toggle}
-          empty="No Bike4Mind account skills loaded."
-          imports={imports}
-          onOpenListing={onOpenSkillMarket}
-        />
-      )}
       {upload.error && (
         <Alert color="danger" data-testid="skill-upload-pick-error">
           {upload.error}
