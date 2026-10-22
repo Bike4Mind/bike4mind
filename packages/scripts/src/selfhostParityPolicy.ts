@@ -747,6 +747,10 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     ['bedrock:GetFoundationModelAvailability', 'bedrock:ListFoundationModels', 'cloudwatch:PutMetricData']
   ),
   gap(
+    'schedule:infra/cron.ts:dataLakeVectorIndexKeepWarm',
+    '334ddb7c057c098282a9ce350f7376b584a67c7a7787c180a9fbbe8e12229b2c'
+  ),
+  gap(
     'schedule:infra/cron.ts:modelDiscoveryStalenessCron',
     '8f17755858a749f29b24d3ddfdb46fd237d5f89769b8853225e077af2ad94d29',
     ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
