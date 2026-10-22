@@ -1,4 +1,4 @@
-import { hearthRepository, MAX_ROSTER_ROWS } from '@bike4mind/database';
+import { hearthRepository, MAX_ROSTER_ROWS, PRESENCE_STALE_AFTER_MS } from '@bike4mind/database';
 import { ApiKeyScope, NotFoundError, UnauthorizedError } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
@@ -11,16 +11,6 @@ import { z } from 'zod';
 const GetPresenceSchema = z.object({
   channelId: z.string().min(1),
 });
-
-/**
- * Liveness hint, not a filter: the roster does not drop stale rows, and lets the
- * client decide how to render an actor nobody has heard from lately (rows are
- * capped for cost, but never filtered by age). The server cannot
- * know the answer - a session idle for ten minutes is dead to a dashboard and
- * perfectly normal to an agent that reports on a heartbeat - so the row keeps
- * its raw lastSeen and this is the shared default for "probably not live".
- */
-const PRESENCE_STALE_AFTER_MS = 5 * 60 * 1000;
 
 /**
  * Matches the catchup read budget. This was the one hearth route with no limit

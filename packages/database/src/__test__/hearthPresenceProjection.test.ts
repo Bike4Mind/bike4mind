@@ -207,6 +207,44 @@ describe('Hearth presence projection', () => {
     expect(roster.map(r => r.state)).toEqual(['awaiting_permission', 'awaiting_input', 'running', 'idle']);
   });
 
+  it('ranks a stale awaiting_permission row below fresh rows', async () => {
+    const channel = await hearthRepository.createChannel(USER, 'general');
+    const channelId = channel._id.toString();
+    const [expired, live] = (
+      await Promise.all(['expired', 'live'].map(n => hearthRepository.ensureActor(USER, 'agent', n)))
+    ).map(a => a._id.toString());
+    const now = new Date('2026-07-27T10:20:00Z');
+
+    await hearthRepository.upsertPresence(
+      presence(channelId, expired, new Date(now.getTime() - 16 * 60_000), 'permission_prompt')
+    );
+    await hearthRepository.upsertPresence(presence(channelId, live, new Date(now.getTime() - 30_000), 'tool_use'));
+
+    const roster = await hearthRepository.presenceForChannel(USER, channelId, { now });
+    expect(roster.map(r => r.actorId.toString())).toEqual([live, expired]);
+    expect(roster.map(r => r.state)).toEqual(['running', 'awaiting_permission']);
+    expect(roster[0]).not.toHaveProperty('isStale');
+  });
+
+  it('keeps state ranking among stale rows', async () => {
+    const channel = await hearthRepository.createChannel(USER, 'general');
+    const channelId = channel._id.toString();
+    const [idle, blocked] = (
+      await Promise.all(['idle', 'blocked'].map(n => hearthRepository.ensureActor(USER, 'agent', n)))
+    ).map(a => a._id.toString());
+    const now = new Date('2026-07-27T10:20:00Z');
+
+    await hearthRepository.upsertPresence(
+      presence(channelId, idle, new Date(now.getTime() - 20 * 60_000), 'turn_finished')
+    );
+    await hearthRepository.upsertPresence(
+      presence(channelId, blocked, new Date(now.getTime() - 30 * 60_000), 'permission_prompt')
+    );
+
+    const roster = await hearthRepository.presenceForChannel(USER, channelId, { now });
+    expect(roster.map(r => r.actorId.toString())).toEqual([blocked, idle]);
+  });
+
   it('scopes the roster to the owning user', async () => {
     const { channelId, actorId } = await setup();
     await hearthRepository.upsertPresence(presence(channelId, actorId, new Date(), 'tool_use'));

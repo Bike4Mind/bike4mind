@@ -20,6 +20,13 @@ import { CcAgentStatus, type ICcAgentStatus } from '@bike4mind/common';
 export type HearthPresenceState = ICcAgentStatus;
 
 /**
+ * A row not heard from for this long is "probably not live". Shared by the
+ * roster sort (stale rows rank below fresh ones) and the presence route, which
+ * publishes it to clients. The roster still never filters by age.
+ */
+export const PRESENCE_STALE_AFTER_MS = 5 * 60 * 1000;
+
+/**
  * Read order for the roster: most-blocking first. Permission blocks outrank
  * questions because a permission prompt halts execution outright, and they are
  * the dominant blocked state in practice. Exported because the sort runs in the

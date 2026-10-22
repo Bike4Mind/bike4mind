@@ -99,6 +99,7 @@ vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'wss://test
 vi.mock('@bike4mind/database', () => ({
   MAX_PRESENCE_FIELD_LENGTH: 200,
   MAX_ROSTER_ROWS: 200,
+  PRESENCE_STALE_AFTER_MS: 5 * 60 * 1000,
   hearthRepository: {
     store: storeMock,
     getOwnedChannel: getOwnedChannelMock,
