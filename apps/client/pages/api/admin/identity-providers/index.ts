@@ -1,7 +1,8 @@
 import { identityProviderRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, identityProviderListResponseSchema, identityProviderResponseSchema } from '@bike4mind/common';
+import { respond } from '@server/utils/respond';
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .get(async (req, res) => {
@@ -13,7 +14,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       // Presence flags, not values: the UI needs to distinguish a configured credential
       // from a blank one, and the secrets themselves must never reach a response.
       const idps = await identityProviderRepository.findAllWithSecretPresence();
-      return res.json(idps);
+      return respond(res, identityProviderListResponseSchema, idps);
     } catch (error) {
       console.error('Error fetching identity providers:', error);
       return res.status(500).json({ error: 'Failed to fetch identity providers' });
@@ -55,7 +56,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         createdBy: req.user!.id,
       });
 
-      return res.status(201).json(newIdp);
+      return respond(res, identityProviderResponseSchema, newIdp, 201);
     } catch (error) {
       console.error('Error creating identity provider:', error);
       if (error instanceof BadRequestError) {

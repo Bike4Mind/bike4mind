@@ -411,7 +411,7 @@ export function occupancyArc(percent: number): number {
  * that to "0%" renders a measured context identically to no context at all - the same
  * something-shown-as-nothing this file avoids everywhere else.
  */
-function formatOccupancy(percent: number, tokens: number): string {
+export function formatOccupancy(percent: number, tokens: number): string {
   if (percent === 0 && tokens > 0) return '<1%';
   return `${percent}%`;
 }
@@ -450,7 +450,7 @@ export function formatCredits(balance: number): string {
  * When the conversation will compact itself, and the model's own window where the cap hides it,
  * so nobody has to work out from "/ 400k" why a 1M model stops short of 1M.
  */
-function describeCompaction(limit: number, modelWindow: number | null): string {
+export function describeCompaction(limit: number, modelWindow: number | null): string {
   const at = `Compacts automatically at ${formatTokens(autoCompactThreshold(limit))}`;
   return modelWindow !== null && modelWindow > limit
     ? `${at} - the model's own window is ${formatTokens(modelWindow)}`

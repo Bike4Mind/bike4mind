@@ -260,6 +260,49 @@ export interface ChatToolCall {
    * same bytes or the prompt cache is lost from this point on. `preview` stays for the thread.
    */
   cleared?: true;
+  /**
+   * Who or what decided whether this call could run, set on every call that went through the
+   * approval gate and absent on one that never needed approval. Absent on older sessions too.
+   */
+  approval?: ChatToolApproval;
+}
+
+/** Why a call settled without anyone deciding it: the card was closed out from under it. */
+export type ChatApprovalSystemReason = 'stopped' | 'conversation-deleted' | 'app-quit' | 'moved-on' | 'error';
+
+/**
+ * Who decided a gated call. Only `user` means a person clicked the card for THIS call; every
+ * other kind ran or refused it on their behalf, which is what the transcript has to be able to
+ * tell apart afterwards.
+ */
+export type ChatApprovalDecidedBy =
+  | {
+      kind: 'user';
+      answer: 'once' | 'always' | 'deny' | 'redirect';
+      /** The label of the card option picked, on a card that offered a choice. */
+      option?: string;
+      /** With answer 'always': the derived rules were also saved for every session. */
+      everywhere?: true;
+    }
+  /** A saved permission rule; `source` names where it lives (desktop or Claude Code settings). */
+  | { kind: 'rule'; rule: string; source?: string }
+  /** An "Allow in this chat" given on an earlier card in this conversation. */
+  | { kind: 'chat-allowance' }
+  /** Let through unasked by the conversation's approval mode. */
+  | { kind: 'mode'; mode: ChatApprovalMode }
+  | { kind: 'system'; reason: ChatApprovalSystemReason; detail?: string };
+
+export interface ChatToolApproval {
+  outcome: 'allowed' | 'denied';
+  decidedBy: ChatApprovalDecidedBy;
+  /** Whether a card was shown for this call. */
+  asked: boolean;
+  /** Why the card asked when something beyond the tool itself raised it (a rule, a taint, a loop). */
+  askedBecause?: string;
+  /** ISO time the card was shown; absent when none was. */
+  requestedAt?: string;
+  /** ISO. */
+  decidedAt: string;
 }
 
 /** Sum over a sub-loop's rounds: how many requests it made and where its time went. */

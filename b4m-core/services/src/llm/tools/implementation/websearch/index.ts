@@ -1,6 +1,7 @@
 import { Logger } from '@bike4mind/observability';
-import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
+import type { ICompletionOptionTools, ToolResultValidator } from '@bike4mind/llm-adapters';
 import { ToolDefinition, ToolContext } from '../../base/types';
+import { EMPTY_RESULT_SCORE, FAILED_RESULT_SCORE } from '../../base/resultValidators';
 import { INDEXED_TOOL_CITATION_RULE, citationNumbersById } from '../../citationNumbering';
 import { GetEffectiveApiKeyAdapters } from '../../../../apiKeyService';
 import {
@@ -203,6 +204,19 @@ export const WEB_SEARCH_UNAVAILABLE_MSG =
   'Web search is temporarily unavailable: one search provider failed and the other returned nothing, ' +
   'so the web was not actually searched. Do not conclude that nothing exists for this query; ' +
   'tell the user the search could not be completed.';
+
+export const WEB_SEARCH_NO_RESULTS_MSG = 'No results found from web search.';
+
+/**
+ * Scores a search that ran but found nothing, or never ran. Prefix matches, because the
+ * image/map prompts can be appended after the base text.
+ */
+export const validateWebSearchResult: ToolResultValidator = result => {
+  if (result.startsWith(WEB_SEARCH_NOT_CONFIGURED_MSG) || result.startsWith(WEB_SEARCH_UNAVAILABLE_MSG)) {
+    return FAILED_RESULT_SCORE;
+  }
+  return result.startsWith(WEB_SEARCH_NO_RESULTS_MSG) ? EMPTY_RESULT_SCORE : undefined;
+};
 
 // A multi-entity comparison fans out to one search per entity plus a refinement or two; past this
 // the model is re-searching rather than answering, and each extra round costs a full model turn.
@@ -470,7 +484,7 @@ export async function performWebSearch(
         ? "Here's what I found from searching the web:\n"
         : providerFailed
           ? WEB_SEARCH_UNAVAILABLE_MSG
-          : 'No results found from web search.';
+          : WEB_SEARCH_NO_RESULTS_MSG;
     const formattedOutput =
       baseText +
       imageSection +
@@ -532,6 +546,7 @@ export const webSearchTool: ToolDefinition = {
 
         return formattedResults;
       },
+      validateResult: validateWebSearchResult,
       toolSchema: {
         name: 'web_search',
         description:

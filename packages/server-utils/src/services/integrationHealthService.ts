@@ -141,8 +141,12 @@ function classifyLatency(latencyMs: number): IntegrationHealthStatus {
 /**
  * Run health probes for all integrations concurrently.
  * Each probe is isolated - one failure won't block others.
+ * `emitMetrics: false` skips the CloudWatch publish for callers with no AWS (the self-host worker).
  */
-export async function runAllProbes(logger: Logger): Promise<IIntegrationHealthCheckDocument[]> {
+export async function runAllProbes(
+  logger: Logger,
+  options: { emitMetrics?: boolean } = {}
+): Promise<IIntegrationHealthCheckDocument[]> {
   const results = await Promise.allSettled(
     INTEGRATION_HEALTH_INTEGRATIONS.map(async integration => {
       const result = await probeReachability(integration);
@@ -162,7 +166,9 @@ export async function runAllProbes(logger: Logger): Promise<IIntegrationHealthCh
   // Awaited: the Lambda freezes once its handler returns, so an un-awaited PutMetricData is either
   // lost or sent on a later thaw, past its signature window ("Signature expired").
   // emitMetrics logs and swallows its own failures, so this never fails the run.
-  await publishMetrics(recorded);
+  if (options.emitMetrics !== false) {
+    await publishMetrics(recorded);
+  }
 
   return recorded;
 }
