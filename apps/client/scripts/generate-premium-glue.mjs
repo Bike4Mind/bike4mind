@@ -958,6 +958,8 @@ function generateEntitlementGrants(packages) {
 // constants/apiKeyScopes.ts. Like the grants above, the built-in rows are TypeScript this script
 // cannot load, so a collision with them is resolved by the merge in that module, not here.
 const API_KEY_SCOPE_VALUE_RE = /^[a-z0-9][a-z0-9-]*:[a-z0-9-]+$/;
+// isWellFormedApiKeyScope (@bike4mind/common) caps stored values at this length.
+const API_KEY_SCOPE_VALUE_MAX = 100;
 // Resources bound to privileged or dedicated-flow keys; a contributed scope may not join them.
 const RESERVED_API_KEY_SCOPE_RESOURCES = ['admin', 'cc-bridge', 'embed', 'datalake'];
 const API_KEY_SCOPE_FIELDS = ['value', 'label', 'description', 'endpoints', 'requiredEntitlement'];
@@ -993,6 +995,9 @@ function generateApiKeyScopes(packages) {
       const { value } = entry;
       if (typeof value !== 'string' || !API_KEY_SCOPE_VALUE_RE.test(value)) {
         fail(pkg, `value ${JSON.stringify(value)} must match ${API_KEY_SCOPE_VALUE_RE}`);
+      }
+      if (value.length > API_KEY_SCOPE_VALUE_MAX) {
+        fail(pkg, `value ${JSON.stringify(value)} must be at most ${API_KEY_SCOPE_VALUE_MAX} characters`);
       }
       if (RESERVED_API_KEY_SCOPE_RESOURCES.includes(value.slice(0, value.indexOf(':')))) {
         fail(pkg, `value ${JSON.stringify(value)} uses a reserved resource`);

@@ -85,6 +85,18 @@ describe('mergeContributedScopes', () => {
     expect(rejected).toHaveLength(5);
   });
 
+  it.each([
+    ['a reserved resource', { ...ACME_READ, value: 'datalake:export' }],
+    ['a wildcard action', { ...ACME_READ, value: 'acme:*' }],
+    ['an empty requiredEntitlement', { ...ACME_READ, requiredEntitlement: '' }],
+  ])('drops a row with %s rather than offering it', async (_label, row) => {
+    const { mergeContributedScopes } = await loadCatalog([]);
+    const rejected: string[] = [];
+    const merged = mergeContributedScopes(BUILT_IN, [row], { onReject: r => rejected.push(r) });
+    expect(merged).toEqual(BUILT_IN);
+    expect(rejected).toHaveLength(1);
+  });
+
   it('treats a non-array contribution as none', async () => {
     const { mergeContributedScopes } = await loadCatalog([]);
     expect(mergeContributedScopes(BUILT_IN, { value: 'acme:read' } as unknown as PremiumApiKeyScope[])).toEqual(

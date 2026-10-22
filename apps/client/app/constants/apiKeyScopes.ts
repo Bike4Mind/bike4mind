@@ -334,14 +334,18 @@ export interface MergeContributedScopesOptions {
   onReject?: (reason: string) => void;
 }
 
+// Same list as the codegen's RESERVED_API_KEY_SCOPE_RESOURCES (scripts/generate-premium-glue.mjs),
+// re-checked here so a hand-edited generated file cannot add a scope under them.
+const RESERVED_API_KEY_SCOPE_RESOURCES: ReadonlySet<string> = new Set(['admin', 'cc-bridge', 'embed', 'datalake']);
+
 const sameEndpoints = (a: readonly string[], b: readonly string[]) =>
   a.length === b.length && a.every((endpoint, i) => endpoint === b[i]);
 
 /**
  * `builtIn` plus the contributed rows. A contribution that repeats an existing row's label,
  * description and endpoints collapses onto it, and a built-in row keeps its own gate. Any other
- * contribution naming an existing value or a built-in scope, and any malformed row, is dropped and
- * reported through `onReject`. This runs at module load, so it never throws.
+ * contribution naming an existing value, a built-in scope or a reserved resource, and any malformed
+ * row, is dropped and reported through `onReject`. This runs at module load, so it never throws.
  */
 export function mergeContributedScopes(
   builtIn: readonly ApiKeyScopeOption[],
@@ -359,7 +363,8 @@ export function mergeContributedScopes(
       typeof row.description !== 'string' ||
       !Array.isArray(row.endpoints) ||
       !row.endpoints.every((endpoint: unknown) => typeof endpoint === 'string') ||
-      (row.requiredEntitlement !== undefined && typeof row.requiredEntitlement !== 'string')
+      (row.requiredEntitlement !== undefined &&
+        (typeof row.requiredEntitlement !== 'string' || row.requiredEntitlement === ''))
     ) {
       reject(`malformed scope row ${String(value)}`);
       continue;
@@ -378,12 +383,16 @@ export function mergeContributedScopes(
       reject(`${value} is a built-in scope`);
       continue;
     }
+    if (RESERVED_API_KEY_SCOPE_RESOURCES.has(value.slice(0, value.indexOf(':')))) {
+      reject(`${value} uses a reserved resource`);
+      continue;
+    }
     const option: ApiKeyScopeOption = {
       value,
       label: row.label,
       description: row.description,
       endpoints: [...row.endpoints],
-      ...(row.requiredEntitlement ? { requiredEntitlement: row.requiredEntitlement } : {}),
+      ...(row.requiredEntitlement !== undefined ? { requiredEntitlement: row.requiredEntitlement } : {}),
     };
     byValue.set(value, option);
     merged.push(option);

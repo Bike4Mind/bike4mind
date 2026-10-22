@@ -91,6 +91,7 @@ describe('API-key scope value predicates', () => {
     ['Acme:read'],
     ['acme:Read'],
     ['acme:read:extra'],
+    ['acme:*'],
     ['-acme:read'],
     ['acme :read'],
     ['acme:read\n'],

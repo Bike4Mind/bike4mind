@@ -174,7 +174,10 @@ export enum ApiKeyScope {
  */
 export type ApiKeyScopeValue = ApiKeyScope | (string & {});
 
-const API_KEY_SCOPE_VALUE_RE = /^[a-z0-9][a-z0-9-]*:([a-z0-9-]+|\*)$/;
+// Matches the codegen's API_KEY_SCOPE_VALUE_RE (apps/client/scripts/generate-premium-glue.mjs); only a
+// built-in scope may carry the `*` action.
+const API_KEY_SCOPE_VALUE_RE = /^[a-z0-9][a-z0-9-]*:[a-z0-9-]+$/;
+export const API_KEY_SCOPE_VALUE_MAX_LENGTH = 100;
 const BUILT_IN_API_KEY_SCOPES: ReadonlySet<string> = new Set(Object.values(ApiKeyScope));
 
 /** True for a built-in {@link ApiKeyScope} value. */
@@ -187,7 +190,8 @@ export const isBuiltInApiKeyScope = (value: unknown): value is ApiKeyScope =>
  * about whether the value is offered or authorizes anything.
  */
 export const isWellFormedApiKeyScope = (value: unknown): value is ApiKeyScopeValue =>
-  typeof value === 'string' && value.length <= 100 && API_KEY_SCOPE_VALUE_RE.test(value);
+  isBuiltInApiKeyScope(value) ||
+  (typeof value === 'string' && value.length <= API_KEY_SCOPE_VALUE_MAX_LENGTH && API_KEY_SCOPE_VALUE_RE.test(value));
 
 /**
  * Scopes bound to a single dedicated flow: bridge pairing, the embed widget,

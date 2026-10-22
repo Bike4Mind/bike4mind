@@ -112,6 +112,7 @@ describe('premium API-key scopes', () => {
     ['a value without an action', [{ ...ACME_READ, value: 'acme' }], /value "acme" must match/],
     ['an uppercase value', [{ ...ACME_READ, value: 'Acme:read' }], /must match/],
     ['a wildcard value', [{ ...ACME_READ, value: 'acme:*' }], /must match/],
+    ['an over-long value', [{ ...ACME_READ, value: `acme:${'r'.repeat(96)}` }], /at most 100 characters/],
     ['the admin resource', [{ ...ACME_READ, value: 'admin:read' }], /reserved resource/],
     ['the cc-bridge resource', [{ ...ACME_READ, value: 'cc-bridge:read' }], /reserved resource/],
     ['the embed resource', [{ ...ACME_READ, value: 'embed:read' }], /reserved resource/],

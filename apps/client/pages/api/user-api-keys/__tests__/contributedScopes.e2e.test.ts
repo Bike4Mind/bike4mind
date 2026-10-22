@@ -12,9 +12,10 @@ import { UserApiKey } from '@bike4mind/database/auth';
 
 /**
  * A contributed scope end to end: the codegen output feeds the real merged catalog, the real mint
- * route screens against it, the real createUserApiKey validates with the route's predicate, and the
- * key is saved through the real model. The request plumbing, analytics and the minting user's
- * access are stubbed.
+ * route screens against it through the real access resolver, the real createUserApiKey validates
+ * with the route's predicate, the key is saved through the real model, and the minted key is then
+ * presented to the real apiKeyAuth gate. The request plumbing, analytics and the minting user's
+ * entitlement lookup are stubbed.
  */
 
 const mockRefs = vi.hoisted(() => ({ postHandler: null as null | ((req: any, res: any) => unknown) }));
@@ -30,17 +31,10 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: () => chain };
 });
 vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe: vi.fn().mockResolvedValue(undefined) }));
-vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
-
 const scopeAccess = vi.hoisted(() => ({ entitlements: new Set<string>() }));
-vi.mock('@server/entitlements/apiKeyScopeAccess', () => ({
-  resolveApiKeyScopeAccess: vi.fn(async () => ({
-    hasOptiAccess: false,
-    hasOverwatchAccess: false,
-    hearthEnabled: false,
-    bypass: false,
-    entitlements: scopeAccess.entitlements,
-  })),
+vi.mock('@server/entitlements', () => ({
+  getUserEntitlements: vi.fn(async () => [...scopeAccess.entitlements]),
+  getRequestEntitlements: vi.fn(async () => [...scopeAccess.entitlements]),
 }));
 
 vi.mock('@client/app/premium-generated/premiumApiKeyScopes.generated', () => ({
@@ -56,6 +50,7 @@ vi.mock('@client/app/premium-generated/premiumApiKeyScopes.generated', () => ({
 }));
 
 import '@pages/api/user-api-keys/index';
+import { apiKeyAuth } from '@server/middlewares/apiKeyAuth';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -115,5 +110,40 @@ describe('contributed API-key scope, end to end', () => {
     const { req, res, userId } = post({ name: 'acme key', scopes });
     await expect(mockRefs.postHandler!(req, res)).rejects.toMatchObject({ statusCode: 422 });
     expect(await UserApiKey.countDocuments({ userId })).toBe(0);
+  });
+
+  describe('the minted key at the real apiKeyAuth gate', () => {
+    async function mintAcmeKey(): Promise<string> {
+      scopeAccess.entitlements = new Set(['acme:pro']);
+      const { req, res } = post({ name: 'acme key', scopes: ['acme:read'] });
+      await mockRefs.postHandler!(req, res);
+      expect(res._getStatusCode()).toBe(201);
+      return res._getJSONData().key;
+    }
+
+    function present(key: string) {
+      const { req, res } = createMocks({ method: 'GET', url: '/api/acme', headers: { 'x-api-key': key } });
+      (req as any).logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+      return { req, res, next: vi.fn() };
+    }
+
+    // The key's owner has no User row here, so a key that clears the scope gate stops at the
+    // owner lookup that follows it; a scope miss stops before that lookup with a 403.
+    it('clears the scope gate on a route requiring the contributed scope', async () => {
+      const { req, res, next } = present(await mintAcmeKey());
+      await expect(apiKeyAuth(['acme:read'])(req as any, res as any, next)).rejects.toMatchObject({
+        statusCode: 401,
+        message: 'User not found or banned',
+      });
+    });
+
+    it('is refused by the scope gate on a route requiring a different scope', async () => {
+      const { req, res, next } = present(await mintAcmeKey());
+      await expect(apiKeyAuth(['notebooks:read'])(req as any, res as any, next)).rejects.toMatchObject({
+        statusCode: 403,
+        message: 'Insufficient API key permissions',
+      });
+      expect(next).not.toHaveBeenCalled();
+    });
   });
 });
