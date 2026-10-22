@@ -4249,7 +4249,9 @@
             "default": 2
           },
           "prompt_upsampling": {
-            "type": "boolean"
+            "type": "boolean",
+            "default": false,
+            "description": "Let the provider rewrite and expand the prompt before rendering. Applies to Black Forest Labs (FLUX) models only; other models ignore it. Defaults to false."
           },
           "seed": {
             "type": [
