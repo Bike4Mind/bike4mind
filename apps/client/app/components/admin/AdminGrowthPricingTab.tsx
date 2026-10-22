@@ -1,9 +1,27 @@
 import { useMemo } from 'react';
-import { Alert, Card, CardContent, Divider, LinearProgress, Stack, Typography } from '@mui/joy';
+import { Alert, Card, CardContent, Divider, LinearProgress, Link, Stack, Typography } from '@mui/joy';
 import WarningIcon from '@mui/icons-material/Warning';
-import { resolveTeamPlanSettings, settingsMap, type SettingKey } from '@bike4mind/common';
+import OpenInNewIcon from '@mui/icons-material/OpenInNew';
+import { useNavigate } from '@tanstack/react-router';
+import {
+  API_SERVICE_GROUPS,
+  resolveTeamPlanSettings,
+  SETTING_TABS,
+  settingsMap,
+  type SettingKey,
+} from '@bike4mind/common';
 import { useSettingsFromServer } from '@client/app/hooks/data/settings';
 import AdminSettingInputField from './AdminSettingInputField';
+import { AdminTab } from './adminSidebarConfig';
+import {
+  ADMIN_SETTINGS_SEARCH_PARAM,
+  ADMIN_SETTINGS_SECTION_PARAM,
+  ADMIN_SETTINGS_TAB_SLUG,
+  adminSearchForTab,
+  type AdminSearch,
+} from './adminTabParams';
+import { useAdminModal } from './useAdminModal';
+import { useCreditAnalysisStore } from './CreditAnalysis/store';
 
 /**
  * The growth and monetization knobs, grouped on one page so they can be tuned without hunting
@@ -36,6 +54,44 @@ export const GROWTH_PRICING_SECTIONS: ReadonlyArray<{
   },
 ];
 
+/** The settings in the tier rate-limit group, read from the group tags so a new tier is picked up. */
+export const RATE_LIMIT_SETTING_KEYS = (Object.keys(settingsMap) as SettingKey[]).filter(
+  key => (settingsMap[key] as { group?: string }).group === API_SERVICE_GROUPS.RATE_LIMITING.id
+);
+
+// Admin Settings search term that narrows the list to the rate-limit group; it matches on setting
+// keys, so it must stay a substring of every key in RATE_LIMIT_SETTING_KEYS (tested).
+export const RATE_LIMIT_SETTINGS_SEARCH = 'apiRateLimit';
+
+// The Admin Settings section whose categories hold the rate-limit group.
+const RATE_LIMIT_SETTINGS_SECTION_ID = Object.values(SETTING_TABS).find(section =>
+  RATE_LIMIT_SETTING_KEYS.some(key => {
+    const { category } = settingsMap[key];
+    return category !== undefined && section.categories.includes(category);
+  })
+)?.id;
+
+/**
+ * Pricing and limit controls that already have an editor elsewhere. They are linked rather than
+ * rendered here so no setting has two editors.
+ */
+export const GROWTH_PRICING_LINKS = [
+  {
+    id: 'model-pricing',
+    title: 'Model pricing',
+    description: 'Per-model token rates that turn usage into credits. Edited in the Credit Analytics pricing catalog.',
+    linkLabel: 'Open the model pricing catalog',
+  },
+  {
+    id: 'rate-limits',
+    title: 'Tier rate limits',
+    description: 'Per-minute request limits for each subscription tier. Edited in Admin Settings.',
+    linkLabel: `Open ${API_SERVICE_GROUPS.RATE_LIMITING.name} settings`,
+  },
+] as const;
+
+type GrowthPricingLinkId = (typeof GROWTH_PRICING_LINKS)[number]['id'];
+
 const formatValue = (value: unknown): string => {
   if (value === undefined || value === null || value === '') return 'not set';
   if (typeof value === 'number') return value.toLocaleString();
@@ -44,6 +100,29 @@ const formatValue = (value: unknown): string => {
 
 const AdminGrowthPricingTab = () => {
   const { data, isLoading } = useSettingsFromServer();
+  const navigate = useNavigate();
+  const setAdminTab = useAdminModal(state => state.setActiveTab);
+  const setCreditAnalysisTab = useCreditAnalysisStore(state => state.setActiveTab);
+
+  // Already inside /admin, so each link is an in-console navigation, as in ModelLifecycleTab.
+  const openLink: Record<GrowthPricingLinkId, () => void> = {
+    'model-pricing': () => {
+      setCreditAnalysisTab('pricing');
+      setAdminTab(AdminTab.CreditAnalytics);
+    },
+    // Navigate with the tab slug instead of setting the store: the store-to-URL mirror would
+    // rebuild the search and drop the section and filter (see useAdminTabUrlSync).
+    'rate-limits': () =>
+      navigate({
+        to: '/admin',
+        search: (previous: AdminSearch) => ({
+          ...adminSearchForTab(previous, ADMIN_SETTINGS_TAB_SLUG),
+          [ADMIN_SETTINGS_SECTION_PARAM]: RATE_LIMIT_SETTINGS_SECTION_ID,
+          [ADMIN_SETTINGS_SEARCH_PARAM]: RATE_LIMIT_SETTINGS_SEARCH,
+        }),
+        replace: true,
+      }),
+  };
 
   const storedByKey = useMemo(() => {
     const map = new Map<string, unknown>();
@@ -82,8 +161,8 @@ const AdminGrowthPricingTab = () => {
       <div>
         <Typography level="h3">Growth and Pricing</Typography>
         <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
-          Starter credits, signup, pricing and team-plan limits in one place. Changes apply without a deploy; server
-          caches pick them up within a few minutes.
+          Starter credits, signup, pricing, team-plan and rate limits in one place. Changes apply without a deploy;
+          server caches pick them up within a few minutes.
         </Typography>
       </div>
 
@@ -133,6 +212,30 @@ const AdminGrowthPricingTab = () => {
                 );
               })}
             </Stack>
+          </CardContent>
+        </Card>
+      ))}
+
+      {GROWTH_PRICING_LINKS.map(section => (
+        <Card key={section.id} variant="outlined" data-testid={`admin-growth-pricing-section-${section.id}`}>
+          <Typography level="title-lg">{section.title}</Typography>
+          <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
+            {section.description}
+          </Typography>
+          <Divider inset="none" />
+          <CardContent>
+            {/* component="button": a Joy Link with only an onClick renders an <a> with no href,
+                which is not focusable. */}
+            <Link
+              level="body-sm"
+              component="button"
+              startDecorator={<OpenInNewIcon sx={{ fontSize: 14 }} />}
+              onClick={openLink[section.id]}
+              sx={{ alignSelf: 'flex-start' }}
+              data-testid={`admin-growth-pricing-link-${section.id}`}
+            >
+              {section.linkLabel}
+            </Link>
           </CardContent>
         </Card>
       ))}

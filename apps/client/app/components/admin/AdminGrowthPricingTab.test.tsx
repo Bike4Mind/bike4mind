@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
@@ -12,8 +12,19 @@ vi.mock('@client/app/hooks/data/settings', () => ({
   useFloorAboveMeasuredWarning: () => undefined,
 }));
 vi.mock('./ScopedSettingOverrides', () => ({ default: () => null }));
+vi.mock('@tanstack/react-router', async () => (await import('./__tests__/fakeAdminRouter')).fakeRouterModule);
 
-import AdminGrowthPricingTab, { GROWTH_PRICING_SECTIONS } from './AdminGrowthPricingTab';
+import { settingsMap } from '@bike4mind/common';
+import { fakeAdminRouter } from './__tests__/fakeAdminRouter';
+import { AdminTab } from './adminSidebarConfig';
+import { useAdminModal } from './useAdminModal';
+import { useCreditAnalysisStore } from './CreditAnalysis/store';
+import AdminGrowthPricingTab, {
+  GROWTH_PRICING_LINKS,
+  GROWTH_PRICING_SECTIONS,
+  RATE_LIMIT_SETTING_KEYS,
+  RATE_LIMIT_SETTINGS_SEARCH,
+} from './AdminGrowthPricingTab';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: React.ReactNode }) => (
@@ -30,6 +41,9 @@ const renderTab = () =>
 beforeEach(() => {
   serverSettings = [];
   settingsLoading = false;
+  fakeAdminRouter.reset({ tab: 'growth-pricing' });
+  useCreditAnalysisStore.setState({ activeTab: 'users' });
+  useAdminModal.setState({ activeTab: AdminTab.GrowthPricing });
 });
 
 describe('AdminGrowthPricingTab', () => {
@@ -98,6 +112,49 @@ describe('AdminGrowthPricingTab', () => {
   it('shows no warnings at defaults', () => {
     renderTab();
     expect(screen.queryByTestId('admin-growth-pricing-warning')).toBeNull();
+  });
+
+  it('links to the model pricing catalog and the tier rate-limit settings', () => {
+    renderTab();
+
+    for (const link of GROWTH_PRICING_LINKS) {
+      expect(screen.getByTestId(`admin-growth-pricing-section-${link.id}`)).toBeTruthy();
+      expect(screen.getByTestId(`admin-growth-pricing-link-${link.id}`).textContent).toBe(link.linkLabel);
+    }
+  });
+
+  it('links without rendering a second editor for any setting', () => {
+    renderTab();
+
+    for (const key of RATE_LIMIT_SETTING_KEYS) {
+      expect(screen.queryByTestId(`admin-setting-${key}-save-btn`)).toBeNull();
+    }
+    const keys = GROWTH_PRICING_SECTIONS.flatMap(section => section.keys);
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  it('opens Credit Analytics on its Model Pricing tab', () => {
+    renderTab();
+    fireEvent.click(screen.getByTestId('admin-growth-pricing-link-model-pricing'));
+
+    expect(useCreditAnalysisStore.getState().activeTab).toBe('pricing');
+    expect(useAdminModal.getState().activeTab).toBe(AdminTab.CreditAnalytics);
+  });
+
+  it('opens Admin Settings filtered to the rate-limit group', () => {
+    renderTab();
+    fireEvent.click(screen.getByTestId('admin-growth-pricing-link-rate-limits'));
+
+    expect(fakeAdminRouter.search).toEqual({
+      tab: 'admin-settings',
+      section: 'security',
+      q: RATE_LIMIT_SETTINGS_SEARCH,
+    });
+    expect(RATE_LIMIT_SETTING_KEYS.length).toBeGreaterThan(0);
+    for (const key of RATE_LIMIT_SETTING_KEYS) {
+      expect(key).toContain(RATE_LIMIT_SETTINGS_SEARCH);
+      expect(settingsMap[key].category).toBe('SecOps');
+    }
   });
 
   it('shows a loader until settings arrive', () => {
