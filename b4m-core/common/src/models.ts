@@ -738,6 +738,8 @@ export type ModelInfo = {
    * Format: YYYY-MM-DD
    */
   deprecationDate?: string;
+  /** Superseded but still selectable; folded into Older models in the picker. */
+  isSuperseded?: boolean;
   /**
    * Successor id for a model this adapter table is sunsetting. Rides into
    * `lifecycle.replacedBy` on the seed row, which is what feeds
