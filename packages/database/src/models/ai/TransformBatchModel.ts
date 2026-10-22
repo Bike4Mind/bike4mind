@@ -34,6 +34,7 @@ const TransformBatchSchema = new Schema<ITransformBatch, ITransformBatchModel, I
       ],
       default: [],
     },
+    billingModels: { type: Schema.Types.Mixed },
     // Cached per-request results (set once the batch ends) so polls after
     // completion don't re-stream the JSONL from Anthropic. Mixed shape ->
     // Schema.Types.Mixed; validated by the ITransformBatchResultItem type.

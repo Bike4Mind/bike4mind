@@ -112,6 +112,12 @@ describe('POST /api/transforms/batch metering', () => {
     expect(m.create).toHaveBeenCalledWith(
       expect.objectContaining({
         creditHold: m.hold,
+        billingModels: {
+          'claude-opus-4-6': expect.objectContaining({
+            id: 'claude-opus-4-6',
+            pricing: { 200_000: { input: 1e-6, output: 2e-6 } },
+          }),
+        },
         apiKeyId: 'k1',
         usageSource: 'api',
         customIdMap: [
@@ -175,10 +181,14 @@ describe('POST /api/transforms/batch metering', () => {
   });
 
   it('reserves one-hour cache writes at twice the input rate, with the batch discount', async () => {
-    await submit([{
-      ...item('a'),
-      messages: [{ role: 'user', content: [{ type: 'text', text: 'p', cache_control: { type: 'ephemeral', ttl: '1h' } }] }],
-    }]);
+    await submit([
+      {
+        ...item('a'),
+        messages: [
+          { role: 'user', content: [{ type: 'text', text: 'p', cache_control: { type: 'ephemeral', ttl: '1h' } }] },
+        ],
+      },
+    ]);
 
     expect(m.ceiling.mock.calls[0][0].pricing[200_000].cache_write).toBe(2e-6);
     expect(m.ceiling.mock.calls[0][3]).toBe(true);

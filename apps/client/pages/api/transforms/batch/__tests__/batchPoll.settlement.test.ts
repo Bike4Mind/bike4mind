@@ -353,26 +353,48 @@ describe('GET /api/transforms/batch/:id settlement', () => {
   });
 
   it('settles both cache TTLs at their discounted rates on the whole prompt tier', async () => {
-    m.catalog.mockResolvedValue([{ id: 'm1', pricing: {
-      200_000: { input: 1e-6, output: 5e-6, cache_read: 0.1e-6, cache_write: 1.25e-6 },
-      1_000_000: { input: 2e-6, output: 10e-6, cache_read: 0.2e-6, cache_write: 2.5e-6 },
-    } }]);
-    batchResults.items = [{
-      customId: 'req_0', clientRef: 'a', status: 'done',
-      tokenUsage: {
-        inputTokens: 100_000, outputTokens: 1_000, cacheReadInputTokens: 50_000,
-        cacheCreationInputTokens: 60_000, cacheWrite5mInputTokens: 20_000, cacheWrite1hInputTokens: 40_000,
+    m.getBatchResults.mockImplementation(async () => ({
+      processingStatus: 'ended',
+      counts: { processing: 0, succeeded: 1, errored: 0, canceled: 0, expired: 0 },
+      results: batchResults.items,
+    }));
+    m.catalog.mockResolvedValue([
+      {
+        id: 'm1',
+        pricing: {
+          200_000: { input: 1e-6, output: 5e-6, cache_read: 0.1e-6, cache_write: 1.25e-6 },
+          1_000_000: { input: 2e-6, output: 10e-6, cache_read: 0.2e-6, cache_write: 2.5e-6 },
+        },
       },
-    }];
+    ]);
+    batchResults.items = [
+      {
+        customId: 'req_0',
+        clientRef: 'a',
+        status: 'done',
+        tokenUsage: {
+          inputTokens: 100_000,
+          outputTokens: 1_000,
+          cacheReadInputTokens: 50_000,
+          cacheCreationInputTokens: 60_000,
+          cacheWrite5mInputTokens: 20_000,
+          cacheWrite1hInputTokens: 40_000,
+        },
+      },
+    ];
     m.claim.mockResolvedValue(m.batch);
 
     await poll();
 
     // The whole 210K prompt selects the upper tier: (.2 + .01 + .01 + .05 + .16) / 2.
     expect(m.settle).toHaveBeenCalledWith(hold, 215, expect.anything(), expect.anything());
-    expect(m.record).toHaveBeenCalledWith(expect.objectContaining({
-      costUsd: expect.closeTo(0.215, 12), cachedInputTokens: 50_000, cacheWriteTokens: 60_000,
-    }));
+    expect(m.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        costUsd: expect.closeTo(0.215, 12),
+        cachedInputTokens: 50_000,
+        cacheWriteTokens: 60_000,
+      })
+    );
   });
 
   it('leaves the batch unclaimed when the catalog cannot load, so a retried poll can still settle', async () => {
@@ -381,5 +403,112 @@ describe('GET /api/transforms/batch/:id settlement', () => {
     await expect(poll()).rejects.toThrow('catalog down');
     expect(m.claim).not.toHaveBeenCalled();
     expect(m.settle).not.toHaveBeenCalled();
+  });
+
+  it('settles with submit-time prices even when the model is deprecated and absent from the catalog', async () => {
+    const billingModel = { id: 'm1', type: 'text', pricing: { 200_000: { input: 1e-3, output: 2e-3 } } };
+    m.batch = {
+      ...m.batch,
+      billingModels: { m1: billingModel },
+      customIdMap: ['a', 'b', 'c'].map((clientRef, index) => ({
+        customId: `req_${index}`,
+        clientRef,
+        model: 'm1',
+      })),
+    };
+    m.catalog.mockResolvedValue([]);
+    m.claim.mockResolvedValue(m.batch);
+
+    await poll();
+
+    expect(m.catalog).not.toHaveBeenCalled();
+    expect(m.settle).toHaveBeenCalledWith(hold, 110, expect.anything(), expect.anything());
+  });
+
+  it('keeps the original rate when catalog prices change after submission', async () => {
+    const billingModel = { id: 'm1', type: 'text', pricing: { 200_000: { input: 1e-3, output: 2e-3 } } };
+    m.batch = {
+      ...m.batch,
+      billingModels: { m1: billingModel },
+      customIdMap: ['a', 'b', 'c'].map((clientRef, index) => ({
+        customId: `req_${index}`,
+        clientRef,
+        model: 'm1',
+      })),
+    };
+    m.catalog.mockResolvedValue([{ id: 'm1', pricing: { 200_000: { input: 1, output: 2 } } }]);
+    m.claim.mockResolvedValue(m.batch);
+
+    await poll();
+
+    expect(m.settle).toHaveBeenCalledWith(hold, 110, expect.anything(), expect.anything());
+  });
+
+  it.each([
+    { catalog: [] },
+    { catalog: [{ id: 'm1', type: 'text', pricing: {} }] },
+    { catalog: [{ id: 'm1', type: 'text', pricing: { 200_000: { input: 0, output: 0 } } }] },
+  ])('leaves a legacy hold unclaimed when its successful items have no usable price: %j', async ({ catalog }) => {
+    m.catalog.mockResolvedValue(catalog);
+
+    await expect(poll()).rejects.toThrow('Cannot price succeeded item');
+
+    expect(m.claim).not.toHaveBeenCalled();
+    expect(m.settle).not.toHaveBeenCalled();
+    expect(m.markSettled).not.toHaveBeenCalled();
+    expect(m.saveResults).not.toHaveBeenCalled();
+  });
+
+  it('keeps a durable completed hold unsettled when its legacy model is missing', async () => {
+    m.batch = { ...m.batch, status: 'completed', creditHold: { ...hold, pendingHoldId: 'pending-1' } };
+    m.catalog.mockResolvedValue([]);
+
+    await expect(poll()).rejects.toThrow('Cannot price succeeded item');
+
+    expect(m.settle).not.toHaveBeenCalled();
+    expect(m.markSettled).not.toHaveBeenCalled();
+  });
+
+  it('refuses an unpriced snapshot rather than replacing it with a current price', async () => {
+    m.batch = { ...m.batch, billingModels: { m1: { id: 'm1', type: 'text', pricing: {} } } };
+
+    await expect(poll()).rejects.toThrow('Cannot price succeeded item');
+
+    expect(m.catalog).not.toHaveBeenCalled();
+    expect(m.claim).not.toHaveBeenCalled();
+    expect(m.settle).not.toHaveBeenCalled();
+  });
+
+  it('retains the hold when a succeeded item omits its billable usage', async () => {
+    batchResults.items[0] = { customId: 'req_0', clientRef: 'a', status: 'done', reply: 'x' };
+
+    await expect(poll()).rejects.toThrow('Cannot price succeeded item');
+
+    expect(m.claim).not.toHaveBeenCalled();
+    expect(m.settle).not.toHaveBeenCalled();
+  });
+
+  it('returns unpriced results without a billing gate when credits were off at submit', async () => {
+    m.batch = { ...m.batch, creditHold: null };
+    m.catalog.mockResolvedValue([]);
+    m.claim.mockResolvedValue(m.batch);
+
+    const body = await poll();
+
+    expect(body.status).toBe('completed');
+    expect(body.results).toHaveLength(3);
+    expect(m.catalog).not.toHaveBeenCalled();
+    expect(m.settle).not.toHaveBeenCalled();
+    expect(m.saveResults).toHaveBeenCalledOnce();
+  });
+
+  it.each([0, 1])('keeps the hold when only %i of two succeeded results were returned', async count => {
+    batchResults.items = batchResults.items.slice(0, count);
+
+    await expect(poll()).rejects.toThrow('Incomplete succeeded results');
+
+    expect(m.claim).not.toHaveBeenCalled();
+    expect(m.settle).not.toHaveBeenCalled();
+    expect(m.markSettled).not.toHaveBeenCalled();
   });
 });

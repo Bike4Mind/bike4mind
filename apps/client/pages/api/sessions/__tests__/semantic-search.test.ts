@@ -44,12 +44,18 @@ vi.mock('@bike4mind/database', () => ({
   creditTransactionRepository: {},
   userRepository: {},
 }));
-vi.mock('@server/billing/meterPlatformCompletion', () => ({ isCreditsEnforced: async () => false }));
+vi.mock('@server/billing/meterPlatformCompletion', () => ({
+  isCreditsEnforced: async () => false,
+  createRequestCompletionMeter: vi.fn(),
+  reserveCompletionCredits: async () => ({ refund: vi.fn() }),
+  settleCompletion: vi.fn(),
+}));
 vi.mock('@bike4mind/database/content', () => ({ Quest: { find: vi.fn(() => ({ lean: async () => [] })) } }));
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: mockGetEffectiveLLMApiKeys },
   // Metering is covered in semantic-search.metering.test.ts.
   recordOperationalUsage: vi.fn(async () => undefined),
+  meterCompletionBackend: (llm: unknown) => llm,
   creditService: {},
   organizationService: {},
 }));

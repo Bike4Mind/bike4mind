@@ -235,6 +235,21 @@ describe('meterPlatformCompletion credits', () => {
     );
   });
 
+  it('keeps embedding usage classified as embedding when settling a reserved call', async () => {
+    const reservation = await reserveCompletionCredits(req(), 0.1, 'semantic search embedding');
+    await settleCompletion(reservation, req(), {
+      model: 'text-embedding-3-small',
+      provider: 'openai',
+      usd: 0.001,
+      inputTokens: 100,
+      outputTokens: 0,
+      feature: 'embedding',
+    });
+    expect(m.recordUsageEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ feature: 'embedding', model: 'text-embedding-3-small' })
+    );
+  });
+
   it('gives each settled call its own requestId while keeping the session id', async () => {
     for (let i = 0; i < 2; i++) {
       const reservation = await reserveCompletionCredits(req(), 0.1, 'QuestMaster planning');

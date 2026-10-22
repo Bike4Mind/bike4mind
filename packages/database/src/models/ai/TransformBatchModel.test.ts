@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import mongoose from 'mongoose';
-import { CreditHolderType } from '@bike4mind/common';
+import { CreditHolderType, ModelBackend, type ModelInfo } from '@bike4mind/common';
 import { createMongoServer } from '../../__test__/createMongoServer';
 import { transformBatchRepository } from './TransformBatchModel';
 
@@ -26,6 +26,16 @@ describe('TransformBatchRepository.claimCompletion', () => {
       reservedCredits: 100,
       balanceAfterHold: 0,
     } as const;
+    const billingModel: ModelInfo = {
+      id: 'm1',
+      name: 'm1',
+      type: 'text',
+      backend: ModelBackend.Anthropic,
+      contextWindow: 200_000,
+      max_tokens: 4096,
+      supportsImageVariation: false,
+      pricing: { 200_000: { input: 1e-6, output: 2e-6 } },
+    };
     const row = await transformBatchRepository.create({
       ownerUserId: 'u1',
       anthropicBatchId: 'msgbatch_claim',
@@ -34,6 +44,7 @@ describe('TransformBatchRepository.claimCompletion', () => {
       succeededCount: 0,
       erroredCount: 0,
       customIdMap: [{ customId: 'req_0', clientRef: 'a', model: 'm1' }],
+      billingModels: { m1: billingModel },
       creditHold,
     });
     const update = { succeededCount: 1, erroredCount: 0 };
@@ -45,6 +56,7 @@ describe('TransformBatchRepository.claimCompletion', () => {
     const winners = claims.filter(Boolean);
     expect(winners).toHaveLength(1);
     expect(winners[0]?.creditHold).toMatchObject({ reservedCredits: 100 });
+    expect(winners[0]?.billingModels?.m1).toMatchObject(billingModel);
     const stored = await transformBatchRepository.findByAnthropicBatchId('msgbatch_claim');
     expect(stored).toMatchObject({ status: 'completed', creditHold: { reservedCredits: 100 }, succeededCount: 1 });
     expect(await transformBatchRepository.claimCompletion(row.id, update)).toBeNull();

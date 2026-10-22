@@ -2,6 +2,7 @@ import { IBaseRepository } from './BaseTypes';
 import { IMongoDocument } from './common';
 import type { PersistedCreditHold } from './CreditHolderTypes';
 import type { CompletionSource } from '../analytics';
+import type { ModelInfo } from '../../models';
 
 /**
  * Lifecycle of a submitted Anthropic Message Batch, tracked locally so the
@@ -57,6 +58,8 @@ export interface ITransformBatch extends IMongoDocument {
   succeededCount: number;
   erroredCount: number;
   customIdMap: ITransformBatchCustomIdMapping[];
+  /** Submit-time pricing, stored once per model so catalog changes cannot alter pending charges. */
+  billingModels?: Record<string, ModelInfo>;
   /**
    * Per-request results, cached once the batch ends so subsequent polls don't
    * re-stream the JSONL from Anthropic. Note: holds full replies - fine at our

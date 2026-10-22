@@ -2,7 +2,7 @@
 /**
  * POST /api/sessions/semantic-search runs query expansion, embeddings and a re-rank on platform
  * keys. A credit pre-flight refuses a caller who cannot pay before any of them, and every call
- * settles through recordOperationalUsage with forceCreditBilling (which owns the debit itself).
+ * settles text calls through the real completion wrapper, and reserves each embedding input.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
@@ -13,7 +13,16 @@ const m = vi.hoisted(() => ({
   complete: vi.fn(),
   embed: vi.fn(),
   record: vi.fn(),
+  reserveEmbedding: vi.fn(),
+  settleEmbedding: vi.fn(),
+  refundEmbedding: vi.fn(),
   findOrg: vi.fn(),
+  meter: vi.fn(),
+  settle: vi.fn(),
+  reserveText: vi.fn(),
+  realReranking: false,
+  refund: vi.fn(),
+  realExpansion: false,
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({ baseApi: () => ({ post: (h: unknown) => h }) }));
@@ -40,7 +49,8 @@ vi.mock('@bike4mind/fab-pipeline', () => ({
   getProviderFromModel: () => 'openai',
   resolveEmbeddingWithKeylessFallback: (model: string) => ({ config: {}, missing: undefined, model }),
 }));
-vi.mock('@bike4mind/services', () => ({
+vi.mock('@bike4mind/services', async () => ({
+  meterCompletionBackend: (await import('@bike4mind/services/billing/completionMeter')).meterCompletionBackend,
   apiKeyService: { getEffectiveLLMApiKeys: async () => ({ openai: 'sk-test' }) },
   recordOperationalUsage: m.record,
   // The balance gate (unit-tested in assertOwnerHasCredits.test.ts), reduced to its contract.
@@ -50,29 +60,54 @@ vi.mock('@bike4mind/services', () => ({
   organizationService: { isCurrentOrgMember: () => true },
   creditService: { isMemberAtOrOverCap: () => false, MEMBER_CREDIT_CAP_MESSAGE: 'cap' },
 }));
-vi.mock('@server/billing/meterPlatformCompletion', () => ({ isCreditsEnforced: async () => m.enforce }));
+vi.mock('@server/billing/meterPlatformCompletion', () => ({
+  isCreditsEnforced: async () => m.enforce,
+  reserveCompletionCredits: m.reserveEmbedding,
+  settleCompletion: m.settleEmbedding,
+  createRequestCompletionMeter: (req: unknown, label: string, options: unknown) => {
+    m.meter(req, label, options);
+    return m.reserveText;
+  },
+}));
 
 type Llm = { complete: (...args: unknown[]) => Promise<void> };
 const noop = async () => undefined;
 // Each fake service makes one provider call through the adapter it was given, as the real ones do.
-vi.mock('@bike4mind/services/llm/SmallLLMService', () => ({
-  SmallLLMService: class {
-    constructor(private adapters: { llm: Llm }) {}
-    async expandQuery() {
-      await this.adapters.llm.complete('ops-model', [], {}, noop);
-      return { data: { corrected: 'bike trip', keywords: ['bike', 'trip'] } };
-    }
-  },
-}));
-vi.mock('@bike4mind/services/llm/reranker', () => ({
-  ReRankService: class {
-    constructor(private adapters: { llm: Llm }) {}
-    async reRank(_query: string, candidates: Array<{ id: string }>) {
-      await this.adapters.llm.complete('ops-model', [], {}, noop);
-      return candidates.map(c => ({ id: c.id, relevanceScore: 8, finalScore: 0.9 }));
-    }
-  },
-}));
+vi.mock('@bike4mind/services/llm/SmallLLMService', async importOriginal => {
+  const { SmallLLMService: ActualSmallLLMService } =
+    await importOriginal<typeof import('@bike4mind/services/llm/SmallLLMService')>();
+  return {
+    SmallLLMService: class extends ActualSmallLLMService {
+      constructor(private testAdapters: { llm: Llm }) {
+        super({ ...testAdapters, modelId: 'ops-model' });
+      }
+      async expandQuery(query: string, options: { timeoutMs: number }) {
+        if (m.realExpansion)
+          return new ActualSmallLLMService({ ...this.testAdapters, modelId: 'ops-model' }).expandQuery(query, options);
+        await this.testAdapters.llm.complete('ops-model', [], {}, noop);
+        return { data: { corrected: 'bike trip', keywords: ['bike', 'trip'] } };
+      }
+    },
+  };
+});
+vi.mock('@bike4mind/services/llm/reranker', async importOriginal => {
+  const { ReRankService: ActualReRankService } =
+    await importOriginal<typeof import('@bike4mind/services/llm/reranker')>();
+  return {
+    ReRankService: class {
+      constructor(private adapters: { llm: Llm }) {}
+      async reRank(_query: string, candidates: Array<{ id: string }>) {
+        if (m.realReranking)
+          return new ActualReRankService({ ...this.adapters, modelId: 'ops-model' }).reRank(
+            _query,
+            candidates.map(candidate => ({ ...candidate, snippet: 'bike', cosineSimilarity: 1 }))
+          );
+        await this.adapters.llm.complete('ops-model', [], {}, noop);
+        return candidates.map(c => ({ id: c.id, relevanceScore: 8, finalScore: 0.9 }));
+      }
+    },
+  };
+});
 
 const MODEL = { id: 'ops-model', backend: 'openai', pricing: { 200_000: { input: 1e-6, output: 2e-6 } } };
 vi.mock('@client/services/operationsModelService', () => ({
@@ -85,8 +120,13 @@ const { default: handler } = await import('@pages/api/sessions/semantic-search')
 
 const QUERY = 'bike trip';
 
-async function call(currentCredits: number, organizationId?: string, apiKeyInfo?: Record<string, unknown>) {
-  const { req, res } = createMocks({ method: 'POST', body: { query: QUERY, useReRanking: true } });
+async function call(
+  currentCredits: number,
+  organizationId?: string,
+  apiKeyInfo?: Record<string, unknown>,
+  useReRanking = true
+) {
+  const { req, res } = createMocks({ method: 'POST', body: { query: QUERY, useReRanking } });
   Object.assign(req, {
     user: { id: 'u1', currentCredits, organizationId },
     apiKeyInfo,
@@ -102,8 +142,19 @@ const recorded = (feature: string) => m.record.mock.calls.map(([p]) => p).filter
 beforeEach(() => {
   vi.clearAllMocks();
   m.enforce = true;
+  m.realExpansion = false;
+  m.realReranking = false;
+  m.reserveText.mockResolvedValue({ settle: m.settle, refund: m.refund });
+  m.settle.mockResolvedValue(1);
+  m.refund.mockResolvedValue(undefined);
   m.embed.mockResolvedValue([1, 0, 0]);
   m.record.mockResolvedValue(undefined);
+  m.reserveEmbedding.mockResolvedValue({ refund: m.refundEmbedding });
+  m.refundEmbedding.mockResolvedValue(undefined);
+  m.settleEmbedding.mockImplementation(async (_reservation, _req, usage) => {
+    m.record({ feature: 'embedding', ...usage, costUsd: usage.usd });
+    return 1;
+  });
   m.findOrg.mockResolvedValue(null);
   // Expansion reports 100/20 tokens, the re-rank 300/40.
   m.complete
@@ -123,22 +174,16 @@ describe('POST /api/sessions/semantic-search metering', () => {
     const res = await call(100);
 
     expect(res._getStatusCode()).toBe(200);
-    expect(recorded('operations')).toEqual([
-      expect.objectContaining({
-        model: 'ops-model',
-        inputTokens: 100,
-        outputTokens: 20,
-        costUsd: expect.closeTo(100 * 1e-6 + 20 * 2e-6, 12),
-        forceCreditBilling: true,
-      }),
-      expect.objectContaining({
-        model: 'ops-model',
-        inputTokens: 300,
-        outputTokens: 40,
-        costUsd: expect.closeTo(300 * 1e-6 + 40 * 2e-6, 12),
-        forceCreditBilling: true,
-      }),
+    expect(m.settle.mock.calls.map(([usage]) => usage)).toEqual([
+      { inputTokens: 100, outputTokens: 20 },
+      { inputTokens: 300, outputTokens: 40 },
     ]);
+    expect(recorded('operations')).toEqual([]);
+    expect(m.meter).toHaveBeenCalledWith(
+      expect.objectContaining({ user: expect.objectContaining({ id: 'u1' }) }),
+      'semantic search expansion',
+      { systemModel: true }
+    );
     const messageTokens = Math.ceil('bike trip plans\n\nGo to Paris'.length / 4);
     const queryTokens = Math.ceil(QUERY.length / 4);
     expect(recorded('embedding')).toEqual([
@@ -146,15 +191,58 @@ describe('POST /api/sessions/semantic-search metering', () => {
         model: 'text-embedding-3-small',
         inputTokens: queryTokens,
         costUsd: getEmbeddingModelCost('text-embedding-3-small', queryTokens),
-        forceCreditBilling: true,
       }),
       expect.objectContaining({
         model: 'text-embedding-3-small',
         inputTokens: messageTokens,
         costUsd: getEmbeddingModelCost('text-embedding-3-small', messageTokens),
-        forceCreditBilling: true,
       }),
     ]);
+  });
+
+  it('settles timed-out expansion attempts when their provider promises finish later', async () => {
+    vi.useFakeTimers();
+    m.realExpansion = true;
+    m.complete.mockReset();
+    m.complete.mockImplementation(async (_model, _messages, _options, callback) => {
+      await new Promise(resolve => setTimeout(resolve, 10_000));
+      await callback(['{"corrected":"bike trip","keywords":["bike"]}'], { inputTokens: 100, outputTokens: 20 });
+    });
+    try {
+      const response = call(100, undefined, undefined, false);
+      await vi.advanceTimersByTimeAsync(6_001);
+      expect((await response)._getStatusCode()).toBe(200);
+      expect(m.complete).toHaveBeenCalledTimes(2);
+      expect(m.settle).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(7_000);
+      expect(m.settle).toHaveBeenCalledTimes(2);
+      expect(m.settle).toHaveBeenNthCalledWith(1, { inputTokens: 100, outputTokens: 20 });
+      expect(m.settle).toHaveBeenNthCalledWith(2, { inputTokens: 100, outputTokens: 20 });
+      expect(m.refund).not.toHaveBeenCalled();
+      expect(recorded('operations')).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('propagates a real expansion service credit refusal without a provider call', async () => {
+    m.realExpansion = true;
+    m.reserveText.mockRejectedValue(insufficientCreditsError('Cannot reserve expansion'));
+
+    await expect(call(100)).rejects.toMatchObject({ statusCode: 422 });
+    expect(m.complete).not.toHaveBeenCalled();
+    expect(m.embed).not.toHaveBeenCalled();
+  });
+
+  it('propagates a real reranker credit refusal instead of accepting its cosine fallback', async () => {
+    m.realReranking = true;
+    m.reserveText.mockResolvedValueOnce({ settle: m.settle, refund: m.refund });
+    m.reserveText.mockRejectedValue(insufficientCreditsError('Cannot reserve rerank'));
+
+    await expect(call(100)).rejects.toMatchObject({ statusCode: 422 });
+    expect(m.complete).toHaveBeenCalledOnce();
+    expect(m.settle).toHaveBeenCalledOnce();
   });
 
   it('reads the org once and gates on its pool', async () => {
@@ -172,7 +260,7 @@ describe('POST /api/sessions/semantic-search metering', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(m.findOrg).not.toHaveBeenCalled();
-    expect(m.record.mock.calls.every(([p]) => p.organization === null)).toBe(true);
+    expect(m.reserveEmbedding.mock.calls.every(([req]) => req.apiKeyInfo.billingOwnerType === 'User')).toBe(true);
   });
 
   it('bills an org-billed API key to its org', async () => {
@@ -182,19 +270,31 @@ describe('POST /api/sessions/semantic-search metering', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(m.findOrg).toHaveBeenCalledWith('o2');
-    expect(m.record.mock.calls.every(([p]) => p.organization?.id === 'o2')).toBe(true);
+    expect(m.reserveEmbedding.mock.calls.every(([req]) => req.apiKeyInfo.organizationId === 'o2')).toBe(true);
   });
 
-  it('tags every event of one search with the same per-request id, distinct across searches', async () => {
-    await call(100);
-    const first = new Set(m.record.mock.calls.map(([p]) => p.requestId));
-    m.complete.mockResolvedValue(undefined);
-    await call(100);
-    const all = new Set(m.record.mock.calls.map(([p]) => p.requestId));
+  it('reserves each embedding before the provider and stops when a later input cannot be funded', async () => {
+    m.reserveEmbedding.mockResolvedValueOnce({ refund: m.refundEmbedding });
+    m.reserveEmbedding.mockRejectedValueOnce(insufficientCreditsError('Insufficient credits'));
 
-    expect(first.size).toBe(1);
-    expect(first.has('u1')).toBe(false);
-    expect(all.size).toBe(2);
+    await expect(call(100, undefined, undefined, false)).rejects.toMatchObject({ statusCode: 422 });
+    expect(m.reserveEmbedding).toHaveBeenCalledBefore(m.embed);
+    expect(m.embed).toHaveBeenCalledOnce();
+    expect(m.settleEmbedding).toHaveBeenCalledOnce();
+    expect(m.reserveEmbedding).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ user: expect.objectContaining({ id: 'u1' }) }),
+      getEmbeddingModelCost('text-embedding-3-small', Buffer.byteLength(QUERY, 'utf8')),
+      'semantic search embedding'
+    );
+  });
+
+  it('refunds an embedding hold when its provider fails', async () => {
+    m.embed.mockRejectedValue(new Error('embedding unavailable'));
+
+    expect((await call(100))._getStatusCode()).toBe(500);
+    expect(m.refundEmbedding).toHaveBeenCalledOnce();
+    expect(m.settleEmbedding).not.toHaveBeenCalled();
   });
 
   it('does not refuse a zero-credit caller when credits are not enforced', async () => {

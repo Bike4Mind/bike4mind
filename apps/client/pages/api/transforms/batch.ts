@@ -134,6 +134,7 @@ const handler = baseApi({ maxBodySize: 32 * 1024 * 1024 }).post(async (req, res)
       succeededCount: 0,
       erroredCount: 0,
       customIdMap,
+      billingModels: Object.fromEntries(modelInfos),
       // Settled by the first poll that sees the batch end, through the pending-hold claim; a batch
       // never polled within BATCH_CREDIT_HOLD_TTL_MS is refunded by the expired-hold sweep instead.
       creditHold: reservation.hold,

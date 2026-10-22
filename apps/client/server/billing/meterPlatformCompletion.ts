@@ -165,6 +165,7 @@ export async function settleCompletion(
     cacheReadInputTokens?: number;
     cacheCreationInputTokens?: number;
     sessionId?: string;
+    feature?: 'completion_api' | 'embedding';
   }
 ): Promise<number> {
   // Per call, never the session id: UsageEvent rollups group by requestId, so one id shared across a
@@ -188,7 +189,7 @@ export async function settleCompletion(
       ownerId: reservation.ownerId,
       ownerType: reservation.ownerType,
       sessionId: charge.sessionId,
-      feature: 'completion_api',
+      feature: charge.feature ?? 'completion_api',
       provider: charge.provider,
       model: charge.model,
       inputTokens: charge.inputTokens,

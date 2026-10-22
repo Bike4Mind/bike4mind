@@ -2,6 +2,8 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { transformBatchRepository, usageEventRepository } from '@bike4mind/database';
 import { NotFoundError, usdToCreditsStochastic } from '@bike4mind/utils';
+import type { ModelInfo } from '@bike4mind/common';
+import { isUnpricedTextModel } from '@bike4mind/services/llm/modelAdmission';
 import { anthropicBatchCost } from '@server/billing/anthropicBatchPricing';
 import { AnthropicBatchService, getAvailableModels } from '@bike4mind/llm-adapters';
 import { settleHeldCredits } from '@server/billing/reserveRequestCredits';
@@ -87,8 +89,30 @@ const handler = baseApi().get(async (req, res) => {
     return res.json({ batch_id: anthropicBatchId, status: 'completed', counts: status.counts, results });
   }
 
+  const succeededResults = (status.results ?? []).filter(result => result.status === 'done');
+  if (batch.creditHold && succeededResults.length !== status.counts.succeeded) {
+    throw new Error(`[transforms/batch] Incomplete succeeded results for batch ${anthropicBatchId}`);
+  }
+
   // Load prices before claiming completion so a catalog outage leaves new work unclaimed.
-  const catalog = batch.creditHold ? await getAvailableModels({ anthropic: apiKey }) : [];
+  const mappings = new Map(batch.customIdMap.map(mapping => [mapping.customId, mapping]));
+  const needsCatalog =
+    Boolean(batch.creditHold) &&
+    succeededResults.some(result => !batch.billingModels?.[mappings.get(result.customId)?.model ?? '']);
+  const catalog = needsCatalog ? await getAvailableModels({ anthropic: apiKey }) : [];
+  const billedModels = new Map<string, ModelInfo>();
+  if (batch.creditHold) {
+    for (const result of succeededResults) {
+      const modelId = mappings.get(result.customId)?.model;
+      const modelInfo = batch.billingModels?.[modelId ?? ''] ?? catalog.find(model => model.id === modelId);
+      if (!result.tokenUsage || !modelInfo || isUnpricedTextModel({ ...modelInfo, type: 'text' })) {
+        throw new Error(
+          `[transforms/batch] Cannot price succeeded item ${result.customId} in batch ${anthropicBatchId}`
+        );
+      }
+      billedModels.set(result.customId, modelInfo);
+    }
+  }
   // The first poll claims completion; later polls resume any durable unsettled hold. Concurrent
   // retries are safe because settlement's pending-hold transaction moves the balance only once.
   const claimed =
@@ -100,7 +124,6 @@ const handler = baseApi().get(async (req, res) => {
         });
   if (claimed?.creditHold) {
     // Failed items are free. Each successful item uses the same batch/cache rates as its hold.
-    const modelByCustomId = new Map(claimed.customIdMap.map(m => [m.customId, m.model]));
     let usd = 0;
     let inputTokens = 0;
     let outputTokens = 0;
@@ -108,12 +131,7 @@ const handler = baseApi().get(async (req, res) => {
     let cacheWriteTokens = 0;
     const models = new Set<string>();
     for (const r of status.results ?? []) {
-      const modelInfo = catalog.find(m => m.id === modelByCustomId.get(r.customId));
-      if (r.status === 'done' && r.tokenUsage && !modelInfo) {
-        req.logger.error(
-          `[transforms/batch] Unbilled item in batch ${anthropicBatchId}: model ${modelByCustomId.get(r.customId)} missing from catalog`
-        );
-      }
+      const modelInfo = billedModels.get(r.customId);
       if (r.status !== 'done' || !r.tokenUsage || !modelInfo) continue;
       const u = r.tokenUsage;
       usd += anthropicBatchCost(modelInfo, u);

@@ -9,46 +9,40 @@
  * avoiding the "everything matches at 70%" problem with pure semantic search.
  *
  * Billing: the query expansion, the embeddings and the re-rank run on platform keys. A credit
- * pre-flight refuses a caller who cannot pay before any of them (a 422, deliberately: every
- * provider failure below degrades silently), and each call settles through recordOperationalUsage
- * with forceCreditBilling, keyed on enforceCredits like the pre-flight.
+ * pre-flight refuses a caller who cannot pay before any of them. Text calls reserve and settle
+ * through the completion meter; embeddings reserve their input ceiling before the provider call.
  */
 
-import { randomUUID } from 'crypto';
 import { Request, Response } from 'express';
 import { assertApiKeyOrgMembership } from '@server/billing/assertApiKeyOrgMembership';
-import { isCreditsEnforced } from '@server/billing/meterPlatformCompletion';
+import {
+  createRequestCompletionMeter,
+  isCreditsEnforced,
+  reserveCompletionCredits,
+  settleCompletion,
+} from '@server/billing/meterPlatformCompletion';
 import { resolveRequestBillingOrgId } from '@server/billing/reserveRequestCredits';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import {
   apiKeyRepository,
   adminSettingsRepository,
-  creditTransactionRepository,
   organizationRepository,
   sessionRepository,
-  usageEventRepository,
-  userRepository,
 } from '@bike4mind/database';
 import { Quest } from '@bike4mind/database/content';
 import { computeCosineSimilarity, getSettingsByNames } from '@bike4mind/utils';
 import { EmbeddingFactory, getProviderFromModel, resolveEmbeddingWithKeylessFallback } from '@bike4mind/fab-pipeline';
 import {
   getEmbeddingModelCost,
-  getTextModelCost,
+  ForbiddenError,
+  UnprocessableEntityError,
   insufficientCreditsError,
-  type ModelInfo,
   isSupportedEmbeddingModel,
   SupportedEmbeddingModel,
-  type SmallLLMAdapters,
+  type ModelInfo,
 } from '@bike4mind/common';
-import {
-  apiKeyService,
-  assertOwnerHasCredits,
-  creditService,
-  recordOperationalUsage,
-  type RecordOperationalUsageParams,
-} from '@bike4mind/services';
+import { apiKeyService, assertOwnerHasCredits, creditService, meterCompletionBackend } from '@bike4mind/services';
 import { ReRankService } from '@bike4mind/services/llm/reranker';
 import { SmallLLMService } from '@bike4mind/services/llm/SmallLLMService';
 import { OperationsModelService } from '@client/services/operationsModelService';
@@ -74,29 +68,36 @@ interface SessionScore {
   bestMatch?: MessageMatch; // Best matching message details for debugging
 }
 
-/** Local estimate for embedding input, matching the settledBasis 'local' recordOperationalUsage stamps. */
+/** Local usage estimate for embedding providers that do not report token counts. */
 const estimateTokens = (text: string) => Math.ceil(text.length / 4);
 
-/** Wraps an LLM so every call's reported token usage (retries included) is summed for settlement. */
-function trackUsage(llm: SmallLLMAdapters['llm']) {
-  const total = { inputTokens: 0, outputTokens: 0 };
-  const tracked: SmallLLMAdapters['llm'] = {
-    complete: async (model, messages, options, callback) => {
-      let inputTokens = 0;
-      let outputTokens = 0;
+/** Best-effort text services may swallow failures; billing refusals must still reach the route. */
+function meterSearchBackend(
+  req: Parameters<typeof createRequestCompletionMeter>[0],
+  backend: Parameters<typeof meterCompletionBackend>[0],
+  modelInfo: ModelInfo,
+  featureLabel: string
+) {
+  let refusal: { error: unknown } | undefined;
+  const meter = createRequestCompletionMeter(req, featureLabel, { systemModel: true });
+  const llm = meterCompletionBackend(
+    backend,
+    async (...args) => {
       try {
-        await llm.complete(model, messages, options, async (texts, info) => {
-          if (info?.inputTokens) inputTokens = info.inputTokens;
-          if (info?.outputTokens) outputTokens = info.outputTokens;
-          await callback(texts, info);
-        });
-      } finally {
-        total.inputTokens += inputTokens;
-        total.outputTokens += outputTokens;
+        return await meter(...args);
+      } catch (error) {
+        refusal = { error };
+        throw error;
       }
     },
+    modelInfo
+  );
+  return {
+    llm,
+    throwIfRefused: () => {
+      if (refusal) throw refusal.error;
+    },
   };
-  return { llm: tracked, total };
 }
 
 const handler = baseApi().post(
@@ -130,37 +131,6 @@ const handler = baseApi().post(
       }
       assertOwnerHasCredits(billingOrg ?? req.user);
     }
-    const requestId = randomUUID();
-
-    const recordUsage = (
-      usage: Pick<RecordOperationalUsageParams, 'feature' | 'provider' | 'model' | 'inputTokens' | 'costUsd'> & {
-        outputTokens?: number;
-      }
-    ) =>
-      recordOperationalUsage(
-        { requestId, user: req.user, organization: billingOrg, forceCreditBilling: true, ...usage },
-        {
-          db: {
-            usageEvents: usageEventRepository,
-            adminSettings: adminSettingsRepository,
-            creditTransactions: creditTransactionRepository,
-            users: userRepository,
-            organizations: organizationRepository,
-          },
-          logger: req.logger,
-        }
-      );
-    const recordOpsUsage = async (modelInfo: ModelInfo, total: { inputTokens: number; outputTokens: number }) => {
-      if (!total.inputTokens && !total.outputTokens) return;
-      await recordUsage({
-        feature: 'operations',
-        provider: modelInfo.backend,
-        model: modelInfo.id,
-        ...total,
-        costUsd: getTextModelCost(modelInfo, total.inputTokens, total.outputTokens),
-      });
-    };
-
     req.logger?.updateMetadata({
       endpoint: 'sessions/semantic-search',
       queryLength: query.length,
@@ -175,15 +145,17 @@ const handler = baseApi().post(
     let queryExpansionTimeMs = 0;
 
     if (hybridMode) {
-      let expansionUsage: { modelInfo: ModelInfo; total: { inputTokens: number; outputTokens: number } } | undefined;
+      let throwIfExpansionRefused = () => {};
       try {
         const expansionStart = Date.now();
         const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel();
-        const tracked = trackUsage(llm);
-        expansionUsage = { modelInfo, total: tracked.total };
-        const smallLLM = new SmallLLMService({ llm: tracked.llm, modelId }, req.logger);
+        // The provider promise owns settlement even when SmallLLM's timeout returns a fallback first.
+        const metered = meterSearchBackend(req, llm, modelInfo, 'semantic search expansion');
+        throwIfExpansionRefused = metered.throwIfRefused;
+        const smallLLM = new SmallLLMService({ llm: metered.llm, modelId }, req.logger);
 
         const { data: expansion } = await smallLLM.expandQuery(query, { timeoutMs: 3000 });
+        metered.throwIfRefused();
         correctedQuery = expansion.corrected;
         keywords = expansion.keywords
           .map(k =>
@@ -199,6 +171,10 @@ const handler = baseApi().post(
           `Query expansion: "${query}" → "${correctedQuery}" with ${keywords.length} keywords in ${queryExpansionTimeMs}ms`
         );
       } catch (expansionError) {
+        throwIfExpansionRefused();
+        if (expansionError instanceof ForbiddenError || expansionError instanceof UnprocessableEntityError) {
+          throw expansionError;
+        }
         // Fallback to simple keyword extraction if LLM fails
         req.logger?.warn?.('Query expansion failed, using simple extraction:', expansionError);
         keywords = query
@@ -208,7 +184,6 @@ const handler = baseApi().post(
           .map(word => word.replace(/[^a-z0-9]/g, ''))
           .filter(word => word.length >= 3);
       }
-      if (expansionUsage) await recordOpsUsage(expansionUsage.modelInfo, expansionUsage.total);
     }
 
     req.logger?.debug?.('Hybrid mode:', hybridMode, 'Keywords:', keywords);
@@ -297,18 +272,35 @@ const handler = baseApi().post(
       const embeddingFactory = new EmbeddingFactory(embeddingConfig);
       const embeddingService = embeddingFactory.createEmbeddingService(embeddingModel);
 
-      // STEP 4: Generate embedding for user's query
-      req.logger?.debug?.('Generating embedding for query:', query.substring(0, 50) + '...');
-      const queryEmbedding = await embeddingService.generateEmbedding(query);
-      const recordEmbeddingUsage = (inputTokens: number) =>
-        recordUsage({
+      const generateEmbedding = async (text: string) => {
+        // A UTF-8 byte bounds the tokenizer input; settle the same local estimate as before.
+        const reservation = await reserveCompletionCredits(
+          req,
+          getEmbeddingModelCost(embeddingModel, Buffer.byteLength(text, 'utf8')),
+          'semantic search embedding'
+        );
+        let vector: number[];
+        try {
+          vector = await embeddingService.generateEmbedding(text);
+        } catch (error) {
+          await reservation.refund();
+          throw error;
+        }
+        const inputTokens = estimateTokens(text);
+        await settleCompletion(reservation, req, {
           feature: 'embedding',
           provider: requiredProvider,
           model: embeddingModel,
           inputTokens,
-          costUsd: getEmbeddingModelCost(embeddingModel, inputTokens),
+          outputTokens: 0,
+          usd: getEmbeddingModelCost(embeddingModel, inputTokens),
         });
-      await recordEmbeddingUsage(estimateTokens(query));
+        return vector;
+      };
+
+      // STEP 4: Generate embedding for user's query
+      req.logger?.debug?.('Generating embedding for query:', query.substring(0, 50) + '...');
+      const queryEmbedding = await generateEmbedding(query);
       req.logger?.debug?.('Query embedding generated, dimensions:', queryEmbedding.length);
 
       // STEP 5: Get all session IDs for the user
@@ -336,128 +328,124 @@ const handler = baseApi().post(
       // Each embedding API call takes ~100-500ms, so 50 calls = 5-25 seconds max
       // Users with many unembedded messages should run Spider to pre-compute embeddings
       const MAX_ON_THE_FLY_EMBEDDINGS = 50;
-      let generatedEmbeddingTokens = 0;
 
-      try {
-        for (let i = 0; i < sessionIds.length; i += BATCH_SIZE) {
-          const batchSessionIds = sessionIds.slice(i, i + BATCH_SIZE);
+      for (let i = 0; i < sessionIds.length; i += BATCH_SIZE) {
+        const batchSessionIds = sessionIds.slice(i, i + BATCH_SIZE);
 
-          // In hybrid mode, filter by keyword regex (case-insensitive) combined with the deletedAt check
-          let messageQuery;
+        // In hybrid mode, filter by keyword regex (case-insensitive) combined with the deletedAt check
+        let messageQuery;
 
-          if (hybridMode && keywords.length > 0) {
-            const keywordPattern = keywords.join('|');
-            messageQuery = {
-              sessionId: { $in: batchSessionIds },
-              $and: [
-                { $or: [{ deletedAt: { $exists: false } }, { deletedAt: null }] },
-                {
-                  $or: [
-                    { prompt: { $regex: keywordPattern, $options: 'i' } },
-                    { reply: { $regex: keywordPattern, $options: 'i' } },
-                    { replies: { $elemMatch: { $regex: keywordPattern, $options: 'i' } } },
-                  ],
-                },
-              ],
-            };
-          } else {
-            messageQuery = {
-              sessionId: { $in: batchSessionIds },
-              $or: [{ deletedAt: { $exists: false } }, { deletedAt: null }],
-            };
-          }
+        if (hybridMode && keywords.length > 0) {
+          const keywordPattern = keywords.join('|');
+          messageQuery = {
+            sessionId: { $in: batchSessionIds },
+            $and: [
+              { $or: [{ deletedAt: { $exists: false } }, { deletedAt: null }] },
+              {
+                $or: [
+                  { prompt: { $regex: keywordPattern, $options: 'i' } },
+                  { reply: { $regex: keywordPattern, $options: 'i' } },
+                  { replies: { $elemMatch: { $regex: keywordPattern, $options: 'i' } } },
+                ],
+              },
+            ],
+          };
+        } else {
+          messageQuery = {
+            sessionId: { $in: batchSessionIds },
+            $or: [{ deletedAt: { $exists: false } }, { deletedAt: null }],
+          };
+        }
 
-          // Fetch messages with their pre-computed embeddings if available
-          // Include both 'reply' (single) and 'replies' (array) fields
-          const messages = await Quest.find(messageQuery, {
-            sessionId: 1,
-            prompt: 1,
-            reply: 1,
-            replies: 1,
-            embedding: 1,
-          }).lean();
+        // Fetch messages with their pre-computed embeddings if available
+        // Include both 'reply' (single) and 'replies' (array) fields
+        const messages = await Quest.find(messageQuery, {
+          sessionId: 1,
+          prompt: 1,
+          reply: 1,
+          replies: 1,
+          embedding: 1,
+        }).lean();
 
-          if (hybridMode) {
-            keywordMatchCount += messages.length;
-          }
+        if (hybridMode) {
+          keywordMatchCount += messages.length;
+        }
 
-          // STEP 7: For each message, use pre-computed embedding or generate on-the-fly
-          for (const message of messages) {
-            try {
-              let messageEmbedding: number[];
+        // STEP 7: For each message, use pre-computed embedding or generate on-the-fly
+        for (const message of messages) {
+          try {
+            let messageEmbedding: number[];
 
-              // Use pre-computed embedding if available and model matches
-              if (
-                message.embedding?.vector &&
-                message.embedding.vector.length > 0 &&
-                message.embedding.model === embeddingModel
-              ) {
-                messageEmbedding = message.embedding.vector;
-                messagesWithEmbedding++;
-              } else {
-                // Check if we've hit the on-the-fly generation limit
-                if (messagesGenerated >= MAX_ON_THE_FLY_EMBEDDINGS) {
-                  messagesSkipped++;
-                  continue;
-                }
-
-                // Fall back to generating embedding on-the-fly
-                // Combine prompt + reply + replies (array) for full content
-                const msgWithReplies = message as typeof message & { replies?: string[] };
-                const replyContent = message.reply || (msgWithReplies.replies?.join('\n\n') ?? '');
-                let content = [message.prompt, replyContent].filter(Boolean).join('\n\n');
-
-                if (!content || content.trim().length === 0) {
-                  continue;
-                }
-
-                // Truncate content if too long
-                const MAX_CHARS = 30000; // ~7500 tokens, leaving buffer for safety
-                if (content.length > MAX_CHARS) {
-                  content = content.substring(0, MAX_CHARS) + '...';
-                }
-
-                messageEmbedding = await embeddingService.generateEmbedding(content);
-                messagesGenerated++;
-                generatedEmbeddingTokens += estimateTokens(content);
+            // Use pre-computed embedding if available and model matches
+            if (
+              message.embedding?.vector &&
+              message.embedding.vector.length > 0 &&
+              message.embedding.model === embeddingModel
+            ) {
+              messageEmbedding = message.embedding.vector;
+              messagesWithEmbedding++;
+            } else {
+              // Check if we've hit the on-the-fly generation limit
+              if (messagesGenerated >= MAX_ON_THE_FLY_EMBEDDINGS) {
+                messagesSkipped++;
+                continue;
               }
 
-              const similarity = computeCosineSimilarity(queryEmbedding, messageEmbedding);
+              // Fall back to generating embedding on-the-fly
+              // Combine prompt + reply + replies (array) for full content
+              const msgWithReplies = message as typeof message & { replies?: string[] };
+              const replyContent = message.reply || (msgWithReplies.replies?.join('\n\n') ?? '');
+              let content = [message.prompt, replyContent].filter(Boolean).join('\n\n');
 
-              if (similarity >= minSimilarity) {
-                const sessionId = message.sessionId;
-                const existing = sessionScores.get(sessionId);
-
-                // Create snippet from the message content (first 200 chars of combined prompt+reply/replies)
-                const msgWithReplies = message as typeof message & { replies?: string[] };
-                const replyContent = message.reply || (msgWithReplies.replies?.join(' ') ?? '');
-                const snippetContent = [message.prompt, replyContent].filter(Boolean).join(' | ');
-                const snippet = snippetContent.length > 200 ? snippetContent.substring(0, 200) + '...' : snippetContent;
-
-                if (existing) {
-                  existing.matchingMessages += 1;
-                  if (similarity > existing.maxSimilarity) {
-                    existing.maxSimilarity = similarity;
-                    existing.bestMatch = { similarity, snippet };
-                  }
-                } else {
-                  sessionScores.set(sessionId, {
-                    sessionId,
-                    maxSimilarity: similarity,
-                    matchingMessages: 1,
-                    bestMatch: { similarity, snippet },
-                  });
-                }
+              if (!content || content.trim().length === 0) {
+                continue;
               }
-            } catch (embeddingError) {
-              // Skip messages that fail embedding generation
-              req.logger?.warn?.('Failed to generate embedding for message:', embeddingError);
+
+              // Truncate content if too long
+              const MAX_CHARS = 30000; // ~7500 tokens, leaving buffer for safety
+              if (content.length > MAX_CHARS) {
+                content = content.substring(0, MAX_CHARS) + '...';
+              }
+
+              messageEmbedding = await generateEmbedding(content);
+              messagesGenerated++;
             }
+
+            const similarity = computeCosineSimilarity(queryEmbedding, messageEmbedding);
+
+            if (similarity >= minSimilarity) {
+              const sessionId = message.sessionId;
+              const existing = sessionScores.get(sessionId);
+
+              // Create snippet from the message content (first 200 chars of combined prompt+reply/replies)
+              const msgWithReplies = message as typeof message & { replies?: string[] };
+              const replyContent = message.reply || (msgWithReplies.replies?.join(' ') ?? '');
+              const snippetContent = [message.prompt, replyContent].filter(Boolean).join(' | ');
+              const snippet = snippetContent.length > 200 ? snippetContent.substring(0, 200) + '...' : snippetContent;
+
+              if (existing) {
+                existing.matchingMessages += 1;
+                if (similarity > existing.maxSimilarity) {
+                  existing.maxSimilarity = similarity;
+                  existing.bestMatch = { similarity, snippet };
+                }
+              } else {
+                sessionScores.set(sessionId, {
+                  sessionId,
+                  maxSimilarity: similarity,
+                  matchingMessages: 1,
+                  bestMatch: { similarity, snippet },
+                });
+              }
+            }
+          } catch (embeddingError) {
+            if (embeddingError instanceof ForbiddenError || embeddingError instanceof UnprocessableEntityError) {
+              throw embeddingError;
+            }
+            // Skip messages that fail embedding generation
+            req.logger?.warn?.('Failed to generate embedding for message:', embeddingError);
           }
         }
-      } finally {
-        // One settlement for every on-the-fly embed, so a 50-embed search is not 50 ledger writes.
-        if (generatedEmbeddingTokens > 0) await recordEmbeddingUsage(generatedEmbeddingTokens);
       }
 
       req.logger?.info?.(
@@ -480,13 +468,13 @@ const handler = baseApi().post(
       if (reRankingRequested) {
         const reRankStart = Date.now();
         const MAX_RERANK_CANDIDATES = 30;
+        let throwIfReRankRefused = () => {};
 
-        let reRankUsage: { modelInfo: ModelInfo; total: { inputTokens: number; outputTokens: number } } | undefined;
         try {
           const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel();
-          const tracked = trackUsage(llm);
-          reRankUsage = { modelInfo, total: tracked.total };
-          const reRankService = new ReRankService({ llm: tracked.llm, modelId }, req.logger);
+          const metered = meterSearchBackend(req, llm, modelInfo, 'semantic search reranking');
+          throwIfReRankRefused = metered.throwIfRefused;
+          const reRankService = new ReRankService({ llm: metered.llm, modelId }, req.logger);
 
           // Send top candidates by cosine to the LLM for relevance verification
           const candidates = Array.from(sessionScores.values())
@@ -502,6 +490,8 @@ const handler = baseApi().post(
             maxCandidates: MAX_RERANK_CANDIDATES,
             minRelevanceScore: 3,
           });
+
+          metered.throwIfRefused();
 
           // Detect whether the re-ranker fell back to cosine-only scoring.
           // The fallback returns results with relevanceScore: -1
@@ -544,10 +534,13 @@ const handler = baseApi().post(
             );
           }
         } catch (reRankError) {
+          throwIfReRankRefused();
+          if (reRankError instanceof ForbiddenError || reRankError instanceof UnprocessableEntityError) {
+            throw reRankError;
+          }
           req.logger?.warn?.('Re-ranking failed, continuing with cosine-only results:', reRankError);
           // Continue with cosine-only results on failure
         }
-        if (reRankUsage) await recordOpsUsage(reRankUsage.modelInfo, reRankUsage.total);
       }
 
       // STEP 9: Sort by score and limit to topK
@@ -607,6 +600,7 @@ const handler = baseApi().post(
         },
       });
     } catch (error) {
+      if (error instanceof ForbiddenError || error instanceof UnprocessableEntityError) throw error;
       req.logger?.error?.('Semantic search failed:', error);
       return res.status(500).json({
         error: 'Semantic search failed. Please try again.',
