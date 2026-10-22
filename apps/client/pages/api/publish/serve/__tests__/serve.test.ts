@@ -3550,6 +3550,7 @@ describe('GET /api/publish/serve - signed file delivery', () => {
     { path: 'player.html', mimeType: 'text/html' },
     { path: 'media/clip.mp4', mimeType: 'video/mp4' },
     { path: 'media/sound.mp3', mimeType: 'audio/mpeg' },
+    { path: 'media/captions.vtt', mimeType: 'text/vtt' },
     { path: 'media/still.jpg', mimeType: 'image/jpeg' },
     { path: 'files/deck.pdf', mimeType: 'application/pdf' },
     { path: 'files/evil.pdf', mimeType: 'text/html' },
@@ -3566,6 +3567,7 @@ describe('GET /api/publish/serve - signed file delivery', () => {
     'user/scope123/my-slug/media/still.jpg': 'JPEG',
     'user/scope123/my-slug/media/clip.mp4': 'MP4',
     'user/scope123/my-slug/media/sound.mp3': 'MP3',
+    'user/scope123/my-slug/media/captions.vtt': 'WEBVTT',
     'user/scope123/my-slug/files/deck.pdf': '%PDF',
     'user/scope123/my-slug/files/evil.pdf': '<script>1</script>',
     'user/scope123/my-slug/style.css': 'body{}',
@@ -3690,6 +3692,8 @@ describe('GET /api/publish/serve - signed file delivery', () => {
     // A `crossorigin` media element (Web Audio, a video drawn to a canvas).
     ['media/sound.mp3', 'audio', 'cors'],
     ['media/clip.mp4', 'video', 'cors'],
+    // A <track> under a media element without crossorigin is fetched same-origin only.
+    ['media/captions.vtt', 'track', 'same-origin'],
   ])('serves %s loaded as %s (mode %s) same-origin from the buffered path', async (file, fetchDest, fetchMode) => {
     mockArtifactFindOne.mockReturnValue(bundle({ manifest: FILES }));
     const { res, promise } = run(['u', 'scope123', 'my-slug', ...file.split('/')], { fetchDest, fetchMode });

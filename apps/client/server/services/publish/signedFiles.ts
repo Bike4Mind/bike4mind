@@ -73,8 +73,12 @@ export function mediaLinkTtlSeconds(proofSecondsLeft: number | null): number {
  */
 export const BUFFERED_FILE_MAX_BYTES = 4 * 1024 * 1024;
 
-/** Sec-Fetch-Dest values whose loader follows a cross-origin redirect: media, frames, navigations. */
-const REDIRECTED_FETCH_DESTS = new Set(['video', 'audio', 'track', 'document', 'iframe', 'frame', 'embed', 'object']);
+/**
+ * Sec-Fetch-Dest values whose loader follows a cross-origin redirect: media, frames, navigations.
+ * Not `track`: a caption file under a media element without `crossorigin` is fetched in
+ * same-origin mode, so a redirect to storage is a network error and the captions vanish.
+ */
+const REDIRECTED_FETCH_DESTS = new Set(['video', 'audio', 'document', 'iframe', 'frame', 'embed', 'object']);
 
 /** True when a request with this `Sec-Fetch-Dest` may be answered by a redirect to signed storage. */
 export function isRedirectedFetchDest(dest: string | string[] | undefined): boolean {

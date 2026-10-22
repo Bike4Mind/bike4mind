@@ -124,17 +124,21 @@ describe('signed link lifetimes', () => {
 });
 
 describe('isRedirectedFetchDest', () => {
-  it.each(['video', 'audio', 'track', 'document', 'iframe', 'frame', 'embed', 'object'])(
-    'redirects a %s load',
-    dest => {
-      expect(isRedirectedFetchDest(dest)).toBe(true);
-    }
-  );
+  it.each(['video', 'audio', 'document', 'iframe', 'frame', 'embed', 'object'])('redirects a %s load', dest => {
+    expect(isRedirectedFetchDest(dest)).toBe(true);
+  });
 
-  it.each([['empty'], ['script'], ['style'], ['image'], ['font'], ['worker'], [undefined], [['video', 'audio']]])(
-    'keeps a %s request on the buffered path',
-    dest => {
-      expect(isRedirectedFetchDest(dest as string | string[] | undefined)).toBe(false);
-    }
-  );
+  it.each([
+    ['track'],
+    ['empty'],
+    ['script'],
+    ['style'],
+    ['image'],
+    ['font'],
+    ['worker'],
+    [undefined],
+    [['video', 'audio']],
+  ])('keeps a %s request on the buffered path', dest => {
+    expect(isRedirectedFetchDest(dest as string | string[] | undefined)).toBe(false);
+  });
 });
