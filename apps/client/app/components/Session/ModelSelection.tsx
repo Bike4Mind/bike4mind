@@ -1172,6 +1172,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
               variant="plain"
               color="neutral"
               data-testid={`older-models-toggle-${backend}`}
+              disabled={!!debouncedSearchQuery}
               aria-expanded={olderExpanded}
               aria-controls={`older-models-content-${backend}`}
               endDecorator={<ExpandMoreIcon sx={{ transform: olderExpanded ? 'rotate(180deg)' : 'none' }} />}

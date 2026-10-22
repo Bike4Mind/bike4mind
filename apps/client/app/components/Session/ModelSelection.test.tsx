@@ -751,16 +751,26 @@ describe('ModelSelection older models', () => {
     expect(screen.getByTestId(`model-card-${olderModel.id}`)).toBeInTheDocument();
   });
 
-  it('finds collapsed models by search and restores collapse after clearing the search', async () => {
-    renderSelection({});
-    const input = screen.getByTestId('model-search-input').querySelector('input') as HTMLInputElement;
-    fireEvent.change(input, { target: { value: 'Previous generation' } });
-    await waitFor(() => expect(screen.getByTestId(`model-card-${olderModel.id}`)).toBeInTheDocument());
-    expect(screen.getByTestId('older-models-toggle-OpenAI')).toHaveAttribute('aria-expanded', 'true');
-    fireEvent.change(input, { target: { value: '' } });
-    await waitFor(() => expect(screen.queryByTestId(`model-card-${olderModel.id}`)).not.toBeInTheDocument());
-    expect(screen.getByTestId('older-models-toggle-OpenAI')).toHaveAttribute('aria-expanded', 'false');
-  });
+  it.each([false, true])(
+    'preserves saved older-group expansion (%s) when its toggle is clicked during search',
+    async initiallyExpanded => {
+      renderSelection({});
+      const toggle = screen.getByTestId('older-models-toggle-OpenAI');
+      if (initiallyExpanded) fireEvent.click(toggle);
+      const input = screen.getByTestId('model-search-input').querySelector('input') as HTMLInputElement;
+      fireEvent.change(input, { target: { value: 'Previous generation' } });
+      await waitFor(() => expect(screen.queryByTestId(`model-card-${textModel.id}`)).not.toBeInTheDocument());
+      expect(screen.getByTestId(`model-card-${olderModel.id}`)).toBeInTheDocument();
+      expect(toggle).toHaveAttribute('aria-expanded', 'true');
+      fireEvent.click(toggle);
+
+      fireEvent.change(input, { target: { value: '' } });
+      await waitFor(() => expect(screen.getByTestId(`model-card-${textModel.id}`)).toBeInTheDocument());
+      expect(toggle).toHaveAttribute('aria-expanded', String(initiallyExpanded));
+      if (initiallyExpanded) expect(screen.getByTestId(`model-card-${olderModel.id}`)).toBeInTheDocument();
+      else expect(screen.queryByTestId(`model-card-${olderModel.id}`)).not.toBeInTheDocument();
+    }
+  );
 
   it('keeps pinned older models reachable in Favorites and Recommended', () => {
     favoriteModelIds.add(olderModel.id);
