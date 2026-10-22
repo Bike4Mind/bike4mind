@@ -23,6 +23,7 @@ import {
   IUsageEventRepository,
   IUserApiKeyRepository,
   IUserRepository,
+  type IUserDocument,
   normalizeMultimodalMessages,
   BadRequestError,
   HTTPError,
@@ -64,6 +65,7 @@ import { subtractCredits, isMemberCreditCapExceeded, MEMBER_CREDIT_CAP_MESSAGE }
 import { isCurrentOrgMember } from './organizationService/orgAuthority';
 import { InsufficientCreditsError } from './llm/ChatCompletionProcess';
 import { usageEventStatusForFinish } from './llm/earlyStopStamp';
+import { createModelAdmission, loadModelConfigurations } from './llm/modelAdmission';
 import { prepareWireTools } from './cliCompletionsToolSearch';
 import { withOllamaThinkingDefault } from './llm/ollamaThinkingDefault';
 
@@ -185,13 +187,15 @@ export interface CompletionParams {
    * A throw from it refunds the hold.
    */
   onReady?: () => void | Promise<void>;
+  /** Entitlement resolver for model admission; omitted means tag-only access. */
+  getEntitlements?: (user: IUserDocument) => Promise<string[]>;
 }
 
 /**
  * Estimate input tokens from messages. Conservative pre-flight estimate at
  * 2.5 chars/token (code, JSON, and non-English tokenize less efficiently).
  */
-function estimateInputTokens(messages: IMessage[]): number {
+export function estimateInputTokens(messages: IMessage[]): number {
   const totalChars = messages.reduce((sum, msg) => {
     const contentLength = typeof msg.content === 'string' ? msg.content.length : JSON.stringify(msg.content).length;
     return sum + contentLength;
@@ -206,7 +210,7 @@ function estimateInputTokens(messages: IMessage[]): number {
  * the tool is sent in full. Decided here rather than trusting prepareWireTools to have stripped
  * the flag, because `serverTools` never pass through it.
  */
-function estimateToolTokens(tools: ICompletionOptionTools[], deferralHonoured: boolean): number {
+export function estimateToolTokens(tools: ICompletionOptionTools[], deferralHonoured = false): number {
   const totalChars = tools.reduce(
     (sum, tool) =>
       deferralHonoured && tool.toolSchema.defer_loading === true ? sum : sum + JSON.stringify(tool.toolSchema).length,
@@ -492,6 +496,22 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     );
   }
 
+  // skipCache: this flag gates money and the serving process may outlive the admin's write to it.
+  const settings = await getSettingsMap(db, { names: ['enforceCredits'], skipCache: true });
+  const enforceCredits = getSettingsValue('enforceCredits', settings);
+
+  const [actor, modelConfigs] = await Promise.all([
+    db.users.findById(userId),
+    loadModelConfigurations(db.adminSettings),
+  ]);
+  await createModelAdmission({
+    user: actor ?? {},
+    configs: modelConfigs,
+    getEntitlements: actor && params.getEntitlements ? () => params.getEntitlements!(actor) : undefined,
+    models,
+    enforceCredits: Boolean(enforceCredits),
+  }).assert(model);
+
   const llm = getLlmByModel(apiKeys, {
     modelInfo,
     logger: logger ?? new Logger(),
@@ -615,10 +635,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     );
   }
 
-  // Credit enforcement: Fail-fast if model info is missing.
-  // skipCache: this flag gates money and the serving process may outlive the admin's write to it.
-  const settings = await getSettingsMap(db, { names: ['enforceCredits'], skipCache: true });
-  const enforceCredits = getSettingsValue('enforceCredits', settings);
+  // Credit enforcement: Fail-fast if model info is missing
 
   if (enforceCredits) {
     if (!modelInfo) {

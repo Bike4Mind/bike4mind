@@ -87,7 +87,6 @@
     "@casl/ability": "^6.8.1",
     "@casl/mongoose": "^8.0.5",
     "@elevenlabs/client": "^1.14.1",
-    "@googleapis/calendar": "^16.0.0",
     "@googleapis/drive": "^22.0.0",
     "@hookform/resolvers": "^5.9.1",
     "@icons-pack/react-simple-icons": "^10.0.0",

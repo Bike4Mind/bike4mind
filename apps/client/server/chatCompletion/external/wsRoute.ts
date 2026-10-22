@@ -41,6 +41,7 @@ import { cliCompletionErrorFields, sanitizeErrorMessage } from '@server/utils/er
 import { emitProcessingFailed } from '../processingFailedMetric';
 import { Resource } from 'sst';
 import { z } from 'zod';
+import { getUserEntitlements } from '@server/entitlements';
 
 /**
  * CLI completions with WebSocket response streaming (`/api/ai/v1/ws-completions`), served by
@@ -216,6 +217,7 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
 
           // Cast: Zod parses content/tools as unknown[], but executeCompletion expects typed arrays
           await executeCompletion({
+            getEntitlements: getUserEntitlements,
             creditHolds: createCompletionCreditHolds(logger),
             userId,
             model,

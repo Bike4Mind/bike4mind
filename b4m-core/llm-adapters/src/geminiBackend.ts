@@ -41,13 +41,10 @@ import { v4 as uuidv4 } from 'uuid';
 import { handleToolResultStreaming, createRecursiveArtifactGuard, declaredArtifactType } from './toolStreamingHelper';
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
 import { injectJsonSchemaInstruction, isBestEffortJsonSchema } from './responseFormatHelpers';
-import { usableTokenCount } from './thinkingParams';
+import { geminiThinkingOutputCap } from './thinkingParams';
 import { withAbortListener } from './withAbortListener';
 import { DispatchModel } from './dispatchModel';
 import { normalizeGeminiFinishReason } from './stopReason';
-
-// Headroom for thinking tokens, which count against maxOutputTokens.
-const GEMINI_THINKING_RESERVE_TOKENS = 16_000;
 
 // Matches gemini-3-pro-preview, gemini-3.1-pro-preview, gemini-3.5-flash, but not a future gemini-30 family.
 const isGemini3 = (modelId: string) => /^gemini-3(\D|$)/.test(modelId);
@@ -1647,11 +1644,8 @@ export class GeminiBackend implements ICompletionBackend {
       };
     }
     // Temperature stays at Google's default 1.0; Gemini 3 loops or degrades below it.
-    const wanted = callerCap + GEMINI_THINKING_RESERVE_TOKENS;
-    // Assumes no live can_think row has max_tokens below the reserve: it would get its catalog cap and no thinking bound.
-    const ceiling = (model.maxOutputTokensDerived ? undefined : usableTokenCount(model.max_tokens)) ?? Infinity;
-    const maxOutputTokens = Math.min(ceiling, wanted);
-    if (wanted >= ceiling) return { maxOutputTokens };
+    const { maxOutputTokens, callerCapBinds } = geminiThinkingOutputCap(model, callerCap);
+    if (!callerCapBinds) return { maxOutputTokens };
     // Bound thinking only when the caller's cap binds; otherwise keep Google's default.
     // Only 3.x and 4.x take thinkingLevel; the -latest aliases track Google's newest 3.x Flash / Flash-Lite.
     // Other ids get the cap alone.

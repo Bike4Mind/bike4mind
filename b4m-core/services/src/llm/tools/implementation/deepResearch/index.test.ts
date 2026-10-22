@@ -24,6 +24,8 @@ vi.mock('../webfetch/plainFetch', () => ({
 
 import { performDeepResearch } from './index';
 import type { ToolContext } from '../../base/types';
+import { meterCompletionBackend } from '../../../../billing/completionMeter';
+import type { ModelInfo } from '@bike4mind/common';
 
 const ANALYSIS_STOP = JSON.stringify({
   analysis: { summary: 'done', gaps: [], nextSteps: [], shouldContinue: false },
@@ -78,6 +80,34 @@ beforeEach(() => {
 });
 
 describe('performDeepResearch discovery precedence', () => {
+  it('reserves and settles analysis through the supplied backend when replacement keys are omitted', async () => {
+    createFirecrawlApp.mockReturnValue(firecrawlApp());
+    resolveWebSearchProviders.mockResolvedValue([null, null]);
+    const context = makeContext();
+    const backend = context.llm;
+    const settle = vi.fn(async () => 1);
+    const reserve = vi.fn(async () => ({ settle, refund: vi.fn(async () => undefined) }));
+    const modelInfo = { id: 'metered-operations-model', backend: 'openai' } as ModelInfo;
+    context.llm = meterCompletionBackend(backend, reserve, modelInfo);
+
+    const result = await performDeepResearch(
+      context,
+      { topic: 'marine biology' },
+      { model: modelInfo.id, maxDepth: 1, duration: 1 }
+    );
+
+    expect(result.success).toBe(true);
+    expect(reserve).toHaveBeenCalled();
+    expect(reserve).toHaveBeenCalledBefore(backend.complete);
+    expect(settle).toHaveBeenCalledTimes(vi.mocked(backend.complete).mock.calls.length);
+    expect(backend.complete).toHaveBeenCalledWith(
+      modelInfo.id,
+      expect.anything(),
+      expect.anything(),
+      expect.any(Function)
+    );
+  });
+
   it('uses Firecrawl for discovery when both Firecrawl and a provider are configured', async () => {
     const app = firecrawlApp();
     const provider = searchProvider();

@@ -2,8 +2,15 @@ import type { ApiKeyTable, ICompletionBackend, ICompletionOptionTools } from '@b
 import { getLlmByModel } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import type { ThoroughnessLevel } from '@bike4mind/agents';
-import { buildUsagePriceStamp, getTextModelCost, getTurnsCost, type ModelInfo, type UsagePriceStamp } from '@bike4mind/common';
+import {
+  buildUsagePriceStamp,
+  getTextModelCost,
+  getTurnsCost,
+  type ModelInfo,
+  type UsagePriceStamp,
+} from '@bike4mind/common';
 import { ServerSubagentOrchestrator, spentResultOf } from '../../agents/ServerSubagentOrchestrator';
+import type { ModelAdmission } from '../../modelAdmission';
 import type {
   ServerAgentExecutionResult,
   ServerSubagentTracker,
@@ -154,6 +161,9 @@ export interface DelegateToAgentToolDeps {
    * (`...deps`) so the child gate holds at every delegation depth.
    */
   toolPermissions?: SubagentToolPermissions;
+
+  /** The user's model admission; forwarded to the orchestrator, see `ServerOrchestratorDeps.modelAdmission`. */
+  modelAdmission?: Pick<ModelAdmission, 'assert'>;
 }
 
 /**
@@ -345,6 +355,7 @@ export function createDelegateToAgentTool(deps: DelegateToAgentToolDeps): ICompl
         checkMemberCreditCap: deps.checkMemberCreditCap,
         checkInsufficientCredits: deps.checkInsufficientCredits,
         toolPermissions: deps.toolPermissions,
+        modelAdmission: deps.modelAdmission,
       });
 
       // Background mode: dispatch + return a structured payload immediately. The LLM

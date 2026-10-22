@@ -4,6 +4,8 @@ import type { Server } from 'http';
 import express from 'express';
 
 // Real @bike4mind/common (pure SSE + origin helpers). Only the seams below are mocked.
+// Real entitlements pull in mongoose models at import time, which the @bike4mind/database mock lacks.
+vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
 vi.mock('@bike4mind/observability', () => ({
   Logger: class {
     info = vi.fn();

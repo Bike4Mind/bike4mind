@@ -35,6 +35,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
 import { verifyVoiceSessionToken, type VoiceSessionContext } from '@server/voice/voiceSessionToken';
 import { voiceSessionTokenExpiresAtMs } from '@bike4mind/server-utils/voice/voiceSessionLimits';
+import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
 
 // Built-in tools enabled for voice turns. Curated to ones that execute INLINE
 // (no SQS/Lambda dispatch): web search, knowledge-base RAG, datetime,
@@ -119,6 +120,13 @@ async function runFullPipeline(
     gpcSignalDetected: false,
     features: new Map<featureNames, ChatCompletionFeature>(),
     logger,
+    createCompletionMeter: ({
+      organizationId,
+      featureLabel,
+    }: {
+      organizationId: string | null;
+      featureLabel: string;
+    }) => createCompletionMeter(user, logger, featureLabel, { sessionId: sessionCtx.sessionId, organizationId }),
     // Forward streamed reply updates to the SSE writer in the handler.
     onReplyStream,
     // No-op: we run process() inline in this request handler, so we deliberately

@@ -91,32 +91,6 @@ Generate images using AWS Bedrock.
 }
 ```
 
-### LLM Inference
-**POST** `/api/infer`
-
-Direct LLM inference for text generation.
-
-**Request:**
-```json
-{
-  "model": "gpt-4",
-  "messages": [
-    {
-      "role": "user",
-      "content": "Explain quantum computing"
-    }
-  ],
-  "stream": false
-}
-```
-
-**Response:**
-```json
-{
-  "result": "Quantum computing is a revolutionary approach..."
-}
-```
-
 ## User Management API
 
 ### Get User Profile

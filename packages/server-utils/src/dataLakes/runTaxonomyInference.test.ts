@@ -102,4 +102,26 @@ describe('runTaxonomyInference', () => {
     expect(result.categories).toEqual(categories);
     expect(result.fileAssignments).toEqual(fileAssignments);
   });
+
+  it('never calls the provider when the reservation is refused', async () => {
+    const reserve = vi.fn().mockRejectedValue(new Error('insufficient credits'));
+
+    await expect(runTaxonomyInference('key', [], { reserve })).rejects.toThrow('insufficient credits');
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
+  it('settles the reported usage after a call and refunds a failed one', async () => {
+    const settle = vi.fn().mockResolvedValue(1);
+    const refund = vi.fn();
+    const reserve = vi.fn().mockResolvedValue({ settle, refund });
+    createMock.mockResolvedValue({ ...completionWith(null), usage: { prompt_tokens: 120, completion_tokens: 30 } });
+
+    await runTaxonomyInference('key', [], { reserve });
+    expect(reserve).toHaveBeenCalledWith(expect.any(Array), 4000);
+    expect(settle).toHaveBeenCalledWith({ inputTokens: 120, outputTokens: 30 });
+
+    createMock.mockRejectedValue(new Error('500'));
+    await expect(runTaxonomyInference('key', [], { reserve })).rejects.toThrow('500');
+    expect(refund).toHaveBeenCalledOnce();
+  });
 });

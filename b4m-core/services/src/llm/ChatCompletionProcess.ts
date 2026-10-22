@@ -161,6 +161,7 @@ import {
 // Re-exported so the resolver below and the type it returns stay reachable from one import, while
 // the declaration stays beside the context contract it has to satisfy.
 export type { EntitlementResolution };
+import { createModelAdmission, loadModelConfigurations, type ModelAdmission } from './modelAdmission';
 import { datalakeTagsFrom } from '../dataLakeService/getDataLakePrompts';
 import { countNotServingNamedLakes } from '../dataLakeService/countNotServingNamedLakes';
 import {
@@ -900,6 +901,7 @@ export class ChatCompletionProcess {
   public summarizeSession: IChatCompletionServiceOptions['summarizeSession'];
   public contextSummarizeSession: IChatCompletionServiceOptions['contextSummarizeSession'];
   public slackWebhookUrl: string;
+  public createCompletionMeter: IChatCompletionServiceOptions['createCompletionMeter'];
   public features: Map<featureNames, ChatCompletionFeature>;
   public userAbility: MongoAbility | null = null;
   public sessionId: string;
@@ -969,6 +971,8 @@ export class ChatCompletionProcess {
   public priorUserPrompts?: string[];
 
   private getEntitlements: IChatCompletionServiceOptions['getEntitlements'];
+  /** Set once the turn's model resolves; gates the deprecated remap and every fallback hop. */
+  private modelAdmission?: ModelAdmission;
   private entitlementsResolved = false;
   /**
    * Set only in `resolveEntitlementKeys()`'s catch branch and reported back through that method's
@@ -1113,6 +1117,7 @@ export class ChatCompletionProcess {
     this.features = options.features || new Map<featureNames, ChatCompletionFeature>();
     this.tokenizer = options.tokenizer;
     this.slackWebhookUrl = options.slackWebhookUrl;
+    this.createCompletionMeter = options.createCompletionMeter;
     this.sessionId = options.sessionId;
     this.cacheRepository = options.cacheRepository;
     this.publishTelemetryAlert = options.publishTelemetryAlert;
@@ -2437,6 +2442,16 @@ export class ChatCompletionProcess {
       if (!modelInfo || !llm) {
         throw new Error('Invalid LLM backend specified');
       }
+      this.modelAdmission = createModelAdmission({
+        user: this.user,
+        configs: await loadModelConfigurations(this.db.adminSettings),
+        getEntitlements: async () => (await this.resolveEntitlementKeys()).keys,
+        models,
+        enforceCredits: getSettingsValue('enforceCredits', defaultAdminSettings) === true,
+      });
+      // Always the final id, remapped or not: /api/chat admits the requested model in
+      // ChatCompletionInvoke, but the quest/Slack queue handlers construct this class directly.
+      await this.modelAdmission.assert(modelInfo.id);
       // Queue and agent runs skip ChatCompletionInvoke, so the redirect is first seen here. Record it
       // with the same convention Invoke uses: model.name is what answers, redirectedFrom what was asked.
       if (quest.promptMeta && resolvedModelId !== model) {
@@ -2674,6 +2689,7 @@ export class ChatCompletionProcess {
               fabFileIds: sessionFabFileIds,
               questId,
               questMaster,
+              organizationId: organization?.id ?? null,
             });
 
             const elapsed = Date.now() - featureStartTime;
@@ -3212,6 +3228,7 @@ export class ChatCompletionProcess {
         subagentTelemetryData: this.subagentTelemetryData,
         sendStatusUpdate: (q, status, options) => this.sendStatusUpdate(q, status, options),
         onToolPreamble: this.onToolPreamble,
+        modelAdmission: this.modelAdmission,
         decide: this.decide,
       });
 
@@ -5397,6 +5414,7 @@ export class ChatCompletionProcess {
                   preferUntriedBackend: isFinalHop,
                   endUserId: this.user.id,
                   requireTools: !!options.tools?.length,
+                  isAdmitted: this.modelAdmission?.admits,
                 }
               );
 

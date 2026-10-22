@@ -68,6 +68,7 @@ import { resolveEmbedTools } from './embedToolResolver';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { emitProcessingFailed } from '../processingFailedMetric';
 import { z } from 'zod';
+import { getUserEntitlements } from '@server/entitlements';
 
 /**
  * Public embed chat endpoint (`POST /api/embed/chat`), served by the always-on
@@ -642,6 +643,7 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
 
       try {
         await executeCompletion({
+          getEntitlements: getUserEntitlements,
           creditHolds: createCompletionCreditHolds(logger),
           userId: actorUserId,
           model: hydrated.model,

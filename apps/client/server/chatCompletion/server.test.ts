@@ -16,6 +16,8 @@ const mockResource = vi.hoisted(() => ({
   websocket: { managementEndpoint: 'https://ws.test', url: 'wss://ws.test' },
   App: { stage: 'test' },
 }));
+// Real entitlements pull in mongoose models at import time, which the @bike4mind/database mock lacks.
+vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
 vi.mock('sst', () => ({ Resource: mockResource }));
 
 // The quest-processing-failure metric's emit seam.

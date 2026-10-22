@@ -49,6 +49,7 @@ import type { ToolAvailability } from '../toolAvailability';
 import type { SubagentTelemetryData } from './implementation/delegateToAgent';
 import type { IChatCompletionServiceOptions, QuestStartBodySchema } from '../ChatCompletionFeatures';
 import { usageEventStatusForFinish } from '../earlyStopStamp';
+import type { ModelAdmission } from '../modelAdmission';
 
 /** Usage-event input shared by both tool settlement sites. Analytics only, never billing. */
 export function buildToolUsageEvent(params: {
@@ -184,6 +185,8 @@ export interface ToolBuilderConfig {
    * preamble while the tool executes. No-op when omitted.
    */
   onToolPreamble?: (preamble: string, toolName: string) => void;
+  /** The turn's model admission, forwarded to the delegation tools (see ToolBuilderDeps.modelAdmission). */
+  modelAdmission?: Pick<ModelAdmission, 'assert'>;
   /** The `decide` tool's execution seam, forwarded to the tool context (see ToolContext.decide). */
   decide?: ToolContext['decide'];
 }
@@ -983,6 +986,7 @@ export class ToolBuilder {
         apiKeyTable,
         thinking,
         agentStore,
+        modelAdmission: this.deps.modelAdmission,
       },
       {
         onStatusUpdate: async (changes, status) => {
