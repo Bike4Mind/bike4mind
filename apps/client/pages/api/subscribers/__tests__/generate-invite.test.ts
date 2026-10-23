@@ -7,7 +7,6 @@ const h = vi.hoisted(() => ({
   markInviteGenerated: vi.fn(),
   findInvite: vi.fn(),
   createInvite: vi.fn(),
-  deleteInvites: vi.fn(),
   publish: vi.fn(),
   audit: vi.fn(),
 }));
@@ -23,7 +22,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 vi.mock('@bike4mind/database', () => ({
   subscriberRepository: { findById: h.findSubscriber, markInviteGenerated: h.markInviteGenerated },
-  registrationInviteRepository: { findOne: h.findInvite, create: h.createInvite, deleteByIds: h.deleteInvites },
+  registrationInviteRepository: { findOne: h.findInvite, create: h.createInvite },
   withTransaction: (fn: () => Promise<unknown>) => fn(),
 }));
 vi.mock('@server/managers/regInviteManager', () => ({ generateCode: () => 'CODE-123' }));
@@ -77,5 +76,14 @@ describe('POST /api/subscribers/generate-invite - admin audit', () => {
     await expect(h.handler!(req, res)).rejects.toThrow(/audit down/);
     expect(res._isEndCalled()).toBe(false);
     expect(h.publish).not.toHaveBeenCalled();
+  });
+
+  it('keeps the committed invite when the invite email fails to publish', async () => {
+    h.publish.mockRejectedValueOnce(new Error('bus down'));
+    const { req, res } = createMocks({ method: 'POST' });
+    Object.assign(req, { body, user: { id: 'admin-1', isAdmin: true } });
+    await expect(h.handler!(req, res)).rejects.toThrow(/bus down/);
+    expect(h.audit).toHaveBeenCalledTimes(1);
+    expect(res._isEndCalled()).toBe(false);
   });
 });
