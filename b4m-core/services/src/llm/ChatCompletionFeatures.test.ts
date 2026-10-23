@@ -1238,7 +1238,20 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       expect(annDb.vectorSearch).not.toHaveBeenCalled();
       expect(content).not.toContain(targetHeading);
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('selected alphabetically by file name'));
-      // The listing page itself is the cap here, so no candidate pick ran to report on.
+      // The listing page itself is the cap here: the query made the by-name cut, and it is recorded.
+      expect(recordForcedRetrievalCutMetricsMock).toHaveBeenCalledTimes(1);
+      expect(recordForcedRetrievalCutMetricsMock).toHaveBeenCalledWith(
+        { selection: 'fileName', reason: 'relevance-unavailable', annPickMs: null },
+        expect.anything()
+      );
+    });
+
+    it('without vector search, records no cut when the single lake fits under the cap', async () => {
+      const { ctx } = makeLargeScopeCtx({ vectorSearchEnabled: false });
+      ctx.db.fabfiles.search = vi.fn(() =>
+        Promise.resolve({ data: lakeFiles.slice(0, 80), hasMore: false, total: 80 })
+      );
+      await run(ctx);
       expect(recordForcedRetrievalCutMetricsMock).not.toHaveBeenCalled();
     });
 
@@ -1260,6 +1273,7 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       // Exactly the cap's worth of files reached the chunk scan.
       const scanned = new Set(ctx.db.fabfilechunks.findVectorsByFabFileIds.mock.calls.flatMap(c => c[0] as string[]));
       expect(scanned.size).toBe(100);
+      expect(recordForcedRetrievalCutMetricsMock).toHaveBeenCalledTimes(1);
       expect(recordForcedRetrievalCutMetricsMock).toHaveBeenCalledWith(
         { selection: 'relevance', annPickMs: expect.any(Number) },
         expect.anything()
@@ -1559,6 +1573,7 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       expect(scanned.size).toBe(100);
       expect([...scanned].filter(id => id.startsWith('a'))).toHaveLength(0);
       expect([...scanned].filter(id => id.startsWith('n'))).toHaveLength(10);
+      expect(recordForcedRetrievalCutMetricsMock).toHaveBeenCalledTimes(1);
       expect(recordForcedRetrievalCutMetricsMock).toHaveBeenCalledWith(
         { selection: 'fileName', reason: 'relevance-unavailable', annPickMs: null },
         expect.anything()

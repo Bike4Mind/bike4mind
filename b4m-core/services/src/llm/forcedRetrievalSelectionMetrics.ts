@@ -11,9 +11,6 @@ import type { ForcedRetrievalFallbackReason } from './forcedRetrievalCandidateSe
  * invisible without reading logs. On production it was 7 of 16 large-lake turns, all on the ANN
  * deadline after an idle index (see apps/workers/src/cron/dataLakeVectorIndexKeepWarm.ts).
  *
- * Scope: the candidate pick only. With relevance unavailable on a single lake the listing page is
- * already the cap, so that by-name cut happens in the query and publishes nothing here.
- *
  * Keep the names below in sync with infra/dataLakeSearchDashboard.ts and the
  * forcedRetrievalByNameCut alarm in infra/alarms.ts; the tests pin the literals because infra/
  * cannot import them.
