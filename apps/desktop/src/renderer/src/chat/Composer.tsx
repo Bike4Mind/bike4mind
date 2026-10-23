@@ -628,8 +628,7 @@ export function Composer({
       </Box>
 
       {/* Attach on the left, what answers the turn on the right - the shape Claude Code uses.
-          The last row in the window, so it keeps a wider gap off the window's bottom edge than
-          off the input above it. */}
+          The window's last row, so a wider gap below than above. */}
       <Stack direction="row" alignItems="center" sx={{ ...contentColumnSx, pt: 1, pb: 2, gap: 1 }}>
         {/* No correction of its own: its box goes on the content edge like every other control
             in the column, and the '+' rides inside it. Pulling the box left so the glyph alone

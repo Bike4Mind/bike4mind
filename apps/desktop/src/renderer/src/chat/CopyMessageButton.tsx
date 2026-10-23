@@ -55,9 +55,8 @@ export function CopyMessageButton({ text, testId }: { text: string; testId: stri
   };
 
   return (
-    // Positioned so the live region below has a containing block of its own. Without one it
-    // resolves to an ancestor outside the transcript's scroller, escapes its clip, and every
-    // turn's region lengthens the document past the window.
+    // The live region's containing block; without it the region resolves outside the transcript's
+    // scroller, escapes its clip, and lengthens the document past the window.
     <Box component="span" sx={{ position: 'relative', display: 'inline-flex' }}>
       <IconButton
         size="sm"
