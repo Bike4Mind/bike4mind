@@ -67,6 +67,13 @@ describe('POST /api/reg-invites/update - admin audit', () => {
     );
   });
 
+  it('does not audit an update whose ids match no invite', async () => {
+    h.formatRegInvites.mockResolvedValue([]);
+    const { res } = await run(['missing-1']);
+    expect(res._getStatusCode()).toBe(200);
+    expect(h.audit).not.toHaveBeenCalled();
+  });
+
   it('does not report success when the audit write rejects', async () => {
     h.audit.mockRejectedValueOnce(new Error('audit down'));
     const run1 = run(['inv-1']);
