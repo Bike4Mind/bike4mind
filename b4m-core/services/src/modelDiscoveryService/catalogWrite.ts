@@ -8,6 +8,7 @@ import {
   ModelBackend,
   ModelRecordWrite,
   groupsTouchedByPatch,
+  isDiscoveryVerdict,
   lifecycleStatusRank,
   type FieldGroup,
   type ICatalogContributor,
@@ -384,6 +385,22 @@ function sourceDisabledReasonOf(contributed: ReadonlyMap<string, unknown>): stri
 }
 
 /**
+ * The disable reason in force, when it is a provider's answer this run could not re-ask. A Bedrock
+ * availability call that fails arrives as null by contract, so such a run contributes nothing about
+ * availability; replacing the reason with promotion's verdict would erase a fact discovery only
+ * reported, and the read path would then reclaim the group as a placeholder of its own.
+ */
+function providerDisableInForce(
+  contributed: ReadonlyMap<string, unknown>,
+  base: Record<string, unknown>
+): string | undefined {
+  if (contributed.has('autoDisabled') || contributed.has('autoDisabledReason')) return undefined;
+  if (base.autoDisabled !== true) return undefined;
+  const reason = base.autoDisabledReason;
+  return typeof reason === 'string' && !isDiscoveryVerdict(reason) ? reason : undefined;
+}
+
+/**
  * Does this run's `autoDisabled: false` lift a disable the same source put on the row? Only a disable
  * credited to that source counts: the row in force holds it (discovery outranks seed for
  * `availability`), and the superseded discovery row names the source as the group's contributor. A
@@ -645,7 +662,9 @@ function planOne(
           ...withoutReason,
           lifecycle: { ...record.lifecycle, status: 'discovered' },
           autoDisabled: true,
-          autoDisabledReason: keepReasonInForce ? reasonInForce : decision.autoDisabledReason,
+          autoDisabledReason: keepReasonInForce
+            ? reasonInForce
+            : (providerDisableInForce(contributed, base) ?? decision.autoDisabledReason),
         };
     ownedGroups.add('lifecycle');
     ownedGroups.add('availability');

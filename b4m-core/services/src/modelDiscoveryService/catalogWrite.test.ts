@@ -187,10 +187,28 @@ describe('planCatalogWrites', () => {
           }
         : null;
 
+    /** The adapter literal the seven-id catalog carries for this model, once it is curated. */
+    const curated: ModelInfo = {
+      id: MODEL as ModelInfo['id'],
+      type: 'text',
+      name: 'Claude Opus 9',
+      backend: ModelBackend.Bedrock,
+      contextWindow: 200_000,
+      max_tokens: 8_192,
+      pricing: {},
+      can_stream: true,
+      supportsTools: true,
+      supportsImageVariation: false,
+      rank: 1,
+      description: 'the curated description',
+    };
+
     const bedrockRun = (
       inferenceTypes: string[],
       entitlement?: BedrockAvailability,
-      previous?: IModelCatalogRowInput
+      previous?: IModelCatalogRowInput,
+      // A priced run promotes on price; the unpriced ones pin what a run with no price in force does.
+      priced = true
     ): Partial<CatalogWriteInput> => ({
       contributions: [
         {
@@ -199,7 +217,7 @@ describe('planCatalogWrites', () => {
           records: normalizeBedrockModels({
             summaries: [summary(inferenceTypes)],
             availability: entitlement ? new Map([[MODEL, entitlement]]) : undefined,
-          }).map(record => ({ ...record, pricing: { inputPerMTok: 15, outputPerMTok: 75 } })),
+          }).map(record => (priced ? { ...record, pricing: { inputPerMTok: 15, outputPerMTok: 75 } } : record)),
         },
       ],
       coveredBackends: new Set<string>([ModelBackend.Bedrock]),
@@ -263,24 +281,10 @@ describe('planCatalogWrites', () => {
     });
 
     it('serves a curated model disabled by a provider-declared disable', () => {
-      // The row is an introduction, and curation reclaims what an introduction invents - the slug,
-      // the 0. Not its disable here: this one is the provider's answer, and serving the model
-      // enabled would fail at every dispatch instead.
+      // Pins the availability half only: the Bedrock introduction already carries the curated name
+      // and claims no limits, so the name and window assertions would hold with or without a yield.
+      // The identity/limits side is pinned in mergeCatalog.test.ts.
       const { rows } = plan(bedrockRun(['ON_DEMAND'], { ...available, authorizationStatus: 'NOT_AUTHORIZED' }));
-      const curated: ModelInfo = {
-        id: MODEL as ModelInfo['id'],
-        type: 'text',
-        name: 'Claude Opus 9',
-        backend: ModelBackend.Bedrock,
-        contextWindow: 200_000,
-        max_tokens: 8_192,
-        pricing: {},
-        can_stream: true,
-        supportsTools: true,
-        supportsImageVariation: false,
-        rank: 1,
-        description: 'the curated description',
-      };
 
       const { models } = mergeCatalogWithDrops([curated], rows as unknown as IModelCatalogRow[], {
         apiKeys: null,
@@ -291,6 +295,33 @@ describe('planCatalogWrites', () => {
       expect(models[0]).toMatchObject({
         name: 'Claude Opus 9',
         contextWindow: 200_000,
+        disabled: true,
+        disabledReason: 'not entitled in this AWS account',
+      });
+    });
+
+    it('keeps a provider-declared disable when a later run has no availability answer', () => {
+      const unentitled = { ...available, authorizationStatus: 'NOT_AUTHORIZED' };
+      const first = plan(bedrockRun(['ON_DEMAND'], unentitled, undefined, false));
+      expect(first.rows[0].patch).toMatchObject({
+        autoDisabled: true,
+        autoDisabledReason: 'not entitled in this AWS account',
+      });
+
+      // A throttled availability call returns null by contract, so this run only re-states the
+      // listing and promotion denies on price. Its verdict must not overwrite the provider's answer,
+      // which leaves nothing for the run to write.
+      const second = plan(bedrockRun(['ON_DEMAND'], undefined, first.rows[0], false));
+      expect(second.rows).toHaveLength(0);
+
+      // Nothing is rewritten, so run 1's row is the one the read path serves.
+      const { models } = mergeCatalogWithDrops([curated], first.rows as unknown as IModelCatalogRow[], {
+        apiKeys: null,
+        isSelfHost: false,
+        bedrockReachable: true,
+      });
+
+      expect(models[0]).toMatchObject({
         disabled: true,
         disabledReason: 'not entitled in this AWS account',
       });
