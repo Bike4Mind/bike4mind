@@ -47,7 +47,11 @@ runs:
         printf 'Acquire::Retries "3";\nAcquire::http::Timeout "20";\nAcquire::https::Timeout "20";\n' \
           | sudo tee /etc/apt/apt.conf.d/80-ci-timeouts > /dev/null
 
-        if timeout 5m npx playwright install-deps chromium; then
+        # Run timeout itself as root so playwright (seeing uid 0) calls apt-get
+        # directly in timeout's process group. Wrapped the other way round,
+        # sudo starts apt in its own pty session and the kill never reaches it:
+        # apt kept downloading and upgrading libs under the running tests.
+        if sudo env "PATH=$PATH" timeout -k 15s 5m npx playwright install-deps chromium; then
           exit 0
         fi
 
