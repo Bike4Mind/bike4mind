@@ -51,13 +51,23 @@ export function isBflUltraImageModel(model?: string | null): boolean {
 }
 
 /**
+ * FLUX.2 endpoints take a reference image as `input_image`; every FLUX.1 model takes
+ * `image_prompt`. Must stay in sync with the body builder in `BFLImageService.generate`, which
+ * picks the field from this predicate and redacts whichever one it sent.
+ */
+export function isFlux2ImageModel(model?: string | null): boolean {
+  return typeof model === 'string' && model.startsWith('flux-2-');
+}
+
+/**
  * Image models sized by discrete `width`/`height` rather than a size string or an aspect ratio.
- * Deliberately just the Flux Pro generation pair: Ultra takes an aspect ratio, and Fill and
- * Kontext are dispatched through the edit path, which reads neither. The settings UI and the
- * generation dispatch both key off this, so they cannot disagree about which controls matter.
+ * The Flux Pro generation pair and the whole FLUX.2 family take width/height; Ultra takes an
+ * aspect ratio, and Fill and Kontext are dispatched through the edit path, which reads neither.
+ * The settings UI and the generation dispatch both key off this, so they cannot disagree about
+ * which controls matter.
  */
 export function usesDiscreteImageDimensions(model?: string | null): boolean {
-  return model === ImageModels.FLUX_PRO || model === ImageModels.FLUX_PRO_1_1;
+  return model === ImageModels.FLUX_PRO || model === ImageModels.FLUX_PRO_1_1 || isFlux2ImageModel(model);
 }
 
 /**
