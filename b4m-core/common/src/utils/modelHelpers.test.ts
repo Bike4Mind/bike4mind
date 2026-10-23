@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { ImageModels, type ModelInfo } from '../models';
+import { BFL_IMAGE_MODELS } from '../schemas/bfl';
 import type { LLMModelConfig } from '../types/entities/LLMTypes';
 import { VIDEO_MODEL_IDS } from '../video/catalog';
 import {
@@ -163,16 +164,9 @@ describe('clampImageQualityForModel', () => {
 });
 
 describe('isBflImageModel', () => {
-  // Enumerate the full BFL set (Kontext members included) - the ResetButton `style:'vivid'`
-  // and BFL-panel branches depend on Kontext models counting as BFL.
-  it.each([
-    ImageModels.FLUX_PRO_1_1,
-    ImageModels.FLUX_PRO,
-    ImageModels.FLUX_PRO_ULTRA,
-    ImageModels.FLUX_PRO_FILL,
-    ImageModels.FLUX_KONTEXT_PRO,
-    ImageModels.FLUX_KONTEXT_MAX,
-  ])('true for BFL model %s', model => expect(isBflImageModel(model)).toBe(true));
+  // Derived from the list itself so the assertion always covers the full set - the ResetButton
+  // `style:'vivid'` and BFL-panel branches depend on Kontext models counting as BFL.
+  it.each(BFL_IMAGE_MODELS)('true for BFL model %s', model => expect(isBflImageModel(model)).toBe(true));
   it('false for a non-BFL image model', () => expect(isBflImageModel(ImageModels.GPT_IMAGE_1)).toBe(false));
   it('false for null/undefined/empty', () => {
     expect(isBflImageModel(null)).toBe(false);
