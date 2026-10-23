@@ -8,7 +8,8 @@ Detection groups verified signups by registrable email domain, including private
 public suffixes, and requires generated local parts as well as the volume threshold.
 The newest 1,000 observations per domain bound each evaluation; reported counts
 refer to that analyzed sample. It recognizes shared alphabetic prefixes with hexadecimal counters and increasing
-hexadecimal suffixes, with rotating short subdomains included in the review reason.
+hexadecimal suffixes even when unrelated addresses interrupt the counter cohort,
+with rotating short subdomains included in the review reason.
 Ordinary employee names and volume alone do not trigger a hold. Observations begin
 when detection is enabled; historical users are not reclassified as fresh signups.
 Shared-MX and cross-domain infrastructure correlation are outside this detector.
@@ -29,7 +30,8 @@ after seven days. A domain's original cohort and five sample emails are retained
 with its review record.
 
 Each newly created hold attempts one Slack notification through
-`SlackSecurityAlertsWebhookUrl` (with the existing default webhook fallback).
+`SlackSecurityAlertsWebhookUrl`. An empty security URL disables these alerts;
+signup samples never fall back to a general webhook.
 The webhook request times out after three seconds. Configure `APP_URL` for an absolute link to the queue. If delivery fails or no
 webhook is configured, the hold remains effective and the server logs a delivery
 error; notification delivery is not automatically retried. Inspect the queue
@@ -38,5 +40,6 @@ and server logs when detection is enabled but no alert arrives.
 Core service consumers can supply `db.signupProtection` with a
 `SignupProtectionRepository` and an optional `notifyHold` callback. The client
 runtime and credit recovery scripts wire the database repository into the shared
-flat-grant boundary. External service consumers without that adapter retain their
+flat-grant boundary. Recovery scripts use `mode: 'enforce'` to check existing holds
+without replaying signup observations or creating holds without notifications. External service consumers without that adapter retain their
 existing behavior.

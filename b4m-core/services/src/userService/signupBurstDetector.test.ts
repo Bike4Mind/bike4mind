@@ -30,6 +30,10 @@ describe('signup burst detector', () => {
   it('detects generated increasing suffixes across random subdomains', () => {
     expect(detectSignupBurst(observations(emails), options)).toMatchObject({ suspicious: true, signupCount: 5 });
   });
+  it('still detects the counter cohort when unrelated numeric addresses interrupt it', () => {
+    const mixed = [...emails.slice(0, 4), 'employee2025@example.net', emails[4]];
+    expect(detectSignupBurst(observations(mixed), options).suspicious).toBe(true);
+  });
   it('detects a shared generated prefix even without random subdomains', () => {
     const addresses = [9, 6, 4, 2, 1].map(value => `alice28aa0${value}@example.net`);
     expect(detectSignupBurst(observations(addresses), options).suspicious).toBe(true);

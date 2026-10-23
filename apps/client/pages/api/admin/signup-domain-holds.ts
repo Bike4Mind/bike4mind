@@ -1,6 +1,6 @@
 import { respond } from '@server/utils/respond';
 import { z } from 'zod';
-import { PENDING_FREE_CREDITS_TAG, signupDomainReviewSchema } from '@bike4mind/common';
+import { ApiKeyScope, PENDING_FREE_CREDITS_TAG, signupDomainReviewSchema } from '@bike4mind/common';
 import { SignupDomainReviewModel, User } from '@bike4mind/database';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { BadRequestError, ensureAdmin } from '@bike4mind/server-utils/utils/errors';
@@ -17,7 +17,7 @@ const decisionSchema = z.object({
     .optional(),
 });
 
-const handler = baseApi({ auth: 'jwtOnly' })
+const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] })
   .get(
     asyncHandler(async (req, res) => {
       ensureAdmin(req.user?.isAdmin);
