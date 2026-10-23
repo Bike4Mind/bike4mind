@@ -92,7 +92,6 @@ const ModalSchema = new Schema<IModalDocument>(
 );
 
 // Index for efficient querying of What's New modals
-// Used by whatsNewGeneration.ts to fetch previous modals for style learning
 ModalSchema.index({ tags: 1, enabled: 1, startDate: -1 });
 
 // Partial unique index for idempotency: no duplicate auto-generated modals per
