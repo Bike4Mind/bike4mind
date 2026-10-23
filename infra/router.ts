@@ -101,7 +101,6 @@ const userFileCdnPrefixes = [
   '/tavern-sounds/',
   '/tavern-icons/',
   '/app-config/',
-  '/whats-new/',
 ].map(prefix => `${routePrefix}${prefix}`);
 
 // Same inert-document CSP the self-host proxy sets (apps/client/pages/api/app-files/serve/
@@ -355,12 +354,6 @@ export const router = routerInstance;
 export function appUrlForLambdaEnv() {
   return bareOrigin(routerInstance.url);
 }
-
-export const whatsNewDistributionId = new sst.Linkable('whatsNewDistributionId', {
-  properties: {
-    value: router.distributionID,
-  },
-});
 
 // Explicitly expose the CloudFront distribution ID for backend discovery
 // The backend (apps/client/server/security/wafLogsInsights.ts) needs this to query WAF logs

@@ -40,9 +40,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req:
   // Local development (sst dev sets IS_LOCAL=true)
   const isLocalDevelopment = process.env.IS_LOCAL === 'true';
 
-  // Legacy field for backwards compatibility (can be removed in future)
-  const isSourceEnvironment = process.env.ENABLE_WHATS_NEW_DISTRIBUTION === 'true';
-  const isForkProduction = stage === 'production' && !isSourceEnvironment;
+  const isForkProduction = stage === 'production' && !isSourceDeployment;
 
   return res.json({
     stage,
