@@ -41,9 +41,11 @@ import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { verifyBulkAbusePreviewToken } from '@server/admin/bulkAbuse/previewToken';
 import handler from '../bulk-preview';
 
-async function call(body: Record<string, unknown>, user: Record<string, unknown> = ADMIN) {
+const BOUND = '6a00000000000000ffffffff';
+
+async function call(body: Record<string, unknown>, user: Record<string, unknown> = ADMIN, canEditSettings = true) {
   const { req, res } = createMocks({ method: 'POST', body });
-  (req as unknown as { user: unknown }).user = user;
+  Object.assign(req, { user, ability: { can: () => canEditSettings } });
   await (handler as unknown as (req: unknown, res: unknown) => Promise<unknown>)(req, res);
   return res;
 }
@@ -56,6 +58,7 @@ describe('POST /api/admin/abuse/bulk-preview', () => {
       excluded: [{ userId: 'd'.repeat(24), email: 'paid@kashre.com', reason: 'paid' }],
       hasMore: true,
       nextAfterUserId: USER_ID,
+      upToUserId: BOUND,
     });
     mockCounts.mockResolvedValue({ sample: [], alreadyBannedCount: 0, activeApiKeyCount: 2, clawbackCredits: 100 });
   });
@@ -88,6 +91,7 @@ describe('POST /api/admin/abuse/bulk-preview', () => {
     expect(verifyBulkAbusePreviewToken(body.previewToken)).toEqual({
       adminId: ADMIN.id,
       fingerprint: abuseService.bulkAbuseFingerprint(target, ALL_ACTIONS, [USER_ID]),
+      upToUserId: BOUND,
     });
     expect(mockResolve).toHaveBeenCalledWith(target, ADMIN.id, expect.anything());
   });
@@ -116,5 +120,21 @@ describe('POST /api/admin/abuse/bulk-preview', () => {
     const none = { ban: false, revokeApiKeys: false, revokeSessions: false, clawbackFreeCredits: false };
     await expect(call({ target: { kind: 'users', userIds: [USER_ID] }, actions: none })).rejects.toThrow();
     expect(mockResolve).not.toHaveBeenCalled();
+  });
+
+  it('refuses to preview a domain ban for an admin who cannot edit admin settings', async () => {
+    await expect(
+      call({ target: { kind: 'domain', domain: 'kashre.com' }, actions: ALL_ACTIONS }, ADMIN, false)
+    ).rejects.toMatchObject({ statusCode: 403 });
+    expect(mockResolve).not.toHaveBeenCalled();
+  });
+
+  it('lets that admin act on a domain without banning it', async () => {
+    await call(
+      { target: { kind: 'domain', domain: 'kashre.com' }, actions: { ...ALL_ACTIONS, ban: false } },
+      ADMIN,
+      false
+    );
+    expect(mockResolve).toHaveBeenCalled();
   });
 });

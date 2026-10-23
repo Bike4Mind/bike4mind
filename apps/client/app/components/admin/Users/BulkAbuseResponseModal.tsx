@@ -71,10 +71,13 @@ const ALL_ACTIONS: BulkAbuseActions = {
 /**
  * Dry-run-then-confirm dialog for pages/api/admin/abuse/bulk-preview.ts and bulk-execute.ts.
  * Execute only acts on what the last preview showed; changing the target or actions discards it.
+ * A domain past MAX_BULK_ABUSE_BATCH continues batch by batch from each result's cursor.
  */
 const BulkAbuseResponseModal: React.FC<BulkAbuseResponseModalProps> = ({ selectedUserIds, onClose, onExecuted }) => {
   const [targetKind, setTargetKind] = useState<BulkAbuseTarget['kind']>(selectedUserIds.length ? 'users' : 'domain');
   const [domain, setDomain] = useState('');
+  // Domain continuation cursor; kept across action edits so "Preview again" stays on the same batch.
+  const [afterUserId, setAfterUserId] = useState<string | undefined>();
   const [actions, setActions] = useState<BulkAbuseActions>(ALL_ACTIONS);
   const [reason, setReason] = useState('');
   const [stage, setStage] = useState<Stage>({ kind: 'edit' });
@@ -96,13 +99,17 @@ const BulkAbuseResponseModal: React.FC<BulkAbuseResponseModalProps> = ({ selecte
 
   const runPreview = (request: BulkAbusePreviewRequest) => {
     executeMutation.reset();
-    previewMutation.mutate(request, { onSuccess: preview => setStage({ kind: 'previewed', request, preview }) });
+    previewMutation.mutate(request, {
+      onSuccess: preview => setStage({ kind: 'previewed', request, preview }),
+      // A failed re-preview must not leave the previous one armed beside the error.
+      onError: () => setStage({ kind: 'edit' }),
+    });
   };
 
   const handlePreview = () => {
     const target: BulkAbuseTarget =
       targetKind === 'domain'
-        ? { kind: 'domain', domain: normalizedDomain ?? domain }
+        ? { kind: 'domain', domain: normalizedDomain ?? domain, ...(afterUserId ? { afterUserId } : {}) }
         : { kind: 'users', userIds: selectedUserIds };
     runPreview({ target, actions });
   };
@@ -121,25 +128,39 @@ const BulkAbuseResponseModal: React.FC<BulkAbuseResponseModalProps> = ({ selecte
     );
   };
 
+  const nextBatchCursor =
+    stage.kind === 'executed'
+      ? stage.result.nextAfterUserId
+      : stage.kind === 'previewed' && stage.preview.includedCount === 0
+        ? stage.preview.nextAfterUserId
+        : null;
+
   const handleNextBatch = () => {
-    if (stage.kind !== 'executed' || stage.request.target.kind !== 'domain' || !stage.result.nextAfterUserId) return;
+    if (stage.kind === 'edit' || stage.request.target.kind !== 'domain' || !nextBatchCursor) return;
+    setAfterUserId(nextBatchCursor);
     runPreview({
-      target: { ...stage.request.target, afterUserId: stage.result.nextAfterUserId },
+      target: { ...stage.request.target, afterUserId: nextBatchCursor },
       actions: stage.request.actions,
     });
   };
 
+  // A batch of only skipped users can still be applied when it carries the domain block.
+  const hasWork =
+    stage.kind === 'previewed' && (stage.preview.includedCount > 0 || stage.preview.blocksDomain !== null);
+  const canExecute = hasWork && isValidAdminActionReason(reason) && !busy;
   const error = previewMutation.error ?? executeMutation.error;
-  const canExecute =
-    stage.kind === 'previewed' && stage.preview.includedCount > 0 && isValidAdminActionReason(reason) && !busy;
+  // Closing mid-run would unmount before onSuccess, losing the results and the selection reset.
+  const handleClose = () => {
+    if (!executeMutation.isPending) onClose();
+  };
 
   return (
-    <Modal open onClose={onClose}>
+    <Modal open onClose={handleClose}>
       <ModalDialog
         data-testid="bulk-abuse-modal"
         sx={{ minWidth: { xs: '90%', sm: 600 }, maxWidth: 720, maxHeight: '90vh', overflow: 'auto' }}
       >
-        <ModalClose />
+        <ModalClose disabled={executeMutation.isPending} />
         <Typography level="h4">Bulk abuse response</Typography>
 
         {stage.kind !== 'executed' && (
@@ -151,6 +172,7 @@ const BulkAbuseResponseModal: React.FC<BulkAbuseResponseModalProps> = ({ selecte
                 value={targetKind}
                 onChange={event => {
                   setTargetKind(event.target.value === 'users' ? 'users' : 'domain');
+                  setAfterUserId(undefined);
                   resetPreview();
                 }}
               >
@@ -179,11 +201,16 @@ const BulkAbuseResponseModal: React.FC<BulkAbuseResponseModalProps> = ({ selecte
                   value={domain}
                   onChange={event => {
                     setDomain(event.target.value);
+                    setAfterUserId(undefined);
                     resetPreview();
                   }}
                   slotProps={{ input: { 'data-testid': 'bulk-abuse-domain-input' } }}
                 />
-                <FormHelperText>Covers every subdomain. Banning also blocks new signups from it.</FormHelperText>
+                <FormHelperText data-testid="bulk-abuse-domain-helper">
+                  {afterUserId
+                    ? 'Continuing after the previous batch. Edit the domain to start over.'
+                    : 'Covers every subdomain. Banning also blocks new signups from it.'}
+                </FormHelperText>
               </FormControl>
             )}
 
@@ -216,18 +243,16 @@ const BulkAbuseResponseModal: React.FC<BulkAbuseResponseModalProps> = ({ selecte
         {stage.kind === 'previewed' && <PreviewSummary preview={stage.preview} />}
         {stage.kind === 'executed' && <ExecuteSummary result={stage.result} />}
 
-        {stage.kind === 'previewed' && stage.preview.includedCount > 0 && (
-          <AdminReasonField value={reason} onChange={setReason} data-testid="bulk-abuse-reason-input" />
-        )}
+        {hasWork && <AdminReasonField value={reason} onChange={setReason} data-testid="bulk-abuse-reason-input" />}
 
         <Stack direction="row" spacing={1} justifyContent="flex-end">
+          {stage.kind !== 'edit' && stage.request.target.kind === 'domain' && nextBatchCursor && (
+            <Button data-testid="bulk-abuse-next-batch-btn" loading={busy} onClick={handleNextBatch}>
+              Preview next batch
+            </Button>
+          )}
           {stage.kind === 'executed' ? (
             <>
-              {stage.result.hasMore && stage.request.target.kind === 'domain' && (
-                <Button data-testid="bulk-abuse-next-batch-btn" loading={busy} onClick={handleNextBatch}>
-                  Preview next batch
-                </Button>
-              )}
               <Button data-testid="bulk-abuse-done-btn" variant="outlined" onClick={onClose}>
                 Done
               </Button>
@@ -250,7 +275,11 @@ const BulkAbuseResponseModal: React.FC<BulkAbuseResponseModalProps> = ({ selecte
                 loading={executeMutation.isPending}
                 onClick={handleExecute}
               >
-                {stage.kind === 'previewed' ? `Apply to ${stage.preview.includedCount} users` : 'Apply'}
+                {stage.kind !== 'previewed'
+                  ? 'Apply'
+                  : stage.preview.includedCount > 0
+                    ? `Apply to ${stage.preview.includedCount} users`
+                    : 'Block domain only'}
               </Button>
             </>
           )}

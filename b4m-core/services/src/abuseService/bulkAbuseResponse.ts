@@ -60,7 +60,22 @@ export type BulkAbuseCohort = {
   excluded: BulkAbuseExclusion[];
   hasMore: boolean;
   nextAfterUserId: string | null;
+  /** Domain targets only: the newest user id considered. Execute re-resolves with the same bound. */
+  upToUserId: string | null;
 };
+
+/**
+ * The largest ObjectId that can have been minted by `at`, so a bound taken at preview time keeps
+ * accounts created afterwards out of execute. Without it a farm still signing up changes every
+ * re-resolved cohort and execute could never get past the fingerprint check.
+ */
+export function userIdUpperBound(at: Date): string {
+  return (
+    Math.floor(at.getTime() / 1000)
+      .toString(16)
+      .padStart(8, '0') + 'f'.repeat(16)
+  );
+}
 
 function escapeRegExp(literal: string): string {
   return literal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -82,13 +97,14 @@ export function isPaidAccount(user: IUser, now = new Date()): boolean {
 
 async function findTargetUsers(
   target: BulkAbuseTarget,
+  upToUserId: string,
   { db }: BulkAbuseCohortAdapters
-): Promise<{ users: IUser[]; missingIds: string[]; hasMore: boolean }> {
+): Promise<{ users: IUser[]; missingIds: string[]; hasMore: boolean; lastScannedId: string | null }> {
   if (target.kind === 'users') {
     const ids = [...new Set(target.userIds.map(id => id.toLowerCase()))];
     const users = await db.users.find({ _id: { $in: ids } });
     const found = new Set(users.map(user => user.id));
-    return { users, missingIds: ids.filter(id => !found.has(id)), hasMore: false };
+    return { users, missingIds: ids.filter(id => !found.has(id)), hasMore: false, lastScannedId: null };
   }
 
   const domain = normalizeEmailDomain(target.domain);
@@ -97,12 +113,19 @@ async function findTargetUsers(
   const filter: Record<string, unknown> = {
     email: { $regex: `@(?:[^@]+\\.)?${escapeRegExp(domain)}$`, $options: 'i' },
     deletedAt: null,
+    _id: target.afterUserId ? { $gt: target.afterUserId, $lte: upToUserId } : { $lte: upToUserId },
   };
-  if (target.afterUserId) filter._id = { $gt: target.afterUserId };
   const page = await db.users.find(filter, { sort: { _id: 1 }, limit: MAX_BULK_ABUSE_BATCH + 1 });
+  const scanned = page.slice(0, MAX_BULK_ABUSE_BATCH);
   const domains = new Set([domain]);
-  const users = page.slice(0, MAX_BULK_ABUSE_BATCH).filter(user => user.email && isEmailInDomains(user.email, domains));
-  return { users, missingIds: [], hasMore: page.length > MAX_BULK_ABUSE_BATCH };
+  const users = scanned.filter(user => user.email && isEmailInDomains(user.email, domains));
+  // The cursor is the last row scanned, not the last match, so rows the JS re-check drops still advance it.
+  return {
+    users,
+    missingIds: [],
+    hasMore: page.length > MAX_BULK_ABUSE_BATCH,
+    lastScannedId: scanned.at(-1)?.id ?? null,
+  };
 }
 
 async function orgOwnerIds(userIds: string[], { db }: BulkAbuseCohortAdapters): Promise<Set<string>> {
@@ -129,14 +152,17 @@ async function purchaserIds(userIds: string[], { db }: BulkAbuseCohortAdapters):
 /**
  * The users a bulk action would touch, and the ones it skips with why. Admins, system accounts,
  * org owners and managers, paid accounts and the acting admin are never actioned. A domain target
- * returns at most MAX_BULK_ABUSE_BATCH users in id order, with a cursor for the rest.
+ * returns at most MAX_BULK_ABUSE_BATCH users in id order, with a cursor for the rest. Pass the
+ * preview's `upToUserId` back on execute so both resolve the same users.
  */
 export async function resolveBulkAbuseCohort(
   target: BulkAbuseTarget,
   actorId: string,
-  adapters: BulkAbuseCohortAdapters
+  adapters: BulkAbuseCohortAdapters,
+  options: { upToUserId?: string } = {}
 ): Promise<BulkAbuseCohort> {
-  const { users, missingIds, hasMore } = await findTargetUsers(target, adapters);
+  const upToUserId = options.upToUserId ?? userIdUpperBound(new Date());
+  const { users, missingIds, hasMore, lastScannedId } = await findTargetUsers(target, upToUserId, adapters);
   const excluded: BulkAbuseExclusion[] = missingIds.map(userId => ({ userId, email: null, reason: 'not_found' }));
 
   const candidates: IUser[] = [];
@@ -158,8 +184,13 @@ export async function resolveBulkAbuseCohort(
     else included.push(user);
   }
 
-  const lastScanned = users.at(-1)?.id ?? null;
-  return { included, excluded, hasMore, nextAfterUserId: hasMore ? lastScanned : null };
+  return {
+    included,
+    excluded,
+    hasMore,
+    nextAfterUserId: hasMore ? lastScannedId : null,
+    upToUserId: target.kind === 'domain' ? upToUserId : null,
+  };
 }
 
 /**
@@ -240,6 +271,9 @@ async function priorClawbackIds(
 export const clawbackAmount = (currentCredits: number, grantCredits: number): number =>
   Math.max(0, Math.min(currentCredits, grantCredits));
 
+/** The keys deactivateAllByUserId disables, so the preview counts what execute revokes. */
+const liveApiKeysFilter = (userId: string | { $in: string[] }) => ({ userId, status: { $ne: ApiKeyStatus.DISABLED } });
+
 /** What executing would change for the included users, for the confirmation dialog. */
 export async function previewBulkAbuseCounts(
   included: IUser[],
@@ -247,7 +281,7 @@ export async function previewBulkAbuseCounts(
 ): Promise<BulkAbusePreviewCounts> {
   const ids = included.map(user => user.id);
   const [activeApiKeyCount, grants, clawedBack] = await Promise.all([
-    ids.length > 0 ? adapters.db.userApiKeys.count({ userId: { $in: ids }, status: ApiKeyStatus.ACTIVE }) : 0,
+    ids.length > 0 ? adapters.db.userApiKeys.count(liveApiKeysFilter({ $in: ids })) : 0,
     signupGrants(ids, adapters),
     priorClawbackIds(ids, adapters),
   ]);
@@ -307,7 +341,7 @@ async function banStep(user: IUser, { db, audit }: BulkAbuseExecuteAdapters): Pr
 }
 
 async function revokeKeysStep(user: IUser, { db, audit }: BulkAbuseExecuteAdapters): Promise<StepResult> {
-  const live = await db.userApiKeys.count({ userId: user.id, status: { $ne: ApiKeyStatus.DISABLED } });
+  const live = await db.userApiKeys.count(liveApiKeysFilter(user.id));
   if (live === 0) return { outcome: 'skipped', revokedApiKeys: 0 };
   await db.userApiKeys.deactivateAllByUserId(user.id);
   await audit({
@@ -385,9 +419,10 @@ async function executeForUser(
         : NOT_REQUESTED;
       return { ban, revokeApiKeys, revokeSessions, clawbackFreeCredits } satisfies Record<BulkAbuseAction, StepResult>;
     });
-    // A banned account's open sockets end now rather than at their next auth check. DB-only and never
-    // throws, and its writes do not join a transaction, so it runs after the commit.
-    if (steps.ban.outcome === 'applied') {
+    // A banned account's sockets, and any opened with a now-revoked key, end now rather than at their
+    // next auth check. DB-only and never throws, and its writes do not join a transaction, so it runs
+    // after the commit. See endRealtimeConnections.ts.
+    if (steps.ban.outcome === 'applied' || steps.revokeApiKeys.outcome === 'applied') {
       await endRealtimeConnections({ userId: user.id }, { db: adapters.db, logger: adapters.logger });
     }
     return {
