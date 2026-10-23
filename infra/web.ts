@@ -102,6 +102,7 @@ import {
   bobRunQueueDLQ,
   libreoncologyAudioRenderQueue,
   libreoncologyAudioRenderQueueDLQ,
+  contributedQueues,
 } from './queues';
 import { imageProcessor } from './functions';
 import { chatCompletion } from './chatCompletion';
@@ -114,7 +115,7 @@ import {
   appUrlForLambdaEnv,
   originVerifySecret,
 } from './router';
-import { secrets } from './secrets';
+import { allSecrets } from './secrets';
 import { migratorInvocation } from './database';
 import { websocketApi } from './websocket';
 import { lambdaVpc } from './vpc';
@@ -125,6 +126,8 @@ import { wafWebAclArn } from './waf';
 // permission already grants runtime access to all queues.
 const dlqUrls = new sst.Linkable('dlqUrls', {
   properties: {
+    // Contributed entries go first so a core key always wins.
+    ...Object.fromEntries(Object.values(contributedQueues).map(({ spec, dlq }) => [spec.label, dlq.url])),
     'fab-file-vectorize': fabFileVectorizeQueueDLQ.url,
     'fab-file-chunk': fabFileChunkQueueDLQ.url,
     'generation-callback': generationCallbackQueueDLQ.url,
@@ -187,6 +190,7 @@ const lambdaFunctionNames = new sst.Linkable('lambdaFunctionNames', {
 
 const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
   properties: {
+    ...Object.fromEntries(Object.values(contributedQueues).map(({ spec, queue }) => [spec.name, queue.url])),
     emailJobQueue: emailJobQueue.url,
     fabFileChunkQueue: fabFileChunkQueue.url,
     fabFileVectorizeQueue: fabFileVectorizeQueue.url,
@@ -251,7 +255,7 @@ export const web = new sst.aws.Nextjs(
       memory: '2048 MB',
     },
     link: [
-      ...Object.values(secrets),
+      ...allSecrets,
       websocketApi,
       historyImportBucket,
       // Linked so the frontend can resolve Resource.ChatCompletion.url to POST quests.
