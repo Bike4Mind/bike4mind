@@ -799,8 +799,19 @@ export function SessionList({
       setHistoryResults([]);
       return;
     }
-    const timer = setTimeout(() => void window.b4m.chat.searchHistory(needle).then(setHistoryResults), 120);
-    return () => clearTimeout(timer);
+    let cancelled = false;
+    const timer = setTimeout(
+      () =>
+        void window.b4m.chat
+          .searchHistory(needle)
+          .then(results => !cancelled && setHistoryResults(results))
+          .catch(() => !cancelled && setHistoryResults([])),
+      120
+    );
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, [query]);
   // Declared above the collapsed rail's early return, so collapsing and re-expanding comes back
   // to the width the user set rather than to the default.
