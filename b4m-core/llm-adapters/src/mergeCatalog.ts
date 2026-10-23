@@ -244,9 +244,9 @@ export interface ResolvedCatalogRecord {
  * second implementation of the rule that can drift from this one.
  *
  * No curated base, so this is discovery's own view: for a model the adapter tables have since
- * curated, the run report still describes the introduction's slug and auto-disable while the read
- * path serves the curated record. The divergence is intended - this view decides what discovery
- * should write, and it cannot write the adapter table.
+ * curated, the read path reclaims the groups curation can state better - identity and limits, plus
+ * availability only where discovery invented the disable - and this view reports what discovery
+ * would write. The divergence is intended: it cannot write the adapter table.
  */
 export function resolveCatalogRecords(rows: IModelCatalogRow[]): Map<string, ResolvedCatalogRecord> {
   const resolved = new Map<string, ResolvedCatalogRecord>();
@@ -281,11 +281,10 @@ function mergeRows(
   const curated = base !== null;
   const winners = new Map<FieldGroup, IModelCatalogRow>();
   for (const row of bucket) {
-    const introduction = curated && isIntroduction(row);
     for (const group of row.ownedGroups) {
       // A group name from a newer schema version claims nothing here.
       if (!isFieldGroup(group)) continue;
-      if (introduction && yieldsToCuration(row, group)) continue;
+      if (curated && yieldsToCuration(row, group)) continue;
       const incumbent = winners.get(group);
       if (!incumbent || outranks(row, incumbent, group)) winners.set(group, row);
     }
@@ -309,18 +308,20 @@ function mergeRows(
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
-/** The groups an introduction's claim on is a placeholder, not a fact. `availability` is decided separately. */
-const INTRODUCTION_PLACEHOLDER_GROUPS: ReadonlySet<FieldGroup> = new Set(['identity', 'limits']);
-
 /**
- * Whether curation may reclaim this group from an introduction. Identity and limits are the
- * placeholders the introduction had to state - the slug it pinned, the 0 the record requires.
- * `availability` is not: alongside discovery's own refusal it carries the provider's answer to
- * "can this be called", and a model the account cannot invoke must stay disabled.
+ * Whether curation may reclaim this group from this row. Identity and limits are what introducing a
+ * model made discovery state - the id it pinned as a name, the 0 its record requires - so only those
+ * placeholders yield. An active row's nonzero window is a measurement (an aggregator's join, a
+ * source's own figure), and a row a source disabled after promotion keeps it. Availability is
+ * decided separately: alongside discovery's own refusal it carries the provider's answer to "can
+ * this be called", and a model the account cannot invoke must stay disabled.
  */
 function yieldsToCuration(row: IModelCatalogRow, group: FieldGroup): boolean {
+  if (row.source !== 'discovery') return false;
   if (group === 'availability') return inventsDisable(row);
-  return INTRODUCTION_PLACEHOLDER_GROUPS.has(group);
+  if (group === 'identity') return isIntroduction(row) || namesItself(row);
+  if (group === 'limits') return isIntroduction(row) && (row.patch.contextWindow === 0 || !isActive(row));
+  return false;
 }
 
 /**
@@ -332,18 +333,28 @@ function inventsDisable(row: IModelCatalogRow): boolean {
   if (row.patch.autoDisabled !== true) return false;
   const reason = row.patch.autoDisabledReason;
   if (typeof reason === 'string' && reason.length > 0) return isDiscoveryVerdict(reason);
-  // A row from before contributors named a group's source still has one where it was written.
+  // No reason on the row to read: consult the per-group contributors instead, which only a row
+  // written before they existed lacks.
   return row.contributors?.some(entry => entry.group === 'availability' && entry.source === 'discovery') === true;
 }
 
+/** The writer pins the model id as the name when a feed publishes none, so a row can carry its id as its label. */
+const namesItself = (row: IModelCatalogRow): boolean =>
+  typeof row.patch.name === 'string' && row.patch.name === row.modelId;
+
+/** An active lifecycle means the model is being served, so what the row states about it was measured. */
+const isActive = (row: IModelCatalogRow): boolean => row.patch.lifecycle?.status === 'active';
+
 /**
- * A discovery row for a model the adapter tables have since curated, which never passed promotion.
+ * A discovery row carrying what an introduction states: the row that introduced a since-curated
+ * model, any snapshot of it, or a row a source has since disabled.
  *
  * The durable marker is `autoDisabled`: promotion writes `false` on the way out, so a row still
- * holding `true` - the introduction, or any snapshot taken from it - is one discovery is keeping
- * out of the pickers, and what it states about the model is a placeholder. A promoted row keeps
- * its claims even when the feed named the model by its id (Ollama) or the writer pinned the slug
- * (feeds that publish no name), so its measured window still corrects the curated one.
+ * holding `true` is one discovery keeps out of the pickers, and the id-for-a-name and zero window it
+ * had to state are placeholders. A promoted row keeps its claims even when the feed named the model
+ * by its id (Ollama), so its measured window still corrects the curated one; `yieldsToCuration`
+ * makes the identity exception for the id the writer pinned, and keeps the window of a row that is
+ * active - including one a source has since disabled. Availability is not this marker's to decide.
  */
 function isIntroduction(row: IModelCatalogRow): boolean {
   if (row.source !== 'discovery') return false;
