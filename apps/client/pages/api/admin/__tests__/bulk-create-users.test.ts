@@ -109,6 +109,43 @@ describe('POST /api/admin/bulk-create-users', () => {
       );
     });
 
+    it.each([
+      ['synthetic identity', h.recordSyntheticIdentity],
+      ['signup funnel', h.emitSignupFunnelEvents],
+      ['profile update', h.update],
+    ] as const)('audits a persisted account and credits when %s fails', async (_step, failingOperation) => {
+      failingOperation.mockRejectedValueOnce(new Error('post-creation failure'));
+      const res = okRes();
+
+      await h.handler!(makeReq([{ email: 'a@b.test', startingCredits: 50 }]), res);
+
+      expect(h.recordAdminAction).toHaveBeenCalledExactlyOnceWith(
+        expect.anything(),
+        expect.objectContaining({
+          action: 'user.bulk_created',
+          details: {
+            count: 1,
+            failedCount: 1,
+            createdUserIds: ['new-1'],
+            startingCreditsTotal: 50,
+            startingCreditsByUserId: { 'new-1': 50 },
+          },
+        })
+      );
+      expect(res.json).toHaveBeenCalledWith({
+        success: true,
+        results: [{ success: false, email: 'a@b.test', error: 'post-creation failure' }],
+      });
+    });
+
+    it('records nothing when account creation fails', async () => {
+      h.createUser.mockRejectedValueOnce(new Error('create failed'));
+
+      await h.handler!(makeReq([{ email: 'a@b.test', startingCredits: 50 }]), okRes());
+
+      expect(h.recordAdminAction).not.toHaveBeenCalled();
+    });
+
     it('records the starting credits granted, in total and per audited user', async () => {
       h.createUser
         .mockResolvedValueOnce({ id: 'new-1', email: 'a@b.test', name: 'a', storageLimit: 1000 })

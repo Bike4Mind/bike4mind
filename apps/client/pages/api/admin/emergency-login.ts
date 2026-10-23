@@ -11,7 +11,7 @@ import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { z } from 'zod';
 import { Resource } from 'sst';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
-import { recordAdminActionForActor, toUserActor } from '@server/utils/adminAudit';
+import { recordAdminActionForActor, systemAuditActor, toUserActor } from '@server/utils/adminAudit';
 
 const EmergencyLoginSchema = z.object({
   username: z.string().min(1).max(200),
@@ -30,7 +30,7 @@ type MatchedAccount = Parameters<typeof toUserActor>[0];
 
 type EmergencyLoginDenialReason = 'no_password' | 'invalid_password' | 'not_admin' | 'banned' | 'no_second_factor';
 
-// No req.user on this route, so the matched account is the actor: the attempt is made in its name.
+// A denied attempt proves no user identity; only an accepted password is attributed to the account.
 const auditEmergencyLogin = (
   req: Parameters<typeof recordAdminActionForActor>[0],
   account: MatchedAccount,
@@ -38,22 +38,30 @@ const auditEmergencyLogin = (
     | { action: 'user.emergency_login.challenged' }
     | { action: 'user.emergency_login.denied'; reason: EmergencyLoginDenialReason }
 ) =>
-  recordAdminActionForActor(req, toUserActor(account, 'platform'), {
-    action: outcome.action,
-    target: { kind: 'user', id: account.id, displayName: account.email ?? account.username },
-    summary:
-      outcome.action === 'user.emergency_login.challenged'
-        ? 'emergency login password accepted, second factor challenged'
-        : `emergency login denied (${outcome.reason})`,
-    details: outcome.action === 'user.emergency_login.denied' ? { reason: outcome.reason } : undefined,
-  });
+  recordAdminActionForActor(
+    req,
+    outcome.action === 'user.emergency_login.denied'
+      ? systemAuditActor('emergency-login')
+      : toUserActor(account, 'platform'),
+    {
+      action: outcome.action,
+      target: { kind: 'user', id: account.id, displayName: account.email ?? account.username },
+      summary:
+        outcome.action === 'user.emergency_login.challenged'
+          ? 'emergency login password accepted, second factor challenged'
+          : `emergency login denied (${outcome.reason})`,
+      details: outcome.action === 'user.emergency_login.denied' ? { reason: outcome.reason } : undefined,
+    }
+  );
 
 const denyEmergencyLogin = async (
   req: Parameters<typeof recordAdminActionForActor>[0],
   account: MatchedAccount,
   reason: EmergencyLoginDenialReason
 ): Promise<never> => {
-  await auditEmergencyLogin(req, account, { action: 'user.emergency_login.denied', reason });
+  if (account.isAdmin) {
+    await auditEmergencyLogin(req, account, { action: 'user.emergency_login.denied', reason });
+  }
   throw new UnauthorizedError('Invalid credentials');
 };
 

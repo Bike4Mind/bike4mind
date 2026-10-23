@@ -92,6 +92,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
             }
           );
 
+          createdUserIds.push(newUser.id);
+          startingCreditsById.set(newUser.id, validatedData.startingCredits ?? 0);
+
           const isSynthetic = await recordSyntheticIdentity(newUser);
           await emitSignupFunnelEvents({
             user: { id: newUser.id, isSynthetic },
@@ -110,8 +113,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
           }
 
           await userRepository.update({ id: newUser.id, storageLimit: newUser.storageLimit, tags: newUser.tags });
-          createdUserIds.push(newUser.id);
-          startingCreditsById.set(newUser.id, validatedData.startingCredits ?? 0);
 
           const brand = process.env.APP_NAME || '';
           const logoUrl = getLogoUrl();
@@ -185,8 +186,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
       })
     );
 
-    // Rows commit independently and their invites are already sent, so there is no single write to
-    // wrap; one best-effort entry covers the batch so a failed audit write cannot 500 a created batch.
+    // Rows commit independently, even when later processing fails. One best-effort entry covers
+    // every created account so a failed audit write cannot 500 a created batch.
     if (createdUserIds.length > 0) {
       const auditedIds = createdUserIds.slice(0, AUDITED_USER_ID_LIMIT);
       await recordAdminActionFromRequest(req, {

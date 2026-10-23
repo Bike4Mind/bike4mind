@@ -136,7 +136,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.created': { category: 'account', severity: 'critical', write: 'strict' },
   'user.bulk_created': { category: 'account', severity: 'notice', write: 'bestEffort' },
   'user.emergency_login.challenged': { category: 'access', severity: 'critical', write: 'strict' },
-  'user.emergency_login.denied': { category: 'access', severity: 'critical', write: 'bestEffort' },
+  'user.emergency_login.denied': { category: 'access', severity: 'notice', write: 'bestEffort' },
   'user.api_key.generated': { category: 'access', severity: 'critical', write: 'strict' },
   'user.subscription.removed': { category: 'credits', severity: 'critical', write: 'strict' },
   'user.api_key.rate_limit_updated': { category: 'access', severity: 'notice', write: 'bestEffort' },
