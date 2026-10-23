@@ -251,7 +251,6 @@ const handler = baseApi()
   )
   .get(
     asyncHandler(async (req, res) => {
-      assertAiAccessAllowed(req.user);
       const user = req.user;
 
       // Only the session itself is a 401. An emailless account (OAuth signup with no
@@ -260,6 +259,7 @@ const handler = baseApi()
       if (!user || !user.username || !user.id) {
         return res.status(401).json({ error: 'User not authenticated' });
       }
+      assertAiAccessAllowed(user);
 
       try {
         const safeUser = {
