@@ -538,9 +538,18 @@ removed on quit. A spare left behind by a crash is recognized by its git metadat
 `HEAD`; one that has been changed, or that the app does not own, is left alone and no spare is
 made.
 
-**Deleting a session never deletes its worktree.** A worktree can hold uncommitted work, and
-deleting a conversation must not be a way to lose code. Removing one stays a git operation the
-user performs themselves (`rmworktree <branch>`).
+**Deleting a session can also remove its worktree and branch.** The delete confirmation offers
+this only for an app-created checkout under `.b4m/worktrees` on a `b4m/` branch. It defaults on
+only when no other conversation (including archived ones) uses the directory or branch, the
+checkout has no uncommitted or untracked files, and its commits are preserved in its upstream
+or base branch. Ordinary ignored files do not prevent removal; nested worktrees and folders
+used by other conversations are kept. Running conversations must stop first; unsafe checkouts
+show the reason and are kept. Cleanup stops background processes, waits for terminal shells
+to exit and closes the browser, then rechecks safety and uses `git worktree remove` and
+`git branch -d`, without force. A shell that cannot be stopped keeps its checkout. New workspace
+bindings wait until cleanup finishes. Git refusals are shown in the dialog; the conversation is
+kept so you can retry or delete it without cleanup. Archiving, imported-session deletion and
+the agent's `session_delete` tool keep their worktrees.
 
 ### Starting a session in a worktree
 

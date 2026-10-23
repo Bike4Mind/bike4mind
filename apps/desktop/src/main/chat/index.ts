@@ -306,7 +306,9 @@ async function pickDirectory(sender: WebContents): Promise<string | null> {
 
 export function registerChat(
   auth: AuthService,
-  hooks: Pick<ChatServiceDeps, 'sessionClosed'> & { observeStream?(event: ChatStreamEvent): void } = {}
+  hooks: Pick<ChatServiceDeps, 'sessionClosed' | 'releaseSessionTerminals'> & {
+    observeStream?(event: ChatStreamEvent): void;
+  } = {}
 ): RegisteredChat {
   const logger = createMainLogger(VERBOSE);
   const userData = app.getPath('userData');
@@ -514,6 +516,7 @@ export function registerChat(
     },
     summaryChanged: (summary: ChatSessionSummary) => send(IPC_CHANNELS.chatSessionSummary, summary),
     sessionClosed: hooks.sessionClosed,
+    releaseSessionTerminals: hooks.releaseSessionTerminals,
   });
 
   ipcMain.handle(IPC_CHANNELS.chatListModels, (_event, force: boolean) => service.listModels(force));
@@ -697,8 +700,15 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatRenameSession, (_event, sessionId: string, title: string) =>
     service.renameSession(sessionId, title)
   );
-  ipcMain.handle(IPC_CHANNELS.chatDeleteSession, async (_event, sessionId: string) => {
-    await service.deleteSession(sessionId);
+  ipcMain.handle(IPC_CHANNELS.chatInspectWorktreeRemoval, (_event, sessionId: unknown) => {
+    if (typeof sessionId !== 'string') throw new Error('Invalid conversation id');
+    return service.inspectSessionWorktreeRemoval(sessionId);
+  });
+  ipcMain.handle(IPC_CHANNELS.chatDeleteSession, async (_event, sessionId: unknown, removeWorktree: unknown) => {
+    if (typeof sessionId !== 'string' || (removeWorktree !== undefined && typeof removeWorktree !== 'boolean')) {
+      throw new Error('Invalid delete request');
+    }
+    await service.deleteSession(sessionId, removeWorktree === true);
     await pullRequests.forget(sessionId);
   });
   registerSidebarIpc(ipcMain, sidebarSections, sessionId =>
