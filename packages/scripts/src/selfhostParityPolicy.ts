@@ -62,7 +62,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   wired(
     'event:infra/eventBus.ts:session-auto-name',
-    '7b0e8dba9b889d49b7206c3aebe064cbf458fb50b4728cd1b7964710de480b4c',
+    '139d3542ed0548541525d9fddaf3407f5da22a6828861b0443b61d5b4e594e9c',
     {
       source: 'apps/workers/src/selfhost/eventDispatch.ts',
       symbol: 'event:session.auto_name',
@@ -72,7 +72,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   wired(
     'event:infra/eventBus.ts:session-context-summarize',
-    'a34591b7d8f3fb2d11480ffcb60fd0e1a9765eee1ce124718b702d0cf4894017',
+    '2144e217cbfc1bee2e633628e68c2abee7360f7ed57f4baa7b7acbe6d8c52969',
     {
       source: 'apps/workers/src/selfhost/eventDispatch.ts',
       symbol: 'event:session.context_summarize',
@@ -82,7 +82,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   wired(
     'event:infra/eventBus.ts:session-summarize',
-    'bb80764861db77f8d8410942e1954d2f052caca0f400d953d1930933ddb1c043',
+    'ca7a6ae80ad259481038c593fe8f857da950bcf0017dd6ef18ded07b7175beb6',
     {
       source: 'apps/workers/src/selfhost/eventDispatch.ts',
       symbol: 'event:session.summarize',
@@ -92,7 +92,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   wired(
     'event:infra/eventBus.ts:session-tag',
-    'b5581a26688d89046dd83cb9b9347c2da20e74c5522e65974959e5a7b1a5673e',
+    'c7e2b52271037285003279603ab3667e158fb2bf73c449f58023f92c08205a27',
     {
       source: 'apps/workers/src/selfhost/eventDispatch.ts',
       symbol: 'event:session.tag',
@@ -114,7 +114,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'd8089deb5d5acdfc5eeadafe24844b1039b26c686ed26d7ed6079f71f437bffe',
     ['cloudwatch:PutMetricData']
   ),
-  gap('event:infra/eventBus.ts:telemetry-alert', 'ae27f3b807e43bcf99e9b11d8100ca8ab778886fa99a58dbabc4ee6b53056f55', [
+  gap('event:infra/eventBus.ts:telemetry-alert', 'da2a32170866774933b17511f32fa3be3347981ebc58cde3f749a7bed484afe7', [
     'bedrock:*',
   ]),
   wired(
