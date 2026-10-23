@@ -9,6 +9,21 @@ import type { SxProps } from '@mui/joy/styles/types';
  */
 export const CONTENT_MAX_WIDTH = 760;
 
+/**
+ * The chat window's root: exactly the viewport, and never scrolled as a whole. Only the regions
+ * inside it scroll - the transcript, the sidebar list, the panels.
+ *
+ * `clip` rather than `hidden`: a hidden box is still a scroll container, so a `scrollIntoView`
+ * or a focus inside it could shift the whole shell up with no scrollbar to bring it back.
+ */
+export const chatShellRootSx: SxProps = {
+  position: 'relative',
+  display: 'flex',
+  height: '100vh',
+  overflow: 'clip',
+  bgcolor: 'background.body',
+};
+
 /** contentColumnSx's horizontal padding, in theme spacing units (`px: 3`). */
 const COLUMN_PADDING_UNITS = 3;
 /** The same padding in px (Joy's spacing unit is 8px), for code that measures against the column. */
@@ -143,8 +158,13 @@ export const columnStackSx: SxProps = {
  * same width the rows that do not scroll were given. `stable` because that has to hold whether
  * or not there is anything to scroll: an `auto` scrollbar coming and going with the length of
  * the conversation would take the column with it.
+ *
+ * Positioned so it is the containing block of anything absolutely positioned inside it. An
+ * overflow box clips only descendants whose containing block it contains, so an absolute box
+ * that resolves past it is not clipped and is scrolled with the document instead.
  */
 export const scrollingColumnHostSx: SxProps = {
+  position: 'relative',
   overflowY: 'auto',
   scrollbarGutter: 'stable',
   ...thinScrollbarSx,

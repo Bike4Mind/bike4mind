@@ -24,7 +24,7 @@ import { Composer } from './Composer';
 import { CustomizeNavItem, CustomizeScreen } from './CustomizePanel';
 import { GlobeIcon, PanelRightIcon, TerminalIcon } from './icons';
 import { MessageThread } from './MessageThread';
-import { columnStackSx, contentColumnSx } from './layout';
+import { chatShellRootSx, columnStackSx, contentColumnSx } from './layout';
 import { ModelPicker } from './ModelPicker';
 import { ReasoningEffortPicker } from './ReasoningEffortPicker';
 import { GrantedFolderChips, SessionChips } from './SessionChips';
@@ -595,7 +595,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
   );
 
   return (
-    <Box sx={{ position: 'relative', display: 'flex', height: '100vh', bgcolor: 'background.body' }} {...drop.handlers}>
+    <Box sx={chatShellRootSx} {...drop.handlers} data-testid="chat-shell">
       <SpawnFailureToast />
       {drop.over && (
         <Box
