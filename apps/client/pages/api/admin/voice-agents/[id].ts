@@ -106,12 +106,14 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       }
     }
 
+    // AgentModel requires a non-empty description, so clearing it falls back to the name.
+    const description = body.description !== undefined ? body.description.trim() || body.name || agent.name : undefined;
+
     // Mirror the editable fields onto the B4M agent document.
     await agentRepository.update({
       id,
       ...(body.name !== undefined ? { name: body.name } : {}),
-      // AgentModel requires a non-empty description, so clearing it falls back to the name.
-      ...(body.description !== undefined ? { description: body.description.trim() || body.name || agent.name } : {}),
+      ...(description !== undefined ? { description } : {}),
       ...(body.systemPrompt !== undefined ? { systemPrompt: body.systemPrompt } : {}),
       ...(body.voiceId !== undefined ? { elevenLabsVoiceId: body.voiceId } : {}),
       ...(body.firstMessage !== undefined ? { firstMessage: body.firstMessage } : {}),
