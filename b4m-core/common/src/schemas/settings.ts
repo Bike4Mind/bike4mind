@@ -5788,8 +5788,8 @@ export function getExperimentalFeatureSettingKeys(): string[] {
  * belt-and-braces next to `redactSettingSecrets` on the response -- that masks the VALUE,
  * this keeps the key out of a non-admin's payload at all.
  *
- * Contributed settings go through the same three arms, so one placed in the EXPERIMENTAL group is
- * readable by any signed-in user unless it is `isSensitive`.
+ * Arm 1 covers core keys only: a contributed setting is readable only through `publicSafe` or an explicit
+ * `userReadable: true`, since an extension's group choice is about admin UI placement, not exposure.
  *
  * Admins bypass this entirely and read the full catalog.
  */
@@ -5797,7 +5797,7 @@ export function userReadableSettingKeys(): string[] {
   const entries = allSettingDefinitions();
   const tagged = entries.filter(s => s.userReadable === true).map(s => s.key);
   const sensitive = new Set(entries.filter(s => s.isSensitive === true).map(s => s.key));
-  const union = new Set<string>([...getExperimentalFeatureSettingKeys(), ...publicSafeSettingKeys(), ...tagged]);
+  const union = new Set<string>([...experimentalFeatureSettingKeys, ...publicSafeSettingKeys(), ...tagged]);
   return Array.from(union).filter(k => !sensitive.has(k));
 }
 

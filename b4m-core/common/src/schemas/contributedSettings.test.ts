@@ -116,7 +116,7 @@ describe('settings helpers over contributed definitions', () => {
     registerContributedSettings([flag]);
     expect(getExperimentalFeatureSettingKeys()).toContain('ExtensionFlag');
     expect(experimentalFeatureSettingKeys).not.toContain('ExtensionFlag');
-    expect(userReadableSettingKeys()).toContain('ExtensionFlag');
+    expect(userReadableSettingKeys()).not.toContain('ExtensionFlag');
   });
 
   it('applies userReadable, publicSafe and isSensitive to contributed keys', () => {
@@ -126,7 +126,7 @@ describe('settings helpers over contributed definitions', () => {
     expect(userReadableSettingKeys()).not.toContain('extensionToken');
   });
 
-  it('keeps a contributed setting from non-admins unless a readable arm admits it and it is not sensitive', () => {
+  it('keeps a contributed setting from non-admins unless it opts in and is not sensitive', () => {
     const plain = makeContributedBooleanSetting({ key: 'extensionPlain', name: 'x', description: 'x' });
     const experimentalSecret = makeContributedStringSetting({
       key: 'extensionExperimentalSecret',
@@ -142,8 +142,16 @@ describe('settings helpers over contributed definitions', () => {
       description: 'x',
       group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     });
-    registerContributedSettings([plain, experimentalSecret, experimentalFlag]);
-    expect(userReadableSettingKeys()).toContain('extensionExperimentalFlag');
+    const experimentalOptIn = makeContributedBooleanSetting({
+      key: 'extensionExperimentalOptIn',
+      name: 'x',
+      description: 'x',
+      group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+      userReadable: true,
+    });
+    registerContributedSettings([plain, experimentalSecret, experimentalFlag, experimentalOptIn]);
+    expect(userReadableSettingKeys()).not.toContain('extensionExperimentalFlag');
+    expect(userReadableSettingKeys()).toContain('extensionExperimentalOptIn');
     expect(getExperimentalFeatureSettingKeys()).toContain('extensionExperimentalSecret');
     expect(userReadableSettingKeys()).not.toContain('extensionExperimentalSecret');
     expect(userReadableSettingKeys()).not.toContain('extensionPlain');

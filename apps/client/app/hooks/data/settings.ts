@@ -87,6 +87,7 @@ export function useExperimentalFeatureSettings() {
     // Single source of truth: derived from the schema's EXPERIMENTAL group
     // in @bike4mind/common, so a new experimental flag added to `settingsMap` is
     // surfaced here automatically - no second hand-maintained allowlist to forget.
+    // A contributed flag reaches a non-admin only with `userReadable: true`; otherwise they get its default.
     const allowedSettings = getExperimentalFeatureSettingKeys();
 
     // Merge database settings with defaults, converting to string for consistency
