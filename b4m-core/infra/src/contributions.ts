@@ -25,7 +25,8 @@ export interface ContributedSecretRotationSpec {
 /**
  * A queue + DLQ pair built with buildQueuePair, whose DLQ is alarmed and listed in the admin
  * DLQ registry. `name` and the DLQ name are used verbatim as SST logical names, so a queue
- * that moves here from infra/queues.ts keeps its resources.
+ * that moves here from infra/queues.ts keeps its resources, provided it states its current
+ * encryption: an unset `encryption` means 'kms' here, not buildQueuePair's 'none'.
  */
 export interface ContributedQueueSpec extends BuildQueuePairOptions {
   /** Kebab-case DLQ label for alarm names and registry lookups. */
@@ -90,13 +91,12 @@ const RESERVED_ENV_NAMES = new Set([
   'INTERNAL_S3_WEBHOOK_SECRET',
 ]);
 
+function isReservedEnvName(name: string): boolean {
+  return RESERVED_ENV_NAMES.has(name) || RESERVED_ENV_PREFIXES.some(prefix => name.startsWith(prefix));
+}
+
 export function isValidContributedResourceName(name: unknown): name is string {
-  return (
-    typeof name === 'string' &&
-    RESOURCE_NAME_PATTERN.test(name) &&
-    !RESERVED_ENV_NAMES.has(name) &&
-    !RESERVED_ENV_PREFIXES.some(prefix => name.startsWith(prefix))
-  );
+  return typeof name === 'string' && RESOURCE_NAME_PATTERN.test(name) && !isReservedEnvName(name);
 }
 
 export interface PartitionedContributions<T> {
@@ -163,6 +163,11 @@ export function contributedQueueNames(spec: Pick<BuildQueuePairOptions, 'name' |
   return [spec.name, spec.dlqName ?? `${spec.name}DLQ`];
 }
 
+/** buildQueuePair options for a contributed pair: encrypted unless the spec opts out. */
+export function contributedQueuePairOptions(spec: ContributedQueueSpec): BuildQueuePairOptions {
+  return { ...spec, encryption: spec.encryption ?? 'kms' };
+}
+
 export interface CoreQueueNames {
   /** SST link names core declares. */
   resourceNames: Iterable<string>;
@@ -173,10 +178,38 @@ export interface CoreQueueNames {
 }
 
 /**
+ * The generated module infra/ and server-utils both import
+ * (premium-generated/infraResources.generated.ts).
+ */
+export interface GeneratedInfraResources {
+  contributedInfraResources: InfraResourceContributions;
+  coreResourceNames: readonly string[] | null;
+  coreEnvNames: readonly string[] | null;
+  coreDlqLabels: readonly string[] | null;
+}
+
+/**
+ * The names a contributed pair may not take. infra/queues.ts and the runtime DLQ registry both
+ * call this, so what deploys and what the registry lists are dropped by the same rules. Every
+ * declared contributed secret is reserved, whether or not it registered. Null when codegen
+ * could not read the core names.
+ */
+export function reservedQueueNames(generated: GeneratedInfraResources): CoreQueueNames | null {
+  const { coreResourceNames, coreEnvNames, coreDlqLabels, contributedInfraResources } = generated;
+  if (coreResourceNames === null || coreEnvNames === null || coreDlqLabels === null) return null;
+  return {
+    resourceNames: [...coreResourceNames, ...contributedInfraResources.secrets.map(spec => String(spec.name))],
+    envNames: coreEnvNames,
+    dlqLabels: coreDlqLabels,
+  };
+}
+
+/**
  * Same contract as partitionContributed, applied to both factory-built names of each pair
  * (the queue and its DLQ) and to its label. A spec is dropped whole when any of them is
  * invalid or taken; names are compared raw and in env form, since a link name and its
- * env form address the same value on the self-host shim.
+ * env form address the same value on the self-host shim, and an env form that is a reserved
+ * variable counts as invalid.
  */
 export function partitionContributedQueues(
   specs: readonly ContributedQueueSpec[],
@@ -210,6 +243,10 @@ export function partitionContributedQueues(
       continue;
     }
     const envForms = names.map(toEnvKey);
+    if (envForms.some(isReservedEnvName)) {
+      result.rejected.push(id);
+      continue;
+    }
     if (
       names.some(n => coreNames.has(n)) ||
       envForms.some(n => coreEnv.has(n) || coreNames.has(n)) ||

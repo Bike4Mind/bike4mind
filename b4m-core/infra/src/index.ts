@@ -87,6 +87,7 @@ export type {
   ContributedSecretRotationSpec,
   ContributedQueueSpec,
   CoreQueueNames,
+  GeneratedInfraResources,
   InfraResourceContributions,
   PartitionedContributions,
 } from './contributions.js';
@@ -96,5 +97,7 @@ export {
   partitionContributed,
   partitionContributedQueues,
   contributedQueueNames,
+  contributedQueuePairOptions,
+  reservedQueueNames,
   describeDroppedContributions,
 } from './contributions.js';

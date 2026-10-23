@@ -1,10 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import {
   contributedQueueNames,
+  contributedQueuePairOptions,
   describeDroppedContributions,
   isValidContributedResourceName,
   partitionContributed,
   partitionContributedQueues,
+  reservedQueueNames,
   type ContributedQueueSpec,
 } from '../contributions.js';
 import { buildQueuePair } from '../queueFactory.js';
@@ -147,6 +149,8 @@ describe('partitionContributedQueues', () => {
     ['a non-kebab label', { label: 'Example Job' }],
     ['the reserved alarm pipeline label', { label: 'alarm-handler-dlq' }],
     ['a duration sst.aws.Queue rejects', { visibilityTimeout: '6m' }],
+    ['a name whose env form is a reserved variable', { name: 'awsRegion' }],
+    ['a DLQ name whose env form has a reserved prefix', { dlqName: 'nodeOptionsDLQ' }],
   ])('rejects %s', (_what, over) => {
     expect(dropped(queue(over)).rejected).toHaveLength(1);
   });
@@ -163,5 +167,51 @@ describe('partitionContributedQueues', () => {
     );
     expect(result.registered).toEqual([queue()]);
     expect(result.duplicates).toHaveLength(3);
+  });
+});
+
+describe('contributedQueuePairOptions', () => {
+  const spec = {
+    name: 'exampleJobQueue',
+    visibilityTimeout: '6 minutes',
+    label: 'x',
+    displayName: 'X',
+    application: 'X',
+  };
+
+  it('encrypts both queues when the spec says nothing', () => {
+    const pair = buildQueuePair(contributedQueuePairOptions(spec));
+    expect(pair.dlqArgs.transform?.queue ?? {}).toMatchObject({ kmsMasterKeyId: 'alias/aws/sqs' });
+    expect(pair.queueArgs('arn').transform?.queue ?? {}).toMatchObject({ kmsMasterKeyId: 'alias/aws/sqs' });
+  });
+
+  it('keeps an explicit opt-out, so a queue moved from infra/queues.ts stays as it was', () => {
+    const pair = buildQueuePair(contributedQueuePairOptions({ ...spec, encryption: 'none' }));
+    expect(pair.dlqArgs.transform?.queue ?? {}).not.toHaveProperty('kmsMasterKeyId');
+    expect(pair.queueArgs('arn').transform?.queue ?? {}).not.toHaveProperty('kmsMasterKeyId');
+  });
+});
+
+describe('reservedQueueNames', () => {
+  const generated = {
+    contributedInfraResources: {
+      secrets: [{ name: 'EXAMPLE_TOKEN' }, { name: 'bad name' }],
+      rotations: [],
+      queues: [],
+    },
+    coreResourceNames: ['CORE_A'],
+    coreEnvNames: ['CORE_ENV'],
+    coreDlqLabels: ['core-label'],
+  } as unknown as Parameters<typeof reservedQueueNames>[0];
+
+  it('reserves the core names plus every declared contributed secret, registered or not', () => {
+    const reserved = reservedQueueNames(generated);
+    expect([...reserved!.resourceNames]).toEqual(['CORE_A', 'EXAMPLE_TOKEN', 'bad name']);
+    expect([...reserved!.envNames]).toEqual(['CORE_ENV']);
+    expect([...reserved!.dlqLabels]).toEqual(['core-label']);
+  });
+
+  it.each(['coreResourceNames', 'coreEnvNames', 'coreDlqLabels'])('is null when %s is null', key => {
+    expect(reservedQueueNames({ ...generated, [key]: null })).toBeNull();
   });
 });

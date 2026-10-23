@@ -1906,11 +1906,25 @@ function readCoreEnvNames(coreNames) {
 }
 
 // Every DLQ label infra/dlqAlarms.ts alarms on, registry-listed or alarm-only. Null when
-// infra/ is absent, like the core resource names.
+// infra/ is absent, like the core resource names. A label that is not a string literal
+// would be missed, so one fails codegen; the contributed pairs' spec.label is the exception.
 function readCoreDlqLabels() {
   const file = join(REPO_ROOT, 'infra/dlqAlarms.ts');
   if (!existsSync(file)) return null;
-  const labels = [...readFileSync(file, 'utf8').matchAll(/\blabel:\s*'([a-z0-9]+(?:-[a-z0-9]+)*)'/g)].map(m => m[1]);
+  const code = readFileSync(file, 'utf8')
+    .split('\n')
+    .filter(line => !/^\s*(\/\/|\/?\*)/.test(line))
+    .join('\n');
+  const computed = [...code.matchAll(/\blabel:\s*(?![\s'"])([^,}\n]+)/g)]
+    .map(m => m[1].trim())
+    .filter(value => value !== 'spec.label');
+  if (computed.length > 0) {
+    throw new Error(
+      `infra/dlqAlarms.ts: DLQ label(s) not written as a string literal: ${computed.join(', ')}. ` +
+        'Codegen reads core labels from literals; write the label inline.'
+    );
+  }
+  const labels = [...code.matchAll(/\blabel:\s*'([a-z0-9]+(?:-[a-z0-9]+)*)'/g)].map(m => m[1]);
   return [...new Set(labels)].sort();
 }
 

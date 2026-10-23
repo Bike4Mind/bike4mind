@@ -1,12 +1,12 @@
 import { Resource } from 'sst';
-import { createDlqRegistry, describeDroppedContributions, partitionContributedQueues } from '@bike4mind/infra';
-import type { DlqDescriptor, DlqResolvers } from '@bike4mind/infra';
 import {
-  contributedInfraResources,
-  coreDlqLabels,
-  coreEnvNames,
-  coreResourceNames,
-} from '../premium-generated/infraResources.generated';
+  createDlqRegistry,
+  describeDroppedContributions,
+  partitionContributedQueues,
+  reservedQueueNames,
+} from '@bike4mind/infra';
+import type { DlqDescriptor, DlqResolvers } from '@bike4mind/infra';
+import * as generatedInfraResources from '../premium-generated/infraResources.generated';
 
 /**
  * SQS queue URLs are stored via sst.Linkable in resource.enc.
@@ -292,24 +292,30 @@ const resolvers: DlqResolvers = {
   resolveSourceQueueUrl: name => (Resource as unknown as LinkableQueues).sourceQueueUrls?.[name],
 };
 
-// Same drop rules as infra/queues.ts, which decides what is deployed; the registry adds its
-// own labels and queue names in case codegen and this file disagree. Registers nothing
-// when codegen could not read the core names.
+// infra/queues.ts partitions the same specs against the same reservedQueueNames, so the
+// registry lists exactly the pairs that deploy. Registers nothing when codegen could not read
+// the core names, or read names this file's DLQ_REGISTRY contradicts (a stale generated file).
 function contributedDescriptors(): DlqDescriptor[] {
-  const specs = contributedInfraResources.queues;
+  const specs = generatedInfraResources.contributedInfraResources.queues;
   if (specs.length === 0) return [];
-  if (coreResourceNames === null || coreEnvNames === null || coreDlqLabels === null) {
+  const reserved = reservedQueueNames(generatedInfraResources);
+  if (reserved === null) {
     console.warn(
       '[dlqRegistry] core resource names unknown (codegen ran without infra/); no contributed DLQ registered'
     );
     return [];
   }
-  const contributedSecretNames = contributedInfraResources.secrets.map(spec => spec.name);
-  const result = partitionContributedQueues(specs, {
-    resourceNames: [...coreResourceNames, ...contributedSecretNames, ...DLQ_REGISTRY.map(d => d.sourceQueue)],
-    envNames: coreEnvNames,
-    dlqLabels: [...coreDlqLabels, ...DLQ_REGISTRY.map(d => d.label)],
-  });
+  const labels = new Set(reserved.dlqLabels);
+  const names = new Set(reserved.resourceNames);
+  const unknown = DLQ_REGISTRY.filter(d => !labels.has(d.label) || !names.has(d.sourceQueue)).map(d => d.label);
+  if (unknown.length > 0) {
+    console.warn(
+      `[dlqRegistry] generated core names miss DLQ_REGISTRY entries (${unknown.join(', ')}); re-run pnpm codegen. ` +
+        'No contributed DLQ registered'
+    );
+    return [];
+  }
+  const result = partitionContributedQueues(specs, reserved);
   for (const line of describeDroppedContributions('contributed queue', result)) console.warn(`[dlqRegistry] ${line}`);
   return result.registered.map(({ label, displayName, application, name }) => ({
     label,
