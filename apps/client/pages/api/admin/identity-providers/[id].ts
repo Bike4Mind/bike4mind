@@ -107,6 +107,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
           details: {
             certReplaced: updated.samlConfig?.cert !== existing.samlConfig?.cert,
             oktaClientSecretReplaced: !!oktaConfig?.clientSecret,
+            samlKeyMaterialReplaced: !!(samlConfig?.decryptionPvk || samlConfig?.privateCert),
           },
         });
         return updated;

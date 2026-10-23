@@ -71,7 +71,7 @@ describe('PUT /api/admin/identity-providers/[id] admin audit', () => {
     expect(h.audit.mock.calls[0][1]).toMatchObject({
       action: 'identity.sso_provider.updated',
       target: { kind: 'settings', id: 'idp-1', displayName: 'Acme Okta' },
-      details: { certReplaced: false, oktaClientSecretReplaced: true },
+      details: { certReplaced: false, oktaClientSecretReplaced: true, samlKeyMaterialReplaced: false },
     });
     expect(h.audit.mock.calls[0][1].changes).toEqual([
       { field: 'name', before: 'Acme SSO', after: 'Acme Okta' },
@@ -94,21 +94,21 @@ describe('PUT /api/admin/identity-providers/[id] admin audit', () => {
       oktaConfig: { ...before.oktaConfig, useOrgAuthServer: true },
     });
 
-    await call('PUT', { samlConfig: {}, oktaConfig: { clientSecret: CLIENT_SECRET } });
+    await call('PUT', { samlConfig: { decryptionPvk: 'SAML-PVK' }, oktaConfig: { clientSecret: CLIENT_SECRET } });
 
     const entry = h.audit.mock.calls[0][1];
     expect(entry.changes).toEqual([
       { field: 'samlConfig.entryPoint', before: 'https://old/sso', after: 'https://new/sso' },
       { field: 'oktaConfig.useOrgAuthServer', before: false, after: true },
     ]);
-    expect(entry.details).toEqual({ certReplaced: true, oktaClientSecretReplaced: true });
-    expect(JSON.stringify(entry)).not.toMatch(/CERT-OLD|CERT-NEW|okta-client-secret-value/);
+    expect(entry.details).toEqual({ certReplaced: true, oktaClientSecretReplaced: true, samlKeyMaterialReplaced: true });
+    expect(JSON.stringify(entry)).not.toMatch(/CERT-OLD|CERT-NEW|SAML-PVK|okta-client-secret-value/);
   });
 
   it('reports no secret replacement when none is submitted', async () => {
     await call('PUT', { name: 'Acme Okta', oktaConfig: { clientId: 'cid', clientSecret: '' } });
 
-    expect(h.audit.mock.calls[0][1].details).toEqual({ certReplaced: false, oktaClientSecretReplaced: false });
+    expect(h.audit.mock.calls[0][1].details).toEqual({ certReplaced: false, oktaClientSecretReplaced: false, samlKeyMaterialReplaced: false });
   });
 
   it('returns 404 without writing when the provider does not exist', async () => {
