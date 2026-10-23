@@ -1293,7 +1293,8 @@ function generateServerHandlerStubs(packages) {
 
       // Cron and queue Lambdas do not go through baseApi, so each stub registers the contributed
       // admin settings itself before the handler module reads one.
-      const registerSpec = relative(dirname(outPath), ADMIN_SETTINGS_REGISTER_MODULE).split(sep).join('/');
+      let registerSpec = relative(dirname(outPath), ADMIN_SETTINGS_REGISTER_MODULE).split(sep).join('/');
+      if (!registerSpec.startsWith('.')) registerSpec = `./${registerSpec}`;
       writeFile(
         outPath,
         `${GENERATED_BANNER}// Source: ${pkg.name} via b4mContributions.serverHandlerStubs\nimport '${registerSpec}';\nexport * from '${exportFrom}';\n`
