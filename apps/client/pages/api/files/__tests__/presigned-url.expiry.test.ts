@@ -51,6 +51,15 @@ describe('presigned-url expiry bounds', () => {
     );
   });
 
+  it('accepts the minimum positive value', async () => {
+    await call('1');
+    expect(h.getSignedUrl).toHaveBeenCalledWith(
+      'owned/report.txt',
+      'get',
+      expect.objectContaining({ expiresIn: 1 })
+    );
+  });
+
   it.each(['3601', '604800', '0', '-5', 'abc'])('rejects expiresIn=%s with a validation error', async value => {
     await expect(call(value)).rejects.toMatchObject({ name: 'ZodError' });
     expect(h.getSignedUrl).not.toHaveBeenCalled();
