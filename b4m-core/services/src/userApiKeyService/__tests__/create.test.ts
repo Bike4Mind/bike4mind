@@ -961,6 +961,7 @@ describe('createUserApiKey - contributed scopes', () => {
 
   it('mints a scope the injected predicate knows, alongside a built-in one', async () => {
     const result = await createUserApiKey('user1', params(['acme:read', ApiKeyScope.READ_NOTEBOOKS]), {
+      trust: TRUSTED,
       db: { userApiKeys: repo as any, agents: {} as any },
       isKnownScope,
     });
