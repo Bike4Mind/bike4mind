@@ -55,8 +55,8 @@ export interface ResolvedOrchestrationProfile {
    */
   systemPrompt?: string;
   /**
-   * Per-profile confidence-gate threshold. The executor pauses for human review when
-   * consecutive iterations' confidence falls below this. Omitted => the executor's global default. Set to 0 to
+   * Per-profile confidence-gate threshold. The executor pauses for human review when consecutive
+   * iterations' confidence falls below this. Omitted => the executor's global default. Set to 0 to
    * effectively disable the gate for a profile whose tools are sandboxed and whose loop is meant
    * to run unattended; maxIterations remains the runaway backstop.
    */
