@@ -44,8 +44,8 @@ export const AI_ACCESS_REVOKED_MESSAGE =
 
 /**
  * True when the admin "Moderate" action has revoked the user's AI access. Unlike
- * `accountBlockReasons`, this does not block sign-in or data access - only AI features. A
- * moderation suspension also sets `isModerated` (see `setModerationStatus`), so it is covered too.
+ * `accountBlockReasons`, this does not block sign-in or data access - only AI features. It is
+ * independent of `moderation.status`: escalation never writes `isModerated` (see `setModerationStatus`).
  */
 export function isAiAccessRevoked(user: { isModerated?: boolean | null }): boolean {
   return user.isModerated === true;

@@ -14,6 +14,7 @@ import { Logger } from '@bike4mind/observability';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { cacheService } from '@bike4mind/services';
 import { CacheKeys } from '@server/utils/cacheKeys';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 const SecurityBehavioralSummarySchema = z.object({
   summary: z.string(),
@@ -250,6 +251,7 @@ const handler = baseApi()
   )
   .get(
     asyncHandler(async (req, res) => {
+      assertAiAccessAllowed(req.user);
       const user = req.user;
 
       // Only the session itself is a 401. An emailless account (OAuth signup with no

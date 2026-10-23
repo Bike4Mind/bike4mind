@@ -10,9 +10,8 @@ import path from 'path';
  * rejects `isModerated` users: `assertAiAccessAllowed` directly, or `createModelAdmission` /
  * `reserveRequestCredits`, which enforce it for the text-LLM and credit-reserving paths.
  *
- * Routes are found by call site, so a new AI route is held to this without anyone listing it. The
- * two sets below are the only ways out: EXEMPT for routes that need no per-user gate, and
- * NOT_YET_GATED for known gaps, pinned so that closing one forces its removal here.
+ * Routes are found by call site, so a new AI route is held to this without anyone listing it. EXEMPT
+ * is the only way out, for admin-only routes that need no per-user gate.
  */
 
 // Scanned from outside pages/: an fs-walking test under pages/ is traced as a route and
@@ -20,38 +19,21 @@ import path from 'path';
 const ROUTES_DIR = path.join(__dirname, '..', '..', 'pages', 'api');
 const SERVER_DIR = path.join(__dirname, '..');
 
-const AI_MARKERS = [/\bgetOperationsModel\b/, /\bgetLlmByModel\b/, /\btranscribeUpload\(/, /\brefineTextRequest\(/];
+// `.complete(` catches a route that builds its own LLM backend (rapid-reply, the tavern chats).
+const AI_MARKERS = [
+  /\bgetOperationsModel\b/,
+  /\bgetLlmByModel\b/,
+  /\btranscribeUpload\(/,
+  /\brefineTextRequest\(/,
+  /\.complete\(/,
+];
 const GATE = /\b(?:assertAiAccessAllowed|createModelAdmission|reserveRequestCredits)\(/;
 
 const EXEMPT = new Set([
   'admin/modal-tool.ts', // admin
   'admin/operations-model.ts', // admin
   'admin/security-dashboard/ai-assessment.ts', // admin
-  'security/behavioral-summary.ts', // admin
   'users/counterLogs.ts', // admin
-]);
-
-// User-facing gaps: these must be gated; remove an entry once it is.
-const NOT_YET_GATED = new Set([
-  'agents/[id]/enhance-field.ts',
-  'agents/[id]/generate-avatar.ts',
-  'agents/[id]/generate-description.ts',
-  'agents/[id]/generate-system-prompt.ts',
-  'agents/create-from-context.ts',
-  'ai/barkeep-chat.ts',
-  'ai/optimize-input.ts',
-  'ai/refineText.ts',
-  'ai/tavern-conversation.ts',
-  'ai/transcribe/index.ts',
-  'blog/enhance.ts',
-  'blog/generate-image-prompt.ts',
-  'fabfiles/[id]/auto-rename.ts',
-  'files/generate-smart-name.ts',
-  'publish/[publicId]/revise.ts',
-  'sessions/[id]/auto-rename.ts',
-  'sessions/semantic-search.ts',
-  'v1/text-refinements.ts',
-  'v1/transcriptions/index.ts',
 ]);
 
 function sourceFiles(dir: string): string[] {
@@ -98,29 +80,19 @@ describe('a moderated user cannot reach an AI feature', () => {
     );
   });
 
-  it.each(aiRoutes.filter(r => !EXEMPT.has(r.route) && !NOT_YET_GATED.has(r.route)).map(r => [r.route, r.gated]))(
-    '%s is gated',
-    (route, gated) => {
-      expect(
-        gated,
-        `${route} runs an AI feature but never calls a moderation gate. Call assertAiAccessAllowed(req.user) ` +
-          `first in the handler (or go through createModelAdmission / reserveRequestCredits). If it is ` +
-          `genuinely admin-only, add it to EXEMPT.`
-      ).toBe(true);
-    }
-  );
-
-  it.each([...EXEMPT, ...NOT_YET_GATED])('%s is still an AI route', route => {
+  it.each(aiRoutes.filter(r => !EXEMPT.has(r.route)).map(r => [r.route, r.gated]))('%s is gated', (route, gated) => {
     expect(
-      byRoute.get(route)?.isAi,
-      `${route} no longer exists or no longer matches an AI marker. Remove it from EXEMPT / NOT_YET_GATED.`
+      gated,
+      `${route} runs an AI feature but never calls a moderation gate. Call assertAiAccessAllowed(req.user) ` +
+        `first in the handler (or go through createModelAdmission / reserveRequestCredits). If it is ` +
+        `genuinely admin-only, add it to EXEMPT.`
     ).toBe(true);
   });
 
-  it.each([...NOT_YET_GATED])('%s still lacks a gate', route => {
+  it.each([...EXEMPT])('%s is still an AI route', route => {
     expect(
-      byRoute.get(route)?.gated,
-      `${route} is now gated. Remove it from NOT_YET_GATED so it stays guarded.`
-    ).toBe(false);
+      byRoute.get(route)?.isAi,
+      `${route} no longer exists or no longer matches an AI marker. Remove it from EXEMPT.`
+    ).toBe(true);
   });
 });

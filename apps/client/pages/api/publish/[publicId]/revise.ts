@@ -6,6 +6,7 @@ import { PublishedArtifact, Annotation } from '@bike4mind/database';
 import type { IMessage, PublishScopeTier, PublishVisibility } from '@bike4mind/common';
 import { validateBundle, buildPublishUrlPath, invalidatePublishCdn, toCacheTarget } from '@server/services/publish';
 import { OperationsModelService } from '@client/services/operationsModelService';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 /**
  * POST /api/publish/[publicId]/revise - Phase C of the artifact-collab layer:
@@ -93,6 +94,7 @@ function buildPrompt(html: string, annotations: OpenAnnotationLean[]): IMessage[
 }
 
 const handler = baseApi().post(async (req, res) => {
+  assertAiAccessAllowed(req.user);
   if (!req.user?.id) return res.status(401).json({ error: 'Authentication required' });
 
   const publicId = String((req.query as { publicId?: string }).publicId ?? '');

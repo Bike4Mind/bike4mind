@@ -764,9 +764,9 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   }
 
   /**
-   * Transition a user's moderation escalation state. When moving to `suspended`,
-   * also mirrors `isModerated: true` so legacy admin surfaces reflect the suspension; any
-   * non-suspended status clears that mirror. `throttledUntil` is set only for `throttled`.
+   * Transition a user's moderation escalation state. `throttledUntil` is set only for `throttled`.
+   * Never touches `isModerated`: that is the admin's independent AI-only block, and a status change
+   * (a throttle, a lifted suspension) must not silently undo it.
    */
   async setModerationStatus(
     userId: string,
@@ -780,7 +780,6 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
           'moderation.status': status,
           'moderation.statusChangedAt': new Date(),
           'moderation.throttledUntil': status === 'throttled' ? (options?.throttledUntil ?? null) : null,
-          isModerated: status === 'suspended',
         },
       },
       { new: true }

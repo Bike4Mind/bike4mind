@@ -31,6 +31,7 @@ import { apiKeyService, meterCompletionBackend } from '@bike4mind/services';
 import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
 import { createAttachmentLakeAccess } from '@server/dataLakes/attachmentLakeAccess';
 import { v4 as uuidv4 } from 'uuid';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 interface CreateFromContextRequest {
   agentName: string;
@@ -386,6 +387,7 @@ IMPORTANT: Return ONLY valid JSON with no additional text, no markdown formattin
 const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
   Request<{}, CreateFromContextResponse, CreateFromContextRequest>
 >(async (req, res) => {
+  assertAiAccessAllowed(req.user);
   const { agentName, sessionId } = req.body;
   const authenticatedUserId = req.user!.id;
 
