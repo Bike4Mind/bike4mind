@@ -83,6 +83,28 @@ describe('every EventBridge subscription dead-letters its failures', () => {
     expect(allowed.split(',').map(v => v.trim())).toContain(s.variable);
   });
 
+  it.each([...new Set(allSubscriptions.map(s => s.deadLetter))].map(d => [d]))(
+    '%s: the DLQ policy admits only its own rules',
+    deadLetter => {
+      const allowed = SUBSCRIBING_FILES.map(
+        file => readInfra(file).match(new RegExp(`${deadLetter}\\.allowRules\\(\\[([^\\]]*)\\]`))?.[1]
+      ).filter((list): list is string => list !== undefined);
+      expect(allowed).toHaveLength(1);
+      expect(
+        allowed[0]
+          .split(',')
+          .map(v => v.trim())
+          .filter(Boolean)
+          .sort()
+      ).toEqual(
+        allSubscriptions
+          .filter(s => s.deadLetter === deadLetter)
+          .map(s => s.variable)
+          .sort()
+      );
+    }
+  );
+
   it.each([...new Set(allSubscriptions.map(s => s.deadLetter))].map(d => [d]))('%s: the DLQ is alarmed', deadLetter => {
     expect(DLQ_ALARMS_SOURCE).toMatch(new RegExp(`createDlqAlarms\\(\\{[^}]*queue:\\s*${deadLetter}\\.queue,`));
   });
