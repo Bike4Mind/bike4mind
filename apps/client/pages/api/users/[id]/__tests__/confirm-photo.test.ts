@@ -3,14 +3,18 @@ import { createMocks } from 'node-mocks-http';
 
 const {
   mockUserFindOneAndUpdate,
+  mockUserUpdateOne,
   mockAppFileFindById,
+  mockAppFileExists,
   mockAppFileFindOne,
   mockAppFileFindOneAndDelete,
   mockStorageDelete,
   mockStorageGetMetadata,
 } = vi.hoisted(() => ({
   mockUserFindOneAndUpdate: vi.fn(),
+  mockUserUpdateOne: vi.fn(),
   mockAppFileFindById: vi.fn(),
+  mockAppFileExists: vi.fn(),
   mockAppFileFindOne: vi.fn(),
   mockAppFileFindOneAndDelete: vi.fn(),
   mockStorageDelete: vi.fn(),
@@ -38,6 +42,7 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
 vi.mock('@bike4mind/database/content', () => ({
   AppFile: {
     findById: (...a: unknown[]) => mockAppFileFindById(...a),
+    exists: (...a: unknown[]) => mockAppFileExists(...a),
     findOne: (...a: unknown[]) => mockAppFileFindOne(...a),
     findOneAndDelete: (...a: unknown[]) => mockAppFileFindOneAndDelete(...a),
   },
@@ -46,6 +51,7 @@ vi.mock('@bike4mind/database/content', () => ({
 vi.mock('@bike4mind/database', () => ({
   User: {
     findOneAndUpdate: (...a: unknown[]) => mockUserFindOneAndUpdate(...a),
+    updateOne: (...a: unknown[]) => mockUserUpdateOne(...a),
   },
 }));
 
@@ -90,7 +96,9 @@ const run = (
 
 beforeEach(() => {
   mockUserFindOneAndUpdate.mockReset().mockResolvedValue({ id: OWN, name: 'A', photoUrl: OLD_KEY });
+  mockUserUpdateOne.mockReset().mockResolvedValue({ modifiedCount: 1 });
   mockAppFileFindById.mockReset().mockResolvedValue(newFile());
+  mockAppFileExists.mockReset().mockResolvedValue({ _id: 'f-new' });
   mockAppFileFindOne.mockReset().mockResolvedValue({ userId: OWN });
   mockAppFileFindOneAndDelete.mockReset().mockResolvedValue(undefined);
   mockStorageDelete.mockReset().mockResolvedValue(undefined);
@@ -110,13 +118,36 @@ describe('POST /api/users/:id/confirm-photo', () => {
   });
 
   it('leaves photoUrl untouched and rejects when the object is not in storage yet', async () => {
-    mockStorageGetMetadata.mockRejectedValue(new Error('NotFound'));
+    mockStorageGetMetadata.mockRejectedValue(Object.assign(new Error('head failed'), { name: 'NotFound' }));
 
     const { promise } = run();
     await expect(promise).rejects.toThrow('has not finished uploading');
 
     expect(mockUserFindOneAndUpdate).not.toHaveBeenCalled();
     expect(mockStorageDelete).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a storage failure that is not a missing object instead of reporting an unfinished upload', async () => {
+    mockStorageGetMetadata.mockRejectedValue(Object.assign(new Error('throttled'), { name: 'SlowDown' }));
+
+    const { promise } = run();
+    await expect(promise).rejects.toThrow('throttled');
+
+    expect(mockUserFindOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('restores the replaced photo when a concurrent confirm deleted this file before the swap', async () => {
+    const OTHER_KEY = 'profile-photos/u1/other.png';
+    mockUserFindOneAndUpdate.mockResolvedValue({ id: OWN, name: 'A', photoUrl: OTHER_KEY });
+    mockAppFileExists.mockResolvedValue(null);
+
+    const { promise } = run();
+    await expect(promise).rejects.toThrow('Profile photo upload not found');
+
+    expect(mockAppFileExists).toHaveBeenCalledWith({ _id: 'f-new' });
+    expect(mockUserUpdateOne).toHaveBeenCalledWith({ _id: OWN, photoUrl: NEW_KEY }, { photoUrl: OTHER_KEY });
+    expect(mockStorageDelete).not.toHaveBeenCalled();
+    expect(mockAppFileFindOneAndDelete).not.toHaveBeenCalled();
   });
 
   it('does NOT delete the previous photo when its AppFile is not owned by the profile owner', async () => {

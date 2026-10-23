@@ -39,8 +39,12 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
     let uploaded: Awaited<ReturnType<typeof storage.getMetadata>>;
     try {
       uploaded = await storage.getMetadata(file.path);
-    } catch {
-      throw new BadRequestError('Profile photo has not finished uploading');
+    } catch (err) {
+      const { name, $metadata } = err as { name?: string; $metadata?: { httpStatusCode?: number } };
+      if (name === 'NotFound' || name === 'NoSuchKey' || $metadata?.httpStatusCode === 404) {
+        throw new BadRequestError('Profile photo has not finished uploading');
+      }
+      throw err;
     }
     // The presign binds ContentType, but this is the step that promotes the bytes to photoUrl.
     if (uploaded.contentType?.split(';')[0].trim().toLowerCase() !== file.mimeType?.toLowerCase()) {
@@ -53,10 +57,15 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
     if (!previous) throw new NotFoundError('User not found');
     const previousPath = previous.photoUrl;
 
-    // Defense-in-depth: only delete the underlying S3 object + AppFile when the AppFile at the old
-    // key belongs to the profile owner. A photoUrl poisoned before the self-service update stopped
-    // accepting it (or by any other writer) must never delete a file that is not this profile's
-    // photo. The owner is the path param, not the caller: an admin may upload on another user's behalf.
+    // A concurrent confirm may have replaced and deleted this file after the lookup above; put the
+    // pre-image back (only if nothing newer landed) rather than leave photoUrl on a deleted key.
+    if (!(await AppFile.exists({ _id: file.id }))) {
+      await User.updateOne({ _id: userId, photoUrl: file.path }, { photoUrl: previousPath ?? null });
+      throw new NotFoundError('Profile photo upload not found');
+    }
+
+    // Only delete the old photo when its AppFile belongs to the profile owner (the path param, not
+    // the caller), so a poisoned photoUrl can never delete someone else's file.
     if (previousPath && previousPath !== file.path) {
       const existing = await AppFile.findOne({ path: previousPath });
       if (existing && existing.userId?.toString() === userId) {
