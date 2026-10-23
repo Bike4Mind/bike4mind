@@ -163,13 +163,30 @@ describe('POST /api/admin/email/jobs/:id/send', () => {
     });
   });
 
-  it('enqueues stored test addresses so the worker and the audit agree on test mode', async () => {
-    h.claimForSending.mockResolvedValue({ ...draftJob, testEmailAddresses: ['stored@example.com'] });
+  it.each([
+    {
+      scenario: 'stored addresses only',
+      testRecipients: undefined,
+      expectedRecipients: ['stored@example.com', 'other-stored@example.com'],
+    },
+    {
+      scenario: 'overlapping requested and stored addresses',
+      testRecipients: ['requested@example.com', 'stored@example.com'],
+      expectedRecipients: ['requested@example.com', 'stored@example.com', 'other-stored@example.com'],
+    },
+  ])('audits and enqueues the merged test recipients for $scenario', async ({ testRecipients, expectedRecipients }) => {
+    h.claimForSending.mockResolvedValue({
+      ...draftJob,
+      testEmailAddresses: ['stored@example.com', 'other-stored@example.com'],
+    });
 
-    await call(sendHandler, 'POST', { testMode: true });
+    await call(sendHandler, 'POST', { testMode: true, testRecipients });
 
-    expect(h.audit.mock.calls[0][1]).toMatchObject({ action: 'email.job.test_sent' });
-    expect(h.sendToQueue.mock.calls[0][1]).toMatchObject({ testMode: true, testRecipients: ['stored@example.com'] });
+    expect(h.audit.mock.calls[0][1]).toMatchObject({
+      action: 'email.job.test_sent',
+      details: { testMode: true, testRecipientCount: expectedRecipients.length },
+    });
+    expect(h.sendToQueue.mock.calls[0][1]).toMatchObject({ testMode: true, testRecipients: expectedRecipients });
   });
 
   it('rejects test mode with no recipients without auditing or enqueuing', async () => {
