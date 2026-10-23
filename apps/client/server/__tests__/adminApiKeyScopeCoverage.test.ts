@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'fs';
 import path from 'path';
-import { ADMIN_GATE, ADMIN_OR_RELEASE_NOTES_WRITE_GATE } from './scopeCoverageHelpers';
+import { ADMIN_GATE, ADMIN_OR_RELEASE_NOTES_WRITE_GATE, blankStringLiterals } from './scopeCoverageHelpers';
 
 /**
  * `requiredScopes` is opt-in and defaults open (baseApi with no gate calls
@@ -57,15 +57,14 @@ function routeFiles(dir: string): string[] {
 
 const files = routeFiles(ROUTES_DIR);
 const rel = (f: string) => path.relative(ROUTES_DIR, f).split(path.sep).join('/');
-// Strip comments and string literals first so a gate that only appears in one (`/* requiredScopes:
-// [ApiKeyScope.ADMIN] */`, `'requiredScopes: [...]'`) does not read as gated. The declaration is
-// often inline in the baseApi options, so the regex itself stays unanchored; stripping is what
-// prevents the false positive. A `//` inside a string can only over-strip, failing closed.
-const source = (f: string) =>
-  readFileSync(f, 'utf8')
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/\/\/[^\n]*/g, '')
-    .replace(/'[^'\n]*'|"[^"\n]*"|`[^`]*`/g, "''");
+// Blank comments and string literals first so a gate that only appears in one (`/* requiredScopes:
+// [ApiKeyScope.ADMIN] */`, `'requiredScopes: [...]'`) does not read as gated. Throws on an
+// unterminated scan so a misread source fails closed rather than hiding a gate.
+const source = (f: string) => {
+  const { code, terminated } = blankStringLiterals(readFileSync(f, 'utf8'));
+  if (!terminated) throw new Error(`${rel(f)}: source ends inside a string, template or block comment`);
+  return code;
+};
 const isGated = (f: string) => ADMIN_GATE.test(source(f));
 const isReleaseNotesGated = (f: string) => ADMIN_OR_RELEASE_NOTES_WRITE_GATE.test(source(f));
 const declaresNoAuth = (f: string) => /\bauth:\s*false\b/.test(source(f));
