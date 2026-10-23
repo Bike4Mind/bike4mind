@@ -312,6 +312,31 @@ describe('rapid reply mappings admin audit', () => {
 });
 
 describe('rapid reply test run admin audit', () => {
+  it.each([
+    { enabled: false, configuredMapping: mapping, reason: 'System disabled' },
+    { enabled: true, configuredMapping: null, reason: 'No mapping configured' },
+    { enabled: true, configuredMapping: { ...mapping, enabled: false }, reason: 'Mapping disabled' },
+  ])('records a failed test_run for $reason', async ({ enabled, configuredMapping, reason }) => {
+    h.settings.mockResolvedValue({ enabled });
+    h.mappings.findByMainModel.mockResolvedValue(configuredMapping);
+
+    const { req, res } = await call(testRun, 'POST', {
+      body: { mainModelId: 'main-a', testInput: 'SECRET TEST INPUT', simulateLatency: 25 },
+    });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toMatchObject({ success: false, testResults: { reason } });
+    expect(h.audit).toHaveBeenCalledExactlyOnceWith(req, {
+      action: 'settings.rapid_reply.test_run',
+      target: { kind: 'settings', id: 'main-a', displayName: 'Rapid reply test for main-a' },
+      summary: 'ran rapid reply test for main-a',
+      details: { mainModelId: 'main-a', success: false, simulatedLatency: 25 },
+    });
+    expect(JSON.stringify(h.audit.mock.calls[0][1])).not.toContain('SECRET');
+    expect(h.sessionCreate).not.toHaveBeenCalled();
+    expect(h.createLog).not.toHaveBeenCalled();
+  });
+
   it('records test_run even when the run itself failed', async () => {
     h.settings.mockResolvedValue({ enabled: true });
     h.mappings.findByMainModel.mockResolvedValue({
