@@ -327,8 +327,19 @@ describe('the shell layout', () => {
     ] as ChatMessage[];
     await open('bound');
 
-    expect(document.querySelectorAll('[data-testid="chat-message-user-copy-btn-status"]')).toHaveLength(2);
-    expect(get('chat-thread').contains(get('session-panel'))).toBe(false);
+    const statuses = document.querySelectorAll<HTMLElement>('[data-testid="chat-message-user-copy-btn-status"]');
+    expect(statuses).toHaveLength(2);
+    // The scroller is positioned too, so the walker alone would not notice the button's own wrapper going.
+    for (const status of statuses) expect(getComputedStyle(status.parentElement as Element).position).toBe('relative');
     expect(escapingAbsolutes().map(el => el.dataset.testid ?? el.outerHTML.slice(0, 80))).toEqual([]);
+  });
+
+  it('docks the session panel outside the transcript scroller, so it does not scroll with the thread', async () => {
+    paneWidth(1600);
+    transcript = [
+      { id: 'u1', role: 'user', content: 'A question', createdAt: '2026-10-01T00:00:00.000Z' },
+    ] as ChatMessage[];
+    await open('bound');
+    expect(get('chat-thread').contains(get('session-panel'))).toBe(false);
   });
 });
