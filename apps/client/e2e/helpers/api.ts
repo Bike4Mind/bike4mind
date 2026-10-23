@@ -849,6 +849,22 @@ export async function apiGetTeam(
 }
 
 /**
+ * POST /api/admin/organizations/:id/revoke - cancels the team's admin grant. A team cannot be deleted
+ * while it holds an active subscription (DELETE /api/organizations/:id), so this comes first.
+ */
+export async function apiRevokeTeamGrant(
+  request: APIRequestContext,
+  adminToken: string,
+  organizationId: string
+): Promise<APIResponse> {
+  const baseURL = process.env.API_URL || 'http://localhost:3000';
+  return request.post(`${baseURL}/api/admin/organizations/${organizationId}/revoke`, {
+    headers: { Authorization: `Bearer ${adminToken}` },
+    data: { reason: 'E2E teams suite' },
+  });
+}
+
+/**
  * Teardown for a seeded team: revoke the admin grant (so no active subscription row outlives the
  * org), then delete the org. Best-effort on purpose - a test may already have deleted it.
  */
@@ -858,10 +874,8 @@ export async function apiDeleteGrantedTeam(
   organizationId: string
 ): Promise<void> {
   const baseURL = process.env.API_URL || 'http://localhost:3000';
-  const headers = { Authorization: `Bearer ${adminToken}` };
-  await request.post(`${baseURL}/api/admin/organizations/${organizationId}/revoke`, {
-    headers,
-    data: { reason: 'E2E teams suite teardown' },
+  await apiRevokeTeamGrant(request, adminToken, organizationId);
+  await request.delete(`${baseURL}/api/organizations/${organizationId}`, {
+    headers: { Authorization: `Bearer ${adminToken}` },
   });
-  await request.delete(`${baseURL}/api/organizations/${organizationId}`, { headers });
 }

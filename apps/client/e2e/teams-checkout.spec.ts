@@ -26,6 +26,9 @@ const STRIPE_CHECKOUT_URL = /^https:\/\/checkout\.stripe\.com\//;
 // file stays ASCII.
 const PESO = /₱|\bPHP\b/;
 
+/** The app's Teams page URL; `new URL` so a trailing slash on API_URL can't produce `//organizations`. */
+const teamsUrl = (baseURL: string | undefined): string => new URL('/organizations', baseURL).href;
+
 const isSubscribeResponse = (r: Response): boolean =>
   r.request().method() === 'POST' && new URL(r.url()).pathname === SUBSCRIBE_PATH;
 
@@ -140,8 +143,11 @@ test.describe('Teams - Stripe checkout (staging only)', () => {
     await startCheckout(page, teamsPage, teamName);
 
     // Stripe's back link is the session's cancel_url, which the modal sets to the Teams page.
-    await page.locator(`a[href^="${baseURL}/organizations"]`).first().click();
-    await page.waitForURL(`${baseURL}/organizations**`, { timeout: TIMEOUTS.ACTION });
+    await page
+      .locator(`a[href^="${teamsUrl(baseURL)}"]`)
+      .first()
+      .click();
+    await page.waitForURL(`${teamsUrl(baseURL)}**`, { timeout: TIMEOUTS.ACTION });
     await teamsPage.dismissModals();
     await expect(page.getByTestId('organizations-create-team-btn')).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
     await expect(teamsPage.teamCardByName(teamName)).toHaveCount(0);
@@ -165,7 +171,7 @@ test.describe('Teams - Stripe checkout (staging only)', () => {
       const postal = page.locator('#billingPostalCode');
       if (await postal.isVisible().catch(() => false)) await postal.fill('94103');
       await page.getByTestId('hosted-payment-submit-button').click();
-      await page.waitForURL(`${baseURL}/organizations**`, { timeout: TIMEOUTS.ACTION * 2 });
+      await page.waitForURL(`${teamsUrl(baseURL)}**`, { timeout: TIMEOUTS.ACTION * 2 });
     });
 
     await test.step('the webhook creates the team with the purchased seats', async () => {
