@@ -340,10 +340,12 @@ if (isWafEnabled && $app.stage === 'production' && wafAiRateLimitAlarmTopic && w
       evaluationPeriods: 1,
       threshold: 3600,
       treatMissingData: 'ignore',
-      // SQS stops publishing the age metric once the queue is empty; visible is still published
-      // as 0, so the IF scores a drained DLQ 0 and it reaches OK. Residual: a period that hides
-      // only the age while visible > 0 scores 0 too (IF's documented rule), so that partial gap
-      // can still resolve the alarm to OK and re-page on the next age datapoint.
+      // SQS stops publishing the age metric once the queue is empty, so the IF scores an empty
+      // queue from the visible count, which SQS reports while the queue is active; a drained DLQ
+      // normally reaches OK (the post-deploy drain check confirms it). Residuals, one per
+      // direction of a partial gap: a period that hides only the age while visible > 0 scores 0
+      // (IF's documented rule), and one that hides only the visible count drops the expression
+      // and holds the current state.
       metricQueries: [
         {
           id: 'visible',

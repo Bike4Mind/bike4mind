@@ -21,15 +21,22 @@
  * range with no datapoints at all still leaves ALARM for INSUFFICIENT_DATA and back.
  *
  * SQS publishes ApproximateAgeOfOldestMessage only while the queue holds a message, so the age
- * alarm reads it through metric math, `IF(visible > 0, age, 0)`. ApproximateNumberOfMessagesVisible
- * is still published as 0 for an empty queue, so a drained DLQ scores 0 and reaches OK; a range
- * with no datapoint at all drops the expression, which `'ignore'` holds.
+ * alarm reads it through metric math, `IF(visible > 0, age, 0)`. SQS reports metrics while a
+ * queue is active, so a recently-drained DLQ normally reports 0 visible and the alarm reaches OK;
+ * the post-deploy drain check is what confirms that on a real queue. A range with no datapoint at
+ * all drops the expression, which `'ignore'` holds.
  *
- * Known residual: when a period publishes `visible > 0` but no `age`, IF's documented
- * missing-data rule scores the true branch 0 - a passing datapoint - so an age-only gap still
- * walks ALARM -> OK -> ALARM. Holding through that needs `FILL(age, REPEAT)`, whose documented
- * delayed-publish behaviour can pin an evaluation-periods-1 alarm unless it also moves to M-of-N;
- * not worth that trade for the narrower partial gap.
+ * Two known residuals, one per direction of a partial gap:
+ * - `visible > 0` with no `age`: IF's documented missing-data rule scores the true branch 0, a
+ *   passing datapoint, so the age alarm can still walk ALARM -> OK -> ALARM and re-page on the
+ *   next age datapoint.
+ * - `age` present with no `visible`: IF drops its output when the condition series has no
+ *   datapoint, so that period is not evaluated and `'ignore'` holds whatever state the alarm was
+ *   in - an alarm in ALARM stays there, but one in OK does not see the breach until the condition
+ *   returns.
+ * Closing either direction needs `FILL(age, REPEAT)`, whose documented delayed-publish behaviour
+ * can pin an evaluation-periods-1 alarm unless it also moves to M-of-N; not worth that trade for
+ * these narrower gaps.
  */
 
 export interface DlqAlarmDefaults {
@@ -78,8 +85,12 @@ export interface DlqAlarmNaming {
   stage: string;
 }
 
-/** One query of an alarm's metric math (structurally a Pulumi MetricAlarmMetricQuery). */
-export interface DlqAlarmMetricQuery {
+/**
+ * One query of an alarm's metric math (structurally a Pulumi MetricAlarmMetricQuery).
+ * `Dimension` is the dimension value type a consumer binds, so Pulumi outputs pass through
+ * without a cast; the unbound spec in `buildDlqAlarmSpecs` uses the `string` default.
+ */
+export interface DlqAlarmMetricQuery<Dimension = string> {
   id: string;
   label?: string;
   expression?: string;
@@ -88,7 +99,7 @@ export interface DlqAlarmMetricQuery {
     namespace: string;
     metricName: string;
     /** Bound by `bindDlqAlarmDimensions`, because only the product knows its queue. */
-    dimensions?: Record<string, string>;
+    dimensions?: Record<string, Dimension>;
     period: number;
     stat: 'Maximum';
   };
@@ -137,24 +148,26 @@ export type DlqAlarmKind = DlqAlarmSpec['kind'];
 /**
  * Binds the owning queue to the fields a spec's shape keeps its dimensions in: a flat messages
  * alarm takes alarm-level `dimensions`, a metric-math age alarm takes them on every input metric.
- * Spread the result into the MetricAlarm args.
+ * Spread the result into the MetricAlarm args. `Dimension` is generic so a product can pass the
+ * Pulumi outputs its queue exposes (`Output<string>`) exactly as it can pass plain strings.
  */
-export function bindDlqAlarmDimensions(
+export function bindDlqAlarmDimensions<Dimension>(
   spec: DlqAlarmSpec,
-  dimensions: Record<string, string>
-): { dimensions: Record<string, string> } | { metricQueries: DlqAlarmMetricQuery[] } {
+  dimensions: Record<string, Dimension>
+): { dimensions: Record<string, Dimension> } | { metricQueries: DlqAlarmMetricQuery<Dimension>[] } {
   if (spec.kind === 'messages') return { dimensions };
   return {
-    metricQueries: spec.args.metricQueries.map(query =>
-      query.metric ? { ...query, metric: { ...query.metric, dimensions } } : query
+    metricQueries: spec.args.metricQueries.map(({ metric, ...query }) =>
+      metric ? { ...query, metric: { ...metric, dimensions } } : query
     ),
   };
 }
 
 /**
  * Builds the standard [message-count, message-age] alarm spec pair for one DLQ.
- * Names and thresholds match the shape long deployed from infra/dlqAlarms.ts,
- * so adopting this builder is a zero-diff refactor for existing alarms.
+ * Names and thresholds match the shape long deployed from infra/dlqAlarms.ts. The age spec is
+ * metric math, so a consumer must bind its queue with `bindDlqAlarmDimensions` (see the file
+ * header) rather than spreading alarm-level `dimensions`.
  */
 export function buildDlqAlarmSpecs(
   dlq: DlqAlarmDescriptor,

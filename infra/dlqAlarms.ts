@@ -12,7 +12,7 @@
  * - Missing data: 'ignore', which holds the current state, so a range with no SQS datapoint
  *   cannot resolve a firing alarm to OK and re-page on the next point. The age alarms score
  *   IF(visible > 0, age, 0) because SQS stops publishing the age metric on an empty queue;
- *   their one known residual is documented at the age alarms below.
+ *   the known residuals are documented at the age alarms below.
  *
  * Stage-gated: Only deployed to `dev` and `production` stages.
  * Set ENABLE_MONITORING=true to opt in for other stages.
@@ -178,10 +178,12 @@ if (isMonitoredStage) {
     evaluationPeriods: 1,
     threshold: 3600,
     treatMissingData: 'ignore',
-    // SQS stops publishing the age metric once the queue is empty; visible is still published
-    // as 0, so the IF scores a drained DLQ 0 and it reaches OK. Residual: a period that hides
-    // only the age while visible > 0 scores 0 too (IF's documented rule), so that partial gap
-    // can still resolve the alarm to OK and re-page on the next age datapoint.
+    // SQS stops publishing the age metric once the queue is empty, so the IF scores an empty
+    // queue from the visible count, which SQS reports while the queue is active; a drained DLQ
+    // normally reaches OK (the post-deploy drain check confirms it). Residuals, one per direction
+    // of a partial gap: a period that hides only the age while visible > 0 scores 0 (IF's
+    // documented rule), and one that hides only the visible count drops the expression and holds
+    // the current state.
     metricQueries: [
       {
         id: 'visible',
