@@ -35,6 +35,7 @@ vi.mock('@server/middlewares/baseApi', () => {
 const repo = vi.hoisted(() => ({
   list: vi.fn().mockResolvedValue([{ ip: '1.2.3.4' }]),
   block: vi.fn().mockResolvedValue({ ip: '1.2.3.4' }),
+  isBlocked: vi.fn().mockResolvedValue(null),
   unblock: vi.fn().mockResolvedValue({ ip: '1.2.3.4' }),
 }));
 
@@ -68,6 +69,7 @@ describe('/api/security/blocked-ips - admin gate', () => {
   beforeEach(() => {
     repo.list.mockClear();
     repo.block.mockClear();
+    repo.isBlocked.mockReset().mockResolvedValue(null);
     repo.unblock.mockClear();
     audit.record.mockReset().mockImplementation(async () => {
       audit.inTransaction.push(audit.txActive);
@@ -126,6 +128,23 @@ describe('/api/security/blocked-ips - admin gate', () => {
     const { req, res } = mocks(ADMIN, { method: 'POST', body: { ip: '1.2.3.4' } });
     await expect(mockRefs.postHandler!(req, res)).rejects.toThrow('audit down');
     expect(res._isEndCalled()).toBe(false);
+  });
+
+  it('POST returns an existing active block without re-blocking or auditing it', async () => {
+    repo.isBlocked.mockResolvedValue({ ip: '1.2.3.4', reason: 'earlier' });
+    const { req, res } = mocks(ADMIN, { method: 'POST', body: { ip: '1.2.3.4', reason: 'abuse' } });
+    await mockRefs.postHandler!(req, res);
+    expect(res._getStatusCode()).toBe(201);
+    expect(res._getJSONData().item).toMatchObject({ reason: 'earlier' });
+    expect(repo.block).not.toHaveBeenCalled();
+    expect(audit.record).not.toHaveBeenCalled();
+  });
+
+  it('POST rejects a reason over 1000 characters', async () => {
+    const { req, res } = mocks(ADMIN, { method: 'POST', body: { ip: '1.2.3.4', reason: 'x'.repeat(1001) } });
+    await mockRefs.postHandler!(req, res);
+    expect(res._getStatusCode()).toBe(400);
+    expect(repo.block).not.toHaveBeenCalled();
   });
 
   it('DELETE records security.blocked_ip.removed inside the unblock transaction', async () => {

@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
 import { blockedIPRepository, withTransaction } from '@bike4mind/database';
 import { ensureAdmin } from '@bike4mind/server-utils/utils/errors';
@@ -11,6 +12,8 @@ import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 // Managing the IP blocklist is an administrative security control; every method
 // is restricted to admins.
 
+const BlockSchema = z.object({ ip: z.string().min(1), reason: z.string().max(1000).optional() });
+
 const handler = baseApi()
   .get(async (req, res) => {
     ensureAdmin(req.user?.isAdmin);
@@ -21,10 +24,13 @@ const handler = baseApi()
   })
   .post(async (req, res) => {
     ensureAdmin(req.user?.isAdmin);
-    const body = req.body as { ip?: string; reason?: string };
-    const { ip, reason } = body || {};
-    if (!ip) return res.status(400).json({ error: 'ip is required' });
+    const parsed = BlockSchema.safeParse(req.body ?? {});
+    if (!parsed.success) return res.status(400).json({ error: 'Invalid request', details: parsed.error.issues });
+    const { ip, reason } = parsed.data;
     const doc = await withTransaction(async () => {
+      // block() returns an existing active block untouched, so only a new block is audited.
+      const existing = await blockedIPRepository.isBlocked(ip);
+      if (existing) return existing;
       const blocked = await blockedIPRepository.block(ip, reason);
       await recordAdminActionFromRequest(req, {
         action: 'security.blocked_ip.added',
