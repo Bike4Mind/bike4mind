@@ -28,8 +28,7 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
 
     const data = FileGeneratePresignedUrlRequestInput.parse(req.body);
 
-    // Profile photos must be images (mirrors admin/upload-logo.ts). SVG stays allowed
-    // as a valid image type, but the app-file proxy serves it inert via CSP.
+    // Profile photos accept image media types; confirm-photo checks the stored type before promotion.
     if (!data.mimeType.startsWith('image/')) throw new BadRequestError(`Invalid mime type ${data.mimeType}`);
     const ext = mime.extension(data.mimeType);
     if (!ext) throw new BadRequestError(`Invalid mime type ${data.mimeType}`);

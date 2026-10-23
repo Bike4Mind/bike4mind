@@ -1,6 +1,6 @@
 import { AppFileReservedTags } from '@bike4mind/common';
 import { AppFile } from '@bike4mind/database/content';
-import { User } from '@bike4mind/database';
+import { User, withTransaction } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
@@ -40,8 +40,18 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
     try {
       uploaded = await storage.getMetadata(file.path);
     } catch (err) {
-      const { name, $metadata } = err as { name?: string; $metadata?: { httpStatusCode?: number } };
-      if (name === 'NotFound' || name === 'NoSuchKey' || $metadata?.httpStatusCode === 404) {
+      const storageError = z
+        .object({
+          name: z.string().optional(),
+          $metadata: z.object({ httpStatusCode: z.number().optional() }).optional(),
+        })
+        .safeParse(err);
+      if (
+        storageError.success &&
+        (storageError.data.name === 'NotFound' ||
+          storageError.data.name === 'NoSuchKey' ||
+          storageError.data.$metadata?.httpStatusCode === 404)
+      ) {
         throw new BadRequestError('Profile photo has not finished uploading');
       }
       throw err;
@@ -51,26 +61,39 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
       throw new BadRequestError('Profile photo has an unexpected content type');
     }
 
-    // Atomic swap returning the document as it was BEFORE the update, so concurrent confirms each
-    // clean up exactly the photo they replaced instead of both cleaning up a stale read.
-    const previous = await User.findOneAndUpdate({ _id: userId }, { photoUrl: file.path }, { new: false });
-    if (!previous) throw new NotFoundError('User not found');
-    const previousPath = previous.photoUrl;
+    // Retire the old record with the pointer swap, so a racing confirm cannot revive a key
+    // scheduled for deletion. A write conflict retries the candidate lookup as well as the swap.
+    const retiredPath = await withTransaction(async session => {
+      const candidate = await AppFile.findOne(
+        { _id: fileId, userId, path: file.path, mimeType: file.mimeType, tags: AppFileReservedTags.ProfilePhoto },
+        null,
+        { session }
+      );
+      if (!candidate) throw new NotFoundError('Profile photo upload not found');
 
-    // A concurrent confirm may have replaced and deleted this file after the lookup above; put the
-    // pre-image back (only if nothing newer landed) rather than leave photoUrl on a deleted key.
-    if (!(await AppFile.exists({ _id: file.id }))) {
-      await User.updateOne({ _id: userId, photoUrl: file.path }, { photoUrl: previousPath ?? null });
-      throw new NotFoundError('Profile photo upload not found');
-    }
+      const previous = await User.findOneAndUpdate(
+        { _id: userId },
+        { photoUrl: candidate.path },
+        { new: false, session }
+      );
+      if (!previous) throw new NotFoundError('User not found');
+      const previousPath = previous.photoUrl;
+      if (!previousPath || previousPath === candidate.path || !previousPath.startsWith(`profile-photos/${userId}/`)) {
+        return null;
+      }
 
-    // Only delete the old photo when its AppFile belongs to the profile owner (the path param, not
-    // the caller), so a poisoned photoUrl can never delete someone else's file.
-    if (previousPath && previousPath !== file.path) {
-      const existing = await AppFile.findOne({ path: previousPath });
-      if (existing && existing.userId?.toString() === userId) {
-        // Best effort: the new photo is already live, so a failed cleanup must not fail the request.
-        await Promise.allSettled([storage.delete(previousPath), AppFile.findOneAndDelete({ path: previousPath })]);
+      const retired = await AppFile.findOneAndDelete(
+        { path: previousPath, userId, tags: AppFileReservedTags.ProfilePhoto },
+        { session }
+      );
+      return retired?.path ?? null;
+    });
+
+    if (retiredPath) {
+      try {
+        await storage.delete(retiredPath);
+      } catch (error) {
+        console.warn('Failed to delete retired profile photo', error);
       }
     }
 

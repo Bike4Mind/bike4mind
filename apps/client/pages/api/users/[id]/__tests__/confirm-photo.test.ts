@@ -3,22 +3,24 @@ import { createMocks } from 'node-mocks-http';
 
 const {
   mockUserFindOneAndUpdate,
-  mockUserUpdateOne,
   mockAppFileFindById,
-  mockAppFileExists,
   mockAppFileFindOne,
   mockAppFileFindOneAndDelete,
   mockStorageDelete,
   mockStorageGetMetadata,
+  mockWithTransaction,
+  mockCommitted,
+  transactionSession,
 } = vi.hoisted(() => ({
   mockUserFindOneAndUpdate: vi.fn(),
-  mockUserUpdateOne: vi.fn(),
   mockAppFileFindById: vi.fn(),
-  mockAppFileExists: vi.fn(),
   mockAppFileFindOne: vi.fn(),
   mockAppFileFindOneAndDelete: vi.fn(),
   mockStorageDelete: vi.fn(),
   mockStorageGetMetadata: vi.fn(),
+  mockWithTransaction: vi.fn(),
+  mockCommitted: vi.fn(),
+  transactionSession: { id: 'photo-transaction' },
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -42,16 +44,15 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
 vi.mock('@bike4mind/database/content', () => ({
   AppFile: {
     findById: (...a: unknown[]) => mockAppFileFindById(...a),
-    exists: (...a: unknown[]) => mockAppFileExists(...a),
     findOne: (...a: unknown[]) => mockAppFileFindOne(...a),
     findOneAndDelete: (...a: unknown[]) => mockAppFileFindOneAndDelete(...a),
   },
 }));
 
 vi.mock('@bike4mind/database', () => ({
+  withTransaction: (callback: (session: unknown) => Promise<unknown>) => mockWithTransaction(callback),
   User: {
     findOneAndUpdate: (...a: unknown[]) => mockUserFindOneAndUpdate(...a),
-    updateOne: (...a: unknown[]) => mockUserUpdateOne(...a),
   },
 }));
 
@@ -96,13 +97,17 @@ const run = (
 
 beforeEach(() => {
   mockUserFindOneAndUpdate.mockReset().mockResolvedValue({ id: OWN, name: 'A', photoUrl: OLD_KEY });
-  mockUserUpdateOne.mockReset().mockResolvedValue({ modifiedCount: 1 });
   mockAppFileFindById.mockReset().mockResolvedValue(newFile());
-  mockAppFileExists.mockReset().mockResolvedValue({ _id: 'f-new' });
-  mockAppFileFindOne.mockReset().mockResolvedValue({ userId: OWN });
-  mockAppFileFindOneAndDelete.mockReset().mockResolvedValue(undefined);
+  mockAppFileFindOne.mockReset().mockResolvedValue(newFile());
+  mockAppFileFindOneAndDelete.mockReset().mockResolvedValue({ path: OLD_KEY });
   mockStorageDelete.mockReset().mockResolvedValue(undefined);
   mockStorageGetMetadata.mockReset().mockResolvedValue({ size: 123, contentType: 'image/png' });
+  mockCommitted.mockReset();
+  mockWithTransaction.mockReset().mockImplementation(async (callback: (session: unknown) => Promise<unknown>) => {
+    const result = await callback(transactionSession);
+    mockCommitted();
+    return result;
+  });
 });
 
 describe('POST /api/users/:id/confirm-photo', () => {
@@ -112,9 +117,25 @@ describe('POST /api/users/:id/confirm-photo', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(mockStorageGetMetadata).toHaveBeenCalledWith(NEW_KEY);
-    expect(mockUserFindOneAndUpdate).toHaveBeenCalledWith({ _id: OWN }, { photoUrl: NEW_KEY }, { new: false });
+    expect(mockUserFindOneAndUpdate).toHaveBeenCalledWith(
+      { _id: OWN },
+      { photoUrl: NEW_KEY },
+      { new: false, session: transactionSession }
+    );
     expect(mockStorageDelete).toHaveBeenCalledWith(OLD_KEY);
-    expect(mockAppFileFindOneAndDelete).toHaveBeenCalledWith({ path: OLD_KEY });
+    expect(mockAppFileFindOne).toHaveBeenCalledWith(
+      { _id: 'f-new', userId: OWN, path: NEW_KEY, mimeType: 'image/png', tags: AppFileReservedTags.ProfilePhoto },
+      null,
+      { session: transactionSession }
+    );
+    expect(mockAppFileFindOneAndDelete).toHaveBeenCalledWith(
+      { path: OLD_KEY, userId: OWN, tags: AppFileReservedTags.ProfilePhoto },
+      { session: transactionSession }
+    );
+    expect(mockStorageGetMetadata.mock.invocationCallOrder[0]).toBeLessThan(
+      mockUserFindOneAndUpdate.mock.invocationCallOrder[0]
+    );
+    expect(mockCommitted.mock.invocationCallOrder[0]).toBeLessThan(mockStorageDelete.mock.invocationCallOrder[0]);
   });
 
   it('leaves photoUrl untouched and rejects when the object is not in storage yet', async () => {
@@ -136,30 +157,68 @@ describe('POST /api/users/:id/confirm-photo', () => {
     expect(mockUserFindOneAndUpdate).not.toHaveBeenCalled();
   });
 
-  it('restores the replaced photo when a concurrent confirm deleted this file before the swap', async () => {
-    const OTHER_KEY = 'profile-photos/u1/other.png';
-    mockUserFindOneAndUpdate.mockResolvedValue({ id: OWN, name: 'A', photoUrl: OTHER_KEY });
-    mockAppFileExists.mockResolvedValue(null);
+  it('rejects a candidate retired between HEAD and the transaction without changing the profile', async () => {
+    mockAppFileFindOne.mockResolvedValue(null);
 
     const { promise } = run();
     await expect(promise).rejects.toThrow('Profile photo upload not found');
 
-    expect(mockAppFileExists).toHaveBeenCalledWith({ _id: 'f-new' });
-    expect(mockUserUpdateOne).toHaveBeenCalledWith({ _id: OWN, photoUrl: NEW_KEY }, { photoUrl: OTHER_KEY });
+    expect(mockStorageGetMetadata).toHaveBeenCalledWith(NEW_KEY);
+    expect(mockUserFindOneAndUpdate).not.toHaveBeenCalled();
     expect(mockStorageDelete).not.toHaveBeenCalled();
     expect(mockAppFileFindOneAndDelete).not.toHaveBeenCalled();
   });
 
-  it('does NOT delete the previous photo when its AppFile is not owned by the profile owner', async () => {
-    mockAppFileFindOne.mockResolvedValue({ userId: 'someone-else' });
+  it('does not delete storage when retiring the previous record aborts the transaction', async () => {
+    mockAppFileFindOneAndDelete.mockRejectedValue(new Error('retirement failed'));
+
+    const { promise } = run();
+    await expect(promise).rejects.toThrow('retirement failed');
+
+    expect(mockCommitted).not.toHaveBeenCalled();
+    expect(mockStorageDelete).not.toHaveBeenCalled();
+  });
+
+  it('rechecks the candidate when a write conflict retries the transaction', async () => {
+    mockAppFileFindOne.mockResolvedValueOnce(newFile()).mockResolvedValueOnce(null);
+    mockUserFindOneAndUpdate.mockRejectedValueOnce(new Error('write conflict'));
+    mockWithTransaction.mockImplementation(async (callback: (session: unknown) => Promise<unknown>) => {
+      try {
+        await callback(transactionSession);
+      } catch {
+        return callback(transactionSession);
+      }
+    });
+
+    const { promise } = run();
+    await expect(promise).rejects.toThrow('Profile photo upload not found');
+
+    expect(mockAppFileFindOne).toHaveBeenCalledTimes(2);
+    expect(mockUserFindOneAndUpdate).toHaveBeenCalledTimes(1);
+    expect(mockStorageDelete).not.toHaveBeenCalled();
+  });
+
+  it('does not delete storage when no owned profile-photo record was retired', async () => {
+    mockAppFileFindOneAndDelete.mockResolvedValue(null);
 
     const { res, promise } = run();
     await promise;
 
     expect(res._getStatusCode()).toBe(200);
-    expect(mockUserFindOneAndUpdate).toHaveBeenCalledWith({ _id: OWN }, { photoUrl: NEW_KEY }, { new: false });
+    expect(mockAppFileFindOneAndDelete).toHaveBeenCalledWith(
+      { path: OLD_KEY, userId: OWN, tags: AppFileReservedTags.ProfilePhoto },
+      { session: transactionSession }
+    );
     expect(mockStorageDelete).not.toHaveBeenCalled();
-    expect(mockAppFileFindOneAndDelete).not.toHaveBeenCalled();
+  });
+
+  it.each([null, undefined])('preserves an unstructured storage rejection (%s)', async rejection => {
+    mockStorageGetMetadata.mockRejectedValue(rejection);
+
+    const { promise } = run();
+    await expect(promise).rejects.toBe(rejection);
+
+    expect(mockWithTransaction).not.toHaveBeenCalled();
   });
 
   it('skips the cleanup when the profile has no previous photo', async () => {
@@ -168,10 +227,27 @@ describe('POST /api/users/:id/confirm-photo', () => {
     const { promise } = run();
     await promise;
 
-    expect(mockUserFindOneAndUpdate).toHaveBeenCalledWith({ _id: OWN }, { photoUrl: NEW_KEY }, { new: false });
-    expect(mockAppFileFindOne).not.toHaveBeenCalled();
+    expect(mockUserFindOneAndUpdate).toHaveBeenCalledWith(
+      { _id: OWN },
+      { photoUrl: NEW_KEY },
+      { new: false, session: transactionSession }
+    );
+    expect(mockAppFileFindOneAndDelete).not.toHaveBeenCalled();
     expect(mockStorageDelete).not.toHaveBeenCalled();
   });
+
+  it.each([NEW_KEY, 'profile-photos/someone-else/old.png', 'documents/u1/old.png'])(
+    'skips retirement when the previous path is current or outside the owner profile prefix (%s)',
+    async previousPath => {
+      mockUserFindOneAndUpdate.mockResolvedValue({ id: OWN, photoUrl: previousPath });
+
+      const { promise } = run();
+      await promise;
+
+      expect(mockAppFileFindOneAndDelete).not.toHaveBeenCalled();
+      expect(mockStorageDelete).not.toHaveBeenCalled();
+    }
+  );
 
   it('still succeeds when deleting the previous photo fails', async () => {
     mockStorageDelete.mockRejectedValue(new Error('boom'));
@@ -206,11 +282,15 @@ describe('POST /api/users/:id/confirm-photo', () => {
 
   it('cleans up the photo that was live at swap time, not an earlier read', async () => {
     mockUserFindOneAndUpdate.mockResolvedValue({ id: OWN, photoUrl: 'profile-photos/u1/raced.png' });
+    mockAppFileFindOneAndDelete.mockResolvedValue({ path: 'profile-photos/u1/raced.png' });
 
     const { promise } = run();
     await promise;
 
-    expect(mockAppFileFindOne).toHaveBeenCalledWith({ path: 'profile-photos/u1/raced.png' });
+    expect(mockAppFileFindOneAndDelete).toHaveBeenCalledWith(
+      { path: 'profile-photos/u1/raced.png', userId: OWN, tags: AppFileReservedTags.ProfilePhoto },
+      { session: transactionSession }
+    );
     expect(mockStorageDelete).toHaveBeenCalledWith('profile-photos/u1/raced.png');
     expect(mockStorageDelete).not.toHaveBeenCalledWith(OLD_KEY);
   });
@@ -258,6 +338,10 @@ describe('POST /api/users/:id/confirm-photo', () => {
     await promise;
 
     expect(res._getStatusCode()).toBe(200);
-    expect(mockUserFindOneAndUpdate).toHaveBeenCalledWith({ _id: OWN }, { photoUrl: NEW_KEY }, { new: false });
+    expect(mockUserFindOneAndUpdate).toHaveBeenCalledWith(
+      { _id: OWN },
+      { photoUrl: NEW_KEY },
+      { new: false, session: transactionSession }
+    );
   });
 });
