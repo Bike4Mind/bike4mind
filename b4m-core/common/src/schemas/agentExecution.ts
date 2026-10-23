@@ -95,8 +95,9 @@ export const AgentExecutionStartRequestSchema = z.object({
     .describe(
       'Admin only. Scripted per-iteration confidence scores (0 to 1) that replace the real score at the ' +
         'confidence gate: entry i scores iteration i + 1, and iterations past the end use the real score. ' +
-        'A value below the gate threshold pauses the run for review, on an iteration that ran tools and did not ' +
-        'finish; the gate never evaluates other iterations, scripted or not. A non-admin caller gets 403.'
+        'The gate pauses the run for review on a streak of consecutive evaluated iterations below its threshold ' +
+        '(currently 2), so script one low entry per iteration you want in the streak. Only iterations that ran ' +
+        'tools are evaluated, scripted or not, and a finished run never pauses. A non-admin caller gets 403.'
     ),
 });
 
