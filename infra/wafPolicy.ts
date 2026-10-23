@@ -119,11 +119,12 @@ const BLOCKED_IP_PLACEHOLDER = '192.0.2.0/32';
 /**
  * Parses a comma-separated list of IPv4 addresses or IPv4 CIDRs into WAF IPSet entries.
  * Bare addresses get /32, duplicates collapse in order, and an empty list yields a TEST-NET
- * placeholder because WAF requires at least one address. Throws on anything else.
+ * placeholder because WAF requires at least one address. Throws on anything else, including a /0
+ * prefix, which the WAF API rejects at deploy time.
  */
 export function parseWafBlockedIps(raw: string | undefined): string[] {
   const octet = '(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)';
-  const pattern = new RegExp(`^${octet}(?:\\.${octet}){3}(?:/(?:3[0-2]|[12]?\\d))?$`);
+  const pattern = new RegExp(`^${octet}(?:\\.${octet}){3}(?:/(?:3[0-2]|[12]\\d|[1-9]))?$`);
 
   const entries = (raw ?? '')
     .split(',')

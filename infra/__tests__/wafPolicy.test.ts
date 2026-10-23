@@ -865,13 +865,16 @@ describe('wafPolicy', () => {
     });
   });
 
-  describe('anonymous IP list on the signup code routes', () => {
+  // /api/otc/ is the email sign-in path as well as signup, so a Block here locks VPN, Tor and
+  // cloud-egress users out of logging in. Both rules stay on Count until the metric has been read;
+  // switching either to Block is a deliberate, separate change.
+  describe('anonymous IP list on the sign-in code routes', () => {
     const ruleName = 'AWS-AWSManagedRulesAnonymousIpList';
     const forStage = (stage: string): WafRule[] =>
       JSON.parse(buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage }));
 
     for (const stage of ['dev', 'production']) {
-      it(`enforces the group at Priority 1 on ${stage}`, () => {
+      it(`runs the group at Priority 1 on ${stage}`, () => {
         const rule = forStage(stage).find(r => r.Name === ruleName);
         expect(rule).toBeDefined();
         expect(rule!.Priority).toBe(1);
@@ -881,6 +884,16 @@ describe('wafPolicy', () => {
         const mgs = (rule!.Statement as any).ManagedRuleGroupStatement;
         expect(mgs.VendorName).toBe('AWS');
         expect(mgs.Name).toBe('AWSManagedRulesAnonymousIpList');
+      });
+
+      it(`keeps both ${stage} group rules on Count (shadow mode)`, () => {
+        const rule = forStage(stage).find(r => r.Name === ruleName);
+        // any: see above
+        const mgs = (rule!.Statement as any).ManagedRuleGroupStatement;
+        expect(mgs.RuleActionOverrides).toEqual([
+          { Name: 'AnonymousIPList', ActionToUse: { Count: {} } },
+          { Name: 'HostingProviderIPList', ActionToUse: { Count: {} } },
+        ]);
       });
 
       it(`scopes the ${stage} group to /api/otc/ with decode, normalize, lowercase in order`, () => {
@@ -940,6 +953,8 @@ describe('wafPolicy', () => {
     it('rejects anything that is not an IPv4 address or CIDR', () => {
       expect(() => parseWafBlockedIps('not-an-ip')).toThrow(/not-an-ip/);
       expect(() => parseWafBlockedIps('1.2.3.4/40')).toThrow(/1\.2\.3\.4\/40/);
+      expect(() => parseWafBlockedIps('0.0.0.0/0')).toThrow(/0\.0\.0\.0\/0/);
+      expect(() => parseWafBlockedIps('1.2.3.4/08')).toThrow(/1\.2\.3\.4\/08/);
       expect(() => parseWafBlockedIps('::1')).toThrow(/::1/);
       expect(() => parseWafBlockedIps('1.2.3.4,999.1.1.1')).toThrow(/999\.1\.1\.1/);
     });

@@ -60,6 +60,20 @@
         "ManagedRuleGroupStatement": {
           "VendorName": "AWS",
           "Name": "AWSManagedRulesAnonymousIpList",
+          "RuleActionOverrides": [
+            {
+              "Name": "AnonymousIPList",
+              "ActionToUse": {
+                "Count": {}
+              }
+            },
+            {
+              "Name": "HostingProviderIPList",
+              "ActionToUse": {
+                "Count": {}
+              }
+            }
+          ],
           "ScopeDownStatement": {
             "ByteMatchStatement": {
               "SearchString": "/api/otc/",
