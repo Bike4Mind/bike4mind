@@ -290,19 +290,22 @@ describe('a rendered file link, end to end through the browser URL parser', () =
       urlBase: BASE,
       origin: ORIGIN,
       visibility: 'private',
+      pagePaths: [BASE],
+      routeBundleLinks: true,
     });
-    const href = /id="f" href="([^"]+)"/.exec(srcdoc)?.[1] ?? /href="([^"]+)" id="f"/.exec(srcdoc)?.[1];
-    expect(href).toBeTruthy();
+    const rendered = new DOMParser().parseFromString(srcdoc, 'text/html');
+    const link = rendered.getElementById('f');
+    const navigationScript = Array.from(rendered.scripts).find(script => script.textContent.includes("b4m:'navigate'"));
+    if (!link || !navigationScript) throw new Error('rendered bundle is missing its link or navigation script');
     const posted: unknown[] = [];
     vi.spyOn(window.parent, 'postMessage').mockImplementation((data: unknown) => {
       posted.push(data);
     });
-    const tag = buildFragmentNavScriptTag({ origins: [ORIGIN], paths: [BASE], bundleBases: [BASE] });
-    eval(tag.slice('<script>'.length, -'</script>'.length));
-    const a = document.createElement('a');
-    a.href = href!.replace(/&amp;/g, '&');
-    document.body.appendChild(a);
-    a.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 }));
+    eval(navigationScript.textContent);
+    document.body.appendChild(link);
+    const click = new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 });
+    link.dispatchEvent(click);
+    expect(click.defaultPrevented).toBe(true);
 
     const frame = document.createElement('iframe');
     document.body.appendChild(frame);
@@ -314,14 +317,22 @@ describe('a rendered file link, end to end through the browser URL parser', () =
     return { posted, fetchDownload };
   }
 
-  it('opens a file whose name needs percent-encoding', () => {
-    const { fetchDownload } = route('My Report (final).pdf');
-    expect(fetchDownload).toHaveBeenCalledWith(`${BASE}/files/My%20Report%20(final).pdf`);
+  it.each([
+    ['My Report (final).pdf', 'My%20Report%20(final).pdf'],
+    ['\u65e5\u672c\u8a9e.pdf', '%E6%97%A5%E6%9C%AC%E8%AA%9E.pdf'],
+  ])('opens a file whose name needs percent-encoding: %s', (fileName, encodedName) => {
+    const { posted, fetchDownload } = route(fileName);
+    expect(posted).toEqual([{ b4m: 'navigate', path: `${BASE}/files/${encodedName}` }]);
+    expect(fetchDownload).toHaveBeenCalledWith(`${BASE}/files/${encodedName}`);
   });
 
-  it('refuses a file whose name contains a percent sign, which the hosted path cannot serve', () => {
-    const { posted, fetchDownload } = route('100%-test.pdf');
-    expect(posted).toEqual([{ b4m: 'navigate', path: `${BASE}/files/100%25-test.pdf` }]);
+  it.each([
+    ['100%-test.pdf', '100%25-test.pdf'],
+    ['100%-done/report.pdf', '100%25-done/report.pdf'],
+    ['100%2520done.pdf', '100%2520done.pdf'],
+  ])('refuses a percent sign in a file or folder name: %s', (fileName, encodedName) => {
+    const { posted, fetchDownload } = route(fileName);
+    expect(posted).toEqual([{ b4m: 'navigate', path: `${BASE}/files/${encodedName}` }]);
     expect(fetchDownload).not.toHaveBeenCalled();
   });
 });

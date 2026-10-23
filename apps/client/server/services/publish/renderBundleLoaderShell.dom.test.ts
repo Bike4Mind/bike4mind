@@ -286,6 +286,7 @@ describe('loader shell bootstrap - same-bundle file downloads', () => {
   it.each([
     ['an encoded dot-dot escape', '/p/u/scope123/my-slug/.%2e/.%2e/.%2e/.%2e/api/users/me'],
     ['an encoded percent sign', '/p/u/scope123/my-slug/files/100%25.pdf'],
+    ['a percent sign in a folder name', '/p/u/scope123/my-slug/files/100%25-done/report.pdf'],
     ['another bundle', '/p/u/scope123/other-slug/files/report.pdf'],
     ['a page (pages navigate, they are not fetched)', '/p/u/scope123/my-slug/guide/next.html'],
   ])('sends no Bearer request for %s, even when called directly', async (_label, path) => {
