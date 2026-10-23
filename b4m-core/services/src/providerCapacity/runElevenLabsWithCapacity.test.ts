@@ -34,6 +34,10 @@ describe('runElevenLabsWithCapacity', () => {
       attempt
     );
 
+    expect(getSettingsMap).toHaveBeenCalledWith(
+      { adminSettings, caches },
+      { names: ['elevenLabsServerApiKey', 'elevenLabsMusicConcurrencyLimit'], skipCache: true }
+    );
     expect(runWithProviderCapacity).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: 'elevenlabs',

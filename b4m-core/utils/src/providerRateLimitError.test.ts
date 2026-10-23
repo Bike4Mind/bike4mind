@@ -20,4 +20,9 @@ describe('parseRetryAfterMs', () => {
     expect(parseRetryAfterMs(null, now)).toBeNull();
     expect(parseRetryAfterMs('soon', now)).toBeNull();
   });
+
+  it('returns null for a malformed number rather than reading it as a past date', () => {
+    expect(parseRetryAfterMs('3.5', now)).toBeNull();
+    expect(parseRetryAfterMs('-1', now)).toBeNull();
+  });
 });

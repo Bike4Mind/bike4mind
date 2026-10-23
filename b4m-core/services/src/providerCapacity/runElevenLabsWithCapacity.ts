@@ -42,17 +42,23 @@ export type ElevenLabsCapacityArgs = {
 };
 
 /**
- * Every ElevenLabs music/sound call on the shared server key goes through here, so the account's
- * plan-wide concurrency cap is shared fairly across users instead of surfacing as a provider 429.
- * A personal key is the user's own account and is not counted. Callers: /api/ai/music,
- * /api/ai/sound-effects and the audio_generation tool.
+ * Slots synchronous ElevenLabs music/sound calls on the shared server key, so the account's
+ * concurrency cap is shared across users instead of surfacing as a provider 429. A personal key is
+ * the user's own account and is not counted. Callers: /api/ai/music, /api/ai/sound-effects and the
+ * audio_generation tool. Not slotted: the async music generation jobs (which retry 429 per job) and
+ * text-to-speech, so these pools bound only the calls routed here.
  */
 export async function runElevenLabsWithCapacity<T>(
   { operation, apiKey, db, logger }: ElevenLabsCapacityArgs,
   attempt: (call: { timeoutMs: number }) => Promise<T>
 ): Promise<T> {
   const config = OPERATIONS[operation];
-  const settings = await getSettingsMap(db, { names: ['elevenLabsServerApiKey', config.limitSetting] });
+  // Uncached, like getEffectiveApiKey's read of the same key: a cached copy would miss a rotated server
+  // key for the cache TTL and silently run every shared-key call unslotted until it expired.
+  const settings = await getSettingsMap(db, {
+    names: ['elevenLabsServerApiKey', config.limitSetting],
+    skipCache: true,
+  });
   const usesServerKey = Boolean(settings.elevenLabsServerApiKey) && settings.elevenLabsServerApiKey === apiKey;
   const slots =
     usesServerKey && db.caches

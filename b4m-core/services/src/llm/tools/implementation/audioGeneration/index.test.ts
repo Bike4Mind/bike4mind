@@ -36,6 +36,7 @@ vi.mock('../../helpers/persistGeneratedFile', () => ({
 
 // Imported after the mocks so the tool picks up the mocked dependencies.
 const { audioGenerationTool } = await import('./index');
+const { aiSoundService } = await import('@bike4mind/utils');
 const { ProviderBusyError } = await import('../../../../providerCapacity');
 
 function createFakeContext(): ToolContext & {
@@ -144,6 +145,17 @@ describe('audio_generation tool', () => {
       expect.objectContaining({ operation: 'sound', db: context.db }),
       expect.any(Function)
     );
+  });
+
+  it('forwards the capacity-granted timeout into the sound generator factory', async () => {
+    mockRunWithCapacity.mockImplementation((_args: unknown, attempt: (call: { timeoutMs: number }) => unknown) =>
+      attempt({ timeoutMs: 12_345 })
+    );
+    const context = createFakeContext();
+
+    await run(context, { kind: 'sound_effect', text: 'dog barking' });
+
+    expect(aiSoundService).toHaveBeenCalledWith('elevenlabs', 'provider-key', context.logger, { timeoutMs: 12_345 });
   });
 
   it('tells the model to retry later, without billing, when the sound-effects provider is at capacity', async () => {

@@ -56,6 +56,7 @@ export const generateMusicContract = defineEndpoint({
         'The API key exceeded its rate limit, or the provider stayed at its concurrency limit for longer than ' +
         'the request could wait. `Retry-After` says when to try again; reserved credits are refunded.',
       schema: ApiErrorSchema,
+      headers: { 'Retry-After': 'Seconds to wait before retrying.' },
     },
     502: {
       description: 'The provider failed to generate the track; reserved credits are refunded.',

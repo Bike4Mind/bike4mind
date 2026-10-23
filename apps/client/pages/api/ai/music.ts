@@ -140,10 +140,11 @@ const handler = nextRouteForContract(generateMusicContract).post(async (req, res
         })
     ));
   } catch (error) {
-    // Refund the reserved credits - a failed generation incurs no provider cost.
-    await reservation.refund();
+    // Log before refunding, so a refund that throws cannot swallow the original failure.
     if (error instanceof ProviderBusyError) {
       req.logger.warn('Music generation deferred: provider at capacity', { provider, reason: error.reason });
+      // Refund the reserved credits - a failed generation incurs no provider cost.
+      await reservation.refund();
       // Only a 429'd attempt reached the provider; a request that never got a slot made no call to record.
       if (error.reason === 'upstream_rate_limited') recordUsage('error', 0, 0);
       throw providerBusyHttpError(error);
@@ -152,6 +153,7 @@ const handler = nextRouteForContract(generateMusicContract).post(async (req, res
       provider,
       error: error instanceof Error ? error.message : 'Unknown error',
     });
+    await reservation.refund();
     recordUsage('error', 0, 0);
     return res.status(502).json({ error: 'Music generation failed' });
   }
