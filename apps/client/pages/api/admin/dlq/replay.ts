@@ -68,7 +68,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
   const sourceQueueUrl = getSourceQueueUrl(dlqEntry.sourceQueue as Parameters<typeof getSourceQueueUrl>[0]);
   const results: ReplayResult[] = [];
 
-  const recordReplayAudit = (summary: { replayed: number; failed: number; skipped: number; total: number }) =>
+  const recordReplayAudit = (summary: {
+    replayed: number;
+    failed: number;
+    skipped: number;
+    total: number;
+    results: ReplayResult[];
+  }) =>
     recordAdminActionFromRequest(req, {
       action: 'ops.dlq.replayed',
       target: { kind: 'system', id: 'dlq-replay', displayName: 'DLQ replay' },
@@ -79,6 +85,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
         failed: summary.failed,
         skipped: summary.skipped,
         total: summary.total,
+        // IDs only, never bodies; bounded by MAX_BATCH_SIZE via the request schema.
+        replayedMessageIds: summary.results.filter(r => r.status === 'replayed').map(r => r.messageId),
       },
     });
 

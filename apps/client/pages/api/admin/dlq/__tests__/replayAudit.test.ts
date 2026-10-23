@@ -69,7 +69,7 @@ describe('POST /api/admin/dlq/replay admin audit', () => {
     expect(h.audit.mock.calls[0][1]).toMatchObject({
       action: 'ops.dlq.replayed',
       target: { kind: 'system', id: 'dlq-replay' },
-      details: { queueLabel: 'quest', messageCount: 1 },
+      details: { queueLabel: 'quest', messageCount: 1, replayedMessageIds: ['m1'] },
     });
     expect(JSON.stringify(h.audit.mock.calls[0][1])).not.toContain('payload');
     expect(h.sendToQueue.mock.invocationCallOrder[0]).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
