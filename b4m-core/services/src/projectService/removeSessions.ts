@@ -4,6 +4,8 @@ import {
   IUserRepository,
   secureParameters,
   BadRequestError,
+  ForbiddenError,
+  NotFoundError,
 } from '@bike4mind/common';
 import { z } from 'zod';
 import { canonicalId } from '../utils/objectIds';
@@ -33,10 +35,10 @@ export const removeSessions = async (
   const { projectId, sessionIds } = secureParameters(params, removeProjectSessionsSchema);
 
   const user = await db.users.findById(userId);
-  if (!user) throw new Error('User not found');
+  if (!user) throw new NotFoundError('User not found');
 
   const project = await db.projects.shareable.findAccessibleById(user, projectId);
-  if (!project) throw new Error('Project not found');
+  if (!project) throw new NotFoundError('Project not found');
 
   const sessions = await db.sessions.shareable.findAllAccessibleByIds(user, sessionIds);
   // BadRequestError, not a bare Error - see addFiles.
@@ -55,7 +57,7 @@ export const removeSessions = async (
     throw new BadRequestError('Some sessions are not accessible');
   }
   if (project.userId !== userId && sessions.some(s => s.userId !== userId)) {
-    throw new Error('You are not authorized to remove sessions from this project');
+    throw new ForbiddenError('You are not authorized to remove sessions from this project');
   }
 
   // Canonical on both sides here too: a stored id is lowercase, so an uppercase request id

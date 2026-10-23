@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { InviteType, IUserDocument, Permission } from '@bike4mind/common';
+import { ForbiddenError, InviteType, IUserDocument, NotFoundError, Permission } from '@bike4mind/common';
 import { removeFiles } from './removeFiles';
 
 /**
@@ -222,5 +222,20 @@ describe('projectService - removeFiles (project-derived access revocation)', () 
 
     expect(db.users.findByIds).toHaveBeenCalledTimes(1);
     expect(db.users.findByIds).toHaveBeenCalledWith(expect.arrayContaining(['member-1', 'member-2']));
+  });
+
+  it('answers NotFoundError for an unknown user or an inaccessible project', async () => {
+    db.users.findById.mockResolvedValueOnce(null);
+    await expect(call()).rejects.toBeInstanceOf(NotFoundError);
+
+    db.projects.shareable.findAccessibleById.mockResolvedValueOnce(null);
+    await expect(call()).rejects.toBeInstanceOf(NotFoundError);
+  });
+
+  it('answers ForbiddenError when a non-owner removes a file they do not own', async () => {
+    await expect(removeFiles('member-1', { projectId: PROJECT_ID, fileIds: [FILE_ID] }, { db })).rejects.toBeInstanceOf(
+      ForbiddenError
+    );
+    expect(db.projects.update).not.toHaveBeenCalled();
   });
 });

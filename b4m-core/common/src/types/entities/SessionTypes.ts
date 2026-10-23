@@ -1164,6 +1164,15 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
   findAllByIds: (ids: string[], options?: { includeDeleted?: boolean }) => Promise<ISessionDocument[]>;
 
   /**
+   * One ascending-by-`_id` page of these ids (live rows only), resuming strictly after `afterId`.
+   * `hasMore` is true when a row exists past the page.
+   */
+  findPageByIds: (
+    ids: string[],
+    options: { afterId?: string; limit: number }
+  ) => Promise<{ data: ISessionDocument[]; hasMore: boolean }>;
+
+  /**
    * Find all session IDs by user ID
    *
    * @param userId - The user ID

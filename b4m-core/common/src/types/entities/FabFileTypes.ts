@@ -1287,6 +1287,14 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    */
   findAllByIds(ids: string[]): Promise<IFabFileDocument[]>;
   /**
+   * One ascending-by-`_id` page of these ids (live rows only, summary fields only), resuming strictly
+   * after `afterId`. `hasMore` is true when a row exists past the page.
+   */
+  findPageByIds(
+    ids: string[],
+    options: { afterId?: string; limit: number }
+  ): Promise<{ data: IFabFileDocument[]; hasMore: boolean }>;
+  /**
    * Existence only: which of these ids still resolve to a file. Projects `_id` and nothing else -
    * the alternative, `findAllByIds`, hydrates a full mongoose document per id (`tags`, `versions`,
    * Mixed `sourceMetadata` included) to answer a question about existence.

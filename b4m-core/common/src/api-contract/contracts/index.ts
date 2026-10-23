@@ -70,6 +70,14 @@ import {
   deleteProjectContract,
 } from './projects.contract';
 import {
+  listProjectFilesContract,
+  addProjectFilesContract,
+  removeProjectFileContract,
+  listProjectSessionsContract,
+  addProjectSessionsContract,
+  removeProjectSessionContract,
+} from './projectContent.contract';
+import {
   listAgentsContract,
   getAgentContract,
   createAgentContract,
@@ -150,6 +158,12 @@ export const CONTRACTS: readonly EndpointContract[] = [
   createTranscriptionContract,
   updateProjectContract,
   deleteProjectContract,
+  listProjectFilesContract,
+  addProjectFilesContract,
+  removeProjectFileContract,
+  listProjectSessionsContract,
+  addProjectSessionsContract,
+  removeProjectSessionContract,
   listAgentsContract,
   getAgentContract,
   createAgentContract,
