@@ -12,7 +12,10 @@ const ZIP_BYTES = Buffer.from('PK\x03\x04ZIPDATA');
 
 // Evaluated once at import - not reset in beforeEach - so it captures the options this module's
 // top-level baseApi(...) call was made with.
-const h = vi.hoisted(() => ({ baseApiOptions: undefined as unknown }));
+const h = vi.hoisted(() => ({
+  baseApiOptions: undefined as unknown,
+  getSignedUrl: vi.fn(async (p: string) => `https://signed.example/${p}`),
+}));
 
 // baseApi wraps the handler; mock it as a thin pass-through so the test
 // focuses on the response body + cleanup behaviour, capturing the options for the scope-gate test.
@@ -63,8 +66,20 @@ vi.mock('@server/models/Subscription', () => ({
   Subscription: class Subscription {},
 }));
 
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
+  getFilesStorage: () => ({ getSignedUrl: h.getSignedUrl }),
+}));
+
+// Mirrors the real extractor's contract: a missing URL or a fetch failure only surfaces when the
+// caller asks for strict; otherwise it resolves to '' and the route would zip a 0-byte entry.
 vi.mock('@client/app/utils/fabFileUtils', () => ({
-  getContentFromFabfile: vi.fn(async () => 'file-content'),
+  getContentFromFabfile: vi.fn(async ({ fileUrl, strict }: { fileUrl?: string; strict?: boolean }) => {
+    if (!fileUrl || fileUrl.includes('/unreadable/')) {
+      if (strict) throw new Error('Failed to fetch file content');
+      return '';
+    }
+    return 'file-content';
+  }),
 }));
 
 vi.mock('@server/utils/files', () => ({
@@ -85,15 +100,21 @@ import handlerImpl from '../download';
 // The mock reduces baseApi to a pass-through; cast to avoid express/NextApiRequest mismatch in tests.
 const handler = handlerImpl as unknown as (req: NextApiRequest, res: NextApiResponse) => Promise<void>;
 import { FabFile } from '@bike4mind/database';
-import { zipFiles } from '@server/utils/files';
+import { createTempFile, zipFiles } from '@server/utils/files';
+import { getContentFromFabfile } from '@client/app/utils/fabFileUtils';
 import defineAbilitiesFor from '@server/auth/ability';
 import type { IUserDocument } from '@bike4mind/common';
 
 const makeUser = (overrides: Partial<IUserDocument> = {}): IUserDocument =>
   ({ id: 'u1', isAdmin: false, tags: [], groups: [], email: 'user@example.com', ...overrides }) as IUserDocument;
 
+// baseApi always installs req.logger before the handler runs; the skipped-file path logs through it.
 const reqWithAbility = (overrides: Partial<IUserDocument> = {}) =>
-  ({ method: 'GET', ability: defineAbilitiesFor(makeUser(overrides)) }) as unknown as NextApiRequest;
+  ({
+    method: 'GET',
+    ability: defineAbilitiesFor(makeUser(overrides)),
+    logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  }) as unknown as NextApiRequest;
 
 function makeRes() {
   const headers: Record<string, string> = {};
@@ -255,6 +276,53 @@ describe('GET /api/files/download', () => {
     await handler(reqWithAbility({ isAdmin: true }), makeRes().res);
 
     expect(FabFile.find).toHaveBeenCalledWith({ $or: [{ userId: 'u1' }] });
+  });
+
+  // Client uploads store no fileUrl at all, and a stored one expires an hour after it was
+  // minted, so the export must sign the durable object key itself.
+  it('signs a fresh URL from filePath when the row has no stored fileUrl', async () => {
+    (FabFile.find as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { filePath: 'uploads/u1/a.txt', mimeType: 'text/plain', fileName: 'a.txt', moderationStatus: 'clean' },
+    ]);
+
+    const { res } = makeRes();
+    await handler(reqWithAbility(), res);
+
+    expect(h.getSignedUrl).toHaveBeenCalledWith('uploads/u1/a.txt', 'get', { audience: 'browser' });
+    expect(getContentFromFabfile).toHaveBeenCalledWith({
+      fileUrl: 'https://signed.example/uploads/u1/a.txt',
+      mimeType: 'text/plain',
+      strict: true,
+    });
+    expect(createTempFile).toHaveBeenCalledTimes(1);
+    expect(tempFiles.length).toBe(1);
+  });
+
+  it('skips a file whose freshly signed URL cannot be read instead of zipping it empty', async () => {
+    (FabFile.find as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { filePath: 'unreadable/a.txt', mimeType: 'text/plain', fileName: 'a.txt', moderationStatus: 'clean' },
+      { filePath: 'ok/b.txt', mimeType: 'text/plain', fileName: 'b.txt', moderationStatus: 'clean' },
+    ]);
+
+    const { res } = makeRes();
+    await handler(reqWithAbility(), res);
+
+    expect(createTempFile).toHaveBeenCalledTimes(1);
+    expect(tempFiles.length).toBe(1);
+    expect((zipFiles as ReturnType<typeof vi.fn>).mock.calls[0][0]).toEqual(tempFiles);
+  });
+
+  it('skips a file that extracts to no text rather than archiving a 0-byte entry', async () => {
+    (FabFile.find as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { filePath: 'uploads/C1/original.png', mimeType: 'image/png', fileName: 'C1.png', moderationStatus: 'clean' },
+    ]);
+    (getContentFromFabfile as ReturnType<typeof vi.fn>).mockResolvedValueOnce('');
+
+    const { res } = makeRes();
+    await handler(reqWithAbility(), res);
+
+    expect(createTempFile).not.toHaveBeenCalled();
+    expect(tempFiles.length).toBe(0);
   });
 
   it('requires files:read at the baseApi route gate', () => {
