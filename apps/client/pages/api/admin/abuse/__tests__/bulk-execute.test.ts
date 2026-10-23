@@ -91,8 +91,11 @@ describe('POST /api/admin/abuse/bulk-execute', () => {
     mockExecute.mockResolvedValue([succeeded(USER_ID)]);
   });
 
-  it('requires the admin API key scope', () => {
-    expect((handler as unknown as { _config: unknown })._config).toEqual({ requiredScopes: [ApiKeyScope.ADMIN] });
+  it('requires JWT authentication with admin scope metadata', () => {
+    expect((handler as unknown as { _config: unknown })._config).toEqual({
+      auth: 'jwtOnly',
+      requiredScopes: [ApiKeyScope.ADMIN],
+    });
   });
 
   it('refuses a non-admin', async () => {

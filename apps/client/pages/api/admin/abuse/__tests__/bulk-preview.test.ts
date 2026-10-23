@@ -63,8 +63,11 @@ describe('POST /api/admin/abuse/bulk-preview', () => {
     mockCounts.mockResolvedValue({ sample: [], alreadyBannedCount: 0, activeApiKeyCount: 2, clawbackCredits: 100 });
   });
 
-  it('requires the admin API key scope', () => {
-    expect((handler as unknown as { _config: unknown })._config).toEqual({ requiredScopes: [ApiKeyScope.ADMIN] });
+  it('requires JWT authentication with admin scope metadata', () => {
+    expect((handler as unknown as { _config: unknown })._config).toEqual({
+      auth: 'jwtOnly',
+      requiredScopes: [ApiKeyScope.ADMIN],
+    });
   });
 
   it('refuses a non-admin', async () => {

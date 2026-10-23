@@ -20,7 +20,7 @@ import { signBulkAbusePreviewToken } from '@server/admin/bulkAbuse/previewToken'
  * Dry run of a bulk abuse response: who would be actioned, who is skipped and why, and what it
  * would change. Writes nothing. The returned previewToken is what bulk-execute.ts acts on.
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
+const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }).post(
   asyncHandler(async (req, res) => {
     if (!req.user?.isAdmin) throw new ForbiddenError('Unauthorized. Admin access required.');
     const { target, actions } = BulkAbusePreviewRequestSchema.parse(req.body);
