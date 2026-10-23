@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -122,6 +122,36 @@ export class MediaStore {
     };
   }
 
+  async findIdempotent(sessionId: string, key: string, mimeType: string): Promise<StoredMedia | null> {
+    const extension = EXTENSION_BY_MIME[normalizeMime(mimeType)];
+    if (!extension) return null;
+    const name = idempotentName(key, extension);
+    const located = await this.locate(sessionId, name);
+    return located
+      ? { name, url: mediaUrl(sessionId, name), mimeType: located.mimeType, byteLength: located.size }
+      : null;
+  }
+
+  async saveIdempotent(sessionId: string, key: string, bytes: Buffer, mimeType: string): Promise<StoredMedia> {
+    const normalized = normalizeMime(mimeType);
+    const extension = EXTENSION_BY_MIME[normalized];
+    if (!extension) throw new Error(`Cannot display ${mimeType || 'an unknown media type'}.`);
+    if (bytes.length === 0) throw new Error('The server returned an empty file.');
+    if (bytes.length > MAX_MEDIA_BYTES) {
+      throw new Error(`The file is ${Math.round(bytes.length / 1024 / 1024)}MB, which is too large to display.`);
+    }
+
+    const directory = this.sessionDirectory(sessionId);
+    await mkdir(directory, { recursive: true });
+    const name = idempotentName(key, extension);
+    const path = join(directory, name);
+    await writeFile(path, bytes, { flag: 'wx' }).catch(error => {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    });
+    const size = (await stat(path)).size;
+    return { name, url: mediaUrl(sessionId, name), mimeType: MIME_BY_EXTENSION[extension], byteLength: size };
+  }
+
   /**
    * Read one stored file back, for the protocol handler. Returns null for anything this store
    * did not name, so a crafted URL cannot address a path outside the media directory.
@@ -209,6 +239,14 @@ export class MediaStore {
     if (!SESSION_ID_PATTERN.test(sessionId)) throw new Error(`invalid session id: ${sessionId}`);
     return join(this.baseDirectory, sessionId);
   }
+}
+
+function idempotentName(key: string, extension: string): string {
+  const digest = createHash('sha256').update(key).digest('hex').slice(0, 32);
+  return (
+    `${digest.slice(0, 8)}-${digest.slice(8, 12)}-${digest.slice(12, 16)}-` +
+    `${digest.slice(16, 20)}-${digest.slice(20)}.${extension}`
+  );
 }
 
 /**

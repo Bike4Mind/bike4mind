@@ -222,6 +222,7 @@ function ReplyCost({ usage }: { usage?: ChatUsage }) {
  */
 const AssistantTurn = memo(function AssistantTurn({
   message,
+  sessionId,
   onRespond,
   onMove,
   onContinue,
@@ -230,6 +231,7 @@ const AssistantTurn = memo(function AssistantTurn({
   skipRounds = 0,
 }: {
   message: ChatMessage;
+  sessionId: string | null;
   onRespond: RespondToApproval;
   /** Absent with no conversation open; the running-command control is then not drawn. */
   onMove?: MoveCallToBackground;
@@ -279,7 +281,7 @@ const AssistantTurn = memo(function AssistantTurn({
             {/* Per round rather than over the whole reply, which is also what keeps a code fence
                 from leaking: a block opened in one round cannot swallow the next round's prose,
                 because the next round is a parse of its own. */}
-            {presented.text.length > 0 && <ReplyMarkdown text={presented.text} />}
+            {presented.text.length > 0 && <ReplyMarkdown text={presented.text} sessionId={sessionId} />}
             {presented.unfinishedArtifact !== null && (
               <Typography level="body-sm" color="warning" sx={{ mt: 1 }} data-testid="chat-unfinished-artifact">
                 {presented.unfinishedArtifact
@@ -437,7 +439,13 @@ function CollapsedTurn({
  * turn is built on, so what it says - and what it leaves out - is exactly what the user needs to
  * be able to read before they type again.
  */
-const BoundaryRow = memo(function BoundaryRow({ message }: { message: ChatMessage }) {
+const BoundaryRow = memo(function BoundaryRow({
+  message,
+  sessionId,
+}: {
+  message: ChatMessage;
+  sessionId: string | null;
+}) {
   const compacted = message.boundary?.kind === 'compact';
   const automatic = compacted && message.boundary?.automatic === true;
 
@@ -466,7 +474,7 @@ const BoundaryRow = memo(function BoundaryRow({ message }: { message: ChatMessag
             Summary of the conversation so far
           </Typography>
           <Box data-testid="chat-boundary-summary">
-            <ReplyMarkdown text={message.content} />
+            <ReplyMarkdown text={message.content} sessionId={sessionId} />
           </Box>
         </Sheet>
       )}
@@ -668,7 +676,7 @@ export function MessageThread({
   // so a turn drawn inside the disclosure is the same turn with the same Continue and status
   // rules rather than a second rendering path that can drift from this one.
   const turn: RenderTurn = (message, index, skipRounds) => {
-    if (message.boundary) return <BoundaryRow key={message.id} message={message} />;
+    if (message.boundary) return <BoundaryRow key={message.id} message={message} sessionId={sessionId} />;
     if (message.automatic) return <AutomaticTurn key={message.id} message={message} />;
     if (message.relay) return <RelayTurn key={message.id} message={message} />;
     if (message.system) return <SystemTurn key={message.id} message={message} />;
@@ -677,6 +685,7 @@ export function MessageThread({
       <AssistantTurn
         key={message.id}
         message={message}
+        sessionId={sessionId}
         onRespond={onRespond}
         {...(onMove ? { onMove } : {})}
         // Only the last turn, and only while nothing is running: resuming writes back

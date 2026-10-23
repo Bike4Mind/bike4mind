@@ -1,4 +1,4 @@
-import { memo, useMemo, type ComponentProps } from 'react';
+import { memo, useEffect, useMemo, useState, type ComponentProps } from 'react';
 import Box from '@mui/joy/Box';
 import { useTheme } from '@mui/joy/styles';
 import ReactMarkdown, { type Components, type ExtraProps } from 'react-markdown';
@@ -80,20 +80,70 @@ function isInline(node: ExtraProps['node']): boolean {
 }
 
 /**
- * An image a reply links. The sanitizer keeps only http(s) sources and the CSP then refuses to
- * load them, so nothing here is on disk: the menu offers its Markdown and no more. Focusable
- * only when there is a menu to open from the keyboard.
+ * Remote images keep their existing URL behavior. Absolute local paths are resolved by main and
+ * replaced with a private media URL; the renderer never receives filesystem access.
  */
-function MarkdownImage({ src, alt, ...props }: ComponentProps<'img'>) {
+function MarkdownImage({ src, alt, sessionId, ...props }: ComponentProps<'img'> & { sessionId: string | null }) {
   const url = typeof src === 'string' && /^https?:/i.test(src) ? src : null;
-  const imageRef = useMemo<ChatImageRef | null>(() => (url ? { source: 'remote', url } : null), [url]);
+  const local = typeof src === 'string' && /^(?:\/|[A-Za-z]:[\\/])/.test(src) ? src : null;
+  const [resolved, setResolved] = useState<{ path: string; url: string } | null>(null);
+  const [unavailable, setUnavailable] = useState(false);
+  const localUrl = resolved?.path === local ? resolved.url : null;
+
+  useEffect(() => {
+    if (!local || !sessionId) {
+      setUnavailable(!!local);
+      return;
+    }
+    let current = true;
+    setResolved(null);
+    setUnavailable(false);
+    void window.b4m.chat
+      .resolveLocalImage(sessionId, local)
+      .then(result => {
+        if (!current) return;
+        if (result.ok) setResolved({ path: local, url: result.url });
+        else setUnavailable(true);
+      })
+      .catch(() => {
+        if (current) setUnavailable(true);
+      });
+    return () => {
+      current = false;
+    };
+  }, [local, sessionId]);
+
+  const imageRef = useMemo<ChatImageRef | null>(
+    () => (url ? { source: 'remote', url } : localUrl ? { source: 'media', url: localUrl } : null),
+    [localUrl, url]
+  );
   const menu = useImageMenu(imageRef);
+  if (local && !localUrl) {
+    return (
+      <span data-testid={unavailable ? 'chat-markdown-image-unavailable' : 'chat-markdown-image-loading'}>
+        {unavailable ? 'Image unavailable' : 'Loading image...'}
+      </span>
+    );
+  }
   return (
-    <img {...props} src={src} alt={alt} tabIndex={menu ? 0 : undefined} {...menu} data-testid="chat-markdown-image" />
+    <img
+      {...props}
+      src={localUrl ?? src}
+      alt={alt}
+      onError={() => {
+        if (local) {
+          setResolved(null);
+          setUnavailable(true);
+        }
+      }}
+      tabIndex={menu ? 0 : undefined}
+      {...menu}
+      data-testid="chat-markdown-image"
+    />
   );
 }
 
-function buildComponents(mode: 'light' | 'dark'): Components {
+function buildComponents(mode: 'light' | 'dark', sessionId: string | null): Components {
   return {
     // The fence draws its own container, so react-markdown's <pre> would only nest a second
     // one around it - and a <div> inside a <pre> is not valid content either.
@@ -111,7 +161,7 @@ function buildComponents(mode: 'light' | 'dark'): Components {
       return <CodeBlock code={String(children).replace(/\n$/, '')} language={language} mode={mode} />;
     },
 
-    img: ({ node: _node, ...props }) => <MarkdownImage {...props} />,
+    img: ({ node: _node, ...props }) => <MarkdownImage {...props} sessionId={sessionId} />,
 
     // The same link a prompt draws, so the two open, and look, the same way. Bare urls arrive
     // here as links too: remark-gfm's autolink literals turn them into ordinary `a` nodes.
@@ -129,9 +179,15 @@ function buildComponents(mode: 'light' | 'dark'): Components {
  * on any of the tokens that follow. A theme change still lands, because that arrives through
  * context rather than through props.
  */
-export const ReplyMarkdown = memo(function ReplyMarkdown({ text }: { text: string }) {
+export const ReplyMarkdown = memo(function ReplyMarkdown({
+  text,
+  sessionId = null,
+}: {
+  text: string;
+  sessionId?: string | null;
+}) {
   const mode = useTheme().palette.mode === 'dark' ? 'dark' : 'light';
-  const components = useMemo(() => buildComponents(mode), [mode]);
+  const components = useMemo(() => buildComponents(mode, sessionId), [mode, sessionId]);
 
   return (
     <Box sx={markdownSx} data-testid="chat-markdown">

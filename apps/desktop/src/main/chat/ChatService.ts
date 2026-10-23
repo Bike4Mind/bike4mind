@@ -1109,6 +1109,11 @@ export class ChatService {
     return { roots: union(owned, granted), workingDirectory: project.workingDirectory };
   }
 
+  async rootsForSession(sessionId: string): Promise<readonly string[] | null> {
+    const session = await this.deps.store.get(sessionId);
+    return session ? (await this.resolveToolScope(session)).roots : null;
+  }
+
   /**
    * Sessions saved before worktree resolution skipped the bare repo can have the shared git dir
    * (<container>/.bare) as their working directory, which no tool can read or run in. Re-resolve

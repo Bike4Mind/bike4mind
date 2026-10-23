@@ -36,6 +36,17 @@ describe('MediaStore', () => {
     expect((await media.read(SESSION, saved.name))?.mimeType).toBe('audio/mpeg');
   });
 
+  it('stores an idempotent copy once for the same conversation and key', async () => {
+    const { store: media, base } = await store();
+    const first = await media.saveIdempotent(SESSION, '/private/tmp/shot.png', Buffer.from('first'), 'image/png');
+    const second = await media.saveIdempotent(SESSION, '/private/tmp/shot.png', Buffer.from('second'), 'image/png');
+
+    expect(second).toEqual(first);
+    expect(await readdir(join(base, SESSION))).toEqual([first.name]);
+    expect((await media.read(SESSION, first.name))?.bytes.toString()).toBe('first');
+    expect(await media.findIdempotent(SESSION, '/private/tmp/shot.png', 'image/png')).toEqual(first);
+  });
+
   it('refuses a type it cannot serve rather than writing a file with a guessed extension', async () => {
     const { store: media } = await store();
     await expect(media.save(SESSION, Buffer.from('MZ'), 'application/octet-stream')).rejects.toThrow(/Cannot display/);

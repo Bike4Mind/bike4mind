@@ -74,6 +74,7 @@ import { CHAT_STREAM_TAG } from './devLogTag';
 import { McpManager } from './mcp/McpManager';
 import { McpServerStore, type StoreFile } from './mcp/McpServerStore';
 import { MediaApiClient } from './media/MediaApiClient';
+import { LocalImageResolver } from './media/LocalImageResolver';
 import { MediaStore } from './media/MediaStore';
 import { VideoJobScheduler } from './media/VideoJobScheduler';
 import { VideoJobStore } from './media/VideoJobStore';
@@ -515,6 +516,12 @@ export function registerChat(
     summaryChanged: (summary: ChatSessionSummary) => send(IPC_CHANNELS.chatSessionSummary, summary),
     sessionClosed: hooks.sessionClosed,
   });
+  const localImages = new LocalImageResolver({
+    media,
+    rootsForSession: sessionId => service.rootsForSession(sessionId),
+    protectedPaths: [userData],
+    decode: bytes => !nativeImage.createFromBuffer(bytes).isEmpty(),
+  });
 
   ipcMain.handle(IPC_CHANNELS.chatListModels, (_event, force: boolean) => service.listModels(force));
   ipcMain.handle(IPC_CHANNELS.chatListSuggestionModels, () => service.listSuggestionModels());
@@ -772,6 +779,11 @@ export function registerChat(
 
   ipcMain.handle(IPC_CHANNELS.chatDiscardAttachment, (_event, sessionId: string, attachmentId: string) =>
     attachments.discard(sessionId, attachmentId)
+  );
+  ipcMain.handle(IPC_CHANNELS.chatResolveLocalImage, (_event, sessionId: unknown, path: unknown) =>
+    typeof sessionId === 'string' && typeof path === 'string'
+      ? localImages.resolve(sessionId, path)
+      : { ok: false, error: 'unavailable' as const }
   );
 
   registerImageMenuIpc(ipcMain, {

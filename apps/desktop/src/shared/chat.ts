@@ -456,6 +456,8 @@ export type ChatImageAction = 'copy' | 'save' | 'copy-path' | 'copy-markdown' | 
 /** `done` is false when the user cancelled a save dialog. */
 export type ChatImageActionResult = { ok: true; done: boolean } | { ok: false; error: string };
 
+export type ChatLocalImageResult = { ok: true; url: string; mimeType: string } | { ok: false; error: 'unavailable' };
+
 /**
  * Everything the artifact card needs to draw one, whether it came out of a reply or back off
  * the server.

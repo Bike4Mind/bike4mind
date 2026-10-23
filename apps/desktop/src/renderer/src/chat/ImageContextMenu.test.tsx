@@ -2,7 +2,13 @@
 import { CssVarsProvider } from '@mui/joy/styles';
 import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import type { AddAttachmentsResult, ChatAttachment, ChatImageActionResult, ChatMedia } from '@shared/chat';
+import type {
+  AddAttachmentsResult,
+  ChatAttachment,
+  ChatImageActionResult,
+  ChatLocalImageResult,
+  ChatMedia,
+} from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AttachmentRow } from './Attachments';
 import { ImageMenuProvider } from './ImageContextMenu';
@@ -82,6 +88,7 @@ beforeEach(() => {
   vi.stubGlobal('b4m', {
     chat: {
       readAttachment: async () => 'data:image/png;base64,AAAA',
+      resolveLocalImage: vi.fn(),
       imageAction,
       attachImage,
       addAttachments: vi.fn(),
@@ -174,6 +181,42 @@ describe('the image context menu', () => {
       { source: 'remote', url: 'https://example.com/chart.png' },
       'copy-markdown'
     );
+  });
+
+  it('loads an approved absolute Markdown image through main without a localhost URL', async () => {
+    const resolveLocalImage = vi.fn<() => Promise<ChatLocalImageResult>>().mockResolvedValue({
+      ok: true,
+      url: 'b4m-media://media/s1/00000000-0000-4000-8000-000000000001.png',
+      mimeType: 'image/png',
+    });
+    window.b4m.chat.resolveLocalImage = resolveLocalImage;
+    const path = '/private/tmp/claude-501/session/scratchpad/testfolder/workspace-tooltip-opaque.png';
+    await render(<ReplyMarkdown sessionId="s1" text={`![Fixed opaque workspace tooltip](${path})`} />);
+
+    expect(resolveLocalImage).toHaveBeenCalledWith('s1', path);
+    expect(byTestId('chat-markdown-image')?.getAttribute('src')).toMatch(/^b4m-media:/);
+    expect(byTestId('chat-markdown-image')?.getAttribute('src')).not.toMatch(/localhost|127\.0\.0\.1/);
+  });
+
+  it('shows loading and unavailable states for a local Markdown image', async () => {
+    let finish: (result: { ok: false; error: 'unavailable' }) => void = () => {};
+    window.b4m.chat.resolveLocalImage = vi.fn(
+      () =>
+        new Promise<ChatLocalImageResult>(resolve => {
+          finish = resolve;
+        })
+    );
+    await render(<ReplyMarkdown sessionId="s1" text="![shot](/private/tmp/missing.png)" />);
+    expect(byTestId('chat-markdown-image-loading')).not.toBeNull();
+    await act(async () => finish({ ok: false, error: 'unavailable' }));
+    expect(byTestId('chat-markdown-image-unavailable')?.textContent).toBe('Image unavailable');
+    expect(byTestId('chat-markdown-image')).toBeNull();
+  });
+
+  it('shows unavailable when local image resolution rejects', async () => {
+    window.b4m.chat.resolveLocalImage = vi.fn().mockRejectedValue(new Error('ipc down'));
+    await render(<ReplyMarkdown sessionId="s1" text="![shot](/private/tmp/missing.png)" />);
+    expect(byTestId('chat-markdown-image-unavailable')?.textContent).toBe('Image unavailable');
   });
 
   it('shows a failed action as a notice', async () => {

@@ -23,6 +23,7 @@ import type {
   ChatImageAction,
   ChatImageActionResult,
   ChatImageRef,
+  ChatLocalImageResult,
   ChatModelCatalog,
   ChatMoveToBackgroundResult,
   ChatQueueEvent,
@@ -163,6 +164,7 @@ export const IPC_CHANNELS = {
   chatDiscardAttachment: 'chat:discard-attachment',
   chatImageAction: 'chat:image-action',
   chatAttachImage: 'chat:attach-image',
+  chatResolveLocalImage: 'chat:resolve-local-image',
   chatListArtifacts: 'chat:list-artifacts',
   chatReadArtifact: 'chat:read-artifact',
   chatPublishArtifact: 'chat:publish-artifact',
@@ -683,6 +685,8 @@ export interface DesktopApi {
     imageAction(image: ChatImageRef, action: ChatImageAction): Promise<ChatImageActionResult>;
     /** Add a thread image to this session's draft, through the same intake as a paste. */
     attachImage(sessionId: string, image: ChatImageRef): Promise<AddAttachmentsResult>;
+    /** Import an approved absolute image path into conversation media. */
+    resolveLocalImage(sessionId: string, path: string): Promise<ChatLocalImageResult>;
     /**
      * Answer a tool call sitting at 'awaiting-approval'. Unknown or already-answered ids are
      * ignored, so a double click cannot approve a second, different command.
