@@ -51,6 +51,9 @@ const handler = baseApi().post(
     const { errorFingerprint: fingerprint, source, status: previousStatus, repoSlug } = doc;
     const effectiveRepoSlug = repoSlug || SRE_DEFAULT_REPO_SLUG;
 
+    let dispatched = true;
+    let reason: string | null = null;
+
     if (source === 'GITHUB_ISSUE') {
       // Check if GitHub issue is closed before retrying
       const systemRepo = effectiveRepoSlug;
@@ -103,7 +106,9 @@ const handler = baseApi().post(
 
       // Clear dispatch dedup before re-dispatch (repo-scoped)
       await cacheRepository.deleteByKey(`sre-dispatch-${effectiveRepoSlug}:${fingerprint}`);
-      await dispatchIssueToSre(payload, logger);
+      const dispatchResult = await dispatchIssueToSre(payload, logger);
+      dispatched = dispatchResult.dispatched;
+      reason = dispatchResult.reason ?? null;
 
       // Delete terminal docs after successful queue send
       const { deletedCount } = await sreErrorTrackingRepository.deleteTerminalByFingerprint(
@@ -152,8 +157,10 @@ const handler = baseApi().post(
     await recordAdminActionFromRequest(req, {
       action: 'ops.sre.tracking_retried',
       target: { kind: 'system', id, displayName: `SRE tracking ${fingerprint}` },
-      summary: `retried SRE tracking ${fingerprint}`,
-      details: { previousStatus, source, repoSlug: effectiveRepoSlug },
+      summary: dispatched
+        ? `retried SRE tracking ${fingerprint}`
+        : `retry of SRE tracking ${fingerprint} blocked (${reason ?? 'unknown'})`,
+      details: { previousStatus, source, repoSlug: effectiveRepoSlug, dispatched, reason },
     });
 
     res.status(200).json({ success: true, fingerprint });
