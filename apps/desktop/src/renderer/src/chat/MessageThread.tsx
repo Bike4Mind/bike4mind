@@ -616,6 +616,7 @@ export function MessageThread({
   messages,
   sessionId,
   noSession,
+  emptySession,
   streaming,
   onRespond,
   onMove,
@@ -632,6 +633,8 @@ export function MessageThread({
    * user to "send a message" while the composer refused to take one.
    */
   noSession?: ReactNode;
+  /** Replaces the ordinary invitation for an existing session whose transcript is still empty. */
+  emptySession?: ReactNode;
   /**
    * A reply is in flight for this conversation, however this window came to know it - so there
    * is nothing to resume, and the live line belongs at the foot of the last turn.
@@ -717,8 +720,13 @@ export function MessageThread({
 
   if (empty) {
     return (
-      <Box sx={{ flex: 1, display: 'grid', placeItems: 'center', p: 3 }}>
-        {sessionId ? (
+      <Box
+        sx={{ flex: 1, minHeight: 0, display: 'grid', placeItems: 'safe center', p: 3, ...scrollingColumnHostSx }}
+        data-testid="chat-thread-empty-host"
+      >
+        {sessionId && emptySession ? (
+          emptySession
+        ) : sessionId ? (
           <Typography level="body-sm" textColor="text.tertiary" data-testid="chat-thread-empty">
             Send a message to start this conversation.
           </Typography>

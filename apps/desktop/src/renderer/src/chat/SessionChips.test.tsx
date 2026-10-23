@@ -279,6 +279,101 @@ describe('the branch chip against what git answers', () => {
   });
 });
 
+describe('the workspace form', () => {
+  let host: HTMLDivElement;
+  let root: Root;
+  const inspectProject = vi.fn();
+  const addContextDirectory = vi.fn();
+  const removeContextDirectory = vi.fn();
+
+  beforeEach(() => {
+    inspectProject.mockReset();
+    addContextDirectory.mockReset();
+    removeContextDirectory.mockReset();
+    inspectProject.mockResolvedValue(inspection());
+    (window as unknown as { b4m: unknown }).b4m = { chat: { inspectProject, listRecentFolders }, getAppInfo };
+    host = document.createElement('div');
+    document.body.appendChild(host);
+    root = createRoot(host);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it('lays out each workspace control in a labeled full-width row without chip semantics', async () => {
+    await act(async () =>
+      root.render(
+        <SessionChips
+          layout="panel"
+          project={project()}
+          binding={{ ...binding, addContextDirectory, removeContextDirectory }}
+          settledTurns={0}
+        />
+      )
+    );
+    await act(async () => undefined);
+
+    const form = host.querySelector('[data-testid="session-workspace-form"]') as HTMLElement;
+    expect(form.textContent).toContain('Project folder');
+    expect(form.textContent).toContain('Git branch');
+    expect(form.textContent).toContain('Worktree');
+    expect(form.querySelector('[data-testid="session-chip-project"]')?.tagName).toBe('BUTTON');
+    expect(form.querySelector('[data-testid="session-chip-branch-btn"]')?.tagName).toBe('BUTTON');
+    expect(form.querySelector('[data-testid="session-chip-add-context"]')?.textContent).toContain('Add directory');
+    expect(form.querySelector('[data-testid="session-chip-context"]')).toBeNull();
+    expect(form.querySelectorAll('[data-testid$="-row"]')).toHaveLength(4);
+    for (const [testId, label] of [
+      ['session-chip-project', 'Project folder'],
+      ['session-chip-branch-btn', 'Git branch'],
+    ]) {
+      const button = form.querySelector(`[data-testid="${testId}"]`) as HTMLElement;
+      const [labelId] = (button.getAttribute('aria-labelledby') ?? '').split(' ');
+      expect(document.getElementById(labelId)?.textContent).toBe(label);
+      expect(document.querySelector(`label[for="${button.id}"]`)?.textContent).toBe(label);
+    }
+  });
+
+  it('adds and explicitly removes additional directories', async () => {
+    await act(async () =>
+      root.render(
+        <SessionChips
+          project={project({ contextDirectories: ['/Users/someone/shared'] })}
+          binding={{ ...binding, addContextDirectory, removeContextDirectory }}
+          settledTurns={0}
+        />
+      )
+    );
+    await act(async () => undefined);
+
+    await act(async () => (host.querySelector('[data-testid="session-chip-add-context"]') as HTMLElement).click());
+    await act(async () =>
+      (host.querySelector('[data-testid="session-workspace-directory-remove-btn"]') as HTMLElement).click()
+    );
+    expect(addContextDirectory).toHaveBeenCalledTimes(1);
+    expect(removeContextDirectory).toHaveBeenCalledWith('/Users/someone/shared');
+    expect(host.querySelector('[data-testid="session-workspace-directory-remove-btn"]')?.textContent).toBe('Remove');
+    expect(host.querySelector('[data-testid="session-chip-context"]')).toBeNull();
+  });
+
+  it('holds directory removal while a binding change is in flight', async () => {
+    await act(async () =>
+      root.render(
+        <SessionChips
+          project={project({ contextDirectories: ['/Users/someone/shared'] })}
+          binding={{ ...binding, busy: true, addContextDirectory, removeContextDirectory }}
+          settledTurns={0}
+        />
+      )
+    );
+    await act(async () => undefined);
+
+    const remove = host.querySelector('[data-testid="session-workspace-directory-remove-btn"]') as HTMLButtonElement;
+    expect(remove.disabled).toBe(true);
+  });
+});
+
 /**
  * A session that has run commands in one folder must not be repointed at another: the transcript
  * above would then describe work done somewhere the session no longer claims. The lock is on
@@ -366,6 +461,7 @@ describe('the chip row once the session has run here', () => {
 
     expect(tooltip.textContent?.split('\n')).toEqual([expect.stringMatching(/new session/i), CHECKOUT]);
     expect(getComputedStyle(tooltip).whiteSpace).toBe('pre-line');
+    expect(getComputedStyle(tooltip).backgroundColor).toContain('--joy-palette-background-popup');
   });
 });
 
