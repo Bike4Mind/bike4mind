@@ -9,6 +9,7 @@ import {
 import { ChoiceEndReason, ChoiceStatus, ICompletionOptions, ICompletionResponseChunk } from '../backend';
 import { BaseBedrockBackend } from './base';
 import { ConverseCommand, ConverseStreamCommand } from '@aws-sdk/client-bedrock-runtime';
+import { appendIdentityReminder, buildIdentityReminder } from '../identityReminder';
 
 type ConverseContentBlock = { text: string } | { reasoningContent: { reasoningText?: { text?: string } } };
 
@@ -106,10 +107,15 @@ export default class DeepSeekBedrockBackend extends BaseBedrockBackend {
           m.content.toLowerCase().includes('give a title to this session'))
     );
 
-    const systemText = messages
+    const callerSystemText = messages
       .filter(m => m.role === 'system' && m.content)
       .map(m => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content)))
       .join('\n');
+
+    // Before the demote-to-user branch below, so a system-only payload carries the line too.
+    const systemText = options.omitIdentityReminder
+      ? callerSystemText
+      : appendIdentityReminder(callerSystemText, buildIdentityReminder(model));
 
     const converseMessages = this.toConverseMessages(messages);
 
