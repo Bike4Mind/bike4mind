@@ -21,7 +21,7 @@ describe('buildDlqAlarmSpecs', () => {
       period: 60,
       statistic: 'Maximum',
       threshold: 0,
-      treatMissingData: 'notBreaching',
+      treatMissingData: 'missing',
       tags: { Application: 'ImageGeneration', Severity: 'Critical', MonitoringType: 'DLQ' },
     });
   });
@@ -40,9 +40,19 @@ describe('buildDlqAlarmSpecs', () => {
       period: 300,
       statistic: 'Maximum',
       threshold: 3600,
-      treatMissingData: 'notBreaching',
+      treatMissingData: 'missing',
       tags: { Application: 'SreAgent', Severity: 'High', MonitoringType: 'DLQ' },
     });
+  });
+
+  it('treats a missing SQS datapoint as no information for both alarm kinds', () => {
+    // A gap must not resolve the alarm: the next real datapoint re-fires ALARM and re-pages
+    // the same dead letter. Asserted per kind so a fix cannot land on one alarm only.
+    const specs = buildDlqAlarmSpecs({ label: 'q', displayName: 'Q', application: 'App' }, NAMING);
+    expect(specs.map(spec => [spec.kind, spec.args.treatMissingData])).toEqual([
+      ['messages', 'missing'],
+      ['age', 'missing'],
+    ]);
   });
 
   it('applies per-descriptor overrides', () => {

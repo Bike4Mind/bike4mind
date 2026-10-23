@@ -4,6 +4,10 @@
  * dlqAlarms.ts builder loop; the product supplies only the resource-bound
  * pieces (queue dimensions, SNS alarm actions) when constructing
  * `new aws.cloudwatch.MetricAlarm(spec.resourceName, { ...spec.args, ... })`.
+ *
+ * Missing data is `'missing'`, not `'notBreaching'`: a skipped SQS datapoint is no information
+ * about the queue, so it must not resolve a firing alarm. With `'notBreaching'` a gap flipped
+ * ALARM to OK and the next real datapoint re-fired it, re-paging the same dead letter each time.
  */
 
 export interface DlqAlarmDefaults {
@@ -70,7 +74,7 @@ export interface DlqAlarmSpec {
     period: number;
     statistic: 'Maximum';
     threshold: number;
-    treatMissingData: 'notBreaching';
+    treatMissingData: 'missing';
     tags: {
       Application: string;
       Severity: 'Critical' | 'High';
@@ -106,7 +110,7 @@ export function buildDlqAlarmSpecs(
         period: defaults.messagePeriod,
         statistic: 'Maximum',
         threshold: dlq.messageThreshold ?? defaults.messageThreshold,
-        treatMissingData: 'notBreaching',
+        treatMissingData: 'missing',
         tags: {
           Application: dlq.application,
           Severity: 'Critical',
@@ -127,7 +131,7 @@ export function buildDlqAlarmSpecs(
         period: defaults.agePeriod,
         statistic: 'Maximum',
         threshold: dlq.ageThreshold ?? defaults.ageThreshold,
-        treatMissingData: 'notBreaching',
+        treatMissingData: 'missing',
         tags: {
           Application: dlq.application,
           Severity: 'High',
