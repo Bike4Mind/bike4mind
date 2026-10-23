@@ -3,7 +3,7 @@ import { ApiKeyScope, EmailJobOverallStatus } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { definedKeys, recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 // Reaches `BaseRepository.update` -> `$set`, so these cast before validators run. `isTestMode`
 // and the `recipientFilter` booleans are Boolean-typed (throw `CastError kind='Boolean'` on 2,
@@ -83,9 +83,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       target: { kind: 'settings', id, displayName: updated?.name ?? existing.name },
       summary: `updated email job ${updated?.name ?? existing.name}`,
       details: {
-        updatedFields: Object.keys(parsedBody.data).filter(
-          key => parsedBody.data[key as keyof typeof parsedBody.data] !== undefined
-        ),
+        updatedFields: definedKeys(parsedBody.data),
       },
     });
 

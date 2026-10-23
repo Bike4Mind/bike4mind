@@ -44,7 +44,10 @@ vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue
 vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({
   getSourceQueueUrl: (name: string) => `queue://${name}`,
 }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
+vi.mock('@server/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: h.audit,
+  definedKeys: (data: Record<string, unknown>) => Object.keys(data).filter(key => data[key] !== undefined),
+}));
 
 import startHandler from '../start';
 import sendHandler from '../send';

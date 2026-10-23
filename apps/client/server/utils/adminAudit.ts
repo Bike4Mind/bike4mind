@@ -135,6 +135,9 @@ export const parseAdminActionReason = (value: unknown): string => {
 };
 
 // Ids compare case-insensitively: Mongo resolves an upper-case hex id to the same user.
+export const definedKeys = (data: Record<string, unknown>): string[] =>
+  Object.keys(data).filter(key => data[key] !== undefined);
+
 export const isSameUserId = (left: string, right: string) => left.toLowerCase() === right.toLowerCase();
 
 // Under impersonation req.user is the impersonated account, so the real admin must be checked too.

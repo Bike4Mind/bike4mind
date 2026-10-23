@@ -41,7 +41,10 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 vi.mock('@server/utils/mailer', () => ({ default: { sendEmail: h.sendEmail } }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
+vi.mock('@server/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: h.audit,
+  definedKeys: (data: Record<string, unknown>) => Object.keys(data).filter(key => data[key] !== undefined),
+}));
 
 import indexHandler from '../index';
 import idHandler from '../[id]';
