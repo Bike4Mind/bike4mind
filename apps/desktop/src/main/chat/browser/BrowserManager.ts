@@ -149,9 +149,8 @@ class ElectronPage implements BrowserPage {
   /** In the app window but hidden for a moment; see hold(). */
   private held = false;
   /**
-   * Screenshots using the debugger right now, and whether one of them attached it. Counted
-   * because a round's tool calls run in parallel, and a capture given up on still reaches it
-   * later: whoever finished first would detach it from under the others.
+   * Live screenshots using the debugger, and whether they own its attachment. A timeout
+   * releases only its own use so overlapping captures can finish within their deadlines.
    */
   private debuggerUsers = 0;
   private attachedDebugger = false;
@@ -524,17 +523,21 @@ class ElectronPage implements BrowserPage {
   }
 
   async screenshot(): Promise<Buffer> {
-    const image = await within(this.capture(), CAPTURE_TIMEOUT_MS);
-    if (image === TIMED_OUT) {
-      this.releaseDebugger();
-      throw new Error(
-        `The page did not paint a frame to capture within ${seconds(CAPTURE_TIMEOUT_MS)}; it is not responding.`
-      );
+    const controller = new AbortController();
+    try {
+      const image = await within(this.capture(controller.signal), CAPTURE_TIMEOUT_MS);
+      if (image === TIMED_OUT) {
+        throw new Error(
+          `The page did not paint a frame to capture within ${seconds(CAPTURE_TIMEOUT_MS)}; it is not responding.`
+        );
+      }
+      if (image.isEmpty()) throw new Error('The page rendered nothing to capture yet. Try again once it has loaded.');
+      // A Retina capture is twice the viewport; the extra pixels only cost the model image tokens.
+      const { width } = image.getSize();
+      return (width > VIEWPORT.width ? image.resize({ width: VIEWPORT.width, quality: 'best' }) : image).toPNG();
+    } finally {
+      controller.abort();
     }
-    if (image.isEmpty()) throw new Error('The page rendered nothing to capture yet. Try again once it has loaded.');
-    // A Retina capture is twice the viewport; the extra pixels only cost the model image tokens.
-    const { width } = image.getSize();
-    return (width > VIEWPORT.width ? image.resize({ width: VIEWPORT.width, quality: 'best' }) : image).toPNG();
   }
 
   /**
@@ -544,7 +547,7 @@ class ElectronPage implements BrowserPage {
    * a viz error or returns a frame from before it was parked. DevTools draws a fresh frame
    * without a surface, so it takes every page off screen, and any the pane fails to capture.
    */
-  private async capture(): Promise<NativeImage> {
+  private async capture(signal: AbortSignal): Promise<NativeImage> {
     const contents = this.contents;
     let failure: unknown = 'off screen';
     if (this.parent !== this.host && !this.held) {
@@ -556,32 +559,43 @@ class ElectronPage implements BrowserPage {
         failure = err;
       }
     }
+    // capturePage can settle after its caller has timed out; do not start more work then.
+    signal.throwIfAborted();
     try {
-      return await this.captureWithDevTools(contents);
+      return await this.captureWithDevTools(contents, signal);
     } catch (err) {
+      signal.throwIfAborted();
       console.warn(`BROWSER: could not capture ${this.currentUrl()}: ${String(failure)}; DevTools: ${String(err)}`);
       throw new Error(CAPTURE_FAILED);
     }
   }
 
   /** Attached for this capture only. A debugger something else attached is used and left attached. */
-  private async captureWithDevTools(contents: WebContents): Promise<NativeImage> {
+  private async captureWithDevTools(contents: WebContents, signal: AbortSignal): Promise<NativeImage> {
     const cdp = contents.debugger;
     if (!cdp.isAttached()) {
       cdp.attach('1.3');
       this.attachedDebugger = true;
     }
     this.debuggerUsers += 1;
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      signal.removeEventListener('abort', release);
+      this.debuggerUsers -= 1;
+      if (this.debuggerUsers === 0) this.releaseDebugger();
+    };
+    signal.addEventListener('abort', release, { once: true });
     try {
       const { data } = (await cdp.sendCommand('Page.captureScreenshot', { format: 'png' })) as { data: string };
       return nativeImage.createFromBuffer(Buffer.from(data, 'base64'));
     } finally {
-      this.debuggerUsers -= 1;
-      if (this.debuggerUsers === 0) this.releaseDebugger();
+      release();
     }
   }
 
-  /** Also forced by a timeout: detaching is what rejects a command the renderer never answers. */
+  /** Detaching the last live capture also rejects commands abandoned after their deadline. */
   private releaseDebugger(): void {
     if (!this.attachedDebugger) return;
     this.attachedDebugger = false;

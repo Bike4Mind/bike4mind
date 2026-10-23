@@ -1011,7 +1011,7 @@ describe('BrowserManager screenshots', () => {
     return answers;
   };
 
-  it('keeps the debugger for a retry while a capture it gave up on finishes late', async () => {
+  it('does not start an abandoned fallback while a retry is using the debugger', async () => {
     vi.useFakeTimers();
     try {
       const tab = await page();
@@ -1030,15 +1030,83 @@ describe('BrowserManager screenshots', () => {
       await vi.advanceTimersByTimeAsync(0);
       answer({ isEmpty: () => true });
       await vi.advanceTimersByTimeAsync(0);
-      expect(answers).toHaveLength(2);
+      expect(answers).toHaveLength(1);
 
       answers[0](png('retry'));
       await expect(retry).resolves.toEqual(Buffer.from('retry@1280'));
-      expect(contents.debuggerAttached).toBe(true);
-      answers[1](png('late'));
-      await vi.advanceTimersByTimeAsync(0);
       expect({ attaches: contents.attaches, detaches: contents.detaches }).toEqual({ attaches: 1, detaches: 1 });
       expect(contents.debuggerAttached).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['empty', 'rejected'])('does not attach after a timed-out pane capture returns %s', async outcome => {
+    vi.useFakeTimers();
+    try {
+      const tab = await page();
+      manager.setPane(window, 's', bounds);
+      let finish: () => void = () => undefined;
+      contents.capture = () =>
+        new Promise((resolve, reject) => {
+          finish = () => (outcome === 'empty' ? resolve({ isEmpty: () => true }) : reject(new Error(SURFACE_ERROR)));
+        });
+      const timedOut = expect(tab.screenshot()).rejects.toThrow(/did not paint a frame/);
+      await vi.advanceTimersByTimeAsync(15_000);
+      await timedOut;
+      finish();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(cdp).not.toHaveBeenCalled();
+      expect(contents.attaches).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps a later capture alive when the first times out and finishes late', async () => {
+    vi.useFakeTimers();
+    try {
+      const tab = await page();
+      const answers = heldCommands();
+      const first = expect(tab.screenshot()).rejects.toThrow(/did not paint a frame/);
+      await vi.advanceTimersByTimeAsync(10_000);
+      const second = tab.screenshot();
+      await vi.advanceTimersByTimeAsync(5_000);
+      await first;
+      expect(contents.debuggerAttached).toBe(true);
+      expect(contents.detaches).toBe(0);
+      answers[0](png('late'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(contents.debuggerAttached).toBe(true);
+      answers[1](png('second'));
+      await expect(second).resolves.toEqual(Buffer.from('second@1280'));
+      expect({ attaches: contents.attaches, detaches: contents.detaches }).toEqual({ attaches: 1, detaches: 1 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([false, true])('keeps late cleanup out of a new capture (external debugger: %s)', async external => {
+    vi.useFakeTimers();
+    try {
+      contents.debuggerAttached = external;
+      const tab = await page();
+      const answers = heldCommands();
+      const first = expect(tab.screenshot()).rejects.toThrow(/did not paint a frame/);
+      await vi.advanceTimersByTimeAsync(15_000);
+      await first;
+      expect(contents.debuggerAttached).toBe(external);
+      expect(contents.detaches).toBe(external ? 0 : 1);
+
+      const retry = tab.screenshot();
+      answers[0](png('late'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(contents.debuggerAttached).toBe(true);
+      answers[1](png('retry'));
+      await expect(retry).resolves.toEqual(Buffer.from('retry@1280'));
+      expect(contents.debuggerAttached).toBe(external);
+      expect(contents.attaches).toBe(external ? 0 : 2);
+      expect(contents.detaches).toBe(external ? 0 : 2);
     } finally {
       vi.useRealTimers();
     }
