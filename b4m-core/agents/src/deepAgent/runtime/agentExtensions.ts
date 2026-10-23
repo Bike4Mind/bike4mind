@@ -83,22 +83,32 @@ export interface SurfaceProfileEntry {
 }
 
 /**
- * `runState` is ONE mutable object shared by every guard in one invocation. The host decides which
- * of its fields survive a continuation (the executor persists only its own ledger fields), so
- * guards cooperate through it: a guard may read what an inner guard recorded.
+ * `runState` is ONE mutable object shared by every guard in one invocation, so guards cooperate
+ * through it: a guard may read what an inner guard recorded. Only fields the host's own state
+ * schema declares survive a continuation; a field a guard adds is gone on the next invocation.
  * A guard must never replace it, only mutate the fields it owns.
  */
 export interface ToolMapGuardContext<TState> {
   executionId: string;
   logger: AgentExtensionLogger;
+  /** Session surface of the run; `null` for a main-notebook chat. Set on every invocation, continuations included. */
+  surface?: string | null;
   runState: TState;
 }
 
+/**
+ * A guard runs on EVERY execution -- every surface, pinned-agent runs and plain chats alike -- so
+ * one meant for a single surface must check `ctx.surface` (or the tool names it wraps) itself.
+ */
 export interface ToolMapGuardEntry<TTools, TState> {
   id: string;
   /** Lower wraps first (innermost). Contributions take 1-99; the host's built-ins sit at 100 and above. */
   priority: number;
-  /** Returns a new map; must not mutate `tools`. */
+  /**
+   * Returns a new map; must not mutate `tools`. The host copies only the map, not its entries, and
+   * the entries may be shared across invocations, so wrap a tool into a NEW entry rather than
+   * reassigning a field (e.g. `execute`) on the one passed in.
+   */
   apply(tools: TTools, ctx: ToolMapGuardContext<TState>): TTools;
 }
 
@@ -160,6 +170,10 @@ function isProfileShaped(value: unknown): value is ResolvedOrchestrationProfile 
     typeof ceilings === 'object' &&
     THOROUGHNESS_LEVELS.every(level => Number.isInteger(ceilings[level]) && (ceilings[level] as number) > 0) &&
     THOROUGHNESS_LEVELS.includes(p.defaultThoroughness as (typeof THOROUGHNESS_LEVELS)[number]) &&
+    typeof p.isSynthetic === 'boolean' &&
+    (p.allowedToolsFromDefaults === undefined || typeof p.allowedToolsFromDefaults === 'boolean') &&
+    (p.toolsetIsExclusive === undefined || typeof p.toolsetIsExclusive === 'boolean') &&
+    (p.systemPrompt === undefined || typeof p.systemPrompt === 'string') &&
     (p.confidenceGateThreshold === undefined ||
       (Number.isFinite(p.confidenceGateThreshold) &&
         (p.confidenceGateThreshold as number) >= 0 &&
