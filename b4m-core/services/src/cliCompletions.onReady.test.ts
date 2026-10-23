@@ -47,6 +47,7 @@ vi.mock('@bike4mind/common', async importOriginal => ({
 
 import { BadRequestError } from '@bike4mind/common';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
+import { getSettingsValue } from '@bike4mind/utils';
 import { InsufficientCreditsError } from './llm/ChatCompletionProcess';
 import { executeCompletion } from './cliCompletions';
 
@@ -81,6 +82,7 @@ const baseParams = {
 describe('executeCompletion onReady', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(getSettingsValue).mockReturnValue(true);
     order.length = 0;
   });
 
@@ -176,7 +178,8 @@ describe('executeCompletion onReady', () => {
     expect((error as Error).message).not.toContain('undefined');
   });
 
-  it('refuses an image model with a 400 unknown_model before any hold, getLlmByModel, onReady or provider call', async () => {
+  it.each([true, false])('refuses an image model before dispatch with enforceCredits=%s', async enforceCredits => {
+    vi.mocked(getSettingsValue).mockReturnValue(enforceCredits);
     vi.mocked(getAvailableModels).mockResolvedValueOnce([
       { ...CATALOGUED_MODEL, id: 'gpt-image-2', type: 'image' } as never,
     ]);
