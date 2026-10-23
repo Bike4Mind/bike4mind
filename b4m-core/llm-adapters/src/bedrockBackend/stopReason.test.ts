@@ -5,6 +5,7 @@
  * notice on the reply. Bedrock needs its own harness (BedrockRuntimeClient plus a
  * per-subclass translate) rather than a row in stopReasonBackends.test.ts, so the
  * test backend here passes pre-shaped ICompletionResponseChunk objects through.
+ * The real Anthropic adapter is also exercised on both transports below.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -157,6 +158,13 @@ describe('AnthropicBedrockBackend surfaces stopReason through complete()', () =>
   it('carries a clean stream through as end_turn', async () => {
     const backend = useTransport(new AnthropicTestBackend(), streamTransport(anthropicStream('end_turn')));
     expect((await lastInfo(backend, true, MODEL))?.stopReason).toBe('end_turn');
+  });
+
+  it.each(['max_tokens', 'end_turn'])('rejects a %s stream missing message_stop', async stopReason => {
+    const chunks = anthropicStream(stopReason).slice(0, -1);
+    const backend = useTransport(new AnthropicTestBackend(), streamTransport(chunks));
+
+    await expect(lastInfo(backend, true, MODEL)).rejects.toThrow(/without a terminal event/);
   });
 
   it('carries a truncated non-streaming turn through as max_tokens', async () => {

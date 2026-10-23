@@ -416,13 +416,13 @@ describe('AnthropicBedrockBackend safety-classifier refusal fallback', () => {
 describe('AnthropicBedrockBackend non-streaming stop_reason', () => {
   const backend = new AnthropicBedrockBackend();
 
-  const response = (stop_reason: string) => ({
+  const response = (stop_reason?: string) => ({
     id: 'msg_1',
     type: 'message',
     role: 'assistant',
     content: [{ type: 'text', text: 'answer' }],
     model: 'x',
-    stop_reason,
+    ...(stop_reason === undefined ? {} : { stop_reason }),
     usage: { input_tokens: 1, output_tokens: 2 },
   });
 
@@ -434,5 +434,12 @@ describe('AnthropicBedrockBackend non-streaming stop_reason', () => {
     // Only max_tokens / degenerate_repetition raise the truncation notice, so an
     // ordinary turn is truthful without being banner-eligible.
     expect(backend.translateChunk('claude', response('end_turn')).chunk?.stopReason).toBe('end_turn');
+  });
+
+  it('does not invent a stop reason when the provider omits it', () => {
+    const result = backend.translateChunk('claude', response());
+
+    expect(result.chunk).toBeDefined();
+    expect(result.chunk).not.toHaveProperty('stopReason');
   });
 });
