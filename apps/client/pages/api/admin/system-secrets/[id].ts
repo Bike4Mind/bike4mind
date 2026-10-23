@@ -104,7 +104,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
         await recordAdminActionFromRequest(req, {
           action: 'settings.system_secret.deleted',
-          target: { kind: 'settings', id: secret.id, displayName: secret.secretName },
+          target: { kind: 'settings', id: secret.secretName, displayName: secret.secretName },
           summary: `deleted system secret override ${secret.secretName}`,
         });
       });

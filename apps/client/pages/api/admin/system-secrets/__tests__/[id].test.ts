@@ -58,7 +58,7 @@ describe('DELETE /api/admin/system-secrets/[id] admin audit', () => {
     expect(h.audit.mock.calls[0][0]).toBe(req);
     expect(h.audit.mock.calls[0][1]).toMatchObject({
       action: 'settings.system_secret.deleted',
-      target: { kind: 'settings', id: 'secret-1', displayName: 'OPENAI_API_KEY' },
+      target: { kind: 'settings', id: 'OPENAI_API_KEY', displayName: 'OPENAI_API_KEY' },
     });
     expect(h.deleteSecret.mock.invocationCallOrder[0]).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
   });
