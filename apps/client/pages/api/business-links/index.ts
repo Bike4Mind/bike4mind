@@ -124,7 +124,12 @@ const handler = baseApi()
         action: 'settings.business_link.created',
         target: { kind: 'settings', id: String(link._id), displayName: name },
         summary: `created business link ${name}`,
-        details: { url, ticker, type, categoryId },
+        details: {
+          url: link.url,
+          ticker: link.ticker,
+          type: link.type,
+          categoryId: link.categoryId ? String(link.categoryId) : undefined,
+        },
       });
 
       return res.status(201).json(link);
