@@ -3,12 +3,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 
-const mockUserUpdate = vi.fn();
+const mockClearPending = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   creditLotRepository: {},
   creditTransactionRepository: {},
-  userRepository: { update: (...a: unknown[]) => mockUserUpdate(...a) },
+  userRepository: { clearPendingFreeCreditGrant: (...a: unknown[]) => mockClearPending(...a) },
 }));
 
 const mockReleasePending = vi.fn();
@@ -46,7 +46,7 @@ const NO_DOMAIN_GRANT = { creditsGranted: 0, currentCredits: null, joinedOrganiz
 describe('emailVerifiedGrants', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockUserUpdate.mockResolvedValue(undefined);
+    mockClearPending.mockResolvedValue({ tags: ['Customer'] });
     mockApplySignupDomainGrant.mockResolvedValue(NO_DOMAIN_GRANT);
   });
 
@@ -71,10 +71,10 @@ describe('emailVerifiedGrants', () => {
       const result = await releaseVerifiedPendingFreeCredits({ id: 'user-1', tags: ['Customer'] }, 'test', logger);
 
       expect(result).toEqual({ creditsGranted: 0, currentCredits: null, tags: null });
-      expect(mockUserUpdate).not.toHaveBeenCalled();
+      expect(mockClearPending).not.toHaveBeenCalled();
     });
 
-    it('persists the patch and reports the grant and the remaining tags', async () => {
+    it('atomically clears the breadcrumb and reports the persisted tags', async () => {
       mockReleasePending.mockResolvedValue(releasedResult);
 
       const result = await releaseVerifiedPendingFreeCredits(taggedUser, 'test reason', logger);
@@ -83,8 +83,16 @@ describe('emailVerifiedGrants', () => {
         { id: 'user-1', tags: [PENDING_FREE_CREDITS_TAG, 'Customer'], pendingCreditGrant: 100 },
         expect.objectContaining({ reason: 'test reason', logger })
       );
-      expect(mockUserUpdate).toHaveBeenCalledWith({ id: 'user-1', tags: ['Customer'], pendingCreditGrant: null });
+      expect(mockClearPending).toHaveBeenCalledWith('user-1');
       expect(result).toEqual({ creditsGranted: 100, currentCredits: 100, tags: ['Customer'] });
+    });
+
+    it('reports current persisted tags instead of the stale grant snapshot', async () => {
+      mockReleasePending.mockResolvedValue(releasedResult);
+      mockClearPending.mockResolvedValue({ tags: ['new-entitlement'] });
+      const result = await releaseVerifiedPendingFreeCredits(taggedUser, 'review release', logger);
+      expect(result.tags).toEqual(['new-entitlement']);
+      expect(mockClearPending).toHaveBeenCalledWith('user-1');
     });
 
     it('logs and resolves with nothing released when the release throws', async () => {
@@ -96,12 +104,12 @@ describe('emailVerifiedGrants', () => {
         tags: null,
       });
       expect(mockLoggerError).toHaveBeenCalledWith(expect.stringContaining('user-1'), expect.any(Error));
-      expect(mockUserUpdate).not.toHaveBeenCalled();
+      expect(mockClearPending).not.toHaveBeenCalled();
     });
 
     it('logs but still reports the credits when the tag-removal write fails', async () => {
       mockReleasePending.mockResolvedValue(releasedResult);
-      mockUserUpdate.mockRejectedValue(new Error('db down'));
+      mockClearPending.mockRejectedValue(new Error('db down'));
 
       await expect(releaseVerifiedPendingFreeCredits(taggedUser, 'test', logger)).resolves.toEqual({
         creditsGranted: 100,
@@ -159,13 +167,12 @@ describe('emailVerifiedGrants', () => {
       });
     });
 
-    it('persists the release tag patch before the partner-tag merge runs', async () => {
-      // The release $sets the whole tags array from a snapshot; run after the merge, it would erase it.
+    it('returns the persisted release tags before the partner-tag merge runs', async () => {
       mockReleasePending.mockResolvedValue(releasedResult);
 
       await applyEmailVerifiedGrants(params);
 
-      expect(mockUserUpdate.mock.invocationCallOrder[0]).toBeLessThan(
+      expect(mockClearPending.mock.invocationCallOrder[0]).toBeLessThan(
         mockApplySignupDomainGrant.mock.invocationCallOrder[0]
       );
     });
@@ -203,7 +210,7 @@ describe('emailVerifiedGrants', () => {
 
     it('reports the release credits when the tag-removal write fails', async () => {
       mockReleasePending.mockResolvedValue(releasedResult);
-      mockUserUpdate.mockRejectedValue(new Error('db down'));
+      mockClearPending.mockRejectedValue(new Error('db down'));
 
       const result = await applyEmailVerifiedGrants(params);
 

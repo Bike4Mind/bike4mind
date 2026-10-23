@@ -7,6 +7,17 @@ export const signupDomain = (email: string): string | null =>
 
 export type SignupBurstVerdict = { suspicious: boolean; reason: string; signupCount: number };
 
+function hasIncreasingSequence(values: readonly number[], minimumLength: number): boolean {
+  const shortestTails: number[] = [];
+  for (const value of values) {
+    const index = shortestTails.findIndex(tail => tail >= value);
+    if (index === -1) shortestTails.push(value);
+    else shortestTails[index] = value;
+    if (shortestTails.length >= minimumLength) return true;
+  }
+  return false;
+}
+
 export function detectSignupBurst(
   signups: readonly SignupObservation[],
   options: { domain: string; threshold: number; since: Date }
@@ -32,9 +43,7 @@ export function detectSignupBurst(
   );
   const generated = cohort.map(signup => /^([a-z]+?)([0-9][a-f0-9]{3,11})$/i.exec(signup.email.split('@')[0] ?? ''));
   const suffixes = generated.filter(match => match !== null).map(match => Number.parseInt(match[2], 16));
-  const monotonic =
-    suffixes.length >= options.threshold &&
-    suffixes.every((value, index) => index === 0 || value > suffixes[index - 1]);
+  const monotonic = hasIncreasingSequence(suffixes, options.threshold);
   const prefixes = new Map<string, number>();
   for (const match of generated) {
     if (match) prefixes.set(match[1].toLowerCase(), (prefixes.get(match[1].toLowerCase()) ?? 0) + 1);
