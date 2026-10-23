@@ -14,7 +14,7 @@
  */
 
 import { Request, Response } from 'express';
-import { assertApiKeyOrgMembership } from '@bike4mind/server-utils/billing/assertApiKeyOrgMembership';
+import { assertApiKeyOrgMembership } from '@server/billing/assertApiKeyOrgMembership';
 import {
   createRequestCompletionMeter,
   isCreditsEnforced,
