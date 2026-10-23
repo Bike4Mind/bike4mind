@@ -22,8 +22,16 @@ describe('the credit-spending axis', () => {
 });
 
 describe('the untrusted-content and outbound axes', () => {
-  it('reads the tools whose result is someone else\'s text, by name and by family', () => {
-    for (const name of ['web_fetch', 'web_search', 'skill', 'session_read', 'browser_snapshot', 'mcp__notion_search']) {
+  it("reads the tools whose result is someone else's text, by name and by family", () => {
+    for (const name of [
+      'web_fetch',
+      'web_search',
+      'skill',
+      'session_read',
+      'browser_snapshot',
+      'screen_capture',
+      'mcp__notion_search',
+    ]) {
       expect(readsUntrusted(name), name).toBe(true);
     }
     for (const name of ['bash_execute', 'file_read', 'grep_search', 'session_send']) {
@@ -96,6 +104,7 @@ describe('the untrusted-content and outbound axes', () => {
       host: true,
       explore: true,
       browser: true,
+      screen: true,
       memory: true,
       skills: true,
       web: true,
@@ -105,9 +114,7 @@ describe('the untrusted-content and outbound axes', () => {
       modelId: 'claude-sonnet-5-5',
     }).map(entry => entry.toolSchema.name);
 
-    const unclassified = declared.filter(
-      name => !spendsCredits(name) && !readsUntrusted(name) && !sendsOut(name)
-    );
+    const unclassified = declared.filter(name => !spendsCredits(name) && !readsUntrusted(name) && !sendsOut(name));
     expect([...unclassified].sort()).toEqual([...NEITHER].sort());
   });
 });

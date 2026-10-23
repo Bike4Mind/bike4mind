@@ -173,6 +173,9 @@ import {
   type SpawnSuggestionHost,
   type SuggestionOutcome,
   type SkillContext,
+  type ImageContext,
+  type ScreenCapturer,
+  type ScreenContext,
   type ToolContext,
   type ToolDefinition,
   type ToolReporter,
@@ -389,6 +392,10 @@ export interface ChatServiceDeps {
   mcp?: McpManager;
   /** The agent's hidden browser. Absent in tests that do not exercise it; the tools are then not declared. */
   browser?: BrowserProvider;
+  /** Other apps' windows, for screen_capture. Absent in tests that do not exercise it; the tool is then not declared. */
+  screen?: ScreenCapturer;
+  /** Fits an image a tool shows the model. Absent in tests, where file_read then describes an image in text. */
+  prepareImage?: ImageContext['prepare'];
   /** Paths kept out of reach of shell commands whatever the user granted. Enforced by the file tools, and by the shell only when SANDBOX_SHELL_COMMANDS is on. */
   protectedPaths?: readonly string[];
   /**
@@ -2111,6 +2118,17 @@ export class ChatService {
       const effortField = effort ? { reasoningEffort: effort } : {};
       // Silence is not "no": see ChatModelOption.supportsVision.
       const vision = catalog?.models.find(option => option.id === session.model)?.supportsVision !== false;
+      const images: ImageContext | undefined = this.deps.prepareImage
+        ? { vision, prepare: this.deps.prepareImage }
+        : undefined;
+      // A wrapper only: nothing is listed or captured until the model calls the tool.
+      const screenCapturer = this.deps.screen;
+      const screen: ScreenContext | undefined = screenCapturer
+        ? {
+            capturer: screenCapturer,
+            keepScreenshot: (bytes, caption) => this.keepScreenshot(sessionId, bytes, caption),
+          }
+        : undefined;
       const offerExplore = shouldOfferExplore(catalog?.models ?? [], session.model);
       const exploreFor = (granted: readonly string[]): ExploreContext | undefined =>
         granted.length > 0 && offerExplore
@@ -2152,6 +2170,7 @@ export class ChatService {
           host: !!host,
           explore: !!explore,
           browser: !!browser,
+          screen: !!screen,
           memory: !!memory,
           skills: !!skills,
           web: true,
@@ -2206,7 +2225,8 @@ export class ChatService {
           skillsSection,
           ask,
           session.model,
-          true
+          true,
+          !!screen
         );
       wire.unshift(systemMessage());
       // Taken whether or not it is used, so a nudge the model ignored once does not follow the
@@ -2390,6 +2410,8 @@ export class ChatService {
                 host,
                 explore,
                 browser,
+                screen,
+                images,
                 memory,
                 skills,
                 web,
@@ -2462,14 +2484,19 @@ export class ChatService {
           lastResult.content = [lastResult.content, '', 'The user changed the shared folders:', ...rootNote].join('\n');
         }
         wire.push({ role: 'user', content: results });
-        const shots = settled.flatMap(call => this.takeImages(call.id));
+        const shown = settled.flatMap(call => {
+          const images = this.takeImages(call.id);
+          return images.length > 0 ? [{ name: call.name, images }] : [];
+        });
+        const shots = shown.flatMap(entry => entry.images);
         if (shots.length > 0 && vision) {
+          const from = [...new Set(shown.map(entry => entry.name))].join(', ');
           // Its own user turn, not blocks beside the tool results: the OpenAI conversion keeps only
           // the tool_result blocks of such a turn and would drop the image silently.
           wire.push({
             role: 'user',
             content: [
-              { type: 'text', text: 'Screenshot from the browser_screenshot call above.' },
+              { type: 'text', text: `${shots.length === 1 ? 'Image' : 'Images'} from the ${from} call above.` },
               ...shots.map(shot => ({
                 type: 'image',
                 source: { type: 'base64', media_type: shot.mediaType, data: shot.data },
@@ -2771,6 +2798,8 @@ export class ChatService {
       host: HostContext | undefined;
       explore: ExploreContext | undefined;
       browser: BrowserContext | undefined;
+      screen: ScreenContext | undefined;
+      images: ImageContext | undefined;
       memory: MemoryStore | undefined;
       skills: SkillContext | undefined;
       web: WebContext | undefined;
@@ -2789,7 +2818,21 @@ export class ChatService {
     messageId: string,
     signal: AbortSignal
   ): Promise<ChatToolCall[]> {
-    const { roots, workingDirectory, media, host, explore, browser, memory, skills, web, patchEdits, ask } = scope;
+    const {
+      roots,
+      workingDirectory,
+      media,
+      host,
+      explore,
+      browser,
+      screen,
+      images,
+      memory,
+      skills,
+      web,
+      patchEdits,
+      ask,
+    } = scope;
     return Promise.all(
       requested.map(async request => {
         const call: ChatToolCall = {
@@ -2919,6 +2962,8 @@ export class ChatService {
           ...(host ? { host } : {}),
           ...(explore ? { explore } : {}),
           ...(browser ? { browser } : {}),
+          ...(screen ? { screen } : {}),
+          ...(images ? { images } : {}),
           ...(memory ? { memory } : {}),
           ...(skills ? { skills } : {}),
           ...(web ? { web } : {}),
@@ -4823,7 +4868,8 @@ export function buildSystemMessage(
   skillsSection = '',
   ask = false,
   modelId = '',
-  web = false
+  web = false,
+  screen = false
 ): CompletionMessage {
   if (roots.length === 0) {
     return {
@@ -4848,6 +4894,7 @@ export function buildSystemMessage(
         // The browser is not file access and is not withheld with it: a conversation that can
         // read nothing on disk can still open a page, and needs to be told how.
         ...(browser ? BROWSER_GUIDANCE : []),
+        ...(screen ? SCREEN_GUIDANCE : []),
         ...(web ? WEB_GUIDANCE : []),
         ...(media ? MEDIA_GUIDANCE : []),
         ...(host ? HOST_GUIDANCE : []),
@@ -4924,7 +4971,8 @@ export function buildSystemMessage(
             'reading the file first.',
           ]),
       'file_read returns the whole file, up to 2000 lines; pass offset and limit only when you',
-      'already know which part you need or the file is too large to read at once.',
+      'already know which part you need or the file is too large to read at once. It shows you a',
+      'PNG, JPEG, GIF or WebP file as an image, so read a screenshot or image to look at it.',
       ...(explore
         ? [
             'For open-ended exploration across many files, call explore instead - a faster read-only',
@@ -4963,6 +5011,7 @@ export function buildSystemMessage(
       'Make the first request early and let the app correct your assumptions, rather than reading',
       'the whole feature first. Unit tests passing is not an end-to-end result.',
       ...(browser ? BROWSER_GUIDANCE : []),
+      ...(screen ? SCREEN_GUIDANCE : []),
       ...(web ? WEB_GUIDANCE : []),
       'Never invent a file name, size or contents, or the output of a command: if a tool did not',
       'return it, you do not know it.',
@@ -5031,9 +5080,7 @@ function pruneScreenshots(wire: CompletionMessage[], turns: number[]): void {
     if (index === undefined) break;
     wire[index] = {
       role: 'user',
-      content: [
-        { type: 'text', text: '[An earlier screenshot was here. Take a new one if you need to see the page.]' },
-      ],
+      content: [{ type: 'text', text: '[An earlier image was here. Capture or read it again if you need to see it.]' }],
     };
   }
 }
@@ -5054,6 +5101,14 @@ const BROWSER_GUIDANCE: readonly string[] = [
   'selects and closes them; browser_navigate with new_tab opens a page beside the current one.',
   'A link that opens a new tab opens it in the background and the step result says which tab;',
   'select it to use it. The user can switch tabs too, so check the list before relying on one.',
+];
+
+const SCREEN_GUIDANCE: readonly string[] = [
+  'screen_capture looks at other apps on this computer: without a target it lists the open',
+  'windows, and with a window title or id it captures that window as an image you and the user',
+  'see. To check a desktop app - an Electron dev build you started with bash_background, say -',
+  'wait for its window to open, then capture it by title instead of guessing how it looks. Each',
+  'capture asks the user first. For web pages use the browser tools.',
 ];
 
 const WEB_GUIDANCE: readonly string[] = [
