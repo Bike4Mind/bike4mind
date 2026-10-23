@@ -427,6 +427,7 @@ export const SettingKeySchema = z.enum([
   'enableTeamPlan',
   'allowOpenRegistration',
   'blockDisposableEmails',
+  'blockedEmailDomains',
   'defaultFreeCredits',
   'teamPlanMinSeats',
   'teamPlanMaxSeats',
@@ -2092,7 +2093,8 @@ export const API_SERVICE_GROUPS = {
     settings: [
       { key: 'billOperationalUsage', order: 1 },
       { key: 'blockDisposableEmails', order: 2 },
-      { key: 'syntheticUserEmailDomains', order: 3 },
+      { key: 'blockedEmailDomains', order: 3 },
+      { key: 'syntheticUserEmailDomains', order: 4 },
     ],
   },
   KNOWLEDGE: {
@@ -3476,6 +3478,18 @@ export const settingsMap = {
       'Rejects new registrations whose email domain (or any parent domain) is a known disposable/burner provider — free credits cannot be farmed with throwaway inboxes (#9779). Applies at registration only; existing accounts on such domains can still sign in. Turn OFF only to work around a false positive.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
+  }),
+  blockedEmailDomains: makeObjectSetting<string[]>({
+    key: 'blockedEmailDomains',
+    name: 'Blocked Email Domains',
+    defaultValue: [],
+    description:
+      'Email domains blocked from signup credits, one per line, on top of the built-in disposable list. A domain also blocks every subdomain (kashre.com blocks x@np.kashre.com). Applies even when Block Disposable Emails is OFF. Registration is refused; OAuth signup and email change still create the account but withhold the free-credit grant, and the OAuth starting-grant backfill skips these users. Existing accounts can still sign in. Bare public suffixes (co.uk, github.io) are refused. Enter internationalized domains in punycode (xn--...); a Unicode-domain email is not matched against them.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+    // Plain strings so one malformed stored entry cannot fail the whole list; the update route
+    // refuses invalid entries and readers filter with partitionDomainList.
+    schema: z.array(z.string()),
   }),
   defaultFreeCredits: makeNumberSetting({
     key: 'defaultFreeCredits',

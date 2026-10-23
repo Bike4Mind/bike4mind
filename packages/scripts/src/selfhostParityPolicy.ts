@@ -882,13 +882,13 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'service:infra/chatCompletion.ts:ChatCompletion',
-    'd010e126ee4819fef1099d145e4d7084c80f4060bb0c85aebcd71d7ce1cc2a82',
+    '65af60de937670b66a99962bfbc993c488f83eefa3689135e8252693eb326f17',
     ['bedrock:*', 'cloudwatch:PutMetricData', 'events:PutEvents', 'execute-api:ManageConnections']
   ),
   gap('service:infra/searxng.ts:Searxng', '16fc0b23bc4d075e5c4e98cbb502ff6dfc37aac7fbf9bd4f7429cd4202b2f370'),
   gap(
     'service:infra/subscriberFanout.ts:subscriberFanoutV2',
-    '02cdd6b4926dc3c12f7ecff7a1975b25750d24d10b5e84b4f007f6a38a44092f'
+    '63d9a5eab65de1a95f5fd1514ae9c91da593ef6ee35b364ba0918b98dfb54e50'
   ),
   gap(
     'sesRule:infra/emailIngestion.ts:emailReceiptRule',

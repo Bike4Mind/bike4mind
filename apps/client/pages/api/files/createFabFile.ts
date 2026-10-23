@@ -35,6 +35,7 @@ import {
 } from '@server/files/fileScopes';
 import { getS3Url } from '@client/app/utils/s3Url';
 import { Resource } from 'sst';
+import { requesterScopedUsers } from '@server/auth/apiKeyAdminScope';
 
 // No caller-chosen `prefix`: the key namespace decides how the S3 upload hook treats an object,
 // and a prefix such as `tmp` lands in one it skips (`isUntrackedFabFileKey`), so the object
@@ -159,7 +160,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_OR_RELEASE_NOTES_SCOPES })
           db: {
             adminSettings: adminSettingsRepository,
             fabFiles: FabFile,
-            users: User,
+            users: requesterScopedUsers(req, User),
             organizations: organizationRepository,
             dataLakes: dataLakeRepository,
             // The service re-gates the lake tag internally, so its inputs must stay at least as

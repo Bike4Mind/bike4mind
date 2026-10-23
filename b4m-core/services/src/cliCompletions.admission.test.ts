@@ -86,4 +86,26 @@ describe('executeCompletion model admission', () => {
     await run(async () => ['pro']);
     expect(h.complete).toHaveBeenCalledOnce();
   });
+
+  it('admits an admin caller, and refuses one whose admin role scopeActor withholds', async () => {
+    const adminDb = () => {
+      const db = buildDb();
+      db.users.findById.mockResolvedValue({ id: 'user1', currentCredits: 100_000, tags: [], isAdmin: true });
+      return db;
+    };
+    const base = {
+      userId: 'user1',
+      model: 'gated-model',
+      messages: [{ role: 'user' as const, content: 'hi' }],
+      onChunk: vi.fn().mockResolvedValue(undefined),
+      getEntitlements: async () => [],
+    };
+
+    await executeCompletion({ ...base, db: adminDb() });
+    expect(h.complete).toHaveBeenCalledOnce();
+
+    await expect(
+      executeCompletion({ ...base, db: adminDb(), scopeActor: actor => ({ ...actor, isAdmin: false }) })
+    ).rejects.toBeInstanceOf(ForbiddenError);
+  });
 });
