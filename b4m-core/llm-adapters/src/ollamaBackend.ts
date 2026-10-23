@@ -322,7 +322,7 @@ export class OllamaBackend implements ICompletionBackend {
     const conversationMessages = offerTools ? messages : stripToolDependentMessages(messages);
     const requestMessages = options.omitIdentityReminder
       ? conversationMessages
-      : appendIdentityReminderToMessages(conversationMessages, buildIdentityReminder(model));
+      : appendIdentityReminderToMessages(conversationMessages, buildIdentityReminder(model, options.modelDisplayName));
     const baseRequest = {
       model,
       // This backend withholds tools in place rather than recursing, so the strip has to track

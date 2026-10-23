@@ -264,7 +264,7 @@ export class ConverseBedrockBackend extends BaseBedrockBackend {
     // with the same flag in the other backends.
     const systemText = options.omitIdentityReminder
       ? callerSystemText
-      : appendIdentityReminder(callerSystemText, buildIdentityReminder(model));
+      : appendIdentityReminder(callerSystemText, buildIdentityReminder(model, options.modelDisplayName));
 
     const converseMessages = this.toConverseMessages(messages, {
       includeTools: sendTools,

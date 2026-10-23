@@ -171,7 +171,7 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
     // Moonshot saw no record its tool ran and re-issued the same call in a loop.
     const messagesWithIdentity = options.omitIdentityReminder
       ? messages
-      : appendIdentityReminderToMessages(messages, buildIdentityReminder(model));
+      : appendIdentityReminderToMessages(messages, buildIdentityReminder(model, options.modelDisplayName));
 
     const formattedMessages = messagesWithIdentity
       .map(raw => {

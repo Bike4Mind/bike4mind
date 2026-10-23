@@ -848,7 +848,7 @@ export class DeepSeekBackend implements ICompletionBackend {
     return convertMessagesToOpenAIFormat(
       options.omitIdentityReminder
         ? messages
-        : appendIdentityReminderToMessages(messages, buildIdentityReminder(model)),
+        : appendIdentityReminderToMessages(messages, buildIdentityReminder(model, options.modelDisplayName)),
       { preserveReasoningContent: true }
     ) as OpenAI.ChatCompletionMessageParam[];
   }

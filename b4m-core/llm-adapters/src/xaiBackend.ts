@@ -961,7 +961,9 @@ export class XAIBackend implements ICompletionBackend {
   ): OpenAI.ChatCompletionMessageParam[] {
     // Convert B4M standard format (tool_use/tool_result) to OpenAI format (tool_calls/role:tool)
     return convertMessagesToOpenAIFormat(
-      options.omitIdentityReminder ? messages : appendIdentityReminderToMessages(messages, buildIdentityReminder(model))
+      options.omitIdentityReminder
+        ? messages
+        : appendIdentityReminderToMessages(messages, buildIdentityReminder(model, options.modelDisplayName))
     ) as OpenAI.ChatCompletionMessageParam[];
   }
 

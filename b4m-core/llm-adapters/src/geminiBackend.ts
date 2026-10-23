@@ -670,7 +670,7 @@ export class GeminiBackend implements ICompletionBackend {
     // Empty text plus no reminder still leaves `systemInstruction: undefined` below.
     const systemInstruction = options.omitIdentityReminder
       ? callerSystemText
-      : appendIdentityReminder(callerSystemText, buildIdentityReminder(modelName));
+      : appendIdentityReminder(callerSystemText, buildIdentityReminder(modelName, options.modelDisplayName));
 
     const nonsystemMessages = messagesWithFormat.filter(message => message.role !== 'system');
     const contents = this.formatMessagesIntoGeminiContent(nonsystemMessages, liveToolUseIds);

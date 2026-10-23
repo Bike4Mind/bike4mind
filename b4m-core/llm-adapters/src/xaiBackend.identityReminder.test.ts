@@ -58,6 +58,13 @@ describe('XAIBackend identity reminder', () => {
     expect(messages[0]).toMatchObject({ role: 'system', content: REMINDER });
   });
 
+  it('names the model by its display name when one is passed', async () => {
+    const messages = await send([{ role: 'user', content: 'hi' }], { modelDisplayName: 'Grok 4.5' });
+
+    expect(messages[0]).toMatchObject({ role: 'system', content: buildIdentityReminder(MODEL, 'Grok 4.5') });
+    expect(messages[0].content).toContain(`you are Grok 4.5 (model id ${MODEL}).`);
+  });
+
   it('sends no reminder when the caller opts out', async () => {
     const messages = await send([{ role: 'user', content: 'hi' }], { omitIdentityReminder: true });
 
