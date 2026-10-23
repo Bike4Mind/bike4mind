@@ -93,8 +93,7 @@ export const registerUser = async (
   params: RegisterUserParameters,
   { db, logger, skipInviteCheck }: RegisterUserAdapters
 ) => {
-  const { email, name, inviteCode, password, metadata, acceptedPolicyVersion, ageAttestation, sourceClientId } =
-    params;
+  const { email, name, inviteCode, password, metadata, acceptedPolicyVersion, ageAttestation, sourceClientId } = params;
 
   // P0-B abuse gate: reject creation unless a current, versioned AUP/ToS acceptance
   // and an 18+ attestation are present. This is the server-side enforcement - the UI checkboxes
@@ -133,7 +132,7 @@ export const registerUser = async (
   // flat credits. Registration-only - OTC sign-in for existing accounts never reaches this
   // function, so grandfathered users on such domains are unaffected.
   if (await shouldBlockDisposableEmail(normalizedEmail, { adminSettings: db.adminSettings })) {
-    throw new BadRequestError('Disposable email addresses are not allowed');
+    throw new BadRequestError('This email domain is not allowed');
   }
 
   let tags: string[] = [];
