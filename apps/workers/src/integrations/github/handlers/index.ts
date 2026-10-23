@@ -9,7 +9,7 @@ initializeSlackPackage();
  */
 
 import { Logger } from '@bike4mind/observability';
-import { GitHubEventHandler, GitHubEventType } from '@server/integrations/github/types';
+import { GitHubEventHandler, GitHubEventType } from '@bike4mind/server-utils/integrations/github/types';
 import { GitHubSlackNotifier } from '@bike4mind/slack';
 import { PingHandler } from './PingHandler';
 import { PullRequestHandler } from './PullRequestHandler';
@@ -28,10 +28,10 @@ import { CheckSuiteHandler } from './CheckSuiteHandler';
  * @param logger - Optional logger to pass to handlers
  * @returns Map of event type to handler
  */
-export function createHandlerRegistry(logger?: Logger): Map<GitHubEventType, GitHubEventHandler> {
+export function createHandlerRegistry(logger?: Logger, ownerUserId?: string): Map<GitHubEventType, GitHubEventHandler> {
   const registry = new Map<GitHubEventType, GitHubEventHandler>();
 
-  const notifier = new GitHubSlackNotifier(logger || (console as unknown as Logger));
+  const notifier = new GitHubSlackNotifier(logger || (console as unknown as Logger), ownerUserId);
 
   const handlers: GitHubEventHandler[] = [
     new PingHandler(logger),

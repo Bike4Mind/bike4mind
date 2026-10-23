@@ -57,16 +57,44 @@ const update = vi.hoisted(() =>
     stripeCustomerId: 'cus_SECRET',
   }))
 );
-vi.mock('@server/utils/errors', () => ({
-  BadRequestError: class BadRequestError extends Error {},
+const credits = vi.hoisted(() => ({
+  findById: vi.fn(async () => ({ id: 'org1', name: 'Acme', userId: 'owner1', currentCredits: 100 })),
+  addCreditsWithLedgerRow: vi.fn(async () => ({ creditHolder: {}, creditTransactionId: 'tx-add' })),
+  subtractCreditsWithLedgerRow: vi.fn(async () => ({ creditHolder: {}, creditTransactionId: 'tx-sub' })),
+  recordAdminAction: vi.fn(async () => null),
+  withTransaction: vi.fn(async (fn: () => Promise<unknown>) => fn()),
 }));
-vi.mock('@bike4mind/services', () => ({ organizationService: { get, update } }));
-vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: {} }));
+vi.mock('@bike4mind/server-utils/utils/errors', () => ({
+  BadRequestError: class BadRequestError extends Error {},
+  NotFoundError: class NotFoundError extends Error {},
+}));
+vi.mock('@bike4mind/services', () => ({
+  organizationService: { get, update },
+  creditService: {
+    addCreditsWithLedgerRow: credits.addCreditsWithLedgerRow,
+    subtractCreditsWithLedgerRow: credits.subtractCreditsWithLedgerRow,
+  },
+}));
+vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: { findById: credits.findById } }));
+vi.mock('@bike4mind/database', () => ({
+  creditLotRepository: {},
+  creditTransactionRepository: {},
+  integrationRequestRepository: {},
+  partnerSignupRuleRepository: {},
+  userRepository: {},
+  withTransaction: credits.withTransaction,
+}));
+vi.mock('@bike4mind/database/social', () => ({ groupRepository: {} }));
+vi.mock('@server/entitlements/partnerRules', () => ({ invalidatePartnerRuleCache: vi.fn() }));
+vi.mock('@server/utils/adminAudit', () => ({
+  parseAdminActionReason: (value: unknown) => String(value),
+  recordAdminActionFromRequest: credits.recordAdminAction,
+}));
 vi.mock('@server/models/Subscription', () => ({ subscriptionRepository: {} }));
 vi.mock('@client/lib/subscriptions/types', () => ({ SubscriptionOwnerType: { Organization: 'organization' } }));
 
 import '@pages/api/organizations/[id]/index';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
 function mocks(user: unknown, method: 'GET' | 'PUT' = 'GET') {
   const { req, res } = createMocks({ method, query: { id: 'org1' } });
@@ -109,6 +137,25 @@ describe('PUT /api/organizations/[id] - URL id wins', () => {
     expect(params.name).toBe('renamed');
   });
 
+  it('forwards storageLimit (including a fractional MB and null) instead of stripping it', async () => {
+    for (const storageLimit of [0.5, null]) {
+      update.mockClear();
+      const { req, res } = mocks({ id: 'caller', isAdmin: true }, 'PUT');
+      (req as any).body = { storageLimit };
+      await mockRefs.putHandler!(req, res);
+      const [, params] = update.mock.calls[0];
+      expect(params.storageLimit).toBe(storageLimit);
+    }
+  });
+
+  it.each([-5, 1e303])('rejects an out-of-range storageLimit (%d) before reaching the service', async storageLimit => {
+    update.mockClear();
+    const { req, res } = mocks({ id: 'caller', isAdmin: true }, 'PUT');
+    (req as any).body = { storageLimit };
+    await expect(mockRefs.putHandler!(req, res)).rejects.toThrow();
+    expect(update).not.toHaveBeenCalled();
+  });
+
   it('rejects a missing id with BadRequestError before reaching the service', async () => {
     const { req, res } = createMocks({ method: 'PUT', query: {} });
     (req as any).user = { id: 'caller', isAdmin: true };
@@ -136,5 +183,70 @@ describe('PUT /api/organizations/[id] - safe serialization', () => {
     const body = res._getJSONData();
     expect(body.billingContact).toBe('billing@acme.com');
     expect('stripeCustomerId' in body).toBe(false);
+  });
+});
+
+describe('PUT /api/organizations/[id] - admin credit edit', () => {
+  beforeEach(() => {
+    update.mockClear();
+    Object.values(credits).forEach(fn => fn.mockClear());
+  });
+
+  function putAsAdmin(body: Record<string, unknown>) {
+    const { req, res } = mocks({ id: 'admin1', isAdmin: true }, 'PUT');
+    (req as any).body = body;
+    return { req, res };
+  }
+
+  it('runs the credit edit and the profile update in one transaction', async () => {
+    const { req, res } = putAsAdmin({ name: 'renamed', currentCredits: 150, creditReason: 'goodwill grant' });
+    await mockRefs.putHandler!(req, res);
+    expect(credits.withTransaction).toHaveBeenCalledTimes(1);
+    expect(credits.addCreditsWithLedgerRow).toHaveBeenCalledTimes(1);
+    expect(credits.recordAdminAction).toHaveBeenCalledTimes(1);
+    expect(update).toHaveBeenCalledTimes(1);
+  });
+
+  it('links the credit audit entry to the ledger row it wrote', async () => {
+    const { req, res } = putAsAdmin({ currentCredits: 150, creditReason: 'goodwill grant' });
+    await mockRefs.putHandler!(req, res);
+    expect(credits.recordAdminAction).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ action: 'org.credits.adjusted', related: { creditTransactionId: 'tx-add' } })
+    );
+  });
+
+  it('propagates a failing profile update out of the transaction after the credit edit', async () => {
+    update.mockRejectedValueOnce(new Error('profile write failed'));
+    const { req, res } = putAsAdmin({ name: 'renamed', currentCredits: 150, creditReason: 'goodwill grant' });
+    await expect(mockRefs.putHandler!(req, res)).rejects.toThrow('profile write failed');
+    expect(credits.addCreditsWithLedgerRow).toHaveBeenCalledTimes(1);
+    expect(credits.withTransaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not open a transaction when no credit value is sent', async () => {
+    const { req, res } = putAsAdmin({ name: 'renamed' });
+    await mockRefs.putHandler!(req, res);
+    expect(credits.withTransaction).not.toHaveBeenCalled();
+    expect(update).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([null, '', '  ', '1,000'])('rejects currentCredits %j and writes nothing', async currentCredits => {
+    const { req, res } = putAsAdmin({ currentCredits, creditReason: 'goodwill grant' });
+    await expect(mockRefs.putHandler!(req, res)).rejects.toMatchObject({ name: 'ZodError' });
+    expect(credits.withTransaction).not.toHaveBeenCalled();
+    expect(credits.addCreditsWithLedgerRow).not.toHaveBeenCalled();
+    expect(credits.subtractCreditsWithLedgerRow).not.toHaveBeenCalled();
+    expect(credits.recordAdminAction).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('rejects a negative balance and writes nothing', async () => {
+    const { req, res } = putAsAdmin({ currentCredits: -5, creditReason: 'goodwill grant' });
+    await expect(mockRefs.putHandler!(req, res)).rejects.toMatchObject({ name: 'ZodError' });
+    expect(credits.withTransaction).not.toHaveBeenCalled();
+    expect(credits.addCreditsWithLedgerRow).not.toHaveBeenCalled();
+    expect(credits.subtractCreditsWithLedgerRow).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
   });
 });

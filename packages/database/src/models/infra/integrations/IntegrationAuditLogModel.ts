@@ -45,6 +45,10 @@ export interface CustomMcpAuditMetadata {
   durationMs?: number;
   approval?: 'auto' | 'user' | 'remembered';
   policyVerdict?: string;
+  /** Discovery: tools kept, tools refused (bad name, duplicate, over a cap), tools new or changed. */
+  toolCount?: number;
+  droppedCount?: number;
+  changedCount?: number;
 }
 
 /**
@@ -168,11 +172,15 @@ IntegrationAuditLogSchema.index({ userId: 1, createdAt: -1 });
 IntegrationAuditLogSchema.index({ workspaceId: 1, createdAt: -1 });
 IntegrationAuditLogSchema.index({ requestId: 1 });
 
-// TTL index to auto-delete old audit logs after 90 days (consistent with other audit logs)
-IntegrationAuditLogSchema.index(
-  { createdAt: 1 },
-  { expireAfterSeconds: 90 * 24 * 60 * 60 } // 90 days
-);
+/**
+ * TTL on createdAt: these audit logs are kept for 12 months.
+ *
+ * Mongo does not apply a changed expireAfterSeconds to an index that already exists, so changing
+ * this value needs a collMod migration (see 20260921235951_set-integration-audit-log-retention).
+ */
+export const INTEGRATION_AUDIT_LOG_RETENTION_SECONDS = 365 * 24 * 60 * 60;
+
+IntegrationAuditLogSchema.index({ createdAt: 1 }, { expireAfterSeconds: INTEGRATION_AUDIT_LOG_RETENTION_SECONDS });
 
 class IntegrationAuditLogRepository
   extends BaseRepository<IIntegrationAuditLogDocument>

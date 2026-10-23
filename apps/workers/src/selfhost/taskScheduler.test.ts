@@ -18,9 +18,16 @@ const mocks = vi.hoisted(() => ({
   },
 }));
 
+// The real billing helpers read repositories (and mongoose models via entitlements) the database mock lacks.
+vi.mock('@server/billing/meterPlatformCompletion', () => ({
+  createCompletionMeter: vi.fn(),
+  assertOwnerCanAfford: vi.fn(),
+}));
+vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
 vi.mock('@bike4mind/services', async () => ({
   taskSchedulerService: await import('../../../../b4m-core/services/src/taskSchedulerService/process'),
   researchTaskService: { process: mocks.research },
+  meterCompletionBackend: (llm: unknown) => llm,
 }));
 vi.mock('@bike4mind/database', () => ({
   taskScheduleRepository: { claimDueTaskSchedule: mocks.claim, update: mocks.update },
@@ -47,15 +54,15 @@ vi.mock('@bike4mind/observability', () => ({
   },
 }));
 vi.mock('sst', () => ({ Resource: { App: { stage: 'test' }, researchEngineQueue: { url: 'queue://research' } } }));
-vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://unused/%STAGE%' } }));
-vi.mock('@server/utils/sqs', () => ({ sendToQueue: mocks.send }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://unused/%STAGE%' } }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: mocks.send }));
 vi.mock('@server/queueHandlers/utils', () => ({
   dispatchWithLogger:
     (handler: (event: SQSEvent, context: Context, logger: unknown) => Promise<void>) =>
     (event: SQSEvent, context: Context) =>
       handler(event, context, mocks.logger),
 }));
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: vi.fn() }));
 vi.mock('@bike4mind/services/llm/tools/implementation/webfetch', () => ({ createFirecrawlApp: vi.fn() }));
 vi.mock('@bike4mind/auth/apiKeyService', () => ({ getFirecrawlConfig: vi.fn() }));
 vi.mock('@bike4mind/services/llm/tools/implementation/webfetch/scrapeWithRetry', () => ({ scrapeWithRetry: vi.fn() }));

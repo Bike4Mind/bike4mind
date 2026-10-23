@@ -19,11 +19,11 @@ vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: vi.fn(),
   getSettingsValue: (key: string, settings: Record<string, string>) => settings[key],
 }));
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { STAGE: 'production' },
 }));
 vi.mock('@bike4mind/observability', () => ({ Logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() } }));
-vi.mock('@server/utils/cloudwatch', () => ({
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   recordFeedbackDeliverySuccess: vi.fn(),
   recordFeedbackDeliveryFailure: vi.fn(),
   recordFeedbackDeliverySkipped: vi.fn(),

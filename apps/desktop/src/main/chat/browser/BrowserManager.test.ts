@@ -97,14 +97,28 @@ vi.mock('electron', () => {
     return made;
   };
   return {
+    /** Like Electron: a destroyed window throws on `contentView`, and destroy() emits 'closed' at once. */
     BrowserWindow: class {
       private destroyed = false;
-      contentView = { addChildView: () => undefined, removeChildView: () => undefined };
+      private readonly own = new Map<string, Handler[]>();
+      readonly children = new Set<unknown>();
+      private readonly view = {
+        addChildView: (child: unknown) => void this.children.add(child),
+        removeChildView: (child: unknown) => void this.children.delete(child),
+      };
+      get contentView() {
+        if (this.destroyed) throw new TypeError('Object has been destroyed');
+        return this.view;
+      }
       isDestroyed = () => this.destroyed;
       destroy = () => {
+        if (this.destroyed) return;
         this.destroyed = true;
+        for (const handler of this.own.get('closed') ?? []) handler();
       };
-      on = () => undefined;
+      on = (event: string, handler: Handler) => {
+        this.own.set(event, [...(this.own.get(event) ?? []), handler]);
+      };
     },
     WebContentsView: class {
       webContents: ReturnType<typeof makeContents> | undefined = makeContents(this);
@@ -141,6 +155,7 @@ vi.mock('./cookies/CookieImporter', () => ({
 const { BrowserWindow } = await import('electron');
 const { BrowserManager, NO_PAGE } = await import('./BrowserManager');
 const { MAX_BROWSER_TABS } = await import('@shared/browserTabs');
+const { resolveAddress } = await import('@shared/browserUrl');
 
 const never = <T>() => new Promise<T>(() => undefined);
 
@@ -209,7 +224,16 @@ describe('BrowserManager page deadlines', () => {
 
   it('stops a load holding a snapshot past the deadline, which lets the snapshot run', async () => {
     const page = await openPage();
-    const snap = { url: 'u', title: 't', text: 'partial page', truncated: false };
+    const model = {
+      url: 'u',
+      title: 't',
+      capturedAt: '2026-10-24T12:00:00.000Z',
+      blocks: [],
+      actions: [],
+      claims: [],
+      truncated: false,
+    };
+    const snap = { url: 'u', title: 't', text: 'partial page', truncated: false, model };
     contents.script = () => heldBehindLoad(snap);
 
     const reading = page.snapshot(1000);
@@ -557,6 +581,195 @@ describe('BrowserManager tabs', () => {
     press(2, 'KeyW');
     await vi.waitFor(() => expect(tabIds()).toEqual([1]));
     expect(press(1, 'KeyA')).not.toHaveBeenCalled();
+  });
+});
+
+describe('BrowserManager when a page outlives its hidden host', () => {
+  type Manager = InstanceType<typeof BrowserManager>;
+  type Window = InstanceType<typeof BrowserWindow> & { children: Set<unknown> };
+  type Page = { host: Window & { destroyed: boolean }; view: { visible: boolean } };
+  const parts = (page: unknown) => page as Page;
+  const shown = (manager: Manager) => (manager as unknown as { shown: unknown }).shown;
+  const bounds = { x: 1440, y: 40, width: 560, height: 760 };
+
+  let states: BrowserPaneState[];
+  let manager: Manager;
+  let window: Window;
+  let baseline = 0;
+  const nth = (n: number) => contents.made[baseline + n - 1];
+  const lastState = () => states.at(-1)!;
+  const context = () => manager.context('s', async () => undefined);
+
+  /** What the url bar sends for typed text that is not an address. */
+  const search = (text: string) => {
+    const resolved = resolveAddress(text);
+    if (!resolved.ok) throw new Error(resolved.error);
+    return manager.navigate('s', resolved.url);
+  };
+
+  beforeEach(() => {
+    contents.handlers.clear();
+    contents.url = '';
+    contents.loads = [];
+    contents.script = () => Promise.resolve(null);
+    // Google answers a search by redirecting to itself with a session parameter, which aborts
+    // the first load after it already committed.
+    contents.load = url => {
+      contents.url = `${url}&sei=abc`;
+      contents.emit('did-navigate', contents.url, 200);
+      return Promise.reject(new Error(`ERR_ABORTED (-3) loading '${url}'`));
+    };
+    baseline = contents.made.length;
+    states = [];
+    manager = new BrowserManager((_sessionId, state) => states.push(state));
+    window = new BrowserWindow() as Window;
+  });
+
+  it('shows an address-bar search in the pane', async () => {
+    manager.setPane(window, 's', bounds);
+
+    const state = await search('electron object has been destroyed');
+
+    expect(contents.loads).toEqual([
+      { id: nth(1).id, url: 'https://www.google.com/search?q=electron%20object%20has%20been%20destroyed' },
+    ]);
+    expect(state).toMatchObject({ url: expect.stringContaining('google.com/search?q='), error: '', activeTabId: 1 });
+    const page = shown(manager);
+    expect(window.children.has(parts(page).view)).toBe(true);
+  });
+
+  it('drops the tab cleanly when its host is closed under it, and the next search opens a new one', async () => {
+    manager.setPane(window, 's', bounds);
+    await search('first search');
+    const page = parts(shown(manager));
+
+    expect(() => page.host.destroy()).not.toThrow();
+
+    expect(nth(1).isDestroyed()).toBe(true);
+    expect(window.children.has(page.view)).toBe(false);
+    expect(shown(manager)).toBeUndefined();
+    expect(lastState()).toEqual(NO_PAGE);
+    expect(() => manager.setPane(window, null, null)).not.toThrow();
+    expect(() => manager.setPane(window, 's', bounds)).not.toThrow();
+
+    await expect(search('second search')).resolves.toMatchObject({ activeTabId: 2, tabs: [{ id: 2 }] });
+    expect(window.children.has(parts(shown(manager)).view)).toBe(true);
+  });
+
+  it('does not throw when the page fires events after its host is gone and before its contents are', async () => {
+    manager.setPane(window, 's', bounds);
+    await search('a search');
+    // Electron destroys closed contents on a later task, so they still emit in between.
+    const page = parts(shown(manager));
+    const first = Object.assign(nth(1), { close: () => undefined });
+
+    page.host.destroy();
+
+    for (const event of ['did-stop-loading', 'did-navigate', 'page-title-updated', 'did-start-loading']) {
+      expect(() => first.fire(event, {}, 'https://www.google.com/', 200)).not.toThrow();
+    }
+    expect(shown(manager)).toBeUndefined();
+    expect(() => first.destroy()).not.toThrow();
+    expect(lastState()).toEqual(NO_PAGE);
+  });
+
+  it('parks, shows and closes a page whose host died without saying so, and keeps serving the pane', async () => {
+    manager.setPane(window, 's', bounds);
+    await search('a search');
+    const broken = parts(shown(manager));
+    // Destroyed with no 'closed' delivered: every placement still has to hold up.
+    broken.host.destroyed = true;
+
+    expect(() => manager.setPane(window, null, null)).not.toThrow();
+    expect(window.children.has(broken.view)).toBe(false);
+    expect(() => manager.setPane(window, 's', bounds)).not.toThrow();
+    expect(shown(manager)).toBeUndefined();
+    expect(() => manager.setPane(window, 's', null)).not.toThrow();
+    await expect(manager.tab('s', 'new')).resolves.toMatchObject({ activeTabId: 2 });
+    await expect(manager.tab('s', 'select', 1)).resolves.toMatchObject({ activeTabId: 1 });
+
+    await expect(manager.tab('s', 'close', 1)).resolves.toMatchObject({ activeTabId: 2, tabs: [{ id: 2 }] });
+    expect(nth(1).isDestroyed()).toBe(true);
+    await expect(search('after the broken tab')).resolves.toMatchObject({ activeTabId: 2, error: '' });
+  });
+
+  it('closes the hidden host of a page that closed itself', async () => {
+    await search('a search');
+    const page = parts(await context().page());
+
+    nth(1).destroy();
+
+    expect(page.host.isDestroyed()).toBe(true);
+    expect(manager.context('s', async () => undefined).tabs()).toEqual([]);
+  });
+
+  it('logs a placement failure once, answers the request anyway, and recovers on the next one', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      await search('a search');
+      const page = (await context().page()) as unknown as { showIn: () => void };
+      const showIn = vi.spyOn(page, 'showIn').mockImplementation(() => {
+        throw new TypeError('Object has been destroyed');
+      });
+
+      expect(manager.setPane(window, 's', bounds)).toMatchObject({ activeTabId: 1 });
+      expect(manager.setPane(window, 's', { ...bounds, width: 600 })).toMatchObject({ activeTabId: 1 });
+      expect(() => nth(1).fire('did-stop-loading')).not.toThrow();
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][0]).toMatch(/^BROWSER: could not place the page: TypeError: Object has been destroyed/);
+
+      showIn.mockRestore();
+      manager.setPane(window, 's', bounds);
+      expect(shown(manager)).toBe(page);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it.each(['hide', 'switch'] as const)('retries parking after a failed pane %s', async action => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      manager.setPane(window, 's', bounds);
+      await search('a search');
+      const page = await context().page();
+      const park = vi.spyOn(page as unknown as { park: () => void }, 'park').mockImplementationOnce(() => {
+        throw new Error('placement failed');
+      });
+
+      const hide = () => manager.setPane(window, action === 'hide' ? null : 'other', bounds);
+      expect(hide).not.toThrow();
+      expect(window.children.has(parts(page).view)).toBe(true);
+
+      expect(hide).not.toThrow();
+      expect(park).toHaveBeenCalledTimes(2);
+      expect(window.children.has(parts(page).view)).toBe(false);
+      expect(shown(manager)).toBeUndefined();
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('parks a partially placed page when the next request switches conversations', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      await search('a search');
+      const page = await context().page();
+      const view = parts(page).view as { visible: boolean; setBounds: (bounds: unknown) => void };
+      vi.spyOn(view, 'setBounds').mockImplementationOnce(() => {
+        throw new Error('bounds failed after attaching');
+      });
+
+      expect(() => manager.setPane(window, 's', bounds)).not.toThrow();
+      expect(window.children.has(view)).toBe(true);
+
+      manager.setPane(window, 'other', bounds);
+      expect(window.children.has(view)).toBe(false);
+      expect(shown(manager)).toBeUndefined();
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 });
 

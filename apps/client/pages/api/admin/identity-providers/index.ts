@@ -1,7 +1,9 @@
-import { identityProviderRepository } from '@bike4mind/database';
+import { identityProviderRepository, withTransaction } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ForbiddenError } from '@server/utils/errors';
-import { ApiKeyScope } from '@bike4mind/common';
+import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { ApiKeyScope, identityProviderListResponseSchema, identityProviderResponseSchema } from '@bike4mind/common';
+import { respond } from '@server/utils/respond';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .get(async (req, res) => {
@@ -13,7 +15,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       // Presence flags, not values: the UI needs to distinguish a configured credential
       // from a blank one, and the secrets themselves must never reach a response.
       const idps = await identityProviderRepository.findAllWithSecretPresence();
-      return res.json(idps);
+      return respond(res, identityProviderListResponseSchema, idps);
     } catch (error) {
       console.error('Error fetching identity providers:', error);
       return res.status(500).json({ error: 'Failed to fetch identity providers' });
@@ -45,17 +47,32 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         throw new BadRequestError('An identity provider already exists for this email domain');
       }
 
-      const newIdp = await identityProviderRepository.createIDP({
-        name,
-        emailDomain: emailDomain.toLowerCase(),
-        type,
-        isActive,
-        samlConfig,
-        oktaConfig,
-        createdBy: req.user!.id,
+      const newIdp = await withTransaction(async () => {
+        const created = await identityProviderRepository.createIDP({
+          name,
+          emailDomain: emailDomain.toLowerCase(),
+          type,
+          isActive,
+          samlConfig,
+          oktaConfig,
+          createdBy: req.user!.id,
+        });
+
+        await recordAdminActionFromRequest(req, {
+          action: 'identity.sso_provider.created',
+          target: { kind: 'settings', id: created.id, displayName: created.name },
+          summary: `created ${created.type} identity provider ${created.name}`,
+          details: {
+            name: created.name,
+            emailDomain: created.emailDomain,
+            type: created.type,
+            isActive: created.isActive,
+          },
+        });
+        return created;
       });
 
-      return res.status(201).json(newIdp);
+      return respond(res, identityProviderResponseSchema, newIdp, 201);
     } catch (error) {
       console.error('Error creating identity provider:', error);
       if (error instanceof BadRequestError) {

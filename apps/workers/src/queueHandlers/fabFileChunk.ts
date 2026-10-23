@@ -15,19 +15,19 @@ import { dataLakeService, fabFilesService, scopedSettingsService } from '@bike4m
 import { DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT } from '@bike4mind/common';
 import { effectiveChunkTokenLimit, FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
-import { getFilesStorage } from '@server/utils/storage';
-import { sendToQueue } from '@server/utils/sqs';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { dispatchWithLogger, MARK_PAUSED_MAX_ATTEMPTS, MARK_PAUSED_RETRY_DELAY_MS } from '@server/queueHandlers/utils';
 import {
   finalizeBatchIfComplete,
   completedBatchStatus,
   deferFailureIfRetryable,
 } from '@server/dataLakes/dataLakeBatchProgress';
-import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from '@server/utils/sqsDelivery';
+import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from '@bike4mind/server-utils/utils/sqsDelivery';
 import { isChunkClaimLostError, isSupportedEmbeddingModel, provenancePayloadShape } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { CHUNK_CLAIM_STALE_MS } from '@workers/s3/chunkScan';
-import { isConvergenceHalted } from '@server/dataLakes/convergenceKillSwitch';
+import { isConvergenceHalted } from '@bike4mind/server-utils/dataLakes/convergenceKillSwitch';
 import type { Logger } from '@bike4mind/observability';
 import type { SQSEvent } from 'aws-lambda';
 import { Resource } from 'sst';

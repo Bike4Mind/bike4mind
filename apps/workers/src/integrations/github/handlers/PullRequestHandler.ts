@@ -15,7 +15,7 @@ import {
   GitHubHandlerResult,
   GitHubPullRequestPayload,
   GitHubWebhookPayload,
-} from '@server/integrations/github/types';
+} from '@bike4mind/server-utils/integrations/github/types';
 import {
   GitHubSlackNotifier,
   NotifyResult,

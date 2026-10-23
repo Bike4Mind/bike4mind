@@ -3,7 +3,7 @@ import type { Response } from 'express';
 import { createStateToken } from '@server/auth/jwtStateStore';
 import { NONCE_SLOT } from '@server/auth/oauthFlowCookie';
 import { Logger } from '@bike4mind/observability';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { GRANT_EXPIRED_MESSAGE } from './githubLakeAuthGrant';
 
 const h = vi.hoisted(() => ({
@@ -47,8 +47,9 @@ const h = vi.hoisted(() => ({
   consumeGitHubLakeAuthGrant: vi.fn(),
 }));
 
-vi.mock('./lakeAppClient', async importOriginal => {
-  const actual = await importOriginal<typeof import('./lakeAppClient')>();
+vi.mock('@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient', async importOriginal => {
+  const actual =
+    await importOriginal<typeof import('@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient')>();
   return {
     ...actual,
     exchangeInstallerCode: h.exchangeInstallerCode,
@@ -72,7 +73,7 @@ vi.mock('./githubLakeAuthGrant', async importOriginal => {
   };
 });
 vi.mock('@server/utils/orgAccess', () => ({ verifyOrgAccess: h.verifyOrgAccess }));
-vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('@bike4mind/services', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/services')>();
   return { dataLakeService: { ...actual.dataLakeService, recordLakeConfigChange: h.recordLakeConfigChange } };
@@ -147,13 +148,13 @@ import {
   REVOKE_PURGE_SLICE_SIZE,
   requireGitHubLakeAppConfig,
 } from './githubLakeConnection';
-import { CLAIM_GRACE_MS } from '@server/dataLakes/assertLakeConnectorFree';
+import { CLAIM_GRACE_MS } from '@bike4mind/server-utils/dataLakes/assertLakeConnectorFree';
 import type {
   GitHubLakeAppConfig,
   GitHubLakeInstallation,
   GitHubLakeRepository,
   GitHubLakeUserInstallation,
-} from './lakeAppClient';
+} from '@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient';
 import {
   GITHUB_DISCONNECT_STALL_MS,
   GITHUB_LAKE_PLACEHOLDER_NAME,

@@ -11,7 +11,7 @@ vi.mock('@bike4mind/slack', () => ({
 
 import { IssueCommentHandler } from '@workers/integrations/github/handlers/IssueCommentHandler';
 import { GitHubSlackNotifier } from '@bike4mind/slack';
-import type { GitHubIssueCommentPayload } from '@server/integrations/github/types';
+import type { GitHubIssueCommentPayload } from '@bike4mind/server-utils/integrations/github/types';
 import type { IMcpServerDocument } from '@bike4mind/common';
 
 function createCommentPayload(

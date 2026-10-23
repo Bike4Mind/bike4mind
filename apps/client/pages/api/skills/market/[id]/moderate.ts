@@ -5,7 +5,7 @@ import { SkillListing, SkillListingReport, SkillListingVersion } from '@bike4min
 import { organizationRepository } from '@bike4mind/database/infra';
 import { ConflictError, ForbiddenError, NotFoundError } from '@bike4mind/common';
 import { canDelistListing, canRestoreListing, findListing, notifyUser } from '@server/skillMarket/market';
-import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
+import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 
 const bodySchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('delist'), reason: z.string().trim().min(1).max(1000) }),

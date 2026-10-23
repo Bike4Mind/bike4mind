@@ -1,0 +1,163 @@
+import type { ServerResponse } from 'http';
+import type { Request, Response } from 'express';
+
+/**
+ * Refresh-token cookie transport.
+ *
+ * Browser sessions carry the opaque `<sid>.<secret>` refresh token in an HttpOnly cookie
+ * instead of localStorage: script-writable storage is capped at ~7 days by WebKit ITP (so
+ * mobile Safari users were being silently logged out), and a long-lived credential sitting
+ * in localStorage is directly exfiltratable by any XSS. The access token stays in JS memory
+ * (useAccessToken) because the WebSocket is on a different registrable domain: JS uses the token
+ * to mint a single-use connect ticket (POST /api/websocket/ticket) and the socket authenticates
+ * with `?ticket=<ticket>` - a cookie can't reach it.
+ *
+ * Non-browser callers (CLI, OAuth authorization-code + device flows) keep passing the refresh
+ * token in the request body and receive no cookie - they have no cookie jar. The refresh
+ * endpoint accepts either transport; see pages/api/auth/refreshToken.ts.
+ */
+
+/** Primary session refresh cookie; the base name, see sessionCookieName for the name on the wire. */
+export const REFRESH_COOKIE_NAME = 'b4m_rt';
+
+/**
+ * Parks the impersonating admin's refresh token for the duration of a loginAs, so
+ * "Return to safety" can restore the admin session. There is only one primary cookie slot per
+ * origin and it is handed to the impersonated user, so the admin's half needs its own name.
+ * Replaces the old client-side returnToken/returnRefreshToken pair, which kept the admin's
+ * credentials in localStorage - exactly what this change removes.
+ */
+export const ADMIN_RETURN_COOKIE_NAME = 'b4m_rt_admin';
+
+/**
+ * Where Secure is set (production), each session cookie is written as `__Host-<name>` with Path=/:
+ * the browser accepts that name only host-only, Secure and on Path=/, so only this host can write
+ * it. Plain-http dev cannot use the prefix and keeps the bare name on /api.
+ * SameSite=Strict is affordable because normal API calls authenticate with `Authorization: Bearer`,
+ * so no cross-site navigation depends on the cookie riding along.
+ */
+const HOST_PREFIX = '__Host-';
+const LEGACY_COOKIE_PATH = '/api';
+
+/** Any subdomain can write the bare name, so it is honored only for sessions that predate the prefix,
+ *  and not at all after the second date. The cutoff must not precede the production deploy, or
+ *  sessions created in between are logged out on their next refresh. */
+export const LEGACY_REFRESH_COOKIE_SESSION_CUTOFF = new Date('2026-10-30T00:00:00Z');
+export const LEGACY_REFRESH_COOKIE_ACCEPTED_UNTIL = new Date('2026-11-30T00:00:00Z');
+
+/**
+ * Bounds a mobile session, so it tracks the AuthSession lifetime (30d), not the access-token TTL.
+ * MUST STAY IN SYNC with DEFAULT_REFRESH_TTL_MS in
+ * b4m-core/services/src/authSessionService/constants.ts. Duplicated rather than imported so this
+ * transport helper - reached from nearly every auth route - does not drag the services barrel in
+ * behind it. A cookie that outlives the session just yields one rejected refresh; one that dies
+ * early logs the user out, which is the failure this whole change exists to prevent, so err long.
+ * Since sliding expiry landed, every rotated Set-Cookie re-stamps this Max-Age, so the cookie
+ * slides with the session's idle window; the 90d absolute cap (ABSOLUTE_SESSION_MAX_MS) is
+ * enforced server-side only.
+ */
+const REFRESH_COOKIE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
+
+/** Production only, since plain-http localhost drops Secure cookies; this also picks the cookie name. */
+const isSecureTransport = (): boolean => process.env.NODE_ENV === 'production';
+export const secureAttribute = (): string => (isSecureTransport() ? '; Secure' : '');
+
+/** The name a session cookie is written and read under; writers and readers must both use this. */
+export const sessionCookieName = (baseName: string): string =>
+  isSecureTransport() ? `${HOST_PREFIX}${baseName}` : baseName;
+const sessionCookiePath = (): string => (isSecureTransport() ? '/' : LEGACY_COOKIE_PATH);
+
+/**
+ * Append rather than overwrite: `res.setHeader('Set-Cookie', string)` replaces any Set-Cookie
+ * already on the response (Node treats a string value as the whole header). loginAs sets two
+ * cookies in one response, so this must accumulate. Shared with the OAuth flow-cookie helpers
+ * (oauthFlowCookie.ts), which set a browser-binding nonce alongside the refresh cookie.
+ */
+export type CookieResponse = Pick<ServerResponse, 'getHeader' | 'setHeader' | 'headersSent'>;
+
+export function appendSetCookie(res: CookieResponse, cookie: string): void {
+  const existing = res.getHeader('Set-Cookie');
+  const next = existing
+    ? Array.isArray(existing)
+      ? [...existing.map(String), cookie]
+      : [String(existing), cookie]
+    : cookie;
+  res.setHeader('Set-Cookie', next);
+}
+
+function expireLegacyCookie(res: Response, baseName: string): void {
+  if (sessionCookieName(baseName) === baseName) return;
+  appendSetCookie(
+    res,
+    `${baseName}=; Path=${LEGACY_COOKIE_PATH}; Max-Age=0; HttpOnly; SameSite=Strict${secureAttribute()}`
+  );
+}
+
+function setCookie(res: Response, baseName: string, value: string): void {
+  appendSetCookie(
+    res,
+    `${sessionCookieName(baseName)}=${value}; Path=${sessionCookiePath()}; Max-Age=${REFRESH_COOKIE_MAX_AGE_SECONDS}; HttpOnly; SameSite=Strict${secureAttribute()}`
+  );
+  expireLegacyCookie(res, baseName);
+}
+
+function expireCookie(res: Response, baseName: string): void {
+  appendSetCookie(
+    res,
+    `${sessionCookieName(baseName)}=; Path=${sessionCookiePath()}; Max-Age=0; HttpOnly; SameSite=Strict${secureAttribute()}`
+  );
+  expireLegacyCookie(res, baseName);
+}
+
+function readCookieValues(req: Pick<Request, 'headers'>, name: string): string[] {
+  const header = req.headers.cookie;
+  if (!header) return [];
+  const values: string[] = [];
+  for (const part of header.split(';')) {
+    const eq = part.indexOf('=');
+    if (eq === -1) continue;
+    if (part.slice(0, eq).trim() === name) values.push(part.slice(eq + 1).trim());
+  }
+  return values;
+}
+
+/** Minimal cookie-header parser (same pattern as publishGateToken / analyticsMiddleware). */
+export function readCookie(req: Pick<Request, 'headers'>, name: string): string | null {
+  const [value] = readCookieValues(req, name);
+  return value ? value : null;
+}
+
+export interface SessionCookieRead {
+  token: string;
+  /** Came from the bare name; the caller must check LEGACY_REFRESH_COOKIE_SESSION_CUTOFF. */
+  legacy: boolean;
+}
+
+function readSessionCookie(req: Pick<Request, 'headers'>, baseName: string): SessionCookieRead | null {
+  const name = sessionCookieName(baseName);
+  const current = readCookie(req, name);
+  if (current) return { token: current, legacy: false };
+  if (name === baseName || Date.now() >= LEGACY_REFRESH_COOKIE_ACCEPTED_UNTIL.getTime()) return null;
+  const legacy = readCookieValues(req, baseName);
+  return legacy.length === 1 && legacy[0] ? { token: legacy[0], legacy: true } : null;
+}
+
+export const setRefreshCookie = (res: Response, token: string): void => setCookie(res, REFRESH_COOKIE_NAME, token);
+export const clearRefreshCookie = (res: Response): void => expireCookie(res, REFRESH_COOKIE_NAME);
+/** Includes the bare-name fallback; only the refresh route, which checks the session's age, uses it. */
+export const readRefreshCookieWithSource = (req: Pick<Request, 'headers'>): SessionCookieRead | null =>
+  readSessionCookie(req, REFRESH_COOKIE_NAME);
+export const readRefreshCookie = (req: Pick<Request, 'headers'>): string | null =>
+  readCookie(req, sessionCookieName(REFRESH_COOKIE_NAME));
+
+export const setAdminReturnCookie = (res: Response, token: string): void =>
+  setCookie(res, ADMIN_RETURN_COOKIE_NAME, token);
+export const clearAdminReturnCookie = (res: Response): void => expireCookie(res, ADMIN_RETURN_COOKIE_NAME);
+export const readAdminReturnCookie = (req: Pick<Request, 'headers'>): string | null =>
+  readCookie(req, sessionCookieName(ADMIN_RETURN_COOKIE_NAME));
+
+/** Clear every session cookie - logout, and any path that tears a session down. */
+export function clearSessionCookies(res: Response): void {
+  clearRefreshCookie(res);
+  clearAdminReturnCookie(res);
+}

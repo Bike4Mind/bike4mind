@@ -52,7 +52,7 @@ describe('/api/skills POST — scope creation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockCreate.mockImplementation(async (doc: Record<string, unknown>) => ({ id: 'new', ...doc }));
-    mockVerifyOrgAccess.mockResolvedValue({ id: ORG });
+    mockVerifyOrgAccess.mockResolvedValue({ id: ORG, userId: USER });
   });
 
   it('defaults to user-scoped when no scope is supplied', async () => {
@@ -79,6 +79,13 @@ describe('/api/skills POST — scope creation', () => {
     const { req, res } = makeReqRes({ ...baseBody, scope: { organizationId: ORG } });
     await expect(handler(req, res)).rejects.toBeInstanceOf(ForbiddenError);
     expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it('allows a platform admin who has no org role', async () => {
+    mockVerifyOrgAccess.mockResolvedValue({ id: ORG, userId: 'owner-1' });
+    const { req, res } = makeReqRes({ ...baseBody, scope: { organizationId: ORG } }, true);
+    await handler(req, res);
+    expect(mockCreate.mock.calls[0][0].organizationId).toBe(ORG);
   });
 
   it('rejects system-scoped creation for a non-admin', async () => {

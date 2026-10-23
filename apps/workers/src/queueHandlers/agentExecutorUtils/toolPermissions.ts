@@ -11,7 +11,8 @@
 
 import type { GatedToolCall } from '@bike4mind/agents';
 import { classifyToolPermission } from '@bike4mind/common';
-import { isHeadlessConnection } from '@server/utils/headlessConnection';
+import { isHeadlessConnection } from '@bike4mind/server-utils/utils/headlessConnection';
+import { formatConfidenceGateReason, recordAndDecideConfidencePause } from './confidenceGate';
 
 export { classifyToolPermission, type ToolPermissionResult } from '@bike4mind/common';
 
@@ -206,7 +207,8 @@ export type ReplayConfidenceOutcome = { status: 'proceed' } | { status: 'paused'
  * `confidence: null` means nothing was replayed, nothing scored, or every replayed call
  * failed to run (a human cannot fix those) - proceed without touching the DB. A
  * `confidenceGateThreshold` of 0 (an unattended-loop profile override) always proceeds
- * too, since a real confidence score is never negative.
+ * too, since a real confidence score is never negative. Like the ordinary check, the
+ * replay advances the persisted low-confidence streak and pauses only on a streak.
  */
 export async function gateReplayConfidence(
   params: {
@@ -216,7 +218,11 @@ export async function gateReplayConfidence(
     confidenceGateThreshold: number;
   },
   deps: {
-    recordIterationConfidence: (executionId: string, confidence: number) => Promise<void>;
+    recordIterationConfidence: (
+      executionId: string,
+      confidence: number,
+      options: { belowThreshold: boolean }
+    ) => Promise<number>;
     setPendingGate: (
       executionId: string,
       gate: { iteration: number; confidence: number; reason: string; requestedAt: Date }
@@ -231,12 +237,15 @@ export async function gateReplayConfidence(
 
   // Telemetry parity with the ordinary per-iteration gate check: every evaluated
   // iteration is recorded, not just the ones that pause.
-  await deps.recordIterationConfidence(executionId, confidence);
-  if (confidence >= confidenceGateThreshold) return { status: 'proceed' };
+  const decision = await recordAndDecideConfidencePause(
+    { iteration: iterationIndex, confidence, belowThreshold: confidence < confidenceGateThreshold, pausable: true },
+    (c, options) => deps.recordIterationConfidence(executionId, c, options)
+  );
+  if (!decision.pause) return { status: 'proceed' };
 
   // Same 0-indexed wire convention as `settleGatedCall`'s `permission_request` emit.
   const wireIteration = Math.max(0, iterationIndex - 1);
-  const reason = `Iteration confidence ${(confidence * 100).toFixed(0)}% below threshold ${(confidenceGateThreshold * 100).toFixed(0)}%`;
+  const reason = formatConfidenceGateReason(confidence, confidenceGateThreshold, decision.lowConfidenceStreak);
   const gatePayload = { iteration: wireIteration, confidence, reason };
   deps.logger.info('[ConfidenceGate] Pausing execution for human review after a replayed approval', {
     executionId,
@@ -292,7 +301,11 @@ export async function resumeApprovedPauseAndGateConfidence<TCheckpoint>(
     // Reads and clears the replay's confidence score - must run AFTER `resumeApprovedPause`
     // resolves, never before, or it observes nothing.
     takeIterationConfidence: () => number | null;
-    recordIterationConfidence: (executionId: string, confidence: number) => Promise<void>;
+    recordIterationConfidence: (
+      executionId: string,
+      confidence: number,
+      options: { belowThreshold: boolean }
+    ) => Promise<number>;
     setPendingGate: (
       executionId: string,
       gate: { iteration: number; confidence: number; reason: string; requestedAt: Date }
@@ -481,16 +494,18 @@ export async function settleGatedCall(
 
   if (disposition === 'denied') {
     deps.logger.warn(`[Permission] Tool "${toolName}" is denied - failing execution`);
-    const deniedMessage = `Execution stopped: tool "${toolName}" is not permitted`;
+    const deniedMessage = `Execution stopped: tool "${toolName}" is not permitted.`;
     // `callerSafe`: this string names only a tool the caller already knows about, and
     // the public poll response is documented to name the gated tool - so it is
     // published verbatim rather than collapsed by the sanitizer.
     await deps.markFailed(executionId, { message: deniedMessage, callerSafe: true });
-    await deps.sendWs('failed', { executionId, reason: 'tool_denied', toolName });
+    // The same text the Quest persists below, so the client's prompt bubble does not
+    // change wording when the persisted Quest replaces it.
+    await deps.sendWs('failed', { executionId, reason: 'tool_denied', toolName, message: deniedMessage });
     // Settle the dispatch-time Quest so chat history shows the reason instead of a
     // permanently `pending` empty bubble - only `persistRunAsQuest` ever flips it to
     // `done`.
-    await deps.persistRunAsQuest(`${deniedMessage}.`);
+    await deps.persistRunAsQuest(deniedMessage);
     return 'denied';
   }
 

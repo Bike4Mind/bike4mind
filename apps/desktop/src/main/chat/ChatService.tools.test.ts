@@ -29,6 +29,9 @@ describe('ChatService tool loop', () => {
 
   /** `turnLimits` is how a test reaches a budget whose real values it could not afford to. */
   function build(turnLimits?: ChatServiceDeps['turnLimits']): ChatService {
+    // Bound to this test's sinks: a previous service replying late must not write into the next test's.
+    const emitted = events;
+    const boundPost = post;
     return new ChatService({
       store,
       models: {
@@ -48,10 +51,10 @@ describe('ChatService tool loop', () => {
       getApiClient: () =>
         ({
           get: vi.fn().mockResolvedValue({}),
-          getAxiosInstance: () => ({ post }),
+          getAxiosInstance: () => ({ post: boundPost }),
         }) as unknown as AuthenticatedApiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
-      emit: event => events.push(event),
+      emit: event => emitted.push(event),
     });
   }
 
@@ -70,11 +73,12 @@ describe('ChatService tool loop', () => {
 
     store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-loop-sessions-')), 'test-model');
     events = [];
-    streams = [];
+    const opened: PassThrough[] = [];
+    streams = opened;
     // A fresh stream per POST, so each turn of the loop has its own response.
     post = vi.fn().mockImplementation(() => {
       const stream = new PassThrough();
-      streams.push(stream);
+      opened.push(stream);
       return Promise.resolve({ data: stream, status: 200 });
     });
 

@@ -43,17 +43,18 @@ const SITES: { path: string; matches: number; note: string }[] = [
     note: 'Corpus defer gate. Deliberately STRICTER: an unlabeled file counts as unreachable',
   },
   {
-    path: 'apps/client/server/memory/lakeSourceReachability.ts',
+    path: 'packages/server-utils/src/memory/lakeSourceReachability.ts',
     matches: 1,
     note: 'isFabFileCitable. Deliberately STRICTER, same reason',
   },
   {
     path: 'packages/database/src/models/content/FabFileModel.ts',
-    matches: 2,
+    matches: 3,
     note:
-      'Atlas $vectorSearch filter clause (scoring exclusion) AND the self-host residency aggregate ' +
-      '(annResidentFabFileIds, which chunks were dispatched TO this model) - same filter shape, same ' +
-      'field, both would need to move together if the exact-match rule ever grew aliases',
+      'Atlas $vectorSearch filter clause (scoring exclusion), the keep-warm probe (warmVectorIndex, ' +
+      'which must page in the same filtered index pages the turn reads) AND the self-host residency ' +
+      'aggregate (annResidentFabFileIds, which chunks were dispatched TO this model) - same filter ' +
+      'shape, same field, all three would need to move together if the exact-match rule ever grew aliases',
   },
   {
     path: 'b4m-core/services/src/dataLakeService/openSearchChunkAdapter.ts',

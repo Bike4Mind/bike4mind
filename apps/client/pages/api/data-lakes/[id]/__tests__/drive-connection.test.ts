@@ -40,13 +40,13 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@server/utils/orgAccess', () => ({
   verifyOrgAccess: h.verifyOrgAccess,
   verifyOrgAdminRead: h.verifyOrgAdminRead,
 }));
-vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
-vi.mock('@server/utils/dlqRegistry', () => ({ getSourceQueueUrl: h.getSourceQueueUrl }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
+vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({ getSourceQueueUrl: h.getSourceQueueUrl }));
 vi.mock('@bike4mind/database', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/database')>();
   return {
@@ -69,8 +69,8 @@ vi.mock('@bike4mind/database', async importOriginal => {
     userRepository: { ...actual.userRepository, findById: h.userFindById },
   };
 });
-vi.mock('@server/integrations/google/drive/drivePollSchedule', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/integrations/google/drive/drivePollSchedule')>()),
+vi.mock('@bike4mind/server-utils/integrations/google/drive/drivePollSchedule', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/integrations/google/drive/drivePollSchedule')>()),
   isDriveLakePollScheduled: h.isDriveLakePollScheduled,
 }));
 vi.mock('@bike4mind/services', () => ({

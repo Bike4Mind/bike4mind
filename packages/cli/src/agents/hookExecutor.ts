@@ -16,6 +16,7 @@
 import type { HookDefinition, HookMatcher, HookResult } from './types.js';
 import { runShellCommand } from '../utils/shellRunner.js';
 import { requestShellCommandPermission, type ShellCommandPermissionDeps } from '../utils/commandPermission.js';
+import { sanitizeTerminalText } from '../utils/sanitizeTerminalText.js';
 
 /**
  * Context passed to hook scripts via stdin as JSON
@@ -86,7 +87,7 @@ async function executeCommandHook(
 
   // Spawn/execution error (exitCode is null)
   if (result.exitCode === null) {
-    console.warn(`Hook execution error: ${result.stderr}`);
+    console.warn(`Hook execution error: ${sanitizeTerminalText(result.stderr)}`);
     return { decision: 'allow' };
   }
 
@@ -95,7 +96,7 @@ async function executeCommandHook(
   }
 
   if (result.exitCode !== 0) {
-    console.warn(`Hook exited with code ${result.exitCode}: ${result.stderr.trim()}`);
+    console.warn(`Hook exited with code ${result.exitCode}: ${sanitizeTerminalText(result.stderr.trim())}`);
     return { decision: 'allow' };
   }
 

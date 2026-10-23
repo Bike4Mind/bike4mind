@@ -54,6 +54,61 @@
       }
     },
     {
+      "Name": "AWS-AWSManagedRulesAnonymousIpList",
+      "Priority": 1,
+      "Statement": {
+        "ManagedRuleGroupStatement": {
+          "VendorName": "AWS",
+          "Name": "AWSManagedRulesAnonymousIpList",
+          "RuleActionOverrides": [
+            {
+              "Name": "AnonymousIPList",
+              "ActionToUse": {
+                "Count": {}
+              }
+            },
+            {
+              "Name": "HostingProviderIPList",
+              "ActionToUse": {
+                "Count": {}
+              }
+            }
+          ],
+          "ScopeDownStatement": {
+            "ByteMatchStatement": {
+              "SearchString": "/api/otc/",
+              "FieldToMatch": {
+                "UriPath": {}
+              },
+              "TextTransformations": [
+                {
+                  "Priority": 0,
+                  "Type": "URL_DECODE"
+                },
+                {
+                  "Priority": 1,
+                  "Type": "NORMALIZE_PATH"
+                },
+                {
+                  "Priority": 2,
+                  "Type": "LOWERCASE"
+                }
+              ],
+              "PositionalConstraint": "STARTS_WITH"
+            }
+          }
+        }
+      },
+      "OverrideAction": {
+        "None": {}
+      },
+      "VisibilityConfig": {
+        "SampledRequestsEnabled": true,
+        "CloudWatchMetricsEnabled": true,
+        "MetricName": "AWS-AWSManagedRulesAnonymousIpList"
+      }
+    },
+    {
       "Name": "emergency-ip-block",
       "Priority": 2,
       "Statement": {

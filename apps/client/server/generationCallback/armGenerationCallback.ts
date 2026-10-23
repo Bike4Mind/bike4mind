@@ -2,9 +2,12 @@ import { questRepository, userApiKeyRepository } from '@bike4mind/database';
 import type { IQuestCallback } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import type { Request } from 'express';
-import { BadRequestError } from '@server/utils/errors';
-import { assertUrlAllowed, SsrfError } from '@server/utils/ssrfProtection';
-import { dispatchQuestCallback, getGenerationCallbackQueueUrl } from './dispatchQuestCallback';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { assertUrlAllowed, SsrfError } from '@bike4mind/server-utils/utils/ssrfProtection';
+import {
+  dispatchQuestCallback,
+  getGenerationCallbackQueueUrl,
+} from '@bike4mind/server-utils/generationCallback/dispatchQuestCallback';
 
 export type GenerationCallbackTarget = Pick<IQuestCallback, 'url' | 'apiKeyId'>;
 

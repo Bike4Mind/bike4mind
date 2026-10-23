@@ -5,7 +5,7 @@ import { BadRequestError } from '../errors';
 const mockGetFileContent = vi.fn();
 vi.mock('../fabfile', () => ({ getFileContent: (...a: unknown[]) => mockGetFileContent(...a) }));
 
-import { processFabFilesServer } from './utils';
+import { processFabFilesServer, ATTACHMENT_END_DELIMITER } from './utils';
 
 const CHARS_PER_TOKEN = 3.5;
 const MAX_FILE_SIZE = 6000;
@@ -101,6 +101,23 @@ describe('processFabFilesServer attached-content budget', () => {
     );
 
     expect(emittedChars(userMessages)).toBeLessThanOrEqual(budget * CHARS_PER_TOKEN + 4 * FRAMING_ALLOWANCE_PER_FILE);
+  });
+
+  it.each([1, 2])('closes %s raw file(s) that have no trailing newline', async fileCount => {
+    mockGetFileContent.mockResolvedValue('every 1,000 miles.');
+    const { userMessages } = await processFabFilesServer(
+      embeddingFactory,
+      Array.from({ length: fileCount }, (_, index) => textFile(String(index))),
+      'summarize',
+      4000,
+      modelInfo,
+      async () => {},
+      deps()
+    );
+    const content = userMessages.map(message => message.content).join('');
+    expect(content).toContain('every 1,000 miles.');
+    expect(content.endsWith(ATTACHMENT_END_DELIMITER)).toBe(true);
+    expect(content.split(ATTACHMENT_END_DELIMITER)).toHaveLength(2);
   });
 
   it('ignores images when splitting the text budget', async () => {
@@ -529,6 +546,46 @@ describe('processFabFilesServer file notices', () => {
     expect(fileNotices).toEqual([
       expect.objectContaining({ fabFileId: 'img', band: 'unsupported_backend', delivered: false }),
     ]);
+  });
+
+  it.each([
+    { id: 'us.amazon.nova-pro-v1:0' },
+    { id: 'vendor.catalog-only-vision', adapterFamily: 'bedrock-converse' as const },
+  ])('delivers image attachments to Converse model $id', async dispatch => {
+    const imageBytes = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1kAAAAASUVORK5CYII=',
+      'base64'
+    );
+    const storage = {
+      download: vi.fn().mockResolvedValue(imageBytes),
+      getSignedUrl: vi.fn().mockResolvedValue('https://signed'),
+    };
+    const visionModel = { ...dispatch, supportsVision: true, backend: 'bedrock' } as ModelInfo;
+    const dependencies = deps();
+    const { userMessages, fileNotices, deliveredFileIds } = await processFabFilesServer(
+      embeddingFactory,
+      [{ ...imageFile('img'), filePath: 'uploads/img.png', fileSize: imageBytes.length } as IFabFileDocument],
+      'describe this image',
+      4000,
+      visionModel,
+      async () => {},
+      {
+        ...dependencies,
+        storage: storage as unknown as typeof dependencies.storage,
+        db: {
+          ...dependencies.db,
+          caches: { findByKey: vi.fn(), createOrUpdate: vi.fn() },
+        },
+      }
+    );
+
+    expect(storage.download).toHaveBeenCalledWith('uploads/img.png');
+    expect(deliveredFileIds).toEqual(['img']);
+    expect(fileNotices).toEqual([]);
+    expect(userMessages.flatMap(message => (Array.isArray(message.content) ? message.content : []))).toContainEqual({
+      type: 'image',
+      source: { type: 'base64', media_type: 'image/png', data: imageBytes.toString('base64') },
+    });
   });
 
   it('leaves no input file both undelivered and unreported, whatever mix is attached', async () => {

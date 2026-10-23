@@ -23,7 +23,7 @@
 import { adminSettingsRepository, DataLakeModel, FabFile, scopedSettingsRepository } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import { Resource } from 'sst';
-import { sendToQueue } from '@server/utils/sqs';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import {
   buildFabFileChunkScanFilter,
   buildStrandedVectorizeScanFilter,

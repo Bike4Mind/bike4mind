@@ -11,11 +11,22 @@
  * that touch alarm/dashboard code).
  */
 
-import { modelDiscoveryCronEnabled, modelDiscoveryFunction, modelDiscoveryStalenessFunction } from './cron';
+import {
+  modelDiscoveryCronEnabled,
+  modelDiscoveryFunction,
+  modelDiscoveryStalenessFunction,
+  voiceHoldSweepCron,
+} from './cron';
 import { whatsNewGenerationQueueSubscription, webhookDeliveryQueueSubscription } from './queues';
 import { subscribeQueryRoute, unsubscribeQueryRoute } from './subscriberFanout';
 import { dlqAlarmTopic } from './dlqAlarms';
-import { isMonitoredStage as _isMonitoredStage, QUESTS_NAMESPACE, QUEST_METRICS } from '@bike4mind/infra';
+import {
+  isMonitoredStage as _isMonitoredStage,
+  QUESTS_NAMESPACE,
+  QUEST_METRICS,
+  VOICE_NAMESPACE,
+  VOICE_METRICS,
+} from '@bike4mind/infra';
 
 const MONITORED_STAGES = ['dev', 'production'] as const;
 const isMonitoredStage = _isMonitoredStage($app.stage, MONITORED_STAGES, process.env.ENABLE_MONITORING);
@@ -1116,7 +1127,7 @@ if (isMonitoredStage) {
    * noise (e.g. a browser tab closed mid-upload). Threshold 10 in one sample is a systemic
    * problem, not a one-off.
    *
-   * Metric emitted by: server/utils/cloudwatch.ts -> recordStuckBatchGauge, wired from
+   * Metric emitted by: packages/server-utils/src/utils/cloudwatch.ts -> recordStuckBatchGauge, wired from
    * apps/workers/src/cron/dataLakeBatchReconcile.ts's runStuckBatchSweep.
    * Namespace: Lumina5/DataLakeBatch / StuckBatches
    */
@@ -1159,7 +1170,7 @@ if (isMonitoredStage) {
    * reachable by ordinary use rather than by an unusual overlap. Until now nothing watched it, and
    * the only other trace was a logger.warn nothing alarms on.
    *
-   * Metric emitted by: server/utils/cloudwatch.ts -> recordTaxonomyTagsApplySkipped, wired from
+   * Metric emitted by: packages/server-utils/src/utils/cloudwatch.ts -> recordTaxonomyTagsApplySkipped, wired from
    * pages/api/data-lakes/batches/[batchId]/apply-taxonomy.ts.
    * Namespace: Lumina5/DataLakeBatch / TaxonomyTagsApplySkipped
    */
@@ -1299,6 +1310,72 @@ if (isMonitoredStage) {
   });
 
   /**
+   * Alarm: forced retrieval answering large lakes from a by-name cut
+   *
+   * A turn whose candidates were cut to the 100-file cap (the lake, plus the library when the turn
+   * includes it) publishes 1 (by-name cut) or 0 (relevance pick), so the Stage-only Average is
+   * the by-name share. A turn whose 1000-row listing overflowed but left <= 100 servable files
+   * publishes nothing. The share is Sum / SampleCount in metric math so a day with one turn, where
+   * a single cut reads as 100%, cannot fire: the alarm needs 2+ turns. Volume is low (about 16
+   * large-lake turns in 14 days on production), hence a daily period and a >50% bar, against a
+   * pre-fix rate of 7 of 16.
+   *
+   * relevance-unavailable cuts count too: EnableDataLakeVectorSearch off, Atlas vector search not
+   * available (self-host), or that setting failing to read. The first two fire on any day with
+   * 2+ large turns, which is a config to fix; a read failure is logged as a warn on the turn.
+   *
+   * Metric emitted by: b4m-core/services/src/llm/forcedRetrievalSelectionMetrics.ts ->
+   * recordForcedRetrievalCutMetrics.
+   * Namespace: Lumina5/DataLakeRetrieval / ForcedRetrievalByNameCut
+   * Alarms on the Stage-only dimension set; the second set adds an attribution dimension.
+   */
+  new aws.cloudwatch.MetricAlarm('forcedRetrievalByNameCut', {
+    name: `${$app.name}-${$app.stage}-forced-retrieval-by-name-cut`,
+    alarmDescription:
+      'Over half of a day of large-lake forced-retrieval turns (min 2) were cut by file name instead of relevance. Check the Reason series on the data-lake search dashboard: deadline points at the vector index, relevance-unavailable at the EnableDataLakeVectorSearch setting or Atlas vector search availability (or a warn that the setting could not be read)',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    threshold: 0.5,
+    metricQueries: [
+      {
+        id: 'byName',
+        returnData: false,
+        metric: {
+          metricName: 'ForcedRetrievalByNameCut',
+          namespace: 'Lumina5/DataLakeRetrieval',
+          period: 86400, // 1 day
+          stat: 'Sum',
+          dimensions: { Stage: $app.stage },
+        },
+      },
+      {
+        id: 'turns',
+        returnData: false,
+        metric: {
+          metricName: 'ForcedRetrievalByNameCut',
+          namespace: 'Lumina5/DataLakeRetrieval',
+          period: 86400, // 1 day
+          stat: 'SampleCount',
+          dimensions: { Stage: $app.stage },
+        },
+      },
+      {
+        id: 'rate',
+        returnData: true,
+        label: 'By-name share (min 2 turns)',
+        expression: 'IF(turns >= 2, byName / turns, 0)',
+      },
+    ],
+    // No emission means no large-lake turn ran, the usual state on most days.
+    treatMissingData: 'notBreaching',
+    alarmActions: [dlqAlarmTopic.arn],
+    tags: {
+      Application: 'DataLakeRetrieval',
+      Severity: 'Medium',
+    },
+  });
+
+  /**
    * Alarm: Data Lake un-chunked rescue sweep, failing enqueues
    *
    * Every failure here is a file that stayed un-chunked for another day: the sweep found it,
@@ -1318,7 +1395,7 @@ if (isMonitoredStage) {
    * readable off ChunkRescueRuns's `outcome` dimension instead of by inference from a silent
    * counter - alarming on the counter's absence would page every quiet day.
    *
-   * Metric emitted by: server/utils/cloudwatch.ts -> recordChunkRescueSweep, wired from
+   * Metric emitted by: packages/server-utils/src/utils/cloudwatch.ts -> recordChunkRescueSweep, wired from
    * apps/workers/src/cron/dataLakeBatchReconcile.ts's rescue sweep.
    * Namespace: Lumina5/DataLakeBatch / ChunkRescueFailures, dimension Stage=<this stage>. The
    * emitter writes both a stage-less and a `{ Stage }`-scoped stream (a dimensioned metric is a
@@ -1363,7 +1440,7 @@ if (isMonitoredStage) {
    * individualLogGroups, so its logger.error is neither Slacked nor alarmed, and the function has
    * no AWS/Lambda Errors alarm either - the throw is caught, so the invocation succeeds.
    *
-   * Metric emitted by: server/utils/cloudwatch.ts -> recordChunkRescueSweep, with the 'failed'
+   * Metric emitted by: packages/server-utils/src/utils/cloudwatch.ts -> recordChunkRescueSweep, with the 'failed'
    * outcome supplied by apps/workers/src/cron/dataLakeBatchReconcile.ts's catch.
    * Namespace: Lumina5/DataLakeBatch / ChunkRescueRuns, dimensions outcome=failed + Stage=<this
    * stage>. Unlike the stage rollups elsewhere in this file, the scoped Runs stream keeps
@@ -1407,7 +1484,7 @@ if (isMonitoredStage) {
    * Routed to the shared dlqAlarmTopic (not a dedicated topic) to reuse its existing
    * Slack-forwarding subscription rather than duplicating that wiring for a single alarm.
    *
-   * Metric emitted by: server/utils/cloudwatch.ts -> recordFeedbackDeliveryFailure, wired
+   * Metric emitted by: packages/server-utils/src/utils/cloudwatch.ts -> recordFeedbackDeliveryFailure, wired
    * from server/integrations/slack/slack.ts's postFeedbackToSlack and
    * pages/api/feedback/index.ts's email path.
    * Namespace: Lumina5/FeedbackDelivery / DeliveryFailed. Reads the coarse `{ Stage }`-only
@@ -1446,7 +1523,7 @@ if (isMonitoredStage) {
    * 'nonprod_unconfigured') do not emit the rollup this reads - see
    * buildFeedbackDeliverySkippedMetrics - so this alarm never pages for a setting an admin chose.
    *
-   * Metric emitted by: server/utils/cloudwatch.ts -> recordFeedbackDeliverySkipped, wired from
+   * Metric emitted by: packages/server-utils/src/utils/cloudwatch.ts -> recordFeedbackDeliverySkipped, wired from
    * the same two call sites as feedbackDeliveryFailures above.
    * Namespace: Lumina5/FeedbackDelivery / DeliverySkipped, Stage-scoped identically.
    */
@@ -1595,26 +1672,120 @@ if (isMonitoredStage) {
   });
 
   /**
-   * Alarm: Session Reuse Revoked
+   * Alarm: Stale voice credit hold settled by the sweep
    *
-   * Fires on any occurrence of a refresh token being presented after its rotation window,
-   * which causes the session to be revoked. Each event is a presumed token theft: both
-   * the legitimate user and any attacker are logged out. Any single occurrence warrants
-   * investigation.
+   * The stale-hold sweep settled a voice hold no client ever ended. Steady state is 0: a
+   * non-zero count means the client hold leak is back. A single genuine browser crash can also
+   * trip it, hence Medium.
+   *
+   * Metric emitted by: apps/workers/src/cron/voiceHoldSweep.ts -> handler.
+   * Namespace: VOICE_NAMESPACE, dimensioned by Stage only (the handler emits { Stage }).
+   */
+  new aws.cloudwatch.MetricAlarm('voiceStaleHoldsSettled', {
+    name: `${$app.name}-${$app.stage}-voice-stale-holds-settled`,
+    alarmDescription:
+      'The stale voice hold sweep settled a credit hold no client ended: the voice hold leak may be back',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: VOICE_METRICS.HoldSweepSettled,
+    namespace: VOICE_NAMESPACE,
+    period: 300, // 5 minutes, one sweep run
+    statistic: 'Sum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    dimensions: { Stage: $app.stage },
+    alarmActions: [dlqAlarmTopic.arn],
+    tags: {
+      Application: 'Voice',
+      Severity: 'Medium',
+    },
+  });
+
+  /**
+   * Alarm: Stale voice hold sweep cannot settle a hold
+   *
+   * A hold's settlement threw, or the whole run did (database unreachable, query error). The hold
+   * stays charged and the next run retries it, so failures in two of three runs are a stuck
+   * sweep, not a blip. Two of three rather than three in a row: a period with no run reads as
+   * not breaching and would reset the streak.
+   *
+   * Metric emitted by: apps/workers/src/cron/voiceHoldSweep.ts -> handler.
+   */
+  new aws.cloudwatch.MetricAlarm('voiceHoldSweepFailures', {
+    name: `${$app.name}-${$app.stage}-voice-hold-sweep-failures`,
+    alarmDescription: 'The stale voice hold sweep is failing to settle credit holds',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 3,
+    datapointsToAlarm: 2,
+    metricName: VOICE_METRICS.HoldSweepFailed,
+    namespace: VOICE_NAMESPACE,
+    period: 300, // 5 minutes
+    statistic: 'Sum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    dimensions: { Stage: $app.stage },
+    alarmActions: [dlqAlarmTopic.arn],
+    tags: {
+      Application: 'Voice',
+      Severity: 'High',
+    },
+  });
+
+  /**
+   * Alarm: Stale voice hold sweep Lambda errors
+   *
+   * A timeout, OOM or init crash never reaches the handler's emit, so it shows up here and nowhere
+   * else. A run that throws also counts in voiceHoldSweepFailures. Same 2-of-3 rule as that alarm.
+   */
+  // The sweep cron only exists on scheduled stages; an ENABLE_MONITORING preview has no Lambda to watch.
+  if (voiceHoldSweepCron) {
+    new aws.cloudwatch.MetricAlarm('voiceHoldSweepLambdaErrors', {
+      name: `${$app.name}-${$app.stage}-voice-hold-sweep-lambda-errors`,
+      alarmDescription: 'The stale voice hold sweep Lambda is erroring (timeout, OOM or crash)',
+      comparisonOperator: 'GreaterThanThreshold',
+      evaluationPeriods: 3,
+      datapointsToAlarm: 2,
+      metricName: 'Errors',
+      namespace: 'AWS/Lambda',
+      period: 300,
+      statistic: 'Sum',
+      threshold: 0,
+      treatMissingData: 'notBreaching',
+      dimensions: { FunctionName: voiceHoldSweepCron.nodes.function.name },
+      alarmActions: [dlqAlarmTopic.arn],
+      tags: {
+        Application: 'Voice',
+        Severity: 'High',
+      },
+    });
+  }
+
+  /**
+   * Alarm: Session Reuse Revoked Burst
+   *
+   * Fires when 3 or more sessions are revoked for refresh-token reuse within an hour. A single
+   * revocation is already contained by the revoke itself (whoever holds the stale token is signed
+   * out), and on production most single events have been benign: a second client on the user's
+   * own network holding a stale cookie, at a baseline of roughly one every three days. A burst is
+   * the signal worth a page - a client regression stranding tokens at scale, or tokens taken in
+   * bulk. Individual events stay queryable without paging: the metric, the
+   * `[auth] session_reuse_revoked` log line (user, request IP vs issuing IP, user agent, idle time)
+   * and the UserAuthAuditLog row.
    *
    * Metric emitted by: server/utils/authAudit.ts -> recordSessionReuseRevoked()
    * Namespace: Lumina5/AuthSecurity / SessionReuseRevoked
    */
-  new aws.cloudwatch.MetricAlarm('sessionReuseRevoked', {
-    name: `${$app.name}-${$app.stage}-session-reuse-revoked`,
-    alarmDescription: 'Refresh token reuse detected outside recovery window - presumed token theft; session revoked',
-    comparisonOperator: 'GreaterThanThreshold',
+  new aws.cloudwatch.MetricAlarm('sessionReuseRevokedBurst', {
+    name: `${$app.name}-${$app.stage}-session-reuse-revoked-burst`,
+    alarmDescription:
+      'Burst of refresh-token reuse revocations (>=3 in 1h) - possible bulk token theft or a client regression stranding tokens',
+    comparisonOperator: 'GreaterThanOrEqualToThreshold',
     evaluationPeriods: 1,
     metricName: 'SessionReuseRevoked',
     namespace: 'Lumina5/AuthSecurity',
-    period: 300, // 5 minutes
+    period: 3600, // 1 hour
     statistic: 'Sum',
-    threshold: 0, // Any occurrence is worth investigating
+    threshold: 3,
     treatMissingData: 'notBreaching',
     alarmActions: [dlqAlarmTopic.arn],
     tags: {

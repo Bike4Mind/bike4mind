@@ -46,25 +46,25 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@server/utils/orgAccess', () => ({ verifyOrgAccess: h.verifyOrgAccess }));
 // common.ts reads Config at import, so importOriginal crashes here: take the real predicate from its own module.
 vi.mock('@server/integrations/google/drive/common', async () => ({
   getValidUserDriveAccessToken: h.getValidUserDriveAccessToken,
   isTerminalDriveGrantError: (
-    await vi.importActual<typeof import('@server/integrations/google/drive/driveGrantErrors')>(
-      '@server/integrations/google/drive/driveGrantErrors'
+    await vi.importActual<typeof import('@bike4mind/server-utils/integrations/google/drive/driveGrantErrors')>(
+      '@bike4mind/server-utils/integrations/google/drive/driveGrantErrors'
     )
   ).isTerminalDriveGrantError,
 }));
 // Keep isValidDriveFolderId real; mock only the Drive network calls.
-vi.mock('@server/integrations/google/drive/driveClient', async importOriginal => {
-  const actual = await importOriginal<typeof import('@server/integrations/google/drive/driveClient')>();
+vi.mock('@bike4mind/server-utils/integrations/google/drive/driveClient', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/server-utils/integrations/google/drive/driveClient')>();
   return { ...actual, createDriveClient: h.createDriveClient, getFolderAccess: h.getFolderAccess };
 });
 vi.mock('@server/security/tokenEncryption', () => ({ decryptToken: () => 'plaintext-refresh-token' }));
-vi.mock('@server/security/secretEncryption', () => ({ isEncrypted: () => true }));
-vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
+vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({ isEncrypted: () => true }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('sst', () => ({
   Resource: {
     get driveLakeIngestQueue() {

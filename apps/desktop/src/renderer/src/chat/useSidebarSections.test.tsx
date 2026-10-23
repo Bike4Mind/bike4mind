@@ -81,4 +81,25 @@ describe('useSidebarSections', () => {
     expect(latest?.error).toBeNull();
     expect(latest?.sections).toEqual(renamed);
   });
+
+  it('clears a previous failure when main hands back the state for a new session', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    await mount(() => Promise.reject(new Error('disk full')));
+
+    await act(async () => latest?.actions.rename('a', 'Day job'));
+    expect(latest?.error).not.toBeNull();
+
+    act(() => latest?.adopt(renamed));
+
+    expect(latest?.sections).toEqual(renamed);
+    expect(latest?.error).toBeNull();
+  });
+
+  it('reports a placement main could not save', async () => {
+    await mount(() => Promise.resolve(renamed));
+
+    act(() => latest?.placementFailed());
+
+    expect(latest?.error).toBe('Could not put the new session in its section.');
+  });
 });

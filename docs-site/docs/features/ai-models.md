@@ -11,6 +11,12 @@ Bike4Mind supports a wide range of state-of-the-art AI models for text generatio
 
 > **Model Availability:** Model availability is managed at the organizational level by your administrator. If you don't see a model or provider listed below in your model selector, it may be disabled for your organization or restricted to certain user roles. Contact your organization administrator to request access to additional models or providers.
 
+## Choosing a model
+
+Each provider lists current models first. Expand **Older models** at the bottom of a provider group to select a superseded model. Search includes older models even when their group is collapsed, and clearing the search restores the group's previous state.
+
+If your session or agent already uses an older model, its selected card stays visible without expanding the group. Older models also remain available in your Favorites and Recommended sections. Models that are no longer available are still hidden.
+
 ## Supported Text Models
 
 Bike4Mind offers 60+ AI models. The lists below cover everything currently offered; your model picker shows exactly what is enabled for your organization.
@@ -69,6 +75,34 @@ Anthropic models are available via both the Anthropic API and AWS Bedrock. Your 
 
 If your organization has Ollama configured, you can access any locally-hosted models installed on your organization's Ollama instance. Requests go only to that instance, never to an external provider.
 
+#### Desktop: turn local thinking on or off
+
+In Desktop, select a server-exposed Ollama model that supports thinking. The conversation's
+reasoning picker shows **Thinking: On** or **Thinking: Off** instead of effort levels. Open it
+and choose **On** to request reasoning before the answer, or **Off** to request an answer
+without thinking.
+
+The choice is saved per conversation. With the default Desktop configuration, a new
+conversation starts with thinking **On**. The same saved setting is reused when you switch
+models: choosing local **Off** saves **Minimal**, and choosing local **On** saves **Default**.
+Those values appear as effort levels on a hosted model that supports reasoning effort. Other
+saved effort levels, such as **High**, display as local **On** and remain unchanged until you
+choose a setting. Check the picker after switching models if you want a different effort level.
+
+Desktop uses the model catalog from your connected Bike4Mind server. Installing Ollama on
+your computer alone does not add models to Desktop. Your server must expose the Ollama model
+and report both tool support and thinking support for it. If the switch is missing, ask your
+administrator to check the catalog's Ollama backend and `can_think` capability; Desktop does
+not infer thinking support from the model name. Models without tool support do not appear in
+the Desktop picker.
+
+Your server must also support translating the thinking choice to Ollama's `think` flag,
+including explicitly sending `think: false` when thinking is off. An older server that leaves
+the flag unset can let Ollama continue thinking even after you select **Off**. If that happens,
+ask your administrator to update the server. For server setup, see the
+[self-hosting guide](../self-host/index.md); the CLI's
+[direct Ollama connection](../cli/local-models.md) is a separate setup.
+
 ### Retiring Soon
 
 These models are being retired by their providers. Move saved notebooks, agents, and API calls to a current model before the date shown.
@@ -120,8 +154,6 @@ Controls response length:
 - Context-aware limits to prevent overflow
 - Model-specific maximums respected
 
-Gemini thinking models run at Google's default output limit, so this setting does not apply to them.
-
 ### Advanced Settings
 
 #### Streaming
@@ -136,7 +168,7 @@ Gemini thinking models run at Google's default output limit, so this setting doe
 
 #### Thinking Models
 - Explicit reasoning steps before responding
-- Configurable token budget
+- Token budget configurable for Anthropic and OpenAI models; Gemini uses a fixed thinking reserve
 - Available for models flagged with thinking support, including o3, recent GPT models, the Claude Opus, Sonnet, Haiku, and Fable families, and the Gemini 3.x models
 
 ## Model Selection Best Practices

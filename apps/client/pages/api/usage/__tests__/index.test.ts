@@ -34,9 +34,9 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
-const mockVerifyOrgAccess = vi.fn();
+const mockVerifyOrgOwner = vi.fn();
 vi.mock('@server/utils/orgAccess', () => ({
-  verifyOrgAccess: (...a: unknown[]) => mockVerifyOrgAccess(...a),
+  verifyOrgOwner: (...a: unknown[]) => mockVerifyOrgOwner(...a),
 }));
 
 vi.mock('@server/utils/resolveUserNames', () => ({
@@ -74,7 +74,7 @@ const emptySummary = {
 describe('GET /api/usage - access', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockVerifyOrgAccess.mockResolvedValue({ id: ORG });
+    mockVerifyOrgOwner.mockResolvedValue({ id: ORG });
     mockOwnerUsageSummary.mockResolvedValue(emptySummary);
     mockApiKeyUsageForOwner.mockResolvedValue([]);
     mockSourceUsageForOwner.mockResolvedValue([]);
@@ -95,14 +95,14 @@ describe('GET /api/usage - access', () => {
   });
 
   describe('Organization owner', () => {
-    it('gates access through verifyOrgAccess for the requested org', async () => {
+    it('gates access through verifyOrgOwner for the requested org', async () => {
       const { run } = call({ isAdmin: false });
       await run();
-      expect(mockVerifyOrgAccess).toHaveBeenCalledWith({ id: SELF, isAdmin: false }, ORG);
+      expect(mockVerifyOrgOwner).toHaveBeenCalledWith({ id: SELF, isAdmin: false }, ORG);
     });
 
-    it('propagates verifyOrgAccess denial and never queries usage', async () => {
-      mockVerifyOrgAccess.mockRejectedValue(new NotFoundError('Organization not found'));
+    it('propagates verifyOrgOwner denial and never queries usage', async () => {
+      mockVerifyOrgOwner.mockRejectedValue(new NotFoundError('Organization not found'));
       const { run } = call({ isAdmin: false });
       await expect(run()).rejects.toThrow(/not found/i);
       expect(mockOwnerUsageSummary).not.toHaveBeenCalled();
@@ -132,7 +132,7 @@ describe('GET /api/usage - access', () => {
     it('lets a user read their own usage without org access', async () => {
       const { res, run } = call({ isAdmin: false, query: { ownerType: 'User', ownerId: SELF } });
       await run();
-      expect(mockVerifyOrgAccess).not.toHaveBeenCalled();
+      expect(mockVerifyOrgOwner).not.toHaveBeenCalled();
       expect(mockOwnerUsageSummary).toHaveBeenCalledWith(SELF, 'User', 30);
       expect(mockFindByUserId).toHaveBeenCalledWith(SELF);
       expect(res._getJSONData().ownerType).toBe('User');

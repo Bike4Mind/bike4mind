@@ -77,6 +77,11 @@ describe('buildOpenApiDocument', () => {
     expect(tools.responses['500'].content['application/json'].schema).toEqual(ref('executeToolResponse500'));
   });
 
+  it('publishes the completions message minimum from the shared request schema', () => {
+    const requestSchema = doc.components.schemas.createCompletionRequest;
+    expect(requestSchema.properties.messages.minItems).toBe(1);
+  });
+
   it('provides request AND response examples for both operations', () => {
     expect(doc.components.schemas.createCompletionRequest.example).toBeDefined();
     expect(doc.components.schemas.createCompletionResponse200.example).toBeDefined();
@@ -130,11 +135,14 @@ describe('buildOpenApiDocument', () => {
     const json = (status: string) => completions.responses[status].content['application/json'].schema;
     expect(json('400')).toEqual(ref('createCompletionResponse400'));
     expect(doc.components.schemas.createCompletionResponse400.properties.errorCode.enum).toEqual([
+      'invalid_request',
       'unknown_model',
       'tool_search_unsupported',
       'all_tools_deferred',
       'deferred_tool_cache_control',
       'unknown_tool_reference',
+      'tool_changes_unsupported',
+      'invalid_tool_change',
     ]);
     expect(json('413')).toEqual(ref('ErrorResponse'));
     expect(json('422')).toEqual(ref('createCompletionResponse422'));

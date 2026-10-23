@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { CREDITS_PER_USD_COST } from '../pricing';
+import { CREDITS_PER_USD_COST, formatUsdPerCredit, MIN_PRICE_PER_CREDIT_USD } from '../pricing';
 import { CustomMcpPrivateCidrSchema, McpHostPatternListSchema } from './customMcpHosts';
 import {
   DEFAULT_PASSAGE_TOKEN_TARGET,
@@ -38,6 +38,10 @@ import {
   KB_SEARCH_RESULT_TOKEN_BUDGET_DEFAULT,
 } from '../constants/knowledgeBaseSearch';
 import { BULK_CHANGE_SHARE_PCT_DEFAULT } from '../constants/lakeConvergence';
+import {
+  ADMIN_AUDIT_DEFAULT_CRITICAL_GRANT_CREDITS,
+  ADMIN_AUDIT_DEFAULT_DAILY_GRANT_CREDITS,
+} from '../types/entities/adminAuditCatalogue';
 import {
   ORGANIZATION_SUBSCRIPTION_CREDITS_PER_SEAT,
   ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
@@ -157,8 +161,11 @@ If the full deliverable genuinely will not fit, do NOT stub the difference. REDU
  * public "Help Center" data lake, so when the knowledge-base search tool is available the model
  * can GROUND its answer in the real docs; the prompt still forbids inventing UI paths it can't
  * verify (relevant when that tool isn't enabled for the session).
+ *
+ * Ships in open-core builds too, so it names only host surfaces, never an overlay feature. A quoted
+ * name in a sentence about the sidebar must be a real sidenav row: SidenavNav.test.tsx enforces it.
  */
-export const HELP_CENTER_PROMPT = `HELP CENTER: Bike4Mind has a built-in Help Center that documents how to use the app. Users reach it from the "Help Center" item in the left sidebar, the help (?) icons beside feature titles, or the ? keyboard shortcut. When the user is clearly asking how to DO something in Bike4Mind itself (navigation, settings, files, the data lake, OptiHashi, agents, projects, sharing, billing, etc.) — as opposed to asking you to perform a task — give a brief, helpful answer and point them to the Help Center for full, up-to-date steps. If a knowledge-base/help search tool is available, use it to ground your answer in the actual help docs first. Do NOT invent menu paths, button names, or features you are not sure exist; if unsure, say so and direct them to the Help Center rather than guessing.`;
+export const HELP_CENTER_PROMPT = `HELP CENTER: Bike4Mind has a built-in Help Center that documents how to use the app. Users reach it from the Help Center button on the "Gears" page (open "Gears" in the left sidebar), the help (?) icons beside feature titles, or the ? keyboard shortcut. When the user is clearly asking how to DO something in Bike4Mind itself (navigation, settings, files, the data lake, agents, projects, sharing, billing, etc.) - as opposed to asking you to perform a task - give a brief, helpful answer and point them to the Help Center for full, up-to-date steps. If a knowledge-base/help search tool is available, use it to ground your answer in the actual help docs first. Do NOT invent menu paths, button names, or features you are not sure exist; if unsure, say so and direct them to the Help Center rather than guessing.`;
 
 /**
  * Default text for the abstention licence. Single source of truth used BOTH as the
@@ -341,6 +348,7 @@ export const SettingKeySchema = z.enum([
   'BedrockGuardrailId',
   'BedrockGuardrailVersion',
   'ImageModerationEnabled',
+  'ImageModerationReviewerEmails',
   'tagLineMain',
   'tagLineSub',
   'defaultTags',
@@ -369,6 +377,7 @@ export const SettingKeySchema = z.enum([
   'serverStatus',
   'defaultSeats',
   'CSMandCTAFlag',
+  'showDesktopAppPromo',
   'SystemFiles',
   'OpenWeatherKey',
   'SerperKey',
@@ -384,6 +393,9 @@ export const SettingKeySchema = z.enum([
   'MaxActiveDungeons',
   'DungeonSpawnIntervalHeartbeats',
   'DungeonTTLMinutes',
+  'EnableStudioCreateV2',
+  'EnableStudioImage',
+  'EnableStudioProductions',
   'VectorThreshold',
   'bflApiKey',
   'EnableMCPServer',
@@ -415,18 +427,13 @@ export const SettingKeySchema = z.enum([
   'enableTeamPlan',
   'allowOpenRegistration',
   'blockDisposableEmails',
+  'blockedEmailDomains',
   'defaultFreeCredits',
   'teamPlanMinSeats',
   'teamPlanMaxSeats',
   'teamPlanCreditsPerSeat',
   'lowCreditsThreshold',
   'syntheticUserEmailDomains',
-
-  // GOOGLE CALENDAR SETTINGS
-  'enableGoogleCalendar',
-  'googleCalendarServiceAccountEmail',
-  'googleCalendarServiceAccountSecret',
-  'googleCalendarOrganizerEmail',
 
   // WEATHER SERVICE SETTINGS
   'EnableWeatherService',
@@ -488,6 +495,11 @@ export const SettingKeySchema = z.enum([
   'SlackFeedbackWebhookUrl',
   'SlackNonProdFeedbackWebhookUrl',
   'SlackEmailAuditWebhookUrl',
+  'SlackSecurityAlertsWebhookUrl',
+
+  // Admin Audit Log alerting
+  'AdminAuditCriticalGrantCredits',
+  'AdminAuditDailyGrantCredits',
 
   // Slack Analytics Bot (existing production bot - DO NOT CHANGE)
   'slackSigningSecret',
@@ -755,7 +767,6 @@ export const CategoryOrder = [
   'Communications',
   'Slack',
   'Tools',
-  'Calendar',
 ] as const;
 
 export type Category = (typeof CategoryOrder)[number];
@@ -799,7 +810,7 @@ export const SETTING_TABS = {
     id: 'externalIntegrations',
     name: 'External Integrations',
     description: 'Configure external service integrations',
-    categories: ['Tools', 'Calendar', 'Slack'] as Category[],
+    categories: ['Tools', 'Slack'] as Category[],
     icon: 'Extension', // Puzzle piece icon
   },
   FEATURES: {
@@ -1064,16 +1075,22 @@ function makeNumberSetting(config: { defaultValue?: number; min?: number; max?: 
   };
 }
 
-function makeBooleanSetting(config: { defaultValue?: boolean } & BaseSetting) {
+function makeBooleanSetting({
+  acceptNumeric = false,
+  ...config
+}: { defaultValue?: boolean; acceptNumeric?: boolean } & BaseSetting) {
   return {
     ...config,
     type: 'boolean' as const,
     schema: z
       .preprocess(val => {
         if (typeof val === 'string') {
-          if (val.toLowerCase() === 'true') return true;
-          if (val.toLowerCase() === 'false') return false;
+          if (val.toLowerCase() === 'true' || (acceptNumeric && val === '1')) return true;
+          if (val.toLowerCase() === 'false' || (acceptNumeric && val === '0')) return false;
         }
+        // Numeric compatibility is opt-in so existing billing and security defaults cannot flip.
+        if (acceptNumeric && val === 1) return true;
+        if (acceptNumeric && val === 0) return false;
         return val;
       }, z.boolean())
       .prefault(config.defaultValue ?? false),
@@ -1947,18 +1964,6 @@ export const API_SERVICE_GROUPS = {
       { key: 'PotionQuestApiKey', order: 6 },
     ],
   },
-  CALENDAR: {
-    id: 'calendarAPIService',
-    name: 'Google Calendar',
-    description: 'Google Calendar integration settings',
-    icon: 'CalendarMonth',
-    settings: [
-      { key: 'enableGoogleCalendar', order: 1 },
-      { key: 'googleCalendarServiceAccountEmail', order: 2 },
-      { key: 'googleCalendarServiceAccountSecret', order: 3 },
-      { key: 'googleCalendarOrganizerEmail', order: 4 },
-    ],
-  },
   FEEDBACK: {
     id: 'feedbackService',
     name: 'Feedback System',
@@ -2052,6 +2057,10 @@ export const API_SERVICE_GROUPS = {
       { key: 'MaxActiveDungeons', order: 291 },
       { key: 'DungeonSpawnIntervalHeartbeats', order: 292 },
       { key: 'DungeonTTLMinutes', order: 293 },
+      // Studio rebuild, admin-only until the reveal (see studioFeatureFlags.ts)
+      { key: 'EnableStudioCreateV2', order: 300 },
+      { key: 'EnableStudioImage', order: 301 },
+      { key: 'EnableStudioProductions', order: 302 },
     ],
   },
   NOTEBOOK: {
@@ -2072,7 +2081,6 @@ export const API_SERVICE_GROUPS = {
       { key: 'CSMandCTAFlag', order: 3 },
       { key: 'defaultSeats', order: 4 },
       { key: 'defaultTags', order: 5 },
-      { key: 'enforceCredits', order: 6 },
     ],
   },
   CREDITS: {
@@ -2080,15 +2088,13 @@ export const API_SERVICE_GROUPS = {
     name: 'Credits System',
     description: 'Credit system and pricing configuration',
     icon: 'Payments',
+    // Signup, starter-credit, pricing and team-plan keys are edited only on the admin Growth and
+    // Pricing tab (AdminGrowthPricingTab); this group links there instead of repeating them.
     settings: [
-      { key: 'pricePerCredit', order: 1 },
-      { key: 'enforceCredits', order: 2 },
-      { key: 'billOperationalUsage', order: 3 },
-      { key: 'enableTeamPlan', order: 4 },
-      { key: 'teamPlanMinSeats', order: 5 },
-      { key: 'teamPlanMaxSeats', order: 6 },
-      { key: 'teamPlanCreditsPerSeat', order: 7 },
-      { key: 'lowCreditsThreshold', order: 8 },
+      { key: 'billOperationalUsage', order: 1 },
+      { key: 'blockDisposableEmails', order: 2 },
+      { key: 'blockedEmailDomains', order: 3 },
+      { key: 'syntheticUserEmailDomains', order: 4 },
     ],
   },
   KNOWLEDGE: {
@@ -2127,6 +2133,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'InstagramLink', order: 6 },
       { key: 'YoutubeLink', order: 7 },
       { key: 'RedditLink', order: 8 },
+      { key: 'showDesktopAppPromo', order: 9 },
     ],
   },
   ADMIN: {
@@ -2865,6 +2872,18 @@ export const settingsMap = {
       'Whether to run generated images through content moderation (Rekognition) and block explicit content. Legal-safety control (#9776) — default ON.',
     category: 'AI Moderation',
   }),
+  ImageModerationReviewerEmails: makeObjectSetting<string[]>({
+    key: 'ImageModerationReviewerEmails',
+    name: 'Image Moderation Reviewer Emails',
+    defaultValue: [],
+    description:
+      'Email addresses alerted when an image moderation incident needs review, one per line. The alert carries incident metadata and an admin link only, never the image or user content. Empty sends no alert.',
+    category: 'AI Moderation',
+    // Plain strings, not z.email(): one malformed stored entry must not fail the whole list and
+    // silence every reviewer. The update route refuses invalid entries; readers filter with
+    // partitionEmailList.
+    schema: z.array(z.string()),
+  }),
   SkillMarketHighRiskTools: makeStringSetting({
     key: 'SkillMarketHighRiskTools',
     name: 'Skill Market High-Risk Tools',
@@ -2878,7 +2897,7 @@ export const settingsMap = {
     name: 'Skill Market URL Allowlist',
     defaultValue: '',
     description:
-      'Comma-separated host names a Skill Market skill may reference without a finding (subdomains included). Any other URL holds a Public listing for review.',
+      'Comma-separated host names a Skill Market skill may reference without a finding (subdomains included). Any other URL holds a listing for review at every visibility.',
     category: 'AI Moderation',
   }),
   SkillMarketClassifierMinConfidence: makeNumberSetting({
@@ -3020,10 +3039,8 @@ export const settingsMap = {
     userReadable: true,
     name: 'Price Per Credit',
     defaultValue: 50,
-    description: 'The price per credit for purchasing credits.',
+    description: `The price in USD of one credit bought pay-as-you-go. Cannot be set below ${formatUsdPerCredit(MIN_PRICE_PER_CREDIT_USD)}, the per-credit sale price including markup.`,
     category: 'Users',
-    group: API_SERVICE_GROUPS.CREDITS.id,
-    order: 1,
   }),
   // Per-user request rate limits for /chat and /opti, keyed by the caller's
   // subscription tier. Admins and developer-tagged users bypass these.
@@ -3242,6 +3259,35 @@ export const settingsMap = {
     order: 8,
     isSensitive: true,
   }),
+  SlackSecurityAlertsWebhookUrl: makeStringSetting({
+    key: 'SlackSecurityAlertsWebhookUrl',
+    name: 'Security Alerts Channel Webhook URL',
+    defaultValue: '',
+    description:
+      'Incoming-webhook URL for the security Slack channel that receives critical Admin Audit Log entries and credit-grant bursts. Leave empty to turn alerts off; the Audit Log page then shows a banner. It never falls back to the default webhook.',
+    category: 'SecOps',
+    isSensitive: true,
+  }),
+  AdminAuditCriticalGrantCredits: makeNumberSetting({
+    key: 'AdminAuditCriticalGrantCredits',
+    name: 'Critical Single Credit Grant',
+    defaultValue: ADMIN_AUDIT_DEFAULT_CRITICAL_GRANT_CREDITS,
+    min: 1,
+    int: true,
+    description:
+      'An admin credit grant above this many credits is recorded as critical in the Admin Audit Log and alerts the security channel.',
+    category: 'SecOps',
+  }),
+  AdminAuditDailyGrantCredits: makeNumberSetting({
+    key: 'AdminAuditDailyGrantCredits',
+    name: 'Critical Daily Credit Grants per Admin',
+    defaultValue: ADMIN_AUDIT_DEFAULT_DAILY_GRANT_CREDITS,
+    min: 1,
+    int: true,
+    description:
+      'A grant that takes one admin past this many credits granted in the last 24 hours is recorded as critical in the Admin Audit Log and alerts the security channel.',
+    category: 'SecOps',
+  }),
   liveFeedbackEmail: makeStringSetting({
     key: 'liveFeedbackEmail',
     name: 'Live Feedback Email',
@@ -3383,45 +3429,6 @@ export const settingsMap = {
     description: 'The default number of seats for new organizations.',
     category: 'Users',
   }),
-  enableGoogleCalendar: makeBooleanSetting({
-    key: 'enableGoogleCalendar',
-    name: 'Enable Google Calendar Integration',
-    defaultValue: false,
-    description: 'Whether to enable scheduling of briefing/advisory using google calendar',
-    category: 'Calendar',
-    group: API_SERVICE_GROUPS.CALENDAR.id,
-    order: 1,
-    // The Integrations page derives the Google Calendar card's status from it.
-    userReadable: true,
-  }),
-  googleCalendarServiceAccountEmail: makeStringSetting({
-    key: 'googleCalendarServiceAccountEmail',
-    name: 'Service Account Email',
-    defaultValue: '',
-    description: 'The service account email address that has access to google calendar API.',
-    category: 'Calendar',
-    group: API_SERVICE_GROUPS.CALENDAR.id,
-    order: 2,
-  }),
-  googleCalendarServiceAccountSecret: makeStringSetting({
-    key: 'googleCalendarServiceAccountSecret',
-    name: 'Service Account Secret',
-    defaultValue: '',
-    description: 'The base64 encoded service account secret that is associated with the service account email.',
-    category: 'Calendar',
-    group: API_SERVICE_GROUPS.CALENDAR.id,
-    order: 3,
-    isSensitive: true,
-  }),
-  googleCalendarOrganizerEmail: makeStringSetting({
-    key: 'googleCalendarOrganizerEmail',
-    name: 'Organizer Email',
-    defaultValue: '',
-    description: 'The organizer email for creating events.',
-    category: 'Calendar',
-    group: API_SERVICE_GROUPS.CALENDAR.id,
-    order: 4,
-  }),
   enforceCredits: makeBooleanSetting({
     key: 'enforceCredits',
     userReadable: true,
@@ -3432,7 +3439,6 @@ export const settingsMap = {
     // client and server resolve the same default.
     defaultValue: process.env.B4M_SELF_HOST === 'true' ? false : true,
     description: 'Whether to enforce credits for users',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   billOperationalUsage: makeBooleanSetting({
@@ -3448,12 +3454,12 @@ export const settingsMap = {
     category: 'Users',
   }),
   enableTeamPlan: makeBooleanSetting({
+    acceptNumeric: true,
     key: 'enableTeamPlan',
     userReadable: true,
     name: 'Enable Team Plan',
     defaultValue: false,
     description: 'Whether to enable team plans',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   allowOpenRegistration: makeBooleanSetting({
@@ -3462,7 +3468,6 @@ export const settingsMap = {
     defaultValue: false,
     description:
       'Master switch for self-serve signup. When OFF (default), a valid invite code is required to register. When ON, users may register without an invite code; the Default Free Credits grant is then applied after they verify their email (anti-spam — see Default Free Credits). Safe to enable: the pre-request credit reservation caps every free user at the credits they are granted.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   blockDisposableEmails: makeBooleanSetting({
@@ -3474,14 +3479,26 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
+  blockedEmailDomains: makeObjectSetting<string[]>({
+    key: 'blockedEmailDomains',
+    name: 'Blocked Email Domains',
+    defaultValue: [],
+    description:
+      'Email domains blocked from signup credits, one per line, on top of the built-in disposable list. A domain also blocks every subdomain (kashre.com blocks x@np.kashre.com). Applies even when Block Disposable Emails is OFF. Registration is refused; OAuth signup and email change still create the account but withhold the free-credit grant, and the OAuth starting-grant backfill skips these users. Existing accounts can still sign in. Bare public suffixes (co.uk, github.io) are refused. Enter internationalized domains in punycode (xn--...); a Unicode-domain email is not matched against them.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+    // Plain strings so one malformed stored entry cannot fail the whole list; the update route
+    // refuses invalid entries and readers filter with partitionDomainList.
+    schema: z.array(z.string()),
+  }),
   defaultFreeCredits: makeNumberSetting({
     key: 'defaultFreeCredits',
     // Read by the new-user welcome to state the amount an unverified sign-up is about to unlock.
     userReadable: true,
     name: 'Default Free Credits',
     defaultValue: 0,
-    description: `Credits granted to a user who registers WITHOUT an invite code (only applies when Allow Open Registration is ON). Granted after the user verifies their email, NOT at signup - an unverified throwaway account gets 0 credits (anti-spam). A free user can never spend more than this - their hard ceiling of real model cost is roughly credits / ${CREDITS_PER_USD_COST} USD.`,
-    group: API_SERVICE_GROUPS.CREDITS.id,
+    description:
+      'Base credits granted after email verification to a user who registers WITHOUT an invite code, including eligible partner signups when Allow Open Registration is OFF. Partner-rule credits are added on top of this amount. An unverified account receives no credits. A free user cannot spend beyond their total granted balance.',
     category: 'Users',
   }),
   teamPlanMinSeats: makeNumberSetting({
@@ -3495,7 +3512,6 @@ export const settingsMap = {
     max: TEAM_PLAN_SEATS_HARD_LIMIT,
     description:
       'Fewest seats a paid team subscription can be bought with. Enforced at checkout, on seat changes from Stripe and on admin conversion to paid. Admin grants may still go down to 1. If set above the maximum seats, the maximum wins.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   teamPlanMaxSeats: makeNumberSetting({
@@ -3508,7 +3524,6 @@ export const settingsMap = {
     max: TEAM_PLAN_SEATS_HARD_LIMIT,
     description:
       'Most seats any team can hold (owner + members + pending invites). Enforced at checkout, on every seat change, on admin grants and on the partner-signup auto-raise. Lowering it below a team that is already larger does not remove anyone; that team can only be set down to this cap.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   teamPlanCreditsPerSeat: makeNumberSetting({
@@ -3520,7 +3535,6 @@ export const settingsMap = {
     max: 100_000_000,
     description:
       'Credits added to a team pool per paid seat each billing cycle (and per seat-month on admin team grants). Applies to invoices issued after the change; credits already granted are not adjusted.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
     // The Team plan card quotes the pool size to every signed-in user.
     userReadable: true,
@@ -3536,7 +3550,6 @@ export const settingsMap = {
     max: 100_000_000,
     description:
       'Below this many credits a user sees the low-credit warning state. Set to 0 to show warnings only once credits run out.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   syntheticUserEmailDomains: makeStringSetting({
@@ -3615,6 +3628,18 @@ export const settingsMap = {
     category: 'Users',
     group: API_SERVICE_GROUPS.USER_MANAGEMENT.id,
     order: 3,
+  }),
+  showDesktopAppPromo: makeBooleanSetting({
+    key: 'showDesktopAppPromo',
+    name: 'Promote the Desktop App',
+    defaultValue: true,
+    description:
+      'Show signed-in users the "Try the desktop app" button and the profile-menu link to the desktop download page. Turn off for deployments that do not want to point users at the published desktop builds.',
+    category: 'Branding',
+    group: API_SERVICE_GROUPS.BRANDING.id,
+    order: 9,
+    // DesktopAppPromoButton and the profile menu read it for every user.
+    userReadable: true,
   }),
   SystemFiles: makeStringSetting({
     key: 'SystemFiles',
@@ -3711,6 +3736,37 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.SEARCH.id,
     order: 4,
     isSensitive: true,
+  }),
+  EnableStudioCreateV2: makeBooleanSetting({
+    key: 'EnableStudioCreateV2',
+    name: 'Enable Studio Create v2',
+    defaultValue: false,
+    description:
+      'Admin-only preview of the restructured Studio Create area. Non-admins never see it, whatever this is set to.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 300,
+  }),
+  EnableStudioImage: makeBooleanSetting({
+    key: 'EnableStudioImage',
+    name: 'Enable Image in Studio',
+    defaultValue: false,
+    description: 'Admin-only preview of the Image tab in Studio. Non-admins never see it, whatever this is set to.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 301,
+    dependsOn: 'EnableStudioCreateV2',
+  }),
+  EnableStudioProductions: makeBooleanSetting({
+    key: 'EnableStudioProductions',
+    name: 'Enable Studio Productions',
+    defaultValue: false,
+    description:
+      'Admin-only preview of Studio Productions (assembling many assets into one piece). Non-admins never see it, whatever this is set to.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 302,
+    dependsOn: 'EnableStudioCreateV2',
   }),
   EnablePotionQuest: makeBooleanSetting({
     key: 'EnablePotionQuest',

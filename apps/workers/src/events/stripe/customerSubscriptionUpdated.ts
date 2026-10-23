@@ -4,11 +4,11 @@ import { StripeSubscriptionMetadataSchema } from '@client/lib/subscriptions/sche
 import { SubscriptionMetadata, SubscriptionOwnerType } from '@client/lib/subscriptions/types';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { setSeats } from '@server/services/organizationService';
-import { Config } from '@server/utils/config';
-import { emitMetric } from '@server/utils/cloudwatch';
+import { Config } from '@bike4mind/server-utils/utils/config';
+import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { StripeEvents } from '@server/utils/eventBus';
 import { voidOpenSubscriptionInvoices } from '@server/integrations/stripe/dunning';
-import { stripe } from '@server/integrations/stripe/stripe';
+import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { sendToClient } from '@server/websocket/utils';
 import dayjs from 'dayjs';
 import { Resource } from 'sst';

@@ -22,7 +22,7 @@ import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { Resource } from 'sst';
 import { v4 as uuidv4 } from 'uuid';
 import { Logger } from '@bike4mind/observability';
-import { verifyOrgAccess } from '@server/utils/orgAccess';
+import { verifyOrgOwner } from '@server/utils/orgAccess';
 import { classifyReplayability } from '@server/integrations/github/webhookReplayClassifier';
 
 // Rate limit: max 10 replays per second (for delivery throttling)
@@ -76,7 +76,7 @@ const handler = baseApi().post(
       );
     }
 
-    await verifyOrgAccess(user, orgId);
+    await verifyOrgOwner(user, orgId);
 
     const webhookConfig = await orgWebhookConfigRepository.findByOrganizationId(orgId);
     if (!webhookConfig) {

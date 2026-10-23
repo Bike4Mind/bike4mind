@@ -6,7 +6,7 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { IOrganizationDocument } from '@bike4mind/common';
 import { SubscriptionSource } from '@client/lib/subscriptions/types';
-import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@client/lib/subscriptions/constants';
+import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@bike4mind/server-utils/lib/subscriptions/constants';
 import en from '@client/app/locales/en.json';
 import OrganizationListPage from '../index';
 
@@ -27,7 +27,6 @@ vi.mock('@client/app/hooks/data/teamPlanSettings', () => ({ useTeamPlanAvailable
 
 vi.mock('@client/app/hooks/data/organizations', () => ({
   useGetUserOrganizations: () => ({ data: [ORG], isLoading: false, isFetching: false }),
-  useGetManagedOrganizations: () => ({ data: [], isLoading: false, isFetching: false, refetch: vi.fn() }),
   useOrganizationSeats: () => ({ currentSeats: 1 }),
 }));
 

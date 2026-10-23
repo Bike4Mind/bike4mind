@@ -26,8 +26,12 @@ import {
 } from '@bike4mind/database';
 import { sessionService } from '@bike4mind/services';
 import { connectionHoldsScope } from '@server/websocket/connectionScope';
-import { REALTIME_VOICE_RESERVE_USD, realtimeCreditsFloor } from '@server/voice/voiceSessionLimits';
-import { isVoiceLedgerKeyTaken, recordVoiceUsage, VOICE_TRANSACTION_OPTIONS } from '@server/voice/settleVoiceHold';
+import { REALTIME_VOICE_RESERVE_USD, realtimeCreditsFloor } from '@bike4mind/server-utils/voice/voiceSessionLimits';
+import {
+  isVoiceLedgerKeyTaken,
+  recordVoiceUsage,
+  VOICE_TRANSACTION_OPTIONS,
+} from '@bike4mind/server-utils/voice/settleVoiceHold';
 
 export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async (event, context, logger) => {
   const { userId, sessionId, model, usage, responseId } = VoiceSessionEndedAction.parse(JSON.parse(event.body ?? ''));
@@ -77,6 +81,11 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     logger.warn(`voiceSessionEnded: user ${user.id} does not own session ${sessionId} - rejecting`);
     return { statusCode: 200 };
   }
+  // The open hold is billed to whoever paid its reserve; only that user's frames may move it.
+  if (session.voiceHoldUserId && session.voiceHoldUserId !== user.id) {
+    logger.warn(`voiceSessionEnded: user ${user.id} did not pay the voice hold on ${sessionId} - rejecting`);
+    return { statusCode: 200 };
+  }
 
   // Rates come from the versioned price catalog (reprices reach voice as data
   // rows); the adapter literal is the fail-safe when the catalog is unreachable.
@@ -93,6 +102,23 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   let actualCredits: number = usdToCreditsStochastic(totalUsd);
   // Credits still reserved for this call after this frame: an open hold is not exhaustion.
   let holdLeft = 0;
+  // Usage the balance could not cover: debits are floored at zero, so this is logged, not charged.
+  let shortfall = 0;
+
+  const settings = await getSettingsMap(
+    { adminSettings: adminSettingsRepository },
+    { names: ['enforceCredits'], skipCache: true }
+  );
+  const enforceCredits = getSettingsValue('enforceCredits', settings);
+  // Returns the shortfall. Floored only under enforcement: with credits off a balance tracks usage
+  // and may go negative, as before.
+  const debit = async (payerId: string, credits: number): Promise<number> => {
+    if (!enforceCredits) {
+      await userRepository.incrementCredits(payerId, -credits);
+      return 0;
+    }
+    return credits - (await userRepository.decrementCreditsFloored(payerId, credits));
+  };
 
   // Both transactions below carry the request logger, so withTransaction reports a retry and its exhaustion.
   const transactionOptions = { ...VOICE_TRANSACTION_OPTIONS, logger };
@@ -106,13 +132,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     let billedBefore: number | null;
     try {
       billedBefore = await withTransaction(async () => {
-        await recordVoiceUsage({
-          userId: user.id,
-          sessionId,
-          model,
-          credits: actualCredits,
-          transactionId: `realtime-voice:${sessionId}:${responseId}`,
-        });
+        shortfall = 0;
         const before = startedAt
           ? await sessionRepository.addVoiceBilledCredits(session.id, startedAt, actualCredits)
           : null;
@@ -123,8 +143,21 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
             ? actualCredits
             : Math.max(0, before + actualCredits - reserved) - Math.max(0, before - reserved);
         if (fromBalance > 0) {
-          await userRepository.incrementCredits(user.id, -fromBalance);
+          shortfall = await debit(user.id, fromBalance);
         }
+        // The hold's billed total and the ledger carry what was taken, not what the balance could not cover.
+        if (shortfall > 0 && startedAt && before !== null) {
+          await sessionRepository.addVoiceBilledCredits(session.id, startedAt, -shortfall);
+        }
+        // Written even at zero credits: its key is what makes a replayed frame a no-op.
+        await recordVoiceUsage({
+          userId: user.id,
+          sessionId,
+          model,
+          credits: actualCredits - shortfall,
+          transactionId: `realtime-voice:${sessionId}:${responseId}`,
+          ...(shortfall > 0 ? { metadata: { shortfallCredits: shortfall } } : {}),
+        });
         return before;
       }, transactionOptions);
     } catch (err) {
@@ -135,6 +168,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     if (billedBefore !== null) {
       holdLeft = Math.max(0, reserved - billedBefore - actualCredits);
     }
+    actualCredits -= shortfall;
     // The sweep settles an abandoned hold up to the last response the server saw. Best-effort and
     // after the debit, so a failed marker write can never leave a ledger row the balance never paid.
     await sessionRepository.recordVoiceActivity(session.id, new Date(), startedAt).catch(err => {
@@ -163,6 +197,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     const elapsedSeconds = Math.floor(elapsedMs / 1000);
     try {
       closed = await withTransaction(async (): Promise<CloseSettlement | null> => {
+        shortfall = 0;
         const claimed = await sessionRepository.claimVoiceHold(session.id, startedAt, { realtimeOnly: true });
         if (!claimed) return null;
         const billed = claimed.billedCredits ?? 0;
@@ -188,19 +223,25 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
 
         // Already taken: the hold, plus anything billed past it. Owed: everything billed plus this frame.
         const delta = Math.max(0, reserved - billed) - credits;
-        if (delta !== 0) {
-          await userRepository.incrementCredits(user.id, delta);
+        const payerId = claimed.payerId ?? user.id;
+        if (delta > 0) {
+          await userRepository.incrementCredits(payerId, delta);
+        } else if (delta < 0) {
+          shortfall = await debit(payerId, -delta);
         }
-        if (credits > 0) {
+        // Only what was taken is charged; the shortfall rides on the ledger row.
+        const charged = credits - shortfall;
+        if (charged > 0 || shortfall > 0) {
           await recordVoiceUsage({
-            userId: user.id,
+            userId: payerId,
             sessionId,
             model,
-            credits,
+            credits: charged,
             transactionId: `realtime-voice-close:${sessionId}:${startedAt.toISOString()}`,
+            ...(shortfall > 0 ? { metadata: { shortfallCredits: shortfall } } : {}),
           });
         }
-        return { credits, capped, floor: floored ? floor : null };
+        return { credits: charged, capped, floor: floored ? floor : null };
       }, transactionOptions);
     } catch (err) {
       if (!isVoiceLedgerKeyTaken(err)) throw err;
@@ -224,6 +265,15 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       });
     }
     actualCredits = closed.credits;
+  }
+
+  if (shortfall > 0) {
+    // The balance is now zero, so the exhausted notice below ends the call.
+    logger.warn('voiceSessionEnded: balance could not cover voice usage - debited to zero', {
+      sessionId,
+      responseId,
+      shortfall,
+    });
   }
 
   // Dual-write usage event: analytics only, never billing.
@@ -253,9 +303,6 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   const credits = actualCredits;
 
   // Check if credits are now exhausted and enforcement is enabled
-  const settings = await getSettingsMap({ adminSettings: adminSettingsRepository }, { names: ['enforceCredits'] });
-  const enforceCredits = getSettingsValue('enforceCredits', settings);
-
   if (enforceCredits) {
     const updatedUser = await userRepository.findById(userId);
     if (updatedUser && (updatedUser.currentCredits ?? 0) <= 0 && holdLeft <= 0) {

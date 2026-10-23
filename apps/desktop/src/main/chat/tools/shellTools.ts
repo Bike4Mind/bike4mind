@@ -4,6 +4,7 @@ import { StringDecoder } from 'node:string_decoder';
 import type { BackgroundProcessInfo } from '@shared/chat';
 import type { OutputStream } from './outputBuffer';
 import { realpathNearest, resolveWithinRoots } from './paths';
+import { writesOwnRepository } from './ownRepository';
 import { scanShell } from './shellScan';
 import { commandEnv, launchCommand } from './commandLaunch';
 import type { SandboxedCommand } from './sandbox';
@@ -426,14 +427,28 @@ export async function shellApproval(
     ...(scan.envFiles.length > 0 ? [`Reads ${scan.envFiles.join(', ')}, which usually holds secrets.`] : []),
     ...(scan.outbound.length > 0 ? [`Can send data off this computer (${scan.outbound.join(', ')}).`] : []),
   ];
+  // A push or gh write to the folder's own origin still says so on the card, but does not stop
+  // auto mode; a reply that has read untrusted content asks anyway, as these are never contained.
+  const ownRepository = await Promise.all(
+    scan.sends.map(({ target }) => (target ? writesOwnRepository(target).catch(() => false) : false))
+  );
+  const asks = scan.envFiles.length > 0 || ownRepository.includes(false);
   return {
     detail: [detail, ...reasons].join('\n\n'),
     key,
-    ...(reasons.length > 0 ? { askInAuto: true as const } : {}),
+    ...(asks ? { askInAuto: true as const } : {}),
+    ...(scan.contained ? { contained: true as const } : {}),
     always: {
       namespace: tool,
-      commands: scan.commands.map(({ text, always, coverable }) => ({ text, pattern: always, coverable })),
+      commands: scan.commands.map(({ text, always, coverable, words, opaque }) => ({
+        text,
+        pattern: always,
+        coverable,
+        words,
+        ...(opaque ? { opaque } : {}),
+      })),
       directories: [...new Set([...directories, ...scan.directories])],
+      paths: scan.paths ?? [],
     },
   };
 }

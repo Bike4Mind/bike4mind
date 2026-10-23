@@ -4,7 +4,7 @@ import type { Request } from 'express';
 
 let mockJwtSecret: string | undefined = 'test-jwt-secret-for-state-store';
 
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: {
     get JWT_SECRET() {
       return mockJwtSecret;

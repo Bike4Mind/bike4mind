@@ -5,14 +5,17 @@ import { fileURLToPath } from 'node:url';
 import {
   assertBudgetConfig,
   completedResult,
+  describeStall,
   gatedAverageSec,
   incompleteResult,
   isLatencyObservation,
+  isStreamComplete,
   latencyBreach,
   mergeResults,
   msToSec,
   StreamingTimeoutError,
   textStreamBudgetMs,
+  unexpectedArtifactIds,
 } from '../../../apps/client/e2e/ai-latency-budget';
 import type { PromptScenario, PromptResult } from '../../../apps/client/e2e/ai-latency-helpers';
 
@@ -31,6 +34,12 @@ import type { PromptScenario, PromptResult } from '../../../apps/client/e2e/ai-l
  * again), and a merge that drops an incomplete result still produces a perfectly well-formed
  * results file - one that reports a healthy average for a cell that timed out.
  */
+
+const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+const CHAT_PAGE = path.join(REPO, 'apps/client/e2e/pages/ChatPage.ts');
+const PROMPT_REPLIES = path.join(REPO, 'apps/client/app/components/Session/PromptReplies.tsx');
+const ARTIFACT_RENDERER = path.join(REPO, 'apps/client/app/components/Session/artifacts/ArtifactRenderer.tsx');
+const readSource = (file: string) => fs.readFileSync(file, 'utf8');
 
 const scenario = (over: Partial<PromptScenario> = {}): PromptScenario => ({
   id: 'p',
@@ -366,5 +375,136 @@ describe('latencyBreach', () => {
     ).toBeNull();
     expect(latencyBreach([slowImage], 10)).toBeNull();
     expect(latencyBreach([], 10)).toBeNull();
+  });
+});
+
+describe('isStreamComplete', () => {
+  const PREVIOUS = 'Brazil, Argentina';
+  // A bare list renders <ol><li> with no markdown <p>, so it carries no `ai-response` test id.
+  // Reading only that id saw '' here, and the old wait sat out its whole budget (~152s) on a
+  // reply that had already arrived.
+  const LIST_ONLY_REPLY = 'Mercury\nVenus\nEarth\nMars\nJupiter';
+
+  it('completes a list-only reply whose stop button flashed by unseen', () => {
+    expect(isStreamComplete({ stopVisible: false, text: LIST_ONLY_REPLY }, PREVIOUS, false)).toBe(true);
+  });
+
+  it('completes once a seen stop button hides, even with no new text (image-only reply)', () => {
+    expect(isStreamComplete({ stopVisible: false, text: PREVIOUS }, PREVIOUS, true)).toBe(true);
+  });
+
+  it('never completes while the stop button is visible, however stable the text', () => {
+    expect(isStreamComplete({ stopVisible: true, text: LIST_ONLY_REPLY }, PREVIOUS, true)).toBe(false);
+  });
+
+  it('does not mistake the prior turn for this one before anything streamed', () => {
+    expect(isStreamComplete({ stopVisible: false, text: PREVIOUS }, PREVIOUS, false)).toBe(false);
+    expect(isStreamComplete({ stopVisible: false, text: '' }, '', false)).toBe(false);
+    expect(isStreamComplete({ stopVisible: false, text: '' }, PREVIOUS, false)).toBe(false);
+  });
+
+  it('completes once a seen stop button hides, even if no reply text was read', () => {
+    expect(isStreamComplete({ stopVisible: false, text: '' }, PREVIOUS, true)).toBe(true);
+  });
+});
+
+describe('describeStall', () => {
+  it('names the stage the wait ran out in', () => {
+    expect(describeStall({ stopVisible: true, text: '' })).toMatch(/no text streamed/);
+    expect(describeStall({ stopVisible: true, text: 'partial' })).toMatch(/stop button never hid/);
+    expect(describeStall({ stopVisible: false, text: '' })).toMatch(/never appeared/);
+    expect(describeStall({ stopVisible: false, text: 'Brazil, Argentina' })).toMatch(/never appeared/);
+  });
+});
+
+describe('ChatPage reply reader', () => {
+  it('reads replies from the body inside the root container, never the <p>-only ai-response id', () => {
+    // ChatPage imports Playwright, so no vitest project can load it; the selector is pinned as
+    // text. Reverting to `ai-response` brings back the list-only-reply stall above.
+    const source = fs.readFileSync(CHAT_PAGE, 'utf8');
+    // Strip comment lines: the doc comment names both ids, so it must satisfy neither half.
+    const code = source
+      .split('\n')
+      .filter(line => !/^\s*(\/\/|\*|\/\*)/.test(line))
+      .join('\n');
+    expect(code).not.toMatch(/getByTestId\(\s*['"`]ai-response['"`]/);
+    expect(code).not.toMatch(/data-testid=['"]?ai-response['"\]]/);
+    expect(code).toMatch(/getByTestId\(\s*['"`]ai-response-body['"`]/);
+    expect(code).toMatch(/isStreamComplete\(/);
+    // The reader falls back to the whole root when the body id is absent, so renaming the test id
+    // would silently put reasoning text back into the returned string.
+    expect(fs.readFileSync(PROMPT_REPLIES, 'utf8')).toMatch(/data-testid="ai-response-body"/);
+  });
+});
+
+describe('unexpected artifact on a chat prompt', () => {
+  const chat = (id: string, sec: number, artifactRendered = false): PromptResult =>
+    completedResult(scenario({ id }), { response: 'x', responseTimeMs: sec * 1000, renderTimeMs: 0, artifactRendered });
+
+  it('marks an unflagged prompt that rendered an artifact as a deliverable and flags it', () => {
+    const result = chat('gpu', 70, true);
+    expect(result.measuresDeliverable).toBe(true);
+    expect(result.unexpectedArtifact).toBe(true);
+  });
+
+  it('leaves a chat-mode reply and the flagged-artifact behaviour unchanged', () => {
+    const plain = chat('reuters', 20);
+    expect(plain.measuresDeliverable).toBe(false);
+    expect(plain.unexpectedArtifact).toBeUndefined();
+
+    // A prompt that declares generatesArtifact is expected to render one: deliverable, not "unexpected".
+    const flagged = completedResult(scenario({ id: 'storybook', generatesArtifact: true }), {
+      response: 'x',
+      responseTimeMs: 1000,
+      renderTimeMs: 0,
+      artifactRendered: true,
+    });
+    expect(flagged.measuresDeliverable).toBe(true);
+    expect(flagged.unexpectedArtifact).toBeUndefined();
+  });
+
+  it('drops the artifact-mode result from the gated average and the breach check', () => {
+    const results = [chat('reuters', 20), chat('smartphone', 30), chat('gpu', 70, true)];
+    expect(gatedAverageSec(results)).toBe(25);
+    expect(latencyBreach(results, 30)).toBeNull();
+    // Without the exclusion the mean (40s) would have breached the same threshold.
+    expect(gatedAverageSec([chat('reuters', 20), chat('smartphone', 30), chat('gpu', 70)])).toBe(40);
+  });
+
+  it('reads as No Data (average 0, no breach) when every gated prompt switched to an artifact', () => {
+    const results = [chat('gpu', 70, true), chat('reuters', 65, true)];
+    expect(gatedAverageSec(results)).toBe(0);
+    expect(latencyBreach(results, 30)).toBeNull();
+    expect(results.every(r => r.measuresDeliverable)).toBe(true);
+  });
+
+  it('lists the switched prompts so the summary can report them', () => {
+    expect(unexpectedArtifactIds([chat('a', 1), chat('gpu', 70, true), chat('b', 2, true)])).toEqual(['gpu', 'b']);
+    expect(unexpectedArtifactIds([chat('a', 1)])).toEqual([]);
+  });
+
+  it('keeps an abandoned chat prompt gated, since an artifact cannot be told from a hang', () => {
+    const results = [chat('a', 1), incompleteResult(scenario({ id: 'gpu' }), 300_000)];
+    expect(latencyBreach(results, 30)).toContain('never finished: gpu');
+  });
+});
+
+describe('ChatPage artifact detector', () => {
+  it('keys on the html/react renderers, so a promoted python or mermaid fence stays a chat reply', () => {
+    // ChatPage imports Playwright, so no vitest project can load it; the wiring is pinned as text.
+    // The server promotes python/mermaid/recharts code fences into artifact cards after the
+    // stream, so matching any artifact-renderer-* would drop ordinary chat replies from the gate.
+    const chatPage = readSource(CHAT_PAGE);
+    expect(chatPage).toContain('[data-testid="artifact-renderer-html"]');
+    expect(chatPage).toContain('[data-testid="artifact-renderer-react"]');
+    expect(chatPage).not.toContain('[data-testid^="artifact-renderer-"]');
+    expect(chatPage).not.toContain('data-artifact-tag');
+  });
+
+  it('pins the placeholder test ids against the components that mount them', () => {
+    expect(readSource(ARTIFACT_RENDERER)).toContain('data-testid={`artifact-renderer-${artifact.type}`}');
+    expect(readSource(CHAT_PAGE)).toContain("getByTestId('generating-artifact-indicator')");
+    expect(readSource(PROMPT_REPLIES)).toContain('data-testid="generating-artifact-indicator"');
+    expect(readSource(ARTIFACT_RENDERER)).toContain('data-testid="artifact-loading"');
   });
 });

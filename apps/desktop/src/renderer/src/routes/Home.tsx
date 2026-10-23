@@ -8,6 +8,7 @@ import { SignInCard } from '../auth/SignInCard';
 import { SignedInPanel } from '../auth/SignedInPanel';
 import { useAuthState } from '../auth/useAuthState';
 import { ChatShell } from '../chat/ChatShell';
+import { AppUpdateNotice } from '../chat/UpdateNotice';
 
 export function Home() {
   const state = useAuthState();
@@ -18,13 +19,9 @@ export function Home() {
   if (state?.status === 'signed-in' || state?.reauthRequired) {
     return (
       <>
-        <ChatShell
-          auth={state}
-          account={(status, openSettings) => (
-            <SignedInPanel state={state} status={status} onOpenSettings={openSettings} />
-          )}
-        />
+        <ChatShell auth={state} account={status => <SignedInPanel state={state} status={status} />} />
         {state.reauthRequired && <ReauthNotice state={state} />}
+        <AppUpdateNotice />
       </>
     );
   }
@@ -43,6 +40,7 @@ export function Home() {
           <SignInCard state={state} />
         )}
       </Card>
+      <AppUpdateNotice />
     </Box>
   );
 }

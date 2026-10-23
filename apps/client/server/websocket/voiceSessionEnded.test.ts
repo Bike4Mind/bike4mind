@@ -9,14 +9,16 @@ interface FakeSession {
   voiceSessionStartedAt: Date | null;
   voiceBilledCredits?: number;
   voiceLastActivityAt?: Date | null;
+  voiceHoldUserId?: string | null;
 }
 const state = vi.hoisted(() => ({
   session: null as unknown as FakeSession,
   balance: 0,
-  transactions: [] as Array<{ credits: number; transactionId?: string }>,
+  transactions: [] as Array<{ credits: number; transactionId?: string; metadata?: Record<string, unknown> }>,
   // Runs just before a claim, to stand in for another settler that got there first.
   beforeClaim: null as null | (() => void),
   failIncrement: false,
+  enforceCredits: true,
   failTransaction: false,
   failActivity: false,
 }));
@@ -24,6 +26,7 @@ const state = vi.hoisted(() => ({
 const logger = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }));
 
 const sendToClient = vi.hoisted(() => vi.fn());
+const getSettingsMap = vi.hoisted(() => vi.fn(async () => ({})));
 vi.mock('@server/websocket/utils', () => ({
   withWebSocketContext: (handler: (...args: unknown[]) => unknown) => (event: unknown) => handler(event, {}, logger),
   sendToClient,
@@ -38,8 +41,8 @@ vi.mock('@bike4mind/common', async importOriginal => ({
 vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
   usdToCreditsStochastic: (usd: number) => usd,
-  getSettingsMap: async () => ({}),
-  getSettingsValue: () => true,
+  getSettingsMap,
+  getSettingsValue: () => state.enforceCredits,
 }));
 vi.mock('@bike4mind/services', () => ({
   sessionService: { getSession: async () => ({ ...state.session }) },
@@ -54,6 +57,12 @@ vi.mock('@bike4mind/database', () => ({
     incrementCredits: async (_id: string, delta: number) => {
       if (state.failIncrement) throw new Error('mongo blip');
       state.balance += delta;
+    },
+    decrementCreditsFloored: async (_id: string, credits: number) => {
+      if (state.failIncrement) throw new Error('mongo blip');
+      const debited = Math.min(credits, Math.max(state.balance, 0));
+      state.balance -= debited;
+      return debited;
     },
   },
   // Rolls the fake session, balance and ledger back on a throw, as a real transaction would.
@@ -95,19 +104,21 @@ vi.mock('@bike4mind/database', () => ({
       if (state.session.voiceSessionStartedAt?.getTime() !== startedAt.getTime()) return null;
       if (options?.realtimeOnly && state.session.voiceBilledCredits === undefined) return null;
       const billedCredits = state.session.voiceBilledCredits ?? null;
+      const payerId = state.session.voiceHoldUserId ?? null;
       state.session = {
         id: state.session.id,
         userId: state.session.userId,
         voiceReservedCredits: null,
         voiceSessionStartedAt: null,
       };
-      return { billedCredits };
+      return { billedCredits, payerId };
     },
   },
 }));
 
+import { adminSettingsRepository } from '@bike4mind/database';
 import { func } from './voiceSessionEnded';
-import { realtimeCreditsFloor, shouldReuseVoiceHold } from '@server/voice/voiceSessionLimits';
+import { realtimeCreditsFloor, shouldReuseVoiceHold } from '@bike4mind/server-utils/voice/voiceSessionLimits';
 
 const HOLD = 100;
 const STARTING_BALANCE = 1000;
@@ -149,9 +160,19 @@ describe('voiceSessionEnded realtime billing', () => {
     state.beforeClaim = null;
     state.failIncrement = false;
     state.failTransaction = false;
+    state.enforceCredits = true;
     state.failActivity = false;
     sendToClient.mockClear();
+    getSettingsMap.mockClear();
     logger.error.mockClear();
+  });
+
+  it('reads fresh credit enforcement for each settlement frame', async () => {
+    await send(30, 'resp-1');
+    expect(getSettingsMap).toHaveBeenCalledExactlyOnceWith(
+      { adminSettings: adminSettingsRepository },
+      { names: ['enforceCredits'], skipCache: true }
+    );
   });
 
   it('bills every response of a multi-turn call, then refunds the unused hold at the end', async () => {
@@ -391,6 +412,92 @@ describe('voiceSessionEnded realtime billing', () => {
 
   it("ignores frames from a user the notebook is shared with, so the owner's hold is never theirs", async () => {
     state.session.userId = 'owner';
+
+    await send(0);
+    await send(30, 'resp-1');
+
+    expect(state.session.voiceSessionStartedAt).not.toBeNull();
+    expect(state.session.voiceBilledCredits).toBe(0);
+    expect(state.balance).toBe(STARTING_BALANCE - HOLD);
+    expect(state.transactions).toHaveLength(0);
+  });
+
+  it('never takes the balance below zero when usage outruns it, and ends the call', async () => {
+    state.balance = 10;
+
+    await send(HOLD + 50, 'resp-1');
+
+    expect(state.balance).toBe(0);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('could not cover'),
+      expect.objectContaining({ shortfall: 40 })
+    );
+    expect(sendToClient).toHaveBeenCalledWith(
+      'u1',
+      expect.any(String),
+      expect.objectContaining({ action: 'voice_credits_exhausted' })
+    );
+  });
+
+  it('records only what a response actually debited, with the shortfall on its ledger row', async () => {
+    state.balance = 10;
+
+    await send(HOLD + 50, 'resp-1');
+
+    // The hold covered 100 and the balance 10 of the 150 used.
+    expect(state.session.voiceBilledCredits).toBe(HOLD + 10);
+    expect(state.transactions).toEqual([
+      expect.objectContaining({ credits: -(HOLD + 10), metadata: { shortfallCredits: 40 } }),
+    ]);
+  });
+
+  it('records only what a close actually debited, with the shortfall on its ledger row', async () => {
+    await send(HOLD, 'resp-1');
+    state.balance = 5;
+
+    await send(30);
+
+    expect(state.transactions.map(t => t.credits)).toEqual([-HOLD, -5]);
+    expect(state.transactions[1].metadata).toEqual({ shortfallCredits: 25 });
+  });
+
+  it('records a fully unpaid close and its shortfall once without changing the zero balance', async () => {
+    await send(HOLD, 'resp-1');
+    state.balance = 0;
+
+    await send(30);
+    await send(30);
+
+    expect(state.balance).toBe(0);
+    expect(state.session.voiceSessionStartedAt).toBeNull();
+    expect(state.transactions).toHaveLength(2);
+    expect(Math.abs(state.transactions[1].credits)).toBe(0);
+    expect(state.transactions[1].metadata).toEqual({ shortfallCredits: 30 });
+  });
+
+  it('never takes the balance below zero when a close settles past it', async () => {
+    // Responses already drew the whole hold; the closing frame's usage comes from the balance.
+    await send(HOLD, 'resp-1');
+    state.balance = 5;
+
+    await send(30);
+
+    expect(state.balance).toBe(0);
+  });
+
+  it('lets usage take the balance negative, without a shortfall, when credits are not enforced', async () => {
+    state.enforceCredits = false;
+    state.balance = 10;
+    logger.warn.mockClear();
+
+    await send(HOLD + 50, 'resp-1');
+
+    expect(state.balance).toBe(-40);
+    expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining('could not cover'), expect.anything());
+  });
+
+  it('ignores frames from a user who did not pay the open hold', async () => {
+    state.session.voiceHoldUserId = 'payer';
 
     await send(0);
     await send(30, 'resp-1');

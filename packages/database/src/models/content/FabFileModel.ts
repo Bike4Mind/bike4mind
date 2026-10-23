@@ -28,6 +28,7 @@ import {
   type FabFileChargeState,
   LAKE_INGEST_SOURCE_TYPES,
   type StorageUsageGroup,
+  type OrganizationStorageUploaderGroup,
   UNCATEGORIZED_TAG_SUFFIX,
   chargedBytes,
   type CitableFabFileFields,
@@ -142,6 +143,16 @@ const unlabeledVectorChunkFilter = (fabFileId: string) => ({
   'vector.0': { $exists: true },
   $or: [{ embeddingModel: { $exists: false } }, { embeddingModel: null }, { embeddingModel: '' }],
 });
+
+/** Atlas `$vectorSearch` rejects a `numCandidates` above this. */
+const ATLAS_MAX_NUM_CANDIDATES = 10_000;
+
+/** Cosine similarity is undefined for a zero vector, so a probe query needs a real direction. */
+const randomUnitVector = (dimensions: number): number[] => {
+  const raw = Array.from({ length: dimensions }, () => Math.random() * 2 - 1);
+  const norm = Math.hypot(...raw) || 1;
+  return raw.map(v => v / norm);
+};
 
 export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument> implements IFabFileChunkRepository {
   constructor(private fabFileChunkModel: IFabFileChunkModel) {
@@ -580,7 +591,7 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
     // pool wide enough for a highly selective query; the per-file multiplier is a starting point,
     // not a measured constant - retune against a real lake if recall still looks low in practice.
     // Floored at 100, capped at Atlas's 10_000 max.
-    const numCandidates = Math.min(10_000, Math.max(limit * 10, fileIds.length * 50, 100));
+    const numCandidates = Math.min(ATLAS_MAX_NUM_CANDIDATES, Math.max(limit * 10, fileIds.length * 50, 100));
 
     const pipeline = [
       {
@@ -614,6 +625,35 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
       text: d.text ?? '',
       score: d.score,
     }));
+  }
+
+  /**
+   * One wide `$vectorSearch` over `model`'s whole index partition, so mongot keeps the index's
+   * pages resident between lake turns (see apps/workers/src/cron/dataLakeVectorIndexKeepWarm.ts).
+   * It walks as many candidates as a large-lake forced-retrieval pick does, and each run's random
+   * query vector lands in a different region of the graph. Returns null when `model` has no
+   * registered Atlas index.
+   */
+  async warmVectorIndex(model: string): Promise<{ hits: number } | null> {
+    const target = getAtlasIndexForModel(model);
+    if (!target) return null;
+    const pipeline = [
+      {
+        $vectorSearch: {
+          index: target.name,
+          path: 'vector',
+          queryVector: randomUnitVector(target.numDimensions),
+          numCandidates: ATLAS_MAX_NUM_CANDIDATES,
+          limit: 1,
+          filter: { embeddingModel: model },
+        },
+      },
+      { $project: { _id: 1 } },
+    ];
+    // any: Atlas-only aggregation syntax, same boundary as vectorSearch above.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const docs = await this.fabFileChunkModel.aggregate(pipeline as any);
+    return { hits: docs.length };
   }
 
   async getAtlasIndexStatus(model: string): Promise<{ queryable: boolean; status: string } | null> {
@@ -785,7 +825,7 @@ const METADATA_ONLY_PROJECTION = { content: 0, chunks: 0, vector: 0, presignedUr
  * dropped upstream of the withhold that exists to name it.
  *
  * Reachable, not theoretical: `findCitableFieldsByIds` backs `createReachableSourcesResolver`
- * (apps/client/server/memory/lakeSourceReachability.ts), which passes a session-derived filter, and
+ * (packages/server-utils/src/memory/lakeSourceReachability.ts), which passes a session-derived filter, and
  * `retrievalVectorizedOnly` is settable per session through the session-create schema. No in-tree
  * path sets it by default, which is the only reason this is latent rather than live - do not read
  * that as a guarantee.
@@ -1322,6 +1362,32 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       },
     ]);
     if (options.maxTimeMS) aggregate.option({ maxTimeMS: options.maxTimeMS });
+    return aggregate.exec();
+  }
+
+  /**
+   * sumFileSizeByOrganizationId's rows, grouped by uploader. Bounded by the partial
+   * `{ organizationId, deletedAt }` index; the group count is at most the org's uploader count.
+   */
+  async summarizeChargedStorageByOrganizationId(
+    organizationId: string,
+    { limit, maxTimeMS }: { limit: number; maxTimeMS?: number }
+  ): Promise<OrganizationStorageUploaderGroup[]> {
+    const aggregate = this.fabFileModel.aggregate<OrganizationStorageUploaderGroup>([
+      // Restates the partial index's filter so the planner can use it; a bare equality match scans.
+      {
+        $match: {
+          organizationId: { $eq: organizationId, $type: 'string' },
+          deletedAt: null,
+          ...STORAGE_CHARGED_FILTER,
+        },
+      },
+      { $group: { _id: '$userId', bytes: { $sum: { $ifNull: ['$fileSize', 0] } }, fileCount: { $sum: 1 } } },
+      { $sort: { bytes: -1, _id: 1 } },
+      { $limit: limit },
+      { $project: { _id: 0, userId: { $toString: '$_id' }, bytes: 1, fileCount: 1 } },
+    ]);
+    if (maxTimeMS) aggregate.option({ maxTimeMS });
     return aggregate.exec();
   }
 
@@ -3523,13 +3589,18 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     if (fabFileIds.length === 0) return [];
     // includeDeleted is the whole point: every caller's ids are soft-deleted rows (see the interface).
     const docs = await this.fabFileModel
-      .find({ _id: { $in: convertIds(fabFileIds) } }, { filePath: 1, 'versions.filePath': 1 })
+      .find(
+        { _id: { $in: convertIds(fabFileIds) } },
+        { filePath: 1, 'versions.filePath': 1, moderationStatus: 1, blockReason: 1 }
+      )
       .setOptions({ includeDeleted: true })
       .lean();
     return docs.map(d => ({
       id: d._id.toString(),
       filePath: d.filePath ?? undefined,
       versions: (d.versions ?? []).map(v => ({ filePath: v.filePath })),
+      moderationStatus: d.moderationStatus ?? undefined,
+      blockReason: d.blockReason ?? undefined,
     }));
   }
 
@@ -3677,6 +3748,36 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       { new: false, projection: 'userId tags' }
     );
     return prior ? prior.toJSON() : null;
+  }
+
+  async setOwnerOrganizationIfUnchanged(
+    fabFileId: string,
+    expected: Pick<IFabFileDocument, 'organizationId' | 'fileSize' | 'storageChargedAt' | 'status' | 'tags'>,
+    nextOrganizationId: string | undefined
+  ): Promise<boolean> {
+    // `null` matches a missing field; status alone also accepts missing, since a hydrated read fills
+    // in the schema's 'pending' default for a legacy row. Tombstones are excluded (already refunded).
+    // The owner derives from the tags, so the stored tag-name set must still equal the read, or a
+    // removal could unstamp a file a concurrent join just put in another lake of the same org.
+    const tagNames = [
+      ...new Set(
+        (expected.tags ?? []).map(tag => tag?.name).filter((name): name is string => typeof name === 'string')
+      ),
+    ];
+    const result = await this.fabFileModel.updateOne(
+      {
+        _id: fabFileId,
+        ...(expected.organizationId ? { organizationId: expected.organizationId } : PERSONAL_STORAGE_FILTER),
+        fileSize: expected.fileSize ?? null,
+        storageChargedAt: expected.storageChargedAt ?? null,
+        status: expected.status === 'pending' ? { $in: ['pending', null] } : (expected.status ?? null),
+        // `$all: []` matches nothing, so an untagged read relies on the $not arm alone.
+        ...(tagNames.length ? { 'tags.name': { $all: tagNames } } : {}),
+        tags: { $not: { $elemMatch: { name: { $type: 'string', $nin: tagNames } } } },
+      },
+      nextOrganizationId ? { $set: { organizationId: nextOrganizationId } } : { $unset: { organizationId: '' } }
+    );
+    return result.modifiedCount > 0;
   }
 
   async pullTagsByFabFileId(fabFileId: string, tagNames: string[]): Promise<number> {
@@ -3900,12 +4001,18 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     // bumps it on any write, so an unrelated edit would reset the staleness clock. Only meaningful
     // while moderationStatus === 'scanning'.
     moderationClaimedAt: { type: Date, required: false },
+    // ETag of the object version the moderation verdict covers - see IFabFile.moderationETag.
+    moderationETag: { type: String, required: false },
+    moderationRevision: { type: Number, required: false },
+    // See IFabFile.clientUpload and packages/server-utils/src/s3/uploadSizeGate.ts.
+    clientUpload: { type: Boolean, required: false },
+    uploadRejectedAt: { type: Date, required: false },
     // Failed-attempt bookkeeping for the rescue sweep's fairness ordering and backoff - see
     // IFabFile.moderationAttempts / .moderationLastAttemptAt. Left unset (not defaulted to 0) so
     // "never failed" sorts ahead of any attempted row without a backfill.
     moderationAttempts: { type: Number, required: false },
     moderationLastAttemptAt: { type: Date, required: false },
-    // See IFabFile.storageChargedAt and server/s3/storageCharge.ts.
+    // See IFabFile.storageChargedAt and packages/server-utils/src/s3/storageCharge.ts.
     storageChargedAt: { type: Date, required: false },
     error: { type: String, required: false },
     presignedUrl: { type: String },
@@ -4004,6 +4111,8 @@ FabFileSchema.index({ deletedAt: 1, userId: 1, createdAt: 1 });
 FabFileSchema.index({ deletedAt: 1, userId: 1, createdAt: -1 });
 FabFileSchema.index({ deletedAt: 1, createdAt: -1, userId: 1 });
 FabFileSchema.index({ deletedAt: 1, filePath: 1 });
+// Landing events also find rejected tombstones, without a deletedAt equality prefix. Pre-built by 20260921235981_ensure-fabfile-filepath-index.
+FabFileSchema.index({ filePath: 1 });
 
 // Optimize permission and sharing queries
 FabFileSchema.index({ isChunk: 1, 'users.permissions': 1, 'users.userId': 1 });

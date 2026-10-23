@@ -1,5 +1,11 @@
-import { IGroupRepository, IOrganizationRepository, IUserDocument, IUserRepository } from '@bike4mind/common';
-import { BadRequestError, NotFoundError, secureParameters } from '@bike4mind/utils';
+import {
+  canRevokeOrgMember,
+  IGroupRepository,
+  IOrganizationRepository,
+  IUserDocument,
+  IUserRepository,
+} from '@bike4mind/common';
+import { BadRequestError, ForbiddenError, NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { purgeOrgMembershipArtifacts, type PurgeOrgMembershipAdapters } from './purgeOrgMembership';
 import { canAdministerOrganization, isCurrentOrgMember } from './orgAuthority';
@@ -35,7 +41,7 @@ export const revokeAccess = async (
   const organization = await adapters.db.organizations.findById(id);
   if (!organization) throw new NotFoundError(`Organization not found for id: ${id}`);
 
-  // Only owner, manager, or admin can revoke access. Shares the predicate with addMember so the
+  // Only owner, a manager, or admin can revoke access. Shares the predicate with addMember so the
   // two halves of the membership lifecycle cannot drift on who may change the roster.
   if (!canAdministerOrganization(user, organization)) {
     throw new NotFoundError(`Organization not found for id: ${id}`); // Return same error to avoid info leakage
@@ -69,21 +75,27 @@ export const revokeAccess = async (
     throw new NotFoundError(`Organization not found for id: ${id}`);
   }
 
+  // Removing a manager edits the Managers list, which only the owner may do (see canRevokeOrgMember).
+  if (!canRevokeOrgMember(user, organization, userId)) {
+    if (userId === user.id) {
+      throw new BadRequestError('Use leave to exit the organization; managers cannot remove themselves');
+    }
+    throw new ForbiddenError('Only the organization owner can remove a manager');
+  }
+
   organization.users = organization.users.filter(user => user.userId.toString() !== userId);
 
   organization.userDetails ||= [];
   organization.userDetails = organization.userDetails.filter(user => user.id.toString() !== userId);
 
   // Mirror leave.ts: an involuntarily-removed member must not keep the org's group ids (data
-  // access), their data-lake access on this org's lakes, a seat in adminUserIds, or the manager
-  // appointment (both of those are org-admin authority - assertCanManageOrgGroups reads the first,
-  // findIdsWithAdminRights reads both). Involuntary removal is exactly where retained access
+  // access), their data-lake access on this org's lakes, or a seat in adminUserIds (org-admin
+  // authority - assertCanManageOrgGroups and findIdsWithAdminRights both read it). Involuntary removal is exactly where retained access
   // matters most. Idempotent under retry. The whole org doc goes in because the lake step needs the
   // billing owner to pass a departed creator's lakes on to; the lapse is attributed to the REMOVING
   // admin, the principal whose action ended the access.
   const purged = await purgeOrgMembershipArtifacts(userId, organization, { userId: user.id }, adapters);
   organization.adminUserIds = purged.adminUserIds;
-  organization.managerId = purged.managerId;
 
   await adapters.db.organizations.removeMember(organization.id, userId);
 

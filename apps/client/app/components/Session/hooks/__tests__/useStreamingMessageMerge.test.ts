@@ -8,9 +8,10 @@ const invalidateQueries = vi.fn();
 const resetStreaming = vi.fn();
 const checkQuestTimeout = vi.fn();
 const updateAllQueryData = vi.fn();
+const queryClient = { invalidateQueries };
 
 vi.mock('@tanstack/react-query', () => ({
-  useQueryClient: () => ({ invalidateQueries }),
+  useQueryClient: () => queryClient,
 }));
 
 vi.mock('@client/app/hooks/useStreamingState', () => ({
@@ -124,6 +125,35 @@ describe('useStreamingMessageMerge', () => {
       context: 'base-context',
       model: 'gpt',
       citables: ['c1'],
+    });
+  });
+
+  describe('turnTiming', () => {
+    const liveTiming = {
+      queueMs: 100,
+      semaphoreWaitMs: 0,
+      retries: [{ reason: 'stream_idle_timeout', delayMs: 3500, model: 'm', at: new Date() }],
+      fallbackHops: 0,
+    };
+
+    it('overlays a retry that arrived after the first frame onto the cached quest', () => {
+      // The cache holds the first frame, which predates any retry.
+      const cached = makeQuest({ id: 'q1', status: 'running', replies: [] });
+      const chatCompletion = makeChatCompletion({ quest: makeStreamQuest({ id: 'q1', turnTiming: liveTiming }) });
+
+      const { result } = renderHook(() =>
+        useStreamingMessageMerge(baseParams({ flattenQuests: [cached], chatCompletion }))
+      );
+
+      expect(result.current.streamingMessageData?.turnTiming?.retries).toHaveLength(1);
+    });
+
+    it('carries it on the fallback path, before the quest is cached', () => {
+      const chatCompletion = makeChatCompletion({ quest: makeStreamQuest({ id: 'q1', turnTiming: liveTiming }) });
+
+      const { result } = renderHook(() => useStreamingMessageMerge(baseParams({ flattenQuests: [], chatCompletion })));
+
+      expect(result.current.streamingMessageData?.turnTiming?.retries).toHaveLength(1);
     });
   });
 
@@ -252,6 +282,60 @@ describe('useStreamingMessageMerge', () => {
     });
   });
 
+  it('recovers a quest whose held completion belongs to a real session while the view is optimistic', async () => {
+    vi.useFakeTimers();
+    const running = makeQuest({ id: 'q1', status: 'running', replies: [] });
+    const chatCompletion = makeChatCompletion({
+      completed: true,
+      quest: makeStreamQuest({ id: 'q1', sessionId: 'real', status: 'done' }),
+    });
+    checkQuestTimeout.mockResolvedValue(makeQuest({ id: 'q1', sessionId: 'real', status: 'done' }));
+
+    const { result } = renderHook(() =>
+      useStreamingMessageMerge(
+        baseParams({ sessionId: 'optimistic-session-1', flattenQuests: [running], chatCompletion })
+      )
+    );
+
+    expect(result.current.streamingMessageData).toBeNull();
+    expect(result.current.showOptimisticSpinner).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    expect(checkQuestTimeout).toHaveBeenCalledWith('q1');
+    expect(updateAllQueryData).toHaveBeenCalledWith(
+      expect.anything(),
+      'quests',
+      'write',
+      expect.objectContaining({ id: 'q1' }),
+      {
+        keysAllowedToCreate: [
+          ['quests', 'session', 'optimistic-session-1'],
+          ['quests', 'session', 'real'],
+        ],
+      }
+    );
+    expect(setChatCompletion).toHaveBeenCalledWith({ quest: undefined, completed: true, stopped: false });
+  });
+
+  it('runs the 10s safety valve when the held quest is a finished earlier one', () => {
+    vi.useFakeTimers();
+    const running = makeQuest({ id: 'q1', status: 'running', replies: [] });
+    const chatCompletion = makeChatCompletion({
+      completed: true,
+      quest: makeStreamQuest({ id: 'q0', status: 'done' }),
+    });
+
+    renderHook(() =>
+      useStreamingMessageMerge(
+        baseParams({ flattenQuests: [running, makeQuest({ id: 'q0', status: 'done' })], chatCompletion })
+      )
+    );
+    vi.advanceTimersByTime(10_000);
+
+    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['quests', 'session', SESSION_ID] });
+  });
+
   it('does not run the 10s safety valve once streaming data has arrived', () => {
     vi.useFakeTimers();
     const cached = makeQuest({ id: 'q1', status: 'running', replies: [] });
@@ -299,6 +383,27 @@ describe('useStreamingMessageMerge', () => {
     expect(updateAllQueryData).toHaveBeenCalled();
     expect(setChatCompletion).toHaveBeenCalledWith({ quest: undefined, completed: true, stopped: false });
     expect(resetStreaming).toHaveBeenCalledWith(SESSION_ID);
+  });
+
+  it('keeps the 20s poll cadence when the held completion object changes', async () => {
+    vi.useFakeTimers();
+    checkQuestTimeout.mockResolvedValue({ id: 'q1', status: 'done', type: 'error' });
+
+    const running = makeQuest({ id: 'q1', status: 'running', replies: [], timestamp: Date.now() });
+    const first = makeChatCompletion({ quest: makeStreamQuest({ id: 'q1', replies: [], status: 'running' }) });
+
+    const { rerender } = renderHook(params => useStreamingMessageMerge(params), {
+      initialProps: baseParams({ flattenQuests: [running], chatCompletion: first }),
+    });
+
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    const second = makeChatCompletion({ quest: makeStreamQuest({ id: 'q1', replies: [], status: 'running' }) });
+    rerender(baseParams({ flattenQuests: [running], chatCompletion: second }));
+    expect(checkQuestTimeout).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(checkQuestTimeout).toHaveBeenCalledWith('q1');
   });
 
   it('recovers a successfully-completed quest whose terminal WebSocket frame was lost', async () => {

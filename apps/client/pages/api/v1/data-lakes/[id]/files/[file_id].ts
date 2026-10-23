@@ -37,15 +37,16 @@ import {
 } from '@bike4mind/database';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
-import { ForbiddenError, NotFoundError } from '@server/utils/errors';
-import { toObjectIdString } from '@server/utils/objectId';
+import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { toObjectIdString } from '@bike4mind/server-utils/utils/objectId';
 import { toMemberAccessContext } from '@server/dataLakes/toAccessContext';
-import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
-import { lakeMembershipAuditDb } from '@server/dataLakes/lakeMembershipAuditDb';
+import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
+import { lakeMembershipAuditDb } from '@bike4mind/server-utils/dataLakes/lakeMembershipAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
+import { storageOwnerTransferDb } from '@server/files/storageOwnerTransferDb';
 
 // Required: the raw pathname embeds `id`/`file_id`, so without a stable bucket each file gets its
 // own counter instead of one budget per caller.
@@ -92,6 +93,7 @@ async function assertLakeMembershipWritable(
 }
 
 const membershipWriteDb = {
+  ...storageOwnerTransferDb,
   dataLakes: dataLakeRepository,
   dataLakeAccessGrants: dataLakeAccessGrantRepository,
   fabFiles: fabFileRepository,

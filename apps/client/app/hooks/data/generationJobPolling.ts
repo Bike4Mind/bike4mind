@@ -7,6 +7,7 @@ import { TERMINAL_GENERATION_JOB_STATES, type GenerationJobState } from '@bike4m
 export type PollableGenerationJob = {
   state: GenerationJobState;
   updated_at: string;
+  credits: { reserved: number | null; settled: number | null };
   output: { availability: 'ready' | 'pending_scan' | 'unavailable'; expires_at: string | null } | null;
 };
 
@@ -77,6 +78,15 @@ export function generationJobPollInterval(
   now: number
 ): number | false {
   if (!job) return false;
+  // Terminal is written before billing. Keep checking the held balance until settlement lands.
+  if (
+    isTerminalGenerationState(job.state) &&
+    job.credits.reserved !== null &&
+    job.credits.settled === null &&
+    now - Date.parse(job.updated_at) < AWAITING_OUTPUT_MAX_POLL_AGE_MS
+  ) {
+    return SOCKET_DOWN_POLL_MS;
+  }
   // Polled even with the socket open: no further frame will arrive, and the listener's one refetch may have been
   // rate-limited or landed before the output was written.
   if (isAwaitingGenerationOutput(job)) {

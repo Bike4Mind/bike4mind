@@ -26,6 +26,8 @@ export interface SkillSummary {
   /** Frontmatter `argument-hint`, e.g. "[file] [priority]". Shown beside the name in the picker. */
   argumentHint?: string;
   source: SkillSource;
+  /** A Skill Market import: someone else wrote it, so it runs wrapped as untrusted content. */
+  imported?: boolean;
   /**
    * Absolute path, shown as the tooltip so a project skill can be read before it is run. For an
    * `account` skill it is `b4m:/api/skills/<id>`, never a file on disk.
@@ -50,3 +52,30 @@ export interface SkillsState {
 
 /** The empty state, for a session that has none and for a failed read. */
 export const NO_SKILLS: SkillsState = { skills: [], projectDirectory: null, untrustedProject: null };
+
+/** A `/name` token in a draft. `start` is the slash, `end` is exclusive. */
+export interface SkillMention {
+  name: string;
+  start: number;
+  end: number;
+}
+
+/**
+ * A slash at the start or after whitespace, a command-shaped name, then a word boundary. The
+ * boundary is what keeps paths (`/etc/hosts`, `src/a.ts`) and URLs out; the name may not END on
+ * `:` or `-` so `/review: now` names `review`. Same charset as parseSkillInvocation in main.
+ */
+const MENTION_RE = /(^|\s)\/([A-Za-z0-9](?:[A-Za-z0-9_:-]*[A-Za-z0-9_])?)(?=$|[\s.,!?;:'")\]])/g;
+
+/**
+ * Every `/name` token in `text`, known skill or not - the caller decides which names are real.
+ * Shared by the composer's highlight and main's inline-skill note so the two never disagree
+ * about what counts as a mention. Close to the web's detectSkillMentions (b4m-core/common), but
+ * desktop names are not kebab-only (`plugin:name`, `Some_Skill`), and positions are needed.
+ */
+export function findSkillMentions(text: string): SkillMention[] {
+  return Array.from(text.matchAll(MENTION_RE), match => {
+    const start = (match.index ?? 0) + match[1].length;
+    return { name: match[2], start, end: start + 1 + match[2].length };
+  });
+}

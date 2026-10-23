@@ -85,6 +85,9 @@ function parseStatusLine(line: string): WorkingTreeFile[] {
   return results;
 }
 
+/** Ignore repo-local hook and fsmonitor settings on host-side git calls. */
+const GIT_HARDENING_ARGS = ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false'];
+
 /**
  * Get working tree changes (staged, unstaged, untracked) via git status
  */
@@ -96,7 +99,7 @@ async function getWorkingTreeChanges(filterPath?: string): Promise<WorkingTreeFi
   }
 
   return new Promise(resolve => {
-    const proc = spawn('git', args, {
+    const proc = spawn('git', [...GIT_HARDENING_ARGS, ...args], {
       cwd: process.cwd(),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -147,7 +150,7 @@ async function getRecentChanges(params: RecentChangesParams): Promise<RecentChan
   }
 
   return new Promise(resolve => {
-    const proc = spawn('git', args, {
+    const proc = spawn('git', [...GIT_HARDENING_ARGS, ...args], {
       cwd: process.cwd(),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -241,7 +244,7 @@ async function getFileStats(files: FileChange[], since: string, filterPath?: str
   }
 
   return new Promise(resolve => {
-    const proc = spawn('git', args, {
+    const proc = spawn('git', [...GIT_HARDENING_ARGS, ...args], {
       cwd: process.cwd(),
       stdio: ['ignore', 'pipe', 'pipe'],
     });

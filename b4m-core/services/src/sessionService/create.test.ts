@@ -432,6 +432,23 @@ describe('createSession summaryTrigger validation', () => {
   });
 });
 
+describe('createSession maxToolCalls bound', () => {
+  const user = { id: '67cbd75e2415ca84138fada7' } as IUserDocument;
+
+  it('rejects a tool-call ceiling past MAX_TOOL_CALLS_CEILING', async () => {
+    const { adapters } = makeAdapters();
+    await expect(createSession(user, { name: 'ok', maxToolCalls: 100_000 }, adapters)).rejects.toThrow(
+      UnprocessableEntityError
+    );
+  });
+
+  it('keeps a tool-call ceiling within the bound', async () => {
+    const { adapters, created } = makeAdapters();
+    await createSession(user, { name: 'ok', maxToolCalls: 50 }, adapters);
+    expect(created[0].maxToolCalls).toBe(50);
+  });
+});
+
 describe('createSession origin', () => {
   const user = { id: 'u1' } as IUserDocument;
   const makeAdapters = () => {

@@ -8,12 +8,15 @@ describe('resolveToolConfigSafely', () => {
 
   it('returns the resolved config', async () => {
     const config = { usableModels: ['test-video'], createJob: vi.fn() };
-    expect(await resolveToolConfigSafely('video_generation', async () => config as never, { warn: vi.fn() } as never)).toBe(config);
+    expect(
+      await resolveToolConfigSafely('video_generation', async () => config as never, { warn: vi.fn() } as never)
+    ).toBe(config);
   });
 
   it('degrades to null and warns when the resolver throws', async () => {
     const warn = vi.fn();
-    const result = await resolveToolConfigSafely('video_generation', 
+    const result = await resolveToolConfigSafely(
+      'video_generation',
       async () => {
         throw new Error('db down');
       },

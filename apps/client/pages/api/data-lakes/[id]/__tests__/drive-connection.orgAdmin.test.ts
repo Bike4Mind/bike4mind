@@ -29,16 +29,18 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: { findById: h.orgFindById } }));
-vi.mock('@server/utils/resolveActiveOrg', () => ({ resolveActiveOrg: vi.fn() }));
-vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
-vi.mock('@server/utils/dlqRegistry', () => ({ getSourceQueueUrl: () => 'https://sqs.example.com/purge' }));
-vi.mock('@server/integrations/google/drive/drivePollSchedule', () => ({
+vi.mock('@bike4mind/server-utils/utils/resolveActiveOrg', () => ({ resolveActiveOrg: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
+vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({
+  getSourceQueueUrl: () => 'https://sqs.example.com/purge',
+}));
+vi.mock('@bike4mind/server-utils/integrations/google/drive/drivePollSchedule', () => ({
   DRIVE_LAKE_POLL_INTERVAL_MS: 6 * 60 * 60 * 1000,
   isDriveLakePollScheduled: async () => false,
 }));
-vi.mock('@server/integrations/google/drive/connectorOrphanFiles', () => ({
+vi.mock('@bike4mind/server-utils/integrations/google/drive/connectorOrphanFiles', () => ({
   listDeletableDriveOrphans: async () => [],
 }));
 vi.mock('@bike4mind/database', async importOriginal => {
@@ -77,7 +79,12 @@ const CONNECTION = { id: 'conn1', organizationId: ORG, driveFolderId: 'Folder123
 describe('/api/data-lakes/[id]/drive-connection - appointed org admin', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    h.orgFindById.mockResolvedValue({ id: ORG, userId: OWNER, managerId: MANAGER, adminUserIds: [APPOINTED_ADMIN] });
+    h.orgFindById.mockResolvedValue({
+      id: ORG,
+      userId: OWNER,
+      adminUserIds: [APPOINTED_ADMIN, MANAGER],
+      users: [{ userId: MANAGER, permissions: ['read'] }],
+    });
     h.dlFindById.mockResolvedValue({ id: 'lake1', organizationId: ORG, datalakeTag: 'datalake:lake1' });
     h.connFindByDataLakeIdAny.mockResolvedValue(CONNECTION);
   });

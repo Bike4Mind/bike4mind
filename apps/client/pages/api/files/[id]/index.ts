@@ -16,16 +16,18 @@ import {
   assertFilesWriteScope,
   FILES_READ_OR_WRITE_OR_GENERATE_SCOPES,
   FILES_READ_SCOPES,
+  isBareGenerateUpload,
 } from '@server/files/fileScopes';
 import { loadGenerateUploadFile } from '@server/files/loadGenerateUploadFile';
+import { assertGenerateUploadDeletable } from '@server/files/assertGenerateUploadDeletable';
 import { holdsApiKeyScope } from '@server/middlewares/apiKeyScopeGate';
 import { Request } from 'express';
-import { isValidObjectId } from '@server/utils/objectId';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { assertDataLakeTagWriteScope } from '@server/dataLakes/dataLakeScopes';
 
 // baseApi's scope gate is per route, so it admits either files scope (and ai:generate, for the
-// narrow GET below) and each method asserts its own.
+// narrow GET and DELETE below) and each method asserts its own.
 const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_OR_GENERATE_SCOPES })
   .get(async (req: Request<{}, unknown, unknown, { id: string }>, res) => {
     req.logger.updateMetadata({ userId: req.user.id, fileId: req.query.id });
@@ -116,7 +118,8 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_OR_GENERATE_SCOPES
    * Delete FabFile by ID
    */
   .delete(async (req: Request<{}, {}, {}, { id: string }>, res) => {
-    assertFilesWriteScope(req);
+    const bare = isBareGenerateUpload(req);
+    if (!bare) assertFilesWriteScope(req);
     const userId = req.user.id;
     const fabFileId = req.query.id;
 
@@ -125,6 +128,9 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_OR_GENERATE_SCOPES
     if (!isValidObjectId(fabFileId)) {
       return res.status(404).json({ msg: 'File not found' });
     }
+
+    // A bare ai:generate key may remove only its own marked staging uploads, never library files.
+    if (bare) await assertGenerateUploadDeletable(req, fabFileId);
 
     const deleteAction = await deleteFileForUser(req, fabFileId);
 

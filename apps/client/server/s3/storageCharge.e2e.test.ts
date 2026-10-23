@@ -25,7 +25,7 @@ import {
   chargeUploadedObject,
   claimStorageCharge,
   stampImportedKnowledgeRows,
-} from './storageCharge';
+} from '@bike4mind/server-utils/s3/storageCharge';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 

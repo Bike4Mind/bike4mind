@@ -16,12 +16,15 @@ import { lakeConnectionOwnerOf, type IDataLakeDocument } from '@bike4mind/common
 import { Resource } from 'sst';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { releaseDriveConnection } from '@server/integrations/google/drive/common';
-import { deleteDriveOrphans, listDeletableDriveOrphans } from '@server/integrations/google/drive/connectorOrphanFiles';
-import { shredMemoryForLakeTags } from '@server/dataLakes/shredMemoryForLakeTags';
-import { getFilesStorage } from '@server/utils/storage';
-import { sendToQueue } from '@server/utils/sqs';
+import {
+  deleteDriveOrphans,
+  listDeletableDriveOrphans,
+} from '@bike4mind/server-utils/integrations/google/drive/connectorOrphanFiles';
+import { shredMemoryForLakeTags } from '@bike4mind/server-utils/dataLakes/shredMemoryForLakeTags';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { ZodError } from 'zod';
-import { DriveDisconnectPurgePayload } from '@server/dataLakes/driveDisconnectPurgePayload';
+import { DriveDisconnectPurgePayload } from '@bike4mind/server-utils/dataLakes/driveDisconnectPurgePayload';
 
 /** Files purged per invocation, sized to finish well inside the consumer's 10-minute timeout. */
 export const DISCONNECT_PURGE_SLICE_SIZE = 1000;

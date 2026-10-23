@@ -2,14 +2,14 @@ import { z } from 'zod';
 import { releaseNoteRepository } from '@bike4mind/database';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { isValidObjectId } from '@server/utils/objectId';
-import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import {
   findDeniedInNote,
   loadDenylistOrThrow,
   noteOrThrow,
   toAdminReleaseNote,
-} from '@server/releaseNotes/adminReleaseNotes';
+} from '@bike4mind/server-utils/releaseNotes/adminReleaseNotes';
 
 const ActionSchema = z.object({ action: z.enum(['hide', 'unhide', 'publishNow']) }).strict();
 

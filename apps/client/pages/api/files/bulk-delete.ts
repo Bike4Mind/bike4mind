@@ -5,18 +5,19 @@ import {
   fabFileChunkRepository,
   fabFileRepository,
   fileTagRepository,
+  projectRepository,
   sessionRepository,
   userRepository,
   withTransaction,
 } from '@bike4mind/database';
 import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
-import { recomputeStatsForLakeTags } from '@server/dataLakes/recomputeStatsForLakeTags';
+import { recomputeStatsForLakeTags } from '@bike4mind/server-utils/dataLakes/recomputeStatsForLakeTags';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
-import { lakeMembershipAuditDb } from '@server/dataLakes/lakeMembershipAuditDb';
-import { getFilesStorage } from '@server/utils/storage';
+import { lakeMembershipAuditDb } from '@bike4mind/server-utils/dataLakes/lakeMembershipAuditDb';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { getGeneratedCopyStore } from '@server/files/generatedCopyStore';
-import { adjustOwnerStorageInSession } from '@server/s3/storageCharge';
+import { adjustOwnerStorageInSession } from '@bike4mind/server-utils/s3/storageCharge';
 import { logEvent } from '@server/utils/analyticsLog';
 import { FileEvents, storageOwnerOf, sumStorageDeltaByOwner, type StorageOwner } from '@bike4mind/common';
 import { Request } from 'express';
@@ -50,6 +51,8 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
 
     // Per owner: a batch can span personal files and files owned by an org.
     const refunds: Array<{ owner: StorageOwner; bytes: number }> = [];
+    // Only from deletes whose transaction COMMITTED - see the merge after withTransaction below.
+    const committedReferences: fabFilesService.DeletedFileReferences[] = [];
     // Collected across the whole batch and recomputed once at the end, so deleting N files out of
     // one lake costs one aggregation rather than N identical ones.
     const deletedFileTagNames: (string | undefined)[] = [];
@@ -77,7 +80,9 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
           }
         }
 
-        await withTransaction(async session => {
+        // Returned out of the callback, so only an attempt that COMMITTED yields references: a
+        // rolled-back or retried attempt's must never be pruned - the file is still live.
+        const attemptReferences = await withTransaction(async session => {
           const result = await fabFilesService.deleteFabFile(
             userId,
             { id: fileId },
@@ -123,7 +128,9 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
           } else if (fabFilesService.toPublicDeleteAction(result.action) === 'not_found') {
             results.notFound.push(fileId);
           }
+          return result.references;
         });
+        if (attemptReferences) committedReferences.push(attemptReferences);
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Unknown error';
         req.logger.error('Error deleting file in bulk operation:', {
@@ -131,6 +138,23 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
         });
         results.failed.push({ id: fileId, error: errorMessage });
       }
+    }
+
+    // One system-file/project unlink per group of files with the SAME holders, after every
+    // transaction has resolved and outside all of them (see cleanUpDeletedFileReferences). Grouped
+    // rather than folded across the batch: a batch can mix a deleted file with a merely unshared
+    // one, and folding them would pull the unshared file from its other recipients. Best-effort:
+    // the files are already deleted, so nothing here may change the response.
+    try {
+      for (const references of fabFilesService.groupDeletedFileReferences(committedReferences)) {
+        await fabFilesService.cleanUpDeletedFileReferences(
+          references,
+          { users: userRepository, projects: projectRepository },
+          req.logger
+        );
+      }
+    } catch (error) {
+      req.logger.warn('Bulk delete: failed to unlink references to deleted files', { error });
     }
 
     // One refund per owner after all deletions; one owner's failure does not skip the others.

@@ -22,8 +22,8 @@
  */
 
 import { buildAgentPersonaPrompt, pairDataLakeTools, type IAgent, type OrchestrationDefaults } from '@bike4mind/common';
-import { buildDefaultOrchestrationProfile } from '@client/lib/agentOrchestration';
-import { isHeadlessConnection } from '@server/utils/headlessConnection';
+import { buildDefaultOrchestrationProfile } from '@bike4mind/server-utils/lib/agentOrchestration';
+import { isHeadlessConnection } from '@bike4mind/server-utils/utils/headlessConnection';
 
 /**
  * Subset of the orchestration fields the executor actually consumes when
@@ -73,12 +73,12 @@ export interface ResolvedOrchestrationProfile {
    */
   systemPrompt?: string;
   /**
-   * Per-profile confidence-gate threshold. The executor pauses an iteration for human
-   * review when its confidence falls below this. Omitted => the executor's global default
-   * (CONFIDENCE_GATE_THRESHOLD). Set to 0 to effectively disable the gate for a profile
-   * whose tools are sandboxed and whose loop is meant to run unattended (e.g. the
-   * optimizer): a single recoverable tool error shouldn't halt an autonomous run for a
-   * human, and maxIterations remains the runaway backstop.
+   * Per-profile confidence-gate threshold. The executor pauses for human review when
+   * consecutive iterations' confidence falls below this (`LOW_CONFIDENCE_STREAK_TO_PAUSE`).
+   * Omitted => the executor's global default (CONFIDENCE_GATE_THRESHOLD). Set to 0 to
+   * effectively disable the gate for a profile whose tools are sandboxed and whose loop is
+   * meant to run unattended (e.g. the optimizer): a single recoverable tool error shouldn't
+   * halt an autonomous run for a human, and maxIterations remains the runaway backstop.
    */
   confidenceGateThreshold?: number;
 }

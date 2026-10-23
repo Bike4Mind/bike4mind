@@ -16,11 +16,13 @@ const mockResource = vi.hoisted(() => ({
   websocket: { managementEndpoint: 'https://ws.test', url: 'wss://ws.test' },
   App: { stage: 'test' },
 }));
+// Real entitlements pull in mongoose models at import time, which the @bike4mind/database mock lacks.
+vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
 vi.mock('sst', () => ({ Resource: mockResource }));
 
 // The quest-processing-failure metric's emit seam.
 const mockEmitMetrics = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-vi.mock('@server/utils/cloudwatch', () => ({ emitMetrics: mockEmitMetrics }));
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetrics: mockEmitMetrics }));
 
 // WS connection lookup + fanout seams for the ws-completions route.
 const mockConnectionFind = vi.hoisted(() => vi.fn());
@@ -118,7 +120,9 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/utils')>()),
   registerProcessErrorHandlers: vi.fn(),
 }));
-vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://x/%STAGE%', STAGE: 'test' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
+  Config: { MONGODB_URI: 'mongodb://x/%STAGE%', STAGE: 'test' },
+}));
 
 import { createApp, drainInFlight, DRAIN_TIMEOUT_MS } from './server';
 import { GENERIC_PROCESSING_FAILURE_REPLY } from './internal/route';
@@ -395,8 +399,19 @@ describe('ChatCompletion /api/ai/v1/completions', () => {
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
 
-  it('returns 422 JSON on an invalid request body (no execution)', async () => {
-    const res = await postCompletion({ messages: [] }); // missing required `model`
+  it('returns 400 JSON for an empty conversation (no execution)', async () => {
+    const res = await postCompletion({ model: 'claude-test', messages: [] });
+    expect(res.status).toBe(400);
+    expect(res.headers.get('content-type')).toContain('application/json');
+    const body = (await res.json()) as { error: string; request_id: string };
+    expect(body.error).toMatch(/^Validation error/);
+    expect(body.error).toContain('messages');
+    expect(body.request_id).toBe(res.headers.get('x-request-id'));
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('returns 422 JSON on another invalid request body (no execution)', async () => {
+    const res = await postCompletion({ messages: [{ role: 'user', content: 'hi' }] }); // missing required `model`
     expect(res.status).toBe(422);
     expect(res.headers.get('content-type')).toContain('application/json');
     const body = (await res.json()) as { error: string; request_id: string };

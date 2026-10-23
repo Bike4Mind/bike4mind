@@ -139,6 +139,65 @@ export interface IAttachmentDelivery {
   droppedIds: string[];
 }
 
+/**
+ * Why a turn's LLM call was retried. Timeouts we raise ourselves are classified ahead of
+ * overload so they never read as a provider fault (older backends worded them "may be
+ * overloaded"). Must stay in sync with classifyTurnRetryReason in @bike4mind/services.
+ */
+export const TURN_RETRY_REASONS = [
+  'stream_idle_timeout',
+  'stream_truncated',
+  'request_timeout',
+  'rate_limit',
+  'overloaded',
+  'server_error',
+  'transport',
+  'tool_pairing',
+  'other',
+] as const;
+export type TurnRetryReason = (typeof TURN_RETRY_REASONS)[number];
+
+/**
+ * Cap on the retries persisted per turn. A pathological turn stops growing the quest record
+ * here, so a full list means "at least this many" - the UI renders it as "50+".
+ */
+export const MAX_RECORDED_TURN_RETRIES = 50;
+
+/** One retry of the LLM call, recorded at the moment the retry was scheduled. */
+export interface ITurnRetry {
+  reason: TurnRetryReason;
+  /** HTTP status of the failed attempt, when the error carried one. */
+  status?: number;
+  /** The provider's Retry-After, in ms. */
+  retryAfterMs?: number;
+  /** The provider's request id for the failed attempt - what a provider support ticket needs. */
+  requestId?: string;
+  /** Backoff before the next attempt, in ms. */
+  delayMs: number;
+  model: string;
+  at: Date;
+}
+
+/**
+ * Where one turn's wall-clock time went, persisted so a slow reply can be diagnosed from the
+ * quest instead of from logs. All durations are ms. TTFB/TTFVT live in
+ * `promptMeta.performance` (firstChunkTime/firstTokenTime) and the final model in `fallbackInfo`,
+ * so neither is repeated here.
+ */
+export interface ITurnTiming {
+  /** Turn started (the quest's timestamp) to processing started: request handling plus queue delay. */
+  queueMs: number;
+  /** Processing started to the first LLM request: context, history, data sources, tools. */
+  contextBuildMs?: number;
+  /** Summed wait for a provider concurrency slot, across every tool round. */
+  semaphoreWaitMs: number;
+  /** Turn started to the reply completing (or the turn failing). Unset while it is running. */
+  totalMs?: number;
+  retries: ITurnRetry[];
+  /** Models switched to after the requested one failed. */
+  fallbackHops: number;
+}
+
 export interface IChatHistoryItem {
   id?: string;
   sessionId: string;
@@ -410,6 +469,9 @@ export interface IChatHistoryItem {
    * produces no notices at all; that case is exactly the one nothing else records.
    */
   attachmentDelivery?: IAttachmentDelivery;
+
+  /** Where this turn's time went - see {@link ITurnTiming}. Absent on turns that predate it. */
+  turnTiming?: ITurnTiming;
 
   /**
    * Navigation intents from the navigate_view tool.
@@ -684,6 +746,13 @@ export interface ISession {
    */
   disabledTools?: string[];
   /**
+   * Server-owned: tools the completion path added on its own because a turn's message called for them
+   * (blog, data-lake save, skill). Only ever grows, so the tool list a session sends stays the same
+   * from turn to turn: any change to it invalidates the provider's whole prompt cache. Never written
+   * from a client.
+   */
+  autoAddedTools?: string[];
+  /**
    * When true, suppress the user's personal integrations for this session - their
    * MCP servers and agent delegation are not layered onto the session's toolset, so
    * it runs only its curated, server-owned tools. Generic capability - lets a product
@@ -793,6 +862,13 @@ export interface ISession {
    */
   maxToolCalls?: number;
   /**
+   * Fields the user set explicitly that a contributed workspace may own. On that workspace its resolver
+   * still decides them; moving or copying off it keeps them (see `WorkspaceSessionSettingsTable` in
+   * surfaces.ts). Recorded at
+   * create for each such field set where the session's workspace does not own it; copies carry it.
+   */
+  userSetFields?: string[];
+  /**
    * The placeholder name a product surface stamped on this session at create
    * time. Generic capability - auto-naming treats a session still bearing its
    * placeholder as rename-eligible (bypassing the recent-update duplicate
@@ -871,13 +947,12 @@ export interface ISession {
    * Set to 0 when a realtime hold opens and removed when it closes; absent for other holds.
    */
   voiceBilledCredits?: number;
-}
 
-/** The per-call state a claimed voice hold carries, restored with it if its settlement fails. */
-export interface VoiceHoldMarkers {
-  voiceConnectedAt?: Date | null;
-  voiceLastActivityAt?: Date | null;
-  voiceBilledCredits?: number | null;
+  /**
+   * Who paid the open voice hold's reserve, set when it opens and cleared when it settles. Every
+   * refund and debit against the hold goes to this user, never to whoever sends the closing frame.
+   */
+  voiceHoldUserId?: string | null;
 }
 
 ///////////
@@ -1034,6 +1109,18 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
   pullKnowledgeIds: (fabFileIds: string[]) => Promise<number>;
 
   /**
+   * As `pullKnowledgeIds`, but for ONE session only. Resolves to whether that session was modified.
+   */
+  pullKnowledgeIdsFromSession: (sessionId: string, fabFileIds: string[]) => Promise<boolean>;
+
+  /**
+   * As `pullKnowledgeIds`, but only from live sessions OWNED by one of `userIds` - bounded by the
+   * (deletedAt, userId) indexes, where the unscoped form has to scan for the unindexed knowledgeIds.
+   * Resolves to the sessions modified.
+   */
+  pullKnowledgeIdsForUsers: (userIds: string[], fabFileIds: string[]) => Promise<number>;
+
+  /**
    * Search for sessions by user ID
    *
    * @param search - The search query
@@ -1092,6 +1179,15 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
    * @returns The updated session
    */
   attachAgent: (sessionId: string, agentId: string) => Promise<ISessionDocument>;
+
+  /**
+   * Record tools the completion path auto-added, atomically and add-only ($addToSet), so concurrent
+   * turns cannot drop one another's entries.
+   *
+   * @param sessionId - The session ID
+   * @param toolNames - Tool names to add to `autoAddedTools`
+   */
+  addAutoAddedTools: (sessionId: string, toolNames: string[]) => Promise<void>;
 
   /**
    * Detach an agent from a session
@@ -1218,7 +1314,7 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
     sessionId: string,
     startedAt: Date,
     options?: { realtimeOnly?: boolean }
-  ) => Promise<{ billedCredits: number | null } | null>;
+  ) => Promise<{ billedCredits: number | null; payerId: string | null } | null>;
 
   /**
    * Write a fresh call's hold, only while the session still holds `priorStartedAt` (the hold read
@@ -1228,18 +1324,6 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
   openVoiceHold: (
     sessionId: string,
     priorStartedAt: Date | null,
-    hold: { voiceReservedCredits: number | null; voiceSessionStartedAt: Date; realtime: boolean }
-  ) => Promise<boolean>;
-
-  /**
-   * Put back a hold claimed by `claimVoiceHold` whose refund then failed, with its per-call
-   * `markers`, so it can be settled again. Resolves false (and writes nothing) when the session
-   * already holds a newer call.
-   */
-  restoreVoiceHold: (
-    sessionId: string,
-    voiceReservedCredits: number,
-    startedAt: Date,
-    markers?: VoiceHoldMarkers
+    hold: { voiceReservedCredits: number | null; voiceSessionStartedAt: Date; realtime: boolean; payerId: string }
   ) => Promise<boolean>;
 }

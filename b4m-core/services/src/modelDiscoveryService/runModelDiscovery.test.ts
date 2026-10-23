@@ -20,6 +20,7 @@ import {
   presentationOwnedOutsideDiscovery,
   runModelDiscovery,
 } from './runModelDiscovery';
+import { normalizeBedrockModels } from './sources/bedrock';
 import type {
   DiscoveredModel,
   DiscoveryLogger,
@@ -141,6 +142,24 @@ describe('runModelDiscovery', () => {
     expect(bench.catalog.rows[0].effectiveFrom).toEqual(START);
     expect(bench.state.sightings).toEqual(['gpt-6']);
     expect(result.metrics).toMatchObject({ ModelsDiscovered: 1, ModelsPromoted: 1, ModelsBlockedByDispatch: 0 });
+  });
+
+  it('does not promote on a provider price the price plan refuses to write', async () => {
+    const dissenting = (name: string) =>
+      stubSource({
+        name,
+        kind: 'aggregator',
+        records: [{ modelId: 'gpt-6', patch: {}, pricing: { inputPerMTok: 20, outputPerMTok: 80 } }],
+      });
+    const refused = harness([openaiSource(), dissenting('models.dev'), dissenting('litellm')]);
+
+    const result = await runModelDiscovery(refused.adapters, refused.options);
+
+    // Every mirror dissents, so no price row lands; promoting would leave an
+    // active text model with nothing in force to bill it by.
+    expect(refused.prices.rows).toEqual([]);
+    expect(result.metrics.ModelsPromoted).toBe(0);
+    expect(result.diff[0]).toMatchObject({ modelId: 'gpt-6', promoted: false, blockedBy: ['no-trusted-price'] });
   });
 
   it('appends nothing on a second run over identical source data', async () => {
@@ -795,6 +814,74 @@ describe('runModelDiscovery', () => {
         expect(controlRows.some(row => row.patch.lifecycle?.status === 'deprecated')).toBe(true);
       });
 
+      it('writes the base lifecycle onto a catalogued profile row and surfaces source gaps', async () => {
+        const legacy = { status: 'legacy' as const, deprecationDate: '2026-07-08', retirementDate: '2027-01-08' };
+        const gap = { source: 'bedrock', modelId: 'meta.llama3-70b-instruct-v1:0', reason: 'no lifecycle' };
+        const bedrock = harness([
+          stubSource({
+            name: 'bedrock',
+            kind: 'provider',
+            result: {
+              ok: true,
+              authoritativeFor: [ModelBackend.Bedrock],
+              records: [
+                { ...bareFoundation, patch: { ...bareFoundation.patch, lifecycle: legacy } },
+                {
+                  modelId: 'global.anthropic.claude-sonnet-4-6',
+                  patch: { lifecycle: legacy },
+                  lifecycleEvidence: 'typed',
+                },
+              ],
+              dropped: [gap],
+            },
+          }),
+        ]);
+        await seedActive(bedrock, 'global.anthropic.claude-sonnet-4-6', 'Claude Sonnet 4.6 (global)');
+
+        await runModelDiscovery(bedrock.adapters, bedrock.options);
+
+        const profileRow = bedrock.catalog.rows.find(
+          row => row.modelId === 'global.anthropic.claude-sonnet-4-6' && row.source === 'discovery'
+        );
+        expect(profileRow?.patch.lifecycle).toMatchObject(legacy);
+        expect(bedrock.runs.docs.at(-1)?.droppedRecords).toContainEqual(gap);
+      });
+
+      it('keeps an aggregator deprecation for a profile id whose foundation is still active', async () => {
+        const profileId = 'global.anthropic.claude-sonnet-4-6';
+        const bedrock = harness([
+          stubSource({
+            name: 'bedrock',
+            kind: 'provider',
+            records: normalizeBedrockModels({
+              summaries: [{ modelId: 'anthropic.claude-sonnet-4-6', modelLifecycle: { status: 'ACTIVE' } }],
+              catalogModelIds: [profileId],
+            }),
+            authoritativeFor: [ModelBackend.Bedrock],
+          }),
+          // Two agreeing aggregators, since a lone aggregator sunset of a held model is only a suggestion.
+          ...['litellm', 'models.dev'].map(name =>
+            stubSource({
+              name,
+              kind: 'aggregator',
+              records: [
+                {
+                  modelId: profileId,
+                  lifecycleEvidence: 'typed',
+                  patch: { lifecycle: { status: 'deprecated', deprecationDate: '2026-07-01' } },
+                },
+              ],
+            })
+          ),
+        ]);
+        await seedActive(bedrock, profileId, 'Claude Sonnet 4.6 (global)');
+
+        await runModelDiscovery(bedrock.adapters, bedrock.options);
+
+        const profileRow = bedrock.catalog.rows.find(row => row.modelId === profileId && row.source === 'discovery');
+        expect(profileRow?.patch.lifecycle).toMatchObject({ status: 'deprecated', deprecationDate: '2026-07-01' });
+      });
+
       describe('frozen profile ids', () => {
         it('persists and warns on a profile id whose foundation id the listing omitted', async () => {
           const bedrock = harness([
@@ -867,6 +954,59 @@ describe('runModelDiscovery', () => {
         harnessed.advance(60_000);
         return runModelDiscovery(harnessed.adapters, harnessed.options);
       };
+
+      describe('a future date an aggregator repeats after the provider reported the model undated', () => {
+        const FUTURE = '2026-12-01';
+        const undated = sunset({ status: 'active' }, 'typed');
+        const aggregator = () =>
+          stubSource({
+            name: 'models.dev',
+            kind: 'aggregator',
+            records: [
+              {
+                modelId: 'gpt-6',
+                patch: { lifecycle: { status: 'active', deprecationDate: FUTURE } },
+                lifecycleEvidence: 'typed',
+              },
+            ],
+          });
+        const writtenDates = (harnessed: Harness) =>
+          harnessed.catalog.rows
+            .filter(row => row.modelId === 'gpt-6')
+            .map(row => (row.patch.lifecycle as { deprecationDate?: string } | undefined)?.deprecationDate)
+            .filter(date => date !== undefined);
+
+        /** A second provider on the backend keeps the aggregator from being gap-fill only. */
+        const azure = () =>
+          stubSource({ name: 'azure', kind: 'provider', records: [gpt6], authoritativeFor: [ModelBackend.OpenAI] });
+
+        const firstPass = async (harnessed: Harness) => {
+          harnessed.adapters.sources = [openaiSource([undated]), azure(), aggregator()];
+          await runModelDiscovery(harnessed.adapters, harnessed.options);
+          expect(writtenDates(harnessed)).toEqual([]);
+          harnessed.advance(60_000);
+        };
+
+        it.each([
+          {
+            name: 'stays refused on a run where the provider fetch fails',
+            openai: () => stubSource({ name: 'openai', kind: 'provider', result: { ok: false, error: 'HTTP 503' } }),
+            expected: [] as string[],
+          },
+          {
+            name: 'is written once the provider is not configured, so it cannot be reporting',
+            openai: () => stubSource({ name: 'openai', kind: 'provider', configured: false }),
+            expected: [FUTURE],
+          },
+        ])('$name', async ({ openai, expected }) => {
+          await firstPass(bench);
+          bench.adapters.sources = [openai(), azure(), aggregator()];
+
+          await runModelDiscovery(bench.adapters, bench.options);
+
+          expect(writtenDates(bench)).toEqual(expected);
+        });
+      });
 
       it('transitions on the first run a typed source reports it', async () => {
         const result = await secondRun(bench, [
@@ -952,6 +1092,52 @@ describe('runModelDiscovery', () => {
         expect(bench.catalog.rows[1].patch).toMatchObject({
           lifecycle: { status: 'deprecated', deprecationDate: '2026-07-30' },
         });
+      });
+
+      const litellmSunset = (name: string) =>
+        stubSource({
+          name,
+          kind: 'aggregator',
+          records: [{ modelId: 'gpt-6', patch: { lifecycle: { status: 'deprecated' } }, lifecycleEvidence: 'typed' }],
+        });
+
+      it('queues a lone aggregator sunset of a listed model instead of writing it', async () => {
+        const result = await secondRun(bench, [openaiSource([gpt6]), litellmSunset('litellm')]);
+
+        expect(result.lifecycle.transitions).toEqual([]);
+        expect(bench.catalog.rows.some(row => row.patch.lifecycle?.status === 'deprecated')).toBe(false);
+        expect(result.lifecycle.suggestions).toEqual([
+          expect.objectContaining({ modelId: 'gpt-6', status: 'deprecated', source: 'litellm' }),
+        ]);
+      });
+
+      it('withholds a lone aggregator sunset of a static model that has no catalog row yet', async () => {
+        const gpt4o: DiscoveredModel = { ...gpt6, modelId: 'gpt-4o', patch: { ...gpt6.patch, id: 'gpt-4o' } };
+        const fresh = harness([
+          openaiSource([gpt4o]),
+          stubSource({
+            name: 'litellm',
+            kind: 'aggregator',
+            records: [
+              { modelId: 'gpt-4o', patch: { lifecycle: { status: 'deprecated' } }, lifecycleEvidence: 'typed' },
+            ],
+          }),
+        ]);
+
+        await runModelDiscovery(fresh.adapters, fresh.options);
+
+        expect(fresh.catalog.rows.some(row => row.patch.lifecycle?.status === 'deprecated')).toBe(false);
+      });
+
+      it('writes an aggregator sunset both aggregators agree on', async () => {
+        const result = await secondRun(bench, [
+          openaiSource([gpt6]),
+          litellmSunset('litellm'),
+          litellmSunset('models.dev'),
+        ]);
+
+        expect(result.lifecycle.transitions[0]).toMatchObject({ modelId: 'gpt-6', to: 'deprecated' });
+        expect(bench.catalog.rows.some(row => row.patch.lifecycle?.status === 'deprecated')).toBe(true);
       });
 
       it('drops a docs signal whose parser row count moved more than 20%', async () => {
@@ -1381,6 +1567,21 @@ describe('runModelDiscovery', () => {
       expect(second.diff).toEqual([]);
       expect(bench.catalog.rows).toHaveLength(2);
       expect(bench.prices.rows).toHaveLength(1);
+    });
+
+    it('persists a source gap reported on every pass once', async () => {
+      const gap = { source: 'openai', modelId: 'gpt-7', reason: 'unusable lifecycle' };
+      const { bench } = convergent([gpt7], enriched);
+      bench.adapters.sources[0] = stubSource({
+        name: 'openai',
+        kind: 'provider',
+        result: { ok: true, records: [gpt7], authoritativeFor: [ModelBackend.OpenAI], dropped: [gap] },
+      });
+
+      const result = await runModelDiscovery(bench.adapters, bench.options);
+
+      expect(result.passes).toBeGreaterThanOrEqual(2);
+      expect(bench.runs.docs.at(-1)?.droppedRecords.filter(record => record.reason === gap.reason)).toHaveLength(1);
     });
 
     it('adds a model the openai source can only half describe, then completes it', async () => {

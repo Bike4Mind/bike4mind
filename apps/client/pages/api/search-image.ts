@@ -2,9 +2,9 @@ import { cacheRepository } from '@bike4mind/database';
 import { isExecutableUploadMimeType, stripImageUrlSignature, verifyImageUrlSignature } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { Config } from '@server/utils/config';
-import { BadRequestError, TooManyRequestsError } from '@server/utils/errors';
-import { safeFetch, SsrfError } from '@server/utils/ssrfProtection';
+import { Config } from '@bike4mind/server-utils/utils/config';
+import { BadRequestError, TooManyRequestsError } from '@bike4mind/server-utils/utils/errors';
+import { isResponseTooLargeError, safeFetch, SsrfError } from '@bike4mind/server-utils/utils/ssrfProtection';
 import { streamWithSizeLimit } from '@server/utils/streamWithSizeLimit';
 import { z } from 'zod';
 
@@ -89,13 +89,17 @@ const handler = baseApi({ auth: 'jwtOnly' }).get(
       try {
         // safeFetch asserts https + non-private target, then re-validates a single redirect hop,
         // so the CDN redirects these thumbnails routinely use still work.
-        response = await safeFetch(fetchUrl, {
-          headers: {
-            'User-Agent': `Lumina5-SearchImageProxy/1.0${brand ? ` (${brand})` : ''}`,
-            Accept: 'image/webp,image/apng,image/*,*/*;q=0.8',
+        response = await safeFetch(
+          fetchUrl,
+          {
+            headers: {
+              'User-Agent': `Lumina5-SearchImageProxy/1.0${brand ? ` (${brand})` : ''}`,
+              Accept: 'image/webp,image/apng,image/*,*/*;q=0.8',
+            },
+            signal: controller.signal,
           },
-          signal: controller.signal,
-        });
+          { maxBodyBytes: MAX_IMAGE_BYTES }
+        );
       } catch (e) {
         if (e instanceof SsrfError) {
           // The reason names the host and the private address it resolved to. Every signed-in
@@ -103,6 +107,9 @@ const handler = baseApi({ auth: 'jwtOnly' }).get(
           // oracle - keep the detail in the log, hand the caller nothing.
           req.logger.warn('Blocked SSRF attempt on /api/search-image', { url: fetchUrl, reason: e.message });
           throw new BadRequestError('Image URL is not allowed');
+        }
+        if (isResponseTooLargeError(e)) {
+          throw new BadRequestError('Image too large');
         }
         if (e instanceof Error && e.name === 'AbortError') {
           throw new BadRequestError('Image fetch timed out');

@@ -13,8 +13,8 @@ import {
   serializeCharter,
   serializeHandoff,
 } from '@bike4mind/database';
-import { enrollDeepAgent } from './enroll';
-import type { AgentRosterItem } from './consoleReads';
+import { enrollDeepAgent } from '@bike4mind/server-utils/deepAgent/enroll';
+import type { AgentRosterItem } from '@bike4mind/server-utils/deepAgent/consoleReads';
 
 /**
  * Missions - the deep-agent capability surfaced on existing B4M Agents.
@@ -79,6 +79,11 @@ export async function enrollMissionForAgent(
     { store, enqueueWake }
   );
   return { missionId: enrolled.agentId, charter: enrolled.charter };
+}
+
+/** Roll back a just-enrolled mission whose first wake failed, so no charter is left orphaned. */
+export async function discardEnrolledMission(missionId: string): Promise<void> {
+  await deepAgentCharterRepository.deleteByAgentId(missionId);
 }
 
 /** Mission roster for one B4M agent (same shape as the console roster). */

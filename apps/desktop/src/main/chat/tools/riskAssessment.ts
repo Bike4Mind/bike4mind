@@ -32,6 +32,7 @@ export function spendsCredits(toolName: string): boolean {
 /**
  * Tools whose result is someone else's text - a web page, an MCP server, a skill, or another
  * session's transcript, which may have read any of those - that can carry injected instructions.
+ * A skill the user installed or a trusted project's opts out per call; see skillTool's `run`.
  *
  * A shell command's output is NOT here, even though `curl` prints what a page said: a script
  * file or a decoded payload slips past any check on the text, so a command is judged on what it
@@ -53,7 +54,7 @@ export function readsUntrusted(toolName: string): boolean {
 /**
  * Tools that can carry data off this computer, or into a session that has not read the untrusted
  * content. A reply that has read such content asks before each of these, whatever "always" was
- * answered before.
+ * answered before - except a shell command the scan proved contained (ApprovalPrompt.contained).
  */
 const SENDS_OUT: ReadonlySet<string> = new Set([
   'bash_execute',
@@ -66,4 +67,16 @@ const SENDS_OUT: ReadonlySet<string> = new Set([
 
 export function sendsOut(toolName: string): boolean {
   return SENDS_OUT.has(toolName) || toolName.startsWith(MCP_TOOL_PREFIX);
+}
+
+/**
+ * Tools whose "Allow in this chat" covers them over a tainted reply too, as an allow
+ * rule does. Taint makes web_fetch ask because an injected page could pick the URL; a user who
+ * answered "always" for every site has already accepted any URL, so asking per site in a
+ * tainted reply only stacks a card for each parallel fetch.
+ */
+const ALWAYS_OVERRIDES_TAINT: ReadonlySet<string> = new Set([WEB_FETCH_TOOL_NAME]);
+
+export function alwaysOverridesTaint(toolName: string): boolean {
+  return ALWAYS_OVERRIDES_TAINT.has(toolName);
 }

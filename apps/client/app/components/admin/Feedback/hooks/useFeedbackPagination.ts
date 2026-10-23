@@ -1,32 +1,20 @@
-import { useCallback, useState } from 'react';
-import { FEEDBACK_LIST_DEFAULT_LIMIT } from '@bike4mind/common';
+import { useCallback } from 'react';
 import { UseFeedbackPaginationReturn } from '../types';
+import { useFeedbackView } from './useFeedbackView';
 
 /**
- * Page cursor for the feedback list.
+ * Page cursor for the feedback list, kept in the URL alongside the filters (see useFeedbackView).
  *
  * Holds only the page and page size: the rows themselves come back already paginated from
  * GET /api/feedback, so there is nothing to slice here. This hook is declared BEFORE the query
  * that consumes it, because its values are query inputs rather than results.
  */
 export const useFeedbackPagination = (): UseFeedbackPaginationReturn => {
-  const [currentPage, setCurrentPage] = useState(1);
-  const [itemsPerPage, setItemsPerPage] = useState(FEEDBACK_LIST_DEFAULT_LIMIT);
+  const [{ page, limit }, updateView] = useFeedbackView();
 
-  const handlePageChange = useCallback((newPage: number) => {
-    setCurrentPage(newPage);
-  }, []);
+  const handlePageChange = useCallback((newPage: number) => updateView({ page: newPage }), [updateView]);
 
-  const handleItemsPerPageChange = useCallback((items: number) => {
-    setItemsPerPage(items);
-    setCurrentPage(1);
-  }, []);
+  const handleItemsPerPageChange = useCallback((items: number) => updateView({ limit: items, page: 1 }), [updateView]);
 
-  // Filters narrow the result set, so page 7 of the old set may not exist in the new one - which
-  // would otherwise show an empty table with no indication why.
-  const resetPage = useCallback(() => {
-    setCurrentPage(1);
-  }, []);
-
-  return { currentPage, handlePageChange, itemsPerPage, handleItemsPerPageChange, resetPage };
+  return { currentPage: page, handlePageChange, itemsPerPage: limit, handleItemsPerPageChange };
 };

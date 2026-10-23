@@ -1,11 +1,16 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_WRITE_SCOPES } from '@server/dataLakes/dataLakeScopes';
-import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { dataLakeRepository, isGitHubLakeSyncClaimLive, orgGitHubLakeConnectionRepository } from '@bike4mind/database';
 import { isLakeIngestable, isSameLakeConnectionOwner, lakeConnectionOwnerOf } from '@bike4mind/common';
 import { authorizeLakeConnectorAccess } from '@server/dataLakes/authorizeLakeConnectorAccess';
-import { BadRequestError, ConflictError, InternalServerError, NotFoundError } from '@server/utils/errors';
-import { sendToQueue } from '@server/utils/sqs';
+import {
+  BadRequestError,
+  ConflictError,
+  InternalServerError,
+  NotFoundError,
+} from '@bike4mind/server-utils/utils/errors';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { Request } from 'express';
 import { Resource } from 'sst';
 

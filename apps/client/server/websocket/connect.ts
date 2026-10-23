@@ -5,7 +5,8 @@ import { authTokenGenerator } from '@server/auth/tokenGenerator';
 import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
 import { isTokenTypeAcceptable, isTokenVersionCurrent } from '@bike4mind/services';
 import { verifyApiKey } from '@server/cli/auth';
-import { UnauthorizedError } from '@server/utils/errors';
+import { isAuthInfraFailure } from '@server/auth/apiKeyAuthFailure';
+import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { withWebSocketContext } from '@server/websocket/utils';
 import { gatewayCapExpiry, assertRealtimeSessionActive } from '@server/websocket/realtimeSession';
 import { APIGatewayProxyEvent, APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
@@ -144,6 +145,8 @@ async function resolveIdentity(
       authExpiresAt: gatewayCapExpiry(),
     };
   } catch (apiKeyErr) {
+    // The key check itself failed (database unreachable): a retryable 5xx, not a bad token.
+    if (isAuthInfraFailure(apiKeyErr)) throw apiKeyErr;
     logger.warn('[WS_CONNECT] both JWT and API-key auth failed', {
       jwtError: jwtErr instanceof Error ? jwtErr.message : String(jwtErr ?? 'n/a'),
       apiKeyError: apiKeyErr instanceof Error ? apiKeyErr.message : String(apiKeyErr),

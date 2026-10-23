@@ -1,5 +1,8 @@
+import type { Logger } from '@bike4mind/observability';
+import type { ServerToolExecutors } from '@bike4mind/services';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { executeToolWithLogging } from '@server/cli/toolsHandler.shared';
+import { buildDecideExecutor } from '@server/decisions/cliDecideExecutor';
+import { executeToolWithLogging } from '@bike4mind/server-utils/cli/toolsHandler.shared';
 import { executeToolContract } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 
@@ -14,6 +17,9 @@ import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
  * WHY dual implementation? SST dev + Lambda Function URLs + CloudFront router =
  * socket hang ups; Next.js API works reliably in local dev.
  */
+/** Same executor wiring as the Lambda entry - see apps/workers/src/cli/tools.ts. */
+const buildExecutors = (logger: Logger): ServerToolExecutors => ({ decide: buildDecideExecutor(logger) });
+
 const handler = nextRouteForContract(executeToolContract, {
   // Passed as an option so the adapter orders it before validation (a malformed
   // body still counts against the limiter). 100 requests/hour (matches the Lambda).
@@ -27,6 +33,7 @@ const handler = nextRouteForContract(executeToolContract, {
         info: msg => req.logger.info(`[TOOLS_API] ${msg}`),
         error: (msg, err) => req.logger.error(`[TOOLS_API] ${msg}`, err),
       },
+      executors: buildExecutors(req.logger),
     });
 
     // Echo request_id in the body to match the X-Request-ID header.

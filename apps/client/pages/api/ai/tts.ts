@@ -4,16 +4,20 @@ import {
   TTS_MAX_INPUT_CHARS,
   VOICE_VENDOR_SUPPORTED_FORMATS,
   UnprocessableEntityError,
-  estimateTtsCreditCost,
-  TTS_DEFAULT_MODEL,
   DEFAULT_TTS_PROVIDER,
   shouldPersistGeneratedAudio,
   type ApiErrorCode,
 } from '@bike4mind/common';
-import { TtsProviderNotConfiguredError } from '@server/utils/resolveTtsProvider';
+import { hasTtsProviderKey, TtsProviderNotConfiguredError } from '@server/utils/resolveTtsProvider';
 import { synthesizeTts, upstreamStatus, isCredentialRejection } from '@server/utils/synthesizeTts';
 import { deductTtsCredits } from '@server/utils/deductTtsCredits';
-import { assertPreflightCredits, InsufficientCreditsPreflightError } from '@server/utils/creditPreflight';
+import { resolveAudioBillingOrgId } from '@server/billing/resolveAudioBillingOrgId';
+import { ttsCandidates, estimateTtsHoldCredits } from '@server/utils/ttsCandidates';
+import {
+  holdPreflightCredits,
+  InsufficientCreditsPreflightError,
+  type PreflightCreditHold,
+} from '@server/utils/creditPreflight';
 import { saveGeneratedAssetToFiles } from '@server/utils/saveGeneratedAssetToFiles';
 import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
 
@@ -35,8 +39,19 @@ import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
  * typed body.
  */
 const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, res) => {
-  const { text, provider, model, voice, format, encoding, stability, similarityBoost, languageCode, preview } =
-    req.validated;
+  const {
+    text,
+    provider,
+    model,
+    voice,
+    format,
+    encoding,
+    stability,
+    similarityBoost,
+    languageCode,
+    preview,
+    organization_id,
+  } = req.validated;
 
   const vendor = provider ?? DEFAULT_TTS_PROVIDER;
 
@@ -60,14 +75,35 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
     );
   }
 
-  // Pre-flight credit gate: reject before incurring provider cost.
+  // Hold the estimate before incurring provider cost, so concurrent calls cannot overdraw the balance.
+  // Omitted keeps the historical personal default; a key bills its own account
+  // (resolveAudioBillingOrgId 403s any other target).
+  const billingOrganizationId = await resolveAudioBillingOrgId(req, organization_id, 'user');
   const userId = req.user?.id;
-  if (userId) {
+  const candidateAvailability = await Promise.all(
+    ttsCandidates(vendor, text.length).map(async candidate => ({
+      vendor: candidate,
+      available:
+        candidate === vendor ||
+        (userId !== undefined &&
+          (await hasTtsProviderKey(candidate, userId).catch(error => {
+            req.logger.warn('TTS fallback key lookup failed', {
+              vendor: candidate,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            return false;
+          }))),
+    }))
+  );
+  const candidates = candidateAvailability.filter(candidate => candidate.available).map(candidate => candidate.vendor);
+  let hold: PreflightCreditHold | undefined;
+  if (userId && req.user) {
     try {
-      await assertPreflightCredits({
-        userId,
-        estimatedCredits: estimateTtsCreditCost(vendor, model ?? TTS_DEFAULT_MODEL[vendor], text.length),
+      hold = await holdPreflightCredits({
+        req: { user: req.user, apiKeyInfo: req.apiKeyInfo, logger: req.logger },
+        requiredCredits: estimateTtsHoldCredits(vendor, model, text.length, candidates),
         featureLabel: 'text-to-speech',
+        billingOrganizationId,
       });
     } catch (error) {
       if (error instanceof InsufficientCreditsPreflightError) {
@@ -88,6 +124,7 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
   try {
     const synthesized = await synthesizeTts({
       provider: vendor,
+      candidates,
       text,
       userId,
       requestedVoice: voice,
@@ -114,8 +151,11 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
 
     // Charge for the successful synthesis before delivery: the provider cost is
     // already incurred however the bytes end up being returned.
-    if (userId) {
+    if (hold) {
+      const settling = hold;
+      hold = undefined;
       await deductTtsCredits({
+        hold: settling,
         userId,
         vendor: usedVendor,
         model: result.model,
@@ -158,6 +198,9 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
       logger: req.logger,
     });
   } catch (error) {
+    // Still set only when synthesis failed before settlement: no provider cost was incurred.
+    await hold?.release();
+
     // No provider is usable (the requested one and every alternate lack a key).
     // errorCode lets the client separate this from a configured-but-rejected
     // key, which needs different advice.

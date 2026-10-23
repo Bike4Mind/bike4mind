@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { ForbiddenError, BadRequestError } from '@server/utils/errors';
+import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { TELEMETRY_SAFE_PROJECTION } from '@server/utils/telemetryProjection';
 import { telemetryDryRunResultRepository, adminSettingsRepository, Quest } from '@bike4mind/database';
 import { z } from 'zod';
@@ -11,8 +11,8 @@ import {
   generateSemanticTelemetryFingerprint,
   getSeverityEmoji,
   formatPrimaryAnomaly,
-} from '@server/services/telemetryFingerprint';
-import { checkFingerprintDedup } from '@server/services/issueDedup';
+} from '@bike4mind/server-utils/services/telemetryFingerprint';
+import { checkFingerprintDedup } from '@bike4mind/server-utils/services/issueDedup';
 import { GitHubService } from '@server/services/githubService';
 import {
   getFallbackPriority,

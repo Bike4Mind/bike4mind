@@ -31,14 +31,23 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 // The whole module is replaced, so every repo the route (or lakeConfigAuditDb) names must be
 // present - a missing export is an import-time failure, not a silent undefined.
 vi.mock('@bike4mind/database', () => ({
+  memoryLedgerRepository: { markSourceShredded: vi.fn().mockResolvedValue(0) },
   withTransaction: async (fn: () => unknown) => fn(),
-  dataLakeRepository: { touchIfStable: h.touchIfStable },
+  dataLakeRepository: { touchIfStable: h.touchIfStable, findByDatalakeTags: vi.fn().mockResolvedValue([]) },
   dataLakeAccessGrantRepository: {},
-  fabFileRepository: {},
+  fabFileRepository: { setOwnerOrganizationIfUnchanged: vi.fn().mockResolvedValue(true) },
+  userRepository: {
+    findById: vi.fn().mockResolvedValue(null),
+    incrementCurrentStorage: vi.fn().mockResolvedValue(undefined),
+  },
+  organizationRepository: {
+    findById: vi.fn().mockResolvedValue(null),
+    incrementCurrentStorage: vi.fn().mockResolvedValue(undefined),
+  },
   lakeConfigChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
   lakeMembershipChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
   adminSettingsRepository: {

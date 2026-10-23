@@ -42,7 +42,7 @@ vi.mock('@bike4mind/slack', () => ({
 vi.mock('@bike4mind/utils/contentDisposition', () => ({ buildContentDisposition: (name: string) => name }));
 // The EnableMCPServer gate itself is pinned by mcpServerFlagGate.test.ts.
 vi.mock('@server/utils/mcpServerFlag', () => ({ assertMcpServerEnabled: vi.fn() }));
-vi.mock('@server/utils/objectId', () => ({ isValidObjectId: () => true }));
+vi.mock('@bike4mind/server-utils/utils/objectId', () => ({ isValidObjectId: () => true }));
 vi.mock('@server/utils/invokeMcpHandler', () => ({ invokeMcpHandler: (...a: unknown[]) => mockInvoke(...a) }));
 vi.mock('@server/utils/parseMcpResult', () => ({
   parseMcpResult: () => ({

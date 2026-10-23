@@ -17,7 +17,7 @@ Two code paths scan images before they reach users:
 | Path | Trigger | Implementation |
 |---|---|---|
 | Generated images | After every generation / edit | `b4m-core/services/src/llm/imageModerationGate.ts` |
-| Uploaded images | S3 `ObjectCreated` event | `apps/client/server/s3/moderateUploadedFile.ts` |
+| Uploaded images | S3 `ObjectCreated` event | `packages/server-utils/src/s3/moderateUploadedFile.ts` |
 
 Both paths call `RekognitionImageModerationService` (`b4m-core/utils/src/imageModeration/index.ts`),
 which blocks on `Explicit` or `Explicit Nudity` labels at or above 90% confidence. The gate
@@ -164,7 +164,7 @@ apply to them.
 |---|---|
 | `b4m-core/utils/src/imageModeration/index.ts` | Rekognition scan, retry, fail-closed |
 | `b4m-core/services/src/llm/imageModerationGate.ts` | Gate for generated images |
-| `apps/client/server/s3/moderateUploadedFile.ts` | Gate for uploaded images |
+| `packages/server-utils/src/s3/moderateUploadedFile.ts` | Gate for uploaded images |
 | `packages/database/src/models/content/ImageModerationIncidentModel.ts` | Audit trail |
 | `packages/database/src/models/content/FabFileModel.ts` | Block state + hard-delete guard |
 | `b4m-core/services/src/ncmecService/index.ts` | CyberTipline submission (/submit + /finish) |

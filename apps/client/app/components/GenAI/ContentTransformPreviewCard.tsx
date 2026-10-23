@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Box, Card, Typography, Chip, Stack, IconButton, Tooltip } from '@mui/joy';
-import { Edit, OpenInFullOutlined as ExpandIcon } from '@mui/icons-material';
+import Edit from '@mui/icons-material/Edit';
+import ExpandIcon from '@mui/icons-material/OpenInFullOutlined';
 import ContentPreviewModal from '../ProfileModal/ContentPreviewModal';
 import { actionButtonSx } from '@client/app/components/common/actionButtonSx';
 import { brand } from '@client/app/utils/themes/themePrimitives';

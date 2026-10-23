@@ -1,9 +1,9 @@
-import { AuthStrategy } from '@bike4mind/common';
+import { AuthStrategy, type IAuthProviders } from '@bike4mind/common';
 import { userRepository, identityProviderRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { isE2EEnabled } from '@server/utils/config';
+import { isE2EEnabled } from '@bike4mind/server-utils/utils/config';
 
 // This endpoint's response necessarily varies by account existence (it routes
 // SSO users to their provider), so it can't be made fully enumeration-proof
@@ -73,7 +73,7 @@ const handler = baseApi({ auth: false })
         }
 
         const hasOkta =
-          authProviders?.some(provider => provider.strategy === AuthStrategy.Okta) ||
+          authProviders?.some((provider: IAuthProviders) => provider.strategy === AuthStrategy.Okta) ||
           (oauthCredentials && oauthCredentials.strategy === 'okta');
 
         if (hasOkta) {
@@ -89,7 +89,7 @@ const handler = baseApi({ auth: false })
         }
 
         // Check if user has SAML metadata (for future SAML users)
-        const hasSaml = authProviders?.some(provider => provider.strategy === AuthStrategy.SAML);
+        const hasSaml = authProviders?.some((provider: IAuthProviders) => provider.strategy === AuthStrategy.SAML);
 
         if (hasSaml) {
           const idp = await identityProviderRepository.findActiveByEmailDomain(emailDomain);

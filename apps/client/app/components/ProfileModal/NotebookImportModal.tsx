@@ -24,7 +24,10 @@ import {
   Link,
   Box,
 } from '@mui/joy';
-import { CloudUpload, Upload, DataObject, History } from '@mui/icons-material';
+import CloudUpload from '@mui/icons-material/CloudUpload';
+import Upload from '@mui/icons-material/Upload';
+import DataObject from '@mui/icons-material/DataObject';
+import History from '@mui/icons-material/History';
 import { toast } from 'sonner';
 import { ContextHelpButton } from '@client/app/components/help';
 import { api } from '@client/app/contexts/ApiContext';
@@ -95,15 +98,6 @@ const NotebookImportModal: React.FC<NotebookImportModalProps> = ({ open, onClose
     try {
       setIsImporting(true);
 
-      // Get presigned URL from API with options
-      const response = await api.post('/api/notebooks/import', options);
-
-      if (!response.data.success) {
-        throw new Error(response.data.message || 'Failed to get upload URL');
-      }
-
-      const { uploadUrl, importId } = response.data;
-
       let content: ArrayBuffer;
       let contentType = 'application/json';
 
@@ -131,8 +125,18 @@ const NotebookImportModal: React.FC<NotebookImportModalProps> = ({ open, onClose
         const encoder = new TextEncoder();
         content = encoder.encode(jsonData).buffer;
       }
+      const body = new Blob([content], { type: contentType });
 
-      await uploadFileToUrl(uploadUrl, new Blob([content], { type: contentType }), contentType, {
+      // The upload URL is bound to the exact byte length PUT below.
+      const response = await api.post('/api/notebooks/import', { ...options, size: body.size });
+
+      if (!response.data.success) {
+        throw new Error(response.data.message || 'Failed to get upload URL');
+      }
+
+      const { uploadUrl, importId } = response.data;
+
+      await uploadFileToUrl(uploadUrl, body, contentType, {
         onUploadProgress: event => {
           if (event.total) {
             setUploadProgress(Math.round((event.loaded / event.total) * 100));
@@ -206,7 +210,7 @@ const NotebookImportModal: React.FC<NotebookImportModalProps> = ({ open, onClose
                   <Upload sx={{ mr: 1 }} />
                   File Upload
                 </Tab>
-                <Tab value="json" className="notebook-import-modal-tab">
+                <Tab value="json" className="notebook-import-modal-tab" data-testid="notebook-import-json-tab">
                   <DataObject sx={{ mr: 1 }} />
                   JSON Data
                 </Tab>
@@ -270,6 +274,7 @@ const NotebookImportModal: React.FC<NotebookImportModalProps> = ({ open, onClose
                   <FormLabel>JSON Data</FormLabel>
                   <Textarea
                     className="notebook-import-modal-textarea"
+                    slotProps={{ textarea: { 'data-testid': 'notebook-import-json-input' } }}
                     minRows={8}
                     maxRows={12}
                     placeholder="Paste your exported notebook JSON data here..."

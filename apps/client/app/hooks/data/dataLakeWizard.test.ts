@@ -10,7 +10,8 @@ import { dataLakeKeys } from '@client/app/hooks/data/dataLakeKeys';
  * and the rollback of orphan state (lake / FabFiles / batch) when an upload fails (#816).
  */
 
-const { toastMock, apiPost, apiPut, apiDelete, uploadFileToUrlMock, subscribeToAction } = vi.hoisted(() => ({
+const { toastMock, apiPost, apiPut, apiDelete, uploadFileToUrlMock, subscribeToAction, logEvent } = vi.hoisted(() => ({
+  logEvent: vi.fn(),
   toastMock: { error: vi.fn(), success: vi.fn(), warning: vi.fn() },
   apiPost: vi.fn(),
   apiPut: vi.fn(() => Promise.resolve({ data: {} })),
@@ -20,6 +21,7 @@ const { toastMock, apiPost, apiPut, apiDelete, uploadFileToUrlMock, subscribeToA
 }));
 
 vi.mock('sonner', () => ({ toast: toastMock }));
+vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => ({ mutate: logEvent }) }));
 vi.mock('@client/app/contexts/ApiContext', () => ({
   api: { post: apiPost, put: apiPut, delete: apiDelete },
 }));
@@ -132,6 +134,26 @@ describe('useBatchUpload onError', () => {
     uploadFileToUrlMock.mockReset();
     uploadFileToUrlMock.mockResolvedValue(undefined);
     useDataLakeWizardStore.getState().resetWizard();
+  });
+
+  it('declares the actual uploaded bytes when the wizard size snapshot is stale', async () => {
+    installApiPostRouter();
+    seedWizardFile();
+    const [wizardFile] = useDataLakeWizardStore.getState().allFiles;
+    useDataLakeWizardStore.setState({ allFiles: [{ ...wizardFile, size: 999 }] });
+
+    const { result } = mountBatchUpload();
+    await act(async () => {
+      await result.current.mutateAsync();
+    });
+
+    expect(apiPost).toHaveBeenCalledWith(
+      '/api/files/generate-presigned-urls-batch',
+      expect.objectContaining({
+        files: [expect.objectContaining({ fileSize: wizardFile.file.size })],
+      })
+    );
+    expect(uploadFileToUrlMock).toHaveBeenCalledWith(expect.any(String), wizardFile.file, wizardFile.file.type);
   });
 
   it('fails fast without ever calling the API when navigator.onLine is false', async () => {
@@ -1795,5 +1817,192 @@ describe('useDataLakeBatchCompletionSync - keeps lake/health/tag-counts/article/
     });
 
     expect(invalidatedKeys()).toContain(JSON.stringify(['dataLakeTagCounts']));
+  });
+});
+
+describe('upload readiness analytics survives the wizard session', () => {
+  beforeEach(() => {
+    apiPost.mockReset();
+    uploadFileToUrlMock.mockReset();
+    uploadFileToUrlMock.mockResolvedValue(undefined);
+    subscribeToAction.mockClear();
+    logEvent.mockClear();
+    useDataLakeWizardStore.getState().resetWizard();
+    installApiPostRouter();
+    seedWizardFile();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    useDataLakeWizardStore.getState().resetWizard();
+  });
+
+  const mountUploadAndCompletion = () =>
+    mountHook(() => {
+      useDataLakeBatchCompletionSync();
+      return useBatchUpload();
+    });
+
+  const complete = (batchId = 'batch1', files = 1) => {
+    const [, onMessage] = subscribeToAction.mock.calls.at(-1)!;
+    return onMessage({
+      action: 'data_lake_batch_progress',
+      batchId,
+      status: 'completed',
+      chunkedFiles: files,
+      vectorizedFiles: files,
+    });
+  };
+
+  it.each(['resetWizard', 'closeWizard'] as const)('logs once after %s before ingestion completes', async action => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    const { result } = mountUploadAndCompletion();
+    await act(async () => {
+      await result.current.mutateAsync();
+    });
+    act(() => {
+      useDataLakeWizardStore.getState()[action]();
+    });
+    now.mockReturnValue(1_500);
+    await act(async () => {
+      await complete();
+      await complete();
+    });
+    expect(logEvent).toHaveBeenCalledExactlyOnceWith({
+      type: 'file_ready_ms',
+      metadata: { milliseconds: 500, files: 1 },
+    });
+  });
+
+  it('buffers terminal readiness until every browser upload settles', async () => {
+    seedWizard({ names: ['a.txt', 'b.txt'] });
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    const { result } = mountUploadAndCompletion();
+    uploadFileToUrlMock.mockImplementation(async () => {
+      now.mockReturnValue(1_300);
+      await complete('batch1', 1);
+      expect(logEvent).not.toHaveBeenCalled();
+    });
+    await act(async () => {
+      await result.current.mutateAsync();
+    });
+    expect(logEvent).toHaveBeenCalledExactlyOnceWith({
+      type: 'file_ready_ms',
+      metadata: { milliseconds: 300, files: 2 },
+    });
+  });
+
+  it('retains an early completion until the upload result supplies the final file count', async () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    const { result } = mountUploadAndCompletion();
+    uploadFileToUrlMock.mockImplementation(async () => {
+      now.mockReturnValue(1_400);
+      await complete();
+      now.mockReturnValue(1_450);
+      const [, onMessage] = subscribeToAction.mock.calls.at(-1)!;
+      await onMessage({ action: 'data_lake_batch_progress', batchId: 'batch1', chunkedFiles: 1 });
+      expect(logEvent).not.toHaveBeenCalled();
+    });
+    await act(async () => {
+      await result.current.mutateAsync();
+    });
+    expect(logEvent).toHaveBeenCalledExactlyOnceWith({
+      type: 'file_ready_ms',
+      metadata: { milliseconds: 400, files: 1 },
+    });
+  });
+
+  it('logs readiness when the terminal batch skipped a file', async () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    const { result } = mountUploadAndCompletion();
+    await act(async () => {
+      await result.current.mutateAsync();
+    });
+    now.mockReturnValue(1_500);
+    const [, onMessage] = subscribeToAction.mock.calls.at(-1)!;
+    await act(async () => {
+      await onMessage({
+        action: 'data_lake_batch_progress',
+        batchId: 'batch1',
+        status: 'completed',
+        skippedFiles: 1,
+      });
+    });
+    expect(logEvent).toHaveBeenCalledExactlyOnceWith({
+      type: 'file_ready_ms',
+      metadata: { milliseconds: 500, files: 1 },
+    });
+  });
+
+  it('logs readiness when processing completes with an error', async () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    const { result } = mountUploadAndCompletion();
+    await act(async () => {
+      await result.current.mutateAsync();
+    });
+    now.mockReturnValue(1_500);
+    const [, onMessage] = subscribeToAction.mock.calls.at(-1)!;
+    await act(async () => {
+      await onMessage({
+        action: 'data_lake_batch_progress',
+        batchId: 'batch1',
+        status: 'completed_with_errors',
+        failedFiles: 1,
+        processingFailedFiles: 1,
+      });
+    });
+    expect(logEvent).toHaveBeenCalledExactlyOnceWith({
+      type: 'file_ready_ms',
+      metadata: { milliseconds: 500, files: 1 },
+    });
+  });
+
+  it('keeps separate timings for two wizard sessions finishing out of order', async () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    const { result } = mountUploadAndCompletion();
+    await act(async () => {
+      await result.current.mutateAsync();
+    });
+    act(() => {
+      useDataLakeWizardStore.getState().resetWizard();
+    });
+    installApiPostRouter();
+    apiPost
+      .mockImplementationOnce(() => Promise.resolve({ data: { id: 'lake2', slug: 'second' } }))
+      .mockImplementationOnce(() => Promise.resolve({ data: { id: 'batch2' } }));
+    seedWizardFile();
+    now.mockReturnValue(1_200);
+    await act(async () => {
+      await result.current.mutateAsync();
+    });
+    act(() => {
+      useDataLakeWizardStore.getState().resetWizard();
+    });
+    now.mockReturnValue(1_500);
+    await act(async () => {
+      await complete('batch2');
+    });
+    now.mockReturnValue(1_800);
+    await act(async () => {
+      await complete('batch1');
+    });
+    expect(logEvent.mock.calls).toEqual([
+      [{ type: 'file_ready_ms', metadata: { milliseconds: 300, files: 1 } }],
+      [{ type: 'file_ready_ms', metadata: { milliseconds: 800, files: 1 } }],
+    ]);
+  });
+
+  it('does not emit readiness for another browser session or a failed ingestion', async () => {
+    const { result } = mountUploadAndCompletion();
+    await act(async () => {
+      await result.current.mutateAsync();
+    });
+    const [, onMessage] = subscribeToAction.mock.calls.at(-1)!;
+    await act(async () => {
+      await complete('untracked-batch');
+      await onMessage({ action: 'data_lake_batch_progress', batchId: 'batch1', status: 'failed' });
+      await complete();
+    });
+    expect(logEvent).not.toHaveBeenCalled();
   });
 });

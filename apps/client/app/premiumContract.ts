@@ -1,4 +1,4 @@
-import type { WorkspaceDeniedToolsTable } from '@bike4mind/common';
+import type { WorkspaceDeniedToolsTable, WorkspaceSessionSettingsTable } from '@bike4mind/common';
 import type { ComponentType } from 'react';
 
 /**
@@ -26,6 +26,14 @@ import type { ComponentType } from 'react';
 export interface PremiumRouteDescriptor {
   path: string;
   lazyImport: () => Promise<{ default: ComponentType }>;
+  /**
+   * STRUCTURAL field: optional card on the admin landing page, linking to the literal `path`.
+   * `partitionPremiumRoutes` throws when it is set on a path with a `$param` segment.
+   */
+  adminDashboard?: {
+    label: string;
+    description: string;
+  };
   /**
    * STRUCTURAL field (like `path`/`lazyImport`, NOT a gating prop - the
    * "gating fields map 1:1 to RestrictedPage" rule above does not apply to it).
@@ -260,6 +268,18 @@ export type PremiumWorkspaceCopyEntitlements = Readonly<Record<string, readonly 
 export type PremiumWorkspaceDeniedTools = WorkspaceDeniedToolsTable;
 
 /**
+ * Session fields owned, per workspace id, by the workspace a session is in, resolved at read time.
+ * Contributed via `b4mContributions.workspaceSessionSettingsExport` (`{ "<surface id>": "<module>" }`,
+ * each module exporting `workspaceSessionSettings: WorkspaceSessionSettingsEntry`). A fork, clone or
+ * snip drops the owned fields and a move unsets them, so a session takes on its current workspace's
+ * values. One overlay per workspace id. The id must be registered in `WORKSPACE_SURFACES` or in
+ * the same package's `b4mContributions.workspaceSurfaceIds` (an array of lowercase surface ids).
+ * Guarded workspaces declare their ids there so their identity stays out of shared core.
+ * Unknown ids fail codegen rather than silently emitting an entry no session can match.
+ */
+export type PremiumWorkspaceSessionSettings = WorkspaceSessionSettingsTable;
+
+/**
  * How a workspace is named and opened for a user whose access to it comes through a copy grant: one
  * who holds `key` but cannot use the workspace outright (`canUseSurface` is false). Without it that
  * user sees the registry's label and link, which name a product they do not hold. Declared as the
@@ -290,6 +310,23 @@ export type PremiumWorkspaceGrantDisplays = Readonly<Record<string, readonly Pre
  * the build.
  */
 export type PremiumToolDisplayLabels = Readonly<Record<string, string>>;
+
+/**
+ * Entitlement registry rows an overlay adds (`b4mContributions.entitlementGrants`) to the built-in
+ * rows in lib/entitlements/registry.ts, in new territory only: a row that changes a built-in tag,
+ * implication or credit amount, or grants a key core already grants, is dropped. Literal data like
+ * the labels above, so the client bundle never imports overlay code. Keys and tags arrive normalized
+ * (lowercase); `base`, `datalake:` and `embed:` keys and `source:` tags are reserved. An implication
+ * must start from a key a contribution grants, and signup credits sit on contributed staff keys. Two
+ * overlays giving one id different values, or one key two granting tags, fail the build.
+ */
+export interface PremiumEntitlementGrants {
+  readonly tagGrants?: readonly { readonly tag: string; readonly entitlements: readonly string[] }[];
+  readonly impliedEntitlements?: readonly { readonly ifHeld: string; readonly alsoGrant: readonly string[] }[];
+  readonly signupCredits?: readonly { readonly key: string; readonly credits: number }[];
+  /** Keys conferred on internal staff domains, on top of the built-in set. */
+  readonly internalStaffEntitlements?: readonly string[];
+}
 
 /** What core hands a reply accessory about the reply it sits under. */
 export interface PremiumReplyAccessoryProps {

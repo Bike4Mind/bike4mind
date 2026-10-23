@@ -1,9 +1,7 @@
 import { useConfig } from '@client/app/hooks/data/settings';
 import { useCallback } from 'react';
 
-export function getS3Url({ bucket, key, region = 'us-east-2' }: { bucket: string; key: string; region?: string }) {
-  return `https://${bucket}.s3.${region}.amazonaws.com/${key}`;
-}
+export { getS3Url } from './s3Url';
 
 /**
  * Map S3 key prefixes to CloudFront URL prefixes where they differ.
@@ -14,7 +12,7 @@ export function getS3Url({ bucket, key, region = 'us-east-2' }: { bucket: string
  */
 export function toCdnPath(key: string): string {
   // Prefix mapping: if you add/change a prefix here, also update
-  // infra/buckets.ts routeBucket and apps/client/server/utils/appFileProxy.ts (resolveProxyTarget allowlist).
+  // infra/buckets.ts routeBucket and packages/server-utils/src/utils/appFileProxy.ts (resolveProxyTarget allowlist).
   if (key.startsWith('organizations/')) {
     return `org-files/${key.slice('organizations/'.length)}`;
   }

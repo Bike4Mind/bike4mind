@@ -1,5 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { Resource } from 'sst';
 import { securityDashboardSnapshotRepository, cacheRepository } from '@bike4mind/database';
 import { z } from 'zod';

@@ -14,10 +14,11 @@ import Stripe from 'stripe';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { resolveSubscriptionSource } from '@server/services/organizationService';
 import { sendToClient } from '@server/websocket/utils';
-import { emitMetric } from '@server/utils/cloudwatch';
+import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
+import { resolveSubscriptionCycleCredits } from '@client/lib/userSubscriptions/cycleCredits';
 import { organizationService, creditService } from '@bike4mind/services';
-import { getTeamPlanSettings } from '@server/services/teamPlanSettings';
+import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
 import { CreditHolderType, IOrganizationDocument, dayjs } from '@bike4mind/common';
 import { Resource } from 'sst';
 
@@ -623,8 +624,15 @@ export const handleUserSubscriptionInvoice = async (
           break;
         }
 
-        // Add credits for subscription renewal or update
-        credits = planDetail.credits;
+        const persistedSubscription = await subscriptionRepository.findByStripeSubscriptionId(subscription.id);
+        const cycleCredits = resolveSubscriptionCycleCredits(
+          planDetail.credits,
+          persistedSubscription?.customCreditsPerCycle
+        );
+        if (cycleCredits === null) {
+          throw new Error(`Invalid cycle credits for subscription ${subscription.id}`);
+        }
+        credits = cycleCredits;
         try {
           await creditService.addCredits(
             {

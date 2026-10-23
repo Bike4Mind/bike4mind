@@ -13,8 +13,11 @@ import { safeCompareTokens } from '@bike4mind/auth/crypto';
 import { resolveStage } from '@bike4mind/server-utils/security/resolveStage';
 import { Logger } from '@bike4mind/observability';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
-import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
-import type { AttackSimulationFinding, AttackSimulationIngestPayload } from '@server/security/attackSimulation/types';
+import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
+import type {
+  AttackSimulationFinding,
+  AttackSimulationIngestPayload,
+} from '@bike4mind/server-utils/security/attackSimulation/types';
 
 const logger = new Logger({ metadata: { service: 'attack-simulation-ingest' } });
 const sqsClient = new SQSClient({});

@@ -19,7 +19,9 @@
  *   app/premium-generated/premiumWorkspaceCopyEntitlements.generated.ts - workspace copy grants
  *   app/premium-generated/premiumWorkspaceGrantDisplays.generated.ts - how a grant shows its workspace
  *   server/premium-generated/premiumWorkspaceDeniedTools.generated.ts - tools denied per workspace
+ *   server/premium-generated/premiumWorkspaceSessionSettings.generated.ts - session fields owned per workspace
  *   app/premium-generated/premiumToolDisplayLabels.generated.ts - overlay tool display names
+ *   app/premium-generated/premiumEntitlementGrants.generated.ts - entitlement registry rows
  *   server/premium-generated/premiumContracts.generated.ts - API contract contributions
  *   server/premium-generated/deploymentOpenApi.generated.ts - deployment spec (null form)
  *
@@ -44,7 +46,16 @@
  * are unaffected because both link states typecheck clean.
  */
 
-import { readdirSync, readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, renameSync, realpathSync } from 'node:fs';
+import {
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+  mkdirSync,
+  existsSync,
+  rmSync,
+  renameSync,
+  realpathSync,
+} from 'node:fs';
 import { resolve, dirname, join, sep, basename, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -114,9 +125,7 @@ function isLinkedIntoClient(pkgName) {
   const segments = pkgName.split('/');
   // Check for package.json, not just the dir: an empty/broken dir would satisfy
   // existsSync while still failing real module resolution.
-  return [CLIENT_ROOT, REPO_ROOT].some(root =>
-    existsSync(join(root, 'node_modules', ...segments, 'package.json'))
-  );
+  return [CLIENT_ROOT, REPO_ROOT].some(root => existsSync(join(root, 'node_modules', ...segments, 'package.json')));
 }
 
 // --- Generate helpers ---
@@ -275,9 +284,7 @@ function generateRouteIndexing(packages) {
   const typeImport = `import type { PremiumRouteIndexing } from '../premiumContract';`;
 
   const contributors = packages.filter(p => p.contributions.routeIndexingExport);
-  contributors.forEach(p =>
-    assertModuleSpecifier(p.contributions.routeIndexingExport, p.name, 'routeIndexingExport')
-  );
+  contributors.forEach(p => assertModuleSpecifier(p.contributions.routeIndexingExport, p.name, 'routeIndexingExport'));
 
   if (contributors.length === 0) {
     writeFile(
@@ -288,9 +295,7 @@ function generateRouteIndexing(packages) {
   }
 
   const imports = contributors
-    .map(
-      (p, i) => `import { routeIndexing as indexing${i} } from '${p.contributions.routeIndexingExport}';`
-    )
+    .map((p, i) => `import { routeIndexing as indexing${i} } from '${p.contributions.routeIndexingExport}';`)
     .join('\n');
 
   const exports = contributors.map((_, i) => `  indexing${i}`).join(',\n');
@@ -338,7 +343,11 @@ const LEGACY_SIDENAV_PATH = '/opti';
 const ROUTE_PATH_RE = /^\/[a-z0-9._-]+(\/[a-z0-9._-]+)*$/;
 
 function assertRoutePath(value, pkgName, field) {
-  if (typeof value !== 'string' || !ROUTE_PATH_RE.test(value) || value.split('/').some(seg => seg === '..' || seg === '.')) {
+  if (
+    typeof value !== 'string' ||
+    !ROUTE_PATH_RE.test(value) ||
+    value.split('/').some(seg => seg === '..' || seg === '.')
+  ) {
     throw new Error(
       `[codegen] invalid ${field} path from package "${pkgName}": ` +
         `${JSON.stringify(value)} is not an origin-relative route path of lower-case [a-z0-9/._-]`
@@ -373,9 +382,7 @@ function generateNotebookSidenavs(packages) {
   rmSync(join(GENERATED_DIR, 'premiumNotebookSidenav.generated.ts'), { force: true });
   const typeImport = `import type { PremiumNotebookSidenavEntry } from '../premiumContract';`;
 
-  const contributors = packages
-    .map(p => ({ pkg: p, sidenav: readSidenavContribution(p) }))
-    .filter(c => c.sidenav);
+  const contributors = packages.map(p => ({ pkg: p, sidenav: readSidenavContribution(p) })).filter(c => c.sidenav);
 
   if (contributors.length === 0) {
     writeFile(
@@ -405,8 +412,9 @@ function generateNotebookSidenavs(packages) {
   }
 
   const imports = chosen
-    .map(({ sidenav }, i) =>
-      `const Sidenav${i} = dynamic(() => import('${sidenav.spec}').then(m => ({ default: m.default })), { ssr: false });`
+    .map(
+      ({ sidenav }, i) =>
+        `const Sidenav${i} = dynamic(() => import('${sidenav.spec}').then(m => ({ default: m.default })), { ssr: false });`
     )
     .join('\n');
 
@@ -495,6 +503,11 @@ ${entries},
 // missing or narrower declaration fails the build rather than passing on trust.
 const WORKSPACE_ID_RE = /^[a-z0-9][a-z0-9_-]*$/i;
 const ENTITLEMENT_KEY_RE = /^[a-z0-9][a-z0-9:_.-]*$/i;
+
+// Open workspace ids from WORKSPACE_SURFACES (b4m-core/common/src/surfaces.ts). Mirrored
+// because install-time codegen only has apps/client/scripts; the test reads the source registry.
+// Guarded ids stay in their owning package's workspaceSurfaceIds contribution.
+const REGISTERED_WORKSPACE_IDS = ['opti'];
 
 // A grant entry may instead be `{ "key", "label", "sessionHref"? }`: the same grant, plus how the
 // workspace is named and opened for a user who reaches it only through that key, in place of the
@@ -785,6 +798,156 @@ function generateToolDisplayLabels(packages) {
   writeFile(
     outPath,
     `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumToolDisplayLabels: PremiumToolDisplayLabels = ${body};\n`
+  );
+}
+
+// --- Generate entitlement grants ---
+
+// Entitlement registry rows (b4mContributions.entitlementGrants), added to the built-in rows in
+// lib/entitlements/registry.ts. Pure data like the labels above. Keys must already be normalized,
+// since the registry matches on the lowercase form. The built-in rows are TypeScript this script
+// cannot load, so a collision with them is dropped by mergeContributedRows instead of failing here.
+const GRANT_KEY_RE = /^[a-z0-9][a-z0-9:_-]*$/;
+// Must stay in sync with isReservedContributionKey and MAX_CONTRIBUTED_SIGNUP_CREDITS in the registry.
+const isReservedGrantKey = key =>
+  key === 'base' ||
+  key.startsWith('datalake:') ||
+  key.startsWith('embed:') ||
+  key.startsWith('source:') ||
+  key === 'customer' ||
+  key === 'pending-free-credits';
+const MAX_CONTRIBUTED_SIGNUP_CREDITS = 250_000;
+const ENTITLEMENT_GRANT_FIELDS = ['tagGrants', 'impliedEntitlements', 'signupCredits', 'internalStaffEntitlements'];
+
+function generateEntitlementGrants(packages) {
+  const outPath = join(GENERATED_DIR, 'premiumEntitlementGrants.generated.ts');
+  const typeImport = `import type { PremiumEntitlementGrants } from '../premiumContract';`;
+
+  const fail = (pkg, detail) => {
+    throw new Error(`[codegen] invalid entitlementGrants from package "${pkg.name}": ${detail}`);
+  };
+  const readKey = (pkg, where, value) => {
+    if (typeof value !== 'string' || !GRANT_KEY_RE.test(value)) {
+      fail(pkg, `${where} ${JSON.stringify(value)} must be lowercase and match ${GRANT_KEY_RE}`);
+    }
+    if (isReservedGrantKey(value)) fail(pkg, `${where} ${JSON.stringify(value)} is reserved`);
+    return value;
+  };
+  const readKeyList = (pkg, where, value) => {
+    if (!Array.isArray(value) || value.length === 0) fail(pkg, `${where} must be a non-empty array of keys`);
+    return [...new Set(value.map(key => readKey(pkg, where, key)))];
+  };
+  const readRows = (pkg, field, value) => {
+    if (!Array.isArray(value)) fail(pkg, `${field} must be an array`);
+    return value.map(row => {
+      if (!isPlainObject(row)) fail(pkg, `${field} rows must be objects, got ${JSON.stringify(row)}`);
+      return row;
+    });
+  };
+  // One value per id across every package; an identical repeat collapses, a different one fails.
+  const claim = (table, field, id, value, pkg) => {
+    const prior = table.get(id);
+    if (prior && JSON.stringify(prior.value) !== JSON.stringify(value)) {
+      throw new Error(
+        `[codegen] entitlementGrants.${field} gives "${id}" different values in packages "${prior.from}" and ` +
+          `"${pkg.name}"; declare it in one.`
+      );
+    }
+    if (!prior) table.set(id, { value, from: pkg.name });
+  };
+
+  const tagGrants = new Map();
+  const tagOfKey = new Map();
+  const implied = new Map();
+  const signupCredits = new Map();
+  const internalStaff = new Set();
+  for (const pkg of packages) {
+    const declared = pkg.contributions.entitlementGrants;
+    if (declared === undefined) continue;
+    if (!isPlainObject(declared)) fail(pkg, `expected an object, got ${JSON.stringify(declared)}`);
+    for (const field of Object.keys(declared)) {
+      if (!ENTITLEMENT_GRANT_FIELDS.includes(field)) fail(pkg, `unknown field ${JSON.stringify(field)}`);
+    }
+    if (declared.tagGrants !== undefined) {
+      for (const row of readRows(pkg, 'tagGrants', declared.tagGrants)) {
+        const tag = readKey(pkg, 'tagGrants tag', row.tag);
+        const keys = readKeyList(pkg, `tagGrants entitlements for "${tag}"`, row.entitlements).sort();
+        claim(tagGrants, 'tagGrants', tag, keys, pkg);
+        for (const key of keys) {
+          const other = tagOfKey.get(key);
+          if (other && other.tag !== tag) {
+            throw new Error(
+              `[codegen] entitlementGrants.tagGrants grants "${key}" from tag "${other.tag}" (package "${other.from}") ` +
+                `and tag "${tag}" (package "${pkg.name}"); a key has one granting tag.`
+            );
+          }
+          tagOfKey.set(key, { tag, from: pkg.name });
+        }
+      }
+    }
+    if (declared.impliedEntitlements !== undefined) {
+      for (const row of readRows(pkg, 'impliedEntitlements', declared.impliedEntitlements)) {
+        const ifHeld = readKey(pkg, 'impliedEntitlements ifHeld', row.ifHeld);
+        const keys = readKeyList(pkg, `impliedEntitlements alsoGrant for "${ifHeld}"`, row.alsoGrant).sort();
+        claim(implied, 'impliedEntitlements', ifHeld, keys, pkg);
+      }
+    }
+    if (declared.signupCredits !== undefined) {
+      for (const row of readRows(pkg, 'signupCredits', declared.signupCredits)) {
+        const key = readKey(pkg, 'signupCredits key', row.key);
+        if (!Number.isInteger(row.credits) || row.credits <= 0 || row.credits > MAX_CONTRIBUTED_SIGNUP_CREDITS) {
+          fail(
+            pkg,
+            `signupCredits for "${key}" must be an integer from 1 to ${MAX_CONTRIBUTED_SIGNUP_CREDITS}, ` +
+              `got ${JSON.stringify(row.credits)}`
+          );
+        }
+        claim(signupCredits, 'signupCredits', key, row.credits, pkg);
+      }
+    }
+    if (declared.internalStaffEntitlements !== undefined) {
+      for (const key of readKeyList(pkg, 'internalStaffEntitlements', declared.internalStaffEntitlements)) {
+        internalStaff.add(key);
+      }
+    }
+  }
+
+  // Built-in grants are invisible here, so an implication may only start from a key a contribution grants.
+  const granted = new Set([...tagOfKey.keys(), ...internalStaff]);
+  const grounded = new Set();
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const [ifHeld, { value }] of implied) {
+      if (grounded.has(ifHeld) || !granted.has(ifHeld)) continue;
+      grounded.add(ifHeld);
+      for (const key of value) granted.add(key);
+      grew = true;
+    }
+  }
+  for (const [ifHeld, { from }] of implied) {
+    if (!grounded.has(ifHeld)) {
+      fail({ name: from }, `impliedEntitlements ifHeld "${ifHeld}" is not granted by any contributed row`);
+    }
+  }
+  for (const [key, { from }] of signupCredits) {
+    if (!internalStaff.has(key)) {
+      fail({ name: from }, `signupCredits key "${key}" must be a contributed internalStaffEntitlements key`);
+    }
+  }
+
+  const grants = {};
+  if (tagGrants.size > 0) grants.tagGrants = [...tagGrants].map(([tag, { value }]) => ({ tag, entitlements: value }));
+  if (implied.size > 0) {
+    grants.impliedEntitlements = [...implied].map(([ifHeld, { value }]) => ({ ifHeld, alsoGrant: value }));
+  }
+  if (signupCredits.size > 0) {
+    grants.signupCredits = [...signupCredits].map(([key, { value }]) => ({ key, credits: value }));
+  }
+  if (internalStaff.size > 0) grants.internalStaffEntitlements = [...internalStaff].sort();
+
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumEntitlementGrants: PremiumEntitlementGrants = ${JSON.stringify(grants, null, 2)};\n`
   );
 }
 
@@ -1092,9 +1255,7 @@ function generateSystemPrompts(packages) {
     return;
   }
 
-  contributors.forEach(p =>
-    assertModuleSpecifier(p.contributions.systemPromptsExport, p.name, 'systemPromptsExport')
-  );
+  contributors.forEach(p => assertModuleSpecifier(p.contributions.systemPromptsExport, p.name, 'systemPromptsExport'));
 
   const imports = contributors
     .map((p, i) => `import { systemPrompts as prompts${i} } from '${p.contributions.systemPromptsExport}';`)
@@ -1142,6 +1303,90 @@ function generatePartnerSignupHooks(packages) {
   );
 }
 
+const RESERVED_OBJECT_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+// Session fields a workspace owns, resolved at read time. Each id must name an open
+// workspace or be registered by the same package via workspaceSurfaceIds. Both generated
+// forms must exist so builds without overlays never import an absent package.
+function generateWorkspaceSessionSettings(packages) {
+  const outPath = join(CLIENT_ROOT, 'server/premium-generated/premiumWorkspaceSessionSettings.generated.ts');
+  const typeImport = `import type { WorkspaceSessionSettingsTable } from '@bike4mind/common';`;
+  const field = 'workspaceSessionSettingsExport';
+
+  const merged = new Map();
+  for (const pkg of packages) {
+    const surfaceIds = pkg.contributions.workspaceSurfaceIds === undefined ? [] : pkg.contributions.workspaceSurfaceIds;
+    if (
+      !Array.isArray(surfaceIds) ||
+      !surfaceIds.every(
+        id =>
+          typeof id === 'string' && WORKSPACE_ID_RE.test(id) && id === id.toLowerCase() && !RESERVED_OBJECT_KEYS.has(id)
+      )
+    ) {
+      throw new Error(
+        `[codegen] invalid workspaceSurfaceIds from package "${pkg.name}": ` +
+          'expected an array of lowercase workspace ids [a-z0-9_-] with no reserved object keys'
+      );
+    }
+    const registeredIds = [...new Set([...REGISTERED_WORKSPACE_IDS, ...surfaceIds])];
+    const declared = pkg.contributions[field];
+    if (declared === undefined) continue;
+    if (!isPlainObject(declared)) {
+      throw new Error(
+        `[codegen] invalid ${field} from package "${pkg.name}": ` +
+          `expected an object of workspace id -> module specifier, got ${JSON.stringify(declared)}`
+      );
+    }
+    for (const [workspaceId, specifier] of Object.entries(declared)) {
+      if (
+        !WORKSPACE_ID_RE.test(workspaceId) ||
+        workspaceId !== workspaceId.toLowerCase() ||
+        RESERVED_OBJECT_KEYS.has(workspaceId)
+      ) {
+        throw new Error(
+          `[codegen] invalid ${field} workspace id from package "${pkg.name}": ` +
+            `${JSON.stringify(workspaceId)} must be lowercase [a-z0-9_-], because surface ids are matched exactly`
+        );
+      }
+      if (!registeredIds.includes(workspaceId)) {
+        throw new Error(
+          `[codegen] invalid ${field} workspace id from package "${pkg.name}": ` +
+            `${JSON.stringify(workspaceId)} is not a registered workspace surface id ` +
+            `(${registeredIds.join(', ')}); register guarded ids in this package's workspaceSurfaceIds`
+        );
+      }
+      if (merged.has(workspaceId)) {
+        throw new Error(
+          `[codegen] duplicate ${field} workspace id "${workspaceId}": declared by both ` +
+            `"${merged.get(workspaceId).pkgName}" and "${pkg.name}"`
+        );
+      }
+      assertModuleSpecifier(specifier, pkg.name, field);
+      merged.set(workspaceId, { pkgName: pkg.name, specifier });
+    }
+  }
+
+  if (merged.size === 0) {
+    writeFile(
+      outPath,
+      `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumWorkspaceSessionSettings: WorkspaceSessionSettingsTable = {};\n`
+    );
+    return;
+  }
+
+  const contributions = [...merged];
+  const imports = contributions
+    .map(([, { specifier }], i) => `import { workspaceSessionSettings as settings${i} } from '${specifier}';`)
+    .join('\n');
+  const entries = contributions.map(([workspaceId], i) => `  ${JSON.stringify(workspaceId)}: settings${i},`).join('\n');
+
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\n${typeImport}\nimport { defineWorkspaceSessionSettingsTable } from '@bike4mind/common';\n${imports}\n\n` +
+      `export const premiumWorkspaceSessionSettings: WorkspaceSessionSettingsTable = defineWorkspaceSessionSettingsTable({\n${entries}\n});\n`
+  );
+}
+
 // --- Generate premium migrations ---
 
 // Premium overlays contribute DB migrations (b4mContributions.migrationsExport -> a module
@@ -1165,10 +1410,7 @@ function generateMigrations(packages) {
   const contributors = packages.filter(p => p.contributions.migrationsExport);
 
   if (contributors.length === 0) {
-    writeFile(
-      outPath,
-      `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumMigrations: MigrationFile[] = [];\n`
-    );
+    writeFile(outPath, `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumMigrations: MigrationFile[] = [];\n`);
     return;
   }
 
@@ -1201,9 +1443,7 @@ function generateMigrations(packages) {
     return rel;
   });
 
-  const imports = relSpecs
-    .map((spec, i) => `import { migrations as migrations${i} } from '${spec}';`)
-    .join('\n');
+  const imports = relSpecs.map((spec, i) => `import { migrations as migrations${i} } from '${spec}';`).join('\n');
 
   const spreads = contributors.map((_, i) => `  ...migrations${i}`).join(',\n');
 
@@ -1356,8 +1596,8 @@ export function contributeInfra(_params: Record<string, unknown>): void {}
     if (!expectedDirs.includes(dir)) {
       console.warn(
         `[codegen] WARNING: packages/premium/${dir} declares b4mContributions.infra ` +
-        `but sst.config.ts has no matching import — infra contributions will not be wired. ` +
-        `Add: await import('./infra/premium-generated/${dir}-infra.generated')`
+          `but sst.config.ts has no matching import — infra contributions will not be wired. ` +
+          `Add: await import('./infra/premium-generated/${dir}-infra.generated')`
       );
     }
   }
@@ -1366,14 +1606,19 @@ export function contributeInfra(_params: Record<string, unknown>): void {}
 // --- Main ---
 
 const packages = discoverPremiumPackages();
-console.log(`[codegen] found ${packages.length} premium package(s): ${packages.map(p => p.name).join(', ') || '(none)'}`);
+console.log(
+  `[codegen] found ${packages.length} premium package(s): ${packages.map(p => p.name).join(', ') || '(none)'}`
+);
 
 // Bare-specifier glue only for packages that will actually resolve. Unlinked
 // packages get the absent form so a hydrated-but-unlinked tree still typechecks,
 // instead of failing every build with cannot-find-module errors.
 const linkedPackages = [];
 for (const pkg of packages) {
-  if (isLinkedIntoClient(pkg.name)) { linkedPackages.push(pkg); continue; }
+  if (isLinkedIntoClient(pkg.name)) {
+    linkedPackages.push(pkg);
+    continue;
+  }
   console.warn(
     `[codegen] WARNING: packages/premium/${pkg.dir} is hydrated but "${pkg.name}" is not ` +
       `resolvable from apps/client (no node_modules link). Emitting the ABSENT form for its ` +
@@ -1403,6 +1648,7 @@ generateServerHandlerStubs(linkedPackages);
 generateLlmTools(linkedPackages);
 generateSystemPrompts(linkedPackages);
 generatePartnerSignupHooks(linkedPackages);
+generateWorkspaceSessionSettings(linkedPackages);
 // Relative-import glue: needs no node_modules link, so it gets the full list.
 // Any NEW generator goes in whichever group matches how it imports the overlay.
 generateMigrations(packages);
@@ -1414,5 +1660,6 @@ generateLocalStorageKeyPrefixes(packages);
 generateWorkspaceCopyEntitlements(packages);
 generateWorkspaceDeniedTools(packages);
 generateToolDisplayLabels(packages);
+generateEntitlementGrants(packages);
 
 console.log('[codegen] done.');

@@ -8,7 +8,7 @@ import { useDeleteAllFiles } from '@client/app/hooks/data/fabFiles';
 import { useDeleteAllSessions } from '@client/app/hooks/data/sessions';
 import { useDownload } from '@client/app/hooks/useDownload';
 import useToggle from '@client/app/hooks/useToggle';
-import { CloudUpload } from '@mui/icons-material';
+import CloudUpload from '@mui/icons-material/CloudUpload';
 import DeleteOutline from '@mui/icons-material/DeleteOutline';
 import { Button, Grid, Stack, Box, Modal, ModalDialog, ModalClose, Switch, Input } from '@mui/joy';
 import axios from 'axios';
@@ -107,7 +107,9 @@ const GeneralSettingsTab = () => {
     // the former, so this must not PUT directly (see browserUploadCallSites.test.ts).
 
     try {
-      const uploadUrl = await api.get(`/api/import-history/upload?source=${source}`).then(res => res.data.url);
+      const uploadUrl = await api
+        .get(`/api/import-history/upload?source=${source}&size=${file.size}`)
+        .then(res => res.data.url);
       // The File streams straight through; reading it into an ArrayBuffer first would hold an
       // entire history export in browser memory.
       await uploadFileToUrl(uploadUrl, file, file.type, {

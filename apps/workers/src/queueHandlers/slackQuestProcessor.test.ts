@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 // The same module instance the handler imports, so the assertion below pins identity, not a copy.
 import { premiumWorkspaceDeniedTools } from '@server/premium-generated/premiumWorkspaceDeniedTools.generated';
+import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';
 
 // This exercises only the db-adapter assembly in getStaticOptions: the surface
 // save_content_to_data_lake (-> saveContentAdapters in adapters.ts) reads from. Mocks mirror
@@ -26,7 +27,7 @@ vi.mock('@server/integrations/slack/slackPackageInit', () => ({
   initializeSlackPackage: vi.fn(),
 }));
 
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: new Proxy({} as Record<string, unknown>, {
     get: (_, key) => `mock-${String(key)}`,
   }),
@@ -40,7 +41,7 @@ vi.mock('@server/utils/eventBus', () => ({
   SessionEvents: { AutoName: { publish: vi.fn() } },
 }));
 
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({}),
   getGeneratedImageStorage: () => ({ download: vi.fn() }),
 }));
@@ -116,5 +117,6 @@ describe('slackQuestProcessor getStaticOptions', () => {
     const { getStaticOptions } = await import('./slackQuestProcessor');
 
     expect(getStaticOptions().workspaceDeniedTools).toBe(premiumWorkspaceDeniedTools);
+    expect(getStaticOptions().workspaceSessionSettings).toBe(premiumWorkspaceSessionSettings);
   }, 120_000);
 });

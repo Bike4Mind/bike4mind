@@ -4,7 +4,7 @@ import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import type { Request, Response } from 'express';
 
 const mockEmitMetrics = vi.fn();
-vi.mock('@server/utils/cloudwatch', () => ({
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   emitMetrics: (...args: unknown[]) => mockEmitMetrics(...args),
 }));
 
@@ -65,22 +65,22 @@ describe('sendMaybeGzip', () => {
     vi.unstubAllEnvs();
   });
 
-  it('sends small responses uncompressed via res.json', () => {
+  it('sends small responses uncompressed via res.json', async () => {
     const req = makeReq('gzip');
     const res = makeRes();
 
-    sendMaybeGzip(req, res, { logs: [] });
+    await sendMaybeGzip(req, res, { logs: [] });
 
     expect(res.json).toHaveBeenCalledWith({ logs: [] });
     expect(res.end).not.toHaveBeenCalled();
     expect(headersOf(res)['content-encoding']).toBeUndefined();
   });
 
-  it('gzips responses over the threshold when the client accepts gzip, and the output round-trips', () => {
+  it('gzips responses over the threshold when the client accepts gzip, and the output round-trips', async () => {
     const req = makeReq('gzip');
     const res = makeRes();
 
-    sendMaybeGzip(req, res, OVER_GZIP_THRESHOLD_PAYLOAD);
+    await sendMaybeGzip(req, res, OVER_GZIP_THRESHOLD_PAYLOAD);
 
     expect(res.json).not.toHaveBeenCalled();
     expect(headersOf(res)['content-type']).toBe('application/json; charset=utf-8');
@@ -91,108 +91,108 @@ describe('sendMaybeGzip', () => {
     expect(JSON.parse(gunzipSync(compressed).toString('utf8'))).toEqual(OVER_GZIP_THRESHOLD_PAYLOAD);
   });
 
-  it('sets Vary: Accept-Encoding on both the compressed and uncompressed paths', () => {
+  it('sets Vary: Accept-Encoding on both the compressed and uncompressed paths', async () => {
     const compressedRes = makeRes();
-    sendMaybeGzip(makeReq('gzip'), compressedRes, OVER_GZIP_THRESHOLD_PAYLOAD);
+    await sendMaybeGzip(makeReq('gzip'), compressedRes, OVER_GZIP_THRESHOLD_PAYLOAD);
     expect(headersOf(compressedRes)['vary']).toBe('Accept-Encoding');
 
     const plainRes = makeRes();
-    sendMaybeGzip(makeReq('gzip'), plainRes, { logs: [] });
+    await sendMaybeGzip(makeReq('gzip'), plainRes, { logs: [] });
     expect(headersOf(plainRes)['vary']).toBe('Accept-Encoding');
   });
 
-  it('appends to an existing Vary header instead of clobbering it', () => {
+  it('appends to an existing Vary header instead of clobbering it', async () => {
     const res = makeRes({ Vary: 'Origin' });
 
-    sendMaybeGzip(makeReq('gzip'), res, OVER_GZIP_THRESHOLD_PAYLOAD);
+    await sendMaybeGzip(makeReq('gzip'), res, OVER_GZIP_THRESHOLD_PAYLOAD);
 
     expect(headersOf(res)['vary']).toBe('Origin, Accept-Encoding');
   });
 
-  it('does not duplicate Accept-Encoding if it is already present in Vary', () => {
+  it('does not duplicate Accept-Encoding if it is already present in Vary', async () => {
     const res = makeRes({ Vary: 'Accept-Encoding' });
 
-    sendMaybeGzip(makeReq('gzip'), res, OVER_GZIP_THRESHOLD_PAYLOAD);
+    await sendMaybeGzip(makeReq('gzip'), res, OVER_GZIP_THRESHOLD_PAYLOAD);
 
     expect(headersOf(res)['vary']).toBe('Accept-Encoding');
   });
 
-  it('matches an existing Vary token case-insensitively and across multiple tokens', () => {
+  it('matches an existing Vary token case-insensitively and across multiple tokens', async () => {
     const res = makeRes({ Vary: 'origin, accept-encoding' });
 
-    sendMaybeGzip(makeReq('gzip'), res, OVER_GZIP_THRESHOLD_PAYLOAD);
+    await sendMaybeGzip(makeReq('gzip'), res, OVER_GZIP_THRESHOLD_PAYLOAD);
 
     expect(headersOf(res)['vary']).toBe('origin, accept-encoding');
   });
 
-  it('appends to an array-valued Vary header', () => {
+  it('appends to an array-valued Vary header', async () => {
     const res = makeRes({ Vary: ['Origin', 'Cookie'] });
 
-    sendMaybeGzip(makeReq('gzip'), res, OVER_GZIP_THRESHOLD_PAYLOAD);
+    await sendMaybeGzip(makeReq('gzip'), res, OVER_GZIP_THRESHOLD_PAYLOAD);
 
     expect(headersOf(res)['vary']).toBe('Origin, Cookie, Accept-Encoding');
   });
 
-  it('does not treat a longer header name containing "accept-encoding" as a duplicate', () => {
+  it('does not treat a longer header name containing "accept-encoding" as a duplicate', async () => {
     const res = makeRes({ Vary: 'X-Accept-Encoding' });
 
-    sendMaybeGzip(makeReq('gzip'), res, OVER_GZIP_THRESHOLD_PAYLOAD);
+    await sendMaybeGzip(makeReq('gzip'), res, OVER_GZIP_THRESHOLD_PAYLOAD);
 
     expect(headersOf(res)['vary']).toBe('X-Accept-Encoding, Accept-Encoding');
   });
 
-  it('does not compress when Accept-Encoding omits gzip', () => {
+  it('does not compress when Accept-Encoding omits gzip', async () => {
     const res = makeRes();
 
-    sendMaybeGzip(makeReq('br, deflate'), res, OVER_GZIP_THRESHOLD_PAYLOAD);
+    await sendMaybeGzip(makeReq('br, deflate'), res, OVER_GZIP_THRESHOLD_PAYLOAD);
 
     expect(res.json).toHaveBeenCalledWith(OVER_GZIP_THRESHOLD_PAYLOAD);
     expect(res.end).not.toHaveBeenCalled();
   });
 
-  it('does not compress when the Accept-Encoding header is absent entirely', () => {
+  it('does not compress when the Accept-Encoding header is absent entirely', async () => {
     const res = makeRes();
 
-    sendMaybeGzip(makeReq(), res, OVER_GZIP_THRESHOLD_PAYLOAD);
+    await sendMaybeGzip(makeReq(), res, OVER_GZIP_THRESHOLD_PAYLOAD);
 
     expect(res.json).toHaveBeenCalledWith(OVER_GZIP_THRESHOLD_PAYLOAD);
     expect(res.end).not.toHaveBeenCalled();
   });
 
-  it('does not compress when the client explicitly disables gzip via q=0', () => {
+  it('does not compress when the client explicitly disables gzip via q=0', async () => {
     const res = makeRes();
 
-    sendMaybeGzip(makeReq('gzip;q=0, deflate'), res, OVER_GZIP_THRESHOLD_PAYLOAD);
+    await sendMaybeGzip(makeReq('gzip;q=0, deflate'), res, OVER_GZIP_THRESHOLD_PAYLOAD);
 
     expect(res.json).toHaveBeenCalledWith(OVER_GZIP_THRESHOLD_PAYLOAD);
     expect(res.end).not.toHaveBeenCalled();
   });
 
-  it('still compresses for gzip;q=0.5 (only an explicit q=0 opts out)', () => {
+  it('still compresses for gzip;q=0.5 (only an explicit q=0 opts out)', async () => {
     const res = makeRes();
 
-    sendMaybeGzip(makeReq('gzip;q=0.5'), res, OVER_GZIP_THRESHOLD_PAYLOAD);
+    await sendMaybeGzip(makeReq('gzip;q=0.5'), res, OVER_GZIP_THRESHOLD_PAYLOAD);
 
     expect(res.end).toHaveBeenCalledTimes(1);
     expect(res.json).not.toHaveBeenCalled();
   });
 
-  it('respects the DISABLE_RESPONSE_GZIP kill-switch', () => {
+  it('respects the DISABLE_RESPONSE_GZIP kill-switch', async () => {
     vi.stubEnv('DISABLE_RESPONSE_GZIP', 'true');
     const res = makeRes();
 
-    sendMaybeGzip(makeReq('gzip'), res, OVER_GZIP_THRESHOLD_PAYLOAD);
+    await sendMaybeGzip(makeReq('gzip'), res, OVER_GZIP_THRESHOLD_PAYLOAD);
 
     expect(res.json).toHaveBeenCalledWith(OVER_GZIP_THRESHOLD_PAYLOAD);
     expect(res.end).not.toHaveBeenCalled();
   });
 
-  it('reports the exact uncompressed byte count, dimensioned by route, once past the large threshold', () => {
+  it('reports the exact uncompressed byte count, dimensioned by route, once past the large threshold', async () => {
     const res = makeRes();
     const largePayload = { data: 'x'.repeat(LARGE_RESPONSE_BYTES_THRESHOLD + 1) };
     const expectedBytes = Buffer.byteLength(JSON.stringify(largePayload));
 
-    sendMaybeGzip(makeReq('gzip'), res, largePayload);
+    await sendMaybeGzip(makeReq('gzip'), res, largePayload);
 
     expect(mockEmitMetrics).toHaveBeenCalledTimes(1);
     const [namespace, metrics] = mockEmitMetrics.mock.calls[0];
@@ -208,13 +208,13 @@ describe('sendMaybeGzip', () => {
     ]);
   });
 
-  it('additionally emits the dimensionless alarm metric when a large body ships uncompressed', () => {
+  it('additionally emits the dimensionless alarm metric when a large body ships uncompressed', async () => {
     const res = makeRes();
     const largePayload = { data: 'x'.repeat(LARGE_RESPONSE_BYTES_THRESHOLD + 1) };
     const expectedBytes = Buffer.byteLength(JSON.stringify(largePayload));
 
     // no gzip in Accept-Encoding -> large body goes out raw, the only case that can still 502
-    sendMaybeGzip(makeReq('br'), res, largePayload);
+    await sendMaybeGzip(makeReq('br'), res, largePayload);
 
     const [, metrics] = mockEmitMetrics.mock.calls[0];
     expect(metrics).toHaveLength(2);
@@ -226,11 +226,31 @@ describe('sendMaybeGzip', () => {
     expect(metrics[0].dimensions).toEqual({ route: '/api/users/counterLogs', compressed: 'false' });
   });
 
-  it('does not report to CloudWatch for responses below the large-response threshold', () => {
+  it('does not report to CloudWatch for responses below the large-response threshold', async () => {
     const res = makeRes();
 
-    sendMaybeGzip(makeReq('gzip'), res, OVER_GZIP_THRESHOLD_PAYLOAD);
+    await sendMaybeGzip(makeReq('gzip'), res, OVER_GZIP_THRESHOLD_PAYLOAD);
 
     expect(mockEmitMetrics).not.toHaveBeenCalled();
+  });
+
+  // The Lambda can freeze as soon as the response is sent, so the metric must be on the wire first.
+  it('does not send a large response until its size metric has been emitted', async () => {
+    const res = makeRes();
+    const largePayload = { data: 'x'.repeat(LARGE_RESPONSE_BYTES_THRESHOLD + 1) };
+    let releaseEmit: () => void = () => {};
+    mockEmitMetrics.mockReturnValueOnce(
+      new Promise<void>(resolve => {
+        releaseEmit = resolve;
+      })
+    );
+
+    const sending = sendMaybeGzip(makeReq('gzip'), res, largePayload);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(res.end).not.toHaveBeenCalled();
+
+    releaseEmit();
+    await sending;
+    expect(res.end).toHaveBeenCalledTimes(1);
   });
 });

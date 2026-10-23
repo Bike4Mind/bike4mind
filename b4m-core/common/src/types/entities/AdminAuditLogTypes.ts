@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { AdminAuditCategory, AdminAuditSeverity } from './adminAuditCatalogue';
+import type { AuditLogCursor, AuditLogFilters, AuditSummary } from './adminAuditQuery';
 
 export const AuditActorSchema = z.object({
   kind: z.enum(['user', 'apiKey', 'system', 'script']),
@@ -27,16 +28,25 @@ export const AuditChangeSchema = z.object({
 });
 export type AuditChange = z.infer<typeof AuditChangeSchema>;
 
-export const AuditContextSchema = z.object({
+/** Sources a stored AdminAuditLog row can carry; the write input and the filters stay inside this set. */
+export const StoredAuditContextSourceSchema = z.enum(['admin_ui', 'api_key', 'script', 'worker']);
+
+export const StoredAuditContextSchema = z.object({
   ip: z.string().optional(),
   userAgent: z.string().optional(),
   requestId: z.string().optional(),
-  source: z.enum(['admin_ui', 'api_key', 'script', 'worker']),
+  source: StoredAuditContextSourceSchema,
   route: z.string().optional(),
+});
+export type StoredAuditContext = z.infer<typeof StoredAuditContextSchema>;
+
+/** Read-side context: 'user' is the account holder's own session, which only the security-store adapters emit. */
+export const AuditContextSchema = StoredAuditContextSchema.extend({
+  source: z.union([StoredAuditContextSourceSchema, z.literal('user')]),
 });
 export type AuditContext = z.infer<typeof AuditContextSchema>;
 
-const AdminAuditCategorySchema = z.enum([
+export const AdminAuditCategorySchema = z.enum([
   'credits',
   'access',
   'identity',
@@ -46,7 +56,7 @@ const AdminAuditCategorySchema = z.enum([
   'support',
 ]) satisfies z.ZodType<AdminAuditCategory>;
 
-const AdminAuditSeveritySchema = z.enum(['info', 'notice', 'critical']) satisfies z.ZodType<AdminAuditSeverity>;
+export const AdminAuditSeveritySchema = z.enum(['info', 'notice', 'critical']) satisfies z.ZodType<AdminAuditSeverity>;
 
 export const AuditEntrySchema = z.object({
   id: z.string(),
@@ -73,7 +83,7 @@ export const AuditEntrySchema = z.object({
 });
 export type AuditEntry = z.infer<typeof AuditEntrySchema>;
 
-export type NewAdminAuditEntry = Omit<AuditEntry, 'id' | 'source'>;
+export type NewAdminAuditEntry = Omit<AuditEntry, 'id' | 'source' | 'context'> & { context: StoredAuditContext };
 
 /** Deliberately not an IBaseRepository: an immutable log exposes no update or delete. */
 export interface IAdminAuditLogRepository {
@@ -81,4 +91,41 @@ export interface IAdminAuditLogRepository {
   appendBackfill(
     entries: Array<NewAdminAuditEntry & { id: string }>
   ): Promise<{ inserted: number; duplicates: number }>;
+  list(
+    filters: AuditLogFilters,
+    page: { limit: number; cursor?: AuditLogCursor }
+  ): Promise<{ entries: AuditEntry[]; nextCursor: AuditLogCursor | null }>;
+  findById(id: string): Promise<AuditEntry | null>;
+  summarize(since: Date): Promise<Omit<AuditSummary, 'windowDays' | 'since'>>;
+  /** Oldest first: entries strictly after `after` (or from the start) up to and including `until`. */
+  listAscending(page: { after: AuditLogCursor | null; until: Date; limit: number }): Promise<AuditEntry[]>;
+  /** Grants (positive `details.credits` on a grant action) by one actor with occurredAt in (from, to]. */
+  countCreditGrants(actorUserId: string, window: { from: Date; to: Date }): Promise<number>;
+  /** Total credits one actor granted with occurredAt at or after `since`. */
+  sumCreditsGranted(actorUserId: string, since: Date): Promise<number>;
 }
+
+/** An actor whose credit-grant burst has already alerted; it stays open while grants keep coming. */
+export type AdminAuditOpenBurst = { actorUserId: string; lastGrantAt: Date };
+
+/**
+ * The alert worker's progress through the audit log. Kept in its own collection because the log
+ * itself is append-only: nothing may mark an entry as alerted.
+ */
+export type AdminAuditAlertState = {
+  cursor: AuditLogCursor;
+  openBursts: AdminAuditOpenBurst[];
+  updatedAt?: Date;
+};
+
+export interface IAdminAuditAlertStateRepository {
+  get(): Promise<AdminAuditAlertState | null>;
+  save(state: Omit<AdminAuditAlertState, 'updatedAt'>): Promise<void>;
+}
+
+/** GET /api/admin/audit-log/alert-status: whether alerts are on, and the grant lines that make an entry critical. */
+export type AuditAlertStatus = {
+  alertsEnabled: boolean;
+  singleGrantCredits: number;
+  dailyGrantCredits: number;
+};

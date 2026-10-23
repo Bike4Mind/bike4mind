@@ -21,7 +21,7 @@ const {
   getSettingsValueMock: vi.fn<(key: string, settings: Record<string, string>) => number>(),
 }));
 
-vi.mock('@server/utils/config', () => ({ isDevelopment: () => isDevelopmentMock() }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ isDevelopment: () => isDevelopmentMock() }));
 vi.mock('@server/models/Subscription', () => ({
   subscriptionRepository: {
     findActiveUserSubscriptions: findActiveUserSubscriptionsMock,

@@ -127,6 +127,15 @@ describe('isPlaceholderLeak', () => {
     expect(isPlaceholderLeak({ File: 'src/__tests__/auth.ts', Secret: 'sk-ant-abc123' })).toBe(true);
   });
 
+  it('drops markdown under docs/ but reports non-markdown files and look-alike directories', () => {
+    expect(isPlaceholderLeak({ File: 'docs/guide.md', Secret: 'some-key' })).toBe(true);
+    expect(isPlaceholderLeak({ File: 'docs-site/docs/guide/setup.md', Secret: 'some-key' })).toBe(true);
+    expect(isPlaceholderLeak({ File: 'docs-site/docs/x/page.mdx', Secret: 'some-key' })).toBe(true);
+    expect(isPlaceholderLeak({ File: 'docs-site/docs/x/_category_.json', Secret: 'some-key' })).toBe(false);
+    expect(isPlaceholderLeak({ File: 'docs-site/src/config.ts', Secret: 'some-key' })).toBe(false);
+    expect(isPlaceholderLeak({ File: 'src/apidocs/x.ts', Secret: 'some-key' })).toBe(false);
+  });
+
   it('returns true for a .env.example file', () => {
     expect(isPlaceholderLeak({ File: '.env.example', Secret: 'some-key' })).toBe(true);
   });

@@ -16,16 +16,16 @@ import {
   getDefaultSession,
 } from '@server/managers/sessionManager';
 import defineAbilitiesFor from '@server/auth/ability';
-import { isAvailable } from '@server/services/integrationCircuitBreaker';
-import { recordRateLimitEvent } from '@server/utils/cloudwatch';
+import { isAvailable } from '@bike4mind/server-utils/services/integrationCircuitBreaker';
+import { recordRateLimitEvent } from '@bike4mind/server-utils/utils/cloudwatch';
 import { getDefaultChatCompletionOptions, getSharedTokenizer } from '@server/utils/chatCompletionDefaults';
 import { LLMEvents } from '@server/utils/eventBus';
 import { buildMcpEnvVariables } from '@server/utils/mcpEnv';
 
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
-import { getSelectedRepositoriesForMcp } from '@server/integrations/github/github-repo-helper';
+import { getSelectedRepositoriesForMcp } from '@bike4mind/server-utils/integrations/github/github-repo-helper';
 import { logEvent } from '@server/utils/analyticsLog';
-import { getFilesStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { Resource } from 'sst';
 import { encryptToken, decryptToken } from '@server/security/tokenEncryption';
 
@@ -54,11 +54,11 @@ import {
   sessionRepository,
   defineAbilitiesFor as dbDefineAbilitiesFor,
 } from '@bike4mind/database';
-import { slackDevWorkspaceRepository } from '@bike4mind/database/infra';
+import { slackDevWorkspaceRepository, orgSlackWorkspaceRepository } from '@bike4mind/database/infra';
 
-// Route Slack-originated completions to SlackEventBus (slackQuestProcessor),
-// keeping them separate from web-originated completions on AppEventBus (questProcessor).
-const slackEventBus = {
+// Publish Slack-originated completions as 'slack.completion.started' so they reach
+// slackQuestProcessor rather than the web completion path.
+const slackEventPublisher = {
   LLMEvents: {
     ...LLMEvents,
     CompletionStart: LLMEvents.SlackCompletionStart,
@@ -97,7 +97,7 @@ export function initializeSlackPackage(): void {
       defaultChatCompletionOptions: getDefaultChatCompletionOptions(),
       getSharedTokenizer,
     },
-    eventBus: slackEventBus as any,
+    eventBus: slackEventPublisher as any,
     mcpEnv: {
       buildMcpEnvVariables,
     },
@@ -135,6 +135,7 @@ export function initializeSlackPackage(): void {
     apiKeyRepository,
     adminSettingsRepository,
     slackDevWorkspaceRepository,
+    orgSlackWorkspaceRepository,
     slackChannelConfigRepository,
     slackAuditLogRepository,
     webhookSubscriptionRepository,

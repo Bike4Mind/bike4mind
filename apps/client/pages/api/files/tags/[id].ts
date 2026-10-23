@@ -1,13 +1,14 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ForbiddenError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { tagService } from '@bike4mind/services';
 import { dataLakeRepository, fabFileRepository, fileTagRepository, userRepository } from '@bike4mind/database';
-import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
-import { lakeMembershipAuditDb } from '@server/dataLakes/lakeMembershipAuditDb';
+import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
+import { lakeMembershipAuditDb } from '@bike4mind/server-utils/dataLakes/lakeMembershipAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
+import { requesterScopedUsers } from '@server/auth/apiKeyAdminScope';
 
 type TagIdQuery = { id?: string | string[] };
 
@@ -49,7 +50,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
             tags: fileTagRepository,
             fabFiles: fabFileRepository,
             dataLakes: dataLakeRepository,
-            users: userRepository,
+            users: requesterScopedUsers(req, userRepository),
             // A prefix-arm rename can flip a draft lake to active; without these that transition
             // would be the one status change the history does not contain.
             ...lakeConfigAuditDb,

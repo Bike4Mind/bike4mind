@@ -42,11 +42,11 @@ describe('redactErrorForLog', () => {
 
   it('preserves the useful debugging fields', () => {
     const redacted = redactErrorForLog(makeAxiosError()) as Record<string, unknown>;
-    expect(redacted.message).toBe('Request failed with status code 402');
+    expect(redacted.message).toBe('Provider request failed');
     expect(redacted.code).toBe('ERR_BAD_REQUEST');
     expect(redacted.status).toBe(402);
-    expect(redacted.data).toEqual({ detail: 'Insufficient credits' });
-    expect(redacted.endpoint).toBe('https://api.bfl.ai/v1/flux-pro-1.1');
+    expect(redacted).not.toHaveProperty('data');
+    expect(redacted).not.toHaveProperty('endpoint');
     expect(redacted.method).toBe('post');
   });
 

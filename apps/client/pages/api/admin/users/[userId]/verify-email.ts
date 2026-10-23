@@ -2,12 +2,13 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { userRepository, withTransaction } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
 import { logEvent } from '@server/utils/analyticsLog';
 import { ApiKeyScope, AuthEvents } from '@bike4mind/common';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { applyEmailVerifiedGrants } from '@server/auth/emailVerifiedGrants';
+import { emitEmailVerifiedFunnelEvents } from '@server/analytics/funnel';
 
 interface RequestQuery {
   userId: string;
@@ -76,15 +77,20 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
 
       // After the commit, not inside it: partner membership re-reads the persisted emailVerified.
       // The account never reaches /api/email/verify now, so this is its one chance at those grants.
-      if (verifiedUser.email) {
-        await applyEmailVerifiedGrants({
-          user: verifiedUser,
-          verifiedEmail: verifiedUser.email,
-          trigger: 'admin-verification',
-          releaseReason: 'admin verified email',
-          logger: req.logger,
-        });
-      }
+      const grants = verifiedUser.email
+        ? await applyEmailVerifiedGrants({
+            user: verifiedUser,
+            verifiedEmail: verifiedUser.email,
+            trigger: 'admin-verification',
+            releaseReason: 'admin verified email',
+            logger: req.logger,
+          })
+        : null;
+      await emitEmailVerifiedFunnelEvents({
+        user: verifiedUser,
+        method: 'admin',
+        creditsGranted: grants ? grants.creditsGranted + grants.subscriptionCreditsGranted : 0,
+      });
 
       return res.json({ message: 'Email verified successfully' });
     })

@@ -1,25 +1,43 @@
 import { adminService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { userRepository } from '@bike4mind/database';
-import { issueBrowserSession } from '@server/auth/issueSession';
-import { readRefreshCookie, setAdminReturnCookie } from '@server/auth/refreshCookie';
-import { UnauthorizedError } from '@server/utils/errors';
+import { userRepository, withTransaction } from '@bike4mind/database';
+import { issueSessionForRequest } from '@server/auth/issueSession';
+import { readRefreshCookie, setAdminReturnCookie, setRefreshCookie } from '@bike4mind/server-utils/auth/refreshCookie';
+import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
 import { redactUserSecretsForSelf } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
 import { selfSessionResponseSchema } from '@server/auth/selfSessionResponseSchema';
+import {
+  denySelfAdminAction,
+  isSameUserId,
+  parseAdminActionReason,
+  recordAdminActionFromRequest,
+} from '@server/utils/adminAudit';
 
-const handler = baseApi().post(
+// jwtOnly: impersonation mints a full session, so an API key must never reach it
+// (see sessionGrantRoutesRejectApiKeys.test.ts).
+const handler = baseApi({ auth: 'jwtOnly' }).post(
   asyncHandler<{}, unknown, unknown, { id: string }>(async (req, res) => {
     const targetUserId = req.query.id;
     const adminUser = req.user;
 
-    const { mfaToken } = req.body as { mfaToken?: string };
+    const { mfaToken, reason: rawReason } = req.body as { mfaToken?: string; reason?: unknown };
 
     if (!mfaToken || typeof mfaToken !== 'string') {
       throw new BadRequestError('MFA token is required to use loginAs');
     }
+
+    if (adminUser.isAdmin && isSameUserId(adminUser.id, targetUserId)) {
+      await denySelfAdminAction(req, {
+        action: 'user.impersonation.denied',
+        attempted: 'user.impersonation.started',
+        target: { kind: 'user', id: targetUserId, displayName: adminUser.name || adminUser.username },
+      });
+    }
+
+    const reason = parseAdminActionReason(rawReason);
 
     // Capture the admin's own refresh token BEFORE the impersonated one overwrites the cookie
     // slot; it is parked in the return cookie so /api/auth/returnToAdmin can restore the admin
@@ -58,11 +76,29 @@ const handler = baseApi().post(
     // leaves the real customer's devices untouched; and the session-management endpoints
     // (revoke-others / the admin force-logout) refuse to run while this claim is present, so an
     // admin can't sign the customer's other devices out from an impersonated session.
-    const { accessToken } = await issueBrowserSession(req, res, targetUser.id, {
-      createdVia: 'impersonation',
-      tokenVersion: targetUser.tokenVersion ?? 0,
-      impersonatedBy: adminUser.id,
+    //
+    // The session doc and the started entry commit together; the sid groups everything done in
+    // this impersonation. Cookies are written only after the commit.
+    const { accessToken, refreshToken } = await withTransaction(async () => {
+      const session = await issueSessionForRequest(req, targetUser.id, {
+        createdVia: 'impersonation',
+        tokenVersion: targetUser.tokenVersion ?? 0,
+        impersonatedBy: adminUser.id,
+      });
+      await recordAdminActionFromRequest(req, {
+        action: 'user.impersonation.started',
+        target: {
+          kind: 'user',
+          id: targetUser.id,
+          displayName: targetUser.name || targetUser.username || targetUser.email || targetUser.id,
+        },
+        summary: 'started impersonating the user',
+        reason,
+        related: { impersonationSessionId: session.sid },
+      });
+      return session;
     });
+    setRefreshCookie(res, refreshToken);
     setAdminReturnCookie(res, adminRefreshToken);
 
     return respond(res, selfSessionResponseSchema, {

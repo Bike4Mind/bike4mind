@@ -25,7 +25,10 @@ import {
 } from '@bike4mind/database';
 import { getRequestEntitlements, getUserEntitlements, type EntitlementRequest } from '@server/entitlements';
 import type { Logger } from '@bike4mind/observability';
-import { getRequestMembershipOrgIds, type MembershipRequest } from './requestMembership';
+import {
+  getRequestMembershipOrgIds,
+  type MembershipRequest,
+} from '@bike4mind/server-utils/dataLakes/requestMembership';
 
 type RetrievalScopeRequest = EntitlementRequest & MembershipRequest;
 

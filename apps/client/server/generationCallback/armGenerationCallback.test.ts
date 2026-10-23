@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Logger } from '@bike4mind/observability';
 import { ApiKeyStatus } from '@bike4mind/common';
-import { BadRequestError } from '@server/utils/errors';
-import { SsrfError } from '@server/utils/ssrfProtection';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { SsrfError } from '@bike4mind/server-utils/utils/ssrfProtection';
 
 const h = vi.hoisted(() => ({
   armCallback: vi.fn(),
@@ -17,12 +17,12 @@ vi.mock('@bike4mind/database', () => ({
   userApiKeyRepository: { findCallbackSigningSecret: h.findCallbackSigningSecret },
 }));
 
-vi.mock('@server/utils/ssrfProtection', async orig => {
-  const actual = await orig<typeof import('@server/utils/ssrfProtection')>();
+vi.mock('@bike4mind/server-utils/utils/ssrfProtection', async orig => {
+  const actual = await orig<typeof import('@bike4mind/server-utils/utils/ssrfProtection')>();
   return { ...actual, assertUrlAllowed: h.assertUrlAllowed };
 });
 
-vi.mock('./dispatchQuestCallback', () => ({
+vi.mock('@bike4mind/server-utils/generationCallback/dispatchQuestCallback', () => ({
   dispatchQuestCallback: h.dispatchQuestCallback,
   getGenerationCallbackQueueUrl: h.getGenerationCallbackQueueUrl,
 }));

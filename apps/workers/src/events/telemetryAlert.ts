@@ -28,8 +28,8 @@ import {
   generateSemanticTelemetryFingerprint,
   getSeverityEmoji,
   formatPrimaryAnomaly,
-} from '@server/services/telemetryFingerprint';
-import { checkFingerprintDedup, type IssueForDedup } from '@server/services/issueDedup';
+} from '@bike4mind/server-utils/services/telemetryFingerprint';
+import { checkFingerprintDedup, type IssueForDedup } from '@bike4mind/server-utils/services/issueDedup';
 import {
   computeHistoricalBaselines,
   generateRuleBasedAnalysis,

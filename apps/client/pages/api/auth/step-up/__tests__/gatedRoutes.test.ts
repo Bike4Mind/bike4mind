@@ -93,6 +93,18 @@ vi.mock('@bike4mind/database', () => ({
   trustedDeviceRepository: { revokeAllForUser: async () => 0 },
   withTransaction: (fn: () => unknown) => fn(),
 }));
+// parseAdminActionReason and isSameUserId stay real; the audit writes need a database, so they are stubbed.
+vi.mock('@server/utils/adminAudit', async importOriginal => {
+  const { ForbiddenError } = await import('@bike4mind/common');
+  return {
+    ...(await importOriginal<typeof import('@server/utils/adminAudit')>()),
+    recordAdminActionFromRequest: vi.fn().mockResolvedValue(null),
+    denySelfAdminAction: vi.fn(async () => {
+      throw new ForbiddenError('Admins cannot perform this action on their own account.');
+    }),
+  };
+});
+
 vi.mock('@bike4mind/services', () => ({
   mfaService: {
     setupMFA: h.setupMFA,
@@ -285,14 +297,17 @@ describe('POST /api/auth/mfa/force-reset', () => {
 
   // An admin's own reset would otherwise bypass the step-up gate on /api/auth/mfa/disable.
   it.each([USER.id, USER.id.toUpperCase()])('refuses an admin resetting their own MFA (%s)', async userId => {
-    const res = await call(forceResetRoute, { user: ADMIN, body: { userId } });
+    const res = await call(forceResetRoute, { user: ADMIN, body: { userId, reason: 'Lost authenticator' } });
     expect(res._getStatusCode()).toBe(403);
     expect(h.removeAllPasskeys).not.toHaveBeenCalled();
     expect(h.forceResetMFA).not.toHaveBeenCalled();
   });
 
   it("still resets another user's MFA", async () => {
-    const res = await call(forceResetRoute, { user: ADMIN, body: { userId: 'other-user' } });
+    const res = await call(forceResetRoute, {
+      user: ADMIN,
+      body: { userId: 'other-user', reason: 'Lost authenticator' },
+    });
     expect(res._getStatusCode()).toBe(200);
     expect(h.forceResetMFA).toHaveBeenCalledTimes(1);
   });

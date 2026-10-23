@@ -58,7 +58,7 @@ export const listModelsContract = defineEndpoint({
             deprecation_date: null,
             replaced_by: null,
             image: null,
-            credits_per_1m_tokens: { input: 6000, output: 30000, cached_input: 600 },
+            credits_per_1m_tokens: { input: 4000, output: 20000, cached_input: 400 },
           },
           {
             id: 'gpt-image-1',

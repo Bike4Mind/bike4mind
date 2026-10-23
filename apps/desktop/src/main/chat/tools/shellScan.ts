@@ -1,11 +1,12 @@
 import { stat } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, parse, resolve } from 'node:path';
 import type { Node } from 'web-tree-sitter';
 import { arityPrefix, commandTokens, directoryOptionValues, droppedOnlySafeOptions } from './bashArity';
 import { parseBash } from './bashParser';
 import { isEnvFile } from './envFiles';
-import { resolveWithinRootsPhysically } from './paths';
+import { ghReadFiles, repositoryWrite, type RepositoryWrite } from './ownRepository';
+import { realpathNearest, resolveWithinRootsPhysically } from './paths';
 
 export interface ShellCommand {
   /** The command's tokens with options before the subcommand dropped: what a remembered pattern is matched against. */
@@ -17,19 +18,106 @@ export interface ShellCommand {
    * or an option off the safe list - so `text` no longer says what the command does.
    */
   coverable: boolean;
+  /** The command as matched by rules, retaining assignments and redirects when it is not coverable. */
+  words: string;
+  /**
+   * Set when the command runs code the scan cannot read (`eval`, `node -e`, `bash -c`, a script on
+   * stdin): the leading words that name that form. A permission rule covers it only by naming them.
+   */
+  opaque?: string;
 }
 
 export interface ShellScan {
   commands: ShellCommand[];
+  /** Physical paths named by the script, including paths inside shared roots and its starting folder. */
+  paths?: string[];
   /** Directories the command reaches outside every granted root and the temp dirs. */
   directories: string[];
   /** `.env` files named as an argument or an input redirect, which auto mode must not read unasked. */
   envFiles: string[];
   /** Why a command can send data off this computer, e.g. `curl --data`, which auto mode must not run unasked. */
   outbound: string[];
+  /**
+   * Each outbound command's reason, with the repository it writes to when its words pin one (see
+   * `repositoryWrite`). Never set for a script that changes the environment, which can redirect git or gh.
+   */
+  sends: { reason: string; target: RepositoryWrite | null }[];
+  /**
+   * True when every command is one `containedCommand` accepts and nothing in the script sets the
+   * environment, so no part of it can carry data to a host of the caller's choosing. A reply that
+   * has read untrusted content still runs these unasked; see ChatService's DirectoryTurn.untrusted.
+   */
+  contained: boolean;
 }
 
 const CHANGES_DIRECTORY = new Set(['cd', 'chdir', 'pushd', 'popd']);
+
+/** Programs that only read what they are pointed at, when `containedCommand` also vouches for the call. */
+const READ_PROBES = new Set(['ls', 'cat', 'head', 'tail', 'stat', 'file', 'wc', 'du', 'tree', 'find']);
+
+/**
+ * Where version managers and package managers install toolchains. An agent lists and reads these
+ * to find which node or pnpm a project runs on; they hold binaries and package code, not secrets.
+ * Deliberately narrow: `~/.local/share` as a whole also holds keyrings and app data.
+ */
+function toolchainLocations(): string[] {
+  const home = homedir();
+  return [
+    ...[
+      '.nvm',
+      '.volta',
+      '.fnm',
+      '.bun',
+      '.deno',
+      '.cargo/bin',
+      '.rustup/toolchains',
+      '.pyenv/versions',
+      '.rbenv/versions',
+      '.asdf/installs',
+      '.asdf/shims',
+      '.nix-profile',
+      '.local/bin',
+      '.local/share/pnpm',
+      '.local/share/fnm',
+      '.local/share/mise/installs',
+      'Library/pnpm',
+    ].map(path => join(home, path)),
+    '/etc/profiles',
+    '/nix/store',
+    '/nix/var/nix/profiles',
+    '/run/current-system/sw',
+    '/opt/homebrew/bin',
+    '/opt/homebrew/opt',
+    '/opt/homebrew/Cellar',
+    '/usr/local/bin',
+    '/usr/local/lib/node_modules',
+    '/usr/bin',
+    '/bin',
+  ];
+}
+
+// Credential files a package manager or a shell keeps beside its toolchain.
+const SECRET_NAME = /^\.?(npmrc|netrc|pypirc|git-credentials|yarnrc(\.yml)?)$|credential|secret|token/i;
+
+const namesSecret = (path: string): boolean => path.split('/').some(part => SECRET_NAME.test(part)) || isEnvFile(path);
+
+/**
+ * Whether a path outside the project is a toolchain install that a read-only probe may look at
+ * unasked, both as written and with every symlink followed, so `~/.nvm/link -> ~/.ssh` still asks.
+ */
+export async function isToolchainPath(path: string, cwd: string): Promise<boolean> {
+  if (namesSecret(resolve(cwd, path))) return false;
+  try {
+    // Each root is resolved the way the path is: a root that does not exist under a linked
+    // parent (macOS `/etc` -> `/private/etc`) must still match the path's physical form.
+    const roots = await Promise.all(
+      toolchainLocations().map(root => resolveWithinRootsPhysically(root, [parse(root).root], root))
+    );
+    return !namesSecret(await resolveWithinRootsPhysically(path, roots, cwd));
+  } catch {
+    return false;
+  }
+}
 
 // Ported from opencode's shell tool, plus commands that write to a path or read one by name.
 const TOUCHES_FILES = new Set([
@@ -148,6 +236,25 @@ function globPrefix(text: string): string | null {
 // ponytail: a wrapper's own option values (`sudo -u bob`, `xargs -I {}`) are read as the program;
 // a full per-wrapper option table if that matters.
 const WRAPPERS = new Set(['sudo', 'env', 'command', 'exec', 'nohup', 'time', 'nice', 'timeout', 'xargs']);
+
+/** A wrapper can change the executable, and these clients can start sending data just by changing flags. */
+export function requiresExactShellRule(command: string): boolean {
+  const head = /^(?:"([^"]*)"|'([^']*)'|(\S+))(?:\s+|$)/.exec(command);
+  if (!head) return true;
+  const executable = head[1] ?? head[2] ?? head[3];
+  const program = basename(executable);
+  const argumentsText = command.slice(head[0].length);
+  return (
+    // Quoting or an absolute executable defeats arityPrefix's bare-program lookup.
+    head[1] !== undefined ||
+    head[2] !== undefined ||
+    executable !== program ||
+    WRAPPERS.has(program) ||
+    /^(curl|wget|rsync|aws|gsutil|gcloud|docker|podman)$/.test(program) ||
+    (program === 'gh' &&
+      (/^(?:api|"api"|'api')(?:\s|$)/.test(argumentsText) || !/^[A-Za-z]+\s+[A-Za-z]+(?:\s|$)/.test(argumentsText)))
+  );
+}
 
 const ALWAYS_OUTBOUND = new Set(['scp', 'sftp', 'ftp', 'nc', 'ncat', 'netcat', 'socat', 'telnet', 'ssh']);
 
@@ -292,6 +399,33 @@ function interpreterOptions(program: string, args: readonly string[]): { options
  */
 const STDIN_SCRIPT = /^(python[\d.]*|node|ruby|perl|php|bun|osascript|sh|bash|zsh|dash|source|\.)$/;
 
+/**
+ * The leading words that name a command's opaque form, or null when the scan can read what it
+ * runs. A wrapper (`sudo`, `timeout 5`) is looked through, so `sudo bash -c ...` is `sudo bash -c`.
+ */
+export function opaqueForm(tokens: readonly string[]): string | null {
+  const normalised = tokens.map(unquote);
+  let start = 0;
+  while (start < normalised.length && WRAPPERS.has(basename(normalised[start]))) {
+    start++;
+    while (start < normalised.length && /^(-|\d|[A-Za-z_][A-Za-z0-9_]*=)/.test(normalised[start])) start++;
+  }
+  const executable = normalised[start];
+  if (executable === undefined) return null;
+  const program = basename(executable);
+  const args = normalised.slice(start + 1);
+  const head = (count: number) => tokens.slice(0, start + count).join(' ');
+  if (program === 'eval' || program === 'source' || program === '.') return head(1);
+  if (program === 'deno' && args[0] === 'eval') return head(2);
+  const inline = /^python[\d.]*$/.test(program) ? DASH_C : INLINE_SCRIPT[program];
+  if (!inline && !STDIN_SCRIPT.test(program)) return null;
+  const { options, operands } = interpreterOptions(program, args);
+  if (inline && options.some(option => inline.test(option))) {
+    return head(2 + args.findIndex(arg => inline.test(flagRun(arg, optionValueLetters(program)))));
+  }
+  return operands.length === 0 || operands[0] === '-' || STDIN_SCRIPT_ARG.test(operands[0]) ? head(1) : null;
+}
+
 /** Arguments that name the command's own standard input rather than a script file. */
 const STDIN_SCRIPT_ARG = /^(\/(dev|proc\/self)\/fd\/[\d]+|\/dev\/stdin|[<>]\()/;
 
@@ -351,7 +485,8 @@ function sendsBody(method: string | undefined): boolean {
 /**
  * Why one simple command can send data off this computer, or null. Defence in depth only: a
  * script file, a decoded payload or a wrapper not listed here slips past, which is why a reply that
- * has read untrusted content asks before any command at all (see ChatService's DirectoryTurn.untrusted).
+ * has read untrusted content asks before any command `containedCommand` does not vouch for (see
+ * ChatService's DirectoryTurn.untrusted).
  */
 export function outboundReason(raw: readonly string[], stdin = false): string | null {
   const tokens = raw.map(unquote);
@@ -426,8 +561,14 @@ export function outboundReason(raw: readonly string[], stdin = false): string | 
       return `gh ${sub} ${action}`;
     }
     if (sub === 'release' && action === 'create') return 'gh release create';
-    const fields = args.some(arg => /^(-f|-F|--field|--raw-field|--input)(=|$)/.test(arg));
-    return sub === 'api' && (fields || sendsBody(optionValue(args, ['-X', '--method']))) ? 'gh api' : null;
+    if (sub !== 'api') return null;
+    // gh's flag parser accepts clustered shorthands: `-iftitle=x` is `--include --field title=x`
+    // and `-iXPOST` is `--include --method POST`. Cut each cluster at its first field or method
+    // letter so both checks see the flag it means, and any field turns the call into a POST.
+    const apiArgs = args.map(arg => arg.replace(/^-[a-zA-Z]*?([fFX])/, '-$1'));
+    if (sendsBody(optionValue(apiArgs, ['-X', '--method']))) return 'gh api';
+    const fields = apiArgs.some(arg => /^-[fF]|^--(field|raw-field|input)(=|$)/.test(arg));
+    return fields && !(action === 'graphql' && graphqlReadOnly(apiArgs)) ? 'gh api' : null;
   }
   if (program === 'aws' || program === 'gsutil' || program === 'gcloud') {
     const positional = args.filter(arg => !arg.startsWith('-'));
@@ -461,6 +602,156 @@ export function outboundReason(raw: readonly string[], stdin = false): string | 
     return `${program} publish`;
   }
   return null;
+}
+
+/**
+ * Whether `gh api graphql`'s fields only carry a query: a GraphQL read is POSTed, so without this
+ * every one of them would count as a body sent out. A mutation, a field read from a file
+ * (`-F x=@path`) or `--input` is still a body.
+ */
+function graphqlReadOnly(args: readonly string[]): boolean {
+  if (args.some(arg => /^--input(=|$)/.test(arg))) return false;
+  for (let i = 0; i < args.length; i++) {
+    const flag = /^(-f|-F|--field|--raw-field)(?:=(.*))?$/.exec(args[i]) ?? /^(-[fF])(.+)$/.exec(args[i]);
+    if (!flag) continue;
+    const value = flag[2] ?? args[++i] ?? '';
+    const field = value.slice(value.indexOf('=') + 1);
+    if (flag[1] !== '-f' && flag[1] !== '--raw-field' && field.startsWith('@')) return false;
+    if (/\bmutation\b/.test(field)) return false;
+  }
+  return true;
+}
+
+/**
+ * Programs that only read or write files on this computer and run no other program. Matched by
+ * exact name, not basename: `./cat` is whatever the project put there.
+ */
+const LOCAL_PROGRAMS = new Set([
+  'basename',
+  'cat',
+  'cmp',
+  'column',
+  'comm',
+  'cut',
+  'date',
+  'diff',
+  'dirname',
+  'du',
+  'echo',
+  'egrep',
+  'false',
+  'fgrep',
+  'file',
+  'find',
+  'fold',
+  'grep',
+  'head',
+  'jq',
+  'ls',
+  'mkdir',
+  'nl',
+  'paste',
+  'printf',
+  'pwd',
+  'readlink',
+  'realpath',
+  'rev',
+  'rg',
+  'sort',
+  'stat',
+  'tail',
+  'tee',
+  'test',
+  'tr',
+  'tree',
+  'true',
+  'uniq',
+  'wc',
+  'which',
+]);
+
+/** Options that make a listed program run another one. */
+const RUNS_A_PROGRAM: Readonly<Record<string, RegExp>> = {
+  find: /^-(exec|execdir|ok|okdir|delete|fprint0?|fprintf|fls)$/,
+  rg: /^--pre(-glob)?(=|$)/,
+  tree: /^-[A-Za-z]*[oR]/,
+};
+
+/**
+ * Whether `sort` would write a file (`-o`, `--output`) or run one (`--compress-program`).
+ * getopt_long accepts any unambiguous prefix, so `--o` and `--co` name those options too.
+ * The short cluster is read properly: `-t o` and `-k o` are values, not an output flag.
+ */
+function sortRunsOrWrites(args: readonly string[]): boolean {
+  const valueLetters = 'kStT';
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--') return false;
+    if (arg.startsWith('--')) {
+      const name = arg.slice(2).split('=')[0];
+      if (name !== '' && ('output'.startsWith(name) || 'compress-program'.startsWith(name))) return true;
+      continue;
+    }
+    if (!arg.startsWith('-') || arg === '-') continue;
+    const cluster = arg.slice(1);
+    for (let at = 0; at < cluster.length; at++) {
+      if (cluster[at] === 'o') return true;
+      if (valueLetters.includes(cluster[at])) {
+        if (at === cluster.length - 1) i++;
+        break;
+      }
+    }
+  }
+  return false;
+}
+
+/** gh subcommands that only read from GitHub. `api` is judged on its own in `readOnlyGh`. */
+const GH_READS: Readonly<Record<string, ReadonlySet<string>>> = {
+  pr: new Set(['checks', 'diff', 'list', 'status', 'view']),
+  issue: new Set(['list', 'status', 'view']),
+  run: new Set(['list', 'view', 'watch']),
+  repo: new Set(['view']),
+  release: new Set(['list', 'view']),
+  workflow: new Set(['list', 'view']),
+  search: new Set(['code', 'commits', 'issues', 'prs', 'repos']),
+};
+
+/**
+ * Whether a gh call only reads from github.com. Any other host is refused, whichever way it is
+ * named: `--hostname`, a URL argument, or a `-R HOST/OWNER/REPO`.
+ */
+function readOnlyGh(args: readonly string[]): boolean {
+  if (args.some(arg => /^--hostname(=|$)/.test(arg) || arg === '--web' || arg === '-w')) return false;
+  if (args.some(arg => arg.includes('://') && !arg.startsWith('https://github.com/'))) return false;
+  const repo = optionValue(args, ['-R', '--repo']);
+  if (repo !== undefined && repo.split('/').length > 2 && !repo.startsWith('github.com/')) return false;
+  const [sub, action] = args.filter(arg => !arg.startsWith('-'));
+  if (sub === 'api') {
+    return outboundReason(['gh', ...args]) === null && !args.some(arg => /^--input(=|$)/.test(arg));
+  }
+  return GH_READS[sub]?.has(action) === true;
+}
+
+/**
+ * Whether one simple command provably keeps to this computer, or only reads from GitHub as the
+ * user. Deliberately an allowlist: anything it does not recognise - an interpreter, a build tool,
+ * a wrapper that runs another program - is not contained. `git` is not on it: a repository's own
+ * config can name a program for `status`, `diff` and the rest to run (`core.fsmonitor`,
+ * `filter.*.clean`, `diff.external`), and no scan of the argv can rule that out.
+ */
+export function containedCommand(raw: readonly string[]): boolean {
+  if (raw.length === 0) return false;
+  const tokens = raw.map(unquote);
+  const [program, ...args] = tokens;
+  if (isDynamic(raw[0])) return false;
+  if (LOCAL_PROGRAMS.has(program)) {
+    if (program === 'sort') return !sortRunsOrWrites(args);
+    const runs = RUNS_A_PROGRAM[program];
+    return !runs || !args.some(arg => runs.test(arg));
+  }
+  // A computed argument can carry what it read into the request path itself.
+  if (program === 'gh') return !raw.slice(1).some(isDynamic) && readOnlyGh(args);
+  return false;
 }
 
 function words(node: Node): string[] {
@@ -498,10 +789,14 @@ export async function scanShell(
     const temp = [tmpdir(), '/tmp', '/private/tmp'];
     const allowed = [...roots, ...temp];
     const commands: ShellCommand[] = [];
+    const paths = new Set<string>([await realpathNearest(startDirectory)]);
     const directories = new Set<string>();
     const envFiles = new Set<string>();
     const outbound = new Set<string>();
+    const sends: ShellScan['sends'] = [];
+    let setsEnvironment = false;
     const writtenCommands = new Set<number>();
+    let contained = true;
 
     const noteEnvFile = (raw: string): void => {
       const path = expandHome(unquote(raw));
@@ -509,13 +804,22 @@ export async function scanShell(
       if (globPrefix(path) === path ? isEnvFile(path) : globMayMatchEnvFile(path)) envFiles.add(path);
     };
 
-    const check = async (raw: string, cwd: string): Promise<string | null> => {
-      const prefix = globPrefix(expandHome(unquote(raw)));
+    /** A `probe` only reads, so a toolchain folder it names is recorded as a path, not an outside folder to grant. */
+    const check = async (raw: string, cwd: string, probe = false): Promise<string | null> => {
+      const text = expandHome(unquote(raw));
+      const prefix = globPrefix(text);
       if (!prefix || isDynamic(prefix)) return null;
+      // A glob can expand to `..` (`~/.nvm*/../.ssh`, `~/.nvm/.?/.ssh`), so a dot after the glob never stays inside.
+      const stays = text === prefix || (!text.slice(prefix.length).includes('.') && !prefix.endsWith('.'));
       try {
-        return await resolveWithinRootsPhysically(prefix, allowed, cwd);
+        const physical = await resolveWithinRootsPhysically(prefix, allowed, cwd);
+        paths.add(physical);
+        return physical;
       } catch {
         const target = resolve(cwd, prefix);
+        paths.add(target);
+        paths.add(await realpathNearest(target));
+        if (probe && stays && (await isToolchainPath(prefix, cwd))) return target;
         const isDirectory = (await stat(target).catch(() => null))?.isDirectory() === true;
         directories.add(isDirectory ? target : dirname(target));
         return target;
@@ -542,19 +846,46 @@ export async function scanShell(
       const assigns = node.namedChildren.some(child => child?.type === 'variable_assignment');
       const writes = writtenCommands.has(node.id) || hasWriteRedirect(node);
       const arithmetic = tokens.some(token => EVALUATES_ARITHMETIC.test(token));
+      const opaque = opaqueForm(tokens);
+      const coverable = !assigns && !writes && !arithmetic && droppedOnlySafeOptions(tokens);
+      // Exact rules must name the unsafe syntax too: dropping an assignment or output redirect
+      // would let `Bash(git status)` cover `GIT_CONFIG_PARAMETERS=... git status` or a file write.
+      const original = node.parent?.type === 'redirected_statement' ? node.parent.text : node.text;
       commands.push({
         text: normalised.join(' '),
         always: `${arityPrefix(normalised).join(' ')} *`,
-        coverable: !assigns && !writes && !arithmetic && droppedOnlySafeOptions(tokens),
+        coverable,
+        words: coverable ? tokens.join(' ') : original,
+        ...(opaque ? { opaque } : {}),
       });
-      const sends = outboundReason(tokens, readsStdin(node));
-      if (sends) outbound.add(sends);
+      const reason = outboundReason(tokens, readsStdin(node));
+      if (reason) {
+        outbound.add(reason);
+        const computed = tokens.some(isDynamic);
+        sends.push({ reason, target: assigns || computed ? null : repositoryWrite(tokens.map(unquote), state.cwd) });
+      }
+      for (const file of ghReadFiles(tokens.map(unquote))) await check(file, state.cwd);
+      if (reason || assigns || arithmetic || !containedCommand(tokens)) contained = false;
       for (const arg of rest) if (!arg.startsWith('-')) noteEnvFile(arg);
       for (const directory of directoryOptionValues(tokens)) await check(directory, state.cwd);
-      if (!TOUCHES_FILES.has(program)) return;
+      if (!TOUCHES_FILES.has(program)) {
+        // Programs outside the folder-discovery list can still name permission files (sed,
+        // awk, dd, ...). Record static operands for the permission-file floor too, including
+        // option values, without treating every ordinary argument as an outside folder grant.
+        for (const arg of rest) {
+          const value = arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : arg;
+          if (value.startsWith('-')) continue;
+          const prefix = globPrefix(expandHome(unquote(value)));
+          if (!prefix || isDynamic(prefix)) continue;
+          const filesystemRoot = parse(resolve(state.cwd, prefix)).root;
+          paths.add(await resolveWithinRootsPhysically(prefix, [filesystemRoot], state.cwd));
+        }
+        return;
+      }
+      const probe = READ_PROBES.has(program) && containedCommand(tokens);
       for (const arg of rest) {
         if (arg.startsWith('-') || (program === 'chmod' && arg.startsWith('+'))) continue;
-        await check(arg, state.cwd);
+        await check(arg, state.cwd, probe);
       }
     };
 
@@ -594,7 +925,9 @@ export async function scanShell(
         node.type === 'variable_assignments' ||
         (node.type === 'variable_assignment' && !ASSIGNMENT_OWNERS.has(node.parent?.type ?? ''))
       ) {
-        commands.push({ text: node.text, always: node.text, coverable: false });
+        commands.push({ text: node.text, always: node.text, coverable: false, words: node.text });
+        contained = false;
+        setsEnvironment = true;
         for (const child of node.children) if (child) await visit(child);
         return;
       }
@@ -603,7 +936,9 @@ export async function scanShell(
       if (node.type === 'for_statement') {
         const body = node.childForFieldName('body');
         const header = body ? node.text.slice(0, body.startIndex - node.startIndex).replace(/[\s;]+$/, '') : node.text;
-        commands.push({ text: header, always: header, coverable: false });
+        commands.push({ text: header, always: header, coverable: false, words: header });
+        contained = false;
+        setsEnvironment = true;
         for (const child of node.children) if (child) await visit(child);
         return;
       }
@@ -612,7 +947,7 @@ export async function scanShell(
         if (body?.type === 'command') {
           writtenCommands.add(body.id);
         } else {
-          commands.push({ text: node.text, always: node.text, coverable: false });
+          commands.push({ text: node.text, always: node.text, coverable: false, words: node.text });
         }
       }
       if (node.type === 'file_redirect') {
@@ -634,7 +969,15 @@ export async function scanShell(
     };
 
     await visit(tree.rootNode);
-    return { commands, directories: [...directories], envFiles: [...envFiles], outbound: [...outbound] };
+    return {
+      commands,
+      paths: [...paths],
+      directories: [...directories],
+      envFiles: [...envFiles],
+      outbound: [...outbound],
+      sends: setsEnvironment ? sends.map(({ reason }) => ({ reason, target: null })) : sends,
+      contained: contained && commands.length > 0,
+    };
   } finally {
     tree.delete();
   }

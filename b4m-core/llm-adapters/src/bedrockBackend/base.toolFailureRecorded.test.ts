@@ -3,9 +3,11 @@
  * returnValue. Answer Diagnosis (common/src/utils/answerDiagnosis.ts) reads that text to name a
  * timeout, so both executing branches of BaseBedrockBackend are pinned here.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import { Logger } from '@bike4mind/observability';
 import type { ChatModels, IMessage, ModelInfo, CompletionInfo } from '@bike4mind/common';
 import { BaseBedrockBackend } from './base';
+import { TOOL_ROUND_LOG_PREFIX, type ToolRoundEntry } from '../toolRoundTiming';
 import {
   ChoiceEndReason,
   ChoiceStatus,
@@ -109,5 +111,39 @@ describe('BaseBedrockBackend records a thrown tool error on toolsUsed', () => {
     const recorded = infos.flatMap(info => info.toolsUsed ?? []).find(t => t.id === TOOL_ID);
     expect(recorded).toMatchObject({ name: 'web_search', success: false });
     expect(recorded?.returnValue).toBe(`Error processing web_search tool: ${TIMEOUT_MESSAGE}`);
+  });
+});
+
+describe('BaseBedrockBackend per-round tool timing log', () => {
+  it('logs one ToolRound line per streaming round, in order, with the tool name and result size', async () => {
+    const info = vi.spyOn(Logger.globalInstance, 'info').mockImplementation(() => {});
+    const backend = new TestBedrockBackend();
+    let callIndex = 0;
+    (backend as unknown as { _bedrockRuntime: { send: () => Promise<unknown> } })._bedrockRuntime = {
+      send: async () => responses.streaming[callIndex++],
+    };
+    const okTool: ICompletionOptionTools = { ...webSearchTool, toolFn: async () => 'three results' };
+
+    try {
+      await backend.complete(
+        TEST_MODEL,
+        [{ role: 'user', content: 'find bikes' }],
+        { stream: true, tools: [okTool], executeTools: true } as Partial<ICompletionOptions>,
+        async () => undefined
+      );
+
+      const rounds = info.mock.calls
+        .filter(([message]) => message === TOOL_ROUND_LOG_PREFIX)
+        .map(([, metadata]) => metadata as ToolRoundEntry);
+
+      expect(rounds.map(r => r.round)).toEqual([0, 1]);
+      expect(rounds[0].tools).toEqual([{ name: 'web_search', resultChars: 'three results'.length }]);
+      expect(rounds[0].msToFirstChunk).not.toBeNull();
+      expect(rounds[1].tools).toEqual([]);
+      expect(rounds[1].sinceRequestMs).toBeGreaterThanOrEqual(rounds[0].sinceRequestMs);
+      for (const r of rounds) expect(r.modelMs).toBeLessThanOrEqual(r.roundMs);
+    } finally {
+      info.mockRestore();
+    }
   });
 });

@@ -1,7 +1,7 @@
 import { withEventContext } from '@workers/utils/eventContext';
 import { NotebookCurationEvents } from '@server/utils/eventBus';
 import { Session, User } from '@bike4mind/database';
-import { sendToQueue } from '@server/utils/sqs';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { Resource } from 'sst';
 
 export const handler = withEventContext(async (event, logger) => {
@@ -16,6 +16,7 @@ export const handler = withEventContext(async (event, logger) => {
     artifactTypes,
     exportFormat,
     customNotebookName,
+    billing,
   } = NotebookCurationEvents.Start.schema.parse(event.properties);
 
   logger.updateMetadata({
@@ -63,6 +64,7 @@ export const handler = withEventContext(async (event, logger) => {
       artifactTypes,
       exportFormat,
       customNotebookName,
+      billing,
     });
 
     logger.info(`Successfully queued notebook curation for session ${sessionId}, messageId: ${messageId}`);

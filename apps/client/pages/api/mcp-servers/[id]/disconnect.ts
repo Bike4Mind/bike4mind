@@ -2,7 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { NotFoundError } from '@bike4mind/utils';
 import { mcpServerRepository, userRepository } from '@bike4mind/database';
 import { McpServerName } from '@bike4mind/common';
-import { isValidObjectId } from '@server/utils/objectId';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 
 const handler = baseApi().delete(async (req, res) => {
   const { id } = req.query;

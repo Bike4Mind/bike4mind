@@ -3,7 +3,7 @@ import Stripe from 'stripe';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { creditTransactionRepository, organizationRepository, userRepository } from '@bike4mind/database';
 import { creditService, organizationService } from '@bike4mind/services';
-import { emitMetric } from '@server/utils/cloudwatch';
+import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import {
   handleOrganizationSubscriptionInvoice,
   handleUserSubscriptionInvoice,
@@ -11,7 +11,7 @@ import {
 } from './serverUtils';
 import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
 import type { Logger } from '@bike4mind/observability';
-import { getTeamPlanSettings } from '@server/services/teamPlanSettings';
+import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
 
 // Vitest hoists these mocks above the imports.
 vi.mock('@server/models/Subscription', () => ({
@@ -59,11 +59,11 @@ vi.mock('@server/websocket/utils', () => ({
   sendToClient: vi.fn().mockResolvedValue(undefined),
 }));
 
-// Admin-configurable team-plan knobs, pinned to their defaults (see server/services/teamPlanSettings).
-vi.mock('@server/services/teamPlanSettings', () => ({
+// Admin-configurable team-plan knobs, pinned to their defaults (see packages/server-utils/src/services/teamPlanSettings).
+vi.mock('@bike4mind/server-utils/services/teamPlanSettings', () => ({
   getTeamPlanSettings: vi.fn(async () => ({ minSeats: 4, maxSeats: 100, creditsPerSeat: 50000 })),
 }));
-vi.mock('@server/utils/cloudwatch', () => ({
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   emitMetric: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -619,6 +619,84 @@ describe('handleUserSubscriptionInvoice — plan lookup', () => {
     vi.clearAllMocks();
     (userRepository.findByStripeCustomerId as any).mockResolvedValue({ id: 'u1', email: 'owner@acme.com' });
     (subscriptionRepository.findByStripeSubscriptionId as any).mockResolvedValue(null);
+    vi.mocked(creditTransactionRepository.findByPaymentIntentId).mockResolvedValue(null);
+  });
+
+  it.each(['subscription_cycle', 'subscription_update'] as const)(
+    'honors the persisted custom grant on %s',
+    async billingReason => {
+      vi.mocked(subscriptionRepository.findByStripeSubscriptionId).mockResolvedValue({
+        customCreditsPerCycle: 75000,
+      } as unknown as NonNullable<Awaited<ReturnType<typeof subscriptionRepository.findByStripeSubscriptionId>>>);
+
+      await handleUserSubscriptionInvoice(
+        { ...buildInvoice(), billing_reason: billingReason } as Stripe.Invoice,
+        buildUserSubscription('price_test_professional'),
+        metadata,
+        logger
+      );
+
+      expect(subscriptionRepository.findByStripeSubscriptionId).toHaveBeenCalledWith('sub_user_xyz');
+      expect(creditService.addCredits).toHaveBeenCalledWith(
+        expect.objectContaining({ ownerId: 'u1', credits: 75000 }),
+        expect.anything()
+      );
+    }
+  );
+
+  it('uses default credits when the persisted row has no override', async () => {
+    await handleUserSubscriptionInvoice(
+      { ...buildInvoice(), billing_reason: 'subscription_cycle' } as Stripe.Invoice,
+      buildUserSubscription('price_test_professional'),
+      metadata,
+      logger
+    );
+    expect(creditService.addCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ credits: 50000 }),
+      expect.anything()
+    );
+  });
+
+  it('propagates an override lookup failure without issuing a default grant', async () => {
+    vi.mocked(subscriptionRepository.findByStripeSubscriptionId).mockRejectedValueOnce(new Error('lookup failed'));
+    await expect(
+      handleUserSubscriptionInvoice(
+        { ...buildInvoice(), billing_reason: 'subscription_cycle' } as Stripe.Invoice,
+        buildUserSubscription('price_test_professional'),
+        metadata,
+        logger
+      )
+    ).rejects.toThrow('lookup failed');
+    expect(creditService.addCredits).not.toHaveBeenCalled();
+  });
+
+  it.each([0, -1, NaN, Infinity])('rejects invalid persisted credits %s without granting', async credits => {
+    vi.mocked(subscriptionRepository.findByStripeSubscriptionId).mockResolvedValue({
+      customCreditsPerCycle: credits,
+    } as unknown as NonNullable<Awaited<ReturnType<typeof subscriptionRepository.findByStripeSubscriptionId>>>);
+    await expect(
+      handleUserSubscriptionInvoice(
+        { ...buildInvoice(), billing_reason: 'subscription_cycle' } as Stripe.Invoice,
+        buildUserSubscription('price_test_professional'),
+        metadata,
+        logger
+      )
+    ).rejects.toThrow('Invalid cycle credits for subscription sub_user_xyz');
+    expect(creditService.addCredits).not.toHaveBeenCalled();
+  });
+
+  it('skips duplicate invoices before the override lookup or another grant', async () => {
+    vi.mocked(creditTransactionRepository.findByPaymentIntentId).mockResolvedValue({
+      id: 'already-granted',
+    } as unknown as NonNullable<Awaited<ReturnType<typeof creditTransactionRepository.findByPaymentIntentId>>>);
+    await handleUserSubscriptionInvoice(
+      { ...buildInvoice(), billing_reason: 'subscription_cycle' } as Stripe.Invoice,
+      buildUserSubscription('price_test_professional'),
+      metadata,
+      logger
+    );
+    expect(subscriptionRepository.findByStripeSubscriptionId).not.toHaveBeenCalled();
+    expect(creditService.addCredits).not.toHaveBeenCalled();
   });
 
   it('errors loudly and emits EntitlementSkipped when the price matches no plan — never a silent no-op', async () => {

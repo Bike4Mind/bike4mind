@@ -18,7 +18,10 @@ export const CreateFileUploadRequestSchema = z.object({
   file_name: z.string().min(1),
   /** Declared MIME type, e.g. `image/png`. Unsupported types are rejected with 400. */
   mime_type: z.string().min(1),
-  /** Size in bytes of the file you will PUT. Checked against the upload limit and your storage quota. */
+  /**
+   * Size in bytes of the file you will PUT. Checked against the upload limit and your storage quota,
+   * and bound into `upload_url`: a PUT of any other length is refused.
+   */
   file_size: z.number().int().positive(),
 });
 

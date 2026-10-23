@@ -17,7 +17,7 @@ import { AgentHistoryStore } from '../agents/AgentHistoryStore.js';
 import { DEFAULT_SUBAGENT_HISTORY_TTL_MS } from '../config/constants.js';
 import { deferredToolRegistry } from '../tools/deferredToolRegistry.js';
 import type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/services/llm';
-import type { PermissionResponse } from '../components';
+import type { ShowPermissionPrompt } from '../tools/gateway/gatewayTypes.js';
 import type { SilentLogger } from './types.js';
 
 /** B4M tool list shape returned by generateCliTools (carries `.toolSchema.name`). */
@@ -36,7 +36,7 @@ export interface BuildSupportingStoresInput {
   sandboxOrchestrator: SandboxOrchestrator;
   additionalDirectories: string[];
   agentContext: AgentContext;
-  promptFn: (toolName: string, args: unknown, preview?: string) => Promise<{ action: PermissionResponse }>;
+  promptFn: ShowPermissionPrompt;
   userQuestionFn: (payload: UserQuestionPayload) => Promise<UserQuestionResponse>;
   /** Startup log collected for the two-column banner; pushed into, not owned. */
   startupLog: string[];

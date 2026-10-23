@@ -112,23 +112,23 @@ describe('registerUser', () => {
   describe('disposable-email blocking', () => {
     it('rejects registration with a disposable-domain email', async () => {
       const params = { ...baseParams, email: 'burner@mailinator.com' };
-      await expect(registerUser(params, mockAdapters)).rejects.toThrow('Disposable email addresses are not allowed');
+      await expect(registerUser(params, mockAdapters)).rejects.toThrow('This email domain is not allowed');
       expect(mockAdapters.db.users.create).not.toHaveBeenCalled();
     });
 
     it('rejects a subdomain of a disposable domain', async () => {
       const params = { ...baseParams, email: 'burner@anything.mailinator.com' };
-      await expect(registerUser(params, mockAdapters)).rejects.toThrow('Disposable email addresses are not allowed');
+      await expect(registerUser(params, mockAdapters)).rejects.toThrow('This email domain is not allowed');
     });
 
     it('rejects disposable domains regardless of email casing', async () => {
       const params = { ...baseParams, email: 'Burner@MAILINATOR.COM' };
-      await expect(registerUser(params, mockAdapters)).rejects.toThrow('Disposable email addresses are not allowed');
+      await expect(registerUser(params, mockAdapters)).rejects.toThrow('This email domain is not allowed');
     });
 
     it('rejects the fully-qualified (trailing-dot) disposable form', async () => {
       const params = { ...baseParams, email: 'burner@mailinator.com.' };
-      await expect(registerUser(params, mockAdapters)).rejects.toThrow('Disposable email addresses are not allowed');
+      await expect(registerUser(params, mockAdapters)).rejects.toThrow('This email domain is not allowed');
     });
 
     it('allows a disposable email when blockDisposableEmails is switched OFF', async () => {
@@ -140,6 +140,17 @@ describe('registerUser', () => {
       });
       const params = { ...baseParams, email: 'burner@mailinator.com' };
       await expect(registerUser(params, mockAdapters)).resolves.toBeDefined();
+    });
+
+    it('rejects an email on an admin-blocked domain even with blockDisposableEmails OFF', async () => {
+      mockAdapters.db.adminSettings.findBySettingName = vi.fn().mockImplementation((name: string) => {
+        if (name === 'blockedEmailDomains') return Promise.resolve({ settingValue: ['kashre.com'] });
+        if (name === 'blockDisposableEmails') return Promise.resolve({ settingValue: 'false' });
+        return Promise.resolve(null);
+      });
+      const params = { ...baseParams, email: 'x@np.kashre.com' };
+      await expect(registerUser(params, mockAdapters)).rejects.toThrow('This email domain is not allowed');
+      expect(mockAdapters.db.users.create).not.toHaveBeenCalled();
     });
 
     it('rejects a malformed email address', async () => {
@@ -451,6 +462,24 @@ describe('registerViaOTC', () => {
       tags: ['Customer'],
       pendingCreditGrant: null,
     });
+  });
+
+  it('grants the default credits for an admitted no-invite signup while open registration is off', async () => {
+    mockAdapters.db.adminSettings.findBySettingName.mockImplementation(async (name: string) => {
+      if (name === 'allowOpenRegistration') return { settingValue: false };
+      if (name === 'defaultFreeCredits') return { settingValue: '100' };
+      return null;
+    });
+
+    const result = await registerViaOTC(otcParams, { ...mockAdapters, skipInviteCheck: true });
+
+    expect(mockAddCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ ownerId: 'newUserId', credits: 100, transactionId: 'verify-grant:newUserId' }),
+      expect.anything()
+    );
+    expect(result).toMatchObject({ emailVerified: true, currentCredits: 100 });
+    expect(result.tags).not.toContain(PENDING_FREE_CREDITS_TAG);
+    expect(mockAdapters.db.registrationInvites.findByCode).not.toHaveBeenCalled();
   });
 
   it('keeps the pending tag (still verifies) when the credit grant throws', async () => {

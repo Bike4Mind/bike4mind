@@ -88,7 +88,7 @@ vi.mock('@bike4mind/utils', () => ({
 }));
 
 const mockConfig = vi.hoisted(() => ({ STAGE: 'production' as string | undefined }));
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: mockConfig,
 }));
 
@@ -97,8 +97,10 @@ vi.mock('@bike4mind/observability', () => ({ Logger: { error: vi.fn(), warn: vi.
 const mockRecordSuccess = vi.fn();
 const mockRecordFailure = vi.fn();
 const mockEmitMetrics = vi.fn();
-vi.mock('@server/utils/cloudwatch', async () => {
-  const actual = await vi.importActual<typeof import('@server/utils/cloudwatch')>('@server/utils/cloudwatch');
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', async () => {
+  const actual = await vi.importActual<typeof import('@bike4mind/server-utils/utils/cloudwatch')>(
+    '@bike4mind/server-utils/utils/cloudwatch'
+  );
   return {
     recordFeedbackDeliverySuccess: (...args: unknown[]) => mockRecordSuccess(...args),
     recordFeedbackDeliveryFailure: (...args: unknown[]) => mockRecordFailure(...args),

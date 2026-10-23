@@ -40,6 +40,7 @@ export interface Message {
      */
     earlyStopReason?: string;
     cancelled?: boolean; // True if this message/operation was cancelled by user
+    steered?: boolean; // User input sent mid-turn and injected into that running turn (session/steering.ts)
     isContinuation?: boolean; // True if this is a continuation message (renders without header)
     // Subagent execution metadata
     subagentExecution?: {
@@ -449,6 +450,11 @@ export interface CustomCommand {
   variables?: Record<string, string>;
   /** Tool patterns to allow during skill execution */
   allowedTools?: string[];
+  /**
+   * A Skill Market import (RemoteSkillSource `includeImports`): owned by the user, written by
+   * someone else. Must run wrapped as untrusted content, never as trusted local instructions.
+   */
+  untrusted?: boolean;
   /** Execution context: 'inline' (default) or 'fork' (runs in subagent) */
   context?: 'fork' | 'inline';
   /** When true, skill is hidden from AI's auto-loading in system prompt */
@@ -484,6 +490,8 @@ export interface CustomCommandFrontmatter {
   context?: 'fork' | 'inline';
   /** When true, skill is hidden from AI's auto-loading in system prompt */
   'disable-model-invocation'?: boolean;
+  /** opencode's spelling of the same opt-out: false hides the skill from the AI */
+  autoinvoke?: boolean;
   /** When false, skill is hidden from /commands menu but still callable */
   'user-invocable'?: boolean;
   /** Lifecycle hooks for skill execution */

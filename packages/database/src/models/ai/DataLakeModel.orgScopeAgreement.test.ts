@@ -113,15 +113,15 @@ describe('data-lake org scope: the manager list agrees with what the org grants 
    * principal could open, review and approve an org lake while `findAccessible` left it out of the
    * only list that leads there. Manage implies read; these pin that the datastore mirror says so too.
    *
-   * The admin set (`findIdsWithAdminRights`: billing owner OR managerId OR adminUserIds) is WIDER
+   * The admin set (`findIdsWithAdminRights`: billing owner OR adminUserIds) is WIDER
    * than the membership set above and stays a separate set - see the note on `orgMembershipFilter`
    * for why folding these arms into membership instead would have changed a write privilege.
    */
   /** An org whose admin rights `admin` holds without any `users[]` ACL row conferring membership. */
   const orgWithManager = (name: string, manager: string) =>
-    Organization.create({ name, userId: 'org-owner', managerId: manager, users: [], groups: [] });
+    Organization.create({ name, userId: 'org-owner', adminUserIds: [manager], users: [], groups: [] });
 
-  it('lists an org lake for a team manager who sits on no users[] ACL row', async () => {
+  it('lists an org lake for an org manager who sits on no users[] ACL row', async () => {
     const orgA = await orgWithManager('org-a', 'manager');
     await dataLakeRepository.create(orgLake('a-lake', String(orgA._id), 'creator'));
 

@@ -1,10 +1,9 @@
 import { Button, DialogContent, DialogTitle, Divider, Drawer, ModalClose, Stack, Typography } from '@mui/joy';
 import React from 'react';
-import { useShallow } from 'zustand/react/shallow';
 import OrganizationsFilter from './filters/OrganizationsFilter';
 import SortControls from './filters/SortControls';
 import UserTagsFilter from './filters/UserTagsFilter';
-import { CLEARED_FILTER_PARAMS, countActiveFilters, useUsersTab } from './useUsersTabParams';
+import { CLEARED_FILTER_PARAMS, countActiveFilters, useUsersParams } from './useUsersTabParams';
 
 interface MobileFiltersDrawerProps {
   open: boolean;
@@ -17,7 +16,7 @@ interface MobileFiltersDrawerProps {
  * shared params store, so "Done" only dismisses the sheet.
  */
 const MobileFiltersDrawer: React.FC<MobileFiltersDrawerProps> = ({ open, onClose, loading }) => {
-  const [params, setParams] = useUsersTab(useShallow(state => [state.params, state.setParams]));
+  const [params, setParams] = useUsersParams();
   const activeFilterCount = countActiveFilters(params);
 
   return (

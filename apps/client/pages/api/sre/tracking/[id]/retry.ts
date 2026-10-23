@@ -10,10 +10,10 @@
  * first consumer wins, the second gets null and no-ops.
  */
 
-import { isValidObjectId } from '@server/utils/objectId';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError, NotFoundError } from '@server/utils/errors';
+import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { sreErrorTrackingRepository, cacheRepository, RETRYABLE_STATUSES } from '@bike4mind/database';
 import { SreSourceType, SreClassification, SRE_DEFAULT_REPO_SLUG } from '@bike4mind/common';
 import type { SreEventPayload, SreJobType } from '@bike4mind/common';
@@ -22,9 +22,9 @@ import {
   dispatchIssueToSre,
   parseIssueNumberFromUrl,
   type SreIssuePayload,
-} from '@server/integrations/github/sreWebhookDispatch';
-import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
-import { sendToQueue } from '@server/utils/sqs';
+} from '@bike4mind/server-utils/integrations/github/sreWebhookDispatch';
+import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { Logger } from '@bike4mind/observability';
 
 const RETRYABLE_SET = new Set(RETRYABLE_STATUSES);

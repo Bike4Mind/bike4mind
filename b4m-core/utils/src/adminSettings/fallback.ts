@@ -1,7 +1,7 @@
 import { ModelInfo } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { isAxiosError } from 'axios';
-import { getLlmByModel, type ApiKeyTable, type ICompletionBackend } from '@bike4mind/llm-adapters';
+import { getLlmByModel, isLlmTimeoutError, type ApiKeyTable, type ICompletionBackend } from '@bike4mind/llm-adapters';
 
 /**
  * Fallback attempt result
@@ -11,6 +11,18 @@ export interface FallbackAttempt {
   backend: ICompletionBackend;
   attempt: number;
 }
+
+// Exceptions raised inside a Bedrock response stream keep `name` and `$fault` but never get
+// `$metadata.httpStatusCode`, so the name is the only status signal.
+const AWS_SDK_ERROR_NAME_STATUS = new Map<string, number>([
+  ['ValidationException', 400],
+  ['AccessDeniedException', 403],
+  ['ResourceNotFoundException', 404],
+  ['ThrottlingException', 429],
+  ['TooManyRequestsException', 429],
+  ['InternalServerException', 500],
+  ['ServiceUnavailableException', 503],
+]);
 
 /**
  * AWS SDK v3 service exceptions (Bedrock, etc.) are plain Error subclasses, not Axios errors:
@@ -22,6 +34,10 @@ export interface FallbackAttempt {
  * (apps/client/server/chatCompletion/external/sseRoute.ts).
  */
 export function getHttpStatus(error: Error): number | undefined {
+  return readHttpStatus(error) ?? ('$fault' in error ? AWS_SDK_ERROR_NAME_STATUS.get(error.name) : undefined);
+}
+
+function readHttpStatus(error: Error): number | undefined {
   if (isAxiosError(error)) {
     return error.response?.status;
   }
@@ -41,10 +57,10 @@ export function getHttpStatus(error: Error): number | undefined {
  * to the HTTP status check.
  */
 const TRANSIENT_AWS_SDK_ERROR_NAMES = new Set([
-  'ServiceUnavailableException', // 503 — Bedrock capacity/availability
-  'ThrottlingException', // 429 — account/model throttling
+  'ServiceUnavailableException', // 503 - Bedrock capacity/availability
+  'ThrottlingException', // 429 - account/model throttling
   'TooManyRequestsException', // 429
-  'InternalServerException', // 500 — transient server-side error
+  'InternalServerException', // 500 - transient server-side error
   'ModelNotReadyException', // model still scaling up
   'ModelTimeoutException', // upstream model timeout
 ]);
@@ -142,6 +158,11 @@ export function shouldTriggerFallback(error: Error): boolean {
  * with the same model before falling back to a different one.
  */
 export function isOverloadedError(error: Error): boolean {
+  // Our own timers gave up on a slow model; the provider never said it was busy.
+  if (isLlmTimeoutError(error)) {
+    return false;
+  }
+
   const message = error.message.toLowerCase();
 
   // Check HTTP status codes from both Axios and AWS SDK (e.g. Bedrock 503) error shapes.
@@ -463,6 +484,13 @@ export type LlmWithFallbackOptions = {
   endUserId?: string | null;
   /** The request carries tools, so only a tool-capable model may take over. */
   requireTools?: boolean;
+  /**
+   * The caller's model admission (b4m-core/services/src/llm/modelAdmission.ts). A fallback the user
+   * could not have picked directly - entitlement-gated, admin-disabled, or unpriced - is never
+   * selected: a non-admitted frontend fallback is dropped in favour of automatic selection, and
+   * automatic selection skips non-admitted candidates.
+   */
+  isAdmitted?: (modelId: string) => Promise<boolean>;
 };
 
 /**
@@ -496,6 +524,17 @@ export async function getLlmWithFallback(
   // advances via automatic selection instead of dead-ending on the same repeated id each hop.
   if (fallbackModelId && excludeModelIds?.has(fallbackModelId)) {
     fallbackModelId = undefined;
+  }
+
+  const isAdmitted = options.isAdmitted;
+  if (isAdmitted) {
+    const admitted = await Promise.all(availableModels.map(m => isAdmitted(m.id)));
+    const listed = availableModels.some(m => m.id === fallbackModelId);
+    availableModels = availableModels.filter((_, i) => admitted[i]);
+    if (fallbackModelId && listed && !availableModels.some(m => m.id === fallbackModelId)) {
+      logger.warn(`Fallback model ${fallbackModelId} is not admitted for this user; selecting automatically`);
+      fallbackModelId = undefined;
+    }
   }
 
   // If no fallback model provided, try to find one automatically

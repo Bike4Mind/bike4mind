@@ -46,6 +46,7 @@ export const API_ERROR_CODES = [
   'unsupported_mode',
   'missing_input_image',
   'unexpected_input_image',
+  'unsupported_input_role',
   'unsupported_audio_option',
   'invalid_request',
   'model_disabled',
@@ -93,6 +94,10 @@ export const API_ERROR_CODES = [
   'deferred_tool_cache_control',
   /** A `tool_reference` named a tool that is not in the request's `tools`. */
   'unknown_tool_reference',
+  /** A `tool_addition` / `tool_removal` system message was sent for a model that cannot serve it here. */
+  'tool_changes_unsupported',
+  /** A tool change message was malformed or sat where the provider does not accept one. */
+  'invalid_tool_change',
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];

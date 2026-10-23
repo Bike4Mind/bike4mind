@@ -10,6 +10,7 @@
  */
 
 import type { GenerationJobState, ValidationViolation } from '@bike4mind/common';
+import type { ChatImportOrigin } from './claudeImport';
 import type { ChatQuestionAnswer } from './questions';
 import type { SkillSource } from './skills';
 
@@ -90,7 +91,7 @@ export interface ChatMedia {
 }
 
 /**
- * An outcome of a server-backed tool that costs money, surfaced on its own rather than folded
+ * A tool outcome or failed permission save, surfaced on its own rather than folded
  * into the result text.
  *
  * Both of these are things the user is entitled to see without expanding a tool call:
@@ -99,7 +100,7 @@ export interface ChatMedia {
  * are about to hear.
  */
 export interface ChatToolNotice {
-  kind: 'insufficient-credits' | 'provider-substituted';
+  kind: 'insufficient-credits' | 'provider-substituted' | 'permissions-save-failed';
   text: string;
 }
 
@@ -195,6 +196,11 @@ export interface ChatToolCall {
    */
   approvalAlwaysFull?: string;
   /**
+   * Set with `approvalId` when the call can be allowed in every session: the permission rules
+   * (Claude Code syntax) that the card's "Always allow" saves. Never on an irreversible call.
+   */
+  approvalRules?: string[];
+  /**
    * Set with `approvalId` when the call can be allowed in more than one way, so the card draws
    * a split button rather than a plain "allow". The chosen option is folded into `input` before
    * the tool runs, which is what makes the settled row report what the user actually picked.
@@ -224,6 +230,12 @@ export interface ChatToolCall {
    */
   label?: string;
   /**
+   * A read whose result the user wrote or chose to load, such as a skill from their own folder,
+   * which therefore does not make the reply untrusted the way a web page or an MCP result does.
+   * Kept on the row so a continued reply, which replays it, judges it the same way.
+   */
+  ownContent?: true;
+  /**
    * What a write tool actually changed, set only once the bytes landed - see ChatDiff for why
    * the diff planned before the write is a truthful record of it.
    *
@@ -248,6 +260,49 @@ export interface ChatToolCall {
    * same bytes or the prompt cache is lost from this point on. `preview` stays for the thread.
    */
   cleared?: true;
+  /**
+   * Who or what decided whether this call could run, set on every call that went through the
+   * approval gate and absent on one that never needed approval. Absent on older sessions too.
+   */
+  approval?: ChatToolApproval;
+}
+
+/** Why a call settled without anyone deciding it: the card was closed out from under it. */
+export type ChatApprovalSystemReason = 'stopped' | 'conversation-deleted' | 'app-quit' | 'moved-on' | 'error';
+
+/**
+ * Who decided a gated call. Only `user` means a person clicked the card for THIS call; every
+ * other kind ran or refused it on their behalf, which is what the transcript has to be able to
+ * tell apart afterwards.
+ */
+export type ChatApprovalDecidedBy =
+  | {
+      kind: 'user';
+      answer: 'once' | 'always' | 'deny' | 'redirect';
+      /** The label of the card option picked, on a card that offered a choice. */
+      option?: string;
+      /** With answer 'always': the derived rules were also saved for every session. */
+      everywhere?: true;
+    }
+  /** A saved permission rule; `source` names where it lives (desktop or Claude Code settings). */
+  | { kind: 'rule'; rule: string; source?: string }
+  /** An "Allow in this chat" given on an earlier card in this conversation. */
+  | { kind: 'chat-allowance' }
+  /** Let through unasked by the conversation's approval mode. */
+  | { kind: 'mode'; mode: ChatApprovalMode }
+  | { kind: 'system'; reason: ChatApprovalSystemReason; detail?: string };
+
+export interface ChatToolApproval {
+  outcome: 'allowed' | 'denied';
+  decidedBy: ChatApprovalDecidedBy;
+  /** Whether a card was shown for this call. */
+  asked: boolean;
+  /** Why the card asked when something beyond the tool itself raised it (a rule, a taint, a loop). */
+  askedBecause?: string;
+  /** ISO time the card was shown; absent when none was. */
+  requestedAt?: string;
+  /** ISO. */
+  decidedAt: string;
 }
 
 /** Sum over a sub-loop's rounds: how many requests it made and where its time went. */
@@ -333,6 +388,11 @@ export interface ChatApprovalAnswer {
    * they are never put back on the call, in the transcript, or in anything the model reads.
    */
   secrets?: { env?: Record<string, string>; headers?: Record<string, string> };
+  /**
+   * With decision 'always': also save the card's `approvalRules` as user-level allow rules, for
+   * every later session. Main saves the rules it derived itself; this only says yes to them.
+   */
+  everywhere?: boolean;
 }
 
 /**
@@ -378,6 +438,23 @@ export interface AddAttachmentsResult {
   attachments: ChatAttachment[];
   rejected: { name: string; reason: string }[];
 }
+
+/**
+ * An image in the thread, as the image context menu names it to main.
+ *
+ * Never a filesystem path: main resolves 'media' and 'attachment' through the stores that wrote
+ * them, so a crafted ref can only reach a file the app itself saved. 'remote' is an image a
+ * reply links by URL; nothing about it is on disk, so only its Markdown can be copied.
+ */
+export type ChatImageRef =
+  | { source: 'media'; url: string; nameHint?: 'screenshot' | 'image' }
+  | { source: 'attachment'; sessionId: string; attachmentId: string; mediaType: string; name: string }
+  | { source: 'remote'; url: string };
+
+export type ChatImageAction = 'copy' | 'save' | 'copy-path' | 'copy-markdown' | 'reveal';
+
+/** `done` is false when the user cancelled a save dialog. */
+export type ChatImageActionResult = { ok: true; done: boolean } | { ok: false; error: string };
 
 /**
  * Everything the artifact card needs to draw one, whether it came out of a reply or back off
@@ -701,6 +778,8 @@ export interface ChatMessageSkill {
   args?: string;
   /** 'project' means these instructions came out of the repository, not the user's own folder. */
   source: SkillSource;
+  /** A Skill Market import: the reply to this message starts as having read untrusted content. */
+  imported?: true;
 }
 
 export type BackgroundProcessStatus = 'running' | 'exited' | 'killed' | 'failed';
@@ -771,7 +850,16 @@ export interface ChatModelOption {
    * absent flag here only means the model was not in a list that had loaded.
    */
   supportsReasoningEffort?: boolean;
+  /**
+   * A local Ollama model that can think. Its server takes no effort, only thinking on or off,
+   * so the effort picker becomes that switch, stored as `default` (on) and
+   * THINKING_OFF_SETTING (off).
+   */
+  thinkingToggle?: boolean;
 }
+
+/** The setting a `thinkingToggle` model's "Off" is stored as; any other setting thinks. */
+export const THINKING_OFF_SETTING = 'minimal' satisfies ReasoningEffortSetting;
 
 /**
  * How hard a model that reasons thinks before answering.
@@ -961,7 +1049,8 @@ interface ChatSessionMeta {
    * effort it was held at rather than whatever the last conversation was set to.
    *
    * Only a model in the catalog's reasoning set is actually sent one - see
-   * `ChatModelOption.supportsReasoningEffort`. On any other model this is stored and inert.
+   * `ChatModelOption.supportsReasoningEffort`. For a model with `thinkingToggle`, `minimal`
+   * instead turns thinking off and every other setting turns it on. Otherwise this is inert.
    */
   reasoningEffort: ReasoningEffortSetting;
   /**
@@ -980,6 +1069,8 @@ interface ChatSessionMeta {
   pinned?: boolean;
   /** Set when the agent spawned this session rather than the user starting it. */
   origin?: ChatSessionOrigin;
+  /** Set on a session imported from Claude; see ChatImportOrigin. */
+  importOrigin?: ChatImportOrigin;
   /**
    * Out of the way but not gone: archived sessions drop into their own collapsed section at the
    * bottom of the sidebar instead of sitting among the live ones. Reversible from the same menu,
@@ -1028,6 +1119,16 @@ export interface ChatSession extends ChatSessionMeta {
    * status line with a true elapsed time rather than none at all.
    */
   replyInFlight?: { messageId: string; startedAt: number };
+  /** The worktree being cut right now, added the same way; see the 'workspace' stream event. */
+  preparingWorkspace?: WorkspacePreparation;
+}
+
+/** A worktree being cut ahead of a session's first turn. `since` is epoch ms. */
+export interface WorkspacePreparation {
+  since: number;
+  base: string;
+  /** The session's own branch, once it has been chosen. */
+  branch?: string;
 }
 
 /**
@@ -1130,6 +1231,12 @@ export type ChatStreamEvent =
    * refusal.
    */
   | { type: 'workspace'; sessionId: string; running: boolean; base: string; branch?: string }
+  /**
+   * A session started from this one (a card or session_spawn) could not prepare its worktree
+   * or first turn. Empty sessions are removed; accepted input keeps its session for retry.
+   * The parent's transcript gets a report too; `title` identifies the failed session.
+   */
+  | { type: 'spawn-failed'; sessionId: string; title: string; message: string }
   /** The conversation's spawn suggestions changed; carries the whole list. No reply in flight. */
   | { type: 'spawn-suggestions'; sessionId: string; suggestions: ChatSpawnSuggestion[] };
 
@@ -1182,6 +1289,8 @@ export interface ChatQueuedMessage {
   id: string;
   sessionId: string;
   text: string;
+  /** App-written reminders that belong only to the user message this entry becomes. */
+  notes?: string[];
   /** Descriptors whose bytes are already on disk; they are held back from pruning while queued. */
   attachments?: ChatAttachment[];
   queuedAt: string;
@@ -1449,6 +1558,8 @@ export interface ChatSpawnSuggestion {
   base: string;
   /** The prefilled branch name for a worktree start. */
   branch: string;
+  /** False when the project is not a git repository, so a worktree start cannot work. */
+  repository?: boolean;
   status: 'pending' | 'started' | 'dismissed';
   /**
    * `title` was cut from the prompt rather than given, so a start that keeps it leaves the
@@ -1463,22 +1574,50 @@ export interface ChatSpawnSuggestion {
   unreported?: boolean;
 }
 
-export interface ChatSpawnSuggestionStart {
-  sessionId: string;
+/** 'here' runs the task as the user's own next message in the suggesting conversation. */
+export type SpawnSuggestionPlacement = 'worktree' | 'local' | 'here';
+
+interface SpawnSuggestionStartBase {
   title: string;
-  placement: 'worktree' | 'local';
-  branch?: string;
   /** The user changed the prompt or title before starting. */
   edited: boolean;
 }
 
+export type ChatSpawnSuggestionStart =
+  | (SpawnSuggestionStartBase & { placement: 'worktree' | 'local'; sessionId: string; branch?: string })
+  | (SpawnSuggestionStartBase & { placement: 'here' });
+
+/**
+ * How both suggestion cards name the start choices: the tray's split button and session_spawn's
+ * approval card. Shared so the two never drift apart.
+ */
+export const SPAWN_CHOICE_TEXT: Readonly<
+  Record<SpawnSuggestionPlacement, { label: string; action: string; hint: string }>
+> = {
+  worktree: {
+    label: 'New session in a worktree',
+    action: 'Start in new worktree',
+    hint: 'Its own branch and checkout, so it cannot disturb this one.',
+  },
+  local: {
+    label: 'New session in this folder',
+    action: 'Start in this folder',
+    hint: 'Shares these files; both sessions edit them at once.',
+  },
+  here: {
+    label: 'Run here, in this conversation',
+    action: 'Run here',
+    hint: 'This conversation does the work itself. No new session.',
+  },
+};
+
 export interface StartSpawnSuggestionRequest {
   sessionId: string;
   suggestionId: string;
-  placement: 'worktree' | 'local';
+  placement: SpawnSuggestionPlacement;
   prompt: string;
   title: string;
-  /** Required for a worktree start. */
+  /** Required for a worktree start; ignored by the others. */
   branch?: string;
 }
 

@@ -1,13 +1,13 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { getValidUserDriveAccessToken } from '@server/integrations/google/drive/common';
 import {
   createDriveClient,
   listFolderChildren,
   isValidDriveFolderId,
   withDriveReconnectOnAuthError,
-} from '@server/integrations/google/drive/driveClient';
+} from '@bike4mind/server-utils/integrations/google/drive/driveClient';
 
 /**
  * List the immediate children of a Google Drive folder, server-side, using the current user's

@@ -28,24 +28,25 @@ import {
   dataLakeRepository,
   fallbackLakeSettingsRepository,
   latticeModelRepository,
-  imageModerationIncidentRepository,
   lakeAccessEventRepository,
   Quest,
   scopedSettingsRepository,
   usageEventRepository,
 } from '@bike4mind/database';
-import { lakeWriteToolDb } from '@server/dataLakes/lakeWriteToolDb';
+import { lakeWriteToolDb } from '@bike4mind/server-utils/dataLakes/lakeWriteToolDb';
 import { NotFoundError } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { z } from 'zod';
 import { QuestStartBodySchema, ChatCompletionProcess } from '@bike4mind/services/llm';
 import type { ToolDefinition } from '@bike4mind/services/llm/tools';
-import { withLatticeTools } from './latticeChatTools';
+import { withLatticeTools } from '@bike4mind/server-utils/queueHandlers/latticeChatTools';
 import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
+import { withholdAdminRole } from '@server/auth/apiKeyAdminScope';
 import { premiumWorkspaceDeniedTools } from '@server/premium-generated/premiumWorkspaceDeniedTools.generated';
+import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';
 import { Resource } from 'sst';
-import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
+import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { logEvent } from '@server/utils/analyticsLog';
 import { recordFirstChatValue } from '@server/analytics/funnel';
 import { summarizeSession, contextSummarizeSession } from '@server/managers/sessionManager';
@@ -59,8 +60,8 @@ import { recallLakeMemoryForSession } from '@server/memory/lakeMemoryRecall';
 import { loadSystemPromptById } from '@server/utils/sessionSystemPromptResolver';
 import { slackToolDefinitions, createPendingActionToolDefs } from '@bike4mind/slack';
 import { cancelPendingActionOnQuest } from '@server/utils/pendingActionExecutor';
-import { buildVideoToolConfig } from '@server/videoGenerations/buildVideoToolConfig';
-import { buildMusicToolConfig } from '@server/musicGenerations/buildMusicToolConfig';
+import { buildVideoToolConfig } from '@bike4mind/server-utils/videoGenerations/buildVideoToolConfig';
+import { buildMusicToolConfig } from '@bike4mind/server-utils/musicGenerations/buildMusicToolConfig';
 import {
   getCreateMusicJobDeps,
   getCreateVideoJobDeps,
@@ -68,6 +69,8 @@ import {
   getVideoJobDeps,
 } from '@server/generationJobs/wiring';
 import { getMcpClientAdapter } from '@server/utils/getMcpClientAdapter';
+import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
 
 // Cache static ChatCompletion options (DB repos, storage clients, config) across invocations;
 // dynamic per-request properties (user, sessionId, logger) are added below. Tokenizer is a
@@ -145,7 +148,7 @@ export const getStaticOptions = () => {
       // Audit trail for images blocked by the image_generation/edit_image tools'
       // moderation gate. The gate itself is unconditional (constructed inline
       // in the tool) - this only wires the incident record, not the block.
-      imageModerationIncidents: imageModerationIncidentRepository,
+      imageModerationIncidents,
       lakeAccessEvents: lakeAccessEventRepository,
       scopedSettings: scopedSettingsRepository,
       ...lakeWriteToolDb,
@@ -157,6 +160,7 @@ export const getStaticOptions = () => {
     slackWebhookUrl: Config.SLACK_WEBHOOK_URL,
     abilityGetter: defineAbilitiesFor,
     workspaceDeniedTools: premiumWorkspaceDeniedTools,
+    workspaceSessionSettings: premiumWorkspaceSessionSettings,
     getScopeFilter: (user: IUserDocument, permission: Permission, modelName: string) =>
       accessibleBy(defineAbilitiesFor(user), permission).ofType(mongoose.models[modelName]),
     // Resolve the caller's entitlement keys so retrieval can reach entitlement-gated lakes
@@ -264,13 +268,14 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
 
   // Load user and session in parallel for better performance
   const queryStartTime = Date.now();
-  const [user, session] = await Promise.all([
+  const [storedUser, session] = await Promise.all([
     User.findById(params.userId),
     sessionRepository.findById(params.sessionId),
   ]);
   logger.debug('User and session queries completed', { durationMs: Date.now() - queryStartTime });
 
-  if (!user) throw new NotFoundError('User not found');
+  if (!storedUser) throw new NotFoundError('User not found');
+  const user = params.adminRoleWithheld ? withholdAdminRole(storedUser) : storedUser;
 
   logger.updateMetadata({
     userId: params.userId,
@@ -318,6 +323,8 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
     tokenizer: getSharedTokenizer(logger),
     sessionId: params.sessionId,
     user,
+    createCompletionMeter: ({ organizationId, featureLabel }) =>
+      createCompletionMeter(user, logger, featureLabel, { sessionId: params.sessionId, organizationId }),
   });
   logger.debug('ChatCompletionProcess instantiation', { durationMs: Date.now() - optionsStartTime });
 

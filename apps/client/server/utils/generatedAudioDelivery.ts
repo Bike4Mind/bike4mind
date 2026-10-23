@@ -2,9 +2,9 @@ import { randomUUID } from 'crypto';
 import type { Response } from 'express';
 import type { Logger } from '@bike4mind/observability';
 import { extensionFromMimeType, type GeneratedAudioEncoding } from '@bike4mind/common';
-import { getFilesStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import type { SaveGeneratedAssetResult } from '@bike4mind/services';
-import { GENERATED_AUDIO_OFFLOAD_PREFIX } from '@server/utils/generatedAudioOffloadPrefix';
+import { GENERATED_AUDIO_OFFLOAD_PREFIX } from '@bike4mind/server-utils/utils/generatedAudioOffloadPrefix';
 
 /**
  * Server half of the generated-audio wire model (common generatedAudio.ts, contract

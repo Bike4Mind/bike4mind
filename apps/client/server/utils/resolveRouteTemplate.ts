@@ -11,8 +11,13 @@ type RouteRequest = Pick<Request, 'originalUrl' | 'url' | 'query'>;
  * `[...key]`. A literal segment that happens to equal a param value is indistinguishable
  * from the param, which is why this runs from the route match and not on stored URLs. Ties
  * resolve to the rightmost matching segment so a static route prefix is never relabeled.
+ *
+ * With `redactAmbiguousQuery`, return `unknown` if a query-only value also matches a path
+ * segment: it could be a dynamic param repeated in the query, which cannot be distinguished
+ * from a static segment with these inputs. OAuth logs prefer hiding that possible ID over
+ * route attribution; usage and rate-limit callers retain the existing default behavior.
  */
-export function resolveRouteTemplate(req: RouteRequest): string {
+export function resolveRouteTemplate(req: RouteRequest, options: { redactAmbiguousQuery?: boolean } = {}): string {
   const raw = req.originalUrl || req.url || '';
   const pathname = raw.split(/[?#]/, 1)[0] || '/';
   const segments = pathname.split('/');
@@ -29,6 +34,19 @@ export function resolveRouteTemplate(req: RouteRequest): string {
     const fromSearch = search.getAll(key);
     return !(fromSearch.length === values.length && fromSearch.every((v, i) => v === values[i]));
   });
+
+  if (options.redactAmbiguousQuery) {
+    const routeParamKeys = new Set(params.map(([key]) => key));
+    const hasAmbiguousSegment = Object.entries(req.query ?? {}).some(([key, value]) => {
+      if (routeParamKeys.has(key)) return false;
+      const values = typeof value === 'string' ? [value] : value;
+      return (
+        Array.isArray(values) &&
+        values.some(part => segments.some(segment => segment !== '' && safeDecode(segment) === part))
+      );
+    });
+    if (hasAmbiguousSegment) return 'unknown';
+  }
 
   // Scan right to left: a param's own segment is never before the static route prefix, so when a
   // value also equals an earlier static segment (`/api/admin/gears/admin` with key=admin) the

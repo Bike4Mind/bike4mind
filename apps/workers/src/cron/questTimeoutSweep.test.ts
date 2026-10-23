@@ -21,7 +21,7 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
-vi.mock('@server/generationCallback/dispatchQuestCallback', () => ({
+vi.mock('@bike4mind/server-utils/generationCallback/dispatchQuestCallback', () => ({
   dispatchQuestCallback: (...args: unknown[]) => mockDispatchQuestCallback(...args),
   redispatchStaleQuestCallback: (...args: unknown[]) => mockRedispatchStaleQuestCallback(...args),
   GENERATION_CALLBACK_STALE_DISPATCH_MS: 6 * 60 * 60 * 1000,
@@ -39,7 +39,7 @@ vi.mock('@bike4mind/observability', () => ({
   }),
 }));
 
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { MONGODB_URI: 'mongodb://localhost:27017/%STAGE%' },
 }));
 
@@ -48,7 +48,7 @@ vi.mock('sst', () => ({
 }));
 
 const mockEmitMetric = vi.fn().mockResolvedValue(undefined);
-vi.mock('@server/utils/cloudwatch', () => ({
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   emitMetric: (...args: unknown[]) => mockEmitMetric(...args),
 }));
 

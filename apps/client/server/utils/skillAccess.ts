@@ -1,6 +1,6 @@
 // apps/client/server/utils/skillAccess.ts
 import { organizationRepository } from '@bike4mind/database/infra';
-import { ISkill, IUserShare, IGroupShare, Permission } from '@bike4mind/common';
+import { ISkill, IUserShare, IGroupShare, Permission, canAdministerOrganization } from '@bike4mind/common';
 import { skillContentHash } from '@server/skillMarket/contentHash';
 
 /**
@@ -35,7 +35,7 @@ const isOrgAdminFor = async (skill: ShareableSkill, actor: SkillActor): Promise<
   if (!skill.organizationId) return false;
   const org = await organizationRepository.findById(skill.organizationId);
   if (!org) return false;
-  return org.userId === actor.id || org.managerId === actor.id;
+  return canAdministerOrganization({ id: actor.id }, org);
 };
 
 /** View access - owner, admin, org-admin, any direct share, or global-read. */

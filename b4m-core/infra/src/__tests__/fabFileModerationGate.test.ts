@@ -31,6 +31,7 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..'
 const SCAN_ROOTS = [
   'apps/client/pages',
   'apps/client/server',
+  'packages/server-utils/src',
   'apps/workers/src',
   'b4m-core/services/src',
   'b4m-core/slack/src',
@@ -143,6 +144,10 @@ const ALLOWLIST: Record<string, string> = {
     'the moderation scanner wiring shared by objectCreated and the on-demand scan route - downloads bytes to RUN the scan and PRODUCE moderationStatus, never returns them to a client; cannot gate on isImageServeable (circular - it is what sets that field)',
   'apps/client/server/s3/knowledgeModerationDeps.ts':
     'the moderation scanner wiring - downloads bytes to RUN the scan and PRODUCE moderationStatus (its closures are handed to moderateImportedKnowledgeFiles / the rescue sweep), never returns them to a client; cannot gate on isImageServeable (circular - it is what sets that field)',
+
+  // --- Not FabFile content: the bucket is shared, but the key is a server-rendered CSV. ---
+  'apps/client/server/utils/adminAuditExportStorage.ts':
+    'signs a server-rendered admin audit-log CSV it just staged under exports/ for a platform admin - not user-uploaded FabFile bytes, so there is no moderationStatus to gate on',
 
   // --- DI passthroughs: the file only wires a storage closure; the actual gate lives
   // in the shared service function the closure is handed to. ---

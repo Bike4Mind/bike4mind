@@ -2,7 +2,6 @@ import { ApiClient } from '../auth/ApiClient';
 import { ServerToolExecutor } from './ServerToolExecutor';
 import { WebSocketToolExecutor } from '../ws/WebSocketToolExecutor';
 import { logger } from '../utils/Logger';
-import { sanitizeToolOutput } from '../utils/toolOutputSanitizer';
 
 /** Optional WebSocket executor for server-side tools (bypasses CloudFront timeout) */
 let wsToolExecutor: WebSocketToolExecutor | null = null;
@@ -15,54 +14,26 @@ export function setWebSocketToolExecutor(executor: WebSocketToolExecutor | null)
 /**
  * Tool categories for routing decisions
  */
-const SERVER_TOOLS = ['weather_info', 'web_search', 'web_fetch'] as const;
+const SERVER_TOOLS = ['weather_info', 'web_search', 'web_fetch', 'decide'] as const;
 
 type ServerToolName = (typeof SERVER_TOOLS)[number];
 
 /**
- * Server-side tools (weather, web_search, web_fetch) run on B4M's API with company keys; every
- * other tool runs locally through the implementation its caller passes in.
+ * Server-side tools (weather, web_search, web_fetch, decide) run on B4M's API with company keys;
+ * every other tool runs locally through the implementation its caller passes in.
  */
 export function isServerTool(toolName: string): toolName is ServerToolName {
   return SERVER_TOOLS.includes(toolName as ServerToolName);
 }
 
 /**
- * Execute a tool, routing to server or local execution as appropriate
+ * Execute a tool, routing to server or local execution as appropriate. Returns the raw result:
+ * the tool gateway's output stage (tools/gateway/stages/output.ts) redacts and caps it, and is
+ * the only caller.
  *
- * @param toolName - Name of the tool to execute
- * @param input - Tool input parameters
- * @param apiClient - API client for server-side execution
- * @param localToolFn - Function to execute tool locally (optional)
- * @returns Tool execution result as string
+ * @param localToolFn - Function to execute a non-server tool locally
  */
 export async function executeTool(
-  toolName: string,
-  input: Record<string, unknown>,
-  apiClient: ApiClient,
-  localToolFn?: (args: Record<string, unknown>) => Promise<unknown>
-): Promise<string> {
-  // Single choke point: EVERY tool result - success or error - is redacted and
-  // size-capped here before it can reach the model. Errors returned as strings
-  // (server tools) sanitize via the success path; thrown errors sanitize in the
-  // catch and are re-thrown so callers still see a failure. Keep this the only
-  // place tool output crosses back to the agent, so nothing can bypass it.
-  try {
-    return sanitizeToolOutput(await routeTool(toolName, input, apiClient, localToolFn));
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const sanitized = sanitizeToolOutput(message);
-    if (error instanceof Error) {
-      // Mutate in place so the error subtype and any custom fields survive - the
-      // adapter re-inspects `.message` (e.g. isPathAccessDenial) downstream.
-      error.message = sanitized;
-      throw error;
-    }
-    throw new Error(sanitized);
-  }
-}
-
-async function routeTool(
   toolName: string,
   input: Record<string, unknown>,
   apiClient: ApiClient,

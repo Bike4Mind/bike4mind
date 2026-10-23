@@ -358,6 +358,16 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     expect(mockInvoke.mock.calls[0][0]).toEqual(expect.objectContaining({ authOrigin: 'apiKey', apiKeyId: 'k1' }));
   });
 
+  it.each([
+    ['withholds', [ApiKeyScope.AI_CHAT], true],
+    ['keeps', [ApiKeyScope.AI_CHAT, ApiKeyScope.ADMIN], false],
+  ] as const)('%s the admin role on the queued quest for a key with scopes %j', async (_, scopes, withheld) => {
+    validateWithScopes([...scopes]);
+    const { req, res } = fire();
+    await handler(req, res);
+    expect((mockInvoke.mock.calls[0][0] as { adminRoleWithheld?: boolean }).adminRoleWithheld).toBe(withheld);
+  });
+
   describe.each([
     {
       name: 'a retired id is swapped for its successor',
@@ -399,6 +409,7 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     await handler(req, res);
     expect((mockInvoke.mock.calls[0][0] as { authOrigin?: string }).authOrigin).toBe('session');
     expect((mockInvoke.mock.calls[0][0] as { apiKeyId?: string }).apiKeyId).toBeUndefined();
+    expect((mockInvoke.mock.calls[0][0] as { adminRoleWithheld?: boolean }).adminRoleWithheld).toBe(false);
   });
 
   it('accepts an ai:generate-only key (2xx) — proves OR semantics', async () => {

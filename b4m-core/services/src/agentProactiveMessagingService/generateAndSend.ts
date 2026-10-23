@@ -1,4 +1,4 @@
-import { BaseStorage } from '@bike4mind/utils';
+import { BaseStorage, isStoppedBeforeReply } from '@bike4mind/utils';
 import { stripToolOutputMarker } from '@bike4mind/utils/artifactParser';
 import {
   getLlmByModel,
@@ -26,6 +26,15 @@ import {
   IScopedSettingsRepository,
 } from '@bike4mind/common';
 import { b4mTools, generateTools } from '../llm/tools';
+import { meterCompletionBackend, type CompletionMeter } from '../billing/completionMeter';
+
+/**
+ * This host builds the whole tool registry but injects no `ToolContext.decide` runner, so `decide`
+ * would be advertised with a toolFn that can only throw. `buildSharedTools` derives the same rule
+ * from its deps; a registry-wide build has to drop the entry itself.
+ */
+const { decide: _noDecisionRunner, ...proactiveMessageTools } = b4mTools;
+export { proactiveMessageTools };
 
 interface GenerateAndSendProactiveMessageAdapters {
   config: ISessionAgentConfigDocument;
@@ -82,6 +91,8 @@ interface GenerateAndSendProactiveMessageAdapters {
    * emits fails verification and renders "Image unavailable" rather than an insecure fallback.
    */
   imageUrlSigningSecret?: string;
+  /** Admits and bills the message's LLM calls to the config owner; refusal throws before any provider call. */
+  meter?: CompletionMeter;
 }
 
 /**
@@ -100,6 +111,7 @@ export async function generateAndSendProactiveMessage({
   storage,
   imageGenerateStorage,
   imageUrlSigningSecret,
+  meter,
 }: GenerateAndSendProactiveMessageAdapters): Promise<void> {
   try {
     logger.info(`Generating proactive message for agent ${agent.name} in session ${session.id}`);
@@ -117,15 +129,16 @@ export async function generateAndSendProactiveMessage({
     const models = await getAvailableModels(apiKeyTable);
     const modelInfo = models.find(m => m.id === model);
 
-    const llm = getLlmByModel(apiKeyTable, {
+    const backend = getLlmByModel(apiKeyTable, {
       modelInfo,
       logger,
       endUserId: user.id,
     });
 
-    if (!llm || !modelInfo) {
+    if (!backend || !modelInfo) {
       throw new Error(`Invalid LLM backend for model: ${model}`);
     }
+    const llm = meter ? meterCompletionBackend(backend, meter, modelInfo, models) : backend;
 
     const toolDefinitions = generateTools(
       user.id,
@@ -158,11 +171,12 @@ export async function generateAndSendProactiveMessage({
       },
       async () => {},
       async () => {},
-      llm,
+      // Unmetered: tool-internal calls record their own operational usage (recordToolOperationalUsage).
+      backend,
       { web_search: { imageUrlSigningSecret } },
       model,
       undefined, // imageProcessorLambdaName
-      b4mTools, // tools: full server-side tool set
+      proactiveMessageTools, // tools: full server-side tool set, minus the host-injected `decide`
       undefined, // allowedDirectories
       undefined, // entitlementKeys
       session.id, // sessionId: attribute proactive-message tool spend to its session
@@ -250,7 +264,7 @@ export async function generateAndSendProactiveMessage({
 /**
  * Builds messages array for LLM to generate a proactive message
  */
-function buildProactiveMessageMessages({
+export function buildProactiveMessageMessages({
   agent,
   config,
   session,
@@ -292,6 +306,7 @@ function buildProactiveMessageMessages({
     const contextMessages = recentMessages.slice(-5);
 
     for (const msg of contextMessages) {
+      if (isStoppedBeforeReply(msg)) continue;
       if (msg.prompt) {
         messages.push({
           role: 'user',

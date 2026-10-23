@@ -6,7 +6,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => ({ get: (fn: any) => fn }),
 }));
 
-vi.mock('@server/utils/config', () => ({ Config: { JWT_SECRET: 'test-jwt-secret' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { JWT_SECRET: 'test-jwt-secret' } }));
 
 vi.mock('@bike4mind/database', () => ({
   mcpServerRepository: { findOne: vi.fn(), update: vi.fn(), create: vi.fn() },
@@ -25,12 +25,14 @@ vi.mock('@server/auth/oauthFlowCookie', () => ({
   clearStateNonce: vi.fn(),
 }));
 
-vi.mock('@server/integrations/integrationAuditLogger', () => ({
+vi.mock('@bike4mind/server-utils/integrations/integrationAuditLogger', () => ({
   IntegrationAuditLogger: { create: () => ({ setUserId: vi.fn(), success: vi.fn(), failure: vi.fn() }) },
 }));
 
+const encryptEnvVariables = vi.hoisted(() => vi.fn(() => [{ key: 'GITHUB_ACCESS_TOKEN', value: 'encrypted' }]));
+
 vi.mock('@server/security/tokenEncryption', () => ({
-  encryptEnvVariables: () => [{ key: 'GITHUB_ACCESS_TOKEN', value: 'encrypted' }],
+  encryptEnvVariables,
 }));
 
 // Tool discovery is best-effort; make it fail fast so only the connect write is exercised.
@@ -131,6 +133,7 @@ describe('/api/auth/github/mcp-callback reconnect', () => {
     // resetAllMocks also wipes the vi.mock factory implementations; re-seed them.
     vi.mocked(getSettingsMap).mockResolvedValue({} as any);
     vi.mocked(invokeMcpHandler).mockRejectedValue(new Error('discovery skipped in test'));
+    encryptEnvVariables.mockReturnValue([{ key: 'GITHUB_ACCESS_TOKEN', value: 'encrypted' }]);
     vi.mocked(userRepository.findById).mockResolvedValue({ id: 'user-123' } as any);
     mockUpdate.mockImplementation(async data => data as any);
     mockCreate.mockImplementation(async data => ({ ...data, id: 'server-new' }) as any);
@@ -251,6 +254,17 @@ describe('/api/auth/github/mcp-callback reconnect', () => {
       connectedAt: expect.any(String),
       scope: 'repo,read:user',
     });
+  });
+
+  it('binds the stored ciphertext to the row id it persists', async () => {
+    mockFindOne.mockResolvedValue(null);
+    stubGitHub(OCTOCAT);
+
+    await run();
+
+    const [, owner] = encryptEnvVariables.mock.calls[0];
+    expect(mockCreate.mock.calls[0][0]._id).toBe(owner.id);
+    expect(owner).toEqual({ userId: 'user-123', name: 'github', id: expect.any(String) });
   });
 
   it.each([

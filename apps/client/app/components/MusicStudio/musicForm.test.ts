@@ -6,7 +6,7 @@ import {
   validateMusicRequest,
   type PublicMusicModel,
 } from '@bike4mind/common';
-import { toPublicMusicModel } from '../../../server/musicGenerations/listUsableMusicModels';
+import { toPublicMusicModel } from '@bike4mind/server-utils/musicGenerations/listUsableMusicModels';
 import {
   canSubmit,
   clampDuration,

@@ -92,8 +92,8 @@ vi.mock('@server/utils/validators', () => ({
     }
   },
 }));
-vi.mock('@server/security/secretEncryption', () => ({ encryptSecret: (v: string) => `enc:${v}` }));
-vi.mock('@server/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: undefined } }));
+vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({ encryptSecret: (v: string) => `enc:${v}` }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: undefined } }));
 // A class, not a bare object: the real services barrel constructs Loggers at import time.
 vi.mock('@bike4mind/observability', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/observability')>();
@@ -105,11 +105,19 @@ vi.mock('@bike4mind/observability', async importOriginal => {
 // Signup/link grants are unit-tested in emailVerifiedGrants.test.ts; assert the callback's wiring here.
 const mockApplyOAuthSignupDomainGrant = vi.fn();
 const mockApplyEmailVerifiedGrants = vi.fn();
+const mockRecordSignupAcquisition = vi.fn().mockResolvedValue({ isSynthetic: false });
+const mockEmitSignupFunnelEvents = vi.fn().mockResolvedValue(undefined);
+const mockEmitVerifiedFunnel = vi.fn().mockResolvedValue(undefined);
 vi.mock('@server/utils/auth/oauthSignupGrants', () => ({
   applyOAuthSignupDomainGrant: (...a: unknown[]) => mockApplyOAuthSignupDomainGrant(...a),
 }));
 vi.mock('@server/auth/emailVerifiedGrants', () => ({
   applyEmailVerifiedGrants: (...a: unknown[]) => mockApplyEmailVerifiedGrants(...a),
+}));
+vi.mock('@server/analytics/funnel', () => ({
+  recordSignupAcquisition: (...a: unknown[]) => mockRecordSignupAcquisition(...a),
+  emitSignupFunnelEvents: (...a: unknown[]) => mockEmitSignupFunnelEvents(...a),
+  emitEmailVerifiedFunnelEvents: (...a: unknown[]) => mockEmitVerifiedFunnel(...a),
 }));
 
 // Import after mocks are registered.
@@ -168,6 +176,7 @@ beforeEach(() => {
   });
   mockUpdateOne.mockResolvedValue({});
   mockCreate.mockResolvedValue({ id: 'new-user', _id: 'new-user', tokenVersion: 0, isBanned: false });
+  mockApplyOAuthSignupDomainGrant.mockResolvedValue({ creditsGranted: 0, subscriptionCreditsGranted: 0 });
   mockRevokeAllByUserId.mockResolvedValue(0);
   mockEndConnections.mockResolvedValue({ connectionIds: [] });
   // Default both lookup stages to "no match" so tests that drive the handler
@@ -258,6 +267,7 @@ describe('/api/auth/okta/callback — account-link email-equality gate', () => {
     });
 
     expect(res._getRedirectUrl()).toMatch(/^\/auth\/success#token=/);
+    expect(res._getRedirectUrl()).not.toContain('firstSignupSession');
     expect(mockAuthFailCreate).not.toHaveBeenCalled();
     // Routine refresh must NOT bump tokenVersion nor revoke existing sessions.
     const updateArg = mockUpdateOne.mock.calls[0]?.[1] ?? {};
@@ -287,6 +297,7 @@ describe('/api/auth/okta/callback — account-link email-equality gate', () => {
   });
 
   it('links AND promotes emailVerified when the local account has no password (pure-OAuth shell)', async () => {
+    mockApplyEmailVerifiedGrants.mockResolvedValue({ creditsGranted: 100, subscriptionCreditsGranted: 20 });
     const res = await runCallback({
       user: {
         id: 'u5',
@@ -312,6 +323,11 @@ describe('/api/auth/okta/callback — account-link email-equality gate', () => {
       trigger: 'oauth-link-verification',
       releaseReason: 'Okta account link (email verified)',
       logger: expect.anything(),
+    });
+    expect(mockEmitVerifiedFunnel).toHaveBeenCalledWith({
+      user: expect.objectContaining({ id: 'u5' }),
+      method: 'okta',
+      creditsGranted: 120,
     });
     // Membership re-reads emailVerified, so the grants must follow the write that persists it.
     expect(mockUpdateOne.mock.invocationCallOrder[0]).toBeLessThan(
@@ -374,12 +390,29 @@ describe('/api/auth/okta/callback — account-link email-equality gate', () => {
     });
 
     expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ email: 'new@example.com' }));
+    expect(res._getRedirectUrl()).toContain('firstSignupSession=1');
     expect(res._getRedirectUrl()).toMatch(/^\/auth\/success#token=/);
     expect(mockAuthFailCreate).not.toHaveBeenCalled();
     // The new account never visits /api/email/verify, so its domain grant runs here.
     expect(mockApplyOAuthSignupDomainGrant).toHaveBeenCalledWith('new-user', 'new@example.com');
     // Okta gets no flat grant: the account is not created pending-free-credits.
     expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('tags');
+  });
+
+  it('carries a fresh-account marker through an MFA handoff', async () => {
+    mockVerifyState.mockReturnValue({ valid: true, payload: {} });
+    mockGetConfig.mockResolvedValue({
+      config: { issuer: 'https://okta.example.com' },
+      source: 'sst',
+      idp: undefined,
+    });
+    mockResolveSecondFactor.mockResolvedValue({ kind: 'enroll', mfaToken: 'pending-tok' });
+    const res = await runCallback({
+      user: null,
+      userInfo: { sub: 'okta-new', email: 'new@example.com', email_verified: true, name: 'New User' },
+    });
+    expect(res._getRedirectUrl()).toContain('mfa=setup');
+    expect(res._getRedirectUrl()).toContain('firstSignupSession=1');
   });
 
   it('skips the domain grant for a new account created without a verified email', async () => {
@@ -401,6 +434,10 @@ describe('/api/auth/okta/callback - new-account email verification gate', () => 
     });
 
     expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ email: 'verified@example.com' }));
+    expect(mockEmitSignupFunnelEvents).toHaveBeenCalledTimes(1);
+    expect(mockEmitSignupFunnelEvents).toHaveBeenCalledWith(
+      expect.objectContaining({ method: 'okta', emailVerified: true, creditsGranted: 0 })
+    );
   });
 
   it('creates the account WITHOUT an email when email_verified is false', async () => {

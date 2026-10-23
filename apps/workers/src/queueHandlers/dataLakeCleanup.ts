@@ -18,14 +18,15 @@ import { dataLakeService } from '@bike4mind/services';
 import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
-import { shredPrincipalMemory } from '@server/memory/ledgerMemoryStore';
+import { shredPrincipalMemory } from '@bike4mind/server-utils/memory/ledgerMemoryStore';
 import { releaseDriveConnectionForLake } from '@server/integrations/google/drive/common';
 import { releaseGitHubLakeConnectionForLake } from '@server/integrations/github/dataLake/githubLakeConnection';
 import { createKeyProvider } from '@bike4mind/server-utils/memory/factCipher';
-import { getFilesStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { BadRequestError } from '@bike4mind/utils';
 import { ZodError } from 'zod';
-import { CleanupPayload } from '@server/dataLakes/dataLakeCleanupPayload';
+import { CleanupPayload } from '@bike4mind/server-utils/dataLakes/dataLakeCleanupPayload';
+import { storageOwnerTransferDb } from '@server/files/storageOwnerTransferDb';
 
 /**
  * Background consumer for the phase-2 data-lake hard-delete sweep, offloaded off the request path
@@ -50,6 +51,8 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       beginPurge: () => dataLakeRepository.beginPurgeExecution(dataLakeId, purgeClaimId),
       deleteFileAndChunks: id => fabFileRepository.hardDeleteWithChunks(id),
       db: {
+        // A survivor stripped of this lake's tags moves its billed bytes to its next owner.
+        ...storageOwnerTransferDb,
         dataLakes: dataLakeRepository,
         dataLakeAccessGrants: dataLakeAccessGrantRepository,
         dataLakeProposals: dataLakeProposalRepository,

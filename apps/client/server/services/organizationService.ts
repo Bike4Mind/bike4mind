@@ -4,7 +4,7 @@ import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import {
   ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
   ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
-} from '@client/lib/subscriptions/constants';
+} from '@bike4mind/server-utils/lib/subscriptions/constants';
 import {
   ISubscription,
   SubscriptionOwnerType,
@@ -12,7 +12,7 @@ import {
   resolveSubscriptionSource,
 } from '@client/lib/subscriptions/types';
 import { subscriptionRepository } from '@server/models/Subscription';
-import { getTeamPlanSettings } from '@server/services/teamPlanSettings';
+import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
 
 /**
  * Count outstanding org invites that haven't been accepted yet. Pending invites

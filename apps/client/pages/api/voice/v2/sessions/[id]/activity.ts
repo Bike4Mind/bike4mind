@@ -1,13 +1,13 @@
 /**
  * POST /api/voice/v2/sessions/{id}/activity - the SPA's connect report and heartbeat for an open
  * voice call. The first one marks the hold connected and each one advances its last activity,
- * which connected-time billing reads (server/voice/settleVoiceHold.ts). Not a published endpoint.
+ * which connected-time billing reads (packages/server-utils/src/voice/settleVoiceHold.ts). Not a published endpoint.
  */
 import { sessionRepository } from '@bike4mind/database';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { NotFoundError } from '@server/utils/errors';
-import { isValidObjectId } from '@server/utils/objectId';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { verifyVoiceSessionToken } from '@server/voice/voiceSessionToken';
 import { Request } from 'express';
 

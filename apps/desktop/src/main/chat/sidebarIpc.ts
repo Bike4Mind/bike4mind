@@ -1,6 +1,6 @@
 import type { IpcMain } from 'electron';
 import { IPC_CHANNELS } from '@shared/ipc';
-import { SIDEBAR_SESSION_ID_MAX_LENGTH } from '@shared/sidebarSections';
+import { SIDEBAR_SESSION_ID_MAX_LENGTH, type SidebarSectionsState } from '@shared/sidebarSections';
 import type { SidebarSectionStore } from './SidebarSectionStore';
 
 const isText = (value: unknown): value is string => typeof value === 'string';
@@ -33,4 +33,30 @@ export function registerSidebarIpc(
     if (sectionId === null) return store.move(sessionId, null);
     return isText(sectionId) && (await knownSession(sessionId)) ? store.move(sessionId, sectionId) : store.read();
   });
+}
+
+/** The result of filing a new session: the state main wrote, or why it could not. */
+export interface PlacementOutcome {
+  sections?: SidebarSectionsState;
+  failed: boolean;
+}
+
+/**
+ * Files a session main has just created into the section the renderer asked for; see
+ * CreateSessionRequest for why this happens before the reply. A failed write is reported and
+ * answered as `failed`: the session exists either way and starts in the default groups.
+ */
+export async function placeNewSession(
+  store: Pick<SidebarSectionStore, 'move'>,
+  sessionId: string,
+  sectionId: unknown,
+  onError: (error: unknown) => void
+): Promise<PlacementOutcome> {
+  if (!isText(sectionId)) return { failed: false };
+  try {
+    return { sections: await store.move(sessionId, sectionId), failed: false };
+  } catch (error) {
+    onError(error);
+    return { failed: true };
+  }
 }

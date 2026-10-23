@@ -41,6 +41,11 @@ describe('chat composer - prop identity stability (regression)', () => {
       expect(sessionBottom).toMatch(/const handleInputChange = useCallback\(/);
       expect(sessionBottom).toMatch(/const handleEditorSubmit = useCallback\(/);
     });
+
+    it('depends on the stable analytics mutation instead of the mutation result', () => {
+      expect(sessionBottom).toContain('const { mutate: logEvent } = useLogEvent();');
+      expect(sessionBottom).not.toContain('const logEvent = useLogEvent();');
+    });
   });
 
   describe('LexicalChatInput', () => {

@@ -43,14 +43,14 @@ vi.mock('@server/models/Subscription', () => ({
     markPastDue: mocks.markPastDue,
   },
 }));
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { STRIPE_WEBHOOK_SECRET: 'whsec_test' },
   isDevelopment: () => false,
 }));
-vi.mock('@server/utils/cloudwatch', () => ({ emitMetric: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetric: vi.fn() }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe: vi.fn() }));
 vi.mock('@server/utils/eventBus', () => ({ StripeEvents: {} }));
-vi.mock('@server/integrations/stripe/stripe', () => ({
+vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   CustomerType: {},
   customerExists: vi.fn(),
   isStripeConfigured: () => true,

@@ -19,6 +19,9 @@ const h = vi.hoisted(() => ({
   incrementCurrentStorage: vi.fn(),
   changeStorageSize: vi.fn(),
   userForRefund: vi.fn(),
+  pullSystemFilesForUsers: vi.fn(),
+  pullFileReferences: vi.fn(),
+  logEvent: vi.fn(),
   baseApiOptions: undefined as unknown,
 }));
 
@@ -39,8 +42,8 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@server/utils/analyticsLog', () => ({ logEvent: h.logEvent }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ delete: h.storageDelete, upload: vi.fn(), getSignedUrl: vi.fn() }),
   getGeneratedImageStorage: () => ({ delete: vi.fn() }),
 }));
@@ -68,7 +71,11 @@ vi.mock('@bike4mind/database', async importOriginal => ({
   },
   fileTagRepository: { touchLastActivityBy: h.touchLastActivityBy },
   sessionRepository: { findAllWithKnowledgeId: h.findAllWithKnowledgeId, update: h.sessionUpdate },
-  userRepository: { findById: h.userFindById },
+  userRepository: {
+    findById: h.userFindById,
+    pullSystemFilesForUsers: h.pullSystemFilesForUsers,
+  },
+  projectRepository: { pullFileReferences: h.pullFileReferences },
   withTransaction: (fn: (session?: unknown) => Promise<unknown>) => fn(undefined),
   User: { findById: (id: string) => ({ session: async () => h.userForRefund(id) }) },
 }));
@@ -137,6 +144,61 @@ describe('bulk-delete - data-lake stats', () => {
     // Three member files, one lake: the meta-tags are deduped, so one aggregation, not three.
     expect(h.computeDataLakeStats).toHaveBeenCalledTimes(1);
     expect(h.setStats).toHaveBeenCalledTimes(1);
+  });
+
+  it('unlinks each deleted file against its own owner and recipients, never a batch-wide union', async () => {
+    const files = new Map([
+      ['507f1f77bcf86cd799439011', { ...memberFile('507f1f77bcf86cd799439011'), users: [{ userId: 'recipient-1' }] }],
+      ['507f1f77bcf86cd799439012', { ...memberFile('507f1f77bcf86cd799439012'), users: [{ userId: 'recipient-2' }] }],
+    ]);
+    h.findById.mockImplementation(async (id: string) => files.get(id) ?? null);
+    h.findByIdAndUserId.mockImplementation(async (id: string) => files.get(id) ?? null);
+    const { res } = makeRes();
+
+    await run([...files.keys()], res);
+
+    const [first, second] = [...files.keys()];
+    expect(h.pullSystemFilesForUsers).toHaveBeenCalledWith([OWNER, 'recipient-1'], [first]);
+    expect(h.pullSystemFilesForUsers).toHaveBeenCalledWith([OWNER, 'recipient-2'], [second]);
+    expect(h.pullFileReferences).toHaveBeenCalledWith([first], { userIds: [OWNER, 'recipient-1'] });
+    expect(h.pullFileReferences).toHaveBeenCalledWith([second], { userIds: [OWNER, 'recipient-2'] });
+  });
+
+  it('never pulls a merely unshared file from a holder who still has it, even when the same batch deletes another file', async () => {
+    const owned = { ...memberFile('507f1f77bcf86cd799439021'), users: [{ userId: 'recipient-1' }] };
+    // Owned by Carol, shared directly with the caller: the caller's delete is an unshare.
+    const shared = { ...memberFile('507f1f77bcf86cd799439022', 'carol'), users: [{ userId: OWNER }] };
+    h.findById.mockImplementation(async (id: string) => (id === owned.id ? owned : shared));
+    h.findByIdAndUserId.mockImplementation(async (id: string) => (id === owned.id ? owned : null));
+    const { res } = makeRes();
+
+    await run([owned.id, shared.id], res);
+
+    // The unshared file keeps its place in Carol's project; only the caller's own system files let go.
+    expect(h.pullFileReferences).toHaveBeenCalledWith([owned.id], { userIds: [OWNER, 'recipient-1'] });
+    for (const [fileIds] of h.pullFileReferences.mock.calls) {
+      expect(fileIds).not.toContain(shared.id);
+    }
+    expect(h.pullSystemFilesForUsers).toHaveBeenCalledWith([OWNER], [shared.id]);
+  });
+
+  it('never unlinks the references of a file whose delete rolled back - that file is still live', async () => {
+    const rolledBack = '507f1f77bcf86cd799439011';
+    const committed = '507f1f77bcf86cd799439012';
+    const files = new Map([
+      [rolledBack, { ...memberFile(rolledBack), users: [{ userId: 'recipient-1' }] }],
+      [committed, memberFile(committed)],
+    ]);
+    h.findById.mockImplementation(async (id: string) => files.get(id) ?? null);
+    h.findByIdAndUserId.mockImplementation(async (id: string) => files.get(id) ?? null);
+    h.logEvent.mockRejectedValueOnce(new Error('log failed'));
+    const { res } = makeRes();
+
+    await run([...files.keys()], res);
+
+    expect(h.pullSystemFilesForUsers).toHaveBeenCalledTimes(1);
+    expect(h.pullSystemFilesForUsers).toHaveBeenCalledWith([OWNER], [committed]);
+    expect(h.pullFileReferences).toHaveBeenCalledWith([committed], { userIds: [OWNER] });
   });
 
   it('does not recompute for a batch that only unshares', async () => {

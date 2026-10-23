@@ -48,6 +48,15 @@ describe('QuestModel.getMostRecentChatHistory', () => {
     expect(history.map(m => m.prompt)).toEqual(['newer', 'older']);
   });
 
+  it('returns stopped status so history can omit cancelled prompts', async () => {
+    await Quest.create(makeQuest({ status: 'stopped', replies: [] }));
+
+    const [message] = await questRepository.getMostRecentChatHistory('session-1', 10);
+
+    expect(message.status).toBe('stopped');
+    expect(message.replies).toEqual([]);
+  });
+
   // Regression lock for the same reason as fabFileIds above: suggestedChoices was missing from
   // the projection, so withStoredChoices (b4m-core/utils) never saw stored choices to re-attach.
   it('returns suggestedChoices so history can re-attach a turn choices block', async () => {

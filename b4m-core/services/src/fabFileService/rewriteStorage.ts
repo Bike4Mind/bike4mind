@@ -15,7 +15,7 @@ import { adjustOwnerStorage } from './ownerStorage';
 /**
  * Storage accounting for rewriting an existing FabFile's bytes. Every rewrite site calls
  * `assertRewriteFits` before its upload and `commitContentRewrite` after it. Each write that changes a
- * row's charged bytes - this commit, or the upload's S3 event claim (apps/client/server/s3/storageCharge.ts)
+ * row's charged bytes - this commit, or the upload's S3 event claim (packages/server-utils/src/s3/storageCharge.ts)
  * - sets `fileSize` and the stamp in one atomic update and moves the owner's counter by
  * `newSize - chargedBytes(preImage)`, so the moves add up to the truth in any order, including
  * overlapping rewrites of one file. A guard test pins the known call sites and finds new ones only under its

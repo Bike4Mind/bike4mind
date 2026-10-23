@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from 'react';
 
-import { IMcpServerDocument } from '@bike4mind/common';
+import { IMcpServerResponse } from '@bike4mind/common';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useMcpServers } from '@client/app/hooks/data/mcpServers';
 
@@ -16,7 +16,7 @@ export function useMcpServerSync(): void {
   const { data: mcpServersData = [] } = useMcpServers();
 
   const availableMcpServers = useMemo(
-    () => mcpServersData.filter((server: IMcpServerDocument) => server.enabled !== false),
+    () => mcpServersData.filter((server: IMcpServerResponse) => server.enabled !== false),
     [mcpServersData]
   );
 

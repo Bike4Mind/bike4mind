@@ -37,6 +37,27 @@ describe('MessageQueue', () => {
     expect(queue.list('a').map(message => message.text)).toEqual(['one\ntwo']);
   });
 
+  it('keeps each task reminder when typed messages merge into one turn', () => {
+    const first = queue.enqueue('a', 'typed first');
+    queue.enqueue('a', 'first task', [], ['first reminder']);
+    queue.enqueue('a', 'typed later');
+    queue.enqueue('a', 'second task', [], ['second reminder']);
+
+    const taken = queue.takeNext('a');
+    expect(taken?.id).toBe(first.id);
+    expect(taken?.text).toBe('typed first\nfirst task\ntyped later\nsecond task');
+    expect(taken?.notes).toEqual(['first reminder', 'second reminder']);
+  });
+
+  it('does not carry a cancelled task reminder onto a later message', () => {
+    const task = queue.enqueue('a', 'task', [], ['task reminder']);
+    queue.cancel('a', task.id);
+    queue.enqueue('a', 'something else');
+
+    expect(events.at(-2)?.returned?.messages[0]?.notes).toEqual(['task reminder']);
+    expect(queue.takeNext('a')?.notes).toBeUndefined();
+  });
+
   it('takes the pending message', () => {
     queue.enqueue('a', 'one');
     queue.enqueue('a', 'two');

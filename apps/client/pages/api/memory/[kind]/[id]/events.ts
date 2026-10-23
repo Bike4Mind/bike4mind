@@ -7,7 +7,7 @@ import {
   type MemoryEventInput,
   type PrincipalKind,
 } from '@bike4mind/memory';
-import { appendMemoryEvent } from '@server/memory/ledgerMemoryStore';
+import { appendMemoryEvent } from '@bike4mind/server-utils/memory/ledgerMemoryStore';
 import { createKeyProvider } from '@bike4mind/server-utils/memory/factCipher';
 
 // The kinds this endpoint accepts an append for. A deliberate subset of PrincipalKind: `lake` is

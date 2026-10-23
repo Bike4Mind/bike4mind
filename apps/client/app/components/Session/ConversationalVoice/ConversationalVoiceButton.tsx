@@ -1,5 +1,6 @@
 import { Box, CircularProgress, IconButton, Tooltip, Typography } from '@mui/joy';
-import { CallEnd, GraphicEq } from '@mui/icons-material';
+import CallEnd from '@mui/icons-material/CallEnd';
+import GraphicEq from '@mui/icons-material/GraphicEq';
 import React, { useEffect, useId, useRef, useState } from 'react';
 import type { Mode } from '@elevenlabs/client';
 import { useNavigate } from '@tanstack/react-router';
@@ -8,7 +9,7 @@ import { estimateElevenLabsConversationalCost } from '@bike4mind/voice';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import { useUser } from '@client/app/contexts/UserContext';
 import CreditsModal from '@client/app/components/subscription/CreditsModal';
-import { MAX_SESSION_SECONDS } from '@server/voice/voiceSessionLimits';
+import { MAX_SESSION_SECONDS } from '@bike4mind/server-utils/voice/voiceSessionLimits';
 import { visuallyHidden } from '@client/app/utils/a11yStyles';
 import { VoiceStatusPill, frequencyBars } from '@client/app/components/common/VoiceStatusPill';
 import {

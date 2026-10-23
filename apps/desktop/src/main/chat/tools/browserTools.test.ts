@@ -26,7 +26,21 @@ function fakePage(start = ''): BrowserPage & { url: string; events: string[] } {
       return { url, title: 'Home', status: 200 };
     }),
     back: vi.fn(async () => undefined),
-    snapshot: vi.fn(async () => ({ url: page.url, title: 'Home', text: '[1] button "Add"', truncated: false })),
+    snapshot: vi.fn(async () => ({
+      url: page.url,
+      title: 'Home',
+      text: '[1] button "Add"',
+      truncated: false,
+      model: {
+        url: page.url,
+        title: 'Home',
+        capturedAt: '2026-10-24T12:00:00.000Z',
+        blocks: [],
+        actions: [{ ref: '1', kind: 'click' as const, element: 'button', label: 'Add' }],
+        claims: [],
+        truncated: false,
+      },
+    })),
     click: vi.fn(async () => 'Add'),
     scroll: vi.fn(async () => 'Pricing plans'),
     fill: vi.fn(async () => 'filled "x"'),
@@ -112,6 +126,7 @@ function contextFor(page: BrowserPage, importedSites: readonly string[] = []) {
       notice: () => undefined,
       label: text => labels.push(text),
       moved: () => undefined,
+      ownContent: () => undefined,
       diff: () => undefined,
       detail: () => undefined,
       image: (bytes, mimeType) => images.push({ bytes, mimeType }),
@@ -232,7 +247,10 @@ describe('browser tools', () => {
     const result = await browserClick.run({ ref: '[1]' }, contextFor(page).context);
     expect(page.click).toHaveBeenCalledWith('1');
     expect(page.settle).toHaveBeenCalled();
-    expect(result).toMatch(/^Clicked \[1\] Add\.\nPage: Home - http:\/\/localhost:3080\/app\n\n\[1\] button "Add"$/);
+    expect(result).toMatch(
+      /^Clicked \[1\] Add\.\nPage: Home - http:\/\/localhost:3080\/app\n\n\[1\] button "Add"\n\nTyped page model:\n\{/
+    );
+    expect(result).toContain('"actions":[{"ref":"1","kind":"click","element":"button","label":"Add"}]');
   });
 
   it('fills and optionally submits', async () => {
@@ -531,6 +549,15 @@ describe('reading a page that carries the user imported cookies', () => {
       title: page.url.startsWith(MAIL) ? 'Inbox (3) - jude' : 'Home',
       text: page.url.startsWith(MAIL) ? 'From: bank - your code is 123456' : '[1] button "Add"',
       truncated: false,
+      model: {
+        url: page.url,
+        title: page.url.startsWith(MAIL) ? 'Inbox (3) - jude' : 'Home',
+        capturedAt: '2026-10-24T12:00:00.000Z',
+        blocks: [],
+        actions: [],
+        claims: [],
+        truncated: false,
+      },
     }));
     return page;
   }

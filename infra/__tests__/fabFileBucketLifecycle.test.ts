@@ -93,4 +93,13 @@ describe('fab-file bucket notebook export lifecycle', () => {
     expect(signedUrlSeconds).toBeGreaterThan(0);
     expect(ruleDays * 86400).toBeGreaterThan(signedUrlSeconds);
   });
+
+  // Audit exports hold actor emails and IPs, so they must land somewhere this rule reaps.
+  it('keeps the admin audit export prefix under the expiring exports prefix', () => {
+    const auditExportSource = read('apps/client/server/utils/adminAuditExportStorage.ts');
+    const auditPrefix = auditExportSource.match(/ADMIN_AUDIT_EXPORT_PREFIX = '([^']+)'/)?.[1];
+
+    expect(rulePrefix).toBeDefined();
+    expect(auditPrefix?.startsWith(rulePrefix ?? '<missing>')).toBe(true);
+  });
 });

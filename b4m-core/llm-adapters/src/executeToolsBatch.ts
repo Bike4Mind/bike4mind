@@ -1,4 +1,4 @@
-import { PermissionDeniedError, getQuestErrorCode } from '@bike4mind/common';
+import { PermissionDeniedError, getQuestErrorCode, visibleReplyText } from '@bike4mind/common';
 import type { ICompletionOptionTools } from './backend';
 
 /** Default concurrency cap to prevent resource exhaustion (DB pools, rate limits, memory) */
@@ -40,7 +40,7 @@ export function shouldEndTurnAfterTools(
   // Nameless slots are not calls: adapters index tool calls by content-block index, so a text
   // block ahead of the tool leaves an empty entry in the list.
   const names = calledToolNames.filter((name): name is string => Boolean(name));
-  if (names.length === 0 || !roundText?.trim()) return false;
+  if (names.length === 0 || !visibleReplyText(roundText).trim()) return false;
   return names.every(name => isTurnEndingTool(name, tools));
 }
 

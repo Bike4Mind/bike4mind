@@ -5,6 +5,8 @@ import { createRoot, type Root } from 'react-dom/client';
 import type { SkillSummary } from '@shared/skills';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CustomizeNavItem, CustomizeScreen } from './CustomizePanel';
+import { forgetSkillGroupExpansion } from './skillGroups';
+import { desktopTheme } from '../theme';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -20,11 +22,25 @@ window.matchMedia ??= ((query: string) => ({
   dispatchEvent: () => false,
 })) as typeof window.matchMedia;
 
+const market = vi.hoisted(() => ({
+  imports: vi.fn(async () => ({ imports: [] as unknown[] })),
+  openOnWeb: vi.fn(async () => true),
+  readLocalSkill: vi.fn(async () => ({
+    ok: true as const,
+    fields: { name: 'chrome-browser', description: 'Use the browser extension', body: 'Go.' },
+    dropped: [] as string[],
+    extraFiles: [] as string[],
+    extraFileCount: 0,
+  })),
+  pickUploadSource: vi.fn(async () => ({ ok: false as const, error: 'No SKILL.md in that folder.' })),
+}));
+
 (window as unknown as { b4m: unknown }).b4m = {
   mcp: {
     getServers: async () => ({ servers: [], secretsPersisted: true }),
     onChanged: () => () => {},
   },
+  skillMarket: market,
 };
 
 const skills = vi.hoisted(() => ({
@@ -44,16 +60,16 @@ const skills = vi.hoisted(() => ({
         filePath: '/home/.claude/commands/legacy-command.md',
       },
       {
-        name: 'hyperframes',
-        description: 'Create videos',
+        name: 'pdf',
+        description: 'Read and write PDFs',
         source: 'global',
-        filePath: '/home/.claude/skills/hyperframes/SKILL.md',
+        filePath: '/home/.claude/skills/synced/bucket/pdf/SKILL.md',
       },
       {
-        name: 'brief-format',
-        description: 'Defines the brief format',
+        name: 'docx',
+        description: 'Read and write Word files',
         source: 'global',
-        filePath: '/home/.claude/skills/hyperframes/references/brief-format.md',
+        filePath: '/home/.claude/skills/synced/bucket/docx/SKILL.md',
       },
     ] as SkillSummary[],
     projectDirectory: '/repo',
@@ -72,7 +88,7 @@ const renderNode = (node: React.ReactNode) => {
   container = document.createElement('div');
   document.body.append(container);
   root = createRoot(container);
-  act(() => root.render(<CssVarsProvider>{node}</CssVarsProvider>));
+  act(() => root.render(<CssVarsProvider theme={desktopTheme}>{node}</CssVarsProvider>));
   return container;
 };
 
@@ -97,6 +113,7 @@ describe('the Customize screen', () => {
   beforeEach(() => {
     if (root) act(() => root.unmount());
     document.body.replaceChildren();
+    forgetSkillGroupExpansion();
     skills.state.skills = [
       { name: 'my-review', description: 'Review my changes', source: 'project', filePath: '/repo/.claude/SKILL.md' },
       {
@@ -112,16 +129,16 @@ describe('the Customize screen', () => {
         filePath: '/home/.claude/commands/legacy-command.md',
       },
       {
-        name: 'hyperframes',
-        description: 'Create videos',
+        name: 'pdf',
+        description: 'Read and write PDFs',
         source: 'global',
-        filePath: '/home/.claude/skills/hyperframes/SKILL.md',
+        filePath: '/home/.claude/skills/synced/bucket/pdf/SKILL.md',
       },
       {
-        name: 'brief-format',
-        description: 'Defines the brief format',
+        name: 'docx',
+        description: 'Read and write Word files',
         source: 'global',
-        filePath: '/home/.claude/skills/hyperframes/references/brief-format.md',
+        filePath: '/home/.claude/skills/synced/bucket/docx/SKILL.md',
       },
     ];
   });
@@ -134,20 +151,22 @@ describe('the Customize screen', () => {
     expect(isVisible(byTestId('skills-settings'))).toBe(true);
   });
 
-  it('groups global skills by their top-level ~/.claude/skills scope', () => {
+  it('groups global skills by their top-level ~/.claude/skills scope, a lone skill as a plain row', () => {
     renderScreen();
-    const groups = allByTestId('skill-group');
     expect(text(byTestId('user-skill-scopes'))).toContain('Your skills');
-    expect(text(groups[0])).toContain('chrome-browser');
-    expect(text(groups[0])).toContain('/chrome-browser');
-    expect(text(groups[1])).toContain('hyperframes');
-    expect(text(groups[1])).toContain('/hyperframes');
-    expect(text(groups[1])).toContain('/brief-format');
+    const single = allByTestId('skills-single-row');
+    expect(single.map(row => text(row))).toEqual([expect.stringContaining('/chrome-browser')]);
+    expect(single[0]?.querySelector('[data-testid="skills-group-toggle-btn"]')).toBeNull();
+
+    const groups = allByTestId('skill-group');
+    expect(text(groups[0])).toContain('Bike4Mind skills');
+    expect(text(groups[0])).toContain('No Bike4Mind account skills loaded.');
+    expect(text(groups[1])).toContain('synced');
+    expect(text(groups[1])).toContain('/pdf');
+    expect(text(groups[1])).toContain('/docx');
     expect(text(container)).not.toContain('Project skills');
     expect(text(container)).not.toContain('/my-review');
     expect(text(container)).not.toContain('/legacy-command');
-    expect(text(groups[2])).toContain('Bike4Mind skills');
-    expect(text(groups[2])).toContain('No Bike4Mind account skills loaded.');
   });
 
   it('shows an explicit empty state for either skill group', () => {
@@ -179,6 +198,34 @@ describe('the Customize screen', () => {
     expect(text(row?.querySelector('[data-testid="customize-skill-chip"]'))).toBe('Bike4Mind');
   });
 
+  it('marks a Skill Market import, offers its update, and opens the market and the web', async () => {
+    skills.state.skills = [
+      ...skills.state.skills,
+      { name: 'web-summary', description: 'Mine', source: 'account', filePath: 'b4m:/api/skills/a1' },
+      { name: 'market-pick', description: 'Theirs', source: 'account', imported: true, filePath: 'b4m:/api/skills/a2' },
+    ];
+    market.imports.mockResolvedValueOnce({
+      imports: [{ skillId: 'a2', name: 'market-pick', listingId: 'l1', updateAvailable: true }],
+    });
+    const onOpenSkillMarket = vi.fn();
+    renderNode(<CustomizeScreen sessionId="session-1" onClose={() => {}} onOpenSkillMarket={onOpenSkillMarket} />);
+    await act(async () => {});
+
+    const rows = allByTestId('customize-skill-row');
+    const mine = rows.find(row => text(row)?.includes('/web-summary'));
+    const theirs = rows.find(row => text(row)?.includes('/market-pick'));
+    expect(mine?.querySelector('[data-testid="customize-skill-imported-chip"]')).toBeNull();
+    expect(mine?.querySelector('[data-testid="customize-skill-update-btn"]')).toBeNull();
+    expect(text(theirs?.querySelector('[data-testid="customize-skill-imported-chip"]'))).toBe('Imported');
+
+    act(() => theirs?.querySelector<HTMLElement>('[data-testid="customize-skill-update-btn"]')?.click());
+    expect(onOpenSkillMarket).toHaveBeenLastCalledWith({ id: 'l1' });
+    act(() => byTestId('customize-skill-market-btn')?.click());
+    expect(onOpenSkillMarket).toHaveBeenLastCalledWith();
+    act(() => mine?.querySelector<HTMLElement>('[data-testid="customize-skill-web-btn"]')?.click());
+    expect(market.openOnWeb).toHaveBeenCalledWith({ kind: 'skill', id: 'a1' });
+  });
+
   it('switches to MCP and preserves its inline controls', () => {
     renderScreen();
     act(() => byTestId('customize-mcp-tab')?.click());
@@ -199,6 +246,149 @@ describe('the Customize screen', () => {
   it('keeps a way out of the screen', () => {
     renderScreen();
     expect(isVisible(byTestId('customize-close-btn'))).toBe(true);
+  });
+  it('offers Upload on local rows only, resolved by name in main, and opens the preview', async () => {
+    skills.state.skills = [
+      ...skills.state.skills,
+      { name: 'web-summary', description: 'Summarise', source: 'account', filePath: 'b4m:/api/skills/a1' },
+    ];
+    renderScreen();
+    const rows = allByTestId('customize-skill-row');
+    const account = rows.find(row => text(row)?.includes('/web-summary'));
+    expect(account?.querySelector('[data-testid="skill-row-upload-btn"]')).toBeNull();
+
+    const local = rows.find(row => text(row)?.includes('/chrome-browser'));
+    await act(async () => local?.querySelector<HTMLElement>('[data-testid="skill-row-upload-btn"]')?.click());
+    expect(market.readLocalSkill).toHaveBeenCalledWith({ sessionId: 'session-1', name: 'chrome-browser' });
+    expect(document.querySelector('[data-testid="skill-upload-dialog"]')).not.toBeNull();
+  });
+
+  it('shows a failed pick inline', async () => {
+    renderScreen();
+    await act(async () => byTestId('skill-upload-pick-btn')?.click());
+    expect(text(byTestId('skill-upload-pick-error'))).toContain('No SKILL.md in that folder.');
+  });
+});
+
+describe('the Customize skill groups', () => {
+  const skill = (scope: string, name: string, description = `About ${name}`): SkillSummary => ({
+    name,
+    description,
+    source: 'global',
+    filePath: `/home/.claude/skills/${scope}/${name}/SKILL.md`,
+  });
+  /** `count` groups of two skills each, so every one has a header. */
+  const manyGroups = (count: number) =>
+    Array.from({ length: count }, (_, index) => [
+      skill(`group-${index}`, `alpha-${index}`),
+      skill(`group-${index}`, `beta-${index}`),
+    ]).flat();
+
+  const toggles = () => allByTestId('skills-group-toggle-btn');
+  const groupNamed = (title: string) => allByTestId('skill-group').find(group => text(group)?.includes(title));
+  const rowsIn = (node: HTMLElement | undefined) =>
+    [...(node?.querySelectorAll('[data-testid="customize-skill-row"]') ?? [])].map(row => text(row));
+  const typeFilter = (value: string) => {
+    const input = byTestId('skills-filter-input') as HTMLInputElement;
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    act(() => {
+      setValue?.call(input, value);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  };
+
+  beforeEach(() => {
+    if (root) act(() => root.unmount());
+    document.body.replaceChildren();
+    forgetSkillGroupExpansion();
+  });
+
+  it('opens expanded when there are few groups, and a header toggles its rows', () => {
+    skills.state.skills = manyGroups(3);
+    renderScreen();
+    expect(toggles().map(toggle => toggle.getAttribute('aria-expanded'))).toEqual(['true', 'true', 'true']);
+    expect(toggles()[0]?.tagName).toBe('BUTTON');
+    expect(rowsIn(groupNamed('group-0'))).toHaveLength(2);
+
+    act(() => toggles()[0]?.click());
+    expect(toggles()[0]?.getAttribute('aria-expanded')).toBe('false');
+    expect(rowsIn(groupNamed('group-0'))).toEqual([]);
+    expect(groupNamed('group-0')?.querySelector('[data-testid="skills-group-list"]')).toBeNull();
+    expect(rowsIn(groupNamed('group-1'))).toHaveLength(2);
+
+    act(() => toggles()[0]?.click());
+    expect(toggles()[0]?.getAttribute('aria-expanded')).toBe('true');
+    expect(rowsIn(groupNamed('group-0'))).toHaveLength(2);
+  });
+
+  it('opens collapsed above ten groups and renders no rows for collapsed groups', () => {
+    skills.state.skills = manyGroups(11);
+    renderScreen();
+    expect(toggles()).toHaveLength(11);
+    expect(toggles().every(toggle => toggle.getAttribute('aria-expanded') === 'false')).toBe(true);
+    expect(allByTestId('customize-skill-row')).toEqual([]);
+    expect(allByTestId('skills-group-list')).toEqual([]);
+  });
+
+  it('collapses and expands every group at once', () => {
+    skills.state.skills = [
+      ...manyGroups(3),
+      { name: 'web-summary', description: 'Summarise', source: 'account', filePath: 'b4m:/api/skills/a1' },
+    ];
+    renderScreen();
+    const all = () => byTestId('skills-collapse-all-btn');
+    expect(text(all())).toBe('Collapse all');
+
+    act(() => all()?.click());
+    expect(toggles()).toHaveLength(4);
+    expect(toggles().every(toggle => toggle.getAttribute('aria-expanded') === 'false')).toBe(true);
+    expect(allByTestId('customize-skill-row')).toEqual([]);
+    expect(text(all())).toBe('Expand all');
+
+    act(() => all()?.click());
+    expect(toggles().every(toggle => toggle.getAttribute('aria-expanded') === 'true')).toBe(true);
+    expect(allByTestId('customize-skill-row')).toHaveLength(7);
+  });
+
+  it('shows only matches while filtering, expanding just the groups that have one', () => {
+    skills.state.skills = [...manyGroups(11), skill('lonely', 'solo')];
+    renderScreen();
+    expect(allByTestId('customize-skill-row')).toHaveLength(1);
+
+    typeFilter('BETA-3');
+    expect(allByTestId('skill-group').map(group => text(group?.querySelector('button')))).toEqual([
+      expect.stringContaining('group-3'),
+    ]);
+    expect(toggles()[0]?.getAttribute('aria-expanded')).toBe('true');
+    expect(rowsIn(groupNamed('group-3'))).toEqual([expect.stringContaining('/beta-3')]);
+    expect(allByTestId('skills-single-row')).toEqual([]);
+
+    typeFilter('nothing-matches-this');
+    expect(text(byTestId('skills-filter-empty'))).toBe('No skills match.');
+    expect(allByTestId('skill-group')).toEqual([]);
+
+    typeFilter('');
+    expect(toggles()).toHaveLength(11);
+    expect(toggles().every(toggle => toggle.getAttribute('aria-expanded') === 'false')).toBe(true);
+  });
+
+  it('matches descriptions too', () => {
+    skills.state.skills = [skill('docs', 'pdf', 'Read portable documents'), skill('docs', 'xlsx', 'Spreadsheets')];
+    renderScreen();
+    typeFilter('portable');
+    expect(rowsIn(groupNamed('docs'))).toEqual([expect.stringContaining('/pdf')]);
+  });
+
+  it('remembers expanded groups when the screen is reopened', () => {
+    skills.state.skills = manyGroups(11);
+    renderScreen();
+    act(() => toggles()[2]?.click());
+    act(() => root.unmount());
+
+    renderScreen();
+    expect(toggles().map(toggle => toggle.getAttribute('aria-expanded'))).toEqual(
+      Array.from({ length: 11 }, (_, index) => (index === 2 ? 'true' : 'false'))
+    );
   });
 });
 

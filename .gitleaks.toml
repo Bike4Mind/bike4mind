@@ -19,15 +19,14 @@ paths = [
   # Test fixtures and test files - strings here are by definition not live credentials
   ".*/__fixtures__/.*",
   ".*/__mocks__/.*",
-  ".*\\.test\\.[tj]sx?$",
-  ".*\\.spec\\.[tj]sx?$",
+  ".*\\.test\\.[cm]?[tj]sx?$",
+  ".*\\.spec\\.[cm]?[tj]sx?$",
   ".*/__tests__/.*",
   # Python test file naming convention (pytest discovery: test_*.py / *_test.py)
   ".*/test_[^/]*\\.py$",
   ".*_test\\.py$",
   # Documentation - placeholder strings are expected here
-  ".*docs/.*",
-  ".*docs-site/.*",
+  "(^|/)docs/.*\\.(md|mdx)$",
   ".*README\\.md$",
   # Environment example files - values here are intentional placeholders
   "\\.env\\.example$",

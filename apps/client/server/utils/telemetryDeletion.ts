@@ -1,5 +1,5 @@
 import { Quest, TelemetryAuditLogModel } from '@bike4mind/database';
-import { getClientIp, truncateIp } from './ip';
+import { getClientIp, truncateIp } from '@bike4mind/server-utils/utils/ip';
 import { regenerateUserTelemetryHashes } from './telemetryHashLookup';
 
 /**

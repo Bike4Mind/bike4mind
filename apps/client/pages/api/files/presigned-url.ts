@@ -1,17 +1,19 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { FILES_READ_SCOPES } from '@server/files/fileScopes';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 import { Request } from 'express';
 import { FabFile, fabFileRepository } from '@bike4mind/database';
 import { isImageServeable } from '@bike4mind/common';
 import { isFileInAccessibleLake, resolveAccessibleLakes } from '@server/dataLakes';
 import { holdsDataLakeReadScope } from '@server/dataLakes/dataLakeScopes';
-import { getFilesStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
+
+const MAX_PRESIGNED_URL_EXPIRY_SECONDS = 3600;
 
 const GetPresignedUrlRequestInput = z.object({
   filePaths: z.array(z.string()),
-  expiresIn: z.number().prefault(3600), // Default to 1 hour
+  expiresIn: z.number().int().positive().max(MAX_PRESIGNED_URL_EXPIRY_SECONDS).prefault(3600), // Default to 1 hour
   // `server` exists for the in-process RLM `getArticle` loopback (see server/tavern/rlm/tools.ts),
   // whose container may not reach the browser origin. It only picks the signing client: the
   // moderation/ACL/lake gates all run before signing, and the SigV4 signature is host-bound.

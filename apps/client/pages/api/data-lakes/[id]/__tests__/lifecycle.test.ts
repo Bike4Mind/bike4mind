@@ -45,7 +45,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
     assertLakeAccessById: h.assertLakeAccessById,
@@ -65,6 +65,7 @@ vi.mock('@bike4mind/services', () => ({
 }));
 vi.mock('@bike4mind/database', () => ({
   organizationRepository: {},
+  memoryLedgerRepository: { markSourceShredded: vi.fn().mockResolvedValue(0) },
   withTransaction: async (fn: () => unknown) => {
     h.inTransaction.push('enter');
     try {
@@ -105,8 +106,8 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/fab-pipeline', () => ({ FabFileChunkSearchIndex: {} }));
 vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: h.selfHostOpenSearchEnabled }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
-vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
-vi.mock('@server/utils/dlqRegistry', () => ({ getSourceQueueUrl: h.getSourceQueueUrl }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
+vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({ getSourceQueueUrl: h.getSourceQueueUrl }));
 vi.mock('@server/integrations/google/drive/common', () => ({
   disableDriveConnectionForLake: h.disableDriveConnectionForLake,
   enableDriveConnectionForLake: h.enableDriveConnectionForLake,
@@ -375,6 +376,29 @@ describe('POST /api/data-lakes/[id]/lifecycle - retrievalIndex wiring (archive/d
       })
     );
   });
+
+  it.each([
+    ['archive', 'archiveDataLake', { id: 'lake1', status: 'archived' }],
+    ['unarchive', 'unarchiveDataLake', { restoredCount: 2, skippedDuplicates: 1 }],
+    ['restore', 'restoreDeletedDataLake', { restoredCount: 3, skippedDuplicates: 0 }],
+    ['delete', 'deleteDataLake', { id: 'lake1', status: 'deleted' }],
+    ['promote', 'promoteDataLake', { id: 'lake1', status: 'active' }],
+    ['demote', 'demoteDataLake', { id: 'lake1', status: 'draft' }],
+  ])(
+    '%s returns its result through the response schema, stripping undeclared keys',
+    async (action, serviceName, body) => {
+      h[serviceName as 'archiveDataLake'].mockResolvedValue({
+        ...body,
+        _id: 'raw-object-id',
+        __v: 1,
+        notInSchema: 'x',
+      });
+      const { res, json } = makeRes();
+      await (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action }), res);
+
+      expect(json).toHaveBeenCalledWith(body);
+    }
+  );
 
   it('archive passes retrievalIndex: undefined when self-host OpenSearch is off', async () => {
     h.selfHostOpenSearchEnabled.mockReturnValue(false);

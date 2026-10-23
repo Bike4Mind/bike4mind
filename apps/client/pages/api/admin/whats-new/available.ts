@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { WhatsNewForkFetcher, AvailableModalEntry } from '@server/services/whatsNewForkFetcher';
 import { getWhatsNewEnvInfo } from '@server/utils/whatsNewEnv';

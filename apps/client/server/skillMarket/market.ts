@@ -7,6 +7,8 @@ import { organizationRepository } from '@bike4mind/database/infra';
 import {
   BadRequestError,
   InboxType,
+  SKILL_LISTING_MAX_TAGS as MAX_TAGS,
+  SKILL_LISTING_TAG_PATTERN as TAG_PATTERN,
   type ISkill,
   type ISkillListing,
   type ISkillListingVersion,
@@ -183,8 +185,7 @@ export const toSnapshot = (skill: ISkill): ISkillSnapshot => ({
 
 export { skillContentHash } from './contentHash';
 
-const TAG_PATTERN = /^[a-z0-9][a-z0-9-]{0,23}$/;
-const MAX_TAGS = 5;
+export { TAG_PATTERN, MAX_TAGS };
 
 export function validateListingTags(value: unknown): string[] {
   if (value === undefined || value === null) return [];

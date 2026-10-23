@@ -156,6 +156,12 @@ export default defineConfig({
   },
 
   projects: [
+    // CSS hit-target regressions use real Joy markup without authentication or a backend.
+    {
+      name: 'radio-hit-target',
+      testMatch: [/(?:^|\/)radio-hit-target\.spec\.tsx$/],
+      use: { ...devices['Desktop Chrome'] },
+    },
     // Core setup: admin, manager, invite code (runs first)
     {
       name: 'setup-core',

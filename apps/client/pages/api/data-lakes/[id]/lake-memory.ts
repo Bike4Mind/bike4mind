@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
-import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { dataLakeService } from '@bike4mind/services';
 import {
@@ -14,15 +14,15 @@ import {
 import { isLeaseHeld, ConflictError, UnprocessableEntityError, TooManyRequestsError } from '@bike4mind/common';
 import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
-import { sendToQueue } from '@server/utils/sqs';
-import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
+import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import {
   LAKE_MEMORY_DAILY_CAP,
   LAKE_MEMORY_RATE_LIMIT_WINDOW_MS,
   lakeMemoryRateLimitKey,
-} from '@server/dataLakes/lakeMemoryRateLimit';
+} from '@bike4mind/server-utils/dataLakes/lakeMemoryRateLimit';
 import { DataLakeAuditEvents, logAuditEvent } from '@server/utils/auditLog';
-import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
+import { resolveAuditPrincipal } from '@bike4mind/server-utils/dataLakes/resolveAuditPrincipal';
 
 /**
  * GET  /api/data-lakes/:id/lake-memory  -> LakeMemoryHealth (the build door's own state, so the UI

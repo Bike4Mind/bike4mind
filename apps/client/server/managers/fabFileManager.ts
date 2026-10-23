@@ -1,7 +1,7 @@
 import { accessibleBy } from '@casl/mongoose';
 import { IFabFile, IFabFileDocument, Permission } from '@bike4mind/common';
 import { Ability } from '@server/auth/ability';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { mongoose, FabFile } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { EmbeddingService } from '@bike4mind/fab-pipeline';

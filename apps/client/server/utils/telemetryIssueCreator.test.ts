@@ -16,7 +16,7 @@ vi.mock('@bike4mind/database', () => ({
   cacheRepository: { claimDedup: vi.fn().mockResolvedValue({ claimed: true }) },
 }));
 
-vi.mock('@server/services/telemetryFingerprint', () => ({
+vi.mock('@bike4mind/server-utils/services/telemetryFingerprint', () => ({
   generateTelemetryFingerprint: vi.fn().mockReturnValue('fp-abc123'),
   generateSemanticTelemetryFingerprint: vi.fn().mockReturnValue('sfp-def456'),
   extractFingerprintFromBody: vi.fn().mockReturnValue(null),
@@ -25,11 +25,11 @@ vi.mock('@server/services/telemetryFingerprint', () => ({
   formatPrimaryAnomaly: vi.fn((s: string) => s.replace('_', ' ')),
 }));
 
-vi.mock('@server/utils/markdownEscape', () => ({
+vi.mock('@bike4mind/server-utils/utils/markdownEscape', () => ({
   escapeMarkdown: vi.fn((s: string) => s),
 }));
 
-vi.mock('@server/services/issueDedup', () => ({
+vi.mock('@bike4mind/server-utils/services/issueDedup', () => ({
   checkFingerprintDedup: vi.fn().mockReturnValue({
     isDuplicate: false,
     isRegression: false,
@@ -199,7 +199,7 @@ describe('getFallbackPriority', () => {
 
 // Import mocked modules for type-safe access in tests
 import { GitHubService } from '@server/services/githubService';
-import { checkFingerprintDedup } from '@server/services/issueDedup';
+import { checkFingerprintDedup } from '@bike4mind/server-utils/services/issueDedup';
 import { cacheRepository } from '@bike4mind/database';
 
 const mockedGitHubService = vi.mocked(GitHubService);

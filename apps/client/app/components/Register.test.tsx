@@ -5,6 +5,10 @@ import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { ExternalLinks } from '@client/app/utils/externalLinks';
+import { FIRST_SIGNUP_SESSION_KEY } from '@client/app/utils/firstSignupSession';
+
+const mockLogEvent = vi.hoisted(() => vi.fn());
+vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => ({ mutate: mockLogEvent }) }));
 
 // Data/context deps are stubbed; the real @mui/joy Checkbox + Link and react-hook-form render so we
 // can assert the anchors the registration consent checkbox exposes. Open registration is enabled
@@ -17,6 +21,7 @@ type MfaHookOptions = {
 const mocks = vi.hoisted(() => ({
   setCurrentUser: vi.fn(),
   setAccessToken: vi.fn(),
+  setVerifiedSession: vi.fn(),
   sendOTC: vi.fn(),
   verifyOTC: vi.fn(),
   mutateAsync: vi.fn(),
@@ -50,7 +55,9 @@ vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: () => ({ setCurrentUser: mocks.setCurrentUser, currentUser: null }),
 }));
 vi.mock('@client/app/hooks/useAccessToken', () => ({
-  useAccessToken: () => ({ setAccessToken: mocks.setAccessToken }),
+  useAccessToken: Object.assign(() => ({ setAccessToken: mocks.setAccessToken }), {
+    getState: () => ({ setVerifiedSession: mocks.setVerifiedSession }),
+  }),
 }));
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => mocks.navigate,
@@ -60,6 +67,7 @@ vi.mock('@client/app/utils/authRedirect', () => ({
   applyRedirect: vi.fn(),
   appendRedirectTo: (url: string) => url,
 }));
+vi.mock('@client/app/utils/sessionBootstrap', () => ({ resetSessionBootstrap: vi.fn() }));
 vi.mock('@client/app/utils/refreshCoordinator', () => ({ resetRefreshCoordinator: vi.fn() }));
 vi.mock('@client/app/utils/signupConversion', () => ({ trackSignupConversion: mocks.trackSignupConversion }));
 vi.mock('@client/app/hooks/useCommonStyles', () => ({
@@ -179,7 +187,25 @@ describe('Register - second-factor handoff', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
     mocks.mfa.options = null;
+  });
+
+  it('marks a freshly registered account first session before entering the app', async () => {
+    mocks.verifyOTC.mockResolvedValueOnce({ user: { id: 'new-user' }, accessToken: 'full' });
+    renderRegister();
+    await submitCode(userEvent.setup());
+    await waitFor(() => expect(mocks.setCurrentUser).toHaveBeenCalledWith({ id: 'new-user' }));
+    expect(JSON.parse(localStorage.getItem(FIRST_SIGNUP_SESSION_KEY) as string).userId).toBe('new-user');
+    expect(mocks.setVerifiedSession).toHaveBeenCalledWith('full');
+  });
+
+  it('does not mark an existing account login as a first session', async () => {
+    mocks.verifyOTC.mockResolvedValueOnce({ id: 'existing-user', accessToken: 'full' });
+    renderRegister();
+    await submitCode(userEvent.setup());
+    await waitFor(() => expect(mocks.setCurrentUser).toHaveBeenCalled());
+    expect(localStorage.getItem(FIRST_SIGNUP_SESSION_KEY)).toBeNull();
   });
 
   it('begins a verify challenge when the account already exists and demands MFA', async () => {
@@ -211,6 +237,17 @@ describe('Register - second-factor handoff', () => {
 
     await waitFor(() => expect(mocks.mfa.begin).toHaveBeenCalledTimes(1));
     expect(mocks.mfa.begin).toHaveBeenCalledWith({ userId: 'u1', mfaToken: 'pending-tok', mode: 'setup' });
+  });
+
+  it('logs policies_accepted once a new account is created', async () => {
+    mocks.verifyOTC.mockResolvedValueOnce({ user: { id: 'new-1', email: 'new@test.com' }, accessToken: 'atk' });
+    renderRegister();
+
+    await submitCode(userEvent.setup());
+
+    await waitFor(() =>
+      expect(mockLogEvent).toHaveBeenCalledWith({ type: 'policies_accepted', metadata: { path: 'registration' } })
+    );
   });
 
   it('sets the current user from the completed challenge', () => {

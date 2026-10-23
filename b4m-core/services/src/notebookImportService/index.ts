@@ -245,7 +245,7 @@ export class NotebookImportService {
 
   /** Bytes admitted so far in THIS import. `currentStorageSize` on the user document is a snapshot
    * read once - the caller charges imported bytes only once every file is admitted
-   * (apps/client/server/s3/storageCharge.ts) - so several files that each pass against that stale
+   * (packages/server-utils/src/s3/storageCharge.ts) - so several files that each pass against that stale
    * value can overshoot the quota together. Same reason as the accumulator in
    * b4m-core/slack/src/CommandHandler.ts. */
   private admittedBytes = 0;
@@ -757,7 +757,7 @@ export class NotebookImportService {
           // must be scanned before serving. The upload-time S3 scan cannot see this row - it is
           // written inside the import transaction and gives up ~7.5s before a real import commits - so
           // the caller re-scans every imported file out of band once this transaction commits, keyed
-          // by the filePath recorded below. See server/s3/moderateImportedKnowledgeFiles.ts.
+          // by the filePath recorded below. See packages/server-utils/src/s3/moderateImportedKnowledgeFiles.ts.
         };
         // No `uploadedAt`/`metadata`: not paths on FabFileSchema, so strict mode drops them silently.
 

@@ -34,7 +34,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 
 import handler from '../pages/api/agent-executions/index';
-import { BadRequestError, UnauthorizedError } from '@server/utils/errors';
+import { BadRequestError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 
 function makeReqRes(overrides: Partial<Request> = {}) {
   const req = {

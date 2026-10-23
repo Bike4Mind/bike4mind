@@ -1,12 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { findStaleVoiceHolds, claimVoiceHold, incrementCredits, createTransaction, connectDB } = vi.hoisted(() => ({
-  findStaleVoiceHolds: vi.fn(),
-  claimVoiceHold: vi.fn(),
-  incrementCredits: vi.fn(),
-  createTransaction: vi.fn(),
-  connectDB: vi.fn(async () => undefined),
-}));
+const { findStaleVoiceHolds, claimVoiceHold, incrementCredits, createTransaction, connectDB, emitMetrics } = vi.hoisted(
+  () => ({
+    findStaleVoiceHolds: vi.fn(),
+    claimVoiceHold: vi.fn(),
+    incrementCredits: vi.fn(),
+    createTransaction: vi.fn(),
+    connectDB: vi.fn(async () => undefined),
+    emitMetrics: vi.fn(async () => undefined),
+  })
+);
 
 vi.mock('@bike4mind/database', () => ({
   connectDB,
@@ -22,7 +25,8 @@ vi.mock('@bike4mind/observability', () => ({
     error() {}
   },
 }));
-vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://host/%STAGE%' } }));
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetrics }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://host/%STAGE%' } }));
 vi.mock('sst', () => ({ Resource: { App: { stage: 'test' } } }));
 
 import {
@@ -36,8 +40,7 @@ import {
   creditsForElapsed,
   MAX_SESSION_SECONDS,
   REALTIME_VOICE_HOLD_SECONDS,
-  realtimeCreditsFloor,
-} from '@server/voice/voiceSessionLimits';
+} from '@bike4mind/server-utils/voice/voiceSessionLimits';
 
 const NOW = new Date('2026-10-11T12:00:00Z');
 const STARTED = new Date(NOW.getTime() - 60 * 60 * 1000);
@@ -136,35 +139,34 @@ describe('voiceHoldSweep', () => {
     expect(result).toMatchObject({ settled: 1, failed: 1 });
   });
 
-  it('charges an abandoned realtime hold the open-time floor up to the last frame the server saw', async () => {
-    // No closing frame ever settled it; frames kept arriving for 20 minutes.
-    findStaleVoiceHolds.mockResolvedValue([hold('a', at(3), at(20 * 60), true)]);
-    claimVoiceHold.mockResolvedValue({ billedCredits: 0 });
-
-    await runVoiceHoldSweep(NOW);
-
-    const floor = realtimeCreditsFloor(RESERVED, 20 * 60);
-    expect(floor).toBeGreaterThan(0);
-    expect(incrementCredits).toHaveBeenCalledWith('user-a', RESERVED - floor);
-  });
-
-  it('keeps what an abandoned realtime hold billed when that is more than its floor', async () => {
-    findStaleVoiceHolds.mockResolvedValue([hold('a', at(3), at(60), true)]);
-    claimVoiceHold.mockResolvedValue({ billedCredits: 300 });
-
-    await runVoiceHoldSweep(NOW);
-
-    expect(realtimeCreditsFloor(RESERVED, 60)).toBeLessThan(300);
-    expect(incrementCredits).toHaveBeenCalledWith('user-a', RESERVED - 300);
-  });
-
-  it('refunds a realtime hold the server never saw a frame for', async () => {
+  // A realtime client drives its own activity markers, so a silent one (or one that stops sending
+  // them) must not be refunded down to its last frame: the floor runs to the sweep.
+  it('charges a silent realtime hold its open-time floor up to the sweep, not its last client frame', async () => {
     findStaleVoiceHolds.mockResolvedValue([hold('a', null, null, true)]);
     claimVoiceHold.mockResolvedValue({ billedCredits: 0 });
+    const sweptAt = new Date(STARTED.getTime() + REALTIME_VOICE_HOLD_STALE_AFTER_MS + 60_000);
 
-    await runVoiceHoldSweep(NOW);
+    await runVoiceHoldSweep(sweptAt);
 
-    expect(incrementCredits).toHaveBeenCalledWith('user-a', RESERVED);
+    expect(incrementCredits).not.toHaveBeenCalled();
+    expect(createTransaction).toHaveBeenCalledWith(
+      'realtime_voice_usage',
+      expect.objectContaining({ ownerId: 'user-a', credits: -RESERVED })
+    );
+  });
+
+  it('charges a realtime hold whose client stopped reporting early the same as a silent one', async () => {
+    findStaleVoiceHolds.mockResolvedValue([hold('a', at(3), at(60), true)]);
+    claimVoiceHold.mockResolvedValue({ billedCredits: 300 });
+    const sweptAt = new Date(STARTED.getTime() + REALTIME_VOICE_HOLD_STALE_AFTER_MS + 60_000);
+
+    await runVoiceHoldSweep(sweptAt);
+
+    expect(incrementCredits).not.toHaveBeenCalled();
+    expect(createTransaction).toHaveBeenCalledWith(
+      'realtime_voice_usage',
+      expect.objectContaining({ credits: -(RESERVED - 300) })
+    );
   });
 
   it('counts a hold whose refund failed as failed, for the next run to retry', async () => {
@@ -180,5 +182,50 @@ describe('voiceHoldSweep', () => {
     await handler();
     expect(connectDB).toHaveBeenCalledWith('mongodb://host/test');
     expect(findStaleVoiceHolds).toHaveBeenCalledTimes(1);
+  });
+
+  // The alarms in infra/alarms.ts match on this namespace, these names and exactly { Stage }.
+  it('publishes the settled and failed counts for the stage alarms', async () => {
+    findStaleVoiceHolds.mockResolvedValue([hold('a'), hold('b')]);
+    incrementCredits.mockRejectedValueOnce(new Error('db blip'));
+
+    await handler();
+
+    expect(emitMetrics).toHaveBeenCalledTimes(1);
+    expect(emitMetrics).toHaveBeenCalledWith('Lumina5/Voice', [
+      { name: 'HoldSweepSettled', value: 1, dimensions: { Stage: 'test' }, unit: 'Count' },
+      { name: 'HoldSweepFailed', value: 1, dimensions: { Stage: 'test' }, unit: 'Count' },
+    ]);
+  });
+
+  it('reports a run that fails before reaching the holds as a failure, and still throws', async () => {
+    findStaleVoiceHolds.mockRejectedValueOnce(new Error('query failed'));
+
+    await expect(handler()).rejects.toThrow('query failed');
+
+    expect(emitMetrics).toHaveBeenCalledWith('Lumina5/Voice', [
+      { name: 'HoldSweepSettled', value: 0, dimensions: { Stage: 'test' }, unit: 'Count' },
+      { name: 'HoldSweepFailed', value: 1, dimensions: { Stage: 'test' }, unit: 'Count' },
+    ]);
+  });
+
+  it('reports a run that cannot reach the database as a failure, and still throws', async () => {
+    connectDB.mockRejectedValueOnce(new Error('database unreachable'));
+
+    await expect(handler()).rejects.toThrow('database unreachable');
+
+    expect(findStaleVoiceHolds).not.toHaveBeenCalled();
+    expect(emitMetrics).toHaveBeenCalledWith('Lumina5/Voice', [
+      { name: 'HoldSweepSettled', value: 0, dimensions: { Stage: 'test' }, unit: 'Count' },
+      { name: 'HoldSweepFailed', value: 1, dimensions: { Stage: 'test' }, unit: 'Count' },
+    ]);
+  });
+
+  it('leaves metrics to the hosted handler, so the self-host twin never calls CloudWatch', async () => {
+    findStaleVoiceHolds.mockResolvedValue([hold('a')]);
+
+    await runVoiceHoldSweep(NOW);
+
+    expect(emitMetrics).not.toHaveBeenCalled();
   });
 });

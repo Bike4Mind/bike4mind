@@ -6,10 +6,13 @@ import {
   hasPriorToolUse,
   mentionsDataLakeSave,
   mentionsDelegatableAgent,
+  resolveStickyAutoAddedTools,
   shouldOfferDataLakeTools,
   shouldOfferBlogTools,
   shouldOfferDelegation,
   shouldOfferSkillTool,
+  STICKY_AUTO_ADDED_TOOL_NAMES,
+  type StickyToolEligibility,
 } from './autoAddedToolGating';
 
 describe('BLOG_REQUEST_PATTERN', () => {
@@ -344,5 +347,103 @@ describe('shouldOfferDataLakeTools', () => {
     expect([...DATA_LAKE_TOOL_NAMES].sort()).toEqual(
       ['create_data_lake', 'list_my_data_lakes', 'save_content_to_data_lake'].sort()
     );
+  });
+});
+
+describe('resolveStickyAutoAddedTools', () => {
+  const eligible: StickyToolEligibility = {
+    isAdmin: true,
+    hasBlogIntegration: true,
+    hasSkillRepository: true,
+    dataLakesEnabled: () => Promise.resolve(true),
+  };
+  const resolve = (
+    persisted: string[] | undefined,
+    triggered: string[],
+    eligibility: Partial<StickyToolEligibility> = {}
+  ) => resolveStickyAutoAddedTools({ persisted, triggered, eligibility: { ...eligible, ...eligibility } });
+
+  it('offers what this turn triggered and reports it as new', async () => {
+    await expect(resolve(undefined, ['blog_draft'])).resolves.toEqual({
+      tools: ['blog_draft'],
+      newlyTriggered: ['blog_draft'],
+    });
+  });
+
+  it("keeps an earlier turn's tool on a turn with no trigger, and reports nothing new", async () => {
+    await expect(resolve(['skill'], [])).resolves.toEqual({ tools: ['skill'], newlyTriggered: [] });
+  });
+
+  it('never drops an entry as turns accumulate', async () => {
+    let persisted: string[] = [];
+    const seen: string[][] = [];
+    for (const triggered of [['skill'], [], ['blog_draft'], [], [...DATA_LAKE_TOOL_NAMES], []]) {
+      const { tools, newlyTriggered } = await resolve(persisted, triggered);
+      persisted = [...new Set([...persisted, ...newlyTriggered])];
+      seen.push(tools);
+    }
+
+    for (let turn = 1; turn < seen.length; turn++) {
+      expect(seen[turn]).toEqual(expect.arrayContaining(seen[turn - 1]));
+    }
+    expect(seen.at(-1)).toHaveLength(1 + 1 + DATA_LAKE_TOOL_NAMES.length);
+  });
+
+  it('serializes a given set identically whatever order it was triggered or stored in', async () => {
+    const a = await resolve(['skill', 'blog_edit', 'blog_draft'], ['blog_publish']);
+    const b = await resolve(['blog_draft', 'blog_edit'], ['skill', 'blog_publish']);
+    const c = await resolve(['blog_publish', 'blog_draft', 'skill', 'blog_edit'], []);
+
+    expect(a.tools).toEqual(['blog_draft', 'blog_edit', 'blog_publish', 'skill']);
+    expect(b.tools).toEqual(a.tools);
+    expect(c.tools).toEqual(a.tools);
+  });
+
+  it('does not report a persisted tool as new when it triggers again', async () => {
+    await expect(resolve(['blog_draft'], ['blog_draft', 'blog_edit'])).resolves.toMatchObject({
+      newlyTriggered: ['blog_edit'],
+    });
+  });
+
+  describe('a session shared with a user who lacks what the first user had', () => {
+    it('withholds blog tools from a non-admin without forgetting them', async () => {
+      const { tools } = await resolve(['blog_draft', 'blog_publish', 'blog_edit'], [], { isAdmin: false });
+
+      expect(tools).toEqual([]);
+    });
+
+    it('offers blog_draft but not publish/edit to an admin with no blog integration', async () => {
+      const { tools } = await resolve(['blog_draft', 'blog_publish', 'blog_edit'], [], { hasBlogIntegration: false });
+
+      expect(tools).toEqual(['blog_draft']);
+    });
+
+    it('withholds data-lake tools while the platform flag is off', async () => {
+      const { tools } = await resolve([...DATA_LAKE_TOOL_NAMES], [], {
+        dataLakesEnabled: () => Promise.resolve(false),
+      });
+
+      expect(tools).toEqual([]);
+    });
+
+    it('withholds skill without a skill repository', async () => {
+      await expect(resolve(['skill'], [], { hasSkillRepository: false })).resolves.toMatchObject({ tools: [] });
+    });
+  });
+
+  it('reads the data-lake flag only when a persisted data-lake tool needs it', async () => {
+    const dataLakesEnabled = vi.fn(() => Promise.resolve(true));
+
+    await resolve(['skill', 'blog_draft'], ['skill'], { dataLakesEnabled });
+
+    expect(dataLakesEnabled).not.toHaveBeenCalled();
+  });
+
+  it('ignores a persisted name it does not manage, rather than offering a tool that may not exist', async () => {
+    await expect(resolve(['removed_tool', 'skill'], [])).resolves.toMatchObject({ tools: ['skill'] });
+  });
+
+  it('does not include delegate_to_agent, whose gate deliberately has no continuation', () => {
+    expect(STICKY_AUTO_ADDED_TOOL_NAMES).not.toContain('delegate_to_agent');
   });
 });

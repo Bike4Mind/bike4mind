@@ -34,8 +34,19 @@ describe('approval mode copy', () => {
   it('says approve-for-me asks before sending data out and after reading untrusted content', () => {
     const notes = APPROVAL_MODE_FOOTNOTES.join(' ');
     expect(notes).toMatch(/send data off this computer/i);
-    expect(notes).toMatch(/read web, browser, MCP or skill content/i);
+    expect(notes).toMatch(/read web, browser, MCP or account skill content/i);
     expect(notes).toMatch(/browsing a site/i);
+  });
+
+  it('names the commands that still run after untrusted content, and the skills that do not count', () => {
+    const notes = APPROVAL_MODE_FOOTNOTES.join(' ');
+    expect(notes).toMatch(/only read files or read from GitHub/i);
+    expect(notes).toMatch(/gh pr view/);
+    expect(notes).toMatch(/skill from your own skills folder or from a project you trusted is not counted/i);
+  });
+
+  it('names the folders file edits can never reach', () => {
+    expect(APPROVAL_MODE_FOOTNOTES.join(' ')).toMatch(/~\/\.ssh are refused in every mode/);
   });
 
   /**
@@ -44,7 +55,7 @@ describe('approval mode copy', () => {
    * itself turn on the asks above.
    */
   it('admits that what a command printed is not counted as reading', () => {
-    expect(APPROVAL_MODE_FOOTNOTES.join(' ')).toMatch(/downloaded and printed is not counted/i);
+    expect(APPROVAL_MODE_FOOTNOTES.join(' ')).toMatch(/downloaded and printed, which is covered by the command rules/i);
   });
 
   /** The two axes the popover has to keep visibly apart, plus the two scoping rules. */

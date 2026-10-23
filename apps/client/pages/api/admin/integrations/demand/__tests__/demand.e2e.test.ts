@@ -61,7 +61,7 @@ vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
 vi.mock('@server/middlewares/apiKeyAnomalyDetection', () => ({
   apiKeyAnomalyDetection: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
-vi.mock('@server/managers/apiKeyUsageManager', () => ({
+vi.mock('@bike4mind/server-utils/managers/apiKeyUsageManager', () => ({
   ApiKeyUsageManager: { logUsage: vi.fn().mockResolvedValue(undefined) },
 }));
 vi.mock('@server/utils/analyticsLog', () => ({

@@ -1,24 +1,21 @@
 import { IOrganizationDocument } from '@bike4mind/common';
 import { useCreateTeamModal } from '@client/app/components/organizations/CreateTeamModal';
 import { useUser } from '@client/app/contexts/UserContext';
-import {
-  useGetManagedOrganizations,
-  useGetUserOrganizations,
-  useOrganizationSeats,
-} from '@client/app/hooks/data/organizations';
+import { useGetUserOrganizations, useOrganizationSeats } from '@client/app/hooks/data/organizations';
 import { useGetSubscriptionsByOwner } from '@client/app/hooks/data/subscriptions';
 import { useTeamPlanAvailable } from '@client/app/hooks/data/teamPlanSettings';
-import { TEAM_PLAN_UNAVAILABLE_MESSAGE } from '@client/lib/subscriptions/constants';
+import { TEAM_PLAN_UNAVAILABLE_MESSAGE } from '@bike4mind/server-utils/lib/subscriptions/constants';
 import {
   SubscriptionOwnerType,
   isDelinquentSubscriptionStatus,
   pickDisplayedSubscription,
 } from '@client/lib/subscriptions/types';
-import { Add as AddIcon, Business as BusinessIcon, Search as SearchIcon } from '@mui/icons-material';
+import AddIcon from '@mui/icons-material/Add';
+import BusinessIcon from '@mui/icons-material/Business';
+import SearchIcon from '@mui/icons-material/Search';
 import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
 import {
   AspectRatio,
-  Alert,
   Box,
   Button,
   Card,
@@ -52,7 +49,7 @@ const OrganizationCard: FC<{ organization: IOrganizationDocument }> = ({ organiz
   const { currentSeats } = useOrganizationSeats(organization.id);
 
   const isOwner = organization.userId === currentUser?.id;
-  const isManager = !!currentUser && organization.managerId === currentUser.id && !isOwner;
+  const isManager = !!currentUser && (organization.adminUserIds ?? []).includes(currentUser.id) && !isOwner;
 
   return (
     <Card variant="outlined" sx={{ height: '100%', borderColor: isOwner ? 'primary.solidBg' : undefined }}>
@@ -172,27 +169,15 @@ const OrganizationListPage: FC = () => {
     isLoading: membersLoading,
     isFetching: membersFetching,
   } = useGetUserOrganizations(currentUser?.id);
-  const {
-    data: managedOrganizations,
-    isLoading: managedLoading,
-    isFetching: managedFetching,
-    isError: managedError,
-    refetch: refetchManaged,
-  } = useGetManagedOrganizations(currentUser?.id);
   const [searchQuery, setSearchQuery] = useState('');
   const openCreateTeamModal = useCreateTeamModal(state => state.open);
   const teamPlanAvailable = useTeamPlanAvailable();
 
   useDocumentTitle('Teams');
 
-  const organizations = Array.from(
-    new Map([
-      ...(managedOrganizations ?? []).map(org => [org.id, org] as const),
-      ...(memberOrganizations ?? []).map(org => [org.id, org] as const),
-    ]).values()
-  ).sort((a, b) => a.name.localeCompare(b.name));
-  const isLoading = membersLoading || managedLoading;
-  const isFetching = membersFetching || managedFetching;
+  const organizations = [...(memberOrganizations ?? [])].sort((a, b) => a.name.localeCompare(b.name));
+  const isLoading = membersLoading;
+  const isFetching = membersFetching;
   const filteredOrganizations = organizations.filter(
     org =>
       org.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -222,6 +207,27 @@ const OrganizationListPage: FC = () => {
         </Tooltip>
       </Box>
 
+      <Card variant="soft" sx={{ mb: 3 }}>
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems={{ sm: 'center' }}>
+          <Box sx={{ flex: 1 }}>
+            <Typography level="title-md">Explore Team administration before subscribing</Typography>
+            <Typography level="body-sm">
+              See sample members, monthly credit limits and usage, plus which controls each role can access.
+            </Typography>
+          </Box>
+          <Button
+            component="a"
+            href="https://docs.bike4mind.com/features/team-admin-preview"
+            target="_blank"
+            rel="noopener noreferrer"
+            variant="outlined"
+            data-testid="organizations-admin-preview-link"
+          >
+            Preview Team administration
+          </Button>
+        </Stack>
+      </Card>
+
       <Box sx={{ position: 'relative', mb: 4 }}>
         <Input
           startDecorator={<SearchIcon />}
@@ -236,12 +242,6 @@ const OrganizationListPage: FC = () => {
         <Box sx={{ mb: 2 }}>
           <LinearProgress />
         </Box>
-      )}
-
-      {managedError && (
-        <Alert color="danger" endDecorator={<Button onClick={() => refetchManaged()}>Retry</Button>} sx={{ mb: 2 }}>
-          Managed teams could not be loaded.
-        </Alert>
       )}
 
       <Grid container spacing={2}>
@@ -264,7 +264,7 @@ const OrganizationListPage: FC = () => {
         )}
       </Grid>
 
-      {!isLoading && !managedError && filteredOrganizations.length === 0 && (
+      {!isLoading && filteredOrganizations.length === 0 && (
         <Box sx={{ textAlign: 'center', py: 8 }}>
           <Typography level="body-lg" color="neutral">
             {t('organization.no_organizations')}

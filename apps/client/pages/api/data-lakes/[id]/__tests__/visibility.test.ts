@@ -20,7 +20,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
     assertLakeAccessById: h.assertLakeAccessById,
@@ -51,7 +51,7 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
-vi.mock('@server/utils/resolveActiveOrg', () => ({ resolveActiveOrg: h.resolveActiveOrg }));
+vi.mock('@bike4mind/server-utils/utils/resolveActiveOrg', () => ({ resolveActiveOrg: h.resolveActiveOrg }));
 
 import handler from '../visibility';
 
@@ -138,5 +138,14 @@ describe('POST /api/data-lakes/[id]/visibility', () => {
 
     await expect(call(req({ visibility: 'public' }), res)).rejects.toThrow(/not found/i);
     expect(h.setLakeVisibility).not.toHaveBeenCalled();
+  });
+
+  it('serves the updated lake through the response boundary, dropping Mongo internals', async () => {
+    h.setLakeVisibility.mockResolvedValue({ id: 'lake-oid-1', isPublic: false, _id: 'oid', __v: 1 });
+    const { res, json } = makeRes();
+
+    await call(req({ visibility: 'private' }), res);
+
+    expect(json).toHaveBeenCalledWith({ id: 'lake-oid-1', isPublic: false });
   });
 });

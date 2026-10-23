@@ -41,6 +41,8 @@ const UPLOAD_PATTERN = new RegExp(`${UPLOAD_CALL.source}|PutObjectCommand|putObj
 const NOT_A_REWRITE = new Set([
   'b4m-core/services/src/fabFileService/create.ts',
   'b4m-core/services/src/fabFileService/createByUrl.ts',
+  // Stages an admin audit-log CSV under exports/ (no FabFile row); nothing to invalidate.
+  'apps/client/server/utils/adminAuditExportStorage.ts',
   // Only uploads while the row is still `pending` (a first write); the S3 event charges it.
   'apps/client/pages/api/files/[id]/upload.ts',
   // Each creates a NEW row (or presigns the first write for one); the S3 event charges it.
@@ -68,8 +70,10 @@ const NOT_A_REWRITE = new Set([
   'apps/client/server/utils/cacheExternalImage.ts',
   'apps/client/server/utils/generatedAudioDelivery.ts',
   'apps/client/server/utils/mailer/emailAttachments.ts',
-  'apps/client/server/services/whatsNewDistribution.ts',
+  'packages/server-utils/src/services/whatsNewDistribution.ts',
   'apps/client/server/generationJobs/wiring.ts',
+  // Posts a clip to Slack (SlackClient.uploadFile); it writes no FabFile bytes.
+  'apps/client/server/generationJobs/slackJobDelivery.ts',
   'apps/workers/src/queueHandlers/orgFeedbackSummary.ts',
   'apps/workers/src/queueHandlers/questExport.ts',
 ]);
@@ -123,6 +127,7 @@ describe('every FabFile content rewrite clears the cached extracted length', () 
       'apps/client/pages/api/fabfiles',
       'apps/client/pages/api/files',
       'apps/client/server',
+      'packages/server-utils/src',
       'apps/workers/src',
       'b4m-core/services/src/fabFileService',
       'b4m-core/services/src/researchTaskService',
@@ -206,6 +211,7 @@ describe('every FabFile content rewrite clears the cached extracted length', () 
     const known = new Set([...REWRITE_SITES, ...ADAPTER_WIRING_SITES, ...CHARGED_ELSEWHERE]);
     const found: string[] = [];
     walkTs('apps/client/server', rel => REWRITE_SERVICE_CALL.test(stripComments(read(rel))) && found.push(rel));
+    walkTs('packages/server-utils/src', rel => REWRITE_SERVICE_CALL.test(stripComments(read(rel))) && found.push(rel));
     walkTs('apps/client/pages', rel => REWRITE_SERVICE_CALL.test(stripComments(read(rel))) && found.push(rel));
     walkTs('apps/workers/src', rel => REWRITE_SERVICE_CALL.test(stripComments(read(rel))) && found.push(rel));
 

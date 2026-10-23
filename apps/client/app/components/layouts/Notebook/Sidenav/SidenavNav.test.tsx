@@ -3,6 +3,7 @@ import { render, screen, within, fireEvent } from '@testing-library/react';
 import type { ComponentType } from 'react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
+import { settingsMap } from '@bike4mind/common';
 
 /**
  * What gates the feature rows in the sidenav.
@@ -24,6 +25,7 @@ const {
   navItems,
   entitlements,
   userState,
+  logEvent,
 } = vi.hoisted(() => ({
   useFeatureEnabledMock: vi.fn(),
   useGearsNavSignalMock: vi.fn(),
@@ -44,8 +46,9 @@ const {
   // The real useOptiAccess/useOptiVisible read this store, so the Opti row tests exercise both.
   userState: {
     isAdmin: false,
-    currentUser: undefined as { preferences?: { hiddenSurfaces?: string[] } } | undefined,
+    currentUser: undefined as { id?: string; preferences?: { hiddenSurfaces?: string[] } } | undefined,
   },
+  logEvent: vi.fn(),
 }));
 
 vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
@@ -60,6 +63,7 @@ vi.mock('@client/app/hooks/data/audioProviders', () => ({ useAudioProviders: use
 vi.mock('@client/app/hooks/useAdminSettingsCache', () => ({
   useAdminSettingsCache: () => ({ isFeatureEnabled: () => false }),
 }));
+vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => ({ mutate: logEvent }) }));
 vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: (selector: (state: typeof userState) => unknown) => selector(userState),
 }));
@@ -121,6 +125,7 @@ beforeEach(() => {
   entitlements.length = 0;
   userState.isAdmin = false;
   userState.currentUser = undefined;
+  localStorage.clear();
 });
 
 describe('SidenavNav Opti row', () => {
@@ -206,6 +211,25 @@ describe('SidenavNav Gears row tag', () => {
     useGearsNavSignalMock.mockReturnValue({ startHere: true, startHereCredits: 6500, claimableCount: 0 });
     renderNav();
     expect(startHere()).toHaveTextContent(`Start here, +${(6500).toLocaleString('en')} credits`);
+    expect(logEvent).toHaveBeenCalledWith({ type: 'start_here_chip_shown' });
+    fireEvent.click(screen.getByTestId('sidenav-nav-gears'));
+    expect(logEvent).toHaveBeenCalledWith({ type: 'start_here_chip_clicked' });
+  });
+
+  it('logs Start here once per user, not again when the sidenav remounts', () => {
+    userState.currentUser = { id: 'user-1' };
+    useGearsNavSignalMock.mockReturnValue({ startHere: true, startHereCredits: 6500, claimableCount: 0 });
+    renderNav().unmount();
+    logEvent.mockClear();
+    renderNav();
+    expect(startHere()).toBeInTheDocument();
+    expect(logEvent).not.toHaveBeenCalledWith({ type: 'start_here_chip_shown' });
+  });
+
+  it('does not log Start here from the pinned nav instance that does not render Gears', () => {
+    useGearsNavSignalMock.mockReturnValue({ startHere: true, startHereCredits: 6500, claimableCount: 0 });
+    renderNav('pinned');
+    expect(logEvent).not.toHaveBeenCalledWith({ type: 'start_here_chip_shown' });
   });
 
   it('says credit, not credits, for a single one', () => {
@@ -428,5 +452,47 @@ describe('SidenavNav overlay-contributed sidebar rows', () => {
     const rows = screen.getAllByTestId('sidenav-nav-premium-a-b');
     expect(rows).toHaveLength(1);
     expect(rows[0]).toHaveTextContent('First');
+  });
+});
+
+/**
+ * The default system prompts ship on every turn, so a sidebar row they name that does not exist sends
+ * every user to a dead end. Any quoted name in a sentence about the sidebar must be a row the
+ * baseline user (no flags, no overlay) actually sees.
+ */
+describe('default prompts', () => {
+  const defaultPrompts = Object.values(settingsMap).flatMap(setting =>
+    setting.key.endsWith('Prompt') && typeof setting.defaultValue === 'string'
+      ? [{ key: setting.key, text: setting.defaultValue }]
+      : []
+  );
+
+  const sidebarNamesIn = (text: string) =>
+    text
+      // A new sentence starts with a capital or a quote, so a mid-sentence "the ? shortcut" does not split one.
+      .split(/(?<=[.!?])\s+(?=[A-Z"])/)
+      .filter(sentence => /\b(side ?bar|sidenav)\b/i.test(sentence))
+      .flatMap(sentence => [...sentence.matchAll(/"([^"]+)"/g)].map(match => match[1]));
+
+  it('reads the help center prompt among them', () => {
+    expect(defaultPrompts.map(prompt => prompt.key)).toContain('HelpCenterPrompt');
+  });
+
+  it('keeps a quoted name after a mid-sentence ? in its sidebar sentence', () => {
+    expect(sidebarNamesIn('Open "Help" or press the ? key in the sidebar. Then "Other" elsewhere.')).toEqual(['Help']);
+  });
+
+  it('name only sidebar rows that exist', () => {
+    renderNav();
+    const rowLabels = screen
+      .getAllByRole('button')
+      .filter(row => row.getAttribute('data-testid')?.startsWith('sidenav-nav-'))
+      .map(row => row.textContent);
+
+    for (const { key, text } of defaultPrompts) {
+      for (const name of sidebarNamesIn(text)) {
+        expect(rowLabels, `${key} names a "${name}" sidebar row`).toContain(name);
+      }
+    }
   });
 });

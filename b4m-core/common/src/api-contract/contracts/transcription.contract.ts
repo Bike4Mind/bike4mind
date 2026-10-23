@@ -72,11 +72,12 @@ export const createTranscriptionContract = defineEndpoint({
     'Transcribes an upload minted by `POST /api/v1/transcriptions/uploads` and returns the text. Call it ' +
     'within 5 minutes of minting the upload. Credits are charged by file size. The uploaded audio is ' +
     'deleted when the call returns, whether it succeeds or fails, so each upload can be transcribed once.\n\n' +
-    '**Limit:** this call is synchronous. The request times out after about 60 seconds, while the AWS ' +
-    'speech backend can take up to about 5 minutes on long audio, so a long recording can fail with a ' +
-    'gateway timeout (`504`) instead of returning text. A timed-out upload may not be deleted right away ' +
-    '(it expires on its own), so do not retry with the same `file_key`: mint a new upload, or send ' +
-    'shorter audio.',
+    '**Limit:** this call is synchronous. Provider work stops being awaited after 45 seconds from ' +
+    'request arrival, leaving time to return reserved credits and delete the upload before the hosted ' +
+    'server stops at 60 seconds. A slow recording returns a gateway timeout (`504`) instead of text. ' +
+    'AWS batch jobs cannot be cancelled remotely and may finish later; their output expires automatically. ' +
+    'Do not retry with the same `file_key`: mint a new upload and send shorter audio. If cleanup fails, ' +
+    'the upload may not be deleted right away (it expires on its own).',
   tags: ['Transcriptions'],
   auth: 'apiKeyOrJwt',
   scopes: [ApiKeyScope.AI_GENERATE],
@@ -107,6 +108,10 @@ export const createTranscriptionContract = defineEndpoint({
         'This deployment has no speech model, or no credential for its provider, configured ' +
         '(`errorCode: "provider_not_configured"`).',
       schema: ProviderNotConfiguredErrorSchema,
+    },
+    504: {
+      description: 'The transcription exceeded the request deadline; reserved credits are returned.',
+      schema: ApiErrorSchema,
     },
   },
   codeSample: { authToken: 'b4m_live_<key>', streaming: false, body: TRANSCRIBE_EXAMPLE },

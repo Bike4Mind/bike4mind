@@ -30,8 +30,8 @@ vi.mock('@server/middlewares/checkBlockedIP', () => ({ checkBlockedIP: vi.fn() }
 vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: vi.fn() }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn() }));
 vi.mock('@server/auth/sessionDevice', () => ({ buildSessionDevice: () => ({}) }));
-vi.mock('@server/auth/refreshCookie', () => ({
-  readRefreshCookie: () => 'cookie-refresh-token',
+vi.mock('@bike4mind/server-utils/auth/refreshCookie', () => ({
+  readRefreshCookieWithSource: () => ({ token: 'cookie-refresh-token', legacy: false }),
   setRefreshCookie: (...a: unknown[]) => mockSetCookie(...a),
 }));
 vi.mock('@server/auth/tokenGenerator', () => ({
@@ -71,6 +71,7 @@ vi.mock('@bike4mind/common', async importOriginal => ({
 }));
 
 import handler from '../refreshToken';
+import { logAuthAudit } from '@server/utils/authAudit';
 
 const USER = { id: 'user-1', tokenVersion: 3, isBanned: false, disputePending: false };
 
@@ -154,6 +155,26 @@ describe('POST /api/auth/refreshToken - account state', () => {
       expect(res._getStatusCode()).toBe(200);
       expect(res._getJSONData().accessToken).toBe('new-access');
       expect(mockSetCookie).toHaveBeenCalledWith(res, 'new-refresh');
+    });
+
+    it('forwards the service audit event, metadata included, to the audit log', async () => {
+      mockRotateSession.mockImplementation(async (_token: string, opts: { audit: (e: unknown) => unknown }) => {
+        await opts.audit({
+          type: 'session_reuse_revoked',
+          sid: 'sid-1',
+          userId: 'user-1',
+          metadata: { reason: 'unrecognized_secret', issuedIp: '198.51.100.1' },
+        });
+        return { status: 'rotated', sid: 'sid-1', user: USER, accessToken: 'a', refreshToken: 'r' };
+      });
+      const { req, res } = fire();
+      await handler(req, res);
+
+      expect(logAuthAudit).toHaveBeenCalledWith(req, {
+        userId: 'user-1',
+        event: 'session_reuse_revoked',
+        metadata: { reason: 'unrecognized_secret', issuedIp: '198.51.100.1', sid: 'sid-1' },
+      });
     });
 
     it('returns a user stripped of every secret and undeclared field', async () => {

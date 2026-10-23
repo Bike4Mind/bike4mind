@@ -6,7 +6,7 @@ const mockGetDebugCode = vi.fn();
 
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 vi.mock('@server/middlewares/baseApi', () => ({ baseApi: () => ({ get: (h: unknown) => h }) }));
-vi.mock('@server/utils/config', () => ({ isE2EEnabled: () => mockIsE2EEnabled() }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ isE2EEnabled: () => mockIsE2EEnabled() }));
 vi.mock('@bike4mind/database', () => ({
   pendingOtcTokenRepository: { getDebugCode: (...a: unknown[]) => mockGetDebugCode(...a) },
 }));

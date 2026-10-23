@@ -44,7 +44,7 @@ vi.mock('@server/middlewares/csrfProtection', () => ({
   csrfProtection: () => vi.fn(),
 }));
 
-vi.mock('@server/utils/errors', () => ({
+vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   ForbiddenError: class ForbiddenError extends Error {},
 }));
 
@@ -90,7 +90,7 @@ vi.mock('@server/utils/analyticsLog', () => ({
 }));
 
 import '../generate-api-key';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
 
 const activeLake = (id: string) => ({ id, status: 'active', createdByUserId: 'someone', name: id, slug: id });
@@ -154,6 +154,24 @@ describe('POST /api/admin/users/:userId/generate-api-key - scope allowlist guard
       expect.objectContaining({ scopes: ['overwatch-ingest:write'] }),
       expect.anything()
     );
+  });
+
+  it('allows release-notes:write for a platform-admin target', async () => {
+    mockUserFind.mockResolvedValue({ id: 'target-user', username: 'targetUser', isAdmin: true });
+    const { req, res } = post({ name: 'release video', scopes: ['release-notes:write'] });
+    await mockRefs.postHandler!(req, res);
+    expect(res._getStatusCode()).toBe(201);
+    expect(mockCreateKey).toHaveBeenCalledWith(
+      'target-user',
+      expect.objectContaining({ scopes: ['release-notes:write'] }),
+      expect.anything()
+    );
+  });
+
+  it('refuses release-notes:write for a target who is not a platform admin, since the routes would refuse the key', async () => {
+    const { req, res } = post({ name: 'release video', scopes: ['release-notes:write'] });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/platform admin/i);
+    expect(mockCreateKey).not.toHaveBeenCalled();
   });
 
   it('allows standard user scopes (notebooks:read) through the admin endpoint', async () => {

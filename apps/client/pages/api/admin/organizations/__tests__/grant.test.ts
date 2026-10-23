@@ -24,14 +24,15 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
   asyncHandler: (fn: (req: unknown, res: unknown) => unknown) => fn,
 }));
 
-vi.mock('@server/utils/errors', () => ({
+vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   ForbiddenError: class ForbiddenError extends Error {},
 }));
 
 const mockOrgCreate = vi.fn();
+const mockAddCredits = vi.fn();
 vi.mock('@bike4mind/services', () => ({
   organizationService: { create: (...a: unknown[]) => mockOrgCreate(...a) },
-  creditService: { addCredits: vi.fn() },
+  creditService: { addCreditsWithLedgerRow: (...a: unknown[]) => mockAddCredits(...a) },
 }));
 
 let inTransaction = false;
@@ -57,12 +58,14 @@ vi.mock('@server/models/Subscription', () => ({
   subscriptionRepository: { create: (...a: unknown[]) => mockSubCreate(...a) },
 }));
 
-// Admin-configurable team-plan knobs, pinned to their defaults (see server/services/teamPlanSettings).
-vi.mock('@server/services/teamPlanSettings', () => ({
+// Admin-configurable team-plan knobs, pinned to their defaults (see packages/server-utils/src/services/teamPlanSettings).
+vi.mock('@bike4mind/server-utils/services/teamPlanSettings', () => ({
   getTeamPlanSettings: vi.fn(async () => ({ minSeats: 4, maxSeats: 100, creditsPerSeat: 50000 })),
 }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn() }));
-vi.mock('@server/utils/adminAudit', () => ({
+// parseAdminActionReason stays real so the reason 400s come from the route itself.
+vi.mock('@server/utils/adminAudit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@server/utils/adminAudit')>()),
   recordAdminActionFromRequest: vi.fn(async () => {
     insideTransactionAtAudit = inTransaction;
     return null;
@@ -73,7 +76,13 @@ vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws-endpoin
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import handler from '../grant';
 
-const BODY = { name: 'Acme Corp', ownerEmail: 'owner@example.com', seats: 5, initialCredits: 1000, reason: 'sales' };
+const BODY = {
+  name: 'Acme Corp',
+  ownerEmail: 'owner@example.com',
+  seats: 5,
+  initialCredits: 1000,
+  reason: 'Sales-approved pilot',
+};
 
 function call(options: { isAdmin?: boolean; body?: object }) {
   const { req, res } = createMocks({ method: 'POST', body: options.body ?? BODY });
@@ -92,6 +101,7 @@ describe('POST /api/admin/organizations/grant', () => {
     mockUserFindByEmail.mockResolvedValue({ id: 'owner-1', email: 'owner@example.com' });
     mockOrgCreate.mockResolvedValue({ id: 'org-1', name: 'Acme Corp' });
     mockSubCreate.mockResolvedValue({ id: 'sub-1' });
+    mockAddCredits.mockResolvedValue({ creditHolder: {}, creditTransactionId: 'tx-grant' });
   });
 
   it('requires the ADMIN scope so an under-scoped admin-owned key is 403d by apiKeyAuth', () => {
@@ -126,7 +136,41 @@ describe('POST /api/admin/organizations/grant', () => {
       expect.objectContaining({
         action: 'org.credits.granted',
         target: expect.objectContaining({ kind: 'organization', id: 'org-1', displayName: 'Acme Corp' }),
-        reason: 'sales',
+        reason: 'Sales-approved pilot',
+        related: { creditTransactionId: 'tx-grant' },
+      })
+    );
+  });
+
+  it('records no related ledger link when there are no initial credits', async () => {
+    const { run } = call({ body: { ...BODY, initialCredits: 0 } });
+    await run();
+    expect(mockAddCredits).not.toHaveBeenCalled();
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ related: undefined })
+    );
+  });
+
+  it.each([
+    ['missing', undefined],
+    ['under five characters', ' abc '],
+    ['over 500 characters', 'x'.repeat(501)],
+  ])('answers 400 and creates nothing when the reason is %s', async (_label, reason) => {
+    const { run } = call({ body: { ...BODY, reason } });
+    await expect(run()).rejects.toMatchObject({ statusCode: 400 });
+    expect(mockOrgCreate).not.toHaveBeenCalled();
+    expect(mockSubCreate).not.toHaveBeenCalled();
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
+  });
+
+  it('records the initial credits as details.credits alongside the existing details', async () => {
+    const { run } = call({});
+    await run();
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        details: expect.objectContaining({ ownerId: 'owner-1', seats: 5, initialCredits: 1000, credits: 1000 }),
       })
     );
   });

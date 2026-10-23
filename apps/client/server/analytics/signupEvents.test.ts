@@ -7,7 +7,7 @@ vi.mock('./emitActiveEvent', () => ({
   emitProductEvent: mockEmit,
   ingestKeyFor: mockKeyFor,
 }));
-vi.mock('@server/utils/config', () => ({ Config: { OVERWATCH_PSEUDONYM_SALT: 'test-salt' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { OVERWATCH_PSEUDONYM_SALT: 'test-salt' } }));
 
 import { pseudonymize } from './pseudonymize';
 import {

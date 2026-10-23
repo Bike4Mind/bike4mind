@@ -94,7 +94,7 @@ vi.mock('@server/websocket/utils', () => ({
   sendToClient: (...args: unknown[]) => mockSendToClient(...args),
 }));
 
-vi.mock('@server/integrations/stripe/stripe', () => ({
+vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   isStripeConfigured: vi.fn().mockReturnValue(true),
   stripe: {
     webhooks: { constructEvent: (...args: unknown[]) => mockConstructEvent(...args) },
@@ -129,11 +129,11 @@ vi.mock('@server/analytics/emitActiveEvent', () => ({
 }));
 
 const mockEmitMetric = vi.fn();
-vi.mock('@server/utils/cloudwatch', () => ({
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   emitMetric: (...args: unknown[]) => mockEmitMetric(...args),
 }));
 
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: {
     MONGODB_URI: 'mongodb://localhost/test',
     STAGE: 'test',
@@ -146,7 +146,7 @@ vi.mock('@server/utils/eventBus', () => ({
   StripeEvents: { InvoicePaymentSucceeded: { publish: vi.fn() } },
 }));
 
-vi.mock('@server/utils/errors', () => ({
+vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   BadRequestError: class BadRequestError extends Error {
     constructor(msg: string) {
       super(msg);

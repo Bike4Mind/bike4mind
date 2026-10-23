@@ -98,7 +98,7 @@ export function createThinkMarkerEscaper(): ThinkMarkerEscaper {
  * The visible remainder of one reply slot, with hidden reasoning removed.
  *
  * This is the rule the chat transcript renders by - `extractReplies` in
- * apps/client/shared/replyUtils.ts calls straight into it, so the two cannot drift.
+ * packages/server-utils/src/shared/replyUtils.ts calls straight into it, so the two cannot drift.
  * Anything deriving "did the user see something yet" (latency metrics in particular) must
  * use this and not a looser non-empty check: a metric built on a looser rule reports text
  * as seen while the UI is still hiding it.
@@ -228,6 +228,8 @@ export const REASONING_CHANNEL_BY_ADAPTER_FAMILY: Record<AdapterFamily, Reasonin
   ollama: 'always',
   'bedrock-deepseek': 'always',
   'bedrock-moonshot': 'always',
+  // Converse reasoningContent is wrapped in the markers inline, like bedrock-deepseek.
+  'bedrock-converse': 'always',
   // Not text completion at all - image, embedding and credential-only families. They cannot
   // back a chat agent, so they are refused rather than described.
   bfl: 'always',

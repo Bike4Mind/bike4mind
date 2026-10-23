@@ -11,13 +11,13 @@ import { rateLimit } from '@server/middlewares/rateLimit';
 // assembled inline from the clean modules instead of wakeHandler's
 // buildDefaultWakeDeps for the same reason.
 import { createReActRunAct, noopRunAct, runWakeCycle, type WakeDeps } from '@bike4mind/agents';
-import { enrollDeepAgent } from '@server/deepAgent/enroll';
-import { MongoDeepAgentStore } from '@server/deepAgent/store';
-import { LlmWakeSteps } from '@server/deepAgent/llmSteps';
+import { enrollDeepAgent } from '@bike4mind/server-utils/deepAgent/enroll';
+import { MongoDeepAgentStore } from '@bike4mind/server-utils/deepAgent/store';
+import { LlmWakeSteps } from '@bike4mind/server-utils/deepAgent/llmSteps';
 import { createDeepAgentToolMaterializer } from '@server/deepAgent/toolMaterializer';
-import { DEFAULT_WAKE_MODEL_ID, resolveDeepAgentBackend } from '@server/deepAgent/resolveBackend';
+import { DEFAULT_WAKE_MODEL_ID, resolveDeepAgentBackend } from '@bike4mind/server-utils/deepAgent/resolveBackend';
 import { loadLinkedAgentContext } from '@server/deepAgent/missions';
-import { bridgeWakeToSession } from '@server/deepAgent/missionSessionBridge';
+import { bridgeWakeToSession } from '@bike4mind/server-utils/deepAgent/missionSessionBridge';
 
 /**
  * POST /api/deep-agent/spin  (admin/dev only)

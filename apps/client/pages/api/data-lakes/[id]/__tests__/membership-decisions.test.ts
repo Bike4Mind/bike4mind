@@ -33,7 +33,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/featureFlag', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({
   requireFeatureEnabled: (flag: string) => {
     h.featureFlags.push(flag);
     return () => {};
@@ -48,7 +48,8 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 vi.mock('@bike4mind/database', () => ({
-  dataLakeRepository: { touchIfStable: h.touchIfStable },
+  memoryLedgerRepository: { markSourceShredded: vi.fn().mockResolvedValue(0) },
+  dataLakeRepository: { touchIfStable: h.touchIfStable, findByDatalakeTags: vi.fn().mockResolvedValue([]) },
   withTransaction: async (fn: () => Promise<unknown>) => {
     h.tx.push('enter');
     const out = await fn();
@@ -56,13 +57,23 @@ vi.mock('@bike4mind/database', () => ({
     return out;
   },
   dataLakeAccessGrantRepository: {},
-  fabFileRepository: {},
+  fabFileRepository: { setOwnerOrganizationIfUnchanged: vi.fn().mockResolvedValue(true) },
+  userRepository: {
+    findById: vi.fn().mockResolvedValue(null),
+    incrementCurrentStorage: vi.fn().mockResolvedValue(undefined),
+  },
+  organizationRepository: {
+    findById: vi.fn().mockResolvedValue(null),
+    incrementCurrentStorage: vi.fn().mockResolvedValue(undefined),
+  },
   lakeMembershipDecisionRepository: {},
   lakeMembershipRemovalRepository: {},
   lakeMembershipChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
 }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
-vi.mock('@server/dataLakes/lakeConfigAuditDb', () => ({ lakeConfigAuditDb: { dataLakeConfigChanges: {} } }));
+vi.mock('@bike4mind/server-utils/dataLakes/lakeConfigAuditDb', () => ({
+  lakeConfigAuditDb: { dataLakeConfigChanges: {} },
+}));
 vi.mock('@server/dataLakes/lakeConfigAuditPrincipal', () => ({
   lakeConfigAuditPrincipal: () => ({ kind: 'user', userId: 'creator-1' }),
 }));

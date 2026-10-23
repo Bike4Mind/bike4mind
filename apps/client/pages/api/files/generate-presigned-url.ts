@@ -7,7 +7,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { createPresignedUpload } from '@server/files/createPresignedUpload';
 import { FILES_WRITE_OR_GENERATE_SCOPES, GENERATE_UPLOAD_MARKER, isBareGenerateUpload } from '@server/files/fileScopes';
-import { BARE_UPLOAD_MIME_TYPE } from '@server/files/generateUploadMarker';
+import { BARE_UPLOAD_MIME_TYPE } from '@bike4mind/server-utils/files/generateUploadMarker';
 import { assertBareGenerateUploadBody } from '@server/files/bareGenerateUpload';
 
 // An ai:generate key without files:write may only stage a bare PNG (the image-edit flow), marked so

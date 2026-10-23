@@ -9,8 +9,13 @@ import {
   ttsRequestSchema,
   ttsBase64ResponseSchema,
   ttsErrorResponseSchema,
+  ttsForbiddenResponseSchema,
   ttsResponseTooLargeSchema,
 } from '../../voiceGeneration';
+import {
+  BILLING_ORGANIZATION_FORBIDDEN_DESCRIPTION,
+  BILLING_ORGANIZATION_STALE_KEY_DESCRIPTION,
+} from '../../schemas/billingOrganization';
 
 /**
  * Contract for POST /api/ai/tts - multi-provider text-to-speech.
@@ -29,6 +34,8 @@ export const synthesizeSpeechContract = defineEndpoint({
     '`X-B4M-Tts-Provider*` headers. Input length is capped per provider (OpenAI 4096 characters, ' +
     'ElevenLabs 10000), and an output `format` the chosen provider cannot produce is rejected with a ' +
     '422 before any provider cost is incurred. ' +
+    '`organization_id` picks the payer: an organization you belong to, or null for your personal ' +
+    'credits; omitted bills your personal credits, as this endpoint always has. ' +
     GENERATED_AUDIO_DESCRIPTION,
   tags: ['Audio'],
   auth: 'apiKeyOrJwt',
@@ -63,6 +70,20 @@ export const synthesizeSpeechContract = defineEndpoint({
       description:
         'Missing/invalid credentials, no provider has a usable key (`provider_not_configured`), or the ' +
         'provider refused the key we sent and no alternate could stand in (`provider_rejected`).',
+      schema: ttsErrorResponseSchema,
+    },
+    400: {
+      description: `The billing organization could not be resolved. ${BILLING_ORGANIZATION_STALE_KEY_DESCRIPTION}`,
+      schema: ttsErrorResponseSchema,
+    },
+    403: {
+      description:
+        'The API key lacks the `ai:generate` scope (`required_scopes` names it), or ' +
+        `${BILLING_ORGANIZATION_FORBIDDEN_DESCRIPTION}`,
+      schema: ttsForbiddenResponseSchema,
+    },
+    404: {
+      description: 'A nonexistent `organization_id`, for an admin caller; for anyone else it is `403`.',
       schema: ttsErrorResponseSchema,
     },
     422: {

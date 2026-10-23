@@ -1,9 +1,10 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { sessionAgentConfigRepository } from '@bike4mind/database';
 import { BadRequestError } from '@bike4mind/utils';
-import { sendToQueue } from '@server/utils/sqs';
-import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
+import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { assertSessionAccess } from '@server/utils/sessionAccess';
+import { assertOwnerCanAfford } from '@server/billing/meterPlatformCompletion';
 
 const handler = baseApi().post(async (req, res) => {
   const { id: sessionId } = req.query;
@@ -38,6 +39,9 @@ const handler = baseApi().post(async (req, res) => {
       results: [],
     });
   }
+
+  // Each message is billed to the caller (their own configs only, above) when the worker runs it.
+  await assertOwnerCanAfford(req.user!);
 
   logger.info(`Triggering proactive messages for ${enabledConfigs.length} agents in session ${sessionId}`);
 

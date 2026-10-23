@@ -30,7 +30,7 @@ export interface EmbedMementoQueryAdapters {
  * than throwing - the caller then fails open (V1 returns no mementos, V2 falls back to the lexical
  * scorer) rather than breaking the turn.
  *
- * Core-side counterpart of `apps/client/server/memory/mementoQueryEmbedding.ts`, which wraps this
+ * Core-side counterpart of `packages/server-utils/src/memory/mementoQueryEmbedding.ts`, which wraps this
  * with the app's concrete repositories. Kept as separate files because `getRelevantMementos` (this
  * package) cannot depend on `apps/client`, and the app-side wrapper is what `recallMementosV2` /
  * `recallLakeMemory` already import - moving the logic here without breaking that import required a

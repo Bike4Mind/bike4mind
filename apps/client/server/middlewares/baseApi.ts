@@ -1,5 +1,5 @@
 import { authMiddleware, auth } from '@server/auth/auth';
-import { registerToolGearObserver } from '@server/services/gears/toolGearObserver';
+import { registerToolGearObserver } from '@bike4mind/server-utils/services/gears/toolGearObserver';
 import { logging } from '@server/middlewares/logging';
 import errorHandler from '@server/middlewares/errorHandler';
 import { apiKeyAuth } from '@server/middlewares/apiKeyAuth';
@@ -11,8 +11,8 @@ import { connectDB } from '@bike4mind/database';
 import { ApiKeyScope, MethodNotAllowedError } from '@bike4mind/common';
 import { Request, Response } from 'express';
 import nc from 'next-connect';
-import { Config, isDevelopment } from '@server/utils/config';
-import { createMethodGuard } from '@server/utils/allowedMethods';
+import { Config, isDevelopment } from '@bike4mind/server-utils/utils/config';
+import { createMethodGuard } from '@bike4mind/server-utils/utils/allowedMethods';
 
 // Gears: hook the shared tool pipeline once per lambda (fire-and-forget observer).
 registerToolGearObserver();

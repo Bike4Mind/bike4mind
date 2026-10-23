@@ -19,8 +19,8 @@ import {
 } from '@bike4mind/database';
 import { getSettingByName } from '@bike4mind/utils';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
-import { isSettingEnabled } from '@server/middlewares/featureFlag';
-import { sendToQueue } from '@server/utils/sqs';
+import { isSettingEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import {
   getBranchHeadSha,
   getGitHubLakeAppConfig,
@@ -28,7 +28,7 @@ import {
   getRepository,
   gitHubErrorStatus,
   gitHubRateLimitDelaySeconds,
-} from '@server/integrations/github/dataLake/lakeAppClient';
+} from '@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient';
 import { releaseGitHubLakeConnection } from '@server/integrations/github/dataLake/githubLakeConnection';
 import { runGitHubLakeSlice } from '@workers/queueHandlers/githubLakeSlice';
 import { settleLakeIngestBatch } from '@workers/queueHandlers/lakeIngestShared';

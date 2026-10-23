@@ -5,9 +5,10 @@ const h = vi.hoisted(() => ({
   handler: null as null | ((req: unknown, res: unknown) => Promise<unknown>),
   findByOrganizationId: vi.fn(),
   incrementCounterConditional: vi.fn(),
-  verifyOrgAccess: vi.fn(),
+  verifyOrgOwner: vi.fn(),
   validateTargetUrl: vi.fn(),
   fetchMock: vi.fn(),
+  SsrfError: class SsrfError extends Error {},
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -25,10 +26,14 @@ vi.mock('@bike4mind/database/infra', () => ({
 vi.mock('@bike4mind/database', () => ({
   cacheRepository: { incrementCounterConditional: h.incrementCounterConditional },
 }));
-vi.mock('@server/security/secretEncryption', () => ({ decryptSecret: () => 'plain-secret' }));
-vi.mock('@server/utils/orgAccess', () => ({ verifyOrgAccess: h.verifyOrgAccess }));
-vi.mock('@server/utils/ssrfProtection', () => ({ validateTargetUrl: h.validateTargetUrl }));
-vi.mock('@server/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: 'test-key' } }));
+vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({ decryptSecret: () => 'plain-secret' }));
+vi.mock('@server/utils/orgAccess', () => ({ verifyOrgOwner: h.verifyOrgOwner }));
+vi.mock('@bike4mind/server-utils/utils/ssrfProtection', () => ({
+  validateTargetUrl: h.validateTargetUrl,
+  fetchPinned: h.fetchMock,
+  SsrfError: h.SsrfError,
+}));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: 'test-key' } }));
 
 await import('../test');
 
@@ -61,15 +66,33 @@ describe('POST /api/organizations/[id]/webhooks/github/test', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.incrementCounterConditional.mockResolvedValue({ success: true });
-    h.verifyOrgAccess.mockResolvedValue({ id: 'org-1', name: 'Acme' });
+    h.verifyOrgOwner.mockResolvedValue({ id: 'org-1', name: 'Acme' });
     h.findByOrganizationId.mockResolvedValue({ id: 'cfg-1', secret: 'enc(secret)' });
     h.validateTargetUrl.mockResolvedValue({ valid: true });
     h.fetchMock.mockResolvedValue({ ok: true, status: 200, statusText: 'OK' });
-    vi.stubGlobal('fetch', h.fetchMock);
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it('sends through the pinned fetch with plain http allowed, not global fetch', async () => {
+    const globalFetch = vi.fn();
+    vi.stubGlobal('fetch', globalFetch);
+
+    await sendTestPing();
+
+    expect(h.fetchMock).toHaveBeenCalledWith(TARGET_URL, expect.objectContaining({ method: 'POST' }), {
+      allowHttp: true,
+      discardBody: true,
+    });
+    expect(globalFetch).not.toHaveBeenCalled();
+  });
+
+  it('rejects the request when the pinned fetch refuses the dialed address', async () => {
+    h.fetchMock.mockRejectedValue(new h.SsrfError('Blocked connection to a private address for x'));
+
+    await expect(sendTestPing()).rejects.toThrow('Blocked connection to a private address');
   });
 
   it('does not follow redirects from the target URL', async () => {
@@ -78,6 +101,19 @@ describe('POST /api/organizations/[id]/webhooks/github/test', () => {
     expect(h.fetchMock).toHaveBeenCalledTimes(1);
     expect(h.fetchMock.mock.calls[0][0]).toBe(TARGET_URL);
     expect(h.fetchMock.mock.calls[0][1]).toMatchObject({ redirect: 'manual' });
+  });
+
+  it('reports success for a 200 with a large response body and cancels the body', async () => {
+    const cancel = vi.fn();
+    const stream = new ReadableStream<Uint8Array>({ pull: c => c.enqueue(new Uint8Array(1024)), cancel });
+    h.fetchMock.mockResolvedValue(
+      new Response(stream, { status: 200, headers: { 'content-length': String(50 * 1024 * 1024) } })
+    );
+
+    const body = jsonBody(await sendTestPing()) as { success: boolean; statusCode: number };
+
+    expect(cancel).toHaveBeenCalled();
+    expect(body).toMatchObject({ success: true, statusCode: 200 });
   });
 
   it('reports a redirect response without echoing the endpoint-controlled reason phrase', async () => {

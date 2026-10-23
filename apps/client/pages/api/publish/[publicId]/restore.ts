@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { createHash } from 'node:crypto';
-import { getPublishedArtifactsStorage } from '@server/utils/storage';
+import { getPublishedArtifactsStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { PublishedArtifact } from '@bike4mind/database';
 import type { PublishScopeTier, PublishVisibility } from '@bike4mind/common';
 import { validateBundle, buildPublishUrlPath, invalidatePublishCdn, toCacheTarget } from '@server/services/publish';

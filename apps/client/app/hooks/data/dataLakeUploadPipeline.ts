@@ -446,7 +446,7 @@ export interface BatchUploadCallbacks {
   setRecoverableLake: (lake: RecoverableLake | null) => void;
   /** Refresh the active-batches list as soon as the batch exists; onUploadComplete only fires
    * after every file uploads. */
-  onBatchCreated: () => void;
+  onBatchCreated: (batchId: string) => void;
   /** Invalidate the lake list + gears status after upload-complete (the hook passes a closure over queryClient). */
   onUploadComplete: () => void;
   /** Refreshes the cached user (storage usage) for the fresh storage re-check below - injected so
@@ -567,7 +567,7 @@ export async function runBatchUpload(cb: BatchUploadCallbacks): Promise<{
     });
 
     batchId = batchRes.data.id;
-    cb.onBatchCreated();
+    cb.onBatchCreated(batchId);
 
     // Switch to upload step and set initial progress
     cb.setStep('upload');
@@ -599,7 +599,8 @@ export async function runBatchUpload(cb: BatchUploadCallbacks): Promise<{
           files: chunk.map(f => ({
             fileName: f.file.name,
             mimeType: f.type || 'application/octet-stream',
-            fileSize: f.size,
+            // The PUT below sends f.file, and the URL is bound to exactly this many bytes.
+            fileSize: f.file.size,
             relativePath: f.relativePath,
             ...(f.contentHash && { contentHash: f.contentHash }),
             // Just the source-folder tag - AI-suggested categories are applied

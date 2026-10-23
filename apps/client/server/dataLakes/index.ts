@@ -30,11 +30,15 @@ import {
 } from '@bike4mind/database';
 import type { EntitlementRequest } from '@server/entitlements';
 import type { Logger } from '@bike4mind/observability';
-import { getFilesStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { toAccessContext } from './toAccessContext';
-import { grantingLakes, isFileInAccessibleLake, normalizedLakePrefix } from './grantingLakes';
-import { firstQueryValue } from './firstQueryValue';
-import { narrowAccessibleLakes } from './narrowAccessibleLakes';
+import {
+  grantingLakes,
+  isFileInAccessibleLake,
+  normalizedLakePrefix,
+} from '@bike4mind/server-utils/dataLakes/grantingLakes';
+import { firstQueryValue } from '@bike4mind/server-utils/dataLakes/firstQueryValue';
+import { narrowAccessibleLakes } from '@bike4mind/server-utils/dataLakes/narrowAccessibleLakes';
 
 export { grantingLakes, isFileInAccessibleLake, firstQueryValue };
 

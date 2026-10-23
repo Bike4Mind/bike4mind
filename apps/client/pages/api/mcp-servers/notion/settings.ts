@@ -177,7 +177,7 @@ async function patchMcpServerEnvVars(
     return;
   }
 
-  const envVars = decryptEnvVariables(notionServer.envVariables);
+  const envVars = decryptEnvVariables(notionServer.envVariables, notionServer);
   const envMap = new Map(envVars.map(v => [v.key, v.value]));
 
   envMap.set('NOTION_WRITE_ENABLED', settings.writeEnabled ? 'true' : 'false');
@@ -207,7 +207,7 @@ async function patchMcpServerEnvVars(
 
   await mcpServerRepository.update({
     id: notionServer.id,
-    envVariables: encryptEnvVariables(updatedVars),
+    envVariables: encryptEnvVariables(updatedVars, notionServer),
   });
 
   console.log('[Notion Settings] Patched MCP server env vars via fallback path');

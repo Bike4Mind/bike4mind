@@ -20,12 +20,12 @@ export type AudioCostInput =
 
 /**
  * Estimates the credit cost of one audio generation and carries `usdCost` + `units`
- * through for usage-event analytics (COGS + billable units); billing uses
- * `requiredCredits`.
+ * through for usage-event analytics (COGS + billable units). `requiredCredits` is the
+ * gate figure only; the final charge settles `usdCost` with usdToCreditsStochastic.
  *
- * Speech reuses the exact same math as the direct `/api/ai/tts` endpoint
- * (`usdToCredits(computeTtsUsd(...))`, see deductTtsCredits) so a tool-driven
- * synthesis and a direct one charge identically. Sound effects delegate to
+ * Speech prices the exact same USD as the direct `/api/ai/tts` endpoint
+ * (`computeTtsUsd(...)`, see deductTtsCredits) so a tool-driven synthesis and a
+ * direct one charge identically. Sound effects delegate to
  * `estimateSoundCredits`, the same estimator the `/api/ai/sound-effects` endpoint uses.
  */
 export function estimateAudioCredits(input: AudioCostInput): {

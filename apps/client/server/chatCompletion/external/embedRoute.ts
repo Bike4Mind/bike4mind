@@ -1,3 +1,5 @@
+import { createCompletionCreditHolds } from '@server/billing/completionCreditHolds';
+import { adminRoleWithheldFor, ownerWithheldUsers, withholdAdminRole } from '@server/auth/apiKeyAdminScope';
 import express, { type Request, type Response, type Express } from 'express';
 import {
   buildMetaEvent,
@@ -53,6 +55,7 @@ import {
   embedConversationRepository,
 } from '@bike4mind/database';
 import { verifyEmbedApiKey, type ApiKeyInfo } from '@server/cli/auth';
+import { isAuthInfraFailure, setAuthInfraFailureHeaders } from '@server/auth/apiKeyAuthFailure';
 import { extractBearer, resolveEmbedSessionToken } from '@server/embed/resolveEmbedSessionToken';
 import { reauthorizeIdentifiedSession } from '@server/embed/identifiedEmbedUser';
 import { isEmbedOriginAllowed } from '@server/embed/firstPartyOrigin';
@@ -60,12 +63,13 @@ import { checkApiKeyRateLimit } from '@server/utils/apiKeyRateLimitCheck';
 import { checkEmbedSessionRateLimit } from '@server/utils/embedSessionRateLimit';
 import { embedCors } from '@server/middlewares/embedCors';
 import { flattenHeaders } from '@server/utils/flattenHeaders';
-import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
+import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { hydrateEmbedAgent } from './embedAgentHydration';
 import { resolveEmbedTools } from './embedToolResolver';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { emitProcessingFailed } from '../processingFailedMetric';
 import { z } from 'zod';
+import { getUserEntitlements } from '@server/entitlements';
 
 /**
  * Public embed chat endpoint (`POST /api/embed/chat`), served by the always-on
@@ -114,7 +118,7 @@ const EmbedChatRequestSchema = z.object({
   // rejected here as a clean 400 rather than surfacing as a mid-stream provider
   // error (most backends require a non-empty, user-terminated conversation).
   messages: z
-    .array(z.object({ role: z.enum(['user', 'assistant']), content: z.string().min(1) }))
+    .array(z.object({ role: z.enum(['user', 'assistant']), content: z.string().trim().min(1) }))
     .min(1)
     .refine(m => m[m.length - 1]?.role === 'user', { message: 'the last message must be from the user' }),
   /** Optional echo of the bound agent id; if present it MUST match the key's agent. */
@@ -142,6 +146,12 @@ interface EmbedContext {
   oauthClientId?: string;
   /** The key's opt-in list of clients allowed to run identified sessions. */
   identifiedClientIds?: string[];
+  /** The key lacks the admin scope, so its owner acts without their admin role. */
+  adminRoleWithheld: boolean;
+}
+
+function embedOwnerUsers(ctx: EmbedContext): typeof userRepository {
+  return ctx.adminRoleWithheld ? ownerWithheldUsers(ctx.userId, userRepository) : userRepository;
 }
 
 function toContext(
@@ -158,6 +168,7 @@ function toContext(
     spendCap: info.spendCap,
     currentSpend: info.currentSpend,
     identifiedClientIds: info.identifiedClientIds,
+    adminRoleWithheld: adminRoleWithheldFor(info),
     ...(session && { sessionId: session.sessionId }),
     ...(session?.endUserId && { endUserId: session.endUserId, oauthClientId: session.oauthClientId }),
   };
@@ -253,12 +264,13 @@ async function buildEmbedServerTools(args: {
 
   const enabledTools = resolveEmbedTools(hydrated);
   if (enabledTools.length === 0) return undefined;
+  const ownerScopedUsers = embedOwnerUsers(ctx);
 
   // These reads are independent, so fetch them together (mirrors the
   // agent/org parallel fetch on the request path above).
   const [project, actor, toolAvailability] = await Promise.all([
     hydrated.projectId ? projectRepository.findById(hydrated.projectId) : Promise.resolve(null),
-    actorUser ? Promise.resolve(actorUser) : userRepository.findById(actorUserId),
+    actorUser ? Promise.resolve(actorUser) : ownerScopedUsers.findById(actorUserId),
     // Never rejects (see resolveToolAvailability's doc comment). Fail-closed here (unlike the
     // Tools picker UI's fail-open default): embed-widget end users have no way to add their own
     // key, so a tool this lookup couldn't confirm works should not reach the model.
@@ -304,7 +316,7 @@ async function buildEmbedServerTools(args: {
       apiKeys: apiKeyRepository,
       fabfiles: fabFileRepository,
       fabfilechunks: fabFileChunkRepository,
-      users: userRepository,
+      users: ownerScopedUsers,
       dataLakes: dataLakeRepository,
       dataLakeAccessGrants: dataLakeAccessGrantRepository,
       fallbackLakeSettings: fallbackLakeSettingsRepository,
@@ -416,6 +428,11 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       try {
         ctx = await resolveEmbedContext(headers);
       } catch (authErr) {
+        // The key check itself failed (database unreachable): retryable, not a bad credential.
+        if (isAuthInfraFailure(authErr)) {
+          setAuthInfraFailureHeaders(res, authErr);
+          return res.status(authErr.statusCode).json({ error: 'server_error', error_description: authErr.message });
+        }
         const message = authErr instanceof Error ? authErr.message : 'Unauthorized';
         return res.status(401).json({ error: 'unauthorized', error_description: message });
       }
@@ -635,6 +652,8 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
 
       try {
         await executeCompletion({
+          getEntitlements: getUserEntitlements,
+          creditHolds: createCompletionCreditHolds(logger),
           userId: actorUserId,
           model: hydrated.model,
           messages,
@@ -651,6 +670,8 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
             ...(ctx.endUserId ? {} : { userApiKeys: userApiKeyRepository }),
           },
           apiKeyInfo: { keyId: ctx.keyId, keyName: 'embed' },
+          // An identified end user acts under their own role; only the key owner's is withheld.
+          scopeActor: ctx.adminRoleWithheld && !ctx.endUserId ? withholdAdminRole : undefined,
           // Anonymous: bill the owner org's pool (ownerType: Organization). Identified:
           // omitted, so executeCompletion bills the acting user's own balance.
           ...(ctx.endUserId ? {} : { billingOrganizationId: ctx.organizationId }),

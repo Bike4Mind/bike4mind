@@ -4,7 +4,12 @@ import type { Parent, Root, RootContent, Text } from 'mdast';
 import { Link } from '@mui/joy';
 import remarkParse from 'remark-parse';
 import { unified } from 'unified';
-import { findCitationMarkers, type CitableSource, type CitationMarkerMatch } from '@bike4mind/common';
+import {
+  areCitablesNumbered,
+  findCitationMarkers,
+  type CitableSource,
+  type CitationMarkerMatch,
+} from '@bike4mind/common';
 import { useCitableSourceClick } from '../useCitableSourceClick';
 
 /** `<cite>` because markdown never produces one, so the override cannot catch anything else. */
@@ -95,13 +100,12 @@ export const ReplyCitablesContext = createContext<readonly CitableSource[]>([]);
 
 /**
  * Whether this reply's `[N]` markers can be trusted to mean `citables[N-1]`: every citable must
- * carry the stamp of its own position. The server stamps only the forced-retrieval prefix of an
- * indexed-style session, so a named-style reply never qualifies, and neither does a turn where a
- * knowledge or web tool appended sources: those tools number their results `1.`, `2.` too, so a
- * `[1]` there may mean a tool result rather than forced source 1.
+ * carry the stamp of its own position. Only an indexed-style session is stamped, by forced
+ * retrieval and by the tools that label their results with the same numbers. The server strips
+ * every stamp once a source lands that was labelled some other way, so such a turn never qualifies.
  */
 export const citationMarkersLinkable = (citables: readonly CitableSource[]): boolean =>
-  citables.length > 0 && citables.every((source, position) => source.metadata?.citationIndex === position + 1);
+  citables.length > 0 && areCitablesNumbered(citables);
 
 /** Linking waits for the finished reply: a tool citable merging mid-stream would pull the links back out. */
 export const shouldLinkCitationMarkers = (citables: readonly CitableSource[], completed: boolean): boolean =>

@@ -1,5 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError, BadRequestError, NotFoundError } from '@server/utils/errors';
+import { ForbiddenError, BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { Logger } from '@bike4mind/observability';
 import { slackExportJobRepository } from '@bike4mind/database';
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';

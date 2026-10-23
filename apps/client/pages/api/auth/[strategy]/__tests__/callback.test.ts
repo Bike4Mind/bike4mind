@@ -44,8 +44,10 @@ vi.mock('@server/analytics/signupEvents', () => ({
   emitSignupForSourceProducts: (...a: any[]) => mockEmitSignup(...a),
 }));
 const mockRecordSignupAcquisition = vi.fn().mockResolvedValue({ isSynthetic: false });
+const mockEmitSignupFunnelEvents = vi.fn().mockResolvedValue(undefined);
 vi.mock('@server/analytics/funnel', () => ({
   recordSignupAcquisition: (...a: any[]) => mockRecordSignupAcquisition(...a),
+  emitSignupFunnelEvents: (...a: any[]) => mockEmitSignupFunnelEvents(...a),
 }));
 
 const mockIssueBrowserSession = vi.fn().mockResolvedValue({ accessToken: 'jwt-access', sid: 'sid' });
@@ -186,6 +188,7 @@ describe('[strategy]/callback - banned user gate', () => {
 
     expect(mockIssueBrowserSession).toHaveBeenCalled();
     expect(res._getRedirectUrl()).toMatch(/^\/auth\/success#token=/);
+    expect(res._getRedirectUrl()).not.toContain('firstSignupSession');
   });
 });
 
@@ -206,6 +209,29 @@ describe('[strategy]/callback - signup credited to the source product', () => {
   // enough to emit - see readConsentedAcquisitionTouches.
   const touchCookie = `${touch}; b4m-consent-decision=granted`;
 
+  it.each(['google', 'github'])('emits one complete signup funnel for %s', async strategy => {
+    const { req, res } = makeReqRes();
+    req.query.strategy = strategy;
+    let passportCallback: Promise<unknown> | undefined;
+    mockAuthenticate.mockImplementation((_strategy: string, _opts: any, cb: any) => () => {
+      passportCallback = cb(null, {
+        id: 'u-new',
+        isBanned: false,
+        isNewUser: true,
+        emailVerified: true,
+        signupCreditsGranted: 100,
+      });
+    });
+
+    await handler(req, res, vi.fn());
+    await passportCallback;
+
+    expect(mockEmitSignupFunnelEvents).toHaveBeenCalledTimes(1);
+    expect(mockEmitSignupFunnelEvents).toHaveBeenCalledWith(
+      expect.objectContaining({ method: strategy, emailVerified: true, creditsGranted: 100 })
+    );
+  });
+
   it("sends a new account's touches, read from its own cookies, with the provider as the method", async () => {
     const res = await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined, {
       cookie: touchCookie,
@@ -217,6 +243,7 @@ describe('[strategy]/callback - signup credited to the source product', () => {
       method: 'github',
     });
     expect(res._getRedirectUrl()).toMatch(/isNewUser=1/);
+    expect(res._getRedirectUrl()).toContain('firstSignupSession=1');
   });
 
   it("persists a new account's acquisition with the provider as the signup method", async () => {
@@ -235,6 +262,7 @@ describe('[strategy]/callback - signup credited to the source product', () => {
 
     expect(mockEmitSignup).not.toHaveBeenCalled();
     expect(res._getRedirectUrl()).not.toMatch(/isNewUser=1/);
+    expect(res._getRedirectUrl()).toContain('firstSignupSession=1');
   });
 
   it('sends nothing for a returning user', async () => {
@@ -256,6 +284,7 @@ describe('[strategy]/callback - signup credited to the source product', () => {
 
     expect(mockEmitSignup).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u-new', method: 'github' }));
     expect(res._getRedirectUrl()).toMatch(/isNewUser=1/);
+    expect(res._getRedirectUrl()).toContain('firstSignupSession=1');
   });
 
   // The account exists once verifyCallback returns, and a retry sees isNewUser false, so a
@@ -347,6 +376,7 @@ describe('[strategy]/callback - second factor gate', () => {
     expect(res._getRedirectUrl()).not.toContain('#token=');
     expect(mockIssueBrowserSession).not.toHaveBeenCalled();
     expect(mockLogSignInSuccess).not.toHaveBeenCalled();
+    expect(res._getRedirectUrl()).not.toContain('firstSignupSession');
   });
 
   it('keeps the requested redirectTo ahead of the MFA handoff fragment', async () => {
@@ -397,6 +427,7 @@ describe('[strategy]/callback - second factor gate', () => {
     const redirectUrl = res._getRedirectUrl();
     expect(redirectUrl).toContain('#mfaToken=pending-tok&userId=u-new&mfa=setup');
     expect(redirectUrl).toContain('isNewUser=1&signupMethod=github');
+    expect(redirectUrl).toContain('firstSignupSession=1');
     expect(mockIssueBrowserSession).not.toHaveBeenCalled();
     expect(mockLogSignInSuccess).not.toHaveBeenCalled();
   });

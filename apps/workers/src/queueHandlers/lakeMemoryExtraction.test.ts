@@ -9,7 +9,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Context, SQSEvent } from 'aws-lambda';
-import { LAKE_MEMORY_MAX_CONTINUATION_SLICES } from '@server/dataLakes/lakeMemoryRateLimit';
+import { LAKE_MEMORY_MAX_CONTINUATION_SLICES } from '@bike4mind/server-utils/dataLakes/lakeMemoryRateLimit';
 
 const getSettingsValueMock = vi.fn();
 const findByIdMock = vi.fn();
@@ -33,7 +33,7 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@workers/dataLakes/extractLakeMemory', () => ({
   extractLakeMemoryForBatch: (...a: unknown[]) => extractMock(...a),
 }));
-vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => sendToQueueMock(...a) }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => sendToQueueMock(...a) }));
 vi.mock('sst', () => ({ Resource: { lakeMemoryQueue: { url: 'https://sqs.example/lake-memory' } } }));
 
 const { dispatch } = await import('./lakeMemoryExtraction');

@@ -1,8 +1,8 @@
 import { ApiKeyScope, Permission } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { SecretRotation, secretRotationRepository } from '@bike4mind/database/infra';
-import { ForbiddenError } from '@server/utils/errors';
-import { SECRET_ROTATION_CONFIG } from '@client/lib/secretRotation/constants';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { SECRET_ROTATION_CONFIG } from '@bike4mind/server-utils/lib/secretRotation/constants';
 import { calculateNextRotationDate, toSafeSecretRotation } from '@client/lib/secretRotation/utils';
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })

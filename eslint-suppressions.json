@@ -74,16 +74,6 @@
       "count": 2
     }
   },
-  "apps/client/pages/api/admin/identity-providers/[id].ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 2
-    }
-  },
-  "apps/client/pages/api/admin/identity-providers/index.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 2
-    }
-  },
   "apps/client/pages/api/admin/integration-audit-logs/index.ts": {
     "b4m/no-raw-entity-response": {
       "count": 1
@@ -259,21 +249,6 @@
       "count": 1
     }
   },
-  "apps/client/pages/api/admin/team-members.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 3
-    }
-  },
-  "apps/client/pages/api/admin/users/[userId]/user-api-keys.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/admin/users/email-verification.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
   "apps/client/pages/api/admin/voice-agents/[id].ts": {
     "b4m/no-raw-entity-response": {
       "count": 1
@@ -364,11 +339,6 @@
       "count": 1
     }
   },
-  "apps/client/pages/api/data-lakes/[id].ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 4
-    }
-  },
   "apps/client/pages/api/data-lakes/[id]/articles.ts": {
     "b4m/no-raw-entity-response": {
       "count": 1
@@ -382,11 +352,6 @@
   "apps/client/pages/api/data-lakes/[id]/findings/index.ts": {
     "b4m/no-raw-entity-response": {
       "count": 1
-    }
-  },
-  "apps/client/pages/api/data-lakes/[id]/lifecycle.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 4
     }
   },
   "apps/client/pages/api/data-lakes/[id]/proposals/[proposalId].ts": {
@@ -414,24 +379,9 @@
       "count": 2
     }
   },
-  "apps/client/pages/api/data-lakes/[id]/settings.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
   "apps/client/pages/api/data-lakes/[id]/transfer-ownership.ts": {
     "b4m/no-raw-entity-response": {
       "count": 2
-    }
-  },
-  "apps/client/pages/api/data-lakes/[id]/visibility.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/data-lakes/archived.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
     }
   },
   "apps/client/pages/api/data-lakes/batches/[batchId].ts": {
@@ -445,16 +395,6 @@
     }
   },
   "apps/client/pages/api/data-lakes/batches/index.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/data-lakes/deleted.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/data-lakes/index.ts": {
     "b4m/no-raw-entity-response": {
       "count": 1
     }
@@ -542,16 +482,6 @@
   "apps/client/pages/api/inbox/index.ts": {
     "b4m/no-raw-entity-response": {
       "count": 1
-    }
-  },
-  "apps/client/pages/api/mcp-servers/[id]/index.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/mcp-servers/index.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 2
     }
   },
   "apps/client/pages/api/mementos/[id]/update.ts": {

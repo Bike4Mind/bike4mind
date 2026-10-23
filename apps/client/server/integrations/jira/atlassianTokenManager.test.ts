@@ -11,7 +11,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { findById, update: userUpdate },
   mcpServerRepository: { findOne: mcpFindOne, update: mcpUpdate },
 }));
-vi.mock('@server/integrations/jira/atlassianConfig', () => ({
+vi.mock('@bike4mind/server-utils/integrations/jira/atlassianConfig', () => ({
   getAtlassianOAuthConfig: vi.fn().mockResolvedValue({ clientId: 'cid', clientSecret: 'secret' }),
 }));
 vi.mock('@server/security/tokenEncryption', () => ({
@@ -69,6 +69,17 @@ describe('AtlassianTokenManager.getValidTokens refresh', () => {
     const saved = userUpdate.mock.calls[0][0].atlassianConnect;
     expect(saved.accessToken).toBe('enc:new-access');
     expect(Number.isNaN(saved.expiresAt.getTime())).toBe(false);
+  });
+
+  it('preserves an encrypted existing refresh token when the provider omits a replacement', async () => {
+    mockTokenResponse({ access_token: 'new-access', expires_in: 3600 });
+    const result = await AtlassianTokenManager.getValidTokens('user-1');
+    expect(result?.refreshToken).toBe('old-refresh');
+    expect(userUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        atlassianConnect: expect.objectContaining({ refreshToken: 'enc:old-refresh' }),
+      })
+    );
   });
 
   it.each([

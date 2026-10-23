@@ -24,7 +24,9 @@ vi.mock('./creditService', async importOriginal => ({
   subtractCredits: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('@bike4mind/llm-adapters', () => ({
+  buildApiKeyTable: (keys: object) => keys,
   reasonsWithinOutputBudget: vi.fn(() => false),
+  isAdaptiveThinkingByDefault: vi.fn(() => false),
   resolveOutputMaxTokens: vi.fn(
     ({ requested, fallback }: { requested?: number; fallback: number }) => requested ?? fallback
   ),
@@ -131,5 +133,10 @@ describe('executeCompletion - long-context tier per request', () => {
   it('falls back to the aggregates when the adapter reports no turns', async () => {
     const usd = await settledUsd({ inputTokens: 240_000, outputTokens: 3_000 });
     expect(usd).toBeCloseTo(1.014, 10);
+  });
+
+  it('prices a cached long prompt in the aggregates on the tier its whole prompt falls in', async () => {
+    const usd = await settledUsd({ inputTokens: 20_000, cacheReadInputTokens: 190_000, outputTokens: 1_000 });
+    expect(usd).toBeCloseTo(20_000 * perM(4) + 190_000 * perM(0.4) + 1_000 * perM(18), 10);
   });
 });

@@ -9,10 +9,12 @@ import {
   Textarea,
   Tooltip,
   FormLabel,
+  FormHelperText,
   Typography,
   Input,
 } from '@mui/joy';
-import { IOrganization, IOrganizationDocument, WithId } from '@bike4mind/common';
+import { IOrganization, IOrganizationDocument, WithId, isValidAdminActionReason } from '@bike4mind/common';
+import { orgManagerNames } from './orgManagerNames';
 import GroupsIcon from '@mui/icons-material/Groups';
 import SportsMartialArtsIcon from '@mui/icons-material/SportsMartialArts';
 import ManageAccountsIcon from '@mui/icons-material/ManageAccounts';
@@ -24,6 +26,8 @@ import Compressor from 'compressorjs';
 import { useUpdateOrganization } from '@client/app/hooks/data/organizations';
 import OrganizationGroupTypesCard from './OrganizationGroupTypesCard';
 import OrganizationGroupMembersCard from './OrganizationGroupMembersCard';
+import OrganizationStorageLimitField, { parseStorageLimitInput } from './OrganizationStorageLimitField';
+import { AdminReasonField } from './shared/AdminReasonField';
 
 export async function compressLogo(file: File, quality: number = 0.8): Promise<File | Blob> {
   return new Promise((resolve, reject) => {
@@ -50,6 +54,11 @@ interface OrganizationProfileProps {
 
 const OrganizationProfileUpdated: React.FC<OrganizationProfileProps> = ({ org, onClose, children, activeDays }) => {
   const [editedOrg, setEditedOrg] = useState<WithId<IOrganization>>(org);
+  const [storageLimitInput, setStorageLimitInput] = useState(org.storageLimit?.toString() ?? '');
+  // The modal stays open after Update and `org` is the caller's snapshot, so track what was last saved.
+  const [savedStorageLimit, setSavedStorageLimit] = useState(org.storageLimit ?? null);
+  const parsedStorageLimit = parseStorageLimitInput(storageLimitInput);
+  const [creditReason, setCreditReason] = useState('');
 
   const updateOrganizationMutation = useUpdateOrganization();
 
@@ -63,7 +72,8 @@ const OrganizationProfileUpdated: React.FC<OrganizationProfileProps> = ({ org, o
       return lastLoginDate && lastLoginDate >= thresholdDate;
     }).length || 0;
 
-  const managers = org.users?.filter(({ user }) => user?.level === 'ManagerUser' || user?.level === 'AdminUser') || [];
+  // The org's own managers, not members whose platform-wide `level` happens to be Manager/Admin.
+  const managerNames = orgManagerNames(org);
 
   const handleChange = (field: keyof IOrganizationDocument, value: any) => {
     setEditedOrg(prev => ({ ...prev, [field]: value }));
@@ -75,9 +85,21 @@ const OrganizationProfileUpdated: React.FC<OrganizationProfileProps> = ({ org, o
       description: org.description ?? '',
       billingContact: org.billingContact ?? '',
     });
+    setStorageLimitInput(org.storageLimit?.toString() ?? '');
+    setSavedStorageLimit(org.storageLimit ?? null);
   }, [org]);
 
+  // The input holds a string while typing; an empty or non-numeric value ("1,000") is NaN.
+  const rawCredits = String(editedOrg.currentCredits ?? 0).trim();
+  const editedCredits = rawCredits === '' ? NaN : Number(rawCredits);
+  const creditsValid = Number.isFinite(editedCredits) && editedCredits >= 0;
+  const creditsChanged = editedCredits !== (org.currentCredits ?? 0);
+  const canSave = !creditsChanged || (creditsValid && isValidAdminActionReason(creditReason));
+
   const handleUpdate = async () => {
+    if (!parsedStorageLimit.valid) return;
+    // Send only a changed limit, so saving other fields never writes null onto an org that has no override.
+    const storageLimitChanged = parsedStorageLimit.storageLimit !== savedStorageLimit;
     try {
       await updateOrganizationMutation.mutateAsync({
         orgId: org.id,
@@ -86,9 +108,13 @@ const OrganizationProfileUpdated: React.FC<OrganizationProfileProps> = ({ org, o
           billingContact: editedOrg.billingContact,
           description: editedOrg.description,
           seats: editedOrg.seats,
-          currentCredits: editedOrg.currentCredits,
+          ...(storageLimitChanged && { storageLimit: parsedStorageLimit.storageLimit }),
+          // Only a changed balance is sent: the server books the difference to the ledger.
+          ...(creditsChanged ? { currentCredits: editedCredits, creditReason: creditReason.trim() } : {}),
         },
       });
+      setSavedStorageLimit(parsedStorageLimit.storageLimit);
+      setCreditReason('');
     } catch (error) {
       // Error is handled by the mutation hook
     }
@@ -128,13 +154,32 @@ const OrganizationProfileUpdated: React.FC<OrganizationProfileProps> = ({ org, o
                 </FormControl>
               </Stack>
               <Stack direction="column" spacing={2}>
-                <FormControl>
+                <FormControl error={!creditsValid}>
                   <FormLabel>Current Credits</FormLabel>
                   <Input
                     value={editedOrg.currentCredits ?? 0}
                     onChange={e => handleChange('currentCredits', e.target.value)}
+                    slotProps={{ input: { 'data-testid': 'org-profile-credits-input' } }}
                   />
+                  {!creditsValid && (
+                    <FormHelperText data-testid="org-profile-credits-error">
+                      Enter a number of credits (0 or more), without commas.
+                    </FormHelperText>
+                  )}
                 </FormControl>
+                <OrganizationStorageLimitField
+                  orgId={org.id}
+                  value={storageLimitInput}
+                  onChange={setStorageLimitInput}
+                />
+                {creditsChanged && (
+                  <AdminReasonField
+                    label="Reason for the credit change"
+                    value={creditReason}
+                    onChange={setCreditReason}
+                    data-testid="org-profile-credit-reason-input"
+                  />
+                )}
                 <FormControl>
                   <FormLabel>Description</FormLabel>
                   <Textarea
@@ -144,14 +189,12 @@ const OrganizationProfileUpdated: React.FC<OrganizationProfileProps> = ({ org, o
                   />
                 </FormControl>
               </Stack>
-              <Tooltip title={managers.map(manager => manager.user?.name).join(', ')}>
+              <Tooltip title={managerNames.join(', ')}>
                 <Stack direction="row" spacing={1}>
                   <ManageAccountsIcon />
                   <Typography level="body-sm">Managers:</Typography>
-                  <Typography textColor={managers.length > 0 ? 'primary' : 'danger.500'}>
-                    {managers.length > 0
-                      ? `${managers.map(manager => manager.user?.name).join(', ')}`
-                      : '<none assigned>'}
+                  <Typography textColor={managerNames.length > 0 ? 'primary' : 'danger.500'}>
+                    {managerNames.length > 0 ? managerNames.join(', ') : '<none assigned>'}
                   </Typography>
                 </Stack>
               </Tooltip>
@@ -160,7 +203,12 @@ const OrganizationProfileUpdated: React.FC<OrganizationProfileProps> = ({ org, o
               <Button variant="outlined" onClick={onClose}>
                 Cancel
               </Button>
-              <Button onClick={handleUpdate} loading={updateOrganizationMutation.isPending}>
+              <Button
+                data-testid="admin-org-update-btn"
+                onClick={handleUpdate}
+                loading={updateOrganizationMutation.isPending}
+                disabled={!parsedStorageLimit.valid || !canSave}
+              >
                 Update
               </Button>
             </Stack>

@@ -31,7 +31,7 @@ import { resolveDeprecatedModelId } from '@bike4mind/llm-adapters';
 import type { DagDispatcher, DagNodeHandle } from '@bike4mind/services/llm';
 import { agentExecutionRepository, type AgentExecutionStatus, type IDagSpec } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
-import { inheritedArtifactFields } from '@server/utils/artifactGate';
+import { inheritedArtifactFields } from '@bike4mind/server-utils/utils/artifactGate';
 import { Resource } from 'sst';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 
@@ -425,6 +425,24 @@ export function clampMaxIterationsForOverCapAggregationWake(args: {
   iterationIndex: number;
 }): number {
   if (args.isAggregationOnlyWake && args.isOverCap) {
+    return Math.min(args.maxIterations, args.iterationIndex + 1);
+  }
+  return args.maxIterations;
+}
+
+/**
+ * The same one-iteration bound for an aggregation-only wake whose model stopped being runnable
+ * (disabled, or the user lost the entitlement) while its children ran. The wrap-up iteration
+ * returns their already-paid-for results; without the bound the loop would keep iterating on a
+ * model the run is no longer entitled to.
+ */
+export function clampMaxIterationsForUnrunnableAggregationWake(args: {
+  isAggregationOnlyWake: boolean;
+  isRunnable: boolean;
+  maxIterations: number;
+  iterationIndex: number;
+}): number {
+  if (args.isAggregationOnlyWake && !args.isRunnable) {
     return Math.min(args.maxIterations, args.iterationIndex + 1);
   }
   return args.maxIterations;

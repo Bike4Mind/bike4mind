@@ -1,10 +1,10 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_WRITE_SCOPES } from '@server/dataLakes/dataLakeScopes';
-import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { dataLakeRepository, orgGoogleDriveConnectionRepository, User } from '@bike4mind/database';
 import { acceptsConnectorContent, isLakeIngestable } from '@bike4mind/common';
 import { authorizeLakeConnectorAccess } from '@server/dataLakes/authorizeLakeConnectorAccess';
-import { withConnectionId, withLakeConnectorClaim } from '@server/dataLakes/assertLakeConnectorFree';
+import { withConnectionId, withLakeConnectorClaim } from '@bike4mind/server-utils/dataLakes/assertLakeConnectorFree';
 import {
   isValidDriveFolderId,
   createDriveClient,
@@ -13,18 +13,18 @@ import {
   UNREACHABLE_FOLDER_MESSAGES,
   REJECTED_DRIVE_TOKEN_MESSAGE,
   type FolderAccess,
-} from '@server/integrations/google/drive/driveClient';
+} from '@bike4mind/server-utils/integrations/google/drive/driveClient';
 import { getValidUserDriveAccessToken, isTerminalDriveGrantError } from '@server/integrations/google/drive/common';
 import { decryptToken } from '@server/security/tokenEncryption';
-import { isEncrypted } from '@server/security/secretEncryption';
+import { isEncrypted } from '@bike4mind/server-utils/security/secretEncryption';
 import {
   BadRequestError,
   ForbiddenError,
   InternalServerError,
   NotFoundError,
   TooManyRequestsError,
-} from '@server/utils/errors';
-import { sendToQueue } from '@server/utils/sqs';
+} from '@bike4mind/server-utils/utils/errors';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { Request } from 'express';
 import { Resource } from 'sst';
 import { z } from 'zod';

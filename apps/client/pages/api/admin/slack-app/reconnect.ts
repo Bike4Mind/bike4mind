@@ -1,8 +1,10 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError, BadRequestError } from '@server/utils/errors';
+import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 import { slackDevWorkspaceRepository } from '@bike4mind/database/infra';
+import { withTransaction } from '@bike4mind/database';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 /**
  * POST /api/admin/slack-app/reconnect
@@ -65,10 +67,19 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
   }
 
   // Token is valid, store it
-  const updated = await slackDevWorkspaceRepository.storeConfigToken(workspaceId, configToken);
-  if (!updated) {
-    throw new BadRequestError('Workspace not found or was deleted. Please refresh and try again.');
-  }
+  await withTransaction(async () => {
+    const updated = await slackDevWorkspaceRepository.storeConfigToken(workspaceId, configToken);
+    if (!updated) {
+      throw new BadRequestError('Workspace not found or was deleted. Please refresh and try again.');
+    }
+
+    await recordAdminActionFromRequest(req, {
+      action: 'integration.slack_app.reconnected',
+      target: { kind: 'settings', id: workspaceId, displayName: workspace.name || workspace.slackAppId },
+      summary: `reconnected slack app ${workspace.slackAppId}`,
+      details: { appId: workspace.slackAppId },
+    });
+  });
 
   req.logger.info('✨ [Admin] Stored config token for workspace', {
     workspaceId,

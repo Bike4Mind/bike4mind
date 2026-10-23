@@ -67,7 +67,8 @@ const makeReq = (
 ) => {
   const chunks = opts.chunks ?? ['notebook-json-bytes'];
   return {
-    query: opts.query ?? { importId: '1700000000000' },
+    // 'notebook-json-bytes' is 19 bytes.
+    query: opts.query ?? { importId: '1700000000000', size: '19' },
     user: { id: opts.userId ?? 'user-1' },
     ability: { can: () => opts.canCreate ?? true },
     destroy: vi.fn(),
@@ -126,12 +127,30 @@ describe('PUT /api/notebooks/import/upload (self-host proxy)', () => {
 
   it('writes under notebooks/<userId>/<importId>.json, ignoring anything else client-supplied', async () => {
     const res = makeRes();
-    await captured.put!(makeReq({ userId: 'user-1', query: { importId: '1700000000000' } }), res);
+    await captured.put!(makeReq({ userId: 'user-1', query: { importId: '1700000000000', size: '19' } }), res);
 
     expect(uploadMock).toHaveBeenCalledTimes(1);
     const key = uploadMock.mock.calls[0][1] as string;
     expect(key).toBe('notebooks/user-1/1700000000000.json');
     expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it.each([undefined, '0', 'abc', String(MAX_NOTEBOOK_IMPORT_UPLOAD_BYTES + 1)])(
+    'rejects a missing or invalid declared size (%s)',
+    async size => {
+      const res = makeRes();
+      await captured.put!(makeReq({ query: { importId: '1700000000000', size } }), res);
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(uploadMock).not.toHaveBeenCalled();
+    }
+  );
+
+  // Hosted S3 refuses any length but the presign's bound one with 403; the proxy matches it.
+  it.each(['18', '20'])('403s a body that is not the declared size (%s) without uploading', async size => {
+    const res = makeRes();
+    await captured.put!(makeReq({ query: { importId: '1700000000000', size } }), res);
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(uploadMock).not.toHaveBeenCalled();
   });
 
   it('413s a body over the cap without uploading anything', async () => {

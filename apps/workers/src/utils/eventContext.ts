@@ -1,7 +1,7 @@
 import { HTTPError } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { connectDB } from '@bike4mind/database';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { EventBridgeEvent } from 'aws-lambda';
 
 /**
@@ -32,7 +32,7 @@ export const withEventContext = <T extends EventBridgeEvent<string, any>>(
       },
     });
 
-    logger.info({ ...event['detail'], eventName });
+    logger.info('Received event', { eventName, eventId: event.id });
 
     await connectDB(Config.MONGODB_URI.replace('%STAGE%', Config.STAGE), logger);
 

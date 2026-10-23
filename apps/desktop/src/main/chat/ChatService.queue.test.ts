@@ -27,6 +27,7 @@ describe('ChatService queued messages', () => {
   let service: ChatService;
   let queue: MessageQueue;
   let events: ChatStreamEvent[];
+  let emit: (event: ChatStreamEvent) => void;
   let queueEvents: ChatQueueEvent[];
   let streams: PassThrough[];
   let post: ReturnType<typeof vi.fn>;
@@ -56,16 +57,19 @@ describe('ChatService queued messages', () => {
 
   beforeEach(async () => {
     store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-queue-')), 'test-model');
-    events = [];
+    // Bound per test: a previous service replying late must not push into this test's events.
+    const emitted: ChatStreamEvent[] = [];
+    events = emitted;
+    emit = event => emitted.push(event);
     queueEvents = [];
     streams = [];
-    post = vi
+    const boundPost = vi
       .fn()
-      .mockImplementation(() => Promise.resolve({ data: streamFor(post.mock.calls.length - 1), status: 200 }));
+      .mockImplementation(() => Promise.resolve({ data: streamFor(boundPost.mock.calls.length - 1), status: 200 }));
 
     apiClient = {
       get: vi.fn().mockResolvedValue({ sseCompletionsUrl: '' }),
-      getAxiosInstance: () => ({ post }),
+      getAxiosInstance: () => ({ post: boundPost }),
     } as unknown as AuthenticatedApiClient;
 
     queue = new MessageQueue(event => queueEvents.push(event));
@@ -76,8 +80,9 @@ describe('ChatService queued messages', () => {
       queue,
       getApiClient: () => apiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
-      emit: event => events.push(event),
+      emit,
     });
+    post = boundPost;
   });
 
   it('queues a message sent during a live reply instead of refusing it', async () => {
@@ -203,7 +208,7 @@ describe('ChatService queued messages', () => {
       queue,
       getApiClient: () => apiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
-      emit: event => events.push(event),
+      emit,
     });
 
     const { id } = await gated.createSession();
@@ -282,6 +287,7 @@ describe('ChatService queued messages', () => {
     const { id } = await service.createSession();
     await service.send(id, 'first');
     await waitForEvent('start');
+    await waitForPost(1);
     await service.send(id, 'second');
     await service.send(id, 'third');
 
@@ -541,7 +547,7 @@ describe('ChatService queued messages', () => {
         queue,
         getApiClient: () => apiClient,
         getEnvironmentUrl: () => 'http://localhost:3000',
-        emit: event => events.push(event),
+        emit,
       });
 
       const { id } = await gated.createSession();
@@ -578,7 +584,7 @@ describe('ChatService queued messages', () => {
         logger: { debug: vi.fn(), warn: vi.fn() },
         getApiClient: () => apiClient,
         getEnvironmentUrl: () => 'http://localhost:3000',
-        emit: event => events.push(event),
+        emit,
       });
       expect(() => plain.sendQueuedNow('no-such-session', 'no-such-id')).not.toThrow();
     });
@@ -601,7 +607,7 @@ describe('ChatService queued messages', () => {
       logger: { debug: vi.fn(), warn: vi.fn() },
       getApiClient: () => apiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
-      emit: event => events.push(event),
+      emit,
     });
     const { id } = await plain.createSession();
     await plain.send(id, 'first');

@@ -22,10 +22,16 @@ import {
   Textarea,
   IconButton,
 } from '@mui/joy';
-import { Add, Edit, Delete, Info, Visibility, VisibilityOff } from '@mui/icons-material';
+import Add from '@mui/icons-material/Add';
+import Edit from '@mui/icons-material/Edit';
+import Delete from '@mui/icons-material/Delete';
+import Info from '@mui/icons-material/Info';
+import Visibility from '@mui/icons-material/Visibility';
+import VisibilityOff from '@mui/icons-material/VisibilityOff';
 import { toast } from 'sonner';
 import { api } from '@client/app/contexts/ApiContext';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
+import type { IdentityProviderSecretPresence } from '@bike4mind/common';
 
 interface IdentityProvider {
   id: string;
@@ -57,7 +63,7 @@ interface IdentityProvider {
    * Which credentials are stored. The list API sends these instead of the secrets
    * themselves, so the form can tell a configured IdP from one saved with a blank one.
    */
-  hasSecrets?: { decryptionPvk: boolean; privateCert: boolean; clientSecret: boolean };
+  hasSecrets?: IdentityProviderSecretPresence;
   createdAt: string;
   updatedAt: string;
 }

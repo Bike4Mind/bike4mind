@@ -2,9 +2,9 @@ import { Request, Response } from 'express';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { ForbiddenError } from '@server/utils/errors';
-import { buildHighlightsPrompt } from '@server/whatsNew/whatsNewHighlights.prompt';
-import type { ModalForHighlights } from '@server/whatsNew/whatsNewHighlights.types';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { buildHighlightsPrompt } from '@bike4mind/server-utils/whatsNew/whatsNewHighlights.prompt';
+import type { ModalForHighlights } from '@bike4mind/server-utils/whatsNew/whatsNewHighlights.types';
 import { z } from 'zod';
 
 const PREVIEW_RATE_LIMIT = 20;

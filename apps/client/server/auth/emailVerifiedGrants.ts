@@ -36,6 +36,8 @@ const NOTHING_RELEASED: PendingFreeCreditReleaseResult = { creditsGranted: 0, cu
 export type EmailVerifiedGrantsResult = PendingFreeCreditReleaseResult & {
   /** The partner org the user was just added to; null when no membership was added. */
   joinedOrganizationId: string | null;
+  /** Plan credits from the domain grant; not part of `creditsGranted`. */
+  subscriptionCreditsGranted: number;
   /** Partner-rule tags merged into the user AFTER `tags` was persisted; callers reflecting tags merge both. */
   tagsApplied: string[];
 };
@@ -130,6 +132,7 @@ export async function applyEmailVerifiedGrants(params: {
     currentCredits: domainGrant.currentCredits ?? release.currentCredits,
     tags: release.tags,
     joinedOrganizationId: domainGrant.joinedOrganizationId,
+    subscriptionCreditsGranted: domainGrant.subscriptionCreditsGranted,
     tagsApplied: domainGrant.tagsApplied,
   };
 }

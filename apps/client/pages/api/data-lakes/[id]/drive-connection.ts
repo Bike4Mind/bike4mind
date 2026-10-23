@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
-import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import {
   dataLakeRepository,
   fabFileRepository,
@@ -9,19 +9,19 @@ import {
 } from '@bike4mind/database';
 import { lakeConnectionOwnerOf, isDriveDisconnectStalled, isSameLakeConnectionOwner } from '@bike4mind/common';
 import type { LakeConnectionOwner, IDataLakeDocument, IOrgGoogleDriveConnectionDocument } from '@bike4mind/common';
-import type { DriveDisconnectPurgePayload } from '@server/dataLakes/driveDisconnectPurgePayload';
-import { listDeletableDriveOrphans } from '@server/integrations/google/drive/connectorOrphanFiles';
+import type { DriveDisconnectPurgePayload } from '@bike4mind/server-utils/dataLakes/driveDisconnectPurgePayload';
+import { listDeletableDriveOrphans } from '@bike4mind/server-utils/integrations/google/drive/connectorOrphanFiles';
 import {
   DRIVE_LAKE_POLL_INTERVAL_MS,
   isDriveLakePollScheduled,
-} from '@server/integrations/google/drive/drivePollSchedule';
+} from '@bike4mind/server-utils/integrations/google/drive/drivePollSchedule';
 import {
   authorizeLakeConnectorAccess,
   authorizeLakeConnectorRead,
 } from '@server/dataLakes/authorizeLakeConnectorAccess';
-import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
-import { sendToQueue } from '@server/utils/sqs';
-import { NotFoundError } from '@server/utils/errors';
+import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { Request } from 'express';
 
 /**

@@ -1,7 +1,7 @@
 import { buildDataLakeAccessContext, type AccessContext, type AccessContextOptions } from '@bike4mind/common';
 import { organizationRepository } from '@bike4mind/database';
 import { getRequestEntitlements, type EntitlementRequest } from '@server/entitlements';
-import { getRequestMembershipOrgIds } from './requestMembership';
+import { getRequestMembershipOrgIds } from '@bike4mind/server-utils/dataLakes/requestMembership';
 
 /**
  * Builds the `AccessContext` for the data-lake management gates

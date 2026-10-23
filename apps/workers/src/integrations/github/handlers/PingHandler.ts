@@ -13,7 +13,7 @@ import {
   GitHubHandlerResult,
   GitHubPingPayload,
   GitHubWebhookPayload,
-} from '@server/integrations/github/types';
+} from '@bike4mind/server-utils/integrations/github/types';
 
 export class PingHandler implements GitHubEventHandler {
   eventType = 'ping' as const;

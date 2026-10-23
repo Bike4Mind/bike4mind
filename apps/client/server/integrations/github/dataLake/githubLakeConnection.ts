@@ -27,7 +27,7 @@ import {
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { dataLakeService } from '@bike4mind/services';
-import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { createStateToken, verifyStateToken, type BaseStatePayload } from '@server/auth/jwtStateStore';
 import { issueStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
 import { authorizeLakeConnectorAccess } from '@server/dataLakes/authorizeLakeConnectorAccess';
@@ -35,14 +35,14 @@ import {
   assertLakeConnectorFree,
   withConnectionId,
   withLakeConnectorClaim,
-} from '@server/dataLakes/assertLakeConnectorFree';
+} from '@bike4mind/server-utils/dataLakes/assertLakeConnectorFree';
 import {
   purgeConnectionIngestedFiles,
   type PurgeConnectionLogger,
 } from '@server/dataLakes/purgeConnectionIngestedFiles';
-import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
-import { serializeError } from '@server/utils/serializeError';
-import { sendToQueue } from '@server/utils/sqs';
+import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
+import { serializeError } from '@bike4mind/server-utils/utils/serializeError';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import {
   BadRequestError,
   ConflictError,
@@ -50,7 +50,7 @@ import {
   HTTPError,
   HttpStatus,
   NotFoundError,
-} from '@server/utils/errors';
+} from '@bike4mind/server-utils/utils/errors';
 import { Resource } from 'sst';
 import {
   consumeGitHubLakeAuthGrant,
@@ -69,7 +69,7 @@ import {
   listUserInstallations,
   type GitHubLakeAppConfig,
   type GitHubLakeUserInstallation,
-} from './lakeAppClient';
+} from '@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient';
 import { findInstallationPolicyViolation } from './lakeAppPolicy';
 
 export const GITHUB_LAKE_STATE_OPTIONS = { audience: 'github-lake-install-state', expiresIn: '10m' } as const;

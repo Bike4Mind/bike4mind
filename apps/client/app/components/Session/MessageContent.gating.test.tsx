@@ -122,6 +122,7 @@ vi.mock('@client/app/components/Credits/AccountSelector', () => ({
 vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }));
+vi.mock('@client/app/utils/copyToClipboard', () => ({ copyTextWithToast: vi.fn() }));
 
 // --- heavy child components (not under test) --------------------------------
 vi.mock('@client/app/components/Session/PromptReplies', () => ({ default: () => null }));
@@ -191,6 +192,7 @@ vi.mock('@client/app/hooks/useAdminSettingsCache', () => ({
 
 import { useSendToDataLakeStore } from '@client/app/stores/useSendToDataLakeStore';
 import { replyPublisher, findPublishedByReply } from '@client/app/utils/publishApi';
+import { copyTextWithToast } from '@client/app/utils/copyToClipboard';
 import MessageContent from './MessageContent';
 import { SessionReadOnlyProvider } from './SessionReadOnlyContext';
 
@@ -959,5 +961,27 @@ describe('MessageContent - read-only mode', () => {
     renderMessageContent(brokenTurn, undefined, { isLastMessage: true, readOnly: true });
 
     expect(screen.queryByTestId('answer-feedback-prompt')).not.toBeInTheDocument();
+  });
+});
+
+describe('MessageContent actions menu - copy turn ID', () => {
+  const copyMock = copyTextWithToast as unknown as ReturnType<typeof vi.fn>;
+
+  beforeEach(() => copyMock.mockClear());
+
+  it('copies the persisted quest id with a confirmation toast', () => {
+    renderAndOpenActionsMenu();
+
+    fireEvent.click(screen.getByTestId('message-copy-turn-id-btn'));
+
+    expect(copyMock).toHaveBeenCalledWith('quest-1', 'Turn ID copied');
+  });
+
+  it('hides the item for an optimistic id, which names no quest', () => {
+    renderMessageContent({ ...messageData, id: 'optimistic-quest-1' } as IChatHistoryItem);
+
+    fireEvent.click(screen.getByTestId('message-actions-menu-btn'));
+
+    expect(screen.queryByTestId('message-copy-turn-id-btn')).not.toBeInTheDocument();
   });
 });

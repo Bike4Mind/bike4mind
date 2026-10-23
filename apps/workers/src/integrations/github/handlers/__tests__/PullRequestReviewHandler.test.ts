@@ -15,7 +15,7 @@ vi.mock('@bike4mind/slack', () => ({
 
 import { PullRequestReviewHandler } from '../PullRequestReviewHandler';
 import { GitHubSlackNotifier } from '@bike4mind/slack';
-import type { GitHubPullRequestReviewPayload } from '@server/integrations/github/types';
+import type { GitHubPullRequestReviewPayload } from '@bike4mind/server-utils/integrations/github/types';
 
 function createReviewPayload(
   overrides: Partial<{

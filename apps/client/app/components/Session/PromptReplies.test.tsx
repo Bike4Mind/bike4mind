@@ -3,6 +3,7 @@ import { beforeEach, describe, it, expect, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import { TRUNCATED_FINISH_REASON } from '@bike4mind/common';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { getThemeConfig } from '../../utils/themes';
@@ -74,6 +75,64 @@ describe('retrieval-floor banner wiring in a rendered reply', () => {
   });
 });
 
+describe('retrieval-coverage notice wiring in a rendered reply', () => {
+  const appTheme = extendTheme({ ...getThemeConfig() });
+
+  const renderReply = (reply: string, { partial = true, showSyntaxHighlight = false } = {}) =>
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <CssVarsProvider theme={appTheme}>
+          <PromptReplies
+            messageData={{
+              id: 'coverage-quest',
+              sessionId: 'session-1',
+              type: 'message',
+              timestamp: new Date('2026-01-01T00:00:00Z'),
+              prompt: 'What does the library say?',
+              reply,
+              questMasterReply: reply,
+              status: 'done',
+              promptMeta: {
+                finishReason: TRUNCATED_FINISH_REASON,
+                ...(partial
+                  ? { retrievalCoverage: { partial: true, reasons: ['Some documents could not be searched.'] } }
+                  : {}),
+              },
+            }}
+            showSyntaxHighlight={showSyntaxHighlight}
+            onSendMessage={async () => {}}
+          />
+        </CssVarsProvider>
+      </QueryClientProvider>
+    );
+
+  it.each(['', '<think>Searching the library</think>'])(
+    'keeps the notice when the reply has no visible answer: %j',
+    reply => {
+      renderReply(reply);
+
+      expect(screen.getByTestId('reply-truncated-warning')).toBeInTheDocument();
+      expect(screen.getByTestId('retrieval-coverage-warning')).toBeInTheDocument();
+    }
+  );
+
+  it.each([false, true])('places the notice after the answer with syntax highlighting %s', showSyntaxHighlight => {
+    renderReply('The library answer.', { showSyntaxHighlight });
+
+    const answer = screen.getByText('The library answer.');
+    const notice = screen.getByTestId('retrieval-coverage-warning');
+    expect(answer.compareDocumentPosition(notice) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(notice.querySelector('details')).not.toHaveAttribute('open');
+  });
+
+  it('keeps an empty reply without partial coverage free of a body or coverage notice', () => {
+    renderReply('', { partial: false });
+
+    expect(screen.queryByTestId('retrieval-coverage-warning')).toBeNull();
+    expect(screen.queryByTestId('ai-response-body')).toBeNull();
+  });
+});
+
 describe('classifyGeneratedFiles', () => {
   it('routes each generated file to exactly one bucket (image grid / audio player / download chip)', () => {
     const { images, audio, others } = classifyGeneratedFiles(['a.png', 'b.mp3', 'c.xlsx']);
@@ -140,16 +199,118 @@ describe('PendingActionButtons (MCP confirmation card)', () => {
     typeof PendingActionButtons
   >['pendingAction'];
 
-  const renderCard = () =>
+  const renderCard = (action = pendingAction) =>
     render(
       <CssVarsProvider theme={appTheme}>
-        <PendingActionButtons pendingAction={pendingAction} messageId="quest-1" sessionId="session-1" />
+        <PendingActionButtons pendingAction={action} messageId="quest-1" sessionId="session-1" />
       </CssVarsProvider>
     );
 
   beforeEach(() => {
     postMock.mockReset();
     sessionStorage.clear();
+  });
+
+  it.each(['add_issue_to_project', 'update_project_item_fields'])(
+    'shows the resolved project and issue target before confirming %s',
+    async tool => {
+      postMock.mockResolvedValue({ data: { success: true, message: 'done' } });
+      renderCard({
+        ...pendingAction,
+        tool,
+        params: {
+          project_id: 'PVT_project',
+          issue_node_id: 'I_issue',
+          item_id: 'PVTI_item',
+          display_project_name: 'Release board',
+          display_issue_title: '#42 - Fix login',
+          display_repository: 'example/app',
+        },
+      });
+
+      const target = screen.getByTestId('mcp-project-action-target');
+      expect(target).toHaveTextContent('Project: Release board');
+      expect(target).toHaveTextContent('Item: #42 - Fix login');
+      expect(target).toHaveTextContent('Repository: example/app');
+      expect(postMock).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByTestId('mcp-confirm-btn'));
+      await waitFor(() =>
+        expect(postMock).toHaveBeenCalledExactlyOnceWith('/api/mcp/confirm', {
+          questId: 'quest-1',
+          sessionId: 'session-1',
+          confirmed: true,
+          pendingActionTs: pendingAction.ts,
+        })
+      );
+    }
+  );
+
+  it.each(['PR #9 - Update dependencies', 'Draft: Plan the release'])(
+    'shows a project item label without requiring a repository: %s',
+    displayIssueTitle => {
+      renderCard({
+        ...pendingAction,
+        tool: 'update_project_item_fields',
+        params: { display_project_name: 'Roadmap', display_issue_title: displayIssueTitle },
+      });
+
+      const target = screen.getByTestId('mcp-project-action-target');
+      expect(target).toHaveTextContent('Project: Roadmap');
+      expect(target).toHaveTextContent(`Item: ${displayIssueTitle}`);
+      expect(target).not.toHaveTextContent('Repository:');
+    }
+  );
+
+  it.each([
+    ['add_issue_to_project', { project_id: 'PVT_legacy', issue_node_id: 'I_legacy' }, 'I_legacy'],
+    ['update_project_item_fields', { project_id: 'PVT_legacy', item_id: 'PVTI_legacy' }, 'PVTI_legacy'],
+    [
+      'add_issue_to_project',
+      {
+        project_id: 'PVT_legacy',
+        issue_node_id: 'I_legacy',
+        display_project_name: {},
+        display_issue_title: '  ',
+        display_repository: [],
+      },
+      'I_legacy',
+    ],
+  ])('falls back to target ids for %s with missing or invalid labels', (tool, params, itemId) => {
+    renderCard({ ...pendingAction, tool, params });
+
+    const target = screen.getByTestId('mcp-project-action-target');
+    expect(target).toHaveTextContent('Project: PVT_legacy');
+    expect(target).toHaveTextContent(`Item: ${itemId}`);
+    expect(target).not.toHaveTextContent('Repository:');
+  });
+
+  it('handles missing target metadata without crashing', () => {
+    renderCard({ ...pendingAction, tool: 'add_issue_to_project' });
+
+    const target = screen.getByTestId('mcp-project-action-target');
+    expect(target).toHaveTextContent('Project: Unknown project');
+    expect(target).toHaveTextContent('Item: Unknown item');
+  });
+
+  it('renders labels as text rather than markup', () => {
+    renderCard({
+      ...pendingAction,
+      tool: 'add_issue_to_project',
+      params: { display_project_name: '<img src=x>', display_issue_title: '<b>Issue</b>' },
+    });
+
+    const target = screen.getByTestId('mcp-project-action-target');
+    expect(target).toHaveTextContent('<img src=x>');
+    expect(target).toHaveTextContent('<b>Issue</b>');
+    expect(target.querySelector('img, b')).toBeNull();
+  });
+
+  it('does not add project target details to other tools', () => {
+    renderCard({ ...pendingAction, params: { display_project_name: 'Unrelated' } });
+
+    expect(screen.queryByTestId('mcp-project-action-target')).toBeNull();
+    expect(screen.getByTestId('mcp-confirm-btn')).toBeInTheDocument();
   });
 
   it('renders no card for a pending action the confirm route will not execute', () => {
@@ -365,5 +526,131 @@ describe('PendingActionButtons (MCP confirmation card)', () => {
     const result = await screen.findByTestId('mcp-confirm-result');
     expect(result.textContent).toContain('Tool execution failed');
     expect(screen.queryByTestId('mcp-confirm-btn')).toBeNull();
+  });
+});
+
+describe('reply UI side effects: live only on first arrival', () => {
+  const appTheme = extendTheme({ ...getThemeConfig() });
+  const effects = [{ type: 'plugin-effect', payload: { v: 1 } }];
+  let seq = 0;
+  const handler = vi.fn((_effects: unknown[], _options: { live?: boolean; dedupeKey?: string }) => 1);
+  let unregister: () => void = () => {};
+
+  beforeEach(async () => {
+    const { registerUiSideEffectHandler } = await import('@client/app/utils/uiSideEffectDispatcher');
+    unregister();
+    handler.mockClear();
+    unregister = registerUiSideEffectHandler(handler);
+    seq += 1;
+  });
+
+  const replyId = (suffix = '') => `side-effect-quest-${seq}${suffix}`;
+  const sessionOf = () => `side-effect-session-${seq}`;
+
+  const reply = (id: string, status: string, withEffects = status === 'done') => (
+    <QueryClientProvider client={new QueryClient()}>
+      <CssVarsProvider theme={appTheme}>
+        <PromptReplies
+          key={id}
+          messageData={
+            {
+              id,
+              sessionId: sessionOf(),
+              questMasterReply: 'answer',
+              status,
+              ...(withEffects ? { uiSideEffects: effects } : {}),
+            } as never
+          }
+          onSendMessage={async () => {}}
+        />
+      </CssVarsProvider>
+    </QueryClientProvider>
+  );
+
+  const liveCalls = () => handler.mock.calls.filter(([, options]) => options.live === true);
+  const replayCalls = () => handler.mock.calls.filter(([, options]) => !options.live);
+
+  it('dispatches live exactly once when a streaming reply finishes', () => {
+    const id = replyId();
+    const { rerender } = render(reply(id, 'running'));
+    expect(handler).not.toHaveBeenCalled();
+    rerender(reply(id, 'done'));
+    rerender(reply(id, 'done'));
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(liveCalls()[0][1]).toEqual({ live: true, dedupeKey: id });
+  });
+
+  it('does not dispatch the same finished reply again when it remounts', () => {
+    const id = replyId();
+    const first = render(reply(id, 'running'));
+    first.rerender(reply(id, 'done'));
+    first.unmount();
+    render(reply(id, 'done'));
+    expect(liveCalls()).toHaveLength(1);
+    expect(replayCalls()).toHaveLength(0);
+  });
+
+  it('replays, never live, a finished reply a refetch re-keys under a new id', () => {
+    const id = replyId();
+    const { rerender } = render(reply(id, 'running'));
+    rerender(reply(id, 'done'));
+    handler.mockClear();
+    const rekeyed = replyId('-rekeyed');
+    rerender(reply(rekeyed, 'done'));
+    expect(liveCalls()).toHaveLength(0);
+    expect(replayCalls()).toHaveLength(1);
+    expect(replayCalls()[0][1]).toEqual({ dedupeKey: rekeyed });
+  });
+
+  it('replays once, never live, a reply already finished when the page loaded', () => {
+    const id = replyId();
+    const first = render(reply(id, 'done'));
+    first.unmount();
+    render(reply(id, 'done'));
+    expect(liveCalls()).toHaveLength(0);
+    expect(replayCalls()).toHaveLength(1);
+    expect(replayCalls()[0][1]).toEqual({ dedupeKey: id });
+  });
+
+  it('replays a finished reply again once its session view is released', async () => {
+    const { forgetSessionDispatches } = await import('@client/app/utils/uiSideEffectDispatcher');
+    const id = replyId();
+    const first = render(reply(id, 'running'));
+    first.rerender(reply(id, 'done'));
+    first.unmount();
+    forgetSessionDispatches(sessionOf());
+    render(reply(id, 'done'));
+    expect(liveCalls()).toHaveLength(1);
+    expect(replayCalls()).toHaveLength(1);
+  });
+
+  it('replays, never live, a reply that finishes while its session view is away', async () => {
+    const { forgetSessionDispatches, noteReplyInFlight } = await import('@client/app/utils/uiSideEffectDispatcher');
+    const id = replyId();
+    noteReplyInFlight(id, sessionOf());
+    forgetSessionDispatches(sessionOf());
+    render(reply(id, 'done'));
+    expect(liveCalls()).toHaveLength(0);
+    expect(replayCalls()).toHaveLength(1);
+  });
+
+  it('replays, never live, effects that a refetch adds to a reply that finished without any', () => {
+    const id = replyId();
+    const { rerender } = render(reply(id, 'running'));
+    rerender(reply(id, 'done', false));
+    expect(handler).not.toHaveBeenCalled();
+    rerender(reply(id, 'done', true));
+    expect(liveCalls()).toHaveLength(0);
+    expect(replayCalls()).toHaveLength(1);
+  });
+
+  it('does not dispatch a reply the streaming completion already applied live', async () => {
+    const { claimLiveDispatch, noteReplyInFlight } = await import('@client/app/utils/uiSideEffectDispatcher');
+    const id = replyId();
+    noteReplyInFlight(id, sessionOf());
+    expect(claimLiveDispatch(id, sessionOf())).toBe(true);
+    const { rerender } = render(reply(id, 'running'));
+    rerender(reply(id, 'done'));
+    expect(handler).not.toHaveBeenCalled();
   });
 });

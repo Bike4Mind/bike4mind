@@ -22,10 +22,14 @@ import {
 import { WebhookDeliveryStatus, WebhookAuditStatus } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { createHandlerRegistry, getHandler } from '@workers/integrations/github/handlers';
-import { isValidGitHubEventType, GitHubWebhookPayload, GitHubHandlerContext } from '@server/integrations/github/types';
+import {
+  isValidGitHubEventType,
+  GitHubWebhookPayload,
+  GitHubHandlerContext,
+} from '@bike4mind/server-utils/integrations/github/types';
 import { dispatchReviewToSreRevision } from '@server/integrations/github/sreRevisionDispatch';
 import { sanitizeDispatchError, sanitizeHandlerError, sanitizeNotificationError } from './sanitizeWebhookError';
-import { emitWebhookDeliveryMetric, WebhookMetrics } from '@server/utils/cloudwatch';
+import { emitWebhookDeliveryMetric, WebhookMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 
 /**
@@ -189,10 +193,9 @@ async function processOrgWebhook(message: z.infer<typeof OrgWebhookPayloadSchema
 
     // Check if subscriber is still a member of the org (membership can change)
     const isOwner = org.userId === subscriber.userId;
-    const isManager = org.managerId === subscriber.userId;
     const isMember = org.users?.some(u => u.userId === subscriber.userId);
 
-    if (!isOwner && !isManager && !isMember) {
+    if (!isOwner && !isMember) {
       logger.warn('Subscriber no longer has org access, skipping', {
         subscriptionId: subscriber.id,
         userId: subscriber.userId,
@@ -454,7 +457,7 @@ async function emitDeliveryFailureMetrics(
 
   // Dimensionless copy of the total: webhookDeliveryHighFailures (infra/alarms.ts) alarms on
   // this metric with no dimension filter, so it needs its own dimensionless data point to
-  // receive any data - see apps/client/server/utils/cloudwatch.ts:recordWebhookDeliveryFailure
+  // receive any data - see packages/server-utils/src/utils/cloudwatch.ts:recordWebhookDeliveryFailure
   // for the same pattern on the per-user MCP delivery path.
   const totalFailureCount = counts.handlerErrorCount + counts.perUserFailureCount + counts.dispatchErrorCount;
   if (totalFailureCount > 0) {
@@ -496,9 +499,12 @@ async function processMcpServerWebhook(message: z.infer<typeof McpServerWebhookP
 
   // Get MCP server (may have been deleted since enqueueing)
   const mcpServer = await mcpServerRepository.findById(mcpServerId);
-  if (!mcpServer) {
-    logger.warn('MCP server not found, skipping', { mcpServerId });
-    return; // Don't retry - server was deleted
+  if (!mcpServer || mcpServer.userId.toString() !== userId || !mcpServer.enabled) {
+    logger.warn('MCP server unavailable, skipping', {
+      mcpServerId,
+      reason: !mcpServer ? 'not_found' : mcpServer.userId.toString() !== userId ? 'owner_mismatch' : 'disabled',
+    });
+    return; // Don't retry: server deleted, disabled, or not owned by this user
   }
 
   // SRE revision detection runs independently of the handler registry.
@@ -518,7 +524,7 @@ async function processMcpServerWebhook(message: z.infer<typeof McpServerWebhookP
     return;
   }
 
-  const registry = createHandlerRegistry(logger);
+  const registry = createHandlerRegistry(logger, mcpServer.userId.toString());
   const handler = getHandler(registry, eventType);
 
   if (handler) {

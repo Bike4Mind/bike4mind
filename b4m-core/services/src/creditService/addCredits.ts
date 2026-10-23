@@ -11,6 +11,15 @@ import {
 import { BadRequestError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { stampCreditLot } from './stampCreditLot';
+import type { CreditLedgerWrite } from './ledgerWrite';
+
+/** Raised when a replayed `transactionId` must fail rather than answer idempotently. */
+export class DuplicateCreditTransactionError extends Error {
+  constructor() {
+    super('A credit transaction already exists for this transactionId');
+    this.name = 'DuplicateCreditTransactionError';
+  }
+}
 
 export interface AddCreditsAdapters {
   db: {
@@ -23,6 +32,13 @@ export interface AddCreditsAdapters {
     creditLots?: ICreditLotRepository;
   };
   creditHolderMethods: ICreditHolderMethods;
+  /**
+   * What a replayed `transactionId` does. 'return' (default) re-reads the holder with a net-zero
+   * increment. 'throw' raises DuplicateCreditTransactionError before touching the session - what
+   * an in-transaction caller needs, because the duplicate write has already aborted it and any
+   * further operation there raises a transient NoSuchTransaction the driver would retry.
+   */
+  duplicateTransactionId?: 'return' | 'throw';
 }
 
 /**
@@ -38,12 +54,13 @@ export const AddCreditsSchema = z.discriminatedUnion('type', [
 export type AddCreditsParameters = z.infer<typeof AddCreditsSchema>;
 
 /**
- * Add credits to a User or Organization and create a corresponding transaction record
+ * Add credits to a User or Organization and create a corresponding transaction record.
+ * Returns the holder and the id of the CreditTransaction row it wrote (undefined on an idempotent retry).
  */
-export async function addCredits(
+export async function addCreditsWithLedgerRow(
   parameters: AddCreditsParameters,
-  { db, creditHolderMethods }: AddCreditsAdapters
-): Promise<ICreditHolder> {
+  { db, creditHolderMethods, duplicateTransactionId = 'return' }: AddCreditsAdapters
+): Promise<CreditLedgerWrite> {
   const params = secureParameters(parameters, AddCreditsSchema);
   const { ownerId, ownerType, credits, type, description, metadata } = params;
 
@@ -105,11 +122,14 @@ export async function addCredits(
   // NOT credit again - a net-zero increment returns the current holder without
   // changing the balance (ICreditHolderMethods exposes no read-only fetch).
   if (tx === null) {
+    if (duplicateTransactionId === 'throw') {
+      throw new DuplicateCreditTransactionError();
+    }
     const currentEntity = await creditHolderMethods.incrementCredits(ownerId, 0);
     if (!currentEntity) {
       throw new BadRequestError('Failed to load credit holder for idempotent add');
     }
-    return currentEntity;
+    return { creditHolder: currentEntity, creditTransactionId: undefined };
   }
 
   // Transaction record committed - now safe to credit the balance exactly once.
@@ -133,5 +153,14 @@ export async function addCredits(
     );
   }
 
-  return updatedEntity;
+  return { creditHolder: updatedEntity, creditTransactionId: tx.id };
+}
+
+/** addCredits for callers that need the ledger row id; see addCreditsWithLedgerRow. */
+export async function addCredits(
+  parameters: AddCreditsParameters,
+  adapters: AddCreditsAdapters
+): Promise<ICreditHolder> {
+  const { creditHolder } = await addCreditsWithLedgerRow(parameters, adapters);
+  return creditHolder;
 }

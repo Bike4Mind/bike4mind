@@ -1,14 +1,17 @@
 import type { Request, Response } from 'express';
 import { ApiKeyScope, isPlaceholderValue } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { Resource } from 'sst';
 import { securityDashboardSnapshotRepository, type ISecurityDashboardSnapshotDocument } from '@bike4mind/database';
 import axios from 'axios';
-import { getCooldownStatus } from '@server/security/cooldown';
+import { getCooldownStatus } from '@bike4mind/server-utils/security/cooldown';
 import { resolveStage } from '@bike4mind/server-utils/security/resolveStage';
-import { computeCategoryScoreAndCounts, computeDeterministicStatus } from '@server/security/securityDashboardScoring';
-import { getTargetUrlForStage } from '@server/integrations/github/githubWorkflowTrigger';
+import {
+  computeCategoryScoreAndCounts,
+  computeDeterministicStatus,
+} from '@bike4mind/server-utils/security/securityDashboardScoring';
+import { getTargetUrlForStage } from '@bike4mind/server-utils/integrations/github/githubWorkflowTrigger';
 
 export interface WebSecuritySnapshotResponse extends ISecurityDashboardSnapshotDocument {}
 

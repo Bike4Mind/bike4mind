@@ -1,10 +1,10 @@
 import { ModalModel } from '@bike4mind/database/social';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
-import { WhatsNewDistributionService } from '@server/services/whatsNewDistribution';
-import { emitModalGenerationMetrics } from '@server/utils/cloudwatch';
-import { isValidObjectId } from '@server/utils/objectId';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { WhatsNewDistributionService } from '@bike4mind/server-utils/services/whatsNewDistribution';
+import { emitModalGenerationMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { Logger } from '@bike4mind/observability';
 
 const logger = new Logger({ metadata: { service: 'modals/delete' } });
@@ -41,9 +41,10 @@ const handler = baseApi().delete(
           error: error instanceof Error ? error.message : String(error),
           modalId: id,
         });
-        emitModalGenerationMetrics([
+        // Awaited for the same reason as the S3 sync above.
+        await emitModalGenerationMetrics([
           { name: 'S3SyncFailure', value: 1, dimensions: { operation: 'delete', modalId: id } },
-        ]).catch(() => {});
+        ]);
       }
     }
 

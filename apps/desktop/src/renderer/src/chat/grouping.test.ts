@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatProject, ChatSessionSummary } from '@shared/chat';
-import { groupSessions, orderedSessions } from './grouping';
+import { groupSessions, orderedSessions, projectForGroup } from './grouping';
 
 function project(directory: string, name: string): ChatProject {
   return {
@@ -220,5 +220,63 @@ describe('user sections', () => {
       expect(names('chat')).toContain('Both');
       expect(names('code')).toContain('Both');
     });
+  });
+
+  it('keeps untouched Claude imports in their own section unless asked to show them inline', () => {
+    const origin = { kind: 'claude-code' as const, sourceId: 's', importedAt: 'x', sourceUpdatedAt: 'x' };
+    const sessions = [
+      session({ id: 'own' }),
+      session({ id: 'imported', importOrigin: origin }),
+      session({ id: 'continued', importOrigin: { ...origin, forkedAt: 'x' } }),
+      session({ id: 'pinned-import', pinned: true, importOrigin: origin }),
+    ];
+    const grouped = groupSessions(sessions, 'chat');
+    expect(grouped.imported.map(entry => entry.id)).toEqual(['imported']);
+    expect(grouped.loose.map(entry => entry.id)).toEqual(['own', 'continued']);
+    expect(grouped.pinned.map(entry => entry.id)).toEqual(['pinned-import']);
+    expect(orderedSessions(grouped).map(entry => entry.id)).not.toContain('imported');
+
+    const inline = groupSessions(sessions, 'chat', undefined, true);
+    expect(inline.imported).toEqual([]);
+    expect(inline.loose.map(entry => entry.id)).toEqual(['own', 'imported', 'continued']);
+  });
+});
+
+describe('Claude Code worktrees', () => {
+  it('files a project picked inside one under its repository', () => {
+    const sessions = [
+      session({ id: 'root', mode: 'code', project: project('/work/repo', 'repo') }),
+      session({ id: 'tree', mode: 'code', project: project('/work/repo/.claude/worktrees/wt', 'repo') }),
+      session({ id: 'other', mode: 'code', project: project('/work/repo/.manifold/worktrees/run', 'run') }),
+    ];
+    const { projects } = groupSessions(sessions, 'code');
+    expect(projects.map(group => [group.directory, group.name, group.sessions.map(entry => entry.id)])).toEqual([
+      ['/work/repo', 'repo', ['root', 'tree']],
+      ['/work/repo/.manifold/worktrees/run', 'run', ['other']],
+    ]);
+  });
+});
+
+describe('starting a session from a project group', () => {
+  it('finds a manually selected Claude worktree when no session names its repository root', () => {
+    const worktree = project('/work/repo/.claude/worktrees/wt', 'wt');
+    const sessions = [session({ id: 'tree', mode: 'code', project: worktree })];
+    const group = groupSessions(sessions, 'code').projects[0];
+    expect(group.directory).toBe('/work/repo');
+    expect(projectForGroup(sessions, group.directory)).toBe(worktree);
+  });
+
+  it('uses the most recent matching project without grouping unrelated worktrees', () => {
+    const tree = project('/work/repo/.claude/worktrees/wt', 'wt');
+    const root = project('/work/repo', 'repo');
+    const other = project('/work/repo/.manifold/worktrees/other', 'other');
+    const sessions = [
+      session({ id: 'tree', mode: 'code', project: tree }),
+      session({ id: 'root', mode: 'code', project: root }),
+      session({ id: 'other', mode: 'code', project: other }),
+    ];
+    expect(projectForGroup(sessions, '/work/repo')).toBe(tree);
+    expect(projectForGroup(sessions, other.directory)).toBe(other);
+    expect(projectForGroup(sessions, '/missing')).toBeUndefined();
   });
 });

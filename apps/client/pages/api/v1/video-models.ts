@@ -2,7 +2,7 @@
 import { listVideoModelsContract } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { getVideoJobDeps } from '@server/generationJobs/wiring';
-import { listUsableVideoModels } from '@server/videoGenerations/listUsableVideoModels';
+import { listUsableVideoModels } from '@bike4mind/server-utils/videoGenerations/listUsableVideoModels';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 
 const handler = nextRouteForContract(listVideoModelsContract, {

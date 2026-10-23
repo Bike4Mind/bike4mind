@@ -177,19 +177,27 @@ import ReplaceReleaseNoteStatusIndex from './20260921235998_replace-release-note
 // marked done and will skip UnsetStoredDefaultForcedRetrievalFloor, which now owns it. Delete that
 // environment's stale `20260921235999` row from the migrations collection so the $unset runs.
 import EnsureFabFileOwnedKeysetIndex from './20260921235994_ensure-fabfile-owned-keyset-index';
+import EnsureFabFileFilePathIndex from './20260921235981_ensure-fabfile-filepath-index';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import UnsetStoredDefaultForcedRetrievalFloor from './20260921235999_unset-stored-default-forced-retrieval-floor';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import EnsureArtifactOwnedKeysetIndex from './20260921235993_ensure-artifact-owned-keyset-index';
 import EnsureSkillListingIndexes from './20260921235960_ensure-skill-listing-indexes';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
+import BackfillSkillListingClaudePluginName from './20260921235963_backfill-skilllisting-claude-plugin-name';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import EnsureConnectionIndexes from './20260921235988_ensure-connection-indexes';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import MoveQuestAnsweredByToRedirectedFrom from './20260921235987_move-quest-answeredby-to-redirectedfrom';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
+import DropGoogleCalendarSettings from './20260921235982_drop-google-calendar-settings';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import EnsureMcpConnectionIndexes from './20260921235985_ensure-mcp-connection-indexes';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import SetUserAuthAuditLogRetention from './20260921235950_set-user-auth-audit-log-retention';
+import SetIntegrationAuditLogRetention from './20260921235951_set-integration-audit-log-retention';
+import SetSlackAuditLogRetention from './20260921235952_set-slack-audit-log-retention';
+import SetLiveopsTriageConfigAuditLogRetention from './20260921235953_set-liveops-triage-config-audit-log-retention';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import EnsureFabFileOwnerOrganizationIndex from './20260921235970_ensure-fabfile-owner-organization-index';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
@@ -199,6 +207,13 @@ import EnsureAdminAuditLogIndexes from './20260921235940_ensure-adminauditlog-in
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import BackfillAdminAuditLog from './20260921235941_backfill-admin-audit-log';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
+import EnsureAdminAuditLogReadIndexes from './20260921235942_ensure-adminauditlog-read-indexes';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
+import BackfillAdminAuditCredits from './20260921235943_backfill-admin-audit-credits';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
+import EnsureUserApiKeyAuditLogActorIndex from './20260921235944_ensure-userapikeyauditlog-actor-index';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
+import FoldOrganizationManagerIntoAdminUserIds from './20260921235983_fold-organization-manager-into-admin-user-ids';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
 
@@ -337,15 +352,25 @@ const coreMigrations: MigrationFile[] = [
   EnsureOAuthGrantClientUserIndex,
   ReplaceReleaseNoteStatusIndex,
   EnsureFabFileOwnedKeysetIndex,
+  EnsureFabFileFilePathIndex,
   UnsetStoredDefaultForcedRetrievalFloor,
   EnsureArtifactOwnedKeysetIndex,
   EnsureSkillListingIndexes,
+  BackfillSkillListingClaudePluginName,
   EnsureConnectionIndexes,
   MoveQuestAnsweredByToRedirectedFrom,
   EnsureMcpConnectionIndexes,
+  DropGoogleCalendarSettings,
   SetUserAuthAuditLogRetention,
+  SetIntegrationAuditLogRetention,
+  SetSlackAuditLogRetention,
+  SetLiveopsTriageConfigAuditLogRetention,
+  FoldOrganizationManagerIntoAdminUserIds,
   EnsureAdminAuditLogIndexes,
   BackfillAdminAuditLog,
+  EnsureAdminAuditLogReadIndexes,
+  BackfillAdminAuditCredits,
+  EnsureUserApiKeyAuditLogActorIndex,
   EnsureFabFileOwnerOrganizationIndex,
   ReconcileOrgStampedFileStorageOwners,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.

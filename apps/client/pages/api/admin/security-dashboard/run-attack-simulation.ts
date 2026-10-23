@@ -1,11 +1,11 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError, BadRequestError } from '@server/utils/errors';
+import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { Resource } from 'sst';
 import { randomUUID } from 'crypto';
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import { Logger } from '@bike4mind/observability';
 import { securityFindingRunRepository } from '@bike4mind/database';
-import { getCooldownStatus } from '@server/security/cooldown';
+import { getCooldownStatus } from '@bike4mind/server-utils/security/cooldown';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { ApiKeyScope } from '@bike4mind/common';
 

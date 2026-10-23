@@ -1,7 +1,7 @@
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 import type { Request, Response } from 'express';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 
 // Publish access-gate proof token (passphrase mode).
 //
@@ -73,6 +73,20 @@ export function requestHasGateProof(req: Request, publicId: string): boolean {
   if (!raw) return false;
   const claims = verifyGateToken(raw);
   return claims !== null && claims.publicId === publicId;
+}
+
+/**
+ * Seconds until this request's passphrase proof for `publicId` expires, or null when it
+ * carries no valid proof. Lets anything minted on the strength of the proof (signed file
+ * links) expire no later than the proof itself.
+ */
+export function gateProofSecondsLeft(req: Request, publicId: string, nowMs = Date.now()): number | null {
+  const name = gateCookieName(publicId);
+  if (!name) return null;
+  const raw = cookieFromHeader(req.headers.cookie, name);
+  if (!raw || verifyGateToken(raw)?.publicId !== publicId) return null;
+  const exp = (jwt.decode(raw) as { exp?: unknown } | null)?.exp;
+  return typeof exp === 'number' ? Math.max(0, Math.floor(exp - nowMs / 1000)) : null;
 }
 
 /** Set the proof cookie. SameSite=Lax so it rides top-level navigations to

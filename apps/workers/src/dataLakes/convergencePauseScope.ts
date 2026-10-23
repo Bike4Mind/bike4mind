@@ -49,7 +49,7 @@ import {
 import { buildDataLakeMembershipFilter } from '@bike4mind/database';
 import { dataLakeService, scopedSettingsService } from '@bike4mind/services';
 import { Logger } from '@bike4mind/observability';
-import { CONVERGENCE_PAUSE_SETTING_KEY } from '@server/dataLakes/convergenceKillSwitch';
+import { CONVERGENCE_PAUSE_SETTING_KEY } from '@bike4mind/server-utils/dataLakes/convergenceKillSwitch';
 // Type-only, so this does NOT pull the sweep's filter module into anyone's runtime graph. Imported
 // rather than restated so the compiler holds the produced shape and the consumed shape together.
 import type { ChunkScanConvergencePause } from '@workers/s3/chunkScan';

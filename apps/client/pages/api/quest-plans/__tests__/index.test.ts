@@ -26,7 +26,7 @@ vi.mock('@server/middlewares/baseApi', () => {
 });
 vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: () => () => undefined }));
-vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => undefined }));
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => undefined }));
 vi.mock('@bike4mind/database', () => ({
   questMasterPlanRepository: { findByUserIdWithCount: h.findByUserIdWithCount, create: h.create },
 }));

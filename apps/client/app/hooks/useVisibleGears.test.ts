@@ -6,7 +6,7 @@ const { statusMock, flagMock, adminFlagMock, userState } = vi.hoisted(() => ({
   statusMock: vi.fn(),
   flagMock: vi.fn(),
   adminFlagMock: vi.fn(),
-  userState: { currentUser: null as { createdAt?: string } | null },
+  userState: { currentUser: null as { createdAt?: string; currentCredits?: number } | null },
 }));
 
 vi.mock('@client/app/hooks/useGearsStatus', () => ({ useGearsStatus: statusMock }));
@@ -116,7 +116,27 @@ describe('useGearsNavSignal', () => {
     expect(signal().startHere).toBe(false);
   });
 
-  it('never says Start here without a usable signup date', () => {
+  it('says Start here for an account past the window once its balance is 0 or below', () => {
+    withGears([gear('published', 'destination', { credits: 5000 })]);
+    for (const currentCredits of [0, -20]) {
+      userState.currentUser = { createdAt: new Date(Date.now() - 400 * DAY_MS).toISOString(), currentCredits };
+      expect(signal()).toMatchObject({ startHere: true, startHereCredits: 5000 });
+    }
+  });
+
+  it('keeps the window for an old account that still has credits', () => {
+    withGears([gear('published', 'destination')]);
+    userState.currentUser = { createdAt: new Date(Date.now() - 31 * DAY_MS).toISOString(), currentCredits: 1 };
+    expect(signal().startHere).toBe(false);
+  });
+
+  it('says Start here at zero credits without a usable signup date', () => {
+    withGears([gear('published', 'destination', { credits: 5000 })]);
+    userState.currentUser = { currentCredits: 0 };
+    expect(signal()).toEqual({ startHere: true, startHereCredits: 5000, claimableCount: 0 });
+  });
+
+  it('does not say Start here when both the signup date and balance are unavailable', () => {
     withGears([gear('published', 'destination')]);
     userState.currentUser = {};
     expect(signal().startHere).toBe(false);

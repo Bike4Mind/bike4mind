@@ -34,12 +34,14 @@ import { buildWorkflowState, withFlushedWorkflowState, type WorkflowStores } fro
 import { formatStep, extractCompactInstructions } from '../utils';
 import { renderWorkflowReminder } from '../utils/workflowReminder.js';
 import { logger } from '../utils/Logger';
+import { sanitizeTerminalText } from '../utils/sanitizeTerminalText.js';
 import { isConnectionDrop } from '../llm/modelCallError';
 import type { ToolCatalog } from '../tools/gateway/toolCatalog.js';
 import type { TodoStore } from '../tools/writeTodosTool.js';
 import type { DecisionStore } from '../tools/decisionLogTool.js';
 import type { BlockerStore } from '../tools/blockerTool.js';
 import { DRAIN_BUDGET_MS, type PostEditDiagnostics } from '../diagnostics/PostEditDiagnostics.js';
+import { deliverSteers } from './steering.js';
 
 /**
  * Collaborators a single turn needs. React-free by design: the two setters are
@@ -89,17 +91,61 @@ export interface TurnContext {
 }
 
 /**
- * Run one user turn to completion. Never throws: transport, auth, and abort
- * errors are handled and surfaced to the console; the queue-drain in `finally`
- * recurses with the same context for messages submitted mid-turn.
+ * Run one user turn to completion, then each follow-up queued behind it. Never
+ * throws: transport, auth, and abort errors are handled and surfaced to the
+ * console.
+ *
+ * Only one runTurn turn is in flight at a time. A call that arrives while one
+ * is (a tavern prompt, a bash-command drain, a submit during an ESC unwind) is
+ * queued as a follow-up rather than run as a second agent loop over the same
+ * agent. Other agent runs (custom commands, background results) gate on
+ * `turnInFlight` themselves. After
+ * each turn settles - completed, failed, or cancelled - everything still queued
+ * runs as one combined next turn: follow-ups, steers that never reached a
+ * request boundary, and input submitted after a cancel (ESC moves what was
+ * queued before it back to the input, see index.tsx).
  */
 export async function runTurn(message: string, ctx: TurnContext): Promise<void> {
-  // Held across the whole turn: it snapshots the session below and writes it back after awaits.
-  const releaseSession = useCliStore.getState().holdSession();
+  const store = useCliStore.getState();
+  if (store.turnInFlight) {
+    store.enqueueMessage(message, 'followUp');
+    return;
+  }
+
+  store.setTurnInFlight(true);
   try {
-    await runHeldTurn(message, ctx);
+    let next: string | null = message;
+    while (next !== null) {
+      // Held across the whole turn: it snapshots the session below and writes it back after awaits.
+      const releaseSession = useCliStore.getState().holdSession();
+      try {
+        await runHeldTurn(next, ctx);
+      } catch (error) {
+        // Surfaced like runHeldTurn's own errors, so the follow-ups behind this turn still run.
+        console.error(`\n\u274C ${error instanceof Error ? error.message : String(error)}\n`);
+        logger.debug(`Turn failed outside its error handling: ${error instanceof Error ? error.stack : String(error)}`);
+      } finally {
+        releaseSession();
+      }
+      const queued = useCliStore.getState().dequeueAllMessages();
+      next = queued.length > 0 ? queued.join('\n\n') : null;
+    }
   } finally {
-    releaseSession();
+    useCliStore.getState().setTurnInFlight(false);
+  }
+}
+
+/** Not awaited by the steer drain, so a failed history write is logged rather than left as an unhandled rejection. */
+async function recordSteerHistory(
+  steers: string[],
+  commandHistoryStore: CommandHistoryStore,
+  setCommandHistory: TurnContext['setCommandHistory']
+): Promise<void> {
+  try {
+    for (const text of steers) await commandHistoryStore.add(text);
+    setCommandHistory(await commandHistoryStore.list());
+  } catch (error) {
+    logger.debug(`[STEER] History write failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
@@ -331,9 +377,20 @@ async function runHeldTurn(message: string, ctx: TurnContext): Promise<void> {
         parallelExecution: cliConfig.preferences.enableParallelToolExecution === true,
         isReadOnlyTool: toolName => toolCatalog.isReadOnly(toolName),
         workflowReminder,
-        drainFeedback: diagnostics
-          ? phase => diagnostics.drain(DRAIN_BUDGET_MS[phase], abortController.signal)
-          : undefined,
+        drainFeedback: async phase => {
+          const diagnosticsFeedback = diagnostics
+            ? await diagnostics.drain(DRAIN_BUDGET_MS[phase], abortController.signal)
+            : null;
+          // Taken after the diagnostics wait so a steer typed during it still makes this request.
+          const steered = deliverSteers(abortController.signal);
+          if (steered) {
+            for (const text of steered.steers) {
+              void bridgePresence.emitEvent({ type: 'message', role: 'user', text: text.slice(0, 4000) });
+            }
+            void recordSteerHistory(steered.steers, commandHistoryStore, setCommandHistory);
+          }
+          return [steered?.feedback, diagnosticsFeedback].filter(Boolean).join('\n\n') || null;
+        },
         // Mid-loop recovery if a provider context-window error interrupts this
         // turn: compact the in-flight history once and retry, instead of
         // failing the turn and losing the user's work.
@@ -477,7 +534,7 @@ async function runHeldTurn(message: string, ctx: TurnContext): Promise<void> {
     }
 
     // Handle other errors - clean message for users, full stack in debug logs
-    console.error(`\n❌ ${rawMessage}\n`);
+    console.error(`\n\u274C ${sanitizeTerminalText(rawMessage)}\n`);
     logger.debug(`Full error details: ${error instanceof Error ? error.stack || error.message : String(error)}`);
   } finally {
     // Tavern: the ReAct turn has settled. Parity with Claude Code's
@@ -498,22 +555,6 @@ async function runHeldTurn(message: string, ctx: TurnContext): Promise<void> {
       type: 'status',
       status: wasAborted ? 'idle' : 'awaiting_input',
     });
-    // Drain the user-message queue: if the user submitted more messages
-    // while this one was processing, collate ALL of them into a single
-    // combined prompt (separated by blank lines) and submit as one
-    // request. Fewer round-trips and the model can address everything
-    // at once. ESC clears the queue (see ESC handler), so an aborted
-    // turn falls through with an empty queue. setImmediate defers the
-    // recursive call out of this finally to avoid re-entering
-    // runTurn synchronously.
-    if (!wasAborted) {
-      const queued = useCliStore.getState().dequeueAllMessages();
-      if (queued.length > 0) {
-        const combined = queued.join('\n\n');
-        setImmediate(() => {
-          void runTurn(combined, ctx);
-        });
-      }
-    }
+    // Messages still queued run as the next turn from runTurn's loop.
   }
 }

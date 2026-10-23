@@ -1,4 +1,4 @@
-import { getFilesStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { v4 as uuid } from 'uuid';
 import { escapeHtml } from '@client/app/utils/htmlEscape';
 
