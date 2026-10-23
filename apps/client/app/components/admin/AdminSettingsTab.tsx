@@ -271,8 +271,7 @@ const AdminSettingsTab: React.FC = () => {
       // Hide child settings when their parent setting is off
       if (settingInfo.dependsOn) {
         const parentValue = settingValueByName.get(settingInfo.dependsOn);
-        const parentDefault = (settingInfo.dependsOn ? resolveSettingDefinition(settingInfo.dependsOn) : undefined)
-          ?.defaultValue;
+        const parentDefault = resolveSettingDefinition(settingInfo.dependsOn)?.defaultValue;
         const isParentOn = parentValue !== undefined ? String(parentValue) === 'true' : parentDefault === true;
         if (!isParentOn) return false;
       }
