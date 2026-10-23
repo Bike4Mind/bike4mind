@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { releaseNoteRepository } from '@bike4mind/database';
 import {
   ApiKeyScope,
+  createModalStillImageSchema,
   createModalVideoSchema,
   findDenied,
   ReleaseNoteItemSchema,
@@ -24,6 +25,7 @@ const EditSchema = z
     summary: z.string().optional(),
     items: z.array(ReleaseNoteItemSchema).optional(),
     video: createModalVideoSchema({ extraOrigins: deploymentMediaOrigins() }).nullable().optional(),
+    image: createModalStillImageSchema({ extraOrigins: deploymentMediaOrigins() }).nullable().optional(),
   })
   .strict()
   .refine(edit => Object.values(edit).some(value => value !== undefined), { message: 'Nothing to update' });
@@ -42,17 +44,23 @@ const handler = api.patch(async (req, res) => {
   if (!parsed.success) {
     throw new BadRequestError(parsed.error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; '));
   }
-  // release-notes:write may only set the video, and that write is the job's, not an admin edit:
-  // attachVideo leaves editedAt alone so the note is not marked edited and still regenerates.
+  // release-notes:write may only set the video or the image, and that write is the job's, not an admin edit:
+  // attachVideo/attachImage leave editedAt alone so the note is not marked edited and still regenerates.
   if (isReleaseNotesWriteOnlyKey(req)) {
     const other = Object.entries(parsed.data)
-      .filter(([field, value]) => field !== 'video' && value !== undefined)
+      .filter(([field, value]) => field !== 'video' && field !== 'image' && value !== undefined)
       .map(([field]) => field);
     if (other.length > 0) {
-      throw new ForbiddenError(`${ApiKeyScope.RELEASE_NOTES_WRITE} may only set video, not ${other.join(', ')}`);
+      throw new ForbiddenError(
+        `${ApiKeyScope.RELEASE_NOTES_WRITE} may only set video or image, not ${other.join(', ')}`
+      );
     }
-    const { video } = parsed.data;
-    if (video === undefined) throw new BadRequestError('video: required');
+    const { video, image } = parsed.data;
+    if (video !== undefined && image !== undefined) throw new BadRequestError('video, image: send one per request');
+    if (image !== undefined) {
+      return res.json(toAdminReleaseNote(noteOrThrow(await releaseNoteRepository.attachImage(id, image))));
+    }
+    if (video === undefined) throw new BadRequestError('video or image: required');
     return res.json(toAdminReleaseNote(noteOrThrow(await releaseNoteRepository.attachVideo(id, video))));
   }
 
@@ -67,11 +75,12 @@ const handler = api.patch(async (req, res) => {
     return text;
   };
 
-  const { headline, summary, items, video } = parsed.data;
+  const { headline, summary, items, video, image } = parsed.data;
   const result = await releaseNoteRepository.edit(id, {
     ...(headline !== undefined && { headline: clean('headline', headline) }),
     ...(summary !== undefined && { summary: clean('summary', summary, true) }),
     ...(video !== undefined && { video }),
+    ...(image !== undefined && { image }),
     ...(items !== undefined && {
       items: items.map((item, i) => ({ ...item, text: clean(`items.${i}.text`, item.text) })),
     }),

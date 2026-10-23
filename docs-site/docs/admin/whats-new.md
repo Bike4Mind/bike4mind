@@ -48,7 +48,7 @@ Set the `WHATS_NEW_FEED_URL` environment variable to the https URL of another de
 
 The URL may instead point at a [JSON Feed](https://jsonfeed.org) document, such as the `whats-new.json` a marketing site publishes for its own What's New page. Each item becomes one slide: its title, its `content_text` (or `summary` when text is blank), its first tag as the label and its `date_published` as the date. Items without a date are skipped, and entries are cursor-paginated newest first. A JSON Feed may live on this deployment's own domain; this deployment's own `/api/v1/whats-new` route is refused both directly and as a redirect target, since fetching it would recurse.
 
-An upstream note's video plays from the upstream deployment's own media route (`/api/v1/whats-new/media/...`), so setting `WHATS_NEW_FEED_URL` also adds its origin to the `img-src`, `connect-src` and `media-src` Content Security Policy directives. An upstream video with any URL outside that origin or this deployment's media allowlist is dropped and the slide shows without it.
+An upstream note's video or still image is served from the upstream deployment's own media route (`/api/v1/whats-new/media/...`), so setting `WHATS_NEW_FEED_URL` also adds its origin to the `img-src`, `connect-src` and `media-src` Content Security Policy directives. An upstream video or image with any URL outside that origin or this deployment's media allowlist is dropped (each on its own) and the slide shows without it.
 
 ## Active Modals
 
