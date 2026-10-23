@@ -22,5 +22,6 @@ export type SignupProtectionRepository = {
 
 export type SignupProtection = {
   repository: SignupProtectionRepository;
+  mode?: 'observe' | 'enforce';
   notifyHold?: (review: SignupDomainReview) => Promise<void>;
 };

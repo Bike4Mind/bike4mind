@@ -1,6 +1,7 @@
 import { VERIFIED_SLACK_IDENTITY_FILTER, canonicalizeEmail } from '@bike4mind/common';
 import {
   AuthStrategy,
+  PENDING_FREE_CREDITS_TAG,
   CollectionType,
   IAuthProviders,
   ISecurityQuestion,
@@ -284,6 +285,16 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     // Legacy accounts can store null; $addToSet requires an array. The guard preserves concurrent tag additions.
     await this.model.updateOne({ _id: userId, tags: null }, { $set: { tags: [] } });
     await this.model.updateOne({ _id: userId }, { $addToSet: { tags: { $each: tags } } });
+  }
+
+  async clearPendingFreeCreditGrant(userId: string): Promise<IUserDocument | null> {
+    await this.model.updateOne({ _id: userId, tags: null }, { $set: { tags: [] } });
+    const user = await this.model.findOneAndUpdate(
+      { _id: userId },
+      { $pull: { tags: PENDING_FREE_CREDITS_TAG }, $set: { pendingCreditGrant: null } },
+      { new: true }
+    );
+    return user?.toJSON() ?? null;
   }
 
   async pullSystemFilesForUsers(userIds: string[], fileIds: string[]): Promise<void> {

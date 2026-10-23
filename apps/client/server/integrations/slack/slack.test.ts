@@ -241,6 +241,16 @@ describe('postMessageToSlack', () => {
       { headers: { 'Content-Type': 'application/json' }, timeout: 10_000 }
     );
   });
+  it('does not route security samples to a default webhook when security alerts are disabled', async () => {
+    mocks.config.SLACK_WEBHOOK_URL = SECRET_FALLBACK;
+    mocks.getSettingsMap.mockResolvedValue({
+      SlackSecurityAlertsWebhookUrl: '   ',
+      SlackDefaultWebhookUrl: 'https://hooks.slack.com/services/general',
+    });
+    await expect(postMessageToSlack('signup sample addresses', 'SlackSecurityAlertsWebhookUrl')).resolves.toBe(false);
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
   it('bounds a security notification and reports a timed out delivery', async () => {
     const securityUrl = 'https://hooks.slack.com/services/security';
     mocks.getSettingsMap.mockResolvedValue({ SlackSecurityAlertsWebhookUrl: securityUrl });

@@ -43,9 +43,11 @@ function normalizeWebhookUrl(raw: string | undefined): string {
 /**
  * Resolves the Slack incoming-webhook URL for a channel, falling back to the
  * admin-configurable default (`SlackDefaultWebhookUrl`) and finally the
- * `SLACK_WEBHOOK_URL` secret. Returns an empty string when none are configured.
+ * `SLACK_WEBHOOK_URL` secret. Security alerts use only their dedicated URL; empty disables them.
+ * Returns an empty string when no eligible webhook is configured.
  */
 export function resolveSlackWebhookUrl(channel: SlackChannelSettingKey, settings: Record<string, string>): string {
+  if (channel === 'SlackSecurityAlertsWebhookUrl') return normalizeWebhookUrl(getSettingsValue(channel, settings));
   // Trim each source before the `||` so a padded URL is usable and a whitespace-only value is treated
   // as empty, letting the fallback chain (channel -> SlackDefaultWebhookUrl -> SLACK_WEBHOOK_URL) continue.
   const resolved =
@@ -111,9 +113,7 @@ export async function postMessageToSlack(
     const slackWebhookUrl = resolveSlackWebhookUrl(channel, settings);
 
     if (!slackWebhookUrl) {
-      Logger.error(
-        `Error posting message to Slack: no ${channel} / SlackDefaultWebhookUrl set in admin settings or config`
-      );
+      Logger.error(`Error posting message to Slack: no eligible webhook configured for ${channel}`);
       return false;
     }
 

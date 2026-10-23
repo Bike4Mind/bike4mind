@@ -134,7 +134,7 @@ const grantAll = async (users: readonly StartingGrantUser[]): Promise<{ granted:
             creditTransactions: creditTransactionRepository,
             creditLots: creditLotRepository,
             users: userRepository,
-            signupProtection: { repository: signupProtectionRepository },
+            signupProtection: { repository: signupProtectionRepository, mode: 'enforce' },
           },
           reason: GRANT_REASON,
         }

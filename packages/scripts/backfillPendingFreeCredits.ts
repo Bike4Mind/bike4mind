@@ -123,7 +123,7 @@ class BackfillPendingFreeCredits {
         await userService.protectSignupCredits(user.id, {
           users: userRepository,
           adminSettings: adminSettingsRepository,
-          signupProtection: { repository: signupProtectionRepository },
+          signupProtection: { repository: signupProtectionRepository, mode: 'enforce' },
         })
       ) {
         console.log(`Skipping held signup domain for user ${user.id}`);

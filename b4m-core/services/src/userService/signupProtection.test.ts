@@ -145,6 +145,24 @@ describe('signup protection and credit boundary', () => {
     });
     expect(fixture.db.users.addTagsToUser).not.toHaveBeenCalled();
   });
+  it('does not replay signup events or create unnotified holds during backfill', async () => {
+    const fixture = buildFixture();
+    fixture.db.signupProtection = { repository: fixture.repository, mode: 'enforce' };
+    const user = fixture.user(1);
+    expect(await protectSignupCredits(user.id, fixture.db)).toBe(false);
+    expect(fixture.repository.observe).not.toHaveBeenCalled();
+    expect(fixture.repository.createHold).not.toHaveBeenCalled();
+    fixture.setReview({
+      domain: 'example.net',
+      status: 'held_pending_review',
+      reason: 'abuse',
+      triggeredAt: new Date(),
+      cohortUserIds: [],
+      sampleEmails: [],
+      signupCount: 5,
+    });
+    expect(await protectSignupCredits(user.id, fixture.db)).toBe(true);
+  });
   it('fails closed without clearing the pending breadcrumb on repository failure', async () => {
     const fixture = buildFixture();
     const user = fixture.user(1);
