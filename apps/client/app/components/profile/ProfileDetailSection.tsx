@@ -38,7 +38,6 @@ const ProfileDetailSection = ({ userId, extra, canEdit, email }: ProfileDetailSe
   }
 
   const handleUploadComplete = (photoUrl: string) => {
-    // Photo URL will be automatically updated through the API
     setIsUploadModalOpen(false);
   };
 

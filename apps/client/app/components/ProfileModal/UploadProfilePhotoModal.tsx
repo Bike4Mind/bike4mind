@@ -23,7 +23,7 @@ interface UploadProfilePhotoModalProps {
 
 const UploadProfilePhotoModal: React.FC<UploadProfilePhotoModalProps> = ({ open, onClose, onUploadComplete }) => {
   const [files, setFiles] = useState<any[]>([]);
-  const { currentUser } = useUser();
+  const { currentUser, refreshUser } = useUser();
   const uploadPhoto = useUploadProfilePhoto();
 
   const handleProcessFile = useCallback(
@@ -55,6 +55,9 @@ const UploadProfilePhotoModal: React.FC<UploadProfilePhotoModalProps> = ({ open,
         load((result as any)?.id || file.name);
         onUploadComplete((result as any)?.photoUrl || URL.createObjectURL(file));
         setFiles([]);
+        // The sidebar avatar reads the zustand store, which the mutation's react-query
+        // invalidation never touches. Fire-and-forget so the upload UI does not wait on it.
+        void refreshUser();
         toast.success('Profile photo updated successfully');
       } catch (err) {
         error('Upload failed');
@@ -62,7 +65,7 @@ const UploadProfilePhotoModal: React.FC<UploadProfilePhotoModalProps> = ({ open,
         console.error('Upload error:', err);
       }
     },
-    [onUploadComplete, currentUser, uploadPhoto]
+    [onUploadComplete, currentUser, uploadPhoto, refreshUser]
   );
 
   return (
