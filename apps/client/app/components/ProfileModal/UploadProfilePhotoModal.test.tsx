@@ -24,8 +24,7 @@ type ProcessFn = (
 let capturedProcess: ProcessFn | null = null;
 
 vi.mock('react-filepond', () => ({
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- stub stands in for the FilePond component
-  FilePond: (props: any) => {
+  FilePond: (props: { server?: { process?: ProcessFn } }) => {
     capturedProcess = props.server?.process ?? null;
     return null;
   },
@@ -74,9 +73,6 @@ describe('UploadProfilePhotoModal', () => {
   beforeEach(() => {
     capturedProcess = null;
     vi.clearAllMocks();
-    // jsdom does not implement createObjectURL; the modal falls back to it because the
-    // mutation resolves to a fileId, not a photoUrl.
-    URL.createObjectURL = vi.fn(() => 'blob:mock');
     vi.spyOn(console, 'error').mockImplementation(() => {});
   });
 
@@ -85,7 +81,7 @@ describe('UploadProfilePhotoModal', () => {
   });
 
   it('refreshes the zustand user store after a successful upload', async () => {
-    mutateAsyncMock.mockResolvedValue({ id: 'file-1' });
+    mutateAsyncMock.mockResolvedValue('file-1');
 
     const { load, error } = await upload();
 
@@ -94,6 +90,7 @@ describe('UploadProfilePhotoModal', () => {
     expect(error).not.toHaveBeenCalled();
     // The sidebar avatar reads the user store, which the react-query invalidation does not touch.
     expect(refreshUserMock).toHaveBeenCalledTimes(1);
+    expect(refreshUserMock).toHaveBeenCalledWith({ fresh: true });
   });
 
   it('does not refresh the store when the upload fails', async () => {
@@ -109,7 +106,7 @@ describe('UploadProfilePhotoModal', () => {
   });
 
   it('uploads with the current user id and file metadata', async () => {
-    mutateAsyncMock.mockResolvedValue({ id: 'file-1' });
+    mutateAsyncMock.mockResolvedValue('file-1');
 
     await upload();
 

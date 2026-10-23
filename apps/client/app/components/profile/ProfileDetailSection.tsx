@@ -37,7 +37,7 @@ const ProfileDetailSection = ({ userId, extra, canEdit, email }: ProfileDetailSe
     );
   }
 
-  const handleUploadComplete = (photoUrl: string) => {
+  const handleUploadComplete = () => {
     setIsUploadModalOpen(false);
   };
 
