@@ -107,6 +107,7 @@ export class SandboxOrchestrator {
       cwd,
       filesystemConfig: this.config.filesystem,
       // Single choke point: a stale network.enabled flag without a running proxy grants nothing.
+      // Only the Seatbelt runtime confines egress to the proxy; Linux still relies on the proxy env vars.
       networkEnabled: proxyPort !== null,
       ...(proxyPort !== null && { proxyPort }),
       env: proxyEnv,
