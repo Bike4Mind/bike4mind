@@ -149,17 +149,19 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'org.data_lake.embedding_spend_reset': { category: 'credits', severity: 'notice', write: 'strict' },
   'user.storage.recalculated': { category: 'support', severity: 'info', write: 'bestEffort' },
   // Handler coverage: liveops, sre and queues
+
+  // ops
   'ops.triage_config.created': { category: 'settings', severity: 'notice', write: 'bestEffort' },
   'ops.triage_config.updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
   'ops.triage_config.deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
   'ops.sre.scan_triggered': { category: 'support', severity: 'notice', write: 'bestEffort' },
   'ops.sre.run_triggered': { category: 'support', severity: 'notice', write: 'bestEffort' },
   'ops.sre.pattern_updated': { category: 'support', severity: 'notice', write: 'bestEffort' },
-  'ops.sre.tracking_dismissed': { category: 'support', severity: 'info', write: 'bestEffort' },
+  'ops.sre.tracking_dismissed': { category: 'support', severity: 'notice', write: 'bestEffort' },
   'ops.sre.tracking_rerun': { category: 'support', severity: 'notice', write: 'bestEffort' },
   'ops.sre.tracking_retried': { category: 'support', severity: 'notice', write: 'bestEffort' },
   'ops.dlq.replayed': { category: 'support', severity: 'notice', write: 'bestEffort' },
-  'ops.agent_executions.cleaned_up': { category: 'support', severity: 'info', write: 'bestEffort' },
+  'ops.agent_executions.cleaned_up': { category: 'support', severity: 'notice', write: 'bestEffort' },
 
   'audit.exported': { category: 'support', severity: 'info', write: 'bestEffort' },
 } as const satisfies Record<string, AdminAuditCatalogueEntry>;
