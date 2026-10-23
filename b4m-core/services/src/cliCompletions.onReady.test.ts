@@ -12,6 +12,7 @@ const { CATALOGUED_MODEL, order, mockComplete } = vi.hoisted(() => {
   return {
     CATALOGUED_MODEL: {
       id: 'gpt-4.1-2025-04-14',
+      type: 'text',
       backend: 'openai',
       contextWindow: 200_000,
       max_tokens: 32_768,
@@ -45,7 +46,8 @@ vi.mock('@bike4mind/common', async importOriginal => ({
 }));
 
 import { BadRequestError } from '@bike4mind/common';
-import { getAvailableModels } from '@bike4mind/llm-adapters';
+import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
+import { getSettingsValue } from '@bike4mind/utils';
 import { InsufficientCreditsError } from './llm/ChatCompletionProcess';
 import { executeCompletion } from './cliCompletions';
 
@@ -80,6 +82,7 @@ const baseParams = {
 describe('executeCompletion onReady', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(getSettingsValue).mockReturnValue(true);
     order.length = 0;
   });
 
@@ -174,6 +177,53 @@ describe('executeCompletion onReady', () => {
     expect((error as Error).message).toContain('is currently unavailable.');
     expect((error as Error).message).not.toContain('undefined');
   });
+
+  it.each([true, false])('refuses an image model before dispatch with enforceCredits=%s', async enforceCredits => {
+    vi.mocked(getSettingsValue).mockReturnValue(enforceCredits);
+    vi.mocked(getAvailableModels).mockResolvedValueOnce([
+      { ...CATALOGUED_MODEL, id: 'gpt-image-2', type: 'image' } as never,
+    ]);
+    const { db, users } = buildDb();
+    const onReady = vi.fn();
+
+    const error = await executeCompletion({ ...baseParams, model: 'gpt-image-2', db, onReady }).catch(
+      (e: unknown) => e
+    );
+
+    expect(error).toBeInstanceOf(BadRequestError);
+    expect(error).toMatchObject({ statusCode: 400, additionalInfo: { errorCode: 'unknown_model' } });
+    expect((error as Error).message).toBe("Model 'gpt-image-2' (type: image) cannot be used for text completions.");
+    expect(users.incrementCredits).not.toHaveBeenCalled();
+    // Proves the guard runs before backend construction, not merely before the provider call.
+    expect(getLlmByModel).not.toHaveBeenCalled();
+    expect(onReady).not.toHaveBeenCalled();
+    expect(mockComplete).not.toHaveBeenCalled();
+  });
+
+  it.each(['image', 'video', 'speech-to-text'] as const)(
+    'refuses a non-text model (type %s) with a 400 unknown_model and no side effects',
+    async type => {
+      vi.mocked(getAvailableModels).mockResolvedValueOnce([
+        { ...CATALOGUED_MODEL, id: 'non-text-model', type } as never,
+      ]);
+      const { db, users } = buildDb();
+      const onReady = vi.fn();
+
+      const error = await executeCompletion({ ...baseParams, model: 'non-text-model', db, onReady }).catch(
+        (e: unknown) => e
+      );
+
+      expect(error).toBeInstanceOf(BadRequestError);
+      expect(error).toMatchObject({ statusCode: 400, additionalInfo: { errorCode: 'unknown_model' } });
+      expect((error as Error).message).toBe(
+        `Model 'non-text-model' (type: ${type}) cannot be used for text completions.`
+      );
+      expect(users.incrementCredits).not.toHaveBeenCalled();
+      expect(getLlmByModel).not.toHaveBeenCalled();
+      expect(onReady).not.toHaveBeenCalled();
+      expect(mockComplete).not.toHaveBeenCalled();
+    }
+  );
 
   it('does not call onReady when the credit hold is refused', async () => {
     const { db } = buildDb(-5);
