@@ -84,12 +84,11 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       ...(isActive !== undefined && { isActive }),
     });
 
-    const changedFields = definedKeys(parsedBody.data);
     await recordAdminActionFromRequest(req, {
       action: 'email.template.updated',
       target: { kind: 'settings', id, displayName: updated?.name ?? existing.name },
       summary: `updated email template ${updated?.name ?? existing.name}`,
-      details: { updatedFields: changedFields },
+      details: { updatedFields: definedKeys(parsedBody.data) },
     });
 
     return res.json(updated);
