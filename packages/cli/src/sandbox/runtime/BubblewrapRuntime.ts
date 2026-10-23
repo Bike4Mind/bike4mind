@@ -8,9 +8,12 @@
  * - Process namespace isolation
  */
 import os from 'os';
+import path from 'path';
+import { mkdirSync, statSync } from 'fs';
 import type { SandboxPlatform, WrappedCommand } from '../types.js';
 import {
   expandPath,
+  getProtectedWorkspacePaths,
   isBinaryAvailable,
   type SandboxRuntime,
   type WrapCommandOptions,
@@ -54,6 +57,29 @@ export class BubblewrapRuntime implements SandboxRuntime {
     // Working directory: read-write bind
     args.push('--bind', cwd, cwd);
 
+    // Later mounts shadow earlier ones, so these re-binds must follow the cwd bind
+    // A bind mountpoint cannot be renamed or removed (EBUSY); a worktree .git file is bound read-only
+    const gitPath = path.join(cwd, '.git');
+    const gitKind = pathKind(gitPath);
+    if (gitKind === 'dir') args.push('--bind', gitPath, gitPath);
+    else if (gitKind === 'file') args.push('--ro-bind', gitPath, gitPath);
+
+    // --ro-bind needs an existing source, so create the project dir first
+    const projectDir = path.join(cwd, '.bike4mind');
+    let projectDirReady = true;
+    try {
+      mkdirSync(projectDir, { recursive: true });
+    } catch {
+      projectDirReady = false;
+    }
+    for (const protectedPath of getProtectedWorkspacePaths(cwd)) {
+      if (protectedPath === projectDir) {
+        if (projectDirReady) args.push('--ro-bind', protectedPath, protectedPath);
+      } else {
+        args.push('--ro-bind-try', protectedPath, protectedPath);
+      }
+    }
+
     // Home directory: bind read-only for tool configs, then overlay denied paths
     const homeDir = os.homedir();
     args.push('--ro-bind', homeDir, homeDir);
@@ -65,9 +91,11 @@ export class BubblewrapRuntime implements SandboxRuntime {
       }
     }
 
-    // Denied paths: mount empty tmpfs to hide contents
+    // Denied paths: hide dirs behind an empty tmpfs and files behind /dev/null; skip missing ones
     for (const deniedPath of expandedDenied) {
-      args.push('--tmpfs', deniedPath);
+      const kind = pathKind(deniedPath);
+      if (kind === 'dir') args.push('--tmpfs', deniedPath);
+      else if (kind === 'file') args.push('--ro-bind', '/dev/null', deniedPath);
     }
 
     // Write restrictions: if writeOnlyToWorkingDir, make home read-only
@@ -107,6 +135,14 @@ export class BubblewrapRuntime implements SandboxRuntime {
       env: env ?? {},
       commandString,
     };
+  }
+}
+
+function pathKind(p: string): 'dir' | 'file' | 'missing' {
+  try {
+    return statSync(p).isDirectory() ? 'dir' : 'file';
+  } catch {
+    return 'missing';
   }
 }
 

@@ -10,6 +10,7 @@ import os from 'os';
 import type { SandboxPlatform, WrappedCommand } from '../types.js';
 import {
   expandPath,
+  getProtectedWorkspacePaths,
   isBinaryAvailable,
   type SandboxRuntime,
   type WrapCommandOptions,
@@ -91,6 +92,14 @@ export class SeatbeltRuntime implements SandboxRuntime {
       lines.push(`(allow file-write* (subpath "/tmp"))`);
       lines.push(`(allow file-write* (subpath "/private/tmp"))`);
       lines.push(`(allow file-write* (subpath "${escapeSeatbeltPath(os.tmpdir())}"))`);
+      lines.push('');
+      // Must follow the cwd allow above: Seatbelt is last-match-wins.
+      lines.push('; Keep protected workspace paths read-only');
+      // literal .git blocks renaming or replacing the entry; writes inside it stay allowed
+      lines.push(`(deny file-write* (literal "${escapeSeatbeltPath(path.join(cwd, '.git'))}"))`);
+      for (const protectedPath of getProtectedWorkspacePaths(cwd)) {
+        lines.push(`(deny file-write* (subpath "${escapeSeatbeltPath(protectedPath)}"))`);
+      }
       lines.push('');
     }
 

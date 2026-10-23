@@ -1,9 +1,25 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { BubblewrapRuntime } from './BubblewrapRuntime.js';
 import os from 'os';
+import { mkdirSync, statSync } from 'fs';
+
+vi.mock('fs', async () => {
+  const actual = await vi.importActual<typeof import('fs')>('fs');
+  return { ...actual, mkdirSync: vi.fn(), statSync: vi.fn() };
+});
+
+const fsEntry = (isDir: boolean) => ({ isDirectory: () => isDir }) as ReturnType<typeof statSync>;
 
 describe('BubblewrapRuntime', () => {
   const runtime = new BubblewrapRuntime();
+
+  beforeEach(() => {
+    vi.mocked(mkdirSync).mockReset();
+    vi.mocked(statSync).mockReset();
+    vi.mocked(statSync).mockImplementation(() => {
+      throw new Error('ENOENT');
+    });
+  });
 
   describe('metadata', () => {
     it('has correct platform and name', () => {
@@ -54,8 +70,105 @@ describe('BubblewrapRuntime', () => {
       expect(precedingArgs).toContain('--bind');
     });
 
+    it('re-binds protected workspace paths read-only after the cwd bind', () => {
+      const result = runtime.wrapCommand({
+        command: 'touch x',
+        cwd: '/home/test/project',
+        filesystemConfig: { writeOnlyToWorkingDir: true, allowedReadPaths: [], deniedPaths: [] },
+        networkEnabled: false,
+      });
+
+      const bindIdx = result.args.findIndex((a, i) => a === '--bind' && result.args[i + 1] === '/home/test/project');
+      expect(bindIdx).toBeGreaterThan(-1);
+      for (const p of ['.git/config', '.git/config.worktree', '.git/commondir', '.git/hooks', '.bike4mind']) {
+        const full = `/home/test/project/${p}`;
+        const idx = result.args.indexOf(full);
+        expect(idx).toBeGreaterThan(bindIdx);
+        expect(result.args[idx - 1]).toBe(p === '.bike4mind' ? '--ro-bind' : '--ro-bind-try');
+        expect(result.args[idx + 1]).toBe(full);
+      }
+    });
+
+    it('creates the .bike4mind dir and binds it with --ro-bind', () => {
+      const result = runtime.wrapCommand({
+        command: 'true',
+        cwd: '/home/test/project',
+        filesystemConfig: { writeOnlyToWorkingDir: true, allowedReadPaths: [], deniedPaths: [] },
+        networkEnabled: false,
+      });
+      const dir = '/home/test/project/.bike4mind';
+      expect(mkdirSync).toHaveBeenCalledWith(dir, { recursive: true });
+      const idx = result.args.indexOf(dir);
+      expect(result.args[idx - 1]).toBe('--ro-bind');
+    });
+
+    it('hides denied files with /dev/null and skips missing denied paths', () => {
+      const home = os.homedir();
+      vi.mocked(statSync).mockImplementation(p => {
+        if (p === `${home}/.netrc`) return fsEntry(false);
+        throw new Error('ENOENT');
+      });
+      const result = runtime.wrapCommand({
+        command: 'true',
+        cwd: '/home/test/project',
+        filesystemConfig: {
+          writeOnlyToWorkingDir: true,
+          allowedReadPaths: [],
+          deniedPaths: [`${home}/.netrc`, `${home}/.missing`],
+        },
+        networkEnabled: false,
+      });
+      const idx = result.args.indexOf(`${home}/.netrc`);
+      expect(result.args.slice(idx - 2, idx + 1)).toEqual(['--ro-bind', '/dev/null', `${home}/.netrc`]);
+      expect(result.args).not.toContain(`${home}/.missing`);
+    });
+
+    it('skips the .bike4mind bind when the dir cannot be created', () => {
+      vi.mocked(mkdirSync).mockImplementation(() => {
+        throw new Error('EROFS');
+      });
+      const result = runtime.wrapCommand({
+        command: 'true',
+        cwd: '/home/test/project',
+        filesystemConfig: { writeOnlyToWorkingDir: true, allowedReadPaths: [], deniedPaths: [] },
+        networkEnabled: false,
+      });
+      expect(result.args).not.toContain('/home/test/project/.bike4mind');
+    });
+
+    it('binds a .git directory as a mountpoint before the inner ro-binds', () => {
+      vi.mocked(statSync).mockImplementation(() => fsEntry(true));
+      const result = runtime.wrapCommand({
+        command: 'true',
+        cwd: '/home/test/project',
+        filesystemConfig: { writeOnlyToWorkingDir: true, allowedReadPaths: [], deniedPaths: [] },
+        networkEnabled: false,
+      });
+      const git = '/home/test/project/.git';
+      const gitIdx = result.args.indexOf(git);
+      expect(result.args[gitIdx - 1]).toBe('--bind');
+      for (const p of ['config', 'config.worktree', 'commondir', 'hooks']) {
+        const idx = result.args.indexOf(`${git}/${p}`);
+        expect(result.args[idx - 1]).toBe('--ro-bind-try');
+        expect(idx).toBeGreaterThan(gitIdx);
+      }
+    });
+
+    it('binds a worktree .git file read-only', () => {
+      vi.mocked(statSync).mockImplementation(() => fsEntry(false));
+      const result = runtime.wrapCommand({
+        command: 'true',
+        cwd: '/home/test/project',
+        filesystemConfig: { writeOnlyToWorkingDir: true, allowedReadPaths: [], deniedPaths: [] },
+        networkEnabled: false,
+      });
+      const gitIdx = result.args.indexOf('/home/test/project/.git');
+      expect(result.args[gitIdx - 1]).toBe('--ro-bind');
+    });
+
     it('mounts denied paths as tmpfs', () => {
       const home = os.homedir();
+      vi.mocked(statSync).mockImplementation(() => fsEntry(true));
       const result = runtime.wrapCommand({
         command: 'cat secret',
         cwd: '/home/test/project',

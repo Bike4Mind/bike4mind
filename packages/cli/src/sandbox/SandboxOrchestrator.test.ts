@@ -166,6 +166,22 @@ describe('SandboxOrchestrator', () => {
     });
   });
 
+  describe('filesystem defaults', () => {
+    it('enforces default denies on a saved config carrying older arrays', () => {
+      const saved = enabledConfig({
+        filesystem: {
+          writeOnlyToWorkingDir: true,
+          allowedReadPaths: ['$HOME/.gitconfig', '$HOME/.npmrc'],
+          deniedPaths: ['$HOME/.ssh', '/custom'],
+        },
+      });
+      const { filesystem } = new SandboxOrchestrator(saved, createMockRuntime()).getConfig();
+      expect(filesystem.deniedPaths).toEqual(expect.arrayContaining(DEFAULT_SANDBOX_CONFIG.filesystem.deniedPaths));
+      expect(filesystem.deniedPaths).toContain('/custom');
+      expect(filesystem.allowedReadPaths).toEqual(['$HOME/.gitconfig']);
+    });
+  });
+
   describe('mode management', () => {
     it('returns current mode', () => {
       const orchestrator = new SandboxOrchestrator(enabledConfig({ mode: 'permissions' }), createMockRuntime());

@@ -68,6 +68,18 @@ export function expandPath(pathStr: string): string {
     .replace(/~\//g, `${os.homedir()}/`);
 }
 
+/** Paths under cwd that stay read-only inside the writable working directory. */
+export function getProtectedWorkspacePaths(cwd: string): string[] {
+  const git = path.join(cwd, '.git');
+  return [
+    path.join(git, 'config'),
+    path.join(git, 'config.worktree'),
+    path.join(git, 'commondir'),
+    path.join(git, 'hooks'),
+    path.join(cwd, '.bike4mind'),
+  ];
+}
+
 /**
  * Factory function to create the appropriate sandbox runtime for the current platform.
  * Returns null if the platform is unsupported or the runtime binary is not available.

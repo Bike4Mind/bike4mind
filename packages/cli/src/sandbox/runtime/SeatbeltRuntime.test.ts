@@ -81,6 +81,23 @@ describe('SeatbeltRuntime', () => {
       expect(profile).toContain(`(allow file-read* (subpath "${home}/.npmrc"))`);
     });
 
+    it('denies writes to protected workspace paths after the cwd allow', () => {
+      const profile = runtime.generateProfile({
+        command: 'touch x',
+        cwd: '/Users/test/project',
+        filesystemConfig: { writeOnlyToWorkingDir: true, allowedReadPaths: [], deniedPaths: [] },
+        networkEnabled: false,
+      });
+
+      const allowIdx = profile.indexOf('(allow file-write* (subpath "/Users/test/project"))');
+      expect(allowIdx).toBeGreaterThan(-1);
+      expect(profile).toContain('(deny file-write* (literal "/Users/test/project/.git"))');
+      for (const p of ['.git/config', '.git/config.worktree', '.git/commondir', '.git/hooks', '.bike4mind']) {
+        const denyIdx = profile.indexOf(`(deny file-write* (subpath "/Users/test/project/${p}"))`);
+        expect(denyIdx).toBeGreaterThan(allowIdx);
+      }
+    });
+
     it('allows writes to temp directories', () => {
       const profile = runtime.generateProfile({
         command: 'npm install',

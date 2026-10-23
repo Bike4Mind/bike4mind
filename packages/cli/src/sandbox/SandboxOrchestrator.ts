@@ -32,6 +32,10 @@ export class SandboxOrchestrator {
     // Clone so a runtime mutation (e.g. setNetworkEnabled) never writes through to
     // the shared DEFAULT_SANDBOX_CONFIG singleton both entrypoints fall back to.
     this.config = structuredClone(config ?? DEFAULT_SANDBOX_CONFIG);
+    // Saved configs carry full arrays, so schema defaults never reach them; always enforce the built-in denies
+    const fsConfig = this.config.filesystem;
+    fsConfig.deniedPaths = [...new Set([...DEFAULT_SANDBOX_CONFIG.filesystem.deniedPaths, ...fsConfig.deniedPaths])];
+    fsConfig.allowedReadPaths = fsConfig.allowedReadPaths.filter(p => !fsConfig.deniedPaths.includes(p));
     this.runtime = runtime ?? null;
     this.proxyManager = proxyManager ?? null;
   }
