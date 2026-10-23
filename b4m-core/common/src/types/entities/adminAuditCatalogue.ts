@@ -135,7 +135,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   // Handler coverage: security and trust and safety
   'security.blocked_ip.added': { category: 'access', severity: 'critical', write: 'strict' },
   'security.blocked_ip.removed': { category: 'access', severity: 'critical', write: 'strict' },
-  'security.blocked_ip.auto_added': { category: 'access', severity: 'critical', write: 'strict' },
+  'security.blocked_ip.auto_added': { category: 'access', severity: 'notice', write: 'strict' },
   'moderation.incident.verdict_recorded': { category: 'support', severity: 'critical', write: 'strict' },
   'moderation.published_artifact.taken_down': { category: 'support', severity: 'critical', write: 'strict' },
   'moderation.published_artifact.takedown_reverted': { category: 'support', severity: 'critical', write: 'strict' },
