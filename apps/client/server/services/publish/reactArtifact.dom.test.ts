@@ -155,6 +155,44 @@ export default App;`;
   });
 });
 
+describe('package and side-effect import text in a comment or string', () => {
+  beforeEach(() => {
+    document.body.innerHTML = '<div id="root"></div>';
+    installReactStub();
+  });
+
+  it('publishes and mounts without inlining the mentioned package', async () => {
+    const source = `import { useState } from 'react';
+/*
+import 'lodash';
+import { LineChart } from 'recharts';
+*/
+// import x from 'lodash-es'
+const NOTES = \`setup:
+import 'polyfill';
+import Chart from 'recharts';
+\`;
+
+export default function App() {
+  const [n] = useState(2);
+  return <main><span>{n}</span><pre>{NOTES}</pre><em>import y from "lodash-es"</em></main>;
+}`;
+    const { indexHtml } = await buildReactArtifactBundle({ source, title: 'App' });
+    expect(indexHtml).not.toContain('recharts@');
+    expect(indexHtml).not.toContain('lodash@');
+
+    new Function(extractBootstrap(indexHtml))();
+
+    const root = document.getElementById('root')!;
+    expect(root.textContent).not.toContain('Error:');
+    expect(root.querySelector('span')?.textContent).toBe('2');
+    // The text-based import rewrite (shared shape with the preview's) still edits import-shaped text
+    // inside strings and JSX text, so only that the text renders is pinned here.
+    expect(root.querySelector('pre')?.textContent).toContain('setup:');
+    expect(root.querySelector('em')?.textContent).toContain('lodash-es');
+  });
+});
+
 describe('LUCIDE_WRAPPER_FN executes (the icon logic that previously shipped invisible icons)', () => {
   it('builds a real SVG from a lucide node array and passes through props', () => {
     installReactStub(); // provides window.React for the wrapper's React.createElement calls

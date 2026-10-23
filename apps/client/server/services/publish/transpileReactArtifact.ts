@@ -88,8 +88,8 @@ const RELATIVE_SPECIFIER = /^\.\.?\//;
 // Statement boundaries and the type-only strip come from @client/app/utils/importStatements, whose
 // factory source the sandbox preview (apps/client/pages/api/react-artifact-sandbox.ts) evaluates in
 // the browser. The import-rewrite callback below is NOT shared: the sandbox keeps its own (it drops
-// every react import, where this one binds non-hook names). Which relative imports are real is
-// decided from Babel's parse instead (findRelativeModuleReferences).
+// every react import, where this one binds non-hook names). Which imports are real (relative,
+// package or side-effect) is decided from Babel's parse instead (analyzeModuleReferences).
 export { findRelativeImport, stripTypeOnlyImports };
 
 type AstNode = { type: string } & Record<string, unknown>;
@@ -105,27 +105,9 @@ function stringLiteralValue(node: unknown): string | null {
 // Child keys that never hold code: comments carry the very text this parse exists to ignore.
 const NON_CODE_KEYS = new Set(['loc', 'extra', 'comments', 'leadingComments', 'trailingComments', 'innerComments']);
 
-/**
- * Every distinct relative specifier `source` loads at run time (value import/export-from, side-effect
- * import, `require('./x')`, `import('./x')`), in source order, from Babel's parse. The preview's module
- * runtime only resolves the require() calls Babel's CommonJS transform emits for these, so a path
- * that appears only in a comment or a string is never one, and must not be one here either.
- */
-export async function findRelativeModuleReferences(source: string): Promise<string[]> {
-  const Babel = await getBabel();
-  let ast: unknown;
-  try {
-    ast = Babel.packages.parser.parse(source, { sourceType: 'module', plugins: ['jsx', 'typescript'] });
-  } catch {
-    // Unparseable: keep the text scan so the transform itself reports the error, file name included.
-    return findRelativeImports(stripTypeOnlyImports(source));
-  }
-  const found: string[] = [];
-  const add = (specifier: string | null): void => {
-    if (specifier !== null && RELATIVE_SPECIFIER.test(specifier) && !found.includes(specifier)) found.push(specifier);
-  };
-  // Explicit stack with children pushed in reverse: a source-order walk that deeply nested user code
-  // cannot overflow.
+/** Visits every code node of a Babel AST in source order. An explicit stack with children pushed in
+ *  reverse, so deeply nested user code cannot overflow it. */
+function walkAst(ast: unknown, visit: (node: AstNode) => void): void {
   const stack: unknown[] = [ast];
   while (stack.length > 0) {
     const node = stack.pop();
@@ -134,6 +116,45 @@ export async function findRelativeModuleReferences(source: string): Promise<stri
       continue;
     }
     if (!isAstNode(node)) continue;
+    visit(node);
+    const keys = Object.keys(node);
+    for (let i = keys.length - 1; i >= 0; i--) {
+      if (!NON_CODE_KEYS.has(keys[i])) stack.push(node[keys[i]]);
+    }
+  }
+}
+
+function parseModule(Babel: typeof import('@babel/standalone'), source: string): object | null {
+  try {
+    return Babel.packages.parser.parse(source, { sourceType: 'module', plugins: ['jsx', 'typescript'] });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A module `source` loads at run time. `binding`: an import declaration that binds names (what the
+ * classic-script rewrite turns into `require()`); `side-effect`: `import 'x'`; `load`: export-from,
+ * `require('x')`, `import('x')` and `import X = require('x')`.
+ */
+type ModuleReference = { specifier: string; kind: 'binding' | 'side-effect' | 'load' };
+
+/** null when the source does not parse, so callers fall back to the text scans. */
+type Analyze = (source: string) => Promise<ModuleReference[] | null>;
+
+/**
+ * Every runtime module reference in `source`, in source order, from Babel's parse. Comments and
+ * string/template/JSX text never count: the preview only loads what Babel compiles from real
+ * imports. Type-only imports and exports are skipped.
+ */
+async function analyzeModuleReferences(source: string): Promise<ModuleReference[] | null> {
+  const ast = parseModule(await getBabel(), source);
+  if (ast === null) return null;
+  const found: ModuleReference[] = [];
+  const add = (specifier: string | null, kind: ModuleReference['kind']): void => {
+    if (specifier !== null) found.push({ specifier, kind });
+  };
+  walkAst(ast, node => {
     switch (node.type) {
       case 'ImportDeclaration': {
         const specifiers = Array.isArray(node.specifiers) ? node.specifiers : [];
@@ -141,15 +162,23 @@ export async function findRelativeModuleReferences(source: string): Promise<stri
           node.importKind === 'type' ||
           node.importKind === 'typeof' ||
           (specifiers.length > 0 && specifiers.every(s => isAstNode(s) && s.importKind === 'type'));
-        if (!typeOnly) add(stringLiteralValue(node.source));
+        if (typeOnly) break;
+        // `import {} from 'x'` also has no specifiers but is not the bare form the rewrite cannot bind.
+        const sourceStart = isAstNode(node.source) ? node.source.start : undefined;
+        const bare =
+          specifiers.length === 0 &&
+          typeof node.start === 'number' &&
+          typeof sourceStart === 'number' &&
+          !source.slice(node.start, sourceStart).includes('{');
+        add(stringLiteralValue(node.source), bare ? 'side-effect' : 'binding');
         break;
       }
       case 'ExportNamedDeclaration':
       case 'ExportAllDeclaration':
-        if (node.exportKind !== 'type') add(stringLiteralValue(node.source));
+        if (node.exportKind !== 'type') add(stringLiteralValue(node.source), 'load');
         break;
       case 'ImportExpression':
-        add(stringLiteralValue(node.source));
+        add(stringLiteralValue(node.source), 'load');
         break;
       case 'CallExpression': {
         const callee = node.callee;
@@ -157,21 +186,82 @@ export async function findRelativeModuleReferences(source: string): Promise<stri
         const loads =
           isAstNode(callee) &&
           (callee.type === 'Import' || (callee.type === 'Identifier' && callee.name === 'require'));
-        if (loads && args.length === 1) add(stringLiteralValue(args[0]));
+        if (loads && args.length === 1) add(stringLiteralValue(args[0]), 'load');
         break;
       }
       case 'TSImportEqualsDeclaration':
         if (node.importKind !== 'type' && isAstNode(node.moduleReference)) {
-          add(stringLiteralValue(node.moduleReference.expression));
+          add(stringLiteralValue(node.moduleReference.expression), 'load');
         }
         break;
     }
-    const keys = Object.keys(node);
-    for (let i = keys.length - 1; i >= 0; i--) {
-      if (!NON_CODE_KEYS.has(keys[i])) stack.push(node[keys[i]]);
+  });
+  return found;
+}
+
+/** One parse per distinct source for the duration of a build. */
+function memoizedAnalyze(): Analyze {
+  const cache = new Map<string, Promise<ModuleReference[] | null>>();
+  return source => {
+    let analysis = cache.get(source);
+    if (!analysis) {
+      analysis = analyzeModuleReferences(source);
+      cache.set(source, analysis);
     }
+    return analysis;
+  };
+}
+
+function relativeSpecifiers(source: string, references: ModuleReference[] | null): string[] {
+  // Unparseable: keep the text scan so the transform itself reports the error, file name included.
+  if (references === null) return findRelativeImports(stripTypeOnlyImports(source));
+  const found: string[] = [];
+  for (const { specifier } of references) {
+    if (RELATIVE_SPECIFIER.test(specifier) && !found.includes(specifier)) found.push(specifier);
   }
   return found;
+}
+
+/**
+ * Every distinct relative specifier `source` loads at run time (value import/export-from, side-effect
+ * import, `require('./x')`, `import('./x')`), in source order, from Babel's parse. The preview's module
+ * runtime only resolves the require() calls Babel's CommonJS transform emits for these, so a path
+ * that appears only in a comment or a string is never one, and must not be one here either.
+ */
+export async function findRelativeModuleReferences(source: string): Promise<string[]> {
+  return relativeSpecifiers(source, await analyzeModuleReferences(source));
+}
+
+/** Package specifiers bound by real imports, in source order: the deps whose UMDs get inlined. */
+function packageImports(source: string, references: ModuleReference[] | null): string[] {
+  if (references === null) return extractImportedModules(source);
+  const mods = new Set<string>();
+  for (const { specifier, kind } of references) {
+    if (kind === 'binding' && !specifier.startsWith('.') && !specifier.startsWith('/')) mods.add(specifier);
+  }
+  return [...mods];
+}
+
+/** assertPublishableDependencies decided from the parse; the text checks only for unparseable input. */
+function assertPublishableReferences(
+  source: string,
+  references: ModuleReference[] | null,
+  options: { allowRelativeSideEffects?: boolean } = {}
+): void {
+  if (references === null) {
+    assertPublishableDependencies(source, options);
+    return;
+  }
+  for (const { specifier, kind } of references) {
+    if (kind === 'side-effect' && !(options.allowRelativeSideEffects && RELATIVE_SPECIFIER.test(specifier))) {
+      throw new ReactArtifactTranspileError(SIDE_EFFECT_IMPORT_MESSAGE);
+    }
+  }
+  for (const dep of packageImports(source, references)) {
+    if (!PUBLISH_SUPPORTED_DEPENDENCIES.includes(dep)) {
+      throw new UnsupportedReactDependencyError(dep);
+    }
+  }
 }
 
 // Uses the module's scanImportStatements binding (not the factory-internal one) so the survivor
@@ -279,6 +369,50 @@ function assertNoSurvivingEsmImport(code: string): void {
 }
 
 /**
+ * assertNoSurvivingEsmImport for code Babel can parse: a candidate that starts inside a comment or a
+ * string/template/JSX text is that text, not a statement. The parse runs only once a candidate exists,
+ * and code that does not parse gets the plain check.
+ */
+function assertNoSurvivingEsmImportInCode(Babel: typeof import('@babel/standalone'), code: string): void {
+  if (findSurvivingEsmImport(code) === null) return;
+  const ast = parseModule(Babel, code);
+  if (ast === null) {
+    assertNoSurvivingEsmImport(code);
+    return;
+  }
+  const ranges: [number, number][] = [];
+  const addRange = (node: unknown): void => {
+    if (isAstNode(node) && typeof node.start === 'number' && typeof node.end === 'number') {
+      ranges.push([node.start, node.end]);
+    }
+  };
+  const comments = (ast as { comments?: unknown }).comments;
+  if (Array.isArray(comments)) comments.forEach(addRange);
+  walkAst(ast, node => {
+    if (
+      node.type === 'StringLiteral' ||
+      node.type === 'DirectiveLiteral' ||
+      node.type === 'TemplateElement' ||
+      node.type === 'JSXText'
+    ) {
+      addRange(node);
+    }
+  });
+  ranges.sort((a, b) => a[0] - b[0]);
+  // Candidates arrive in increasing order and the ranges are disjoint, so one forward cursor suffices.
+  let i = 0;
+  const survivor = findSurvivingEsmImport(code, at => {
+    while (i < ranges.length && ranges[i][1] <= at) i++;
+    return i < ranges.length && ranges[i][0] <= at;
+  });
+  if (survivor) {
+    throw new ReactArtifactTranspileError(
+      `Could not rewrite an ESM import for a script bundle: ${JSON.stringify(survivor.slice(0, 120))}`
+    );
+  }
+}
+
+/**
  * A line-initial `import ... from '<spec>'` still present after the rewrite. Deliberately NOT built
  * on scanImportStatements - a check sharing the scanner could never catch a gap in it. Each
  * statement is bounded by the first `;` or quote after it and the cursor only advances, so this
@@ -291,7 +425,7 @@ function assertNoSurvivingEsmImport(code: string): void {
  * this pattern. Narrow in practice - scanImportStatements has no line anchor and already rewrites
  * those, so this only misses one if the scanner has separately failed on that input.
  */
-function findSurvivingEsmImport(code: string): string | null {
+function findSurvivingEsmImport(code: string, insideLiteral?: (at: number) => boolean): string | null {
   const lineInitialImport = /^[^\S\n\r\u2028\u2029]*import\s/gm;
   let m: RegExpExecArray | null;
   while ((m = lineInitialImport.exec(code)) !== null) {
@@ -308,7 +442,7 @@ function findSurvivingEsmImport(code: string): string | null {
       // them rewritable nor scanner matches, so none may trip the net.
       const quoted = r > p + 1 && r < code.length;
       if (quoted && q < p && code.slice(q - 4, q) === 'from' && q - 4 - importEnd >= 2 && WS.test(code[q - 5])) {
-        return code.slice(m.index, r + 1);
+        if (!insideLiteral?.(importEnd - 6)) return code.slice(m.index, r + 1);
       }
     }
     // Resume just past the clause terminator, not past `r`: the quote scan for `r` may cross a
@@ -329,11 +463,17 @@ function extractImportedModules(rawSource: string): string[] {
   return [...mods];
 }
 
+const SIDE_EFFECT_IMPORT_MESSAGE =
+  'Side-effect imports (import "...") are not supported. Import a default or named binding, or inline the code.';
+
 /**
  * Reject any imported module that is not publishable yet. Uses an IMPORT-ONLY scan (real
  * `import ... from '...'` statements) - deliberately NOT `extractReactDependencies`, whose
  * lucide-react auto-detect would flag any artifact merely NAMING a common icon identifier
  * (Settings, Home, Bell, Star, User, ...) and 422 a component that never imported lucide.
+ *
+ * Text-based and sync, so it also reads import text inside comments and strings: the build decides
+ * from Babel's parse (assertPublishableReferences) and uses this only for a source that does not parse.
  */
 export function assertPublishableDependencies(
   source: string,
@@ -351,9 +491,7 @@ export function assertPublishableDependencies(
     ? /^[^\S\n\r\u2028\u2029]*import\s+['"](?!\.\.?\/)/m
     : /^[^\S\n\r\u2028\u2029]*import\s+['"]/m;
   if (sideEffectImport.test(source)) {
-    throw new ReactArtifactTranspileError(
-      'Side-effect imports (import "...") are not supported. Import a default or named binding, or inline the code.'
-    );
+    throw new ReactArtifactTranspileError(SIDE_EFFECT_IMPORT_MESSAGE);
   }
   for (const dep of extractImportedModules(source)) {
     if (!PUBLISH_SUPPORTED_DEPENDENCIES.includes(dep)) {
@@ -388,15 +526,19 @@ export function unwrapDefaultExport(transformed: string): string {
  * bootstrap reads. Output contains no import/export statements and no eval.
  */
 export async function transpileReactSource(source: string): Promise<string> {
+  return transpileSingleFile(source, analyzeModuleReferences);
+}
+
+async function transpileSingleFile(source: string, analyze: Analyze): Promise<string> {
   // This path has no sibling files, so any real relative import gets the missing-file error.
-  await resolveReactArtifactFiles(source, {});
+  await resolveFiles(source, {}, analyze);
   const cleaned = stripTypeOnlyImports(source);
 
   const Babel = await getBabel();
   // Past the check above, a relative statement the text scan finds sits in a comment or a string:
   // keep it verbatim, as the preview's module path does.
   const withRequires = rewriteImportsToRequire(cleaned, { keepRelative: true });
-  assertNoSurvivingEsmImport(withRequires);
+  assertNoSurvivingEsmImportInCode(Babel, withRequires);
 
   let transformed: string | null | undefined;
   try {
@@ -439,12 +581,17 @@ export async function transpileReactSource(source: string): Promise<string> {
  * for an import that matches no file or several, so publish rejects what the page would fail on.
  */
 export async function resolveReactArtifactFiles(entry: string, files: Record<string, string>): Promise<string[]> {
+  return resolveFiles(entry, files, analyzeModuleReferences);
+}
+
+async function resolveFiles(entry: string, files: Record<string, string>, analyze: Analyze): Promise<string[]> {
   const keys = Object.keys(files);
   const resolve = createArtifactModuleResolver(moduleBaseName, keys);
   const reached = new Set<string>();
   const queue = [entry];
   while (queue.length > 0) {
-    for (const specifier of await findRelativeModuleReferences(queue.shift() as string)) {
+    const source = queue.shift() as string;
+    for (const specifier of relativeSpecifiers(source, await analyze(source))) {
       let key: string;
       try {
         key = resolve(specifier);
@@ -479,7 +626,7 @@ async function transpileReactModule(source: string, filename: string): Promise<s
   if (!transformed) {
     throw new ReactArtifactTranspileError(`JSX transform produced no output for ${filename}.`);
   }
-  assertNoSurvivingEsmImport(transformed);
+  assertNoSurvivingEsmImportInCode(Babel, transformed);
   return transformed;
 }
 
@@ -631,23 +778,28 @@ export async function buildReactArtifactBundle(input: {
       'React artifact must export a component as its default export (e.g. `export default MyComponent`).'
     );
   }
-  if ((await findRelativeModuleReferences(input.source)).length === 0) {
-    assertPublishableDependencies(input.source);
-    const dependencies = extractImportedModules(input.source).filter(m =>
-      Object.prototype.hasOwnProperty.call(PUBLISH_REACT_DEP_SCRIPTS, m)
-    );
-    const transpiledCode = await transpileReactSource(input.source);
+  const analyze = memoizedAnalyze();
+  const inlined = (mods: string[]): string[] =>
+    mods.filter(m => Object.prototype.hasOwnProperty.call(PUBLISH_REACT_DEP_SCRIPTS, m));
+  const entryReferences = await analyze(input.source);
+  if (relativeSpecifiers(input.source, entryReferences).length === 0) {
+    assertPublishableReferences(input.source, entryReferences);
+    const dependencies = inlined(packageImports(input.source, entryReferences));
+    const transpiledCode = await transpileSingleFile(input.source, analyze);
     return { indexHtml: assembleReactBundleHtml({ title: input.title, transpiledCode, dependencies }) };
   }
 
   const files = input.files ?? {};
   const reached: Record<string, string> = Object.create(null);
-  for (const key of await resolveReactArtifactFiles(input.source, files)) reached[key] = files[key];
+  for (const key of await resolveFiles(input.source, files, analyze)) reached[key] = files[key];
   const sources = [input.source, ...Object.values(reached)];
-  sources.forEach(src => assertPublishableDependencies(src, { allowRelativeSideEffects: true }));
-  const dependencies = [...new Set(sources.flatMap(extractImportedModules))].filter(m =>
-    Object.prototype.hasOwnProperty.call(PUBLISH_REACT_DEP_SCRIPTS, m)
-  );
+  const deps = new Set<string>();
+  for (const src of sources) {
+    const references = await analyze(src);
+    assertPublishableReferences(src, references, { allowRelativeSideEffects: true });
+    packageImports(src, references).forEach(dep => deps.add(dep));
+  }
+  const dependencies = inlined([...deps]);
   const transpiledCode = await transpileReactModuleProgram(input.source, reached);
   return { indexHtml: assembleReactBundleHtml({ title: input.title, transpiledCode, dependencies }) };
 }

@@ -633,6 +633,23 @@ describe('rewriteImportsToRequire ESM survivor backstop', () => {
     ).toThrow(/import Chart from 'chartjs'/);
   });
 
+  it('skips import text inside a template or comment but still throws for a real survivor after it', async () => {
+    vi.resetModules();
+    vi.doMock('@client/app/utils/importStatements', async () => ({
+      ...(await vi.importActual<typeof import('@client/app/utils/importStatements')>(
+        '@client/app/utils/importStatements'
+      )),
+      scanImportStatements: () => [],
+    }));
+    const mod = await import('./transpileReactArtifact');
+    const text = "const note = `\nimport X from 'recharts'\n`;\n/*\nimport Y from 'react'\n*/\n";
+    const app = 'export default function App() { return <p>{note}</p>; }';
+    await expect(mod.transpileReactSource(text + app)).resolves.toContain('__DEFAULT_EXPORT__');
+    await expect(
+      mod.buildReactArtifactBundle({ source: `${text}import { useState } from 'react';\n${app}`, title: 'App' })
+    ).rejects.toThrow(/Could not rewrite an ESM import for a script bundle: "import \{ useState \} from 'react'"/);
+  });
+
   it('is blind to a non-line-initial survivor - a documented, narrow gap', async () => {
     vi.resetModules();
     vi.doMock('@client/app/utils/importStatements', async () => ({

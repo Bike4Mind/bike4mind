@@ -308,3 +308,94 @@ export default function App() { return null; }`;
     ]);
   });
 });
+
+// Package and side-effect imports are read from the same parse as relative ones, so import text in
+// a comment or a string neither 422s the publish nor inlines a UMD the page never loads.
+describe('package and side-effect import text outside import statements', () => {
+  const RECHARTS_PATH = '/static/lib/recharts@2.x.js';
+  const app = (body: string) => `${body}\nexport default function App() { return <p>{label}</p>; }`;
+  const MENTIONS: [string, (spec: string) => string][] = [
+    ['a line comment', spec => app(`// import X from '${spec}'\nconst label = 'x';`)],
+    ['a block comment', spec => app(`/* import X from '${spec}' */\nconst label = 'x';`)],
+    ['a string literal', spec => app(`const label = "import X from '${spec}'";`)],
+    ['a template literal', spec => app(`const label = \`\nimport X from '${spec}'\n\`;`)],
+    ['JSX text', spec => `export default function App() { return <p>import X from '${spec}'</p>; }`],
+  ];
+
+  it.each(MENTIONS)('publishes an unsupported package mentioned only in %s', async (_label, build) => {
+    const { indexHtml } = await buildReactArtifactBundle({ source: build('lodash-es'), title: 'App' });
+    expect(validateBundle({ indexHtml, manifest: [{ path: 'index.html', mimeType: 'text/html' }] }).valid).toBe(true);
+    expect(indexHtml).not.toContain('"lodash-es":window');
+    expect(renderInert(indexHtml)).not.toMatch(/^Error/);
+  });
+
+  it.each(MENTIONS)('does not inline a supported package mentioned only in %s', async (_label, build) => {
+    const { indexHtml } = await buildReactArtifactBundle({ source: build('recharts'), title: 'App' });
+    expect(indexHtml).not.toContain(RECHARTS_PATH);
+    expect(indexHtml).not.toContain('"recharts":window');
+    expect(renderInert(indexHtml)).not.toMatch(/^Error/);
+  });
+
+  it.each([
+    ['a multi-line template literal', "const label = `notes:\nimport 'lodash';\nimport X from './X';\n`;"],
+    ['a block comment without star prefixes', "/*\nimport 'lodash';\nimport X from './X';\n*/\nconst label = 'x';"],
+  ])('publishes and renders line-initial import text in %s', async (_label, body) => {
+    const source = app(body);
+    const { indexHtml } = await buildReactArtifactBundle({ source, title: 'App' });
+    expect(indexHtml).not.toContain('.run(');
+    expect(renderInert(indexHtml)).toMatch(/^<p>/);
+  });
+
+  it('accepts the same text in a multi-file entry and its sibling', async () => {
+    const note = "const note = `\nimport 'lodash';\nimport Gone from './Gone';\n`;";
+    const { indexHtml } = await buildReactArtifactBundle({
+      source: `${note}\n${ENTRY}`,
+      title: 'App',
+      files: { Stopwatch: `/*\nimport 'polyfill';\nimport Y from 'lodash-es';\n*/\n${STOPWATCH}` },
+    });
+    expect(renderInert(indexHtml)).toBe('<main><span>7</span></main>');
+  });
+
+  it('still rejects a real bare package side-effect import with the same message', async () => {
+    await expect(
+      buildReactArtifactBundle({ source: app(`import 'lodash';\nconst label = 'x';`), title: 'App' })
+    ).rejects.toThrow(
+      'Side-effect imports (import "...") are not supported. Import a default or named binding, or inline the code.'
+    );
+    // Not line-initial: the text guard never saw this one, the parse does.
+    await expect(
+      buildReactArtifactBundle({ source: app(`const label = 'x'; import 'lodash';`), title: 'App' })
+    ).rejects.toThrow('Side-effect imports');
+  });
+
+  it('still rejects a real unsupported package with the same message', async () => {
+    const build = buildReactArtifactBundle({
+      source: app(`import X from 'lodash-es';\nconst label = 'x';`),
+      title: 'App',
+    });
+    await expect(build).rejects.toThrow(UnsupportedReactDependencyError);
+    await expect(build).rejects.toThrow(new UnsupportedReactDependencyError('lodash-es').message);
+  });
+
+  it('still inlines a real supported package and skips a type-only one', async () => {
+    const real = await buildReactArtifactBundle({
+      source: app(`import { LineChart } from 'recharts';\nconst label = typeof LineChart;`),
+      title: 'App',
+    });
+    expect(real.indexHtml).toContain(RECHARTS_PATH);
+    const typeOnly = await buildReactArtifactBundle({
+      source: app(`import type { LineChart } from 'recharts';\nconst label = 'x';`),
+      title: 'App',
+    });
+    expect(typeOnly.indexHtml).not.toContain(RECHARTS_PATH);
+  });
+
+  it('still accepts a real relative side-effect import in a multi-file entry', async () => {
+    const { indexHtml } = await buildReactArtifactBundle({
+      source: `// import 'lodash';\nimport './Setup';\nexport default function App() { return <b>x</b>; }`,
+      title: 'App',
+      files: { Setup: `globalThis.__setup = 1;` },
+    });
+    expect(renderInert(indexHtml)).toBe('<b>x</b>');
+  });
+});
