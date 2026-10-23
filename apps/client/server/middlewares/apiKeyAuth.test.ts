@@ -428,6 +428,20 @@ describe('apiKeyAuth admin role', () => {
     expect(req.user?.isAdmin).toBe(false);
   });
 
+  it('judges the trust rate limit against the stored admin role, not the withheld one', async () => {
+    keyWith([ApiKeyScope.AI_CHAT]);
+    const seenIsAdmin: boolean[] = [];
+    applyUntrustedRateLimitMock.mockImplementationOnce(async (owner: unknown, key: { rateLimit: unknown }) => {
+      seenIsAdmin.push((owner as { isAdmin?: boolean }).isAdmin === true);
+      return key.rateLimit;
+    });
+    const req = makeReq();
+
+    expect((await run(undefined, req)).passed).toBe(true);
+    expect(seenIsAdmin).toEqual([true]);
+    expect(req.user?.isAdmin).toBe(false);
+  });
+
   it('keeps the admin role for a key holding the admin scope', async () => {
     keyWith([ApiKeyScope.ADMIN]);
     const req = makeReq();
