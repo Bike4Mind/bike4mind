@@ -70,7 +70,9 @@ const findActiveSubscriptionsByOwner = vi.hoisted(() => vi.fn().mockResolvedValu
 vi.mock('@server/models/Subscription', () => ({
   subscriptionRepository: { findActiveSubscriptionsByOwner },
 }));
-vi.mock('@bike4mind/server-utils/lib/subscriptions/types', () => ({ SubscriptionOwnerType: { Organization: 'organization' } }));
+vi.mock('@bike4mind/server-utils/lib/subscriptions/types', () => ({
+  SubscriptionOwnerType: { Organization: 'organization' },
+}));
 
 import '@pages/api/organizations/[id]/index';
 

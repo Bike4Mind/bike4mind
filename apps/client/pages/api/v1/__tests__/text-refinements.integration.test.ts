@@ -210,16 +210,19 @@ describe('POST /api/v1/text-refinements', () => {
     });
   });
 
-  it.each([429, 500, 503])('502s, not 401s, when the provider fails with a non-credential status (upstream %i)', async status => {
-    validateWithScopes([ApiKeyScope.AI_GENERATE]);
-    // Only a refused credential is permanent. A rate limit or an outage carries a status too, and
-    // answering 401 would tell the caller to stop retrying a transient fault.
-    mockRefineText.mockRejectedValue(Object.assign(new Error('provider failed'), { status }));
-    const { req, res } = post({ text: 'hello' });
-    await handler(req, res);
-    expect(res._getStatusCode()).toBe(502);
-    expect(res._getJSONData()).toEqual({ error: 'Text refinement failed' });
-  });
+  it.each([429, 500, 503])(
+    '502s, not 401s, when the provider fails with a non-credential status (upstream %i)',
+    async status => {
+      validateWithScopes([ApiKeyScope.AI_GENERATE]);
+      // Only a refused credential is permanent. A rate limit or an outage carries a status too, and
+      // answering 401 would tell the caller to stop retrying a transient fault.
+      mockRefineText.mockRejectedValue(Object.assign(new Error('provider failed'), { status }));
+      const { req, res } = post({ text: 'hello' });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(502);
+      expect(res._getJSONData()).toEqual({ error: 'Text refinement failed' });
+    }
+  );
 
   it('502s on an empty refinement and does not cache it', async () => {
     validateWithScopes([ApiKeyScope.AI_GENERATE]);

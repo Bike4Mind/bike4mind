@@ -3,7 +3,10 @@ import { z } from 'zod';
 import { getLlmByModel } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import type { ISkillHonestSummary, ISkillScanFinding, ISkillSnapshot } from '@bike4mind/common';
-import { getEffectiveApiKeyByBackend, OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
+import {
+  getEffectiveApiKeyByBackend,
+  OperationsModelService,
+} from '@bike4mind/server-utils/services/operationsModelService';
 import { tryParseJsonObject } from '@server/utils/resolveImagePrompt';
 
 /**

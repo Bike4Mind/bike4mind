@@ -15,7 +15,10 @@ import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { Logger } from '@bike4mind/observability';
 import isSameOrBefore from 'dayjs/plugin/isSameOrBefore';
 import { counterService } from '@bike4mind/services';
-import { getEffectiveApiKeyByBackend, OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
+import {
+  getEffectiveApiKeyByBackend,
+  OperationsModelService,
+} from '@bike4mind/server-utils/services/operationsModelService';
 import { z } from 'zod';
 import { Request } from 'express';
 import qs from 'qs';

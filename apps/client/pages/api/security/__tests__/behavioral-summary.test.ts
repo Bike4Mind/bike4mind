@@ -25,7 +25,9 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: () => chain };
 });
 
-vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => (_req: any, _res: any, next: any) => next() }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
+  rateLimit: () => (_req: any, _res: any, next: any) => next(),
+}));
 
 const repos = vi.hoisted(() => ({
   authFailLogRepository: {

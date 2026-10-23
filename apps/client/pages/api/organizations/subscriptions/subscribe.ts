@@ -1,7 +1,10 @@
 import { adminSettingsRepository } from '@bike4mind/database';
 import { BadRequestError } from '@bike4mind/utils';
 import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@bike4mind/server-utils/lib/subscriptions/constants';
-import { OrgSubscriptionSubscribeSchema, StripeSubscriptionMetadataSchema } from '@bike4mind/server-utils/lib/subscriptions/schema';
+import {
+  OrgSubscriptionSubscribeSchema,
+  StripeSubscriptionMetadataSchema,
+} from '@bike4mind/server-utils/lib/subscriptions/schema';
 import { SubscriptionOwnerType, isDelinquentSubscriptionStatus } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { baseApi } from '@server/middlewares/baseApi';
 import { Config } from '@bike4mind/server-utils/utils/config';

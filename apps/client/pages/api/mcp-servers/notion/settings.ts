@@ -2,7 +2,11 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { mcpServerRepository, userRepository } from '@bike4mind/database';
 import { McpServerName } from '@bike4mind/common';
 import { NotionTokenManager } from '@server/integrations/notion/notionTokenManager';
-import { decryptToken, decryptEnvVariables, encryptEnvVariables } from '@bike4mind/server-utils/security/tokenEncryption';
+import {
+  decryptToken,
+  decryptEnvVariables,
+  encryptEnvVariables,
+} from '@bike4mind/server-utils/security/tokenEncryption';
 
 const NOTION_UUID_REGEX = /^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$/i;
 const MAX_ALLOWED_PAGES = 50;

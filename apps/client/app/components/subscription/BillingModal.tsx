@@ -11,7 +11,10 @@ import { useLowCreditsThreshold } from '@client/app/hooks/data/teamPlanSettings'
 import { useEffectiveCredits } from '@client/app/hooks/useEffectiveCredits';
 import { formatCreditAmount } from '@client/app/utils/formatCredits';
 import type { BillingView } from '@client/app/utils/billingDeepLink';
-import { isDelinquentSubscriptionStatus, pickDisplayedSubscription } from '@bike4mind/server-utils/lib/subscriptions/types';
+import {
+  isDelinquentSubscriptionStatus,
+  pickDisplayedSubscription,
+} from '@bike4mind/server-utils/lib/subscriptions/types';
 import { SUBSCRIPTION_PLANS_MAP } from '@client/lib/userSubscriptions/constants';
 import { CreditsSection } from './CreditsSection';
 import CreditsExplanation from './CreditsExplanation';

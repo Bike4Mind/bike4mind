@@ -16,7 +16,9 @@ vi.mock('@bike4mind/services', () => ({
     (payloadVersion ?? 0) === (userVersion ?? 0),
   isTokenTypeAcceptable: (tokenType: unknown, expected: string) => tokenType === undefined || tokenType === expected,
 }));
-vi.mock('@bike4mind/server-utils/auth/assertAccountStateUsable', () => ({ assertAccountStateUsable: mockAssertAccountStateUsable }));
+vi.mock('@bike4mind/server-utils/auth/assertAccountStateUsable', () => ({
+  assertAccountStateUsable: mockAssertAccountStateUsable,
+}));
 
 import { verifyJwtPayload } from './verifyJwtPayload';
 

@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { parseChartJSON, tryParseChartJSON, ChartParseError, getChartErrorMessage } from '@bike4mind/server-utils/app/utils/chartJsonParser';
+import {
+  parseChartJSON,
+  tryParseChartJSON,
+  ChartParseError,
+  getChartErrorMessage,
+} from '@bike4mind/server-utils/app/utils/chartJsonParser';
 
 describe('chartJsonParser', () => {
   describe('parseChartJSON', () => {
