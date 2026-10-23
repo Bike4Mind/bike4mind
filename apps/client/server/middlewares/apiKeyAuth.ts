@@ -163,6 +163,14 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScopeValue[], alsoRequiredScop
       // The same gate the JWT/CLI/WebSocket surfaces use, so the two cannot drift.
       assertAccountStateUsable(user);
 
+      // Judged before the admin role is withheld: trust is about the account, not the key's
+      // authority, so an admin's key without the admin scope is still an admin-owned key.
+      const rateLimit = await applyUntrustedRateLimit(
+        user,
+        { rateLimit: validation.rateLimit!, billingOwnerType: validation.billingOwnerType },
+        req
+      );
+
       // Admin authority over an API key comes from the key's scope, not from who minted it.
       if (!apiKeyGrantsAdmin(validation.scopes)) withholdAdminRole(user);
 
@@ -170,11 +178,7 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScopeValue[], alsoRequiredScop
       req.apiKeyInfo = {
         keyId: validation.keyId!,
         scopes: validation.scopes!,
-        rateLimit: await applyUntrustedRateLimit(
-          user,
-          { rateLimit: validation.rateLimit!, billingOwnerType: validation.billingOwnerType },
-          req
-        ),
+        rateLimit,
         expiresAt: validation.expiresAt,
         productId: validation.productId,
         billingOwnerType: validation.billingOwnerType,
