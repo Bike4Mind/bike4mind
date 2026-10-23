@@ -207,8 +207,20 @@ describe('apiKeyScopes vs the shared CONFINED_API_KEY_SCOPES', () => {
   });
 });
 
-const ALL_ACCESS: ApiKeyScopeAccess = { hasOptiAccess: true, hasOverwatchAccess: true, hearthEnabled: true };
-const NO_ACCESS: ApiKeyScopeAccess = { hasOptiAccess: false, hasOverwatchAccess: false, hearthEnabled: false };
+const ALL_ACCESS: ApiKeyScopeAccess = {
+  hasOptiAccess: true,
+  hasOverwatchAccess: true,
+  hearthEnabled: true,
+  bypass: true,
+  entitlements: new Set(),
+};
+const NO_ACCESS: ApiKeyScopeAccess = {
+  hasOptiAccess: false,
+  hasOverwatchAccess: false,
+  hearthEnabled: false,
+  bypass: false,
+  entitlements: new Set(),
+};
 const gatedBy = (flag: keyof ApiKeyScopeAccess) =>
   (Object.entries(GATED_API_KEY_SCOPES) as [ApiKeyScope, keyof ApiKeyScopeAccess][])
     .filter(([, gate]) => gate === flag)

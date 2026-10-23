@@ -22,6 +22,7 @@
  *   server/premium-generated/premiumWorkspaceSessionSettings.generated.ts - session fields owned per workspace
  *   app/premium-generated/premiumToolDisplayLabels.generated.ts - overlay tool display names
  *   app/premium-generated/premiumEntitlementGrants.generated.ts - entitlement registry rows
+ *   app/premium-generated/premiumApiKeyScopes.generated.ts - contributed API-key scopes
  *   server/premium-generated/premiumContracts.generated.ts - API contract contributions
  *   server/premium-generated/deploymentOpenApi.generated.ts - deployment spec (null form)
  *
@@ -951,6 +952,100 @@ function generateEntitlementGrants(packages) {
   );
 }
 
+// --- Generate API-key scopes ---
+
+// API-key scopes (b4mContributions.apiKeyScopes), merged into the built-in catalog in
+// constants/apiKeyScopes.ts. Like the grants above, the built-in rows are TypeScript this script
+// cannot load, so a collision with them is resolved by the merge in that module, not here.
+const API_KEY_SCOPE_VALUE_RE = /^[a-z0-9][a-z0-9-]*:[a-z0-9-]+$/;
+// isWellFormedApiKeyScope (@bike4mind/common) caps stored values at this length.
+const API_KEY_SCOPE_VALUE_MAX = 100;
+// Resources bound to privileged or dedicated-flow keys; a contributed scope may not join them.
+const RESERVED_API_KEY_SCOPE_RESOURCES = ['admin', 'cc-bridge', 'embed', 'datalake'];
+const API_KEY_SCOPE_FIELDS = ['value', 'label', 'description', 'endpoints', 'requiredEntitlement'];
+const API_KEY_SCOPE_DESCRIPTION_MAX = 200;
+const API_KEY_SCOPE_ENDPOINTS_MAX = 50;
+const API_KEY_SCOPE_ENDPOINT_RE = /^(GET|POST|PUT|PATCH|DELETE) \/[A-Za-z0-9._~:/{}-]*$/;
+const API_KEY_SCOPE_ENDPOINT_MAX = 160;
+
+function generateApiKeyScopes(packages) {
+  const outPath = join(GENERATED_DIR, 'premiumApiKeyScopes.generated.ts');
+  const typeImport = `import type { PremiumApiKeyScope } from '../premiumContract';`;
+
+  const fail = (pkg, detail) => {
+    throw new Error(`[codegen] invalid apiKeyScopes from package "${pkg.name}": ${detail}`);
+  };
+  const readText = (pkg, where, value, max) => {
+    if (typeof value !== 'string' || value.length > max || !GRANT_LABEL_RE.test(value) || /\p{Cc}/u.test(value)) {
+      fail(pkg, `${where} must be 1-${max} characters with no control characters or edge whitespace`);
+    }
+    return value;
+  };
+
+  const scopes = new Map();
+  for (const pkg of packages) {
+    const declared = pkg.contributions.apiKeyScopes;
+    if (declared === undefined) continue;
+    if (!Array.isArray(declared)) fail(pkg, `expected an array, got ${JSON.stringify(declared)}`);
+    for (const entry of declared) {
+      if (!isPlainObject(entry)) fail(pkg, `rows must be objects, got ${JSON.stringify(entry)}`);
+      for (const field of Object.keys(entry)) {
+        if (!API_KEY_SCOPE_FIELDS.includes(field)) fail(pkg, `unknown field ${JSON.stringify(field)}`);
+      }
+      const { value } = entry;
+      if (typeof value !== 'string' || !API_KEY_SCOPE_VALUE_RE.test(value)) {
+        fail(pkg, `value ${JSON.stringify(value)} must match ${API_KEY_SCOPE_VALUE_RE}`);
+      }
+      if (value.length > API_KEY_SCOPE_VALUE_MAX) {
+        fail(pkg, `value ${JSON.stringify(value)} must be at most ${API_KEY_SCOPE_VALUE_MAX} characters`);
+      }
+      if (RESERVED_API_KEY_SCOPE_RESOURCES.includes(value.slice(0, value.indexOf(':')))) {
+        fail(pkg, `value ${JSON.stringify(value)} uses a reserved resource`);
+      }
+      const row = {
+        value,
+        label: readText(pkg, `label of "${value}"`, entry.label, GRANT_LABEL_MAX),
+        description: readText(pkg, `description of "${value}"`, entry.description, API_KEY_SCOPE_DESCRIPTION_MAX),
+        endpoints: [],
+      };
+      if (!Array.isArray(entry.endpoints) || entry.endpoints.length > API_KEY_SCOPE_ENDPOINTS_MAX) {
+        fail(pkg, `endpoints of "${value}" must be an array of at most ${API_KEY_SCOPE_ENDPOINTS_MAX} lines`);
+      }
+      for (const line of entry.endpoints) {
+        if (
+          typeof line !== 'string' ||
+          line.length > API_KEY_SCOPE_ENDPOINT_MAX ||
+          !API_KEY_SCOPE_ENDPOINT_RE.test(line)
+        ) {
+          fail(pkg, `endpoint ${JSON.stringify(line)} of "${value}" must look like "GET /api/path"`);
+        }
+        row.endpoints.push(line);
+      }
+      if (entry.requiredEntitlement !== undefined) {
+        if (typeof entry.requiredEntitlement !== 'string' || !GRANT_KEY_RE.test(entry.requiredEntitlement)) {
+          fail(pkg, `requiredEntitlement of "${value}" must be lowercase and match ${GRANT_KEY_RE}`);
+        }
+        row.requiredEntitlement = entry.requiredEntitlement;
+      }
+
+      const prior = scopes.get(value);
+      if (prior && JSON.stringify(prior.row) !== JSON.stringify(row)) {
+        throw new Error(
+          `[codegen] apiKeyScopes gives "${value}" different rows in packages "${prior.from}" and "${pkg.name}"; ` +
+            `declare it in one.`
+        );
+      }
+      if (!prior) scopes.set(value, { row, from: pkg.name });
+    }
+  }
+
+  const rows = [...scopes.values()].map(({ row }) => row);
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumApiKeyScopes: readonly PremiumApiKeyScope[] = ${JSON.stringify(rows, null, 2)};\n`
+  );
+}
+
 // --- Generate localStorage key prefixes ---
 
 // Overlays own localStorage keys core cannot name without naming their surface, so
@@ -1661,5 +1756,6 @@ generateWorkspaceCopyEntitlements(packages);
 generateWorkspaceDeniedTools(packages);
 generateToolDisplayLabels(packages);
 generateEntitlementGrants(packages);
+generateApiKeyScopes(packages);
 
 console.log('[codegen] done.');
