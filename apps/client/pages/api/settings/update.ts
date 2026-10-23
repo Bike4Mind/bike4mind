@@ -9,7 +9,8 @@ import {
   maskSensitiveSettingValue,
   MIN_PRICE_PER_CREDIT_USD,
   partitionEmailList,
-  settingsMap,
+  isRegisteredSettingKey,
+  resolveSettingDefinition,
 } from '@bike4mind/common';
 import { withTransaction } from '@bike4mind/database';
 import { AdminSettings } from '@bike4mind/database/infra';
@@ -42,11 +43,16 @@ const handler = baseApi().put(
     if (!req.ability) throw new NotFoundError('Ability not found');
     if (!req.ability.can('update', AdminSettings)) throw new NotFoundError('Permission denied');
 
-    const key = SettingKeySchema.parse(req.body.key);
+    // A contributed key is accepted once registered; anything else still fails SettingKeySchema (400).
+    const key: string =
+      typeof req.body.key === 'string' && isRegisteredSettingKey(req.body.key)
+        ? req.body.key
+        : SettingKeySchema.parse(req.body.key);
+    const definition = resolveSettingDefinition(key)!;
 
     // Delete, not store the default, so the setting reads as unset again. hardDelete: the upsert below
     // would match a soft-deleted tombstone without reviving it (softDeletePlugin, db-core/src/utils/mongo.ts).
-    if (settingsMap[key].clearDeletesRow && isBlankSettingValue(req.body.value)) {
+    if (definition.clearDeletesRow && isBlankSettingValue(req.body.value)) {
       await withTransaction(async () => {
         const existing = await AdminSettings.findOne({ settingName: key }).lean();
         await AdminSettings.deleteOne({ settingName: key }, { hardDelete: true });
@@ -58,7 +64,7 @@ const handler = baseApi().put(
       return res.json({ settingName: key, settingValue: null });
     }
 
-    let value = settingsMap[key].schema.parse(req.body.value);
+    let value = definition.schema.parse(req.body.value);
 
     if (key === 'forcedRetrievalMinSimilarityPct' && req.body.confirmAboveMeasuredFloor !== true) {
       await refuseFloorAboveMeasured(Number(value), req.logger);
@@ -82,7 +88,7 @@ const handler = baseApi().put(
       value = valid;
     }
 
-    const isSensitiveSetting = settingsMap[key].isSensitive === true;
+    const isSensitiveSetting = definition.isSensitive === true;
 
     // The client is only ever sent a mask for a sensitive setting (see fetch.ts), so a
     // mask arriving here is never a real value - keep what is stored rather than
@@ -215,7 +221,7 @@ const handler = baseApi().put(
     // artifact stale. The cost is bounded (one indexed find + one small S3 PUT) and this
     // branch only runs on the rare publicSafe-settings write, so it can't realistically
     // approach the 60s function timeout.
-    if (settingsMap[key]?.publicSafe) {
+    if (definition.publicSafe) {
       await materializePublicSettingsArtifactSafe(req.logger);
     }
 

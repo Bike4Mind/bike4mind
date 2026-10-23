@@ -867,7 +867,7 @@ export const CATEGORY_ICONS = {
   Slack: 'Chat',
 } as const;
 
-interface BaseSetting {
+export interface BaseSetting {
   key: SettingKey;
   name: string;
   description: string;
@@ -924,6 +924,20 @@ interface BaseSetting {
 
 /** Default of the `lowCreditsThreshold` setting - the credit balance below which the UI warns. */
 export const LOW_CREDITS_THRESHOLD_DEFAULT = 1000;
+
+/**
+ * One admin setting's definition, as built by the `make*Setting` factories. `K` is `string` for a
+ * contributed setting, whose key and parent are not `SettingKey` literals.
+ */
+export type SettingDefinition<K extends string = SettingKey> = Omit<BaseSetting, 'key' | 'dependsOn'> & {
+  key: K;
+  dependsOn?: [K] extends [SettingKey] ? SettingKey : string;
+  type: 'string' | 'number' | 'boolean' | 'array' | 'object';
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  schema: z.ZodType<any, any, any>;
+  defaultValue?: string | number | boolean | object | undefined;
+  options?: string[];
+};
 
 /**
  * "No stored choice", for a setting of ANY type (the scoped resolver applies this to every key, not
@@ -1118,6 +1132,32 @@ function makeObjectSetting<T>(
       return val; // Already an object or other type
     }, config.schema),
   };
+}
+
+// Factories for a contributed setting (see registerContributedSettings). They build the same schema
+// as the core factories; only the key and parent are widened to plain strings.
+type ContributedSettingFields = Omit<
+  SettingDefinition<string>,
+  'type' | 'schema' | 'defaultValue' | 'options' | 'scope'
+>;
+type AsCoreConfig<T> = Omit<T, 'key' | 'dependsOn'> & BaseSetting;
+
+export function makeContributedStringSetting(
+  config: { defaultValue: string | undefined; options?: string[] } & ContributedSettingFields
+): SettingDefinition<string> {
+  return makeStringSetting(config as AsCoreConfig<typeof config>);
+}
+
+export function makeContributedNumberSetting(
+  config: { defaultValue?: number; min?: number; max?: number; int?: boolean } & ContributedSettingFields
+): SettingDefinition<string> {
+  return makeNumberSetting(config as AsCoreConfig<typeof config>);
+}
+
+export function makeContributedBooleanSetting(
+  config: { defaultValue?: boolean; acceptNumeric?: boolean } & ContributedSettingFields
+): SettingDefinition<string> {
+  return makeBooleanSetting(config as AsCoreConfig<typeof config>);
 }
 
 // function makeArraySetting(config: { defaultValue?: string[] } & BaseSetting) {
@@ -5504,13 +5544,7 @@ export const settingsMap = {
   }),
   // Add more settings as needed
 } satisfies {
-  [key in SettingKey]: BaseSetting & {
-    type: 'string' | 'number' | 'boolean' | 'array' | 'object';
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    schema: z.ZodType<any, any, any>;
-    defaultValue?: string | number | boolean | object | undefined;
-    options?: string[];
-  };
+  [key in SettingKey]: SettingDefinition;
 };
 
 export type SettingValue<K extends SettingKey> = z.infer<(typeof settingsMap)[K]['schema']>;
@@ -5646,7 +5680,7 @@ export function isMaskedSensitiveSettingValue(value: unknown): boolean {
  * publicSafe settings should never carry secrets, but redact anyway).
  */
 export function redactSettingSecrets(setting: AdminSettingDoc): AdminSettingDoc {
-  const definition = (settingsMap as Record<string, { isSensitive?: boolean } | undefined>)[setting.settingName];
+  const definition = resolveSettingDefinition(setting.settingName);
   if (!definition || definition.isSensitive) {
     return { ...setting, settingValue: maskSensitiveSettingValue(setting.settingValue) };
   }
@@ -5680,11 +5714,11 @@ export function redactSettingSecrets(setting: AdminSettingDoc): AdminSettingDoc 
  * value stays empty. The authoritative mask carrying the real last-4 still comes from
  * /api/settings/fetch. Non-sensitive shapes (sreAgentConfig) fall through to redactSettingSecrets.
  *
- * A `settingName` absent from `settingsMap` is treated as sensitive too, matching
+ * A `settingName` with no definition (core or contributed) is treated as sensitive too, matching
  * redactSettingSecrets - an orphaned row must never broadcast unmasked.
  */
 export function redactSettingSecretsForBroadcast(setting: AdminSettingDoc): AdminSettingDoc {
-  const definition = (settingsMap as Record<string, { isSensitive?: boolean } | undefined>)[setting.settingName];
+  const definition = resolveSettingDefinition(setting.settingName);
   if (!definition || definition.isSensitive) {
     const hasValue = typeof setting.settingValue === 'string' && setting.settingValue.length > 0;
     return { ...setting, settingValue: hasValue ? SENSITIVE_SETTING_MASK : '' };
@@ -5694,7 +5728,7 @@ export function redactSettingSecretsForBroadcast(setting: AdminSettingDoc): Admi
 
 /** Setting keys explicitly tagged `publicSafe` - the only keys allowed in the public artifact. */
 export function publicSafeSettingKeys(): string[] {
-  return (Object.values(settingsMap) as Array<{ key: string; publicSafe?: boolean }>)
+  return allSettingDefinitions()
     .filter(s => s.publicSafe === true)
     .map(s => s.key);
 }
@@ -5717,6 +5751,9 @@ export const experimentalNonGroupSettingKeys: readonly SettingKey[] = ['EnableCo
  * experimental flag added to `settingsMap` is surfaced automatically - there is
  * no second hand-maintained allowlist in the client to forget - plus
  * `experimentalNonGroupSettingKeys`.
+ *
+ * Core keys only, computed at import time. Code that must also see contributed experimental
+ * settings calls `getExperimentalFeatureSettingKeys()`, since registration happens after import.
  */
 export const experimentalFeatureSettingKeys: readonly SettingKey[] = (() => {
   const groupKeys = (Object.values(settingsMap) as Array<{ key: SettingKey; group?: string }>)
@@ -5724,6 +5761,14 @@ export const experimentalFeatureSettingKeys: readonly SettingKey[] = (() => {
     .map(s => s.key);
   return Array.from(new Set<SettingKey>([...groupKeys, ...experimentalNonGroupSettingKeys]));
 })();
+
+/** `experimentalFeatureSettingKeys` plus every contributed setting in the `EXPERIMENTAL` group. */
+export function getExperimentalFeatureSettingKeys(): string[] {
+  const contributed = Array.from(contributedSettings.values())
+    .filter(s => s.group === API_SERVICE_GROUPS.EXPERIMENTAL.id)
+    .map(s => s.key);
+  return Array.from(new Set<string>([...experimentalFeatureSettingKeys, ...contributed]));
+}
 
 /**
  * Setting keys a NON-ADMIN authenticated caller may read via GET /api/settings/fetch.
@@ -5743,10 +5788,13 @@ export const experimentalFeatureSettingKeys: readonly SettingKey[] = (() => {
  * belt-and-braces next to `redactSettingSecrets` on the response -- that masks the VALUE,
  * this keeps the key out of a non-admin's payload at all.
  *
+ * Arm 1 covers core keys only: a contributed setting is readable only through `publicSafe` or an explicit
+ * `userReadable: true`, since an extension's group choice is about admin UI placement, not exposure.
+ *
  * Admins bypass this entirely and read the full catalog.
  */
 export function userReadableSettingKeys(): string[] {
-  const entries = Object.values(settingsMap) as Array<{ key: string; userReadable?: boolean; isSensitive?: boolean }>;
+  const entries = allSettingDefinitions();
   const tagged = entries.filter(s => s.userReadable === true).map(s => s.key);
   const sensitive = new Set(entries.filter(s => s.isSensitive === true).map(s => s.key));
   const union = new Set<string>([...experimentalFeatureSettingKeys, ...publicSafeSettingKeys(), ...tagged]);
@@ -5772,4 +5820,81 @@ export function buildPublicSettingsProjection(settings: AdminSettingDoc[]): Publ
     .filter(s => allowed.has(s.settingName))
     .map(redactSettingSecrets)
     .map(s => ({ settingName: s.settingName, settingValue: s.settingValue }));
+}
+
+// --- Contributed settings ---
+//
+// An extension package registers its own setting definitions here instead of adding literals to
+// `SettingKeySchema`. Registration is a side effect of importing the generated contribution module
+// (apps/client: premiumAdminSettings.generated.ts, via lib/settings/registerContributedSettings.ts),
+// so a read that runs before that import sees only the core catalog.
+//
+// The contribution module also ships in the client bundle, so a sensitive contributed setting may not
+// carry a default. Contributed settings are platform-level: scoped overrides accept core keys only.
+
+const contributedSettings = new Map<string, SettingDefinition<string>>();
+
+const RESERVED_SETTING_NAMES = new Set(['__proto__', 'constructor', 'prototype']);
+
+function isCoreSettingKey(key: string): key is SettingKey {
+  return Object.prototype.hasOwnProperty.call(settingsMap, key);
+}
+
+export interface ContributedSettingsRegistration {
+  registered: string[];
+  /** Keys a core setting already defines; the core definition is kept. */
+  coreCollisions: string[];
+  /** Keys an earlier contribution already registered; the first one is kept. */
+  duplicates: string[];
+  /** Reserved object keys, definitions with no key or schema, sensitive ones with a default, and ones declaring a scope. */
+  rejected: string[];
+}
+
+/** Adds contributed setting definitions. Never replaces an existing definition. */
+export function registerContributedSettings(
+  definitions: readonly SettingDefinition<string>[]
+): ContributedSettingsRegistration {
+  const result: ContributedSettingsRegistration = { registered: [], coreCollisions: [], duplicates: [], rejected: [] };
+  for (const definition of definitions) {
+    const key = definition?.key;
+    if (
+      typeof key !== 'string' ||
+      key.trim() === '' ||
+      RESERVED_SETTING_NAMES.has(key) ||
+      typeof definition.schema?.safeParse !== 'function' ||
+      (definition.isSensitive === true && definition.defaultValue !== undefined && definition.defaultValue !== '') ||
+      definition.scope !== undefined
+    ) {
+      result.rejected.push(String(key));
+    } else if (isCoreSettingKey(key)) {
+      result.coreCollisions.push(key);
+    } else if (contributedSettings.has(key)) {
+      // The same module can be evaluated by more than one entrypoint; that is not a clash.
+      if (contributedSettings.get(key) !== definition) result.duplicates.push(key);
+    } else {
+      contributedSettings.set(key, definition);
+      result.registered.push(key);
+    }
+  }
+  return result;
+}
+
+/** @internal Tests only: drops every contributed definition. */
+export function resetContributedSettings(): void {
+  contributedSettings.clear();
+}
+
+/** The core definition for `key`, else the contributed one. */
+export function resolveSettingDefinition(key: string): SettingDefinition<string> | undefined {
+  if (isCoreSettingKey(key)) return settingsMap[key];
+  return contributedSettings.get(key);
+}
+
+export function isRegisteredSettingKey(key: string): boolean {
+  return resolveSettingDefinition(key) !== undefined;
+}
+
+/** Core definitions followed by contributed ones. */
+export function allSettingDefinitions(): SettingDefinition<string>[] {
+  return [...(Object.values(settingsMap) as SettingDefinition<string>[]), ...contributedSettings.values()];
 }

@@ -15,6 +15,7 @@
  * 3. Direct Lambda invocation with ContinuationSchema - resumes after permission response
  */
 
+import '@client/lib/settings/registerContributedSettings';
 import {
   connectDB,
   sessionRepository,
