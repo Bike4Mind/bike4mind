@@ -75,6 +75,7 @@ type TabBarState = Omit<BrowserPaneState, 'tabs' | 'activeTabId'>;
 interface TabHooks {
   onClosed: () => void;
   onChanged: () => void;
+  onSnapshot: (snapshot: BrowserSnapshot) => void;
   /** A popup or `target=_blank` asked for `url`. `fromAgent` when one of the agent's own steps caused it. */
   onWindowOpen: (url: string, fromAgent: boolean, background: boolean) => void;
   onShortcut: (shortcut: BrowserTabShortcut) => void;
@@ -483,7 +484,9 @@ class ElectronPage implements BrowserPage {
 
   async snapshot(maxChars: number, inView = false): Promise<BrowserSnapshot> {
     const snapshot = await this.script<unknown>(pageCall(SNAPSHOT_PAGE, maxChars, inView), 'Reading the page');
-    return browserSnapshotSchema.parse(snapshot);
+    const parsed = browserSnapshotSchema.parse(snapshot);
+    this.hooks.onSnapshot(parsed);
+    return parsed;
   }
 
   async scroll(target: ScrollTarget): Promise<string> {
@@ -710,19 +713,7 @@ export class BrowserManager implements BrowserProvider {
       return tab;
     };
     return {
-      page: async () => {
-        const page = this.activeTab(sessionId);
-        return new Proxy(page, {
-          get: (target, property) =>
-            property === 'snapshot'
-              ? async (maxChars: number, inView = false) => {
-                  const snapshot = await target.snapshot(maxChars, inView);
-                  void Promise.resolve(this.onSnapshot(sessionId, snapshot)).catch(() => undefined);
-                  return snapshot;
-                }
-              : Reflect.get(target, property, target),
-        });
-      },
+      page: async () => this.activeTab(sessionId),
       tabs: () => this.tabInfo(sessionId),
       newTab: async () => this.openTab(sessionId, true) ?? null,
       selectTab: async id => {
@@ -958,6 +949,7 @@ export class BrowserManager implements BrowserProvider {
         this.push(sessionId);
         this.apply();
       },
+      onSnapshot: snapshot => void Promise.resolve(this.onSnapshot(sessionId, snapshot)).catch(() => undefined),
       onWindowOpen: (url, fromAgent, background) => this.openFromPage(sessionId, tab, url, fromAgent, background),
       // Out of the input event first: Cmd+W destroys the very contents that is dispatching it.
       onShortcut: shortcut => setImmediate(() => void this.onShortcut(sessionId, shortcut)),
