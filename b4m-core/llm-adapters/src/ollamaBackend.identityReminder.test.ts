@@ -57,6 +57,24 @@ describe('OllamaBackend identity reminder', () => {
     expect(systemContents(chat.mock.calls[0][0])).toEqual([]);
   });
 
+  it('sends the caller system message unappended when the caller opts out', async () => {
+    const { backend, chat } = makeBackend([answer('ok')]);
+
+    await run(
+      backend,
+      [
+        { role: 'system', content: 'You are terse.' },
+        { role: 'user', content: 'hi' },
+      ],
+      { omitIdentityReminder: true }
+    );
+
+    expect(chat.mock.calls[0][0].messages).toEqual([
+      { role: 'system', content: 'You are terse.' },
+      { role: 'user', content: 'hi' },
+    ]);
+  });
+
   // The tool round recurses with the caller's original message array: appending in place
   // would stack one reminder per round.
   it('carries exactly one reminder on every round of a tool loop', async () => {

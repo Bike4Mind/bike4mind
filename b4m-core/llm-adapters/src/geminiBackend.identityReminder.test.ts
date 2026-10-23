@@ -39,6 +39,18 @@ describe('GeminiBackend identity reminder', () => {
     expect(request.config?.systemInstruction).toBe(`You are terse.\n\n${REMINDER}`);
   });
 
+  // The pipeline can emit a second system layer after user turns (processFabFilesServer);
+  // the adapter joins every layer, then appends once - never once per layer.
+  it('appends one reminder after joining several system layers', async () => {
+    const request = await run([
+      { role: 'system', content: 'You are terse.' },
+      { role: 'user', content: 'hi' },
+      { role: 'system', content: 'Retrieved file content.' },
+    ]);
+
+    expect(request.config?.systemInstruction).toBe(`You are terse.\nRetrieved file content.\n\n${REMINDER}`);
+  });
+
   it('sends the reminder as the whole system instruction when the caller supplied none', async () => {
     const request = await run([{ role: 'user', content: 'hi' }]);
 

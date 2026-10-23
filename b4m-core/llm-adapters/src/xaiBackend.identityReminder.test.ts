@@ -49,4 +49,19 @@ describe('XAIBackend identity reminder', () => {
 
     expect(messages).toEqual([{ role: 'user', content: 'hi' }]);
   });
+
+  it('sends the caller system message unappended when the caller opts out', async () => {
+    const messages = await send(
+      [
+        { role: 'system', content: 'You are terse.' },
+        { role: 'user', content: 'hi' },
+      ],
+      { omitIdentityReminder: true }
+    );
+
+    expect(messages).toEqual([
+      { role: 'system', content: 'You are terse.' },
+      { role: 'user', content: 'hi' },
+    ]);
+  });
 });
