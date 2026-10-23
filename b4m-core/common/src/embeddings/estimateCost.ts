@@ -9,11 +9,8 @@ const usdPerTokenOf = (model: string): number | undefined => {
 };
 
 /**
- * Does the catalog hold a rate for this model, as opposed to settling $0 because it has none?
- *
- * `getEmbeddingModelCost` cannot tell those apart from the outside: a locally-hosted embedder priced
- * at an explicit 0 and a model with no rate at all both return 0. A usage-event write does not care -
- * a SPEND PREFLIGHT does, because quoting $0 as truth is the one lie a spend gate must not tell.
+ * Does the catalog hold a rate for this model? `getEmbeddingModelCost` returns 0 both for an explicit $0 rate and
+ * for no rate at all; spend preflights must refuse the latter.
  */
 export const hasPublishedEmbeddingRate = (model: string): boolean => usdPerTokenOf(model) !== undefined;
 
