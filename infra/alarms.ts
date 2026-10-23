@@ -1312,14 +1312,17 @@ if (isMonitoredStage) {
   /**
    * Alarm: forced retrieval answering large lakes from a by-name cut
    *
-   * Each large-lake turn publishes 1 (by-name cut) or 0 (relevance pick), so the Stage-only
-   * Average is the by-name share. It is computed as Sum / SampleCount in metric math so a day
-   * with one turn, where a single cut reads as 100%, cannot fire: the alarm needs 2+ turns.
-   * Volume is low (about 16 large-lake turns in 14 days on production), hence a daily period and
-   * a >50% bar, against a pre-fix rate of 7 of 16.
+   * A turn whose candidates were cut to the 100-file cap (the lake, plus the library when the turn
+   * includes it) publishes 1 (by-name cut) or 0 (relevance pick), so the Stage-only Average is
+   * the by-name share. A turn whose 1000-row listing overflowed but left <= 100 servable files
+   * publishes nothing. The share is Sum / SampleCount in metric math so a day with one turn, where
+   * a single cut reads as 100%, cannot fire: the alarm needs 2+ turns. Volume is low (about 16
+   * large-lake turns in 14 days on production), hence a daily period and a >50% bar, against a
+   * pre-fix rate of 7 of 16.
    *
-   * relevance-unavailable cuts count too, so a monitored stage with EnableDataLakeVectorSearch
-   * off fires on any day with 2+ large-lake turns. That is a config to fix, not noise.
+   * relevance-unavailable cuts count too: EnableDataLakeVectorSearch off, Atlas vector search not
+   * available (self-host), or that setting failing to read. The first two fire on any day with
+   * 2+ large turns, which is a config to fix; a read failure is logged as a warn on the turn.
    *
    * Metric emitted by: b4m-core/services/src/llm/forcedRetrievalSelectionMetrics.ts ->
    * recordForcedRetrievalCutMetrics.
@@ -1329,7 +1332,7 @@ if (isMonitoredStage) {
   new aws.cloudwatch.MetricAlarm('forcedRetrievalByNameCut', {
     name: `${$app.name}-${$app.stage}-forced-retrieval-by-name-cut`,
     alarmDescription:
-      'Over half of a day of large-lake forced-retrieval turns (min 2) were cut by file name instead of relevance. Check the Reason series on the data-lake search dashboard: deadline points at the vector index, relevance-unavailable at the EnableDataLakeVectorSearch setting',
+      'Over half of a day of large-lake forced-retrieval turns (min 2) were cut by file name instead of relevance. Check the Reason series on the data-lake search dashboard: deadline points at the vector index, relevance-unavailable at the EnableDataLakeVectorSearch setting or Atlas vector search availability (or a warn that the setting could not be read)',
     comparisonOperator: 'GreaterThanThreshold',
     evaluationPeriods: 1,
     threshold: 0.5,

@@ -29,7 +29,8 @@ export type ForcedRetrievalCutMetrics =
   | { selection: 'fileName'; reason: ForcedRetrievalFallbackReason; annPickMs: number | null };
 
 /**
- * Emits one datapoint set per turn whose scope overflowed the cap. Never throws, and no-ops outside
+ * Emits one datapoint set per turn whose candidates were cut to the cap: servable files over it, or
+ * a single-lake listing the query already cut at it. Never throws, and no-ops outside
  * deployed stages (`SEED_STAGE_NAME`, as in dataLakeSearchMetrics.ts, whose bounded-client
  * rationale applies here too: this is awaited on the chat turn).
  */

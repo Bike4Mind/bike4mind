@@ -1255,6 +1255,51 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       expect(recordForcedRetrievalCutMetricsMock).not.toHaveBeenCalled();
     });
 
+    it('without vector search, records the cut when the lake fits but lake plus library overflow the cap', async () => {
+      const { ctx } = makeLargeScopeCtx({ vectorSearchEnabled: false });
+      const lakeRows = Array.from({ length: 60 }, (_, i) => fileInLake('a', i));
+      const libraryRows = Array.from({ length: 60 }, (_, i) => fileInLake('lib', i, []));
+      ctx.db.fabfiles.search = vi.fn(
+        (_u, _q, _f, page: { limit: number }, _s, opts: { restrictToDataLake: boolean }) => {
+          const all = opts.restrictToDataLake ? lakeRows : [...lakeRows, ...libraryRows];
+          return Promise.resolve({
+            data: all.slice(0, page.limit),
+            hasMore: all.length > page.limit,
+            total: all.length,
+          });
+        }
+      );
+      const feature = new KnowledgeRetrievalFeature(
+        ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+        ['datalake:a'],
+        undefined,
+        undefined,
+        undefined,
+        false,
+        undefined,
+        true
+      );
+      stubLakeAccess(feature, [lake('a')]);
+      await feature.getContextMessages(
+        makeQuest(),
+        embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+        'stage III NSCLC treatment'
+      );
+      expect(ctx.db.fabfiles.search).toHaveBeenCalledWith(
+        expect.anything(),
+        '',
+        expect.anything(),
+        expect.objectContaining({ limit: 100 }),
+        expect.anything(),
+        expect.objectContaining({ restrictToDataLake: true })
+      );
+      expect(recordForcedRetrievalCutMetricsMock).toHaveBeenCalledTimes(1);
+      expect(recordForcedRetrievalCutMetricsMock).toHaveBeenCalledWith(
+        { selection: 'fileName', reason: 'relevance-unavailable', annPickMs: null },
+        expect.anything()
+      );
+    });
+
     it('with vector search, picks candidates by relevance and serves the late-sorting answer', async () => {
       const { ctx, annDb, warn } = makeLargeScopeCtx({ vectorSearchEnabled: true });
       const { quest, content } = await run(ctx);
@@ -1648,6 +1693,8 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       expect(annDb.vectorSearch).not.toHaveBeenCalled();
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('only the first 1000 by file name are considered, so'));
       expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('candidate cap'));
+      // Relevance was available, so this is no relevance-unavailable cut; the alarm doc says it publishes nothing.
+      expect(recordForcedRetrievalCutMetricsMock).not.toHaveBeenCalled();
     });
 
     it('falls back when no candidate file is vector-index ready yet', async () => {

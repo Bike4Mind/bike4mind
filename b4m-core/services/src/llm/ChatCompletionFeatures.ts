@@ -3410,8 +3410,9 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         queryVector,
         embeddingModel,
         relevanceSelectionAvailable,
-        // Same predicate as reportCoverage's cutAtCandidateCap: only a single lake without
-        // relevance lists at the cap, so the other paths cannot record this turn twice.
+        // Only a single lake without relevance lists at the cap; the wider listings record their
+        // cut in the over-cap branch, so no turn is recorded twice. A wider listing that overflowed
+        // with <= cap servable files records nothing (see the forcedRetrievalByNameCut alarm doc).
         fileResults.hasMore === true && listingLimit <= FORCED_RETRIEVAL_MAX_CANDIDATE_FILES
       );
       const supersession = buildSupersessionReport(collapse.superseded);
