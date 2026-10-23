@@ -175,6 +175,7 @@ async function open(sessionId: string, mode: 'code' | 'chat' = 'code') {
 describe('the session panel in the shell', () => {
   it('docks over the thread of a Code session with a folder, holding the chips the composer used to', async () => {
     paneWidth(1600);
+    transcript = [{ id: 'm1', role: 'user', content: 'Hello', createdAt: '2026-10-01T00:00:00.000Z' }];
     await open('bound');
 
     expect(get('session-panel').dataset.variant).toBe('docked');
@@ -185,6 +186,7 @@ describe('the session panel in the shell', () => {
 
   it('hides from the header button and remembers it', async () => {
     paneWidth(1600);
+    transcript = [{ id: 'm1', role: 'user', content: 'Hello', createdAt: '2026-10-01T00:00:00.000Z' }];
     await open('bound');
 
     await act(async () => get('chat-toggle-session-panel-btn').click());
@@ -200,6 +202,7 @@ describe('the session panel in the shell', () => {
 
   it('folds into the header button on a narrow pane and opens as a popover that Escape shuts', async () => {
     paneWidth(900);
+    transcript = [{ id: 'm1', role: 'user', content: 'Hello', createdAt: '2026-10-01T00:00:00.000Z' }];
     await open('bound');
     expect(find('session-panel')).toBeNull();
 
@@ -212,12 +215,31 @@ describe('the session panel in the shell', () => {
     expect(window.localStorage.getItem('b4m.sessionPanel.open')).toBeNull();
   });
 
-  it('is not offered on an unbound Code session, whose chips stay above the composer', async () => {
+  it('centers setup in an empty Code transcript without duplicating it above the composer', async () => {
     paneWidth(1600);
     await open('unbound');
     expect(find('chat-toggle-session-panel-btn')).toBeNull();
     expect(find('session-panel')).toBeNull();
-    expect(find('session-chips-row')).not.toBeNull();
+    expect(get('chat-code-workspace-setup').contains(find('session-chips-row'))).toBe(true);
+    expect(document.querySelectorAll('[data-testid="session-chips-row"]')).toHaveLength(1);
+    expect(find('chat-thread-empty')).toBeNull();
+  });
+
+  it('centers setup for an empty bound Code session instead of opening the panel', async () => {
+    paneWidth(1600);
+    await open('bound');
+    expect(find('session-panel')).toBeNull();
+    expect(find('chat-toggle-session-panel-btn')).toBeNull();
+    expect(get('chat-code-workspace-setup').contains(find('session-chips-row'))).toBe(true);
+  });
+
+  it('moves workspace controls into the panel once the Code session has messages', async () => {
+    paneWidth(1600);
+    transcript = [{ id: 'm1', role: 'user', content: 'Hello', createdAt: '2026-10-01T00:00:00.000Z' }];
+    await open('bound');
+    expect(get('session-panel').contains(find('session-chips-panel'))).toBe(true);
+    expect(find('chat-code-workspace-setup')).toBeNull();
+    expect(find('session-chips-row')).toBeNull();
   });
 
   it('is not offered on a Chat session', async () => {
@@ -272,6 +294,7 @@ describe('the session panel in the shell', () => {
 
   it('shows a project binding error above the composer once the panel is hidden', async () => {
     paneWidth(1600);
+    transcript = [{ id: 'm1', role: 'user', content: 'Hello', createdAt: '2026-10-01T00:00:00.000Z' }];
     updateProject = async () => ({ ok: false, error: 'Could not read the repository' });
     await open('bound');
 

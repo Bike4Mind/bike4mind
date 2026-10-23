@@ -5,6 +5,8 @@ import Button from '@mui/joy/Button';
 import Checkbox from '@mui/joy/Checkbox';
 import Chip from '@mui/joy/Chip';
 import Dropdown from '@mui/joy/Dropdown';
+import FormControl from '@mui/joy/FormControl';
+import FormLabel from '@mui/joy/FormLabel';
 import IconButton from '@mui/joy/IconButton';
 import Input from '@mui/joy/Input';
 import ListDivider from '@mui/joy/ListDivider';
@@ -90,39 +92,32 @@ type ChipBinding = ProjectBindingController & { chips: ChipRowState };
  */
 const ROW_HEIGHT = 28;
 
-/** One pill in the row: the frame, with its controls drawn plain inside it. */
-const pillSx: SxProps = {
-  display: 'flex',
-  alignItems: 'center',
-  minHeight: ROW_HEIGHT,
-  borderRadius: '999px',
-  border: '1px solid',
-  borderColor: 'neutral.outlinedBorder',
-  bgcolor: 'background.surface',
-};
-
-/** Joy's `sm` Chip, brought up to the row - and in to `pillButtonSx`'s padding and gap. */
+/** Joy's `sm` Chip, used only for granted folders in non-Code conversations. */
 const chipSx: SxProps = {
   '--Chip-minHeight': `${ROW_HEIGHT}px`,
   '--Chip-paddingInline': '8px',
   gap: '6px',
 };
 
-/** A pill's inner button: no border or background of its own, the pill provides both. */
-const pillButtonSx: SxProps = {
+const formButtonSx: SxProps = {
   fontWeight: 'normal',
-  minHeight: 22,
-  px: 1,
+  width: '100%',
+  minWidth: 0,
+  minHeight: 32,
+  px: 1.25,
+  justifyContent: 'flex-start',
   '--Button-gap': '6px',
-  borderRadius: '999px',
+  borderRadius: 'sm',
 };
+
+const formRowSx: SxProps = { width: '100%', minWidth: 0 };
 
 /** Chip tooltips put a path on a line of its own; the width cap is in theme.ts. */
 const chipTooltipSx: SxProps = { whiteSpace: 'pre-line' };
 
 /**
- * Where the chips live: a row above the composer (an unbound Code session, where they are how a
- * folder gets chosen) or the session panel's Environment section at the top of the window.
+ * Where the workspace form lives: centered in an empty transcript or in the session panel's
+ * Environment section after the first message.
  */
 export type ChipLayout = 'row' | 'panel';
 
@@ -253,14 +248,14 @@ function ProjectChip({
       <Tooltip title={folder.tooltip} size="sm" variant="soft" placement={placement.tooltip} sx={chipTooltipSx}>
         {/* Wrapped for the same reason as the worktree toggle below: a disabled button takes no
             pointer events, so the reason it is locked would be unreadable on the chip it is about. */}
-        <Box sx={{ display: 'flex' }}>
+        <Box sx={{ display: 'flex', width: '100%' }}>
           <MenuButton
             size="sm"
             variant={unset ? 'soft' : 'outlined'}
             color={unset ? 'primary' : 'neutral'}
             disabled={binding.busy || !folder.enabled}
             startDecorator={<FolderIcon />}
-            sx={{ ...pillButtonSx, minHeight: ROW_HEIGHT }}
+            sx={formButtonSx}
             slotProps={{ root: { 'data-testid': 'session-chip-project' } }}
           >
             <Typography level="body-xs" textColor="inherit" noWrap>
@@ -309,12 +304,7 @@ function ProjectChip({
 }
 
 /**
- * Branch and worktree as one pill, split by a divider.
- *
- * They are paired rather than separate because a worktree belongs to a branch: two independent
- * controls would invite "worktree, no branch", which resolves to nothing the tools could run in.
- *
- * With no folder chosen the pill stays clickable and its menu carries the reason. A branch list
+ * With no folder chosen the branch control stays clickable and its menu carries the reason. A branch list
  * needs a repository, and "nothing to list" is a thing to say rather than a control to grey out.
  * Once the session has run here the opposite holds - nothing in the menu could be picked - so
  * the branch button is disabled and its tooltip says why.
@@ -350,149 +340,164 @@ function BranchChip({
   const onNow = branchChip.label;
 
   return (
-    <Box sx={pillSx} data-testid="session-chip-branch">
-      <Dropdown onOpenChange={(_event, open) => open && setFilter('')}>
-        <Tooltip title={branchChip.tooltip} size="sm" variant="soft" placement={placement.tooltip} sx={chipTooltipSx}>
-          {/* Wrapped for the same reason as the worktree toggle: once locked the button is
+    <Stack spacing={1} sx={formRowSx} data-testid="session-chip-branch">
+      <FormControl size="sm" sx={formRowSx} data-testid="session-workspace-branch-row">
+        <FormLabel>Git branch</FormLabel>
+        <Dropdown onOpenChange={(_event, open) => open && setFilter('')}>
+          <Tooltip title={branchChip.tooltip} size="sm" variant="soft" placement={placement.tooltip} sx={chipTooltipSx}>
+            {/* Wrapped for the same reason as the worktree toggle: once locked the button is
               disabled, and the tooltip is then the only place its branch and reason are read. */}
-          <Box sx={{ display: 'flex' }}>
-            <MenuButton
-              size="sm"
-              variant="plain"
-              color="neutral"
-              disabled={binding.busy || !branchChip.enabled}
-              startDecorator={<BranchIcon />}
-              sx={pillButtonSx}
-              slotProps={{ root: { 'data-testid': 'session-chip-branch-btn' } }}
-            >
-              <Typography level="body-xs" textColor="inherit" noWrap>
-                {branchChip.label}
-              </Typography>
-            </MenuButton>
-          </Box>
-        </Tooltip>
+            <Box sx={{ display: 'flex', width: '100%' }}>
+              <MenuButton
+                size="sm"
+                variant="outlined"
+                color="neutral"
+                disabled={binding.busy || !branchChip.enabled}
+                startDecorator={<BranchIcon />}
+                sx={formButtonSx}
+                slotProps={{ root: { 'data-testid': 'session-chip-branch-btn' } }}
+              >
+                <Typography level="body-xs" textColor="inherit" noWrap>
+                  {branchChip.label}
+                </Typography>
+              </MenuButton>
+            </Box>
+          </Tooltip>
 
-        <Menu
-          size="sm"
-          placement={placement.menu}
-          sx={{ maxHeight: 360, overflow: 'auto', width: BRANCH_MENU_WIDTH, maxWidth: 'calc(100vw - 32px)' }}
-          data-testid="session-chip-branch-menu"
-        >
-          {branches.length > FILTER_THRESHOLD && (
-            <BranchFilter
-              value={filter}
-              onChange={setFilter}
-              onCommit={() => canCreate && void binding.setBranch(typed)}
-            />
-          )}
+          <Menu
+            size="sm"
+            placement={placement.menu}
+            sx={{ maxHeight: 360, overflow: 'auto', width: BRANCH_MENU_WIDTH, maxWidth: 'calc(100vw - 32px)' }}
+            data-testid="session-chip-branch-menu"
+          >
+            {branches.length > FILTER_THRESHOLD && (
+              <BranchFilter
+                value={filter}
+                onChange={setFilter}
+                onCommit={() => canCreate && void binding.setBranch(typed)}
+              />
+            )}
 
-          {/* Always rendered, never conditional: Joy re-registers its menu items when the
+            {/* Always rendered, never conditional: Joy re-registers its menu items when the
               children change and pulls focus onto the first one, which would take the caret out
               of the filter box the moment a typed name stopped matching an existing branch. */}
-          {!unset && !locked && (
-            <MenuItem
-              disabled={!canCreate}
-              onClick={() => void binding.setBranch(typed)}
-              data-testid="session-chip-branch-new"
-            >
-              <Typography level="body-sm" noWrap title={canCreate ? typed : undefined} sx={{ minWidth: 0 }}>
-                {canCreate ? `Create ${typed}` : 'Type a name to start a new branch'}
-              </Typography>
-            </MenuItem>
-          )}
-
-          {matches.map(entry => {
-            const held = branchHolder(elsewhere, entry);
-            return (
+            {!unset && !locked && (
               <MenuItem
-                key={entry}
-                disabled={locked}
-                selected={entry === onNow}
-                onClick={() => void binding.setBranch(entry)}
-                data-testid="session-chip-branch-option"
+                disabled={!canCreate}
+                onClick={() => void binding.setBranch(typed)}
+                data-testid="session-chip-branch-new"
               >
-                <Typography
-                  level="body-sm"
-                  noWrap
-                  title={entry}
-                  sx={{ minWidth: 0 }}
-                  data-testid="session-chip-branch-name"
-                >
-                  {entry === onNow ? '* ' : ''}
-                  {entry}
+                <Typography level="body-sm" noWrap title={canCreate ? typed : undefined} sx={{ minWidth: 0 }}>
+                  {canCreate ? `Create ${typed}` : 'Type a name to start a new branch'}
                 </Typography>
-                {held && (
-                  <Tooltip
-                    title={heldTooltip(held, project?.workspace ?? false, home)}
-                    size="sm"
-                    variant="soft"
-                    placement="right"
-                    sx={chipTooltipSx}
+              </MenuItem>
+            )}
+
+            {matches.map(entry => {
+              const held = branchHolder(elsewhere, entry);
+              return (
+                <MenuItem
+                  key={entry}
+                  disabled={locked}
+                  selected={entry === onNow}
+                  onClick={() => void binding.setBranch(entry)}
+                  data-testid="session-chip-branch-option"
+                >
+                  <Typography
+                    level="body-sm"
+                    noWrap
+                    title={entry}
+                    sx={{ minWidth: 0 }}
+                    data-testid="session-chip-branch-name"
                   >
-                    {/* The outsized shrink factor makes the mark give up its width before the
+                    {entry === onNow ? '* ' : ''}
+                    {entry}
+                  </Typography>
+                  {held && (
+                    <Tooltip
+                      title={heldTooltip(held, project?.workspace ?? false, home)}
+                      size="sm"
+                      variant="soft"
+                      placement="right"
+                      sx={chipTooltipSx}
+                    >
+                      {/* The outsized shrink factor makes the mark give up its width before the
                         branch name does, down to a floor that keeps the icon and a few letters;
                         the tooltip has the full path. */}
-                    <Box
-                      sx={{
-                        ml: 'auto',
-                        pl: 1.5,
-                        minWidth: 64,
-                        flexShrink: 1000,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'flex-end',
-                        gap: 0.5,
-                        color: 'text.tertiary',
-                        '& > svg': { flexShrink: 0 },
-                      }}
-                      data-testid="session-chip-branch-elsewhere-label"
-                    >
-                      <FolderIcon />
-                      <Typography level="body-xs" textColor="inherit" noWrap sx={{ minWidth: 0 }}>
-                        {checkoutFolderName(held.path)}
-                        {held.prunable ? ' (missing)' : ''}
-                      </Typography>
-                    </Box>
-                  </Tooltip>
-                )}
-              </MenuItem>
-            );
-          })}
+                      <Box
+                        sx={{
+                          ml: 'auto',
+                          pl: 1.5,
+                          minWidth: 64,
+                          flexShrink: 1000,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'flex-end',
+                          gap: 0.5,
+                          color: 'text.tertiary',
+                          '& > svg': { flexShrink: 0 },
+                        }}
+                        data-testid="session-chip-branch-elsewhere-label"
+                      >
+                        <FolderIcon />
+                        <Typography level="body-xs" textColor="inherit" noWrap sx={{ minWidth: 0 }}>
+                          {checkoutFolderName(held.path)}
+                          {held.prunable ? ' (missing)' : ''}
+                        </Typography>
+                      </Box>
+                    </Tooltip>
+                  )}
+                </MenuItem>
+              );
+            })}
 
-          {branchNotice && (
-            <Typography
-              level="body-xs"
-              textColor="text.tertiary"
-              sx={{ px: 1.5, py: 0.5, whiteSpace: 'normal' }}
-              data-testid="session-chip-branch-notice"
-            >
-              {branchNotice}
-            </Typography>
-          )}
-        </Menu>
-      </Dropdown>
-
-      <Box sx={{ width: '1px', alignSelf: 'stretch', my: 0.5, bgcolor: 'neutral.outlinedBorder' }} />
-
-      <Tooltip title={worktree.tooltip} size="sm" variant="soft" placement={placement.tooltip} sx={chipTooltipSx}>
-        {/* The Box, not the Checkbox, carries the tooltip: a disabled input takes no pointer
-            events, so the reason it is disabled would be unreadable on the one it applies to. */}
-        <Box sx={{ px: 1, display: 'flex', alignItems: 'center' }}>
-          <Checkbox
-            size="sm"
-            label={
-              <Typography level="body-xs" textColor="inherit">
-                {worktree.label}
+            {branchNotice && (
+              <Typography
+                level="body-xs"
+                textColor="text.tertiary"
+                sx={{ px: 1.5, py: 0.5, whiteSpace: 'normal' }}
+                data-testid="session-chip-branch-notice"
+              >
+                {branchNotice}
               </Typography>
-            }
-            checked={project?.workspace ?? false}
-            disabled={binding.busy || !worktree.enabled}
-            onChange={event => void binding.setWorkspace(event.target.checked)}
-            slotProps={{ input: { 'data-testid': 'session-chip-worktree-toggle' } }}
-          />
-        </Box>
-      </Tooltip>
-    </Box>
+            )}
+          </Menu>
+        </Dropdown>
+      </FormControl>
+
+      <FormControl size="sm" sx={formRowSx} data-testid="session-workspace-worktree-row">
+        <FormLabel>Worktree</FormLabel>
+        <Tooltip title={worktree.tooltip} size="sm" variant="soft" placement={placement.tooltip} sx={chipTooltipSx}>
+          {/* The Box, not the Checkbox, carries the tooltip: a disabled input takes no pointer
+            events, so the reason it is disabled would be unreadable on the one it applies to. */}
+          <Box
+            sx={{
+              minHeight: 32,
+              px: 1.25,
+              display: 'flex',
+              alignItems: 'center',
+              border: '1px solid',
+              borderColor: 'neutral.outlinedBorder',
+              borderRadius: 'sm',
+              bgcolor: 'background.surface',
+            }}
+          >
+            <Checkbox
+              size="sm"
+              label={
+                <Typography level="body-xs" textColor="inherit">
+                  {worktree.label}
+                </Typography>
+              }
+              checked={project?.workspace ?? false}
+              disabled={binding.busy || !worktree.enabled}
+              onChange={event => void binding.setWorkspace(event.target.checked)}
+              slotProps={{ input: { 'data-testid': 'session-chip-worktree-toggle' } }}
+            />
+          </Box>
+        </Tooltip>
+      </FormControl>
+    </Stack>
   );
 }
 
@@ -596,36 +601,63 @@ function ContextChips({
   const directories = [...(project?.contextDirectories ?? []), ...granted];
 
   return (
-    <>
+    <Stack spacing={1} sx={formRowSx} data-testid="session-workspace-directories-row">
       <Tooltip title={addContext.tooltip} size="sm" variant="soft" placement={placement.tooltip} sx={chipTooltipSx}>
         {/* Wrapped for the same reason as the worktree toggle: a disabled button shows no tooltip. */}
-        <Box sx={{ display: 'flex' }}>
-          <IconButton
+        <Box sx={{ display: 'flex', width: '100%' }}>
+          <Button
             size="sm"
             variant="outlined"
             color="neutral"
             disabled={binding.busy || !addContext.enabled}
             onClick={() => void binding.addContextDirectory()}
-            aria-label={addContext.label}
-            sx={{ borderRadius: '999px', minWidth: ROW_HEIGHT, minHeight: ROW_HEIGHT }}
+            startDecorator={<FolderPlusIcon />}
+            sx={formButtonSx}
             data-testid="session-chip-add-context"
           >
-            <FolderPlusIcon />
-          </IconButton>
+            Add directory
+          </Button>
         </Box>
       </Tooltip>
 
-      {directories
-        .filter((directory, index) => directories.indexOf(directory) === index)
-        .map(directory => (
-          <DirectoryChip
-            key={directory}
-            directory={directory}
-            onRemove={binding.removeContextDirectory}
-            placement={placement}
-          />
-        ))}
-    </>
+      {directories.filter((directory, index) => directories.indexOf(directory) === index).length > 0 && (
+        <Stack spacing={0.75} data-testid="session-workspace-directory-list">
+          {directories
+            .filter((directory, index) => directories.indexOf(directory) === index)
+            .map(directory => (
+              <DirectoryRow key={directory} directory={directory} onRemove={binding.removeContextDirectory} />
+            ))}
+        </Stack>
+      )}
+    </Stack>
+  );
+}
+
+function DirectoryRow({ directory, onRemove }: { directory: string; onRemove: (directory: string) => Promise<void> }) {
+  const home = useHomeDirectory();
+  const shown = displayPath(directory, home, Number.POSITIVE_INFINITY);
+  return (
+    <Stack
+      direction="row"
+      spacing={1}
+      alignItems="center"
+      sx={{ minWidth: 0 }}
+      data-testid="session-workspace-directory"
+    >
+      <Typography level="body-xs" noWrap title={shown} sx={{ flex: 1, minWidth: 0 }}>
+        {shown}
+      </Typography>
+      <Button
+        size="sm"
+        variant="plain"
+        color="neutral"
+        onClick={() => void onRemove(directory)}
+        aria-label={`Remove ${shown}`}
+        data-testid="session-workspace-directory-remove-btn"
+      >
+        Remove
+      </Button>
+    </Stack>
   );
 }
 
@@ -790,10 +822,9 @@ function keyOf(directory: string | null, workingDirectory: string | null): strin
 /**
  * What a Code session is grounded in, editable at any point in the session.
  *
- * Drawn for EVERY Code session, including one that has chosen nothing yet - the unset chips are
- * how a project gets chosen, not a readout of a choice already made elsewhere. Unbound, they sit
- * above the composer; once a folder is chosen they move into the session panel's Environment
- * section (`layout="panel"`). A Chat session has no project and draws nothing here.
+ * Drawn for every Code session, including one that has chosen nothing yet. Empty sessions show it
+ * in the transcript; after the first message it moves into the session panel's Environment section.
+ * A Chat session has no project and draws nothing here.
  */
 export function SessionChips({
   project,
@@ -878,8 +909,15 @@ export function SessionChips({
         )
       )}
 
-      <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center', flexWrap: 'wrap', gap: 0.75 }}>
-        <ProjectChip binding={bound} current={project?.directory ?? null} placement={placement} />
+      <Stack
+        spacing={1.25}
+        sx={{ width: '100%', minWidth: 0, overflowX: 'hidden' }}
+        data-testid="session-workspace-form"
+      >
+        <FormControl size="sm" sx={formRowSx} data-testid="session-workspace-project-row">
+          <FormLabel>Project folder</FormLabel>
+          <ProjectChip binding={bound} current={project?.directory ?? null} placement={placement} />
+        </FormControl>
         <BranchChip
           project={project}
           binding={bound}

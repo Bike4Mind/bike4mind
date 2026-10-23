@@ -279,6 +279,77 @@ describe('the branch chip against what git answers', () => {
   });
 });
 
+describe('the workspace form', () => {
+  let host: HTMLDivElement;
+  let root: Root;
+  const inspectProject = vi.fn();
+  const addContextDirectory = vi.fn();
+  const removeContextDirectory = vi.fn();
+
+  beforeEach(() => {
+    inspectProject.mockReset();
+    addContextDirectory.mockReset();
+    removeContextDirectory.mockReset();
+    inspectProject.mockResolvedValue(inspection());
+    (window as unknown as { b4m: unknown }).b4m = { chat: { inspectProject, listRecentFolders }, getAppInfo };
+    host = document.createElement('div');
+    document.body.appendChild(host);
+    root = createRoot(host);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it('lays out each workspace control in a labeled full-width row without chip semantics', async () => {
+    await act(async () =>
+      root.render(
+        <SessionChips
+          layout="panel"
+          project={project()}
+          binding={{ ...binding, addContextDirectory, removeContextDirectory }}
+          settledTurns={0}
+        />
+      )
+    );
+    await act(async () => undefined);
+
+    const form = host.querySelector('[data-testid="session-workspace-form"]') as HTMLElement;
+    expect(form.textContent).toContain('Project folder');
+    expect(form.textContent).toContain('Git branch');
+    expect(form.textContent).toContain('Worktree');
+    expect(form.querySelector('[data-testid="session-chip-project"]')?.tagName).toBe('BUTTON');
+    expect(form.querySelector('[data-testid="session-chip-branch-btn"]')?.tagName).toBe('BUTTON');
+    expect(form.querySelector('[data-testid="session-chip-add-context"]')?.textContent).toContain('Add directory');
+    expect(form.querySelector('[data-testid="session-chip-context"]')).toBeNull();
+    expect(form.querySelectorAll('[data-testid$="-row"]')).toHaveLength(4);
+    expect(getComputedStyle(form).overflowX).toBe('hidden');
+  });
+
+  it('adds and explicitly removes additional directories', async () => {
+    await act(async () =>
+      root.render(
+        <SessionChips
+          project={project({ contextDirectories: ['/Users/someone/shared'] })}
+          binding={{ ...binding, addContextDirectory, removeContextDirectory }}
+          settledTurns={0}
+        />
+      )
+    );
+    await act(async () => undefined);
+
+    await act(async () => (host.querySelector('[data-testid="session-chip-add-context"]') as HTMLElement).click());
+    await act(async () =>
+      (host.querySelector('[data-testid="session-workspace-directory-remove-btn"]') as HTMLElement).click()
+    );
+    expect(addContextDirectory).toHaveBeenCalledTimes(1);
+    expect(removeContextDirectory).toHaveBeenCalledWith('/Users/someone/shared');
+    expect(host.querySelector('[data-testid="session-workspace-directory-remove-btn"]')?.textContent).toBe('Remove');
+    expect(host.querySelector('[data-testid="session-chip-context"]')).toBeNull();
+  });
+});
+
 /**
  * A session that has run commands in one folder must not be repointed at another: the transcript
  * above would then describe work done somewhere the session no longer claims. The lock is on
