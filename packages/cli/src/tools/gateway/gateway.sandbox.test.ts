@@ -56,6 +56,9 @@ describe('wrapToolWithPermission sandbox cwd confinement', () => {
       catalog: new ToolCatalog(),
       needsPermission: vi.fn(() => false),
       trustToolForSession: vi.fn(),
+      trustCommandForSession: vi.fn(),
+      isCommandScoped: vi.fn(() => true),
+      sessionScopeFor: vi.fn(() => null),
     } as unknown as PermissionManager;
     const agentContext = { currentAgent: null };
     const wrapped = wrapToolWithPermission(tool, {
@@ -175,6 +178,9 @@ describe('wrapToolWithPermission sandbox cwd confinement', () => {
       catalog: new ToolCatalog(),
       needsPermission: vi.fn(() => needsPermission),
       trustToolForSession: vi.fn(),
+      trustCommandForSession: vi.fn(),
+      isCommandScoped: vi.fn(() => true),
+      sessionScopeFor: vi.fn(() => null),
     } as unknown as PermissionManager;
     const agentContext = { currentAgent: null };
     const wrapped = wrapFn(createMockTool('bash_execute', toolFn), {
@@ -426,6 +432,9 @@ describe('wrapToolWithPermission file-change notification', () => {
       catalog: new ToolCatalog(),
       needsPermission: vi.fn(() => false),
       trustToolForSession: vi.fn(),
+      trustCommandForSession: vi.fn(),
+      isCommandScoped: vi.fn(() => true),
+      sessionScopeFor: vi.fn(() => null),
     } as unknown as PermissionManager;
     const onFileChanged = vi.fn();
     const agentContext = { currentAgent: null, onFileChanged };
