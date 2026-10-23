@@ -221,7 +221,7 @@ export function unquote(text: string): string {
 }
 
 /** `~` and `$HOME` are the user's home, which the shell expands before the program sees it. */
-function expandHome(text: string): string {
+export function expandHome(text: string): string {
   const home = homedir();
   if (text === '~') return home;
   if (text.startsWith('~/')) return join(home, text.slice(2));

@@ -4,7 +4,7 @@ import type { Node } from 'web-tree-sitter';
 import { directoryOptionValues } from './bashArity';
 import { parseBash } from './bashParser';
 import { isWithin, physicalTarget } from './paths';
-import { unquote, words } from './shellScan';
+import { expandHome, unquote, words } from './shellScan';
 import type { ToolContext } from './types';
 
 const MAX_FILES_PER_SESSION = 200;
@@ -171,6 +171,7 @@ function pathsIn(word: string): string[] {
       if (equals !== -1) return [piece.slice(equals + 1)];
       return piece.startsWith('-') ? [] : [piece];
     })
+    .map(piece => piece.replace(/^['"]+|['"]+$/g, ''))
     .filter(Boolean);
 }
 
@@ -179,13 +180,29 @@ function launcherLength(tokens: readonly string[], start: number): number {
   return match?.length ?? 0;
 }
 
+/** Where the program starts in `tokens` once leading wrappers and launchers (and their options) are skipped. */
+function skipWrappers(tokens: readonly string[]): { start: number; wrapped: boolean; launched: boolean } {
+  let start = 0;
+  let wrapped = false;
+  let launched = false;
+  for (;;) {
+    const launcher = launcherLength(tokens, start);
+    if (launcher === 0 && !WRAPPERS.has(basename(tokens[start] ?? ''))) break;
+    if (launcher === 0) wrapped = true;
+    else launched = true;
+    start += Math.max(launcher, 1);
+    while (start < tokens.length && /^(-|\d|[A-Za-z_][A-Za-z0-9_]*=)/.test(tokens[start])) start++;
+  }
+  return { start, wrapped, launched };
+}
+
 /** A git config key that names a program git runs, set on the command line. */
 const GIT_PROGRAM_KEY = /(^|\s)(-c\s*|--config-env[=\s])['"]?core\.(fsmonitor|hookspath|sshcommand)=?/i;
 
 /** The `-c core.*` setting that makes git run a program, which auto mode asks about. */
 export function gitRunsConfiguredProgram(commands: readonly { words: string }[]): string | null {
   for (const { words: text } of commands) {
-    const match = /^\s*(\S+\s+)*?git\s/.test(text) ? GIT_PROGRAM_KEY.exec(text) : null;
+    const match = /^\s*(\S+\s+)*?(\S*\/)?git\s/.test(text) ? GIT_PROGRAM_KEY.exec(text) : null;
     if (match) return `core.${match[3]}`;
   }
   return null;
@@ -212,22 +229,43 @@ export async function sessionScriptRun(
   startDirectory: string,
   sessionId: string | undefined
 ): Promise<SessionScriptRun | null> {
+  const found: FoundRuns = new Map();
+  const hooks = new Map<string, number>();
+  await scanScripts(command, startDirectory, sessionId, found, hooks);
+  if (found.size === 0 && hooks.size === 0) return null;
+  const runs = [...found.values()];
+  return {
+    names: [...new Set(runs.map(run => run.name))],
+    hooks: [...hooks],
+    untracked: runs.some(run => run.generation === '*'),
+    generation: [...runs.map(run => run.generation), ...hooks.values()].join(','),
+  };
+}
+
+type FoundRuns = Map<string, { name: string; generation: number | '*' }>;
+
+/** Adds what `command` runs to `found` and `hooks`; a nested `sh -c` string adds to the same maps. */
+async function scanScripts(
+  command: string,
+  startDirectory: string,
+  sessionId: string | undefined,
+  found: FoundRuns,
+  hooks: Map<string, number>
+): Promise<void> {
   const record = sessionId ? (bySession.get(sessionId) ?? (evicted.has(sessionId) ? undefined : null)) : null;
-  if (record === null) return null;
+  if (record === null) return;
   const written = record?.files ?? new Map<string, number>();
   const overflowed = record?.overflowed ?? true;
-  if (written.size === 0 && !overflowed) return null;
+  if (written.size === 0 && !overflowed) return;
   const tree = await parseBash(command);
   // An unparsable command is already asked about by shellApproval.
-  if (!tree) return null;
+  if (!tree) return;
 
-  const found = new Map<string, { name: string; generation: number | '*' }>();
-  const hooks = new Map<string, number>();
   let cwd = startDirectory;
 
   // Also resolved from the starting folder, since a `cd` inside a subshell is not undone here.
   const consider = async (raw: string, directory: string, exact = false): Promise<void> => {
-    const text = unquote(raw);
+    const text = expandHome(unquote(raw));
     if (!text || text.includes('$') || text.includes('`')) return;
     for (const base of new Set(exact ? [directory] : [directory, startDirectory])) {
       const physical = await physicalTarget(resolve(base, text)).catch(() => resolve(base, text));
@@ -259,23 +297,13 @@ export async function sessionScriptRun(
 
   const visitCommand = async (node: Node, piped: boolean): Promise<void> => {
     const tokens = words(node).map(unquote);
-    let start = 0;
-    let wrapped = false;
-    let launched = false;
-    for (;;) {
-      const launcher = launcherLength(tokens, start);
-      if (launcher === 0 && !WRAPPERS.has(basename(tokens[start] ?? ''))) break;
-      if (launcher === 0) wrapped = true;
-      else launched = true;
-      start += Math.max(launcher, 1);
-      while (start < tokens.length && /^(-|\d|[A-Za-z_][A-Za-z0-9_]*=)/.test(tokens[start])) start++;
-    }
+    const { start, wrapped, launched } = skipWrappers(tokens);
     const [executable, ...args] = tokens.slice(start);
     if (executable === undefined) return;
     const program = basename(executable);
     if (!wrapped && (program === 'cd' || program === 'pushd')) {
       const target = args.find(arg => !arg.startsWith('-'));
-      if (target && !target.includes('$')) cwd = resolve(cwd, target);
+      if (target && !target.includes('$')) cwd = resolve(cwd, expandHome(target));
       return;
     }
     if (program === 'git') {
@@ -307,11 +335,9 @@ export async function sessionScriptRun(
         for (const path of pathsIn(child.childForFieldName('value')?.text ?? '')) await consider(path, cwd);
       }
     }
-    const inline = SHELLS.test(program) ? args.findIndex(arg => /^-[a-z]*c[a-z]*$/.test(arg)) : -1;
+    const inline = SHELLS.test(program) ? args.findIndex(arg => /^[-+][a-z]*c[a-z]*$/.test(arg)) : -1;
     if (inline !== -1 && args[inline + 1] !== undefined) {
-      const nested = await sessionScriptRun(args[inline + 1], cwd, sessionId);
-      if (nested) for (const name of nested.names) await consider(name, cwd);
-      for (const [repository, generation] of nested?.hooks ?? []) hooks.set(repository, generation);
+      await scanScripts(args[inline + 1], cwd, sessionId, found, hooks);
     }
     const project = PROJECT_FILES[runner];
     if (project) {
@@ -330,6 +356,13 @@ export async function sessionScriptRun(
         }
       }
     }
+    // `$(./x.sh)` and `<(cat x.sh)` run inside the command; a process substitution handed to an interpreter is its script.
+    const interprets = wrapped || INTERPRETER.test(program);
+    for (const substitution of node.descendantsOfType(['command_substitution', 'process_substitution'])) {
+      for (const child of substitution?.namedChildren ?? []) {
+        if (child) await visit(child, piped || (interprets && substitution?.type === 'process_substitution'));
+      }
+    }
   };
 
   const visit = async (node: Node, piped: boolean): Promise<void> => {
@@ -338,8 +371,9 @@ export async function sessionScriptRun(
     const feedsInterpreter =
       node.type === 'pipeline' &&
       node.namedChildren.some(child => {
-        const name = child?.type === 'command' ? words(child)[0] : undefined;
-        return name !== undefined && INTERPRETER.test(basename(unquote(name)));
+        if (child?.type !== 'command') return false;
+        const tokens = words(child).map(unquote);
+        return INTERPRETER.test(basename(tokens[skipWrappers(tokens).start] ?? ''));
       });
     for (const child of node.namedChildren) if (child) await visit(child, piped || feedsInterpreter);
   };
@@ -349,12 +383,4 @@ export async function sessionScriptRun(
   } finally {
     tree.delete();
   }
-  if (found.size === 0 && hooks.size === 0) return null;
-  const runs = [...found.values()];
-  return {
-    names: [...new Set(runs.map(run => run.name))],
-    hooks: [...hooks],
-    untracked: runs.some(run => run.generation === '*'),
-    generation: [...runs.map(run => run.generation), ...hooks.values()].join(','),
-  };
 }

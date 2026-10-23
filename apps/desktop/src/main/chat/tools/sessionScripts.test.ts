@@ -1,7 +1,7 @@
-import { mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   expectShellRun,
   forgetSessionWrites,
@@ -14,6 +14,8 @@ import type { ToolContext } from './types';
 
 const WRITTEN = [
   'setup.sh',
+  'sub/y.sh',
+  'run.sh',
   'tools/go.py',
   'tools/x.ts',
   'tools/hook.js',
@@ -39,6 +41,7 @@ describe('sessionScriptRun', () => {
     root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-session-scripts-')));
     for (const directory of [
       'tools',
+      'sub',
       'web',
       'src',
       'tests',
@@ -56,6 +59,8 @@ describe('sessionScriptRun', () => {
       if (file !== 'data.txt') await recordSessionWrite(context, join(root, file));
     }
   });
+
+  afterAll(() => rm(root, { recursive: true, force: true }));
 
   const runs = async (command: string, sessionId = session) =>
     (await sessionScriptRun(command, root, sessionId))?.names ?? null;
@@ -98,8 +103,27 @@ describe('sessionScriptRun', () => {
     ['pnpm vitest --config=cfg/custom.config.ts', 'cfg/custom.config.ts'],
     ['pytest -p plugins.myplug', 'plugins/myplug.py'],
     ['git -c core.editor=./tools/hook.js commit', './tools/hook.js'],
+    ['bash -c "cd sub && ./y.sh"', './y.sh'],
+    ['bash -c "cd sub; bash y.sh"', 'y.sh'],
+    ['bash +ec "cd sub; bash y.sh"', 'y.sh'],
+    ['echo "$(./run.sh)"', './run.sh'],
+    ['echo "$(bash run.sh)"', 'run.sh'],
+    ['bash <(cat run.sh)', 'run.sh'],
+    ['cat run.sh | sudo bash', 'run.sh'],
+    ['cat run.sh | env bash', 'run.sh'],
+    ["git -c alias.z='!sh run.sh' z", 'run.sh'],
+    ['/usr/bin/git -c core.hooksPath=./run.sh commit', './run.sh'],
   ])('finds %s', async (command, name) => {
     expect(await runs(command.replace('ROOT', root))).toContain(name.replace('ROOT', root));
+  });
+
+  it('matches a written file in the home folder given as ~', async () => {
+    const script = join(homedir(), 'b4m-session-scripts-nonexistent.sh');
+    await recordSessionWrite(context, script);
+    expect(await runs('bash ~/b4m-session-scripts-nonexistent.sh')).toHaveLength(1);
+    expect(await runs('cd ~ && bash b4m-session-scripts-nonexistent.sh')).toEqual([
+      'b4m-session-scripts-nonexistent.sh',
+    ]);
   });
 
   it.each(['cd web && npm run build', 'pnpm --dir web test', 'yarn --cwd web build'])(
@@ -126,6 +150,9 @@ describe('sessionScriptRun', () => {
     'npx eslint tools/x.ts',
     'npx tsc -p tools/x.ts',
     'pnpm exec eslint tools/x.ts',
+    'echo "$(cat run.sh)"',
+    'diff <(cat run.sh) data.txt',
+    'cat run.sh | sudo tee out.txt',
   ])('ignores %s', async command => {
     expect(await runs(command)).toBeNull();
   });
@@ -193,6 +220,8 @@ describe('sessionScriptRun', () => {
     }
     expect(await sessionScriptRun('bash data.txt', root, id)).toMatchObject({ untracked: true });
     for (let index = 0; index < 50; index++) forgetSessionWrites(`filler-${index}`);
+    forgetSessionWrites(id);
+    forgetSessionWrites(session);
   });
 
   it('forgets a closed session', async () => {
