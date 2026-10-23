@@ -9,6 +9,7 @@ const h = vi.hoisted(() => ({
   audit: vi.fn(),
   runProbe: vi.fn(),
   runAllProbes: vi.fn(),
+  getOverride: vi.fn(),
   setOverride: vi.fn(),
   clearCache: vi.fn(),
   resetBreaker: vi.fn(),
@@ -33,7 +34,7 @@ vi.mock('@bike4mind/observability', () => ({ Logger: class {} }));
 vi.mock('@bike4mind/database', () => ({
   INTEGRATION_HEALTH_INTEGRATIONS: ['github', 'slack'],
   integrationHealthCheckRepository: {},
-  integrationCircuitOverrideRepository: { setOverride: h.setOverride },
+  integrationCircuitOverrideRepository: { getOverride: h.getOverride, setOverride: h.setOverride },
 }));
 vi.mock('@bike4mind/server-utils/services/integrationHealthService', () => ({
   getHealthSummary: vi.fn(),
@@ -106,6 +107,7 @@ describe('integration-health admin audit', () => {
   });
 
   it('records a circuit breaker override after it takes effect', async () => {
+    h.getOverride.mockResolvedValue({ integration: 'slack', mode: 'auto' });
     h.setOverride.mockResolvedValue({ integration: 'slack', mode: 'force_block', setBy: 'admin-1', reason: 'outage' });
 
     const { res } = await call('put', { integration: 'slack', mode: 'force_block', reason: 'outage' });
@@ -115,7 +117,9 @@ describe('integration-health admin audit', () => {
     expect(h.audit.mock.calls[0][1]).toMatchObject({
       action: 'system_health.integration_override_set',
       target: { kind: 'settings', id: 'slack' },
-      details: { integration: 'slack', mode: 'force_block', overrideReason: 'outage' },
+      reason: 'outage',
+      changes: [{ field: 'mode', before: 'auto', after: 'force_block' }],
+      details: { integration: 'slack', mode: 'force_block' },
     });
     expect(h.clearCache.mock.invocationCallOrder[0]).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
   });

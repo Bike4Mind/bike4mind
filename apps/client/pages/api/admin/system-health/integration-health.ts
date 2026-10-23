@@ -12,7 +12,11 @@ import {
 import type { IntegrationName, CircuitBreakerMode } from '@bike4mind/database';
 import { getHealthSummary, runAllProbes, runProbe } from '@bike4mind/server-utils/services/integrationHealthService';
 import { getStatus, clearCache } from '@bike4mind/server-utils/services/integrationCircuitBreaker';
-import { flushBreakerMetrics, getAllBreakerStates, resetBreaker } from '@bike4mind/server-utils/services/mcpCircuitBreakers';
+import {
+  flushBreakerMetrics,
+  getAllBreakerStates,
+  resetBreaker,
+} from '@bike4mind/server-utils/services/mcpCircuitBreakers';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 const ensureAdmin = (isAdmin?: boolean | null) => {
@@ -139,6 +143,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       throw new BadRequestError(`Invalid mode: ${mode}. Must be one of: ${validModes.join(', ')}`);
     }
 
+    const previous = await integrationCircuitOverrideRepository.getOverride(integration as IntegrationName);
     const override = await integrationCircuitOverrideRepository.setOverride({
       integration: integration as IntegrationName,
       mode: mode as CircuitBreakerMode,
@@ -163,7 +168,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         displayName: `Circuit breaker override for ${override.integration}`,
       },
       summary: `set circuit breaker mode for ${override.integration} to ${override.mode}`,
-      details: { integration: override.integration, mode: override.mode, overrideReason: override.reason },
+      reason: override.reason,
+      changes: [{ field: 'mode', before: previous?.mode ?? null, after: override.mode }],
+      details: { integration: override.integration, mode: override.mode },
     });
 
     return res.json({
