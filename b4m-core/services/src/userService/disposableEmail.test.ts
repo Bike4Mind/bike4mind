@@ -32,6 +32,14 @@ describe('shouldBlockDisposableEmail', () => {
     expect(await shouldBlockDisposableEmail('aubrey28b850@np.kashre.com', { adminSettings })).toBe(true);
   });
 
+  it('blocks a domain on both lists when blockDisposableEmails is OFF', async () => {
+    const { adminSettings } = adminSettingsWith({
+      blockDisposableEmails: false,
+      blockedEmailDomains: ['mailinator.com'],
+    });
+    expect(await shouldBlockDisposableEmail('x@mailinator.com', { adminSettings })).toBe(true);
+  });
+
   it('blocks an admin-blocked domain even when blockDisposableEmails is OFF', async () => {
     const { adminSettings } = adminSettingsWith({ blockDisposableEmails: false, blockedEmailDomains: ['kashre.com'] });
     expect(await shouldBlockDisposableEmail('x@kashre.com', { adminSettings })).toBe(true);

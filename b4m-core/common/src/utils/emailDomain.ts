@@ -11,13 +11,16 @@ export function normalizeEmailDomain(raw: string): string | null {
   return DOMAIN_PATTERN.test(domain) ? domain : null;
 }
 
+// Ideographic and fullwidth full stops, which some mail stacks treat as a plain dot.
+const UNICODE_DOTS = /[\u3002\uff0e\uff61]/g;
+
 function trimDomain(raw: string): string {
-  return raw.trim().toLowerCase().replace(/\.$/, '');
+  return raw.trim().toLowerCase().replace(UNICODE_DOTS, '.').replace(/\.+$/, '');
 }
 
 /**
- * The domain part of an email (after the last `@`), lowercased, trimmed and without a trailing
- * dot; null when there is none. Deliberately not hostname-validated: a blocklist check must still
+ * The domain part of an email (after the last `@`), lowercased, trimmed, with Unicode full stops
+ * read as dots and trailing dots removed; null when there is none. Deliberately not hostname-validated: a blocklist check must still
  * see an odd-looking domain rather than skip it.
  */
 export function emailDomainOf(email: string): string | null {

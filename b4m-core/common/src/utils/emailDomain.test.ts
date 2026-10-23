@@ -32,6 +32,11 @@ describe('emailDomainOf', () => {
     expect(emailDomainOf('a@b@NP.Kashre.com.')).toBe('np.kashre.com');
   });
 
+  it('reads Unicode full stops as dots and drops repeated trailing dots', () => {
+    expect(emailDomainOf('x@kashre\u3002com')).toBe('kashre.com');
+    expect(emailDomainOf('x@kashre.com..')).toBe('kashre.com');
+  });
+
   it('is null without an @ or with nothing after it', () => {
     expect(emailDomainOf('notanemail')).toBeNull();
     expect(emailDomainOf('user@')).toBeNull();

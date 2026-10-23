@@ -47,8 +47,8 @@ export const isAdminBlockedEmailDomain = async (
  * The anti-sybil gate for credit-bearing signups: true when the email is on an admin-blocked
  * domain, or is disposable and the blockDisposableEmails setting (default ON) is enabled. The
  * admin list applies regardless of that toggle, which exists to work around a false positive in
- * the package list. Shared by registerUser and the OAuth signup grant in
- * apps/client/server/utils/auth/verifyCallback.ts so the two cannot drift.
+ * the package list. Shared by registerUser and the free-credit eligibility check in
+ * apps/client/server/auth/emailVerifiedGrants.ts (OAuth signup, email change) so they cannot drift.
  */
 export const shouldBlockDisposableEmail = async (
   email: string,

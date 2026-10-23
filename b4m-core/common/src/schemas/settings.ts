@@ -3484,7 +3484,7 @@ export const settingsMap = {
     name: 'Blocked Email Domains',
     defaultValue: [],
     description:
-      'Email domains refused at registration, one per line, on top of the built-in disposable list. A domain also blocks every subdomain (kashre.com blocks x@np.kashre.com). Applies even when Block Disposable Emails is OFF, and at registration only: existing accounts can still sign in.',
+      'Email domains refused at registration, one per line, on top of the built-in disposable list. A domain also blocks every subdomain (kashre.com blocks x@np.kashre.com). Applies even when Block Disposable Emails is OFF. Checked wherever that gate is (registration and the free-credit grant at email verification), so existing accounts can still sign in.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
     // Plain strings so one malformed stored entry cannot fail the whole list; the update route
