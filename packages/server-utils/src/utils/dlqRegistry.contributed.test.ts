@@ -15,16 +15,27 @@ const DLQ_URLS = {
 };
 const SOURCE_URLS = { exampleJobQueue: 'https://sqs.example/exampleJobQueue' };
 
-async function load(queues: unknown[], coreNames: string[] | null = ['imageGenerationQueue', 'imageGenerationDLQ']) {
+type GeneratedModule = typeof import('../premium-generated/infraResources.generated');
+type CoreNames = Pick<GeneratedModule, 'coreResourceNames' | 'coreEnvNames' | 'coreDlqLabels'>;
+
+// The core names default to the checked-in generated module, so a collision is caught by the
+// same names a real codegen run produces.
+async function load(queues: unknown[], core?: CoreNames) {
+  const actual = await vi.importActual<GeneratedModule>('../premium-generated/infraResources.generated');
+  const names = core ?? {
+    coreResourceNames: actual.coreResourceNames,
+    coreEnvNames: actual.coreEnvNames,
+    coreDlqLabels: actual.coreDlqLabels,
+  };
   vi.doMock('sst', () => ({ Resource: { dlqUrls: DLQ_URLS, sourceQueueUrls: SOURCE_URLS } }));
   vi.doMock('../premium-generated/infraResources.generated', () => ({
     contributedInfraResources: { secrets: [], rotations: [], queues },
-    coreResourceNames: coreNames,
-    coreEnvNames: coreNames && [],
-    coreDlqLabels: coreNames && ['image-generation'],
+    ...names,
   }));
   return import('./dlqRegistry');
 }
+
+const NO_CORE_NAMES: CoreNames = { coreResourceNames: null, coreEnvNames: null, coreDlqLabels: null };
 
 describe('contributed DLQ registry', () => {
   let baseline: string[];
@@ -74,6 +85,34 @@ describe('contributed DLQ registry', () => {
     expect(() => registry.contributedDlqLabel('image-generation')).toThrow('not registered');
   });
 
+  it('drops every pair that re-declares a real core label or source queue', async () => {
+    const core = (await load([])).getDlqRegistry();
+    vi.resetModules();
+    const registry = await load(
+      core.flatMap((d, i) => [
+        { ...QUEUE, name: `redeclared${i}Queue`, label: d.label },
+        { ...QUEUE, name: d.sourceQueue, label: `redeclared-${i}` },
+      ])
+    );
+    expect(registry.getDlqRegistry()).toEqual(core);
+    for (const d of core) expect(() => registry.contributedDlqLabel(d.label)).toThrow('not registered');
+    expect(() => registry.contributedDlqLabel('redeclared-0')).toThrow('not registered');
+  });
+
+  it('registers nothing when the generated core names miss a DLQ_REGISTRY entry', async () => {
+    const actual = await vi.importActual<GeneratedModule>('../premium-generated/infraResources.generated');
+    const [first] = (await load([])).getDlqRegistry();
+    vi.resetModules();
+    const registry = await load([{ ...QUEUE, label: first.label }, QUEUE], {
+      coreResourceNames: actual.coreResourceNames,
+      coreEnvNames: actual.coreEnvNames,
+      coreDlqLabels: actual.coreDlqLabels!.filter(label => label !== first.label),
+    });
+    expect(registry.getDlqRegistry().map(d => d.label)).toEqual(baseline);
+    expect(registry.getDlqByLabel(first.label)).toEqual(first);
+    expect(() => registry.contributedDlqLabel('example-job')).toThrow('not registered');
+  });
+
   it('keeps the first of duplicate pairs instead of failing the registry', async () => {
     const registry = await load([QUEUE, { ...QUEUE, displayName: 'Second' }]);
     expect(registry.getDlqRegistry().filter(d => d.label === 'example-job')).toHaveLength(1);
@@ -87,7 +126,7 @@ describe('contributed DLQ registry', () => {
   });
 
   it('registers nothing when codegen could not read the core names', async () => {
-    const registry = await load([QUEUE], null);
+    const registry = await load([QUEUE], NO_CORE_NAMES);
     expect(registry.getDlqRegistry().map(d => d.label)).toEqual(baseline);
     expect(() => registry.contributedDlqLabel('example-job')).toThrow('not registered');
   });

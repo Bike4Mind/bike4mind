@@ -169,6 +169,19 @@ describe('infra resource glue', () => {
     expect(runtime).toContain('"coreQueue"');
   });
 
+  it('fails codegen on a DLQ label that is not a literal, other than the contributed spec.label', () => {
+    mkdirSync(join(sandbox, 'infra'), { recursive: true });
+    writeFileSync(join(sandbox, 'infra/secrets.ts'), "export const s = new sst.Secret('CORE_A', 'x');\n");
+    const alarms =
+      "const D = [{ label: 'image-generation' }];\nconst C = specs.map(spec => ({ label: spec.label }));\n";
+    writeFileSync(join(sandbox, 'infra/dlqAlarms.ts'), alarms);
+    expect(runCodegen().status).toBe(0);
+    writeFileSync(join(sandbox, 'infra/dlqAlarms.ts'), `${alarms}createDlqAlarms({ label: coreLabel });\n`);
+    const result = runCodegen();
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('not written as a string literal: coreLabel');
+  });
+
   it('emits null core names without infra/, so the runtime registers nothing', () => {
     writeOverlay({ secrets: [{ name: 'EXAMPLE_API_TOKEN' }] });
     expect(runCodegen().status).toBe(0);

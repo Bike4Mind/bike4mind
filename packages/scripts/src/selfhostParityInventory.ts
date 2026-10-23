@@ -143,6 +143,24 @@ export const NOT_COVERED: readonly { shape: string; reason: string }[] = [
   { shape: 'premium overlay contributeInfra()', reason: 'Declared in private overlay repos, absent here.' },
 ];
 
+/**
+ * Queue constructors named from package data instead of a literal, keyed by file and the name
+ * argument's text. Their names are unknown until a package declares one, so there is no self-host
+ * registration to match. An entry that matches no constructor fails discovery as stale.
+ */
+export const DATA_NAMED_QUEUES: readonly { file: string; name: string; reason: string }[] = [
+  {
+    file: 'infra/queues.ts',
+    name: 'pair.dlqName',
+    reason: 'DLQ of a b4mContributions.infraResources queue pair; self-host does not provision contributed queues.',
+  },
+  {
+    file: 'infra/queues.ts',
+    name: 'pair.name',
+    reason: 'Source queue of a b4mContributions.infraResources pair; self-host does not provision contributed queues.',
+  },
+];
+
 const HOSTED_CONSTRUCTOR = /^(?:sst\.aws\.\w+|aws\.\w+\.\w+)$/;
 const TRIGGER_METHODS = new Set(['subscribe', 'subscribeQueue', 'notify']);
 /** Option keys whose `<resource>.arn` value is the compute or queue a trigger delivers to. */
@@ -452,6 +470,7 @@ function discoverConstructorDeclarations(index: InfraIndex): {
   const byNode = new Map<ts.NewExpression, RawDeclaration>();
   const functions: { file: string; node: ts.NewExpression }[] = [];
   const eventTargets: { file: string; node: ts.NewExpression }[] = [];
+  const matchedDataNamed = new Set<(typeof DATA_NAMED_QUEUES)[number]>();
   for (const source of index.parsed) {
     const file = source.fileName;
     walk(source, node => {
@@ -462,12 +481,27 @@ function discoverConstructorDeclarations(index: InfraIndex): {
       if (type === 'Function') functions.push({ file, node });
       const kind = type && type !== 'Function' ? DECLARATION_KINDS[type] : undefined;
       if (!kind) return;
+      const first = node.arguments?.[0];
+      const dataNamed =
+        kind === 'queue' && first && !ts.isStringLiteralLike(first)
+          ? DATA_NAMED_QUEUES.find(entry => entry.file === file && entry.name === first.getText())
+          : undefined;
+      if (dataNamed) {
+        matchedDataNamed.add(dataNamed);
+        return;
+      }
       const name = declarationName(node, file, kind);
       constructorOptions(node, file, name);
       const raw: RawDeclaration = { file, kind, name, nodes: [node], subscribers: [] };
       declarations.push(raw);
       byNode.set(node, raw);
     });
+  }
+  const parsedFiles = new Set(index.parsed.map(source => source.fileName));
+  for (const entry of DATA_NAMED_QUEUES) {
+    if (parsedFiles.has(entry.file) && !matchedDataNamed.has(entry)) {
+      throw new Error(`${entry.file}: stale DATA_NAMED_QUEUES entry ${entry.name}; no queue is named by it`);
+    }
   }
   return { declarations, byNode, functions, eventTargets };
 }
