@@ -95,7 +95,10 @@ describe.each([
   });
 
   it('leaves systemInstruction unset when there are no system messages', async () => {
-    const { requests } = await run({ msgs: [{ role: 'user', content: 'hi' }], options: { omitIdentityReminder: true } });
+    const { requests } = await run({
+      msgs: [{ role: 'user', content: 'hi' }],
+      options: { omitIdentityReminder: true },
+    });
     expect(requests[0].config?.systemInstruction).toBeUndefined();
   });
 

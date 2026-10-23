@@ -432,10 +432,15 @@ describe('OllamaBackend.buildMessages image handling', () => {
   // Drive a plain completion and return the message the api chat call received.
   async function sentMessage(content: unknown) {
     const { backend, chat } = makeBackend(answer);
-    await backend.complete('moondream', [{ role: 'user', content } as any], {
-      stream: false,
-      omitIdentityReminder: true,
-    } as any, async () => {});
+    await backend.complete(
+      'moondream',
+      [{ role: 'user', content } as any],
+      {
+        stream: false,
+        omitIdentityReminder: true,
+      } as any,
+      async () => {}
+    );
     return (chat.mock.calls[0][0] as { messages: Array<{ content: string; images?: string[] }> }).messages[0];
   }
 

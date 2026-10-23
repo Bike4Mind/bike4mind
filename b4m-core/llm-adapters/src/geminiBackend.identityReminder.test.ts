@@ -31,7 +31,10 @@ async function run(messages: IMessage[], options: Record<string, unknown> = {}) 
 
 describe('GeminiBackend identity reminder', () => {
   it('appends the reminder to the system instruction by default', async () => {
-    const request = await run([{ role: 'system', content: 'You are terse.' }, { role: 'user', content: 'hi' }]);
+    const request = await run([
+      { role: 'system', content: 'You are terse.' },
+      { role: 'user', content: 'hi' },
+    ]);
 
     expect(request.config?.systemInstruction).toBe(`You are terse.\n\n${REMINDER}`);
   });
@@ -49,9 +52,15 @@ describe('GeminiBackend identity reminder', () => {
   });
 
   it('sends the caller system text unappended when the reminder is omitted', async () => {
-    const request = await run([{ role: 'system', content: 'You are terse.' }, { role: 'user', content: 'hi' }], {
-      omitIdentityReminder: true,
-    });
+    const request = await run(
+      [
+        { role: 'system', content: 'You are terse.' },
+        { role: 'user', content: 'hi' },
+      ],
+      {
+        omitIdentityReminder: true,
+      }
+    );
 
     expect(request.config?.systemInstruction).toBe('You are terse.');
   });
