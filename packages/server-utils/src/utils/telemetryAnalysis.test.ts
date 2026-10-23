@@ -14,7 +14,7 @@ import {
   measureGrowth,
   seededCorpus,
   FENCE_PIECES,
-} from '@client/__tests__/utils/regexLinearity';
+} from '../__tests__/utils/regexLinearity';
 
 function createTestTelemetry(overrides: { anomalies?: Partial<AnomaliesTelemetry> } = {}): ContextTelemetry {
   const defaultAnomalies: AnomaliesTelemetry = {
