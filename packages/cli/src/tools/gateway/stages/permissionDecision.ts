@@ -7,6 +7,8 @@ import { commandTextOf } from '../toolPolicy.js';
 
 export type AutoRunInput = {
   toolName: string;
+  /** The tool came from an MCP server (`_isMcpTool`); lets `mcp__<server>__*` host patterns match it. */
+  isMcpTool?: boolean;
   /** A gate (high-risk command, fuzzy edit) demanded an explicit prompt; nothing below may skip it. */
   forcePrompt: boolean;
   isSandboxed: boolean;
@@ -21,10 +23,10 @@ export type AutoRunInput = {
  * auto-allowed, or auto-accept mode (Shift+Tab). A forced prompt overrides all three.
  */
 export function canRunWithoutPrompt(input: AutoRunInput): boolean {
-  const { toolName, forcePrompt, isSandboxed, command, interactionMode, permissionManager } = input;
+  const { toolName, isMcpTool, forcePrompt, isSandboxed, command, interactionMode, permissionManager } = input;
   // Evaluated before the forcePrompt check so the allowlist is parsed on the first call, as
   // it always has been.
-  const hostAllowlisted = isHostAllowlisted(toolName);
+  const hostAllowlisted = isHostAllowlisted(toolName, { isMcpTool });
   if (forcePrompt) return false;
   if (hostAllowlisted) return true;
   if (!permissionManager.needsPermission(toolName, { isSandboxed, command })) return true;
