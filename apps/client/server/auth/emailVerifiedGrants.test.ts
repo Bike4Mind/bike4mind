@@ -1,3 +1,4 @@
+import { signupProtection } from '@server/auth/signupProtection';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
@@ -135,6 +136,7 @@ describe('emailVerifiedGrants', () => {
         expect.objectContaining({ id: 'user-1' }),
         expect.objectContaining({ reason: 'verify test' })
       );
+      expect(mockReleasePending.mock.calls[0][1].db.signupProtection).toBe(signupProtection);
     });
 
     it('sums the credits and prefers the domain grant balance', async () => {

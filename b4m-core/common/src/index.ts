@@ -191,3 +191,5 @@ export * from './storageBreakdown';
 export * from './organizationStorage';
 
 export { VERIFIED_SLACK_IDENTITY_FILTER } from './slackIdentity';
+
+export { personalEmailProviders } from './organizationUtils';

@@ -280,6 +280,8 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   /** Merge tags into one user's tags (idempotent via $addToSet). No-op on an empty list. */
   async addTagsToUser(userId: string, tags: string[]): Promise<void> {
     if (tags.length === 0) return;
+    // Legacy accounts can store null; $addToSet requires an array. The guard preserves concurrent tag additions.
+    await this.model.updateOne({ _id: userId, tags: null }, { $set: { tags: [] } });
     await this.model.updateOne({ _id: userId }, { $addToSet: { tags: { $each: tags } } });
   }
 

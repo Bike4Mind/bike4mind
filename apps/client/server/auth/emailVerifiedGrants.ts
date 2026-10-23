@@ -1,3 +1,4 @@
+import { signupProtection } from '@server/auth/signupProtection';
 import {
   adminSettingsRepository,
   creditLotRepository,
@@ -74,6 +75,7 @@ export async function releaseVerifiedPendingFreeCredits(
           creditTransactions: creditTransactionRepository,
           creditLots: creditLotRepository,
           users: userRepository,
+          signupProtection,
         },
         reason,
         logger,
