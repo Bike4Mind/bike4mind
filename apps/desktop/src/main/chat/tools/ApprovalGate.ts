@@ -111,8 +111,8 @@ export class ApprovalGate {
   /** sessionId -> standing key -> the answer to replay. In memory only, by design. */
   private readonly standing = new Map<string, Map<string, StandingApproval>>();
 
-  /** sessionId -> the shell patterns and directories the user said "always" to. */
-  private readonly standingShell = new Map<string, StandingShell>();
+  /** sessionId -> exact approval key -> the shell patterns and directories it allowed. */
+  private readonly standingShell = new Map<string, Map<string, StandingShell>>();
 
   constructor(private readonly listener?: ApprovalGateListener) {}
 
@@ -133,11 +133,20 @@ export class ApprovalGate {
     return null;
   }
 
+  revoke(sessionId: string, key: string): void {
+    const keys = this.standing.get(sessionId);
+    if (!keys) return;
+    keys.delete(key);
+    for (const stored of keys.keys()) if (stored.startsWith(`${key}#`)) keys.delete(stored);
+    this.standingShell.get(sessionId)?.delete(key);
+  }
+
   /** Whether every sub-command of this script has been allowed before. */
   coversCommands(sessionId: string, always: ApprovalAlways): boolean {
     const standing = this.standingShell.get(sessionId);
     if (!standing || always.commands.length === 0) return false;
-    const own = [...standing.patterns]
+    const own = [...standing.values()]
+      .flatMap(entry => [...entry.patterns])
       .filter(entry => entry.startsWith(`${always.namespace}\x00`))
       .map(entry => entry.slice(always.namespace.length + 1));
     return always.commands.every(
@@ -148,9 +157,8 @@ export class ApprovalGate {
   /** The directories among these that the user has not said "always" to. */
   uncoveredDirectories(sessionId: string, directories: readonly string[]): string[] {
     const standing = this.standingShell.get(sessionId);
-    return directories.filter(
-      directory => !standing || ![...standing.directories].some(allowed => withinDirectory(allowed, directory))
-    );
+    const allowedDirectories = standing ? [...standing.values()].flatMap(entry => [...entry.directories]) : [];
+    return directories.filter(directory => !allowedDirectories.some(allowed => withinDirectory(allowed, directory)));
   }
 
   /**
@@ -188,7 +196,7 @@ export class ApprovalGate {
           (!options.rememberable || (!!answer.optionId && options.rememberable.includes(answer.optionId)));
         if (keep) {
           this.remember(sessionId, standingKey(key, answer.optionId), answer);
-          if (options.always) this.rememberShell(sessionId, options.always);
+          if (options.always) this.rememberShell(sessionId, key, options.always);
         }
         if (announced) this.listener?.settled(sessionId);
         resolve(answer.decision === 'always' && !keep ? { ...answer, decision: 'once' } : answer);
@@ -248,11 +256,13 @@ export class ApprovalGate {
     this.standingShell.clear();
   }
 
-  private rememberShell(sessionId: string, always: ApprovalAlways): void {
-    const standing = this.standingShell.get(sessionId) ?? { patterns: new Set(), directories: new Set() };
+  private rememberShell(sessionId: string, key: string, always: ApprovalAlways): void {
+    const byKey = this.standingShell.get(sessionId) ?? new Map<string, StandingShell>();
+    const standing = byKey.get(key) ?? { patterns: new Set(), directories: new Set() };
     for (const { pattern } of always.commands) standing.patterns.add(`${always.namespace}\x00${pattern}`);
     for (const directory of always.directories) standing.directories.add(directory);
-    this.standingShell.set(sessionId, standing);
+    byKey.set(key, standing);
+    this.standingShell.set(sessionId, byKey);
   }
 
   private remember(sessionId: string, key: string, answer: ChatApprovalAnswer): void {

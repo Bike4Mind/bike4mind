@@ -11,6 +11,12 @@ import Stack from '@mui/joy/Stack';
 import Switch from '@mui/joy/Switch';
 import Typography from '@mui/joy/Typography';
 import type { RecentFolder } from '@shared/chat';
+import type {
+  CapabilityAuditEvent,
+  CapabilityGrant,
+  CapabilityLedgerState,
+  CapabilityScope,
+} from '@shared/capabilities';
 import {
   type ClaudeCodeSourceView,
   PERMISSION_LISTS,
@@ -230,6 +236,8 @@ export function PermissionsSettings({
   const [desktopOpen, setDesktopOpen] = useState(true);
   const [pending, setPending] = useState(false);
   const changing = useRef(false);
+  const [ledger, setLedger] = useState<CapabilityLedgerState | null>(null);
+  const [ledgerError, setLedgerError] = useState<string | null>(null);
 
   const mutate = useCallback(async (change: () => Promise<boolean>) => {
     if (changing.current) return false;
@@ -251,6 +259,15 @@ export function PermissionsSettings({
       .listRecentFolders()
       .then(setFolders)
       .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    const api = window.b4m.capabilities;
+    if (!api) return;
+    void api
+      .getState()
+      .then(setLedger)
+      .catch(error => setLedgerError(String(error)));
   }, []);
 
   const projectChoices = useMemo(() => {
@@ -398,6 +415,19 @@ export function PermissionsSettings({
           )}
         </Stack>
 
+        <CapabilityLedgerView
+          state={ledger}
+          error={ledgerError}
+          onRevoke={async grantId => {
+            setLedgerError(null);
+            try {
+              setLedger(await window.b4m.capabilities.revoke(grantId));
+            } catch (error) {
+              setLedgerError(String(error));
+            }
+          }}
+        />
+
         <Stack spacing={1}>
           <Stack direction="row" spacing={1} alignItems="center">
             <Typography level="title-sm" sx={{ flex: 1 }}>
@@ -442,6 +472,98 @@ export function PermissionsSettings({
         </Stack>
       </Stack>
     </fieldset>
+  );
+}
+
+function scopeLabel(scope: CapabilityScope): string {
+  if (scope.kind === 'browser-origin') return `${scope.access}: ${scope.value}`;
+  return scope.value;
+}
+
+function subjectLabel(grant: CapabilityGrant): string {
+  if (grant.subject.kind === 'desktop-user') return 'This desktop';
+  if (grant.subject.kind === 'project') return shortPath(grant.subject.directory);
+  return `Conversation ${grant.subject.sessionId.slice(0, 8)}`;
+}
+
+function auditLabel(event: CapabilityAuditEvent): string {
+  if (event.type === 'grant') return `Granted ${event.grant.capability}: ${scopeLabel(event.grant.scope)}`;
+  if (event.type === 'use') return `Used ${event.capability}: ${scopeLabel(event.scope)}`;
+  return `${event.type === 'revoke' ? 'Revoked' : 'Expired'} grant ${event.grantId.slice(0, 8)}`;
+}
+
+function CapabilityLedgerView({
+  state,
+  error,
+  onRevoke,
+}: {
+  state: CapabilityLedgerState | null;
+  error: string | null;
+  onRevoke: (grantId: string) => Promise<void>;
+}) {
+  const [open, setOpen] = useState(true);
+  const active = state?.grants.filter(grant => !grant.revokedAt && !grant.expiredAt) ?? [];
+  return (
+    <Stack spacing={1} data-testid="capability-ledger">
+      <Stack direction="row" spacing={1} alignItems="center">
+        <CollapseToggle
+          open={open}
+          onToggle={() => setOpen(value => !value)}
+          name="capability ledger"
+          testId="capability-ledger-toggle-btn"
+        />
+        <Typography level="title-sm">Capability ledger</Typography>
+        <Typography level="body-xs" textColor="text.tertiary">
+          {active.length} active, {state?.audit.length ?? 0} audit events
+        </Typography>
+      </Stack>
+      <Typography level="body-xs" textColor="text.tertiary">
+        Local grants for files, tools, browser origins, imported identity and credit-spending actions.
+      </Typography>
+      {error && <Typography color="danger">Could not load capability ledger: {error}</Typography>}
+      {open && state && (
+        <Stack spacing={1}>
+          {active.map(grant => (
+            <Sheet key={grant.id} variant="soft" sx={{ borderRadius: 'sm', p: 1 }} data-testid="capability-grant-row">
+              <Stack direction="row" spacing={1} alignItems="center">
+                <Chip size="sm" variant="outlined">
+                  {grant.capability}
+                </Chip>
+                <Stack sx={{ flex: 1, minWidth: 0 }}>
+                  <Typography level="body-sm" sx={{ overflowWrap: 'anywhere' }}>
+                    {scopeLabel(grant.scope)}
+                  </Typography>
+                  <Typography level="body-xs" textColor="text.tertiary">
+                    {subjectLabel(grant)} - granted {new Date(grant.createdAt).toLocaleString()}
+                    {grant.expiresAt ? ` - expires ${new Date(grant.expiresAt).toLocaleString()}` : ''}
+                  </Typography>
+                </Stack>
+                <Button
+                  size="sm"
+                  variant="plain"
+                  color="danger"
+                  onClick={() => void onRevoke(grant.id)}
+                  data-testid="capability-revoke-btn"
+                >
+                  Revoke
+                </Button>
+              </Stack>
+            </Sheet>
+          ))}
+          <Typography level="title-sm">Audit log</Typography>
+          {state.audit.map(event => (
+            <Stack key={event.sequence} direction="row" spacing={1} data-testid="capability-audit-row">
+              <Typography level="body-xs" textColor="text.tertiary" sx={{ minWidth: 150 }}>
+                {new Date(event.timestamp).toLocaleString()}
+              </Typography>
+              <Typography level="body-xs" sx={{ overflowWrap: 'anywhere' }}>
+                {auditLabel(event)}
+              </Typography>
+            </Stack>
+          ))}
+        </Stack>
+      )}
+    </Stack>
   );
 }
 

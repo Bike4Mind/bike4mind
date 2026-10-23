@@ -293,6 +293,10 @@ const api: DesktopApi = {
     setRules: (scope, lists) => ipcRenderer.invoke(IPC_CHANNELS.permissionsSetRules, scope, lists),
     setSharing: (share: boolean) => ipcRenderer.invoke(IPC_CHANNELS.permissionsSetSharing, share),
   },
+  capabilities: {
+    getState: () => ipcRenderer.invoke(IPC_CHANNELS.capabilitiesGetState),
+    revoke: (grantId: string) => ipcRenderer.invoke(IPC_CHANNELS.capabilitiesRevoke, grantId),
+  },
   claudeImport: {
     getState: () => ipcRenderer.invoke(IPC_CHANNELS.claudeImportGetState),
     setCodeSettings: patch => ipcRenderer.invoke(IPC_CHANNELS.claudeImportSetCodeSettings, patch),
