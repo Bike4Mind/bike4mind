@@ -541,6 +541,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       recommendations.push('Mapping max tokens exceeds default setting. Consider adjusting for consistency.');
     }
 
+    const testSuccess = !errorMessage && !!rapidReplyResponse;
+
     await rapidReplyAuditLogRepository.createLog({
       entityType: 'settings',
       entityId: 'test',
@@ -556,7 +558,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
             latencyCheck,
             mappingFound: true,
             promptsAvailable: activePrompts.length,
-            testSuccess: !errorMessage,
+            testSuccess,
             tokensUsed: actualTokensUsed,
             estimatedCost: actualCost,
             responseGenerated: !!rapidReplyResponse,
@@ -578,8 +580,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         simulatedLatency: simulateLatency,
       },
     });
-
-    const testSuccess = !errorMessage && !!rapidReplyResponse;
 
     await recordTestRun(testSuccess);
 
