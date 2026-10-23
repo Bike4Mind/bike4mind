@@ -404,6 +404,8 @@ const agents = await b4m.call('listAgents');
 // the key needs the agents:read scope
 ```
 
+The SDK calls `GET /api/v1/agents`, which uses API-key authentication, `limit`/`cursor` pagination, and a `{ data, next_cursor }` response. This differs from the `/api/agents` route documented above; use the [in-app API reference](https://app.bike4mind.com/api/v1/docs) for the versioned contract.
+
 ### Python
 
 Use the [plain HTTP Python client](../../api/examples.md#python) with your JWT. No Python SDK is required.
@@ -458,4 +460,4 @@ curl -X POST https://app.bike4mind.com/api/sessions/session_123/agents \
 
 ---
 
-For more examples and detailed integration guides, see the [Integration section](../integration/). 
+For more examples and detailed integration guides, see the [Integration section](../integration/).
