@@ -77,7 +77,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
   await recordAdminActionFromRequest(req, {
     action: 'ops.overwatch.first_seen_backfilled',
     target: { kind: 'system', id: 'overwatch-first-seen-backfill', displayName: 'Overwatch first-seen backfill' },
-    summary: `backfilled first-seen dates for ${users.length} users`,
+    summary: `backfilled first-seen dates for ${users.length - skipped} of ${users.length} users`,
     details: {
       skip,
       processed: users.length,

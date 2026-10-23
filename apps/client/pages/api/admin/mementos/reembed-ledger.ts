@@ -136,7 +136,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     await recordAdminActionFromRequest(req, {
       action: 'ops.memory_ledger.reembedded',
       target: { kind: 'system', id: 'memory-ledger-reembed', displayName: 'Memory ledger re-embed' },
-      summary: `re-embedded memory ledger vectors for ${processedPrincipals} principals`,
+      summary: `re-embedded ${totals.reembedded + totals.backfilled + totals.truncated} memory ledger vectors across ${processedPrincipals} principals`,
       details: { ...totals, processedPrincipals, failedPrincipals: failedPrincipals.length },
     });
   }
