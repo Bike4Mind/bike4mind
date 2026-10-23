@@ -20,6 +20,12 @@ describe('EMBEDDING_MODEL_CATALOG', () => {
       expect(dimensions.values).toContain(dimensions.native);
     }
   });
+
+  it.each(EMBEDDING_MODEL_IDS)('%s is declared discrete only if its provider forwards outputDimension', id => {
+    const { dimensions, provider } = EMBEDDING_MODEL_CATALOG[id];
+    // Only fab-pipeline VoyageAIEmbeddingService forwards a width; any other provider would silently serve native.
+    if (dimensions.kind === 'discrete') expect(provider).toBe('voyage');
+  });
 });
 
 describe('servableEmbeddingDimensions', () => {
