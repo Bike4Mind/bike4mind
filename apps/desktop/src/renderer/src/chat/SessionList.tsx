@@ -22,6 +22,7 @@ import List from '@mui/joy/List';
 import ListDivider from '@mui/joy/ListDivider';
 import ListItem from '@mui/joy/ListItem';
 import ListItemButton from '@mui/joy/ListItemButton';
+import ListItemContent from '@mui/joy/ListItemContent';
 import ListItemDecorator from '@mui/joy/ListItemDecorator';
 import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
@@ -35,6 +36,7 @@ import {
   type ChatSessionStatus,
   type ChatSessionSummary,
 } from '@shared/chat';
+import type { LocalHistoryResult } from '@shared/history';
 import type { PrSummary } from '@shared/pullRequest';
 import { sectionOf, type SidebarSection, type SidebarSectionsState } from '@shared/sidebarSections';
 import { capRows, raisedRows, setGroupLimit, useGroupLimit } from './groupCap';
@@ -790,6 +792,16 @@ export function SessionList({
   footer?: ReactNode;
 }) {
   const [query, setQuery] = useState('');
+  const [historyResults, setHistoryResults] = useState<LocalHistoryResult[]>([]);
+  useEffect(() => {
+    const needle = query.trim();
+    if (!needle) {
+      setHistoryResults([]);
+      return;
+    }
+    const timer = setTimeout(() => void window.b4m.chat.searchHistory(needle).then(setHistoryResults), 120);
+    return () => clearTimeout(timer);
+  }, [query]);
   // Declared above the collapsed rail's early return, so collapsing and re-expanding comes back
   // to the width the user set rather than to the default.
   const [width, setWidth] = useState(readSidebarWidth);
@@ -1146,6 +1158,24 @@ export function SessionList({
             startDecorator={<SearchIcon />}
             slotProps={{ input: { 'data-testid': 'chat-search-input' } }}
           />
+          {historyResults.length > 0 && (
+            <List size="sm" data-testid="local-history-results">
+              {historyResults.map(result => (
+                <ListItem key={result.id}>
+                  <ListItemButton onClick={() => onSelect(result.sessionId)} data-testid="local-history-result">
+                    <ListItemContent>
+                      <Typography level="body-xs">
+                        {result.kind === 'page' ? 'Page' : 'Conversation'}: {result.title}
+                      </Typography>
+                      <Typography level="body-xs" textColor="text.tertiary" noWrap>
+                        {result.snippet.replace(/<\/?mark>/g, '')}
+                      </Typography>
+                    </ListItemContent>
+                  </ListItemButton>
+                </ListItem>
+              ))}
+            </List>
+          )}
         </Box>
         {renameError && (
           <Alert

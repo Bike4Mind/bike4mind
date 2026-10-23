@@ -5,6 +5,7 @@ import Button from '@mui/joy/Button';
 import IconButton from '@mui/joy/IconButton';
 import Input from '@mui/joy/Input';
 import Stack from '@mui/joy/Stack';
+import Switch from '@mui/joy/Switch';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import type { AuthState } from '@shared/auth';
@@ -700,6 +701,16 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
                   >
                     <PanelRightIcon />
                   </IconButton>
+                </Tooltip>
+              )}
+              {conversation.session && (
+                <Tooltip title="Keep this conversation and its visited pages in the local search index.">
+                  <Switch
+                    size="sm"
+                    checked={conversation.session.historyEnabled === true}
+                    onChange={event => void conversation.setHistory(event.target.checked)}
+                    slotProps={{ input: { 'aria-label': 'Local history', 'data-testid': 'chat-history-switch' } }}
+                  />
                 </Tooltip>
               )}
               {/* Inside the reading column, not out at the window edge: a tooltip opening from

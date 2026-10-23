@@ -559,6 +559,14 @@ export class SessionStore {
     });
   }
 
+  async setHistoryEnabled(id: string, enabled: boolean): Promise<ChatSessionSummary | null> {
+    return this.mutate(id, session => {
+      if (enabled) session.historyEnabled = true;
+      else delete session.historyEnabled;
+      return true;
+    });
+  }
+
   /**
    * How hard this conversation's model should think, stored beside the model for the same
    * reason: the two are chosen together, and a thread reopened later resumes the pair it was
@@ -1007,6 +1015,7 @@ export class SessionStore {
       ...(parsed.titleLocked ? { titleLocked: true } : {}),
       ...(parsed.pinned ? { pinned: true } : {}),
       ...(parsed.archived ? { archived: true } : {}),
+      ...(parsed.historyEnabled ? { historyEnabled: true } : {}),
       ...(origin ? { origin } : {}),
       ...(importOrigin ? { importOrigin } : {}),
       messages: Array.isArray(parsed.messages) ? parsed.messages : [],

@@ -8,6 +8,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
+import type { ModelCatalog } from './ModelCatalog';
+import { LOCAL_MODEL_PREFIX } from './OllamaLocal';
 
 function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
@@ -75,6 +77,37 @@ describe('ChatService', () => {
     ]);
     // The prompt names the thread, so the sidebar stops saying "New chat".
     expect(session?.title).toBe('hello');
+  });
+
+  it('completes a local turn while signed out and declares no tools for a plain model', async () => {
+    const model = `${LOCAL_MODEL_PREFIX}llama3.2`;
+    const localStore = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-local-chat-')), model);
+    const localEvents: ChatStreamEvent[] = [];
+    const local = {
+      stream: vi.fn(async (request, emit) => {
+        expect(request.tools).toEqual([]);
+        emit({ type: 'content', text: 'Offline answer', stopReason: 'end_turn' });
+      }),
+    };
+    const offline = new ChatService({
+      store: localStore,
+      access: { list: async () => [] } as unknown as AccessStore,
+      models: {
+        list: async () => ({
+          models: [{ id: model, name: 'llama3.2', backend: 'local-ollama', supportsTools: false }],
+        }),
+        cached: () => [{ id: model, name: 'llama3.2', backend: 'local-ollama', supportsTools: false }],
+      } as unknown as ModelCatalog,
+      local: local as never,
+      logger: { debug: vi.fn(), warn: vi.fn() },
+      getApiClient: () => null,
+      getEnvironmentUrl: () => '',
+      emit: event => localEvents.push(event),
+    });
+    const { id } = await offline.createSession();
+    expect(await offline.send(id, 'answer offline')).toMatchObject({ ok: true });
+    await waitFor(localEvents, 'done');
+    expect((await offline.getSession(id))?.messages.at(-1)?.content).toBe('Offline answer');
   });
 
   // A window opening a conversation mid-turn has only getSession to go on: replies are stored

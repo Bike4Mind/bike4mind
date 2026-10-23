@@ -609,7 +609,9 @@ export class BrowserManager implements BrowserProvider {
 
   constructor(
     private readonly onPageState: (sessionId: string, state: BrowserPaneState) => void = () => undefined,
-    onCookieState: (state: CookieImportState) => void = () => undefined
+    onCookieState: (state: CookieImportState) => void = () => undefined,
+    private readonly onSnapshot: (sessionId: string, snapshot: BrowserSnapshot) => void | Promise<void> = () =>
+      undefined
   ) {
     this.cookies = new CookieImporter(() => this.session(), onCookieState);
   }
@@ -624,7 +626,19 @@ export class BrowserManager implements BrowserProvider {
       return tab;
     };
     return {
-      page: async () => this.activeTab(sessionId),
+      page: async () => {
+        const page = this.activeTab(sessionId);
+        return new Proxy(page, {
+          get: (target, property) =>
+            property === 'snapshot'
+              ? async (maxChars: number, inView = false) => {
+                  const snapshot = await target.snapshot(maxChars, inView);
+                  void Promise.resolve(this.onSnapshot(sessionId, snapshot)).catch(() => undefined);
+                  return snapshot;
+                }
+              : Reflect.get(target, property, target),
+        });
+      },
       tabs: () => this.tabInfo(sessionId),
       newTab: async () => this.openTab(sessionId, true) ?? null,
       selectTab: async id => {

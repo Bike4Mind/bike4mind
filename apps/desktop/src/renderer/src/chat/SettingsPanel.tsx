@@ -140,6 +140,26 @@ function dollarCostsEntry(enabled: boolean, setEnabled: (enabled: boolean) => vo
   };
 }
 
+function localHistoryEntry(): ConfigEntry {
+  return {
+    id: 'local-history',
+    icon: <FolderIcon />,
+    label: 'Local history',
+    summary: 'Opted-in conversations and pages stay on this device and remain searchable offline.',
+    control: (
+      <Button
+        size="sm"
+        color="danger"
+        variant="soft"
+        onClick={() => void window.b4m.chat.clearHistory()}
+        data-testid="settings-clear-history-btn"
+      >
+        Clear local history
+      </Button>
+    ),
+  };
+}
+
 function permissionsEntry(
   state: PermissionsState | null,
   setState: (state: PermissionsState) => void,
@@ -260,6 +280,7 @@ function useSettingsEntries(auth: AuthState | null): Record<SettingsSection, Con
       appearanceEntry(mode, setMode, theme.palette.mode),
       suggestionsEntry(suggestions, toggleSuggestions, suggestionModel),
       worktreeEntry(worktreeDefault, toggleWorktreeDefault),
+      localHistoryEntry(),
       ...(import.meta.env.DEV ? [dollarCostsEntry(showDollarCosts, setShowDollarCosts)] : []),
       ...(auth ? [serverEntry(auth)] : []),
       updatesEntry(update),
