@@ -17,13 +17,13 @@ const handler = baseApi().post(
     const userId = req.query.id;
     if (!userId) throw new Error('User ID is required');
 
-    const user = await User.findById(userId);
-    if (!user) throw new NotFoundError('User not found');
-
     // Only allow users to update their own photo
     if (userId !== req.user.id && !req.user.isAdmin) {
       throw new BadRequestError('You can only update your own profile photo');
     }
+
+    const user = await User.findById(userId);
+    if (!user) throw new NotFoundError('User not found');
 
     const data = FileGeneratePresignedUrlRequestInput.parse(req.body);
 
@@ -37,7 +37,12 @@ const handler = baseApi().post(
     const fileKey = `profile-photos/${userId}/${uuidv4()}.${ext}`;
 
     // ACL not needed - bucket policy grants public read for profile-photos/* prefix
-    const presignedUrl = await storage.getSignedUrl(fileKey, 'put', { expiresIn: 600, ContentLength: data.fileSize });
+    // ContentType is bound so the PUT cannot carry a different type than the image mime validated above.
+    const presignedUrl = await storage.getSignedUrl(fileKey, 'put', {
+      expiresIn: 600,
+      ContentType: data.mimeType,
+      ContentLength: data.fileSize,
+    });
 
     // photoUrl is deliberately NOT written here: the browser has not PUT the bytes yet, and CloudFront
     // 403s a missing key. confirm-photo.ts points the profile at this file once the object exists.
