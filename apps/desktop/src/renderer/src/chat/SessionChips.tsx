@@ -106,7 +106,7 @@ const formButtonSx: SxProps = {
 const formRowSx: SxProps = { width: '100%', minWidth: 0 };
 
 /** Chip tooltips put a path on a line of its own; the width cap is in theme.ts. */
-const chipTooltipSx: SxProps = { whiteSpace: 'pre-line' };
+const chipTooltipSx: SxProps = { whiteSpace: 'pre-line', bgcolor: 'background.popup' };
 
 /**
  * Where the workspace form lives: centered in an empty transcript or in the session panel's

@@ -437,6 +437,7 @@ describe('the chip row once the session has run here', () => {
 
     expect(tooltip.textContent?.split('\n')).toEqual([expect.stringMatching(/new session/i), CHECKOUT]);
     expect(getComputedStyle(tooltip).whiteSpace).toBe('pre-line');
+    expect(getComputedStyle(tooltip).backgroundColor).toContain('--joy-palette-background-popup');
   });
 });
 
