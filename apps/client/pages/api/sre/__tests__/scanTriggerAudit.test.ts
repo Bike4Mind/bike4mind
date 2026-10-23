@@ -116,6 +116,7 @@ describe('SRE scan and trigger admin audit', () => {
     expect(h.audit.mock.calls[0][1]).toMatchObject({
       action: 'ops.sre.run_triggered',
       target: { kind: 'system', id: 'sre-trigger' },
+      summary: 'triggered SRE, dispatched 1 of 1 issues in acme/app',
       details: { repoSlug: 'acme/app', issueNumbers: [7], dispatched: 1 },
     });
     expect(h.dispatch.mock.invocationCallOrder[0]).toBeLessThan(h.audit.mock.invocationCallOrder[0]);

@@ -165,14 +165,15 @@ const handler = baseApi().post(
       }
     }
 
+    const dispatchedCount = results.filter(r => r.dispatched).length;
     await recordAdminActionFromRequest(req, {
       action: 'ops.sre.run_triggered',
       target: { kind: 'system', id: 'sre-trigger', displayName: 'SRE manual trigger' },
-      summary: `triggered SRE for ${issueNumbers.length} issues in ${systemRepo}`,
+      summary: `triggered SRE, dispatched ${dispatchedCount} of ${issueNumbers.length} issues in ${systemRepo}`,
       details: {
         repoSlug: systemRepo,
         issueNumbers,
-        dispatched: results.filter(r => r.dispatched).length,
+        dispatched: dispatchedCount,
       },
     });
 
