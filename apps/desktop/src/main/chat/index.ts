@@ -513,7 +513,7 @@ export function registerChat(
       }
     },
     summaryChanged: (summary: ChatSessionSummary) => send(IPC_CHANNELS.chatSessionSummary, summary),
-    sessionClosed: sessionId => hooks.sessionClosed?.(sessionId),
+    sessionClosed: hooks.sessionClosed,
   });
 
   ipcMain.handle(IPC_CHANNELS.chatListModels, (_event, force: boolean) => service.listModels(force));
