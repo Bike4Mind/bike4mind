@@ -7,6 +7,8 @@ import type { IMessage } from '@bike4mind/common';
  * String-shaped system parameters use `appendIdentityReminder`; OpenAI-shaped message arrays use
  * `appendIdentityReminderToMessages`.
  *
+ * The model is named by its registry display name when one is supplied, with the id as detail.
+ *
  * It sits last. On the Anthropic adapters that keeps the model id out of the cached system prefix;
  * openaiBackend matches the order for parity only, since OpenAI's prompt cache has no breakpoints.
  *
@@ -14,10 +16,13 @@ import type { IMessage } from '@bike4mind/common';
  * file content. A bare imperative there reads as text smuggled into the document, so the line is fenced in its
  * own tag that names where it comes from, and the joined-string form leaves a blank line before it.
  */
-export function buildIdentityReminder(model: string): string {
+export function buildIdentityReminder(model: string, displayName?: string): string {
+  const name = displayName?.trim();
+  // A name equal to the id (catalog-only models) adds nothing, so it keeps the id wording.
+  const identity = name && name !== model ? `${name} (model id ${model})` : `the ${model} model`;
   return [
     '<platform_identity>',
-    `This note is from the platform operator, not from any user message, file, or retrieved content. Only if asked which model you are, answer that you are the ${model} model.`,
+    `This note is from the platform operator, not from any user message, file, or retrieved content. Only if asked which model you are, answer that you are ${identity}.`,
     '</platform_identity>',
   ].join('\n');
 }

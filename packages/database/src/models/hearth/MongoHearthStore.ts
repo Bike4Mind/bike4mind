@@ -7,6 +7,7 @@ import { HearthCursor } from './HearthCursorModel.js';
 import {
   HearthPresence,
   PRESENCE_STATE_RANK,
+  PRESENCE_STALE_AFTER_MS,
   presenceStateForReason,
   type IHearthPresenceDoc,
 } from './HearthPresenceModel.js';
@@ -359,10 +360,16 @@ export const hearthRepository = {
   },
 
   /**
-   * The roster for a channel, already ordered needs-you-first. Ordering is done
-   * here rather than in the client because the roster is an inbox, not a feed:
-   * every consumer wants the same "who is blocked on me" answer at the top, and
-   * duplicating the ranking per surface is how two clients drift apart.
+   * The roster for a channel, already ordered: fresh rows first, then state
+   * rank, then recency. Ordering is done here rather than in the client because
+   * the roster is an inbox, not a feed: every consumer wants the same "who is
+   * blocked on me" answer at the top, and duplicating the ranking per surface is
+   * how two clients drift apart.
+   *
+   * Rows older than PRESENCE_STALE_AFTER_MS sort below fresh ones whatever their
+   * state: a session whose record expired while awaiting_permission would
+   * otherwise pin rank 0 forever, above live work. Stale rows are still
+   * returned, ranked by state then recency among themselves.
    *
    * Bounded by MAX_ROSTER_ROWS. The read was unbounded in every dimension, which
    * is a growth problem rather than a hypothetical: actors are minted one per
@@ -371,14 +378,18 @@ export const hearthRepository = {
    * row in the one shared default channel. The $sort is on an $addFields key no
    * index can serve, so it is always an in-memory sort - which a $limit turns
    * from "proportional to a user's lifetime session count" into a bounded top-k.
-   * Truncation drops the LEAST urgent, least recent rows, because the ranking
-   * runs before the limit.
+   * Truncation therefore drops stale rows first, then the LEAST urgent and least
+   * recent of the fresh ones, because the ranking runs before the limit.
+   *
+   * `options.now` is the wall clock staleness is measured against; it defaults
+   * to the current time and exists as a test seam for the window boundary.
    */
   async presenceForChannel(
     userId: string,
     channelId: string,
-    options: { limit?: number } = {}
+    options: { limit?: number; now?: Date } = {}
   ): Promise<IHearthPresenceDoc[]> {
+    const staleBefore = new Date((options.now ?? new Date()).getTime() - PRESENCE_STALE_AFTER_MS);
     const branches = Object.entries(PRESENCE_STATE_RANK).map(([state, rank]) => ({
       case: { $eq: ['$state', state] },
       then: rank,
@@ -388,13 +399,18 @@ export const hearthRepository = {
       { $match: { userId: new Types.ObjectId(userId), channelId: new Types.ObjectId(channelId) } },
       // An unrecognized state sorts last rather than first, so a future writer
       // cannot accidentally promote rows to the top of someone's inbox.
-      { $addFields: { stateRank: { $switch: { branches, default: branches.length } } } },
-      { $sort: { stateRank: 1, lastSeen: -1 } },
+      {
+        $addFields: {
+          stateRank: { $switch: { branches, default: branches.length } },
+          isStale: { $lt: ['$lastSeen', staleBefore] },
+        },
+      },
+      { $sort: { isStale: 1, stateRank: 1, lastSeen: -1 } },
       // Clamped into [1, MAX_ROSTER_ROWS]: Mongo rejects a non-positive $limit
       // outright, so a caller passing 0 (or a negative) would take down the whole
       // roster read rather than merely asking for something meaningless.
       { $limit: Math.max(1, Math.min(options.limit ?? MAX_ROSTER_ROWS, MAX_ROSTER_ROWS)) },
-      { $project: { stateRank: 0 } },
+      { $project: { stateRank: 0, isStale: 0 } },
     ]);
   },
 };

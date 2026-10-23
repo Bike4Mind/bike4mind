@@ -75,6 +75,20 @@ export function requestHasGateProof(req: Request, publicId: string): boolean {
   return claims !== null && claims.publicId === publicId;
 }
 
+/**
+ * Seconds until this request's passphrase proof for `publicId` expires, or null when it
+ * carries no valid proof. Lets anything minted on the strength of the proof (signed file
+ * links) expire no later than the proof itself.
+ */
+export function gateProofSecondsLeft(req: Request, publicId: string, nowMs = Date.now()): number | null {
+  const name = gateCookieName(publicId);
+  if (!name) return null;
+  const raw = cookieFromHeader(req.headers.cookie, name);
+  if (!raw || verifyGateToken(raw)?.publicId !== publicId) return null;
+  const exp = (jwt.decode(raw) as { exp?: unknown } | null)?.exp;
+  return typeof exp === 'number' ? Math.max(0, Math.floor(exp - nowMs / 1000)) : null;
+}
+
 /** Set the proof cookie. SameSite=Lax so it rides top-level navigations to
  *  `/p/...` after the prompt page reloads; HttpOnly so bundle JS can't read it
  *  (the sandboxed iframe is opaque-origin anyway, belt and suspenders). */

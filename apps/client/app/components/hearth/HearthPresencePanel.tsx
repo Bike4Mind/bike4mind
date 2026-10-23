@@ -104,11 +104,17 @@ function formatLastSeen(iso: string, now: number): string {
 }
 
 /**
- * The presence roster for a channel: one row per actor, "needs you" first.
+ * The presence roster for a channel: one row per actor, fresh rows first and
+ * "needs you" first within them; stale rows sink and dim.
  *
  * The order is exactly what the server returned and is never re-sorted here -
  * the roster is an inbox, and every surface reading it must agree on what sits
- * at the top (see hearthRepository.presenceForChannel).
+ * at the top (see hearthRepository.presenceForChannel). Dimming re-evaluates
+ * the `staleAfterMs` from the same response against the local clock, so panel
+ * and server use one threshold and agree on the boundary up to client clock
+ * skew. The clock ticks between fetch
+ * and render and this list is never re-sorted, so a row can dim while still
+ * holding its fetched place.
  */
 export default function HearthPresencePanel({ channelId }: { channelId: string }) {
   const queryClient = useQueryClient();

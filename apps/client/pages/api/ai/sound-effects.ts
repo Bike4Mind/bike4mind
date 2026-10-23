@@ -61,7 +61,10 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
     return res.status(503).json({ error: `No ${provider} API key configured` });
   }
 
-  const settings = await getSettingsMap({ adminSettings: adminSettingsRepository }, { names: ['enforceCredits'] });
+  const settings = await getSettingsMap(
+    { adminSettings: adminSettingsRepository },
+    { names: ['enforceCredits'], skipCache: true }
+  );
   const enforceCredits = getSettingsValue('enforceCredits', settings);
 
   // Cost is deterministic from the request (duration-driven), so the same

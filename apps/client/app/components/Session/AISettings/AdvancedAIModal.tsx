@@ -22,13 +22,11 @@ import {
   Option,
   Divider,
 } from '@mui/joy';
-import {
-  Close as CloseIcon,
-  Check as CheckIcon,
-  RestartAlt as RestartAltIcon,
-  KeyboardArrowDown as KeyboardArrowDownIcon,
-  ArrowBack as ArrowBackIcon,
-} from '@mui/icons-material';
+import CloseIcon from '@mui/icons-material/Close';
+import CheckIcon from '@mui/icons-material/Check';
+import RestartAltIcon from '@mui/icons-material/RestartAlt';
+import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
+import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import type { Theme } from '@mui/joy/styles';
 import { useTheme } from '@mui/joy';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';

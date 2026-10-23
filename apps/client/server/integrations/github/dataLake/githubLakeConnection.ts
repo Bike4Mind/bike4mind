@@ -35,7 +35,7 @@ import {
   assertLakeConnectorFree,
   withConnectionId,
   withLakeConnectorClaim,
-} from '@server/dataLakes/assertLakeConnectorFree';
+} from '@bike4mind/server-utils/dataLakes/assertLakeConnectorFree';
 import {
   purgeConnectionIngestedFiles,
   type PurgeConnectionLogger,
@@ -69,7 +69,7 @@ import {
   listUserInstallations,
   type GitHubLakeAppConfig,
   type GitHubLakeUserInstallation,
-} from './lakeAppClient';
+} from '@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient';
 import { findInstallationPolicyViolation } from './lakeAppPolicy';
 
 export const GITHUB_LAKE_STATE_OPTIONS = { audience: 'github-lake-install-state', expiresIn: '10m' } as const;

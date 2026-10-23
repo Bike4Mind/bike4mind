@@ -1,4 +1,4 @@
-import type { IModalDocument, PublicReleaseNote } from '@bike4mind/common';
+import { fromPublicReleaseNoteVideo, type IModalDocument, type PublicReleaseNote } from '@bike4mind/common';
 import { formatDisplayDate } from '@client/app/utils/dateUtils';
 import { groupReleaseNoteItems } from '@bike4mind/server-utils/app/utils/releaseNoteItems';
 
@@ -36,6 +36,7 @@ export function releaseNoteToModal(note: PublicReleaseNote): IModalDocument {
     numberOfViews: { type: 'firstTimeView', value: 0, threshold: 1, tags: [] },
     imageUrl: null,
     images: null,
+    video: note.video ? fromPublicReleaseNoteVideo(note.video) : null,
     textMessage: null,
     generationMetadata: null,
     createdAt: publishedAt,

@@ -308,7 +308,7 @@ Add new redirect URIs to each provider (keep old URIs temporarily):
 
 #### Milestone 4: Deploy Production
 
-Push to `prod` branch to trigger GitHub Actions deployment, or manually run:
+Promote a `main` commit to production through your deployment pipeline, or manually run:
 
 ```bash
 pnpm sst deploy --stage production

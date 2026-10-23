@@ -41,6 +41,16 @@ import { buildPrintBridgeTag } from './printBridge';
  * Off-origin `<a href>`s are retargeted to a new tab (see `retargetOffOriginLinks`),
  * which is the only outbound navigation the viewer sandbox permits.
  *
+ * Multi-page bundles: `pagePath` names the bundle file being rendered (default
+ * `index.html`). Relative refs resolve against THAT file's directory, exactly as they
+ * would on a static host, and relative `<a href>`s into the bundle are rewritten to
+ * absolute bundle URLs. The rewrite is what makes them work at all in inline mode: an
+ * `about:srcdoc` document inherits the wrapper's base URL (`.../{slug}`, no trailing
+ * slash), so `poster/poster.html` would otherwise resolve one segment too high.
+ * A page other than `index.html` never went through publish-time validation, so the
+ * markup that validation rejects on the index (frames, `<base>`, meta refresh,
+ * non-blessed script srcs) is stripped from it here instead.
+ *
  * Every render also carries the print bridge (see `printBridge.ts`) - the wrapper's
  * "Save as PDF" prints THIS document rather than the frame-clipping wrapper, so the
  * trigger has to live in the bundle. Unconditional, so the saved `?export=html` file
@@ -59,6 +69,7 @@ export interface RenderSandboxedBundleInput {
   urlBase: string;
   /** Document origin to resolve absolute URLs against, e.g. `https://app.example.com`. */
   origin: string;
+  scriptOrigin?: string;
   /** Artifact visibility - the default `assetMode` derives from it (public -> base). */
   visibility: PublishVisibility;
   /**
@@ -73,6 +84,13 @@ export interface RenderSandboxedBundleInput {
    */
   assets?: Map<string, SandboxAsset>;
   /**
+   * Short-lived signed storage URLs keyed by manifest path, minted post-gate by the caller
+   * (inline mode only). A media ref with an entry here points straight at storage instead
+   * of being inlined: video, audio and oversized images cannot ride a `data:` URI, and the
+   * opaque frame cannot fetch them back through the gated route (no cookie on its requests).
+   */
+  signedAssets?: Map<string, string>;
+  /**
    * URL paths that identify THIS page (canonical /p path plus the /a/<token> or /uc
    * alias it was reached at). When set, the fragment-nav helper (see fragmentNav.ts)
    * is injected so same-page `#fragment` links scroll in place instead of triggering
@@ -81,6 +99,19 @@ export interface RenderSandboxedBundleInput {
    * sub-documents (`?a=` reply artifacts), whose real URL fragment-navigates natively.
    */
   pagePaths?: string[];
+  /**
+   * Bundle-relative path of the file being rendered (`index.html` when unset). Relative
+   * refs resolve against its directory, and a page other than `index.html` is hardened
+   * (see the file header).
+   */
+  pagePath?: string;
+  /**
+   * Route same-bundle links (other pages, downloadable files) to the parent wrapper via
+   * the fragment-nav helper so they navigate at TOP level. Only meaningful when the
+   * parent runs the hash bridge (srcdoc wrapper / loader shell); the isolated origin
+   * navigates natively and must leave this off, or the click would go unanswered.
+   */
+  routeBundleLinks?: boolean;
 }
 
 export interface RenderSandboxedBundleResult {
@@ -96,6 +127,7 @@ const RELATIVE_ATTR_PAIRS: ReadonlyArray<readonly [string, string]> = [
   ['video[src]', 'src'],
   ['audio[src]', 'src'],
   ['source[src]', 'src'],
+  ['video[poster]', 'poster'],
 ];
 
 export function renderSandboxedBundle(input: RenderSandboxedBundleInput): RenderSandboxedBundleResult {
@@ -103,21 +135,25 @@ export function renderSandboxedBundle(input: RenderSandboxedBundleInput): Render
   const assets = input.assets ?? new Map<string, SandboxAsset>();
   const assetMode = input.assetMode ?? (visibility === 'public' ? 'base' : 'inline');
   const droppedAssets: string[] = [];
+  const pagePath = input.pagePath || 'index.html';
+  const pageDir = pagePath.includes('/') ? pagePath.slice(0, pagePath.lastIndexOf('/') + 1) : '';
 
   const $ = cheerio.load(indexHtml);
+
+  if (pagePath !== 'index.html') hardenSecondaryPage($);
 
   // Blessed libs: absolutize root-relative `/static/...` srcs to the app origin so
   // they resolve from the opaque-origin document (which has no base URL of its own).
   const blessed = new Set<string>(BLESSED_SCRIPT_PATHS);
   $('script[src]').each((_i, el) => {
     const src = $(el).attr('src');
-    if (src && blessed.has(src)) $(el).attr('src', `${origin}${src}`);
+    if (src && blessed.has(src)) $(el).attr('src', `${input.scriptOrigin ?? origin}${src}`);
   });
 
   if (assetMode === 'base') {
     // Relative asset refs load back through the `{urlBase}` route. A <base> makes
     // every relative URL (and the author's own) resolve against the bundle's path.
-    ensureBaseHref($, `${origin}${urlBase}/`);
+    ensureBaseHref($, `${origin}${urlBase}/${encodeBundlePath(pageDir)}`);
   } else {
     // Gated: inline every relative asset from the pre-fetched (credentialed) bytes so
     // the opaque origin never issues a credentialed request. Stylesheets become inline
@@ -131,7 +167,7 @@ export function renderSandboxedBundle(input: RenderSandboxedBundleInput): Render
     $('link[rel~="stylesheet"]').each((_i, el) => {
       const href = $(el).attr('href');
       if (!href || !isRelativeBundlePath(href)) return;
-      const asset = assets.get(href);
+      const asset = assets.get(resolveBundlePath(pagePath, href) ?? href);
       if (!asset) {
         droppedAssets.push(href);
         $(el).remove();
@@ -144,7 +180,13 @@ export function renderSandboxedBundle(input: RenderSandboxedBundleInput): Render
       $(selector).each((_i, el) => {
         const value = $(el).attr(attr);
         if (!value || !isRelativeBundlePath(value)) return;
-        const asset = assets.get(value);
+        const key = resolveBundlePath(pagePath, value) ?? value;
+        const signed = input.signedAssets?.get(key);
+        if (signed) {
+          $(el).attr(attr, signed);
+          return;
+        }
+        const asset = assets.get(key);
         if (!asset) {
           droppedAssets.push(value);
           return;
@@ -154,6 +196,8 @@ export function renderSandboxedBundle(input: RenderSandboxedBundleInput): Render
     }
   }
 
+  // Self-contained documents (`?a=` reply artifacts, exports) pass no urlBase: no bundle to link into.
+  if (urlBase) absolutizeBundleLinks($, origin, urlBase, pagePath);
   retargetOffOriginLinks($, origin);
 
   if (input.pagePaths?.length) {
@@ -164,6 +208,7 @@ export function renderSandboxedBundle(input: RenderSandboxedBundleInput): Render
       buildFragmentNavScriptTag({
         origins: [origin, PUBLISH_HOST ? `https://${PUBLISH_HOST}` : ''],
         paths: input.pagePaths,
+        bundleBases: input.routeBundleLinks ? [urlBase] : [],
       })
     );
   }
@@ -198,6 +243,88 @@ function retargetOffOriginLinks($: cheerio.CheerioAPI, origin: string): void {
     rel.add('noopener');
     $(el).attr('rel', [...rel].join(' '));
   });
+}
+
+/**
+ * Rewrite relative `<a href>`s to absolute bundle URLs, resolved against the rendered
+ * page's directory. A link to `index.html` (or the bundle root) maps to the bundle's own
+ * URL, so the fragment helper treats `index.html#x` from the index as an in-page jump.
+ * Links that climb out of the bundle are left alone; the server would 404 them anyway.
+ * The query is dropped, except a file's exact `?download=1`, the one query the navigate
+ * bridge passes on (fragmentNav.ts).
+ */
+function absolutizeBundleLinks($: cheerio.CheerioAPI, origin: string, urlBase: string, pagePath: string): void {
+  $('a[href]').each((_i, el) => {
+    const href = $(el).attr('href') ?? '';
+    if (!isRelativeBundlePath(href)) return;
+    const resolved = resolveBundlePath(pagePath, href);
+    if (resolved === null) return;
+    const hashAt = href.indexOf('#');
+    const hash = hashAt === -1 ? '' : href.slice(hashAt);
+    const beforeHash = hashAt === -1 ? href : href.slice(0, hashAt);
+    const queryAt = beforeHash.indexOf('?');
+    const download = queryAt !== -1 && beforeHash.slice(queryAt) === '?download=1' && !isBundlePagePath(resolved);
+    const target = resolved === '' || resolved === 'index.html' ? '' : `/${encodeBundlePath(resolved)}`;
+    $(el).attr('href', `${origin}${urlBase}${target}${download ? '?download=1' : ''}${hash}`);
+  });
+}
+
+/**
+ * Strip from a secondary page what publish-time validation rejects on `index.html`. The
+ * opaque sandbox is the security boundary either way; this keeps a secondary page from
+ * framing other documents, retargeting its own base, or redirecting itself, which the
+ * index cannot do either.
+ */
+function hardenSecondaryPage($: cheerio.CheerioAPI): void {
+  $('iframe, frame, frameset, object, embed, base').remove();
+  $('meta[http-equiv]').each((_i, el) => {
+    if (($(el).attr('http-equiv') ?? '').trim().toLowerCase() === 'refresh') $(el).remove();
+  });
+  const blessed = new Set<string>(BLESSED_SCRIPT_PATHS);
+  $('script[src]').each((_i, el) => {
+    if (!blessed.has($(el).attr('src') ?? '')) $(el).remove();
+  });
+}
+
+/**
+ * Resolve a relative ref against the directory of `pagePath` to a bundle-relative path
+ * (no leading slash, query and fragment dropped, percent-decoded to match manifest keys).
+ * Returns null for a ref that climbs out of the bundle root or cannot be parsed.
+ */
+export function resolveBundlePath(pagePath: string, ref: string): string | null {
+  // A sentinel origin with a root marker segment: `..` past the marker means the ref
+  // escaped the bundle, which plain URL resolution would silently clamp at `/`.
+  const ROOT = 'https://bundle.invalid/__root__/';
+  let url: URL;
+  try {
+    url = new URL(ref, new URL(pagePath, ROOT));
+  } catch {
+    return null;
+  }
+  if (url.origin !== 'https://bundle.invalid' || !url.pathname.startsWith('/__root__/')) return null;
+  const rel = url.pathname.slice('/__root__/'.length);
+  try {
+    return decodeURIComponent(rel);
+  } catch {
+    return rel;
+  }
+}
+
+/**
+ * True for a bundle file that is a page: rendered through the sandboxed wrapper like the
+ * index, never served raw. Decided by extension, not the publisher-supplied MIME type -
+ * the file never reaches the browser as its own document, so its declared type is moot.
+ */
+export function isBundlePagePath(path: string): boolean {
+  return /\.html?$/i.test(path);
+}
+
+/** Percent-encode each segment of a bundle-relative path for use in a URL. */
+export function encodeBundlePath(path: string): string {
+  return path
+    .split('/')
+    .map(seg => encodeURIComponent(seg))
+    .join('/');
 }
 
 /** Append markup after the author's content, tolerating a bundle with no `<body>`. */

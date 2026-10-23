@@ -7,6 +7,7 @@ import {
   type WebContents,
 } from 'electron';
 import type { CookieImportState } from '@shared/browserCookies';
+import { browserSnapshotSchema, type BrowserSnapshot } from '@shared/browserPage';
 import type { ChatMedia } from '@shared/chat';
 import { browserTabShortcut, MAX_BROWSER_TABS, type BrowserTabShortcut } from '@shared/browserTabs';
 import { normalizeUrl } from '@shared/browserUrl';
@@ -28,7 +29,6 @@ import {
   SNAPSHOT_PAGE,
   type ElementOutcome,
   type ScrollTarget,
-  type SnapshotResult,
 } from './pageScripts';
 
 /**
@@ -139,6 +139,8 @@ class ElectronPage implements BrowserPage {
   private lastError = '';
   /** Main-frame navigations committed so far; tells a load that showed nothing from one that showed a page. */
   private commits = 0;
+  /** Set by close(), so the host's own 'closed' does not run the teardown a second time. */
+  private closing = false;
   /** Agent steps running in this page right now; a popup opened during one is the agent's. */
   private acting = 0;
   private actedAt = 0;
@@ -168,6 +170,14 @@ class ElectronPage implements BrowserPage {
     });
     this.host.contentView.addChildView(this.view);
     this.parent = this.host;
+    // The page and its host go together. Whatever closes every window (a quit, an update
+    // install) closes this one too, and closing a window leaves its views' contents running: a
+    // page that outlived its host could never be parked again, and every pane update threw.
+    this.host.on('closed', () => {
+      if (this.closing) return;
+      void this.close();
+      this.hooks.onClosed();
+    });
     this.view.setBounds({ x: 0, y: 0, ...VIEWPORT });
 
     const contents = this.view.webContents;
@@ -230,7 +240,12 @@ class ElectronPage implements BrowserPage {
       this.record(`the page crashed (${details.reason})`);
       this.fail(`The page crashed (${details.reason}).`);
     });
-    contents.on('destroyed', () => this.hooks.onClosed());
+    // A page that closed itself (`window.close()`) would otherwise leak its hidden host.
+    contents.on('destroyed', () => {
+      this.closing = true;
+      if (!this.host.isDestroyed()) this.host.destroy();
+      this.hooks.onClosed();
+    });
   }
 
   /** Say why nothing arrived, and tell the pane: a silent failure is a blank pane with no reason. */
@@ -260,11 +275,16 @@ class ElectronPage implements BrowserPage {
 
   /** Whether this page is worth putting on screen. One that has been nowhere is not. */
   get showable(): boolean {
-    return !this.webContents.isDestroyed() && hasContent(this.currentUrl());
+    return !this.gone && hasContent(this.currentUrl());
+  }
+
+  private get gone(): boolean {
+    return this.webContents.isDestroyed() || this.host.isDestroyed();
   }
 
   /** Put the view in the app window at the pane's bounds, which are window-relative and in DIP. */
   showIn(window: BrowserWindow, bounds: BrowserPaneBounds): void {
+    if (this.gone || window.isDestroyed()) return;
     this.moveTo(window);
     this.view.setBounds(bounds);
     this.view.setVisible(true);
@@ -275,15 +295,26 @@ class ElectronPage implements BrowserPage {
    * to the parked viewport and back for every menu, and {@link still} captures it as it looked.
    */
   hold(): void {
-    this.view.setVisible(false);
+    if (!this.gone) this.view.setVisible(false);
   }
 
   /** Take the view back out of the app window, at the size every tool has always seen. */
   park(): void {
+    if (this.host.isDestroyed()) {
+      this.detach();
+      return;
+    }
+    if (this.webContents.isDestroyed()) return;
     this.view.setVisible(true);
     if (this.parent === this.host) return;
     this.moveTo(this.host);
     this.view.setBounds({ x: 0, y: 0, ...VIEWPORT });
+  }
+
+  /** Out of whatever window holds the view, for a page with no host left to park in. */
+  private detach(): void {
+    if (this.parent !== this.host && !this.parent.isDestroyed()) this.parent.contentView.removeChildView(this.view);
+    this.parent = this.host;
   }
 
   /** The held page as a JPEG data URL, or null when it painted nothing or took too long. */
@@ -300,7 +331,7 @@ class ElectronPage implements BrowserPage {
   }
 
   private moveTo(next: BaseWindow): void {
-    if (this.parent === next || this.webContents.isDestroyed()) return;
+    if (this.parent === next || this.webContents.isDestroyed() || next.isDestroyed()) return;
     if (!this.parent.isDestroyed()) this.parent.contentView.removeChildView(this.view);
     next.contentView.addChildView(this.view);
     this.parent = next;
@@ -433,8 +464,9 @@ class ElectronPage implements BrowserPage {
     history.goBack();
   }
 
-  async snapshot(maxChars: number, inView = false): Promise<SnapshotResult> {
-    return this.script<SnapshotResult>(pageCall(SNAPSHOT_PAGE, maxChars, inView), 'Reading the page');
+  async snapshot(maxChars: number, inView = false): Promise<BrowserSnapshot> {
+    const snapshot = await this.script<unknown>(pageCall(SNAPSHOT_PAGE, maxChars, inView), 'Reading the page');
+    return browserSnapshotSchema.parse(snapshot);
   }
 
   async scroll(target: ScrollTarget): Promise<string> {
@@ -516,6 +548,7 @@ class ElectronPage implements BrowserPage {
   }
 
   async close(): Promise<void> {
+    this.closing = true;
     // Out of the app window first: destroying a view that is still a child of it would tear a
     // hole in the pane the renderer is drawing around.
     this.park();
@@ -565,6 +598,8 @@ export class BrowserManager implements BrowserProvider {
   /** The one tab that is a child of the app window, so apply never has to walk every conversation. */
   private shown: ElectronPage | undefined;
   private readonly watchedWindows = new WeakSet<BrowserWindow>();
+  /** Placement failures already logged, so a wedged page logs once rather than on every event. */
+  private readonly warned = new Set<string>();
 
   /**
    * The user's own Chrome sessions, for sites they named. Public because the renderer drives it
@@ -728,11 +763,33 @@ export class BrowserManager implements BrowserProvider {
 
   private hidePane(): void {
     this.pane = undefined;
-    this.shown?.park();
-    this.shown = undefined;
+    this.contain(() => {
+      this.shown?.park();
+      this.shown = undefined;
+    });
   }
 
+  /**
+   * apply() runs from webContents listeners and IPC handlers, where a throw is an Uncaught
+   * Exception dialog or a pane that fails every request after it. Keep tracking a possibly
+   * attached page on failure, so the next update can retry parking it.
+   */
   private apply(): void {
+    this.contain(() => this.place());
+  }
+
+  private contain(work: () => void): void {
+    try {
+      work();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (this.warned.has(message)) return;
+      this.warned.add(message);
+      console.warn(`BROWSER: could not place the page: ${err instanceof Error ? err.stack : message}`);
+    }
+  }
+
+  private place(): void {
     const pane = this.pane;
     const active = pane ? this.sessions.get(pane.sessionId)?.active : undefined;
     const next = pane && active?.showable && !pane.window.isDestroyed() ? active : undefined;

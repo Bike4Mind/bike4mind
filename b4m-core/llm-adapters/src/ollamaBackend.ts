@@ -128,72 +128,63 @@ export class OllamaBackend implements ICompletionBackend {
     return new Ollama({ host: this._clientHost, headers: this._clientHeaders, fetch: fetchWithTimeout });
   }
 
+  /** Rejects when Ollama is unreachable; getAvailableModels needs a down host to differ from an empty one. */
   async getModelInfo(): Promise<ModelInfo[]> {
-    try {
-      const models = await this._api.list();
+    const models = await this._api.list();
 
-      // In self-host, Ollama runs on the operator's own hardware, so describe
-      // it as local; otherwise it is served remotely by the hosted platform.
-      const isSelfHost = process.env.B4M_SELF_HOST === 'true';
+    // In self-host, Ollama runs on the operator's own hardware, so describe
+    // it as local; otherwise it is served remotely by the hosted platform.
+    const isSelfHost = process.env.B4M_SELF_HOST === 'true';
 
-      // Ollama /api/list doesn't include per-model capabilities or context
-      // length, so fetch them via /api/show (one call per model, in parallel).
-      // This is what tells us whether a model can use tools or accept images,
-      // and its real context window. Without it every local model defaults to
-      // "no tools" (disabling the tools picker even for tool-capable models
-      // like Qwen) and a placeholder context size.
-      return await Promise.all(
-        models.models.map(async model => {
-          const { capabilities, contextWindow: reportedContextWindow } = await this.getModelDetailsCached(model.name);
-          // Advertise the window we will actually allocate, not the one the
-          // model was trained for: callers size history against this number, so
-          // publishing an uncapped 262K would have them build prompts Ollama
-          // then truncates from the front.
-          const contextWindow = OllamaBackend.effectiveContextWindow(reportedContextWindow);
-          const modelInfo = {
-            id: model.name,
-            type: 'text',
-            name: model.name,
-            backend: ModelBackend.Ollama,
-            contextWindow,
-            max_tokens: OllamaBackend.advertisedOutputCap(contextWindow),
-            supportsImageVariation: false,
-            // Local models are free. pricing is a tier map keyed by a token
-            // threshold (consumed by getTextModelCost), not a flat {input,output}
-            // object; a flat shape resolves to an undefined tier and crashes cost
-            // accounting in post-processing.
-            pricing: {
-              [contextWindow]: { input: 0, output: 0 },
-            },
-            // Deliberately costless: suppresses the [UNPRICED_MODEL] alarm.
-            freeToRun: true,
-            // Derived from the model's own reported capabilities rather than
-            // hardcoded; falls back to false when /api/show is unavailable.
-            supportsVision: capabilities.includes('vision'),
-            supportsTools: capabilities.includes('tools'),
-            can_think: capabilities.includes('thinking'),
-            can_stream: true,
-            logoFile: 'Ollama_Logo.svg',
-            rank: 1,
-            description: isSelfHost
-              ? 'Runs locally on your own hardware via Ollama. No API key required, and nothing leaves your machine. Performance and capabilities vary by model.'
-              : // Brand externalized for open-core; generic phrasing when APP_NAME is unset.
-                `This model is served from ${
-                  process.env.APP_NAME ? `${process.env.APP_NAME}'s` : 'the platform'
-                } Ollama servers using publicly available open-source models. Performance and capabilities vary by model.`,
-          } as ModelInfo;
-          return modelInfo;
-        })
-      );
-    } catch (error) {
-      let errorMessage = error instanceof Error ? error.message : String(error);
-      if (error instanceof Error && error.message.includes('503 Service Temporarily Unavailable')) {
-        errorMessage = 'Ollama server is temporarily unavailable. Please try again later.';
-      }
-      // Connection errors here usually mean the Ollama server is down or the host is misconfigured.
-      this._logger.warn('[OllamaBackend] Error fetching model info from Ollama:', errorMessage);
-      return [];
-    }
+    // Ollama /api/list doesn't include per-model capabilities or context
+    // length, so fetch them via /api/show (one call per model, in parallel).
+    // This is what tells us whether a model can use tools or accept images,
+    // and its real context window. Without it every local model defaults to
+    // "no tools" (disabling the tools picker even for tool-capable models
+    // like Qwen) and a placeholder context size.
+    return await Promise.all(
+      models.models.map(async model => {
+        const { capabilities, contextWindow: reportedContextWindow } = await this.getModelDetailsCached(model.name);
+        // Advertise the window we will actually allocate, not the one the
+        // model was trained for: callers size history against this number, so
+        // publishing an uncapped 262K would have them build prompts Ollama
+        // then truncates from the front.
+        const contextWindow = OllamaBackend.effectiveContextWindow(reportedContextWindow);
+        const modelInfo = {
+          id: model.name,
+          type: 'text',
+          name: model.name,
+          backend: ModelBackend.Ollama,
+          contextWindow,
+          max_tokens: OllamaBackend.advertisedOutputCap(contextWindow),
+          supportsImageVariation: false,
+          // Local models are free. pricing is a tier map keyed by a token
+          // threshold (consumed by getTextModelCost), not a flat {input,output}
+          // object; a flat shape resolves to an undefined tier and crashes cost
+          // accounting in post-processing.
+          pricing: {
+            [contextWindow]: { input: 0, output: 0 },
+          },
+          // Deliberately costless: suppresses the [UNPRICED_MODEL] alarm.
+          freeToRun: true,
+          // Derived from the model's own reported capabilities rather than
+          // hardcoded; falls back to false when /api/show is unavailable.
+          supportsVision: capabilities.includes('vision'),
+          supportsTools: capabilities.includes('tools'),
+          can_think: capabilities.includes('thinking'),
+          can_stream: true,
+          logoFile: 'Ollama_Logo.svg',
+          rank: 1,
+          description: isSelfHost
+            ? 'Runs locally on your own hardware via Ollama. No API key required, and nothing leaves your machine. Performance and capabilities vary by model.'
+            : // Brand externalized for open-core; generic phrasing when APP_NAME is unset.
+              `This model is served from ${
+                process.env.APP_NAME ? `${process.env.APP_NAME}'s` : 'the platform'
+              } Ollama servers using publicly available open-source models. Performance and capabilities vary by model.`,
+        } as ModelInfo;
+        return modelInfo;
+      })
+    );
   }
 
   /** Ollama's default when a model doesn't report a context length. */

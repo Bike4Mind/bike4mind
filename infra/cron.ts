@@ -7,7 +7,6 @@ import { allSecrets } from './secrets';
 import {
   researchEngineQueue,
   agentProactiveMessageQueue,
-  whatsNewHighlightsQueue,
   liveOpsTriageQueue,
   deepAgentWakeQueue,
   dataLakeTaxonomyQueue,
@@ -35,16 +34,6 @@ const scheduleTaskCron = new sst.aws.Cron('scheduleTaskCron', {
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
-    permissions: [
-      {
-        actions: ['sqs:*'],
-        resources: ['*'],
-      },
-      {
-        actions: ['events:*'],
-        resources: ['*'],
-      },
-    ],
   },
 });
 
@@ -243,43 +232,6 @@ const liveopsTriageDispatcherCron = runsScheduledJobs
     })
   : undefined;
 
-/**
- * What's New Weekly Highlights Cron
- * Generates a weekly summary of What's New modals and posts to Slack.
- *
- * Schedule: Weekly on Saturday at 2am CST (8:00 UTC)
- * Disabled; see `enabled` below.
- *
- * Workflow:
- * 1. Fetches What's New modals from the past 7 days
- * 2. Uses LLM to generate highlights summary
- * 3. Posts formatted highlights to configured Slack channel
- */
-const whatsNewHighlightsCron = runsScheduledJobs
-  ? new sst.aws.Cron('whatsNewHighlightsCron', {
-      schedule: 'cron(0 8 ? * SAT *)', // 2am CST / 8am UTC every Saturday
-      function: {
-        handler: 'apps/workers/src/cron/whatsNewHighlights.handler',
-        vpc: lambdaVpc,
-        link: [...allSecrets, whatsNewHighlightsQueue],
-        timeout: '2 minutes',
-        runtime: 'nodejs24.x',
-        environment: {
-          ...DEFAULT_LAMBDA_ENVIRONMENT,
-        },
-        permissions: [
-          {
-            actions: ['cloudwatch:PutMetricData'],
-            resources: ['*'],
-          },
-        ],
-      },
-      // Disabled: its only input was the generated What's New modals, which release notes replaced, so it
-      // would post a "no modals" warning every week.
-      enabled: false,
-    })
-  : undefined;
-
 // Telemetry TTL Cleanup — GDPR Article 5(1)(e) storage limitation
 // Removes contextTelemetry from Quest documents older than 90 days
 const telemetryCleanupCron = runsScheduledJobs
@@ -364,6 +316,32 @@ const adminAuditAlertsCron = runsScheduledJobs
         environment: {
           ...DEFAULT_LAMBDA_ENVIRONMENT,
           APP_URL: $dev ? 'http://localhost:3000' : appUrlForLambdaEnv(),
+        },
+        logging: {
+          retention: '1 month',
+        },
+      },
+    })
+  : undefined;
+
+// Data Lake Vector Index Keep-Warm - one wide $vectorSearch per queryable per-model Atlas index, so
+// forced retrieval's 3s ANN candidate pick does not hit a cold index after an idle stretch
+// and fall back to picking files by name. Skips itself while EnableDataLakeVectorSearch is off.
+// No self-host twin: self-host retrieval runs on OpenSearch.
+const dataLakeVectorIndexKeepWarmCron = runsScheduledJobs
+  ? new sst.aws.Cron('dataLakeVectorIndexKeepWarm', {
+      schedule: 'rate(5 minutes)',
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/dataLakeVectorIndexKeepWarm.handler',
+        runtime: 'nodejs24.x',
+        // A query against an index that has already gone cold has taken 49s on production.
+        timeout: '2 minutes',
+        // The next run is the retry; Lambda's async retries would only stack more queries on mongot.
+        retries: 0,
+        link: [...allSecrets],
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
         },
         logging: {
           retention: '1 month',
@@ -495,12 +473,6 @@ const securityScanSchedulerCron = runsScheduledJobs
         environment: {
           ...DEFAULT_LAMBDA_ENVIRONMENT,
         },
-        permissions: [
-          {
-            actions: ['events:*'],
-            resources: ['*'],
-          },
-        ],
       },
     })
   : undefined;
@@ -1193,6 +1165,7 @@ const lakeInconsistencySweepCron = runsScheduledJobs
 
 export {
   adminAuditAlertsCron,
+  dataLakeVectorIndexKeepWarmCron,
   modelDiscoveryCronEnabled,
   dailyUserActivityReport,
   weeklyUserActivityReport,
@@ -1204,7 +1177,6 @@ export {
   emailCampaignSchedulerCron,
   whatsNewSyncCron,
   liveopsTriageDispatcherCron,
-  whatsNewHighlightsCron,
   cloudSecurityScanCron,
   integrationHealthCheckCron,
   securityScanSchedulerCron,

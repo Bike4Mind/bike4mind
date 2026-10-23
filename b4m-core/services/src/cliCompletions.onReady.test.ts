@@ -10,7 +10,13 @@ vi.mock('./creditService', async importOriginal => ({
 const { CATALOGUED_MODEL, order, mockComplete } = vi.hoisted(() => {
   const order: string[] = [];
   return {
-    CATALOGUED_MODEL: { id: 'gpt-4.1-2025-04-14', backend: 'openai', max_tokens: 32_768 },
+    CATALOGUED_MODEL: {
+      id: 'gpt-4.1-2025-04-14',
+      backend: 'openai',
+      contextWindow: 200_000,
+      max_tokens: 32_768,
+      pricing: { 200_000: { input: 1 / 1_000_000, output: 1 / 1_000_000 } },
+    },
     order,
     mockComplete: vi.fn(async () => {
       order.push('complete');
@@ -97,6 +103,47 @@ describe('executeCompletion onReady', () => {
       BadRequestError
     );
     expect(onReady).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['system-only', [{ role: 'system', content: 'system prompt' }]],
+    ['blank user text', [{ role: 'user', content: '  \n\t ' }]],
+    ['blank assistant text block', [{ role: 'assistant', content: [{ type: 'text', text: '\t ' }] }]],
+  ])('refuses a %s conversation before the credit hold, onReady, or provider call', async (_label, messages) => {
+    const { db, users } = buildDb();
+    const onReady = vi.fn();
+
+    await expect(executeCompletion({ ...baseParams, messages: messages as never, db, onReady })).rejects.toMatchObject({
+      statusCode: 400,
+      message: 'request must contain at least one non-empty user or assistant message',
+    });
+    expect(users.incrementCredits).not.toHaveBeenCalled();
+    expect(onReady).not.toHaveBeenCalled();
+    expect(mockComplete).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      'image-only',
+      [{ role: 'user', content: [{ type: 'image_url', image_url: { url: 'https://example.com/a.png' } }] }],
+    ],
+    [
+      'tool call',
+      [
+        {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: 'call-1', name: 'lookup', input: {} }],
+        },
+      ],
+    ],
+  ])('keeps a %s conversation eligible for dispatch', async (_label, messages) => {
+    const { db } = buildDb();
+    const onReady = vi.fn();
+
+    await executeCompletion({ ...baseParams, messages: messages as never, db, onReady });
+
+    expect(onReady).toHaveBeenCalledOnce();
+    expect(mockComplete).toHaveBeenCalledOnce();
   });
 
   it('refuses a disabled model with a 400 unknown_model before any hold, onReady or provider call', async () => {

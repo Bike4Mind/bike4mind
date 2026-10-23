@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
-import { IUserApiKeyDocument, ApiKeyScope, IEmbedBranding } from '@bike4mind/common';
+import { IUserApiKeyDocument, ApiKeyScope, IEmbedBranding, type ApiKeyRateLimitUsage } from '@bike4mind/common';
 import type { CounterLockoutState } from '@server/utils/apiKeyRateLimitCheck';
 import { toast } from 'sonner';
 
@@ -227,10 +227,10 @@ export function useAdminGenerateApiKey({ onSuccess }: { onSuccess?: (result: Cre
  * usage fields on the key doc itself are not maintained. */
 export interface AdminUserApiKeysResponse {
   apiKeys: IUserApiKeyDocument[];
-  liveUsage: Record<string, { minute: number; day: number }>;
+  liveUsage: Record<string, ApiKeyRateLimitUsage>;
 }
 
-export function useAdminGetUserApiKeys(userId: string | undefined) {
+export function useAdminGetUserApiKeys(userId: string | undefined, options?: { refetchInterval?: number }) {
   return useQuery<AdminUserApiKeysResponse>({
     queryKey: ['admin', 'user-api-keys', userId],
     queryFn: async () => {
@@ -238,6 +238,7 @@ export function useAdminGetUserApiKeys(userId: string | undefined) {
       return response.data;
     },
     enabled: typeof userId === 'string' && userId.length > 0,
+    refetchInterval: options?.refetchInterval,
   });
 }
 

@@ -11,7 +11,6 @@ import {
   sessionRepository,
   questRepository,
   fabFileRepository,
-  creditTransactionRepository,
   adminSettingsRepository,
 } from '@bike4mind/database';
 import { CurationType } from '@bike4mind/common';
@@ -45,7 +44,6 @@ function service(job = 'job') {
     sessionRepository,
     chatHistoryRepository: questRepository,
     fabFileRepository,
-    creditTransactionRepository,
     adminSettingsRepository,
     logger,
     objectKeyPrefix: `curated-notebooks/jobs/${job}`,
@@ -100,27 +98,29 @@ beforeEach(async () => {
   });
 });
 afterEach(() => vi.restoreAllMocks());
-it('rolls back file, cache and billing on failed debit, then retries exactly once', async () => {
-  const debit = vi.spyOn(userRepository, 'incrementCredits').mockRejectedValueOnce(new Error('debit unavailable'));
+// Curation writes no credit rows itself (the executive-summary LLM calls are billed per call by the
+// worker's meter), so a transcript curation leaves the balance untouched.
+it('rolls back file and cache on a failed session write, then retries exactly once', async () => {
+  const failure = vi.spyOn(sessionRepository, 'update').mockRejectedValueOnce(new Error('session write unavailable'));
   expect((await service().curateNotebook(sessionId, userId, options)).success).toBe(false);
   expect(await FabFile.countDocuments({})).toBe(0);
   expect(await CreditTransaction.countDocuments({})).toBe(0);
   expect(await NotebookCurationJob.countDocuments({})).toBe(0);
   expect((await Session.findById(sessionId).lean())?.curationContentHash).toBeFalsy();
-  debit.mockRestore();
+  failure.mockRestore();
   const result = await service().curateNotebook(sessionId, userId, options);
   expect(result.success).toBe(true);
-  expect((await User.findById(userId).lean())?.currentCredits).toBe(900);
+  expect((await User.findById(userId).lean())?.currentCredits).toBe(1000);
   const file = await FabFile.findById(result.curatedFileId).lean();
   expect(objects.get(file!.filePath!)).toContain('A readable transcript.');
   expect((await Session.findById(sessionId).lean())?.curatedNotebookFileId).toBe(result.curatedFileId);
   expect((await NotebookCurationJob.findOne({ curationJobId: 'job' }).lean())?.result).toMatchObject(result);
   await service().curateNotebook(sessionId, userId, options);
   expect(await FabFile.countDocuments({})).toBe(1);
-  expect(await CreditTransaction.countDocuments({})).toBe(1);
-  expect((await User.findById(userId).lean())?.currentCredits).toBe(900);
+  expect(await CreditTransaction.countDocuments({})).toBe(0);
+  expect((await User.findById(userId).lean())?.currentCredits).toBe(1000);
 });
-it('returns the committed winner without charging again', async () => {
+it('returns the committed winner without writing again', async () => {
   const first = await service().curateNotebook(sessionId, userId, options);
   expect(first.success).toBe(true);
   const commit = createNotebookCommit(
@@ -131,9 +131,9 @@ it('returns the committed winner without charging again', async () => {
   const write = vi.fn();
   expect(await commit(write)).toMatchObject(first);
   expect(write).not.toHaveBeenCalled();
-  expect(await CreditTransaction.countDocuments({})).toBe(1);
+  expect(await FabFile.countDocuments({})).toBe(1);
 });
-it('concurrent different artifacts return one durable winner and one debit', async () => {
+it('concurrent different artifacts return one durable winner', async () => {
   const results = await Promise.all([
     service().curateNotebook(sessionId, userId, options),
     service().curateNotebook(sessionId, userId, { ...options, exportFormat: 'html' }),
@@ -141,8 +141,7 @@ it('concurrent different artifacts return one durable winner and one debit', asy
   expect(results.map(result => result.success)).toEqual([true, true]);
   expect(results[0].curatedFileId).toBe(results[1].curatedFileId);
   expect(await FabFile.countDocuments({})).toBe(1);
-  expect(await CreditTransaction.countDocuments({})).toBe(1);
-  expect((await User.findById(userId).lean())?.currentCredits).toBe(900);
+  expect(await CreditTransaction.countDocuments({})).toBe(0);
   const winner = await FabFile.findById(results[0].curatedFileId).lean();
   expect(objects.size).toBe(1);
   expect(objects.get(winner!.filePath!)).toContain('A readable transcript.');
@@ -166,7 +165,6 @@ it('reads the committed receipt after the transaction acknowledgement is lost', 
   });
   const result = await service().curateNotebook(sessionId, userId, options);
   expect(result.success).toBe(true);
-  expect((await User.findById(userId).lean())?.currentCredits).toBe(900);
   expect(await NotebookCurationJob.countDocuments({})).toBe(1);
   const file = await FabFile.findById(result.curatedFileId).lean();
   expect(objects.has(file!.filePath!)).toBe(true);

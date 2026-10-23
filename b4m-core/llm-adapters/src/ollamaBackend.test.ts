@@ -387,6 +387,19 @@ describe('OllamaBackend.getModelInfo capability mapping', () => {
   });
 });
 
+// getAvailableModels caches an empty listing for the full TTL; only a rejection gets the retry TTL.
+describe('OllamaBackend.getModelInfo listing failure', () => {
+  it('rejects instead of resolving an empty list when Ollama is unreachable', async () => {
+    const backend = new OllamaBackend('http://localhost:11434', silentLogger);
+    (backend as unknown as { _api: unknown })._api = {
+      list: vi.fn(async () => {
+        throw new TypeError('fetch failed');
+      }),
+    };
+    await expect(backend.getModelInfo()).rejects.toThrow('fetch failed');
+  });
+});
+
 // Ollama returns reasoning in a separate message.thinking field (not inline
 // <think> tags); the backend must wrap it so the consumer renders it, and drive
 // Ollama's think flag from the Thinking toggle.

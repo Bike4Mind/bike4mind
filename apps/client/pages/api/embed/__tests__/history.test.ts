@@ -29,6 +29,8 @@ const mockRepo = vi.hoisted(() => ({ getMessages: vi.fn(), deleteConversation: v
 vi.mock('@bike4mind/database', () => ({ embedConversationRepository: mockRepo }));
 
 import '../history';
+import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
+import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 
 const CLAIMS = {
   keyId: 'key-1',
@@ -50,7 +52,11 @@ async function call(method: RequestMethod, headers: Record<string, string> = { a
   const { req, res } = createMocks({ method, headers: { host: 'app.example.com', ...headers } });
   (req as unknown as { logger: object }).logger = { warn: vi.fn() };
   await handlers[method](req, res);
-  return { status: res._getStatusCode(), body: res._getData() ? res._getJSONData() : undefined };
+  return {
+    status: res._getStatusCode(),
+    body: res._getData() ? res._getJSONData() : undefined,
+    headers: res._getHeaders(),
+  };
 }
 
 beforeEach(() => {
@@ -101,6 +107,34 @@ describe('/api/embed/history', () => {
     mockVerifyEmbedKeyById.mockRejectedValue(new Error('Invalid embed key: revoked'));
     expect((await call('DELETE')).status).toBe(401);
     expect(mockRepo.deleteConversation).not.toHaveBeenCalled();
+  });
+
+  it('answers 503 with Retry-After and no driver text when the database is unreachable', async () => {
+    mockVerifyEmbedKeyById.mockRejectedValue(
+      toApiKeyAuthError(Object.assign(new Error('connect ECONNREFUSED 10.0.0.1:27017'), { name: 'MongoNetworkError' }))
+    );
+    for (const method of ['GET', 'DELETE'] as const) {
+      const { status, body, headers } = await call(method);
+      expect(status).toBe(503);
+      expect(body.error).toBe('server_error');
+      expect(headers['retry-after']).toBe('5');
+      expect(JSON.stringify(body)).not.toMatch(/ECONNREFUSED|10\.0\.0\.1/);
+    }
+    expect(mockRepo.deleteConversation).not.toHaveBeenCalled();
+  });
+
+  it('answers 500 server_error for an unexpected key-check failure', async () => {
+    mockVerifyEmbedKeyById.mockRejectedValue(toApiKeyAuthError(new Error('boom')));
+    const { status, body } = await call('GET');
+    expect(status).toBe(500);
+    expect(body.error).toBe('server_error');
+  });
+
+  it('answers 401 for a token whose key is unknown', async () => {
+    mockVerifyEmbedKeyById.mockRejectedValue(new UnauthorizedError('Invalid or expired embed key'));
+    const { status, body } = await call('GET');
+    expect(status).toBe(401);
+    expect(body.error).toBe('unauthorized');
   });
 
   it('refuses an origin outside the key allow-list', async () => {

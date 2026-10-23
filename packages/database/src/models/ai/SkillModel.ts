@@ -1,6 +1,13 @@
 import mongoose, { Model, Schema, model } from 'mongoose';
-import { ISkill, ISkillDocument, ISkillMethods, ISkillRepository } from '@bike4mind/common';
-import BaseRepository from '@bike4mind/db-core';
+import {
+  ConcurrencyConflictError,
+  ISkill,
+  ISkillDocument,
+  ISkillMethods,
+  ISkillRepository,
+  RepositoryUpdateOptions,
+} from '@bike4mind/common';
+import BaseRepository, { convertId } from '@bike4mind/db-core';
 import { softDeletePlugin } from '../../utils/mongo';
 import { ShareableDocumentSchema, ShareableDocumentRepository } from '../content/SharableDocumentModel';
 
@@ -25,6 +32,34 @@ export class SkillRepository extends BaseRepository<ISkillDocument> implements I
     super(skillModel);
     this.skillModel = skillModel;
     this.shareable = extensions.shareable;
+  }
+
+  async updateIfNonGlobal(
+    data: Partial<ISkillDocument>,
+    options?: RepositoryUpdateOptions<ISkillDocument>
+  ): Promise<ISkillDocument | null> {
+    if (!data.id) {
+      throw new Error('id is required');
+    }
+    const { id, ...updateData } = data;
+    const idFilter = { _id: convertId(id) };
+    // Bump `__v` (with no `__v` precondition, so ordinary edits never conflict): a guarded writer that
+    // read the skill while it was global must not land on top of content written here unscanned.
+    const updated = await this._plainUpdate(
+      { ...idFilter, isGlobalRead: { $ne: true }, isGlobalWrite: { $ne: true } },
+      updateData as Record<string, unknown>,
+      options,
+      { $inc: { __v: 1 } }
+    );
+    if (updated) return updated;
+    // A miss on a row that still exists means it went global after the caller read it.
+    const existsQuery = this.skillModel.exists(idFilter);
+    if (options?.includeDeleted) existsQuery.setOptions({ includeDeleted: true });
+    if (this._txn) existsQuery.session(this._txn);
+    if (await existsQuery) {
+      throw new ConcurrencyConflictError(this.skillModel.modelName, { filter: idFilter, reason: 'became_global' });
+    }
+    return null;
   }
 
   async searchAccessible(

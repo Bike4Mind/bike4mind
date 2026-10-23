@@ -60,6 +60,7 @@ apps/client/pages/api/webhooks/github/__tests__/lake.test.ts # Test file for the
 
 # Jira webhook — authenticated via HMAC + replay protection
 apps/client/pages/api/webhooks/jira/[token].ts          # Jira HMAC + routing token + replay protection
+apps/client/pages/api/webhooks/jira/__tests__/[token].test.ts # Test file for the handler above (script greps by path, not export)
 
 # Qwork webhook — authenticated via HMAC-SHA256 (dual-secret rotation + 5-min replay prevention)
 apps/client/pages/api/webhooks/qwork/index.ts           # HMAC-SHA256 over raw body, dual-secret rotation, timestamp replay guard

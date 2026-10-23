@@ -4,6 +4,7 @@ import {
   isEncrypted,
   isValidEncryptionKey,
 } from '@bike4mind/server-utils/security/secretEncryption';
+import { mcpEnvSecretContext } from '@bike4mind/utils/security';
 import { Config } from '@bike4mind/server-utils/utils/config';
 
 function requireKey(): string {
@@ -18,11 +19,10 @@ function previousKey(): string | null {
   return key;
 }
 
-/** Encrypts a token value. Returns null if value is null/undefined. Idempotent - skips already-encrypted values. */
-export function encryptToken(value: string | null | undefined): string | null {
+/** Encrypts submitted plaintext, even when it has the shape of stored ciphertext. */
+export function encryptToken(value: string | null | undefined, context?: string): string | null {
   if (!value) return null;
-  if (isEncrypted(value)) return value;
-  return encryptSecret(value, requireKey());
+  return encryptSecret(value, requireKey(), context);
 }
 
 /**
@@ -30,7 +30,7 @@ export function encryptToken(value: string | null | undefined): string | null {
  * previous key for seamless key rotation. Returns null if value is null/undefined.
  * Passes through plaintext values for backward compatibility during migration.
  */
-export function decryptToken(value: string | null | undefined): string | null {
+export function decryptToken(value: string | null | undefined, context?: string): string | null {
   if (!value) return null;
   if (!isEncrypted(value)) return value;
 
@@ -39,7 +39,7 @@ export function decryptToken(value: string | null | undefined): string | null {
 
   for (const key of keysToTry) {
     try {
-      return decryptSecret(value, key);
+      return decryptSecret(value, key, context);
     } catch (err) {
       lastError = err;
     }
@@ -47,8 +47,8 @@ export function decryptToken(value: string | null | undefined): string | null {
 
   const hasPrevious = keysToTry.length > 1;
   const errorDetail = lastError instanceof Error ? lastError.message : String(lastError);
-  const context = hasPrevious ? 'both current and previous keys' : 'no previous key configured';
-  console.error(`[tokenEncryption] Decryption failed (${context}): ${errorDetail}`);
+  const errorContext = hasPrevious ? 'both current and previous keys' : 'no previous key configured';
+  console.error(`[tokenEncryption] Decryption failed (${errorContext}): ${errorDetail}`);
 
   throw new Error(
     hasPrevious
@@ -57,21 +57,27 @@ export function decryptToken(value: string | null | undefined): string | null {
   );
 }
 
+export type McpSecretOwner = { userId: string; name?: string; id: string };
+
+function envContext(owner: McpSecretOwner, field: string): string {
+  return mcpEnvSecretContext(owner.userId, owner.id, field);
+}
+
 export type EnvVariable = { key: string; value: string };
 
 /** Encrypts the value of every item in an envVariables array. */
-export function encryptEnvVariables(vars: EnvVariable[]): EnvVariable[] {
+export function encryptEnvVariables(vars: EnvVariable[], owner: McpSecretOwner): EnvVariable[] {
   const key = requireKey();
   return vars.map(v => ({
     key: v.key,
-    value: isEncrypted(v.value) ? v.value : encryptSecret(v.value, key),
+    value: v.value ? encryptSecret(v.value, key, envContext(owner, v.key)) : '',
   }));
 }
 
 /** Decrypts the value of every item in an envVariables array. Uses key rotation fallback. */
-export function decryptEnvVariables(vars: EnvVariable[]): EnvVariable[] {
+export function decryptEnvVariables(vars: EnvVariable[], owner: McpSecretOwner): EnvVariable[] {
   return vars.map(v => ({
     key: v.key,
-    value: decryptToken(v.value) ?? v.value,
+    value: decryptToken(v.value, envContext(owner, v.key)) ?? v.value,
   }));
 }

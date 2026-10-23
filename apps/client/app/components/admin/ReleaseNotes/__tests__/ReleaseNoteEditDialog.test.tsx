@@ -10,6 +10,9 @@ const { mockPatch } = vi.hoisted(() => ({ mockPatch: vi.fn() }));
 vi.mock('@client/app/contexts/ApiContext', () => ({
   api: { get: vi.fn(), post: vi.fn(), patch: mockPatch, put: vi.fn() },
 }));
+vi.mock('@client/app/hooks/data/settings', () => ({
+  useConfig: () => ({ data: { fabfileBucketName: 'fab-bucket' } }),
+}));
 vi.mock('sonner', () => ({
   toast: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn() }),
 }));
@@ -61,5 +64,50 @@ describe('ReleaseNoteEditDialog', () => {
       summary: 'Summary',
       items: [second, { category: 'new', text: 'Dark mode', importance: 2, sourcePrs: [] }],
     });
+  });
+
+  const renderDialog = (value: AdminReleaseNote) =>
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <CssVarsProvider theme={appTheme}>
+          <ReleaseNoteEditDialog note={value} onClose={vi.fn()} />
+        </CssVarsProvider>
+      </QueryClientProvider>
+    );
+
+  it('sends the video when one is pasted', async () => {
+    mockPatch.mockResolvedValue({ data: note });
+    renderDialog(note);
+
+    fireEvent.change(screen.getByTestId('modal-video-landscape-video-input'), {
+      target: { value: 'https://d111.cloudfront.net/wide.mp4' },
+    });
+    fireEvent.click(screen.getByTestId('release-note-edit-save-btn'));
+
+    await waitFor(() => expect(mockPatch).toHaveBeenCalled());
+    expect(mockPatch.mock.calls[0][1]).toMatchObject({
+      video: expect.objectContaining({ landscapeUrl: 'https://d111.cloudfront.net/wide.mp4' }),
+    });
+  });
+
+  it('sends null when the stored video is cleared', async () => {
+    mockPatch.mockResolvedValue({ data: note });
+    renderDialog({ ...note, video: { landscapeUrl: 'https://d111.cloudfront.net/wide.mp4' } });
+
+    fireEvent.click(screen.getByTestId('modal-video-landscape-video-clear-btn'));
+    fireEvent.click(screen.getByTestId('release-note-edit-save-btn'));
+
+    await waitFor(() => expect(mockPatch).toHaveBeenCalled());
+    expect(mockPatch.mock.calls[0][1]).toMatchObject({ video: null });
+  });
+
+  it('blocks saving a video on a disallowed host', () => {
+    renderDialog(note);
+
+    fireEvent.change(screen.getByTestId('modal-video-landscape-video-input'), {
+      target: { value: 'https://evil.example.com/wide.mp4' },
+    });
+
+    expect(screen.getByTestId('release-note-edit-save-btn')).toBeDisabled();
   });
 });

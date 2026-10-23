@@ -279,6 +279,17 @@ export class GatewayTimeoutError extends HTTPError {
   }
 }
 
+/** 503: a dependency we need (the database) is unreachable right now. Retrying later may succeed. */
+export class ServiceUnavailableError extends HTTPError {
+  constructor(
+    message?: string,
+    public additionalInfo?: Record<string, unknown>
+  ) {
+    super(HttpStatus.ServiceUnavailable, message, additionalInfo);
+    this.name = 'ServiceUnavailableError';
+  }
+}
+
 export class TooManyRequestsError extends HTTPError {
   constructor(
     message?: string,

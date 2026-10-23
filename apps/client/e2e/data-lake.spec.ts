@@ -2,14 +2,20 @@ import fs from 'fs';
 import crypto from 'crypto';
 import path from 'path';
 import { test, expect } from './fixtures';
+import type { APIRequestContext } from '@playwright/test';
 import { TIMEOUTS } from './constants';
 import {
   apiCreateDataLake,
   apiCreateFile,
   apiDeleteDataLake,
+  apiGetDataLake,
   apiListDataLakes,
   apiListDataLakesStatus,
+  apiCreateSession,
+  apiDeleteSession,
+  apiLoginStandingUser,
   apiLakeLifecycle,
+  apiGetDataLakeHealth,
   apiSeedLakeArticle,
   apiUpdateDataLake,
   apiSetDataLakeVisibility,
@@ -831,5 +837,211 @@ test.describe('Data Lake - in-chat file actions', () => {
     // /new defers session creation to the first send; attaching a lake file creates the
     // grounded session up front and swaps the URL for the real notebook.
     await expect(page).toHaveURL(/\/notebooks\//, { timeout: TIMEOUTS.NAVIGATION });
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Group K - Asking a lake larger than the forced-retrieval candidate cap
+// -----------------------------------------------------------------------------
+// Seeding and embedding a lake past the cap takes minutes, so it is a standing fixture on its own
+// standing account, rebuilt only when it is missing or broken (e.g. after a stage reset). It never
+// goes into `created`, so the afterAll purge above leaves it alone.
+const FIXTURE_LAKE_OWNER = { email: 'datalake-fixture-e2e@test.com', name: 'E2E Data Lake Fixture' };
+// Bump the version whenever largeLakeFiles() changes: the health check below counts files and cannot
+// tell a stale lake from a current one. A rebuild never deletes another version, because a branch
+// still on it may be asking it at that moment; delete an old version by hand once no branch uses it.
+const FIXTURE_LAKE_VERSION = 1;
+const FIXTURE_LAKE_NAME = `E2E Large Lake Fixture v${FIXTURE_LAKE_VERSION}`;
+// Explicit because the derived default is cut to 20 chars, which drops the version: every version
+// would claim the same prefix and assertPrefixAvailable would refuse the second one.
+const FIXTURE_LAKE_TAG_PREFIX = `e2elargelakev${FIXTURE_LAKE_VERSION}:`;
+// Must stay above FORCED_RETRIEVAL_MAX_CANDIDATE_FILES (100, ChatCompletionFeatures.ts) and below
+// FORCED_RETRIEVAL_MAX_LISTED_FILES (1000), the range where candidates are cut by relevance.
+const LARGE_LAKE_FILLER_COUNT = 110;
+const LARGE_LAKE_FILE_COUNT = LARGE_LAKE_FILLER_COUNT + 1;
+const SEED_CONCURRENCY = 10;
+// A fixture lake younger than this was just built (maybe by a concurrent run): an unhealthy one is
+// waited on rather than deleted out from under its builder, and a healthy one may still be inside
+// the vector index lag.
+const FIXTURE_REBUILD_GRACE_MS = 15 * 60_000;
+const FIXTURE_PASSPHRASE = 'amber-heron-tidewater';
+// `zz-` sorts after every `filler-` name, so a by-name cut to the first 100 never reaches it.
+const FIXTURE_ANSWER_FILE = 'zz-lighthouse-keeper-log.txt';
+const FILLER_TOPICS = [
+  'sourdough starters need regular feeding with flour and water',
+  'tomato seedlings should be hardened off before transplanting',
+  'a road bike chain wears faster in wet and gritty conditions',
+  'watercolor paper is stretched before painting to stop buckling',
+  'basil prefers warm soil and dislikes cold night temperatures',
+  'marathon training plans build weekly mileage gradually',
+  'cast iron pans are seasoned with a thin layer of baked oil',
+  'houseplants in winter need less water than in summer',
+  'chess openings trade tempo against control of the center',
+  'compost piles heat up when green and brown matter are balanced',
+  'film cameras meter light differently from digital sensors',
+];
+
+function largeLakeFiles(): Array<{ fileName: string; content: string }> {
+  const fillers = Array.from({ length: LARGE_LAKE_FILLER_COUNT }, (_, i) => {
+    const n = String(i + 1).padStart(3, '0');
+    return {
+      fileName: `filler-${n}.txt`,
+      content: `Field note ${n}. ${FILLER_TOPICS[i % FILLER_TOPICS.length]}. Entry ${n} of the large lake fixture.`,
+    };
+  });
+  return [
+    ...fillers,
+    {
+      fileName: FIXTURE_ANSWER_FILE,
+      content:
+        'Tidewater lighthouse keeper log. The keeper changes the night watch passphrase every season. ' +
+        `The passphrase for this season is ${FIXTURE_PASSPHRASE}.`,
+    },
+  ];
+}
+
+/**
+ * Wait until every fixture file is chunked and embedded. Asking earlier gets the unindexed files
+ * withheld (retrievalUnavailable.ts), which shows the coverage notice for a reason this test is not
+ * about. Reads the server's health grading rather than comparing the counters here, which would be
+ * another copy of the reachability rule (packages/scripts/src/checkLakeReachabilitySites.test.ts).
+ */
+async function waitUntilFixtureEmbedded(request: APIRequestContext, token: string, lakeId: string): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        const { fullyVectorized } = (await apiGetDataLakeHealth(request, token, lakeId)).predicates;
+        if (fullyVectorized.fail > 0) throw new Error(`${fullyVectorized.fail} fixture file(s) failed to index`);
+        return fullyVectorized.pass;
+      },
+      { message: 'every fixture file is chunked and embedded', timeout: 6 * 60_000, intervals: [5_000] }
+    )
+    .toBe(LARGE_LAKE_FILE_COUNT);
+}
+
+/** Returns the healthy fixture lake, rebuilding it first if needed; `fresh` is true when recently embedded. */
+async function ensureLargeLakeFixture(
+  request: APIRequestContext,
+  token: string,
+  attempt = 0
+): Promise<{ lake: DataLake; fresh: boolean }> {
+  // isOwn: the list also returns other users' public lakes. The list projection has no createdAt,
+  // which the age checks below need, so each match is re-read.
+  const listed = (await apiListDataLakes(request, token)).filter(l => l.name === FIXTURE_LAKE_NAME && l.isOwn);
+  const candidates = await Promise.all(listed.map(l => apiGetDataLake(request, token, l.id)));
+  const isRecent = (lake: DataLake) => Date.now() - Date.parse(lake.createdAt) < FIXTURE_REBUILD_GRACE_MS;
+  for (const lake of candidates) {
+    if (lake.status !== 'active') continue;
+    const { fullyVectorized } = (await apiGetDataLakeHealth(request, token, lake.id)).predicates;
+    if (fullyVectorized.pass === LARGE_LAKE_FILE_COUNT && fullyVectorized.fail === 0) {
+      return { lake, fresh: isRecent(lake) };
+    }
+  }
+
+  const inProgress = candidates.find(isRecent);
+  if (inProgress) {
+    await waitUntilFixtureEmbedded(request, token, inProgress.id);
+    return { lake: inProgress, fresh: true };
+  }
+
+  await Promise.all(candidates.map(l => apiDeleteDataLake(request, token, l.id)));
+  let lake: DataLake;
+  try {
+    lake = await apiCreateDataLake(request, token, {
+      name: FIXTURE_LAKE_NAME,
+      fileTagPrefix: FIXTURE_LAKE_TAG_PREFIX,
+    });
+  } catch (err) {
+    // The prefix stays claimed until the purge finishes, or while another run's lake holds it.
+    if (/failed: 400\b/.test(String(err)) && attempt < 6) {
+      await new Promise(resolve => setTimeout(resolve, 10_000));
+      return ensureLargeLakeFixture(request, token, attempt + 1);
+    }
+    throw err;
+  }
+  const files = largeLakeFiles();
+  for (let i = 0; i < files.length; i += SEED_CONCURRENCY) {
+    await Promise.all(files.slice(i, i + SEED_CONCURRENCY).map(file => apiSeedLakeArticle(request, token, lake, file)));
+  }
+  expect(await apiLakeLifecycle(request, token, lake.id, 'promote')).toBe(200);
+  await waitUntilFixtureEmbedded(request, token, lake.id);
+  return { lake, fresh: true };
+}
+
+test.describe('Data Lake - asking a large lake', () => {
+  // The by-name fallback this guards against is intermittent (a cold vector index is one cause), so
+  // a retry can pass and report the run as flaky instead of failing it.
+  test.describe.configure({ retries: 0 });
+
+  test('a question answered by a file late in name order is answered and cited with full coverage', async ({
+    request,
+    page,
+    basePage,
+    chatPage,
+    loginAsUser,
+  }) => {
+    // Preview stages do not run scheduled jobs (runsScheduledJobs in infra/constants.ts).
+    test.skip(
+      /\/\/app\.pr\d+\./.test(process.env.API_URL ?? ''),
+      'Preview stages run no vector-index keep-warm, so a cold index fails this retries:0 test'
+    );
+    // Only a rebuild of the fixture lake needs this long; a reused one answers in about a minute.
+    test.setTimeout(10 * 60_000);
+    const owner = await apiLoginStandingUser(request, FIXTURE_LAKE_OWNER);
+
+    const { lake, fresh } = await test.step('find or rebuild the fixture lake', () =>
+      ensureLargeLakeFixture(request, owner.accessToken));
+
+    if (fresh) {
+      await test.step('wait out the vector index lag', async () => {
+        // A file joins the relevance ranking only VECTOR_SEARCH_READY_LAG_MS (60s,
+        // vectorSearchEligibility.ts) after its embedding is stamped; until then it ranks below every
+        // file with a hit and is cut at the cap with no coverage notice. The answer file is seeded
+        // last, so asking straight away tests that lag, not the selection this test is about.
+        await page.waitForTimeout(75_000);
+      });
+    }
+
+    const sessionId = await apiCreateSession(request, owner.accessToken, `E2E Large Lake Chat ${RUN}`, {
+      dataLakeId: lake.id,
+    });
+    try {
+      const reply = await test.step('ask the lake a question only the late file answers', async () => {
+        await loginAsUser(owner);
+        await page.goto(`/notebooks/${sessionId}`, { waitUntil: 'domcontentloaded' });
+        await basePage.dismissModals();
+
+        return chatPage.sendMessageAndWaitForResponse(
+          'What is the night watch passphrase for this season in the Tidewater lighthouse keeper log?'
+        );
+      });
+
+      await test.step('the whole lake was in scope', async () => {
+        // Checked before the answer so a by-name cut fails with the server's own reason, not as a
+        // missing passphrase. retrievalCoverage is not in the stream frames and only lands with a
+        // delayed quest refetch (RetrievalCoverageBanner.tsx), so reload to read the persisted quest.
+        // A goto, not page.reload(): only the fixture's wrapped goto re-seeds the memory-only access
+        // token (fixtures.ts), so a raw reload lands on /login?error=session_expired.
+        await page.goto(`/notebooks/${sessionId}`, { waitUntil: 'domcontentloaded' });
+        await expect(chatPage.aiResponseRoot.last()).toBeVisible({ timeout: 30_000 });
+        const warning = page.getByTestId('retrieval-coverage-warning');
+        const reasons = (await warning.count()) > 0 ? await warning.innerText() : '';
+        expect(reasons, 'retrieval-coverage-warning was shown').toBe('');
+      });
+
+      await test.step('the reply answers from and cites the late file', async () => {
+        expect(reply.toLowerCase()).toContain(FIXTURE_PASSPHRASE);
+        const replyRoot = chatPage.aiResponseRoot.last();
+        // Only the first few sources show until expanded (CitableSources.tsx COLLAPSED_COUNT).
+        const showMore = replyRoot.getByTestId('citable-sources-show-more-btn');
+        if (await showMore.isVisible()) await showMore.click();
+        await expect(
+          replyRoot.getByTestId('citable-source-chip').filter({ hasText: FIXTURE_ANSWER_FILE })
+        ).toBeVisible();
+      });
+    } finally {
+      // The standing account outlives the run, so its sessions would pile up.
+      await apiDeleteSession(request, owner.accessToken, sessionId).catch(() => undefined);
+    }
   });
 });

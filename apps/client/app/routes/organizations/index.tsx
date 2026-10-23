@@ -10,7 +10,9 @@ import {
   isDelinquentSubscriptionStatus,
   pickDisplayedSubscription,
 } from '@client/lib/subscriptions/types';
-import { Add as AddIcon, Business as BusinessIcon, Search as SearchIcon } from '@mui/icons-material';
+import AddIcon from '@mui/icons-material/Add';
+import BusinessIcon from '@mui/icons-material/Business';
+import SearchIcon from '@mui/icons-material/Search';
 import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
 import {
   AspectRatio,
@@ -204,6 +206,27 @@ const OrganizationListPage: FC = () => {
           </span>
         </Tooltip>
       </Box>
+
+      <Card variant="soft" sx={{ mb: 3 }}>
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems={{ sm: 'center' }}>
+          <Box sx={{ flex: 1 }}>
+            <Typography level="title-md">Explore Team administration before subscribing</Typography>
+            <Typography level="body-sm">
+              See sample members, monthly credit limits and usage, plus which controls each role can access.
+            </Typography>
+          </Box>
+          <Button
+            component="a"
+            href="https://docs.bike4mind.com/features/team-admin-preview"
+            target="_blank"
+            rel="noopener noreferrer"
+            variant="outlined"
+            data-testid="organizations-admin-preview-link"
+          >
+            Preview Team administration
+          </Button>
+        </Stack>
+      </Card>
 
       <Box sx={{ position: 'relative', mb: 4 }}>
         <Input

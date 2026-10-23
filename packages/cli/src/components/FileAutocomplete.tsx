@@ -3,6 +3,7 @@ import { Box, Text } from 'ink';
 import * as path from 'node:path';
 import type { FileSearchResult } from '../utils/fileSearch.js';
 import { formatFileSize } from '../utils/fileSearch.js';
+import { sanitizeTerminalText } from '../utils/sanitizeTerminalText.js';
 
 interface FileAutocompleteProps {
   files: FileSearchResult[];
@@ -66,7 +67,7 @@ export function FileAutocomplete({ files, selectedIndex, query }: FileAutocomple
         const isSelected = actualIndex === selectedIndex;
         const icon = file.isDirectory ? '[folder]' : '[file]  ';
         const sizeDisplay = file.isDirectory ? '' : file.size !== undefined ? ` (${formatFileSize(file.size)})` : '';
-        const pathDisplay = file.isDirectory ? `${file.path}/` : file.path;
+        const pathDisplay = sanitizeTerminalText(file.isDirectory ? `${file.path}/` : file.path);
 
         return (
           <Box key={file.path} marginLeft={1}>

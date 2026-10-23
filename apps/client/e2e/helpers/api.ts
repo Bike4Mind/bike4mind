@@ -13,12 +13,14 @@ interface LoginResponse {
 export async function apiCreateSession(
   request: APIRequestContext,
   token: string,
-  name = 'E2E Test Session'
+  name = 'E2E Test Session',
+  /** Grounds the session on this lake (resolveLakeSessionDefaults: forced retrieval scoped to it). */
+  options: { dataLakeId?: string } = {}
 ): Promise<string> {
   const baseURL = process.env.API_URL || 'http://localhost:3000';
   const response = await request.post(`${baseURL}/api/sessions/create`, {
     headers: { Authorization: `Bearer ${token}` },
-    data: { name },
+    data: { name, ...(options.dataLakeId ? { dataLakeId: options.dataLakeId } : {}) },
   });
 
   if (!response.ok()) {
@@ -248,9 +250,57 @@ export async function apiLoginViaOtc(
 }
 
 /**
+ * Log in to a STANDING test account, creating it on first use, for a fixture that must outlive the
+ * run (e.g. a lake too slow to rebuild every time). The address must have no `-<digits>` segment
+ * before `-e2e@test.com`: the cleanup sweep (BASE_E2E_EMAIL_PATTERN in
+ * server/utils/e2eCleanupScope.ts) only deletes addresses with one, so this account survives it and
+ * the run's own users are still swept. Give each fixture its own address so no other spec can change it.
+ */
+export async function apiLoginStandingUser(
+  request: APIRequestContext,
+  params: { email: string; name: string }
+): Promise<{ accessToken: string; refreshToken: string; userId: string }> {
+  if (!/-e2e@test\.com$/i.test(params.email) || /-\d+-e2e@test\.com$/i.test(params.email)) {
+    throw new Error(`${params.email} is not a standing test address (want <name>-e2e@test.com, no digit segment)`);
+  }
+  let tokens: { accessToken: string; refreshToken: string } | undefined;
+  let loginError: unknown;
+  // Concurrent runs share this address, and /api/otc/send rejects a send that races another one.
+  for (let attempt = 0; attempt < 3 && !tokens; attempt++) {
+    if (attempt > 0) await new Promise(resolve => setTimeout(resolve, 2_000 * attempt));
+    tokens = await apiLoginViaOtc(request, params.email).catch((err: unknown) => {
+      loginError = err;
+      return undefined;
+    });
+  }
+  if (tokens) {
+    // The access token is a JWT whose `id` claim is the user id (AuthTokenGeneratorService).
+    const payload: unknown = JSON.parse(Buffer.from(tokens.accessToken.split('.')[1], 'base64url').toString('utf-8'));
+    const userId = (payload as { id?: unknown }).id;
+    if (typeof userId !== 'string') throw new Error(`Standing user ${params.email}: access token has no id claim`);
+    return { ...tokens, userId };
+  }
+  // No account yet (first run, or a stage reset). A login that failed for another reason ends here
+  // too, and createUser then rejects the taken address, so both errors are reported.
+  const created = await apiCreateTestUser(request, {
+    username: params.email.replace(/@test\.com$/i, ''),
+    email: params.email,
+    name: params.name,
+    password: crypto.randomBytes(18).toString('base64url'),
+  }).catch((createError: unknown) => {
+    throw new Error(`Standing user ${params.email}: login failed (${loginError}) and create failed (${createError})`);
+  });
+  return {
+    accessToken: created.accessToken,
+    refreshToken: created.refreshToken,
+    userId: (created.user.id || created.user._id) as string,
+  };
+}
+
+/**
  * Pull the refresh token out of a Set-Cookie response header. Playwright joins multiple
- * Set-Cookie headers with newlines, so scan line by line. Mirrors REFRESH_COOKIE_NAME in
- * packages/server-utils/src/auth/refreshCookie.ts - keep in sync.
+ * Set-Cookie headers with newlines, so scan line by line. Mirrors sessionCookieName in
+ * packages/server-utils/src/auth/refreshCookie.ts (prefixed on https, bare on http) - keep in sync.
  */
 export function refreshTokenFromSetCookie(setCookieHeader: string | undefined): string | null {
   if (!setCookieHeader) return null;
@@ -258,7 +308,8 @@ export function refreshTokenFromSetCookie(setCookieHeader: string | undefined): 
     const [pair] = line.split(';');
     const eq = pair.indexOf('=');
     if (eq === -1) continue;
-    if (pair.slice(0, eq).trim() === 'b4m_rt') {
+    const name = pair.slice(0, eq).trim();
+    if (name === '__Host-b4m_rt' || name === 'b4m_rt') {
       const value = pair.slice(eq + 1).trim();
       return value.length > 0 ? value : null;
     }
@@ -427,6 +478,11 @@ export interface DataLake {
   organizationId?: string;
   datalakeTag: string;
   fileCount?: number;
+  /** DataLakeStatus (DataLakeTypes.ts); a draft lake does not ground chat until promoted. */
+  status?: string;
+  /** Set only on the list projection (apiListDataLakes): true when the caller owns the lake. */
+  isOwn?: boolean;
+  /** Absent from the list projection (dataLakeConfigListResponseSchema); read it via apiGetDataLake. */
   createdAt: string;
 }
 
@@ -485,6 +541,19 @@ export async function apiCreateDataLake(
   return { ...body, id: body.id || body._id } as DataLake;
 }
 
+/** GET /api/data-lakes/:id (dataLakeResponseSchema), which unlike the list carries `createdAt`. */
+export async function apiGetDataLake(request: APIRequestContext, token: string, dataLakeId: string): Promise<DataLake> {
+  const baseURL = process.env.API_URL || 'http://localhost:3000';
+  const response = await request.get(`${baseURL}/api/data-lakes/${dataLakeId}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok()) {
+    throw new Error(`Get data lake failed: ${response.status()} ${response.statusText()}`);
+  }
+  const body = await response.json();
+  return { ...body, id: body.id || body._id } as DataLake;
+}
+
 /** List active data lakes accessible to the caller. */
 export async function apiListDataLakes(request: APIRequestContext, token: string): Promise<DataLake[]> {
   const baseURL = process.env.API_URL || 'http://localhost:3000';
@@ -520,7 +589,29 @@ export async function apiGetDataLakeArticlesStatus(
   return response.status();
 }
 
-export type DataLakeLifecycleAction = 'archive' | 'unarchive' | 'restore' | 'delete' | 'cleanup';
+/** The slice of GET /api/data-lakes/:id/health (LakeHealthApiResponse) the readiness poll reads. */
+export interface DataLakeHealth {
+  /** P3 per member, graded by the server's own reachability rule; an in-flight file is not `fail`. */
+  predicates: { fullyVectorized: { pass: number; fail: number; unknown: number } };
+}
+
+export async function apiGetDataLakeHealth(
+  request: APIRequestContext,
+  token: string,
+  dataLakeId: string
+): Promise<DataLakeHealth> {
+  const baseURL = process.env.API_URL || 'http://localhost:3000';
+  const response = await request.get(`${baseURL}/api/data-lakes/${dataLakeId}/health`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok()) {
+    throw new Error(`Get data lake health failed: ${response.status()} ${response.statusText()}`);
+  }
+  return response.json();
+}
+
+// 'promote' flips a draft lake to active; a draft lake does not ground chat (promoteDataLake.ts).
+export type DataLakeLifecycleAction = 'archive' | 'unarchive' | 'restore' | 'delete' | 'cleanup' | 'promote';
 
 /** Drive a lake lifecycle transition. Returns the response status (so callers can assert 403 for non-owners). */
 export async function apiLakeLifecycle(

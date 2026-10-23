@@ -9,6 +9,7 @@ import {
   IUsageEventRepository,
   IUserDocument,
   UsageEventFeature,
+  UsagePriceStamp,
   usdToCreditsStochastic,
   type CompletionSource,
 } from '@bike4mind/common';
@@ -41,6 +42,11 @@ export interface RecordOperationalUsageParams {
   cacheWriteTokens?: number;
   /** Provider COGS in USD, computed by the caller with the model-appropriate pricing fn. */
   costUsd: number;
+  /**
+   * Rate provenance for costUsd (buildUsagePriceStamp), from a caller that priced a text model.
+   * Unset for callers with no ModelInfo or token split (embeddings, run-level judge totals).
+   */
+  priceStamp?: UsagePriceStamp;
   latencyMs?: number;
   source?: CompletionSource;
   /** Provider stop reason of the underlying completion, e.g. `CompletionInfo.stopReason`. */
@@ -128,8 +134,13 @@ export async function recordOperationalUsage(
 
   let creditsCharged = 0;
   try {
+    // A narrowed db (the LLM-tool and knowledge-base callers) can only ever record, never debit,
+    // so the flags cannot change the outcome - read them only where the debit path is reachable.
+    // That keeps the fresh read off a path that issues one record per search/tool call.
+    const canDebit = Boolean(db.creditTransactions && db.users && db.organizations);
     const shouldBill =
       !params.bypassCreditBilling &&
+      canDebit &&
       (params.forceCreditBilling
         ? await areCreditsEnforced(db, logger)
         : await isOperationalBillingEnabled(db, logger));
@@ -186,6 +197,7 @@ export async function recordOperationalUsage(
     settledBasis: 'local',
     costUsd: params.costUsd,
     creditsCharged,
+    ...params.priceStamp,
     // Same refund key the chat/CLI completion paths record: see usageEventStatusForFinish.
     status: usageEventStatusForFinish(params.finishReason),
     latencyMs: params.latencyMs,

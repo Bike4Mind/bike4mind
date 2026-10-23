@@ -307,6 +307,23 @@ const noWorkersImportInClient = [
   },
 ];
 
+// Root-barrel imports that vitest pays for on every test file that reaches them. Next's
+// optimizePackageImports rewrites these for the app bundle, but vitest loads the barrel as-is:
+// `@mui/icons-material` alone requires ~10k icon modules (a third of the client shard's import
+// time), and `lodash` loads the whole library for one function. Spread into every apps/client
+// block that owns no-restricted-imports, for the last-rule-wins reason above.
+const noHeavyBarrelImportsInClient = [
+  {
+    name: '@mui/icons-material',
+    allowImportNames: ['SvgIconComponent'],
+    message: "Import each icon from its own module: `import Close from '@mui/icons-material/Close'`.",
+  },
+  {
+    name: 'lodash',
+    message: "Import each function from its own module: `import debounce from 'lodash/debounce'`.",
+  },
+];
+
 // apps/workers has no react/next/mui dependency (see apps/workers/package.json) and must stay that
 // way - it runs EventBridge Lambda handlers and a self-host job runner, neither of which renders
 // anything. Scoped to apps/client/app specifically (not @client/* broadly), since apps/workers
@@ -561,6 +578,7 @@ export default defineConfig([
         {
           paths: [
             ...b4mv3RestrictedPaths,
+            ...noHeavyBarrelImportsInClient,
             {
               name: 'next/router',
               message:
@@ -641,7 +659,7 @@ export default defineConfig([
       'no-restricted-imports': [
         'error',
         {
-          paths: [...b4mv3RestrictedPaths],
+          paths: [...b4mv3RestrictedPaths, ...noHeavyBarrelImportsInClient],
           patterns: [
             {
               group: ['**/overwatch/services/*', '**/overwatch/types'],

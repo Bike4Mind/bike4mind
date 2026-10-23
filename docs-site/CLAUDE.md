@@ -1,6 +1,6 @@
 # docs-site: public documentation
 
-This directory is the Docusaurus site served at docs.bike4mind.com. It is PUBLIC and auto-deploys to production on every merge to `main` that touches `docs-site/`. Every line you write is published. A private scan gates deploys, but do not rely on it: keep sensitive content out in the first place.
+This directory is the Docusaurus site served at docs.bike4mind.com. It is PUBLIC and auto-deploys to production on every merge to `main` that touches `docs-site/`. Every line you write is published. A private scan gates deploys and, on the PR, `CI Complete` (a late or re-run scan result needs the `Docs Sensitive Scan` job re-run too), but do not rely on it: keep sensitive content out in the first place.
 
 ## Never include
 

@@ -13,7 +13,7 @@ import {
   usdToCredits,
 } from '@bike4mind/common';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
-import { getSettingsMap } from '@bike4mind/utils';
+import { ClientMessageSender, getSettingsMap } from '@bike4mind/utils';
 import { OMITTED_QUALITY_TIER, OpenAIImageCostCalculator } from './imageCostCalculator/OpenAIImageCostCalculator';
 import { estimateImageCredits } from '../imageCost';
 import type { Logger } from '@bike4mind/observability';
@@ -21,6 +21,7 @@ import { silentLogger, statusLog } from '../__tests__/utils/testUtils';
 import { getSettingsValue, ImageModerationBlockedError } from '@bike4mind/utils';
 import { moderateImageOrThrow } from './imageModerationGate';
 import { deductCreditsWithOrgSupport } from '../creditService';
+import { startQuestHeartbeat } from './questHeartbeat';
 
 // The real stochastic rounding, with its draw pinned so the final debit is assertable.
 const { settlementDraw } = vi.hoisted(() => ({ settlementDraw: vi.fn(() => 0.5) }));
@@ -72,7 +73,8 @@ vi.mock('../creditService', async importOriginal => {
 
 vi.mock('./imageModerationGate', () => ({ moderateImageOrThrow: vi.fn(async () => undefined) }));
 
-vi.mock('./questHeartbeat', () => ({
+vi.mock('./questHeartbeat', async importOriginal => ({
+  ...(await importOriginal<typeof import('./questHeartbeat')>()),
   startQuestHeartbeat: vi.fn().mockResolvedValue(() => undefined),
 }));
 
@@ -97,7 +99,7 @@ describe('ImageGenerationService.maybeSummarizeAfterImage', () => {
   it('does nothing when invokeSummarizeSession is not configured', async () => {
     const { service, findById } = makeService({ invokeSummarizeSession: undefined });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (service as any).maybeSummarizeAfterImage('session1', silentLogger);
+    await (service as any).maybeSummarizeAfterImage('session1', 'requester-1', silentLogger);
     expect(findById).not.toHaveBeenCalled();
   });
 
@@ -109,8 +111,9 @@ describe('ImageGenerationService.maybeSummarizeAfterImage', () => {
       totalQuests: SUMMARIZATION_CONFIG.earlyMilestoneQuestCount,
     });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (service as any).maybeSummarizeAfterImage('session1', silentLogger);
-    expect(invokeSummarizeSession).toHaveBeenCalledWith('session1', 'earlyMilestone');
+    await (service as any).maybeSummarizeAfterImage('session1', 'requester-1', silentLogger);
+    // The image requester pays, even on a session they only share.
+    expect(invokeSummarizeSession).toHaveBeenCalledWith('session1', 'earlyMilestone', 'requester-1');
   });
 
   it('skips with a debug log when the session lookup misses', async () => {
@@ -119,7 +122,7 @@ describe('ImageGenerationService.maybeSummarizeAfterImage', () => {
     const logger = { ...silentLogger, debug } as unknown as Logger;
     const { service } = makeService({ invokeSummarizeSession, session: null });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (service as any).maybeSummarizeAfterImage('missing-session', logger);
+    await (service as any).maybeSummarizeAfterImage('missing-session', 'requester-1', logger);
     expect(invokeSummarizeSession).not.toHaveBeenCalled();
     expect(debug).toHaveBeenCalledWith(expect.stringContaining('missing-session'));
   });
@@ -132,7 +135,7 @@ describe('ImageGenerationService.maybeSummarizeAfterImage', () => {
       totalQuests: SUMMARIZATION_CONFIG.earlyMilestoneQuestCount - 1,
     });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (service as any).maybeSummarizeAfterImage('session1', silentLogger);
+    await (service as any).maybeSummarizeAfterImage('session1', 'requester-1', silentLogger);
     expect(invokeSummarizeSession).not.toHaveBeenCalled();
   });
 });
@@ -1242,8 +1245,8 @@ describe('ImageGenerationService.process (size normalization)', () => {
     const validateUserCredits = vi
       .spyOn(service as any, 'validateUserCredits')
       .mockResolvedValue({ requiredCredits: 0, usdCost: 0 });
-    // Twice: process() reads the settings map once for the credit gate and once for moderation.
-    vi.mocked(getSettingsMap).mockResolvedValueOnce({ enforceCredits: 'true' }).mockResolvedValueOnce({});
+    // One fresh map per request carries both the credit gate and moderation.
+    vi.mocked(getSettingsMap).mockResolvedValueOnce({ enforceCredits: 'true' });
 
     await service.process({
       body: {
@@ -1263,6 +1266,15 @@ describe('ImageGenerationService.process (size normalization)', () => {
       billed: validateUserCredits.mock.calls[0]?.[3] as { size?: string; inputImageCount?: number } | undefined,
     };
   };
+
+  it('passes skipCache once per image so an admin toggle applies on the next image', async () => {
+    vi.mocked(getSettingsMap).mockClear();
+
+    await generateWith(ImageModels.GPT_IMAGE_2, ModelBackend.OpenAI);
+
+    // One fresh map per request, shared by the credit gate and moderation.
+    expect(vi.mocked(getSettingsMap).mock.calls.map(([, options]) => options)).toEqual([{ skipCache: true }]);
+  });
 
   it('holds credits for one image when a Kontext request asks for several', async () => {
     vi.mocked(getAvailableModels).mockResolvedValue([
@@ -1530,8 +1542,8 @@ describe('ImageGenerationService quest partial writes', () => {
       service as unknown as { validateUserCredits: () => Promise<unknown> },
       'validateUserCredits'
     ).mockResolvedValue(cost);
-    // process() reads the settings map once for the credit gate and once for moderation.
-    vi.mocked(getSettingsMap).mockResolvedValueOnce({ enforceCredits: 'true' }).mockResolvedValueOnce({});
+    // One fresh map per request carries both the credit gate and moderation.
+    vi.mocked(getSettingsMap).mockResolvedValueOnce({ enforceCredits: 'true' });
   };
 
   // Drops any queued enforceCredits value that process() did not consume, so it cannot leak.
@@ -1541,7 +1553,11 @@ describe('ImageGenerationService quest partial writes', () => {
 
   // The promptMeta invoke() builds for the `a cat` FLUX_PRO_1_1 body below.
   const invokePromptMeta = {
-    model: { name: ImageModels.FLUX_PRO_1_1, parameters: { safety_tolerance: 2 }, type: 'image' },
+    model: {
+      name: ImageModels.FLUX_PRO_1_1,
+      parameters: { safety_tolerance: 2, prompt_upsampling: false },
+      type: 'image',
+    },
     session: { id: 'session1', userId: 'user1' },
     prompt: 'a cat',
     questId: 'quest1',
@@ -1947,5 +1963,65 @@ describe('ImageGenerationService quest partial writes', () => {
 
       expect(logger.error).toHaveBeenCalledWith('Error processing image generation:', failure);
     });
+  });
+});
+
+describe('ImageGenerationService.process (terminal state on early failure)', () => {
+  const body = {
+    sessionId: 'session1',
+    questId: 'quest1',
+    userId: 'user1',
+    prompt: 'a red bicycle',
+    model: ImageModels.GEMINI_2_5_FLASH_IMAGE,
+  } as any;
+
+  const makeService = (questStatus: string | undefined, usersFindById: ReturnType<typeof vi.fn>) => {
+    const quest = { id: 'quest1', sessionId: 'session1', status: questStatus } as any;
+    const update = vi.fn(async () => undefined);
+    const service = new ImageGenerationService({
+      db: {
+        quests: { findById: vi.fn(async () => quest), update, updateMany: vi.fn(async () => undefined) },
+        users: { findById: usersFindById },
+        organizations: { findById: vi.fn(async () => null) },
+      },
+      logEvent: vi.fn().mockResolvedValue(undefined),
+      abilityGetter: vi.fn().mockReturnValue({}),
+      storage: {} as any,
+      fabFileStorage: {} as any,
+      wsHttpsUrl: 'https://ws.example.com',
+    } as any);
+    return { service, quest, update };
+  };
+
+  beforeEach(() => {
+    vi.mocked(startQuestHeartbeat).mockClear();
+    vi.mocked(ClientMessageSender).mockClear();
+  });
+
+  it('settles the quest with an error and an error frame when the user lookup rejects', async () => {
+    const { service, quest, update } = makeService(undefined, vi.fn().mockRejectedValue(new Error('db down')));
+
+    await service.process({ body, logger: silentLogger });
+
+    expect(quest.type).toBe('error');
+    expect(quest.status).toBe('done');
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ id: 'quest1', type: 'error', status: 'done' }));
+    const sender = vi.mocked(ClientMessageSender).mock.results[0].value as { sendToClient: ReturnType<typeof vi.fn> };
+    expect(sender.sendToClient).toHaveBeenCalledWith(
+      'user1',
+      'https://ws.example.com',
+      expect.objectContaining({ quest: expect.objectContaining({ type: 'error', status: 'done' }) })
+    );
+  });
+
+  it.each(['done', 'stopped'])('does nothing when the quest is already %s', async status => {
+    const users = vi.fn();
+    const { service, update } = makeService(status, users);
+
+    await service.process({ body, logger: silentLogger });
+
+    expect(startQuestHeartbeat).not.toHaveBeenCalled();
+    expect(users).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
   });
 });

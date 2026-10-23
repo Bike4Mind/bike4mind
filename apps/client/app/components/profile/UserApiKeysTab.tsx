@@ -2134,7 +2134,7 @@ export default function UserApiKeysTab() {
                         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
                           {key.scopes.slice(0, 2).map(scope => (
                             <Chip key={scope} size="sm" variant="soft">
-                              {scope.split(':')[1]}
+                              {scope}
                             </Chip>
                           ))}
                           {key.scopes.length > 2 && (

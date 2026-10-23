@@ -21,6 +21,7 @@ import {
 import { Edit3, AlertCircle } from 'lucide-react';
 import { IFabFileDocument } from '@bike4mind/common';
 import { serverStorageLimitMessage } from '@client/app/utils/storageQuota';
+import { getInsufficientCreditsMessage } from '@client/app/utils/error';
 
 interface EditFileDialogProps {
   open: boolean;
@@ -75,7 +76,11 @@ const EditFileDialog: React.FC<EditFileDialogProps> = ({ open, onClose, file, on
       await onSubmit(instruction, options);
       handleClose();
     } catch (err) {
-      setError(serverStorageLimitMessage(err) ?? (err instanceof Error ? err.message : 'Failed to generate edit'));
+      setError(
+        getInsufficientCreditsMessage(err) ??
+          serverStorageLimitMessage(err) ??
+          (err instanceof Error ? err.message : 'Failed to generate edit')
+      );
     } finally {
       submittingRef.current = false;
       setIsSubmitting(false);

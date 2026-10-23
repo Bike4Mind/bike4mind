@@ -1,9 +1,7 @@
 import { useConfig } from '@client/app/hooks/data/settings';
 import { useCallback } from 'react';
 
-export function getS3Url({ bucket, key, region = 'us-east-2' }: { bucket: string; key: string; region?: string }) {
-  return `https://${bucket}.s3.${region}.amazonaws.com/${key}`;
-}
+export { getS3Url } from './s3Url';
 
 /**
  * Map S3 key prefixes to CloudFront URL prefixes where they differ.

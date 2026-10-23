@@ -1,6 +1,7 @@
 import React, { useEffect } from 'react';
 import { Box, Text } from 'ink';
 import { useCliStore } from '../store';
+import { sanitizeTerminalText } from '../utils/sanitizeTerminalText.js';
 
 /** Time to display notifications before clearing (ms) */
 const NOTIFICATION_DISPLAY_DURATION_MS = 3000;
@@ -36,7 +37,7 @@ export function CompletedGroupNotification() {
             </Text>
             <Text color="green" bold>
               {item.groupDescription
-                ? `Background tasks completed: "${item.groupDescription}"`
+                ? `Background tasks completed: "${sanitizeTerminalText(item.groupDescription)}"`
                 : 'Background tasks completed'}
             </Text>
           </Box>

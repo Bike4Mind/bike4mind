@@ -5,7 +5,7 @@ import { OrgSubscriptionSubscribeSchema, StripeSubscriptionMetadataSchema } from
 import { SubscriptionOwnerType, isDelinquentSubscriptionStatus } from '@client/lib/subscriptions/types';
 import { baseApi } from '@server/middlewares/baseApi';
 import { Config } from '@bike4mind/server-utils/utils/config';
-import { createCustomer, CustomerType, stripe } from '@server/integrations/stripe/stripe';
+import { createCustomer, CustomerType, stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { USD_CHECKOUT_SESSION_PARAMS } from '@server/integrations/stripe/checkoutCurrency';
 import { appendSuccessParams, isAllowedCallbackOrigin } from '@server/integrations/stripe/callbackUrl';
 import { Request } from 'express';

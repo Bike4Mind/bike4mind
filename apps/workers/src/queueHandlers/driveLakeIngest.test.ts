@@ -86,6 +86,7 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
+  memoryLedgerRepository: { markSourceShredded: vi.fn().mockResolvedValue(0) },
   organizationRepository: {
     findById: (id: string) => h.orgFindById(id),
     incrementCurrentStorage: h.incrementCurrentStorage,
@@ -187,16 +188,16 @@ vi.mock('@server/integrations/google/drive/common', async () => ({
   disableDriveConnectionForLake: h.disableDriveConnectionForLake,
   releaseDriveConnection: h.releaseDriveConnection,
   isTerminalDriveGrantError: (
-    await vi.importActual<typeof import('@server/integrations/google/drive/driveGrantErrors')>(
-      '@server/integrations/google/drive/driveGrantErrors'
+    await vi.importActual<typeof import('@bike4mind/server-utils/integrations/google/drive/driveGrantErrors')>(
+      '@bike4mind/server-utils/integrations/google/drive/driveGrantErrors'
     )
   ).isTerminalDriveGrantError,
 }));
 // isFolder/isValidDriveFolderId etc. stay real (classifyDriveChanges depends on the real isFolder),
 // and so does isDriveRateLimitError - the throttle deferrals below are exactly the behaviour a
 // stubbed predicate would fake away. Only the network-touching calls are mocked.
-vi.mock('@server/integrations/google/drive/driveClient', async importOriginal => {
-  const actual = await importOriginal<typeof import('@server/integrations/google/drive/driveClient')>();
+vi.mock('@bike4mind/server-utils/integrations/google/drive/driveClient', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/server-utils/integrations/google/drive/driveClient')>();
   return {
     ...actual,
     // Echoes the token so a test can tell which credential built the client a call received.
@@ -235,7 +236,7 @@ import {
 } from './driveLakeIngest';
 import { MAX_INGEST_CANDIDATES } from '@bike4mind/server-utils/integrations/google/drive/driveIngestLimits';
 import { DriveWalkTimeBudgetExceededError } from '@server/integrations/google/drive/driveContent';
-import { REJECTED_DRIVE_TOKEN_MESSAGE } from '@server/integrations/google/drive/driveClient';
+import { REJECTED_DRIVE_TOKEN_MESSAGE } from '@bike4mind/server-utils/integrations/google/drive/driveClient';
 
 const logger = { warn: vi.fn(), error: vi.fn(), log: vi.fn(), info: vi.fn(), updateMetadata: vi.fn() } as never;
 const makeEvent = (body: unknown) => ({ Records: [{ body: JSON.stringify(body) }] }) as never;

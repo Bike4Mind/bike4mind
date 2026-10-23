@@ -54,11 +54,11 @@ import {
   sessionRepository,
   defineAbilitiesFor as dbDefineAbilitiesFor,
 } from '@bike4mind/database';
-import { slackDevWorkspaceRepository } from '@bike4mind/database/infra';
+import { slackDevWorkspaceRepository, orgSlackWorkspaceRepository } from '@bike4mind/database/infra';
 
-// Route Slack-originated completions to SlackEventBus (slackQuestProcessor),
-// keeping them separate from web-originated completions on AppEventBus (questProcessor).
-const slackEventBus = {
+// Publish Slack-originated completions as 'slack.completion.started' so they reach
+// slackQuestProcessor rather than the web completion path.
+const slackEventPublisher = {
   LLMEvents: {
     ...LLMEvents,
     CompletionStart: LLMEvents.SlackCompletionStart,
@@ -97,7 +97,7 @@ export function initializeSlackPackage(): void {
       defaultChatCompletionOptions: getDefaultChatCompletionOptions(),
       getSharedTokenizer,
     },
-    eventBus: slackEventBus as any,
+    eventBus: slackEventPublisher as any,
     mcpEnv: {
       buildMcpEnvVariables,
     },
@@ -135,6 +135,7 @@ export function initializeSlackPackage(): void {
     apiKeyRepository,
     adminSettingsRepository,
     slackDevWorkspaceRepository,
+    orgSlackWorkspaceRepository,
     slackChannelConfigRepository,
     slackAuditLogRepository,
     webhookSubscriptionRepository,

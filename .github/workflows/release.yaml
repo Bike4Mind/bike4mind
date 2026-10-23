@@ -294,12 +294,15 @@ jobs:
   # Snapshot (prerelease) publish for feature branches, triggered when the
   # "Branch Tests" workflow completes successfully. It lives in this file so
   # npm's single trusted publisher (this workflow) covers snapshot publishes
-  # too - see the header comment.
+  # too - see the header comment. The release PR branch is skipped: it already
+  # carries the real versions, so snapshot-publishing it would upload them under a
+  # snapshot tag and the post-merge publish could then never move latest.
   snapshot:
     if: >-
       github.event_name == 'workflow_run' &&
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.head_branch != 'main' &&
+      github.event.workflow_run.head_branch != 'changeset-release/main' &&
       github.repository == (vars.CANONICAL_REPO || 'MillionOnMars/lumina5')
     concurrency:
       group: snapshot-${{ github.event.workflow_run.head_branch }}

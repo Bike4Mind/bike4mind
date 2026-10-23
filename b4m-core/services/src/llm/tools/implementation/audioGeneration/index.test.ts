@@ -148,15 +148,17 @@ describe('audio_generation tool', () => {
     expect(context.onFinish).not.toHaveBeenCalled();
   });
 
-  it('sanitizes the provider error in the tool result (logs detail) without storing or billing', async () => {
+  it('sanitizes the provider error in the tool result and logs without storing or billing', async () => {
     mockSynthesize.mockRejectedValue(new Error('provider exploded: key sk-abc123 rejected at https://api.example'));
     const context = createFakeContext();
     const result = await run(context, { kind: 'speech', text: 'boom' }, { ttsProvider: 'openai' });
     // The model sees a generic message; the raw vendor string (key hint / URL) must not leak.
     expect(result).toBe('Error: TTS request rejected by the openai provider.');
     expect(result).not.toMatch(/sk-abc123|api\.example/);
-    // The detail is still logged for operators.
-    expect(context.logger.error).toHaveBeenCalledWith(expect.stringContaining('provider exploded'));
+    expect(context.logger.error).toHaveBeenCalledWith('[audio_generation] speech generation failed', {
+      errorType: 'Error',
+    });
+    expect(JSON.stringify(vi.mocked(context.logger.error).mock.calls)).not.toMatch(/sk-abc123|api\.example/);
     expect(context.imageGenerateStorage.upload).not.toHaveBeenCalled();
     // A failed generation must not settle a charge - onFinish is never reached.
     expect(context.onFinish).not.toHaveBeenCalled();
@@ -164,10 +166,17 @@ describe('audio_generation tool', () => {
 
   it('rejects an over-length sound-effect description before gating or calling the provider', async () => {
     const context = createFakeContext();
-    const result = await run(context, { kind: 'sound_effect', text: 'x'.repeat(1001) });
-    expect(result).toMatch(/too long/i);
+    const result = await run(context, { kind: 'sound_effect', text: 'x'.repeat(451) });
+    expect(result).toMatch(/too long \(max 450 characters\)/i);
     expect(context.onStart).not.toHaveBeenCalled();
     expect(mockGenerate).not.toHaveBeenCalled();
+  });
+
+  it('accepts a sound-effect description of exactly 450 characters', async () => {
+    const context = createFakeContext();
+    const result = await run(context, { kind: 'sound_effect', text: 'x'.repeat(450) });
+    expect(result).not.toMatch(/too long/i);
+    expect(mockGenerate).toHaveBeenCalled();
   });
 
   it('rejects a model-supplied durationSeconds outside 0.5-30 before any paid call', async () => {

@@ -1,6 +1,19 @@
-import { describe, expect, it } from 'vitest';
+import { createHash } from 'node:crypto';
+import { describe, expect, it, vi } from 'vitest';
+
+// Env domain grants feed the known keys at module load, so the fingerprint below must not see them.
+vi.hoisted(() => {
+  delete process.env.NEXT_PUBLIC_PREMIUM_DOMAIN_GRANTS;
+});
+
+// Hermetic against whatever overlay is mounted: this suite pins the built-in rows on their own.
+vi.mock('@client/app/premium-generated/premiumEntitlementGrants.generated', () => ({ premiumEntitlementGrants: {} }));
+
 import {
   __registryRows,
+  MAX_CONTRIBUTED_SIGNUP_CREDITS,
+  mergeContributedRows,
+  TAG_GRANTS,
   allKnownEntitlementKeys,
   entitlementsForEmail,
   entitlementsForPriceIds,
@@ -30,6 +43,10 @@ import {
 // resolve to a real `price_` id) - it cannot detect a deployment that forgets to
 // set the real prod var, which is inherent to build-time NEXT_PUBLIC_* inlining.
 
+// The built-in rows as written, before merging normalizes and de-duplicates them, so a bad
+// built-in edit fails here instead of being silently repaired.
+const builtIn = __registryRows.builtInRows;
+
 describe('registry invariants', () => {
   it('every price row has a real Stripe price id for both stages (no empty/placeholder fill-in)', () => {
     // Validate BOTH stages from the staged rows - the isTestMode ternary only
@@ -47,13 +64,13 @@ describe('registry invariants', () => {
   it('every entitlement key and grant tag is already in canonical (normalized) form', () => {
     const allKeys = [
       ...__registryRows.priceRows.flatMap(r => r.entitlements),
-      ...__registryRows.tagGrantRows.flatMap(r => r.entitlements),
+      ...builtIn.tagGrantRows.flatMap(r => r.entitlements),
       ...__registryRows.domainGrantRows.flatMap(r => r.entitlements),
     ];
     for (const key of allKeys) {
       expect(key).toBe(normalizeTag(key));
     }
-    for (const row of __registryRows.tagGrantRows) {
+    for (const row of builtIn.tagGrantRows) {
       expect(row.tag).toBe(normalizeTag(row.tag));
     }
     for (const row of __registryRows.domainGrantRows) {
@@ -71,12 +88,12 @@ describe('registry invariants', () => {
   });
 
   it('has no duplicate tag-grant rows after normalization', () => {
-    const tags = __registryRows.tagGrantRows.map(r => normalizeTag(r.tag));
+    const tags = builtIn.tagGrantRows.map(r => normalizeTag(r.tag));
     expect(new Set(tags).size).toBe(tags.length);
   });
 
   it('every tag-grant row maps to at least one entitlement key', () => {
-    for (const row of __registryRows.tagGrantRows) {
+    for (const row of builtIn.tagGrantRows) {
       expect(row.entitlements.length, `tag '${row.tag}' grants nothing`).toBeGreaterThan(0);
     }
   });
@@ -95,27 +112,30 @@ describe('registry invariants', () => {
   // SIGNUP_CREDITS is built via `new Map(rows.map(...))` keyed on the normalized
   // entitlement key - same silent-last-wins duplicate hazard as the grant maps.
   it('every signup-credit row is keyed in canonical (normalized) form', () => {
-    for (const row of __registryRows.signupCreditRows) {
+    for (const row of builtIn.signupCreditRows) {
       expect(row.key).toBe(normalizeTag(row.key));
     }
   });
 
   it('has no duplicate signup-credit rows after normalization', () => {
-    const keys = __registryRows.signupCreditRows.map(r => normalizeTag(r.key));
+    const keys = builtIn.signupCreditRows.map(r => normalizeTag(r.key));
     expect(new Set(keys).size).toBe(keys.length);
   });
 
   it('every signup-credit row grants a positive, finite credit amount', () => {
-    for (const row of __registryRows.signupCreditRows) {
+    for (const row of builtIn.signupCreditRows) {
       expect(Number.isInteger(row.credits), `signup credit for '${row.key}' must be an integer`).toBe(true);
       expect(row.credits, `signup credit for '${row.key}' must be positive`).toBeGreaterThan(0);
+      expect(row.credits, `signup credit for '${row.key}' exceeds the contribution cap`).toBeLessThanOrEqual(
+        MAX_CONTRIBUTED_SIGNUP_CREDITS
+      );
     }
   });
 });
 
 describe('implied-entitlement invariants', () => {
   it('every implied row is in canonical form and implies at least one key', () => {
-    for (const row of __registryRows.impliedRows) {
+    for (const row of builtIn.impliedRows) {
       expect(row.ifHeld).toBe(normalizeTag(row.ifHeld));
       expect(row.alsoGrant.length, `'${row.ifHeld}' implies nothing`).toBeGreaterThan(0);
       for (const key of row.alsoGrant) expect(key).toBe(normalizeTag(key));
@@ -123,13 +143,13 @@ describe('implied-entitlement invariants', () => {
   });
 
   it('has no duplicate ifHeld rows (Map build would silently drop the earlier one)', () => {
-    const heads = __registryRows.impliedRows.map(r => normalizeTag(r.ifHeld));
+    const heads = builtIn.impliedRows.map(r => normalizeTag(r.ifHeld));
     expect(new Set(heads).size).toBe(heads.length);
   });
 
   it('only implies between known grantable keys, never a key from itself', () => {
     const known = new Set(KNOWN_ENTITLEMENT_KEYS);
-    for (const row of __registryRows.impliedRows) {
+    for (const row of builtIn.impliedRows) {
       expect(known.has(row.ifHeld), `'${row.ifHeld}' is not a known key`).toBe(true);
       for (const key of row.alsoGrant) {
         expect(known.has(key), `'${key}' is not a known key`).toBe(true);
@@ -138,12 +158,20 @@ describe('implied-entitlement invariants', () => {
     }
   });
 
+  it('only implies between known keys over the merged rows too', () => {
+    const known = new Set(KNOWN_ENTITLEMENT_KEYS);
+    for (const row of __registryRows.impliedRows) {
+      expect(known.has(row.ifHeld), `'${row.ifHeld}' is not a known key`).toBe(true);
+      for (const key of row.alsoGrant) expect(known.has(key), `'${key}' is not a known key`).toBe(true);
+    }
+  });
+
   // `signupCreditsForKeys` zeroes a key another held key implies, so an implying
   // key must be worth at least as much as anything it implies - otherwise a
   // bundle would under-pay versus holding the implied key directly. Checked over
   // the full closure (chains included), not just direct alsoGrant rows.
   it('every implying key pays at least as much signup credits as the keys it implies', () => {
-    for (const row of __registryRows.impliedRows) {
+    for (const row of builtIn.impliedRows) {
       const sourceCredits = SIGNUP_CREDITS.get(normalizeTag(row.ifHeld)) ?? 0;
       // slice(1) drops the implying key itself; the rest is everything it reaches through chains.
       for (const key of applyImpliedEntitlements([row.ifHeld]).slice(1)) {
@@ -612,6 +640,81 @@ describe('BYPASS_EXEMPT_ENTITLEMENTS / isBypassExemptEntitlement', () => {
   it('every exempt key is a real known entitlement (guards a typo that would never match)', () => {
     for (const key of BYPASS_EXEMPT_ENTITLEMENTS) {
       expect(KNOWN_ENTITLEMENT_KEYS).toContain(key);
+    }
+  });
+});
+
+describe('built-in rows with no contribution', () => {
+  const { builtInRows } = __registryRows;
+
+  // Literal fingerprint of the base branch's tag, implied and signup-credit maps and known keys.
+  // A built-in row edit changes it on purpose; update the hash in the same change.
+  it('serve every derived map unchanged', () => {
+    const fingerprint = createHash('sha256')
+      .update(
+        JSON.stringify({
+          tagGrants: [...TAG_GRANTS],
+          implied: [...IMPLIED_ENTITLEMENTS],
+          signupCredits: [...SIGNUP_CREDITS],
+          known: KNOWN_ENTITLEMENT_KEYS,
+        })
+      )
+      .digest('hex');
+
+    expect(__registryRows.contributedRows).toEqual({});
+    expect(__registryRows.rejectedContributions).toEqual([]);
+    expect(fingerprint).toBe('4e5400a11bf767b3b2d2465d121289d496bf1396aaec41e50006f0b77b5f6e37');
+  });
+
+  it('keep every built-in key known', () => {
+    const builtInKeys = [
+      ...builtInRows.tagGrantRows.flatMap(row => row.entitlements),
+      ...builtInRows.impliedRows.flatMap(row => row.alsoGrant),
+    ];
+    expect(builtInKeys.length).toBeGreaterThan(0);
+    expect(unknownEntitlementKeys(builtInKeys)).toEqual([]);
+    expect(KNOWN_ENTITLEMENT_KEYS).toEqual([...allKnownEntitlementKeys()].sort());
+  });
+
+  it('are unchanged by a contribution that repeats them', () => {
+    const repeated = mergeContributedRows(builtInRows, {
+      tagGrants: builtInRows.tagGrantRows.map(row => ({ tag: row.tag.toUpperCase(), entitlements: row.entitlements })),
+      impliedEntitlements: builtInRows.impliedRows,
+      signupCredits: builtInRows.signupCreditRows,
+      internalStaffEntitlements: builtInRows.internalStaffEntitlements,
+    });
+    expect(repeated).toEqual(mergeContributedRows(builtInRows, {}));
+    expect(repeated.tagGrantRows).toEqual(builtInRows.tagGrantRows);
+  });
+});
+
+describe('the contribution this build generated', () => {
+  it('merges with nothing dropped and keeps the registry invariants', async () => {
+    const { premiumEntitlementGrants } = await vi.importActual<
+      typeof import('@client/app/premium-generated/premiumEntitlementGrants.generated')
+    >('@client/app/premium-generated/premiumEntitlementGrants.generated');
+    const rejected: string[] = [];
+    const merged = mergeContributedRows(builtIn, premiumEntitlementGrants, {
+      otherCoreKeys: __registryRows.otherCoreKeys,
+      onReject: reason => rejected.push(reason),
+    });
+    expect(rejected).toEqual([]);
+
+    const builtInTags = new Map(builtIn.tagGrantRows.map(row => [normalizeTag(row.tag), row.entitlements]));
+    const builtInKeys = new Set(builtIn.tagGrantRows.flatMap(row => row.entitlements));
+    for (const row of merged.tagGrantRows) {
+      if (builtInTags.has(row.tag)) {
+        expect(row.entitlements, `built-in tag '${row.tag}' changed`).toEqual(builtInTags.get(row.tag));
+      } else {
+        for (const key of row.entitlements) expect(builtInKeys.has(key), `'${row.tag}' grants '${key}'`).toBe(false);
+      }
+    }
+    for (const row of merged.impliedRows) {
+      expect(row.alsoGrant.length).toBeGreaterThan(0);
+      expect(row.alsoGrant).not.toContain(row.ifHeld);
+    }
+    for (const row of merged.signupCreditRows) {
+      expect(Number.isInteger(row.credits) && row.credits > 0, `credit for '${row.key}'`).toBe(true);
     }
   });
 });

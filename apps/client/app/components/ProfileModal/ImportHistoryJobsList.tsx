@@ -12,7 +12,12 @@ import {
   Tooltip,
   Typography,
 } from '@mui/joy';
-import { RefreshRounded, ErrorOutline, CheckCircle, Schedule, HourglassEmpty, Cancel } from '@mui/icons-material';
+import RefreshRounded from '@mui/icons-material/RefreshRounded';
+import ErrorOutline from '@mui/icons-material/ErrorOutline';
+import CheckCircle from '@mui/icons-material/CheckCircle';
+import Schedule from '@mui/icons-material/Schedule';
+import HourglassEmpty from '@mui/icons-material/HourglassEmpty';
+import Cancel from '@mui/icons-material/Cancel';
 import {
   useListImportHistoryJobs,
   useRetryImportHistoryJob,

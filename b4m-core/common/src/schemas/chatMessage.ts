@@ -59,6 +59,7 @@ const CHAT_MESSAGE_RESPONSE_FIELDS = {
   pendingAction: true,
   attachmentNotices: true,
   attachmentDelivery: true,
+  turnTiming: true,
   navigationIntents: true,
   suggestedChoices: true,
   attachmentList: true,

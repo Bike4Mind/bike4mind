@@ -81,6 +81,19 @@ describe('toolSearchTool', () => {
     expect(out).toContain('1 already loaded');
   });
 
+  it('loads a repeated name only once within and across select queries', async () => {
+    deferredToolRegistry.register([makeTool('alpha')]);
+    const search = createToolSearchTool({ registry: deferredToolRegistry, toolListAccessor: () => liveTools });
+
+    const firstLoad = await run(search, { query: 'select:alpha,alpha' });
+    expect(liveTools.map(tool => tool.toolSchema.name)).toEqual(['alpha']);
+    expect(firstLoad).toContain('Loaded 1 new tool schema(s)');
+
+    const secondLoad = await run(search, { query: 'select:alpha,alpha' });
+    expect(liveTools.map(tool => tool.toolSchema.name)).toEqual(['alpha']);
+    expect(secondLoad).toContain('Loaded 0 new tool schema(s)');
+  });
+
   it('free-text form returns ranked matches and respects max_results', async () => {
     deferredToolRegistry.register([
       makeTool('mcp__github__create_pull_request', 'opens a PR'),

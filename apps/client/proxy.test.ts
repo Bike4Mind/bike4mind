@@ -43,19 +43,20 @@ describe('proxy CSP header', () => {
   it('global style-src does not contain the blanket https: wildcard', () => {
     const response = proxy(makeRequest('https://app.bike4mind.com/dashboard'));
     const csp = response.headers.get('Content-Security-Policy') ?? '';
-    // style-src https: was narrowed — HTML artifacts load from /api/artifact-sandbox
-    // which sets its own per-response CSP with style-src https:. The global
-    // style-src keeps the explicit MailerLite host (the only external stylesheet
-    // the app itself loads) but no longer permits arbitrary https: stylesheets.
-    expect(csp).toContain("style-src 'self' 'unsafe-inline' https://assets.mailerlite.com");
-    // Ensure the blanket `https:` wildcard is not present (only the explicit MailerLite host).
+    expect(csp).toContain("style-src 'self' 'unsafe-inline'");
     expect(csp).not.toMatch(/style-src [^;]*\bhttps:(?!\/\/)/);
   });
 
-  it('global style-src includes the MailerLite host so universal.css loads on app pages', () => {
+  it('does not admit executable or other resources from the retired marketing vendor', () => {
     const response = proxy(makeRequest('https://app.bike4mind.com/new'));
     const csp = response.headers.get('Content-Security-Policy') ?? '';
-    expect(csp).toContain('https://assets.mailerlite.com');
+    expect(csp).not.toContain('https://assets.mailerlite.com');
+  });
+
+  it('keeps sandbox-only script hosts out of the app CSP', () => {
+    const csp = proxy(makeRequest('https://app.bike4mind.com/new')).headers.get('Content-Security-Policy') ?? '';
+    expect(csp).not.toContain('unpkg.com');
+    expect(csp).not.toContain('cdn.tailwindcss.com');
   });
 
   it('allow-lists every host the ad pixels need, in each directive that governs them', () => {
@@ -85,6 +86,13 @@ describe('proxy CSP header', () => {
     const csp = response.headers.get('Content-Security-Policy') ?? '';
     const values = (csp.match(new RegExp(`${directive} ([^;]*)`))?.[1] ?? '').split(/\s+/);
     expect(values).toContain('https://tile.openstreetmap.org');
+  });
+
+  it('connect-src allows the GitHub API the desktop download page reads its latest release from', () => {
+    const response = proxy(makeRequest('https://app.bike4mind.com/desktop'));
+    const csp = response.headers.get('Content-Security-Policy') ?? '';
+    const connectSrc = (csp.match(/connect-src ([^;]*)/)?.[1] ?? '').split(/\s+/);
+    expect(connectSrc).toContain('https://api.github.com');
   });
 
   it('frame-src allows only the -nocookie YouTube host', () => {
@@ -510,5 +518,37 @@ describe('proxy configured object-store origin', () => {
   it.each(['/api/files', '/p/example', '/embed/chat'])('preserves policy exclusions for %s', path => {
     vi.stubEnv('S3_PRESIGN_ENDPOINT', 'https://objects.example.invalid');
     expect(proxy(makeRequest(`https://app.example.invalid${path}`)).headers.get('Content-Security-Policy')).toBeNull();
+  });
+});
+
+describe("proxy upstream What's New feed origin", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  const policy = () => proxy(makeRequest('https://app.example.invalid/home')).headers.get('Content-Security-Policy')!;
+  const sourcesOf = (csp: string, name: string) =>
+    csp
+      .split(';')
+      .map(part => part.trim().split(/\s+/))
+      .find(([directive]) => directive === name)!
+      .slice(1);
+
+  it('lets media, posters and the service worker load from the upstream origin', () => {
+    vi.stubEnv('WHATS_NEW_FEED_URL', 'https://upstream.example.invalid/api/v1/whats-new');
+    const csp = policy();
+    for (const name of ['connect-src', 'img-src', 'media-src']) {
+      expect(sourcesOf(csp, name)).toContain('https://upstream.example.invalid');
+    }
+    expect(sourcesOf(csp, 'script-src')).not.toContain('https://upstream.example.invalid');
+  });
+
+  it('adds nothing for an unset or non-https feed', () => {
+    vi.stubEnv('WHATS_NEW_FEED_URL', '');
+    const baseline = policy();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.stubEnv('WHATS_NEW_FEED_URL', 'http://upstream.example.invalid/api/v1/whats-new');
+    expect(policy()).toBe(baseline);
   });
 });

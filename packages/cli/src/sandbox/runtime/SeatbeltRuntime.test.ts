@@ -81,6 +81,39 @@ describe('SeatbeltRuntime', () => {
       expect(profile).toContain(`(allow file-read* (subpath "${home}/.npmrc"))`);
     });
 
+    it('denies writes to protected workspace paths after the cwd allow', () => {
+      const profile = runtime.generateProfile({
+        command: 'touch x',
+        cwd: '/Users/test/project',
+        filesystemConfig: { writeOnlyToWorkingDir: true, allowedReadPaths: [], deniedPaths: [] },
+        networkEnabled: false,
+      });
+
+      const allowIdx = profile.indexOf('(allow file-write* (subpath "/Users/test/project"))');
+      expect(allowIdx).toBeGreaterThan(-1);
+      for (const p of ['.git', '.bike4mind']) {
+        const denyIdx = profile.indexOf(`(deny file-write* (subpath "/Users/test/project/${p}"))`);
+        expect(denyIdx).toBeGreaterThan(allowIdx);
+      }
+    });
+
+    it('applies credential denies after overlapping read allowances', () => {
+      const home = os.homedir();
+      const profile = runtime.generateProfile({
+        command: 'cat ~/.npmrc',
+        cwd: '/Users/test/project',
+        filesystemConfig: {
+          writeOnlyToWorkingDir: true,
+          allowedReadPaths: ['$HOME', '~/.npmrc'],
+          deniedPaths: ['$HOME/.npmrc'],
+        },
+        networkEnabled: false,
+      });
+      const denyIndex = profile.indexOf(`(deny file-read* file-write* (subpath "${home}/.npmrc"))`);
+      expect(denyIndex).toBeGreaterThan(profile.indexOf(`(allow file-read* (subpath "${home}"))`));
+      expect(denyIndex).toBeGreaterThan(profile.indexOf(`(allow file-read* (subpath "${home}/.npmrc"))`));
+    });
+
     it('allows writes to temp directories', () => {
       const profile = runtime.generateProfile({
         command: 'npm install',

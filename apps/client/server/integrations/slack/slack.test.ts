@@ -440,4 +440,17 @@ describe('postEmailMirrorToSlack', () => {
     await expect(postEmailMirrorToSlack(payload)).resolves.toBeUndefined();
     expect(Logger.error).toHaveBeenCalledTimes(1);
   });
+
+  it('stays silent when only a general webhook is configured', async () => {
+    // The mirror carries private email content, so it must never fall back to the default or
+    // feedback channel: an audit webhook that is not set means no mirror at all.
+    mocks.getSettingsMap.mockResolvedValue({
+      SlackDefaultWebhookUrl: 'https://hooks.slack.com/services/general',
+      SlackFeedbackWebhookUrl: 'https://hooks.slack.com/services/feedback',
+    });
+
+    await postEmailMirrorToSlack(payload);
+
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
 });

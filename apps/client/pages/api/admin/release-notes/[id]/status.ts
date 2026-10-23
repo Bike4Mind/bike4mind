@@ -9,7 +9,7 @@ import {
   loadDenylistOrThrow,
   noteOrThrow,
   toAdminReleaseNote,
-} from '@server/releaseNotes/adminReleaseNotes';
+} from '@bike4mind/server-utils/releaseNotes/adminReleaseNotes';
 
 const ActionSchema = z.object({ action: z.enum(['hide', 'unhide', 'publishNow']) }).strict();
 
