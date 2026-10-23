@@ -108,9 +108,10 @@ describe('POST /api/users/:id/upload-photo - presign only', () => {
     // photoUrl stays on the old (existing) photo until confirm-photo runs, so no render can hit a missing key.
     expect(mockUserUpdateOne).not.toHaveBeenCalled();
     expect(mockStorageDelete).not.toHaveBeenCalled();
-    // The PUT is bound to the declared fileSize, so S3 refuses a larger photo.
+    // The PUT is bound to the declared fileSize and content type, so S3 refuses a larger photo or another type.
     expect(mockStorageGetSignedUrl).toHaveBeenCalledWith(expect.any(String), 'put', {
       expiresIn: 600,
+      ContentType: 'image/png',
       ContentLength: 123,
     });
     expect(res._getJSONData()).toEqual(
@@ -124,5 +125,13 @@ describe('POST /api/users/:id/upload-photo - presign only', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(mockAppFileCtor).toHaveBeenCalledWith(expect.objectContaining({ userId: OWN }));
+  });
+
+  it('rejects a caller who is neither the owner nor an admin before looking the user up', async () => {
+    const { promise } = run({ id: 'intruder', isAdmin: false });
+    await expect(promise).rejects.toThrow();
+
+    expect(mockUserFindById).not.toHaveBeenCalled();
+    expect(mockFileSave).not.toHaveBeenCalled();
   });
 });
