@@ -89,8 +89,9 @@ const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(
             omitted.push(`${entry.fileName}: ${entry.note}`);
             continue;
           }
-          // truncateContent appends an ellipsis, so a shortened entry is always longer than the cap.
-          if (entry.content.length > maxContentLength) {
+          // truncateContent leaves off its ellipsis when the cut ends in } or ], so a shortened entry
+          // can be exactly the cap. An untouched file of exactly that length is listed too (harmless).
+          if (entry.content.length >= maxContentLength) {
             omitted.push(`${entry.fileName}: shortened to the first ${maxContentLength} characters.`);
           }
 

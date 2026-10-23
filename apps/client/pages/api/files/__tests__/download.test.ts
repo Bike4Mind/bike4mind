@@ -412,6 +412,23 @@ describe('GET /api/files/download', () => {
     );
   });
 
+  it('records a file cut to exactly the cap with no ellipsis (cut ended in } or ])', async () => {
+    (FabFile.find as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { fileUrl: 'u1', mimeType: 'application/json', fileName: 'data.json', moderationStatus: 'clean' },
+    ]);
+    (getContentFromFabfile as ReturnType<typeof vi.fn>).mockResolvedValueOnce('x'.repeat(49999) + '}');
+
+    const { res } = makeRes();
+    await handler(reqWithAbility(), res);
+
+    expect(tempFiles.map(f => path.basename(f))).toEqual(['0_data.json', '1_README.txt']);
+    expect(createTempFile).toHaveBeenLastCalledWith(
+      '1_README.txt',
+      expect.stringContaining('data.json: shortened to the first 50000 characters.'),
+      expect.any(String)
+    );
+  });
+
   it('keeps the original name for a file that is already text', async () => {
     (FabFile.find as ReturnType<typeof vi.fn>).mockResolvedValue([
       { fileUrl: 'u1', mimeType: 'text/markdown', fileName: 'notes.md', moderationStatus: 'clean' },
