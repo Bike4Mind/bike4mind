@@ -1,4 +1,6 @@
 #!/usr/bin/env npx ts-node -r tsconfig-paths/register
+import { signupProtectionRepository } from '@bike4mind/database';
+import { userService } from '@bike4mind/services';
 
 import { adminSettingsRepository, connectDB, creditTransactionRepository, userRepository } from '@bike4mind/database';
 import { CreditHolderType, IUserDocument, PENDING_FREE_CREDITS_TAG, settingsMap } from '@bike4mind/common';
@@ -117,6 +119,16 @@ class BackfillPendingFreeCredits {
     let errors = 0;
 
     for (const user of stranded) {
+      if (
+        await userService.protectSignupCredits(user.id, {
+          users: userRepository,
+          adminSettings: adminSettingsRepository,
+          signupProtection: { repository: signupProtectionRepository },
+        })
+      ) {
+        console.log(`Skipping held signup domain for user ${user.id}`);
+        continue;
+      }
       try {
         // An invite-resolved amount stored on the user wins over the setting;
         // mirrors the runtime grant paths (registerViaOTC / email verify).

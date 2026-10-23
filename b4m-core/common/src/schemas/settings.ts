@@ -452,6 +452,9 @@ export const SettingKeySchema = z.enum([
   'otcLimitSendPerIpDaily',
   'otcLimitVerifyPerEmailPerIp',
   'otcLimitVerifyPerIp',
+  'signupBurstThreshold',
+  'signupBurstWindowHours',
+  'signupBurstAutoHold',
   'defaultFreeCredits',
   'freeTierDailySpendCapCredits',
   'freeTierDay1SpendCapCredits',
@@ -2081,23 +2084,26 @@ export const API_SERVICE_GROUPS = {
       { key: 'billOperationalUsage', order: 1 },
       { key: 'blockDisposableEmails', order: 2 },
       { key: 'blockedEmailDomains', order: 3 },
-      { key: 'freeTierDailySpendCapCredits', order: 4 },
-      { key: 'freeTierDay1SpendCapCredits', order: 5 },
-      { key: 'freeTierDays2To7SpendCapCredits', order: 6 },
-      { key: 'syntheticUserEmailDomains', order: 7 },
-      { key: 'turnstileEnabled', order: 8 },
-      { key: 'turnstileFailClosed', order: 9 },
-      { key: 'turnstileSiteKey', order: 10 },
-      { key: 'stagedSignupGrantEnabled', order: 11 },
-      { key: 'signupGrantCredits', order: 12 },
-      { key: 'verifiedUnlockCredits', order: 13 },
-      { key: 'signupGrantRiskPolicy', order: 14 },
-      { key: 'signupGrantActivityEnabled', order: 15 },
-      { key: 'signupGrantActivityMinMessages', order: 16 },
-      { key: 'signupGrantActivityMinDays', order: 17 },
-      { key: 'signupGrantOrgInviteEnabled', order: 18 },
-      { key: 'signupRiskScoring', order: 19 },
-      { key: 'signupAnomaly', order: 20 },
+      { key: 'stagedSignupGrantEnabled', order: 4 },
+      { key: 'signupGrantCredits', order: 5 },
+      { key: 'verifiedUnlockCredits', order: 6 },
+      { key: 'signupGrantRiskPolicy', order: 7 },
+      { key: 'signupGrantActivityEnabled', order: 8 },
+      { key: 'signupGrantOrgInviteEnabled', order: 9 },
+      { key: 'signupGrantActivityMinMessages', order: 10 },
+      { key: 'signupGrantActivityMinDays', order: 11 },
+      { key: 'freeTierDailySpendCapCredits', order: 12 },
+      { key: 'freeTierDay1SpendCapCredits', order: 13 },
+      { key: 'freeTierDays2To7SpendCapCredits', order: 14 },
+      { key: 'syntheticUserEmailDomains', order: 15 },
+      { key: 'turnstileEnabled', order: 16 },
+      { key: 'turnstileFailClosed', order: 17 },
+      { key: 'turnstileSiteKey', order: 18 },
+      { key: 'signupBurstThreshold', order: 19 },
+      { key: 'signupBurstWindowHours', order: 20 },
+      { key: 'signupBurstAutoHold', order: 21 },
+      { key: 'signupRiskScoring', order: 22 },
+      { key: 'signupAnomaly', order: 23 },
     ],
   },
   KNOWLEDGE: {
@@ -3958,6 +3964,37 @@ export const settingsMap = {
       'Private minimum distinct UTC activity days and elapsed whole days between first and last activity. Zero disables eligibility.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
+  }),
+  signupBurstThreshold: makeNumberSetting({
+    key: 'signupBurstThreshold',
+    name: 'Signup Burst Threshold',
+    defaultValue: 5,
+    int: true,
+    min: 3,
+    max: 1000,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description: 'Minimum verified signups with generated email patterns before a domain is held for review.',
+  }),
+  signupBurstWindowHours: makeNumberSetting({
+    key: 'signupBurstWindowHours',
+    name: 'Signup Burst Window (hours)',
+    defaultValue: 6,
+    int: true,
+    min: 1,
+    max: 168,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description: 'Rolling window for verified signup pattern detection.',
+  }),
+  signupBurstAutoHold: makeBooleanSetting({
+    key: 'signupBurstAutoHold',
+    name: 'Auto-hold Signup Bursts',
+    defaultValue: false,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description:
+      'Hold patterned signup domains for admin review and defer their pending free credits. Granted balances are never changed. Review in Signup Domain Holds.',
   }),
   defaultFreeCredits: makeNumberSetting({
     key: 'defaultFreeCredits',
@@ -6114,8 +6151,7 @@ export const FORCED_RETRIEVAL_SETTING_KEYS = [
   'forcedRetrievalSpreadFloorPct',
 ] as const satisfies readonly SettingKey[];
 
-// ============================================================================
-// Public settings projection - the security boundary for the unauthenticated
+// =====================================================================// Public settings projection - the security boundary for the unauthenticated
 // CDN config artifact (docs/perf/mobile-startup-latency.md, M2.5).
 //
 // SINGLE source of truth for what may be served without authentication. The
@@ -6123,8 +6159,7 @@ export const FORCED_RETRIEVAL_SETTING_KEYS = [
 // public if explicitly tagged. `isSensitive` is a separate (opt-out) boundary
 // used by the authenticated /api/settings/fetch admin path and is NOT sufficient
 // for public exposure (e.g. sreAgentConfig is !isSensitive but operational).
-// ============================================================================
-
+// =====================================================================
 /** Minimal shape of a stored admin setting document (Mongo/ORM-agnostic). */
 export interface AdminSettingDoc {
   settingName: string;
