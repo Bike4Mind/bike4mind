@@ -148,8 +148,13 @@ class ElectronPage implements BrowserPage {
   private closing = false;
   /** In the app window but hidden for a moment; see hold(). */
   private held = false;
-  /** Set while a screenshot holds the debugger it attached, so a timeout can let it go. */
-  private ownsDebugger = false;
+  /**
+   * Screenshots using the debugger right now, and whether one of them attached it. Counted
+   * because a round's tool calls run in parallel, and a capture given up on still reaches it
+   * later: whoever finished first would detach it from under the others.
+   */
+  private debuggerUsers = 0;
+  private attachedDebugger = false;
   /** Agent steps running in this page right now; a popup opened during one is the agent's. */
   private acting = 0;
   private actedAt = 0;
@@ -564,19 +569,22 @@ class ElectronPage implements BrowserPage {
     const cdp = contents.debugger;
     if (!cdp.isAttached()) {
       cdp.attach('1.3');
-      this.ownsDebugger = true;
+      this.attachedDebugger = true;
     }
+    this.debuggerUsers += 1;
     try {
       const { data } = (await cdp.sendCommand('Page.captureScreenshot', { format: 'png' })) as { data: string };
       return nativeImage.createFromBuffer(Buffer.from(data, 'base64'));
     } finally {
-      this.releaseDebugger();
+      this.debuggerUsers -= 1;
+      if (this.debuggerUsers === 0) this.releaseDebugger();
     }
   }
 
+  /** Also forced by a timeout: detaching is what rejects a command the renderer never answers. */
   private releaseDebugger(): void {
-    if (!this.ownsDebugger) return;
-    this.ownsDebugger = false;
+    if (!this.attachedDebugger) return;
+    this.attachedDebugger = false;
     if (!this.webContents.isDestroyed() && this.webContents.debugger.isAttached()) this.webContents.debugger.detach();
   }
 

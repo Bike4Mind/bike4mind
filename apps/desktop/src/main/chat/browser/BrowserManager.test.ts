@@ -1004,6 +1004,61 @@ describe('BrowserManager screenshots', () => {
     await expect((await page()).screenshot()).rejects.toThrow('The page rendered nothing to capture yet.');
   });
 
+  /** Each DevTools command waits for its own answer, in the order they were sent. */
+  const heldCommands = () => {
+    const answers: Array<(result: unknown) => void> = [];
+    contents.cdp = () => new Promise(resolve => answers.push(resolve));
+    return answers;
+  };
+
+  it('keeps the debugger for a retry while a capture it gave up on finishes late', async () => {
+    vi.useFakeTimers();
+    try {
+      const tab = await page();
+      manager.setPane(window, 's', bounds);
+      let answer: (image: unknown) => void = () => undefined;
+      contents.capture = () => new Promise(resolve => (answer = resolve));
+
+      const timedOut = expect(tab.screenshot()).rejects.toThrow(/did not paint a frame/);
+      await vi.advanceTimersByTimeAsync(15_000);
+      await timedOut;
+
+      // The retry is mid-DevTools capture when the abandoned capturePage comes back empty.
+      const answers = heldCommands();
+      contents.capture = () => Promise.reject(new Error(SURFACE_ERROR));
+      const retry = tab.screenshot();
+      await vi.advanceTimersByTimeAsync(0);
+      answer({ isEmpty: () => true });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(answers).toHaveLength(2);
+
+      answers[0](png('retry'));
+      await expect(retry).resolves.toEqual(Buffer.from('retry@1280'));
+      expect(contents.debuggerAttached).toBe(true);
+      answers[1](png('late'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect({ attaches: contents.attaches, detaches: contents.detaches }).toEqual({ attaches: 1, detaches: 1 });
+      expect(contents.debuggerAttached).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('lets two screenshots from one round share the debugger, detaching after the last', async () => {
+    const tab = await page();
+    const answers = heldCommands();
+    const first = tab.screenshot();
+    const second = tab.screenshot();
+    await vi.waitFor(() => expect(answers).toHaveLength(2));
+
+    answers[0](png('first'));
+    await expect(first).resolves.toEqual(Buffer.from('first@1280'));
+    expect(contents.debuggerAttached).toBe(true);
+    answers[1](png('second'));
+    await expect(second).resolves.toEqual(Buffer.from('second@1280'));
+    expect({ attaches: contents.attaches, detaches: contents.detaches }).toEqual({ attaches: 1, detaches: 1 });
+  });
+
   it('uses a debugger something else attached, and leaves it attached', async () => {
     contents.debuggerAttached = true;
 
