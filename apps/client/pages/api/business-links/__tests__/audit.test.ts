@@ -71,7 +71,14 @@ beforeEach(() => {
 
 describe('business links admin audit', () => {
   it('POST /business-links records business_link.created', async () => {
-    h.linkCreate.mockResolvedValue({ _id: LINK_ID, name: 'Acme', url: 'https://acme.example' });
+    h.linkCreate.mockResolvedValue({
+      _id: LINK_ID,
+      name: 'Acme',
+      url: 'https://acme.example',
+      ticker: 'ACME',
+      type: 'company',
+      categoryId: CATEGORY_ID,
+    });
     const { req, res } = await run(linksHandler, 'POST', { body: { name: 'Acme', url: 'https://acme.example' } });
 
     expect(res._getStatusCode()).toBe(201);
@@ -80,6 +87,7 @@ describe('business links admin audit', () => {
     expect(h.audit.mock.calls[0][1]).toMatchObject({
       action: 'settings.business_link.created',
       target: { kind: 'settings', id: LINK_ID, displayName: 'Acme' },
+      details: { url: 'https://acme.example', ticker: 'ACME', type: 'company', categoryId: CATEGORY_ID },
     });
   });
 
