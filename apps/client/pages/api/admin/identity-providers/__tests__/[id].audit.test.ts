@@ -71,7 +71,7 @@ describe('PUT /api/admin/identity-providers/[id] admin audit', () => {
     expect(h.audit.mock.calls[0][1]).toMatchObject({
       action: 'identity.sso_provider.updated',
       target: { kind: 'settings', id: 'idp-1', displayName: 'Acme Okta' },
-      details: { oktaConfigUpdated: true, samlConfigUpdated: false },
+      details: { certReplaced: false, oktaClientSecretReplaced: true },
     });
     expect(h.audit.mock.calls[0][1].changes).toEqual([
       { field: 'name', before: 'Acme SSO', after: 'Acme Okta' },
@@ -79,6 +79,36 @@ describe('PUT /api/admin/identity-providers/[id] admin audit', () => {
     ]);
     expect(JSON.stringify(h.audit.mock.calls[0][1])).not.toContain(CLIENT_SECRET);
     expect(h.updateIDP.mock.invocationCallOrder[0]).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
+  });
+
+  it('diffs non-secret SAML and Okta config and never records credential values', async () => {
+    const before = {
+      ...existing,
+      samlConfig: { entryPoint: 'https://old/sso', issuer: 'iss', cert: 'CERT-OLD', identifierFormat: 'f' },
+      oktaConfig: { audience: 'api://a', clientId: 'cid', authServerId: 'default', useOrgAuthServer: false },
+    };
+    h.findById.mockResolvedValue(before);
+    h.updateIDP.mockResolvedValue({
+      ...before,
+      samlConfig: { ...before.samlConfig, entryPoint: 'https://new/sso', cert: 'CERT-NEW' },
+      oktaConfig: { ...before.oktaConfig, useOrgAuthServer: true },
+    });
+
+    await call('PUT', { samlConfig: {}, oktaConfig: { clientSecret: CLIENT_SECRET } });
+
+    const entry = h.audit.mock.calls[0][1];
+    expect(entry.changes).toEqual([
+      { field: 'samlConfig.entryPoint', before: 'https://old/sso', after: 'https://new/sso' },
+      { field: 'oktaConfig.useOrgAuthServer', before: false, after: true },
+    ]);
+    expect(entry.details).toEqual({ certReplaced: true, oktaClientSecretReplaced: true });
+    expect(JSON.stringify(entry)).not.toMatch(/CERT-OLD|CERT-NEW|okta-client-secret-value/);
+  });
+
+  it('reports no secret replacement when none is submitted', async () => {
+    await call('PUT', { name: 'Acme Okta', oktaConfig: { clientId: 'cid', clientSecret: '' } });
+
+    expect(h.audit.mock.calls[0][1].details).toEqual({ certReplaced: false, oktaClientSecretReplaced: false });
   });
 
   it('returns 404 without writing when the provider does not exist', async () => {
@@ -113,6 +143,16 @@ describe('DELETE /api/admin/identity-providers/[id] admin audit', () => {
       details: { emailDomain: 'acme.com', type: 'okta' },
     });
     expect(h.deleteIDP.mock.invocationCallOrder[0]).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
+  });
+
+  it('returns 404 without deleting when the provider does not exist', async () => {
+    h.findById.mockResolvedValue(null);
+
+    const { res } = await call('DELETE');
+
+    expect(res._getStatusCode()).toBe(404);
+    expect(h.deleteIDP).not.toHaveBeenCalled();
+    expect(h.audit).not.toHaveBeenCalled();
   });
 
   it('returns 500 and leaves the OIDC cache alone when the audit write rejects', async () => {

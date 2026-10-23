@@ -8,14 +8,23 @@ import { respond } from '@server/utils/respond';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 const AUDITED_IDP_FIELDS = ['name', 'emailDomain', 'type', 'isActive'] as const;
+const AUDITED_SAML_FIELDS = ['entryPoint', 'issuer', 'callbackUrl', 'identifierFormat'] as const;
+const AUDITED_OKTA_FIELDS = ['audience', 'clientId', 'authServerId', 'useOrgAuthServer'] as const;
 
-// Config blocks hold credentials, so only the non-secret top-level fields are diffed.
+// Credentials (cert, Okta client secret, SAML key material) are never diffed; callers report them as booleans.
 function diffIdentityProvider(existing: IIdentityProviderDocument, updated: IIdentityProviderDocument): AuditChange[] {
-  return AUDITED_IDP_FIELDS.filter(field => existing[field] !== updated[field]).map(field => ({
-    field,
-    before: existing[field],
-    after: updated[field],
-  }));
+  const changes: AuditChange[] = [];
+  const push = (field: string, before: unknown, after: unknown) => {
+    if (before !== after) changes.push({ field, before, after });
+  };
+  for (const field of AUDITED_IDP_FIELDS) push(field, existing[field], updated[field]);
+  for (const field of AUDITED_SAML_FIELDS) {
+    push(`samlConfig.${field}`, existing.samlConfig?.[field], updated.samlConfig?.[field]);
+  }
+  for (const field of AUDITED_OKTA_FIELDS) {
+    push(`oktaConfig.${field}`, existing.oktaConfig?.[field], updated.oktaConfig?.[field]);
+  }
+  return changes;
 }
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
@@ -71,12 +80,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         }
       }
 
-      const existing = await identityProviderRepository.findById(id);
-      if (!existing) {
-        throw new NotFoundError('Identity provider not found');
-      }
-
       const updatedIdp = await withTransaction(async () => {
+        const existing = await identityProviderRepository.findById(id);
+        if (!existing) {
+          throw new NotFoundError('Identity provider not found');
+        }
+
         const updated = await identityProviderRepository.updateIDP(id, {
           name,
           emailDomain: emailDomain?.toLowerCase(),
@@ -96,8 +105,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
           summary: `updated identity provider ${updated.name}`,
           changes: diffIdentityProvider(existing, updated),
           details: {
-            samlConfigUpdated: samlConfig !== undefined,
-            oktaConfigUpdated: oktaConfig !== undefined,
+            certReplaced: updated.samlConfig?.cert !== existing.samlConfig?.cert,
+            oktaClientSecretReplaced: !!oktaConfig?.clientSecret,
           },
         });
         return updated;
@@ -134,12 +143,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         throw new BadRequestError('Identity provider ID is required');
       }
 
-      const provider = await identityProviderRepository.findById(id);
-      if (!provider) {
-        throw new NotFoundError('Identity provider not found');
-      }
-
       await withTransaction(async () => {
+        const provider = await identityProviderRepository.findById(id);
+        if (!provider) {
+          throw new NotFoundError('Identity provider not found');
+        }
+
         const deleted = await identityProviderRepository.deleteIDP(id);
 
         if (!deleted) {
