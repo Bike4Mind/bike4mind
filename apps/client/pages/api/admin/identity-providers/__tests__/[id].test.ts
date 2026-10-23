@@ -23,6 +23,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
+  withTransaction: (fn: () => unknown) => fn(),
   identityProviderRepository: {
     findById: (...a: unknown[]) => mockFindById(...a),
     findByEmailDomain: (...a: unknown[]) => mockFindByEmailDomain(...a),
@@ -31,6 +32,8 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/observability', () => ({ Logger: { info: vi.fn() } }));
 vi.mock('@server/auth/oktaOidcClient', () => ({ clearConfigurationCache: vi.fn() }));
+
+vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn() }));
 
 import handler from '../[id]';
 

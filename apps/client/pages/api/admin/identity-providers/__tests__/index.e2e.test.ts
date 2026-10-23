@@ -1,17 +1,17 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import mongoose from 'mongoose';
-import type { MongoMemoryServer } from 'mongodb-memory-server';
-// createMongoServer is not exported from the package barrel / dist; deep-import the source.
+// createMongoReplSet is not exported from the package barrel / dist; deep-import the source.
 import {
-  createMongoServer,
+  createMongoReplSet,
   MONGO_TEST_TIMEOUT_MS,
+  settleAutoIndexBuilds,
 } from '../../../../../../../packages/database/src/__test__/createMongoServer';
 import { identityProviderRepository } from '@bike4mind/database';
 import { configureSecretsAtRest, generateEncryptionKey } from '@bike4mind/utils/security';
 
 /**
- * Drives the REAL repository, model and encryption against createMongoServer, so the response
+ * Drives the REAL repository, model and encryption against createMongoReplSet, so the response
  * schema is exercised over documents that actually hold stored credentials. The unit tests feed
  * the routes hand-built objects; only this one proves a stored credential is reported as present
  * without its value ever reaching a response, and survives an edit that omits it.
@@ -39,12 +39,14 @@ import itemHandler from '../[id]';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
-let mongoServer: MongoMemoryServer;
+let mongoServer: Awaited<ReturnType<typeof createMongoReplSet>> | undefined;
 
 beforeAll(async () => {
   configureSecretsAtRest(generateEncryptionKey());
-  mongoServer = await createMongoServer();
+  // A replica set, because create and update write the admin audit entry in a transaction.
+  mongoServer = await createMongoReplSet();
   await mongoose.connect(mongoServer.getUri());
+  await settleAutoIndexBuilds(mongoose);
 });
 afterAll(async () => {
   await mongoose.disconnect();
@@ -58,7 +60,12 @@ type Handler = (req: unknown, res: unknown) => Promise<void>;
 
 const call = async (handler: unknown, method: string, { body, id }: { body?: object; id?: string } = {}) => {
   const { req, res } = createMocks({ method: method as 'GET', body, query: id ? { id } : {} });
-  (req as unknown as Record<string, unknown>).user = { id: 'admin1', isAdmin: true };
+  (req as unknown as Record<string, unknown>).user = {
+    id: 'admin1',
+    username: 'admin',
+    email: 'admin@example.com',
+    isAdmin: true,
+  };
   await (handler as Handler)(req, res);
   return res;
 };
