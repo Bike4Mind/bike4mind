@@ -73,7 +73,9 @@ const mcpModelWrite = (...args: unknown[]) => {
 
 // The mcp-servers write methods check the MCP admin flag; on here so body validation decides.
 // Audit writers are covered by each route's own tests; stubbed so this file does not depend on which routes record.
-vi.mock('@server/utils/adminAudit', () => ({
+// Partial mock: handlers also import pure helpers (definedKeys, parseAdminActionReason) from here.
+vi.mock('@server/utils/adminAudit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@server/utils/adminAudit')>()),
   recordAdminActionFromRequest: vi.fn().mockResolvedValue(null),
   recordAdminActionForActor: vi.fn().mockResolvedValue(null),
 }));
