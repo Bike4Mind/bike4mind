@@ -147,7 +147,8 @@ export const NOT_COVERED: readonly { shape: string; reason: string }[] = [
 /**
  * Queue constructors named from package data instead of a literal, keyed by file and the name
  * argument's text. Their names are unknown until a package declares one, so there is no self-host
- * registration to match. An entry that matches no constructor fails discovery as stale.
+ * registration to match. An entry must match exactly one constructor: none fails discovery as
+ * stale, and more fails it so a second queue cannot borrow the exemption.
  */
 export const DATA_NAMED_QUEUES: readonly { file: string; name: string; reason: string }[] = [
   {
@@ -471,7 +472,7 @@ function discoverConstructorDeclarations(index: InfraIndex): {
   const byNode = new Map<ts.NewExpression, RawDeclaration>();
   const functions: { file: string; node: ts.NewExpression }[] = [];
   const eventTargets: { file: string; node: ts.NewExpression }[] = [];
-  const matchedDataNamed = new Set<(typeof DATA_NAMED_QUEUES)[number]>();
+  const matchedDataNamed = new Map<(typeof DATA_NAMED_QUEUES)[number], number>();
   for (const source of index.parsed) {
     const file = source.fileName;
     walk(source, node => {
@@ -488,7 +489,7 @@ function discoverConstructorDeclarations(index: InfraIndex): {
           ? DATA_NAMED_QUEUES.find(entry => entry.file === file && entry.name === first.getText())
           : undefined;
       if (dataNamed) {
-        matchedDataNamed.add(dataNamed);
+        matchedDataNamed.set(dataNamed, (matchedDataNamed.get(dataNamed) ?? 0) + 1);
         return;
       }
       const name = declarationName(node, file, kind);
@@ -500,8 +501,13 @@ function discoverConstructorDeclarations(index: InfraIndex): {
   }
   const parsedFiles = new Set(index.parsed.map(source => source.fileName));
   for (const entry of DATA_NAMED_QUEUES) {
-    if (parsedFiles.has(entry.file) && !matchedDataNamed.has(entry)) {
+    const matches = matchedDataNamed.get(entry) ?? 0;
+    if (parsedFiles.has(entry.file) && matches === 0) {
       throw new Error(`${entry.file}: stale DATA_NAMED_QUEUES entry ${entry.name}; no queue is named by it`);
+    }
+    // One reviewed constructor per entry, so a second queue named the same way is not exempted.
+    if (matches > 1) {
+      throw new Error(`${entry.file}: DATA_NAMED_QUEUES entry ${entry.name} names ${matches} queues; it may name one`);
     }
   }
   return { declarations, byNode, functions, eventTargets };

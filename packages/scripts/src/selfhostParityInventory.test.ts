@@ -631,6 +631,9 @@ describe('handler sources', () => {
     expect(() => discoverParityInventory({ 'infra/queues.ts': 'new sst.aws.Queue(pair.dlqName, {});' })).toThrow(
       /stale DATA_NAMED_QUEUES entry pair\.name/
     );
+    expect(() => discoverParityInventory({ 'infra/queues.ts': `${pairs} new sst.aws.Queue(pair.name, {});` })).toThrow(
+      /entry pair\.name names 2 queues/
+    );
   });
 
   it('treats only ENOENT as absence when reading repository sources', () => {
