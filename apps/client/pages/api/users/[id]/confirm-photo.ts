@@ -17,9 +17,6 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
     const userId = req.query.id;
     if (!userId) throw new Error('User ID is required');
 
-    const user = await User.findById(userId);
-    if (!user) throw new NotFoundError('User not found');
-
     if (userId !== req.user.id && !req.user.isAdmin) {
       throw new BadRequestError('You can only update your own profile photo');
     }
@@ -39,14 +36,22 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
     }
 
     const storage = new S3Storage(Resource.appFilesBucket.name);
+    let uploaded: Awaited<ReturnType<typeof storage.getMetadata>>;
     try {
-      await storage.getMetadata(file.path);
+      uploaded = await storage.getMetadata(file.path);
     } catch {
       throw new BadRequestError('Profile photo has not finished uploading');
     }
+    // The presign binds ContentType, but this is the step that promotes the bytes to photoUrl.
+    if (uploaded.contentType?.split(';')[0].trim().toLowerCase() !== file.mimeType?.toLowerCase()) {
+      throw new BadRequestError('Profile photo has an unexpected content type');
+    }
 
-    const previousPath = user.photoUrl;
-    await User.updateOne({ _id: userId }, { photoUrl: file.path });
+    // Atomic swap returning the document as it was BEFORE the update, so concurrent confirms each
+    // clean up exactly the photo they replaced instead of both cleaning up a stale read.
+    const previous = await User.findOneAndUpdate({ _id: userId }, { photoUrl: file.path }, { new: false });
+    if (!previous) throw new NotFoundError('User not found');
+    const previousPath = previous.photoUrl;
 
     // Defense-in-depth: only delete the underlying S3 object + AppFile when the AppFile at the old
     // key belongs to the profile owner. A photoUrl poisoned before the self-service update stopped
