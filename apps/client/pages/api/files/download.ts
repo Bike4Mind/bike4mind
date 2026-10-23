@@ -6,11 +6,20 @@ import { accessibleBy } from '@casl/mongoose';
 import * as fs from 'fs';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { getContentFromFabfile } from '@client/app/utils/fabFileUtils';
+import { getContentFromFabfile, getMaxContentLength } from '@client/app/utils/fabFileUtils';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { FabFile } from '@bike4mind/database';
-import { isImageServeable } from '@bike4mind/common';
+import { isImageServeable, SupportedFabFileMimeTypes } from '@bike4mind/common';
 import { FILES_READ_SCOPES } from '@server/files/fileScopes';
+
+// The extractor turns these into plain text, so the entry is renamed to .txt. Text stored under
+// a .pdf or .docx name does not open in the app that name promises.
+const CONVERTED_TO_TEXT = new Set<string>([
+  SupportedFabFileMimeTypes.PDF,
+  SupportedFabFileMimeTypes.DOCX,
+  SupportedFabFileMimeTypes.XLS,
+  SupportedFabFileMimeTypes.XLSX,
+]);
 
 const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(
   asyncHandler(async (req, res) => {
@@ -24,12 +33,25 @@ const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(
       tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'knowledges-'));
       const outputZipPath = path.join(tempDir, 'knowledges.zip');
       let index = 0;
+      // Every entry is extracted text, not the original bytes, and the extractor caps each one.
+      // Anything shortened or left out is recorded so the archive can say so instead of looking
+      // complete.
+      const omitted: string[] = [];
+      const maxContentLength = await getMaxContentLength();
 
-      for (const knowledge of knowledges) {
+      type ReadResult = { fileName: string; mimeType?: string; content?: string; note?: string };
+
+      // Neither a kept nor a dropped file may fail the whole export, so a per-file problem comes
+      // back as a note instead of throwing.
+      const readKnowledge = async (knowledge: (typeof knowledges)[number]): Promise<ReadResult> => {
+        const fileName = path.basename(knowledge.fileName);
+        const mimeType = knowledge.mimeType;
+
         // Never bundle a held (pending scan) or blocked uploaded image into the export zip.
-        if (!isImageServeable(knowledge)) continue;
+        if (!isImageServeable(knowledge)) {
+          return { fileName, mimeType, note: 'left out, the file was still being scanned or was blocked.' };
+        }
 
-        let content: string;
         try {
           // The stored fileUrl is a presigned URL: unset on client uploads and stale an hour
           // after it was minted, and only a read of the first page refreshes it. Sign the
@@ -41,26 +63,60 @@ const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(
             : knowledge.fileUrl;
           // strict: a missing URL or a failed fetch must be distinguishable from empty text,
           // so the file can be skipped instead of archived as a 0-byte entry.
-          content = await getContentFromFabfile({ fileUrl, mimeType: knowledge.mimeType, strict: true });
+          const content = await getContentFromFabfile({ fileUrl, mimeType, strict: true });
+          // Images and unsupported binaries extract to no text at all; an empty entry would
+          // only look like a successful export of an empty document.
+          return content
+            ? { fileName, mimeType, content }
+            : { fileName, mimeType, note: 'left out, it contains no extractable text.' };
         } catch (error) {
           req.logger.warn('Skipping file in export: content unavailable', {
             fileName: knowledge.fileName,
             reason: error instanceof Error ? error.message : String(error),
           });
-          continue;
+          return { fileName, mimeType, note: 'left out, its content could not be read.' };
         }
-        // Images and unsupported binaries extract to no text at all; an empty entry would
-        // only look like a successful export of an empty document.
-        if (!content) continue;
+      };
 
-        const file = await createTempFile(`${index++}_${path.basename(knowledge.fileName)}`, content, tempDir);
-        files.push(file);
+      // Bounded batching: a few hundred files fetched one after another outlives the server
+      // Lambda's 60s timeout. Batches keep that in check without unbounded fan-out.
+      const BATCH_SIZE = 5;
+      for (let start = 0; start < knowledges.length; start += BATCH_SIZE) {
+        const batch = await Promise.all(knowledges.slice(start, start + BATCH_SIZE).map(readKnowledge));
+
+        for (const entry of batch) {
+          if (entry.content === undefined) {
+            omitted.push(`${entry.fileName}: ${entry.note}`);
+            continue;
+          }
+          // truncateContent appends an ellipsis, so a shortened entry is always longer than the cap.
+          if (entry.content.length > maxContentLength) {
+            omitted.push(`${entry.fileName}: shortened to the first ${maxContentLength} characters.`);
+          }
+
+          const entryName = CONVERTED_TO_TEXT.has(entry.mimeType ?? '') ? `${entry.fileName}.txt` : entry.fileName;
+          files.push(await createTempFile(`${index++}_${entryName}`, entry.content, tempDir));
+        }
+      }
+
+      if (omitted.length) {
+        const manifest = [
+          'This archive contains the extracted text of your knowledge files, not the original files.',
+          'Images are not included, and long files are shortened.',
+          '',
+          'Shortened or left out:',
+          '',
+          ...omitted,
+          '',
+        ].join('\n');
+        files.push(await createTempFile(`${index++}_README.txt`, manifest, tempDir));
       }
 
       await zipFiles(files, outputZipPath);
 
-      // Read the zip into memory so the temp files can be removed immediately
-      // after the response; the archives are small (a few knowledge files).
+      // Read the zip into memory so the temp files can be removed immediately after the response.
+      // Entries are capped extracted text, which keeps this inside the Lambda buffered-response
+      // payload limit; archiving the original bytes would have to stream into S3 instead.
       const zipBuffer = await fs.promises.readFile(outputZipPath);
 
       res.setHeader('Content-Type', 'application/zip');

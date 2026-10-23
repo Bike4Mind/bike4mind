@@ -73,6 +73,8 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
 // Mirrors the real extractor's contract: a missing URL or a fetch failure only surfaces when the
 // caller asks for strict; otherwise it resolves to '' and the route would zip a 0-byte entry.
 vi.mock('@client/app/utils/fabFileUtils', () => ({
+  // The real default, so the truncation cases can be exercised without a settings round-trip.
+  getMaxContentLength: vi.fn(async () => 50000),
   getContentFromFabfile: vi.fn(async ({ fileUrl, strict }: { fileUrl?: string; strict?: boolean }) => {
     if (!fileUrl || fileUrl.includes('/unreadable/')) {
       if (strict) throw new Error('Failed to fetch file content');
@@ -223,8 +225,13 @@ describe('GET /api/files/download', () => {
     await handler(req, res);
 
     // Only the clean non-image and the clean image are zipped; held/blocked images and the
-    // not-yet-cleared non-image are skipped.
-    expect(tempFiles.length).toBe(2);
+    // not-yet-cleared non-image are skipped. Every skip is named in the archive README.
+    expect(tempFiles.map(f => path.basename(f))).toEqual(['0_a.txt', '1_clean.png', '2_README.txt']);
+    expect(createTempFile).toHaveBeenLastCalledWith(
+      '2_README.txt',
+      expect.stringContaining('mid-scan.txt: left out, the file was still being scanned or was blocked.'),
+      expect.any(String)
+    );
   });
 
   it('cleans up temp files even when zipping fails', async () => {
@@ -337,15 +344,20 @@ describe('GET /api/files/download', () => {
     const { res, getSent } = makeRes();
     await handler(reqWithAbility(), res);
 
-    // The unreadable row never reaches the extractor, and never becomes a temp entry.
+    // The unreadable row never reaches the extractor, and never becomes content - it is only
+    // named in the README.
     expect(getContentFromFabfile).toHaveBeenCalledTimes(1);
     expect(getContentFromFabfile).toHaveBeenCalledWith({
       fileUrl: 'https://signed.example/ok/b.txt',
       mimeType: 'text/plain',
       strict: true,
     });
-    expect(createTempFile).toHaveBeenCalledTimes(1);
-    expect(tempFiles.length).toBe(1);
+    expect(tempFiles.map(f => path.basename(f))).toEqual(['0_b.txt', '1_README.txt']);
+    expect(createTempFile).toHaveBeenLastCalledWith(
+      '1_README.txt',
+      expect.stringContaining('a.txt: left out, its content could not be read.'),
+      expect.any(String)
+    );
     expect((zipFiles as ReturnType<typeof vi.fn>).mock.calls[0][0]).toEqual(tempFiles);
     expect(getSent()).toEqual(ZIP_BYTES);
   });
@@ -359,8 +371,7 @@ describe('GET /api/files/download', () => {
     const { res } = makeRes();
     await handler(reqWithAbility(), res);
 
-    expect(createTempFile).toHaveBeenCalledTimes(1);
-    expect(tempFiles.length).toBe(1);
+    expect(tempFiles.map(f => path.basename(f))).toEqual(['0_b.txt', '1_README.txt']);
     expect((zipFiles as ReturnType<typeof vi.fn>).mock.calls[0][0]).toEqual(tempFiles);
   });
 
@@ -373,8 +384,44 @@ describe('GET /api/files/download', () => {
     const { res } = makeRes();
     await handler(reqWithAbility(), res);
 
-    expect(createTempFile).not.toHaveBeenCalled();
-    expect(tempFiles.length).toBe(0);
+    // The image is not archived as an empty entry - only the README, which names it.
+    expect(tempFiles.map(f => path.basename(f))).toEqual(['0_README.txt']);
+    expect(createTempFile).toHaveBeenCalledWith(
+      '0_README.txt',
+      expect.stringContaining('C1.png: left out, it contains no extractable text.'),
+      expect.any(String)
+    );
+  });
+
+  // The archive is extracted text: a PDF arrives in it as text, so its name must say so, and a
+  // shortened document must be recorded rather than looking complete.
+  it('renames a converted document to .txt and records the shortening in README.txt', async () => {
+    (FabFile.find as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { fileUrl: 'u1', mimeType: 'application/pdf', fileName: 'contract.pdf', moderationStatus: 'clean' },
+    ]);
+    (getContentFromFabfile as ReturnType<typeof vi.fn>).mockResolvedValueOnce('x'.repeat(50001));
+
+    const { res } = makeRes();
+    await handler(reqWithAbility(), res);
+
+    expect(tempFiles.map(f => path.basename(f))).toEqual(['0_contract.pdf.txt', '1_README.txt']);
+    expect(createTempFile).toHaveBeenLastCalledWith(
+      '1_README.txt',
+      expect.stringContaining('contract.pdf: shortened to the first 50000 characters.'),
+      expect.any(String)
+    );
+  });
+
+  it('keeps the original name for a file that is already text', async () => {
+    (FabFile.find as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { fileUrl: 'u1', mimeType: 'text/markdown', fileName: 'notes.md', moderationStatus: 'clean' },
+    ]);
+
+    const { res } = makeRes();
+    await handler(reqWithAbility(), res);
+
+    // Nothing was left out or shortened, so no README is added either.
+    expect(tempFiles.map(f => path.basename(f))).toEqual(['0_notes.md']);
   });
 
   it('requires files:read at the baseApi route gate', () => {
