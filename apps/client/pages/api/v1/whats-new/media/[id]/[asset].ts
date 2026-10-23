@@ -13,7 +13,8 @@ const SIGNED_URL_TTL_SECONDS = 3600;
 const CACHE_CONTROL = 'public, max-age=600, s-maxage=600';
 
 const handler = nextRouteForContract(getWhatsNewMediaContract, {
-  // A page of notes can load four files per note, so the budget is wider than the feed's.
+  // Up to four files per note (a still is fetched only for a note without a video), so the budget is wider
+  // than the feed's.
   rateLimit: rateLimit({ limit: 300, windowMs: 60_000, bucket: 'GET /api/v1/whats-new/media' }),
 }).get(async (req, res) => {
   const { id, asset } = req.validatedParams;

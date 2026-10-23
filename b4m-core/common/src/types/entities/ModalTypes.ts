@@ -172,6 +172,7 @@ export interface IModal {
   imageUrl: string | null;
   images?: ModalImage[] | null;
   video?: ModalVideo | null;
+  /** Release-note slides only (set by releaseNoteToModal); the Modal model does not persist it. */
   stillImage?: ModalStillImage | null;
   textMessage: string | null;
   /** Generation metadata for auto-generated modals (null for manual modals) */
