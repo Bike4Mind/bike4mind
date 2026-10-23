@@ -21,6 +21,8 @@ const PDF_WORKER_PATH = /^\/pdf\.worker(-\d+\.\d+\.\d+)?\.min\.mjs$/;
 // deployed stages (infra/web.ts), so self-host, local dev and tests are not gated.
 const ORIGIN_VERIFY_HEADER = 'x-b4m-origin-verify';
 
+const NEXT_ACTION_HEADER = 'next-action';
+
 // Never the raw x-forwarded-for: its leftmost token is client-controlled on every deploy, so a
 // [SECURITY] line would record whatever source the attacker chose.
 function logSourceIp(request: NextRequest): string {
@@ -86,6 +88,14 @@ export function proxy(request: NextRequest) {
       `[SECURITY] Blocked malformed URL encoding: ${request.method} ${pathname} from ${logSourceIp(request)}`
     );
     return new NextResponse('Bad Request', { status: 400 });
+  }
+
+  // The app defines no server actions, so a Next-Action header is only ever scanner traffic. Next
+  // answers an unknown action with a text/plain error, which the app-page runtime turns into a 500
+  // invariant for RSC requests (vercel/next.js#97568). Remove this guard if server actions are ever
+  // introduced. Sits after the [SECURITY] guards so probes that also trip them are still logged.
+  if (request.headers.has(NEXT_ACTION_HEADER)) {
+    return new NextResponse('Not found', { status: 404 });
   }
 
   // Strip the origin secret before route handlers see it, so nothing that logs headers leaks it.
