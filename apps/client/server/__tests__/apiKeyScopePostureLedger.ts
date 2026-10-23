@@ -362,7 +362,6 @@ export const KNOWN_UNPOSTURED = new Set<string>([
   'users/[id]/slack-settings.ts',
   'users/[id]/telemetry-export.ts',
   'users/[id]/update.ts',
-  'users/[id]/upload-photo.ts',
   'users/[id]/userInvites.ts',
   'users/activities/recent.ts',
   'users/by-email/[email].ts',
