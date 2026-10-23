@@ -613,4 +613,15 @@ describe('POST /api/admin/model-prices admin audit', () => {
     await expect(run()).rejects.toThrow('audit down');
     expect(res._isEndCalled()).toBe(false);
   });
+
+  it('does not report a revert-to-seed as done when the audit write rejects', async () => {
+    mockAudit.mockRejectedValue(new Error('audit down'));
+    const { res, run } = call({
+      method: 'POST',
+      body: { modelId: 'gpt-x', unit: 'per_token', action: 'revert-to-seed' },
+    });
+
+    await expect(run()).rejects.toThrow('audit down');
+    expect(res._isEndCalled()).toBe(false);
+  });
 });
