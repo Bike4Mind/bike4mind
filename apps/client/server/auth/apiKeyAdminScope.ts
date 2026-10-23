@@ -54,7 +54,7 @@ type UsersById = { findById: (id: string) => PromiseLike<AdminFlagged | null> };
 
 /**
  * Wraps a `users` adapter for a service that re-reads the key's owner by id, so the copy it gets
- * back carries the same withheld role as `req.user`. Every other method is inherited unchanged.
+ * back carries the same withheld role as `req.user`. Every other member is passed through unchanged.
  */
 export function ownerWithheldUsers<R extends UsersById>(ownerId: string, users: R): R {
   const findById = async (id: string) => {
@@ -62,11 +62,12 @@ export function ownerWithheldUsers<R extends UsersById>(ownerId: string, users: 
     return user && String(id) === ownerId ? withholdAdminRole(user) : user;
   };
   // A Proxy rather than Object.create(users): Mongoose statics such as hydrate() need the real Model as `this`.
+  // Only inherited methods are bound; own function-valued fields (a repository's `model`) pass through as-is.
   return new Proxy(users, {
     get(target, prop) {
       if (prop === 'findById') return findById;
       const value = Reflect.get(target, prop, target);
-      return typeof value === 'function' ? value.bind(target) : value;
+      return typeof value === 'function' && !Object.hasOwn(target, prop) ? value.bind(target) : value;
     },
   });
 }

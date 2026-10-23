@@ -93,4 +93,15 @@ describe('ownerWithheldUsers', () => {
     expect(doc.name).toBe('a');
     expect(doc.isAdmin).toBe(true);
   });
+
+  it('passes an own function-valued field such as a repository model through untouched', () => {
+    class Repo {
+      constructor(public model: typeof TestUser) {}
+      async findById() {
+        return null;
+      }
+    }
+
+    expect(ownerWithheldUsers('me', new Repo(TestUser)).model).toBe(TestUser);
+  });
 });
