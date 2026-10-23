@@ -103,12 +103,12 @@ describe('POST /api/admin/email/jobs/:id/start', () => {
     expect(h.audit.mock.invocationCallOrder[0]).toBeLessThan(h.sendToQueue.mock.invocationCallOrder[0]);
   });
 
-  it('records a test-mode job at notice severity under its own action', async () => {
+  it('records a stored test-mode job as a real start, since the worker sends it to the full filter', async () => {
     h.claimForStart.mockResolvedValue({ ...draftJob, isTestMode: true });
 
     await call(startHandler, 'POST');
 
-    expect(h.audit.mock.calls[0][1]).toMatchObject({ action: 'email.job.test_started' });
+    expect(h.audit.mock.calls[0][1]).toMatchObject({ action: 'email.job.started' });
   });
 
   it('rejects an already-started job without auditing or enqueuing', async () => {
@@ -161,6 +161,38 @@ describe('POST /api/admin/email/jobs/:id/send', () => {
       action: 'email.job.test_sent',
       details: { testMode: true, testRecipientCount: 1 },
     });
+  });
+
+  it('enqueues stored test addresses so the worker and the audit agree on test mode', async () => {
+    h.claimForSending.mockResolvedValue({ ...draftJob, testEmailAddresses: ['stored@example.com'] });
+
+    await call(sendHandler, 'POST', { testMode: true });
+
+    expect(h.audit.mock.calls[0][1]).toMatchObject({ action: 'email.job.test_sent' });
+    expect(h.sendToQueue.mock.calls[0][1]).toMatchObject({ testMode: true, testRecipients: ['stored@example.com'] });
+  });
+
+  it('rejects test mode with no recipients without auditing or enqueuing', async () => {
+    await expect(call(sendHandler, 'POST', { testMode: true })).rejects.toThrow('at least one test recipient');
+
+    expect(h.audit).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('rejects a job that is already sending without auditing or enqueuing', async () => {
+    h.claimForSending.mockResolvedValue(null);
+
+    await expect(call(sendHandler, 'POST')).rejects.toThrow('currently being sent');
+
+    expect(h.audit).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('rejects a missing job', async () => {
+    h.claimForSending.mockResolvedValue(null);
+    h.findById.mockResolvedValue(null);
+
+    await expect(call(sendHandler, 'POST')).rejects.toThrow('Job not found');
   });
 
   it('records recipient filter counts, never the addresses or ids', async () => {
