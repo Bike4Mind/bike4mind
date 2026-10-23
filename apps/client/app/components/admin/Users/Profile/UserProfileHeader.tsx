@@ -77,7 +77,8 @@ export const UserProfileHeader: React.FC<{ user: AdminUserProfile; actions: Reac
             <Chip size="sm" variant="outlined" data-testid="user-profile-badge-level">
               {user.level}
             </Chip>
-            {user.organizationId && (
+            {/* An update response carries the org unpopulated (a bare id) until the refetch lands. */}
+            {typeof user.organizationId === 'object' && user.organizationId?.name && (
               <Chip size="sm" variant="outlined" data-testid="user-profile-badge-org">
                 {user.organizationId.name}
               </Chip>

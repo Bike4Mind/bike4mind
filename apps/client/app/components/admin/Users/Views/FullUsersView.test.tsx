@@ -15,10 +15,19 @@ vi.mock('../Details/Bike4MindUserDetails', () => ({ default: () => null }));
 vi.mock('../Details/LoginDetails', () => ({ default: () => null }));
 vi.mock('../Details/UserDetails', () => ({ default: () => null }));
 vi.mock('../Details/UserSubscriptionStatus', () => ({ default: () => null }));
-// Stands in for the Ban checkbox: stages the same field edit the real control does.
+// Stands in for the Ban checkbox and the confirmed Delete: the same calls the real controls make.
 vi.mock('../SpicyUserActions', () => ({
-  default: ({ onFieldChange }: { onFieldChange: (key: string, value: unknown) => void }) => (
-    <button data-testid="stub-ban-toggle" onClick={() => onFieldChange('isBanned', true)} />
+  default: ({
+    onFieldChange,
+    handleDeleteUser,
+  }: {
+    onFieldChange: (key: string, value: unknown) => void;
+    handleDeleteUser: (userId: string, reason: string) => Promise<void>;
+  }) => (
+    <>
+      <button data-testid="stub-ban-toggle" onClick={() => onFieldChange('isBanned', true)} />
+      <button data-testid="stub-delete" onClick={() => handleDeleteUser('u1', 'Spam account')} />
+    </>
   ),
 }));
 vi.mock('../Details/GrantSubscriptionModal', () => ({ default: () => null }));
@@ -29,7 +38,10 @@ vi.mock('../ComplianceModal', () => ({ useComplianceModal: () => vi.fn() }));
 // The real panel is lazy-loaded; stub it so the tab wiring is what this file exercises.
 vi.mock('../Activity/UserActivityPanel', () => ({ default: () => <div data-testid="user-activity-panel" /> }));
 vi.mock('@client/app/hooks/data/user', () => ({
-  useDeleteUser: () => ({ mutate: vi.fn() }),
+  // Succeeds at once, so the caller's per-call onSuccess is what the delete tests observe.
+  useDeleteUser: () => ({
+    mutate: (_variables: unknown, options?: { onSuccess?: () => void }) => options?.onSuccess?.(),
+  }),
   useUpdateUser: () => ({ mutate: mutations.updateMutate, isPending: false }),
   useLoginAsUser: () => ({ mutate: mutations.loginAsMutate, isPending: false }),
 }));
@@ -261,6 +273,26 @@ describe('FullUsersView - page danger zone', () => {
     expect(screen.getByTestId('user-profile-danger-zone')).toBeVisible();
   });
 
+  it('opens on the tab its host passes, so ?tab=admin deep-links the danger zone', () => {
+    render(<FullUsersView index={0} user={savedUser()} variant="page" tab="admin" onTabChange={vi.fn()} />, {
+      wrapper: TestWrapper,
+    });
+
+    expect(screen.getByTestId('user-profile-danger-zone')).toBeVisible();
+    expect(screen.getByTestId('user-profile-tab-admin')).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('tells its host once the user is deleted', () => {
+    const onUserDeleted = vi.fn();
+    render(<FullUsersView index={0} user={savedUser()} variant="page" onUserDeleted={onUserDeleted} />, {
+      wrapper: TestWrapper,
+    });
+
+    fireEvent.click(screen.getByTestId('stub-delete'));
+
+    expect(onUserDeleted).toHaveBeenCalledTimes(1);
+  });
+
   it('confirms a staged ban before saving it', () => {
     render(<FullUsersView index={0} user={savedUser()} variant="page" />, { wrapper: TestWrapper });
 
@@ -289,5 +321,13 @@ describe('FullUsersView - card in the Users list', () => {
 
     fireEvent.click(screen.getByTestId('user-card-open-profile-btn'));
     expect(mutations.navigate).toHaveBeenCalledWith({ to: '/admin/users/$userId', params: { userId: 'u1' } });
+  });
+
+  it('will not leave for the profile while the card holds staged edits', () => {
+    render(<FullUsersView index={0} user={savedUser()} />, { wrapper: TestWrapper });
+
+    addCustomTag('unsaved-tag');
+
+    expect(screen.getByTestId('user-card-open-profile-btn')).toBeDisabled();
   });
 });

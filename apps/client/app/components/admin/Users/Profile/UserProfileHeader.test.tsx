@@ -63,6 +63,12 @@ describe('UserProfileHeader', () => {
     expect(screen.getByTestId('user-profile-badge-signup')).toHaveTextContent('Signed up via google');
   });
 
+  it('leaves the org badge out while the org is an unpopulated id, as an update response carries it', () => {
+    renderHeader(profile({ organizationId: 'org-1' as unknown as AdminUserProfile['organizationId'] }));
+
+    expect(screen.queryByTestId('user-profile-badge-org')).not.toBeInTheDocument();
+  });
+
   it('leaves out badges that do not apply', () => {
     renderHeader(profile());
 

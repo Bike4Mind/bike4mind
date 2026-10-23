@@ -1,4 +1,5 @@
 import { ADMIN_TAB_PARAM, ADMIN_USERS_TAB_SLUG } from '@bike4mind/common';
+import type { UsersDisplayMode } from './UsersFilterBar';
 import { IGetUsersParams } from '@client/app/utils/userAPICalls';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { useCallback, useEffect, useMemo } from 'react';
@@ -16,11 +17,17 @@ const ADMIN_PATH = '/admin';
 export const useUsersTab = create<{
   params: IGetUsersParams;
   setParams: (params: Partial<IGetUsersParams>) => void;
+  // Persisted because opening a user's profile page unmounts the list, and coming back must not
+  // drop the admin out of the mode they were scanning in.
+  displayMode: UsersDisplayMode;
+  setDisplayMode: (displayMode: UsersDisplayMode) => void;
 }>()(
   persist(
     (set, get) => ({
       params: { ...DEFAULT_USERS_PARAMS },
       setParams: params => set({ params: { ...get().params, ...params } }),
+      displayMode: 'slim',
+      setDisplayMode: displayMode => set({ displayMode }),
     }),
     { name: 'admin-user-tab-01' }
   )

@@ -417,18 +417,24 @@ export const FullUsersView: React.FC<UsersViewProps> = ({
       sx={{ width: { xs: '100%', sm: 'auto' }, mt: { xs: 2, sm: 0 } }}
     >
       <ContextHelpButton helpId="admin/user-management" tooltipText="User Management Help" />
+      {/* The card has no leave guard, so it cannot be left while it holds staged edits. */}
       {!isPage && (
-        <Button
-          size="sm"
-          variant="outlined"
-          color="neutral"
-          startDecorator={<OpenInNewIcon />}
-          onClick={() => openUserProfile(user.id)}
-          sx={{ width: { xs: '100%', sm: 'auto' } }}
-          data-testid="user-card-open-profile-btn"
-        >
-          Open profile
-        </Button>
+        <Tooltip title={hasUnsavedChanges ? 'Update or undo your changes first' : ''}>
+          <span>
+            <Button
+              size="sm"
+              variant="outlined"
+              color="neutral"
+              startDecorator={<OpenInNewIcon />}
+              onClick={() => openUserProfile(user.id)}
+              disabled={hasUnsavedChanges}
+              sx={{ width: { xs: '100%', sm: 'auto' } }}
+              data-testid="user-card-open-profile-btn"
+            >
+              Open profile
+            </Button>
+          </span>
+        </Tooltip>
       )}
       <Button
         size="sm"
