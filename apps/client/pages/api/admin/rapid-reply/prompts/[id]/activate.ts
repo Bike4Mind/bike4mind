@@ -48,11 +48,16 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     },
   });
 
+  // Targets the parent so every version's activation sits under the same entry as its edits.
   await recordAdminActionFromRequest(req, {
     action: 'settings.rapid_reply_prompt.activated',
-    target: { kind: 'settings', id, displayName: `Rapid reply prompt ${currentPrompt.name}` },
+    target: {
+      kind: 'settings',
+      id: currentPrompt.parentId || currentPrompt.id,
+      displayName: `Rapid reply prompt ${currentPrompt.name}`,
+    },
     summary: `activated rapid reply prompt ${currentPrompt.name} v${currentPrompt.version}`,
-    details: { parentId: currentPrompt.parentId || currentPrompt.id, version: currentPrompt.version },
+    details: { promptId: id, version: currentPrompt.version },
   });
 
   return res.json({

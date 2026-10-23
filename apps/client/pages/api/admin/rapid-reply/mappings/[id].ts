@@ -134,17 +134,19 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       });
     }
 
-    await recordAdminActionFromRequest(req, {
-      action: 'settings.rapid_reply_mapping.updated',
-      target: { kind: 'settings', id, displayName: `Rapid reply mapping ${currentMapping.mainModelId}` },
-      summary: `updated rapid reply mapping ${currentMapping.mainModelId}`,
-      // systemPrompt is free text; only its field name is recorded.
-      changes: Object.entries(changes).map(([field, change]) =>
-        field === 'systemPrompt'
-          ? { field, before: undefined, after: undefined }
-          : { field, before: change.before, after: change.after }
-      ),
-    });
+    if (Object.keys(changes).length > 0) {
+      await recordAdminActionFromRequest(req, {
+        action: 'settings.rapid_reply_mapping.updated',
+        target: { kind: 'settings', id, displayName: `Rapid reply mapping ${currentMapping.mainModelId}` },
+        summary: `updated rapid reply mapping ${currentMapping.mainModelId}`,
+        // systemPrompt is free text; its values are withheld with a marker so the drawer doesn't read it as cleared.
+        changes: Object.entries(changes).map(([field, change]) =>
+          field === 'systemPrompt'
+            ? { field, before: '[omitted]', after: '[omitted]' }
+            : { field, before: change.before, after: change.after }
+        ),
+      });
+    }
 
     return res.json(updatedMapping);
   })
