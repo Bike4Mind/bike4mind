@@ -122,11 +122,11 @@ const chipTooltipSx: SxProps = { whiteSpace: 'pre-line' };
 export type ChipLayout = 'row' | 'embedded' | 'panel';
 
 /** Menus and tooltips open away from the edge the chips sit against. */
-type ChipPlacement = { menu: 'top-start' | 'bottom-end'; tooltip: 'top-start' | 'left' };
+type ChipPlacement = { menu: 'top-start' | 'bottom-end'; tooltip: 'top-start' | 'bottom-start' | 'left' };
 
 const PLACEMENT: Record<ChipLayout, ChipPlacement> = {
   row: { menu: 'top-start', tooltip: 'top-start' },
-  embedded: { menu: 'bottom-end', tooltip: 'top-start' },
+  embedded: { menu: 'bottom-end', tooltip: 'bottom-start' },
   panel: { menu: 'bottom-end', tooltip: 'left' },
 };
 
