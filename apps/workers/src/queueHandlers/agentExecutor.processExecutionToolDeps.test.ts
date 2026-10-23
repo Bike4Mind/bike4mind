@@ -155,6 +155,28 @@ vi.mock('@server/premium-generated/premiumLlmTools.generated', () => ({
   premiumLlmTools: { fixture_tool: { name: 'fixture_tool' } },
 }));
 
+vi.mock('@server/premium-generated/premiumAgentExtensions.generated', () => ({
+  premiumAgentExtensions: [
+    {
+      surfaceProfiles: [
+        {
+          id: 'fixture-profile',
+          surface: 'fixture-surface',
+          build: () => ({
+            id: 'fixture-profile',
+            name: 'Fixture profile',
+            allowedTools: ['fixture_tool'],
+            deniedTools: [],
+            maxIterations: { quick: 5, medium: 15, very_thorough: 30 },
+            defaultThoroughness: 'medium',
+            isSynthetic: true,
+          }),
+        },
+      ],
+    },
+  ],
+}));
+
 // Pass-through spies, so the real registry still resolves and guards while the calls are observable.
 vi.mock('./agentExecutor.agentExtensions', async () => {
   const actual = await vi.importActual<typeof import('./agentExecutor.agentExtensions')>(
@@ -763,12 +785,19 @@ describe('processExecution tool deps', () => {
       expect(enabledTools).toContain('fixture_tool');
     });
 
-    it('skips the surface profile when the run pins an agent, still guarding tools', async () => {
+    it('preserves a pinned agent and its denials through a continuation on a contributed surface', async () => {
       const { resolve, guard } = await registry();
       const { sessionRepository, agentRepository, agentExecutionRepository, adminSettingsRepository } =
         await import('@bike4mind/database');
-      vi.mocked(sessionRepository.findById).mockResolvedValue({ ...baseSession, surface: OPTI_SURFACE } as never);
-      const findAgent = vi.spyOn(agentRepository, 'findById').mockResolvedValue(null as never);
+      const session = { ...baseSession, surface: 'fixture-surface', disableUserIntegrations: false };
+      vi.mocked(sessionRepository.findById).mockResolvedValue(session as never);
+      const pinnedDenials = ['web_search', 'fixture__write', 'delegate_to_agent', 'coordinate_task'];
+      const findAgent = vi.spyOn(agentRepository, 'findById').mockResolvedValue({
+        id: 'agent-1',
+        name: 'Pinned agent',
+        allowedTools: ['fixture_tool', 'web_search'],
+        deniedTools: pinnedDenials,
+      } as never);
       // Only a new execution resolves memento gates; the continuation-only harness never mocked it.
       const persistGates = vi
         .spyOn(agentExecutionRepository, 'persistResolvedMementoGates')
@@ -793,6 +822,98 @@ describe('processExecution tool deps', () => {
       expect(buildSharedToolsMock).toHaveBeenCalledTimes(1);
       expect(resolve).not.toHaveBeenCalled();
       expect(guard).toHaveBeenCalledTimes(1);
+      expect(agentExecutionRepository.persistProfileDeniedTools).toHaveBeenCalledExactlyOnceWith(
+        'exec-1',
+        pinnedDenials,
+        true
+      );
+      const [, persistedDenials, profileIsPinned] = vi.mocked(agentExecutionRepository.persistProfileDeniedTools).mock
+        .calls[0];
+      const [, persistedTools] = vi.mocked(agentExecutionRepository.persistResolvedEnabledTools).mock.calls[0];
+      vi.clearAllMocks();
+      vi.mocked(agentExecutionRepository.findById).mockResolvedValueOnce({
+        ...execDoc,
+        profileIsPinned,
+        profileDeniedTools: persistedDenials,
+        resolvedEnabledTools: persistedTools,
+      } as never);
+
+      const deps = await runWithSession(session);
+
+      expect(resolve).not.toHaveBeenCalled();
+      expect(guard).toHaveBeenCalledTimes(1);
+      expect(deps.agentStore).toBeUndefined();
+      expect(deps.dagDispatcher).toBeUndefined();
+      const options = buildSharedToolsMock.mock.calls[0][2];
+      expect(options.enabledTools).toContain('fixture_tool');
+      expect(options.enabledTools).not.toContain('web_search');
+      expect(options.sessionDisabledTools).toEqual(expect.arrayContaining(pinnedDenials));
+    });
+
+    it.each([undefined, false])(
+      'keeps stored denials only for unknown legacy provenance (%s)',
+      async profileIsPinned => {
+        const { resolve } = await registry();
+        const { agentExecutionRepository } = await import('@bike4mind/database');
+        const persistedDenials = ['web_search', 'fixture__write', 'delegate_to_agent', 'coordinate_task'];
+        vi.mocked(agentExecutionRepository.findById).mockResolvedValueOnce({
+          ...execDoc,
+          profileIsPinned,
+          profileDeniedTools: persistedDenials,
+          resolvedEnabledTools: ['fixture_tool', 'web_search'],
+        } as never);
+
+        const deps = await runWithSession({
+          ...baseSession,
+          surface: 'fixture-surface',
+          disableUserIntegrations: false,
+        });
+
+        expect(resolve).toHaveBeenCalledTimes(1);
+        expect(resolve.mock.results[0].value.deniedTools).toEqual([]);
+        const options = buildSharedToolsMock.mock.calls[0][2];
+        expect(options.enabledTools).toContain('fixture_tool');
+        if (profileIsPinned === undefined) {
+          expect(options.enabledTools).not.toContain('web_search');
+          expect(options.sessionDisabledTools).toEqual(expect.arrayContaining(persistedDenials));
+          expect(deps.agentStore).toBeUndefined();
+          expect(deps.dagDispatcher).toBeUndefined();
+        } else {
+          expect(options.enabledTools).toContain('web_search');
+          expect(options.sessionDisabledTools).toEqual([]);
+          expect(deps.agentStore).toBeDefined();
+          expect(deps.dagDispatcher).toBeDefined();
+        }
+      }
+    );
+
+    it('records an unpinned surface profile for later continuations', async () => {
+      const { resolve } = await registry();
+      const { sessionRepository, agentExecutionRepository } = await import('@bike4mind/database');
+      vi.mocked(sessionRepository.findById).mockResolvedValue({ ...baseSession, surface: 'fixture-surface' } as never);
+      const persistGates = vi
+        .spyOn(agentExecutionRepository, 'persistResolvedMementoGates')
+        .mockResolvedValue(undefined as never);
+      try {
+        const { handler } = await import('./agentExecutor');
+        await handler(
+          {
+            executionId: 'exec-1',
+            userId: 'user-1',
+            sessionId: 'session-1',
+            query: 'q',
+            model: 'claude-sonnet-5',
+            connectionId: 'conn-1',
+          },
+          lambdaContext
+        );
+      } finally {
+        persistGates.mockRestore();
+      }
+
+      expect(buildSharedToolsMock).toHaveBeenCalledTimes(1);
+      expect(resolve).toHaveBeenCalledTimes(1);
+      expect(agentExecutionRepository.persistProfileDeniedTools).toHaveBeenCalledExactlyOnceWith('exec-1', [], false);
     });
 
     it('falls through to the default profile on a surface with none registered, still guarding tools', async () => {

@@ -1256,10 +1256,11 @@ async function processExecution(
     // post-permission / post-timeout resume (isNewExecution=false, no startPayload) would
     // otherwise collapse the toolbelt to mission-only and the loop could no longer
     // formulate/schedule to advance the ladder. An explicit `@agent` mention still wins
-    // on the initial send (it sets `startPayload.agentId` -> the persisted-agent path).
+    // across continuations too; its provenance is persisted with the profile denials.
     // Contributed tool names come from the generated map (the same one merged into `externalTools`
     // below), so a contributed tool is offerable here without editing a list by hand.
-    const surfaceProfile = startPayload?.agentId
+    const profileIsPinned = isNewExecution ? Boolean(startPayload?.agentId) : execution.profileIsPinned;
+    const surfaceProfile = profileIsPinned
       ? undefined
       : executorAgentExtensions.resolveSurfaceProfile(session.surface, {
           executionId,
@@ -1267,7 +1268,15 @@ async function processExecution(
           contributedToolNames: Object.keys(premiumLlmTools),
         });
     if (surfaceProfile) {
-      orchestrationProfile = surfaceProfile;
+      // Legacy rows cannot identify their original profile. Retain their denials while keeping
+      // surface defaults available, so an ambiguous resume never widens the original policy.
+      orchestrationProfile =
+        !isNewExecution && profileIsPinned === undefined
+          ? {
+              ...surfaceProfile,
+              deniedTools: [...new Set([...surfaceProfile.deniedTools, ...(execution.profileDeniedTools ?? [])])],
+            }
+          : surfaceProfile;
     } else if (isNewExecution) {
       // `getSettingsValue<K>` is generic-narrowed to `SettingValue<K>` -
       // `OrchestrationDefaults` here - so no cast is needed.
@@ -1312,7 +1321,11 @@ async function processExecution(
       // itself does not survive a Lambda handoff (startPayload.agentId is gone on a
       // resume), and the delegation gate below reads these every invocation. Same
       // durability pattern as enableLattice.
-      await agentExecutionRepository.persistProfileDeniedTools(executionId, orchestrationProfile.deniedTools);
+      await agentExecutionRepository.persistProfileDeniedTools(
+        executionId,
+        orchestrationProfile.deniedTools,
+        Boolean(startPayload?.agentId)
+      );
     }
     if (orchestrationProfile) {
       logger.info('[Orchestration] Resolved profile', {

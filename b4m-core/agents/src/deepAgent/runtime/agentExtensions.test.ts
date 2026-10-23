@@ -246,6 +246,88 @@ describe('createAgentExtensionRegistry', () => {
     expect(runLogger.warn).toHaveBeenCalledTimes(1);
   });
 
+  it('handles a rejected asynchronous guard and still applies built-ins synchronously', async () => {
+    const { registry } = newRegistry();
+    const runLogger = { info: vi.fn(), warn: vi.fn() };
+    registry.registerToolMapGuard(tagGuard('builtin', 100), 'builtin');
+    registry.registerToolMapGuard({
+      id: 'async-guard',
+      priority: 1,
+      apply: (async () => {
+        await new Promise(resolve => setTimeout(resolve, 0));
+        throw new Error('delayed guard failure');
+      }) as never,
+    });
+
+    const output = registry.applyToolMapGuards(
+      { t: 'x' },
+      { executionId: 'e', logger: runLogger, runState: { calls: [] } }
+    );
+
+    expect(output).toEqual({ t: 'builtin(x)' });
+    await vi.waitFor(() =>
+      expect(runLogger.warn).toHaveBeenCalledWith(expect.stringContaining('asynchronous result'), {
+        id: 'async-guard',
+        error: 'delayed guard failure',
+      })
+    );
+  });
+
+  it('handles a rejected asynchronous profile builder while returning no profile synchronously', async () => {
+    const { registry } = newRegistry();
+    const runLogger = { info: vi.fn(), warn: vi.fn() };
+    registry.registerSurfaceProfile({
+      id: 'async-profile',
+      surface: 's',
+      build: (async () => {
+        await new Promise(resolve => setTimeout(resolve, 0));
+        throw new Error('delayed profile failure');
+      }) as never,
+    });
+
+    expect(registry.resolveSurfaceProfile('s', { ...profileCtx, logger: runLogger })).toBeUndefined();
+    await vi.waitFor(() =>
+      expect(runLogger.warn).toHaveBeenCalledWith(expect.stringContaining('asynchronous result'), {
+        id: 'async-profile',
+        error: 'delayed profile failure',
+      })
+    );
+  });
+
+  it('preserves registered metadata and callbacks when their source objects change after freezing', () => {
+    const { registry } = newRegistry();
+    const originalProfile = profile('original-profile', 'original-surface');
+    const originalGuard = tagGuard('original-guard', 1);
+    registry.registerSurfaceProfile(originalProfile);
+    registry.registerToolMapGuard(originalGuard);
+    registry.registerToolMapGuard(tagGuard('builtin', 100), 'builtin');
+    registry.freeze();
+
+    originalProfile.id = 'changed-profile';
+    originalProfile.surface = 'changed-surface';
+    originalProfile.build = () => {
+      throw new Error('replaced builder');
+    };
+    originalGuard.id = 'changed-guard';
+    originalGuard.priority = 999;
+    originalGuard.apply = () => {
+      throw new Error('replaced guard');
+    };
+
+    expect(registry.resolveSurfaceProfile('original-surface', profileCtx)?.id).toBe('original-profile');
+    expect(registry.resolveSurfaceProfile('changed-surface', profileCtx)).toBeUndefined();
+    expect(registry.list()).toEqual({
+      surfaceProfiles: [{ id: 'original-profile', surface: 'original-surface', source: 'contribution' }],
+      toolMapGuards: [
+        { id: 'original-guard', priority: 1, source: 'contribution' },
+        { id: 'builtin', priority: 100, source: 'builtin' },
+      ],
+    });
+    expect(registry.applyToolMapGuards({ t: 'x' }, { executionId: 'e', logger, runState: { calls: [] } })).toEqual({
+      t: 'builtin(original-guard(x))',
+    });
+  });
+
   it('applies guards innermost-first by priority, ties broken by id, sharing one runState', () => {
     const { registry } = newRegistry();
     registry.registerToolMapGuard(tagGuard('outer', 300), 'builtin');
