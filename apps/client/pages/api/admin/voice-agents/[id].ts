@@ -110,7 +110,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     await agentRepository.update({
       id,
       ...(body.name !== undefined ? { name: body.name } : {}),
-      ...(body.description !== undefined ? { description: body.description } : {}),
+      // AgentModel requires a non-empty description, so clearing it falls back to the name.
+      ...(body.description !== undefined ? { description: body.description.trim() || body.name || agent.name } : {}),
       ...(body.systemPrompt !== undefined ? { systemPrompt: body.systemPrompt } : {}),
       ...(body.voiceId !== undefined ? { elevenLabsVoiceId: body.voiceId } : {}),
       ...(body.firstMessage !== undefined ? { firstMessage: body.firstMessage } : {}),
