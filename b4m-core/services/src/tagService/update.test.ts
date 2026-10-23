@@ -401,6 +401,28 @@ describe('tagService - update', () => {
       expect(mockTagRepo.update).toHaveBeenCalledWith(expect.objectContaining({ color: '#ff0000' }));
     });
 
+    // The cap judges the destination, not whether the name grew: an over-long tag can be renamed
+    // under the cap, but not to another over-long name.
+    it('refuses a case-only rename of a tag whose stored name is already over the cap', async () => {
+      const longName = 'x'.repeat(MAX_LAKE_FILE_TAG_NAME_LENGTH + 1);
+      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc({ name: longName }));
+
+      await expect(update(userId, { id: existingTagId, name: longName.toUpperCase() }, adapters)).rejects.toThrow(
+        `cannot be longer than ${MAX_LAKE_FILE_TAG_NAME_LENGTH} characters`
+      );
+      expect(mockFabFileRepo.updateTagsByUserId).not.toHaveBeenCalled();
+      expect(mockTagRepo.update).not.toHaveBeenCalled();
+    });
+
+    it('allows renaming a tag whose stored name is over the cap to a name within it', async () => {
+      const longName = 'x'.repeat(MAX_LAKE_FILE_TAG_NAME_LENGTH + 1);
+      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc({ name: longName }));
+
+      await update(userId, { id: existingTagId, name: 'short' }, adapters);
+
+      expect(mockFabFileRepo.updateTagsByUserId).toHaveBeenCalledWith(userId, longName, 'short');
+    });
+
     // Lake membership IS the tag string on the file, so renaming one would evict every file.
     it('refuses to rename a data lake membership tag', async () => {
       (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc({ name: 'datalake:reports' }));

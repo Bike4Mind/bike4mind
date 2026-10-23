@@ -146,8 +146,9 @@ export const update = async (userId: string, params: TagUpdateParams, adapters: 
   const renaming = newName !== undefined && newName !== tag.name;
 
   // Capped on a real rename only, not in the schema: an icon/colour edit re-sends the stored name,
-  // and tag creation sets no cap, so an existing over-long name must stay editable. Checked before
-  // any write - the file rewrite below is not transactional.
+  // and tag creation sets no cap, so an existing over-long name must stay editable. The cap is on
+  // the destination alone, so renaming such a tag to another over-long name (even a case-only fix)
+  // is refused. Checked before any write - the file rewrite below is not transactional.
   if (renaming && newName.length > MAX_LAKE_FILE_TAG_NAME_LENGTH) {
     throw new BadRequestError(
       `Tag Service - Update: a tag name cannot be longer than ${MAX_LAKE_FILE_TAG_NAME_LENGTH} characters`
