@@ -1,4 +1,5 @@
 import { createCompletionCreditHolds } from '@server/billing/completionCreditHolds';
+import { actorScopeForKey } from '@server/auth/apiKeyAdminScope';
 import express, { type Request, type Response, type Express, type NextFunction } from 'express';
 import {
   CompletionRequestSchema,
@@ -327,6 +328,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
           organizations: organizationRepository,
         },
         apiKeyInfo: apiKeyInfoForCompletion,
+        scopeActor: actorScopeForKey(apiKeyInfo),
         // Org-billed API keys route spend to the org's shared pool (invariant:
         // organizationId is set iff the key's billingOwnerType is Organization).
         billingOrganizationId: apiKeyInfo?.organizationId,

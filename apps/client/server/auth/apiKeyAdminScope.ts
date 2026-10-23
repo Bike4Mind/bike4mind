@@ -40,20 +40,31 @@ export function persistedIsAdmin(user: AdminFlagged): boolean {
   return PERSISTED_ADMIN_ROLE in user || !!user.isAdmin;
 }
 
+export function adminRoleWithheldFor(apiKeyInfo: { scopes: readonly string[] } | undefined): boolean {
+  return !!apiKeyInfo && !apiKeyGrantsAdmin(apiKeyInfo.scopes);
+}
+
+/** For executeCompletion's `scopeActor`: the owner's view for a key without the admin scope. */
+export function actorScopeForKey(apiKeyInfo: { scopes: readonly string[] } | undefined) {
+  return adminRoleWithheldFor(apiKeyInfo) ? withholdAdminRole : undefined;
+}
+
+type UsersById = { findById: (id: string) => PromiseLike<AdminFlagged | null> };
+
 /**
- * Wraps a `users` adapter for a service that re-reads the caller by id, so the copy it gets back
- * carries the same withheld role as `req.user`. Every other method is inherited unchanged.
+ * Wraps a `users` adapter for a service that re-reads the key's owner by id, so the copy it gets
+ * back carries the same withheld role as `req.user`. Every other method is inherited unchanged.
  */
-export function requesterScopedUsers<R extends { findById: (id: string) => PromiseLike<AdminFlagged | null> }>(
-  req: ApiKeyRequest,
-  users: R
-): R {
-  if (!req.apiKeyInfo || apiKeyGrantsAdmin(req.apiKeyInfo.scopes) || !req.user) return users;
-  const requesterId = String(req.user.id);
+export function ownerWithheldUsers<R extends UsersById>(ownerId: string, users: R): R {
   const scoped: R = Object.create(users);
   scoped.findById = async (id: string) => {
     const user = await users.findById(id);
-    return user && String(id) === requesterId ? withholdAdminRole(user) : user;
+    return user && String(id) === ownerId ? withholdAdminRole(user) : user;
   };
   return scoped;
+}
+
+export function requesterScopedUsers<R extends UsersById>(req: ApiKeyRequest, users: R): R {
+  if (!req.user || !adminRoleWithheldFor(req.apiKeyInfo)) return users;
+  return ownerWithheldUsers(String(req.user.id), users);
 }
