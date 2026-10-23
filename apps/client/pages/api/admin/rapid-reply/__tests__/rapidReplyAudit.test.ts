@@ -12,6 +12,7 @@ const h = vi.hoisted(() => ({
     deletePrompt: vi.fn(),
     activateVersion: vi.fn(),
     setActive: vi.fn(),
+    createVersion: vi.fn(),
     findByModelPair: vi.fn(),
   },
   mappings: {
@@ -76,10 +77,10 @@ type Handler = (req: unknown, res: unknown) => Promise<void>;
 const call = async (
   handler: unknown,
   method: 'POST' | 'PUT' | 'DELETE',
-  options: { body?: Record<string, unknown>; id?: string } = {}
+  options: { body?: Record<string, unknown>; id?: string; isAdmin?: boolean } = {}
 ) => {
   const { req, res } = createMocks({ method, body: options.body ?? {}, query: options.id ? { id: options.id } : {} });
-  (req as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true, email: 'a@example.com' };
+  (req as Record<string, unknown>).user = { id: 'admin-1', isAdmin: options.isAdmin ?? true, email: 'a@example.com' };
   await (handler as Handler)(req, res);
   return { req, res };
 };
@@ -95,7 +96,7 @@ const mapping = {
 };
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  vi.resetAllMocks();
   h.audit.mockResolvedValue(null);
 });
 
@@ -151,6 +152,35 @@ describe('rapid reply prompts admin audit', () => {
     expect(h.audit.mock.calls[0][1]).toMatchObject({
       target: { kind: 'settings', id: 'p1' },
       details: { promptId: 'p1-v2', changedFields: ['name'], name: { before: 'Concise', after: 'Brief' } },
+    });
+  });
+
+  it('records a new version under the parent without prompt content', async () => {
+    h.prompts.findById.mockResolvedValue({ ...prompt, id: 'p1-v2', parentId: 'p1', version: 2 });
+    h.prompts.createVersion.mockResolvedValue({ ...prompt, id: 'p1-v3', parentId: 'p1', version: 3 });
+    const { res } = await call(promptById, 'PUT', {
+      id: 'p1-v2',
+      body: { content: 'SECRET X', createNewVersion: true },
+    });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(h.audit).toHaveBeenCalledTimes(1);
+    expect(h.audit.mock.calls[0][1]).toMatchObject({
+      action: 'settings.rapid_reply_prompt.updated',
+      target: { kind: 'settings', id: 'p1' },
+      details: { promptId: 'p1-v2', changedFields: ['version'], newVersion: true, newVersionId: 'p1-v3' },
+    });
+    expect(JSON.stringify(h.audit.mock.calls[0][1])).not.toContain('SECRET');
+  });
+
+  it('records deleted against the parent when a child version is deleted', async () => {
+    h.prompts.findById.mockResolvedValue({ ...prompt, id: 'p1-v2', parentId: 'p1', version: 2 });
+    h.prompts.deletePrompt.mockResolvedValue(true);
+    await call(promptById, 'DELETE', { id: 'p1-v2' });
+
+    expect(h.audit.mock.calls[0][1]).toMatchObject({
+      target: { kind: 'settings', id: 'p1' },
+      details: { promptId: 'p1-v2' },
     });
   });
 
@@ -308,6 +338,92 @@ describe('rapid reply mappings admin audit', () => {
     expect(details.operations).toHaveLength(100);
     expect(details.operations[0].id).toBe('[object Object]');
     expect(details.operations[1].id).toHaveLength(200);
+  });
+});
+
+describe('rapid reply admin audit on failed writes', () => {
+  const failures: Array<{ name: string; run: () => Promise<unknown> }> = [
+    {
+      name: 'prompt PUT for a missing prompt',
+      run: () => {
+        h.prompts.findById.mockResolvedValue(null);
+        return call(promptById, 'PUT', { id: 'p1', body: { name: 'x' } });
+      },
+    },
+    {
+      name: 'prompt PUT when the update returns nothing',
+      run: () => {
+        h.prompts.findById.mockResolvedValue(prompt);
+        h.prompts.updatePrompt.mockResolvedValue(null);
+        return call(promptById, 'PUT', { id: 'p1', body: { name: 'x' } });
+      },
+    },
+    {
+      name: 'prompt DELETE when nothing was deleted',
+      run: () => {
+        h.prompts.findById.mockResolvedValue(prompt);
+        h.prompts.deletePrompt.mockResolvedValue(false);
+        return call(promptById, 'DELETE', { id: 'p1' });
+      },
+    },
+    {
+      name: 'prompt activate for a missing prompt',
+      run: () => {
+        h.prompts.findById.mockResolvedValue(null);
+        return call(promptActivate, 'POST', { id: 'p1' });
+      },
+    },
+    {
+      name: 'prompt activate when activation fails',
+      run: () => {
+        h.prompts.findById.mockResolvedValue(prompt);
+        h.prompts.activateVersion.mockResolvedValue(false);
+        return call(promptActivate, 'POST', { id: 'p1' });
+      },
+    },
+    {
+      name: 'mapping POST for a duplicate main model',
+      run: () => {
+        h.mappings.findByMainModel.mockResolvedValue(mapping);
+        return call(mappingsIndex, 'POST', {
+          body: { mainModelId: 'main-a', rapidModelId: 'rapid-a', systemPrompt: 'x' },
+        });
+      },
+    },
+    { name: 'mapping POST with missing fields', run: () => call(mappingsIndex, 'POST', { body: {} }) },
+    {
+      name: 'mapping PUT for a missing mapping',
+      run: () => {
+        h.mappings.findById.mockResolvedValue(null);
+        return call(mappingById, 'PUT', { id: 'm1', body: { enabled: false } });
+      },
+    },
+    {
+      name: 'mapping DELETE for a missing mapping',
+      run: () => {
+        h.mappings.findById.mockResolvedValue(null);
+        return call(mappingById, 'DELETE', { id: 'm1' });
+      },
+    },
+  ];
+
+  it.each(failures)('records nothing for $name', async ({ run }) => {
+    await expect(run()).rejects.toThrow();
+    expect(h.audit).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['prompts POST', () => call(promptsIndex, 'POST', { isAdmin: false, body: { name: 'x', content: 'y' } })],
+    ['prompt PUT', () => call(promptById, 'PUT', { isAdmin: false, id: 'p1', body: { name: 'x' } })],
+    ['prompt DELETE', () => call(promptById, 'DELETE', { isAdmin: false, id: 'p1' })],
+    ['prompt activate', () => call(promptActivate, 'POST', { isAdmin: false, id: 'p1' })],
+    ['mappings POST', () => call(mappingsIndex, 'POST', { isAdmin: false, body: {} })],
+    ['mapping PUT', () => call(mappingById, 'PUT', { isAdmin: false, id: 'm1', body: {} })],
+    ['mapping DELETE', () => call(mappingById, 'DELETE', { isAdmin: false, id: 'm1' })],
+    ['mappings bulk', () => call(mappingsBulk, 'POST', { isAdmin: false, body: { operations: [] } })],
+  ])('records nothing for a non-admin on %s', async (_name, run) => {
+    await expect(run()).rejects.toThrow();
+    expect(h.audit).not.toHaveBeenCalled();
   });
 });
 
