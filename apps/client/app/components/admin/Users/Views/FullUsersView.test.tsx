@@ -273,6 +273,13 @@ describe('FullUsersView - page danger zone', () => {
     expect(screen.getByTestId('user-profile-danger-zone')).toBeVisible();
   });
 
+  it('gives the header quick actions accessible names', () => {
+    render(<FullUsersView index={0} user={savedUser()} variant="page" />, { wrapper: TestWrapper });
+
+    expect(screen.getByRole('button', { name: 'Login as User' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Grant Subscription' })).toBeInTheDocument();
+  });
+
   it('opens on the tab its host passes, so ?tab=admin deep-links the danger zone', () => {
     render(<FullUsersView index={0} user={savedUser()} variant="page" tab="admin" onTabChange={vi.fn()} />, {
       wrapper: TestWrapper,
