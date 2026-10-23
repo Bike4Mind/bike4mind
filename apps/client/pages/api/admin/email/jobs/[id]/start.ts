@@ -21,10 +21,10 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     if (!claimed) return null;
 
     await recordAdminActionFromRequest(req, {
-      action: claimed.isTestMode ? 'email.job.test_started' : 'email.job.started',
+      action: 'email.job.started',
       target: { kind: 'settings', id, displayName: claimed.name },
-      summary: `${claimed.isTestMode ? 'started test of' : 'started'} email job ${claimed.name}`,
-      details: { templateId: claimed.templateId, isTestMode: claimed.isTestMode },
+      summary: `started email job ${claimed.name}`,
+      details: { templateId: claimed.templateId },
     });
 
     return claimed;

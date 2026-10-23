@@ -115,9 +115,9 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'identity.sso_provider.deleted': { category: 'identity', severity: 'critical', write: 'strict' },
 
   // Handler coverage: email and messaging
+  // Job entries record the claim and enqueue request, not delivery.
   'email.job.started': { category: 'support', severity: 'critical', write: 'strict' },
   'email.job.sent': { category: 'support', severity: 'critical', write: 'strict' },
-  'email.job.test_started': { category: 'support', severity: 'notice', write: 'strict' },
   'email.job.test_sent': { category: 'support', severity: 'notice', write: 'strict' },
   'email.job.created': { category: 'support', severity: 'notice', write: 'bestEffort' },
   'email.job.updated': { category: 'support', severity: 'notice', write: 'bestEffort' },
