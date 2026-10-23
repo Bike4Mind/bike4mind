@@ -130,6 +130,30 @@ describe('rapid reply prompts admin audit', () => {
     expect(JSON.stringify(h.audit.mock.calls[0][1])).not.toContain('SECRET');
   });
 
+  it('records nothing for a PUT that changes nothing', async () => {
+    h.prompts.findById.mockResolvedValue({ ...prompt, parameters: { temperature: 0.2 } });
+    h.prompts.updatePrompt.mockResolvedValue(prompt);
+    const { res } = await call(promptById, 'PUT', {
+      id: 'p1',
+      body: { name: 'Concise', content: prompt.content, parameters: { temperature: 0.2 } },
+    });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(h.createLog).not.toHaveBeenCalled();
+    expect(h.audit).not.toHaveBeenCalled();
+  });
+
+  it('targets the parent when a child version is edited, and records a rename', async () => {
+    h.prompts.findById.mockResolvedValue({ ...prompt, id: 'p1-v2', parentId: 'p1', version: 2 });
+    h.prompts.updatePrompt.mockResolvedValue({ ...prompt, id: 'p1-v2', name: 'Brief' });
+    await call(promptById, 'PUT', { id: 'p1-v2', body: { name: 'Brief' } });
+
+    expect(h.audit.mock.calls[0][1]).toMatchObject({
+      target: { kind: 'settings', id: 'p1' },
+      details: { promptId: 'p1-v2', changedFields: ['name'], name: { before: 'Concise', after: 'Brief' } },
+    });
+  });
+
   it('records deleted', async () => {
     h.prompts.findById.mockResolvedValue(prompt);
     h.prompts.deletePrompt.mockResolvedValue(true);
@@ -155,6 +179,17 @@ describe('rapid reply prompts admin audit', () => {
     expect(h.audit.mock.calls[0][1]).toMatchObject({
       action: 'settings.rapid_reply_prompt.activated',
       target: { kind: 'settings', id: 'p1' },
+    });
+  });
+
+  it('records activation of a child version against the parent', async () => {
+    h.prompts.findById.mockResolvedValue({ ...prompt, id: 'p1-v2', parentId: 'p1', version: 2 });
+    h.prompts.activateVersion.mockResolvedValue(true);
+    await call(promptActivate, 'POST', { id: 'p1-v2' });
+
+    expect(h.audit.mock.calls[0][1]).toMatchObject({
+      target: { kind: 'settings', id: 'p1' },
+      details: { promptId: 'p1-v2', version: 2 },
     });
   });
 });
@@ -188,9 +223,22 @@ describe('rapid reply mappings admin audit', () => {
     expect(h.audit.mock.calls[0][1]).toMatchObject({
       action: 'settings.rapid_reply_mapping.updated',
       target: { kind: 'settings', id: 'm1' },
-      changes: [{ field: 'enabled', before: true, after: false }, { field: 'systemPrompt' }],
+      changes: [
+        { field: 'enabled', before: true, after: false },
+        { field: 'systemPrompt', before: '[omitted]', after: '[omitted]' },
+      ],
     });
     expect(JSON.stringify(h.audit.mock.calls[0][1])).not.toContain('SECRET');
+  });
+
+  it('records nothing for a PUT that changes nothing', async () => {
+    h.mappings.findById.mockResolvedValue(mapping);
+    h.mappings.updateMapping.mockResolvedValue(mapping);
+    const { res } = await call(mappingById, 'PUT', { id: 'm1', body: { enabled: true, priority: 1 } });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(h.createLog).not.toHaveBeenCalled();
+    expect(h.audit).not.toHaveBeenCalled();
   });
 
   it('records deleted', async () => {
@@ -233,6 +281,33 @@ describe('rapid reply mappings admin audit', () => {
         ],
       },
     });
+  });
+
+  it('records changed field names for bulk updates', async () => {
+    h.mappings.findById.mockResolvedValue(mapping);
+    h.mappings.updateMapping.mockResolvedValue(mapping);
+    await call(mappingsBulk, 'POST', {
+      body: { operations: [{ id: 'm1', action: 'update', data: { priority: 5, systemPrompt: 'NEW SECRET' } }] },
+    });
+
+    expect(h.audit.mock.calls[0][1].details.operations).toEqual([
+      { id: 'm1', action: 'update', success: true, changedFields: ['priority', 'systemPrompt'] },
+    ]);
+    expect(JSON.stringify(h.audit.mock.calls[0][1])).not.toContain('SECRET');
+  });
+
+  it('caps the audited bulk operations and coerces echoed ids to bounded strings', async () => {
+    const operations = Array.from({ length: 150 }, (_, i) => ({ id: `m${i}`, action: 'bogus' }));
+    operations[0] = { id: { $gt: '' } as unknown as string, action: 'bogus' };
+    operations[1] = { id: 'x'.repeat(1000), action: 'bogus' };
+    await call(mappingsBulk, 'POST', { body: { operations } });
+
+    const details = h.audit.mock.calls[0][1].details;
+    expect(details.total).toBe(150);
+    expect(details.truncated).toBe(true);
+    expect(details.operations).toHaveLength(100);
+    expect(details.operations[0].id).toBe('[object Object]');
+    expect(details.operations[1].id).toHaveLength(200);
   });
 });
 

@@ -11,6 +11,12 @@ interface BulkOperation {
   data?: any;
 }
 
+// Keeps the admin audit document well under Mongo's size limit however large the request.
+const MAX_AUDITED_OPERATIONS = 100;
+// id/action are echoed from an unvalidated body, so they may be any shape or length.
+const toAuditText = (value: unknown) =>
+  value === undefined || value === null ? undefined : String(value).slice(0, 200);
+
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
   if (!req.user?.isAdmin) {
     throw new ForbiddenError('Unauthorized. Admin access required.');
@@ -24,8 +30,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
 
   const results = [];
   const auditLogs = [];
+  const changedFieldsByIndex = new Map<number, string[]>();
 
-  for (const operation of operations) {
+  for (const [index, operation] of operations.entries()) {
     const { id, action, data } = operation as BulkOperation;
 
     if (!id || !action) {
@@ -106,6 +113,10 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
         result,
       });
 
+      if (action === 'update') {
+        changedFieldsByIndex.set(index, Object.keys(auditChanges));
+      }
+
       // Add to audit log if there were changes
       if (Object.keys(auditChanges).length > 0) {
         auditLogs.push({
@@ -155,7 +166,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
       total: results.length,
       successful: successCount,
       failed: failureCount,
-      operations: results.map(({ id, action, success }) => ({ id, action, success })),
+      operations: results.slice(0, MAX_AUDITED_OPERATIONS).map(({ id, action, success }, index) => ({
+        id: toAuditText(id),
+        action: toAuditText(action),
+        success,
+        ...(changedFieldsByIndex.has(index) && { changedFields: changedFieldsByIndex.get(index) }),
+      })),
+      ...(results.length > MAX_AUDITED_OPERATIONS && { truncated: true }),
     },
   });
 
