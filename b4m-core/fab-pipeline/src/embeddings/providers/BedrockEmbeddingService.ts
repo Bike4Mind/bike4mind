@@ -1,15 +1,8 @@
 import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
-import { EmbeddingModelInfo, EmbeddingModelProvider, EmbeddingService } from '../EmbeddingService';
+import { EmbeddingModelInfo, EmbeddingService, embeddingModelInfoMap } from '../EmbeddingService';
 import { BedrockEmbeddingModel, bedrockClientConfig } from '@bike4mind/common';
 
-export const BEDROCK_EMBEDDING_MODEL_MAP: Record<BedrockEmbeddingModel, EmbeddingModelInfo<BedrockEmbeddingModel>> = {
-  [BedrockEmbeddingModel.TITAN_TEXT_EMBEDDINGS_V2]: {
-    provider: EmbeddingModelProvider.BEDROCK,
-    model: BedrockEmbeddingModel.TITAN_TEXT_EMBEDDINGS_V2,
-    contextWindow: 8192,
-    dimensions: [1024, 512, 256],
-  },
-};
+export const BEDROCK_EMBEDDING_MODEL_MAP = embeddingModelInfoMap(Object.values(BedrockEmbeddingModel));
 
 export interface BedrockCredentials {
   accessKeyId: string;

@@ -75,7 +75,7 @@ const handler = nextRouteForContract(createEmbeddingsContract, { maxBodySize: 4 
 
     const service = new EmbeddingFactory(resolution.config).createEmbeddingService(model);
     const modelInfo = service.getModelInfo();
-    const plan = planEmbeddingDimensions(model, modelInfo, dimensions);
+    const plan = planEmbeddingDimensions(model, dimensions);
     if (plan.kind === 'unsupported') {
       return res.status(422).json({ error: plan.message });
     }
