@@ -52,12 +52,14 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
 
     await settingsDoc.save();
 
-    await recordAdminActionFromRequest(req, {
-      action: 'settings.agent_ops.repaired',
-      target: { kind: 'settings', id: 'agent_ops', displayName: 'Agent Ops settings' },
-      summary: `repaired Agent Ops settings (${repairsMade.length} fixes)`,
-      details: { repairsMade },
-    });
+    if (repairsMade.length > 0) {
+      await recordAdminActionFromRequest(req, {
+        action: 'settings.agent_ops.repaired',
+        target: { kind: 'settings', id: 'agent_ops', displayName: 'Agent Ops settings' },
+        summary: `repaired Agent Ops settings (${repairsMade.length} fixes)`,
+        details: { repairsMade },
+      });
+    }
 
     res.json({
       success: true,

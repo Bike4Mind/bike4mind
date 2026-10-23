@@ -106,12 +106,14 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     const changes = (['generationLlmModel', 'rateLimitSeconds', 'isEnabled'] as const)
       .filter(field => updateData[field] !== undefined && updateData[field] !== current?.[field])
       .map(field => ({ field, before: current?.[field] ?? null, after: updateData[field] }));
-    await recordAdminActionFromRequest(req, {
-      action: 'settings.agent_ops.updated',
-      target: { kind: 'settings', id: 'agent_ops', displayName: 'Agent Ops settings' },
-      summary: 'updated Agent Ops settings',
-      changes,
-    });
+    if (changes.length > 0) {
+      await recordAdminActionFromRequest(req, {
+        action: 'settings.agent_ops.updated',
+        target: { kind: 'settings', id: 'agent_ops', displayName: 'Agent Ops settings' },
+        summary: 'updated Agent Ops settings',
+        changes,
+      });
+    }
 
     res.json(updatedSettings);
   })
@@ -150,7 +152,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       req.user!.id
     );
 
-    const addedVersion = updatedSettings.versions.reduce((max, v) => Math.max(max, v.versionNumber), 0);
+    const addedVersion = updatedSettings.currentVersionNumber;
     await recordAdminActionFromRequest(req, {
       action: 'settings.agent_ops.version_added',
       target: { kind: 'settings', id: 'agent_ops', displayName: 'Agent Ops settings' },

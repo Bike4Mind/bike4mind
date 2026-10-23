@@ -15,15 +15,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     throw new BadRequestError('Invalid version number');
   }
 
+  let updatedSettings;
   try {
-    const updatedSettings = await agentOpsSettingsRepository.activateMetaPromptVersion(versionNumber);
-    await recordAdminActionFromRequest(req, {
-      action: 'settings.agent_ops.version_activated',
-      target: { kind: 'settings', id: 'agent_ops', displayName: 'Agent Ops settings' },
-      summary: `activated Agent Ops meta-prompt version ${versionNumber}`,
-      details: { version: versionNumber },
-    });
-    res.json(updatedSettings);
+    updatedSettings = await agentOpsSettingsRepository.activateMetaPromptVersion(versionNumber);
   } catch (error) {
     if (error instanceof Error) {
       if (error.message.includes('not found')) {
@@ -32,6 +26,14 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     }
     throw error;
   }
+
+  await recordAdminActionFromRequest(req, {
+    action: 'settings.agent_ops.version_activated',
+    target: { kind: 'settings', id: 'agent_ops', displayName: 'Agent Ops settings' },
+    summary: `activated Agent Ops meta-prompt version ${versionNumber}`,
+    details: { version: versionNumber },
+  });
+  res.json(updatedSettings);
 });
 
 export default handler;

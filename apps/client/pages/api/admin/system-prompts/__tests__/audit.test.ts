@@ -112,6 +112,31 @@ describe('system prompt admin audit', () => {
     expect(JSON.stringify(input)).not.toContain(longContent);
   });
 
+  it('PUT records before/after for enabled and category changes', async () => {
+    const existing = {
+      name: 'P',
+      description: 'a long description',
+      content: 'old',
+      category: 'system',
+      enabled: true,
+      version: 1,
+    };
+    h.repo.findByPromptId
+      .mockResolvedValueOnce(existing)
+      .mockResolvedValueOnce({ ...existing, category: 'agent', enabled: false, version: 2 });
+    h.repo.updatePrompt.mockResolvedValue({ enabled: true });
+    const res = await call(promptHandler, 'PUT', { content: longContent, category: 'agent', enabled: false });
+    expect(res._getStatusCode()).toBe(200);
+    expect(h.repo.toggleEnabled).toHaveBeenCalledWith('p1', false);
+    expect(h.audit.mock.calls[0][1]).toMatchObject({
+      changes: [
+        { field: 'category', before: 'system', after: 'agent' },
+        { field: 'enabled', before: true, after: false },
+      ],
+      details: { changedFields: ['content', 'category', 'enabled'] },
+    });
+  });
+
   it('PUT on a missing row records created', async () => {
     h.repo.findByPromptId.mockResolvedValue(null);
     h.repo.upsertPrompt.mockResolvedValue({ name: 'P', category: 'system', enabled: true, version: 1 });
@@ -153,26 +178,30 @@ describe('system prompt admin audit', () => {
   it('create-version records version_created', async () => {
     h.repo.findByPromptId.mockResolvedValue({ name: 'P', activeVersion: 1 });
     h.repo.createNewVersion.mockResolvedValue({ version: 4, history: [] });
-    const res = await call(createVersion, 'POST', { content: 'body text', setAsActive: false });
+    const res = await call(createVersion, 'POST', { content: 'secret body text', setAsActive: false, enabled: false });
     expect(res._getStatusCode()).toBe(200);
     expect(h.audit).toHaveBeenCalledTimes(1);
-    expect(h.audit.mock.calls[0][1]).toMatchObject({
+    const input = h.audit.mock.calls[0][1];
+    expect(input).toMatchObject({
       action: 'settings.system_prompt.version_created',
       target: { kind: 'settings', id: 'p1', displayName: 'P' },
-      details: { version: 4, setAsActive: false },
+      details: { version: 4, setAsActive: false, enabled: false },
     });
+    expect(JSON.stringify(input)).not.toContain('secret body text');
   });
 
   it('save-version records version_saved', async () => {
     h.repo.findByPromptId.mockResolvedValue({ name: 'P', activeVersion: 1 });
     h.repo.saveToVersion.mockResolvedValue({ ok: true });
-    const res = await call(saveVersion, 'POST', { version: 2, content: 'body text', tags: ['a'] });
+    const res = await call(saveVersion, 'POST', { version: 2, content: 'secret body text', tags: ['a'] });
     expect(res._getStatusCode()).toBe(200);
-    expect(h.audit.mock.calls[0][1]).toMatchObject({
+    const input = h.audit.mock.calls[0][1];
+    expect(input).toMatchObject({
       action: 'settings.system_prompt.version_saved',
       target: { kind: 'settings', id: 'p1' },
-      details: { version: 2, changedFields: ['content', 'tags'] },
+      details: { version: 2, fieldsSent: ['content', 'tags'] },
     });
+    expect(JSON.stringify(input)).not.toContain('secret body text');
   });
 
   it('switch-version records version_switched with the active-version diff', async () => {

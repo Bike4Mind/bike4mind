@@ -80,7 +80,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
       action: 'settings.system_prompt.version_created',
       target: { kind: 'settings', id: promptId, displayName: name || prompt.name },
       summary: `created version ${result.version} of system prompt ${promptId}`,
-      details: { version: result.version, setAsActive },
+      details: { version: result.version, setAsActive, ...(typeof enabled === 'boolean' && { enabled }) },
     });
 
     return res.status(200).json({

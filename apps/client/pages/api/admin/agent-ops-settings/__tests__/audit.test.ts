@@ -85,13 +85,34 @@ describe('agent ops admin audit', () => {
 
   it('POST records version_added without the meta-prompt text', async () => {
     h.repo.getSettings.mockResolvedValue({ versions: [] });
-    h.repo.addMetaPromptVersion.mockResolvedValue({ versions: [{ versionNumber: 1 }, { versionNumber: 2 }] });
+    h.repo.addMetaPromptVersion.mockResolvedValue({
+      versions: [{ versionNumber: 1 }, { versionNumber: 2 }],
+      currentVersionNumber: 2,
+    });
     const res = await call(settingsHandler, 'POST', { metaPrompt: 'private meta prompt', description: 'd' });
     expect(res._getStatusCode()).toBe(200);
     expect(h.audit).toHaveBeenCalledTimes(1);
     const input = h.audit.mock.calls[0][1];
     expect(input).toMatchObject({ action: 'settings.agent_ops.version_added', target, details: { version: 2 } });
     expect(JSON.stringify(input)).not.toContain('private meta prompt');
+  });
+
+  it('POST records the added version when a legacy version has no number', async () => {
+    h.repo.getSettings.mockResolvedValue({ versions: [{}] });
+    h.repo.addMetaPromptVersion.mockResolvedValue({
+      versions: [{ versionNumber: undefined }, { versionNumber: 1 }],
+      currentVersionNumber: 1,
+    });
+    await call(settingsHandler, 'POST', { metaPrompt: 'p', description: 'd' });
+    expect(h.audit.mock.calls[0][1]).toMatchObject({ details: { version: 1 } });
+  });
+
+  it('PUT does not audit when nothing changed', async () => {
+    h.repo.getSettings.mockResolvedValue({ rateLimitSeconds: 60, isEnabled: true, generationLlmModel: 'm1' });
+    h.repo.createOrUpdateSettings.mockResolvedValue({});
+    const res = await call(settingsHandler, 'PUT', { rateLimitSeconds: 60, isEnabled: true });
+    expect(res._getStatusCode()).toBe(200);
+    expect(h.audit).not.toHaveBeenCalled();
   });
 
   it('seed records seeded', async () => {
@@ -124,6 +145,18 @@ describe('agent ops admin audit', () => {
       target,
       details: { repairsMade: ['Fixed version 1 number', 'Activated first version'] },
     });
+  });
+
+  it('repair does not audit when nothing needed fixing', async () => {
+    h.repo.getSettings.mockResolvedValue({ id: 's1' });
+    h.findById.mockResolvedValue({
+      versions: [{ versionNumber: 1, isActive: true }],
+      save: vi.fn().mockResolvedValue(undefined),
+      toJSON: () => ({}),
+    });
+    const res = await call(repair, 'POST');
+    expect(res._getStatusCode()).toBe(200);
+    expect(h.audit).not.toHaveBeenCalled();
   });
 
   it('activate records version_activated', async () => {
