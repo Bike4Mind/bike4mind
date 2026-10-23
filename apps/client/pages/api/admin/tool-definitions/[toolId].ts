@@ -19,6 +19,12 @@ const updateSchema = z.object({
   enabled: z.boolean().optional(),
 });
 
+const codeShortDescription = (description: string): string =>
+  description.length > 100 ? description.substring(0, 100) + '...' : description;
+
+const changedOnly = (changes: { field: string; before: unknown; after: unknown }[]) =>
+  changes.filter(c => JSON.stringify(c.before) !== JSON.stringify(c.after));
+
 // Find tool in code
 function findCodeTool(toolId: string): { toolName: string; description: string; category: string } | null {
   // Check built-in LLM tools
@@ -101,8 +107,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
           toolId,
           toolName: codeTool.toolName,
           description: codeTool.description,
-          shortDescription:
-            codeTool.description.length > 100 ? codeTool.description.substring(0, 100) + '...' : codeTool.description,
+          shortDescription: codeShortDescription(codeTool.description),
           category: codeTool.category,
           tags: [],
           parameters: { type: 'object' },
@@ -175,11 +180,11 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
           action: 'settings.tool_definition.override_updated',
           target: { kind: 'settings', id: toolId, displayName: `${toolId} tool definition` },
           summary: `updated tool definition override ${toolId}`,
-          changes: [
+          changes: changedOnly([
             { field: 'description', before: existingOverride.description, after: description },
             { field: 'shortDescription', before: existingOverride.shortDescription, after: shortDescription },
             { field: 'enabled', before: existingOverride.enabled, after: enabled },
-          ],
+          ]),
         });
 
         return res.json({
@@ -228,11 +233,11 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         action: 'settings.tool_definition.override_updated',
         target: { kind: 'settings', id: toolId, displayName: `${toolId} tool definition` },
         summary: `created tool definition override ${toolId}`,
-        changes: [
+        changes: changedOnly([
           { field: 'description', before: codeTool.description, after: description },
-          { field: 'shortDescription', before: null, after: shortDescription },
-          { field: 'enabled', before: null, after: enabled },
-        ],
+          { field: 'shortDescription', before: codeShortDescription(codeTool.description), after: shortDescription },
+          { field: 'enabled', before: true, after: enabled },
+        ]),
       });
 
       return res.status(201).json({
@@ -309,8 +314,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         toolId,
         toolName: codeTool.toolName,
         description: codeTool.description,
-        shortDescription:
-          codeTool.description.length > 100 ? codeTool.description.substring(0, 100) + '...' : codeTool.description,
+        shortDescription: codeShortDescription(codeTool.description),
         category: codeTool.category,
         tags: [],
         parameters: { type: 'object' },
