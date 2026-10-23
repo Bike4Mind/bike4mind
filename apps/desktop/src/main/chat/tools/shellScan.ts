@@ -48,9 +48,19 @@ export interface ShellScan {
    * has read untrusted content still runs these unasked; see ChatService's DirectoryTurn.untrusted.
    */
   contained: boolean;
+  /** Files the script writes by redirect, `tee`, or as a `cp`/`mv`/`install`/`ln` destination. */
+  writes: string[];
 }
 
 const CHANGES_DIRECTORY = new Set(['cd', 'chdir', 'pushd', 'popd']);
+const COPIES = new Set(['cp', 'mv', 'install', 'ln']);
+// The short flag may close a cluster (`-fsSLo`, `-qO`); curl's `-O` names no path, so case matters.
+const DOWNLOAD_OUTPUT: Record<string, { long: string; short: RegExp }> = {
+  curl: { long: '--output', short: /^-[a-zA-Z]*?o(.*)$/ },
+  wget: { long: '--output-document', short: /^-[a-zA-Z]*?O(.*)$/ },
+};
+const GIT_CONFIG_SETS =
+  /^(set|unset|edit|-e|--edit|--add|--unset|--unset-all|--replace-all|--rename-section|--remove-section|rename-section|remove-section)$/;
 
 /** Programs that only read what they are pointed at, when `containedCommand` also vouches for the call. */
 const READ_PROBES = new Set(['ls', 'cat', 'head', 'tail', 'stat', 'file', 'wc', 'du', 'tree', 'find']);
@@ -204,14 +214,14 @@ function globMayMatchEnvFile(path: string): boolean {
   }
 }
 
-function unquote(text: string): string {
+export function unquote(text: string): string {
   if (text.length < 2) return text;
   const first = text[0];
   return (first === '"' || first === "'") && text.at(-1) === first ? text.slice(1, -1) : text;
 }
 
 /** `~` and `$HOME` are the user's home, which the shell expands before the program sees it. */
-function expandHome(text: string): string {
+export function expandHome(text: string): string {
   const home = homedir();
   if (text === '~') return home;
   if (text.startsWith('~/')) return join(home, text.slice(2));
@@ -754,7 +764,7 @@ export function containedCommand(raw: readonly string[]): boolean {
   return false;
 }
 
-function words(node: Node): string[] {
+export function words(node: Node): string[] {
   const out: string[] = [];
   for (const child of node.namedChildren) {
     if (!child || child.type === 'variable_assignment' || child.type.endsWith('redirect') || child.type === 'comment') {
@@ -796,6 +806,7 @@ export async function scanShell(
     const sends: ShellScan['sends'] = [];
     let setsEnvironment = false;
     const writtenCommands = new Set<number>();
+    const writes = new Set<string>();
     let contained = true;
 
     const noteEnvFile = (raw: string): void => {
@@ -836,6 +847,7 @@ export async function scanShell(
       const tokens = node.children.some(child => child?.type === 'command_name') ? words(node) : [];
       if (tokens.length === 0) return;
       const [program, ...rest] = tokens;
+      noteWrites(program, rest);
 
       if (CHANGES_DIRECTORY.has(program)) {
         await changeDirectory(program, rest);
@@ -906,12 +918,52 @@ export async function scanShell(
       state.cwd = next;
     };
 
+    const noteWrite = (raw: string): void => {
+      const text = expandHome(unquote(raw));
+      if (text && !isDynamic(text) && !HARMLESS_REDIRECT_TARGETS.has(text)) writes.add(resolve(state.cwd, text));
+    };
+
+    const noteWrites = (program: string, rest: string[]): void => {
+      const operands = rest.filter(arg => !arg.startsWith('-'));
+      if (program === 'tee') operands.forEach(noteWrite);
+      for (const [index, arg] of rest.entries()) {
+        const output = DOWNLOAD_OUTPUT[program];
+        const value = !output
+          ? undefined
+          : arg === output.long
+            ? ''
+            : arg.startsWith(`${output.long}=`)
+              ? arg.slice(output.long.length + 1)
+              : output.short.exec(arg)?.[1];
+        if (value !== undefined) noteWrite(value || (rest[index + 1] ?? ''));
+        if (program === 'dd' && arg.startsWith('of=')) noteWrite(arg.slice(3));
+      }
+      const [sub, verb, ...after] = commandTokens([program, ...rest]).slice(1);
+      const setsConfig = [verb, ...after].filter(arg => arg && !arg.startsWith('-')).length >= 2;
+      if (
+        program === 'git' &&
+        sub === 'config' &&
+        (setsConfig || [verb, ...after].some(a => GIT_CONFIG_SETS.test(a ?? '')))
+      ) {
+        const repository = directoryOptionValues([program, ...rest])[0] ?? '.';
+        noteWrite(rest.includes('--global') ? '~/.gitconfig' : join(repository, '.git/config'));
+      }
+      if ((program === 'npm' || program === 'pnpm') && sub === 'pkg' && verb !== 'get') noteWrite('package.json');
+      if (!COPIES.has(program)) return;
+      const option = rest.findIndex(arg => arg === '-t' || arg.startsWith('--target-directory='));
+      const target = option === -1 ? operands.at(-1) : (rest[option].split('=')[1] ?? rest[option + 1]);
+      if (target === undefined) return;
+      noteWrite(target);
+      for (const source of operands) if (source !== target) noteWrite(join(unquote(target), basename(unquote(source))));
+    };
+
     const redirect = async (node: Node): Promise<void> => {
       const target = node.childForFieldName('destination');
       if (!target || target.type === 'number') return;
       const text = unquote(target.text);
       if (HARMLESS_REDIRECT_TARGETS.has(text) || text.startsWith('&')) return;
       if (!WRITE_OPERATORS.has(redirectOperator(node) ?? '')) noteEnvFile(target.text);
+      else noteWrite(target.text);
       await check(target.text, state.cwd);
     };
 
@@ -977,6 +1029,7 @@ export async function scanShell(
       outbound: [...outbound],
       sends: setsEnvironment ? sends.map(({ reason }) => ({ reason, target: null })) : sends,
       contained: contained && commands.length > 0,
+      writes: [...writes],
     };
   } finally {
     tree.delete();

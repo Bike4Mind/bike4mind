@@ -141,6 +141,7 @@ import type { McpManager, McpToolBinding } from './mcp/McpManager';
 import { desktopAppGuidance, mcpServerLines } from './mcp/prompt';
 import { describeFlags, modelSafeRequest, planMcpServerRequest } from './tools/mcpTools';
 import type { AccessStore } from './tools/AccessStore';
+import { forgetSessionWrites } from './tools/sessionScripts';
 import {
   QUESTION_CANCELLED,
   type ApprovalGate,
@@ -1350,6 +1351,8 @@ export class ChatService {
     this.webSearches.forget(sessionId);
     this.scopeVersions.delete(sessionId);
     await this.deps.background?.killSession(sessionId);
+    // Only on delete: an archived conversation can be unarchived, and its scripts must still ask.
+    forgetSessionWrites(sessionId);
     this.deps.sessionClosed?.(sessionId);
     await this.deps.browser?.closeSession(sessionId);
     await this.deps.attachments?.deleteSession(sessionId);
