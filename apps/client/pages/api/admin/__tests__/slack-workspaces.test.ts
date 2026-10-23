@@ -21,6 +21,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 vi.mock('@bike4mind/database', () => ({
   slackDevWorkspaceRepository: { deactivate: h.deactivate, findAllActive: vi.fn() },
+  withTransaction: (fn: () => Promise<unknown>) => fn(),
 }));
 vi.mock('@bike4mind/observability', () => ({ Logger: { info: vi.fn() } }));
 vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
@@ -40,7 +41,7 @@ beforeEach(() => {
 });
 
 describe('PATCH /api/admin/slack-workspaces admin audit', () => {
-  it('records a best-effort deactivated entry after the deactivate', async () => {
+  it('records a strict deactivated entry after the deactivate', async () => {
     h.deactivate.mockResolvedValue({
       id: 'ws-1',
       name: 'Acme',
@@ -60,6 +61,13 @@ describe('PATCH /api/admin/slack-workspaces admin audit', () => {
       details: { slackTeamId: 'T1' },
     });
     expect(h.deactivate.mock.invocationCallOrder[0]).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
+  });
+
+  it('fails the request when the audit write rejects', async () => {
+    h.deactivate.mockResolvedValue({ id: 'ws-1', name: 'Acme', slackTeamId: 'T1', slackAppId: 'A123', isActive: false });
+    h.audit.mockRejectedValue(new Error('audit down'));
+
+    await expect(deactivate()).rejects.toThrow('audit down');
   });
 
   it('does not audit when the workspace does not exist', async () => {

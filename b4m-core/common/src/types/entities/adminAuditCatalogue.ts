@@ -109,7 +109,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'integration.slack_app.created': { category: 'settings', severity: 'critical', write: 'strict' },
   'integration.slack_app.reconnected': { category: 'settings', severity: 'critical', write: 'strict' },
   'integration.slack_app.manifest_updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
-  'integration.slack_workspace.deactivated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'integration.slack_workspace.deactivated': { category: 'settings', severity: 'critical', write: 'strict' },
   'identity.sso_provider.created': { category: 'identity', severity: 'critical', write: 'strict' },
   'identity.sso_provider.updated': { category: 'identity', severity: 'critical', write: 'strict' },
   'identity.sso_provider.deleted': { category: 'identity', severity: 'critical', write: 'strict' },

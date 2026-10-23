@@ -1,4 +1,4 @@
-import { slackDevWorkspaceRepository } from '@bike4mind/database';
+import { slackDevWorkspaceRepository, withTransaction } from '@bike4mind/database';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError, BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
@@ -48,24 +48,27 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     const { workspaceId } = result.data;
     // action is validated by Zod schema to be 'deactivate'
 
-    const workspace = await slackDevWorkspaceRepository.deactivate(workspaceId);
+    const workspace = await withTransaction(async () => {
+      const deactivated = await slackDevWorkspaceRepository.deactivate(workspaceId);
 
-    if (!workspace) {
-      throw new NotFoundError('Workspace not found');
-    }
+      if (!deactivated) {
+        throw new NotFoundError('Workspace not found');
+      }
+
+      await recordAdminActionFromRequest(req, {
+        action: 'integration.slack_workspace.deactivated',
+        target: { kind: 'settings', id: deactivated.id, displayName: deactivated.name || deactivated.slackAppId },
+        summary: `deactivated slack workspace ${deactivated.name || deactivated.id}`,
+        details: { slackTeamId: deactivated.slackTeamId, appId: deactivated.slackAppId },
+      });
+      return deactivated;
+    });
 
     Logger.info('🗑️ [Admin] Deactivated Slack workspace', {
       workspaceId,
       slackTeamId: workspace.slackTeamId,
       workspaceName: workspace.name,
       adminUserId: req.user?.id,
-    });
-
-    await recordAdminActionFromRequest(req, {
-      action: 'integration.slack_workspace.deactivated',
-      target: { kind: 'settings', id: workspace.id, displayName: workspace.name || workspace.slackAppId },
-      summary: `deactivated slack workspace ${workspace.name || workspace.id}`,
-      details: { slackTeamId: workspace.slackTeamId, appId: workspace.slackAppId },
     });
 
     return res.json({
