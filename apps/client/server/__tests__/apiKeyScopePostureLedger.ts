@@ -342,7 +342,6 @@ export const KNOWN_UNPOSTURED = new Set<string>([
   'user-api-keys/[id]/revoke.ts',
   'user-api-keys/[id]/rotate.ts',
   'user-api-keys/billing-organizations.ts',
-  'user-api-keys/eligibility.ts',
   'user-api-keys/index.ts',
   'user/accept-policies.ts',
   'users/[id]/activities/index.ts',
