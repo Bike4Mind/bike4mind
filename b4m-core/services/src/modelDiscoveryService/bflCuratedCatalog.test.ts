@@ -4,6 +4,7 @@ import {
   ModelBackend,
   groupsTouchedByPatch,
   toModelRecord,
+  type BFLImageModel,
   type IModelCatalogRow,
   type IModelCatalogRowInput,
   type ModelInfo,
@@ -20,14 +21,14 @@ import openapi from './sources/__fixtures__/bfl/openapi.json';
  * Every FLUX.2 endpoint BFL lists is discovered, so the adapter table - not the endpoint list -
  * is what decides whether it becomes a product. Without a curated entry the endpoint is
  * introduced under its slug, with no description and no price, and left auto-disabled; with one
- * it arrives named, described and priced. The drop assertion is the issue's literal acceptance,
+ * it arrives named, described and priced. The drop assertion is the stated acceptance criterion,
  * but it passes either way (discovery falls back to the slug for non-OpenAI backends), so the
  * named-and-enabled half is the one that would have caught the defect.
  */
 const RUN_AT = new Date('2026-10-23T10:00:00Z');
 const SEED_AT = new Date('2026-01-01T00:00:00Z');
 
-const FLUX_2_IDS: ImageModels[] = [
+const FLUX_2_IDS: BFLImageModel[] = [
   ImageModels.FLUX_2_MAX,
   ImageModels.FLUX_2_PRO,
   ImageModels.FLUX_2_PRO_PREVIEW,
@@ -97,7 +98,7 @@ describe('BFL discovery over the curated table', () => {
   it('drops no FLUX.2 endpoint', async () => {
     const { dropped } = await plan();
 
-    expect(dropped.filter(record => FLUX_2_IDS.includes(record.modelId as ImageModels))).toEqual([]);
+    expect(dropped.filter(record => FLUX_2_IDS.includes(record.modelId as BFLImageModel))).toEqual([]);
   });
 
   it('leaves every FLUX.2 row named, described and not auto-disabled', async () => {

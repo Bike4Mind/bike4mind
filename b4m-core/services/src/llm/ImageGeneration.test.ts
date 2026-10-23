@@ -1059,6 +1059,37 @@ describe('ImageGenerationService.validateUserCredits input images', () => {
   });
 });
 
+describe('ImageGenerationService.validateUserCredits (model dispatch)', () => {
+  const user = { id: 'user1', currentCredits: 1_000_000 } as any;
+  const logger = { ...silentLogger, updateMetadata: vi.fn() } as unknown as Logger;
+  const validate = (modelInfo: ModelInfo, input: Record<string, unknown>) =>
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (new ImageGenerationService({ db: {} } as any) as any).validateUserCredits(
+      user,
+      modelInfo,
+      1,
+      input,
+      logger,
+      null
+    ) as Promise<{ requiredCredits: number; usdCost: number }>;
+
+  // The BFL branch used to enumerate the FLUX.1 ids, so a curated-but-newer model was accepted by
+  // the render path and then rejected here with "Model not supported" at credit pre-flight.
+  it.each([
+    [ImageModels.FLUX_2_PRO, 0.03],
+    [ImageModels.FLUX_2_KLEIN_4B, 0.014],
+  ])('prices a %s generation at pre-flight instead of throwing', async (model, usd) => {
+    await expect(validate({ id: model } as ModelInfo, { model })).resolves.toMatchObject({
+      usdCost: usd,
+      requiredCredits: usdToCredits(usd),
+    });
+  });
+
+  it('leaves FLUX_PRO_FILL unpriced here, because it bills through the edit path', async () => {
+    await expect(validate({ id: ImageModels.FLUX_PRO_FILL } as ModelInfo, {})).rejects.toThrow(/not supported/i);
+  });
+});
+
 describe('ImageGenerationService.validateUserCredits (per-member cap)', () => {
   // GROK image quality has a flat usdCost, so requiredCredits is deterministic here.
   const modelInfo = { id: ImageModels.GROK_IMAGINE_IMAGE_QUALITY } as ModelInfo;

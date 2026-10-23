@@ -36,7 +36,7 @@ describe('computeImageUsdCostPerImage', () => {
   });
 
   // BFL's published first-megapixel rates (https://bfl.ai/pricing). The preview endpoints
-  // have no published rate and are billed at the sibling they pin, by decision on the ticket.
+  // have no published rate and are billed at the sibling they pin, by product decision.
   it.each([
     [ImageModels.FLUX_2_MAX, 0.07],
     [ImageModels.FLUX_2_PRO, 0.03],

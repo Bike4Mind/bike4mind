@@ -4,6 +4,7 @@ import axios from 'axios';
 import {
   ImageModels,
   BFL_SAFETY_TOLERANCE,
+  type BFLImageModel,
   isBflUltraImageModel,
   isFlux2ImageModel,
   toNonWebpOutputFormat,
@@ -59,7 +60,7 @@ export class BFLImageService extends AIImageService {
     }: {
       n?: number;
       user?: string;
-      model?: ImageModels;
+      model?: BFLImageModel;
       safety_tolerance?: number;
       prompt_upsampling?: boolean;
       seed?: number | null;
@@ -72,8 +73,7 @@ export class BFLImageService extends AIImageService {
     }
   ): Promise<string[]> {
     try {
-      // FLUX.2 renamed the reference-image field to `input_image`; FLUX.1 only knows
-      // `image_prompt` and rejects a field it does not define.
+      // FLUX.2 reads the reference image from `input_image`; FLUX.1 reads `image_prompt`.
       const referenceImageField = isFlux2ImageModel(model) ? 'input_image' : 'image_prompt';
       // Generate n images in parallel
       const urls = await Promise.all(

@@ -93,7 +93,15 @@ describe('getImageModelCapabilities', () => {
       }
     });
 
-    it('advertises the BFL bounds resolveImageDimensions enforces', () => {
+    it('advertises the BFL bounds resolveImageDimensions enforces, FLUX.2 included', () => {
+      expect(getImageModelCapabilities(ImageModels.FLUX_2_PRO).sizing).toMatchObject({
+        kind: 'dimensions',
+        minWidth: BFL_DIMENSION_BOUNDS.min,
+        maxWidth: BFL_DIMENSION_BOUNDS.max,
+        minHeight: BFL_DIMENSION_BOUNDS.min,
+        maxHeight: BFL_DIMENSION_BOUNDS.max,
+        step: BFL_DIMENSION_BOUNDS.step,
+      });
       expect(getImageModelCapabilities(ImageModels.FLUX_PRO_1_1).sizing).toMatchObject({
         kind: 'dimensions',
         minWidth: BFL_DIMENSION_BOUNDS.min,
