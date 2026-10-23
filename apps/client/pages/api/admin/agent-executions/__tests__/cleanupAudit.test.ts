@@ -48,7 +48,7 @@ beforeEach(() => {
 });
 
 describe('POST /api/admin/agent-executions/cleanup admin audit', () => {
-  it('records ops.agent_executions.cleaned_up with the deleted count', async () => {
+  it('records ops.agent_executions.cleaned_up with the marked count and swept ids', async () => {
     const { req, res } = createMocks({ method: 'POST', body: { executionIds: ['e1', 'e2'] } });
     (req as unknown as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
 
@@ -60,7 +60,7 @@ describe('POST /api/admin/agent-executions/cleanup admin audit', () => {
     expect(h.audit.mock.calls[0][1]).toMatchObject({
       action: 'ops.agent_executions.cleaned_up',
       target: { kind: 'system', id: 'agent-executions-cleanup' },
-      details: { requested: 2, deletedCount: 1 },
+      details: { requested: 2, marked: 1, executionIds: ['e1'] },
     });
     expect(h.markAbandoned.mock.invocationCallOrder[0]).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
   });

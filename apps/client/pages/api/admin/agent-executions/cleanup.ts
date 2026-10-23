@@ -122,7 +122,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     action: 'ops.agent_executions.cleaned_up',
     target: { kind: 'system', id: 'agent-executions-cleanup', displayName: 'Agent executions cleanup' },
     summary: `cleaned up ${swept.length} agent executions`,
-    details: { requested: executionIds.length, deletedCount: swept.length, questsSettled: quests.settled },
+    details: {
+      requested: executionIds.length,
+      marked: swept.length,
+      questsSettled: quests.settled,
+      executionIds: swept.map(s => s.id),
+    },
   });
 
   const body: CleanupResponse = {
