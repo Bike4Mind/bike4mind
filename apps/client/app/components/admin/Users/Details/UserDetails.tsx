@@ -15,10 +15,24 @@ import SecurityIcon from '@mui/icons-material/Security';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CancelIcon from '@mui/icons-material/Cancel';
 import EmailIcon from '@mui/icons-material/Email';
-import { Button, Input, Stack, Tooltip, Box, Alert, Typography, Chip, Modal, ModalDialog, ModalClose } from '@mui/joy';
+import {
+  Button,
+  Input,
+  Stack,
+  Tooltip,
+  Box,
+  Alert,
+  Typography,
+  Chip,
+  Modal,
+  ModalDialog,
+  ModalClose,
+  Switch,
+} from '@mui/joy';
 import React, { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { isAxiosError } from 'axios';
 import { api } from '@client/app/contexts/ApiContext';
 
 interface UserDetailsProps {
@@ -34,6 +48,9 @@ const UserDetails: React.FC<UserDetailsProps> = ({ user, editedFields, onFieldCh
   const [isApiKeysModalOpen, setIsApiKeysModalOpen] = useState(false);
   const [isMfaResetOpen, setIsMfaResetOpen] = useState(false);
   const [mfaResetReason, setMfaResetReason] = useState('');
+  // Server-confirmed value from the last toggle; overrides the prop until the refetch lands.
+  const [apiKeyTrustOverride, setApiKeyTrustOverride] = useState<boolean | null>(null);
+  const apiKeyTrustApproved = apiKeyTrustOverride ?? user.apiKeyTrustApproved === true;
   const queryClient = useQueryClient();
 
   const forceResetMFA = useForceResetMFA();
@@ -95,6 +112,21 @@ const UserDetails: React.FC<UserDetailsProps> = ({ user, editedFields, onFieldCh
     },
   });
 
+  const setApiKeyTrust = useMutation({
+    mutationFn: async (approved: boolean) => {
+      const response = await api.post<{ apiKeyTrustApproved: boolean }>(`/api/admin/users/${user.id}/api-key-trust`, {
+        approved,
+      });
+      return response.data;
+    },
+    onSuccess: data => {
+      // Held locally rather than via onFieldChange: this writes through its own endpoint, so it must not stage a pending save.
+      setApiKeyTrustOverride(data.apiKeyTrustApproved);
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+      queryClient.refetchQueries({ queryKey: ['users', user.id] });
+    },
+  });
+
   useEffect(() => {
     setOrganizationName(user.organizationId?.name || '');
   }, [user]);
@@ -139,6 +171,23 @@ const UserDetails: React.FC<UserDetailsProps> = ({ user, editedFields, onFieldCh
         },
       }
     );
+  };
+
+  const handleApiKeyTrustToggle = async (approved: boolean) => {
+    try {
+      await setApiKeyTrust.mutateAsync(approved);
+      toast.success(
+        approved
+          ? `${user.username} is now trusted for personal API keys`
+          : `API key trust revoked for ${user.username}`
+      );
+    } catch (error) {
+      toast.error(
+        isAxiosError<{ message?: string }>(error)
+          ? (error.response?.data?.message ?? error.message)
+          : 'Failed to update API key trust'
+      );
+    }
   };
 
   const handleVerifyEmail = () => {
@@ -362,6 +411,22 @@ const UserDetails: React.FC<UserDetailsProps> = ({ user, editedFields, onFieldCh
               </Button>
             </Stack>
           )}
+
+          <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 2 }}>
+            <Box>
+              <Typography level="title-sm">Trusted for personal API keys</Typography>
+              <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
+                Trust this account for personal API keys without waiting for the account-age or purchase requirement.
+                Email must still be verified.
+              </Typography>
+            </Box>
+            <Switch
+              checked={apiKeyTrustApproved}
+              disabled={setApiKeyTrust.isPending}
+              onChange={event => handleApiKeyTrustToggle(event.target.checked)}
+              slotProps={{ input: { 'data-testid': 'admin-user-api-key-trust-toggle' } }}
+            />
+          </Box>
 
           <Button
             startDecorator={<CardGiftcardIcon />}

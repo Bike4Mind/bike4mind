@@ -429,6 +429,10 @@ export const SettingKeySchema = z.enum([
   'allowOpenRegistration',
   'blockDisposableEmails',
   'blockedEmailDomains',
+  'apiKeyTrustGateEnabled',
+  'apiKeyMinAccountAgeDays',
+  'maxActiveKeysUntrusted',
+  'apiKeyUntrustedRateLimitPerMin',
   'defaultFreeCredits',
   'teamPlanMinSeats',
   'teamPlanMaxSeats',
@@ -2103,6 +2107,18 @@ export const API_SERVICE_GROUPS = {
       { key: 'apiRateLimitProPerMin', order: 3 },
     ],
   },
+  API_KEY_TRUST: {
+    id: 'apiKeyTrustService',
+    name: 'API Key Trust Gate',
+    description: 'Who may mint personal API keys, and how hard keys of untrusted accounts are throttled',
+    icon: 'Key',
+    settings: [
+      { key: 'apiKeyTrustGateEnabled', order: 1 },
+      { key: 'apiKeyMinAccountAgeDays', order: 2 },
+      { key: 'maxActiveKeysUntrusted', order: 3 },
+      { key: 'apiKeyUntrustedRateLimitPerMin', order: 4 },
+    ],
+  },
   DATA_LAKE_AUDIT: {
     id: 'dataLakeAuditService',
     name: 'Data Lake Audit',
@@ -3372,6 +3388,57 @@ export const settingsMap = {
     description:
       'Master switch for self-serve signup. When OFF (default), a valid invite code is required to register. When ON, users may register without an invite code; the Default Free Credits grant is then applied after they verify their email (anti-spam — see Default Free Credits). Safe to enable: the pre-request credit reservation caps every free user at the credits they are granted.',
     category: 'Users',
+  }),
+  // Personal API key trust gate. A trusted account has a verified email AND one of: a
+  // purchase or active plan, an account older than apiKeyMinAccountAgeDays, or admin
+  // approval (user.apiKeyTrustApproved). See userApiKeyService/trust.ts.
+  apiKeyTrustGateEnabled: makeBooleanSetting({
+    key: 'apiKeyTrustGateEnabled',
+    name: 'API Key Trust Gate',
+    defaultValue: true,
+    description:
+      'Restricts personal API key creation for untrusted accounts: an unverified email cannot mint keys, and a verified account that has not purchased, is younger than the minimum age and is not admin-approved is limited to the untrusted key cap. Off restores unrestricted minting and lifts the untrusted rate limit.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.API_KEY_TRUST.id,
+    order: 1,
+  }),
+  apiKeyMinAccountAgeDays: makeNumberSetting({
+    key: 'apiKeyMinAccountAgeDays',
+    name: 'API Key Trust: Minimum Account Age (days)',
+    defaultValue: 7,
+    min: 0,
+    max: 365,
+    int: true,
+    description: 'Account age, in days, after which a verified account is trusted for API keys without a purchase.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.API_KEY_TRUST.id,
+    order: 2,
+  }),
+  maxActiveKeysUntrusted: makeNumberSetting({
+    key: 'maxActiveKeysUntrusted',
+    name: 'API Key Trust: Max Active Keys (untrusted)',
+    defaultValue: 1,
+    min: 0,
+    max: 10,
+    int: true,
+    description:
+      'Active personal API keys a verified but untrusted account may hold. 0 blocks untrusted accounts from minting entirely. Org-billed keys are not limited by this.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.API_KEY_TRUST.id,
+    order: 3,
+  }),
+  apiKeyUntrustedRateLimitPerMin: makeNumberSetting({
+    key: 'apiKeyUntrustedRateLimitPerMin',
+    name: 'API Key Trust: Untrusted Rate Limit (requests/min)',
+    defaultValue: 20,
+    min: 1,
+    max: 10000,
+    int: true,
+    description:
+      "Per-minute ceiling applied at request time to personal API keys whose owner is untrusted, including keys minted before the gate existed. A key's own lower limit still wins.",
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.API_KEY_TRUST.id,
+    order: 4,
   }),
   blockDisposableEmails: makeBooleanSetting({
     key: 'blockDisposableEmails',

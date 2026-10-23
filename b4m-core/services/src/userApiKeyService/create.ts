@@ -25,6 +25,7 @@ import { API_KEY_RATE_LIMIT_DEFAULTS, apiKeyRateLimitSchema } from './rateLimit'
 import { assertNoScopeEscalation } from './assertNoScopeEscalation';
 import { generateCallbackSigningSecret } from './callbackSigningSecret';
 import { computeKeyDigest } from './keyDigest';
+import { ApiKeyTrustAssessment, apiKeyTrustRequiredError } from './trust';
 
 // Sanity ceiling for a per-embed-key spend cap, in whole credits - a guard against
 // fat-finger/overflow values, not a product limit. Shared with the spend-cap update
@@ -134,7 +135,15 @@ interface CreateUserApiKeyAdapters {
   isKnownScope?: (value: string) => boolean;
   /** Expiry of the calling API key, when it has one. A key may not mint a child that outlives it. */
   callerExpiresAt?: Date;
+  /**
+   * The owner's standing with the API key trust gate (trust.ts). REQUIRED for the same reason
+   * `db.agents` is: a creation path that forgot it would silently mint for untrusted accounts.
+   * Ignored for the system user and org-billed keys; the exchange pool takes no assessment.
+   */
+  trust: ApiKeyTrustAssessment;
 }
+
+type MintUserApiKeyAdapters = Omit<CreateUserApiKeyAdapters, 'trust'> & { trust?: ApiKeyTrustAssessment };
 
 export interface CreateUserApiKeyResult {
   id: string;
@@ -197,7 +206,7 @@ export const createUserApiKey = async (
 export const createExchangeUserApiKey = async (
   userId: string,
   parameters: CreateExchangeUserApiKeyParameters,
-  adapters: CreateUserApiKeyAdapters
+  adapters: Omit<CreateUserApiKeyAdapters, 'trust'>
 ): Promise<CreateUserApiKeyResult> =>
   mintUserApiKey(
     userId,
@@ -208,7 +217,7 @@ export const createExchangeUserApiKey = async (
 const mintUserApiKey = async (
   userId: string,
   parameters: MintUserApiKeyParameters,
-  adapters: CreateUserApiKeyAdapters
+  adapters: MintUserApiKeyAdapters
 ): Promise<CreateUserApiKeyResult> => {
   const { db, systemUserId } = adapters;
   const schema = adapters.isKnownScope
@@ -331,7 +340,15 @@ const mintUserApiKey = async (
   // scope) to prevent rogue-admin bypass.
   const isSystemUser = systemUserId && userId === systemUserId;
   const pool = isExchangeKey ? 'oauth-exchange' : 'standard';
-  const cap = isExchangeKey ? MAX_ACTIVE_EXCHANGE_KEYS_PER_USER : MAX_ACTIVE_KEYS_PER_USER;
+  const untrusted = isSystemUser || isExchangeKey || billsOrg ? null : untrustedAssessment(adapters.trust);
+  if (untrusted && (untrusted.reason === 'email_unverified' || untrusted.maxActiveKeys <= 0)) {
+    throw apiKeyTrustRequiredError(untrusted);
+  }
+  const cap = isExchangeKey
+    ? MAX_ACTIVE_EXCHANGE_KEYS_PER_USER
+    : untrusted
+      ? Math.min(untrusted.maxActiveKeys, MAX_ACTIVE_KEYS_PER_USER)
+      : MAX_ACTIVE_KEYS_PER_USER;
 
   const { key, keyPrefix, keyDigest } = generateApiKey();
   const callbackSigningSecret = generateCallbackSigningSecret();
@@ -374,6 +391,7 @@ const mintUserApiKey = async (
   } else {
     const result = await db.userApiKeys.createIfUnderCap(docToCreate, cap, pool);
     if (result === 'at_cap') {
+      if (untrusted) throw apiKeyTrustRequiredError(untrusted);
       const message = isExchangeKey
         ? `Maximum ${MAX_ACTIVE_EXCHANGE_KEYS_PER_USER} concurrently authorized federated apps allowed per user`
         : `Maximum ${MAX_ACTIVE_KEYS_PER_USER} active API keys allowed per user`;
@@ -404,4 +422,10 @@ const mintUserApiKey = async (
     preauthorizedLakeIds: apiKeyDocument.preauthorizedLakeIds,
     createdAt: apiKeyDocument.createdAt,
   };
+};
+
+/** Narrows the caller's assessment to the untrusted case; fails closed when a JS caller omitted it. */
+const untrustedAssessment = (trust: ApiKeyTrustAssessment | undefined) => {
+  if (!trust) throw new Error('createUserApiKey requires a trust assessment');
+  return trust.status === 'untrusted' ? trust : null;
 };

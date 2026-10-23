@@ -5,6 +5,7 @@ import {
   useRevokeUserApiKey,
   useDeleteUserApiKey,
   useBillingOrganizations,
+  useApiKeyEligibility,
   useRotateCallbackSigningSecret,
   CreateUserApiKeyRequest,
   CreateUserApiKeyResponse,
@@ -192,7 +193,7 @@ interface NewKeyModalProps {
   onSuccess: (result: CreateUserApiKeyResponse) => void;
 }
 
-function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
+export function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
   const genericScopes = useGenericApiKeyScopes();
   const scopeModel = useMemo(() => buildScopeModel(genericScopes), [genericScopes]);
   const [formData, setFormData] = useState<CreateUserApiKeyRequest>({
@@ -224,6 +225,7 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
 
   const { data: billingOrgs } = useBillingOrganizations();
   const canBillOrg = (billingOrgs?.length ?? 0) > 0;
+  const { data: eligibility } = useApiKeyEligibility();
 
   const createMutation = useCreateUserApiKey({
     onSuccess: result => {
@@ -264,7 +266,9 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
       scopes: fd.scopes.includes(value) ? fd.scopes.filter(s => s !== value) : [...fd.scopes, value],
     }));
 
-  const canSubmit = !!formData.name.trim() && formData.scopes.length > 0;
+  // Only personal keys are trust-gated; picking an org to bill makes the key org-billed.
+  const blockedByTrust = eligibility?.canCreate === false && !formData.organizationId;
+  const canSubmit = !!formData.name.trim() && formData.scopes.length > 0 && !blockedByTrust;
 
   return (
     <Modal open={open} onClose={onClose} className="project-api-keys-modal">
@@ -281,6 +285,12 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
         </Typography>
 
         <Stack spacing={2.5} className="project-api-keys-modal-content">
+          {eligibility?.canCreate === false && (
+            <Alert color="warning" variant="soft" data-testid="api-key-trust-alert">
+              {eligibility.message}
+            </Alert>
+          )}
+
           <FormControl required className="project-api-keys-name-control">
             <FormLabel className="project-api-keys-name-label">Name</FormLabel>
             <Input
@@ -1914,6 +1924,8 @@ export default function UserApiKeysTab() {
   const { data, isLoading, error, refetch } = useGetUserApiKeys();
   const { data: billingOrgs } = useBillingOrganizations();
   const orgNameById = new Map((billingOrgs ?? []).map(org => [org.id, org.name]));
+  const { data: eligibility } = useApiKeyEligibility();
+  const createBlockedByTrust = eligibility?.canCreate === false && (billingOrgs?.length ?? 0) === 0;
   const [showNewKeyModal, setShowNewKeyModal] = useState(false);
   const [showKeyCreatedModal, setShowKeyCreatedModal] = useState(false);
   const [newlyCreatedKey, setNewlyCreatedKey] = useState('');
@@ -2047,9 +2059,19 @@ export default function UserApiKeysTab() {
                   <RefreshIcon />
                 </IconButton>
               </Tooltip>
-              <Button startDecorator={<AddIcon />} onClick={() => setShowNewKeyModal(true)} variant="solid">
-                Create API Key
-              </Button>
+              <Tooltip title={createBlockedByTrust ? eligibility?.message : undefined}>
+                <span>
+                  <Button
+                    startDecorator={<AddIcon />}
+                    onClick={() => setShowNewKeyModal(true)}
+                    variant="solid"
+                    disabled={createBlockedByTrust}
+                    data-testid="api-keys-create-btn"
+                  >
+                    Create API Key
+                  </Button>
+                </span>
+              </Tooltip>
             </Box>
           </Box>
 
