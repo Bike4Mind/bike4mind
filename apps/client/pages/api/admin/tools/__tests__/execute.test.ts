@@ -97,19 +97,6 @@ describe('POST /api/admin/tools/execute', () => {
     });
   });
 
-  it('records an admin_tool.executed entry with the tool name for a non-modal tool', async () => {
-    mockExecute.mockResolvedValue({ success: true });
-    const { run } = call({ body: { tool: 'lookup', params: { action: 'get' } } });
-    await run();
-
-    expect(mockAudit).toHaveBeenCalledTimes(1);
-    expect(mockAudit.mock.calls[0][1]).toMatchObject({
-      action: 'settings.admin_tool.executed',
-      target: { kind: 'settings', id: 'lookup' },
-      details: { toolName: 'lookup' },
-    });
-  });
-
   it('records nothing when the tool run failed, such as for an unregistered tool name', async () => {
     mockExecute.mockResolvedValue({ success: false, error: 'Tool not found' });
     await call({ body: { tool: 'no_such_tool', params: { action: 'get' } } }).run();

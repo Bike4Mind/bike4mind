@@ -4,12 +4,7 @@ import { ForbiddenError } from '@bike4mind/utils';
 import { initializeServerAdminTools, getServerAdminToolService } from '@client/server/tools/adminToolsServer';
 import { collectModalChanges } from '@client/server/tools/modalOperations';
 import { recordModalChanges } from '@client/server/tools/recordModalChanges';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { AdminToolContext, AdminToolParams, ApiKeyScope } from '@bike4mind/common';
-
-const MODAL_TOOL_NAME = 'modal';
-// Tools that never write; everything else is recorded as an admin tool run.
-const READ_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set(['help']);
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
   asyncHandler(async (req: any, res: any) => {
@@ -46,15 +41,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
     const { result, changes } = await collectModalChanges(() => adminToolService.execute(tool, context, toolParams));
 
     await recordModalChanges(req, changes, 'admin-tool');
-    // A failed run (including an unregistered tool name) changed nothing worth auditing.
-    if (result.success && tool !== MODAL_TOOL_NAME && !READ_ONLY_TOOL_NAMES.has(tool)) {
-      await recordAdminActionFromRequest(req, {
-        action: 'settings.admin_tool.executed',
-        target: { kind: 'settings', id: String(tool), displayName: `admin tool ${String(tool)}` },
-        summary: `ran admin tool ${String(tool)}`,
-        details: { toolName: tool, toolAction: toolParams.action },
-      });
-    }
 
     return res.json(result);
   })
