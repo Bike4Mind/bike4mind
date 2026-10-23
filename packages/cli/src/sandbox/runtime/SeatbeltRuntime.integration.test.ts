@@ -4,7 +4,7 @@
  */
 import { describe, it, expect, afterAll } from 'vitest';
 import { execSync } from 'child_process';
-import { existsSync, mkdirSync, rmSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import path from 'path';
 import os from 'os';
 import { SeatbeltRuntime } from './SeatbeltRuntime.js';
@@ -46,6 +46,49 @@ describe.skipIf(process.platform !== 'darwin')('SeatbeltRuntime integration', ()
       cleanupWrapped(wrapped.cleanupPaths);
     }
   });
+
+  it.each([true, false])(
+    'protects missing metadata and credentials with write confinement %s',
+    writeOnlyToWorkingDir => {
+      const fixture = mkdtempSync(path.join(os.tmpdir(), 'b4m-seatbelt-security-'));
+      try {
+        const cwd = path.join(fixture, 'workspace');
+        mkdirSync(path.join(cwd, '.git'), { recursive: true });
+        const credentialPath = path.join(fixture, 'credential');
+        writeFileSync(credentialPath, 'dummy-token');
+        const commands = [
+          `cat "${credentialPath}"`,
+          `touch "${path.join(cwd, '.git/config')}"`,
+          `mkdir "${path.join(cwd, '.git/hooks')}"`,
+          `mkdir "${path.join(cwd, '.bike4mind')}"`,
+        ];
+        for (const command of commands) {
+          const wrapped = runtime.wrapCommand({
+            command,
+            cwd,
+            filesystemConfig: {
+              writeOnlyToWorkingDir,
+              allowedReadPaths: [fixture, credentialPath],
+              deniedPaths: [credentialPath],
+            },
+            networkEnabled: false,
+          });
+          try {
+            expect(() =>
+              execSync(wrapped.commandString, { encoding: 'utf-8', timeout: 10000, stdio: 'pipe' })
+            ).toThrow();
+          } finally {
+            cleanupWrapped(wrapped.cleanupPaths);
+          }
+        }
+        expect(existsSync(path.join(cwd, '.git/config'))).toBe(false);
+        expect(existsSync(path.join(cwd, '.git/hooks'))).toBe(false);
+        expect(existsSync(path.join(cwd, '.bike4mind'))).toBe(false);
+      } finally {
+        rmSync(fixture, { recursive: true, force: true });
+      }
+    }
+  );
 
   it('allows writing to CWD', () => {
     const testFile = path.join(TEST_DIR, 'write-test.txt');
