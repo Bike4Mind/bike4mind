@@ -5,6 +5,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import { withholdAdminRole } from '@server/auth/apiKeyAdminScope';
 
 const m = vi.hoisted(() => ({
   adminList: vi.fn(),
@@ -84,14 +85,22 @@ const note = (overrides: Record<string, unknown> = {}) => ({
 type Handler = (req: unknown, res: unknown) => Promise<unknown>;
 async function call(
   handler: unknown,
-  opts: { method: string; isAdmin?: boolean; query?: Record<string, string>; body?: unknown; keyScopes?: string[] }
+  opts: {
+    method: string;
+    isAdmin?: boolean;
+    withheldAdmin?: boolean;
+    query?: Record<string, string>;
+    body?: unknown;
+    keyScopes?: string[];
+  }
 ) {
   const { req, res } = createMocks({
     method: opts.method as 'GET',
     query: opts.query ?? {},
     body: opts.body as object,
   });
-  Object.assign(req, { user: { id: 'admin-1', isAdmin: opts.isAdmin ?? true }, logger: { warn: vi.fn() } });
+  const user = { id: 'admin-1', isAdmin: opts.isAdmin ?? true };
+  Object.assign(req, { user: opts.withheldAdmin ? withholdAdminRole(user) : user, logger: { warn: vi.fn() } });
   if (opts.keyScopes) Object.assign(req, { apiKeyInfo: { scopes: opts.keyScopes } });
   const error = await (handler as Handler)(req, res).then(
     () => undefined,
@@ -197,7 +206,7 @@ describe('GET /api/admin/release-notes', () => {
     m.findOne.mockResolvedValue(note({ releaseTag: 'v2026.10.23.2' }));
     const { error, body } = await call(listHandler, {
       method: 'GET',
-      isAdmin: false,
+      withheldAdmin: true,
       query: { tag: 'v2026.10.23.2' },
       keyScopes: ['release-notes:write'],
     });
@@ -208,12 +217,23 @@ describe('GET /api/admin/release-notes', () => {
   it('still refuses a release-notes:write key without the admin role that browses without a tag', async () => {
     const { error } = await call(listHandler, {
       method: 'GET',
-      isAdmin: false,
+      withheldAdmin: true,
       query: {},
       keyScopes: ['release-notes:write'],
     });
     expect(error?.statusCode).toBe(403);
     expect(m.adminList).not.toHaveBeenCalled();
+  });
+
+  it('refuses a release-notes:write key whose owner is not an admin', async () => {
+    const { error } = await call(listHandler, {
+      method: 'GET',
+      isAdmin: false,
+      query: { tag: 'v2026.10.23.2' },
+      keyScopes: ['release-notes:write'],
+    });
+    expect(error?.statusCode).toBe(403);
+    expect(m.findOne).not.toHaveBeenCalled();
   });
 
   it('leaves an admin:* key free to browse without a tag', async () => {
@@ -376,7 +396,7 @@ describe('PATCH /api/admin/release-notes/[id] with a release-notes:write key', (
     m.attachVideo.mockResolvedValue({ kind: 'ok', note: note({ video, editedAt: null }) });
     const { error, status } = await call(editHandler, {
       method: 'PATCH',
-      isAdmin: false,
+      withheldAdmin: true,
       query: { id: ID },
       body: { video },
       keyScopes: ['release-notes:write'],
@@ -384,6 +404,18 @@ describe('PATCH /api/admin/release-notes/[id] with a release-notes:write key', (
     expect(error).toBeUndefined();
     expect(status).toBe(200);
     expect(m.attachVideo).toHaveBeenCalledWith(ID, video);
+  });
+
+  it('refuses a release-notes:write key whose owner is not an admin', async () => {
+    const { error } = await call(editHandler, {
+      method: 'PATCH',
+      isAdmin: false,
+      query: { id: ID },
+      body: { video: { landscapeUrl: 'https://d111.cloudfront.net/wide.mp4' } },
+      keyScopes: ['release-notes:write'],
+    });
+    expect(error?.statusCode).toBe(403);
+    expect(m.attachVideo).not.toHaveBeenCalled();
   });
 
   it('sets the video through attachVideo, which leaves editedAt alone, never through edit', async () => {

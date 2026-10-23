@@ -5,7 +5,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { decodeTimeIdCursor, encodeTimeIdCursor } from '@server/utils/cursorPagination';
 import { ForbiddenError, UnprocessableEntityError } from '@bike4mind/server-utils/utils/errors';
 import { loadReleaseNotesConfig, toAdminReleaseNote } from '@bike4mind/server-utils/releaseNotes/adminReleaseNotes';
-import { isReleaseNotesWriteOnlyKey } from '@server/releaseNotes/releaseNotesWriteOnlyKey';
+import { canAdministerReleaseNotes, isReleaseNotesWriteOnlyKey } from '@server/releaseNotes/releaseNotesWriteOnlyKey';
 
 const QuerySchema = z.object({
   status: z.enum(['scheduled', 'published', 'hidden']).default('scheduled'),
@@ -19,7 +19,7 @@ const api = baseApi({ requiredScopes: [ApiKeyScope.ADMIN, ApiKeyScope.RELEASE_NO
 const handler = api.get(async (req, res) => {
   // The job key holds release-notes:write and no admin scope, so apiKeyAuth withholds the owner's admin
   // role on req.user; the narrow form that key gets is enforced below.
-  if (!req.user?.isAdmin && !isReleaseNotesWriteOnlyKey(req)) {
+  if (!canAdministerReleaseNotes(req)) {
     throw new ForbiddenError('Unauthorized. Admin access required.');
   }
 
