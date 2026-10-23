@@ -25,6 +25,13 @@ describe('DeepSeekBedrockBackend identity reminder', () => {
     expect(body.system?.[0].text).toBe(`You are terse.\n\n${REMINDER}`);
   });
 
+  it('adds the reminder as a system field when the caller supplies only user turns', () => {
+    const body = payloadOf([{ role: 'user', content: 'hi' }]);
+
+    expect(body.system).toEqual([{ text: REMINDER }]);
+    expect(body.messages).toEqual([{ role: 'user', content: [{ text: 'hi' }] }]);
+  });
+
   it('carries the reminder into the demoted user turn when the payload is system-only', () => {
     const body = payloadOf([{ role: 'system', content: 'Summarise this session.' }]);
 

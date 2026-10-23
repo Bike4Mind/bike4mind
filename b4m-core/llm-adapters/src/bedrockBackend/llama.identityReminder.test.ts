@@ -26,6 +26,18 @@ describe('LlamaBedrockBackend identity reminder', () => {
     expect(prompt).toBe(`System: ${REMINDER}\n\nHuman: hi\n\nAssistant:`);
   });
 
+  it('appends the reminder only to the last System: block when the call carries several', () => {
+    const prompt = promptOf([
+      { role: 'system', content: 'You are terse.' },
+      { role: 'user', content: 'hi' },
+      { role: 'system', content: 'Retrieved file content.' },
+    ]);
+
+    expect(prompt).toBe(
+      `System: You are terse.\n\nHuman: hi\n\nSystem: Retrieved file content.\n\n${REMINDER}\n\nAssistant:`
+    );
+  });
+
   it('leaves the prompt byte-identical when the caller opts out', () => {
     const prompt = promptOf(
       [
