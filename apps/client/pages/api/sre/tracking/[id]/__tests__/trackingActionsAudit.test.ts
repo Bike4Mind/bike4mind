@@ -155,8 +155,30 @@ describe('SRE tracking actions admin audit', () => {
     expect(h.audit.mock.calls[0][1]).toMatchObject({
       action: 'ops.sre.tracking_retried',
       target: { kind: 'system', id: TRACKING_ID },
-      details: { previousStatus: 'failed' },
+      details: { previousStatus: 'failed', dispatched: true },
     });
     expect(h.sendToQueue.mock.invocationCallOrder[0]).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
+  });
+
+  it('retry records a blocked GitHub dispatch with its reason', async () => {
+    h.findFullById.mockResolvedValue({ ...trackingDoc('failed'), source: 'GITHUB_ISSUE', githubIssueNumber: 7 });
+    vi.mocked(GitHubService.forSystem).mockResolvedValue({
+      getIssue: vi
+        .fn()
+        .mockResolvedValue({ number: 7, state: 'open', title: 't', html_url: 'u', body: null, labels: [] }),
+    } as unknown as Awaited<ReturnType<typeof GitHubService.forSystem>>);
+    vi.mocked(dispatchIssueToSre).mockResolvedValueOnce({ dispatched: false, reason: 'label-mismatch' } as Awaited<
+      ReturnType<typeof dispatchIssueToSre>
+    >);
+
+    const { res } = await post(retryHandler);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(h.audit).toHaveBeenCalledTimes(1);
+    expect(h.audit.mock.calls[0][1]).toMatchObject({
+      action: 'ops.sre.tracking_retried',
+      summary: 'retry of SRE tracking fp-1 blocked (label-mismatch)',
+      details: { source: 'GITHUB_ISSUE', dispatched: false, reason: 'label-mismatch' },
+    });
   });
 });
