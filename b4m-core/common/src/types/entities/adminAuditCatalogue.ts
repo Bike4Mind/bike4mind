@@ -138,7 +138,6 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'settings.modal.created': { category: 'settings', severity: 'info', write: 'bestEffort' },
   'settings.modal.updated': { category: 'settings', severity: 'info', write: 'bestEffort' },
   'settings.modal.deleted': { category: 'settings', severity: 'info', write: 'bestEffort' },
-  'settings.admin_tool.executed': { category: 'settings', severity: 'info', write: 'bestEffort' },
   'settings.release_note.updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
   'settings.release_note.status_changed': { category: 'settings', severity: 'notice', write: 'bestEffort' },
   'settings.business_link.created': { category: 'settings', severity: 'info', write: 'bestEffort' },
