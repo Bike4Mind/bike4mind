@@ -85,8 +85,8 @@ const handler = baseApi().patch(
     if (changes.length > 0) {
       await recordAdminActionFromRequest(req, {
         action: 'ops.sre.pattern_updated',
-        target: { kind: 'settings', id, displayName: `SRE pattern ${id}` },
-        summary: `updated SRE pattern ${id}`,
+        target: { kind: 'settings', id, displayName: updated.name || `SRE pattern ${id}` },
+        summary: `updated SRE pattern ${updated.name || id}`,
         changes,
       });
     }

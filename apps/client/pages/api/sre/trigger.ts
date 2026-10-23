@@ -64,24 +64,34 @@ const handler = baseApi().post(
       throw new BadRequestError('SRE config missing github owner/repo');
     }
 
+    const recordTriggerAudit = (results: TriggerResultItem[], blockedReason?: string) => {
+      const dispatchedCount = results.filter(r => r.dispatched).length;
+      return recordAdminActionFromRequest(req, {
+        action: 'ops.sre.run_triggered',
+        target: { kind: 'system', id: 'sre-trigger', displayName: 'SRE manual trigger' },
+        summary: `triggered SRE, dispatched ${dispatchedCount} of ${issueNumbers.length} issues in ${systemRepo}`,
+        details: {
+          repoSlug: systemRepo,
+          issueNumbers,
+          dispatched: dispatchedCount,
+          ...(blockedReason ? { blockedReason } : {}),
+        },
+      });
+    };
+
     // Check per-repo enablement and GitHub source enablement
     const repoConfig = resolveFullConfig(config, systemRepo);
-    if (!repoConfig) {
-      res.status(200).json({
-        results: issueNumbers.map(n => ({ issueNumber: n, dispatched: false, reason: 'repo-not-configured' })),
-      });
-      return;
-    }
-    if (!repoConfig.enabled) {
-      res.status(200).json({
-        results: issueNumbers.map(n => ({ issueNumber: n, dispatched: false, reason: 'repo-disabled' })),
-      });
-      return;
-    }
-    if (!repoConfig.sources.github.enabled) {
-      res.status(200).json({
-        results: issueNumbers.map(n => ({ issueNumber: n, dispatched: false, reason: 'github-source-disabled' })),
-      });
+    const blockedReason = !repoConfig
+      ? 'repo-not-configured'
+      : !repoConfig.enabled
+        ? 'repo-disabled'
+        : !repoConfig.sources.github.enabled
+          ? 'github-source-disabled'
+          : undefined;
+    if (!repoConfig || blockedReason) {
+      const results = issueNumbers.map(n => ({ issueNumber: n, dispatched: false, reason: blockedReason }));
+      await recordTriggerAudit(results, blockedReason);
+      res.status(200).json({ results });
       return;
     }
 
@@ -165,17 +175,7 @@ const handler = baseApi().post(
       }
     }
 
-    const dispatchedCount = results.filter(r => r.dispatched).length;
-    await recordAdminActionFromRequest(req, {
-      action: 'ops.sre.run_triggered',
-      target: { kind: 'system', id: 'sre-trigger', displayName: 'SRE manual trigger' },
-      summary: `triggered SRE, dispatched ${dispatchedCount} of ${issueNumbers.length} issues in ${systemRepo}`,
-      details: {
-        repoSlug: systemRepo,
-        issueNumbers,
-        dispatched: dispatchedCount,
-      },
-    });
+    await recordTriggerAudit(results);
 
     res.status(200).json({ results });
   })
