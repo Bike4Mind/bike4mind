@@ -86,6 +86,16 @@ describe('PUT /api/admin/tool-definitions/[toolId] admin audit', () => {
     expect(h.updateDescription.mock.invocationCallOrder[0]).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
   });
 
+  it('leaves unchanged fields out of the update diff', async () => {
+    h.findByToolId.mockResolvedValue({ ...EXISTING, description: BODY.description, enabled: true });
+    await invoke('PUT', BODY);
+
+    expect(h.audit.mock.calls[0][1].changes).toEqual([
+      { field: 'shortDescription', before: 'old short', after: BODY.shortDescription },
+    ]);
+    expect(h.updateDescription.mock.invocationCallOrder[0]).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
+  });
+
   it('records override_updated when creating the first override', async () => {
     h.findByToolId.mockResolvedValue(null);
     const { res } = await invoke('PUT', BODY);
@@ -95,6 +105,10 @@ describe('PUT /api/admin/tool-definitions/[toolId] admin audit', () => {
     expect(h.audit.mock.calls[0][1]).toMatchObject({
       action: 'settings.tool_definition.override_updated',
       target: { kind: 'settings', id: TOOL_ID },
+      changes: [
+        { field: 'description', before: 'Search the web for current information.', after: BODY.description },
+        { field: 'shortDescription', before: 'Search the web for current information.', after: BODY.shortDescription },
+      ],
     });
     expect(h.createOverride.mock.invocationCallOrder[0]).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
   });

@@ -87,11 +87,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       action: 'settings.gear_override.updated',
       target: { kind: 'settings', id: key, displayName: `${key} gear override` },
       summary: `updated gear override ${key}`,
-      changes: Object.entries(fields).map(([field, after]) => ({
-        field: `${key}.${field}`,
-        before: previousFields[field] ?? null,
-        after,
-      })),
+      changes: Object.entries(fields)
+        .filter(([field, after]) => JSON.stringify(previousFields[field] ?? null) !== JSON.stringify(after))
+        .map(([field, after]) => ({ field: `${key}.${field}`, before: previousFields[field] ?? null, after })),
     });
     return res.status(200).json({ override: updated });
   });

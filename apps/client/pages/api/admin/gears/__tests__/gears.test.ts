@@ -77,6 +77,12 @@ describe('PUT /api/admin/gears admin audit', () => {
     expect(h.findOneAndUpdate.mock.invocationCallOrder[0]).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
   });
 
+  it('leaves submitted fields whose value did not change out of the diff', async () => {
+    await invoke(indexHandler, { method: 'PUT', body: { key: 'daily', credits: 10, enabled: false } });
+
+    expect(h.audit.mock.calls[0][1].changes).toEqual([{ field: 'daily.enabled', before: null, after: false }]);
+  });
+
   it('does not audit an unknown gear', async () => {
     const { res } = await invoke(indexHandler, { method: 'PUT', body: { key: 'ghost', credits: 0 } });
 
