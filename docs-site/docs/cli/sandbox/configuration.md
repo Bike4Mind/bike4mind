@@ -121,6 +121,8 @@ On macOS (Seatbelt), access to denied paths is rejected. On Linux (Bubblewrap), 
 
 Must be `true` for the network proxy to start. When disabled, sandboxed commands have unrestricted network access.
 
+On macOS the sandbox profile permits only loopback traffic, so direct connections to other hosts are blocked and outbound traffic to them has to go through the proxy. On Linux the proxy is advisory: it is applied through proxy environment variables, and a process that ignores them can still connect directly. Node's built-in `fetch` honors the proxy only on recent Node releases (24.3 and newer are known to work); on older versions it connects directly and fails inside the sandbox.
+
 ### `allowedDomains`
 
 **Type:** `string[]` | **Default:** (see full schema above)
