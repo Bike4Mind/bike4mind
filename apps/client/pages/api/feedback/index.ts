@@ -185,7 +185,7 @@ function renderFeedbackLinksHtml(links: FeedbackDeepLinks | null): string {
 
 /**
  * Decides where feedback-to-email sends go for a given deploy stage, mirroring
- * resolveFeedbackSlackRoute (@server/integrations/slack/slack) so the two channels can't drift
+ * resolveFeedbackSlackRoute (@bike4mind/server-utils/integrations/slack/slack) so the two channels can't drift
  * apart on the same stage-leak bug. Non-production stages deliberately do NOT fall back to
  * FeedbackReceiveEmail - that fallback is exactly the leak this resolver closes (a real internal
  * recipient list otherwise inherited from a non-prod stage into the prod feedback inbox).

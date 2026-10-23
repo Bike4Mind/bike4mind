@@ -1,9 +1,9 @@
 /**
  * The hosted cron handler and the self-host worker's scheduled task
- * (`@server/modelDiscovery/scheduledRun`) must reach `runModelDiscovery` with the
+ * (`@bike4mind/server-utils/modelDiscovery/scheduledRun`) must reach `runModelDiscovery` with the
  * same wiring. Asserted against one spy so a driver that grows its own adapters
  * fails here. The worker-side cases live in
- * apps/client/server/modelDiscovery/scheduledRun.test.ts; the mock setup below mirrors it.
+ * packages/server-utils/src/modelDiscovery/scheduledRun.test.ts; the mock setup below mirrors it.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';

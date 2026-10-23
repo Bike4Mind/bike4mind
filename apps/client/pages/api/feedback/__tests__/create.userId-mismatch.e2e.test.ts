@@ -25,7 +25,7 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
 
 /**
  * End-to-end regression test for the real chain: POST handler -> logEvent -> incrementUserCounter
- * -> User.findById. Deliberately does NOT mock @server/utils/analyticsLog or the database models,
+ * -> User.findById. Deliberately does NOT mock @bike4mind/server-utils/utils/analyticsLog or the database models,
  * because a mock would hide the real Mongoose CastError this bug produces -- the handler must
  * pass logEvent the same resolved id it already used to build the saved document, not the raw,
  * client-controlled request-body userId.
