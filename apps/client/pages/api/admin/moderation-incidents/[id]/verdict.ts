@@ -341,21 +341,39 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
       `[NCMEC] submission accepted for incident ${incidentId}, reportId=${ncmecReportId}; persisting to DB`
     );
 
-    // A failed audit rolls this write back and the request 500s with the incident left in
-    // confirmed_csam; the reportId logged above lets an admin finish it with mark_reported.
+    // A failed audit rolls this write back and leaves the incident in confirmed_csam. Persist
+    // the reportId outside the transaction so retry_finish (idempotent) can complete it.
     const adminId = req.user.id;
-    const updated = await withTransaction(async () => {
-      const reported = await imageModerationIncidentRepository.updateReviewStatus(
-        incidentId,
-        'reported',
-        ncmecReportId,
-        adminId
+    let updated;
+    try {
+      updated = await withTransaction(async () => {
+        const reported = await imageModerationIncidentRepository.updateReviewStatus(
+          incidentId,
+          'reported',
+          ncmecReportId,
+          adminId
+        );
+        if (reported) {
+          await recordVerdict(req, { incidentId, userId: claimed.userId }, body.verdict, { ncmecReportId });
+        }
+        return reported;
+      });
+    } catch (err) {
+      req.logger.error(
+        `[NCMEC] marking incident ${incidentId} reported failed after NCMEC accepted reportId=${ncmecReportId}: ${(err as Error).message}`
       );
-      if (reported) {
-        await recordVerdict(req, { incidentId, userId: claimed.userId }, body.verdict, { ncmecReportId });
-      }
-      return reported;
-    });
+      await imageModerationIncidentRepository
+        .setNcmecReportId(incidentId, ncmecReportId)
+        .catch(persistErr =>
+          req.logger.error(
+            `[NCMEC] failed to persist reportId for incident ${incidentId}: ${(persistErr as Error).message}`
+          )
+        );
+      return res.status(500).json({
+        error: `NCMEC accepted the report (reportId=${ncmecReportId}) but recording it failed. Incident left in confirmed_csam -- use retry_finish to complete it.`,
+        ncmecReportId,
+      });
+    }
     if (!updated) {
       req.logger.warn(
         `[NCMEC] DB update skipped for incident ${incidentId} (already reported); NCMEC reportId=${ncmecReportId}`
