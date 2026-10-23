@@ -43,6 +43,8 @@ vi.mock('@server/utils/adminAudit', async importOriginal => {
     denySelfAdminAction: (...a: unknown[]) => mockDeny(...a),
   };
 });
+const { mockEmitBillingEvent } = vi.hoisted(() => ({ mockEmitBillingEvent: vi.fn() }));
+vi.mock('@server/analytics/signupEvents', () => ({ emitBillingEvent: mockEmitBillingEvent }));
 vi.mock('@server/services/purgeDeletedUserData', () => ({
   purgeDeletedUserData: (...a: unknown[]) => mockPurge(...a),
   readUserIntegrationGrants: (...a: unknown[]) => mockReadGrants(...a),
@@ -71,6 +73,7 @@ beforeEach(() => {
   mockPurge.mockReset().mockResolvedValue(undefined);
   mockReadGrants.mockReset().mockResolvedValue(null);
   mockRecord.mockReset().mockResolvedValue(null);
+  mockEmitBillingEvent.mockReset().mockResolvedValue([]);
   mockWithTransaction.mockReset().mockImplementation((fn: () => unknown) => fn());
   mockDeny.mockReset().mockImplementation(async () => {
     throw new ForbiddenError('Admins cannot perform this action on their own account.');
@@ -90,6 +93,40 @@ describe('DELETE /api/users/[id]/delete', () => {
     expect(mockRepoDelete).toHaveBeenCalledWith('u1');
     expect(mockPurge).toHaveBeenCalledWith('u1', expect.objectContaining({ deletedBy: 'admin1' }));
     expect(res._getJSONData()).toMatchObject({ id: 'u1' });
+  });
+
+  it('reports the deletion to Overwatch, as no action of the user, keyed on a pseudonym', async () => {
+    const deleted = {
+      id: 'u1',
+      level: 'PaidUser',
+      subscribedUntil: '2099-01-01T00:00:00.000Z',
+      createdAt: new Date(Date.now() - 10.5 * 24 * 60 * 60 * 1000),
+    };
+    mockAdminDeleteUser.mockImplementation(async (_admin: string, _p: unknown, { db }: DeleteAdapters) => {
+      await db.users.delete('u1');
+      return deleted;
+    });
+
+    const { call } = await run();
+    await call;
+
+    expect(mockEmitBillingEvent).toHaveBeenCalledTimes(1);
+    const [sent] = mockEmitBillingEvent.mock.calls[0];
+    expect(sent).toMatchObject({
+      user: deleted,
+      event: 'account_deleted',
+      metadata: { wasSubscriber: true, daysSinceSignup: 10 },
+    });
+    // The eventId is sent verbatim beside a hash of this, so it is never the raw user id.
+    expect(sent.occurrence).not.toBe('u1');
+    expect(sent.occurrence).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('reports nothing when the delete never ran', async () => {
+    mockAdminDeleteUser.mockRejectedValue(new Error('not found'));
+    const { call } = await run();
+    await expect(call).rejects.toThrow('not found');
+    expect(mockEmitBillingEvent).not.toHaveBeenCalled();
   });
 
   it('escapes names and email in the admin notification body', async () => {

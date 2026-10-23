@@ -24,7 +24,22 @@ vi.mock('@bike4mind/database', async () => {
 vi.mock('@server/models/Subscription', () => ({
   subscriptionRepository: {
     updateByStripeSubscriptionId: vi.fn().mockResolvedValue({}),
+    findByStripeSubscriptionId: vi.fn().mockResolvedValue(null),
   },
+}));
+
+// The lifecycle events' own rules are covered in signupEvents.test.ts and
+// billingEventDetails.test.ts; here only which events this handler sends.
+const { mockEmitBillingEvent, mockSubscriptionEventUser } = vi.hoisted(() => ({
+  mockEmitBillingEvent: vi.fn(),
+  mockSubscriptionEventUser: vi.fn(),
+}));
+vi.mock('@server/analytics/signupEvents', () => ({ emitBillingEvent: mockEmitBillingEvent }));
+vi.mock('@server/analytics/billingEventDetails', () => ({
+  planDetails: (priceId: string) => ({ plan: `plan:${priceId}`, interval: 'monthly' }),
+  planChangeDirection: () => 'upgrade',
+  rowTimestamps: (row: { updatedAt?: Date }) => ({ updatedAt: row.updatedAt }),
+  subscriptionEventUser: mockSubscriptionEventUser,
 }));
 
 vi.mock('@server/services/organizationService', () => ({
@@ -379,5 +394,137 @@ describe('customerSubscriptionUpdated - stops dunning on a cancel Stripe recorde
     expect(emitMetric).toHaveBeenCalledWith('Lumina5/Entitlements', 'DunningCleanupFailed', 1, {
       reason: 'void_failed',
     });
+  });
+});
+
+describe('customerSubscriptionUpdated - lifecycle events', () => {
+  const payer = { id: 'u1', acquisition: { firstTouch: { source: 'widgets' } } };
+  const rowBefore = (over: Record<string, unknown> = {}) => ({
+    ownerType: 'User',
+    ownerId: 'u1',
+    status: 'active',
+    priceId: 'price_basic',
+    canceledAt: null,
+    updatedAt: new Date('2026-10-01T00:00:00Z'),
+    ...over,
+  });
+  const userSub = (over: Record<string, unknown> = {}) => ({
+    ...buildStripeSub(1),
+    metadata: { userId: 'u1', stage: 'test', ownerType: 'User' },
+    items: {
+      data: [
+        { quantity: 1, price: { id: 'price_basic' }, current_period_start: 1700000000, current_period_end: 1702592000 },
+      ],
+    },
+    ...over,
+  });
+  const run = () => handler({ properties: { subscriptionId: 'sub_stripe_a' } } as any, logger as any);
+  const sentEvents = () => mockEmitBillingEvent.mock.calls.map(([c]) => c.event);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (subscriptionRepository.updateByStripeSubscriptionId as any).mockResolvedValue({ id: 'row' });
+    mockSubscriptionEventUser.mockResolvedValue(payer);
+  });
+
+  it('sends plan_changed when the price moves, naming both plans and keyed on the row version', async () => {
+    (subscriptionRepository.findByStripeSubscriptionId as any).mockResolvedValue(rowBefore());
+    const sub = userSub();
+    sub.items.data[0].price.id = 'price_pro';
+    (stripe.subscriptions.retrieve as any).mockResolvedValue(sub);
+
+    await run();
+
+    expect(mockEmitBillingEvent).toHaveBeenCalledTimes(1);
+    expect(mockEmitBillingEvent).toHaveBeenCalledWith({
+      user: payer,
+      event: 'plan_changed',
+      occurrence: 'sub_stripe_a:plan:2026-10-01T00:00:00.000Z',
+      metadata: {
+        fromPlan: 'plan:price_basic',
+        toPlan: 'plan:price_pro',
+        fromInterval: 'monthly',
+        toInterval: 'monthly',
+        direction: 'upgrade',
+      },
+    });
+  });
+
+  it('sends subscription_cancel_scheduled when a period-end cancel is set', async () => {
+    (subscriptionRepository.findByStripeSubscriptionId as any).mockResolvedValue(rowBefore());
+    (stripe.subscriptions.retrieve as any).mockResolvedValue(
+      userSub({ cancel_at_period_end: true, canceled_at: 1700500000 })
+    );
+
+    await run();
+
+    expect(sentEvents()).toEqual(['subscription_cancel_scheduled']);
+    expect(mockEmitBillingEvent.mock.calls[0][0]).toMatchObject({
+      occurrence: 'sub_stripe_a:cancel:2026-10-01T00:00:00.000Z',
+      metadata: { plan: 'plan:price_basic', interval: 'monthly' },
+    });
+  });
+
+  it('sends subscription_cancel_reverted when that cancel is withdrawn', async () => {
+    (subscriptionRepository.findByStripeSubscriptionId as any).mockResolvedValue(
+      rowBefore({ canceledAt: new Date('2026-09-30T00:00:00Z') })
+    );
+    (stripe.subscriptions.retrieve as any).mockResolvedValue(
+      userSub({ cancel_at_period_end: false, canceled_at: null })
+    );
+
+    await run();
+
+    expect(sentEvents()).toEqual(['subscription_cancel_reverted']);
+  });
+
+  it('sends nothing on an update that repeats the state it had (a renewal)', async () => {
+    (subscriptionRepository.findByStripeSubscriptionId as any).mockResolvedValue(
+      rowBefore({ canceledAt: new Date('2026-09-30T00:00:00Z') })
+    );
+    (stripe.subscriptions.retrieve as any).mockResolvedValue(
+      userSub({ cancel_at_period_end: true, canceled_at: 1700500000 })
+    );
+
+    await run();
+
+    expect(mockEmitBillingEvent).not.toHaveBeenCalled();
+  });
+
+  it('leaves a subscription that is over to the deleted webhook', async () => {
+    (subscriptionRepository.findByStripeSubscriptionId as any).mockResolvedValue(rowBefore());
+    (stripe.subscriptions.retrieve as any).mockResolvedValue(userSub({ status: 'canceled', canceled_at: 1700500000 }));
+
+    await run();
+
+    expect(mockEmitBillingEvent).not.toHaveBeenCalled();
+  });
+
+  it('sends nothing for a subscription with no user to attribute, an organization one', async () => {
+    (subscriptionRepository.findByStripeSubscriptionId as any).mockResolvedValue(
+      rowBefore({ ownerType: 'Organization' })
+    );
+    mockSubscriptionEventUser.mockResolvedValue(null);
+    const sub = userSub();
+    sub.items.data[0].price.id = 'price_pro';
+    (stripe.subscriptions.retrieve as any).mockResolvedValue(sub);
+
+    await run();
+
+    expect(mockEmitBillingEvent).not.toHaveBeenCalled();
+  });
+
+  it('sends nothing for a row this stage does not own, and still syncs when the earlier read fails', async () => {
+    (subscriptionRepository.findByStripeSubscriptionId as any).mockResolvedValue(rowBefore());
+    (subscriptionRepository.updateByStripeSubscriptionId as any).mockResolvedValue(null);
+    (stripe.subscriptions.retrieve as any).mockResolvedValue(userSub({ canceled_at: 1700500000 }));
+    await run();
+    expect(mockEmitBillingEvent).not.toHaveBeenCalled();
+
+    (subscriptionRepository.findByStripeSubscriptionId as any).mockRejectedValue(new Error('db down'));
+    (subscriptionRepository.updateByStripeSubscriptionId as any).mockResolvedValue({ id: 'row' });
+    await run();
+    expect(subscriptionRepository.updateByStripeSubscriptionId).toHaveBeenCalledTimes(2);
+    expect(mockEmitBillingEvent).not.toHaveBeenCalled();
   });
 });

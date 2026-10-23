@@ -157,7 +157,10 @@ export async function emitSignupFunnelEvents(opts: {
   emailVerified: boolean;
   creditsGranted: number;
 }): Promise<void> {
-  const metadata = { method: opts.method };
+  // An account an admin created (create-user, bulk-create-users) is a signup, but not a day its
+  // user was active: `userAction: false` keeps Overwatch from counting them in DAU, or as a new
+  // user, before they have signed in once. Their first real request does that.
+  const metadata = { method: opts.method, ...(opts.method === 'admin' && { userAction: false }) };
   await Promise.all([
     opts.emailVerified && emitFunnelEvent({ user: opts.user, event: 'email_verified', metadata }),
     (opts.emailVerified || opts.creditsGranted > 0) &&

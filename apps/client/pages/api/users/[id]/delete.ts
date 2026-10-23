@@ -22,6 +22,10 @@ import {
   parseAdminActionReason,
   recordAdminActionFromRequest,
 } from '@server/utils/adminAudit';
+import { emitBillingEvent } from '@server/analytics/signupEvents';
+import { wholeDaysBetween } from '@server/analytics/billingEventDetails';
+import { pseudonymizeUserId } from '@server/analytics/pseudonymize';
+import { resolveUserType } from '@server/analytics/resolveUserType';
 
 const deletedUserTarget = (id: string, user: Pick<IUserDocument, 'name' | 'username' | 'email'> | null) => ({
   kind: 'user' as const,
@@ -116,6 +120,22 @@ const handler = baseApi().delete(
         });
       }
     }
+
+    // The account's own churn, for Overwatch: to the host, and to the product the user came
+    // through. An admin's request rather than the user's, so it is marked as no action of theirs.
+    // The occurrence is the pseudonym, never the raw id, which an eventId is sent verbatim beside.
+    // Never throws, and runs after the delete has committed.
+    const daysSinceSignup = wholeDaysBetween(deletedUser.createdAt, new Date());
+    await emitBillingEvent({
+      user: deletedUser,
+      event: 'account_deleted',
+      occurrence: pseudonymizeUserId(deletedUser.id),
+      metadata: {
+        wasSubscriber:
+          resolveUserType({ level: deletedUser.level, subscribedUntil: deletedUser.subscribedUntil }) === 'subscriber',
+        ...(daysSinceSignup !== undefined && { daysSinceSignup }),
+      },
+    });
 
     return res.json(toSafeUser(deletedUser));
   })
