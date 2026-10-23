@@ -131,8 +131,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     cursor = target;
   }
 
-  // A dry run changes nothing, so only an execute pass is audited.
-  if (execute) {
+  // A dry run changes nothing, and an empty page (the end of a paged walk) touched nothing, so neither is audited.
+  if (execute && processedPrincipals > 0) {
     await recordAdminActionFromRequest(req, {
       action: 'ops.memory_ledger.reembedded',
       target: { kind: 'system', id: 'memory-ledger-reembed', displayName: 'Memory ledger re-embed' },

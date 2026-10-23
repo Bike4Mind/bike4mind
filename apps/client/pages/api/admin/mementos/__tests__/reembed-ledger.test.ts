@@ -103,6 +103,11 @@ describe('/api/admin/mementos/reembed-ledger', () => {
     });
   });
 
+  it('does not audit an execute pass over an empty page', async () => {
+    await post({ execute: true });
+    expect(mockAudit).not.toHaveBeenCalled();
+  });
+
   it('rejects a malformed cursor', async () => {
     const res = await post({ after: { principalKind: 'bogus', principalId: 'x', ownerUserId: 'y' } });
     expect(res._getStatusCode()).toBe(400);
