@@ -1,4 +1,5 @@
 import {
+  BFL_IMAGE_MODELS,
   CATALOG_SCHEMA_VERSION,
   ImageModels,
   ModelBackend,
@@ -11,7 +12,7 @@ import {
 } from '@bike4mind/common';
 import { BFLBackend, resolveCatalogRecords } from '@bike4mind/llm-adapters';
 import { describe, expect, it } from 'vitest';
-import { FluxImageCostCalculator } from '../llm/imageCostCalculator/FluxImageCostCalculator';
+import { FluxImageCostCalculator, type FluxModel } from '../llm/imageCostCalculator/FluxImageCostCalculator';
 import { testCredentials } from './__fixtures__/fakes';
 import { planCatalogWrites } from './catalogWrite';
 import { normalizeBflOpenApi } from './sources/bfl';
@@ -79,6 +80,21 @@ describe('FLUX.2 curated catalog entries', () => {
     expect(entry!.supportsImageVariation).toBe(true);
     expect(entry!.supportsSafetyTolerance).toBe(true);
     expect(new FluxImageCostCalculator().getCost({ model: id })).toBeGreaterThan(0);
+  });
+});
+
+describe('curated adapter table invariants', () => {
+  // The adapter table and BFL_IMAGE_MODELS are two hand-maintained lists, and curation is what
+  // makes an endpoint a product. An id in one but not the other still passes discovery, then
+  // fails at credit pre-flight, where isBflImageModel is false and ImageGeneration throws
+  // "Model not supported" (and dispatch would route it to the OpenAI service).
+  it('makes every curated model a dispatchable, positively priced BFL id', async () => {
+    const calculator = new FluxImageCostCalculator();
+
+    for (const model of await bflTable()) {
+      expect(BFL_IMAGE_MODELS, `${model.id} is curated but absent from BFL_IMAGE_MODELS`).toContain(model.id);
+      expect(calculator.getCost({ model: model.id as FluxModel }), `${model.id} has no price`).toBeGreaterThan(0);
+    }
   });
 });
 
