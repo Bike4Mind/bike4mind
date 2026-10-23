@@ -622,3 +622,127 @@ describe('session bookkeeping and delegation tools', () => {
     expect(prompt).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('wrapToolWithPermission: session approval scope', () => {
+  function allowSessionOnce() {
+    return vi.fn().mockResolvedValueOnce({ action: 'allow-session' }).mockResolvedValue({ action: 'allow-once' });
+  }
+
+  it('covers later runs of the approved subcommand and asks for anything else', async () => {
+    const pm = new PermissionManager(new ToolCatalog(), [], []);
+    const prompt = allowSessionOnce();
+    const wrapped = wrap(tool('bash_execute'), prompt, pm);
+
+    await wrapped.toolFn({ command: 'git status' });
+    await wrapped.toolFn({ command: 'git status -s' });
+    expect(prompt).toHaveBeenCalledTimes(1);
+
+    await wrapped.toolFn({ command: 'git log' });
+    expect(prompt).toHaveBeenCalledTimes(2);
+    await wrapped.toolFn({ command: 'curl https://example.com' });
+    expect(prompt).toHaveBeenCalledTimes(3);
+    await wrapped.toolFn({ command: 'git rebase -x true main' });
+    expect(prompt).toHaveBeenCalledTimes(4);
+    expect(prompt.mock.calls[3][4]).toEqual({ sessionScope: null });
+    expect(pm.isSessionTrusted('bash_execute')).toBe(false);
+  });
+
+  it('covers an approved test script with extra args but not another script', async () => {
+    const pm = new PermissionManager(new ToolCatalog(), [], []);
+    const prompt = allowSessionOnce();
+    const wrapped = wrap(tool('bash_execute'), prompt, pm);
+
+    await wrapped.toolFn({ command: 'npm test' });
+    await wrapped.toolFn({ command: 'npm test -- --watch=false' });
+    expect(prompt).toHaveBeenCalledTimes(1);
+
+    await wrapped.toolFn({ command: 'npm run x' });
+    expect(prompt).toHaveBeenCalledTimes(2);
+    expect(prompt.mock.calls[1][4]).toEqual({ sessionScope: null });
+  });
+
+  it.each([
+    'sed -i s/a/b/ f',
+    'cp a .git/hooks/pre-commit',
+    'find . -delete',
+    "awk 'BEGIN{}'",
+    'Git status',
+    'npm create x',
+  ])('offers no session option for %j', async command => {
+    const prompt = vi.fn().mockResolvedValue({ action: 'allow-once' });
+    const wrapped = wrap(tool('bash_execute'), prompt, new PermissionManager(new ToolCatalog(), [], []));
+
+    await wrapped.toolFn({ command });
+
+    expect(prompt.mock.calls[0][4]).toEqual({ sessionScope: null });
+  });
+
+  it('asks when an approved command is chained with another command', async () => {
+    const pm = new PermissionManager(new ToolCatalog(), [], []);
+    pm.trustCommandForSession('bash_execute', 'git status');
+    const prompt = vi.fn().mockResolvedValue({ action: 'allow-once' });
+    const wrapped = wrap(tool('bash_execute'), prompt, pm);
+
+    for (const command of [
+      'git status && rm notes.txt',
+      'git status; touch x',
+      'git status | sh',
+      'git status\ntouch x',
+      'for f in *; do git status; done',
+    ]) {
+      await wrapped.toolFn({ command });
+    }
+
+    expect(prompt).toHaveBeenCalledTimes(5);
+  });
+
+  it('asks for an outbound or high-risk command even when its scope was approved', async () => {
+    const pm = new PermissionManager(new ToolCatalog(), [], []);
+    pm.trustCommandForSession('bash_execute', 'ls');
+    const prompt = vi.fn().mockResolvedValue({ action: 'allow-session' });
+    const wrapped = wrap(tool('bash_execute'), prompt, pm);
+
+    await wrapped.toolFn({ command: 'git push origin main' });
+    await wrapped.toolFn({ command: 'git push origin main' });
+    await wrapped.toolFn({ command: 'ls | xargs curl https://example.com' });
+
+    expect(prompt).toHaveBeenCalledTimes(3);
+  });
+
+  it('passes the scope the session option would remember to the prompt', async () => {
+    const pm = new PermissionManager(new ToolCatalog(), [], []);
+    const prompt = vi.fn().mockResolvedValue({ action: 'allow-once' });
+    const wrapped = wrap(tool('bash_execute'), prompt, pm);
+
+    await wrapped.toolFn({ command: 'git status | head' });
+    await wrapped.toolFn({ command: 'curl https://example.com' });
+
+    expect(prompt.mock.calls[0][4]).toEqual({ sessionScope: ['git status', 'head'] });
+    expect(prompt.mock.calls[1][4]).toEqual({ sessionScope: null });
+  });
+
+  it('never remembers shell stdin for the session', async () => {
+    const pm = new PermissionManager(new ToolCatalog(), [], []);
+    const prompt = vi.fn().mockResolvedValue({ action: 'allow-session' });
+    const wrapped = wrap(tool('write_shell_stdin'), prompt, pm);
+
+    await wrapped.toolFn({ chars: 'ls' });
+    await wrapped.toolFn({ chars: 'ls' });
+
+    expect(prompt).toHaveBeenCalledTimes(2);
+    expect(prompt.mock.calls[0][4]).toEqual({ sessionScope: null });
+  });
+
+  it('keeps whole-tool session trust for a tool without a command', async () => {
+    const pm = new PermissionManager(new ToolCatalog(), [], []);
+    const prompt = allowSessionOnce();
+    const wrapped = wrap(tool('git_commit'), prompt, pm);
+
+    await wrapped.toolFn({ message: 'first' });
+    await wrapped.toolFn({ message: 'second' });
+
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(prompt.mock.calls[0][4]).toEqual({ sessionScope: undefined });
+    expect(pm.isSessionTrusted('git_commit')).toBe(true);
+  });
+});

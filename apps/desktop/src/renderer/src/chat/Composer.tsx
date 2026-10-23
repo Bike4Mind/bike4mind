@@ -42,10 +42,10 @@ import { mergeIntoDraft } from './queuedMessages';
 import { highlightedTokens, insertSkill, matchSkills, skillChipColor, skillQuery } from './skillMenu';
 import { SkillPicker } from './SkillPicker';
 import {
-  contextPercent,
+  allowanceArc,
+  allowanceColor,
+  creditAllowancePercent,
   describeUsage,
-  occupancyArc,
-  occupancyColor,
   usageLabel,
   type ComposerUsage,
 } from './statusLine';
@@ -112,8 +112,8 @@ export function Composer({
    */
   notReady?: string | null;
   /**
-   * What the idle indicator says INSTEAD of a bare "Ready": how full the window is and what is
-   * left to spend. Only the idle case - the three states above all name something the user may
+   * What the idle indicator says INSTEAD of a bare "Ready": the personal credit balance against
+   * its monthly allowance. Only the idle case - the three states above all name something the user may
    * need to act on, and those still win.
    */
   usage?: ComposerUsage | null;
@@ -205,27 +205,12 @@ export function Composer({
   const hasContent = text.trim().length > 0 || attachments.attachments.length > 0;
   const blocked = !!blockedReason || !!notReady;
 
-  /**
-   * The usage the ring reports, in flight or not.
-   *
-   * It used to be blanked while a reply streamed, on the grounds that the turn already has its
-   * own line under the transcript. The two do not report the same fact: TurnStatus counts what
-   * THIS turn has spent so far, and this reports how full the window was when the last request
-   * went out. A turn is also the moment the answer matters most, and a field that empties
-   * itself exactly then is a worse answer than a figure a round trip behind.
-   *
-   * What keeps them from disagreeing is that neither one estimates. The streamed 'usage' events
-   * carry the turn's running bill, which is not window occupancy, so this deliberately does not
-   * read them: the figure holds the last COMPLETED request and steps when the next one lands -
-   * see latestReply, which is where the holding happens. `disabled` and `notReady` stay, because
-   * in those there is no conversation and nothing was ever measured to hold - and with the word
-   * beside it gone, a ring in those states would be a glyph standing for nothing. The dot in the
-   * sidebar is what speaks for them now; see TurnDot.
-   */
   const shownUsage = !disabled && !notReady ? (usage ?? null) : null;
   const usageText = shownUsage && usageLabel(shownUsage);
-  const usageDetail = shownUsage && usageText ? describeUsage(shownUsage, showDollars) : null;
-  const occupancy = shownUsage ? contextPercent(shownUsage.contextTokens, shownUsage.contextLimit) : null;
+  const usageDetail = shownUsage ? describeUsage(shownUsage, showDollars) : null;
+  const allowancePercent = shownUsage
+    ? creditAllowancePercent(shownUsage.credits, shownUsage.monthlyAllowance ?? null)
+    : null;
 
   // See composerInput.ts for what wins here and why.
   const shown = shownSuggestion({ disabled, text, suggestion });
@@ -655,17 +640,6 @@ export function Composer({
 
         {footer}
 
-        {/* The whole status line: one ring, and the detail one hover behind it.
-
-            The dot and the figure that used to flank it are gone, and nothing went with them.
-            A reply in flight already turns the send button into Stop and draws its own line
-            under the transcript; a Code session with no folder has the "Choose a folder" chip
-            a few pixels above, which is the thing to act on rather than a word repeating it;
-            and a window with no conversation says so in the composer's own placeholder. The
-            words those two carried were each the second place something was said.
-
-            The figure itself is not lost either - it is the ring's accessible name, and the
-            tooltip states it in full alongside the balance. See usageLabel. */}
         {shownUsage && (
           <Tooltip
             title={usageDetail ?? ''}
@@ -681,20 +655,17 @@ export function Composer({
             <Box sx={{ display: 'inline-flex' }} data-testid="composer-status">
               <CircularProgress
                 determinate
-                // An occupancy nobody stated draws the bare track: no arc, and dimmed, so
-                // "nothing measured" cannot be read as "the window is empty". A determinate
-                // ring has no other way to say unknown, and the tooltip says it in words.
-                value={occupancy === null ? 0 : occupancyArc(occupancy)}
-                color={occupancyColor(occupancy)}
+                value={allowancePercent === null ? 0 : allowanceArc(allowancePercent)}
+                color={allowanceColor(allowancePercent)}
                 // Sized off the text rather than off Joy's own scale: this sits in a row of
                 // body-xs controls, and the smallest preset is half again as tall as they are.
                 sx={{
                   '--CircularProgress-size': '14px',
                   '--CircularProgress-trackThickness': '2px',
                   '--CircularProgress-progressThickness': '2px',
-                  ...(occupancy === null ? { opacity: 0.5 } : {}),
+                  ...(allowancePercent === null ? { opacity: 0.5 } : {}),
                 }}
-                aria-label={usageText ?? 'Context window'}
+                aria-label={usageText ?? 'Credits'}
                 data-testid="composer-status-ring"
               />
             </Box>

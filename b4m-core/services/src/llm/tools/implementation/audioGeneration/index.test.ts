@@ -166,10 +166,17 @@ describe('audio_generation tool', () => {
 
   it('rejects an over-length sound-effect description before gating or calling the provider', async () => {
     const context = createFakeContext();
-    const result = await run(context, { kind: 'sound_effect', text: 'x'.repeat(1001) });
-    expect(result).toMatch(/too long/i);
+    const result = await run(context, { kind: 'sound_effect', text: 'x'.repeat(451) });
+    expect(result).toMatch(/too long \(max 450 characters\)/i);
     expect(context.onStart).not.toHaveBeenCalled();
     expect(mockGenerate).not.toHaveBeenCalled();
+  });
+
+  it('accepts a sound-effect description of exactly 450 characters', async () => {
+    const context = createFakeContext();
+    const result = await run(context, { kind: 'sound_effect', text: 'x'.repeat(450) });
+    expect(result).not.toMatch(/too long/i);
+    expect(mockGenerate).toHaveBeenCalled();
   });
 
   it('rejects a model-supplied durationSeconds outside 0.5-30 before any paid call', async () => {

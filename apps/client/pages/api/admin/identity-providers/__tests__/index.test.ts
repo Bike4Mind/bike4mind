@@ -22,12 +22,15 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
+  withTransaction: (fn: () => unknown) => fn(),
   identityProviderRepository: {
     findAllWithSecretPresence: (...a: unknown[]) => mockFindAllWithSecretPresence(...a),
     findByEmailDomain: (...a: unknown[]) => mockFindByEmailDomain(...a),
     createIDP: (...a: unknown[]) => mockCreateIDP(...a),
   },
 }));
+
+vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn() }));
 
 import handler from '../index';
 

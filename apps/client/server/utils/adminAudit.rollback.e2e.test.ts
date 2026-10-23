@@ -24,8 +24,10 @@ import {
 import {
   AdminSettings,
   Organization,
+  SlackDevWorkspace,
   organizationRepository,
   scopedSettingsRepository,
+  slackDevWorkspaceRepository,
 } from '@bike4mind/database/infra';
 import { CreditHolderType } from '@bike4mind/common';
 import {
@@ -144,6 +146,19 @@ describe('strict admin audit writes roll back the action on a real replica set',
     ).rejects.toThrow('audit store unavailable');
 
     expect(await scopedSettingsRepository.find({})).toHaveLength(0);
+  });
+
+  it('a failed audit write rolls back a write made through the separate infra repository entry', async () => {
+    const workspace = await SlackDevWorkspace.create({ slackAppId: 'A123', name: 'Acme', isActive: true });
+
+    await expect(
+      withTransaction(async () => {
+        await slackDevWorkspaceRepository.deactivate(workspace.id);
+        await record('integration.slack_workspace.deactivated', failingStore, workspace.id);
+      })
+    ).rejects.toThrow('audit store unavailable');
+
+    expect((await SlackDevWorkspace.findById(workspace.id).lean())?.isActive).toBe(true);
   });
 
   it('an entry the real store rejects also rolls the action back', async () => {
