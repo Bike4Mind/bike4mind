@@ -21,6 +21,11 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@bike4mind/database', () => ({ adminSettingsRepository: {}, agentRepository }));
+vi.mock('@bike4mind/utils', async importActual => ({
+  ...(await importActual<typeof import('@bike4mind/utils')>()),
+  getSettingsMap: vi.fn().mockResolvedValue({}),
+  getSettingsValue: () => 'xi-test-key',
+}));
 vi.mock('@bike4mind/voice', () => ({
   deleteElevenLabsAgent: vi.fn(),
   getElevenLabsAgent: vi.fn(),
@@ -38,7 +43,12 @@ const makeRes = () => {
 describe('PATCH /api/admin/voice-agents/[id]', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    agentRepository.findById.mockResolvedValue({ id: 'agent-1', type: 'voice', name: 'Aria' });
+    agentRepository.findById.mockResolvedValue({
+      id: 'agent-1',
+      type: 'voice',
+      name: 'Aria',
+      elevenLabsAgentId: 'el-agent-1',
+    });
     agentRepository.update.mockResolvedValue(undefined);
   });
 
@@ -49,6 +59,12 @@ describe('PATCH /api/admin/voice-agents/[id]', () => {
     await patch({ description: '' });
 
     expect(agentRepository.update).toHaveBeenCalledWith({ id: 'agent-1', description: 'Aria' });
+  });
+
+  it('falls back to the new name, not the stale one, when Description is cleared alongside a rename', async () => {
+    await patch({ name: 'Nova', description: '' });
+
+    expect(agentRepository.update).toHaveBeenCalledWith(expect.objectContaining({ name: 'Nova', description: 'Nova' }));
   });
 
   it('treats a whitespace-only Description as cleared', async () => {
