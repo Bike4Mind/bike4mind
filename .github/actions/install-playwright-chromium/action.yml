@@ -1,0 +1,57 @@
+name: 'Install Playwright Chromium'
+description: >-
+  Install the Playwright Chromium browser and its system dependencies without
+  letting a slow apt mirror fail the job. The browser download is cached per
+  Playwright version and capped, since the yauzl/Node>=24.16 extraction wedge
+  (playwright#40724) can hang it indefinitely. The apt step is capped
+  separately: the runner image already ships nearly every library Chromium
+  needs (the rest is mostly fonts), so when the mirror crawls past the cap we
+  keep going as long as Chromium actually launches, and fail only if it does
+  not.
+
+  Requires node_modules to be installed in working-directory.
+
+inputs:
+  working-directory:
+    description: 'Directory whose node_modules provides @playwright/test'
+    required: false
+    default: 'apps/client'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Resolve Playwright version
+      id: version
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: echo "version=$(npx playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+
+    - name: Cache Playwright browsers
+      uses: actions/cache@v5
+      with:
+        path: ~/.cache/ms-playwright
+        key: ${{ runner.os }}-${{ runner.arch }}-ms-playwright-chromium-${{ steps.version.outputs.version }}
+
+    - name: Download Chromium
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      # A no-op on a cache hit.
+      run: timeout 5m npx playwright install chromium
+
+    - name: Install Chromium system dependencies
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        # Shorten per-file stalls: apt's defaults let each dead connection sit
+        # for minutes before moving on.
+        printf 'Acquire::Retries "3";\nAcquire::http::Timeout "20";\nAcquire::https::Timeout "20";\n' \
+          | sudo tee /etc/apt/apt.conf.d/80-ci-timeouts > /dev/null
+
+        if timeout 5m npx playwright install-deps chromium; then
+          exit 0
+        fi
+
+        echo "::warning::Playwright system dependency install did not finish (slow apt mirror?); checking whether Chromium launches with the preinstalled libraries"
+        # A kill mid-unpack leaves dpkg half-configured; finish what it started.
+        sudo dpkg --configure -a || true
+        node -e "require('@playwright/test').chromium.launch().then((b) => b.close())"

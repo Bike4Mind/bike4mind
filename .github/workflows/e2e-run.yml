@@ -140,12 +140,7 @@ jobs:
             core.warning(`No recent main commit has staging/deploy=success; ${process.env.STATUS_CONTEXT} status will be skipped.`);
 
       - name: Install Playwright Chromium
-        working-directory: apps/client
-        # Cap the install: the yauzl/Node>=24.16 extraction wedge
-        # (playwright#40724) can hang this step indefinitely, idling to the job
-        # cap. Fail fast instead.
-        timeout-minutes: 8
-        run: npx playwright install chromium --with-deps
+        uses: ./.github/actions/install-playwright-chromium
 
       # A staging deploy in flight swaps the Lambda under the suite, so requests can
       # 401 or 5xx mid-run. When that hits the create-test-user setup it skips the
