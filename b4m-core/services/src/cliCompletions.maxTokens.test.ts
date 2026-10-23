@@ -72,6 +72,7 @@ import { isMemberCreditCapExceeded } from './creditService';
 
 const ADAPTIVE_MODEL = {
   id: 'adaptive-model',
+  type: 'text',
   backend: 'anthropic',
   max_tokens: 128_000,
   can_think: true,
@@ -80,12 +81,14 @@ const ADAPTIVE_MODEL = {
 
 const PLAIN_MODEL = {
   id: 'plain-model',
+  type: 'text',
   backend: 'anthropic',
   max_tokens: 8192,
 };
 
 const GPT5_MODEL = {
   id: ChatModels.GPT5,
+  type: 'text',
   backend: 'openai',
   max_tokens: 128_000,
 };
@@ -259,7 +262,7 @@ describe('executeCompletion - output budget', () => {
    * the one place the REAL resolver meets a capless row.
    */
   describe('a model row declaring no output cap', () => {
-    const CAPLESS_MODEL = { id: 'capless-model', backend: 'anthropic' };
+    const CAPLESS_MODEL = { id: 'capless-model', type: 'text', backend: 'anthropic' };
 
     it('sends a finite budget rather than NaN', async () => {
       availableModels = [CAPLESS_MODEL];

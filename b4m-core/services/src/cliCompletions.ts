@@ -496,6 +496,15 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     );
   }
 
+  // Modality is a property of the model, not its backend: an image/video model routed
+  // through a chat backend cannot be served by this text endpoint.
+  if (modelInfo && modelInfo.type !== 'text') {
+    throw new BadRequestError(
+      `Model '${params.model}' is a ${modelInfo.type} model and cannot be used for text completions.`,
+      { errorCode: UNKNOWN_MODEL_ERROR_CODE }
+    );
+  }
+
   // skipCache: this flag gates money and the serving process may outlive the admin's write to it.
   const settings = await getSettingsMap(db, { names: ['enforceCredits'], skipCache: true });
   const enforceCredits = getSettingsValue('enforceCredits', settings);
