@@ -5,6 +5,7 @@
 // to navigate anywhere outside the bundle it is showing.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { buildFragmentNavScriptTag, HASH_BRIDGE_JS } from './fragmentNav';
+import { renderSandboxedBundle } from './renderSandboxedBundle';
 
 const ORIGIN = window.location.origin;
 const BASE = '/p/u/scope123/my-slug';
@@ -144,12 +145,6 @@ describe('hash bridge (parent) navigate handling', () => {
     expect(fetchDownload).toHaveBeenCalledWith(`${BASE}/files/deck.pdf?download=1`);
   });
 
-  it('accepts a file whose name holds a literal percent sign', () => {
-    runParentBridge(BASE);
-    fromFrame({ b4m: 'navigate', path: `${BASE}/files/100%25%20done.pdf` });
-    expect(fetchDownload).toHaveBeenCalledWith(`${BASE}/files/100%25%20done.pdf`);
-  });
-
   it('navigates the top-level context to a page under the bundle, keeping its fragment', () => {
     runParentBridge(`${BASE}/guide/intro.html`);
     // jsdom performs only same-document navigations, so the target is this page plus a
@@ -177,8 +172,6 @@ describe('hash bridge (parent) navigate handling', () => {
     ['?download=1 on a page', `${BASE}/guide/next.html?download=1`],
     ['?download=1 on the bundle root', `${BASE}?download=1`],
     ['a query string in the fragment', `${BASE}/report.pdf#a?b`],
-    ['a double-encoded slash', `${BASE}/..%252fapi/report.pdf`],
-    ['a double-encoded single dot', `${BASE}/%252e/report.pdf`],
     ['an absolute URL', `https://elsewhere.example${BASE}/report.pdf`],
     ['a protocol-relative URL', `//elsewhere.example${BASE}/report.pdf`],
     ['a non-string', 42],
@@ -188,6 +181,9 @@ describe('hash bridge (parent) navigate handling', () => {
     ['an encoded-dot + dot segment', `${BASE}/%2e./%2e./%2e./%2e./api/users/me`],
     ['an encoded single-dot segment', `${BASE}/%2e/report.pdf`],
     ['a double-encoded dot-dot segment', `${BASE}/%252e%252e/report.pdf`],
+    ['a double-encoded slash', `${BASE}/..%252fapi/report.pdf`],
+    ['a double-encoded single dot', `${BASE}/%252e/report.pdf`],
+    ['an encoded percent sign', `${BASE}/files/100%25.pdf`],
     ['an encoded slash', `${BASE}/..%2fapi/report.pdf`],
     ['a backslash', `${BASE}/..\\..\\api`],
     ['an encoded backslash', `${BASE}/..%5c..%5capi`],
@@ -277,6 +273,66 @@ describe('hash bridge (parent) navigate handling', () => {
   it('does nothing on a page that is not a bundle viewer', () => {
     runParentBridge('/somewhere/else');
     fromFrame({ b4m: 'navigate', path: '/somewhere/else/report.pdf' });
+    expect(fetchDownload).not.toHaveBeenCalled();
+  });
+});
+
+describe('a rendered file link, end to end through the browser URL parser', () => {
+  afterEach(() => {
+    delete (navigator as { userActivation?: unknown }).userActivation;
+  });
+
+  /** Render the link as the server does, click it in the frame, and hand the posted path to the parent. */
+  function route(fileName: string): { posted: unknown[]; fetchDownload: ReturnType<typeof vi.fn> } {
+    window.history.replaceState(null, '', BASE);
+    const { srcdoc } = renderSandboxedBundle({
+      indexHtml: `<html><body><a id="f" href="files/${fileName}">File</a></body></html>`,
+      urlBase: BASE,
+      origin: ORIGIN,
+      visibility: 'private',
+      pagePaths: [BASE],
+      routeBundleLinks: true,
+    });
+    const rendered = new DOMParser().parseFromString(srcdoc, 'text/html');
+    const link = rendered.getElementById('f');
+    const navigationScript = Array.from(rendered.scripts).find(script => script.textContent.includes("b4m:'navigate'"));
+    if (!link || !navigationScript) throw new Error('rendered bundle is missing its link or navigation script');
+    const posted: unknown[] = [];
+    vi.spyOn(window.parent, 'postMessage').mockImplementation((data: unknown) => {
+      posted.push(data);
+    });
+    eval(navigationScript.textContent);
+    document.body.appendChild(link);
+    const click = new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 });
+    link.dispatchEvent(click);
+    expect(click.defaultPrevented).toBe(true);
+
+    const frame = document.createElement('iframe');
+    document.body.appendChild(frame);
+    const fetchDownload = vi.fn();
+    (window as { __b4mFetchDownload?: unknown }).__b4mFetchDownload = fetchDownload;
+    Object.defineProperty(navigator, 'userActivation', { value: { isActive: true }, configurable: true });
+    eval(HASH_BRIDGE_JS);
+    for (const data of posted) window.dispatchEvent(new MessageEvent('message', { data, source: frame.contentWindow }));
+    return { posted, fetchDownload };
+  }
+
+  it.each([
+    ['My Report (final).pdf', 'My%20Report%20(final).pdf'],
+    ['\u65e5\u672c\u8a9e.pdf', '%E6%97%A5%E6%9C%AC%E8%AA%9E.pdf'],
+  ])('opens a file whose name needs percent-encoding: %s', (fileName, encodedName) => {
+    const { posted, fetchDownload } = route(fileName);
+    expect(posted).toEqual([{ b4m: 'navigate', path: `${BASE}/files/${encodedName}` }]);
+    expect(fetchDownload).toHaveBeenCalledWith(`${BASE}/files/${encodedName}`);
+  });
+
+  it.each([
+    ['100%-test.pdf', '100%25-test.pdf'],
+    ['100%-done/report.pdf', '100%25-done/report.pdf'],
+    ['100%2520done.pdf', '100%2520done.pdf'],
+  ])('refuses a percent sign in a file or folder name: %s', (fileName, encodedName) => {
+    const { posted, fetchDownload } = route(fileName);
+    expect(posted).toEqual([{ b4m: 'navigate', path: `${BASE}/files/${encodedName}` }]);
     expect(fetchDownload).not.toHaveBeenCalled();
   });
 });
