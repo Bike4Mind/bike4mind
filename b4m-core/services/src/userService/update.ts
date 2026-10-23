@@ -58,11 +58,11 @@ export const updateUserSchema = z.object({
     .nullable()
     .optional(),
   // `photoUrl` is intentionally NOT in the self-service schema (same reasoning as
-  // `tags` above): it is an S3 key that upload-photo.ts derives server-side and later
-  // dereferences for DELETION (storage.delete + AppFile removal). A self-set value would
-  // let a caller point it at a resource they do not own, turning their next photo upload
-  // into an arbitrary-file delete. The dedicated upload-photo endpoint is the only writer;
-  // secureParameters strips any `photoUrl` a caller sends here.
+  // `tags` above): it is an S3 key that apps/client/pages/api/users/[id]/confirm-photo.ts
+  // writes and later dereferences for DELETION (storage.delete + AppFile removal). A self-set
+  // value would let a caller point it at a resource they do not own, turning their next photo
+  // upload into an arbitrary-file delete. The dedicated confirm-photo endpoint is the only
+  // writer; secureParameters strips any `photoUrl` a caller sends here.
   showCreditsUsed: z.boolean().optional(),
   preferences: z
     .object({
