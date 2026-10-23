@@ -93,8 +93,7 @@ export const registerUser = async (
   params: RegisterUserParameters,
   { db, logger, skipInviteCheck }: RegisterUserAdapters
 ) => {
-  const { email, name, inviteCode, password, metadata, acceptedPolicyVersion, ageAttestation, sourceClientId } =
-    params;
+  const { email, name, inviteCode, password, metadata, acceptedPolicyVersion, ageAttestation, sourceClientId } = params;
 
   // P0-B abuse gate: reject creation unless a current, versioned AUP/ToS acceptance
   // and an 18+ attestation are present. This is the server-side enforcement - the UI checkboxes
@@ -269,6 +268,16 @@ export const registerUser = async (
     }
   }
 
+  // Only a referral invite (issued to a specific inbox) names an inviter; admin bulk codes and
+  // unlimited codes have no single sender to credit.
+  const referredByUserId = invite && !isUnlimitedInvite && invite.email && invite.userId ? invite.userId : null;
+
+  const invitesPerUserSetting = await db.adminSettings.findBySettingName('ReferralInvitesPerUser');
+  const invitesPerUserParsed = settingsMap.ReferralInvitesPerUser.schema.safeParse(invitesPerUserSetting?.settingValue);
+  const numReferralsAvailable = invitesPerUserParsed.success
+    ? invitesPerUserParsed.data
+    : (settingsMap.ReferralInvitesPerUser.defaultValue ?? 3);
+
   const buildUser: Omit<IUserDocument, 'id'> = {
     username,
     email,
@@ -330,7 +339,8 @@ export const registerUser = async (
     pendingEmailExpires: null,
     pendingEmailUsed: null,
     regInvites: [],
-    numReferralsAvailable: 3,
+    referredByUserId,
+    numReferralsAvailable,
     stripeCustomerId: null,
     organizationId: null,
     googleDrive: null,
