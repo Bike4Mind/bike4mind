@@ -312,7 +312,7 @@ Once the stream opens the status is 200 and stays 200. A failure after that poin
 - `code: "provider_error"`: the model provider failed. Retry, or pick another model. The provider's own response body is never forwarded.
 - `code` absent, or any other `code`: show `message` and log `requestId`.
 
-The stream opens with keep-alive comments and a `{ "type": "meta", "requestId": "..." }` event; ignore both. Text arrives as `content` events with a `text` field. With a reasoning model, the text can contain `<think>...</think>` spans (possibly several) holding the model's reasoning; strip them before you show the reply, and never show or log a `thinking` field. A successful stream ends with `data: [DONE]`. An `error` event is terminal and is not followed by `[DONE]`; a stream that ends with neither is incomplete.
+The stream opens with keep-alive comments and a `{ "type": "meta", "requestId": "..." }` event; ignore both. Text arrives as `content` events with a `text` field. With a reasoning model, the text can contain `<think>...</think>` spans (possibly several) holding the model's reasoning; strip them before you show the reply, and never show or log a `thinking` field. A successful stream ends with `data: [DONE]`. An `error` event is terminal and is not followed by `[DONE]`; a stream that ends with neither is incomplete. Check the terminal event's `stopReason` too: `max_tokens` means the reply was truncated, even when `[DONE]` follows. Handle other non-success reasons as an incomplete or unusable reply; see the [streaming guide](../api/completions/streaming.md).
 
 Branch on `code`, never on `message`, which is prose and can change. (The JSON, non-streaming B4M APIs report the credit condition the same way this endpoint does before the stream: HTTP 422 with `errorCode: "insufficient_credits"`.)
 
@@ -573,27 +573,43 @@ async function complete(userId: string, idToken: string, prompt: string): Promis
 
   // From here the status is 200; a failure arrives as an error event.
   let text = '';
+  let stopReason: string | undefined;
   let buffer = '';
   const decoder = new TextDecoder();
   const reader = res.body.getReader();
-  for (let r = await reader.read(); !r.done; r = await reader.read()) {
-    buffer += decoder.decode(r.value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop()!;
-    for (const line of lines) {
-      if (!line.startsWith('data:')) continue;
-      const data = line.slice(5).trim();
-      // Reasoning models wrap their reasoning in <think> spans; never show it to users.
-      if (data === '[DONE]') return text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-      const event = JSON.parse(data);
-      if (event.type === 'error') {
-        if (event.code === 'insufficient_credits') throw new OutOfCreditsError(event.message);
-        throw new Error(`Completion failed (requestId ${event.requestId}): ${event.message}`);
+  try {
+    for (let r = await reader.read(); !r.done; r = await reader.read()) {
+      buffer += decoder.decode(r.value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop()!;
+      for (const line of lines) {
+        if (!line.startsWith('data:')) continue;
+        const data = line.slice(5).trim();
+        // Reasoning models wrap their reasoning in <think> spans; never show it to users.
+        if (data === '[DONE]') {
+          if (stopReason === 'max_tokens') throw new Error('Completion was truncated; increase max_tokens');
+          if (stopReason && !['end_turn', 'stop', 'stop_sequence'].includes(stopReason)) {
+            throw new Error(`Completion did not finish with an answer: ${stopReason}`);
+          }
+          return text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+        }
+        const event = JSON.parse(data);
+        if (event.type === 'error') {
+          if (event.code === 'insufficient_credits') throw new OutOfCreditsError(event.message);
+          throw new Error(`Completion failed (requestId ${event.requestId}): ${event.message}`);
+        }
+        if (typeof event.stopReason === 'string') stopReason = event.stopReason;
+        if (event.type === 'content') text += event.text;
       }
-      if (event.type === 'content') text += event.text;
+    }
+    throw new Error('Completion stream ended without [DONE]');
+  } finally {
+    try {
+      await reader.cancel();
+    } finally {
+      reader.releaseLock();
     }
   }
-  throw new Error('Completion stream ended without [DONE]');
 }
 ```
 

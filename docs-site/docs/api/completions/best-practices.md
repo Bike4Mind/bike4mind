@@ -28,7 +28,9 @@ fetch('https://app.bike4mind.com/api/ai/v1/completions', {
 ```javascript
 // Frontend code
 fetch('/api/my-completion-proxy', {
-  headers: { 'Authorization': `Bearer ${userJWT}` }
+  method: 'POST',
+  headers: { 'Authorization': `Bearer ${userJWT}`, 'Content-Type': 'application/json' },
+  body: JSON.stringify({ model: 'claude-sonnet-5-5', messages })
 });
 
 // Backend code (Node.js/Express)
@@ -53,6 +55,9 @@ app.post('/api/my-completion-proxy', authenticateUser, async (req, res) => {
   // Stream response back to client
   res.status(response.status);
   res.setHeader('Content-Type', response.headers.get('content-type') ?? 'text/event-stream');
+  if (response.headers.has('Retry-After')) {
+    res.setHeader('Retry-After', response.headers.get('Retry-After'));
+  }
   Readable.fromWeb(response.body).pipe(res);
 });
 ```

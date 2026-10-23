@@ -18,25 +18,32 @@ npm install @bike4mind/sdk
 
 ```typescript
 import { createClient } from '@bike4mind/sdk';
+import { CompletionError, withRetry } from './b4m-stream.js';
 
 const b4m = createClient({
   baseUrl: 'https://app.bike4mind.com',
   apiKey: process.env.B4M_API_KEY,
 });
 
-for await (const event of b4m.completions({
-  model: 'claude-sonnet-5-5',
-  messages: [{ role: 'user', content: 'Hello!' }],
-})) {
-  if (event.type === 'content') process.stdout.write(event.text);
-  // The SDK yields in-band error events instead of throwing them
-  if (event.type === 'error') throw new Error(`${event.message} (${event.code}, ${event.requestId})`);
-}
+await withRetry(async () => {
+  let text = ''; // Reset partial output on every attempt
+  for await (const event of b4m.completions({
+    model: 'claude-sonnet-5-5',
+    messages: [{ role: 'user', content: 'Hello!' }],
+  })) {
+    if (event.type === 'content') text += event.text;
+    // The SDK yields in-band error events instead of throwing them
+    if (event.type === 'error') {
+      throw new CompletionError(event.message, { code: event.code, requestId: event.requestId });
+    }
+  }
+  process.stdout.write(text); // Publish only a successful attempt
+});
 
 const models = await b4m.call('listModels');
 ```
 
-`completions()` throws `B4mStreamEndedError` when a stream ends without `[DONE]`. The SDK does not retry; wrap calls in the retry helper below. The rest of this page uses plain `fetch`, which runs in Node 18+ and browsers.
+The SDK sample imports the helpers defined below; save those sections as `b4m-stream.js` first. `completions()` throws `B4mStreamEndedError` when a stream ends without `[DONE]`. The SDK does not retry; wrap calls in the retry helper below. The rest of this page uses plain `fetch`, which runs in Node 18+ and browsers.
 
 ---
 
@@ -45,6 +52,13 @@ const models = await b4m.call('listModels');
 Save this as `b4m-stream.js`. It is the one stream loop and the one error type that the other samples reuse:
 
 ```javascript
+export function retryAfterSeconds(value) {
+  if (value === null || value === undefined || value.trim() === '') return undefined;
+  if (/^\d+$/.test(value.trim())) return Number(value);
+  const date = Date.parse(value);
+  return Number.isNaN(date) ? undefined : Math.max(0, Math.ceil((date - Date.now()) / 1000));
+}
+
 export class CompletionError extends Error {
   constructor(message, { status, code, requestId, retryAfter } = {}) {
     super(message);
@@ -80,7 +94,8 @@ export async function streamCompletion(
     const text = await response.text();
     let parsed = {};
     try {
-      parsed = JSON.parse(text);
+      const body = JSON.parse(text);
+      if (body && typeof body === 'object' && !Array.isArray(body)) parsed = body;
     } catch {
       // Not JSON: fall back to the raw text
     }
@@ -88,7 +103,7 @@ export async function streamCompletion(
       status: response.status,
       code: parsed.errorCode,
       requestId: parsed.request_id,
-      retryAfter: Number(response.headers.get('Retry-After')) || undefined,
+      retryAfter: retryAfterSeconds(response.headers.get('Retry-After')),
     });
   }
 
@@ -130,7 +145,13 @@ export async function streamCompletion(
       }
     }
   } finally {
-    reader.releaseLock();
+    try {
+      await reader.cancel(); // Also stops the upstream request when onEvent throws
+    } catch (cleanupError) {
+      console.warn('Could not cancel completion stream', cleanupError);
+    } finally {
+      reader.releaseLock();
+    }
   }
 
   throw new CompletionError('Stream ended without [DONE] or an error event');
@@ -175,7 +196,7 @@ export async function withRetry(fn, maxAttempts = 3) {
       if (!retryable || attempt >= maxAttempts - 1) throw error;
 
       // Honor Retry-After when present; otherwise back off 1s, 2s, 4s
-      await sleep((error.retryAfter ?? 2 ** attempt) * 1000);
+      await sleep((error.retryAfter ?? error.retryAfterSeconds ?? 2 ** attempt) * 1000);
     }
   }
 }
@@ -187,7 +208,7 @@ import { streamCompletion, withRetry } from './b4m-stream.js';
 await withRetry(() => streamCompletion(body, onEvent, { apiKey: process.env.B4M_API_KEY }));
 ```
 
-A retry restarts the stream from the beginning, so discard any partial output collected by `onEvent` before you call it again.
+A retry restarts the stream from the beginning. Reset accumulators inside `fn` on every attempt, and publish buffered output only after success, as in the SDK example. Do not automatically retry a callback that executes tools or performs other side effects.
 
 ---
 
@@ -262,10 +283,14 @@ The browser calls your own server route, which holds the API key and forwards th
 Never put your API key in browser code. Variables such as `NEXT_PUBLIC_*` are bundled into the page and visible to every visitor.
 :::
 
-Server route (Next.js `app/api/chat/route.ts`), with `B4M_API_KEY` set as a server-only environment variable:
+Server route (Next.js `app/api/chat/route.ts`), with `B4M_API_KEY` set as a server-only environment variable. `authenticateUser` below is your application's authentication and authorization integration: implement it to return the current user and their `canUseAI` permission before enabling this route:
 
 ```typescript
 export async function POST(req: Request) {
+  const user = await authenticateUser(req); // Your app's server-side auth integration
+  if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  if (!user.canUseAI) return Response.json({ error: 'Forbidden' }, { status: 403 });
+
   const upstream = await fetch('https://app.bike4mind.com/api/ai/v1/completions', {
     method: 'POST',
     headers: {
@@ -273,6 +298,7 @@ export async function POST(req: Request) {
       'Content-Type': 'application/json',
     },
     body: await req.text(),
+    signal: req.signal,
   });
 
   // Pass the upstream status and SSE body through unchanged
@@ -280,6 +306,7 @@ export async function POST(req: Request) {
     status: upstream.status,
     headers: {
       'Content-Type': upstream.headers.get('content-type') ?? 'text/event-stream',
+      ...(upstream.headers.has('Retry-After') && { 'Retry-After': upstream.headers.get('Retry-After')! }),
     },
   });
 }
@@ -364,10 +391,12 @@ async function completionWithTools(apiKey: string, userQuery: string) {
   while (true) {
     let toolCalls: { id?: string; name: string; arguments?: string }[] = [];
     let responseText = '';
+    let thinking: unknown[] = [];
 
     await streamCompletion({ model: 'claude-sonnet-5-5', messages, tools }, (event) => {
       if (event.type === 'content' || event.type === 'tool_use') responseText += event.text;
       if (event.type === 'tool_use') toolCalls = event.tools ?? [];
+      if (event.thinking) thinking = event.thinking;
     }, { apiKey });
 
     if (toolCalls.length === 0) return responseText;
@@ -377,7 +406,8 @@ async function completionWithTools(apiKey: string, userQuery: string) {
     messages.push({
       role: 'assistant',
       content: [
-        { type: 'text', text: responseText },
+        ...thinking, // Replay signed thinking/redacted_thinking blocks unchanged
+        ...(responseText ? [{ type: 'text', text: responseText }] : []),
         ...parsed.map((t) => ({ type: 'tool_use', id: t.id, name: t.name, input: t.input })),
       ],
     });
@@ -414,7 +444,11 @@ Client-side limiter. Set the limit to your own plan's limit, listed in the [in-a
 class RateLimiter {
   private requests: number[] = [];
 
-  constructor(private requestsPerMinute: number) {}
+  constructor(private requestsPerMinute: number) {
+    if (!Number.isInteger(requestsPerMinute) || requestsPerMinute < 1) {
+      throw new Error('requestsPerMinute must be a positive integer');
+    }
+  }
 
   async waitForSlot(): Promise<void> {
     const now = Date.now();
@@ -450,10 +484,10 @@ class ProductionB4MClient extends EventEmitter {
   }
 
   async complete(model: string, messages: { role: string; content: string }[]): Promise<string> {
-    await this.rateLimiter.waitForSlot();
-
     let attempt = 0;
     return withRetry(async () => {
+      await this.rateLimiter.waitForSlot();
+      this.emit('reset'); // Consumers discard chunks from a failed attempt
       this.emit('attempt', { attempt: ++attempt, maxRetries: this.maxRetries });
       let full = '';
       try {
@@ -477,7 +511,10 @@ class ProductionB4MClient extends EventEmitter {
 const requestsPerMinute = Number(process.env.B4M_REQUESTS_PER_MINUTE);
 const client = new ProductionB4MClient(process.env.B4M_API_KEY!, requestsPerMinute);
 
-client.on('chunk', (text) => process.stdout.write(text));
+let displayedText = '';
+client.on('reset', () => { displayedText = ''; });
+client.on('chunk', (text) => { displayedText += text; });
+client.on('complete', () => process.stdout.write(displayedText));
 client.on('usage', (usage) => console.log('\nTokens:', usage));
 client.on('failure', (error) => console.error('Error:', error.message));
 

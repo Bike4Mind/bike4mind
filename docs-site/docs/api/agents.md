@@ -8,12 +8,14 @@ https://app.bike4mind.com/api
 ```
 
 ## Authentication
-All agent endpoints require JWT authentication:
+Agent endpoints accept a JWT or a scoped API key:
 ```http
 Authorization: Bearer <your-jwt-token>
 ```
 
 ## Agent Management Endpoints
+
+`GET /api/agents` requires `agents:read` for API keys; create, update, delete and description generation require `agents:write`. JWT calls use the signed-in user's permissions. Session attachment endpoints below use the platform session API.
 
 ### List Agents
 
@@ -215,8 +217,7 @@ POST /agents/{agentId}/generate-description
 
 ```json
 {
-  "description": "A creative and helpful marketing assistant who loves to build engaging content. Known for their perfectionist tendencies and love of puns, they bring both professionalism and humor to every project.",
-  "generatedAt": "2024-01-15T10:30:00Z"
+  "description": "A creative and helpful marketing assistant who loves to build engaging content."
 }
 ```
 
@@ -238,8 +239,8 @@ GET /sessions/{sessionId}/agents
     {
       "id": "agent_123",
       "name": "Marketing Assistant",
-      "avatarUrl": "https://...",
-      "attachedAt": "2024-01-15T10:30:00Z"
+      "description": "Helps with marketing content creation",
+      "visual": { "portraitUrl": "https://example.com/avatar.png" }
     }
   ]
 }
@@ -264,16 +265,10 @@ POST /sessions/{sessionId}/agents
 #### Response
 
 ```json
-{
-  "message": "Agent attached successfully",
-  "agent": {
-    "id": "agent_123",
-    "name": "Marketing Assistant",
-    "avatarUrl": "https://..."
-  },
-  "attachedAt": "2024-01-15T10:30:00Z"
-}
+{ "session": { "id": "665f1c2e9b1d4a0012ab34ef", "agentIds": ["665f1c2e9b1d4a0012ab34cd"] } }
 ```
+
+The response contains the updated session, with more fields than shown.
 
 ### Detach Agent from Session
 
@@ -283,20 +278,17 @@ Remove an agent from a conversation session.
 DELETE /sessions/{sessionId}/agents
 ```
 
-#### Query Parameters
+#### Request Body
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `agentId` | string | Yes | ID of the agent to detach |
+Send `agentId` in a JSON body, rather than the query string:
+
+```json
+{ "agentId": "665f1c2e9b1d4a0012ab34cd" }
+```
 
 #### Response
 
-```json
-{
-  "message": "Agent detached successfully",
-  "detachedAt": "2024-01-15T10:30:00Z"
-}
-```
+Both attach and detach return `{ "session": { ... } }`, containing the updated session. Getting session agents returns `{ "agents": [...] }` with full agent objects, in the same shape as the agent detail endpoint.
 
 ## WebSocket Events
 

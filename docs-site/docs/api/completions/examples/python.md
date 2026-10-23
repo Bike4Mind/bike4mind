@@ -25,6 +25,7 @@ Save this as `b4m_stream.py`. It is the one stream loop and the one error type t
 ```python
 import json
 import time
+from email.utils import parsedate_to_datetime
 from typing import Any, Callable, Dict, Optional
 
 import requests
@@ -44,6 +45,17 @@ class CompletionError(Exception):
         self.retry_after = retry_after
 
 
+def retry_after_seconds(value: Optional[str]) -> Optional[float]:
+    if not value or not value.strip():
+        return None
+    if value.strip().isdigit():
+        return int(value)
+    try:
+        return max(0, parsedate_to_datetime(value).timestamp() - time.time())
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
 def http_error(status: int, text: str, retry_after: Optional[str]) -> CompletionError:
     try:
         body = json.loads(text)
@@ -56,7 +68,7 @@ def http_error(status: int, text: str, retry_after: Optional[str]) -> Completion
         status=status,
         code=body.get("errorCode"),
         request_id=body.get("request_id"),
-        retry_after=int(retry_after) if retry_after and retry_after.isdigit() else None,
+        retry_after=retry_after_seconds(retry_after),
     )
 
 
@@ -92,21 +104,21 @@ def stream_completion(
         CompletionError: On an HTTP error, an in-band error event, a malformed
             event, or a stream that ends without [DONE]
     """
-    response = (session or requests).post(
+    with (session or requests).post(
         f"{base_url}/api/ai/v1/completions",
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
         json=payload,
         stream=True,
-    )
-    if not response.ok:
-        raise http_error(response.status_code, response.text, response.headers.get("Retry-After"))
+    ) as response:
+        if not response.ok:
+            raise http_error(response.status_code, response.text, response.headers.get("Retry-After"))
 
-    for sse in SSEClient(response).events():
-        if sse.data == "[DONE]":
-            return
-        on_event(parse_event(sse.data, response.status_code))
+        for sse in SSEClient(response).events():
+            if sse.data == "[DONE]":
+                return
+            on_event(parse_event(sse.data, response.status_code))
 
-    raise CompletionError("Stream ended without [DONE] or an error event")
+        raise CompletionError("Stream ended without [DONE] or an error event")
 ```
 
 Use it:
@@ -143,7 +155,7 @@ def retry_delay(error: CompletionError, attempt: int, max_attempts: int) -> Opti
     if not retryable or attempt >= max_attempts - 1:
         return None
     # Honor Retry-After when present; otherwise back off 1s, 2s, 4s
-    return error.retry_after or 2 ** attempt
+    return error.retry_after if error.retry_after is not None else 2 ** attempt
 
 
 def with_retry(fn: Callable[[], Any], max_attempts: int = 3) -> Any:
@@ -261,13 +273,16 @@ def completion_with_tools(api_key: str, user_query: str) -> str:
     while True:
         tool_calls = []
         response_text = ""
+        thinking = []
 
         def handle_event(event):
-            nonlocal tool_calls, response_text
+            nonlocal tool_calls, response_text, thinking
             if event["type"] in ("content", "tool_use"):
                 response_text += event["text"]
             if event["type"] == "tool_use":
                 tool_calls = event.get("tools", [])
+            if event.get("thinking"):
+                thinking = event["thinking"]
 
         stream_completion(
             api_key, {"model": "claude-sonnet-5-5", "messages": messages, "tools": TOOLS}, handle_event
@@ -281,7 +296,8 @@ def completion_with_tools(api_key: str, user_query: str) -> str:
         messages.append({
             "role": "assistant",
             "content": [
-                {"type": "text", "text": response_text},
+                *thinking,  # Replay signed thinking/redacted_thinking blocks unchanged
+                *([{"type": "text", "text": response_text}] if response_text else []),
                 *[{"type": "tool_use", "id": t["id"], "name": t["name"], "input": args} for t, args in calls],
             ],
         })
@@ -411,6 +427,8 @@ from typing import Deque
 
 class RateLimiter:
     def __init__(self, requests_per_minute: int):
+        if not isinstance(requests_per_minute, int) or requests_per_minute < 1:
+            raise ValueError("requests_per_minute must be a positive integer")
         self.requests_per_minute = requests_per_minute
         self.requests: Deque[float] = deque()
 

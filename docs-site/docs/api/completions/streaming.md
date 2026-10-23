@@ -92,7 +92,7 @@ async function streamCompletion(messages, onEvent, { signal } = {}) {
   if (!response.ok) {
     throw Object.assign(new Error(`HTTP ${response.status}: ${await response.text()}`), {
       status: response.status,
-      retryAfter: Number(response.headers.get('Retry-After')) || undefined,
+      retryAfterHeader: response.headers.get('Retry-After'), // Raw header; parse seconds or HTTP-date before retrying
     });
   }
 
@@ -135,7 +135,13 @@ async function streamCompletion(messages, onEvent, { signal } = {}) {
       }
     }
   } finally {
-    reader.releaseLock();
+    try {
+      await reader.cancel();
+    } catch (cleanupError) {
+      console.warn('Could not cancel completion stream', cleanupError);
+    } finally {
+      reader.releaseLock();
+    }
   }
 
   throw new Error('Stream ended without [DONE] or an error event');
@@ -153,7 +159,7 @@ try {
 ```
 
 **Key points:**
-1. Use `response.body.getReader()` for streaming, and release the reader in a `finally` block.
+1. Use `response.body.getReader()` for streaming, and cancel the stream and release the reader in a `finally` block.
 2. Buffer incomplete lines: an event can be split across chunks, so parse only complete `data:` lines. A `JSON.parse` error such as "Unexpected end of JSON input" usually means a missing buffer.
 3. `[DONE]` means the stream finished cleanly. A stream that ends without it and without an `error` event is incomplete.
 4. Wrap only `JSON.parse` in try/catch and treat malformed data as a failure; do not skip the line. Exceptions from your own handler must propagate.
@@ -191,33 +197,33 @@ def stream_completion(api_key: str, messages: list):
     e.response.status_code and the Retry-After header), and StreamError for
     in-band errors and incomplete streams.
     """
-    response = requests.post(
+    with requests.post(
         "https://app.bike4mind.com/api/ai/v1/completions",
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
         json={"model": "claude-sonnet-5-5", "messages": messages},
         stream=True,  # Without this, requests buffers the whole response
-    )
-    response.raise_for_status()
+    ) as response:
+        response.raise_for_status()
 
-    done = False
-    for event in SSEClient(response).events():
-        if event.data == "[DONE]":
-            done = True
-            break
+        done = False
+        for event in SSEClient(response).events():
+            if event.data == "[DONE]":
+                done = True
+                break
 
-        try:
-            data = json.loads(event.data)
-        except json.JSONDecodeError as e:
-            raise StreamError(f"Malformed stream event: {event.data!r}") from e
+            try:
+                data = json.loads(event.data)
+            except json.JSONDecodeError as e:
+                raise StreamError(f"Malformed stream event: {event.data!r}") from e
 
-        # The HTTP status is already 200, so a failure arrives as an event
-        if data.get("type") == "error":
-            raise StreamError(data["message"], data.get("code"), data.get("requestId"))
+            # The HTTP status is already 200, so a failure arrives as an event
+            if data.get("type") == "error":
+                raise StreamError(data["message"], data.get("code"), data.get("requestId"))
 
-        print(data)
+            print(data)
 
-    if not done:
-        raise StreamError("Stream ended without [DONE] or an error event")
+        if not done:
+            raise StreamError("Stream ended without [DONE] or an error event")
 
 # Usage
 if __name__ == "__main__":

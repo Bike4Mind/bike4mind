@@ -10,7 +10,7 @@ This document provides a complete reference for all agent-related API endpoints 
 
 ## Authentication
 
-All agent API endpoints require authentication via JWT tokens. Include the token in the Authorization header:
+Agent API endpoints accept a JWT or a scoped API key. Include the token in the Authorization header:
 
 ```
 Authorization: Bearer <your-jwt-token>
@@ -23,6 +23,8 @@ https://app.bike4mind.com/api
 ```
 
 ## Agent Management Endpoints
+
+`GET /api/agents` requires `agents:read` for API keys; create, update, delete and description generation require `agents:write`. JWT calls use the signed-in user's permissions. Session attachment endpoints below use the platform session API.
 
 ### List Agents
 
@@ -224,8 +226,7 @@ POST /agents/{agentId}/generate-description
 
 ```json
 {
-  "description": "A creative and helpful marketing assistant who loves to build engaging content. Known for their perfectionist tendencies and love of puns, they bring both professionalism and humor to every project.",
-  "generatedAt": "2024-01-15T10:30:00Z"
+  "description": "A creative and helpful marketing assistant who loves to build engaging content."
 }
 ```
 
@@ -247,8 +248,8 @@ GET /sessions/{sessionId}/agents
     {
       "id": "agent_123",
       "name": "Marketing Assistant",
-      "avatarUrl": "https://...",
-      "attachedAt": "2024-01-15T10:30:00Z"
+      "description": "Helps with marketing content creation",
+      "visual": { "portraitUrl": "https://example.com/avatar.png" }
     }
   ]
 }
@@ -273,16 +274,10 @@ POST /sessions/{sessionId}/agents
 #### Response
 
 ```json
-{
-  "message": "Agent attached successfully",
-  "agent": {
-    "id": "agent_123",
-    "name": "Marketing Assistant",
-    "avatarUrl": "https://..."
-  },
-  "attachedAt": "2024-01-15T10:30:00Z"
-}
+{ "session": { "id": "665f1c2e9b1d4a0012ab34ef", "agentIds": ["665f1c2e9b1d4a0012ab34cd"] } }
 ```
+
+The response contains the updated session, with more fields than shown.
 
 ### Detach Agent from Session
 
@@ -292,20 +287,17 @@ Remove an agent from a conversation session.
 DELETE /sessions/{sessionId}/agents
 ```
 
-#### Query Parameters
+#### Request Body
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `agentId` | string | Yes | ID of the agent to detach |
+Send `agentId` in a JSON body, rather than the query string:
+
+```json
+{ "agentId": "665f1c2e9b1d4a0012ab34cd" }
+```
 
 #### Response
 
-```json
-{
-  "message": "Agent detached successfully",
-  "detachedAt": "2024-01-15T10:30:00Z"
-}
-```
+Both attach and detach return `{ "session": { ... } }`, containing the updated session. Getting session agents returns `{ "agents": [...] }` with full agent objects, in the same shape as the agent detail endpoint.
 
 ## WebSocket Events
 
@@ -409,29 +401,12 @@ const b4m = createClient({
 
 // List your agents (any spec operation is callable by its operationId)
 const agents = await b4m.call('listAgents');
-// the key needs the agents:read scope (agents:write also works)
+// the key needs the agents:read scope
 ```
 
 ### Python
 
-```python
-from bike4mind import BikeForMindClient
-
-client = BikeForMindClient(
-    api_key='your-api-key',
-    base_url='https://app.bike4mind.com'
-)
-
-# Create an agent
-agent = client.agents.create(
-    name='My Assistant',
-    description='A helpful assistant',
-    personality={'majorMotivation': 'Helper'}
-)
-
-# Attach to session
-client.sessions.attach_agent(session_id, agent['id'])
-```
+Use the [plain HTTP Python client](../../api/examples.md#python) with your JWT. No Python SDK is required.
 
 ### cURL Examples
 

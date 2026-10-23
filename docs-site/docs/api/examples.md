@@ -43,6 +43,7 @@ class BikeForMindAPI {
       });
     }
 
+    if (response.status === 204) return undefined;
     return response.json();
   }
 
@@ -50,14 +51,14 @@ class BikeForMindAPI {
     return this.request(endpoint);
   }
 
-  async post(endpoint: string, data: any) {
+  async post(endpoint: string, data?: unknown) {
     return this.request(endpoint, {
       method: 'POST',
       body: JSON.stringify(data)
     });
   }
 
-  async put(endpoint: string, data: any) {
+  async put(endpoint: string, data: unknown) {
     return this.request(endpoint, {
       method: 'PUT', 
       body: JSON.stringify(data)
@@ -108,12 +109,14 @@ class BikeForMindAPI:
                 message = None
             raise requests.HTTPError(f"API Error: {message or response.text}", response=response)
         
+        if response.status_code == 204:
+            return None
         return response.json()
     
     def get(self, endpoint):
         return self._request('GET', endpoint)
     
-    def post(self, endpoint, data):
+    def post(self, endpoint, data=None):
         return self._request('POST', endpoint, data)
     
     def put(self, endpoint, data):
@@ -149,15 +152,20 @@ const agent = await api.post('/api/agents', {
   personality: {
     majorMotivation: 'Analyzer',
     minorMotivation: 'Teacher',
-    responseStyle: 'detailed'
+    flaw: 'None',
+    quirk: 'None'
   },
-  capabilities: ['code_review', 'best_practices'],
+  capabilities: [JSON.stringify({
+    triggerWords: ['@review', '@code'],
+    responseStyle: 'detailed',
+    specialBehaviors: ['code_review', 'best_practices']
+  })],
   triggerWords: ['@review', '@code'],
   isPublic: false
 });
 
 // List all available agents
-const agents = await api.get('/api/agents?public=true');
+const agents = await api.get('/api/agents'); // accessible agents
 
 // Attach agent to a session
 await api.post(`/api/sessions/${sessionId}/agents`, {
@@ -231,16 +239,17 @@ class BikeForMindWebSocket {
     };
   }
 
-  private send(data: any) {
+  private send(data: unknown) {
     if (this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(data));
     }
   }
 
-  private handleMessage(message: any) {
+  private handleMessage(message: unknown) {
+    if (typeof message !== 'object' || message === null || !('type' in message)) return;
     switch (message.type) {
       case 'agent_attached':
-        console.log('Agent attached:', message.agent);
+        console.log('Agent attached:', message);
         break;
       case 'agent_response':
         console.log('Agent response:', message);
@@ -317,9 +326,10 @@ curl -X POST https://app.bike4mind.com/api/agents \
     "description": "Helps with research tasks",
     "personality": {
       "majorMotivation": "Explorer",
-      "responseStyle": "analytical"
+      "flaw": "None",
+      "quirk": "None"
     },
-    "capabilities": ["research", "analysis"]
+    "capabilities": ["{\"responseStyle\":\"analytical\",\"specialBehaviors\":[\"research\",\"analysis\"]}"]
   }'
 ```
 
@@ -342,9 +352,9 @@ http_code="${response: -3}"
 body="${response%???}"
 
 if [ "$http_code" -eq 200 ]; then
-  echo "Success: $body" | jq .
+  printf '%s\n' "$body" | jq .
 else
-  echo "Error ($http_code): $body" | jq .error
+  printf '%s\n' "$body" | jq .error
 fi
 ```
 
@@ -366,8 +376,8 @@ export function useAgents(searchTerm?: string) {
       try {
         setLoading(true);
         const api = new BikeForMindAPI(userToken);
-        const response = await api.get(`/api/agents?search=${searchTerm || ''}`);
-        setAgents(response.agents);
+        const response = await api.get(`/api/agents?query=${encodeURIComponent(searchTerm || '')}`);
+        setAgents(response.data);
       } catch (err) {
         setError(err.message);
       } finally {
@@ -394,7 +404,7 @@ export function useAPI() {
 
   const api = new BikeForMindAPI(userToken);
 
-  const callAPI = async (apiCall: () => Promise<any>) => {
+  const callAPI = async (apiCall: () => Promise<unknown>) => {
     try {
       loading.value = true;
       error.value = null;
