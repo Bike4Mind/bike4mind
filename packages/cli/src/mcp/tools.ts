@@ -14,6 +14,7 @@ import {
   PublishVisibilitySchema,
   questReplyText,
   SLUG_OWNED_BY_OTHER,
+  SOUND_EFFECTS_MAX_INPUT_CHARS,
   ttsRequestSchema,
   type GeneratedAudioResponse,
   type TTSRequest,
@@ -316,7 +317,11 @@ const getFileShape = {
 // Bounds mirror `soundEffectsRequestSchema` (@bike4mind/common) and the ElevenLabs
 // sound-generation limits; keep in sync with the route's parse.
 const generateSoundEffectShape = {
-  text: z.string().min(1).max(1000).describe('Text description of the sound effect to generate'),
+  text: z
+    .string()
+    .min(1)
+    .max(SOUND_EFFECTS_MAX_INPUT_CHARS)
+    .describe('Text description of the sound effect to generate'),
   provider: z.enum(['elevenlabs']).default('elevenlabs').describe('Sound-generation provider'),
   durationSeconds: z
     .number()
