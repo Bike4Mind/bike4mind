@@ -91,10 +91,16 @@ function isToolbeltShaped(profile: ToolbeltProfile): boolean {
   );
 }
 
+// A host module re-evaluated in the same process (dev HMR, `vi.resetModules`) registers the same
+// profiles again; that is not a collision worth reporting.
+function isSameToolbelt(a: ToolbeltProfile, b: ToolbeltProfile): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
 /**
  * Add toolbelt profiles for new roles. A profile whose role is already taken (built-in or
  * contributed earlier) is dropped, not merged, and so is a malformed one; both are returned for
- * the host to log.
+ * the host to log. Re-registering an identical contributed profile is a silent no-op.
  */
 export function registerToolbelts(profiles: readonly ToolbeltProfile[]): { taken: string[]; invalid: number } {
   const taken: string[] = [];
@@ -104,7 +110,9 @@ export function registerToolbelts(profiles: readonly ToolbeltProfile[]): { taken
       invalid++;
       continue;
     }
-    if (Object.hasOwn(TOOLBELT_PROFILES, profile.role) || contributedToolbelts.has(profile.role)) {
+    const existing = contributedToolbelts.get(profile.role);
+    if (existing && isSameToolbelt(existing, profile)) continue;
+    if (Object.hasOwn(TOOLBELT_PROFILES, profile.role) || existing) {
       taken.push(profile.role);
       continue;
     }

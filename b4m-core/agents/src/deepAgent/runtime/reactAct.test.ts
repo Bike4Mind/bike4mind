@@ -137,6 +137,8 @@ describe('resolveToolbeltProfile', () => {
       taken: ['paper-repro', 'contributed-role'],
       invalid: 0,
     });
+    // A re-evaluated host module registers an equal copy again; that is not a collision.
+    expect(registerToolbelts([{ ...contributed }])).toEqual({ taken: [], invalid: 0 });
     expect(
       registerToolbelts([
         { ...contributed, role: '' },
