@@ -182,6 +182,10 @@ export async function emitBillingEvent(opts: {
   try {
     const { user, event, occurrence } = opts;
     if (!user?.id || user.isSynthetic || !occurrence) return [];
+    // The credit marks and userAction are this emitter's to set. Dropped from the caller's
+    // metadata, not just overridden: the host copy adds no credit marks, so a caller's
+    // `attribution` or `touch` would otherwise reach it and dress an observed event as credited.
+    const { attribution: _attribution, touch: _touch, userAction: _userAction, ...callerMetadata } = opts.metadata;
     const acquisition = user.acquisition ?? undefined;
     const hostUtm = acquisition?.firstTouch;
     const copies: Array<{ productId: string; utm?: OverwatchUtm; credit?: { touch: string; attribution: string } }> = [
@@ -201,7 +205,7 @@ export async function emitBillingEvent(opts: {
           reportFailure: true,
           userId: user.id,
           ...(utm && { utm }),
-          metadata: { ...opts.metadata, ...credit, userAction: false },
+          metadata: { ...callerMetadata, ...credit, userAction: false },
         }).catch(() => {
           console.warn('[b4m-analytics] billing event emit failed', { productId, event });
         })

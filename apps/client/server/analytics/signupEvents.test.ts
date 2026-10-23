@@ -334,16 +334,25 @@ describe('emitBillingEvent', () => {
     }
   });
 
-  it('keeps the marks it adds over whatever the caller put in metadata', async () => {
-    // The credit marker and userAction are the emitter's to set: a caller's metadata cannot
-    // pass a credited copy off as observed, or an event off as the user's own action.
-    await emitBillingEvent({
-      user: subscriber,
-      event: 'payment_failed',
-      occurrence: 'in_1:1',
-      metadata: { kind: 'subscription', userAction: true, attribution: 'observed' },
+  it('keeps the marks it adds over whatever the caller put in metadata, on every copy', async () => {
+    // The credit marks and userAction are the emitter's to set: a caller's metadata cannot pass
+    // a credited copy off as observed, mark the host's observed copy as credited, or pass an
+    // event off as the user's own action.
+    mockKeyFor.mockImplementation((p: string) => (p === 'widgets' || p === 'bike4mind' ? 'key' : undefined));
+    await expect(
+      emitBillingEvent({
+        user: subscriber,
+        event: 'payment_failed',
+        occurrence: 'in_1:1',
+        metadata: { kind: 'subscription', userAction: true, attribution: 'observed', touch: 'last' },
+      })
+    ).resolves.toEqual(['bike4mind', 'widgets']);
+
+    const byProduct = Object.fromEntries(mockEmit.mock.calls.map(([c]) => [c.productId, c.metadata]));
+    expect(byProduct).toEqual({
+      bike4mind: { kind: 'subscription', userAction: false },
+      widgets: { kind: 'subscription', touch: 'first', attribution: 'self-reported', userAction: false },
     });
-    expect(mockEmit.mock.calls[0][0].metadata).toMatchObject({ attribution: 'self-reported', userAction: false });
   });
 
   it('sends nothing without an occurrence, for a synthetic user, or without a user', async () => {
