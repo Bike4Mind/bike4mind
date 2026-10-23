@@ -2,16 +2,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
 const {
-  mockUserFindById,
-  mockUserUpdateOne,
+  mockUserFindOneAndUpdate,
   mockAppFileFindById,
   mockAppFileFindOne,
   mockAppFileFindOneAndDelete,
   mockStorageDelete,
   mockStorageGetMetadata,
 } = vi.hoisted(() => ({
-  mockUserFindById: vi.fn(),
-  mockUserUpdateOne: vi.fn(),
+  mockUserFindOneAndUpdate: vi.fn(),
   mockAppFileFindById: vi.fn(),
   mockAppFileFindOne: vi.fn(),
   mockAppFileFindOneAndDelete: vi.fn(),
@@ -47,8 +45,7 @@ vi.mock('@bike4mind/database/content', () => ({
 
 vi.mock('@bike4mind/database', () => ({
   User: {
-    findById: (...a: unknown[]) => mockUserFindById(...a),
-    updateOne: (...a: unknown[]) => mockUserUpdateOne(...a),
+    findOneAndUpdate: (...a: unknown[]) => mockUserFindOneAndUpdate(...a),
   },
 }));
 
@@ -77,6 +74,7 @@ const newFile = (over: Record<string, unknown> = {}) => ({
   id: 'f-new',
   userId: OWN,
   path: NEW_KEY,
+  mimeType: 'image/png',
   tags: [AppFileReservedTags.ProfilePhoto],
   ...over,
 });
@@ -91,13 +89,12 @@ const run = (
 };
 
 beforeEach(() => {
-  mockUserFindById.mockReset().mockResolvedValue({ id: OWN, name: 'A', photoUrl: OLD_KEY });
-  mockUserUpdateOne.mockReset().mockResolvedValue(undefined);
+  mockUserFindOneAndUpdate.mockReset().mockResolvedValue({ id: OWN, name: 'A', photoUrl: OLD_KEY });
   mockAppFileFindById.mockReset().mockResolvedValue(newFile());
   mockAppFileFindOne.mockReset().mockResolvedValue({ userId: OWN });
   mockAppFileFindOneAndDelete.mockReset().mockResolvedValue(undefined);
   mockStorageDelete.mockReset().mockResolvedValue(undefined);
-  mockStorageGetMetadata.mockReset().mockResolvedValue({ size: 123 });
+  mockStorageGetMetadata.mockReset().mockResolvedValue({ size: 123, contentType: 'image/png' });
 });
 
 describe('POST /api/users/:id/confirm-photo', () => {
@@ -107,7 +104,7 @@ describe('POST /api/users/:id/confirm-photo', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(mockStorageGetMetadata).toHaveBeenCalledWith(NEW_KEY);
-    expect(mockUserUpdateOne).toHaveBeenCalledWith({ _id: OWN }, { photoUrl: NEW_KEY });
+    expect(mockUserFindOneAndUpdate).toHaveBeenCalledWith({ _id: OWN }, { photoUrl: NEW_KEY }, { new: false });
     expect(mockStorageDelete).toHaveBeenCalledWith(OLD_KEY);
     expect(mockAppFileFindOneAndDelete).toHaveBeenCalledWith({ path: OLD_KEY });
   });
@@ -118,7 +115,7 @@ describe('POST /api/users/:id/confirm-photo', () => {
     const { promise } = run();
     await expect(promise).rejects.toThrow('has not finished uploading');
 
-    expect(mockUserUpdateOne).not.toHaveBeenCalled();
+    expect(mockUserFindOneAndUpdate).not.toHaveBeenCalled();
     expect(mockStorageDelete).not.toHaveBeenCalled();
   });
 
@@ -129,18 +126,18 @@ describe('POST /api/users/:id/confirm-photo', () => {
     await promise;
 
     expect(res._getStatusCode()).toBe(200);
-    expect(mockUserUpdateOne).toHaveBeenCalledWith({ _id: OWN }, { photoUrl: NEW_KEY });
+    expect(mockUserFindOneAndUpdate).toHaveBeenCalledWith({ _id: OWN }, { photoUrl: NEW_KEY }, { new: false });
     expect(mockStorageDelete).not.toHaveBeenCalled();
     expect(mockAppFileFindOneAndDelete).not.toHaveBeenCalled();
   });
 
   it('skips the cleanup when the profile has no previous photo', async () => {
-    mockUserFindById.mockResolvedValue({ id: OWN, name: 'A' });
+    mockUserFindOneAndUpdate.mockResolvedValue({ id: OWN, name: 'A' });
 
     const { promise } = run();
     await promise;
 
-    expect(mockUserUpdateOne).toHaveBeenCalledWith({ _id: OWN }, { photoUrl: NEW_KEY });
+    expect(mockUserFindOneAndUpdate).toHaveBeenCalledWith({ _id: OWN }, { photoUrl: NEW_KEY }, { new: false });
     expect(mockAppFileFindOne).not.toHaveBeenCalled();
     expect(mockStorageDelete).not.toHaveBeenCalled();
   });
@@ -152,7 +149,7 @@ describe('POST /api/users/:id/confirm-photo', () => {
     await promise;
 
     expect(res._getStatusCode()).toBe(200);
-    expect(mockUserUpdateOne).toHaveBeenCalled();
+    expect(mockUserFindOneAndUpdate).toHaveBeenCalled();
   });
 
   it.each([
@@ -165,7 +162,7 @@ describe('POST /api/users/:id/confirm-photo', () => {
     const { promise } = run();
     await expect(promise).rejects.toThrow('Profile photo upload not found');
 
-    expect(mockUserUpdateOne).not.toHaveBeenCalled();
+    expect(mockUserFindOneAndUpdate).not.toHaveBeenCalled();
   });
 
   it('rejects a malformed fileId without querying the database', async () => {
@@ -173,14 +170,56 @@ describe('POST /api/users/:id/confirm-photo', () => {
     await expect(promise).rejects.toThrow('Profile photo upload not found');
 
     expect(mockAppFileFindById).not.toHaveBeenCalled();
-    expect(mockUserUpdateOne).not.toHaveBeenCalled();
+    expect(mockUserFindOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('cleans up the photo that was live at swap time, not an earlier read', async () => {
+    mockUserFindOneAndUpdate.mockResolvedValue({ id: OWN, photoUrl: 'profile-photos/u1/raced.png' });
+
+    const { promise } = run();
+    await promise;
+
+    expect(mockAppFileFindOne).toHaveBeenCalledWith({ path: 'profile-photos/u1/raced.png' });
+    expect(mockStorageDelete).toHaveBeenCalledWith('profile-photos/u1/raced.png');
+    expect(mockStorageDelete).not.toHaveBeenCalledWith(OLD_KEY);
+  });
+
+  it('rejects an object whose stored content type is not the declared image type', async () => {
+    mockStorageGetMetadata.mockResolvedValue({ size: 123, contentType: 'text/html' });
+
+    const { promise } = run();
+    await expect(promise).rejects.toThrow('unexpected content type');
+
+    expect(mockUserFindOneAndUpdate).not.toHaveBeenCalled();
+    expect(mockStorageDelete).not.toHaveBeenCalled();
+  });
+
+  it('accepts a stored content type that carries parameters', async () => {
+    mockStorageGetMetadata.mockResolvedValue({ size: 123, contentType: 'Image/PNG; charset=binary' });
+
+    const { res, promise } = run();
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+  });
+
+  it('rejects when the profile owner does not exist and leaves storage untouched', async () => {
+    mockUserFindOneAndUpdate.mockResolvedValue(null);
+
+    const { promise } = run();
+    await expect(promise).rejects.toThrow('User not found');
+
+    expect(mockStorageDelete).not.toHaveBeenCalled();
+    expect(mockAppFileFindOneAndDelete).not.toHaveBeenCalled();
   });
 
   it('rejects a caller who is neither the owner nor an admin', async () => {
     const { promise } = run({ id: 'intruder', isAdmin: false });
     await expect(promise).rejects.toThrow('only update your own');
 
-    expect(mockUserUpdateOne).not.toHaveBeenCalled();
+    expect(mockAppFileFindById).not.toHaveBeenCalled();
+    expect(mockStorageGetMetadata).not.toHaveBeenCalled();
+    expect(mockUserFindOneAndUpdate).not.toHaveBeenCalled();
   });
 
   it('lets an admin confirm on behalf of the profile owner', async () => {
@@ -188,6 +227,6 @@ describe('POST /api/users/:id/confirm-photo', () => {
     await promise;
 
     expect(res._getStatusCode()).toBe(200);
-    expect(mockUserUpdateOne).toHaveBeenCalledWith({ _id: OWN }, { photoUrl: NEW_KEY });
+    expect(mockUserFindOneAndUpdate).toHaveBeenCalledWith({ _id: OWN }, { photoUrl: NEW_KEY }, { new: false });
   });
 });
