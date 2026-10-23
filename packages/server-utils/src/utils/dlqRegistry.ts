@@ -1,6 +1,12 @@
 import { Resource } from 'sst';
-import { createDlqRegistry } from '@bike4mind/infra';
+import { createDlqRegistry, describeDroppedContributions, partitionContributedQueues } from '@bike4mind/infra';
 import type { DlqDescriptor, DlqResolvers } from '@bike4mind/infra';
+import {
+  contributedInfraResources,
+  coreDlqLabels,
+  coreEnvNames,
+  coreResourceNames,
+} from '../premium-generated/infraResources.generated';
 
 /**
  * SQS queue URLs are stored via sst.Linkable in resource.enc.
@@ -260,34 +266,102 @@ const DLQ_REGISTRY = [
   },
 ] as const satisfies readonly DlqDescriptor[];
 
-/** Valid source queue names - derived from DLQ_REGISTRY so they stay in sync automatically. */
-export type SourceQueueName = (typeof DLQ_REGISTRY)[number]['sourceQueue'];
+type CoreDlqLabel = (typeof DLQ_REGISTRY)[number]['label'];
+type CoreSourceQueueName = (typeof DLQ_REGISTRY)[number]['sourceQueue'];
+
+declare const contributedBrand: unique symbol;
+/** A DLQ label an overlay declared; obtained from contributedDlqLabel, which checks registration. */
+export type ContributedDlqLabel = string & { readonly [contributedBrand]: 'dlqLabel' };
+/** A source queue an overlay declared; obtained from contributedSourceQueueName. */
+export type ContributedSourceQueueName = string & { readonly [contributedBrand]: 'sourceQueue' };
+
+export type DlqLabel = CoreDlqLabel | ContributedDlqLabel;
+/** Valid source queue names: DLQ_REGISTRY's, plus the contributed ones that registered. */
+export type SourceQueueName = CoreSourceQueueName | ContributedSourceQueueName;
+
+/** An entry the registry holds, whose label and source queue are therefore resolvable. */
+export type RegisteredDlqDescriptor = DlqDescriptor & { label: DlqLabel; sourceQueue: SourceQueueName };
 
 type LinkableQueues = {
   dlqUrls: Record<string, string>;
-  sourceQueueUrls: Record<SourceQueueName, string>;
+  sourceQueueUrls: Record<string, string>;
 };
 
 const resolvers: DlqResolvers = {
   resolveDlqUrl: label => (Resource as unknown as LinkableQueues).dlqUrls?.[label],
-  resolveSourceQueueUrl: name => (Resource as unknown as LinkableQueues).sourceQueueUrls?.[name as SourceQueueName],
+  resolveSourceQueueUrl: name => (Resource as unknown as LinkableQueues).sourceQueueUrls?.[name],
 };
 
-const registry = createDlqRegistry(DLQ_REGISTRY, resolvers, {
-  dlqErrorContext: 'Check dlqUrls Linkable in infra/web.ts.',
-  sourceQueueErrorContext: 'Check sourceQueueUrls Linkable in infra/web.ts.',
-});
-
-export function getDlqRegistry() {
-  return registry.getAllDescriptors();
+// Same drop rules as infra/queues.ts, which decides what is deployed; the registry adds its
+// own labels and queue names in case codegen and this file disagree. Registers nothing
+// when codegen could not read the core names.
+function contributedDescriptors(): DlqDescriptor[] {
+  const specs = contributedInfraResources.queues;
+  if (specs.length === 0) return [];
+  if (coreResourceNames === null || coreEnvNames === null || coreDlqLabels === null) {
+    console.warn(
+      '[dlqRegistry] core resource names unknown (codegen ran without infra/); no contributed DLQ registered'
+    );
+    return [];
+  }
+  const contributedSecretNames = contributedInfraResources.secrets.map(spec => spec.name);
+  const result = partitionContributedQueues(specs, {
+    resourceNames: [...coreResourceNames, ...contributedSecretNames, ...DLQ_REGISTRY.map(d => d.sourceQueue)],
+    envNames: coreEnvNames,
+    dlqLabels: [...coreDlqLabels, ...DLQ_REGISTRY.map(d => d.label)],
+  });
+  for (const line of describeDroppedContributions('contributed queue', result)) console.warn(`[dlqRegistry] ${line}`);
+  return result.registered.map(({ label, displayName, application, name }) => ({
+    label,
+    displayName,
+    application,
+    sourceQueue: name,
+  }));
 }
 
-export function getDlqByLabel(label: string) {
-  return registry.getDlqByLabel(label as (typeof DLQ_REGISTRY)[number]['label']);
+let registry: ReturnType<typeof createDlqRegistry<readonly DlqDescriptor[]>> | undefined;
+const contributedLabels = new Set<string>();
+const contributedSourceQueues = new Set<string>();
+
+function getRegistry() {
+  if (!registry) {
+    const contributed = contributedDescriptors();
+    for (const d of contributed) {
+      contributedLabels.add(d.label);
+      contributedSourceQueues.add(d.sourceQueue);
+    }
+    registry = createDlqRegistry<readonly DlqDescriptor[]>([...DLQ_REGISTRY, ...contributed], resolvers, {
+      dlqErrorContext: 'Check dlqUrls Linkable in infra/web.ts.',
+      sourceQueueErrorContext: 'Check sourceQueueUrls Linkable in infra/web.ts.',
+    });
+  }
+  return registry;
 }
 
-export function getDlqUrl(label: (typeof DLQ_REGISTRY)[number]['label']): string {
-  return registry.getDlqUrl(label);
+/** Narrows an overlay's DLQ label; throws when it was dropped or never declared. */
+export function contributedDlqLabel(label: string): ContributedDlqLabel {
+  getRegistry();
+  if (!contributedLabels.has(label)) throw new Error(`Contributed DLQ label not registered: ${label}`);
+  return label as ContributedDlqLabel;
+}
+
+/** Narrows an overlay's source queue name; throws when it was dropped or never declared. */
+export function contributedSourceQueueName(name: string): ContributedSourceQueueName {
+  getRegistry();
+  if (!contributedSourceQueues.has(name)) throw new Error(`Contributed source queue not registered: ${name}`);
+  return name as ContributedSourceQueueName;
+}
+
+export function getDlqRegistry(): readonly RegisteredDlqDescriptor[] {
+  return getRegistry().getAllDescriptors() as readonly RegisteredDlqDescriptor[];
+}
+
+export function getDlqByLabel(label: string): RegisteredDlqDescriptor | undefined {
+  return getRegistry().getDlqByLabel(label) as RegisteredDlqDescriptor | undefined;
+}
+
+export function getDlqUrl(label: DlqLabel): string {
+  return getRegistry().getDlqUrl(label);
 }
 
 /**
@@ -295,5 +369,11 @@ export function getDlqUrl(label: (typeof DLQ_REGISTRY)[number]['label']): string
  * Exported for use by queue handlers, API routes, and cron jobs.
  */
 export function getSourceQueueUrl(name: SourceQueueName): string {
-  return registry.getSourceQueueUrl(name);
+  return getRegistry().getSourceQueueUrl(name);
+}
+
+export function resetDlqRegistryForTests(): void {
+  registry = undefined;
+  contributedLabels.clear();
+  contributedSourceQueues.clear();
 }

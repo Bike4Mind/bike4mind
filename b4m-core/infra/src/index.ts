@@ -85,6 +85,8 @@ export { VOICE_NAMESPACE, VOICE_METRICS } from './voiceMetricSpecs.js';
 export type {
   ContributedSecretSpec,
   ContributedSecretRotationSpec,
+  ContributedQueueSpec,
+  CoreQueueNames,
   InfraResourceContributions,
   PartitionedContributions,
 } from './contributions.js';
@@ -92,5 +94,7 @@ export {
   EMPTY_INFRA_RESOURCE_CONTRIBUTIONS,
   isValidContributedResourceName,
   partitionContributed,
+  partitionContributedQueues,
+  contributedQueueNames,
   describeDroppedContributions,
 } from './contributions.js';

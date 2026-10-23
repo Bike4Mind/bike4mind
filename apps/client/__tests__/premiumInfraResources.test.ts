@@ -34,6 +34,14 @@ function writeOverlay(infraResources: unknown) {
   );
 }
 
+const QUEUE = {
+  name: 'exampleJobQueue',
+  visibilityTimeout: '6 minutes',
+  label: 'example-job',
+  displayName: 'Example Job',
+  application: 'Example',
+};
+
 const ROTATION = {
   secret: 'EXAMPLE_API_TOKEN',
   description: 'Example token',
@@ -60,6 +68,20 @@ describe('infra resource glue', () => {
     expect(infra).toBe(runtime);
     expect(infra).toContain('"secrets": []');
     expect(infra).toContain('"rotations": []');
+    expect(infra).toContain('"queues": []');
+  });
+
+  it('copies a declared queue pair to both targets, dropping undeclared optional fields', () => {
+    writeOverlay({ queues: [{ ...QUEUE, retry: 5, tags: { Team: 'x' }, extra: 'evil' }] });
+    const result = runCodegen();
+    expect(result.status, result.stderr).toBe(0);
+    const [infra, runtime] = readTargets();
+    expect(infra).toBe(runtime);
+    expect(infra).toContain('"name": "exampleJobQueue"');
+    expect(infra).toContain('"label": "example-job"');
+    expect(infra).toContain('"retry": 5');
+    expect(infra).not.toContain('dlqName');
+    expect(infra).not.toContain('evil');
   });
 
   it('emits the same declared data to both targets, even for an unlinked overlay', () => {
@@ -92,6 +114,12 @@ describe('infra resource glue', () => {
     ['a non-positive rotation interval', { rotations: [{ ...ROTATION, rotationIntervalDays: 0 }] }],
     ['a rotation interval past the admin limit', { rotations: [{ ...ROTATION, rotationIntervalDays: 366 }] }],
     ['an unrepresentable rotation date', { rotations: [{ ...ROTATION, rotationIntervalDays: 1e308 }] }],
+    ['a non-array queues list', { queues: {} }],
+    ['a queue without a label', { queues: [{ ...QUEUE, label: undefined }] }],
+    ['a queue with a non-string visibility timeout', { queues: [{ ...QUEUE, visibilityTimeout: 360 }] }],
+    ['a queue with a negative retry', { queues: [{ ...QUEUE, retry: -1 }] }],
+    ['a queue with an unknown encryption', { queues: [{ ...QUEUE, encryption: 'aes' }] }],
+    ['a queue with non-string tags', { queues: [{ ...QUEUE, tags: { Team: 1 } }] }],
   ])('fails codegen on %s', (_label, value) => {
     writeOverlay(value);
     const result = runCodegen();
@@ -120,6 +148,27 @@ describe('infra resource glue', () => {
     expect(readTargets()[1]).toContain('coreResourceNames: readonly string[] | null = ["App","CORE_A","CORE_B","Web"]');
   });
 
+  it('lists the DLQ labels infra/dlqAlarms.ts alarms on, and accepts the contributed queue loop', () => {
+    mkdirSync(join(sandbox, 'infra'), { recursive: true });
+    writeFileSync(join(sandbox, 'infra/secrets.ts'), "export const s = new sst.Secret('CORE_A', 'x');\n");
+    writeFileSync(
+      join(sandbox, 'infra/dlqAlarms.ts'),
+      "const D = [{ label: 'image-generation' }];\ncreateDlqAlarms({ label: 'fab-file-moderation' });\n" +
+        "widget({ label: 'Messages Visible' });\n"
+    );
+    writeFileSync(
+      join(sandbox, 'infra/queues.ts'),
+      "const q = new sst.aws.Queue('coreQueue', {});\n" +
+        'const dlq = new sst.aws.Queue(pair.dlqName, pair.dlqArgs);\n' +
+        'const queue = new sst.aws.Queue(pair.name, pair.queueArgs(dlq.arn));\n'
+    );
+    const result = runCodegen();
+    expect(result.status, result.stderr).toBe(0);
+    const runtime = readTargets()[1];
+    expect(runtime).toContain('coreDlqLabels: readonly string[] | null = ["fab-file-moderation","image-generation"]');
+    expect(runtime).toContain('"coreQueue"');
+  });
+
   it('emits null core names without infra/, so the runtime registers nothing', () => {
     writeOverlay({ secrets: [{ name: 'EXAMPLE_API_TOKEN' }] });
     expect(runCodegen().status).toBe(0);
@@ -127,6 +176,7 @@ describe('infra resource glue', () => {
     expect(infra).toBe(runtime);
     expect(runtime).toContain('coreResourceNames: readonly string[] | null = null');
     expect(runtime).toContain('coreEnvNames: readonly string[] | null = null');
+    expect(runtime).toContain('coreDlqLabels: readonly string[] | null = null');
   });
 
   it('lists the env form of core resources and the env keys infra defines, not env example keys', () => {
