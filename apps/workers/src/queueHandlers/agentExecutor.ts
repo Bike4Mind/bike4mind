@@ -2128,6 +2128,7 @@ async function processExecution(
     const guardedPremiumTools = executorAgentExtensions.applyToolMapGuards(premiumLlmTools, {
       executionId,
       logger,
+      surface: session.surface,
       runState: optiPlanState,
     });
 

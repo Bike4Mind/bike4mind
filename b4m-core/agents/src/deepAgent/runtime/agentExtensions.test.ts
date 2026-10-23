@@ -199,16 +199,21 @@ describe('createAgentExtensionRegistry', () => {
         { id: 'p8', surface: 's8', build: () => ({ ...base, deniedTools: [7] }) as never },
         { id: 'p9', surface: 's9', build: () => ({ ...base, confidenceGateThreshold: Number.NaN }) },
         { id: 'p10', surface: 's10', build: () => ({ ...base, confidenceGateThreshold: 1.5 }) },
+        { id: 'p11', surface: 's11', build: () => ({ ...base, systemPrompt: { text: 'hi' } }) as never },
+        { id: 'p12', surface: 's12', build: () => ({ ...base, isSynthetic: undefined }) as never },
+        { id: 'p13', surface: 's13', build: () => ({ ...base, toolsetIsExclusive: 'yes' }) as never },
+        { id: 'p14', surface: 's14', build: () => ({ ...base, allowedToolsFromDefaults: 1 }) as never },
       ],
     });
-    for (const surface of ['s1', 's2', 's3', 's4', 's6', 's7', 's8', 's9', 's10']) {
+    const rejected = ['s1', 's2', 's3', 's4', 's6', 's7', 's8', 's9', 's10', 's11', 's12', 's13', 's14'];
+    for (const surface of rejected) {
       expect(registry.resolveSurfaceProfile(surface, { ...profileCtx, logger: runLogger })).toBeUndefined();
     }
-    expect(runLogger.warn).toHaveBeenCalledTimes(9);
+    expect(runLogger.warn).toHaveBeenCalledTimes(rejected.length);
     expect(registry.resolveSurfaceProfile('s5', { ...profileCtx, logger: runLogger })).toBe(base);
   });
 
-  it('hands a contributed guard a copy, so an in-place mutation cannot reach the original map', () => {
+  it('hands a contributed guard a copy of the map, so adding or replacing a key cannot reach the original', () => {
     const { registry } = newRegistry();
     registry.registerContribution({
       toolMapGuards: [
