@@ -169,20 +169,18 @@ const tools = [
 const response = await fetch('https://app.bike4mind.com/api/ai/v1/completions', {
   method: 'POST',
   headers: {
-    'X-API-Key': apiKey,
+    'Authorization': `Bearer ${apiKey}`,
     'Content-Type': 'application/json',
   },
   body: JSON.stringify({
-    model: 'claude-3-5-sonnet',
+    model: 'claude-sonnet-5-5',
     messages: [
       {
         role: 'user',
         content: 'What is the weather in San Francisco?'
       }
     ],
-    options: {
-      tools: tools  // Include tools in request
-    }
+    tools: tools  // Include tools in request
   })
 });
 ```
@@ -244,11 +242,11 @@ const toolResult = executeToolLocally('get_weather', { location: 'San Francisco'
 const followUpResponse = await fetch('https://app.bike4mind.com/api/ai/v1/completions', {
   method: 'POST',
   headers: {
-    'X-API-Key': apiKey,
+    'Authorization': `Bearer ${apiKey}`,
     'Content-Type': 'application/json',
   },
   body: JSON.stringify({
-    model: 'claude-3-5-sonnet',
+    model: 'claude-sonnet-5-5',
     messages: [
       {
         role: 'user',
@@ -280,9 +278,7 @@ const followUpResponse = await fetch('https://app.bike4mind.com/api/ai/v1/comple
         ]
       }
     ],
-    options: {
-      tools: tools  // Include same tools array
-    }
+    tools: tools  // Include same tools array
   })
 });
 ```
@@ -485,13 +481,13 @@ Always include the tools array in follow-up requests so the model has consistent
 
 ```javascript
 // Initial request
-{ options: { tools: [...] } }
+{ tools: [...] }
 
 // Follow-up with tool results
-{ options: { tools: [...] } }  // Same tools array
+{ tools: [...] }  // Same tools array
 
 // Final request
-{ options: { tools: [...] } }  // Same tools array
+{ tools: [...] }  // Same tools array
 ```
 
 ### 7. Limit Tool Execution Time
@@ -748,7 +744,7 @@ describe('Weather Tool', () => {
 
 ## Next Steps
 
-- **[Extended Thinking](/api/completions/extended-thinking)** - Use reasoning with tool calls
-- **[Code Examples](/api/completions/examples/javascript)** - See complete tool implementations
-- **[Error Handling](/api/completions/errors)** - Handle tool errors
-- **[Best Practices](/api/completions/best-practices)** - Production tool patterns
+- **[Extended Thinking](./extended-thinking.md)** - Use reasoning with tool calls
+- **[Code Examples](./examples/javascript.md)** - See complete tool implementations
+- **[Error Handling](./errors.md)** - Handle tool errors
+- **[Best Practices](./best-practices.md)** - Production tool patterns

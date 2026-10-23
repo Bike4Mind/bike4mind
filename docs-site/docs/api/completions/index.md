@@ -22,11 +22,11 @@ Here's a simple request to get started:
 
 ```bash
 curl -X POST https://app.bike4mind.com/api/ai/v1/completions \
-  -H "X-API-Key: YOUR_API_KEY" \
+  -H "Authorization: Bearer YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   --no-buffer \
   -d '{
-    "model": "claude-3-5-sonnet",
+    "model": "claude-sonnet-5-5",
     "messages": [
       {"role": "user", "content": "Hello, world!"}
     ]
@@ -57,7 +57,7 @@ Follow these steps to make your first successful request in 5 minutes.
 
 ### Prerequisites
 
-You'll need an **API key** to authenticate your requests. If you don't have one yet, see the [Authentication](/api/completions/authentication) guide to learn how to obtain an API key.
+You'll need an **API key** to authenticate your requests. If you don't have one yet, see the [Authentication](./authentication.md) guide to learn how to obtain an API key.
 
 ### Your First Request
 
@@ -65,11 +65,11 @@ Let's make a simple completion request using curl:
 
 ```bash
 curl -X POST https://app.bike4mind.com/api/ai/v1/completions \
-  -H "X-API-Key: YOUR_API_KEY" \
+  -H "Authorization: Bearer YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   --no-buffer \
   -d '{
-    "model": "claude-3-5-sonnet",
+    "model": "claude-sonnet-5-5",
     "messages": [
       {"role": "user", "content": "What is 2+2?"}
     ]
@@ -109,7 +109,7 @@ The minimal request requires:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `model` | string | Model identifier (e.g., `"claude-3-5-sonnet"`) |
+| `model` | string | Model identifier (e.g., `"claude-sonnet-5-5"`) |
 | `messages` | array | Conversation history with role and content |
 
 **Message structure:**
@@ -125,13 +125,13 @@ The minimal request requires:
 
 Now that you've made your first request, explore more:
 
-- **[Authentication](/api/completions/authentication)** - Learn about API keys and security best practices
-- **[API Reference](/api/completions/reference)** - Complete technical specification
-- **[SSE Streaming Guide](/api/completions/streaming)** - Implement streaming in your application
-- **[Code Examples](/api/completions/examples/javascript)** - Production-ready code in JavaScript, Python, and more
-- **[Tools & Function Calling](/api/completions/tools)** - Add function calling to your requests
-- **[Error Handling](/api/completions/errors)** - Handle errors and troubleshoot issues
-- **[Best Practices](/api/completions/best-practices)** - Production deployment guidance
+- **[Authentication](./authentication.md)** - Learn about API keys and security best practices
+- **[API Reference](./reference.md)** - Complete technical specification
+- **[SSE Streaming Guide](./streaming.md)** - Implement streaming in your application
+- **[Code Examples](./examples/javascript.md)** - Production-ready code in JavaScript, Python, and more
+- **[Tools & Function Calling](./tools.md)** - Add function calling to your requests
+- **[Error Handling](./errors.md)** - Handle errors and troubleshoot issues
+- **[Best Practices](./best-practices.md)** - Production deployment guidance
 
 ---
 
@@ -139,16 +139,16 @@ Now that you've made your first request, explore more:
 
 ### By Use Case
 
-- **Building a chatbot?** → Start with [SSE Streaming Guide](/api/completions/streaming)
-- **Need function calling?** → See [Tools & Function Calling](/api/completions/tools)
-- **Complex reasoning tasks?** → Check out [Extended Thinking](/api/completions/extended-thinking)
-- **Production deployment?** → Read [Best Practices](/api/completions/best-practices)
+- **Building a chatbot?** -> Start with [SSE Streaming Guide](./streaming.md)
+- **Need function calling?** -> See [Tools & Function Calling](./tools.md)
+- **Complex reasoning tasks?** -> Check out [Extended Thinking](./extended-thinking.md)
+- **Production deployment?** -> Read [Best Practices](./best-practices.md)
 
 ### By Language
 
-- **JavaScript/TypeScript** → [JavaScript Examples](/api/completions/examples/javascript)
-- **Python** → [Python Examples](/api/completions/examples/python)
-- **curl** → [curl Examples](/api/completions/examples/curl)
+- **JavaScript/TypeScript** -> [JavaScript Examples](./examples/javascript.md)
+- **Python** -> [Python Examples](./examples/python.md)
+- **curl** -> [curl Examples](./examples/curl.md)
 
 ---
 
@@ -156,6 +156,6 @@ Now that you've made your first request, explore more:
 
 If you encounter issues or have questions:
 
-- **[Error Handling Guide](/api/completions/errors)** - Troubleshoot common problems
+- **[Error Handling Guide](./errors.md)** - Troubleshoot common problems
 - **API Status** - Check service status (coming soon)
 - **Support** - Contact support for assistance (coming soon)

@@ -29,8 +29,18 @@ class BikeForMindAPI {
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      throw new Error(`API Error: ${error.error.message}`);
+      const text = await response.text();
+      let message = text;
+      try {
+        const body = JSON.parse(text);
+        message = body.error?.message ?? (typeof body.error === 'string' ? body.error : text);
+      } catch {
+        // Not JSON: keep the raw text
+      }
+      throw Object.assign(new Error(`API Error: ${message}`), {
+        status: response.status,
+        retryAfter: Number(response.headers.get('Retry-After')) || undefined,
+      });
     }
 
     return response.json();
@@ -63,7 +73,7 @@ class BikeForMindAPI {
 
 // Usage
 const api = new BikeForMindAPI('your-jwt-token');
-const users = await api.get('/api/users');
+const agents = await api.get('/api/agents');
 ```
 
 ### Python
@@ -91,8 +101,12 @@ class BikeForMindAPI:
         )
         
         if not response.ok:
-            error = response.json()
-            raise Exception(f"API Error: {error['error']['message']}")
+            try:
+                error = response.json().get('error')
+                message = error.get('message') if isinstance(error, dict) else error
+            except ValueError:
+                message = None
+            raise requests.HTTPError(f"API Error: {message or response.text}", response=response)
         
         return response.json()
     
@@ -110,27 +124,19 @@ class BikeForMindAPI:
 
 # Usage
 api = BikeForMindAPI('your-jwt-token')
-users = api.get('/api/users')
+agents = api.get('/api/agents')
 ```
 
 ## Common Use Cases
 
-### User Management
+### Agent Management
 
 ```typescript
-// Get current user profile
-const profile = await api.get('/api/users/me');
+// List your agents
+const agents = await api.get('/api/agents');
 
-// List users in organization
-const users = await api.get('/api/users?organizationId=org_123');
-
-// Update user preferences
-await api.put('/api/users/me', {
-  preferences: {
-    theme: 'dark',
-    language: 'en'
-  }
-});
+// Get one agent
+const agent = await api.get('/api/agents/agent_123');
 ```
 
 ### Agent Operations
@@ -262,37 +268,7 @@ ws.subscribeToSession('session_123');
 
 ### Error Handling with Retry Logic
 
-```typescript
-async function apiCallWithRetry(
-  apiCall: () => Promise<any>,
-  maxRetries: number = 3,
-  baseDelay: number = 1000
-): Promise<any> {
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      return await apiCall();
-    } catch (error) {
-      if (attempt === maxRetries) {
-        throw error;
-      }
-
-      // Check if error is retryable
-      if (error.code === 'RATE_LIMIT_EXCEEDED' || error.code === 'SERVICE_UNAVAILABLE') {
-        const delay = baseDelay * Math.pow(2, attempt - 1);
-        await new Promise(resolve => setTimeout(resolve, delay));
-        continue;
-      }
-
-      throw error; // Don't retry for non-retryable errors
-    }
-  }
-}
-
-// Usage
-const result = await apiCallWithRetry(async () => {
-  return api.get('/api/users');
-});
-```
+Retry only 429, 500 and 503, wait the `Retry-After` seconds on a 429, and never retry 400, 401, 403, 413 or 422. The `request` method above attaches `status` and `retryAfter` to the error it throws, so the [retry helper](./completions/examples/javascript.md#retry-helper) works with it unchanged. The full retry table is in [Completions errors](./completions/errors.md#retry-guidance).
 
 ### Pagination Helper
 
@@ -319,15 +295,15 @@ async function getAllPages<T>(
 }
 
 // Usage
-const allUsers = await getAllPages(api, '/api/users');
+const allAgents = await getAllPages(api, '/api/agents');
 ```
 
 ## cURL Examples
 
 ### Basic Authentication
 ```bash
-# Get user profile
-curl -X GET https://app.bike4mind.com/api/users/me \
+# List your agents
+curl -X GET https://app.bike4mind.com/api/agents \
   -H "Authorization: Bearer $JWT_TOKEN"
 ```
 
@@ -359,7 +335,7 @@ curl -X POST https://app.bike4mind.com/api/ai/transcribe \
 ```bash
 # Using jq for JSON processing
 response=$(curl -s -w "%{http_code}" \
-  -X GET https://app.bike4mind.com/api/users \
+  -X GET https://app.bike4mind.com/api/agents \
   -H "Authorization: Bearer $JWT_TOKEN")
 
 http_code="${response: -3}"

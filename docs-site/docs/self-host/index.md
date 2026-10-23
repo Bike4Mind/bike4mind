@@ -68,7 +68,7 @@ Compose reads `.env.selfhost` values verbatim - don't add comments on the same l
 B4M_BOOTSTRAP_ADMIN_EMAIL=you@example.com
 ```
 
-**LLM keys** - set the ones you'll use; blank disables that provider. Only models for providers with a key appear in the model picker. You can also add or override keys per-user later, in the app under Settings > API Keys.
+**LLM keys** - set the ones you'll use; blank disables that provider. Only models for providers with a key appear in the model picker. You can also add or override keys per-user later, in the app under Profile menu -> More -> API Keys.
 
 ```bash
 ANTHROPIC_API_KEY=      # Claude
@@ -108,7 +108,7 @@ For production use, point the `MAIL_*` variables at a real SMTP provider instead
 
 Everything you can do in the UI is also available over the HTTP API, authenticated with a scoped API key.
 
-1. **Create an API key**: in the app, open **Settings > API Keys** and create a key with the `ai:chat` scope. The key (starting `b4m_`) is shown once - copy it.
+1. **Create an API key**: in the app, open **Profile menu -> More -> API Keys** and create a key with the `ai:chat` scope. The key (starting `b4m_`) is shown once - copy it.
 
 2. **Send a chat message**:
 
@@ -121,14 +121,14 @@ curl -X POST http://localhost:3000/api/chat \
 
 `wait: true` processes the message synchronously and returns the reply in the response; omit it to get a `sessionId`/`questId` back immediately and let processing continue in the background. The model defaults to the admin `DefaultAPIModel` setting; pass `"model": "..."` to pick any model from `/api/models` (only providers you configured a key for are available).
 
-The same header works as `Authorization: ApiKey <key>`. Keys, scopes, and rate limits are managed per-user in Settings > API Keys.
+The same header works as `Authorization: ApiKey <key>`. Keys, scopes, and rate limits are managed per-user in Profile menu -> More -> API Keys.
 
 ## Troubleshooting
 
 - **App can't reach Mongo / "no primary" errors** - MongoDB must run as a replica set (`--replSet rs0`) for transactions; the bundled `mongo` service is configured for this. Give it a few seconds to elect a primary on first boot.
 - **No sign-in email arrives** - check Mailpit at `http://localhost:8025`; if it's empty, check `docker compose -f compose.selfhost.yaml logs app` for mail errors and verify the `MAIL_*` values.
 - **A model returns "unauthorized"** - that provider's API key is missing or wrong in `.env.selfhost`. Only the providers you set keys for are available.
-- **The model picker is empty / "no models" warning** - no provider key is configured. Set at least one provider key in `.env.selfhost` and restart (`docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d`), or add a key in the app under Settings > API Keys.
+- **The model picker is empty / "no models" warning** - no provider key is configured. Set at least one provider key in `.env.selfhost` and restart (`docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d`), or add a key in the app under Profile menu -> More -> API Keys.
 - **Chat replies only appear after a refresh** - expected for now: the realtime websocket gateway is not part of the compose stack yet, so live streaming updates degrade to fetch-on-refresh.
 - **Changed `SECRET_ENCRYPTION_KEY` and now secrets fail to decrypt** - restore the original key; it cannot be rotated in place.
 

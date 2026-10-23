@@ -405,26 +405,15 @@ X-RateLimit-Reset: 1642284600
 ### JavaScript/TypeScript
 
 ```typescript
-import { BikeForMindClient } from '@bike4mind/sdk';
+import { createClient } from '@bike4mind/sdk';
 
-const client = new BikeForMindClient({
-  apiKey: 'your-api-key',
-  baseUrl: 'https://app.bike4mind.com'
+const b4m = createClient({
+  baseUrl: 'https://app.bike4mind.com',
+  apiKey: process.env.B4M_API_KEY,
 });
 
-// Create an agent
-const agent = await client.agents.create({
-  name: 'My Assistant',
-  description: 'A helpful assistant',
-  personality: {
-    majorMotivation: 'Helper',
-    responseStyle: 'friendly'
-  },
-  capabilities: ['general_assistance']
-});
-
-// Attach to session
-await client.sessions.attachAgent(sessionId, agent.id);
+// List your agents (any spec operation is callable by its operationId)
+const agents = await b4m.call('listAgents');
 ```
 
 ### Python

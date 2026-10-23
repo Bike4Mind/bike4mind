@@ -25,8 +25,8 @@ Extended thinking is an Anthropic Claude feature that allows the model to show i
 - **Educational:** Learn the model's thought process
 - **Debugging:** Identify where reasoning may have gone wrong
 
-:::info Automatic Feature
-Extended thinking is automatically available for supported Anthropic Claude models. You don't need to enable it explicitly.
+:::info Opt in per request
+Extended thinking is off unless you ask for it. Send `options.thinking.enabled: true`, and optionally `options.thinking.budget_tokens` (integer; the in-app API reference lists the allowed range and default) and `options.reasoningEffort` (`none`, `minimal`, `low`, `medium`, `high` or `xhigh`). Models that cannot think ignore these fields. The in-app API reference lists the exact behavior per provider.
 :::
 
 ---
@@ -100,17 +100,19 @@ When extended thinking is used, the `content` event includes a `thinking` array:
 
 ```bash
 curl -X POST https://app.bike4mind.com/api/ai/v1/completions \
-  -H "X-API-Key: $B4M_API_KEY" \
+  -H "Authorization: Bearer $B4M_API_KEY" \
   -H "Content-Type: application/json" \
   --no-buffer \
   -d '{
-    "model": "claude-3-5-sonnet",
+    "model": "claude-sonnet-5-5",
     "messages": [
       {
         "role": "user",
         "content": "A farmer has 17 sheep, and all but 9 die. How many are left?"
       }
-    ]
+    ],
+    "max_tokens": 4000,
+    "options": { "thinking": { "enabled": true, "budget_tokens": 2048 } }
   }'
 ```
 
@@ -210,21 +212,12 @@ Simple question without thinking:   50 output tokens
 Same question with thinking:       200 output tokens
 ```
 
-**Cost impact:**
-
-```
-Claude 3.5 Sonnet: $15/1M output tokens
-
-Without thinking: 50 tokens = $0.00075
-With thinking:   200 tokens = $0.003
-
-4x increase in cost
-```
+Cost is credits charged by token usage, and thinking tokens are output tokens. The `credits` field on each event reports what a request used.
 
 **Recommendations:**
 
 1. **Budget accordingly** - Account for increased token usage when using models with extended thinking
-2. **Set maxTokens** - Limit total output to control costs
+2. **Set `max_tokens`** - Limit total output to control costs
 3. **Monitor usage** - Track token consumption for optimization
 4. **Use when valuable** - Extended thinking is most valuable for complex reasoning tasks
 
@@ -286,25 +279,13 @@ User: "Hello!"
 
 ## Supported Models
 
-Extended thinking is currently available for:
-
-- **Claude 3.5 Sonnet**
-- **Claude 3 Opus**
-- **Other Anthropic Claude models** (check model capabilities)
+Extended thinking is available on Anthropic Claude models. Call `GET /api/v1/models` for the model ids available to you.
 
 **Check if a model supports extended thinking:**
 
 ```javascript
 function supportsExtendedThinking(modelName) {
-  const supportedModels = [
-    'claude-3-5-sonnet',
-    'claude-3-opus',
-    'claude-3-sonnet',
-  ];
-
-  return supportedModels.some(model =>
-    modelName.toLowerCase().includes(model)
-  );
+  return modelName.toLowerCase().includes('claude');
 }
 ```
 
@@ -319,12 +300,14 @@ async function streamWithThinking(messages) {
   const response = await fetch('https://app.bike4mind.com/api/ai/v1/completions', {
     method: 'POST',
     headers: {
-      'X-API-Key': process.env.B4M_API_KEY,
+      'Authorization': `Bearer ${process.env.B4M_API_KEY}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: 'claude-3-5-sonnet',
-      messages: messages
+      model: 'claude-sonnet-5-5',
+      messages: messages,
+      max_tokens: 4000,
+      options: { thinking: { enabled: true, budget_tokens: 2048 } },
     })
   });
 
@@ -414,8 +397,8 @@ const estimatedTokens = 100;
 // With thinking estimate (2-5x multiplier)
 const estimatedWithThinking = estimatedTokens * 3;
 
-// Set appropriate maxTokens
-const maxTokens = estimatedWithThinking;
+// Send as the top-level max_tokens field
+const max_tokens = estimatedWithThinking;
 ```
 
 ### 3. Use for Complex Tasks
@@ -480,14 +463,13 @@ function trackTokenUsage(event) {
 ### Thinking Not Appearing
 
 **Possible causes:**
-1. **Wrong model** - Extended thinking only works with Anthropic Claude models
-2. **Simple query** - Model determined thinking wasn't needed
-3. **Model decision** - Model chose not to use extended thinking
+1. **Not enabled** - The request did not set `options.thinking.enabled: true`
+2. **Wrong model** - The model cannot think, so the fields are ignored
+3. **Model decision** - The model chose not to emit thinking for a simple query
 
 **Solutions:**
-- Verify you're using a Claude model (`claude-3-5-sonnet`, etc.)
+- Send `options.thinking.enabled: true` and use a model that can think (`claude-sonnet-5-5`, etc.)
 - Try a more complex query that requires reasoning
-- Extended thinking is automatic and model-decided (cannot be forced)
 
 ### Too Much Thinking
 
@@ -496,7 +478,7 @@ function trackTokenUsage(event) {
 2. **No token limit** - Allowing unlimited output
 
 **Solutions:**
-- Set reasonable `maxTokens` limits
+- Lower `options.thinking.budget_tokens` and set a reasonable `max_tokens`
 - Simplify your queries if possible
 - Accept that complex problems require more thinking
 
@@ -504,7 +486,7 @@ function trackTokenUsage(event) {
 
 ## Next Steps
 
-- **[Tools & Function Calling](/api/completions/tools)** - Use tools with extended thinking
-- **[Code Examples](/api/completions/examples/javascript)** - See complete implementations
-- **[Error Handling](/api/completions/errors)** - Handle response parsing
-- **[Best Practices](/api/completions/best-practices)** - Optimize token usage
+- **[Tools & Function Calling](./tools.md)** - Use tools with extended thinking
+- **[Code Examples](./examples/javascript.md)** - See complete implementations
+- **[Error Handling](./errors.md)** - Handle response parsing
+- **[Best Practices](./best-practices.md)** - Optimize token usage

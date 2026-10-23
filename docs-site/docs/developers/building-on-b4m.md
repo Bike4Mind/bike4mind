@@ -293,21 +293,11 @@ Revoking your app's access in B4M stops new exchanges wherever the consent check
 
 `POST /api/ai/v1/completions` checks everything it can before it opens the stream: the JSON body, the key and its scopes, the rate limit, the model and the user's credits. Any of those failing returns a JSON error with a real HTTP status and no stream:
 
-| Status | Meaning | `errorCode` |
-|--------|---------|-------------|
-| 400 | Malformed JSON, or a `model` B4M does not know or cannot serve you. | - |
-| 400 | The model provider rejected your request. Change the request or choose another model; do not retry it unchanged. | `invalid_request` |
-| 401 | The key was rejected. Re-mint once (see "One re-mint" above). | - |
-| 403 | The key lacks a scope this endpoint needs; `required_scopes` names them. | - |
-| 405 | Wrong HTTP method; use `POST`. | - |
-| 413 | The body is over 25 MB. | - |
-| 422 | The user or their org is out of credits, or the org's per-member credit cap is reached. Prompt them to top up their B4M balance. | `insufficient_credits` |
-| 422 | The body failed validation; `error` names the failing fields. | - |
-| 429 | Rate limited. Wait `Retry-After` seconds, then retry. When called with an API key, `X-RateLimit-*` headers show the window state. | - |
-| 500 | Internal error. Retry, and log `request_id` if it persists. | - |
-| 503 | The database is unavailable, the model's provider is not configured on this deployment, or the self-hosted model server that lists the model (Ollama, local image) is unreachable. Retry later or pick another model. | `provider_not_configured` for the model cases |
+Every status code and its `errorCode` values are listed in the [in-app API reference](https://app.bike4mind.com/api/v1/docs). Branch on the status and `errorCode`, never on the `error` prose. A key missing a scope is a 403, and `required_scopes` names the scopes.
 
-The body is `{ "error": "...", "request_id": "...", "errorCode": "..." }` (`errorCode` only where the table shows one), and `request_id` also arrives as the `X-Request-ID` header. Branch on the status and `errorCode`, never on `error`, which is prose and can change. The public API never returns 402.
+Out of credits is a 422 with `errorCode: "insufficient_credits"` (never 402). A failure body also carries `request_id`, which arrives as the `X-Request-ID` header too.
+
+Retry summary: a 400 `invalid_request` must not be retried unchanged. A 429 is retried after the `Retry-After` seconds. A 503, including `provider_not_configured` (the model's provider is not configured here, or a self-hosted model server such as Ollama or local image is unreachable), is retried later or with another model.
 
 Once the stream opens the status is 200 and stays 200. A failure after that point arrives as one in-band event:
 
@@ -330,20 +320,21 @@ Branch on `code`, never on `message`, which is prose and can change. (The JSON, 
 
 A reasoning model spends tokens thinking before it writes the visible reply, and those thinking tokens count against `max_tokens`. With a small budget the model can use all of it on reasoning and the stream ends with no visible text.
 
-For a short streamed reply, set a small `maxTokens` and turn thinking off with `reasoningEffort: "none"`:
+For a short streamed reply, set a small `max_tokens` and turn thinking off with `reasoningEffort: "none"`:
 
 ```json
 {
   "model": "claude-sonnet-5",
   "messages": [{ "role": "user", "content": "Summarize this in one sentence: ..." }],
   "stream": true,
-  "options": { "maxTokens": 800, "reasoningEffort": "none" }
+  "max_tokens": 800,
+  "options": { "reasoningEffort": "none" }
 }
 ```
 
 Otherwise, omit `max_tokens` on reasoning models and let B4M size the ceiling.
 
-On a model that cannot turn thinking off, `none` falls back to the lowest effort, so the model still reasons a little and a very small `maxTokens` can still come back short. Adapters that do not support the field ignore it. See the `reasoningEffort` field of the completions request in the API reference (`https://<your-b4m-host>/api/v1/docs`, spec at `/api/v1/openapi.json`) for the allowed values (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`) and the per-adapter behavior.
+On a model that cannot turn thinking off, `none` falls back to the lowest effort, so the model still reasons a little and a very small `max_tokens` can still come back short. Adapters that do not support the field ignore it. See the `reasoningEffort` field of the completions request in the API reference (`https://<your-b4m-host>/api/v1/docs`, spec at `/api/v1/openapi.json`) for the allowed values (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`) and the per-adapter behavior.
 
 ## 7. Read the user's state
 

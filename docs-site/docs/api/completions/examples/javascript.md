@@ -6,28 +6,90 @@ sidebar_position: 1
 
 # JavaScript/TypeScript Examples
 
-Production-ready code examples for integrating the B4M Completions API with JavaScript and TypeScript.
+Production-ready code examples for integrating the B4M Completions API with JavaScript and TypeScript. The first three sections define the stream loop, the error type and the retry helper once. Every later sample imports them and shows only what it adds.
+
+## Prefer the Typed SDK
+
+If you do not need to control the stream parsing yourself, install the typed client:
+
+```bash
+npm install @bike4mind/sdk
+```
+
+```typescript
+import { createClient } from '@bike4mind/sdk';
+
+const b4m = createClient({
+  baseUrl: 'https://app.bike4mind.com',
+  apiKey: process.env.B4M_API_KEY,
+});
+
+for await (const event of b4m.completions({
+  model: 'claude-sonnet-5-5',
+  messages: [{ role: 'user', content: 'Hello!' }],
+})) {
+  if (event.type === 'content') process.stdout.write(event.text);
+  // The SDK yields in-band error events instead of throwing them
+  if (event.type === 'error') throw new Error(`${event.message} (${event.code}, ${event.requestId})`);
+}
+
+const models = await b4m.call('listModels');
+```
+
+`completions()` throws `B4mStreamEndedError` when a stream ends without `[DONE]`. The SDK does not retry; wrap calls in the retry helper below. The rest of this page uses plain `fetch`, which runs in Node 18+ and browsers.
+
+---
 
 ## Basic Streaming Example
 
-Simple streaming implementation using the Fetch API:
+Save this as `b4m-stream.js`. It is the one stream loop and the one error type that the other samples reuse:
 
 ```javascript
-async function streamCompletion(apiKey, messages) {
-  const response = await fetch('https://app.bike4mind.com/api/ai/v1/completions', {
+export class CompletionError extends Error {
+  constructor(message, { status, code, requestId, retryAfter } = {}) {
+    super(message);
+    this.name = 'CompletionError';
+    this.status = status;
+    this.code = code;
+    this.requestId = requestId;
+    this.retryAfter = retryAfter;
+  }
+}
+
+/**
+ * Streams a completion and calls onEvent for every event before [DONE].
+ * Throws CompletionError on an HTTP error, an in-band error event, or a
+ * stream that ends without [DONE].
+ */
+export async function streamCompletion(
+  body,
+  onEvent,
+  { apiKey, url = 'https://app.bike4mind.com/api/ai/v1/completions', signal } = {}
+) {
+  const response = await fetch(url, {
     method: 'POST',
     headers: {
-      'X-API-Key': apiKey,
       'Content-Type': 'application/json',
+      ...(apiKey && { Authorization: `Bearer ${apiKey}` }),
     },
-    body: JSON.stringify({
-      model: 'claude-3-5-sonnet',
-      messages: messages
-    })
+    body: JSON.stringify(body),
+    signal,
   });
 
   if (!response.ok) {
-    throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+    const text = await response.text();
+    let parsed = {};
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      // Not JSON: fall back to the raw text
+    }
+    throw new CompletionError(parsed.error ?? text, {
+      status: response.status,
+      code: parsed.errorCode,
+      requestId: parsed.request_id,
+      retryAfter: Number(response.headers.get('Retry-After')) || undefined,
+    });
   }
 
   const reader = response.body.getReader();
@@ -44,382 +106,230 @@ async function streamCompletion(apiKey, messages) {
       buffer = lines.pop() || '';
 
       for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          const data = line.slice(6).trim();
+        if (!line.startsWith('data: ')) continue;
+        const data = line.slice(6).trim();
+        if (data === '[DONE]') return;
 
-          if (data === '[DONE]') {
-            console.log('\n✓ Stream complete');
-            return;
-          }
-
-          const event = JSON.parse(data);
-
-          if (event.type === 'content') {
-            process.stdout.write(event.text);
-          } else if (event.type === 'error') {
-            throw new Error(`Stream error: ${event.message}`);
-          }
+        let event;
+        try {
+          event = JSON.parse(data);
+        } catch {
+          throw new CompletionError(`Malformed stream event: ${data}`);
         }
+
+        // The HTTP status is already 200, so a failure arrives as an event
+        if (event.type === 'error') {
+          throw new CompletionError(event.message, {
+            status: response.status,
+            code: event.code,
+            requestId: event.requestId,
+          });
+        }
+
+        onEvent(event);
       }
     }
   } finally {
     reader.releaseLock();
   }
+
+  throw new CompletionError('Stream ended without [DONE] or an error event');
 }
-
-// Usage
-const apiKey = process.env.B4M_API_KEY;
-const messages = [
-  { role: 'user', content: 'Write a haiku about coding' }
-];
-
-streamCompletion(apiKey, messages)
-  .then(() => console.log('Done!'))
-  .catch(err => console.error('Error:', err));
 ```
+
+Use it:
+
+```javascript
+import { streamCompletion } from './b4m-stream.js';
+
+try {
+  await streamCompletion(
+    { model: 'claude-sonnet-5-5', messages: [{ role: 'user', content: 'Write a haiku about coding' }] },
+    (event) => {
+      if (event.type === 'content') process.stdout.write(event.text);
+    },
+    { apiKey: process.env.B4M_API_KEY }
+  );
+  console.log('\nDone');
+} catch (err) {
+  console.error('Error:', err.code ?? err.status, err.requestId, err.message);
+}
+```
+
+---
+
+## Retry Helper
+
+Add this to `b4m-stream.js`. It is the one retry helper; see the [retry table](../errors.md) for which failures are worth retrying:
+
+```javascript
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+export async function withRetry(fn, maxAttempts = 3) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      // Retry only 429, 500, 503 and in-band provider_error
+      const retryable = [429, 500, 503].includes(error.status) || error.code === 'provider_error';
+      if (!retryable || attempt >= maxAttempts - 1) throw error;
+
+      // Honor Retry-After when present; otherwise back off 1s, 2s, 4s
+      await sleep((error.retryAfter ?? 2 ** attempt) * 1000);
+    }
+  }
+}
+```
+
+```javascript
+import { streamCompletion, withRetry } from './b4m-stream.js';
+
+await withRetry(() => streamCompletion(body, onEvent, { apiKey: process.env.B4M_API_KEY }));
+```
+
+A retry restarts the stream from the beginning, so discard any partial output collected by `onEvent` before you call it again.
 
 ---
 
 ## TypeScript Client Class
 
-Complete TypeScript implementation with full type safety:
+A thin typed wrapper over the helpers above. It adds types and a `complete()` method that returns the full text, retrying the whole request on a transient failure:
 
 ```typescript
-import fetch from 'node-fetch';
+import { streamCompletion, withRetry } from './b4m-stream.js';
 
 interface Message {
   role: 'user' | 'assistant' | 'system';
-  content: string | any[];
+  content: string | unknown[];
 }
 
 interface CompletionOptions {
   temperature?: number;
-  maxTokens?: number;
-  stream?: boolean;
-  tools?: any[];
+  max_tokens?: number;
+  tools?: unknown[];
 }
 
-interface SSEContentEvent {
-  type: 'content' | 'tool_use';
-  text: string;
-  tools?: any[];
-  usage?: {
-    inputTokens?: number;
-    outputTokens?: number;
-  };
-  thinking?: any[];
+interface SSEEvent {
+  type: 'meta' | 'content' | 'tool_use' | 'provider_block';
+  text?: string;
+  tools?: { id?: string; name: string; arguments?: string }[];
+  usage?: { inputTokens?: number; outputTokens?: number };
 }
 
-interface SSEErrorEvent {
-  type: 'error';
-  message: string;
-}
-
-type SSEEvent = SSEContentEvent | SSEErrorEvent;
-
-class B4MCompletionClient {
-  private apiKey: string;
-  private baseUrl: string;
-
-  constructor(apiKey: string, baseUrl = 'https://app.bike4mind.com') {
-    if (!apiKey) {
-      throw new Error('API key is required');
-    }
-    this.apiKey = apiKey;
-    this.baseUrl = baseUrl;
+export class B4MCompletionClient {
+  constructor(
+    private apiKey: string,
+    private baseUrl = 'https://app.bike4mind.com'
+  ) {
+    if (!apiKey) throw new Error('API key is required');
   }
 
-  async streamCompletion(
-    model: string,
-    messages: Message[],
-    options?: CompletionOptions,
-    onEvent?: (event: SSEEvent) => void
-  ): Promise<void> {
-    const response = await fetch(`${this.baseUrl}/api/ai/v1/completions`, {
-      method: 'POST',
-      headers: {
-        'X-API-Key': this.apiKey,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model,
-        messages,
-        options
-      })
+  stream(model: string, messages: Message[], options?: CompletionOptions, onEvent: (e: SSEEvent) => void = () => {}) {
+    return streamCompletion({ model, messages, ...options }, onEvent, {
+      apiKey: this.apiKey,
+      url: `${this.baseUrl}/api/ai/v1/completions`,
     });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`HTTP ${response.status}: ${errorText}`);
-    }
-
-    const reader = response.body!.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const data = line.slice(6).trim();
-
-            if (data === '[DONE]') {
-              return;
-            }
-
-            try {
-              const event = JSON.parse(data) as SSEEvent;
-
-              if (event.type === 'error') {
-                throw new Error(`Stream error: ${event.message}`);
-              }
-
-              if (onEvent) {
-                onEvent(event);
-              }
-            } catch (parseError) {
-              console.error('JSON parse error:', parseError, 'Raw:', data);
-            }
-          }
-        }
-      }
-    } finally {
-      reader.releaseLock();
-    }
   }
 
-  async complete(
-    model: string,
-    messages: Message[],
-    options?: CompletionOptions
-  ): Promise<string> {
-    let fullResponse = '';
-
-    await this.streamCompletion(model, messages, options, (event) => {
-      if (event.type === 'content') {
-        fullResponse += event.text;
-      }
+  complete(model: string, messages: Message[], options?: CompletionOptions): Promise<string> {
+    return withRetry(async () => {
+      let text = '';
+      await this.stream(model, messages, options, (event) => {
+        if (event.type === 'content') text += event.text;
+      });
+      return text;
     });
-
-    return fullResponse;
   }
 }
 
 // Usage
 const client = new B4MCompletionClient(process.env.B4M_API_KEY!);
 
-// Streaming with callback
-await client.streamCompletion(
-  'claude-3-5-sonnet',
-  [{ role: 'user', content: 'Hello!' }],
-  { temperature: 0.7, maxTokens: 1024 },
-  (event) => {
-    if (event.type === 'content') {
-      process.stdout.write(event.text);
-    }
-  }
-);
+await client.stream('claude-sonnet-5-5', [{ role: 'user', content: 'Hello!' }], { max_tokens: 1024 }, (event) => {
+  if (event.type === 'content') process.stdout.write(event.text!);
+});
 
-// Non-streaming (waits for complete response)
-const response = await client.complete(
-  'claude-3-5-sonnet',
-  [{ role: 'user', content: 'What is 2+2?' }]
-);
-console.log(response);
+console.log(await client.complete('claude-sonnet-5-5', [{ role: 'user', content: 'What is 2+2?' }]));
 ```
 
 ---
 
 ## React Hook
 
-React hook for easy integration in React applications:
+The browser calls your own server route, which holds the API key and forwards the request:
+
+:::warning
+Never put your API key in browser code. Variables such as `NEXT_PUBLIC_*` are bundled into the page and visible to every visitor.
+:::
+
+Server route (Next.js `app/api/chat/route.ts`), with `B4M_API_KEY` set as a server-only environment variable:
+
+```typescript
+export async function POST(req: Request) {
+  const upstream = await fetch('https://app.bike4mind.com/api/ai/v1/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${process.env.B4M_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: await req.text(),
+  });
+
+  // Pass the upstream status and SSE body through unchanged
+  return new Response(upstream.body, {
+    status: upstream.status,
+    headers: {
+      'Content-Type': upstream.headers.get('content-type') ?? 'text/event-stream',
+    },
+  });
+}
+```
+
+The hook reuses `streamCompletion`, pointed at that route and with no `apiKey`. The proxy passes errors and the stream through unchanged, so the same parsing and `CompletionError` apply:
 
 ```typescript
 import { useState, useCallback } from 'react';
+import { streamCompletion } from './b4m-stream.js';
 
 interface Message {
   role: 'user' | 'assistant' | 'system';
   content: string;
 }
 
-interface UseCompletionOptions {
-  apiKey: string;
-  model?: string;
-  baseUrl?: string;
-}
-
-interface CompletionState {
-  response: string;
-  loading: boolean;
-  error: string | null;
-  usage: {
-    inputTokens?: number;
-    outputTokens?: number;
-  } | null;
-}
-
-export function useCompletion(options: UseCompletionOptions) {
-  const {
-    apiKey,
-    model = 'claude-3-5-sonnet',
-    baseUrl = 'https://app.bike4mind.com'
-  } = options;
-
-  const [state, setState] = useState<CompletionState>({
-    response: '',
-    loading: false,
-    error: null,
-    usage: null,
-  });
+export function useCompletion({ model = 'claude-sonnet-5-5', endpoint = '/api/chat' } = {}) {
+  const [response, setResponse] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const complete = useCallback(async (messages: Message[]) => {
-    setState({
-      response: '',
-      loading: true,
-      error: null,
-      usage: null,
-    });
-
+    setResponse('');
+    setError(null);
+    setLoading(true);
     try {
-      const response = await fetch(`${baseUrl}/api/ai/v1/completions`, {
-        method: 'POST',
-        headers: {
-          'X-API-Key': apiKey,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model,
-          messages
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${await response.text()}`);
-      }
-
-      const reader = response.body?.getReader();
-      if (!reader) throw new Error('Response body is null');
-
-      const decoder = new TextDecoder();
-      let buffer = '';
-      let fullResponse = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const data = line.slice(6).trim();
-
-            if (data === '[DONE]') break;
-
-            try {
-              const event = JSON.parse(data);
-
-              if (event.type === 'content') {
-                fullResponse += event.text;
-                setState(prev => ({
-                  ...prev,
-                  response: fullResponse,
-                  usage: event.usage || prev.usage,
-                }));
-              } else if (event.type === 'error') {
-                throw new Error(event.message);
-              }
-            } catch (parseError) {
-              console.error('Parse error:', parseError);
-            }
-          }
-        }
-      }
-
-      setState(prev => ({ ...prev, loading: false }));
-
-    } catch (error: any) {
-      setState(prev => ({
-        ...prev,
-        loading: false,
-        error: error.message,
-      }));
+      await streamCompletion({ model, messages }, (event) => {
+        if (event.type === 'content') setResponse((prev) => prev + event.text);
+      }, { url: endpoint });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
     }
-  }, [apiKey, model, baseUrl]);
+  }, [model, endpoint]);
 
-  const reset = useCallback(() => {
-    setState({
-      response: '',
-      loading: false,
-      error: null,
-      usage: null,
-    });
-  }, []);
-
-  return {
-    ...state,
-    complete,
-    reset,
-  };
+  return { response, loading, error, complete };
 }
 
-// Usage in component
-function ChatComponent() {
-  const { response, loading, error, usage, complete, reset } = useCompletion({
-    apiKey: process.env.NEXT_PUBLIC_B4M_API_KEY!,
-  });
-
-  const [input, setInput] = useState('');
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!input.trim()) return;
-
-    await complete([
-      { role: 'user', content: input }
-    ]);
-
-    setInput('');
-  };
+// Usage in a component
+function Chat() {
+  const { response, loading, error, complete } = useCompletion();
 
   return (
     <div>
-      <form onSubmit={handleSubmit}>
-        <input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="Type your message..."
-          disabled={loading}
-        />
-        <button type="submit" disabled={loading}>
-          {loading ? 'Sending...' : 'Send'}
-        </button>
-      </form>
-
+      <button disabled={loading} onClick={() => complete([{ role: 'user', content: 'Hello!' }])}>
+        {loading ? 'Sending...' : 'Send'}
+      </button>
       {error && <div className="error">{error}</div>}
-
-      <div className="response">
-        {response || (loading ? 'Thinking...' : 'Response will appear here')}
-      </div>
-
-      {usage && (
-        <div className="usage">
-          Tokens: {usage.inputTokens} in / {usage.outputTokens} out
-        </div>
-      )}
-
-      {response && (
-        <button onClick={reset}>Clear</button>
-      )}
+      <div className="response">{response}</div>
     </div>
   );
 }
@@ -427,461 +337,160 @@ function ChatComponent() {
 
 ---
 
-## Error Handling with Retry
-
-Complete error handling with exponential backoff:
-
-```typescript
-class B4MClientWithRetry extends B4MCompletionClient {
-  private maxRetries: number;
-
-  constructor(apiKey: string, baseUrl?: string, maxRetries = 3) {
-    super(apiKey, baseUrl);
-    this.maxRetries = maxRetries;
-  }
-
-  async streamCompletionWithRetry(
-    model: string,
-    messages: Message[],
-    options?: CompletionOptions,
-    onEvent?: (event: SSEEvent) => void
-  ): Promise<void> {
-    for (let attempt = 0; attempt < this.maxRetries; attempt++) {
-      try {
-        return await this.streamCompletion(model, messages, options, onEvent);
-      } catch (error: any) {
-        // Parse HTTP status from error message
-        const statusMatch = error.message.match(/HTTP (\d+)/);
-        const status = statusMatch ? parseInt(statusMatch[1]) : null;
-
-        // Rate limited - wait and retry
-        if (status === 429) {
-          // Extract Retry-After from error if available
-          const retryAfter = 60; // Default to 60 seconds
-          console.log(`Rate limited. Waiting ${retryAfter}s (attempt ${attempt + 1})...`);
-          await this.sleep(retryAfter * 1000);
-          continue;
-        }
-
-        // Server error - exponential backoff
-        if (status && status >= 500) {
-          if (attempt < this.maxRetries - 1) {
-            const delay = Math.pow(2, attempt) * 1000; // 1s, 2s, 4s
-            console.log(`Server error. Retrying in ${delay}ms (attempt ${attempt + 1})...`);
-            await this.sleep(delay);
-            continue;
-          }
-        }
-
-        // Other errors - don't retry
-        throw error;
-      }
-    }
-
-    throw new Error(`Failed after ${this.maxRetries} attempts`);
-  }
-
-  private sleep(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms));
-  }
-}
-
-// Usage
-const client = new B4MClientWithRetry(process.env.B4M_API_KEY!, undefined, 3);
-
-await client.streamCompletionWithRetry(
-  'claude-3-5-sonnet',
-  [{ role: 'user', content: 'Hello!' }],
-  undefined,
-  (event) => {
-    if (event.type === 'content') {
-      console.log(event.text);
-    }
-  }
-);
-```
-
----
-
 ## Tool Calling Example
 
-Complete tool calling implementation:
+Complete tool calling loop. B4M returns each tool call with an `id` and `arguments` as a JSON string:
 
 ```typescript
-interface Tool {
-  toolSchema: {
-    name: string;
-    description: string;
-    parameters: {
-      type: string;
-      properties: Record<string, any>;
-      required: string[];
-    };
-  };
-}
+import { streamCompletion } from './b4m-stream.js';
 
-async function completionWithTools(
-  client: B4MCompletionClient,
-  userQuery: string
-) {
-  const tools: Tool[] = [
+async function completionWithTools(apiKey: string, userQuery: string) {
+  const tools = [
     {
       toolSchema: {
         name: 'get_weather',
         description: 'Get current weather for a location',
         parameters: {
           type: 'object',
-          properties: {
-            location: {
-              type: 'string',
-              description: 'City name'
-            }
-          },
-          required: ['location']
-        }
-      }
-    }
+          properties: { location: { type: 'string', description: 'City name' } },
+          required: ['location'],
+        },
+      },
+    },
   ];
 
-  const messages: Message[] = [
-    { role: 'user', content: userQuery }
-  ];
+  const messages: unknown[] = [{ role: 'user', content: userQuery }];
 
   while (true) {
-    let toolCalls: any[] = [];
+    let toolCalls: { id?: string; name: string; arguments?: string }[] = [];
     let responseText = '';
 
-    await client.streamCompletion(
-      'claude-3-5-sonnet',
-      messages,
-      { tools },
-      (event) => {
-        if (event.type === 'content') {
-          responseText += event.text;
-        } else if (event.type === 'tool_use') {
-          responseText += event.text;
-          toolCalls = event.tools || [];
-        }
-      }
-    );
+    await streamCompletion({ model: 'claude-sonnet-5-5', messages, tools }, (event) => {
+      if (event.type === 'content' || event.type === 'tool_use') responseText += event.text;
+      if (event.type === 'tool_use') toolCalls = event.tools ?? [];
+    }, { apiKey });
 
-    // No tool calls - we're done
-    if (toolCalls.length === 0) {
-      return responseText;
-    }
+    if (toolCalls.length === 0) return responseText;
 
-    // Execute tools
-    // Note: B4M returns tools with 'arguments' (JSON string) and 'id'
-    // Parse arguments to get input object
-    console.log('Executing tools:', toolCalls);
+    const parsed = toolCalls.map((tool) => ({ ...tool, input: JSON.parse(tool.arguments ?? '{}') }));
 
-    // Add assistant message with tool calls
     messages.push({
       role: 'assistant',
       content: [
         { type: 'text', text: responseText },
-        ...toolCalls.map((tool) => {
-          // Parse arguments from JSON string if needed
-          const input = typeof tool.arguments === 'string'
-            ? JSON.parse(tool.arguments)
-            : tool.input;
-          return {
-            type: 'tool_use',
-            id: tool.id,  // Use the actual ID from B4M response
-            name: tool.name,
-            input: input
-          };
-        })
-      ]
+        ...parsed.map((t) => ({ type: 'tool_use', id: t.id, name: t.name, input: t.input })),
+      ],
     });
 
-    // Execute tools and add results
-    const toolResults = await Promise.all(
-      toolCalls.map(async (tool) => {
-        const input = typeof tool.arguments === 'string'
-          ? JSON.parse(tool.arguments)
-          : tool.input;
-        const result = await executeTool(tool.name, input);
-        return {
-          type: 'tool_result',
-          tool_use_id: tool.id,  // Use the actual ID from B4M response
-          content: JSON.stringify(result)
-        };
-      })
+    const results = await Promise.all(
+      parsed.map(async (t) => ({
+        type: 'tool_result',
+        tool_use_id: t.id,
+        content: JSON.stringify(await executeTool(t.name, t.input)),
+      }))
     );
-
-    messages.push({
-      role: 'user',
-      content: toolResults
-    });
-
-    // Continue loop for final response
+    messages.push({ role: 'user', content: results });
   }
 }
 
-async function executeTool(name: string, input: any): Promise<any> {
-  switch (name) {
-    case 'get_weather':
-      // Mock weather API call
-      return {
-        location: input.location,
-        temperature: 72,
-        condition: 'Sunny',
-        humidity: 45
-      };
-    default:
-      throw new Error(`Unknown tool: ${name}`);
+async function executeTool(name: string, input: { location: string }) {
+  if (name === 'get_weather') {
+    // Mock weather API call
+    return { location: input.location, temperature: 72, condition: 'Sunny' };
   }
+  throw new Error(`Unknown tool: ${name}`);
 }
 
-// Usage
-const client = new B4MCompletionClient(process.env.B4M_API_KEY!);
-const result = await completionWithTools(client, 'What is the weather in San Francisco?');
-console.log(result);
+console.log(await completionWithTools(process.env.B4M_API_KEY!, 'What is the weather in San Francisco?'));
 ```
 
 ---
 
 ## Rate Limiting
 
-Client-side rate limiting implementation:
+Client-side limiter. Set the limit to your own plan's limit, listed in the [in-app API reference](https://app.bike4mind.com/api/v1/docs):
 
 ```typescript
 class RateLimiter {
-  private requestsPerMinute: number;
   private requests: number[] = [];
 
-  constructor(requestsPerMinute: number) {
-    this.requestsPerMinute = requestsPerMinute;
-  }
+  constructor(private requestsPerMinute: number) {}
 
   async waitForSlot(): Promise<void> {
     const now = Date.now();
-    const oneMinuteAgo = now - 60000;
-
-    // Remove old requests
-    this.requests = this.requests.filter(time => time > oneMinuteAgo);
+    this.requests = this.requests.filter((time) => time > now - 60_000);
 
     if (this.requests.length >= this.requestsPerMinute) {
-      const oldestRequest = this.requests[0];
-      const waitTime = 60000 - (now - oldestRequest);
-
-      console.log(`Rate limit: waiting ${Math.ceil(waitTime / 1000)}s`);
-
-      await new Promise(resolve => setTimeout(resolve, waitTime));
-
-      // Recursive call to check again
+      await new Promise((resolve) => setTimeout(resolve, 60_000 - (now - this.requests[0])));
       return this.waitForSlot();
     }
 
     this.requests.push(now);
   }
 }
-
-// Usage with client
-const limiter = new RateLimiter(60); // 60 requests per minute
-const client = new B4MCompletionClient(process.env.B4M_API_KEY!);
-
-async function makeRateLimitedRequest(messages: Message[]) {
-  await limiter.waitForSlot();
-
-  return client.complete('claude-3-5-sonnet', messages);
-}
 ```
 
 ---
 
-## Complete Production Example
+## Production Example
 
-Full production-ready implementation with all features:
+Combine the pieces: a rate limiter in front, `withRetry` around the stream, and events for logging:
 
 ```typescript
-import fetch from 'node-fetch';
 import { EventEmitter } from 'events';
-
-interface CompletionConfig {
-  apiKey: string;
-  baseUrl?: string;
-  maxRetries?: number;
-  requestsPerMinute?: number;
-}
+import { streamCompletion, withRetry } from './b4m-stream.js';
 
 class ProductionB4MClient extends EventEmitter {
-  private apiKey: string;
-  private baseUrl: string;
-  private maxRetries: number;
   private rateLimiter: RateLimiter;
 
-  constructor(config: CompletionConfig) {
+  constructor(private apiKey: string, requestsPerMinute: number, private maxRetries = 3) {
     super();
-
-    if (!config.apiKey) {
-      throw new Error('API key is required');
-    }
-
-    this.apiKey = config.apiKey;
-    this.baseUrl = config.baseUrl || 'https://app.bike4mind.com';
-    this.maxRetries = config.maxRetries || 3;
-    this.rateLimiter = new RateLimiter(config.requestsPerMinute || 60);
+    if (!apiKey) throw new Error('API key is required');
+    this.rateLimiter = new RateLimiter(requestsPerMinute);
   }
 
-  async complete(
-    model: string,
-    messages: Message[],
-    options?: CompletionOptions
-  ): Promise<string> {
-    // Wait for rate limit slot
+  async complete(model: string, messages: { role: string; content: string }[]): Promise<string> {
     await this.rateLimiter.waitForSlot();
 
-    // Retry logic
-    for (let attempt = 0; attempt < this.maxRetries; attempt++) {
+    let attempt = 0;
+    return withRetry(async () => {
+      this.emit('attempt', { attempt: ++attempt, maxRetries: this.maxRetries });
+      let full = '';
       try {
-        this.emit('attempt', { attempt: attempt + 1, maxRetries: this.maxRetries });
-
-        let fullResponse = '';
-
-        await this.streamCompletion(model, messages, options, (event) => {
-          if (event.type === 'content') {
-            fullResponse += event.text;
-            this.emit('chunk', event.text);
-
-            if (event.usage) {
-              this.emit('usage', event.usage);
-            }
-          }
-        });
-
-        this.emit('complete', fullResponse);
-        return fullResponse;
-
-      } catch (error: any) {
-        this.emit('error', error);
-
-        const statusMatch = error.message.match(/HTTP (\d+)/);
-        const status = statusMatch ? parseInt(statusMatch[1]) : null;
-
-        // Rate limited
-        if (status === 429) {
-          const retryAfter = 60;
-          console.log(`Rate limited. Waiting ${retryAfter}s...`);
-          await this.sleep(retryAfter * 1000);
-          continue;
-        }
-
-        // Server error
-        if (status && status >= 500 && attempt < this.maxRetries - 1) {
-          const delay = Math.pow(2, attempt) * 1000;
-          console.log(`Server error. Retrying in ${delay}ms...`);
-          await this.sleep(delay);
-          continue;
-        }
-
-        // Non-retryable error
+        await streamCompletion({ model, messages }, (event) => {
+          if (event.type !== 'content') return;
+          full += event.text;
+          this.emit('chunk', event.text);
+          if (event.usage) this.emit('usage', event.usage);
+        }, { apiKey: this.apiKey });
+      } catch (error) {
+        this.emit('failure', error);
         throw error;
       }
-    }
-
-    throw new Error(`Failed after ${this.maxRetries} attempts`);
-  }
-
-  private async streamCompletion(
-    model: string,
-    messages: Message[],
-    options?: CompletionOptions,
-    onEvent?: (event: SSEEvent) => void
-  ): Promise<void> {
-    const response = await fetch(`${this.baseUrl}/api/ai/v1/completions`, {
-      method: 'POST',
-      headers: {
-        'X-API-Key': this.apiKey,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ model, messages, options })
-    });
-
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${await response.text()}`);
-    }
-
-    const reader = response.body!.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const data = line.slice(6).trim();
-
-            if (data === '[DONE]') return;
-
-            try {
-              const event = JSON.parse(data) as SSEEvent;
-
-              if (event.type === 'error') {
-                throw new Error(`Stream error: ${event.message}`);
-              }
-
-              if (onEvent) onEvent(event);
-            } catch (parseError) {
-              console.error('Parse error:', parseError);
-            }
-          }
-        }
-      }
-    } finally {
-      reader.releaseLock();
-    }
-  }
-
-  private sleep(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms));
+      this.emit('complete', full);
+      return full;
+    }, this.maxRetries);
   }
 }
 
 // Usage
-const client = new ProductionB4MClient({
-  apiKey: process.env.B4M_API_KEY!,
-  maxRetries: 3,
-  requestsPerMinute: 60
-});
+const requestsPerMinute = Number(process.env.B4M_REQUESTS_PER_MINUTE);
+const client = new ProductionB4MClient(process.env.B4M_API_KEY!, requestsPerMinute);
 
-// Listen to events
-client.on('attempt', ({ attempt, maxRetries }) => {
-  console.log(`Attempt ${attempt}/${maxRetries}`);
-});
+client.on('chunk', (text) => process.stdout.write(text));
+client.on('usage', (usage) => console.log('\nTokens:', usage));
+client.on('failure', (error) => console.error('Error:', error.message));
 
-client.on('chunk', (text) => {
-  process.stdout.write(text);
-});
-
-client.on('usage', (usage) => {
-  console.log('\nTokens:', usage);
-});
-
-client.on('error', (error) => {
-  console.error('Error:', error.message);
-});
-
-// Make request
-const response = await client.complete(
-  'claude-3-5-sonnet',
-  [{ role: 'user', content: 'Hello!' }]
-);
+await client.complete('claude-sonnet-5-5', [{ role: 'user', content: 'Hello!' }]);
 ```
+
+The event is named `failure` because Node throws on an `EventEmitter` `'error'` event that has no listener.
 
 ---
 
 ## Next Steps
 
-- **[Python Examples](/api/completions/examples/python)** - See Python implementations
-- **[curl Examples](/api/completions/examples/curl)** - Quick testing with curl
-- **[Best Practices](/api/completions/best-practices)** - Production patterns
-- **[Error Handling](/api/completions/errors)** - Handle errors properly
+- **[Python Examples](./python.md)** - See Python implementations
+- **[curl Examples](./curl.md)** - Quick testing with curl
+- **[Best Practices](../best-practices.md)** - Production patterns
+- **[Error Handling](../errors.md)** - Handle errors properly
