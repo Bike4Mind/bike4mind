@@ -1865,11 +1865,16 @@ function readCoreResourceNames() {
       .join('\n');
     const captured = [...code.matchAll(/new sst\.[A-Za-z.]+\(\s*'([A-Za-z0-9_]+)'/g)];
     // The contributed secret and queue loops are the only constructors named from data;
-    // those names are not core's.
-    const fromData = { 'secrets.ts': /^\s*spec\.name,/, 'queues.ts': /^\s*pair\.(name|dlqName),/ };
-    const constructors = [...code.matchAll(/new sst\.[A-Za-z.]+\(/g)].filter(
-      m => !fromData[file]?.test(code.slice(m.index + m[0].length))
-    );
+    // those names are not core's. Each pattern exempts one constructor, so a second one named
+    // the same way is counted as unreadable instead of silently left out.
+    const fromData = { 'secrets.ts': [/^\s*spec\.name,/], 'queues.ts': [/^\s*pair\.name,/, /^\s*pair\.dlqName,/] };
+    const exempted = new Set();
+    const constructors = [...code.matchAll(/new sst\.[A-Za-z.]+\(/g)].filter(m => {
+      const rest = code.slice(m.index + m[0].length);
+      const pattern = (fromData[file] ?? []).find(p => !exempted.has(p) && p.test(rest));
+      if (pattern) exempted.add(pattern);
+      return !pattern;
+    });
     if (constructors.length !== captured.length) {
       throw new Error(
         `infra/${file}: ${constructors.length - captured.length} sst constructor(s) not named by a ` +
@@ -1915,9 +1920,15 @@ function readCoreDlqLabels() {
     .split('\n')
     .filter(line => !/^\s*(\/\/|\/?\*)/.test(line))
     .join('\n');
+  // Only the contributed loop's spec.label is exempt; a second one is reported like any other.
+  let contributedLabelSeen = false;
   const computed = [...code.matchAll(/\blabel:\s*(?![\s'"])([^,}\n]+)/g)]
     .map(m => m[1].trim())
-    .filter(value => value !== 'spec.label');
+    .filter(value => {
+      if (value !== 'spec.label' || contributedLabelSeen) return true;
+      contributedLabelSeen = true;
+      return false;
+    });
   if (computed.length > 0) {
     throw new Error(
       `infra/dlqAlarms.ts: DLQ label(s) not written as a string literal: ${computed.join(', ')}. ` +

@@ -182,6 +182,21 @@ describe('infra resource glue', () => {
     expect(result.stderr).toContain('not written as a string literal: coreLabel');
   });
 
+  it('exempts one contributed queue loop and one spec.label, not a second of either', () => {
+    mkdirSync(join(sandbox, 'infra'), { recursive: true });
+    writeFileSync(join(sandbox, 'infra/secrets.ts'), "export const s = new sst.Secret('CORE_A', 'x');\n");
+    const loop = 'const queue = new sst.aws.Queue(pair.name, pair.queueArgs(dlq.arn));\n';
+    writeFileSync(join(sandbox, 'infra/queues.ts'), loop + loop);
+    const queues = runCodegen();
+    expect(queues.status).not.toBe(0);
+    expect(queues.stderr).toContain('infra/queues.ts: 1 sst constructor(s) not named');
+    writeFileSync(join(sandbox, 'infra/queues.ts'), loop);
+    writeFileSync(join(sandbox, 'infra/dlqAlarms.ts'), 'const C = [{ label: spec.label }, { label: spec.label }];\n');
+    const labels = runCodegen();
+    expect(labels.status).not.toBe(0);
+    expect(labels.stderr).toContain('not written as a string literal: spec.label');
+  });
+
   it('reads a core DLQ label in either quote style', () => {
     mkdirSync(join(sandbox, 'infra'), { recursive: true });
     writeFileSync(join(sandbox, 'infra/secrets.ts'), "export const s = new sst.Secret('CORE_A', 'x');\n");
