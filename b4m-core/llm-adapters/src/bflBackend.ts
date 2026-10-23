@@ -126,8 +126,9 @@ export class BFLBackend implements ICompletionBackend {
         rank: 5,
       },
       // FLUX.2 family. The endpoints are discovered from BFL's OpenAPI, but presentation and
-      // price are curated here: discovery supplies neither, and an entry without them shows in
-      // the picker under its slug, unpriced. Prices are BFL's published first-megapixel rates
+      // price are curated here: discovery supplies neither, so an endpoint without an entry is
+      // introduced under its slug, left auto-disabled and reported in the discovery run - it
+      // never reaches the picker. Prices are BFL's published first-megapixel rates
       // (https://bfl.ai/pricing); the cost path bills a flat per-image figure, so a larger
       // output under-bills. Keep the two preview entries' prices equal to the pinned siblings
       // they mirror, since BFL publishes no rate for a preview.
