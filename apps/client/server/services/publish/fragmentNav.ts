@@ -129,7 +129,8 @@ export function buildFragmentNavScriptTag(config: FragmentNavConfig): string {
  * encoding), any query but a file's `?download=1`, and any other origin - so the only places
  * a bundle can send the viewer are its own pages and files. Refusing `%` also refuses a file
  * whose name contains one: the hosted request path is decoded once before the app sees it,
- * so `100%25.pdf` reaches the router as `100%.pdf` and fails there with a 400 anyway.
+ * so `100%25.pdf` reaches the router as `100%.pdf` and fails there with a 400 anyway. If the
+ * edge stops decoding, a second-decode check can replace this refusal.
  */
 export const BUNDLE_PATH_JS = String.raw`function b4mBundleBase(){
   return (/^\/(?:p\/(?:u|pj|o)\/[^/]+\/[^/]+|a\/[^/]+)(?=\/|$)/.exec(location.pathname)||[''])[0];
