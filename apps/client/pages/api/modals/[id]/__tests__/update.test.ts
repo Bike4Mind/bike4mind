@@ -46,7 +46,6 @@ vi.mock('@bike4mind/services', () => ({
   viewerClassifier: {
     classify: vi.fn(async () => 'customer'),
   },
-  MODAL_SAFE_DEFAULT_KEY: 'customer',
 }));
 
 import '@pages/api/modals/[id]/update';

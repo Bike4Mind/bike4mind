@@ -49,7 +49,7 @@ function isSourceDeployment(): boolean {
  *
  * Main production sets IS_SOURCE_DEPLOYMENT=true; fork production deployments do not.
  */
-function isForkEnvironment(): boolean {
+export function isForkEnvironment(): boolean {
   const stage = Resource.App.stage;
 
   // Only relevant for production stage - other stages (dev, staging, pr-*) are never forks
