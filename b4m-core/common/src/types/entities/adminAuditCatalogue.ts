@@ -91,7 +91,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'system_health.test_run': { category: 'settings', severity: 'info', write: 'bestEffort' },
 
   'user.email.verified': { category: 'identity', severity: 'info', write: 'bestEffort' },
-  'user.api_key_trust.approved': { category: 'identity', severity: 'notice', write: 'bestEffort' },
+  'user.api_key_trust.approved': { category: 'identity', severity: 'notice', write: 'strict' },
   'user.api_key_trust.revoked': { category: 'identity', severity: 'notice', write: 'bestEffort' },
   'user.email.unverified': { category: 'identity', severity: 'info', write: 'bestEffort' },
   'user.email.verification_resent': { category: 'identity', severity: 'info', write: 'bestEffort' },

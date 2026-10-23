@@ -170,10 +170,11 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScopeValue[], alsoRequiredScop
       req.apiKeyInfo = {
         keyId: validation.keyId!,
         scopes: validation.scopes!,
-        rateLimit: await applyUntrustedRateLimit(user, {
-          rateLimit: validation.rateLimit!,
-          billingOwnerType: validation.billingOwnerType,
-        }),
+        rateLimit: await applyUntrustedRateLimit(
+          user,
+          { rateLimit: validation.rateLimit!, billingOwnerType: validation.billingOwnerType },
+          req
+        ),
         expiresAt: validation.expiresAt,
         productId: validation.productId,
         billingOwnerType: validation.billingOwnerType,

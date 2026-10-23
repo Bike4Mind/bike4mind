@@ -131,6 +131,11 @@ const UserDetails: React.FC<UserDetailsProps> = ({ user, editedFields, onFieldCh
     setOrganizationName(user.organizationId?.name || '');
   }, [user]);
 
+  // A refetched prop supersedes the local override, including a change another admin made.
+  useEffect(() => {
+    setApiKeyTrustOverride(null);
+  }, [user.apiKeyTrustApproved]);
+
   const handleNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newName = e.target.value;
     onFieldChange('name', newName);
@@ -183,8 +188,8 @@ const UserDetails: React.FC<UserDetailsProps> = ({ user, editedFields, onFieldCh
       );
     } catch (error) {
       toast.error(
-        isAxiosError<{ message?: string }>(error)
-          ? (error.response?.data?.message ?? error.message)
+        isAxiosError<{ error?: string }>(error)
+          ? (error.response?.data?.error ?? error.message)
           : 'Failed to update API key trust'
       );
     }
@@ -424,7 +429,12 @@ const UserDetails: React.FC<UserDetailsProps> = ({ user, editedFields, onFieldCh
               checked={apiKeyTrustApproved}
               disabled={setApiKeyTrust.isPending}
               onChange={event => handleApiKeyTrustToggle(event.target.checked)}
-              slotProps={{ input: { 'data-testid': 'admin-user-api-key-trust-toggle' } }}
+              slotProps={{
+                input: {
+                  'aria-label': 'Trusted for personal API keys',
+                  'data-testid': 'admin-user-api-key-trust-toggle',
+                },
+              }}
             />
           </Box>
 

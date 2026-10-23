@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { ApiKeyScope } from '@bike4mind/common';
@@ -544,27 +544,44 @@ describe('UserApiKeysTab - API key trust gate', () => {
     expect(screen.getByTestId('api-key-create-btn')).toBeEnabled();
   });
 
-  it('disables the main create button when blocked and no organization can be billed', () => {
+  it('explains the block on the tab and disables create when blocked and no organization can be billed', () => {
     h.eligibility = blocked;
     renderTab();
 
     expect(screen.getByTestId('api-keys-create-btn')).toBeDisabled();
+    expect(screen.getByTestId('api-keys-trust-notice')).toHaveTextContent(blocked.message);
   });
 
-  it('keeps the main create button enabled when blocked but an organization can be billed', () => {
+  it('shows no tab notice when the user can create keys', () => {
+    renderTab();
+
+    expect(screen.queryByTestId('api-keys-trust-notice')).not.toBeInTheDocument();
+    expect(screen.getByTestId('api-keys-create-btn')).toBeEnabled();
+  });
+
+  it('keeps the main create button enabled and the notice hidden when blocked but an organization can be billed', () => {
     h.eligibility = blocked;
     h.billingOrgs = [{ id: 'org-1', name: 'Acme' }];
     renderTab();
 
     expect(screen.getByTestId('api-keys-create-btn')).toBeEnabled();
+    expect(screen.queryByTestId('api-keys-trust-notice')).not.toBeInTheDocument();
   });
 
-  it('shows the alert and disables submit in the modal when blocked and billing a personal account', () => {
+  it('shows the alert with the org hint and disables submit while billing a personal account, then clears both on picking an org', async () => {
     h.eligibility = blocked;
     h.billingOrgs = [{ id: 'org-1', name: 'Acme' }];
     openModalAndName();
 
-    expect(screen.getByTestId('api-key-trust-alert')).toHaveTextContent(blocked.message);
+    const alert = screen.getByTestId('api-key-trust-alert');
+    expect(alert).toHaveTextContent(blocked.message);
+    expect(alert).toHaveTextContent('You can still create a key billed to an organization you manage.');
     expect(screen.getByTestId('api-key-create-btn')).toBeDisabled();
+
+    fireEvent.click(within(screen.getByTestId('api-key-billing-select')).getByRole('combobox'));
+    fireEvent.click(await screen.findByRole('option', { name: /Acme/ }));
+
+    expect(screen.queryByTestId('api-key-trust-alert')).not.toBeInTheDocument();
+    expect(screen.getByTestId('api-key-create-btn')).toBeEnabled();
   });
 });

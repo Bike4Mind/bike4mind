@@ -4,7 +4,10 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { resolveApiKeyTrust } from '@server/utils/apiKeyTrust';
 
 export type ApiKeyEligibilityResponse = {
-  /** Whether the caller may mint another personal (user-billed) key. Org-billed keys are not gated. */
+  /**
+   * Whether the trust gate lets the caller mint another personal (user-billed) key. Org-billed
+   * keys are not gated. The ordinary per-user key cap is not reflected here.
+   */
   canCreate: boolean;
   /** Why not, and what would unlock it. Null when canCreate is true. */
   message: string | null;
@@ -14,21 +17,22 @@ export type ApiKeyEligibilityResponse = {
  * GET /api/user-api-keys/eligibility
  *
  * The caller's standing with the API key trust gate, so the key-creation UI can disable itself
- * with the same explanation POST /api/user-api-keys would return as a 403. Mirrors the
- * service's check in userApiKeyService/create.ts.
+ * with the same explanation POST /api/user-api-keys would return as a 403.
  */
 const handler = baseApi().get(async (req, res) => {
-  const { assessment } = await resolveApiKeyTrust(req.user);
+  const { assessment } = await resolveApiKeyTrust(req.user, req);
   if (assessment.status !== 'untrusted') {
     return res.json({ canCreate: true, message: null } satisfies ApiKeyEligibilityResponse);
   }
 
-  const atCap =
-    assessment.reason === 'email_unverified' ||
-    (await userApiKeyRepository.countActiveByUserId(req.user.id)) >= assessment.maxActiveKeys;
+  const activePersonalKeys =
+    assessment.reason === 'email_unverified'
+      ? 0
+      : await userApiKeyRepository.countActiveByUserId(req.user.id, 'personal');
+  const canCreate = userApiKeyService.untrustedOwnerMayMint(assessment, activePersonalKeys);
   return res.json({
-    canCreate: !atCap,
-    message: atCap ? userApiKeyService.describeApiKeyTrustRequirement(assessment) : null,
+    canCreate,
+    message: canCreate ? null : userApiKeyService.describeApiKeyTrustRequirement(assessment),
   } satisfies ApiKeyEligibilityResponse);
 });
 

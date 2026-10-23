@@ -193,7 +193,7 @@ interface NewKeyModalProps {
   onSuccess: (result: CreateUserApiKeyResponse) => void;
 }
 
-export function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
+function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
   const genericScopes = useGenericApiKeyScopes();
   const scopeModel = useMemo(() => buildScopeModel(genericScopes), [genericScopes]);
   const [formData, setFormData] = useState<CreateUserApiKeyRequest>({
@@ -285,9 +285,11 @@ export function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
         </Typography>
 
         <Stack spacing={2.5} className="project-api-keys-modal-content">
-          {eligibility?.canCreate === false && (
+          {blockedByTrust && (
             <Alert color="warning" variant="soft" data-testid="api-key-trust-alert">
-              {eligibility.message}
+              {canBillOrg
+                ? `${eligibility?.message} You can still create a key billed to an organization you manage.`
+                : eligibility?.message}
             </Alert>
           )}
 
@@ -2059,21 +2061,23 @@ export default function UserApiKeysTab() {
                   <RefreshIcon />
                 </IconButton>
               </Tooltip>
-              <Tooltip title={createBlockedByTrust ? eligibility?.message : undefined}>
-                <span>
-                  <Button
-                    startDecorator={<AddIcon />}
-                    onClick={() => setShowNewKeyModal(true)}
-                    variant="solid"
-                    disabled={createBlockedByTrust}
-                    data-testid="api-keys-create-btn"
-                  >
-                    Create API Key
-                  </Button>
-                </span>
-              </Tooltip>
+              <Button
+                startDecorator={<AddIcon />}
+                onClick={() => setShowNewKeyModal(true)}
+                variant="solid"
+                disabled={createBlockedByTrust}
+                data-testid="api-keys-create-btn"
+              >
+                Create API Key
+              </Button>
             </Box>
           </Box>
+
+          {createBlockedByTrust && (
+            <Alert color="warning" variant="soft" sx={{ mb: 2 }} data-testid="api-keys-trust-notice">
+              {eligibility?.message}
+            </Alert>
+          )}
 
           {isLoading ? (
             <Box display="flex" justifyContent="center" alignItems="center" minHeight="200px">

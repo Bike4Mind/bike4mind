@@ -99,6 +99,13 @@ export const assessApiKeyTrust = async (
   };
 };
 
+/**
+ * Whether an untrusted owner already holding `activePersonalKeys` user-billed keys may mint one
+ * more. The single rule behind both the mint (create.ts) and the eligibility route the UI reads.
+ */
+export const untrustedOwnerMayMint = (assessment: UntrustedApiKeyAssessment, activePersonalKeys: number): boolean =>
+  assessment.reason === 'not_yet_trusted' && activePersonalKeys < assessment.maxActiveKeys;
+
 /** User-facing explanation naming what would unlock key creation. */
 export const describeApiKeyTrustRequirement = (assessment: UntrustedApiKeyAssessment): string => {
   if (assessment.reason === 'email_unverified') {

@@ -1,23 +1,32 @@
 import { CreditHolderType, type IUserApiKeyRateLimit } from '@bike4mind/common';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { userApiKeyService } from '@bike4mind/services';
-import { getActiveSubscriptionsForUser } from '@server/entitlements/activeSubscriptions';
+import {
+  getActiveSubscriptionsForUser,
+  getRequestActiveSubscriptions,
+  type ActiveSubscriptionsRequest,
+} from '@server/entitlements/activeSubscriptions';
 
 type ApiKeyTrustUser = userApiKeyService.ApiKeyTrustSubject & { id: string };
 
 /**
  * The API key trust gate's view of one account, with the settings it was judged against.
  * Any active subscription (own or an org seat) counts as paid, the same rows that drive
- * entitlements and the rate tier.
+ * entitlements and the rate tier. Pass `req` when `user` is `req.user`, so the subscription read
+ * is shared with the rest of the request. A failed read throws rather than guessing either way.
  */
-export async function resolveApiKeyTrust(user: ApiKeyTrustUser): Promise<{
+export async function resolveApiKeyTrust(
+  user: ApiKeyTrustUser,
+  req?: ActiveSubscriptionsRequest
+): Promise<{
   assessment: userApiKeyService.ApiKeyTrustAssessment;
   settings: userApiKeyService.ApiKeyTrustSettings;
 }> {
   const settings = await userApiKeyService.loadApiKeyTrustSettings({ adminSettings: adminSettingsRepository });
   const assessment = await userApiKeyService.assessApiKeyTrust(user, {
     settings,
-    hasActivePlan: async () => (await getActiveSubscriptionsForUser(user.id)).length > 0,
+    hasActivePlan: async () =>
+      (await (req ? getRequestActiveSubscriptions(req) : getActiveSubscriptionsForUser(user.id))).length > 0,
   });
   return { assessment, settings };
 }
@@ -29,10 +38,11 @@ export async function resolveApiKeyTrust(user: ApiKeyTrustUser): Promise<{
  */
 export async function applyUntrustedRateLimit(
   owner: ApiKeyTrustUser,
-  key: { rateLimit: IUserApiKeyRateLimit; billingOwnerType?: string }
+  key: { rateLimit: IUserApiKeyRateLimit; billingOwnerType?: string },
+  req?: ActiveSubscriptionsRequest
 ): Promise<IUserApiKeyRateLimit> {
   if (key.billingOwnerType === CreditHolderType.Organization) return key.rateLimit;
-  const { assessment, settings } = await resolveApiKeyTrust(owner);
+  const { assessment, settings } = await resolveApiKeyTrust(owner, req);
   if (assessment.status !== 'untrusted') return key.rateLimit;
   return {
     ...key.rateLimit,
