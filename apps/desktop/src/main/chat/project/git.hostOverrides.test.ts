@@ -21,6 +21,9 @@ describe('git host overrides', () => {
   });
 
   it('adds the network overrides to fetch', async () => {
+    execFile.mockImplementation((_cmd, args, _opts, cb) =>
+      args[0] === 'config' ? cb(null, 'local\0core.sshcommand\ntouch marker\0') : cb(null, { stdout: '', stderr: '' })
+    );
     await fetchRemoteFor('/repo-net', 'origin/main');
     const fetchCall = execFile.mock.calls.find(([, args]) => args.includes('fetch'));
     expect(fetchCall?.[1].slice(0, HOST_GIT_CONFIG_ARGS.length)).toEqual([...HOST_GIT_CONFIG_ARGS]);
