@@ -166,6 +166,29 @@ describe('PUT /api/admin/users/[userId]/subscriptions/[subscriptionId]/credits',
       );
     });
 
+    it('uses the existing custom team rate, not the seat default, as the previous rate', async () => {
+      mockFindByStripeSubId.mockResolvedValue({
+        id: 'sub-1',
+        ownerType: 'Organization',
+        ownerId: 'org-1',
+        quantity: 3,
+        customCreditsPerCycle: 7000,
+      });
+      mockOrgFindById.mockResolvedValue({ id: 'org-1', name: 'Acme', users: [] });
+
+      const { run } = call({});
+      await run();
+
+      expect(mockRecordAdminAction).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          organizationId: 'org-1',
+          changes: [{ field: 'customCreditsPerCycle', before: 7000, after: 5000 }],
+          details: expect.objectContaining({ credits: -2000, previousCreditsPerCycle: 7000 }),
+        })
+      );
+    });
+
     it('fails the request without notifying when the audit write fails', async () => {
       mockRecordAdminAction.mockRejectedValueOnce(new Error('audit down'));
 
