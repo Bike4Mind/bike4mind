@@ -210,10 +210,10 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       if (!entry) {
         throw new BadRequestError(`${modelId} (${unit}) is not seed-managed; nothing to revert to`);
       }
-      const inForce = (await modelPriceRepository.rowsInForce(FAR_FUTURE)).find(
-        r => r.modelId === modelId && r.unit === unit
-      );
       const row = await withTransaction(async () => {
+        const inForce = (await modelPriceRepository.rowsInForce(FAR_FUTURE)).find(
+          r => r.modelId === modelId && r.unit === unit
+        );
         const appended = await modelPriceRepository.append({
           modelId,
           unit,
