@@ -140,6 +140,7 @@ jobs:
             core.warning(`No recent main commit has staging/deploy=success; ${process.env.STATUS_CONTEXT} status will be skipped.`);
 
       - name: Install Playwright Chromium
+        timeout-minutes: 12
         uses: ./.github/actions/install-playwright-chromium
 
       # A staging deploy in flight swaps the Lambda under the suite, so requests can

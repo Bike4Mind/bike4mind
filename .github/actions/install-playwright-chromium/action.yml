@@ -24,7 +24,10 @@ runs:
       id: version
       shell: bash
       working-directory: ${{ inputs.working-directory }}
-      run: echo "version=$(npx playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+      run: |
+        v=$(node -p "require('@playwright/test/package.json').version")
+        test -n "$v"
+        echo "version=$v" >> "$GITHUB_OUTPUT"
 
     - name: Cache Playwright browsers
       uses: actions/cache@v5
@@ -51,11 +54,13 @@ runs:
         # directly in timeout's process group. Wrapped the other way round,
         # sudo starts apt in its own pty session and the kill never reaches it:
         # apt kept downloading and upgrading libs under the running tests.
-        if sudo env "PATH=$PATH" timeout -k 15s 5m npx playwright install-deps chromium; then
+        rc=0
+        sudo env "PATH=$PATH" timeout -k 15s 5m npx playwright install-deps chromium || rc=$?
+        if [ "$rc" -eq 0 ]; then
           exit 0
         fi
 
-        echo "::warning::Playwright system dependency install did not finish (slow apt mirror?); checking whether Chromium launches with the preinstalled libraries"
+        echo "::warning::Playwright system dependency install failed (exit $rc; 124/137 means the cap was hit, e.g. a slow apt mirror); checking whether Chromium launches with the preinstalled libraries"
         # A kill mid-unpack leaves dpkg half-configured; finish what it started.
         sudo dpkg --configure -a || true
         node -e "require('@playwright/test').chromium.launch().then((b) => b.close())"

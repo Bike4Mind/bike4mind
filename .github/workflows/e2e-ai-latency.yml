@@ -146,6 +146,7 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Install Playwright Chromium
+        timeout-minutes: 12
         uses: ./.github/actions/install-playwright-chromium
 
       - name: Wait for deployment to be healthy
@@ -405,6 +406,7 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Install Playwright Chromium
+        timeout-minutes: 12
         uses: ./.github/actions/install-playwright-chromium
 
       - name: Wait for deployment to be healthy
