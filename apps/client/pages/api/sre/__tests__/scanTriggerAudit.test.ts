@@ -38,10 +38,10 @@ vi.mock('@bike4mind/common', async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
   SreAgentConfigSchema: { parse: (value: unknown) => value },
   getConfiguredRepoSlugs: () => ['acme/app'],
-  resolveFullConfig: () => ({
+  resolveFullConfig: vi.fn(() => ({
     enabled: true,
     sources: { github: { enabled: true, labelFilter: { required: ['sre'] } } },
-  }),
+  })),
 }));
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: vi.fn().mockResolvedValue({}) },
@@ -67,6 +67,7 @@ vi.mock('@bike4mind/server-utils/integrations/github/sreWebhookDispatch', () => 
 vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
 import scanHandler from '../scan';
+import { resolveFullConfig } from '@bike4mind/common';
 import triggerHandler from '../trigger';
 
 const post = async (handler: unknown, body: unknown) => {
@@ -120,5 +121,26 @@ describe('SRE scan and trigger admin audit', () => {
       details: { repoSlug: 'acme/app', issueNumbers: [7], dispatched: 1 },
     });
     expect(h.dispatch.mock.invocationCallOrder[0]).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
+  });
+
+  it('trigger records a config-blocked run with its blockedReason', async () => {
+    vi.mocked(resolveFullConfig).mockReturnValueOnce({
+      enabled: false,
+      sources: { github: { enabled: true } },
+    } as never);
+
+    const { res } = await post(triggerHandler, { issueNumbers: [7, 8] });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().results).toEqual([
+      { issueNumber: 7, dispatched: false, reason: 'repo-disabled' },
+      { issueNumber: 8, dispatched: false, reason: 'repo-disabled' },
+    ]);
+    expect(h.dispatch).not.toHaveBeenCalled();
+    expect(h.audit).toHaveBeenCalledTimes(1);
+    expect(h.audit.mock.calls[0][1]).toMatchObject({
+      action: 'ops.sre.run_triggered',
+      details: { repoSlug: 'acme/app', issueNumbers: [7, 8], dispatched: 0, blockedReason: 'repo-disabled' },
+    });
   });
 });

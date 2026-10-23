@@ -4,6 +4,7 @@ import { createMocks } from 'node-mocks-http';
 
 const h = vi.hoisted(() => ({
   audit: vi.fn(),
+  receiveFromQueue: vi.fn(),
   sendToQueue: vi.fn(),
   deleteFromQueue: vi.fn(),
   countAttempts: vi.fn(),
@@ -30,7 +31,7 @@ vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({
   getSourceQueueUrl: () => 'source-url',
 }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({
-  receiveFromQueue: vi.fn(),
+  receiveFromQueue: h.receiveFromQueue,
   sendToQueue: h.sendToQueue,
   deleteFromQueue: h.deleteFromQueue,
 }));
@@ -70,6 +71,26 @@ describe('POST /api/admin/dlq/replay admin audit', () => {
       action: 'ops.dlq.replayed',
       target: { kind: 'system', id: 'dlq-replay' },
       details: { queueLabel: 'quest', messageCount: 1, replayedMessageIds: ['m1'] },
+    });
+    expect(JSON.stringify(h.audit.mock.calls[0][1])).not.toContain('payload');
+    expect(h.sendToQueue.mock.invocationCallOrder[0]).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
+  });
+
+  it('records the queued replay path with counts and ids but no message bodies', async () => {
+    h.receiveFromQueue.mockResolvedValue([
+      { MessageId: 'm1', ReceiptHandle: 'r1', Body: '{"secret":"payload"}' },
+      { MessageId: 'm2', ReceiptHandle: 'r2', Body: 'not json' },
+    ]);
+    const { req, res } = createMocks({ method: 'POST', body: { queueLabel: 'quest', batchSize: 2 } });
+    (req as unknown as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
+
+    await (handler as unknown as Route)(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(h.audit).toHaveBeenCalledTimes(1);
+    expect(h.audit.mock.calls[0][1]).toMatchObject({
+      action: 'ops.dlq.replayed',
+      details: { queueLabel: 'quest', messageCount: 1, failed: 1, skipped: 0, total: 2, replayedMessageIds: ['m1'] },
     });
     expect(JSON.stringify(h.audit.mock.calls[0][1])).not.toContain('payload');
     expect(h.sendToQueue.mock.invocationCallOrder[0]).toBeLessThan(h.audit.mock.invocationCallOrder[0]);

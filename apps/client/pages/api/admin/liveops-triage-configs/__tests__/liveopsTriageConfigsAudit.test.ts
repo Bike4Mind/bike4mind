@@ -141,4 +141,18 @@ describe('liveops triage configs admin audit', () => {
     expect(res._getStatusCode()).toBe(409);
     expect(h.audit).not.toHaveBeenCalled();
   });
+
+  it('PUT does not audit when the body changes nothing', async () => {
+    h.findById.mockResolvedValue({ id: CONFIG_ID, name: 'Nightly', enabled: true });
+    h.updateConfig.mockResolvedValue({ id: CONFIG_ID, name: 'Nightly', enabled: true });
+
+    const { res } = await call(itemHandler, {
+      method: 'PUT',
+      query: { id: CONFIG_ID },
+      body: { enabled: true, name: 'Nightly' },
+    });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(h.audit).not.toHaveBeenCalled();
+  });
 });

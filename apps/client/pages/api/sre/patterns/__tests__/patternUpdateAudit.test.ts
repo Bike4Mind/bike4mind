@@ -40,6 +40,7 @@ beforeEach(() => {
   });
   h.update.mockResolvedValue({
     id: PATTERN_ID,
+    name: 'Timeout pattern',
     isActive: true,
     workaroundIneffective: true,
     rootCauseTrackingIssue: null,
@@ -58,7 +59,7 @@ describe('PATCH /api/sre/patterns/[id] admin audit', () => {
     expect(h.audit.mock.calls[0][0]).toBe(req);
     expect(h.audit.mock.calls[0][1]).toMatchObject({
       action: 'ops.sre.pattern_updated',
-      target: { kind: 'settings', id: PATTERN_ID },
+      target: { kind: 'settings', id: PATTERN_ID, displayName: 'Timeout pattern' },
       changes: [{ field: 'isActive', before: false, after: true }],
     });
     expect(h.update.mock.invocationCallOrder[0]).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
