@@ -327,6 +327,66 @@ describe('planCatalogWrites', () => {
       });
     });
 
+    // The contributor is a supply credit, so the writer has to align it with the disable in force:
+    // the read path reads a provider credit as proof the provider is what disabled the model.
+    it('credits a run decision to discovery even when the same run cleared the provider disable', () => {
+      const unentitled = { ...available, authorizationStatus: 'NOT_AUTHORIZED' };
+      const first = plan({ ...bedrockRun(['ON_DEMAND'], unentitled, undefined, false), policy: 'manual' });
+      expect(first.rows[0].contributors).toContainEqual({ group: 'availability', source: 'bedrock' });
+
+      // The provider now says callable, and a manual policy's promotion refuses for its own reason.
+      const second = plan({ ...bedrockRun(['ON_DEMAND'], available, first.rows[0]), policy: 'manual' });
+
+      expect(second.rows[0].patch).toMatchObject({
+        autoDisabled: true,
+        autoDisabledReason: 'discovered, awaiting admin approval',
+      });
+      expect(second.rows[0].contributors).toContainEqual({ group: 'availability', source: 'discovery' });
+
+      const { models } = mergeCatalogWithDrops([curated], second.rows as unknown as IModelCatalogRow[], {
+        apiKeys: null,
+        isSelfHost: false,
+        bedrockReachable: true,
+      });
+
+      expect(models[0]).toMatchObject({ name: 'Claude Opus 9', contextWindow: 200_000 });
+      expect(models[0].disabled, 'the clearance is credited to the provider').toBeFalsy();
+    });
+
+    it('keeps the provider credit on a row that writes a carried provider reason', () => {
+      const unentitled = { ...available, authorizationStatus: 'NOT_AUTHORIZED' };
+      const first = plan(bedrockRun(['ON_DEMAND'], unentitled, undefined, false));
+
+      // No availability answer this run (a throttled call returns null by contract), so the
+      // provider's reason stands; the row is written because the listing moved another field.
+      const second = plan({
+        ...bedrockRun(['ON_DEMAND'], undefined, first.rows[0], false),
+        contributions: [
+          {
+            name: 'bedrock',
+            kind: 'provider',
+            records: normalizeBedrockModels({
+              summaries: [{ ...summary(['ON_DEMAND']), inputModalities: ['TEXT', 'IMAGE'] }],
+            }),
+          },
+        ],
+      });
+
+      expect(second.rows[0].patch).toMatchObject({
+        autoDisabled: true,
+        autoDisabledReason: 'not entitled in this AWS account',
+      });
+      expect(second.rows[0].contributors).toContainEqual({ group: 'availability', source: 'bedrock' });
+
+      const { models } = mergeCatalogWithDrops([curated], second.rows as unknown as IModelCatalogRow[], {
+        apiKeys: null,
+        isSelfHost: false,
+        bedrockReachable: true,
+      });
+
+      expect(models[0]).toMatchObject({ disabled: true, disabledReason: 'not entitled in this AWS account' });
+    });
+
     it('leaves a manual disable in force when it lifts its own', () => {
       const disabled = disabledWhileActive();
       const next = plan(bedrockRun(['ON_DEMAND'], available, disabled));

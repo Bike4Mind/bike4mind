@@ -668,6 +668,14 @@ function planOne(
         };
     ownedGroups.add('lifecycle');
     ownedGroups.add('availability');
+    // `contributorsFor` credits a group to whoever supplied its first field, and a clearance this
+    // same run applied supplies `autoDisabled` from the provider. The disable written here is
+    // whichever is in force: a reason carried from the provider stays the provider's, while a
+    // verdict this run decided is discovery's, and the read path reads the credit as proof of who
+    // disabled the model.
+    if (record.autoDisabled === true && isDiscoveryVerdict(record.autoDisabledReason)) {
+      derivedGroups.add('availability');
+    }
   }
 
   if (ownedGroups.size === 0) return { unchanged: true };
