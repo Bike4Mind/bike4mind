@@ -1,6 +1,6 @@
 import { IResearchDataWithFiles } from '@bike4mind/common';
 import { Box, Card, CardContent, Chip, Input, Stack, Typography } from '@mui/joy';
-import { InsertDriveFile } from '@mui/icons-material';
+import InsertDriveFile from '@mui/icons-material/InsertDriveFile';
 import { FC, useState, useTransition, useMemo } from 'react';
 import { greenAlpha } from '../../utils/themes/colors';
 import ResearchTaskFile from './File';

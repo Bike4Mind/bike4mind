@@ -1,15 +1,13 @@
 import { IFileTag } from '@bike4mind/common';
 import { DataLakeIcon } from '@client/app/components/datalake/dataLakeBranding';
-import {
-  Add,
-  Close,
-  DeleteOutline,
-  LocalOffer,
-  IosShare,
-  CheckBox,
-  ChevronLeft,
-  ChevronRight,
-} from '@mui/icons-material';
+import Add from '@mui/icons-material/Add';
+import Close from '@mui/icons-material/Close';
+import DeleteOutline from '@mui/icons-material/DeleteOutline';
+import LocalOffer from '@mui/icons-material/LocalOffer';
+import IosShare from '@mui/icons-material/IosShare';
+import CheckBox from '@mui/icons-material/CheckBox';
+import ChevronLeft from '@mui/icons-material/ChevronLeft';
+import ChevronRight from '@mui/icons-material/ChevronRight';
 import { Box, Button, Dropdown, Menu, MenuButton, MenuItem, Typography } from '@mui/joy';
 import { FC, useState } from 'react';
 import { useTranslation } from 'react-i18next';

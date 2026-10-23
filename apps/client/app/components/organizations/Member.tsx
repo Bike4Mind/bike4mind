@@ -18,7 +18,7 @@ import { IGetUsersParams } from '@client/app/utils/userAPICalls';
 import SearchIcon from '@mui/icons-material/Search';
 import { Box, Button, Card, Chip, IconButton, Input, Stack, Typography } from '@mui/joy';
 import { useQueryClient } from '@tanstack/react-query';
-import { debounce } from 'lodash';
+import debounce from 'lodash/debounce';
 import SortByAlphaIcon from '@mui/icons-material/SortByAlpha';
 import AddIcon from '@mui/icons-material/Add';
 import { FC, Fragment, useCallback, useMemo, useState } from 'react';

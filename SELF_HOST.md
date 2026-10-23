@@ -7,7 +7,7 @@ Run the open core of Bike4Mind on your own hardware - a laptop, a server, or you
 1. Clone the repo and copy the env template.
 2. Generate the three security secrets and set your LLM provider key(s).
 3. `docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d`
-4. Sign in at `http://localhost:3000` with a one-time code read from Mailpit at `http://localhost:8025`. The first account becomes the admin.
+4. Sign in at `http://localhost:3000` with a one-time code read from Mailpit at `http://localhost:8025`. The account whose email matches `B4M_BOOTSTRAP_ADMIN_EMAIL` becomes the admin (if it is unset, the first account to register with the emailed code does).
 5. Create an API key in the app and make your first API call with `curl`.
 
 ## Prerequisites
@@ -50,6 +50,12 @@ openssl rand -hex 32   # -> SECRET_ENCRYPTION_KEY
 > **Formatting:** compose reads `.env.selfhost` values verbatim - don't add comments on the same line as a value.
 
 **Minimum required to boot:** the defaults in the template already point everything (MongoDB, MinIO object storage, ElasticMQ queues, Mailpit mail catcher) at the bundled services - you only need to set the three secrets above.
+
+**Choose the admin account** - set `B4M_BOOTSTRAP_ADMIN_EMAIL` to the email address you will sign in with, before you start the stack for the first time. That account becomes the admin on first sign-in. Sign in with the emailed one-time code the first time, not OAuth (for example GitHub): the bootstrap applies only to the email-code sign-in. If you leave it unset, the first account to register with the emailed code becomes the admin.
+
+```bash
+B4M_BOOTSTRAP_ADMIN_EMAIL=you@example.com
+```
 
 > **Serving on anything other than `http://localhost:3000`?** Set `APP_URL` to the origin your browser actually hits - a remapped `APP_HOST_PORT`, a LAN hostname, a tailnet name, or the public `https` origin of a reverse proxy in front of the app. `APP_URL` is the CSRF origin allow-list, and it fails closed: every state-changing request (saving settings, generating an API key, uploading) returns a 403, with a different message per cause. Unset, it is `CSRF: APP_URL is not configured on this deployment.`; set to an origin you do not browse from, it is `Invalid request origin. CSRF protection triggered (expected <your APP_URL>).` Reads keep working either way, which makes both look like a permissions bug rather than a config one.
 
@@ -184,7 +190,7 @@ Bike4Mind signs you in with a one-time code sent by email. In the self-host stac
 2. Open Mailpit at **`http://localhost:8025`** and read the code from the sign-in email.
 3. Enter the code and pick a username.
 
-**The first account created on a fresh install automatically becomes the admin** (no invite code needed). After that, invite-only registration applies - as admin you can issue invites or enable open registration in the admin settings.
+**On a fresh install, the account whose email matches `B4M_BOOTSTRAP_ADMIN_EMAIL` becomes the admin** (no invite code needed). Set it before the first start. If it is unset, the first account to register with the emailed code becomes the admin instead. After that, invite-only registration applies - as admin you can issue invites or enable open registration in the admin settings.
 
 For production use, point the `MAIL_*` variables at a real SMTP provider instead of Mailpit.
 
@@ -888,7 +894,7 @@ Whichever path you choose, do the checklist first.
   ```
 
 - [ ] **Use a real SMTP provider.** Mailpit is local-only, so remote friends cannot read their sign-in codes from it. Point `MAIL_*` at a real provider (port 587 STARTTLS or 465 implicit TLS).
-- [ ] **Keep sign-up invite-only and cap per-user usage.** Registration is invite-only by default (`allowOpenRegistration` is OFF; the first account created becomes admin). Leave it off and invite friends explicitly from the admin settings. Self-host also defaults credit enforcement OFF - as admin, turn on **Enforce Credits** and give each friend a finite credit budget so a runaway (or a shared key) cannot burn your LLM spend. Per-key API rate limits default to 60/min and 1000/day.
+- [ ] **Keep sign-up invite-only and cap per-user usage.** Registration is invite-only by default (`allowOpenRegistration` is OFF; the account matching `B4M_BOOTSTRAP_ADMIN_EMAIL` becomes admin, or the first account created if it is unset). Leave it off and invite friends explicitly from the admin settings. Self-host also defaults credit enforcement OFF - as admin, turn on **Enforce Credits** and give each friend a finite credit budget so a runaway (or a shared key) cannot burn your LLM spend. Per-key API rate limits default to 60/min and 1000/day.
 - [ ] **Back up `SECRET_ENCRYPTION_KEY`.** It encrypts other secrets in the database and losing it makes that data unrecoverable. Rotation is not automated for self-host: if you ever change it, set `SECRET_ENCRYPTION_KEY_PREVIOUS` to the old key and keep it configured permanently so existing ciphertext still decrypts.
 
 ### Read-only production configuration preflight
@@ -1120,6 +1126,16 @@ The worker records health snapshots for active data lakes at 06:00 UTC, using th
 
 Snapshots upsert by lake and UTC day. Failed lakes are isolated and their attempted-check timestamp advances so they cannot starve other lakes. The existing 2,000-lake cap and five concurrent computations remain; these are count bounds, not cancellation of a hung database request. This job reports health only. It neither repairs content nor runs inconsistency detection: absent or stale stored inconsistency results remain absent or stale. Other hosted maintenance jobs are not enabled by this registration.
 
+### Integration health checks
+
+The worker probes Slack, GitHub and Atlassian reachability every five minutes with the same unauthenticated checks hosted deployments run, and stores each result in MongoDB for the admin Integration Health dashboard. It emits no CloudWatch metrics and does not probe at startup, so a fresh container waits one full interval. Stored checks become eligible for MongoDB TTL cleanup after 25 hours.
+
+An install with no outbound HTTPS to `slack.com`, `api.github.com` or `api.atlassian.com` records those integrations as unhealthy on every run. Three consecutive failures open that integration's platform-wide circuit breaker, which blocks its callers: Slack message sends and updates return without sending, and GitHub and Atlassian MCP requests are refused as unavailable. Those integrations cannot work without that egress anyway, so there is no opt-out switch.
+
+A successful probe taking more than five seconds is also recorded as unhealthy. Three consecutive slow probes can therefore open the same circuit breaker even while the provider still responds.
+
+Probes use global `fetch`. If proxy support is added to an integration client, the probes must use equivalent proxy routing so a failed direct connection does not mark a working proxied integration as unavailable.
+
 ### Daily telemetry retention
 
 The single worker removes `promptMeta.contextTelemetry` from eligible Quest records older than 90 days at 03:00 UTC. The existing hosted cleanup and local worker share the same 5,000-record batches and database writes. The cutoff is fixed once per run using UTC calendar days; the exact cutoff remains excluded. Conversation content and other prompt metadata remain intact.
@@ -1134,7 +1150,10 @@ Focused tests use disposable Mongo, exact retention boundaries and an injected l
 VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/cron/telemetryCleanup.test.ts src/mongoTestTimeoutBudget.test.ts
 VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/selfhost/telemetryCleanup.test.ts
 TZ=America/New_York VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test:integration src/cron/telemetryCleanup.retention.e2e.test.ts
+pnpm --filter @bike4mind/workers test src/selfhost/selfHostWorker.dst.test.ts
 ```
+
+The last command covers the worker scheduler itself, not just this task. It switches the process to `America/New_York` at runtime and checks that daily UTC tasks keep their UTC slot across both transitions and across a restart, and that interval tasks restart their cadence from the moment the worker starts again.
 
 ## Daily API-key usage baselines
 

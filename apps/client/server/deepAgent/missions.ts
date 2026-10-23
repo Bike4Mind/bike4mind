@@ -81,6 +81,11 @@ export async function enrollMissionForAgent(
   return { missionId: enrolled.agentId, charter: enrolled.charter };
 }
 
+/** Roll back a just-enrolled mission whose first wake failed, so no charter is left orphaned. */
+export async function discardEnrolledMission(missionId: string): Promise<void> {
+  await deepAgentCharterRepository.deleteByAgentId(missionId);
+}
+
 /** Mission roster for one B4M agent (same shape as the console roster). */
 export async function listMissionsForAgent(b4mAgentId: string, limit = 50): Promise<AgentRosterItem[]> {
   const charterDocs = await deepAgentCharterRepository.listByLinkedAgentId(b4mAgentId, limit);

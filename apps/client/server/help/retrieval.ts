@@ -101,6 +101,8 @@ export interface HelpSearchResult {
   relevantArticles: RelevantArticle[];
   /** Which strategy produced the result. */
   method: 'vector' | 'keyword' | 'none';
+  /** The query embedding this search paid for, if one ran (even when it then fell back to keywords). */
+  embedding?: { model: string; provider: string; inputTokens: number };
 }
 
 // ===========================
@@ -421,6 +423,7 @@ export async function searchHelpContext(params: {
   const { question, currentHelpSlug, isAdmin, apiKeys, logger } = params;
 
   const embeddingsIndex = await loadHelpEmbeddings(logger);
+  let embedding: HelpSearchResult['embedding'];
 
   if (embeddingsIndex) {
     try {
@@ -442,6 +445,12 @@ export async function searchHelpContext(params: {
           const embeddingService = embeddingFactory.createEmbeddingService(embeddingModel);
 
           const fullQueryEmbedding = await embeddingService.generateEmbedding(question);
+          // The embedding client reports no usage; ~4 chars per token, as the other query-embed recorders estimate.
+          embedding = {
+            model: embeddingModel,
+            provider: requiredProvider,
+            inputTokens: Math.ceil(question.length / 4),
+          };
           const queryEmbedding = truncateAndNormalize(fullQueryEmbedding, embeddingsIndex.dimensions);
           const searchResult = vectorSearch(queryEmbedding, embeddingsIndex, currentHelpSlug, isAdmin);
 
@@ -466,7 +475,7 @@ export async function searchHelpContext(params: {
               .slice(0, MAX_RELEVANT_ARTICLES)
               .map(([slug, info]) => ({ slug, title: info.title }));
 
-            if (context) return { context, relevantArticles, method: 'vector' };
+            if (context) return { context, relevantArticles, method: 'vector', embedding };
           }
         } else {
           logger.warn(`[HelpRetrieval] No API key for ${requiredProvider}; using keyword search`);
@@ -483,5 +492,6 @@ export async function searchHelpContext(params: {
     context: fallback.context,
     relevantArticles: fallback.relevantArticles,
     method: fallback.context ? 'keyword' : 'none',
+    embedding,
   };
 }

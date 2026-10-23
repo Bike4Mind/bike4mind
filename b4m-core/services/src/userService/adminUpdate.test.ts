@@ -248,7 +248,26 @@ describe('adminUpdateUser — audited credit adjustments', () => {
       previousBalance: 100,
       resultingBalance: 0,
       note: 'Refund chargeback',
+      creditTransactionId: 'tx-1',
     });
+  });
+
+  it('links a grant to the ledger row it wrote', async () => {
+    const { adapters, createTransaction } = makeAdapters(100);
+    createTransaction.mockResolvedValueOnce({ id: 'tx-grant' });
+
+    const result = await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, creditDelta: 50 }, adapters);
+
+    expect(result.creditAdjustment?.creditTransactionId).toBe('tx-grant');
+  });
+
+  it('links a deduction to the ledger row it wrote', async () => {
+    const { adapters, createTransaction } = makeAdapters(100);
+    createTransaction.mockResolvedValueOnce({ id: 'tx-deduct' });
+
+    const result = await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, creditDelta: -30 }, adapters);
+
+    expect(result.creditAdjustment?.creditTransactionId).toBe('tx-deduct');
   });
 
   it('returns no credit adjustment when the balance does not change', async () => {

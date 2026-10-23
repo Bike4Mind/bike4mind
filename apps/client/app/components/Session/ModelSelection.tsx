@@ -15,13 +15,11 @@ import {
   IconButton,
   Tooltip,
 } from '@mui/joy';
-import {
-  Chat as ChatIcon,
-  Image as ImageIcon,
-  Videocam as VideoIcon,
-  StarRounded,
-  StarBorderRounded,
-} from '@mui/icons-material';
+import ChatIcon from '@mui/icons-material/Chat';
+import ImageIcon from '@mui/icons-material/Image';
+import VideoIcon from '@mui/icons-material/Videocam';
+import StarRounded from '@mui/icons-material/StarRounded';
+import StarBorderRounded from '@mui/icons-material/StarBorderRounded';
 import ClearIcon from '@mui/icons-material/Clear';
 import AutoAwesomeRoundedIcon from '@mui/icons-material/AutoAwesomeRounded';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';

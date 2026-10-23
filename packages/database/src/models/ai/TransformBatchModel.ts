@@ -3,8 +3,7 @@ import { ITransformBatch, ITransformBatchRepository } from '@bike4mind/common';
 import { softDeletePlugin } from '../../utils/mongo';
 import BaseRepository from '@bike4mind/db-core';
 
-interface ITransformBatchMethods {
-}
+interface ITransformBatchMethods {}
 
 interface ITransformBatchModel extends Model<ITransformBatch, {}, ITransformBatchMethods> {}
 
@@ -28,16 +27,22 @@ const TransformBatchSchema = new Schema<ITransformBatch, ITransformBatchModel, I
           {
             customId: { type: String, required: true },
             clientRef: { type: String, required: true },
+            model: { type: String },
           },
           { _id: false }
         ),
       ],
       default: [],
     },
+    billingModels: { type: Schema.Types.Mixed },
     // Cached per-request results (set once the batch ends) so polls after
     // completion don't re-stream the JSONL from Anthropic. Mixed shape ->
     // Schema.Types.Mixed; validated by the ITransformBatchResultItem type.
     results: { type: Schema.Types.Mixed, required: false },
+    creditHold: { type: Schema.Types.Mixed, default: null },
+    creditSettledAt: { type: Date },
+    apiKeyId: { type: String },
+    usageSource: { type: String },
   },
   {
     timestamps: true,
@@ -64,6 +69,26 @@ class TransformBatchRepository extends BaseRepository<ITransformBatch> implement
 
   async findByAnthropicBatchId(anthropicBatchId: ITransformBatch['anthropicBatchId']) {
     return this.model.findOne({ anthropicBatchId });
+  }
+
+  async claimCompletion(id: string, update: Pick<ITransformBatch, 'succeededCount' | 'erroredCount'>) {
+    return this.model.findOneAndUpdate(
+      { _id: id, status: 'in_progress' },
+      { $set: { ...update, status: 'completed' } },
+      { new: false }
+    );
+  }
+
+  async markCreditSettled(id: string) {
+    const result = await this.model.updateOne(
+      { _id: id, creditSettledAt: { $exists: false } },
+      { $set: { creditHold: null, creditSettledAt: new Date() } }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  async saveResults(id: string, results: NonNullable<ITransformBatch['results']>) {
+    await this.model.updateOne({ _id: id }, { $set: { results } });
   }
 }
 

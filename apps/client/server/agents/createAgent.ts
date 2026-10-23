@@ -11,6 +11,29 @@ import { creditService } from '@bike4mind/services';
 import { BadRequestError } from '@bike4mind/utils';
 import { AgentValidationError, validateAgentUpdate } from '@server/utils/agentValidation';
 
+const AGENT_LIMITS: Record<UserLevelType, number> = {
+  DemoUser: 2,
+  PaidUser: 10,
+  VIPUser: 20,
+  ManagerUser: 50,
+  AdminUser: Infinity,
+};
+
+/**
+ * Per-tier agent count cap. Throws BadRequestError with `errorCode: agent_limit_reached` when the
+ * user already owns their tier's maximum. Every agent-creating path calls it before writing:
+ * createAgent below and POST /api/agents/create-from-context.
+ */
+export async function assertAgentLimit(user: { id: string; level?: UserLevelType | null }) {
+  const activeCount = await agentRepository.countByUserId(user.id);
+  const limit = AGENT_LIMITS[user.level ?? 'DemoUser'];
+  if (activeCount >= limit) {
+    throw new BadRequestError(`Agent limit reached for your tier (${limit} max)`, {
+      errorCode: AGENT_LIMIT_REACHED_ERROR_CODE,
+    });
+  }
+}
+
 /**
  * Validates and creates an agent owned by `userId`, enforcing the per-tier agent cap and, when
  * `useOwnCredits` is set, funding it from the owner through a ledgered transfer (the same
@@ -67,21 +90,7 @@ export async function createAgent(agentData: Partial<IAgent>, userId: string, la
       throw new BadRequestError('User not found');
     }
 
-    // Enforce per-tier agent count limit
-    const AGENT_LIMITS: Record<UserLevelType, number> = {
-      DemoUser: 2,
-      PaidUser: 10,
-      VIPUser: 20,
-      ManagerUser: 50,
-      AdminUser: Infinity,
-    };
-    const activeCount = await agentRepository.countByUserId(userId);
-    const limit = AGENT_LIMITS[user.level ?? 'DemoUser'];
-    if (activeCount >= limit) {
-      throw new BadRequestError(`Agent limit reached for your tier (${limit} max)`, {
-        errorCode: AGENT_LIMIT_REACHED_ERROR_CODE,
-      });
-    }
+    await assertAgentLimit({ id: userId, level: user.level });
 
     let updatedUserCredits = user.currentCredits || 0;
 

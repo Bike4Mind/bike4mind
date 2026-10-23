@@ -1,10 +1,8 @@
 import { Box } from '@mui/joy';
-import {
-  Image as ImageIcon,
-  Language as WebFetchIcon,
-  HdrAuto as AtlassianIcon,
-  GitHub as GitHubIcon,
-} from '@mui/icons-material';
+import ImageIcon from '@mui/icons-material/Image';
+import WebFetchIcon from '@mui/icons-material/Language';
+import AtlassianIcon from '@mui/icons-material/HdrAuto';
+import GitHubIcon from '@mui/icons-material/GitHub';
 import WebSearchIcon from '../svgs/icons/WebSearchIcon';
 import SupportsToolsIcon from '../svgs/SupportsToolsIcon';
 import CountBadge from './CountBadge';

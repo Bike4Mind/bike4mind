@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach, MockedObject } from 'vitest';
-import { subtractCredits, SubtractCreditsAdapters, SubtractCreditsParameters } from './subtractCredits';
+import {
+  subtractCredits,
+  subtractCreditsWithLedgerRow,
+  SubtractCreditsAdapters,
+  SubtractCreditsParameters,
+} from './subtractCredits';
 import {
   ICreditHolder,
   ICreditHolderMethods,
@@ -577,6 +582,45 @@ describe('creditService - subtractCredits', () => {
         'realtime_voice_usage',
         expect.objectContaining({ credits: -20 })
       );
+    });
+  });
+
+  describe('subtractCreditsWithLedgerRow', () => {
+    const parameters: SubtractCreditsParameters = {
+      type: 'generic_deduct',
+      ownerId: 'user1',
+      ownerType: CreditHolderType.User,
+      credits: 10,
+      description: 'Admin deduction',
+    };
+
+    it('returns the holder and the id of the ledger row it wrote', async () => {
+      mockCreditTransactionRepo.createTransaction.mockResolvedValue({ id: 'tx-sub' } as never);
+      mockCreditHolderMethods.incrementCredits.mockResolvedValue(mockUser);
+
+      const result = await subtractCreditsWithLedgerRow(parameters, mockAdapters);
+
+      expect(result).toEqual({ creditHolder: mockUser, creditTransactionId: 'tx-sub' });
+    });
+
+    it('returns the row id on the skipBalanceUpdate path', async () => {
+      mockCreditTransactionRepo.createTransaction.mockResolvedValue({ id: 'tx-skip' } as never);
+
+      const result = await subtractCreditsWithLedgerRow(parameters, {
+        ...mockAdapters,
+        skipBalanceUpdate: true,
+        currentCreditHolder: mockUser,
+      });
+
+      expect(result).toEqual({ creditHolder: mockUser, creditTransactionId: 'tx-skip' });
+      expect(mockCreditHolderMethods.incrementCredits).not.toHaveBeenCalled();
+    });
+
+    it('subtractCredits still returns just the holder', async () => {
+      mockCreditTransactionRepo.createTransaction.mockResolvedValue({ id: 'tx-sub' } as never);
+      mockCreditHolderMethods.incrementCredits.mockResolvedValue(mockUser);
+
+      await expect(subtractCredits(parameters, mockAdapters)).resolves.toBe(mockUser);
     });
   });
 

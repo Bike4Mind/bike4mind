@@ -30,13 +30,11 @@ import 'prismjs/components/prism-javascript';
 import 'prismjs/components/prism-jsx';
 import 'prismjs/components/prism-typescript';
 import 'prismjs/components/prism-tsx';
-import {
-  Save as SaveIcon,
-  Undo as UndoIcon,
-  Lock as LockIcon,
-  LockOpen as UnlockIcon,
-  Warning as WarningIcon,
-} from '@mui/icons-material';
+import SaveIcon from '@mui/icons-material/Save';
+import UndoIcon from '@mui/icons-material/Undo';
+import LockIcon from '@mui/icons-material/Lock';
+import UnlockIcon from '@mui/icons-material/LockOpen';
+import WarningIcon from '@mui/icons-material/Warning';
 import { gray, whiteAlpha } from '@client/app/utils/themes/colors';
 import { ArtifactVersionDropdown } from '@client/app/components/artifacts';
 import { toast } from 'sonner';

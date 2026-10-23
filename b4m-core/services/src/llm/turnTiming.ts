@@ -4,7 +4,12 @@ import { MAX_RECORDED_TURN_RETRIES } from '@bike4mind/common';
 import type { TurnTelemetrySink } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import { getHttpStatus, isOverloadedError, isRetryableError } from '@bike4mind/utils';
-import { isRequestTimeoutError, isStreamIdleTimeoutError, isToolPairingError } from './llmErrorPredicates';
+import {
+  isRequestTimeoutError,
+  isStreamIdleTimeoutError,
+  isToolPairingError,
+  isTruncatedStreamError,
+} from './llmErrorPredicates';
 
 /** Same namespace as the backends' StreamIdleTimeoutTriggered, so the two read side by side. */
 export const CHAT_RETRY_NAMESPACE = 'Lumina5/LLMStreaming';
@@ -18,13 +23,13 @@ export const CHAT_RETRY_METRIC = 'ChatRetry';
 export const MAX_RECORDED_RETRIES = MAX_RECORDED_TURN_RETRIES;
 
 /**
- * Timeouts first: the backends' own idle and request timeouts say "the model may be overloaded",
- * which isOverloadedError matches, and recording that as provider overload is the misreading this
- * telemetry exists to expose. Must stay in sync with TURN_RETRY_REASONS in @bike4mind/common.
+ * Timeouts first: our own idle and request timeouts are a slow model, not provider overload, and
+ * older backends worded them "the model may be overloaded", which isOverloadedError matches.
+ * Recording that as overload is the misreading this telemetry exists to expose. Must stay in sync with TURN_RETRY_REASONS in @bike4mind/common.
  */
 export function classifyTurnRetryReason(error: Error): TurnRetryReason {
   // The truncation error shares the idle timeout's "stream timeout" prefix but is not a stall.
-  if (error.message.includes('without message_stop')) return 'stream_truncated';
+  if (isTruncatedStreamError(error)) return 'stream_truncated';
   if (isStreamIdleTimeoutError(error)) return 'stream_idle_timeout';
   if (isRequestTimeoutError(error)) return 'request_timeout';
   if (isToolPairingError(error)) return 'tool_pairing';

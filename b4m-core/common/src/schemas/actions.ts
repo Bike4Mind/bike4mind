@@ -90,14 +90,16 @@ export const CliCompletionRequestAction = z.object({
   accessToken: z.string(),
   requestId: z.uuid(),
   model: z.string(),
-  messages: z.array(
-    z.object({
-      role: z.enum(['user', 'assistant', 'system']),
-      content: z.union([z.string(), z.array(z.unknown())]),
-      // per-message cache flag (Anthropic only - silently ignored elsewhere)
-      cache: z.boolean().optional(),
-    })
-  ),
+  messages: z
+    .array(
+      z.object({
+        role: z.enum(['user', 'assistant', 'system']),
+        content: z.union([z.string(), z.array(z.unknown())]),
+        // per-message cache flag (Anthropic only - silently ignored elsewhere)
+        cache: z.boolean().optional(),
+      })
+    )
+    .min(1),
   options: z
     .object({
       temperature: z.number().optional(),
@@ -1484,7 +1486,7 @@ export const ConfidenceGateAction = z.object({
   iteration: z.number(),
   /** 0..1, the agent's reported confidence for the paused iteration. */
   confidence: z.number(),
-  /** Pre-formatted server copy, e.g. "Iteration confidence 42% below threshold 60%". */
+  /** Pre-formatted server copy, e.g. "2 iterations in a row below the 60% confidence threshold (latest 42%)". */
   reason: z.string(),
 });
 

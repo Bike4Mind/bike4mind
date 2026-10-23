@@ -1,4 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+// Model admission reads admin settings from the real repository; these tests exercise other gates.
+vi.mock('@server/billing/meterPlatformCompletion', () => ({
+  createModelAdmission: async () => ({ admits: async () => true, assert: async () => {} }),
+}));
 import { ImageModels } from '@bike4mind/common';
 
 // Generated media a dispatched subagent produces is paid upstream whether or not the run

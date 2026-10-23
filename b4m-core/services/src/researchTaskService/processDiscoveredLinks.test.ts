@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { processDiscoveredLinks } from './processDiscoveredLinks';
 import { NotFoundError, UnprocessableEntityError } from '@bike4mind/utils';
-import { ResearchTaskType } from '@bike4mind/common';
+import { insufficientCreditsError, ResearchTaskType } from '@bike4mind/common';
 import axios from 'axios';
 import { createSendStatusUpdate } from './utils';
 
@@ -330,6 +330,87 @@ describe('processDiscoveredLinks', () => {
     // Assert
     expect(mockLLM.complete).toHaveBeenCalledTimes(2);
     expect(mockLogger.info).toHaveBeenCalledWith(expect.stringContaining('RETRY: Failed to extract links'));
+  });
+
+  it('propagates a credit refusal without retrying or discarding pending links', async () => {
+    const refusal = insufficientCreditsError('Not enough credits for the completion hold');
+    mockDb.researchTasks.findById.mockResolvedValue(mockResearchTask);
+    mockDb.researchDatas.findByUrlAndUserId.mockResolvedValue(mockResearchData);
+    mockDb.fabFiles.findById.mockResolvedValue(mockFabFile);
+    mockedAxios.get.mockResolvedValue({ data: '# Content with links' });
+    mockLLM.complete.mockRejectedValue(refusal);
+
+    await expect(processDiscoveredLinks({ id: 'test-task-id' }, adapters)).rejects.toBe(refusal);
+
+    expect(mockLLM.complete).toHaveBeenCalledTimes(1);
+    expect(mockResearchTask.discoveredLinks.map((link: { status: string }) => link.status)).toEqual([
+      'pending',
+      'pending',
+    ]);
+    expect(mockDb.researchTasks.update).toHaveBeenCalledWith({
+      id: 'test-task-id',
+      discoveredLinks: expect.arrayContaining([expect.objectContaining({ status: 'pending' })]),
+    });
+    expect(mockJobs.researchTasks.downloadRelevantLinks).not.toHaveBeenCalled();
+  });
+
+  it('does not advance to downloads when a concurrent batch is refused after another completes', async () => {
+    const refusal = insufficientCreditsError('Credits exhausted after the first batch');
+    mockResearchTask.discoveredLinks = Array.from({ length: 51 }, (_, index) => ({
+      url: `https://example.com/link${index + 1}`,
+      sourceUrl: 'https://example.com',
+      status: 'pending',
+    }));
+    mockDb.researchTasks.findById.mockResolvedValue(mockResearchTask);
+    mockDb.researchDatas.findByUrlAndUserId.mockResolvedValue(mockResearchData);
+    mockDb.fabFiles.findById.mockResolvedValue(mockFabFile);
+    mockedAxios.get.mockResolvedValue({ data: '# Content with links' });
+    mockLLM.complete.mockImplementationOnce(
+      async (_model: unknown, _messages: unknown, _options: unknown, callback: (chunks: string[]) => Promise<void>) => {
+        await callback([JSON.stringify([{ url: 'https://example.com/link1', text: 'First link' }])]);
+      }
+    );
+    mockLLM.complete.mockRejectedValue(refusal);
+
+    await expect(processDiscoveredLinks({ id: 'test-task-id' }, adapters)).rejects.toBe(refusal);
+
+    expect(mockLLM.complete).toHaveBeenCalledTimes(2);
+    expect(mockResearchTask.discoveredLinks[0].status).toBe('completed');
+    expect(mockResearchTask.discoveredLinks[50].status).toBe('pending');
+    expect(mockDb.researchTasks.update).toHaveBeenCalledWith({
+      id: 'test-task-id',
+      discoveredLinks: expect.arrayContaining([
+        expect.objectContaining({ url: 'https://example.com/link1', status: 'completed' }),
+        expect.objectContaining({ url: 'https://example.com/link51', status: 'pending' }),
+      ]),
+    });
+    expect(mockJobs.researchTasks.downloadRelevantLinks).not.toHaveBeenCalled();
+  });
+
+  it('stops queued batches and later URLs after the owner is refused', async () => {
+    const refusal = insufficientCreditsError('Owner cannot fund more analysis');
+    mockResearchTask.urls.push('https://later.example.com');
+    mockResearchTask.discoveredLinks = [
+      ...Array.from({ length: 200 }, (_, index) => ({
+        url: `https://example.com/link${index + 1}`,
+        sourceUrl: 'https://example.com',
+        status: 'pending',
+      })),
+      { url: 'https://later.example.com/link', sourceUrl: 'https://later.example.com', status: 'pending' },
+    ];
+    mockDb.researchTasks.findById.mockResolvedValue(mockResearchTask);
+    mockDb.researchDatas.findByUrlAndUserId.mockResolvedValue(mockResearchData);
+    mockDb.fabFiles.findById.mockResolvedValue(mockFabFile);
+    mockedAxios.get.mockResolvedValue({ data: '# Content with links' });
+    mockLLM.complete.mockRejectedValue(refusal);
+
+    await expect(processDiscoveredLinks({ id: 'test-task-id' }, adapters)).rejects.toBe(refusal);
+
+    // At most the three already-running batches may reach the meter; the fourth and later URL stop.
+    expect(mockLLM.complete).toHaveBeenCalledTimes(3);
+    expect(mockDb.researchDatas.findByUrlAndUserId).toHaveBeenCalledTimes(1);
+    expect(mockResearchTask.discoveredLinks.every((link: { status: string }) => link.status === 'pending')).toBe(true);
+    expect(mockJobs.researchTasks.downloadRelevantLinks).not.toHaveBeenCalled();
   });
 
   it('should mark links as failed after retry attempts are exhausted', async () => {

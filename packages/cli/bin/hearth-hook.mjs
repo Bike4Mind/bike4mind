@@ -9,6 +9,9 @@
 // shared default channel by NAME and the server find-or-creates it, so a fresh
 // install needs no per-user setup and lands in the same channel the cc-bridge
 // reports into (one roster, not two half-rosters).
+// Optional: B4M_HEARTH_DEBUG - any value but empty or 0 writes one stderr line
+// when reporting fails or stdin errors. Off by default: hook stderr can reach the
+// user's terminal on every event, so a stale key must not nag.
 // Always exits 0 - a reporting hook must never block the session.
 //
 // DISCLOSURE. Everything sent here lands in an append-only log that other
@@ -39,7 +42,36 @@
 import { basename, resolve } from 'node:path';
 import { homedir } from 'node:os';
 
-const { B4M_API_URL, B4M_API_KEY, B4M_HEARTH_CHANNEL, B4M_HEARTH_DISCLOSURE } = process.env;
+const { B4M_API_URL, B4M_API_KEY, B4M_HEARTH_CHANNEL, B4M_HEARTH_DISCLOSURE, B4M_HEARTH_DEBUG } = process.env;
+
+const DEBUG = Boolean(B4M_HEARTH_DEBUG) && B4M_HEARTH_DEBUG !== '0';
+
+// The diagnostic is best-effort: with the reader gone, an unhandled EPIPE here
+// would kill the process and decide the exit code, which this hook must never do.
+process.stderr.on('error', () => {});
+
+// Resolves once the line is flushed: stderr to a pipe is async on macOS, so
+// exiting straight after a bare write can drop it. Bounded, because a full pipe
+// with a stalled reader never calls back - and a diagnostic must not be the
+// thing that holds the session open.
+const FLUSH_DEADLINE_MS = 250;
+const REQUEST_DEADLINE_MS = 3000;
+const debug = line =>
+  DEBUG
+    ? new Promise(done => {
+        const deadline = setTimeout(done, FLUSH_DEADLINE_MS).unref();
+        process.stderr.write(`hearth-hook: ${line}\n`, () => {
+          clearTimeout(deadline);
+          done();
+        });
+      })
+    : Promise.resolve();
+
+function errorCode(error) {
+  const code = error?.cause?.code ?? error?.code;
+  if (typeof code === 'string') return code;
+  return typeof error?.name === 'string' ? error.name : 'unknown';
+}
 
 const DEFAULT_DISCLOSURE = 2;
 const MAX_DISCLOSURE = 2;
@@ -238,10 +270,18 @@ function describe({ label, tier, workspace, activity }) {
 }
 
 const chunks = [];
+process.stdin.on('error', err => {
+  debug(`stdin error: ${errorCode(err)}`).finally(() => process.exit(0));
+});
 process.stdin.on('data', c => chunks.push(c));
 process.stdin.on('end', async () => {
+  let pending = Promise.resolve();
+  let operation = 'stdin payload';
   try {
-    if (!B4M_API_URL || !B4M_API_KEY) return;
+    if (!B4M_API_URL || !B4M_API_KEY) {
+      pending = debug('configuration error: missing B4M_API_URL or B4M_API_KEY');
+      return;
+    }
     const hook = JSON.parse(Buffer.concat(chunks).toString() || '{}');
 
     const tier = disclosureTier();
@@ -267,7 +307,10 @@ process.stdin.on('end', async () => {
     const activity = activityOf(hook);
     if (tier >= 2) payload.activity = activity;
 
-    await fetch(new URL('/api/hearth/events', B4M_API_URL), {
+    operation = 'configuration';
+    const endpoint = new URL('/api/hearth/events', B4M_API_URL);
+    operation = 'POST /api/hearth/events';
+    const res = await fetch(endpoint, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-api-key': B4M_API_KEY },
       body: JSON.stringify({
@@ -281,12 +324,15 @@ process.stdin.on('end', async () => {
         // had posted it - the log could not distinguish operator from tooling.
         actor: { kind: 'agent', displayName: label },
       }),
-      // Bounded so a hung request can never stall the session past 3s.
-      signal: AbortSignal.timeout(3000),
+      // Reserve the debug flush inside the same 3s request/diagnostic budget.
+      signal: AbortSignal.timeout(DEBUG ? REQUEST_DEADLINE_MS - FLUSH_DEADLINE_MS : REQUEST_DEADLINE_MS),
     });
-  } catch {
-    // Swallow everything: reporting must never fail the hook.
+    if (!res.ok) pending = debug(`POST /api/hearth/events failed: HTTP ${res.status}`);
+  } catch (err) {
+    // Never print error messages: they can contain URLs or input content.
+    pending = debug(`${operation} error: ${errorCode(err)}`);
   } finally {
+    await pending;
     process.exit(0);
   }
 });

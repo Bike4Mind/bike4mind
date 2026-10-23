@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 
+// Model admission reads admin settings from the real repository; these tests exercise other gates.
+vi.mock('@server/billing/meterPlatformCompletion', () => ({
+  createModelAdmission: async () => ({ admits: async () => true, assert: async () => {} }),
+}));
+
 // Drives the real `handler` through a `dag_node_dispatch` message and asserts what
 // `processSubagentDispatch` hands `buildSharedTools`. Harness mirrors agentExecutor.subagentMediaBilling.test.ts.
 

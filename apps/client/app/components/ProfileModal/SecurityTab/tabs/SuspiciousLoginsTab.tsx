@@ -1,6 +1,7 @@
 import React from 'react';
 import { Box, Chip, CircularProgress, Sheet, Stack, Typography, useTheme } from '@mui/joy';
-import { PersonSearch as PersonSearchIcon, Warning } from '@mui/icons-material';
+import PersonSearchIcon from '@mui/icons-material/PersonSearch';
+import Warning from '@mui/icons-material/Warning';
 import { useGetSuspiciousSummary, useGetRecentSuspiciousLogins } from '@client/app/hooks/data/admin';
 import type { SuspiciousPatternSummary } from '@client/app/hooks/data/admin';
 

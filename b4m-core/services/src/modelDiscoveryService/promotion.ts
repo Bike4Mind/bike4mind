@@ -46,7 +46,7 @@ export const CREDENTIAL_OF_BACKEND: Readonly<Record<ModelBackend, (creds: Discov
 export type AwaitingPriceKind = 'none' | 'aggregator-quote' | 'build-literal';
 
 export interface PromotionInput {
-  record: Pick<ModelRecord, 'backend' | 'adapterFamily' | 'dispatchProfile' | 'reasoning' | 'freeToRun'>;
+  record: Pick<ModelRecord, 'type' | 'backend' | 'adapterFamily' | 'dispatchProfile' | 'reasoning' | 'freeToRun'>;
   policy: DiscoveryAutoEnablePolicy;
   credentials: DiscoveryCredentials;
   /** A price from a trusted tier: a provider API, two aggregators that agree, or a price row in force or adapter literal. */
@@ -116,8 +116,10 @@ export function evaluatePromotion({
   blockedBy.push(...dispatchProfileGaps(record));
 
   // A model that costs nothing cannot be mispriced, so 'priced' does not strand
-  // the local models a self-host install exists to run.
-  const priceSatisfied = policy === 'all' || hasTrustedPrice || record.freeToRun === true;
+  // the local models a self-host install exists to run. 'all' waives the price
+  // for every type but text: an unpriced text model settles at $0 per token.
+  const priced = hasTrustedPrice || record.freeToRun === true;
+  const priceSatisfied = priced || (policy === 'all' && record.type !== 'text');
   if (policy === 'manual') blockedBy.push('manual-approval-required');
   else if (!priceSatisfied) blockedBy.push('no-trusted-price');
 

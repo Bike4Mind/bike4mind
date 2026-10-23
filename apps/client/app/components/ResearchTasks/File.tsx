@@ -5,7 +5,7 @@ import { useNotebookContextFiles } from '@client/app/hooks/useNotebookContextFil
 import { useChunkFile } from '@client/app/hooks/data/fabFiles';
 import { useDeleteResearchData } from '@client/app/hooks/data/researchData';
 import { useConfirmation } from '@client/app/hooks/useConfirmation';
-import { AttachFile } from '@mui/icons-material';
+import AttachFile from '@mui/icons-material/AttachFile';
 import { Box, Button, Chip, IconButton, Tooltip, Typography } from '@mui/joy';
 import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined';
 import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined';

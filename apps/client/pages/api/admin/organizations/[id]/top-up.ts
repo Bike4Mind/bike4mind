@@ -81,7 +81,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
     // this attempt's credit write while the original committed write stands.
     try {
       await withTransaction(async () => {
-        await creditService.addCredits(
+        const { creditTransactionId } = await creditService.addCreditsWithLedgerRow(
           isRefund
             ? {
                 ownerId: organization.id,
@@ -118,6 +118,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
           summary: `${isRefund ? 'refunded' : 'topped up'} ${credits} credits`,
           reason,
           details: { credits, ownerId: organization.userId, ...(isRefund ? { kind } : {}) },
+          related: creditTransactionId ? { creditTransactionId } : undefined,
         });
       });
     } catch (err: unknown) {

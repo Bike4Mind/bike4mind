@@ -2,11 +2,9 @@ import React, { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Box, Button, Card, Typography, Chip, Stack, IconButton, Tooltip } from '@mui/joy';
 import ShowMoreButton from '@client/app/components/common/ShowMoreButton';
 import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
-import {
-  OpenInFullOutlined as ExpandIcon,
-  ContentCopyOutlined as CopyIcon,
-  SaveOutlined as SaveIcon,
-} from '@mui/icons-material';
+import ExpandIcon from '@mui/icons-material/OpenInFullOutlined';
+import CopyIcon from '@mui/icons-material/ContentCopyOutlined';
+import SaveIcon from '@mui/icons-material/SaveOutlined';
 import { setSessionLayout, setSelectedArtifactVersion, type ArtifactData } from '@client/app/hooks/useSessionLayout';
 import { useSelectedArtifactContentSync } from '@client/app/hooks/useSelectedArtifactContentSync';
 import { useSessions, useWorkBenchFiles, useWorkBenchActions } from '@client/app/contexts/SessionsContext';

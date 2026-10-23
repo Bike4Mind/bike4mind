@@ -1,6 +1,6 @@
 import { RequestHandler } from 'express';
 import { Logger } from '@bike4mind/observability';
-import { invert } from 'lodash';
+import invert from 'lodash/invert';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { LEGACY_REQUEST_ID_HEADER, REQUEST_ID_HEADER, resolveRequestId } from '@bike4mind/common';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';

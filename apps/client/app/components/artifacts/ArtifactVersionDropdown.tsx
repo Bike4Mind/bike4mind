@@ -12,7 +12,9 @@ import {
   FormControl,
   FormLabel,
 } from '@mui/joy';
-import { History as VersionIcon, CheckCircle as LatestIcon, KeyboardArrowDown } from '@mui/icons-material';
+import VersionIcon from '@mui/icons-material/History';
+import LatestIcon from '@mui/icons-material/CheckCircle';
+import KeyboardArrowDown from '@mui/icons-material/KeyboardArrowDown';
 import {
   useArtifactVersions,
   useSubscribeToArtifactVersions,

@@ -62,6 +62,7 @@ export interface UserSettings {
   agentModeDefault: 'off' | 'auto' | 'on';
   showFunTools: boolean;
   showSplashCards: boolean;
+  desktopPromoDismissed: boolean;
 }
 
 interface UserSettingsContextProps {
@@ -113,6 +114,7 @@ const defaultSettings: UserSettings = {
   agentModeDefault: 'off',
   showFunTools: false,
   showSplashCards: false,
+  desktopPromoDismissed: false,
 };
 
 // One id for every settings-write failure - preferences AND language - so a burst of failures
@@ -205,6 +207,7 @@ const SCALAR_PREF_KEYS = [
   'agentModeDefault',
   'showFunTools',
   'showSplashCards',
+  'desktopPromoDismissed',
 ] as const;
 
 /** Apply server preferences on top of defaults. Non-null server values win. */

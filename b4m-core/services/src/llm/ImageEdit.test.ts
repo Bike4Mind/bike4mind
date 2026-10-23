@@ -72,7 +72,10 @@ vi.mock('../creditService', async importOriginal => {
 
 vi.mock('./imageModerationGate', () => ({ moderateImageOrThrow: vi.fn(async () => undefined) }));
 
-vi.mock('./questHeartbeat', () => ({ startQuestHeartbeat: vi.fn(async () => () => {}) }));
+vi.mock('./questHeartbeat', async importOriginal => ({
+  ...(await importOriginal<typeof import('./questHeartbeat')>()),
+  startQuestHeartbeat: vi.fn(async () => () => {}),
+}));
 
 const makeModelInfo = (id: string): ModelInfo =>
   ({
@@ -1410,5 +1413,59 @@ describe('ImageEditService quest partial writes', () => {
       // itself would pass even if process() started mutating it before the write.
       promptMeta: { marker: 'meta' },
     });
+  });
+});
+
+describe('ImageEditService.process (settled quest and early failure)', () => {
+  const makeService = (questStatus: string | undefined, usersFindById: ReturnType<typeof vi.fn>) => {
+    const quest = { id: 'quest1', sessionId: 'session1', status: questStatus } as Record<string, unknown>;
+    const update = vi.fn(async () => undefined);
+    const service = new ImageEditService({
+      db: {
+        quests: { findById: vi.fn(async () => quest), update },
+        users: { findById: usersFindById },
+        organizations: { findById: vi.fn(async () => null) },
+      },
+      startImageEditProcess: vi.fn(),
+      deleteFabFile: vi.fn(),
+      wsHttpsUrl: 'wss://example.invalid',
+      abilityGetter: vi.fn(),
+      logEvent: vi.fn(),
+      storage: {} as never,
+      fabFileStorage: {} as never,
+    } as never);
+    const run = () =>
+      service.process({
+        body: {
+          sessionId: 'session1',
+          questId: 'quest1',
+          userId: 'user1',
+          prompt: 'make it blue',
+          model: ImageModels.GPT_IMAGE_1_5,
+          image: 'https://example.invalid/source.png',
+          fabFileIds: [],
+        } as never,
+        logger: silentLogger,
+      });
+    return { run, quest, update };
+  };
+
+  it('settles the quest with an error when the user lookup rejects', async () => {
+    const { run, quest, update } = makeService(undefined, vi.fn().mockRejectedValue(new Error('db down')));
+
+    await run();
+
+    expect(quest).toMatchObject({ type: 'error', status: 'done' });
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ id: 'quest1', type: 'error', status: 'done' }));
+  });
+
+  it.each(['done', 'stopped'])('does nothing when the quest is already %s', async status => {
+    const users = vi.fn();
+    const { run, update } = makeService(status, users);
+
+    await run();
+
+    expect(users).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
   });
 });

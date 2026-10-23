@@ -1,5 +1,5 @@
 import { emojis } from '@client/app/constants/tools';
-import { Casino } from '@mui/icons-material';
+import Casino from '@mui/icons-material/Casino';
 import { Box, Divider, IconButton, Input } from '@mui/joy';
 import { gray, blackAlpha } from '../../../utils/themes/colors';
 import { EmojiClickData, EmojiStyle } from 'emoji-picker-react';

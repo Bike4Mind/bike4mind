@@ -1,5 +1,31 @@
 # @bike4mind/sdk
 
+## 1.4.0
+
+### Minor Changes
+
+- [#5159](https://github.com/Bike4Mind/bike4mind/pull/5159) [`e0f2069`](https://github.com/Bike4Mind/bike4mind/commit/e0f2069b4640c1323b66161ed9d6e7a5ffd61c04) Thanks [@biletskiy6](https://github.com/biletskiy6)! - show a product video in a What's New slide
+
+- [#5164](https://github.com/Bike4Mind/bike4mind/pull/5164) [`edecc8d`](https://github.com/Bike4Mind/bike4mind/commit/edecc8dd12d0b7bd99123b1b64cba319bb8bcc1c) Thanks [@julsanchez](https://github.com/julsanchez)! - serve an org's Skill Market listings as a Claude Code plugin marketplace
+
+- [#5256](https://github.com/Bike4Mind/bike4mind/pull/5256) [`0e0284e`](https://github.com/Bike4Mind/bike4mind/commit/0e0284e08221bbb80caf0e317192759ca66935e5) Thanks [@onoya](https://github.com/onoya)! - record per-turn timing and retries on the quest
+
+- [#5428](https://github.com/Bike4Mind/bike4mind/pull/5428) [`d0f839c`](https://github.com/Bike4Mind/bike4mind/commit/d0f839cb64f6db020c5184c038dca4a971cfed47) Thanks [@jebie](https://github.com/jebie)! - native tool search on Bedrock
+
+- [#5434](https://github.com/Bike4Mind/bike4mind/pull/5434) [`55fbaf1`](https://github.com/Bike4Mind/bike4mind/commit/55fbaf1aa3906a8c1fbd73960aa6e3cfaa4f66c9) Thanks [@onoya](https://github.com/onoya)! - role-tagged video generation inputs
+
+- [#5520](https://github.com/Bike4Mind/bike4mind/pull/5520) [`b13304e`](https://github.com/Bike4Mind/bike4mind/commit/b13304e18ae26ccac766546e4495d9f0f88ef0f1) Thanks [@jjmarfa](https://github.com/jjmarfa)! - publish text refinement as a v1 contract
+
+### Patch Changes
+
+- [#5035](https://github.com/Bike4Mind/bike4mind/pull/5035) [`556feb1`](https://github.com/Bike4Mind/bike4mind/commit/556feb12ee8f51a8d6876317a4b95043acfc87b2) Thanks [@julsanchez](https://github.com/julsanchez)! - hold or gate credits before TTS, transcription, tools and agent runs
+
+- [#5460](https://github.com/Bike4Mind/bike4mind/pull/5460) [`0741792`](https://github.com/Bike4Mind/bike4mind/commit/074179264f77d6c72938e1d9769c906727d1b801) Thanks [@vinchi777](https://github.com/vinchi777)! - classify upstream caller errors
+
+- [#5461](https://github.com/Bike4Mind/bike4mind/pull/5461) [`318e6a5`](https://github.com/Bike4Mind/bike4mind/commit/318e6a5f7b1ab8a512eb7fb44dee7d634ae20c75) Thanks [@vinchi777](https://github.com/vinchi777)! - reject empty effective messages
+
+- [#5499](https://github.com/Bike4Mind/bike4mind/pull/5499) [`74c6ac2`](https://github.com/Bike4Mind/bike4mind/commit/74c6ac23923bcf866c76efdfccd44abbb1ca66e1) Thanks [@jjmarfa](https://github.com/jjmarfa)! - document prompt_upsampling in the public image API
+
 ## 1.3.0
 
 ### Minor Changes

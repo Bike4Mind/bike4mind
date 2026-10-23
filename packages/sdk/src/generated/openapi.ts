@@ -144,7 +144,7 @@ export interface paths {
      *
      *     TOOL SEARCH. On a model whose `GET /api/v1/models` row has `supports_tool_search: true` (`backend` `"anthropic"` or `"bedrock"`), a `tools` entry may set `toolSchema.defer_loading: true`, and a `{ "serverTool": { "type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex" } }` (or the `bm25` pair) entry adds Anthropic's tool search, so deferred definitions load only when the model searches for them. The stream then carries `provider_block` events (`{ type, provider: "anthropic", block }`) for the server-run search; echo each block back verbatim, in order, in the assistant `messages` content of the next request, and never answer one with a `tool_result`. When the server-run search loop hits its iteration limit the stream ends with `stopReason: "pause_turn"`; continue by re-sending the conversation with that assistant turn's provider blocks echoed. A client-side search may return `{ "type": "tool_reference", "tool_name": "..." }` blocks inside a `tool_result`'s content. On every other model `defer_loading` is ignored (every tool is sent as usual) and a server tool, a `tool_reference` or an echoed tool search block is refused with a `400` rather than run without it.
      *
-     *     ERRORS. Everything checked before the model provider is called fails with a JSON error body and a real HTTP status, before any stream opens: a malformed or otherwise invalid request or an unknown `model` `400` (`errorCode: "unknown_model"` for the latter), a bad credential `401`, a key without a required scope `403` (with `required_scopes`), a body over 25 MB `413`, a body that fails schema validation `422`, insufficient credits `422` with `errorCode: "insufficient_credits"` (personal or org balance, or an org per-member credit cap), a rate limit `429` with `Retry-After`, and a catalogued model whose provider is not configured on this deployment, or a model that could only come from a self-hosted model server (Ollama, local image) that is currently unreachable, `503` with `errorCode: "provider_not_configured"` (retryable). Once the stream has opened the status stays `200` and a failure arrives as one terminal in-band `error` event. Branch on that event's `code`, never on `message`, which is prose and may change: `insufficient_credits` (buy credits) when credits run out mid-generation, `provider_rejected` when the model provider refused our credentials, `content_blocked` when the model declined the request (do not retry it unchanged), and `provider_error` for any other provider failure. Treat `code` as optional.
+     *     ERRORS. Everything checked before the model provider is called fails with a JSON error body and a real HTTP status, before any stream opens: an empty `messages` array, a conversation with no non-empty user or assistant message (system-only, or only blank content), a malformed request, or an unknown `model` `400` (`errorCode: "unknown_model"` for an unknown model), a bad credential `401`, a key without a required scope `403` (with `required_scopes`), a body over 25 MB `413`, any other body that fails schema validation `422`, insufficient credits `422` with `errorCode: "insufficient_credits"` (personal or org balance, or an org per-member credit cap), a rate limit `429` with `Retry-After`, and a catalogued model whose provider is not configured on this deployment, or a model that could only come from a self-hosted model server (Ollama, local image) that is currently unreachable, `503` with `errorCode: "provider_not_configured"` (retryable). A provider rejection of caller input that happens before the stream opens is also a JSON `400`, with `errorCode: "invalid_request"` (do not retry it unchanged). Once the stream has opened the status stays `200` and a failure arrives as one terminal in-band `error` event. Branch on that event's `code`, never on `message`, which is prose and may change: `insufficient_credits` (buy credits) when credits run out mid-generation, `invalid_request` when the provider rejects caller input (do not retry it unchanged), `provider_rejected` when the model provider refused our credentials, `content_blocked` when the model declined the request (do not retry it unchanged), and `provider_error` for any other provider failure. Treat `code` as optional.
      */
     post: operations['createCompletion'];
     delete?: never;
@@ -384,6 +384,26 @@ export interface paths {
      * @description Returns one embedding vector per input string. The request and success bodies follow the OpenAI embeddings API shape; error bodies use the standard B4M error envelope. `model` is any embedding model this deployment supports (OpenAI, Voyage AI, Amazon Bedrock, or a self-hosted Ollama model); `input` is a string or up to 2048 strings, at most 300000 tokens in total and each within the model context window. The input count is further capped so inputs x output width stays within 196608 values (128 inputs at 1536 dimensions) - page larger jobs across requests. Pre-tokenized input (arrays of token ids) is not accepted; clients that send it by default, such as LangChain's Python `OpenAIEmbeddings`, must be set to send strings (`check_embedding_ctx_length=False`). `dimensions` shortens the vector on models that support it (OpenAI `text-embedding-3-*`, and Voyage models with several published widths). Billed in credits per input token from the per-model embedding rate, reserved before the provider call and refunded if it fails. Authenticate with an API key (`b4m_live_`) carrying `ai:generate`, or a JWT.
      */
     post: operations['createEmbeddings'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/text-refinements': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Refine text
+     * @description Rewrites `text` to be more concise, clear and detailed while keeping its intent. `context` is optional background that steers the rewrite. `text` is at most 10000 characters and `context` at most 10000. Output is capped at about 800 tokens, and identical requests are served from a cache for about five minutes. Not billed in credits. Authenticate with an API key (`b4m_live_`) carrying `ai:generate`, or a JWT.
+     */
+    post: operations['createTextRefinement'];
     delete?: never;
     options?: never;
     head?: never;
@@ -1689,7 +1709,12 @@ export interface components {
           requestId?: string;
           /** @enum {string} */
           code?:
-            'insufficient_credits' | 'spend_cap_exceeded' | 'provider_error' | 'provider_rejected' | 'content_blocked';
+            | 'insufficient_credits'
+            | 'spend_cap_exceeded'
+            | 'invalid_request'
+            | 'provider_error'
+            | 'provider_rejected'
+            | 'content_blocked';
         };
     createCompletionResponse400: {
       error: string;
@@ -1701,6 +1726,7 @@ export interface components {
       name?: string;
       /** @enum {string} */
       errorCode?:
+        | 'invalid_request'
         | 'unknown_model'
         | 'tool_search_unsupported'
         | 'all_tools_deferred'
@@ -2648,6 +2674,10 @@ export interface components {
       )[];
       /** @default 2 */
       safety_tolerance?: number;
+      /**
+       * @description Let the provider rewrite and expand the prompt before rendering. Applies to Black Forest Labs (FLUX) models only; other models ignore it. Defaults to false.
+       * @default false
+       */
       prompt_upsampling?: boolean;
       seed?: number | null;
       /** @enum {string|null} */
@@ -3007,6 +3037,46 @@ export interface components {
        * @enum {string}
        */
       encoding_format?: 'float' | 'base64';
+    };
+    /**
+     * @example {
+     *       "text": "A golden retriever running along a sunlit beach at sunset, waves breaking behind it."
+     *     }
+     */
+    createTextRefinementResponse200: {
+      text: string;
+    };
+    createTextRefinementResponse401: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'provider_not_configured' | 'provider_rejected';
+    };
+    createTextRefinementResponse503: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'provider_not_configured' | 'provider_rejected';
+    };
+    /**
+     * @example {
+     *       "text": "a dog on a beach",
+     *       "context": "prompt for an image generator"
+     *     }
+     */
+    createTextRefinementRequest: {
+      text: string;
+      context?: string;
     };
     /**
      * @example {
@@ -6663,7 +6733,7 @@ export interface operations {
           'text/event-stream': components['schemas']['createCompletionResponse200'];
         };
       };
-      /** @description Malformed or otherwise invalid request (no `errorCode`), or a `model` the caller cannot use (`errorCode: "unknown_model"`): not in the catalog or not available to the caller. List valid ids with `GET /api/v1/models`. Tool search requests are refused with: `tool_search_unsupported` (a server tool, `tool_reference` or echoed tool search block on a model that cannot serve tool search here), `all_tools_deferred` (every tool deferred and no server tool), `deferred_tool_cache_control` (`cache_control` on a deferred tool), `unknown_tool_reference` (a `tool_reference` naming a tool not in `tools`, or carrying no string `tool_name`). Mid-conversation tool changes are refused with: `tool_changes_unsupported` (a `tool_addition` / `tool_removal` system message on a model that cannot serve it here), `invalid_tool_change` (a malformed block, or one placed where the provider does not accept it), and `unknown_tool_reference` (a changed tool not in `tools`). */
+      /** @description Malformed or otherwise invalid request (no `errorCode`), provider-rejected caller input (`errorCode: "invalid_request"`), or a `model` the caller cannot use (`errorCode: "unknown_model"`): not in the catalog or not available to the caller. List valid ids with `GET /api/v1/models`. Tool search requests are refused with: `tool_search_unsupported` (a server tool, `tool_reference` or echoed tool search block on a model that cannot serve tool search here), `all_tools_deferred` (every tool deferred and no server tool), `deferred_tool_cache_control` (`cache_control` on a deferred tool), `unknown_tool_reference` (a `tool_reference` naming a tool not in `tools`, or carrying no string `tool_name`). Mid-conversation tool changes are refused with: `tool_changes_unsupported` (a `tool_addition` / `tool_removal` system message on a model that cannot serve it here), `invalid_tool_change` (a malformed block, or one placed where the provider does not accept it), and `unknown_tool_reference` (a changed tool not in `tools`). */
       400: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -9132,6 +9202,206 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['createEmbeddingsResponse503'];
+        };
+      };
+    };
+  };
+  createTextRefinement: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['createTextRefinementRequest'];
+      };
+    };
+    responses: {
+      /** @description The refined text. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['createTextRefinementResponse200'];
+        };
+      };
+      /** @description Missing/invalid credentials, or the text-refinement provider refused the configured key (`errorCode: "provider_rejected"`). */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['createTextRefinementResponse401'];
+        };
+      };
+      /** @description The API key does not hold any of the required scopes. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request failed validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Per-key rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Unexpected server error (for example the refinement cache is unavailable). */
+      500: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The model call failed for a reason other than a rejected credential, or returned no refined text. */
+      502: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description This deployment has no operations model configured (`errorCode: "provider_not_configured"`). */
+      503: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['createTextRefinementResponse503'];
         };
       };
     };

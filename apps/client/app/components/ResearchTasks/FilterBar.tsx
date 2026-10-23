@@ -1,7 +1,8 @@
 import { FC } from 'react';
 import { Box, Select, Option } from '@mui/joy';
 import { ResearchTaskStatus, ResearchTaskType } from '@bike4mind/common';
-import { FilterList, Assessment } from '@mui/icons-material';
+import FilterList from '@mui/icons-material/FilterList';
+import Assessment from '@mui/icons-material/Assessment';
 
 interface FilterBarProps {
   status: ResearchTaskStatus | null;

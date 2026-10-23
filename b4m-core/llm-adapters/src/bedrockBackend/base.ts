@@ -598,7 +598,8 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         //
         // Worded to include "stream timeout" on purpose: that is the substring
         // ChatCompletionProcess's isStreamIdleTimeoutError matches, which buys the existing
-        // retry-once-then-fallback path. Keep the phrase if you reword this. Note it is NOT in
+        // retry-once-then-fallback path. Keep the phrase if you reword this, and keep "without a
+        // terminal event" in sync with isTruncatedStreamError in llmErrorPredicates.ts. Note it is NOT in
         // logToSlackClassify's skip list and does not satisfy isAbortError, so a genuine
         // truncation logs at ERROR and is alert-visible - deliberate, since a truncated answer
         // that survived a retry and a provider fallback is worth seeing.

@@ -5,6 +5,7 @@ import type { Node } from 'web-tree-sitter';
 import { arityPrefix, commandTokens, directoryOptionValues, droppedOnlySafeOptions } from './bashArity';
 import { parseBash } from './bashParser';
 import { isEnvFile } from './envFiles';
+import { ghReadFiles, repositoryWrite, type RepositoryWrite } from './ownRepository';
 import { realpathNearest, resolveWithinRootsPhysically } from './paths';
 
 export interface ShellCommand {
@@ -37,6 +38,11 @@ export interface ShellScan {
   /** Why a command can send data off this computer, e.g. `curl --data`, which auto mode must not run unasked. */
   outbound: string[];
   /**
+   * Each outbound command's reason, with the repository it writes to when its words pin one (see
+   * `repositoryWrite`). Never set for a script that changes the environment, which can redirect git or gh.
+   */
+  sends: { reason: string; target: RepositoryWrite | null }[];
+  /**
    * True when every command is one `containedCommand` accepts and nothing in the script sets the
    * environment, so no part of it can carry data to a host of the caller's choosing. A reply that
    * has read untrusted content still runs these unasked; see ChatService's DirectoryTurn.untrusted.
@@ -45,6 +51,73 @@ export interface ShellScan {
 }
 
 const CHANGES_DIRECTORY = new Set(['cd', 'chdir', 'pushd', 'popd']);
+
+/** Programs that only read what they are pointed at, when `containedCommand` also vouches for the call. */
+const READ_PROBES = new Set(['ls', 'cat', 'head', 'tail', 'stat', 'file', 'wc', 'du', 'tree', 'find']);
+
+/**
+ * Where version managers and package managers install toolchains. An agent lists and reads these
+ * to find which node or pnpm a project runs on; they hold binaries and package code, not secrets.
+ * Deliberately narrow: `~/.local/share` as a whole also holds keyrings and app data.
+ */
+function toolchainLocations(): string[] {
+  const home = homedir();
+  return [
+    ...[
+      '.nvm',
+      '.volta',
+      '.fnm',
+      '.bun',
+      '.deno',
+      '.cargo/bin',
+      '.rustup/toolchains',
+      '.pyenv/versions',
+      '.rbenv/versions',
+      '.asdf/installs',
+      '.asdf/shims',
+      '.nix-profile',
+      '.local/bin',
+      '.local/share/pnpm',
+      '.local/share/fnm',
+      '.local/share/mise/installs',
+      'Library/pnpm',
+    ].map(path => join(home, path)),
+    '/etc/profiles',
+    '/nix/store',
+    '/nix/var/nix/profiles',
+    '/run/current-system/sw',
+    '/opt/homebrew/bin',
+    '/opt/homebrew/opt',
+    '/opt/homebrew/Cellar',
+    '/usr/local/bin',
+    '/usr/local/lib/node_modules',
+    '/usr/bin',
+    '/bin',
+  ];
+}
+
+// Credential files a package manager or a shell keeps beside its toolchain.
+const SECRET_NAME = /^\.?(npmrc|netrc|pypirc|git-credentials|yarnrc(\.yml)?)$|credential|secret|token/i;
+
+const namesSecret = (path: string): boolean => path.split('/').some(part => SECRET_NAME.test(part)) || isEnvFile(path);
+
+/**
+ * Whether a path outside the project is a toolchain install that a read-only probe may look at
+ * unasked, both as written and with every symlink followed, so `~/.nvm/link -> ~/.ssh` still asks.
+ */
+export async function isToolchainPath(path: string, cwd: string): Promise<boolean> {
+  if (namesSecret(resolve(cwd, path))) return false;
+  try {
+    // Each root is resolved the way the path is: a root that does not exist under a linked
+    // parent (macOS `/etc` -> `/private/etc`) must still match the path's physical form.
+    const roots = await Promise.all(
+      toolchainLocations().map(root => resolveWithinRootsPhysically(root, [parse(root).root], root))
+    );
+    return !namesSecret(await resolveWithinRootsPhysically(path, roots, cwd));
+  } catch {
+    return false;
+  }
+}
 
 // Ported from opencode's shell tool, plus commands that write to a path or read one by name.
 const TOUCHES_FILES = new Set([
@@ -173,13 +246,13 @@ export function requiresExactShellRule(command: string): boolean {
   const argumentsText = command.slice(head[0].length);
   return (
     // Quoting or an absolute executable defeats arityPrefix's bare-program lookup.
-    head[1] !== undefined || head[2] !== undefined || executable !== program ||
+    head[1] !== undefined ||
+    head[2] !== undefined ||
+    executable !== program ||
     WRAPPERS.has(program) ||
     /^(curl|wget|rsync|aws|gsutil|gcloud|docker|podman)$/.test(program) ||
-    (program === 'gh' && (
-      /^(?:api|"api"|'api')(?:\s|$)/.test(argumentsText) ||
-      !/^[A-Za-z]+\s+[A-Za-z]+(?:\s|$)/.test(argumentsText)
-    ))
+    (program === 'gh' &&
+      (/^(?:api|"api"|'api')(?:\s|$)/.test(argumentsText) || !/^[A-Za-z]+\s+[A-Za-z]+(?:\s|$)/.test(argumentsText)))
   );
 }
 
@@ -601,6 +674,7 @@ const LOCAL_PROGRAMS = new Set([
 const RUNS_A_PROGRAM: Readonly<Record<string, RegExp>> = {
   find: /^-(exec|execdir|ok|okdir|delete|fprint0?|fprintf|fls)$/,
   rg: /^--pre(-glob)?(=|$)/,
+  tree: /^-[A-Za-z]*[oR]/,
 };
 
 /**
@@ -719,6 +793,8 @@ export async function scanShell(
     const directories = new Set<string>();
     const envFiles = new Set<string>();
     const outbound = new Set<string>();
+    const sends: ShellScan['sends'] = [];
+    let setsEnvironment = false;
     const writtenCommands = new Set<number>();
     let contained = true;
 
@@ -728,9 +804,13 @@ export async function scanShell(
       if (globPrefix(path) === path ? isEnvFile(path) : globMayMatchEnvFile(path)) envFiles.add(path);
     };
 
-    const check = async (raw: string, cwd: string): Promise<string | null> => {
-      const prefix = globPrefix(expandHome(unquote(raw)));
+    /** A `probe` only reads, so a toolchain folder it names is recorded as a path, not an outside folder to grant. */
+    const check = async (raw: string, cwd: string, probe = false): Promise<string | null> => {
+      const text = expandHome(unquote(raw));
+      const prefix = globPrefix(text);
       if (!prefix || isDynamic(prefix)) return null;
+      // A glob can expand to `..` (`~/.nvm*/../.ssh`, `~/.nvm/.?/.ssh`), so a dot after the glob never stays inside.
+      const stays = text === prefix || (!text.slice(prefix.length).includes('.') && !prefix.endsWith('.'));
       try {
         const physical = await resolveWithinRootsPhysically(prefix, allowed, cwd);
         paths.add(physical);
@@ -739,6 +819,7 @@ export async function scanShell(
         const target = resolve(cwd, prefix);
         paths.add(target);
         paths.add(await realpathNearest(target));
+        if (probe && stays && (await isToolchainPath(prefix, cwd))) return target;
         const isDirectory = (await stat(target).catch(() => null))?.isDirectory() === true;
         directories.add(isDirectory ? target : dirname(target));
         return target;
@@ -777,9 +858,14 @@ export async function scanShell(
         words: coverable ? tokens.join(' ') : original,
         ...(opaque ? { opaque } : {}),
       });
-      const sends = outboundReason(tokens, readsStdin(node));
-      if (sends) outbound.add(sends);
-      if (sends || assigns || arithmetic || !containedCommand(tokens)) contained = false;
+      const reason = outboundReason(tokens, readsStdin(node));
+      if (reason) {
+        outbound.add(reason);
+        const computed = tokens.some(isDynamic);
+        sends.push({ reason, target: assigns || computed ? null : repositoryWrite(tokens.map(unquote), state.cwd) });
+      }
+      for (const file of ghReadFiles(tokens.map(unquote))) await check(file, state.cwd);
+      if (reason || assigns || arithmetic || !containedCommand(tokens)) contained = false;
       for (const arg of rest) if (!arg.startsWith('-')) noteEnvFile(arg);
       for (const directory of directoryOptionValues(tokens)) await check(directory, state.cwd);
       if (!TOUCHES_FILES.has(program)) {
@@ -796,9 +882,10 @@ export async function scanShell(
         }
         return;
       }
+      const probe = READ_PROBES.has(program) && containedCommand(tokens);
       for (const arg of rest) {
         if (arg.startsWith('-') || (program === 'chmod' && arg.startsWith('+'))) continue;
-        await check(arg, state.cwd);
+        await check(arg, state.cwd, probe);
       }
     };
 
@@ -840,6 +927,7 @@ export async function scanShell(
       ) {
         commands.push({ text: node.text, always: node.text, coverable: false, words: node.text });
         contained = false;
+        setsEnvironment = true;
         for (const child of node.children) if (child) await visit(child);
         return;
       }
@@ -850,6 +938,7 @@ export async function scanShell(
         const header = body ? node.text.slice(0, body.startIndex - node.startIndex).replace(/[\s;]+$/, '') : node.text;
         commands.push({ text: header, always: header, coverable: false, words: header });
         contained = false;
+        setsEnvironment = true;
         for (const child of node.children) if (child) await visit(child);
         return;
       }
@@ -886,6 +975,7 @@ export async function scanShell(
       directories: [...directories],
       envFiles: [...envFiles],
       outbound: [...outbound],
+      sends: setsEnvironment ? sends.map(({ reason }) => ({ reason, target: null })) : sends,
       contained: contained && commands.length > 0,
     };
   } finally {

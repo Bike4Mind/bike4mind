@@ -143,6 +143,7 @@ describe('ServerLlmBackend SSE transport (open)', () => {
     ['Model provider returned an error', 'provider_error', 'server', undefined],
     ['Model provider rejected our credentials', 'provider_rejected', 'auth', undefined],
     ['The model declined this request', 'content_blocked', 'refused', undefined],
+    ['The model provider rejected the request', 'invalid_request', 'refused', undefined],
     ['Insufficient credits', 'insufficient_credits', 'refused', undefined],
   ])('classifies an error frame "%s" (%s) as %s', async (message, code, kind, status) => {
     const stream = new PassThrough();
