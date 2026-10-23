@@ -182,6 +182,27 @@ export default function Stopwatch({ label }: { label: string }) {
     expect(root.innerHTML).toBe('<main><span>lap:0</span></main>');
   });
 
+  it('renders an entry whose default export is `export { X as default }`', async () => {
+    const { indexHtml } = await buildReactArtifactBundle({
+      title: 'App',
+      source: `import Tag from './Tag';
+function App() { return <main><Tag /></main>; }
+export { App as default };`,
+      files: { Tag: `export default function Tag() { return <i>tag</i>; }` },
+    });
+    expect(run(indexHtml).innerHTML).toBe('<main><i>tag</i></main>');
+  });
+
+  it('runs a relative side-effect import before the entry reads what it set', async () => {
+    const { indexHtml } = await buildReactArtifactBundle({
+      title: 'App',
+      source: `import './Setup';
+export default function App() { return <p>{(window as any).__fromSetup}</p>; }`,
+      files: { Setup: `(window as any).__fromSetup = 'ready';` },
+    });
+    expect(run(indexHtml).innerHTML).toBe('<p>ready</p>');
+  });
+
   it('resolves sibling-to-sibling imports, named exports and npm deps used only by a sibling', async () => {
     (window as any)._ = { capitalize: (s: string) => s.toUpperCase() };
     const { indexHtml } = await buildReactArtifactBundle({

@@ -145,6 +145,67 @@ describe('buildReactArtifactBundle with sibling files', () => {
   });
 });
 
+describe('multi-file default-export forms', () => {
+  const forms: [string, string, Record<string, string>][] = [
+    [
+      'export { X as default }',
+      `import Stopwatch from './Stopwatch';\nfunction App() { return <main><Stopwatch /></main>; }\nexport { App as default };`,
+      { Stopwatch: STOPWATCH },
+    ],
+    [
+      'export { Widget as default } from a sibling',
+      `export { Widget as default } from './Page';`,
+      { Page: `export function Widget() { return <p>page</p>; }` },
+    ],
+  ];
+  for (const [label, source, files] of forms) {
+    it(`accepts ${label}`, async () => {
+      const { indexHtml } = await buildReactArtifactBundle({ source, title: 'App', files });
+      expect(validateBundle({ indexHtml, manifest: [{ path: 'index.html', mimeType: 'text/html' }] }).valid).toBe(true);
+    });
+  }
+});
+
+describe('multi-file side-effect imports', () => {
+  const entry = `import './Setup';\nexport default function App() { return <b>x</b>; }`;
+
+  it('accepts a relative side-effect import of a sibling', async () => {
+    const { indexHtml } = await buildReactArtifactBundle({
+      source: entry,
+      title: 'App',
+      files: { Setup: `globalThis.__setup = 1;` },
+    });
+    expect(indexHtml).toContain('"Setup"');
+  });
+
+  it('rejects a relative side-effect import with no matching file', async () => {
+    await expect(
+      buildReactArtifactBundle({ source: entry, title: 'App', files: { Other: STOPWATCH } })
+    ).rejects.toThrow('Cannot resolve "./Setup"');
+  });
+
+  it('rejects a relative side-effect import when there are no files', async () => {
+    await expect(buildReactArtifactBundle({ source: entry, title: 'App' })).rejects.toThrow('Cannot resolve "./Setup"');
+  });
+
+  it('still rejects a bare package side-effect import in the entry or a sibling', async () => {
+    await expect(
+      buildReactArtifactBundle({
+        source: `import 'lodash';\nimport S from './Stopwatch';\nexport default function A() { return <S />; }`,
+        title: 'App',
+        files: { Stopwatch: STOPWATCH },
+      })
+    ).rejects.toThrow('Side-effect imports');
+    await expect(
+      buildReactArtifactBundle({
+        source: ENTRY,
+        title: 'App',
+        files: { Stopwatch: `import 'lodash';\n${STOPWATCH}` },
+      })
+    ).rejects.toThrow('Side-effect imports');
+  });
+});
+
 describe('resolveReactArtifactFiles', () => {
   it('walks sibling-to-sibling imports transitively, in files order, through cycles', () => {
     const files = {

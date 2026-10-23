@@ -254,7 +254,10 @@ function extractImportedModules(rawSource: string): string[] {
  * lucide-react auto-detect would flag any artifact merely NAMING a common icon identifier
  * (Settings, Home, Bell, Star, User, ...) and 422 a component that never imported lucide.
  */
-export function assertPublishableDependencies(source: string): void {
+export function assertPublishableDependencies(
+  source: string,
+  options: { allowRelativeSideEffects?: boolean } = {}
+): void {
   // Bare side-effect imports (`import 'x';`) match neither extractImportedModules nor the rewrite,
   // so they would survive into the classic inline <script> and blank the page (parse error before
   // the render try/catch). Reject cleanly instead.
@@ -262,7 +265,11 @@ export function assertPublishableDependencies(source: string): void {
   // ^ at every line start, so a run that crossed one only re-reached a position ^ matches anyway,
   // and excluding them is what stops a file of bare newlines from rescanning to end at each start.
   // Every other \s character stays in, so \f, \v and \u00a0 before an import still match.
-  if (/^[^\S\n\r\u2028\u2029]*import\s+['"]/m.test(source)) {
+  // The multi-file path links `import './x'` through its module runtime, so it may skip relative ones.
+  const sideEffectImport = options.allowRelativeSideEffects
+    ? /^[^\S\n\r\u2028\u2029]*import\s+['"](?!\.\.?\/)/m
+    : /^[^\S\n\r\u2028\u2029]*import\s+['"]/m;
+  if (sideEffectImport.test(source)) {
     throw new ReactArtifactTranspileError(
       'Side-effect imports (import "...") are not supported. Import a default or named binding, or inline the code.'
     );
@@ -415,7 +422,8 @@ export async function transpileReactModuleProgram(entry: string, files: Record<s
   }
   const entryBody = await transpileReactModule(entry, 'component.tsx');
   // The CommonJS counterpart of transpileReactSource's authoritative default-export check.
-  if (!/\bexports\.default\b/.test(entryBody)) {
+  // `export { X as default } from './F'` compiles to Object.defineProperty(exports, "default", ...).
+  if (!/\bexports\.default\b|\bexports,\s*["']default["']/.test(entryBody)) {
     throw new ReactArtifactTranspileError(
       'React artifact must export a component as its default export (e.g. `export default MyComponent`).'
     );
@@ -553,7 +561,7 @@ export async function buildReactArtifactBundle(input: {
   const reached: Record<string, string> = Object.create(null);
   for (const key of resolveReactArtifactFiles(input.source, files)) reached[key] = files[key];
   const sources = [input.source, ...Object.values(reached)];
-  sources.forEach(assertPublishableDependencies);
+  sources.forEach(src => assertPublishableDependencies(src, { allowRelativeSideEffects: true }));
   const dependencies = [...new Set(sources.flatMap(extractImportedModules))].filter(m =>
     Object.prototype.hasOwnProperty.call(PUBLISH_REACT_DEP_SCRIPTS, m)
   );
