@@ -1,9 +1,8 @@
-import type { Browser, Page } from '@playwright/test';
-import { test, expect } from './fixtures';
+import type { Browser } from '@playwright/test';
+import { test, expect, openPageAs } from './fixtures';
 import { TEAMS_INVITEE_KEY, TEAMS_MANAGER_KEY, TEAMS_MEMBER_KEY, TIMEOUTS } from './constants';
 import { getTestUsers, type TestUser } from './helpers/test-users';
 import { apiAddTeamMember, apiDeleteGrantedTeam, apiGetTeam, apiGrantTeam, apiRevokeTeamGrant } from './helpers/api';
-import { buildAuthSuccessUrl } from './helpers/auth-seed';
 import { AdminPage } from './pages/AdminPage';
 import { ALL_TEAM_TABS, TeamsPage } from './pages/TeamsPage';
 
@@ -18,7 +17,7 @@ import { ALL_TEAM_TABS, TeamsPage } from './pages/TeamsPage';
  * and revoke, so a later test relies on the state an earlier one left.
  *
  * The fixture page is always the owner. Every other identity gets its own browser context via
- * openPageAs: switching identity on one page let the previous user's persisted session leak into
+ * openTeamsPageAs: switching identity on one page let the previous user's persisted session leak into
  * the next (requests for the old user id 401'd and the app bounced to /login?error=session_expired).
  */
 test.describe.configure({ mode: 'serial' });
@@ -39,25 +38,9 @@ let mainTeamId: string;
 let fullTeamId: string;
 let disposableTeamId: string;
 
-/**
- * A page signed in as `user`, in a browser context of its own. Mirrors the fixture page: modals
- * stubbed, cookie consent pre-decided, and every in-app goto routed through /auth/success.
- */
-async function openPageAs(browser: Browser, baseURL: string | undefined, user: TestUser) {
-  const context = await browser.newContext({ baseURL });
-  await context.route('**/api/modals**', route => route.fulfill({ json: [] }));
-  await context.addInitScript(() => {
-    try {
-      localStorage.setItem('cookie_consent', 'denied');
-    } catch {
-      // Opaque origins (about:blank) have no localStorage.
-    }
-  });
-  const page: Page = await context.newPage();
-  const rawGoto = page.goto.bind(page);
-  page.goto = (url: string, options?: Parameters<typeof rawGoto>[1]) =>
-    rawGoto(url.startsWith('/') && !url.startsWith('/auth/success') ? buildAuthSuccessUrl(url, user) : url, options);
-  return { page, teamsPage: new TeamsPage(page), close: () => context.close() };
+async function openTeamsPageAs(browser: Browser, baseURL: string | undefined, user: TestUser) {
+  const { page, close } = await openPageAs(browser, baseURL, user);
+  return { page, teamsPage: new TeamsPage(page), close };
 }
 
 /** Names follow the `Setup <key> <suffix>` shape teams.setup.ts gives them. */
@@ -253,7 +236,7 @@ test.describe('Teams', () => {
   });
 
   test('an admin raising seats re-opens Add Member for the owner', async ({ page, teamsPage, browser, baseURL }) => {
-    const asAdmin = await openPageAs(browser, baseURL, admin);
+    const asAdmin = await openTeamsPageAs(browser, baseURL, admin);
     try {
       const adminPage = new AdminPage(asAdmin.page);
       await adminPage.gotoAdmin();
@@ -280,7 +263,7 @@ test.describe('Teams', () => {
   // --- Roles ------------------------------------------------------------------------
 
   test('a plain member sees only Overview and Members, with no roster controls', async ({ browser, baseURL }) => {
-    const { page, teamsPage, close } = await openPageAs(browser, baseURL, member);
+    const { page, teamsPage, close } = await openTeamsPageAs(browser, baseURL, member);
     try {
       await teamsPage.gotoTeam(mainTeamId);
       expect(await teamsPage.visibleTabs()).toEqual(['Overview', 'Members']);
@@ -316,7 +299,7 @@ test.describe('Teams', () => {
     await page.getByTestId('org-admins-save-btn').click();
     expect((await saved).ok()).toBe(true);
 
-    const asManager = await openPageAs(browser, baseURL, manager);
+    const asManager = await openTeamsPageAs(browser, baseURL, manager);
     try {
       await asManager.teamsPage.gotoTeam(mainTeamId);
       const tabs = await asManager.teamsPage.visibleTabs();
