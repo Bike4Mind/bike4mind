@@ -57,12 +57,18 @@ type UsersById = { findById: (id: string) => PromiseLike<AdminFlagged | null> };
  * back carries the same withheld role as `req.user`. Every other method is inherited unchanged.
  */
 export function ownerWithheldUsers<R extends UsersById>(ownerId: string, users: R): R {
-  const scoped: R = Object.create(users);
-  scoped.findById = async (id: string) => {
+  const findById = async (id: string) => {
     const user = await users.findById(id);
     return user && String(id) === ownerId ? withholdAdminRole(user) : user;
   };
-  return scoped;
+  // A Proxy rather than Object.create(users): Mongoose statics such as hydrate() need the real Model as `this`.
+  return new Proxy(users, {
+    get(target, prop) {
+      if (prop === 'findById') return findById;
+      const value = Reflect.get(target, prop, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
 }
 
 export function requesterScopedUsers<R extends UsersById>(req: ApiKeyRequest, users: R): R {
