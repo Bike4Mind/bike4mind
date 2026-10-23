@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { ChatModels, ModelBackend, toModelRecord } from '@bike4mind/common';
+import { ChatModels, ImageModels, ModelBackend, toModelRecord } from '@bike4mind/common';
 import type { IModelCatalogRow, ModelInfo } from '@bike4mind/common';
 import { getAvailableModels, setModelCatalogProvider, setModelPriceRowsProvider } from './index';
 import { mergeCatalog, mergeCatalogWithDrops, resolveCatalogRecords } from './mergeCatalog';
@@ -956,5 +956,83 @@ describe('mergeCatalog: a non-operator availability row cannot clear a disable',
       NO_KEYS
     );
     expect(merged.disabled).toBe(false);
+  });
+});
+
+describe('mergeCatalog: a discovery introduction under a curated record', () => {
+  const imageSeed = (overrides: Partial<ModelInfo> = {}): ModelInfo =>
+    seedModel({
+      id: ImageModels.FLUX_2_PRO,
+      type: 'image',
+      name: 'FLUX.2 Pro',
+      backend: ModelBackend.BFL,
+      contextWindow: 10_000,
+      supportsImageVariation: true,
+      ...overrides,
+    });
+
+  /** What the writer produced for an endpoint no adapter table curated: slug, 0, disabled. */
+  const introduction = (overrides: Partial<IModelCatalogRow> = {}): IModelCatalogRow =>
+    row({
+      modelId: String(ImageModels.FLUX_2_PRO),
+      source: 'discovery',
+      ownedGroups: ['identity', 'limits', 'availability', 'lifecycle'],
+      patch: {
+        id: String(ImageModels.FLUX_2_PRO),
+        vendor: 'black-forest-labs',
+        backend: ModelBackend.BFL,
+        type: 'image',
+        name: String(ImageModels.FLUX_2_PRO),
+        contextWindow: 0,
+        autoDisabled: true,
+        lifecycle: { status: 'discovered' },
+      },
+      ...overrides,
+    });
+
+  it('yields the name, the window and the disable to the curated record', () => {
+    const seed = imageSeed();
+    const [merged] = mergeCatalog([seed], [introduction()], NO_KEYS);
+
+    expect(merged).toMatchObject({ name: 'FLUX.2 Pro', contextWindow: 10_000 });
+    expect(merged.disabled).toBeFalsy();
+    expect(merged.disabledReason).toBeUndefined();
+  });
+
+  it('yields from a later snapshot that still carries the slug, though it claims no lifecycle', () => {
+    const seed = imageSeed();
+    const [merged] = mergeCatalog(
+      [seed],
+      [
+        introduction({
+          ownedGroups: ['identity', 'modalities'],
+          patch: {
+            id: String(ImageModels.FLUX_2_PRO),
+            vendor: 'bfl',
+            backend: ModelBackend.BFL,
+            type: 'image',
+            name: String(ImageModels.FLUX_2_PRO),
+            contextWindow: 0,
+            lifecycle: { status: 'active' },
+          },
+        }),
+      ],
+      NO_KEYS
+    );
+
+    expect(merged).toMatchObject({ name: 'FLUX.2 Pro', contextWindow: 10_000 });
+    expect(merged.disabled).toBeFalsy();
+    expect(merged.disabledReason).toBeUndefined();
+  });
+
+  it('still lets a promoted discovery row claim the groups it owns', () => {
+    const seed = imageSeed();
+    const [merged] = mergeCatalog(
+      [seed],
+      [row({ modelId: seed.id, source: 'discovery', ownedGroups: ['limits'], patch: { contextWindow: 400_000 } })],
+      NO_KEYS
+    );
+
+    expect(merged.contextWindow).toBe(400_000);
   });
 });

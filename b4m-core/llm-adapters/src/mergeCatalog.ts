@@ -268,11 +268,18 @@ function mergeRows(
   bucket: IModelCatalogRow[],
   base: RenderableModelRecord | null
 ): { draft: Record<string, unknown>; owned: Set<FieldGroup> } {
+  // A curated record presents this model (base is its adapter literal), so an un-promoted
+  // introduction yields those three groups to it. Without this, a model discovery introduced before
+  // the adapter table curated it renders as its slug, at contextWindow 0 and auto-disabled, for good:
+  // a per-image adapter price can never satisfy the promotion clause that would clear the flag.
+  const curated = base !== null;
   const winners = new Map<FieldGroup, IModelCatalogRow>();
   for (const row of bucket) {
+    const introduction = curated && isIntroduction(row);
     for (const group of row.ownedGroups) {
       // A group name from a newer schema version claims nothing here.
       if (!isFieldGroup(group)) continue;
+      if (introduction && INTRODUCTION_PLACEHOLDER_GROUPS.has(group)) continue;
       const incumbent = winners.get(group);
       if (!incumbent || outranks(row, incumbent, group)) winners.set(group, row);
     }
@@ -295,6 +302,26 @@ function mergeRows(
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
+
+/** The groups a discovery introduction pins to placeholders, not to facts. */
+const INTRODUCTION_PLACEHOLDER_GROUPS: ReadonlySet<FieldGroup> = new Set(['identity', 'limits', 'availability']);
+
+/**
+ * A discovery row that never had a curated identity. Its `name` is the endpoint slug, its
+ * `contextWindow` the 0 the append schema requires, `autoDisabled` the unpriced verdict: it claims
+ * all three because an introduction has to state something, not because the feed knows them.
+ *
+ * The slug is the durable marker: a row's patch carries the whole record forward, so every snapshot
+ * taken from an introduction keeps the slug even once it stops claiming the lifecycle. The
+ * un-promoted status covers a row whose name a feed did supply.
+ */
+function isIntroduction(row: IModelCatalogRow): boolean {
+  if (row.source !== 'discovery') return false;
+  return (
+    row.patch.name === row.modelId ||
+    (row.ownedGroups.includes('lifecycle') && row.patch.lifecycle?.status === 'discovered')
+  );
+}
 
 const claimsGroup = (row: IModelCatalogRow, group: FieldGroup): boolean =>
   row.source !== 'operator' && row.ownedGroups.includes(group);
