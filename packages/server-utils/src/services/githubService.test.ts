@@ -114,6 +114,7 @@ vi.mock('@bike4mind/observability', () => ({
 
 import { GitHubService, GitHubRateLimitError } from './githubService';
 import { Logger } from '@bike4mind/observability';
+import type { ITestConnectionFailure, ITestConnectionSuccess } from '@bike4mind/common';
 
 describe('GitHubService', () => {
   const mockConnection = {
@@ -880,7 +881,7 @@ describe('GitHubService', () => {
         });
 
         const service = (await GitHubService.forOrganization('org-123', logger))!;
-        const result = await service.testConnection();
+        const result = (await service.testConnection()) as ITestConnectionSuccess;
 
         expect(result.success).toBe(true);
         expect(result.type).toBe('user');
@@ -897,7 +898,7 @@ describe('GitHubService', () => {
         });
 
         const service = (await GitHubService.forOrganization('org-123', logger))!;
-        const result = await service.testConnection();
+        const result = (await service.testConnection()) as ITestConnectionSuccess;
 
         expect(result.success).toBe(true);
         expect(result.type).toBe('app');
@@ -911,7 +912,7 @@ describe('GitHubService', () => {
       mockOctokit.users.getAuthenticated.mockRejectedValue(new Error('Auth failed'));
 
       const service = (await GitHubService.forOrganization('org-123', logger))!;
-      const result = await service.testConnection();
+      const result = (await service.testConnection()) as ITestConnectionFailure;
 
       expect(result.success).toBe(false);
       expect(result.error).toBe('Auth failed');

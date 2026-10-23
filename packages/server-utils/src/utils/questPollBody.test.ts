@@ -42,7 +42,13 @@ describe('toQuestPollBody', () => {
     };
 
     it('projects the full record on a successful turn', async () => {
-      expect((await toQuestPollBody(quest({ fallbackInfo: info }), { isOwner: true })).fallbackInfo).toEqual(info);
+      expect(
+        (
+          await toQuestPollBody(quest({ fallbackInfo: info as IChatHistoryItemDocument['fallbackInfo'] }), {
+            isOwner: true,
+          })
+        ).fallbackInfo
+      ).toEqual(info);
     });
 
     it('is absent when the quest has none', async () => {
@@ -64,7 +70,10 @@ describe('toQuestPollBody', () => {
     });
 
     it('is withheld on an error turn, e.g. a recovered timeout', async () => {
-      const body = await toQuestPollBody(quest({ type: 'error', fallbackInfo: info }), { isOwner: true });
+      const body = await toQuestPollBody(
+        quest({ type: 'error', fallbackInfo: info as IChatHistoryItemDocument['fallbackInfo'] }),
+        { isOwner: true }
+      );
       expect(body.fallbackInfo).toBeUndefined();
     });
   });

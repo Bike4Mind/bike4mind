@@ -298,6 +298,10 @@ export async function withdrawAuthorListings(authorUserId: string): Promise<numb
 
 const HOUR_MS = 60 * 60 * 1000;
 
+// The Request augmentation that declares `user` lives in apps/client/global.d.ts, outside this
+// package's compilation.
+const isAdminRequest = (req: object): boolean => !!(req as { user?: { isAdmin?: boolean } }).user?.isAdmin;
+
 /**
  * Anti-spam for every scan-triggering route (publish, resubmit, rescan): a burst cap plus the
  * admin-set daily cap. Each scan may cost an LLM call, so this also bounds classifier spend.
@@ -305,12 +309,12 @@ const HOUR_MS = 60 * 60 * 1000;
  */
 export const submitRateLimits = () => [
   rateLimit({
-    limit: req => (req.user?.isAdmin ? Infinity : 10),
+    limit: req => (isAdminRequest(req) ? Infinity : 10),
     windowMs: HOUR_MS,
     bucket: 'skill-market-submit',
   }),
   rateLimit({
-    limit: async req => (req.user?.isAdmin ? Infinity : (await loadMarketSettings()).dailySubmitLimit),
+    limit: async req => (isAdminRequest(req) ? Infinity : (await loadMarketSettings()).dailySubmitLimit),
     windowMs: 24 * HOUR_MS,
     bucket: 'skill-market-submit-daily',
   }),

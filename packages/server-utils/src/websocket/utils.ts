@@ -1,3 +1,6 @@
+// Shared by the WebSocket handlers (still in apps/client/server/websocket) and apps/workers.
+// When the handlers move, they import this file from the package; it must not move into a
+// single app.
 import {
   ApiGatewayManagementApiClient,
   GoneException,

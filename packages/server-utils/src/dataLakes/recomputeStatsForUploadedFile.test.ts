@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { dataLakeService } from '@bike4mind/services';
+import type { AttributedActor } from './recomputeStatsForLakeTags';
 
 const h = vi.hoisted(() => ({ recomputeStatsForLakeTags: vi.fn() }));
 vi.mock('./recomputeStatsForLakeTags', () => ({
@@ -21,7 +21,7 @@ describe('recomputeStatsForUploadedFile', () => {
 
   it('forwards the acting principal so a draft -> active flip names the uploader, not `system`', async () => {
     // toEqual ignores undefined-valued keys, so the tag-name assertions above pass with no actor.
-    const actor: dataLakeService.ManageActor = {
+    const actor: AttributedActor = {
       userId: 'u1',
       isAdmin: false,
       auditPrincipal: { principalKind: 'apiKey', principalId: 'k1', onBehalfOfUserId: 'u1' },

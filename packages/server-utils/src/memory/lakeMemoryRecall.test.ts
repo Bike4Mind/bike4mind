@@ -38,7 +38,7 @@ describe('recallLakeMemoryForSession', () => {
     await recallLakeMemoryForSession({ userId: 'u1', query: 'pto policy', dataLakeTags: ['datalake:hr'], k: 5 });
 
     expect(recallLakeMemoryMock).toHaveBeenCalledTimes(1);
-    const opts = recallLakeMemoryMock.mock.calls[0][0] as Record<string, unknown>;
+    const opts = (recallLakeMemoryMock.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
     expect(opts).not.toHaveProperty('resolveSourceDates');
     // The reachability resolver IS still wired - without this, the assertion above would also pass
     // on a call that had quietly stopped injecting anything at all.

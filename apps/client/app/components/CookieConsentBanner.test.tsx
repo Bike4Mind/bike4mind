@@ -767,7 +767,7 @@ describe('CookieConsentBanner', () => {
   // The bridge from this origin's decision to the server's. The banner keeps its own decision in
   // localStorage, which no request handler can read, so it publishes the resolution it reached
   // into a first-party cookie (see publishResolvedConsent). Signup attribution is gated on that
-  // cookie in server/analytics/serverConsent.ts, so if the banner stops publishing it, every
+  // cookie in packages/server-utils/src/analytics/serverConsent.ts, so if the banner stops publishing it, every
   // app-direct signup silently stops being attributed and nothing near the auth code fails.
   describe('publishing the resolved decision for the server', () => {
     const published = () =>

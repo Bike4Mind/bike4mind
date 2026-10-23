@@ -110,7 +110,9 @@ describe('invokeMcpHandler circuit breaker', () => {
 
   describe('DB-backed circuit breaker (Layer 1)', () => {
     it('should call the handler when integration is available', async () => {
-      const payload = { name: 'github', action: 'callTool', params: {} } as Parameters<typeof invokeMcpHandler>[0];
+      const payload = { name: 'github', action: 'callTool', params: {} } as unknown as Parameters<
+        typeof invokeMcpHandler
+      >[0];
 
       const result = await invokeMcpHandler(payload);
 
@@ -125,7 +127,9 @@ describe('invokeMcpHandler circuit breaker', () => {
         reason: 'github integration is currently unavailable (3 consecutive failures). Retry later.',
       });
 
-      const payload = { name: 'github', action: 'callTool', params: {} } as Parameters<typeof invokeMcpHandler>[0];
+      const payload = { name: 'github', action: 'callTool', params: {} } as unknown as Parameters<
+        typeof invokeMcpHandler
+      >[0];
 
       await expect(invokeMcpHandler(payload)).rejects.toThrow('github integration is currently unavailable');
       expect(mockLocalMcpHandler).not.toHaveBeenCalled();
@@ -134,7 +138,9 @@ describe('invokeMcpHandler circuit breaker', () => {
     it('should throw with default message when reason is null', async () => {
       mockIsMcpServerAvailable.mockResolvedValue({ available: false, reason: null });
 
-      const payload = { name: 'github', action: 'callTool', params: {} } as Parameters<typeof invokeMcpHandler>[0];
+      const payload = { name: 'github', action: 'callTool', params: {} } as unknown as Parameters<
+        typeof invokeMcpHandler
+      >[0];
 
       await expect(invokeMcpHandler(payload)).rejects.toThrow(
         'github integration is currently unavailable. Retry later.'
@@ -143,7 +149,7 @@ describe('invokeMcpHandler circuit breaker', () => {
     });
 
     it('should skip circuit breaker check when payload has no name', async () => {
-      const payload = { action: 'listTools', params: {} } as Parameters<typeof invokeMcpHandler>[0];
+      const payload = { action: 'listTools', params: {} } as unknown as Parameters<typeof invokeMcpHandler>[0];
 
       await invokeMcpHandler(payload);
 
@@ -169,7 +175,9 @@ describe('invokeMcpHandler circuit breaker', () => {
     });
 
     it('should run a call with no user outside any shared breaker', async () => {
-      const payload = { name: 'github', action: 'callTool', params: {} } as Parameters<typeof invokeMcpHandler>[0];
+      const payload = { name: 'github', action: 'callTool', params: {} } as unknown as Parameters<
+        typeof invokeMcpHandler
+      >[0];
 
       await expect(invokeMcpHandler(payload)).resolves.toEqual({ result: 'ok' });
 

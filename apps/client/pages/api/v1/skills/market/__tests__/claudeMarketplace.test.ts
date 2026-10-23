@@ -3,7 +3,7 @@
  * Route tests for the Skill Market's Claude Code plugin feed: claude-marketplace.json and
  * [id]/claude-plugin.zip. `baseApi` is stubbed (so the skills:read scope gate is not exercised
  * here; the contract declares it), but the contract router, the visibility helpers in
- * server/skillMarket/market.ts and the zip builder run for real against mocked models.
+ * packages/server-utils/src/skillMarket/market.ts and the zip builder run for real against mocked models.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'crypto';

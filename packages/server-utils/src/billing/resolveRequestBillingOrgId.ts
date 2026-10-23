@@ -1,4 +1,4 @@
-import { CreditHolderType, type IUserDocument } from '@bike4mind/common';
+import { type ApiKeyBillingOwnerType, CreditHolderType, type IUserDocument } from '@bike4mind/common';
 
 /**
  * The organization a request bills, or undefined when it bills the user. Precedence: org-billed API key
@@ -8,7 +8,8 @@ import { CreditHolderType, type IUserDocument } from '@bike4mind/common';
 export function resolveRequestBillingOrgId(
   req: {
     user?: Pick<IUserDocument, 'organizationId'>;
-    apiKeyInfo?: Pick<Express.ApiKeyInfo, 'billingOwnerType' | 'organizationId'>;
+    // Structural slice of Express.ApiKeyInfo, whose augmentation lives in apps/client/global.d.ts.
+    apiKeyInfo?: { billingOwnerType?: ApiKeyBillingOwnerType; organizationId?: string };
   },
   organizationId?: string | null
 ): string | undefined {
