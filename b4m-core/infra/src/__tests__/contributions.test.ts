@@ -1,9 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import {
+  contributedQueueNames,
   describeDroppedContributions,
   isValidContributedResourceName,
   partitionContributed,
+  partitionContributedQueues,
+  type ContributedQueueSpec,
 } from '../contributions.js';
+import { buildQueuePair } from '../queueFactory.js';
 
 const byName = (s: { name: string }) => s.name;
 
@@ -79,5 +83,85 @@ describe('partitionContributed', () => {
     );
     expect(describeDroppedContributions('secret', result)).toHaveLength(3);
     expect(describeDroppedContributions('secret', partitionContributed([], byName, core))).toEqual([]);
+  });
+});
+
+describe('partitionContributedQueues', () => {
+  const core = {
+    resourceNames: ['imageGenerationQueue', 'imageGenerationDLQ', 'EXAMPLE_API_TOKEN'],
+    envNames: ['MONGODB_URI', 'IMAGE_GENERATION_QUEUE'],
+    dlqLabels: ['image-generation', 'fab-file-moderation'],
+  };
+  const queue = (over: Partial<ContributedQueueSpec> = {}): ContributedQueueSpec => ({
+    name: 'exampleJobQueue',
+    visibilityTimeout: '6 minutes',
+    label: 'example-job',
+    displayName: 'Example Job',
+    application: 'Example',
+    ...over,
+  });
+  const dropped = (spec: ContributedQueueSpec) => {
+    const result = partitionContributedQueues([spec], core);
+    expect(result.registered).toEqual([]);
+    return result;
+  };
+
+  it('registers a valid pair', () => {
+    expect(partitionContributedQueues([queue()], core).registered).toEqual([queue()]);
+  });
+
+  it('registers nothing for an empty list', () => {
+    expect(partitionContributedQueues([], core)).toEqual({
+      registered: [],
+      coreCollisions: [],
+      duplicates: [],
+      rejected: [],
+    });
+  });
+
+  it('names the pair the way buildQueuePair does, so a moved queue keeps its logical names', () => {
+    const legacy = { name: 'exampleJobQueue', visibilityTimeout: '6 minutes' };
+    const pair = buildQueuePair(legacy);
+    expect(contributedQueueNames(legacy)).toEqual([pair.name, pair.dlqName]);
+    expect(contributedQueueNames({ name: 'imageGenerationQueue', dlqName: 'imageGenerationDLQ' })).toEqual([
+      'imageGenerationQueue',
+      'imageGenerationDLQ',
+    ]);
+  });
+
+  it.each([
+    ['a core queue name', { name: 'imageGenerationQueue' }],
+    ['a core DLQ name as its DLQ', { dlqName: 'imageGenerationDLQ' }],
+    ['a core name in env form', { name: 'mongodbUri' }],
+    ['a core queue in another casing', { name: 'imageGenerationQUEUE' }],
+    ['a contributed secret in env form', { name: 'exampleApiToken' }],
+    ['a core DLQ label', { label: 'image-generation' }],
+    ['an alarm-only core label', { label: 'fab-file-moderation' }],
+  ])('drops a pair reusing %s', (_what, over) => {
+    expect(dropped(queue(over)).coreCollisions).toHaveLength(1);
+  });
+
+  it.each([
+    ['an upper snake name', { name: 'EXAMPLE_QUEUE' }],
+    ['a DLQ name equal to the queue name', { dlqName: 'exampleJobQueue' }],
+    ['a non-kebab label', { label: 'Example Job' }],
+    ['the reserved alarm pipeline label', { label: 'alarm-handler-dlq' }],
+    ['a duration sst.aws.Queue rejects', { visibilityTimeout: '6m' }],
+  ])('rejects %s', (_what, over) => {
+    expect(dropped(queue(over)).rejected).toHaveLength(1);
+  });
+
+  it('keeps the first of two pairs sharing a name, DLQ name or label', () => {
+    const result = partitionContributedQueues(
+      [
+        queue(),
+        queue({ label: 'other' }),
+        queue({ name: 'otherQueue', dlqName: 'exampleJobQueue', label: 'other-2' }),
+        queue({ name: 'thirdQueue' }),
+      ],
+      core
+    );
+    expect(result.registered).toEqual([queue()]);
+    expect(result.duplicates).toHaveLength(3);
   });
 });

@@ -6,7 +6,19 @@ import {
   TEST_GENERATION_PROVIDER_ENVIRONMENT,
 } from './constants';
 import { imageProcessor } from './imageProcessor';
-import { allSecrets } from './secrets';
+import {
+  buildQueuePair,
+  describeDroppedContributions,
+  partitionContributedQueues,
+  type ContributedQueueSpec,
+} from '@bike4mind/infra';
+import { allSecrets, contributedSecrets } from './secrets';
+import {
+  contributedInfraResources,
+  coreDlqLabels,
+  coreEnvNames,
+  coreResourceNames,
+} from './premium-generated/infraResources.generated';
 import { websocketApi } from './websocket';
 import { lambdaVpc } from './vpc';
 import { eventBus } from './bus';
@@ -1582,6 +1594,40 @@ const libreoncologyAudioRenderQueueSubscription = libreoncologyAudioRenderQueue.
     // fan-out would rate-limit the live product. 2 is the lowest value AWS accepts.
     transform: { eventSourceMapping: { scalingConfig: { maximumConcurrency: 2 } } },
   }
+);
+
+// Overlay-declared queue pairs. The overlay subscribes its own consumer; core alarms the DLQ
+// (dlqAlarms.ts) and links both URLs (web.ts). Without core names nothing stops a pair from
+// reusing a core logical name, so codegen without infra/ fails the deploy here.
+if (
+  (coreResourceNames === null || coreEnvNames === null || coreDlqLabels === null) &&
+  contributedInfraResources.queues.length > 0
+) {
+  throw new Error(
+    '[infra] core resource names unknown (codegen ran without infra/); refusing to create contributed queues. ' +
+      'Re-run pnpm codegen with infra/ present.'
+  );
+}
+const contributedQueuePartition = partitionContributedQueues(contributedInfraResources.queues, {
+  resourceNames: [...(coreResourceNames ?? []), ...Object.keys(contributedSecrets)],
+  envNames: coreEnvNames ?? [],
+  dlqLabels: coreDlqLabels ?? [],
+});
+for (const line of describeDroppedContributions('contributed queue', contributedQueuePartition)) {
+  console.warn(`[infra] ${line}`);
+}
+
+export const contributedQueues: Record<
+  string,
+  { spec: ContributedQueueSpec; queue: sst.aws.Queue; dlq: sst.aws.Queue }
+> = Object.fromEntries(
+  contributedQueuePartition.registered.map(spec => {
+    const pair = buildQueuePair<$util.Output<string>>(spec);
+    const dlq = new sst.aws.Queue(pair.dlqName, pair.dlqArgs);
+    // partitionContributedQueues only registers durations in the form QueueArgs accepts.
+    const queue = new sst.aws.Queue(pair.name, pair.queueArgs(dlq.arn) as sst.aws.QueueArgs);
+    return [spec.name, { spec, queue, dlq }];
+  })
 );
 
 export {

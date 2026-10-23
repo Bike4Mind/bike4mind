@@ -1819,7 +1819,32 @@ function readInfraResources(pkg) {
     const { secret, description, rotationIntervalDays, isAutomatic, rotationProcess } = r;
     return { secret, description, rotationIntervalDays, isAutomatic, rotationProcess };
   });
-  return { secrets, rotations };
+  const optional = (q, field, check, what) => {
+    if (q[field] !== undefined && !check(q[field])) fail(`${q.name}.${field} must be ${what}`);
+    return q[field];
+  };
+  const isString = v => typeof v === 'string';
+  const isNonNegativeInt = v => Number.isInteger(v) && v >= 0;
+  const queues = list('queues').map(q => {
+    for (const field of ['name', 'visibilityTimeout', 'label', 'displayName', 'application']) {
+      if (typeof q[field] !== 'string') fail(`queue ${field} must be a string`);
+    }
+    const tags = optional(q, 'tags', v => isPlainObject(v) && Object.values(v).every(isString), 'an object of strings');
+    return {
+      name: q.name,
+      dlqName: optional(q, 'dlqName', isString, 'a string'),
+      visibilityTimeout: q.visibilityTimeout,
+      retry: optional(q, 'retry', isNonNegativeInt, 'a non-negative integer'),
+      encryption: optional(q, 'encryption', v => ['kms', 'sse-sqs', 'none'].includes(v), "'kms', 'sse-sqs' or 'none'"),
+      dlqEncryption: optional(q, 'dlqEncryption', v => ['kms', 'none'].includes(v), "'kms' or 'none'"),
+      dlqMessageRetentionSeconds: optional(q, 'dlqMessageRetentionSeconds', isNonNegativeInt, 'a non-negative integer'),
+      tags: tags === undefined ? undefined : Object.fromEntries(Object.entries(tags)),
+      label: q.label,
+      displayName: q.displayName,
+      application: q.application,
+    };
+  });
+  return { secrets, rotations, queues };
 }
 
 // Every name core links into Resource: its secrets plus the other SST components declared
@@ -1839,9 +1864,11 @@ function readCoreResourceNames() {
       .filter(line => !/^\s*(\/\/|\/?\*)/.test(line))
       .join('\n');
     const captured = [...code.matchAll(/new sst\.[A-Za-z.]+\(\s*'([A-Za-z0-9_]+)'/g)];
-    // The contributed-secret loop is the one constructor named from data; those names are not core's.
+    // The contributed secret and queue loops are the only constructors named from data;
+    // those names are not core's.
+    const fromData = { 'secrets.ts': /^\s*spec\.name,/, 'queues.ts': /^\s*pair\.(name|dlqName),/ };
     const constructors = [...code.matchAll(/new sst\.[A-Za-z.]+\(/g)].filter(
-      m => !(file === 'secrets.ts' && /^\s*spec\.name,/.test(code.slice(m.index + m[0].length)))
+      m => !fromData[file]?.test(code.slice(m.index + m[0].length))
     );
     if (constructors.length !== captured.length) {
       throw new Error(
@@ -1878,20 +1905,31 @@ function readCoreEnvNames(coreNames) {
   return [...names].sort();
 }
 
+// Every DLQ label infra/dlqAlarms.ts alarms on, registry-listed or alarm-only. Null when
+// infra/ is absent, like the core resource names.
+function readCoreDlqLabels() {
+  const file = join(REPO_ROOT, 'infra/dlqAlarms.ts');
+  if (!existsSync(file)) return null;
+  const labels = [...readFileSync(file, 'utf8').matchAll(/\blabel:\s*'([a-z0-9]+(?:-[a-z0-9]+)*)'/g)].map(m => m[1]);
+  return [...new Set(labels)].sort();
+}
+
 function generateInfraResources(packages) {
-  const merged = { secrets: [], rotations: [] };
+  const merged = { secrets: [], rotations: [], queues: [] };
   for (const pkg of packages) {
     if (pkg.contributions.infraResources === undefined) continue;
-    const { secrets, rotations } = readInfraResources(pkg);
+    const { secrets, rotations, queues } = readInfraResources(pkg);
     merged.secrets.push(...secrets);
     merged.rotations.push(...rotations);
+    merged.queues.push(...queues);
   }
   const coreNames = readCoreResourceNames();
   const content =
     `${GENERATED_BANNER}import type { InfraResourceContributions } from '@bike4mind/infra';\n\n` +
     `export const contributedInfraResources: InfraResourceContributions = ${JSON.stringify(merged, null, 2)};\n\n` +
     `export const coreResourceNames: readonly string[] | null = ${JSON.stringify(coreNames)};\n\n` +
-    `export const coreEnvNames: readonly string[] | null = ${JSON.stringify(readCoreEnvNames(coreNames))};\n`;
+    `export const coreEnvNames: readonly string[] | null = ${JSON.stringify(readCoreEnvNames(coreNames))};\n\n` +
+    `export const coreDlqLabels: readonly string[] | null = ${JSON.stringify(readCoreDlqLabels())};\n`;
   for (const target of INFRA_RESOURCE_TARGETS) writeFile(target, content);
 }
 
