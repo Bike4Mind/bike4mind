@@ -1,4 +1,4 @@
-import { ModelBackend } from '@bike4mind/common';
+import { ModelBackend, isDiscoveryVerdict } from '@bike4mind/common';
 import { describe, expect, it } from 'vitest';
 import { testCredentials, testRecord } from './__fixtures__/fakes';
 import {
@@ -183,5 +183,23 @@ describe('evaluatePromotion', () => {
       'no-trusted-price',
       'no-credential-for-backend',
     ]);
+  });
+
+  // mergeCatalog recognises discovery's own disable by this prefix; a reworded verdict keeps the
+  // disable in force over a curated record and the model is served enabled.
+  it('words every denial off the prefix the catalog merge recognises as discovery-owned', () => {
+    const constants = [
+      AWAITING_PRICE_REASON,
+      UNCORROBORATED_PRICE_REASON,
+      PRICED_IN_BUILD_REASON,
+      AWAITING_APPROVAL_REASON,
+      NOT_INVOCABLE_REASON,
+    ];
+    for (const reason of constants) expect(isDiscoveryVerdict(reason), reason).toBe(true);
+
+    // The fallback branch, reached when no named clause explains the denial.
+    const decision = evaluate({ credentials: testCredentials({ openai: null }) });
+    expect(decision.blockedBy).toEqual(['no-credential-for-backend']);
+    expect(isDiscoveryVerdict(decision.autoDisabledReason)).toBe(true);
   });
 });
