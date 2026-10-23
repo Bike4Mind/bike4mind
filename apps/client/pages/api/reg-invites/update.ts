@@ -28,6 +28,7 @@ const handler = baseApi().post(
 
     const updatedInvites = await withTransaction(async () => {
       const invites = await registrationInviteRepository.formatRegInvites(updates as Partial<IRegInviteDocument>, ids);
+      if (invites.length === 0) return invites;
       await recordAdminActionFromRequest(req, {
         action: 'user.reg_invite.updated',
         target:
