@@ -362,7 +362,6 @@ export const KNOWN_UNPOSTURED = new Set<string>([
   'users/[id]/organizations/index.ts',
   'users/[id]/projects.ts',
   'users/[id]/recalculate-storage.ts',
-  'users/[id]/revoke-sessions.ts',
   'users/[id]/slack-settings.ts',
   'users/[id]/telemetry-export.ts',
   'users/[id]/update.ts',

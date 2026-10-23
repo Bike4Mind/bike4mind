@@ -1,0 +1,61 @@
+import { describe, expect, it, vi } from 'vitest';
+import mongoose from 'mongoose';
+import { ApiKeyScope } from '@bike4mind/common';
+import { persistedIsAdmin, requesterScopedUsers, withholdAdminRole } from './apiKeyAdminScope';
+
+const TestUser = mongoose.model(
+  'ApiKeyAdminScopeTestUser',
+  new mongoose.Schema({ name: String, isAdmin: { type: Boolean, default: false } })
+);
+
+const loaded = () => TestUser.hydrate({ _id: new mongoose.Types.ObjectId(), name: 'a', isAdmin: true });
+
+describe('withholdAdminRole', () => {
+  it('reads false on a document without changing what it would persist', () => {
+    const doc = loaded();
+
+    withholdAdminRole(doc);
+
+    expect(doc.isAdmin).toBe(false);
+    expect(doc.get('isAdmin')).toBe(true);
+    expect(doc.isModified('isAdmin')).toBe(false);
+    expect(doc.toJSON().isAdmin).toBe(true);
+    expect(persistedIsAdmin(doc)).toBe(true);
+  });
+
+  it('forwards an explicit write to the document', () => {
+    const doc = loaded();
+    withholdAdminRole(doc);
+
+    doc.isAdmin = false;
+
+    expect(doc.get('isAdmin')).toBe(false);
+    expect(doc.isModified('isAdmin')).toBe(true);
+  });
+
+  it('leaves a regular user untouched', () => {
+    const user = { id: 'u1', isAdmin: false };
+    expect(withholdAdminRole(user)).toEqual({ id: 'u1', isAdmin: false });
+    expect(persistedIsAdmin(user)).toBe(false);
+  });
+});
+
+describe('requesterScopedUsers', () => {
+  const repo = {
+    findById: vi.fn(async (id: string) => ({ id, isAdmin: true })),
+    count: vi.fn(async () => 3),
+  };
+
+  it('withholds the role only on the requester read for a key without the admin scope', async () => {
+    const users = requesterScopedUsers({ user: { id: 'me' }, apiKeyInfo: { scopes: [ApiKeyScope.WRITE_FILES] } }, repo);
+
+    expect((await users.findById('me'))?.isAdmin).toBe(false);
+    expect((await users.findById('other'))?.isAdmin).toBe(true);
+    expect(await users.count()).toBe(3);
+  });
+
+  it('returns the adapter unchanged for an admin-scoped key or a session', () => {
+    expect(requesterScopedUsers({ user: { id: 'me' }, apiKeyInfo: { scopes: [ApiKeyScope.ADMIN] } }, repo)).toBe(repo);
+    expect(requesterScopedUsers({ user: { id: 'me' } }, repo)).toBe(repo);
+  });
+});
