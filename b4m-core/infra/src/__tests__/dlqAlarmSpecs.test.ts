@@ -119,6 +119,7 @@ describe('buildDlqAlarmSpecs', () => {
       messagePeriod: 120,
       agePeriod: 600,
     });
+    if (messages.kind !== 'messages') throw new Error(`expected a messages spec, got ${messages.kind}`);
     expect(messages.args.period).toBe(120);
     if (age.kind !== 'age') throw new Error(`expected an age spec, got ${age.kind}`);
     expect(age.args.metricQueries.map(q => q.metric?.period)).toEqual([600, 600, undefined]);
