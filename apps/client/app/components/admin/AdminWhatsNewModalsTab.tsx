@@ -430,7 +430,7 @@ export default function AdminWhatsNewModalsTab() {
           <ActiveModalsCard />
 
           {/* Weekly Highlights to Slack - only for main environments (production, dev, or PR previews), not forks */}
-          {!isForkProduction && <WeeklyHighlightsCard />}
+          {env && !env.isForkProduction && <WeeklyHighlightsCard />}
         </Stack>
       </Box>
     </ErrorBoundary>
