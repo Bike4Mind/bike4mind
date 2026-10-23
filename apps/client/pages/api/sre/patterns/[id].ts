@@ -68,24 +68,28 @@ const handler = baseApi().patch(
       changes: body,
     });
 
-    await recordAdminActionFromRequest(req, {
-      action: 'ops.sre.pattern_updated',
-      target: { kind: 'settings', id, displayName: `SRE pattern ${id}` },
-      summary: `updated SRE pattern ${id}`,
-      changes: [
-        { field: 'isActive', before: existing.isActive, after: updated.isActive },
-        {
-          field: 'workaroundIneffective',
-          before: existing.workaroundIneffective,
-          after: updated.workaroundIneffective,
-        },
-        {
-          field: 'rootCauseTrackingIssue',
-          before: existing.rootCauseTrackingIssue,
-          after: updated.rootCauseTrackingIssue,
-        },
-      ].filter(change => change.before !== change.after),
-    });
+    const changes = [
+      { field: 'isActive', before: existing.isActive, after: updated.isActive },
+      {
+        field: 'workaroundIneffective',
+        before: existing.workaroundIneffective,
+        after: updated.workaroundIneffective,
+      },
+      {
+        field: 'rootCauseTrackingIssue',
+        before: existing.rootCauseTrackingIssue ?? null,
+        after: updated.rootCauseTrackingIssue ?? null,
+      },
+    ].filter(change => change.before !== change.after);
+
+    if (changes.length > 0) {
+      await recordAdminActionFromRequest(req, {
+        action: 'ops.sre.pattern_updated',
+        target: { kind: 'settings', id, displayName: `SRE pattern ${id}` },
+        summary: `updated SRE pattern ${id}`,
+        changes,
+      });
+    }
 
     res.status(200).json(updated);
   })
