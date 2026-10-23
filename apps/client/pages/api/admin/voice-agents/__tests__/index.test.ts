@@ -95,6 +95,9 @@ describe('POST /api/admin/voice-agents', () => {
 
     await expect(route.post?.(req, makeRes())).rejects.toThrow('save failed');
 
-    expect(req.logger.warn).toHaveBeenCalledOnce();
+    expect(req.logger.warn).toHaveBeenCalledExactlyOnceWith(
+      { err: expect.objectContaining({ message: 'delete failed' }), agentId: 'el-agent-1' },
+      expect.stringContaining('agent is orphaned')
+    );
   });
 });
