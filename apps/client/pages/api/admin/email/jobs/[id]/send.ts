@@ -69,7 +69,16 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
       details: {
         templateId: claimed.templateId,
         testMode: Boolean(testMode),
-        recipientFilter: recipientFilter ?? null,
+        recipientFilter: recipientFilter
+          ? {
+              all: recipientFilter.all ?? false,
+              allUsers: recipientFilter.allUsers ?? false,
+              allSubscribers: recipientFilter.allSubscribers ?? false,
+              userIdCount: recipientFilter.userIds?.length ?? 0,
+              subscriberIdCount: recipientFilter.subscriberIds?.length ?? 0,
+              specificEmailCount: recipientFilter.specificEmails?.length ?? 0,
+            }
+          : null,
         userIdCount: Array.isArray(userIds) ? userIds.length : null,
         testRecipientCount: Array.isArray(testRecipients) ? testRecipients.length : 0,
       },

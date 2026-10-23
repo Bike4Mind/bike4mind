@@ -163,6 +163,24 @@ describe('POST /api/admin/email/jobs/:id/send', () => {
     });
   });
 
+  it('records recipient filter counts, never the addresses or ids', async () => {
+    await call(sendHandler, 'POST', {
+      recipientFilter: { allUsers: true, userIds: ['u1'], specificEmails: ['a@example.com', 'b@example.com'] },
+    });
+
+    const details = h.audit.mock.calls[0][1].details;
+    expect(details.recipientFilter).toEqual({
+      all: false,
+      allUsers: true,
+      allSubscribers: false,
+      userIdCount: 1,
+      subscriberIdCount: 0,
+      specificEmailCount: 2,
+    });
+    expect(JSON.stringify(details)).not.toContain('example.com');
+    expect(JSON.stringify(details)).not.toContain('u1');
+  });
+
   it('sends nothing when the audit write fails', async () => {
     h.audit.mockRejectedValue(new Error('audit down'));
 
