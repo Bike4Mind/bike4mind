@@ -108,6 +108,8 @@ const SourceSubSchema = new Schema(
     sessionId: { type: String },
     messageId: { type: String },
     fabFileId: { type: String },
+    // Multi-file React publishes only; see PublishSourceSchema in @bike4mind/common.
+    reactSiblings: { type: [String], default: undefined },
   },
   { _id: false }
 );
