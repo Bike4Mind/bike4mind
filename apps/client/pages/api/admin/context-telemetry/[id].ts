@@ -82,13 +82,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         const durationMs = Date.now() - startTime;
         const deletedAt = new Date().toISOString();
 
-        await recordAdminActionFromRequest(req, {
-          action: 'ops.context_telemetry.deleted',
-          target: { kind: 'system', id, displayName: `Context telemetry for quest ${id}` },
-          summary: `deleted context telemetry for quest ${id}`,
-          details: { questId: id },
-        });
-
         // Log successful deletion for GDPR audit trail (fire-and-forget)
         telemetryAuditLogRepository
           .createLog({
@@ -134,6 +127,14 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
         throw error;
       }
+
+      // Outside the try: the deletion already succeeded, so an audit error must not log a GDPR failure.
+      await recordAdminActionFromRequest(req, {
+        action: 'ops.context_telemetry.deleted',
+        target: { kind: 'system', id, displayName: `Context telemetry for quest ${id}` },
+        summary: `deleted context telemetry for quest ${id}`,
+        details: { questId: id },
+      });
     })
   );
 
