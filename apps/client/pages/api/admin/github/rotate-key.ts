@@ -81,13 +81,16 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
     // Update the connection with new key and clear cached token
     await withTransaction(async () => {
-      await orgGitHubConnectionRepository.update({
+      const updated = await orgGitHubConnectionRepository.update({
         id: connection.id,
         privateKey: encryptedPrivateKey,
         cachedAccessToken: undefined,
         tokenExpiresAt: undefined,
         tokenCachedAt: undefined,
       });
+      if (!updated) {
+        throw new NotFoundError('Failed to update connection');
+      }
       await recordAdminActionFromRequest(req, {
         action: 'integration.github_connection.key_rotated',
         target: { kind: 'settings', id: connection.id, displayName: 'System GitHub connection' },

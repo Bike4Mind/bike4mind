@@ -71,6 +71,13 @@ describe('POST /api/admin/github/rotate-key admin audit', () => {
     expect(h.update.mock.invocationCallOrder[0]).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
   });
 
+  it('fails with NotFoundError and records nothing when the update matches no connection', async () => {
+    h.update.mockResolvedValue(null);
+
+    await expect(rotate()).rejects.toMatchObject({ name: 'NotFoundError', statusCode: 404 });
+    expect(h.audit).not.toHaveBeenCalled();
+  });
+
   it('does not report success when the audit write rejects', async () => {
     h.audit.mockRejectedValue(new Error('audit down'));
 
