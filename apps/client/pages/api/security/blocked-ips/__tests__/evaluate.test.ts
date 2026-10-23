@@ -23,7 +23,10 @@ vi.mock('@server/middlewares/baseApi', () => {
 });
 
 const authFail = vi.hoisted(() => ({ getIPsWithHighAttempts: vi.fn().mockResolvedValue([]) }));
-const blockedIP = vi.hoisted(() => ({ block: vi.fn().mockResolvedValue({}) }));
+const blockedIP = vi.hoisted(() => ({
+  block: vi.fn().mockResolvedValue({}),
+  isBlocked: vi.fn().mockResolvedValue(null),
+}));
 const audit = vi.hoisted(() => ({ record: vi.fn(), inTransaction: [] as boolean[], txActive: false }));
 vi.mock('@bike4mind/database', () => ({
   authFailLogRepository: authFail,
@@ -44,7 +47,7 @@ import '@pages/api/security/blocked-ips/evaluate';
 function mocks(user: unknown) {
   const { req, res } = createMocks({ method: 'POST' });
   (req as any).user = user;
-  Object.assign(req, { logger: { warn: vi.fn() } });
+  Object.assign(req, { logger: { warn: vi.fn(), error: vi.fn() } });
   return { req, res };
 }
 
@@ -54,6 +57,7 @@ describe('POST /api/security/blocked-ips/evaluate - admin gate', () => {
   beforeEach(() => {
     authFail.getIPsWithHighAttempts.mockClear();
     blockedIP.block.mockReset().mockResolvedValue({});
+    blockedIP.isBlocked.mockReset().mockResolvedValue(null);
     authFail.getIPsWithHighAttempts.mockResolvedValue([]);
     audit.record.mockReset().mockImplementation(async () => {
       audit.inTransaction.push(audit.txActive);
@@ -109,11 +113,27 @@ describe('POST /api/security/blocked-ips/evaluate - admin gate', () => {
     expect(audit.record).not.toHaveBeenCalled();
   });
 
-  it('fails the run when the audit write rejects instead of reporting the IP as blocked', async () => {
-    authFail.getIPsWithHighAttempts.mockResolvedValue([{ ip: '1.1.1.1', attempts: 12 }]);
-    audit.record.mockRejectedValue(new Error('audit down'));
+  it('keeps blocking the remaining IPs after an audit write rejects, then fails the run listing it', async () => {
+    authFail.getIPsWithHighAttempts.mockResolvedValue([
+      { ip: '1.1.1.1', attempts: 12 },
+      { ip: '2.2.2.2', attempts: 15 },
+    ]);
+    audit.record.mockRejectedValueOnce(new Error('audit down'));
     const { req, res } = mocks(ADMIN);
-    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow('audit down');
-    expect(res._isEndCalled()).toBe(false);
+    await mockRefs.postHandler!(req, res);
+    expect(blockedIP.block).toHaveBeenCalledTimes(2);
+    expect(res._getStatusCode()).toBe(500);
+    expect(res._getJSONData()).toMatchObject({ auditFailed: ['1.1.1.1'], blocked: ['2.2.2.2'] });
+  });
+
+  it('does not re-block or re-audit an IP that already has an active block', async () => {
+    authFail.getIPsWithHighAttempts.mockResolvedValue([{ ip: '1.1.1.1', attempts: 12 }]);
+    blockedIP.isBlocked.mockResolvedValue({ ip: '1.1.1.1' });
+    const { req, res } = mocks(ADMIN);
+    await mockRefs.postHandler!(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().blocked).toEqual(['1.1.1.1']);
+    expect(blockedIP.block).not.toHaveBeenCalled();
+    expect(audit.record).not.toHaveBeenCalled();
   });
 });
