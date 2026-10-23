@@ -2,6 +2,7 @@ import { test, expect } from './fixtures';
 import type { Page, Response } from '@playwright/test';
 import { TIMEOUTS } from './constants';
 import { isStagingEnv } from './helpers/env';
+import { checkoutUsdAmountPattern } from './helpers/checkout-currency';
 import type { TeamsPage } from './pages/TeamsPage';
 
 /**
@@ -134,7 +135,7 @@ test.describe('Teams - Stripe checkout (staging only)', () => {
     });
 
     await test.step('the total matches the modal, in US dollars', async () => {
-      await expect(page.getByText(new RegExp(`(US)?\\$${total}(\\.00)?`)).first()).toBeVisible({
+      await expect(page.getByText(checkoutUsdAmountPattern(total)).first()).toBeVisible({
         timeout: TIMEOUTS.VISIBLE,
       });
       expect(await page.locator('body').innerText()).not.toMatch(PESO);

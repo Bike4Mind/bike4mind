@@ -845,7 +845,11 @@ export async function apiGetTeam(
   const response = await request.get(`${baseURL}/api/organizations/${organizationId}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
-  return response.ok() ? response.json() : null;
+  if (response.status() === 404) return null;
+  if (!response.ok()) {
+    throw new Error(`Get team failed: ${response.status()} ${await response.text()}`);
+  }
+  return response.json();
 }
 
 /**

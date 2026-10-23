@@ -26,7 +26,7 @@ export const SKILLS_MEMBER_KEY = 'skillsMember';
 
 /**
  * Spec-user keys for the extra accounts the teams suite needs: no project authenticates as them, the
- * spec switches to them mid-test via loginAsUser. teams.setup.ts creates them.
+ * spec opens isolated pages for them via openPageAs. teams.setup.ts creates them.
  */
 export const TEAMS_MEMBER_KEY = 'teamsMember';
 export const TEAMS_MANAGER_KEY = 'teamsManager';
