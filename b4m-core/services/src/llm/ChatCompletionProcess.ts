@@ -161,7 +161,6 @@ import {
 // Re-exported so the resolver below and the type it returns stay reachable from one import, while
 // the declaration stays beside the context contract it has to satisfy.
 export type { EntitlementResolution };
-import { AI_ACCESS_REVOKED_MESSAGE, isAiAccessRevoked } from '../userService/accountState';
 import { createModelAdmission, loadModelConfigurations, type ModelAdmission } from './modelAdmission';
 import { datalakeTagsFrom } from '../dataLakeService/getDataLakePrompts';
 import { countNotServingNamedLakes } from '../dataLakeService/countNotServingNamedLakes';
@@ -2601,10 +2600,6 @@ export class ChatCompletionProcess {
         throw new ForbiddenError(
           'Your account is suspended for repeated content-policy violations. Please contact support to appeal.'
         );
-      }
-      // The admin "Moderate" action; queue-delivered quests skip ChatCompletionInvoke's admission gate.
-      if (isAiAccessRevoked(this.user)) {
-        throw new ForbiddenError(AI_ACCESS_REVOKED_MESSAGE);
       }
       const throttleWindowActive =
         moderationState?.status === 'throttled' &&
