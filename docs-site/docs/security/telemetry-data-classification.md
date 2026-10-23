@@ -75,8 +75,9 @@ no attribution. The host product's copy needs no touch, so a user with none stor
 still produces it, with no campaign. Organization invoices are excluded because the
 checkout user's signup source is not the organization's acquisition source.
 Zero-amount invoices, refunds, disputes, and synthetic users send nothing. Each
-event carries the amount collected in major units, the currency, whether it was a
-subscription or credits, and the invoice billing reason. It is
+event carries the amount collected in the currency's major unit (dollars, or whole
+yen), the currency, whether it was a subscription or credits, and the invoice
+billing reason. It is
 keyed on the Stripe invoice or payment intent, so a redelivered webhook does not
 count twice. Overwatch has no purchase stage in its funnel yet, so these events
 are stored as raw events only.
@@ -89,21 +90,28 @@ host product and to the same products in the same way:
   (amount, currency), once per failed confirmation.
 - `subscription_ended`: from the subscription-deleted webhook, whatever ended it.
   Carries Stripe's cancellation reason, the plan name and interval, and whole days
-  subscribed.
+  from the subscription's start to its end.
 - `plan_changed`: the subscription moved to another price. Carries the plan names
   and intervals on each side and whether it was an upgrade, a downgrade or the same
   tier, by plan tier.
 - `subscription_cancel_scheduled` and `subscription_cancel_reverted`: a period-end
   cancellation being set, or withdrawn. Carries the plan name and interval.
-- `account_deleted`: an admin deleted the account. Carries whether the account was
-  a subscriber and whole days since signup.
+- `account_deleted`: an admin deleted the account. Sent after the deletion
+  commits, from the account as it stood just before it, so like every event here it
+  carries the user's pseudonym, and the host copy carries the stored first-touch
+  campaign. Carries whether the account was a subscriber and whole days since
+  signup. Deleting the account does not erase Overwatch's records keyed by that
+  pseudonym, this event and the account's earlier events included.
 
 Plans are named by plan name and interval, never by Stripe price id. Organization
 subscriptions send none of these. Every copy of these events, and of `purchase`,
 carries `metadata.userAction: false`, because each arrives from a webhook, a worker
 or an admin rather than from the user's own request, and Overwatch would otherwise
 count the user as active on that day. For the same reason, `signup_completed` and
-the other signup-funnel events for an account an admin created carry it too.
+the other signup-funnel events for an account an admin created carry it too, as do
+`email_verified` and `credits_granted` when an admin verifies an account's email.
+Overwatch also leaves `userAction: false` signups out of its funnel's signup count,
+so an account an admin created is not counted as a signup.
 
 Because the touches were recorded with consent at signup, a purchase is credited
 from them even if the visitor later withdraws cookie consent: the webhook has no
