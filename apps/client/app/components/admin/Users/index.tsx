@@ -1,4 +1,3 @@
-import FullUserViewModal from '@client/app/components/admin/Users/Views/FullUserViewModal';
 import { useGetUsers } from '@client/app/hooks/data/user';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
@@ -168,7 +167,6 @@ const UsersTab: React.FC = () => {
       {/* Place all modals in one area */}
       <AdminProfileModal />
       <ComplianceModal />
-      <FullUserViewModal />
       <CreateUserModal />
     </Sheet>
   );
