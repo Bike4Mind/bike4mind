@@ -906,6 +906,19 @@ interactive permission prompt blocks; `PostToolUse` / `Stop` / `UserPromptSubmit
 commands remove it. Each hook command runs via a real shell with its stdin piped
 then closed (EOF), so a blocking `cat > <file>` hook returns immediately.
 
+### Folder trust on a host launch
+
+A launch with a positional prompt **and** at least one host flag (`--mcp-config`,
+`--append-system-prompt`, `--allowedTools`, `--settings`, `--session-id` or
+`--resume`) does not show the folder-trust prompt or the repo MCP-approval prompt,
+since no hook fires for either and the auto-fired turn would wait behind it. An
+untrusted folder's repo config (`CLAUDE.md`, `AGENTS.md`, `.mcp.json`, `.claude/`,
+`.bike4mind/`) stays inert for that session, exactly as if "Not now" had been
+chosen, and nothing is persisted. A one-line notice says so; run `/trust folder`
+to trust it. Pending repo MCP servers stay off with the usual warning. Context the
+host needs should reach the session through `--append-system-prompt` and
+`--mcp-config`.
+
 ## License
 
 Private - Bike4Mind
