@@ -763,6 +763,13 @@ export function registerChat(
   );
   ipcMain.handle(IPC_CHANNELS.capabilitiesGetState, async () => {
     await capabilitiesReady;
+    // SessionStore resolves the signed-in account per operation; startup can precede sign-in.
+    await capabilityLedger.migrate({
+      roots: [],
+      trustedProjects: [],
+      permissions: { user: { allow: [], ask: [], deny: [] }, projects: {} },
+      sessions: await store.list(),
+    });
     return capabilityLedger.state();
   });
   ipcMain.handle(IPC_CHANNELS.capabilitiesRevoke, async (_event, grantId: unknown) => {
