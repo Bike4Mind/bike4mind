@@ -26,6 +26,7 @@ import { FallbackLlmBackend } from '../llm/FallbackLlmBackend';
 import { setWebSocketToolExecutor } from '../llm/ToolRouter';
 import { ApiClient } from '../auth/ApiClient';
 import { logger } from '../utils/Logger';
+import { sanitizeTerminalText } from '../utils/sanitizeTerminalText.js';
 import { SubagentOrchestrator } from '../agents/SubagentOrchestrator.js';
 import { BackgroundAgentManager } from '../agents/BackgroundAgentManager.js';
 import { createAgentDelegateTool } from '../agents/delegateTool.js';
@@ -230,7 +231,7 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
       config.fallbackModels && config.fallbackModels.length > 0
         ? new FallbackLlmBackend(llm, config.fallbackModels, (fromModel, toModel, error) => {
             process.stderr.write(
-              `⚠️  Model "${fromModel}" failed (${error.message}). Falling back to "${toModel}"...\n`
+              `\u26A0\uFE0F  Model "${fromModel}" failed (${sanitizeTerminalText(error.message)}). Falling back to "${toModel}"...\n`
             );
           })
         : llm;
@@ -500,7 +501,10 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
     // Output in the requested format
     switch (outputFormat) {
       case 'text':
-        process.stdout.write(result.finalAnswer + '\n');
+        // Sanitize only for a terminal; piped output is data and stays byte-exact.
+        process.stdout.write(
+          (process.stdout.isTTY ? sanitizeTerminalText(result.finalAnswer) : result.finalAnswer) + '\n'
+        );
         break;
 
       case 'json': {
@@ -556,7 +560,7 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
     } else if (outputFormat === 'stream-json') {
       createHeadlessEmitter(runId, line => process.stdout.write(line))({ type: 'error', error: message });
     } else {
-      process.stderr.write(`Error: ${message}\n`);
+      process.stderr.write(`Error: ${sanitizeTerminalText(message)}\n`);
     }
 
     process.exit(1);
