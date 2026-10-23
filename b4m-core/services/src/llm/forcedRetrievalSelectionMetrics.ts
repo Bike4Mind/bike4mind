@@ -14,8 +14,9 @@ import type { ForcedRetrievalFallbackReason } from './forcedRetrievalCandidateSe
  * Scope: the candidate pick only. With relevance unavailable on a single lake the listing page is
  * already the cap, so that by-name cut happens in the query and publishes nothing here.
  *
- * Keep the names below in sync with infra/dataLakeSearchDashboard.ts; the tests pin the literals
- * because infra/ cannot import them.
+ * Keep the names below in sync with infra/dataLakeSearchDashboard.ts and the
+ * forcedRetrievalByNameCut alarm in infra/alarms.ts; the tests pin the literals because infra/
+ * cannot import them.
  */
 
 /** 1 for a by-name cut, 0 for a relevance pick, so Average is the fallback rate and Sum the count. */
