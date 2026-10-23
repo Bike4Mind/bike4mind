@@ -101,6 +101,7 @@ describe('UploadProfilePhotoModal', () => {
 
     const { error } = await upload();
 
+    expect(mutateAsyncMock).toHaveBeenCalledTimes(1);
     expect(refreshUserMock).not.toHaveBeenCalled();
     expect(toastMock.success).not.toHaveBeenCalled();
     expect(toastMock.error).toHaveBeenCalledWith('Failed to upload profile photo');

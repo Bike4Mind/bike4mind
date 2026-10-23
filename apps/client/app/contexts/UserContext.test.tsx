@@ -334,6 +334,16 @@ describe('refreshUser single-flight guard', () => {
     expect(mockGet).toHaveBeenCalledTimes(2);
   });
 
+  it("writes the identify response's photoUrl into currentUser", async () => {
+    mockGet.mockResolvedValueOnce({ data: { user: fakeUser({ photoUrl: 'uploads/avatar-1.png' }) } });
+
+    await useUser.getState().refreshUser();
+
+    // The sidebar avatar renders currentUser.photoUrl. Dropping the response from the set
+    // leaves the avatar on its fallback initial, which is the bug this refresh exists to fix.
+    expect(useUser.getState().currentUser?.photoUrl).toBe('uploads/avatar-1.png');
+  });
+
   it('clears the guard even when the request rejects, so a retry can still fire', async () => {
     mockGet.mockRejectedValueOnce(new Error('boom')).mockResolvedValueOnce({ data: { user: fakeUser() } });
     const { refreshUser } = useUser.getState();
