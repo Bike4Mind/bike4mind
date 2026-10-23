@@ -833,6 +833,19 @@ const UserAcquisitionSchema = new Schema(
   { _id: false }
 );
 
+const SignupMetaSchema = new Schema(
+  {
+    ip: { type: String, default: null },
+    userAgent: { type: String, default: null },
+    asn: { type: Number, default: null },
+    asnOrg: { type: String, default: null },
+    country: { type: String, default: null },
+    isDatacenter: { type: Boolean, default: null },
+    capturedAt: { type: Date, required: true },
+  },
+  { _id: false }
+);
+
 export const UserSchema = new Schema<IUserDocument, IUserModel>(
   {
     username: { type: String, required: true, unique: true },
@@ -1095,6 +1108,8 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
 
     // Written once at signup, consent-gated - see IUser.acquisition.
     acquisition: { type: UserAcquisitionSchema, required: false, default: undefined },
+    // Written once at signup - see IUser.signupMeta.
+    signupMeta: { type: SignupMetaSchema, required: false, default: undefined },
     isSynthetic: { type: Boolean, required: false },
     firstValueAt: { type: Date, required: false },
   },

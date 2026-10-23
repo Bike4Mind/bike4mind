@@ -29,6 +29,27 @@ export interface ISystemFileEntry {
   enabled: boolean;
 }
 
+/**
+ * Network facts about the request that created or signed in to an account, read server-side
+ * (apps/client server/auth/networkMeta.ts). Every field is null when unknown: a failed or missing
+ * lookup never blocks auth.
+ */
+export interface INetworkMeta {
+  ip: string | null;
+  userAgent: string | null;
+  asn: number | null;
+  /** Operator name, known only for ASNs on the bundled hosting-provider list. */
+  asnOrg: string | null;
+  /** ISO 3166-1 alpha-2. */
+  country: string | null;
+  /** Whether the ASN is a hosting/datacenter network; null when the ASN is unknown. */
+  isDatacenter: boolean | null;
+}
+
+export interface ISignupMeta extends INetworkMeta {
+  capturedAt: Date;
+}
+
 export interface ILoginRecord {
   loginTime: Date;
   logoutTime?: Date; // Optional, in case the user doesn't explicitly logout
@@ -629,6 +650,9 @@ export interface IUser extends ICreditHolder {
    * (apps/client server/analytics/funnel.ts). Absent when there was no consented touch.
    */
   acquisition?: IUserAcquisition | null;
+
+  /** Network metadata of the signup request, written once at account creation. Admin-only PII. */
+  signupMeta?: ISignupMeta | null;
 
   /**
    * A test persona or test-domain account, decided at signup. Funnel analytics skip or tag these so

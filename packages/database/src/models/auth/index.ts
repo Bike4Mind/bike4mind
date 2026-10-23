@@ -1,6 +1,7 @@
 export * from './ApiKeyAlertModel';
 export * from './ApiKeyModel';
 export * from './ApiKeyUsageLogModel';
+export * from './AuthEventModel';
 export * from './AuthFailLogModel';
 export * from './AuthSessionModel';
 export * from './BlockedIPModel';
