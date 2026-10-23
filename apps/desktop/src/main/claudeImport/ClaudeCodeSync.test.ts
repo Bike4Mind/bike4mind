@@ -1,4 +1,4 @@
-import { appendFile, copyFile, mkdir, mkdtemp, readFile, stat, utimes, writeFile } from 'node:fs/promises';
+import { appendFile, copyFile, mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -164,6 +164,28 @@ describe('Claude Code import', () => {
     expect(session.project?.directory).toBe(repository);
     const ids = session.messages.map(message => message.id);
     expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('keeps syncing a session after its worktree is removed', async () => {
+    const { root, transcriptPath, store, deps } = await setup();
+    const { repository, worktree } = await existingProject(root, transcriptPath);
+    const onDisk = {
+      ...deps,
+      directoryExists: async (path: string) => (await stat(path).catch(() => null))?.isDirectory() ?? false,
+    };
+    const first = await importTranscript(await indexed(transcriptPath), undefined, onDisk);
+    expect((await store.get(codeSessionId(SOURCE_ID)))!.project?.workingDirectory).toBe(worktree);
+
+    await rm(worktree, { recursive: true });
+    const old = { ...first, mapVersion: undefined };
+    const rebuilt = await importTranscript(await indexed(transcriptPath), old, onDisk);
+    expect(rebuilt.status).toBe('imported');
+    expect(needsImport(await indexed(transcriptPath), rebuilt)).toBe(false);
+    expect((await store.get(codeSessionId(SOURCE_ID)))!.project).toMatchObject({
+      directory: repository,
+      workspace: false,
+      workingDirectory: repository,
+    });
   });
 
   it('appends only what was added since the last read', async () => {

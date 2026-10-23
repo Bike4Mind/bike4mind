@@ -384,12 +384,19 @@ function containsPath(directory: string, path: string): boolean {
   return !isAbsolute(within) && within !== '..' && !within.startsWith(`..${sep}`);
 }
 
+/** Only a branch this app cut can have a removable worktree; a cheap gate before any sharing scan. */
+export function hasAppWorkspaceBranch(
+  project: ChatProject | undefined
+): project is ChatProject & { workspaceBranch: string } {
+  return !!project?.workspaceBranch?.startsWith(BRANCH_PREFIX);
+}
+
 /** Shared by the delete dialog and execution: uncertainty always keeps the checkout. */
 export async function inspectWorktreeRemoval(
   project: ChatProject | undefined,
   otherProjects: readonly (ChatProject | undefined)[]
 ): Promise<InspectedWorktreeRemoval | null> {
-  if (!project?.workspaceBranch?.startsWith(BRANCH_PREFIX)) return null;
+  if (!hasAppWorkspaceBranch(project)) return null;
   const path = await canonical(project.workingDirectory);
   if (!path) return null;
   const container = await containerDirectory(project.directory);
@@ -430,12 +437,14 @@ export async function inspectWorktreeRemoval(
     return result(`${count} uncommitted file${count === 1 ? '' : 's'}`);
   }
   const upstream = (await git(path, ['for-each-ref', '--format=%(upstream)', `refs/heads/${branch}`])).trim();
-  const references = [
-    upstream,
-    ...(project.branch && project.branch !== branch
+  // `branch -d` judges a branch with an upstream against that upstream alone, and a command-local
+  // `-c branch.<name>.merge` only adds a second value rather than replacing it. So only the
+  // upstream can prove preservation, or `-d` would refuse after the checkout is already gone.
+  const references = upstream
+    ? [upstream]
+    : project.branch && project.branch !== branch
       ? [`refs/heads/${project.branch}`, `refs/remotes/origin/${project.branch}`, `refs/remotes/${project.branch}`]
-      : []),
-  ].filter(Boolean);
+      : [];
   let localOnly: number | null = null;
   for (const reference of references) {
     try {
@@ -467,7 +476,8 @@ export async function removeSessionWorktree(
       await git(project.directory, ['for-each-ref', '--format=%(upstream)', `refs/heads/${inspection.branch}`])
     ).trim();
     // Without an upstream, use the proven base rather than this checkout's possibly stale HEAD.
-    // Existing upstreams keep Git's normal refusal rules; command-local settings never persist.
+    // With one, the inspection already proved against that upstream, which is what `-d` checks.
+    // Command-local settings never persist.
     const comparison = upstream
       ? []
       : [

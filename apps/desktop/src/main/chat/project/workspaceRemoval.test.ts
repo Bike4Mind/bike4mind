@@ -95,7 +95,7 @@ describe('session worktree removal', () => {
     ).rejects.toThrow();
   });
 
-  it('keeps a branch when Git refuses its existing upstream, without rewriting configuration', async () => {
+  it('refuses before removing anything when the base, but not the upstream Git checks, has the commits', async () => {
     const project = await fixture();
     await git(project.directory, ['update-ref', 'refs/remotes/origin/pushed', 'main']);
     await git(project.directory, ['config', 'remote.origin.url', project.directory]);
@@ -103,13 +103,14 @@ describe('session worktree removal', () => {
     await git(project.directory, ['branch', '--set-upstream-to=origin/pushed', project.workspaceBranch!]);
     await git(project.workingDirectory, ['commit', '--allow-empty', '-qm', 'merged']);
     await git(project.directory, ['merge', '--ff-only', project.workspaceBranch!]);
-    expect(await inspectWorktreeRemoval(project, [])).toMatchObject({ safe: true });
-    await expect(removeSessionWorktree(project, [])).rejects.toThrow('Worktree removed, but branch');
+    expect(await inspectWorktreeRemoval(project, [])).toMatchObject({
+      safe: false,
+      reason: '1 commit not pushed or merged',
+    });
+    await expect(removeSessionWorktree(project, [])).rejects.toThrow('not pushed or merged');
+    expect((await stat(project.workingDirectory)).isDirectory()).toBe(true);
     expect((await git(project.directory, ['config', '--get', `branch.${project.workspaceBranch}.merge`])).trim()).toBe(
       'refs/heads/pushed'
-    );
-    expect((await git(project.directory, ['branch', '--list', project.workspaceBranch!])).trim()).toContain(
-      project.workspaceBranch
     );
   });
 
@@ -326,15 +327,15 @@ describe('session deletion integration', () => {
     }
   });
 
-  it('revalidates the kept project instead of the incoming import project', async () => {
+  it('replaces a kept project whose checkout is gone with the incoming import project', async () => {
     const project = await fixture();
     const store = new SessionStore(join(project.directory, '.b4m', 'sessions'), 'test-model');
     const imported = importedSession(project);
     expect(await store.putImported(imported)).toBe('written');
     const kept = { ...project, workingDirectory: join(project.directory, 'removed-checkout') };
     await store.setProject(imported.id, kept);
-    expect(await store.putImported(imported)).toBe('removed');
-    expect((await store.get(imported.id))?.project).toEqual(kept);
+    expect(await store.putImported(imported)).toBe('written');
+    expect((await store.get(imported.id))?.project).toEqual(project);
   });
 
   it('cancels imports whose working directory has a non-directory ancestor', async () => {
@@ -571,6 +572,18 @@ describe('session deletion integration', () => {
       await service.deleteSession(session.id);
       expect(await store.get(session.id)).toBeNull();
       expect((await stat(project.workingDirectory)).isDirectory()).toBe(true);
+    } finally {
+      service.dispose();
+    }
+  });
+
+  it('skips the conversation scan for a session without an app worktree', async () => {
+    const { store, service } = await serviceFixture();
+    try {
+      const chat = await store.create();
+      const scan = vi.spyOn(store, 'workspaceProjectsExcept');
+      expect(await service.inspectSessionWorktreeRemoval(chat.id)).toBeNull();
+      expect(scan).not.toHaveBeenCalled();
     } finally {
       service.dispose();
     }

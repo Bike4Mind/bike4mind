@@ -130,6 +130,20 @@ export function isForkedImport(session: ChatSession): boolean {
   return !!session.importOrigin.forkedAt || session.messages.some(message => !isImportedMessageId(message.id));
 }
 
+/** Whether a binding's repository and checkout are both still directories; other errors surface. */
+async function projectOnDisk(project: ChatProject): Promise<boolean> {
+  for (const path of new Set([project.directory, project.workingDirectory])) {
+    try {
+      if (!(await stat(path)).isDirectory()) return false;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' || code === 'ENOTDIR') return false;
+      throw error;
+    }
+  }
+  return true;
+}
+
 function summarize(session: ChatSession): ChatSessionSummary {
   const { messages, spawnSuggestions: _suggestions, ...summary } = session;
   return { ...summary, messageCount: messages.length };
@@ -877,17 +891,15 @@ export class SessionStore {
             }
           : {};
         const imported = { ...existing, ...session, ...kept };
-        if (imported.project) {
-          for (const path of new Set([imported.project.directory, imported.project.workingDirectory])) {
-            try {
-              if (!(await stat(path)).isDirectory()) return 'removed';
-            } catch (error) {
-              const code = (error as NodeJS.ErrnoException).code;
-              if (code === 'ENOENT' || code === 'ENOTDIR') return 'removed';
-              throw error;
-            }
-          }
+        // A carried-over binding whose checkout has since been removed (the normal end of a
+        // worktree) yields to the importer's fresh one, which projectFor already checked.
+        // Answering 'removed' here would freeze the copy for good: callers read it as deleted.
+        if (imported.project && imported.project !== session.project && !(await projectOnDisk(imported.project))) {
+          if (session.project) imported.project = session.project;
+          else delete imported.project;
         }
+        // Only a fresh binding gone under the lease means workspace cleanup won the race.
+        if (imported.project && !(await projectOnDisk(imported.project))) return 'removed';
         await this.write(directory, imported);
         return 'written';
       })

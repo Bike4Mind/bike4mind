@@ -84,6 +84,7 @@ import { defaultUserInstructionsRoot } from './project/instructions';
 import { type MemoryStore, memoryStoreFor } from './project/memory';
 import { ProjectContextCache } from './project/projectContext';
 import {
+  hasAppWorkspaceBranch,
   inspectWorktreeRemoval,
   removeSessionWorktree,
   prefetchBase,
@@ -1364,8 +1365,10 @@ export class ChatService {
 
   async inspectSessionWorktreeRemoval(sessionId: string) {
     const session = await this.deps.store.get(sessionId);
+    // The scan parses every stored conversation; most deletes have no app worktree to inspect.
+    if (!hasAppWorkspaceBranch(session?.project)) return null;
     const others = await this.deps.store.workspaceProjectsExcept(sessionId);
-    const inspection = await inspectWorktreeRemoval(session?.project, others);
+    const inspection = await inspectWorktreeRemoval(session.project, others);
     if (inspection && this.hasTurnInFlight(sessionId)) {
       return { ...inspection, safe: false, reason: 'Conversation is still running' };
     }
