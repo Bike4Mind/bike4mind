@@ -7,7 +7,8 @@ description: >-
   separately: the runner image already ships nearly every library Chromium
   needs (the rest is mostly fonts), so when the mirror crawls past the cap we
   keep going as long as Chromium actually launches, and fail only if it does
-  not.
+  not. Interrupted package configuration must also recover successfully within
+  one minute before tests can run.
 
   Requires node_modules to be installed in working-directory.
 
@@ -38,8 +39,9 @@ runs:
     - name: Download Chromium
       shell: bash
       working-directory: ${{ inputs.working-directory }}
+      # Kill the whole group at the deadline; TERM can orphan resistant children.
       # A no-op on a cache hit.
-      run: timeout 5m npx playwright install chromium
+      run: timeout --signal=KILL 5m npx playwright install chromium
 
     - name: Install Chromium system dependencies
       shell: bash
@@ -55,12 +57,13 @@ runs:
         # sudo starts apt in its own pty session and the kill never reaches it:
         # apt kept downloading and upgrading libs under the running tests.
         rc=0
-        sudo env "PATH=$PATH" timeout -k 15s 5m npx playwright install-deps chromium || rc=$?
+        sudo env "PATH=$PATH" timeout --signal=KILL 5m npx playwright install-deps chromium || rc=$?
         if [ "$rc" -eq 0 ]; then
           exit 0
         fi
 
-        echo "::warning::Playwright system dependency install failed (exit $rc; 124/137 means the cap was hit, e.g. a slow apt mirror); checking whether Chromium launches with the preinstalled libraries"
-        # A kill mid-unpack leaves dpkg half-configured; finish what it started.
-        sudo dpkg --configure -a || true
+        echo "::warning::Playwright system dependency install failed (exit $rc); recovering package state before checking whether Chromium launches"
+        # Finish interrupted package configuration before starting tests.
+        # A failed or hung repair leaves the runner unsafe to reuse.
+        sudo timeout --signal=KILL 1m dpkg --configure -a
         node -e "require('@playwright/test').chromium.launch().then((b) => b.close())"
