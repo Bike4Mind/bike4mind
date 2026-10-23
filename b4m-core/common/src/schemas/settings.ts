@@ -4737,7 +4737,7 @@ export const settingsMap = {
     max: 100,
     int: true,
     description:
-      'How many music generations from the music API and chat may run at once on the server ElevenLabs key, across all users (async music generation jobs are not counted). Match it to the ElevenLabs plan: extra requests wait briefly for a free slot instead of failing with a provider 429. Requests on a personal ElevenLabs key are not counted.',
+      'How many music generations from the music API may run at once on the server ElevenLabs key, across all users (async music generation jobs, which chat uses, are not counted). Match it to the ElevenLabs plan: extra requests wait briefly for a free slot instead of failing with a provider 429. Requests on a personal ElevenLabs key are not counted.',
     category: 'AI',
     group: API_SERVICE_GROUPS.VOICE_SESSION.id,
     order: 12,
