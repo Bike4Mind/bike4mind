@@ -5,9 +5,14 @@
  * pieces (queue dimensions, SNS alarm actions) when constructing
  * `new aws.cloudwatch.MetricAlarm(spec.resourceName, { ...spec.args, ... })`.
  *
- * Missing data is `'missing'`, not `'notBreaching'`: a skipped SQS datapoint is no information
- * about the queue, so it must not resolve a firing alarm. With `'notBreaching'` a gap flipped
- * ALARM to OK and the next real datapoint re-fired it, re-paging the same dead letter each time.
+ * Missing data is `'ignore'`, which holds the current alarm state. `'notBreaching'` scored a
+ * skipped SQS datapoint as a passing period, so a gap flipped ALARM to OK and the next real
+ * datapoint re-fired it, re-paging the same dead letter; `'missing'` is no better, because a
+ * range with no datapoints at all still leaves ALARM for INSUFFICIENT_DATA and back.
+ *
+ * SQS publishes ApproximateAgeOfOldestMessage only while the queue holds a message, so the age
+ * alarm reads it through metric math, `IF(visible > 0, age, 0)`. An empty queue scores 0 and
+ * still resolves to OK; a gap while a message is present scores nothing and holds state.
  */
 
 export interface DlqAlarmDefaults {
@@ -58,30 +63,58 @@ export interface DlqAlarmNaming {
 
 export type DlqAlarmKind = 'messages' | 'age';
 
-/** Everything about the alarm derivable without touching cloud resources. */
-export interface DlqAlarmSpec {
-  kind: DlqAlarmKind;
-  /** Pulumi/SST logical resource name, e.g. 'dlq-image-generation-messages'. */
-  resourceName: string;
-  /** MetricAlarm args minus the resource-bound fields (dimensions, actions). */
-  args: {
-    name: string;
-    alarmDescription: string;
-    comparisonOperator: 'GreaterThanThreshold';
-    evaluationPeriods: number;
-    metricName: 'ApproximateNumberOfMessagesVisible' | 'ApproximateAgeOfOldestMessage';
-    namespace: 'AWS/SQS';
+/** One query of an alarm's metric math (structurally a Pulumi MetricAlarmMetricQuery). */
+export interface DlqAlarmMetricQuery {
+  id: string;
+  label?: string;
+  expression?: string;
+  returnData?: boolean;
+  metric?: {
+    namespace: string;
+    metricName: string;
+    /** Filled in by the product, which owns the queue. */
+    dimensions?: Record<string, string>;
     period: number;
-    statistic: 'Maximum';
-    threshold: number;
-    treatMissingData: 'missing';
-    tags: {
-      Application: string;
-      Severity: 'Critical' | 'High';
-      MonitoringType: 'DLQ';
-    };
+    stat: 'Maximum';
   };
 }
+
+interface DlqAlarmBaseArgs {
+  name: string;
+  alarmDescription: string;
+  comparisonOperator: 'GreaterThanThreshold';
+  evaluationPeriods: number;
+  threshold: number;
+  /** Holds the current state across an SQS metric gap instead of resolving the alarm. */
+  treatMissingData: 'ignore';
+  tags: {
+    Application: string;
+    Severity: 'Critical' | 'High';
+    MonitoringType: 'DLQ';
+  };
+}
+
+/** Everything about the alarm derivable without touching cloud resources. */
+export type DlqAlarmSpec =
+  | {
+      kind: 'messages';
+      /** Pulumi/SST logical resource name, e.g. 'dlq-image-generation-messages'. */
+      resourceName: string;
+      /** MetricAlarm args minus the resource-bound fields (dimensions, actions). */
+      args: DlqAlarmBaseArgs & {
+        metricName: 'ApproximateNumberOfMessagesVisible';
+        namespace: 'AWS/SQS';
+        period: number;
+        statistic: 'Maximum';
+      };
+    }
+  | {
+      kind: 'age';
+      resourceName: string;
+      args: DlqAlarmBaseArgs & {
+        metricQueries: DlqAlarmMetricQuery[];
+      };
+    };
 
 /**
  * Builds the standard [message-count, message-age] alarm spec pair for one DLQ.
@@ -110,7 +143,7 @@ export function buildDlqAlarmSpecs(
         period: defaults.messagePeriod,
         statistic: 'Maximum',
         threshold: dlq.messageThreshold ?? defaults.messageThreshold,
-        treatMissingData: 'missing',
+        treatMissingData: 'ignore',
         tags: {
           Application: dlq.application,
           Severity: 'Critical',
@@ -126,12 +159,38 @@ export function buildDlqAlarmSpecs(
         alarmDescription: `${dlq.displayName} DLQ has message stuck for >1 hour`,
         comparisonOperator: 'GreaterThanThreshold',
         evaluationPeriods: defaults.ageEvalPeriods,
-        metricName: 'ApproximateAgeOfOldestMessage',
-        namespace: 'AWS/SQS',
-        period: defaults.agePeriod,
-        statistic: 'Maximum',
         threshold: dlq.ageThreshold ?? defaults.ageThreshold,
-        treatMissingData: 'missing',
+        treatMissingData: 'ignore',
+        // SQS stops publishing the age metric once the queue is empty, so scoring the raw
+        // metric would strand every drained DLQ in INSUFFICIENT_DATA instead of OK.
+        metricQueries: [
+          {
+            id: 'visible',
+            metric: {
+              namespace: 'AWS/SQS',
+              metricName: 'ApproximateNumberOfMessagesVisible',
+              period: defaults.agePeriod,
+              stat: 'Maximum',
+            },
+            returnData: false,
+          },
+          {
+            id: 'age',
+            metric: {
+              namespace: 'AWS/SQS',
+              metricName: 'ApproximateAgeOfOldestMessage',
+              period: defaults.agePeriod,
+              stat: 'Maximum',
+            },
+            returnData: false,
+          },
+          {
+            id: 'oldest',
+            label: 'Oldest message age (0 when the queue is empty)',
+            expression: 'IF(visible > 0, age, 0)',
+            returnData: true,
+          },
+        ],
         tags: {
           Application: dlq.application,
           Severity: 'High',

@@ -9,8 +9,9 @@
  *   for 3 consecutive 60s evaluation periods (3 min) before firing
  * - Message age: any message older than 1 hour (3600s) triggers alarm
  *   (single evaluation period — the 1hr threshold already provides built-in delay)
- * - Missing data: treated as no information, not as a passing period, so an SQS
- *   datapoint gap cannot resolve a firing alarm to OK and re-page on the next point
+ * - Missing data: 'ignore', which holds the current state, so an SQS datapoint gap cannot
+ *   resolve a firing alarm to OK and re-page on the next point. The age alarms score
+ *   IF(visible > 0, age, 0) because SQS stops publishing the age metric on an empty queue
  *
  * Stage-gated: Only deployed to `dev` and `production` stages.
  * Set ENABLE_MONITORING=true to opt in for other stages.
@@ -160,7 +161,7 @@ if (isMonitoredStage) {
     period: 60,
     statistic: 'Maximum',
     threshold: 0,
-    treatMissingData: 'missing',
+    treatMissingData: 'ignore',
     dimensions: { QueueName: dlqAlarmHandlerDlq.name },
     alarmActions: [oobAlarmTopic.arn],
     tags: { Application: 'AlarmPipeline', Severity: 'Critical', MonitoringType: 'DLQ' },
@@ -174,13 +175,40 @@ if (isMonitoredStage) {
       'DlqAlarmHandlerDlq oldest message exceeds 1 hour -- the alarm-to-Slack Lambda has been failing for an extended period.',
     comparisonOperator: 'GreaterThanThreshold',
     evaluationPeriods: 1,
-    metricName: 'ApproximateAgeOfOldestMessage',
-    namespace: 'AWS/SQS',
-    period: 60,
-    statistic: 'Maximum',
     threshold: 3600,
-    treatMissingData: 'missing',
-    dimensions: { QueueName: dlqAlarmHandlerDlq.name },
+    treatMissingData: 'ignore',
+    // SQS stops publishing the age metric once the queue is empty; the IF keeps a drained
+    // DLQ resolvable to OK while a gap with a message present still holds the state.
+    metricQueries: [
+      {
+        id: 'visible',
+        metric: {
+          namespace: 'AWS/SQS',
+          metricName: 'ApproximateNumberOfMessagesVisible',
+          dimensions: { QueueName: dlqAlarmHandlerDlq.name },
+          period: 60,
+          stat: 'Maximum',
+        },
+        returnData: false,
+      },
+      {
+        id: 'age',
+        metric: {
+          namespace: 'AWS/SQS',
+          metricName: 'ApproximateAgeOfOldestMessage',
+          dimensions: { QueueName: dlqAlarmHandlerDlq.name },
+          period: 60,
+          stat: 'Maximum',
+        },
+        returnData: false,
+      },
+      {
+        id: 'oldest',
+        label: 'Oldest message age (0 when the queue is empty)',
+        expression: 'IF(visible > 0, age, 0)',
+        returnData: true,
+      },
+    ],
     alarmActions: [oobAlarmTopic.arn],
     tags: { Application: 'AlarmPipeline', Severity: 'High', MonitoringType: 'DLQ' },
   });
@@ -499,10 +527,21 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
 function createDlqAlarms(dlq: Omit<InfraDlqDescriptor, 'sourceQueue'>) {
   // Alarm names, thresholds, and tags come from the shared spec builder; only the
   // resource-bound pieces (queue dimensions, SNS actions) are wired here.
+  const dimensions = { QueueName: dlq.queue.nodes.queue.name };
   for (const spec of buildDlqAlarmSpecs(dlq, { appName: $app.name, stage: $app.stage })) {
+    // A metric-math alarm carries its dimensions on the input metrics, not the alarm.
+    const bound =
+      spec.kind === 'age'
+        ? {
+            metricQueries: spec.args.metricQueries.map(query =>
+              query.metric ? { ...query, metric: { ...query.metric, dimensions } } : query
+            ),
+          }
+        : { dimensions };
+
     new aws.cloudwatch.MetricAlarm(spec.resourceName, {
       ...spec.args,
-      dimensions: { QueueName: dlq.queue.nodes.queue.name },
+      ...bound,
       alarmActions: [dlqAlarmTopic!.arn],
       okActions: [dlqAlarmTopic!.arn],
     });
