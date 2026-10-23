@@ -58,7 +58,13 @@ describe('API reference scopes table', () => {
     expect(
       getApiReferenceContent(
         'https://b4m.test',
-        genericApiKeyScopesFor({ hasOptiAccess: false, hasOverwatchAccess: false, hearthEnabled: false })
+        genericApiKeyScopesFor({
+          hasOptiAccess: false,
+          hasOverwatchAccess: false,
+          hearthEnabled: false,
+          bypass: false,
+          entitlements: new Set(),
+        })
       )
     ).not.toContain('optihashi:');
   });

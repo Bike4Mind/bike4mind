@@ -1,4 +1,4 @@
-import type { ApiKeyScope } from '@bike4mind/common';
+import type { ApiKeyScopeValue } from '@bike4mind/common';
 import { ForbiddenError } from '@bike4mind/utils';
 
 /**
@@ -12,8 +12,8 @@ import { ForbiddenError } from '@bike4mind/utils';
  * absent `callerScopes` (a browser/JWT caller, who already holds the whole account) skips the check.
  */
 export function assertNoScopeEscalation(
-  callerScopes: readonly ApiKeyScope[] | undefined,
-  targetScopes: readonly ApiKeyScope[],
+  callerScopes: readonly ApiKeyScopeValue[] | undefined,
+  targetScopes: readonly ApiKeyScopeValue[],
   message: string
 ): void {
   if (!callerScopes) return;
