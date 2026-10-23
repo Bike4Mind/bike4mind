@@ -486,6 +486,26 @@ describe('POST /api/ai/sound-effects', () => {
     expect(getEffectiveApiKey).not.toHaveBeenCalled();
   });
 
+  it('rejects a 451-character prompt (422) before resolving a key or calling the provider', async () => {
+    const { res, promise } = run({ text: 'x'.repeat(451), durationSeconds: 3 });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(422);
+    expect(getEffectiveApiKey).not.toHaveBeenCalled();
+    expect(generate).not.toHaveBeenCalled();
+  });
+
+  it('accepts a 450-character prompt and forwards it to the provider', async () => {
+    getSettingsValue.mockReturnValue(false);
+    estimateSoundCredits.mockReturnValue({ requiredCredits: 12, usdCost: 0.006, billedSeconds: 3 });
+
+    const { res, promise } = run({ text: 'x'.repeat(450), durationSeconds: 3 });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(generate).toHaveBeenCalledWith('x'.repeat(450), expect.anything());
+  });
+
   it.each(['alaw_8000', ''])('refuses format %j with 422, before reserving or generating', async format => {
     getSettingsValue.mockReturnValue(true);
     estimateSoundCredits.mockReturnValue({ requiredCredits: 12, usdCost: 0.006, billedSeconds: 3 });

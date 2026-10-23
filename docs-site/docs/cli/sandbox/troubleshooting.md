@@ -51,14 +51,13 @@ Common issues you may encounter when using the CLI sandbox, with symptoms, cause
    /sandbox:violations
    ```
 
-2. If a read path was blocked, add it to `allowedReadPaths` in your config:
+2. For a non-sensitive read path, add it to `allowedReadPaths` in your config. A matching `deniedPaths` entry takes precedence, so an allow entry cannot expose a denied file or directory:
    ```json
    {
      "sandbox": {
        "filesystem": {
          "allowedReadPaths": [
            "$HOME/.gitconfig",
-           "$HOME/.npmrc",
            "$HOME/.your-needed-path"
          ]
        }
@@ -69,6 +68,22 @@ Common issues you may encounter when using the CLI sandbox, with symptoms, cause
 3. If a write path was blocked, remember that writes are restricted to your CWD. Either:
    - Change your working directory to where the file needs to be written
    - Temporarily disable the sandbox for that operation: `/sandbox:disable`
+
+## Private registry authentication fails
+
+**Symptoms:** A package command cannot find registry credentials, returns an authentication error, or reads an empty configuration file.
+
+**Cause:** Credential stores such as `~/.npmrc` and `~/.netrc` are denied by default. On Linux, a denied file appears empty; adding it to `allowedReadPaths` does not override the deny rule.
+
+**Solution:** Run the required authenticated command as a trusted operation outside the sandbox after reviewing it. Avoid copying credentials into the project or removing the default denied paths from shared configuration. Re-enable the sandbox before continuing agent commands.
+
+## Git staging or commits fail
+
+**Symptoms:** Git cannot create a lock file, stage files, or write a commit while the sandbox is enabled.
+
+**Cause:** Your working directory's `.git` metadata is read-only inside the sandbox. Project `.bike4mind` configuration is also read-only, even when general write restrictions are disabled.
+
+**Solution:** Review and run the required Git write as a trusted operation outside the sandbox, then re-enable the sandbox. Read-only Git commands and host-managed checkpoints remain available.
 
 ## Network request blocked
 

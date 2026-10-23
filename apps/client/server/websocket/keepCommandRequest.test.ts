@@ -4,7 +4,6 @@ vi.mock('@server/cli/auth', () => ({
   verifyApiKey: vi.fn().mockRejectedValue(new Error('no api key')),
   verifyJwtToken: vi.fn().mockResolvedValue({ id: 'u1' }),
   checkRateLimit: vi.fn().mockResolvedValue(undefined),
-  checkApiKeyRateLimitOrThrow: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('@server/websocket/utils', () => ({
@@ -17,8 +16,6 @@ vi.mock('@server/websocket/utils', () => ({
 
 import { checkRateLimit, verifyApiKey, verifyJwtToken } from '@server/cli/auth';
 import { sendToClient, sendToConnection } from '@server/websocket/utils';
-import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
-import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { func } from './keepCommandRequest';
 
 const logger = { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), updateMetadata: vi.fn() };
@@ -62,52 +59,32 @@ describe('keepCommandRequest websocket handler', () => {
   });
 });
 
-const databaseUnreachable = () =>
-  toApiKeyAuthError(Object.assign(new Error('connect ECONNREFUSED 10.0.0.1:27017'), { name: 'MongoNetworkError' }));
-const expectNoDriverLeak = (value: unknown) => {
-  const serialized = JSON.stringify(value);
-  expect(serialized).not.toContain('ECONNREFUSED');
-  expect(serialized).not.toContain('10.0.0.1');
-};
-
-describe('keepCommandRequest websocket handler - API-key check outcome', () => {
+describe('keepCommandRequest websocket handler - session-only auth', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it('reports an unavailable error when the database is unreachable, without trying the JWT', async () => {
-    vi.mocked(verifyApiKey).mockRejectedValueOnce(databaseUnreachable());
-
+  it('never accepts an API key: the token is checked only as a session JWT', async () => {
     await run();
 
-    expect(sendToConnection).toHaveBeenCalledWith(
-      'conn-1',
-      'https://example.test/test',
-      expect.objectContaining({
-        action: 'keep_command_result',
-        success: false,
-        error: 'Authentication temporarily unavailable',
-      })
-    );
-    expectNoDriverLeak(vi.mocked(sendToConnection).mock.calls);
-    expect(verifyJwtToken).not.toHaveBeenCalled();
+    expect(verifyApiKey).not.toHaveBeenCalled();
+    expect(verifyJwtToken).toHaveBeenCalledWith('jwt-token');
   });
 
-  it('keeps the auth-failed error for an unknown key that the JWT check also rejects', async () => {
-    vi.mocked(verifyApiKey).mockRejectedValueOnce(new UnauthorizedError('Invalid or expired API key'));
+  it('does not relay the command when the token is not a valid session JWT', async () => {
     vi.mocked(verifyJwtToken).mockRejectedValueOnce(new Error('bad token'));
 
     await run();
 
+    expect(sendToClient).not.toHaveBeenCalled();
     expect(sendToConnection).toHaveBeenCalledWith(
       'conn-1',
       'https://example.test/test',
       expect.objectContaining({
         action: 'keep_command_result',
         success: false,
-        error: 'Authentication failed. Provide a valid API key or JWT token.',
+        error: 'Authentication failed. Sign in again and retry.',
       })
     );
-    expect(verifyJwtToken).toHaveBeenCalled();
   });
 });

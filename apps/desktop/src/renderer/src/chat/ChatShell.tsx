@@ -398,18 +398,6 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
   const closePanelPopover = useCallback(() => setPanelPopoverOpen(false), []);
   useEffect(() => setPanelPopoverOpen(false), [activeId, panelDocked, screen]);
 
-  /**
-   * What the composer's usage indicator reports: how full the window is, and what is left.
-   *
-   * The context figure comes from the last reply's LAST request, never from the turn's summed
-   * usage - see contextTokens. It is measured against the capped limit (effectiveContextLimit)
-   * rather than the raw window, and that limit is real even for a model that states no window:
-   * the cap applies either way.
-   *
-   * `turnOpen` is handed on so the figure survives the turn it is shown during: the reply being
-   * streamed has measured nothing yet, and without it the indicator would read as unknown from
-   * the moment the user pressed send until the reply landed. See latestReply.
-   */
   const composerUsage: ComposerUsage = useMemo(() => {
     const reply = latestReply(conversation.messages, turnOpen);
     return {
@@ -417,10 +405,18 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
       contextLimit: effectiveContextLimit(modelOption?.contextWindow),
       modelWindow: modelOption?.contextWindow ?? null,
       credits: credits.balance,
+      monthlyAllowance: credits.monthlyAllowance,
       ...(credits.error ? { creditsError: credits.error } : {}),
       lastTurn: reply?.usage ?? null,
     };
-  }, [conversation.messages, turnOpen, modelOption?.contextWindow, credits.balance, credits.error]);
+  }, [
+    conversation.messages,
+    turnOpen,
+    modelOption?.contextWindow,
+    credits.balance,
+    credits.monthlyAllowance,
+    credits.error,
+  ]);
 
   // What the turn in flight is doing, read off the reply being streamed into the thread. Only
   // the last message can be that reply, so nothing earlier is consulted.
