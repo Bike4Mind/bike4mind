@@ -6,9 +6,10 @@ import {
 } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, isModelAccessible } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
+import { AI_ACCESS_REVOKED_MESSAGE, isAiAccessRevoked } from '../userService/accountState';
 
 export type ModelAdmissionInput = {
-  user: { isAdmin?: boolean | null; tags?: string[] | null };
+  user: { isAdmin?: boolean | null; tags?: string[] | null; isModerated?: boolean | null };
   /** The llmModelConfigurations admin setting. */
   configs: LLMModelConfig[];
   getEntitlements?: () => Promise<string[]>;
@@ -19,8 +20,9 @@ export type ModelAdmissionInput = {
 };
 
 export type ModelAdmission = {
+  /** Throws ForbiddenError when the user's AI access is revoked, so fallback selection surfaces the real reason. */
   admits(modelId: string): Promise<boolean>;
-  /** Throws BadRequestError (disabled) or ForbiddenError (not accessible / unpriced). */
+  /** Throws BadRequestError (disabled) or ForbiddenError (AI access revoked / not accessible / unpriced). */
   assert(modelId: string): Promise<void>;
 };
 
@@ -63,6 +65,10 @@ export function createModelAdmission({
   const isAdmin = user.isAdmin || false;
   let entitlementKeys: Promise<string[]> | undefined;
 
+  const assertAiAccess = (): void => {
+    if (isAiAccessRevoked(user)) throw new ForbiddenError(AI_ACCESS_REVOKED_MESSAGE);
+  };
+
   const refusal = async (modelId: string): Promise<Error | null> => {
     const model = models?.find(m => m.id === modelId);
     if (model?.disabled) {
@@ -87,8 +93,12 @@ export function createModelAdmission({
   };
 
   return {
-    admits: async modelId => (await refusal(modelId)) === null,
+    async admits(modelId) {
+      assertAiAccess();
+      return (await refusal(modelId)) === null;
+    },
     async assert(modelId) {
+      assertAiAccess();
       const error = await refusal(modelId);
       if (error) throw error;
     },
