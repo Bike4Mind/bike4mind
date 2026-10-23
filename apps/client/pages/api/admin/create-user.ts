@@ -171,7 +171,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
 </html>`;
               await EmailEvents.Send.publish({
                 to: toEmail,
-                subject: `You've been invited${brand ? ` to ${brand}` : ''} — sign-in code`,
+                subject: `You've been invited${brand ? ` to ${brand}` : ''} \u2014 sign-in code`,
                 body: emailBody,
               });
             },
