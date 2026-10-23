@@ -25,7 +25,12 @@ const draft: AttachmentDraft = {
   clear: () => {},
 };
 
-const usage: ComposerUsage = { contextTokens: 44_000, contextLimit: 200_000, credits: 31_667 };
+const usage: ComposerUsage = {
+  contextTokens: 44_000,
+  contextLimit: 200_000,
+  credits: 25_000,
+  monthlyAllowance: 50_000,
+};
 
 function statusMarkup(props: Partial<Parameters<typeof Composer>[0]> = {}): string {
   return renderToStaticMarkup(
@@ -71,38 +76,31 @@ describe('the composer indicator', () => {
   it('draws the ring and nothing else, keeping the figure as its name', () => {
     expect(statusMarkup()).not.toContain('composer-status-text');
     expect(statusMarkup()).not.toContain('turn-dot');
-    expect(ringLabel()).toBe('Context 22%');
-    expect(ringValue()).toBe(22);
+    expect(ringLabel()).toBe('Credits 50% of monthly plan allowance');
+    expect(ringValue()).toBe(50);
   });
 
-  // The behaviour the ring was added to protect: a turn in flight is when the figure matters
-  // most, and it holds the last measured request rather than blanking.
   it('keeps the ring up through a turn in flight', () => {
     expect(hasRing({ streaming: true })).toBe(true);
-    expect(ringLabel({ streaming: true })).toBe('Context 22%');
+    expect(ringLabel({ streaming: true })).toBe('Credits 50% of monthly plan allowance');
   });
 
-  /**
-   * A measured context under a percent would draw an arc a few pixels long, which is the empty
-   * ring that means nothing was measured at all. The floor is what keeps the two apart - the
-   * same thing "<1%" does for the words.
-   */
-  it('floors the arc so a tiny measured context still reads as measured', () => {
-    const tiny = { contextTokens: 900, contextLimit: 1_050_000, credits: 31_667 };
+  it('floors a tiny positive balance share so it remains visible', () => {
+    const tiny = { ...usage, credits: 1, monthlyAllowance: 50_000 };
     expect(ringValue({ usage: tiny })).toBe(4);
-    // Escaped because this reads the attribute out of static markup, not out of the DOM.
-    expect(ringLabel({ usage: tiny })).toBe('Context &lt;1%');
+    expect(ringLabel({ usage: tiny })).toBe('Credits &lt;1% of monthly plan allowance');
   });
 
-  /**
-   * A determinate ring draws 0% and "no idea" identically, so an unstated window draws the bare
-   * track instead of an arc. The ring stays: it is the tooltip's hover target, and the balance
-   * lives in that tooltip whether or not a window was ever stated.
-   */
-  it('draws an empty ring, not a full-looking one, for a window the catalog does not state', () => {
-    const unstated = { contextTokens: 44_000, contextLimit: null, credits: 31_667 };
+  it('draws an empty ring when no finite monthly allowance is stated', () => {
+    const unstated = { ...usage, credits: 31_667, monthlyAllowance: null };
     expect(ringValue({ usage: unstated })).toBe(0);
-    expect(ringLabel({ usage: unstated })).toBe('Context --');
+    expect(ringLabel({ usage: unstated })).toBe('Credits personal balance; no monthly plan allowance');
+  });
+
+  it('clamps rollover above the allowance to a full arc while stating the real percentage', () => {
+    const rollover = { ...usage, credits: 75_000, monthlyAllowance: 50_000 };
+    expect(ringValue({ usage: rollover })).toBe(100);
+    expect(ringLabel({ usage: rollover })).toBe('Credits 150% of monthly plan allowance');
   });
 
   // Nothing to measure and nothing to say: the sidebar dot speaks for these, so a ring here

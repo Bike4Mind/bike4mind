@@ -18,6 +18,8 @@
 
 ## Unreleased
 
+- Show the personal credit balance against the monthly plan allowance in the footer ring, with last-turn costs in its tooltip and context usage in the separate Context panel.
+
 - Show spawned sessions immediately while their worktrees prepare, with queued messages and visible startup failures; preserve accepted input and attachments if startup fails.
 - Reuse base-branch fetches and spare checkouts, and invalidate the skill catalog when its files change.
 - Make "Always allow" save the displayed permission rule, and settle waiting cards it covers.
