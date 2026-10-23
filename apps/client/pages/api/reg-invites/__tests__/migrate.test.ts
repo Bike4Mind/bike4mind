@@ -4,6 +4,7 @@ const h = vi.hoisted(() => ({
   handler: null as null | ((req: unknown, res: unknown) => Promise<unknown>),
   findByEmail: vi.fn(),
   createUser: vi.fn(),
+  findOrg: vi.fn(),
   publish: vi.fn(),
   audit: vi.fn(),
 }));
@@ -17,7 +18,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   }),
 }));
 vi.mock('@bike4mind/database', () => ({ withTransaction: async (fn: () => Promise<unknown>) => fn() }));
-vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: {} }));
+vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: { findById: h.findOrg } }));
 vi.mock('@bike4mind/database/auth', () => ({ userRepository: { findByEmail: h.findByEmail } }));
 vi.mock('@bike4mind/services', () => ({
   userService: { createUser: h.createUser },
@@ -30,9 +31,9 @@ vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: h.pub
 process.env.APP_URL = 'https://app.test';
 await import('../migrate');
 
-const run = (usersData: unknown[], sendEmail = false) =>
+const run = (usersData: unknown[], sendEmail = false, orgId?: string) =>
   h.handler!(
-    { body: { usersData, sendEmail }, user: { id: 'admin-1', isAdmin: true }, ability: {}, logger: {} },
+    { body: { usersData, sendEmail, orgId }, user: { id: 'admin-1', isAdmin: true }, ability: {}, logger: {} },
     { json: vi.fn() }
   );
 
@@ -89,6 +90,22 @@ describe('POST /api/reg-invites/migrate', () => {
     );
     const lastCreate = h.createUser.mock.invocationCallOrder.at(-1) ?? 0;
     expect(lastCreate).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
+  });
+
+  it('targets the organization by name when orgId is set', async () => {
+    h.findOrg.mockResolvedValue({ id: 'org-1', name: 'Acme Org' });
+    await run([{ email: 'a@b.test', name: 'A' }], false, 'org-1');
+
+    expect(h.findOrg).toHaveBeenCalledWith('org-1');
+    expect(h.audit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ target: { kind: 'organization', id: 'org-1', displayName: 'Acme Org' } })
+    );
+  });
+
+  it('does not look up an organization when orgId is absent', async () => {
+    await run([{ email: 'a@b.test', name: 'A' }]);
+    expect(h.findOrg).not.toHaveBeenCalled();
   });
 
   it('does not audit a run that migrated nobody', async () => {
