@@ -4,6 +4,7 @@ import {
   LIFECYCLE_SUNSET_STATUSES,
   MODEL_INFO_FIELD_GROUP_OF,
   ModelBackend,
+  isDiscoveryVerdict,
   isFieldGroup,
   lifecycleStatusRank,
   isRenderableModelType,
@@ -239,8 +240,13 @@ export interface ResolvedCatalogRecord {
 /**
  * Resolve rows into one belief per model, with no seed base and no rendering.
  * Same per-group precedence mergeCatalogWithDrops uses - shared so the discovery
- * service diffs against exactly the view the read path will produce, rather than
- * a second implementation of the rule that can drift from this one.
+ * service diffs against the same rule the read path applies, rather than a
+ * second implementation of the rule that can drift from this one.
+ *
+ * No curated base, so this is discovery's own view: for a model the adapter tables have since
+ * curated, the run report still describes the introduction's slug and auto-disable while the read
+ * path serves the curated record. The divergence is intended - this view decides what discovery
+ * should write, and it cannot write the adapter table.
  */
 export function resolveCatalogRecords(rows: IModelCatalogRow[]): Map<string, ResolvedCatalogRecord> {
   const resolved = new Map<string, ResolvedCatalogRecord>();
@@ -269,7 +275,7 @@ function mergeRows(
   base: RenderableModelRecord | null
 ): { draft: Record<string, unknown>; owned: Set<FieldGroup> } {
   // A curated record presents this model (base is its adapter literal), so an un-promoted
-  // introduction yields those three groups to it. Without this, a model discovery introduced before
+  // introduction yields its placeholders to it. Without this, a model discovery introduced before
   // the adapter table curated it renders as its slug, at contextWindow 0 and auto-disabled, for good:
   // a per-image adapter price can never satisfy the promotion clause that would clear the flag.
   const curated = base !== null;
@@ -279,7 +285,7 @@ function mergeRows(
     for (const group of row.ownedGroups) {
       // A group name from a newer schema version claims nothing here.
       if (!isFieldGroup(group)) continue;
-      if (introduction && INTRODUCTION_PLACEHOLDER_GROUPS.has(group)) continue;
+      if (introduction && yieldsToCuration(row, group)) continue;
       const incumbent = winners.get(group);
       if (!incumbent || outranks(row, incumbent, group)) winners.set(group, row);
     }
@@ -303,24 +309,47 @@ function mergeRows(
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
-/** The groups a discovery introduction pins to placeholders, not to facts. */
-const INTRODUCTION_PLACEHOLDER_GROUPS: ReadonlySet<FieldGroup> = new Set(['identity', 'limits', 'availability']);
+/** The groups an introduction's claim on is a placeholder, not a fact. `availability` is decided separately. */
+const INTRODUCTION_PLACEHOLDER_GROUPS: ReadonlySet<FieldGroup> = new Set(['identity', 'limits']);
 
 /**
- * A discovery row that never had a curated identity. Its `name` is the endpoint slug, its
- * `contextWindow` the 0 the append schema requires, `autoDisabled` the unpriced verdict: it claims
- * all three because an introduction has to state something, not because the feed knows them.
+ * Whether curation may reclaim this group from an introduction. Identity and limits are the
+ * placeholders the introduction had to state - the slug it pinned, the 0 the record requires.
+ * `availability` is not: alongside discovery's own refusal it carries the provider's answer to
+ * "can this be called", and a model the account cannot invoke must stay disabled.
+ */
+function yieldsToCuration(row: IModelCatalogRow, group: FieldGroup): boolean {
+  if (group === 'availability') return inventsDisable(row);
+  return INTRODUCTION_PLACEHOLDER_GROUPS.has(group);
+}
+
+/**
+ * Discovery writes `autoDisabled` when promotion refuses a model, so its own disable is a verdict.
+ * A provider's disable ("not entitled in this AWS account") is a fact it reported, and curation has
+ * no better claim on it.
+ */
+function inventsDisable(row: IModelCatalogRow): boolean {
+  if (row.patch.autoDisabled !== true) return false;
+  const reason = row.patch.autoDisabledReason;
+  if (typeof reason === 'string' && reason.length > 0) return isDiscoveryVerdict(reason);
+  // A row from before contributors named a group's source still has one where it was written.
+  return row.contributors?.some(entry => entry.group === 'availability' && entry.source === 'discovery') === true;
+}
+
+/**
+ * A discovery row for a model the adapter tables have since curated, which never passed promotion.
  *
- * The slug is the durable marker: a row's patch carries the whole record forward, so every snapshot
- * taken from an introduction keeps the slug even once it stops claiming the lifecycle. The
- * un-promoted status covers a row whose name a feed did supply.
+ * The durable marker is `autoDisabled`: promotion writes `false` on the way out, so a row still
+ * holding `true` - the introduction, or any snapshot taken from it - is one discovery is keeping
+ * out of the pickers, and what it states about the model is a placeholder. A promoted row keeps
+ * its claims even when the feed named the model by its id (Ollama) or the writer pinned the slug
+ * (feeds that publish no name), so its measured window still corrects the curated one.
  */
 function isIntroduction(row: IModelCatalogRow): boolean {
   if (row.source !== 'discovery') return false;
-  return (
-    row.patch.name === row.modelId ||
-    (row.ownedGroups.includes('lifecycle') && row.patch.lifecycle?.status === 'discovered')
-  );
+  if (row.patch.autoDisabled === true) return true;
+  // Rows written before the flag was carried forward: an un-promoted lifecycle says the same thing.
+  return row.ownedGroups.includes('lifecycle') && row.patch.lifecycle?.status === 'discovered';
 }
 
 const claimsGroup = (row: IModelCatalogRow, group: FieldGroup): boolean =>

@@ -985,6 +985,7 @@ describe('mergeCatalog: a discovery introduction under a curated record', () => 
         name: String(ImageModels.FLUX_2_PRO),
         contextWindow: 0,
         autoDisabled: true,
+        autoDisabledReason: 'discovered, not invocable by this build',
         lifecycle: { status: 'discovered' },
       },
       ...overrides,
@@ -999,8 +1000,10 @@ describe('mergeCatalog: a discovery introduction under a curated record', () => 
     expect(merged.disabledReason).toBeUndefined();
   });
 
-  it('yields from a later snapshot that still carries the slug, though it claims no lifecycle', () => {
+  it('yields from a later snapshot of the introduction, which claims no lifecycle', () => {
     const seed = imageSeed();
+    // The correction row that build's next run wrote: the slug carried forward, the curated window
+    // folded in from the seed, discovery's own disable still on it - and no lifecycle claim.
     const [merged] = mergeCatalog(
       [seed],
       [
@@ -1008,11 +1011,13 @@ describe('mergeCatalog: a discovery introduction under a curated record', () => 
           ownedGroups: ['identity', 'modalities'],
           patch: {
             id: String(ImageModels.FLUX_2_PRO),
-            vendor: 'bfl',
+            vendor: 'black-forest-labs',
             backend: ModelBackend.BFL,
             type: 'image',
             name: String(ImageModels.FLUX_2_PRO),
-            contextWindow: 0,
+            contextWindow: 10_000,
+            autoDisabled: true,
+            autoDisabledReason: 'discovered, not invocable by this build',
             lifecycle: { status: 'active' },
           },
         }),
@@ -1022,14 +1027,64 @@ describe('mergeCatalog: a discovery introduction under a curated record', () => 
 
     expect(merged).toMatchObject({ name: 'FLUX.2 Pro', contextWindow: 10_000 });
     expect(merged.disabled).toBeFalsy();
-    expect(merged.disabledReason).toBeUndefined();
+  });
+
+  it('keeps a provider-declared disable while the curated record supplies the identity', () => {
+    const seed = imageSeed();
+    // How the Bedrock source reports an unentitled model: a real name, the provider's own reason.
+    const [merged] = mergeCatalog(
+      [seed],
+      [
+        introduction({
+          ownedGroups: ['identity', 'limits', 'availability', 'lifecycle'],
+          patch: {
+            id: String(ImageModels.FLUX_2_PRO),
+            vendor: 'black-forest-labs',
+            backend: ModelBackend.BFL,
+            type: 'image',
+            name: 'FLUX.2 Pro [prov]',
+            contextWindow: 8_000,
+            autoDisabled: true,
+            autoDisabledReason: 'not entitled in this AWS account',
+            lifecycle: { status: 'discovered' },
+          },
+        }),
+      ],
+      NO_KEYS
+    );
+
+    expect(merged).toMatchObject({
+      name: 'FLUX.2 Pro',
+      contextWindow: 10_000,
+      disabled: true,
+      disabledReason: 'not entitled in this AWS account',
+    });
   });
 
   it('still lets a promoted discovery row claim the groups it owns', () => {
     const seed = imageSeed();
+    // The row promotion writes: the whole introduction carried forward, with autoDisabled false.
+    // A feed that names models by id (Ollama), or one the writer pinned the slug for, keeps that
+    // name through promotion - so the name alone cannot say the row is still an introduction.
     const [merged] = mergeCatalog(
       [seed],
-      [row({ modelId: seed.id, source: 'discovery', ownedGroups: ['limits'], patch: { contextWindow: 400_000 } })],
+      [
+        row({
+          modelId: seed.id,
+          source: 'discovery',
+          ownedGroups: ['limits'],
+          patch: {
+            id: String(ImageModels.FLUX_2_PRO),
+            vendor: 'black-forest-labs',
+            backend: ModelBackend.BFL,
+            type: 'image',
+            name: String(ImageModels.FLUX_2_PRO),
+            contextWindow: 400_000,
+            autoDisabled: false,
+            lifecycle: { status: 'active' },
+          },
+        }),
+      ],
       NO_KEYS
     );
 
