@@ -332,10 +332,11 @@ function yieldsToCuration(row: IModelCatalogRow, group: FieldGroup): boolean {
  * A provider's disable ("not entitled in this AWS account") is a fact it reported, and curation has
  * no better claim on it.
  *
- * The row's `availability` contributor decides when it has one: a run that could not re-ask the
- * provider carries the earlier credit forward while promotion restamps the reason, so a provider's
- * disable can be wearing discovery's verdict wording. Only rows written before contributors existed
- * fall back to the wording.
+ * The row's `availability` contributor decides when it has one. It is a supply credit, not a
+ * property of the disable, and the writer aligns the two: a reason carried forward from the
+ * provider keeps the provider's credit, while a verdict the run decided is credited to discovery
+ * even when that run also cleared the provider's disable first. Only rows written before
+ * contributors existed fall back to the wording.
  */
 function inventsDisable(row: IModelCatalogRow): boolean {
   if (row.patch.autoDisabled !== true) return false;

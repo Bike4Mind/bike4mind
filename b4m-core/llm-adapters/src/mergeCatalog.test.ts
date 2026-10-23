@@ -1206,9 +1206,12 @@ describe('mergeCatalog: a discovery introduction under a curated record', () => 
 
   it('keeps a disable the row credits to the provider even when the reason wears discovery wording', () => {
     const seed = imageSeed();
-    // The shape the pre-change writer left on a manual-policy deployment: the provider said
-    // "not entitled", a later run could not ask again, and promotion restamped the reason while the
-    // row still credits the provider. The contributor, not the wording, says who disabled it.
+    // The row a writer that credited a group to whoever supplied its first field leaves when one run
+    // both clears the provider's disable and has its promotion refused: the disable in force is
+    // discovery's verdict, but the clearance supplied `autoDisabled`, so the row credits the
+    // provider. That writer can no longer be told from one that carried a provider's reason, and
+    // the contributor is what the read path trusts - so such a row keeps its disable until a later
+    // run rewrites the credit. The contributor, not the wording, says who disabled it.
     const [merged] = mergeCatalog(
       [seed],
       [
