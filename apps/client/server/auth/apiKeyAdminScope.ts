@@ -34,7 +34,8 @@ export function withholdAdminRole<T extends AdminFlagged>(user: T): T {
 
 /**
  * The user's stored role, ignoring withholdAdminRole. Only for checks about what the key's owner
- * was entitled to when the key was minted (e.g. org billing), never for granting admin authority.
+ * was entitled to when the key was minted (e.g. org billing), or to confirm an owner is a real admin
+ * behind a key that is separately confined to a narrow scope. Never a stand-in for req.user.isAdmin.
  */
 export function persistedIsAdmin(user: AdminFlagged): boolean {
   return PERSISTED_ADMIN_ROLE in user || !!user.isAdmin;
