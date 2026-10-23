@@ -163,6 +163,18 @@ Every request to a `baseApi` route that authenticates with an API key writes one
 | Client IP      | `ipAddress`, resolved server-side | 90 days (TTL index) | Abuse and security investigation, anomaly alerts |
 | Key and owner  | `keyId` and `userId`              | 90 days (TTL index) | Attribute usage to a key and its owner           |
 
+## Signup and login network metadata
+
+Every self-service signup stores the network it came from on the new account (`signupMeta`), written once. Every successful signup and sign-in also writes one `AuthEvent` row. Admin-created accounts and impersonation sessions write neither. The network number (ASN) and country come from headers the CDN sets; when they are absent the fields are empty, never guessed. A failed write never blocks sign-in. Both are visible only to admins, and both are deleted with the account.
+
+| Data          | Storage                               | Lifetime                               | Purpose                                             |
+| ------------- | ------------------------------------- | -------------------------------------- | --------------------------------------------------- |
+| Client IP     | `signupMeta.ip`, `AuthEvent.ip`       | Account lifetime / 90 days (TTL index) | Abuse and security investigation                    |
+| User agent    | `signupMeta.userAgent`, `AuthEvent`   | Account lifetime / 90 days (TTL index) | Abuse and security investigation                    |
+| Network (ASN) | `asn`, plus operator for hosting ASNs | Account lifetime / 90 days (TTL index) | Spot signups from one network or a hosting provider |
+| Country       | ISO country code                      | Account lifetime / 90 days (TTL index) | Abuse and security investigation                    |
+| Hosting flag  | `isDatacenter`                        | Account lifetime / 90 days (TTL index) | Flag signups from cloud and hosting networks        |
+
 ## Chat turn timing
 
 Each chat reply records where its wall-clock time went, so a slow or retried reply can be diagnosed from the reply itself. The record holds durations, counts and provider metadata only: no prompt or reply text. It is shown in the reply's Answer diagnosis panel, and a short summary with a copyable turn ID appears under replies that retried, switched model or took a minute or more.

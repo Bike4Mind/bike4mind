@@ -480,10 +480,10 @@ const handler = baseApi({ auth: false })
       type: AuthEvents.REGISTER,
       metadata: { strategy: 'otc' },
     }).catch(err => req.logger.error('OTC registration analytics log failed', err));
+    await recordSignupNetwork({ req, userId: newUser.id, method: 'otc' });
     // Funnel floor (server/analytics/funnel.ts): keep the consented touches on the user so later
     // stages stay joinable to the door, then report the stages OTC completes in one step - the
     // code proved the email, and registerViaOTC plus the domain grant above seeded the credits.
-    await recordSignupNetwork({ req, userId: newUser.id, method: 'otc' });
     const signupFunnel = await recordSignupAcquisition({ req, user: newUser, method: 'otc' });
     // Credit the signup to the product the visitor came through, if any, and only with consent
     // - see readConsentedAcquisitionTouches. Never throws. Synthetic accounts are detected

@@ -768,10 +768,11 @@ describe('PUT /api/users/:id/update - respond() boundary', () => {
     name: 'Existing Name',
     securityQuestions: [{ question: 'Pet name?', answer: 'Fluffy' }],
     userNotes: [{ note: 'admin note', timestamp: '2026-01-01', userName: 'admin' }],
+    signupMeta: { ip: '203.0.113.7', asn: 16509, isDatacenter: true },
     notInSchema: 'x',
   };
 
-  it('admin branch keeps ignoredFields, securityQuestions and userNotes and strips an undeclared key', async () => {
+  it('admin branch keeps ignoredFields, securityQuestions, userNotes and signupMeta and strips an undeclared key', async () => {
     mockUserFindById.mockReturnValue(profile);
     const { res, promise } = run({ user: ADMIN, userId: 'u1', body: { name: 'New Name', adminNote: 'x' } });
     await promise;
@@ -781,6 +782,7 @@ describe('PUT /api/users/:id/update - respond() boundary', () => {
     expect(json.ignoredFields).toEqual(['adminNote']);
     expect(json.securityQuestions).toEqual([{ question: 'Pet name?', answer: '' }]);
     expect(json.userNotes).toEqual(profile.userNotes);
+    expect(json.signupMeta).toEqual(profile.signupMeta);
     expect(json).not.toHaveProperty('notInSchema');
   });
 
@@ -798,6 +800,7 @@ describe('PUT /api/users/:id/update - respond() boundary', () => {
     expect(json.ignoredFields).toEqual(['tags']);
     expect(json.securityQuestions).toEqual([{ question: 'Pet name?', answer: '' }]);
     expect(json).not.toHaveProperty('userNotes');
+    expect(json).not.toHaveProperty('signupMeta');
     expect(json).not.toHaveProperty('notInSchema');
   });
 });

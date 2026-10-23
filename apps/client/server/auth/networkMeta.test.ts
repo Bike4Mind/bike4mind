@@ -10,10 +10,10 @@ vi.mock('@bike4mind/database', () => ({
 
 import { readNetworkMeta, recordLoginEvent, recordSignupNetwork, type NetworkRequest } from './networkMeta';
 
-const logger = { warn: vi.fn() } as unknown as NonNullable<NetworkRequest['logger']>;
+const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
 function reqWith(headers: Record<string, string>): NetworkRequest {
-  return { headers: { 'user-agent': 'Mozilla/5.0', ...headers }, socket: {}, logger };
+  return { headers: { 'user-agent': 'Mozilla/5.0', ...headers }, socket: {} };
 }
 
 const AWS_REQUEST = reqWith({
@@ -53,7 +53,7 @@ describe('recordSignupNetwork', () => {
   beforeEach(() => {
     updateOne.mockReset().mockResolvedValue({});
     record.mockReset().mockResolvedValue(undefined);
-    vi.mocked(logger.warn).mockReset();
+    warn.mockClear();
   });
 
   it('stamps signupMeta only on a user that has none, and logs a signup event', async () => {
@@ -70,18 +70,26 @@ describe('recordSignupNetwork', () => {
     );
   });
 
-  it('never throws when the write fails, and logs the failure', async () => {
+  it('still logs the signup event when the user write fails, and never throws', async () => {
     updateOne.mockRejectedValueOnce(new Error('db down'));
 
     await expect(recordSignupNetwork({ req: AWS_REQUEST, userId: 'u1', method: 'otc' })).resolves.toBeUndefined();
-    expect(logger.warn).toHaveBeenCalledWith('[auth] signup network metadata not recorded', { error: 'db down' });
+    expect(warn).toHaveBeenCalledWith('[auth] signup network metadata not recorded', 'db down');
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u1', type: 'signup' }));
+  });
+
+  it('never throws when the signup event write fails', async () => {
+    record.mockRejectedValueOnce(new Error('db down'));
+
+    await expect(recordSignupNetwork({ req: AWS_REQUEST, userId: 'u1', method: 'otc' })).resolves.toBeUndefined();
+    expect(warn).toHaveBeenCalledWith('[auth] signup event not recorded', 'db down');
   });
 });
 
 describe('recordLoginEvent', () => {
   beforeEach(() => {
     record.mockReset().mockResolvedValue(undefined);
-    vi.mocked(logger.warn).mockReset();
+    warn.mockClear();
   });
 
   it('logs a login event with the request network', async () => {
@@ -94,6 +102,6 @@ describe('recordLoginEvent', () => {
   it('never throws when the write fails', async () => {
     record.mockRejectedValueOnce(new Error('db down'));
     await expect(recordLoginEvent({ req: AWS_REQUEST, userId: 'u1', method: 'otc' })).resolves.toBeUndefined();
-    expect(logger.warn).toHaveBeenCalledWith('[auth] login event not recorded', { error: 'db down' });
+    expect(warn).toHaveBeenCalledWith('[auth] login event not recorded', 'db down');
   });
 });

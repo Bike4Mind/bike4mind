@@ -1,6 +1,7 @@
 import mongoose, { Document, Model, model, Schema } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 import type { INetworkMeta } from '@bike4mind/common';
+import { NETWORK_META_FIELDS } from './networkMetaFields';
 
 export const AUTH_EVENT_TYPES = ['signup', 'login'] as const;
 export type AuthEventType = (typeof AUTH_EVENT_TYPES)[number];
@@ -31,12 +32,7 @@ const AuthEventSchema = new Schema<IAuthEventDocument>(
     userId: { type: String, required: true },
     type: { type: String, required: true, enum: AUTH_EVENT_TYPES },
     method: { type: String, required: true },
-    ip: { type: String, default: null },
-    userAgent: { type: String, default: null },
-    asn: { type: Number, default: null },
-    asnOrg: { type: String, default: null },
-    country: { type: String, default: null },
-    isDatacenter: { type: Boolean, default: null },
+    ...NETWORK_META_FIELDS,
   },
   {
     toJSON: { virtuals: true },

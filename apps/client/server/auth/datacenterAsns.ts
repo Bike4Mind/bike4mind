@@ -22,9 +22,6 @@ export const DATACENTER_ASNS: ReadonlyMap<number, string> = new Map([
   [12876, 'Scaleway'],
   [45102, 'Alibaba Cloud'],
   [132203, 'Tencent Cloud'],
-  [9009, 'M247'],
-  [60068, 'Datacamp'],
-  [212238, 'Datacamp'],
   [36352, 'ColoCrossing'],
   [53667, 'FranTech'],
 ]);

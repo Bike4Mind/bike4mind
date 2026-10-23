@@ -155,6 +155,7 @@ const handler = baseApi({ auth: false })
             console.error('Failed to log OAuth registration:', logError);
           }
           await stampOAuthSourceTag(user.id, stateResult?.valid ? stateResult.payload.clientId : undefined);
+          await recordSignupNetwork({ req, userId: user.id, method: strategy });
           // Credit the signup to the product the visitor came through, if any, and only with
           // consent - see readConsentedAcquisitionTouches. Before the session is minted, as in
           // OTC: a mint failure after the account exists would otherwise lose the signup for
@@ -173,7 +174,6 @@ const handler = baseApi({ auth: false })
           // - a Lambda freeze after the redirect would drop it for good. The cost is bounded
           // and narrow: emitProductEvent has its own 2s timeout and per-emit catch, and a
           // signup naming no product resolves here immediately, which is most of them.
-          await recordSignupNetwork({ req, userId: user.id, method: strategy });
           const signupFunnel = await recordSignupAcquisition({ req, user, method: strategy });
           isSyntheticSignup = signupFunnel.isSynthetic;
           const funnelUser = {
