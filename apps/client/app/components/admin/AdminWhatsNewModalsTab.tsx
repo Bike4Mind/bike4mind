@@ -102,6 +102,7 @@ import {
   getModalPriorityStatus,
   getStatusChipColor,
   getStatusLabel,
+  shouldShowWeeklyHighlights,
 } from './AdminWhatsNewModalsTab.utils';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import {
@@ -394,8 +395,8 @@ function WhatsNewErrorFallback() {
  * - Weekly highlights to Slack
  */
 export default function AdminWhatsNewModalsTab() {
-  // isForkProduction distinguishes a fork's production stage from the source deployment; only
-  // fork production hides highlights, since source prod, dev and PR previews all run them.
+  // isForkProduction distinguishes a fork's production stage from the source deployment. The
+  // highlights card stays on the main environments only (source prod, dev, PR previews).
   const { data: env } = useLiveOpsTriageEnv();
   const stage = env?.stage || 'unknown';
   const isForkProduction = env?.isForkProduction ?? false;
@@ -430,7 +431,7 @@ export default function AdminWhatsNewModalsTab() {
           <ActiveModalsCard />
 
           {/* Weekly Highlights to Slack - only for main environments (production, dev, or PR previews), not forks */}
-          {env && !env.isForkProduction && <WeeklyHighlightsCard />}
+          {shouldShowWeeklyHighlights(env) && <WeeklyHighlightsCard />}
         </Stack>
       </Box>
     </ErrorBoundary>
