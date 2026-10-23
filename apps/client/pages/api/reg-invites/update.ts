@@ -3,38 +3,44 @@ import { logEvent } from '@server/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { RegInviteEvents } from '@bike4mind/common';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { ForbiddenError, parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 import { registrationInviteRepository, withTransaction } from '@bike4mind/database';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
-// Placeholder schema; only status is currently used.
+const MAX_AUDITED_IDS = 100;
+
+// Only status is currently used as an update field.
 const UpdateRegisterInviteSchema = z.object({
+  ids: z.array(z.string().min(1)).min(1),
   status: z.string().optional(),
 });
 
 const handler = baseApi().post(
-  asyncHandler<unknown, unknown, { ids: string[] }>(async (req, res) => {
-    const ids = req.body.ids;
+  asyncHandler<unknown, unknown, unknown>(async (req, res) => {
     const user = req.user;
-
-    const validatedData = UpdateRegisterInviteSchema.parse(req.body) as Partial<IRegInviteDocument>;
-    if (!ids) throw new Error('No ids provided');
 
     if (!user.isAdmin) {
       throw new ForbiddenError('Permission denied');
     }
 
+    const { ids, ...updates } = parseOrBadRequest(UpdateRegisterInviteSchema, req.body);
+
     const updatedInvites = await withTransaction(async () => {
-      const invites = await registrationInviteRepository.formatRegInvites(validatedData, ids);
+      const invites = await registrationInviteRepository.formatRegInvites(updates as Partial<IRegInviteDocument>, ids);
       await recordAdminActionFromRequest(req, {
         action: 'user.reg_invite.updated',
         target:
-          ids.length === 1
-            ? { kind: 'settings', id: ids[0], displayName: 'registration invite' }
-            : { kind: 'system', id: 'registration_invites', displayName: `${ids.length} registration invites` },
-        summary: `updated ${ids.length} registration invite${ids.length === 1 ? '' : 's'}`,
-        details: { ids, status: validatedData.status ?? null },
+          invites.length === 1
+            ? { kind: 'settings', id: invites[0].id, displayName: 'registration invite' }
+            : { kind: 'system', id: 'registration_invites', displayName: `${invites.length} registration invites` },
+        summary: `updated ${invites.length} registration invite${invites.length === 1 ? '' : 's'}`,
+        details: {
+          requested: ids.length,
+          ids: ids.slice(0, MAX_AUDITED_IDS),
+          idsTruncated: ids.length > MAX_AUDITED_IDS,
+          status: updates.status ?? null,
+        },
       });
       return invites;
     });
@@ -43,7 +49,7 @@ const handler = baseApi().post(
       {
         userId: user.id,
         type: RegInviteEvents.UPDATE_REGINVITE,
-        metadata: { ids, status: validatedData.status || '' },
+        metadata: { ids, status: updates.status || '' },
       },
       { ability: req.ability }
     );
