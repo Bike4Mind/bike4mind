@@ -89,7 +89,11 @@ describe('PUT /api/admin/modals/variants admin audit', () => {
 
 describe('DELETE /api/admin/modals/variants admin audit', () => {
   it('records variants_cleared and notes that content was reset for an internal-only modal', async () => {
-    h.findById.mockResolvedValue({ _id: 'modal-1', variants: { internal: { title: 'secret' } } });
+    h.findById.mockResolvedValue({
+      _id: 'modal-1',
+      title: 'Internal launch',
+      variants: { internal: { title: 'secret' } },
+    });
     h.findByIdAndUpdate.mockResolvedValue({ _id: 'modal-1', title: '', textMessage: 'Banner text' });
     const { res } = await run('DELETE', { modalId: 'modal-1' });
 
@@ -97,7 +101,7 @@ describe('DELETE /api/admin/modals/variants admin audit', () => {
     expect(h.audit).toHaveBeenCalledTimes(1);
     expect(h.audit.mock.calls[0][1]).toMatchObject({
       action: 'settings.modal.variants_cleared',
-      target: { kind: 'settings', id: 'modal-1', displayName: 'Banner text' },
+      target: { kind: 'settings', id: 'modal-1', displayName: 'Internal launch' },
       details: { clearedAudienceKeys: ['internal'], contentFieldsReset: true },
     });
   });

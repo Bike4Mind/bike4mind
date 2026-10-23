@@ -145,8 +145,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
       await recordAdminActionFromRequest(req, {
         action: 'settings.modal.variants_cleared',
-        target: { kind: 'settings', id: modalId, displayName: modalDisplayName(updated) },
-        summary: `cleared audience variants of modal ${modalDisplayName(updated)}`,
+        target: { kind: 'settings', id: modalId, displayName: modalDisplayName(existing) },
+        summary: `cleared audience variants of modal ${modalDisplayName(existing)}`,
         details: { clearedAudienceKeys: Object.keys(existingVariants ?? {}), contentFieldsReset: !hadCustomerVariant },
       });
 
