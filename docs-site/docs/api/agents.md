@@ -39,27 +39,29 @@ GET /agents
 {
   "data": [
     {
-      "id": "agent_123",
+      "_id": "665f1c2e9b1d4a0012ab34cd",
+      "id": "665f1c2e9b1d4a0012ab34cd",
       "name": "Marketing Assistant",
       "description": "Helps with marketing content creation",
-      "avatarUrl": "https://...",
+      "userId": "665f1c2e9b1d4a0012ab0001",
       "personality": {
         "majorMotivation": "Builder",
-        "minorMotivation": "Helper", 
-        "characterFlaw": "Perfectionist",
-        "uniqueQuirk": "Loves Puns"
+        "minorMotivation": "Helper",
+        "flaw": "None",
+        "quirk": "None"
       },
-      "capabilities": ["content_creation", "social_media"],
-      "triggerWords": ["@marketing", "@content"],
-      "isPublic": true,
-      "ownerId": "user_456",
-      "createdAt": "2024-01-15T10:30:00Z"
+      "capabilities": ["{\"triggerWords\":[\"@marketing\"],\"responseStyle\":\"friendly\",\"specialBehaviors\":[]}"],
+      "triggerWords": ["@marketing"],
+      "isPublic": false,
+      "createdAt": "2025-01-15T10:30:00.000Z"
     }
   ],
   "hasMore": false,
   "total": 1
 }
 ```
+
+Each agent object carries more fields than shown, such as `systemPrompt`, `visual`, `identity` and credit settings. The list is paged with `page` and `limit`; `hasMore` tells you whether another page exists and `total` is the number of matching agents.
 
 ### Create Agent
 
@@ -71,6 +73,22 @@ POST /agents
 
 #### Request Body
 
+Only `name` is required. The API accepts these fields:
+
+| Field | Notes |
+|-------|-------|
+| `name` | Required. |
+| `description` | Optional. Defaults to `No description provided`. |
+| `personality` | Object with `majorMotivation`, `minorMotivation`, `flaw`, `quirk` and `description`, plus further optional dimensions. Missing `flaw` and `quirk` default to `"None"`. |
+| `triggerWords` | Array of strings. Defaults to `["@help"]`. |
+| `capabilities` | Array holding one JSON string with `triggerWords`, `responseStyle` and `specialBehaviors`. See below. |
+| `isPublic` | Boolean. Defaults to `false`. |
+| `systemPrompt`, `preferredModel`, `temperature`, `maxTokens` | Optional model settings. |
+
+`characterFlaw`, `uniqueQuirk` and a `personality.responseStyle` field are not read; send `flaw` and `quirk`, and set the response style inside `capabilities`.
+
+`capabilities` is stored as a one-element array whose single entry is a JSON string, and the create call expects that same form. The string's `responseStyle` defaults to `"friendly"`.
+
 ```json
 {
   "name": "My Custom Agent",
@@ -78,39 +96,40 @@ POST /agents
   "personality": {
     "majorMotivation": "Explorer",
     "minorMotivation": "Analyzer",
-    "characterFlaw": "Impatient",
-    "uniqueQuirk": "Quotes Movies",
-    "responseStyle": "casual"
+    "flaw": "Impatient",
+    "quirk": "Quotes Movies"
   },
-  "capabilities": ["research", "analysis"],
+  "capabilities": ["{\"triggerWords\":[\"@research\"],\"responseStyle\":\"casual\",\"specialBehaviors\":[]}"],
   "triggerWords": ["@research", "@analyze"],
-  "isPublic": false,
-  "avatarUrl": "https://example.com/avatar.png"
+  "isPublic": false
 }
 ```
 
 #### Response
 
+Status `201`. The body is the created agent plus `userCredits`.
+
 ```json
 {
-  "id": "agent_789",
+  "_id": "665f1c2e9b1d4a0012ab34ce",
+  "id": "665f1c2e9b1d4a0012ab34ce",
   "name": "My Custom Agent",
   "description": "A specialized agent for my use case",
-  "avatarUrl": "https://example.com/avatar.png",
+  "userId": "665f1c2e9b1d4a0012ab0001",
   "personality": {
     "majorMotivation": "Explorer",
     "minorMotivation": "Analyzer",
-    "characterFlaw": "Impatient",
-    "uniqueQuirk": "Quotes Movies",
-    "responseStyle": "casual"
+    "flaw": "Impatient",
+    "quirk": "Quotes Movies"
   },
-  "capabilities": ["research", "analysis"],
+  "capabilities": ["{\"triggerWords\":[\"@research\"],\"responseStyle\":\"casual\",\"specialBehaviors\":[]}"],
   "triggerWords": ["@research", "@analyze"],
   "isPublic": false,
-  "ownerId": "user_current",
-  "createdAt": "2024-01-15T10:30:00Z"
+  "userCredits": 1000
 }
 ```
+
+The object includes more fields than shown.
 
 ### Get Agent Details
 
@@ -124,25 +143,26 @@ GET /agents/{agentId}
 
 ```json
 {
-  "id": "agent_123",
+  "_id": "665f1c2e9b1d4a0012ab34cd",
+  "id": "665f1c2e9b1d4a0012ab34cd",
   "name": "Marketing Assistant",
   "description": "Helps with marketing content creation",
-  "avatarUrl": "https://...",
+  "userId": "665f1c2e9b1d4a0012ab0001",
   "personality": {
     "majorMotivation": "Builder",
     "minorMotivation": "Helper",
-    "characterFlaw": "Perfectionist",
-    "uniqueQuirk": "Loves Puns",
-    "responseStyle": "friendly"
+    "flaw": "None",
+    "quirk": "None"
   },
-  "capabilities": ["content_creation", "social_media"],
-  "triggerWords": ["@marketing", "@content"],
-  "isPublic": true,
-  "ownerId": "user_456",
-  "createdAt": "2024-01-15T10:30:00Z",
-  "updatedAt": "2024-01-16T14:22:00Z"
+  "capabilities": ["{\"triggerWords\":[\"@marketing\"],\"responseStyle\":\"friendly\",\"specialBehaviors\":[]}"],
+  "triggerWords": ["@marketing"],
+  "isPublic": false,
+  "createdAt": "2025-01-15T10:30:00.000Z",
+  "updatedAt": "2025-01-16T14:22:00.000Z"
 }
 ```
+
+The object includes more fields than shown.
 
 ### Update Agent
 
@@ -154,6 +174,8 @@ PUT /agents/{agentId}
 
 #### Request Body
 
+Send the fields you want to change. Field names match the create request.
+
 ```json
 {
   "name": "Updated Marketing Assistant",
@@ -161,11 +183,9 @@ PUT /agents/{agentId}
   "personality": {
     "majorMotivation": "Builder",
     "minorMotivation": "Helper",
-    "characterFlaw": "Perfectionist",
-    "uniqueQuirk": "Loves Puns",
-    "responseStyle": "professional"
+    "flaw": "Perfectionist",
+    "quirk": "Loves Puns"
   },
-  "capabilities": ["content_creation", "social_media", "seo"],
   "triggerWords": ["@marketing", "@content", "@seo"],
   "isPublic": true
 }
@@ -176,17 +196,12 @@ PUT /agents/{agentId}
 Delete an agent (only owner can delete).
 
 ```http
-DELETE /agents/{agentId}/delete
+DELETE /agents/{agentId}
 ```
 
 #### Response
 
-```json
-{
-  "message": "Agent deleted successfully",
-  "deletedAt": "2024-01-15T10:30:00Z"
-}
-```
+Status `204` with an empty body. A later `GET /agents/{agentId}` returns `404`.
 
 ### Generate Agent Description
 
@@ -369,23 +384,7 @@ All endpoints use standard HTTP status codes and return errors in this format:
 
 ## Rate Limits
 
-Agent API endpoints are subject to rate limiting:
-
-| Endpoint Pattern | Limit | Window |
-|------------------|-------|--------|
-| `GET /agents` | 100 requests | 1 minute |
-| `POST /agents` | 10 requests | 1 minute |
-| `PUT /agents/*` | 30 requests | 1 minute |
-| `DELETE /agents/*` | 10 requests | 1 minute |
-| `*/sessions/*/agents` | 60 requests | 1 minute |
-
-Rate limit information is included in response headers:
-
-```
-X-RateLimit-Limit: 100
-X-RateLimit-Remaining: 95
-X-RateLimit-Reset: 1642284600
-```
+Agent API requests made with an API key use the standard per-key limits. Each key has a per-minute and a per-day limit, and exceeding either returns `429` with a `Retry-After` header in seconds. See [Rate limits and size](./completions/reference.md#rate-limits-and-size).
 
 ## Best Practices
 

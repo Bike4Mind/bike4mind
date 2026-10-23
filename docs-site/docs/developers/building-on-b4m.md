@@ -312,7 +312,7 @@ Once the stream opens the status is 200 and stays 200. A failure after that poin
 - `code: "provider_error"`: the model provider failed. Retry, or pick another model. The provider's own response body is never forwarded.
 - `code` absent, or any other `code`: show `message` and log `requestId`.
 
-The stream opens with keep-alive comments and a `{ "type": "meta", "requestId": "..." }` event; ignore both. Text arrives as `content` events with a `text` field. With a reasoning model, the text can contain `<think>...</think>` spans (possibly several) holding the model's reasoning; strip them before you show the reply, and never show or log a `thinking` field. A successful stream ends with `data: [DONE]`. An `error` event is terminal and is not followed by `[DONE]`; a stream that ends with neither is incomplete. A `stopReason` of `max_tokens` on the last event means the reply was cut off. Any other `stopReason` that is not a clean finish (`end_turn`, `stop`, `tool_use`, `stop_sequence`), such as `degenerate_repetition`, `refusal` or a provider-specific value, means the reply is not usable even though `[DONE]` still arrives.
+The stream opens with keep-alive comments and a `{ "type": "meta", "requestId": "..." }` event; ignore both. Text arrives as `content` events with a `text` field. With a reasoning model, the text can contain `<think>...</think>` spans (possibly several) holding the model's reasoning; strip them before you show the reply, and never show or log a `thinking` field. A successful stream ends with `data: [DONE]`. An `error` event is terminal and is not followed by `[DONE]`; a stream that ends with neither is incomplete.
 
 Branch on `code`, never on `message`, which is prose and can change. (The JSON, non-streaming B4M APIs report the credit condition the same way this endpoint does before the stream: HTTP 422 with `errorCode: "insufficient_credits"`.)
 
@@ -535,17 +535,6 @@ class RateLimitedError extends Error {
     super(`Rate limited; retry in ${retryAfterS}s`);
   }
 }
-class TruncatedReplyError extends Error {
-  constructor(readonly partial: string) {
-    super('Reply was cut off at max_tokens');
-  }
-}
-class UnusableReplyError extends Error {
-  constructor(readonly stopReason: string) {
-    super(`Reply ended early: ${stopReason}`);
-  }
-}
-const CLEAN_STOP_REASONS = new Set(['end_turn', 'stop', 'tool_use', 'stop_sequence']);
 
 async function checkBalance(key: string): Promise<Response> {
   return fetch(`${B4M}/api/v1/credits`, { headers: { Authorization: `Bearer ${key}` } });
@@ -584,7 +573,6 @@ async function complete(userId: string, idToken: string, prompt: string): Promis
 
   // From here the status is 200; a failure arrives as an error event.
   let text = '';
-  let stopReason: string | undefined;
   let buffer = '';
   const decoder = new TextDecoder();
   const reader = res.body.getReader();
@@ -596,18 +584,12 @@ async function complete(userId: string, idToken: string, prompt: string): Promis
       if (!line.startsWith('data:')) continue;
       const data = line.slice(5).trim();
       // Reasoning models wrap their reasoning in <think> spans; never show it to users.
-      if (data === '[DONE]') {
-        const reply = text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-        if (stopReason === 'max_tokens') throw new TruncatedReplyError(reply);
-        if (stopReason && !CLEAN_STOP_REASONS.has(stopReason)) throw new UnusableReplyError(stopReason);
-        return reply;
-      }
+      if (data === '[DONE]') return text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
       const event = JSON.parse(data);
       if (event.type === 'error') {
         if (event.code === 'insufficient_credits') throw new OutOfCreditsError(event.message);
         throw new Error(`Completion failed (requestId ${event.requestId}): ${event.message}`);
       }
-      if (event.stopReason) stopReason = event.stopReason;
       if (event.type === 'content') text += event.text;
     }
   }
@@ -615,7 +597,7 @@ async function complete(userId: string, idToken: string, prompt: string): Promis
 }
 ```
 
-Catch `OutOfCreditsError` in your UI and send the user to top up their B4M balance. On `RateLimitedError`, wait `retryAfterS` seconds before retrying. On `TruncatedReplyError`, show `partial` marked as incomplete, or retry with a higher `max_tokens`. For a model that reasons inside its output budget, omitting `max_tokens` lets B4M size the ceiling. On `UnusableReplyError` (for example `degenerate_repetition` or `refusal`), do not show the text; retry or tell the user the reply failed.
+Catch `OutOfCreditsError` in your UI and send the user to top up their B4M balance. On `RateLimitedError`, wait `retryAfterS` seconds before retrying. For a model that reasons inside its output budget, omitting `max_tokens` lets B4M size the ceiling.
 
 ## Further reading
 
