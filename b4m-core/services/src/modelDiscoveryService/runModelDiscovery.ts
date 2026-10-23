@@ -893,6 +893,7 @@ async function planPass(input: PassInput): Promise<PassPlan> {
     statesBeforeRun,
     ratesInForce: perTokenRatesInForce(priceRowsInForce),
     priorDiscoveryGroups,
+    priorContributors,
     autoRemap: ctx.autoRemap,
     operatorOwnedModelIds,
     runStartedAt: effectiveAt,
