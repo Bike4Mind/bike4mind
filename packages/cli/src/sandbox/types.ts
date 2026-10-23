@@ -128,7 +128,7 @@ export const DEFAULT_SANDBOX_CONFIG: SandboxConfig = {
   mode: 'disabled',
   filesystem: {
     writeOnlyToWorkingDir: true,
-    allowedReadPaths: ['$HOME/.gitconfig', '$HOME/.npmrc', '$HOME/.node_modules'],
+    allowedReadPaths: ['$HOME/.gitconfig', '$HOME/.node_modules'],
     deniedPaths: [
       '$HOME/.ssh',
       '$HOME/.aws',
@@ -138,6 +138,13 @@ export const DEFAULT_SANDBOX_CONFIG: SandboxConfig = {
       // agent's own auth tokens or project trust decisions.
       '$HOME/.claude',
       '$HOME/.bike4mind',
+      '$HOME/.npmrc',
+      '$HOME/.netrc',
+      '$HOME/.config/gh',
+      '$HOME/.docker',
+      '$HOME/.kube',
+      '$HOME/.config/gcloud',
+      '$HOME/.azure',
       '/etc/shadow',
       '/etc/passwd',
     ],
