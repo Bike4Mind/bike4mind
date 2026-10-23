@@ -5,6 +5,7 @@ import {
   ITagRepository,
   IUserDocument,
   LakeAuditPrincipal,
+  MAX_LAKE_FILE_TAG_NAME_LENGTH,
 } from '@bike4mind/common';
 import { secureParameters, BadRequestError } from '@bike4mind/utils';
 import { z } from 'zod';
@@ -143,6 +144,15 @@ export const update = async (userId: string, params: TagUpdateParams, adapters: 
   // edit still carries `name` and must not touch a single file; but `foo` -> `Foo` is a real
   // rename, because the files store the old casing.
   const renaming = newName !== undefined && newName !== tag.name;
+
+  // Capped on a real rename only, not in the schema: an icon/colour edit re-sends the stored name,
+  // and tag creation sets no cap, so an existing over-long name must stay editable. Checked before
+  // any write - the file rewrite below is not transactional.
+  if (renaming && newName.length > MAX_LAKE_FILE_TAG_NAME_LENGTH) {
+    throw new BadRequestError(
+      `Tag Service - Update: a tag name cannot be longer than ${MAX_LAKE_FILE_TAG_NAME_LENGTH} characters`
+    );
+  }
 
   // Every usable fileTagPrefix ends in ':' (see prefixArmTagNames), so a colon-free name on
   // both sides of the rename can never touch one - skip the lake lookup for the common case.
