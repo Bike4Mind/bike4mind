@@ -164,6 +164,33 @@ export function bindDlqAlarmDimensions<Dimension>(
 }
 
 /**
+ * The age alarm's metric math, `IF(visible > 0, age, 0)` (see the file header for why and its
+ * residuals). Shared by the fleet spec and the out-of-band DLQ alarms in infra/dlqAlarms.ts and
+ * infra/waf.ts; pass `dimensions` to bind the queue directly, or leave them for
+ * `bindDlqAlarmDimensions`.
+ */
+export function buildDlqAgeMetricQueries<Dimension = string>(
+  period: number,
+  dimensions?: Record<string, Dimension>
+): DlqAlarmMetricQuery<Dimension>[] {
+  const input = (id: string, metricName: string): DlqAlarmMetricQuery<Dimension> => ({
+    id,
+    metric: { namespace: 'AWS/SQS', metricName, ...(dimensions && { dimensions }), period, stat: 'Maximum' },
+    returnData: false,
+  });
+  return [
+    input('visible', 'ApproximateNumberOfMessagesVisible'),
+    input('age', 'ApproximateAgeOfOldestMessage'),
+    {
+      id: 'oldest',
+      label: 'Oldest message age (0 when the queue is empty)',
+      expression: 'IF(visible > 0, age, 0)',
+      returnData: true,
+    },
+  ];
+}
+
+/**
  * Builds the standard [message-count, message-age] alarm spec pair for one DLQ.
  * Names and thresholds match the shape long deployed from infra/dlqAlarms.ts. The age spec is
  * metric math, so a consumer must bind its queue with `bindDlqAlarmDimensions` (see the file
@@ -209,36 +236,7 @@ export function buildDlqAlarmSpecs(
         evaluationPeriods: defaults.ageEvalPeriods,
         threshold: dlq.ageThreshold ?? defaults.ageThreshold,
         treatMissingData: 'ignore',
-        // SQS stops publishing the age metric once the queue is empty, so scoring the raw
-        // metric would strand every drained DLQ in INSUFFICIENT_DATA instead of OK.
-        metricQueries: [
-          {
-            id: 'visible',
-            metric: {
-              namespace: 'AWS/SQS',
-              metricName: 'ApproximateNumberOfMessagesVisible',
-              period: defaults.agePeriod,
-              stat: 'Maximum',
-            },
-            returnData: false,
-          },
-          {
-            id: 'age',
-            metric: {
-              namespace: 'AWS/SQS',
-              metricName: 'ApproximateAgeOfOldestMessage',
-              period: defaults.agePeriod,
-              stat: 'Maximum',
-            },
-            returnData: false,
-          },
-          {
-            id: 'oldest',
-            label: 'Oldest message age (0 when the queue is empty)',
-            expression: 'IF(visible > 0, age, 0)',
-            returnData: true,
-          },
-        ],
+        metricQueries: buildDlqAgeMetricQueries(defaults.agePeriod),
         tags: {
           Application: dlq.application,
           Severity: 'High',

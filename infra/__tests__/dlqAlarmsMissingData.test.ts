@@ -3,9 +3,9 @@
  *
  * Pins the out-of-band DLQ alarms. `treatMissingData: 'ignore'` holds the alarm state across a
  * skipped SQS datapoint, where 'notBreaching' resolved it to OK and the next datapoint re-paged;
- * the age alarms read the age metric through IF(visible > 0, age, 0) because SQS stops publishing
- * it on an empty queue, so a drained DLQ normally scores 0 off the visible count and reaches OK
- * (SQS reports that count while the queue is active; the post-deploy drain check confirms it).
+ * the age alarms read the age metric through the shared IF(visible > 0, age, 0) metric math
+ * (`buildDlqAgeMetricQueries`), so a drained DLQ normally scores 0 off the visible count and
+ * reaches OK.
  *
  * Text-matched, not executed: infra/ is an SST program and does not load outside `sst`.
  */
@@ -100,48 +100,6 @@ function alarmBlock(source: string, id: string): string {
   return callStart < 0 ? '' : balancedCall(source, callStart);
 }
 
-/** The `{ ... }` objects of a `metricQueries: [...]` array, split on balanced braces. */
-function metricQueries(block: string): string[] {
-  const arrayAt = block.indexOf('metricQueries: [');
-  if (arrayAt < 0) return [];
-  const open = block.indexOf('[', arrayAt);
-
-  let depth = 0;
-  let end = -1;
-  for (let i = open; i < block.length; i++) {
-    if (block[i] === '[') depth++;
-    else if (block[i] === ']' && --depth === 0) {
-      end = i;
-      break;
-    }
-  }
-  if (end < 0) return [];
-
-  const queries: string[] = [];
-  let braces = 0;
-  let start = -1;
-  for (let i = open; i < end; i++) {
-    if (block[i] === '{') {
-      if (braces++ === 0) start = i;
-    } else if (block[i] === '}' && --braces === 0) {
-      queries.push(block.slice(start, i + 1));
-    }
-  }
-  return queries;
-}
-
-/** Removes a `metricQueries: [ ... ]` array so nested metric fields cannot pass for alarm fields. */
-function withoutMetricQueries(block: string): string {
-  const start = block.indexOf('metricQueries: [');
-  if (start < 0) return block;
-  let depth = 0;
-  for (let i = block.indexOf('[', start); i < block.length; i++) {
-    if (block[i] === '[') depth++;
-    else if (block[i] === ']' && --depth === 0) return block.slice(0, start) + block.slice(i + 1);
-  }
-  return block;
-}
-
 const ALARMS = [
   { id: 'DlqAlarmHandlerDlqMessages', source: DLQ_ALARMS, kind: 'messages' },
   { id: 'DlqAlarmHandlerDlqAge', source: DLQ_ALARMS, kind: 'age' },
@@ -164,47 +122,24 @@ describe('out-of-band DLQ alarms', () => {
         expect(alarm).toMatch(/treatMissingData: 'ignore'/);
       });
 
-      it('stays on the AWS/SQS namespace', () => {
-        expect(alarm).toMatch(/namespace: 'AWS\/SQS'/);
-      });
-
       if (kind === 'messages') {
-        it('watches the DLQ message count as a plain metric alarm', () => {
-          // Asserted on the whole alarm, not on a stripped copy: a messages alarm that grew
-          // metric math would stop being a plain metric alarm.
+        it('watches the DLQ message count as a plain AWS/SQS metric alarm', () => {
+          // Asserted on the whole alarm: a messages alarm that grew metric math would stop being
+          // a plain metric alarm.
           expect(alarm).not.toMatch(/metricQueries/);
+          expect(alarm).toMatch(/namespace: 'AWS\/SQS'/);
           expect(alarm).toMatch(/metricName: 'ApproximateNumberOfMessagesVisible'/);
           expect(alarm).toMatch(/dimensions: \{ QueueName:/);
         });
       } else {
-        it('scores an empty queue as 0 so a drained DLQ still reaches OK', () => {
-          // Pin the shape by identity: CloudWatch rejects an expression that names a query id
-          // the alarm does not declare, or a second returnData query.
-          const queries = metricQueries(alarm);
-          expect(queries).toHaveLength(3);
-          expect(queries.map(query => query.match(/id: '[^']+'/)?.[0])).toEqual([
-            "id: 'visible'",
-            "id: 'age'",
-            "id: 'oldest'",
-          ]);
-          expect(queries.map(query => query.match(/returnData: (true|false)/)?.[0])).toEqual([
-            'returnData: false',
-            'returnData: false',
-            'returnData: true',
-          ]);
-          expect(queries[2]).toMatch(/expression: 'IF\(visible > 0, age, 0\)'/);
-
-          // Each input metric names its own queue; without this the alarm watches no queue.
-          expect(queries[0]).toMatch(/metricName: 'ApproximateNumberOfMessagesVisible'/);
-          expect(queries[0]).toMatch(/dimensions: \{ QueueName:/);
-          expect(queries[1]).toMatch(/metricName: 'ApproximateAgeOfOldestMessage'/);
-          expect(queries[1]).toMatch(/dimensions: \{ QueueName:/);
+        it('reads the age through the shared metric math, bound to its own queue', () => {
+          // The query shape itself is unit-tested in b4m-core/infra/src/__tests__/dlqAlarmSpecs.test.ts.
+          expect(alarm).toMatch(/metricQueries: buildDlqAgeMetricQueries\(60, \{ QueueName: \w+\.name \}\),/);
 
           // Metric math forbids the alarm-level metric fields; CloudWatch rejects the deploy.
-          const fields = withoutMetricQueries(alarm);
-          expect(fields).not.toMatch(/metricName:/);
-          expect(fields).not.toMatch(/dimensions:/);
-          expect(fields).not.toMatch(/statistic:/);
+          expect(alarm).not.toMatch(/metricName:/);
+          expect(alarm).not.toMatch(/dimensions:/);
+          expect(alarm).not.toMatch(/statistic:/);
         });
       }
     });
@@ -213,7 +148,7 @@ describe('out-of-band DLQ alarms', () => {
 
 describe('every AWS/SQS alarm in the out-of-band files', () => {
   const sqsAlarms = [...alarmBlocks(DLQ_ALARMS), ...alarmBlocks(WAF)].filter(block =>
-    /namespace: 'AWS\/SQS'/.test(block)
+    /namespace: 'AWS\/SQS'|buildDlqAgeMetricQueries\(/.test(block)
   );
   const idOf = (block: string) => block.match(/MetricAlarm\(\s*'([^']+)'/)?.[1] ?? '<unnamed>';
 

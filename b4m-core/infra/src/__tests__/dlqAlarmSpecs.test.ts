@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { bindDlqAlarmDimensions, buildDlqAlarmSpecs, DLQ_ALARM_DEFAULTS } from '../dlqAlarmSpecs.js';
+import {
+  bindDlqAlarmDimensions,
+  buildDlqAgeMetricQueries,
+  buildDlqAlarmSpecs,
+  DLQ_ALARM_DEFAULTS,
+} from '../dlqAlarmSpecs.js';
 
 const NAMING = { appName: 'b4m', stage: 'production' };
 
@@ -159,5 +164,48 @@ describe('bindDlqAlarmDimensions', () => {
     bindDlqAlarmDimensions(age, DIMENSIONS);
     if (age.kind !== 'age') throw new Error(`expected an age spec, got ${age.kind}`);
     expect(age.args.metricQueries.map(query => query.metric?.dimensions)).toEqual([undefined, undefined, undefined]);
+  });
+});
+
+describe('buildDlqAgeMetricQueries', () => {
+  it('binds the queue on both input metrics when given dimensions, as the out-of-band alarms do', () => {
+    const queue = { QueueName: 'b4m-production-dlq-alarm-handler-dlq' };
+    expect(buildDlqAgeMetricQueries(60, queue)).toEqual([
+      {
+        id: 'visible',
+        metric: {
+          namespace: 'AWS/SQS',
+          metricName: 'ApproximateNumberOfMessagesVisible',
+          dimensions: queue,
+          period: 60,
+          stat: 'Maximum',
+        },
+        returnData: false,
+      },
+      {
+        id: 'age',
+        metric: {
+          namespace: 'AWS/SQS',
+          metricName: 'ApproximateAgeOfOldestMessage',
+          dimensions: queue,
+          period: 60,
+          stat: 'Maximum',
+        },
+        returnData: false,
+      },
+      {
+        id: 'oldest',
+        label: 'Oldest message age (0 when the queue is empty)',
+        expression: 'IF(visible > 0, age, 0)',
+        returnData: true,
+      },
+    ]);
+  });
+
+  it('is what the fleet age spec carries, unbound', () => {
+    const [, age] = buildDlqAlarmSpecs({ label: 'x', displayName: 'X', application: 'X' }, NAMING);
+    if (age.kind !== 'age') throw new Error(`expected an age spec, got ${age.kind}`);
+    expect(age.args.metricQueries).toEqual(buildDlqAgeMetricQueries(DLQ_ALARM_DEFAULTS.agePeriod));
+    expect(age.args.metricQueries.some(query => query.metric && 'dimensions' in query.metric)).toBe(false);
   });
 });

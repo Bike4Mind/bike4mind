@@ -68,7 +68,12 @@ import {
 } from './eventBus';
 import { emailIngestionQueueDLQ, emailAnalysisQueueDLQ } from './emailIngestion';
 import { emailBatchQueueDLQ, emailJobQueueDLQ } from './emailMarketing';
-import { isMonitoredStage as _isMonitoredStage, bindDlqAlarmDimensions, buildDlqAlarmSpecs } from '@bike4mind/infra';
+import {
+  isMonitoredStage as _isMonitoredStage,
+  bindDlqAlarmDimensions,
+  buildDlqAgeMetricQueries,
+  buildDlqAlarmSpecs,
+} from '@bike4mind/infra';
 import type { DlqDescriptor } from '@bike4mind/infra';
 
 const MONITORED_STAGES = ['dev', 'production'] as const;
@@ -185,42 +190,9 @@ if (isMonitoredStage) {
     evaluationPeriods: 1,
     threshold: 3600,
     treatMissingData: 'ignore',
-    // SQS stops publishing the age metric once the queue is empty, so the IF scores an empty
-    // queue from the visible count, which SQS reports while the queue is active; a drained DLQ
-    // normally reaches OK (the post-deploy drain check confirms it). Residuals, one per direction
-    // of a partial gap: a period that hides only the age while visible > 0 scores 0 (IF's
-    // documented rule), and one that hides only the visible count drops the expression and holds
-    // the current state.
-    metricQueries: [
-      {
-        id: 'visible',
-        metric: {
-          namespace: 'AWS/SQS',
-          metricName: 'ApproximateNumberOfMessagesVisible',
-          dimensions: { QueueName: dlqAlarmHandlerDlq.name },
-          period: 60,
-          stat: 'Maximum',
-        },
-        returnData: false,
-      },
-      {
-        id: 'age',
-        metric: {
-          namespace: 'AWS/SQS',
-          metricName: 'ApproximateAgeOfOldestMessage',
-          dimensions: { QueueName: dlqAlarmHandlerDlq.name },
-          period: 60,
-          stat: 'Maximum',
-        },
-        returnData: false,
-      },
-      {
-        id: 'oldest',
-        label: 'Oldest message age (0 when the queue is empty)',
-        expression: 'IF(visible > 0, age, 0)',
-        returnData: true,
-      },
-    ],
+    // Same IF(visible > 0, age, 0) metric math as the fleet age alarms; see
+    // b4m-core/infra/src/dlqAlarmSpecs.ts for why and its residuals.
+    metricQueries: buildDlqAgeMetricQueries(60, { QueueName: dlqAlarmHandlerDlq.name }),
     alarmActions: [oobAlarmTopic.arn],
     tags: { Application: 'AlarmPipeline', Severity: 'High', MonitoringType: 'DLQ' },
   });

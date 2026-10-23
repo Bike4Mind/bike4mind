@@ -12,6 +12,7 @@ import { buildDevWafRuleJson, getDevWafMeta, parseWafBlockedIps } from './wafPol
 import { WAF_REDACTED_HEADERS } from './wafRedaction';
 import { secrets } from './secrets';
 import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
+import { buildDlqAgeMetricQueries } from '@bike4mind/infra';
 
 // WAF is disabled by default. Enable via ENABLE_WAF=true environment variable.
 // For production and dev, set ENABLE_WAF=true in GitHub Variables.
@@ -341,42 +342,9 @@ if (isWafEnabled && $app.stage === 'production' && wafAiRateLimitAlarmTopic && w
       evaluationPeriods: 1,
       threshold: 3600,
       treatMissingData: 'ignore',
-      // SQS stops publishing the age metric once the queue is empty, so the IF scores an empty
-      // queue from the visible count, which SQS reports while the queue is active; a drained DLQ
-      // normally reaches OK (the post-deploy drain check confirms it). Residuals, one per
-      // direction of a partial gap: a period that hides only the age while visible > 0 scores 0
-      // (IF's documented rule), and one that hides only the visible count drops the expression
-      // and holds the current state.
-      metricQueries: [
-        {
-          id: 'visible',
-          metric: {
-            namespace: 'AWS/SQS',
-            metricName: 'ApproximateNumberOfMessagesVisible',
-            dimensions: { QueueName: wafAlarmDlq.name },
-            period: 60,
-            stat: 'Maximum',
-          },
-          returnData: false,
-        },
-        {
-          id: 'age',
-          metric: {
-            namespace: 'AWS/SQS',
-            metricName: 'ApproximateAgeOfOldestMessage',
-            dimensions: { QueueName: wafAlarmDlq.name },
-            period: 60,
-            stat: 'Maximum',
-          },
-          returnData: false,
-        },
-        {
-          id: 'oldest',
-          label: 'Oldest message age (0 when the queue is empty)',
-          expression: 'IF(visible > 0, age, 0)',
-          returnData: true,
-        },
-      ],
+      // Same IF(visible > 0, age, 0) metric math as the fleet age alarms; see
+      // b4m-core/infra/src/dlqAlarmSpecs.ts for why and its residuals.
+      metricQueries: buildDlqAgeMetricQueries(60, { QueueName: wafAlarmDlq.name }),
       alarmActions: [wafOobAlarmTopic.arn],
       tags: { Application: 'WAF', Severity: 'High', MonitoringType: 'DLQ' },
     },
