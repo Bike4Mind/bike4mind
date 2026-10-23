@@ -20,8 +20,8 @@ function trimDomain(raw: string): string {
 
 /**
  * The domain part of an email (after the last `@`), lowercased, trimmed, with Unicode full stops
- * read as dots and trailing dots removed; null when there is none. Deliberately not hostname-validated: a blocklist check must still
- * see an odd-looking domain rather than skip it.
+ * read as dots and trailing dots removed; null when there is none. Deliberately not
+ * hostname-validated: a blocklist check must still see an odd-looking domain rather than skip it.
  */
 export function emailDomainOf(email: string): string | null {
   const atIndex = email.lastIndexOf('@');
