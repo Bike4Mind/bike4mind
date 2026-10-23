@@ -193,6 +193,7 @@ const SELF_VIEW_PASSTHROUGH_FIELDS = {
   pendingEmailUsed: true,
   numReferralsAvailable: true,
   regInvites: true,
+  referredByUserId: true,
   organizationId: true,
   lastActiveAt: true,
   isOnline: true,
