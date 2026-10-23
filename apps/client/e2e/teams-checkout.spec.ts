@@ -15,7 +15,10 @@ import type { TeamsPage } from './pages/TeamsPage';
  * subscribe route's unit test is what pins `currency: 'usd'` for every run.
  *
  * Every test stops before paying except the last, which also needs STRIPE_CHECKOUT_PAY=true because
- * it leaves a test-mode Stripe subscription behind on each run.
+ * it leaves a test-mode Stripe subscription behind on each run. Nothing tears that down: the app has
+ * no route to cancel a subscription and an org with an active one can't be deleted, so after each
+ * paid run cancel the subscription in the Stripe test dashboard, then delete the `E2E Paid <id>`
+ * team. Its hosted-page selectors (#cardNumber, #billingPostalCode, ...) have not been run yet.
  */
 test.describe.configure({ mode: 'serial' });
 
