@@ -252,6 +252,19 @@ describe('emitEmailVerifiedFunnelEvents', () => {
     ]);
   });
 
+  it('marks an admin verifying the email as no action of its user', async () => {
+    await emitEmailVerifiedFunnelEvents({
+      user: { id: 'u1', createdAt: new Date('2026-10-11T00:00:00Z') },
+      method: 'admin',
+      creditsGranted: 120,
+    });
+
+    expect(mockEmit.mock.calls.map(([event]) => [event.event, event.metadata])).toEqual([
+      ['email_verified', { method: 'admin', userAction: false }],
+      ['credits_granted', { amount: 120, source: 'signup', method: 'admin', userAction: false }],
+    ]);
+  });
+
   it('skips a pre-launch or undated account', async () => {
     const early = { id: 'u1', createdAt: new Date('2026-10-10T23:59:59Z') };
     await emitEmailVerifiedFunnelEvents({ user: early, method: 'otc', creditsGranted: 70 });
