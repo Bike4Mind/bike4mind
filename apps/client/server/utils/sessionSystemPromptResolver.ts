@@ -1,3 +1,4 @@
+import '@client/lib/settings/registerContributedSettings';
 import { applyWorkspaceSessionSettings, type SurfaceSettingsSession } from '@bike4mind/common';
 import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';
 import { loadSystemPromptContent } from '@server/utils/systemPrompts/loader';
