@@ -1,5 +1,5 @@
 import type { MeSubscription, MeTier } from '@bike4mind/common';
-import type { ISubscription } from '@client/lib/subscriptions/types';
+import { SubscriptionOwnerType, type ISubscription } from '@client/lib/subscriptions/types';
 import { getEntitlingPlanByPriceId } from '@client/lib/userSubscriptions/utils';
 import { SubscriptionPlanInterval, UserSubscriptionTier } from '@client/lib/userSubscriptions/types';
 
@@ -9,7 +9,20 @@ const TIER_KEYS: Record<UserSubscriptionTier, MeTier> = {
 };
 
 /** Only the fields the projection reads, so any active-subscription row fits. */
-type ActiveSubscription = Pick<ISubscription, 'priceId' | 'periodEndsAt'>;
+type ActiveSubscription = Pick<ISubscription, 'priceId' | 'periodEndsAt' | 'ownerType' | 'customCreditsPerCycle'>;
+
+type PricedSubscription = {
+  subscription: ActiveSubscription;
+  plan: NonNullable<ReturnType<typeof getEntitlingPlanByPriceId>>;
+};
+
+function bestPlan(priced: readonly PricedSubscription[]): PricedSubscription | undefined {
+  return [...priced].sort((a, b) => {
+    const tierDiff = (b.plan.tier ?? 0) - (a.plan.tier ?? 0);
+    if (tierDiff !== 0) return tierDiff;
+    return new Date(b.subscription.periodEndsAt).getTime() - new Date(a.subscription.periodEndsAt).getTime();
+  })[0];
+}
 
 /**
  * Project a caller's ACTIVE subscriptions onto the published `GET /api/v1/me` shape.
@@ -30,9 +43,10 @@ type ActiveSubscription = Pick<ISubscription, 'priceId' | 'periodEndsAt'>;
 export function resolveCallerPlan(active: readonly ActiveSubscription[]): {
   tier: MeTier;
   subscription: MeSubscription | null;
+  personalMonthlyCreditAllowance: number | null;
 } {
   if (active.length === 0) {
-    return { tier: 'free', subscription: null };
+    return { tier: 'free', subscription: null, personalMonthlyCreditAllowance: null };
   }
 
   const priced = active.flatMap(subscription => {
@@ -41,21 +55,29 @@ export function resolveCallerPlan(active: readonly ActiveSubscription[]): {
   });
 
   if (priced.length === 0) {
-    return { tier: 'other', subscription: null };
+    return { tier: 'other', subscription: null, personalMonthlyCreditAllowance: null };
   }
 
   // Highest ladder rung wins when a caller holds several. An off-ladder plan
   // (`tier` omitted) sorts below every rung but is still paid - see MeTier.
   // `getActiveSubscriptionsForUser` returns rows in no guaranteed order, so a tie on
   // rung breaks by the later period end - the subscription that outlasts the rest.
-  const [best] = [...priced].sort((a, b) => {
-    const tierDiff = (b.plan.tier ?? 0) - (a.plan.tier ?? 0);
-    if (tierDiff !== 0) return tierDiff;
-    return new Date(b.subscription.periodEndsAt).getTime() - new Date(a.subscription.periodEndsAt).getTime();
-  });
+  const best = bestPlan(priced)!;
+  const personal = bestPlan(
+    priced.filter(candidate => candidate.subscription.ownerType === SubscriptionOwnerType.User)
+  );
+  const configuredAllowance = personal?.subscription.customCreditsPerCycle ?? personal?.plan.credits;
+  const personalMonthlyCreditAllowance =
+    personal?.plan.interval === SubscriptionPlanInterval.Monthly &&
+    typeof configuredAllowance === 'number' &&
+    Number.isFinite(configuredAllowance) &&
+    configuredAllowance > 0
+      ? configuredAllowance
+      : null;
 
   return {
     tier: best.plan.tier ? TIER_KEYS[best.plan.tier] : 'other',
+    personalMonthlyCreditAllowance,
     subscription: {
       plan_name: best.plan.name,
       price_id: best.plan.priceId,

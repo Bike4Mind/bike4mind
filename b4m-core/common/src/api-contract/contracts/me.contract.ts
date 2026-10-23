@@ -51,7 +51,7 @@ export const getMeContract = defineEndpoint({
           interval: 'monthly',
           current_period_ends_at: '2026-10-18T00:00:00.000Z',
         },
-        credits: { balance: 31667 },
+        credits: { balance: 31667, monthly_allowance: 50000 },
         entitlements: ['base'],
       },
     },

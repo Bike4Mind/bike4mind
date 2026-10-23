@@ -50,7 +50,10 @@ export const MeResponseSchema = z.object({
   name: z.string(),
   tier: z.enum(ME_TIERS),
   subscription: MeSubscriptionSchema.nullable(),
-  credits: CreditBalanceSchema,
+  credits: CreditBalanceSchema.extend({
+    /** Credits granted to the personal ledger by one monthly plan cycle. */
+    monthly_allowance: z.number().nonnegative().nullable(),
+  }),
   /** Entitlement keys the caller currently holds, e.g. `base`. */
   entitlements: z.array(z.string()),
 });

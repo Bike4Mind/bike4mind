@@ -1,6 +1,6 @@
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import { describe, expect, it, vi } from 'vitest';
-import { AccountService, readBalance, readPlan, readTier } from './AccountService';
+import { AccountService, readBalance, readMonthlyAllowance, readPlan, readTier } from './AccountService';
 
 function service(get: ReturnType<typeof vi.fn>, signedIn = true) {
   return new AccountService({
@@ -25,16 +25,30 @@ describe('readBalance', () => {
   });
 });
 
+describe('readMonthlyAllowance', () => {
+  it('keeps a finite backend-stated allowance, including zero', () => {
+    expect(readMonthlyAllowance({ credits: { monthly_allowance: 50_000 } })).toBe(50_000);
+    expect(readMonthlyAllowance({ credits: { monthly_allowance: 0 } })).toBe(0);
+  });
+
+  it('does not invent an allowance from a missing or unusable value', () => {
+    expect(readMonthlyAllowance({ credits: {} })).toBeNull();
+    expect(readMonthlyAllowance({ credits: { monthly_allowance: -1 } })).toBeNull();
+    expect(readMonthlyAllowance({ credits: { monthly_allowance: '50000' } })).toBeNull();
+    expect(readMonthlyAllowance(null)).toBeNull();
+  });
+});
+
 describe('AccountService', () => {
   it('reports the balance from the account endpoint', async () => {
     const get = vi.fn().mockResolvedValue({ credits: { balance: 31_667 } });
-    await expect(service(get).credits()).resolves.toEqual({ balance: 31_667 });
+    await expect(service(get).credits()).resolves.toEqual({ balance: 31_667, monthlyAllowance: null });
     expect(get).toHaveBeenCalledWith('/api/v1/me');
   });
 
   it('reports a zero balance as the real figure it is', async () => {
     const get = vi.fn().mockResolvedValue({ credits: { balance: 0 } });
-    await expect(service(get).credits()).resolves.toEqual({ balance: 0 });
+    await expect(service(get).credits()).resolves.toEqual({ balance: 0, monthlyAllowance: null });
   });
 
   // The distinction the whole nullable balance exists for: a read that failed must not come
@@ -106,7 +120,7 @@ describe('AccountService.profile', () => {
   it('keeps the tier when the server names no plan', async () => {
     const get = vi.fn().mockResolvedValue({ credits: { balance: 10 }, tier: 'other', subscription: null });
     await expect(service(get).profile()).resolves.toEqual({
-      credits: { balance: 10 },
+      credits: { balance: 10, monthlyAllowance: null },
       plan: null,
       tier: 'other',
     });
