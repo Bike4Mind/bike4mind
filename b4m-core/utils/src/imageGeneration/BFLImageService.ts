@@ -1,7 +1,13 @@
 import { Logger } from '@bike4mind/observability';
 import { AIImageService, ImageEditOptions, ImageEditResponse } from './AIImageService';
 import axios from 'axios';
-import { ImageModels, BFL_SAFETY_TOLERANCE, isBflUltraImageModel, toNonWebpOutputFormat } from '@bike4mind/common';
+import {
+  ImageModels,
+  BFL_SAFETY_TOLERANCE,
+  isBflUltraImageModel,
+  isFlux2ImageModel,
+  toNonWebpOutputFormat,
+} from '@bike4mind/common';
 import { redactErrorForLog } from './redactErrorForLog';
 
 export class BFLImageService extends AIImageService {
@@ -53,7 +59,7 @@ export class BFLImageService extends AIImageService {
     }: {
       n?: number;
       user?: string;
-      model?: ImageModels.FLUX_PRO | ImageModels.FLUX_PRO_1_1 | ImageModels.FLUX_PRO_ULTRA;
+      model?: ImageModels;
       safety_tolerance?: number;
       prompt_upsampling?: boolean;
       seed?: number | null;
@@ -66,6 +72,9 @@ export class BFLImageService extends AIImageService {
     }
   ): Promise<string[]> {
     try {
+      // FLUX.2 renamed the reference-image field to `input_image`; FLUX.1 only knows
+      // `image_prompt` and rejects a field it does not define.
+      const referenceImageField = isFlux2ImageModel(model) ? 'input_image' : 'image_prompt';
       // Generate n images in parallel
       const urls = await Promise.all(
         Array.from({ length: n }).map(async () => {
@@ -87,7 +96,7 @@ export class BFLImageService extends AIImageService {
             safety_tolerance: this.clampSafetyTolerance(safety_tolerance),
             prompt_upsampling,
             seed,
-            image_prompt,
+            [referenceImageField]: image_prompt,
             output_format: output_format || 'jpeg',
             ...modelSpecificOptions,
             user,
@@ -111,15 +120,15 @@ export class BFLImageService extends AIImageService {
 
           const cleanedBody = this.stripNullFields(requestBody);
           // .log(), not .debug(), so the actual outbound payload is visible at the default log
-          // level. prompt is truncated and image_prompt redacted, matching every other prompt log
+          // level. prompt is truncated and the reference image redacted, matching every other prompt log
           // on this path (route: promptPreview.substring(0,100); GeminiImageService: same) -
           // logging full user prompts at the default level is a different posture than diagnosing
           // params, which is all this needed.
           const safeRequestBody = {
             ...cleanedBody,
             prompt: prompt.length > 100 ? `${prompt.slice(0, 100)}...` : prompt,
-            ...(cleanedBody.image_prompt
-              ? { image_prompt: `[BASE64_DATA_${(cleanedBody.image_prompt as string).length}_CHARS]` }
+            ...(cleanedBody[referenceImageField]
+              ? { [referenceImageField]: `[BASE64_DATA_${(cleanedBody[referenceImageField] as string).length}_CHARS]` }
               : {}),
           };
           Logger.globalInstance.log('BFL Image generation request body:', safeRequestBody);

@@ -35,6 +35,20 @@ describe('computeImageUsdCostPerImage', () => {
     expect(computeImageUsdCostPerImage(ImageModels.FLUX_PRO_FILL, { model: ImageModels.FLUX_PRO_FILL })).toBe(0.05);
   });
 
+  // BFL's published first-megapixel rates (https://bfl.ai/pricing). The preview endpoints
+  // have no published rate and are billed at the sibling they pin, by decision on the ticket.
+  it.each([
+    [ImageModels.FLUX_2_MAX, 0.07],
+    [ImageModels.FLUX_2_PRO, 0.03],
+    [ImageModels.FLUX_2_PRO_PREVIEW, 0.03],
+    [ImageModels.FLUX_2_FLEX, 0.05],
+    [ImageModels.FLUX_2_KLEIN_9B, 0.015],
+    [ImageModels.FLUX_2_KLEIN_9B_PREVIEW, 0.015],
+    [ImageModels.FLUX_2_KLEIN_4B, 0.014],
+  ])('prices %s at %s USD per image', (model, usd) => {
+    expect(computeImageUsdCostPerImage(model, { model })).toBe(usd);
+  });
+
   // #2899: this is the single seam both charging (validateUserCredits) and the client-side cost
   // preview go through, so the ceiling price for 'auto' has to survive the GPT-image branch's
   // cast into OpenAICostInput - not just the calculator's own unit tests.

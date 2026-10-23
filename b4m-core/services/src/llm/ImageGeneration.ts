@@ -32,6 +32,7 @@ import {
   BFL_IMAGE_MODELS,
   XAI_IMAGE_MODELS,
   GEMINI_IMAGE_MODELS,
+  isBflImageModel,
   isGPTImageModel,
   rejectsTransparentBackground,
   clampImageQualityForModel,
@@ -519,13 +520,10 @@ export class ImageGenerationService {
       const openAiCostCalculator = new OpenAIImageCostCalculator();
       usdCost = openAiCostCalculator.getCost(input as OpenAICostInput);
       inputUsd = openAiCostCalculator.getInputImageCost(input as OpenAICostInput);
-    } else if (
-      modelInfo.id === ImageModels.FLUX_PRO_ULTRA ||
-      modelInfo.id === ImageModels.FLUX_PRO_1_1 ||
-      modelInfo.id === ImageModels.FLUX_PRO ||
-      modelInfo.id === ImageModels.FLUX_KONTEXT_PRO ||
-      modelInfo.id === ImageModels.FLUX_KONTEXT_MAX
-    ) {
+    } else if (isBflImageModel(modelInfo.id) && modelInfo.id !== ImageModels.FLUX_PRO_FILL) {
+      // Fill bills through the edit path, which dispatches from there; every other BFL
+      // generation model is priced here by the family predicate, so a newly curated id
+      // cannot fall through to "Model not supported".
       const fluxCostCalculator = new FluxImageCostCalculator();
       usdCost = fluxCostCalculator.getCost({
         model: modelInfo.id,

@@ -20,9 +20,11 @@ export const BFL_OPENAPI_URL = 'https://api.bfl.ai/openapi.json';
  * It emits no `name`. BFL publishes only the endpoint slug, and the catalog's
  * FLUX names are curated ("FLUX Pro Ultra", "FLUX Pro (Legacy)") - overwriting
  * those with `flux-pro-1-1-ultra` would be a presentation regression dressed up
- * as discovery. The cost is stated: a FLUX endpoint the catalog has never held
- * is discovered and then DROPPED for a missing name, which surfaces in the run's
- * dropped records as an operator work item rather than as silence.
+ * as discovery. So an endpoint the adapter table has never curated is introduced
+ * under its slug and left auto-disabled for want of a trusted price, which
+ * surfaces it in the run's report as an operator work item rather than as
+ * silence. Curation in the adapter table, not discovery, is what makes a listed
+ * endpoint a product.
  */
 interface OpenApiSchema {
   properties?: Record<string, unknown>;

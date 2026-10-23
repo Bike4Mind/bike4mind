@@ -1,8 +1,80 @@
 [
   {
+    "modelId": "flux-2-flex",
+    "patch": {
+      "id": "flux-2-flex",
+      "vendor": "bfl",
+      "backend": "bfl",
+      "type": "image",
+      "contextWindow": 0,
+      "supportsImageVariation": true,
+      "supportsSafetyTolerance": true
+    }
+  },
+  {
+    "modelId": "flux-2-klein-4b",
+    "patch": {
+      "id": "flux-2-klein-4b",
+      "vendor": "bfl",
+      "backend": "bfl",
+      "type": "image",
+      "contextWindow": 0,
+      "supportsImageVariation": true,
+      "supportsSafetyTolerance": true
+    }
+  },
+  {
+    "modelId": "flux-2-klein-9b",
+    "patch": {
+      "id": "flux-2-klein-9b",
+      "vendor": "bfl",
+      "backend": "bfl",
+      "type": "image",
+      "contextWindow": 0,
+      "supportsImageVariation": true,
+      "supportsSafetyTolerance": true
+    }
+  },
+  {
+    "modelId": "flux-2-klein-9b-preview",
+    "patch": {
+      "id": "flux-2-klein-9b-preview",
+      "vendor": "bfl",
+      "backend": "bfl",
+      "type": "image",
+      "contextWindow": 0,
+      "supportsImageVariation": true,
+      "supportsSafetyTolerance": true
+    }
+  },
+  {
+    "modelId": "flux-2-max",
+    "patch": {
+      "id": "flux-2-max",
+      "vendor": "bfl",
+      "backend": "bfl",
+      "type": "image",
+      "contextWindow": 0,
+      "supportsImageVariation": true,
+      "supportsSafetyTolerance": true
+    }
+  },
+  {
     "modelId": "flux-2-pro",
     "patch": {
       "id": "flux-2-pro",
+      "vendor": "bfl",
+      "backend": "bfl",
+      "type": "image",
+      "contextWindow": 0,
+      "supportsImageVariation": true,
+      "supportsSafetyTolerance": true
+    }
+  },
+  {
+    "modelId": "flux-2-pro-preview",
+    "patch": {
+      "id": "flux-2-pro-preview",
       "vendor": "bfl",
       "backend": "bfl",
       "type": "image",
