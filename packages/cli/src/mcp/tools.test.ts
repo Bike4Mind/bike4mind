@@ -1098,6 +1098,12 @@ describe('registerTools', () => {
     expect(schema.safeParse({ notebookId: NB_ID, name: '' }).success).toBe(false);
   });
 
+  it('generate_sound_effect input schema accepts 450 characters and rejects 451', () => {
+    const schema = z.object(collectTools(mockClient({})).schemas.get('generate_sound_effect')!);
+    expect(schema.safeParse({ text: 'x'.repeat(450) }).success).toBe(true);
+    expect(schema.safeParse({ text: 'x'.repeat(451) }).success).toBe(false);
+  });
+
   // An empty or dot-segment id collapses the URL onto /api/sessions, whose DELETE wipes every notebook.
   it.each([
     ['get_notebook', {}],

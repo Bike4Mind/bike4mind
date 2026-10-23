@@ -226,7 +226,8 @@ async function describePage(
   const note = snap.truncated
     ? '\n[Snapshot cut at the size limit. Use browser_evaluate to read a specific part of the page.]'
     : '';
-  return capOutput(`${header}\n\n${snap.text || '(no visible text)'}${note}${eventsSection(page)}`);
+  const model = `\n\nTyped page model:\n${JSON.stringify(snap.model)}`;
+  return capOutput(`${header}\n\n${snap.text || '(no visible text)'}${model}${note}${eventsSection(page)}`);
 }
 
 function hostOf(url: string): string {

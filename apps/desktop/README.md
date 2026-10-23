@@ -61,6 +61,13 @@ the composer, where it can be dismissed.
 
 ## Chat costs
 
+The footer ring shows your personal credit balance as a percentage of your monthly personal
+plan allowance. Organization credit pools are separate. A balance above the allowance, for
+example after rollover or a top-up, fills the ring while the tooltip keeps the actual percentage.
+Accounts without a monthly personal allowance show the balance without a percentage.
+If the balance or allowance is unavailable, check that you are signed in and can reach the
+backend; older backends may not report an allowance. The separate Context panel shows context usage.
+
 Chat shows the credits reported by the server while a reply streams, after it finishes, and
 in the composer's usage details. Missing credit usage is left blank rather than shown as zero.
 
