@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
+import { ApiKeyScope, PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
 
 const { handlers, find, reviewUpdate, release, count, baseOptions } = vi.hoisted(() => ({
   handlers: {} as Record<string, (req: unknown, res: unknown) => Promise<void>>,
@@ -51,7 +51,7 @@ beforeEach(() => {
 });
 describe('signup domain hold decisions', () => {
   it('is session-only and rejects non-admin decisions before reading or writing', async () => {
-    expect(baseOptions).toHaveBeenCalledWith({ auth: 'jwtOnly' });
+    expect(baseOptions).toHaveBeenCalledWith({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] });
     const { req, res } = makeRequest({ domain: 'example.net', action: 'release' }, false);
     await expect(handlers.post(req, res)).rejects.toThrow(/admin access required/i);
     expect(reviewUpdate).not.toHaveBeenCalled();
