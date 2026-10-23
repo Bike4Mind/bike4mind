@@ -19,7 +19,7 @@ export type ApiKeyEligibilityResponse = {
  * The caller's standing with the API key trust gate, so the key-creation UI can disable itself
  * with the same explanation POST /api/user-api-keys would return as a 403.
  */
-const handler = baseApi().get(async (req, res) => {
+const handler = baseApi({ auth: 'jwtOnly' }).get(async (req, res) => {
   const { assessment } = await resolveApiKeyTrust(req.user, req);
   if (assessment.status !== 'untrusted') {
     return res.json({ canCreate: true, message: null } satisfies ApiKeyEligibilityResponse);

@@ -5,7 +5,6 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
-import { ApiKeyScope } from '@bike4mind/common';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 interface RequestQuery {
@@ -16,7 +15,7 @@ const bodySchema = z.object({ approved: z.boolean() });
 
 // Admin-only endpoint to trust (or stop trusting) an account for minting personal API keys
 // without waiting for the account-age or purchase requirement. Email must still be verified.
-const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = baseApi({ auth: 'jwtOnly' })
   .use(csrfProtection())
   .post(
     asyncHandler(async (req, res) => {
