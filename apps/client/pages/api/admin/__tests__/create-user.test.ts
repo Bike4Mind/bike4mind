@@ -17,6 +17,8 @@ vi.mock('@bike4mind/services', () => ({
 let inTransaction = false;
 let insideTransactionAtAudit: boolean | undefined;
 vi.mock('@bike4mind/database', () => ({
+  isTransientTransactionError: (error: unknown) =>
+    (error as { errorLabels?: string[] })?.errorLabels?.includes('TransientTransactionError') === true,
   withTransaction: async (fn: () => Promise<unknown>) => {
     inTransaction = true;
     try {
@@ -151,6 +153,27 @@ describe('admin/create-user', () => {
 
       expect(mockRecordAdminAction).not.toHaveBeenCalled();
     });
+  });
+
+  it('passes a transient transaction error through unchanged so withTransaction can retry it', async () => {
+    const transient = Object.assign(new Error('write conflict'), { errorLabels: ['TransientTransactionError'] });
+    mockCreateUser.mockRejectedValueOnce(transient);
+
+    await expect(
+      runHandler(makeReq({ username: 'retry', email: 'retry@example.com', name: 'Retry' }), makeRes())
+    ).rejects.toBe(transient);
+  });
+
+  it('still returns 201 when post-commit signup analytics fail', async () => {
+    mockCreateUser.mockResolvedValue({ id: 'u-funnel', email: 'f@example.com', username: 'funnel', currentCredits: 0 });
+    mockEmitSignupFunnelEvents.mockRejectedValueOnce(new Error('funnel down'));
+    const req = makeReq({ username: 'funnel', email: 'f@example.com', name: 'Funnel' });
+    const res = makeRes();
+
+    await runHandler(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(201);
+    expect(req.logger.error).toHaveBeenCalledWith(expect.stringContaining('signup analytics'), expect.any(Error));
   });
 
   it('stores password: null + hasUsablePassword: false for a passwordless shell account', async () => {

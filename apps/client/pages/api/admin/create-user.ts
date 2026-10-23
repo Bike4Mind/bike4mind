@@ -1,6 +1,11 @@
 import { ApiKeyScope, usernameSchema } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { userRepository, pendingOtcTokenRepository, withTransaction } from '@bike4mind/database';
+import {
+  userRepository,
+  pendingOtcTokenRepository,
+  withTransaction,
+  isTransientTransactionError,
+} from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
@@ -102,7 +107,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
           }
         )
         .catch((error: unknown) => {
-          throw toCreateUserError(error);
+          // withTransaction retries only on the original transient error, so it must pass through.
+          throw isTransientTransactionError(error) ? error : toCreateUserError(error);
         });
 
       await recordAdminActionFromRequest(req, {
@@ -120,6 +126,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
       return created;
     });
 
+    // The user and audit row are already committed, so analytics failures must not turn into a 400.
     try {
       const isSynthetic = await recordSyntheticIdentity(newUser);
       await emitSignupFunnelEvents({
@@ -128,74 +135,74 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
         emailVerified: newUser.emailVerified === true,
         creditsGranted: newUser.currentCredits ?? validatedData.initialCredits,
       });
+    } catch (err) {
+      req.logger.error('Failed to record signup analytics for admin-created user', err);
+    }
 
-      // Send OTC welcome email so the new user knows how to sign in.
-      // Failures are non-fatal - the user is created regardless.
-      try {
-        const brand = process.env.APP_NAME || '';
-        const logoUrl = getLogoUrl();
-        const result = await userService.sendOTC(
-          { email: newUser.email! },
-          {
-            mailer: {
-              sendOTCEmail: async (toEmail, code) => {
-                const emailBody = `
+    // Send OTC welcome email so the new user knows how to sign in.
+    // Failures are non-fatal - the user is created regardless.
+    try {
+      const brand = process.env.APP_NAME || '';
+      const logoUrl = getLogoUrl();
+      const result = await userService.sendOTC(
+        { email: newUser.email! },
+        {
+          mailer: {
+            sendOTCEmail: async (toEmail, code) => {
+              const emailBody = `
 <!DOCTYPE html>
 <html>
-  <head>
-    <style>
-      body { font-family: Arial, sans-serif; line-height: 1.5; color: #333333; }
-      .content { margin: 20px; }
-      .code { font-size: 32px; font-weight: bold; letter-spacing: 8px; color: #1a82e2; padding: 16px 24px; background: #f5f5f5; border-radius: 8px; display: inline-block; margin: 16px 0; }
-    </style>
-  </head>
-  <body>
-    <div class="content">
-      ${buildEmailLogoImg(brand, logoUrl)}
-      <h2>You've been invited${brand ? ` to ${brand}` : ''}</h2>
-      <p>An admin has created an account for you. Use the code below to sign in for the first time.</p>
-      <div class="code">${code}</div>
-      <p>This code expires in 10 minutes. If you need a new one, visit the sign-in page and enter your email address.</p>
-    </div>
-  </body>
+<head>
+  <style>
+    body { font-family: Arial, sans-serif; line-height: 1.5; color: #333333; }
+    .content { margin: 20px; }
+    .code { font-size: 32px; font-weight: bold; letter-spacing: 8px; color: #1a82e2; padding: 16px 24px; background: #f5f5f5; border-radius: 8px; display: inline-block; margin: 16px 0; }
+  </style>
+</head>
+<body>
+  <div class="content">
+    ${buildEmailLogoImg(brand, logoUrl)}
+    <h2>You've been invited${brand ? ` to ${brand}` : ''}</h2>
+    <p>An admin has created an account for you. Use the code below to sign in for the first time.</p>
+    <div class="code">${code}</div>
+    <p>This code expires in 10 minutes. If you need a new one, visit the sign-in page and enter your email address.</p>
+  </div>
+</body>
 </html>`;
-                await EmailEvents.Send.publish({
-                  to: toEmail,
-                  subject: `You've been invited${brand ? ` to ${brand}` : ''} — sign-in code`,
-                  body: emailBody,
-                });
-              },
+              await EmailEvents.Send.publish({
+                to: toEmail,
+                subject: `You've been invited${brand ? ` to ${brand}` : ''} — sign-in code`,
+                body: emailBody,
+              });
             },
-            signPendingToken: payload => jwt.sign(payload, Config.JWT_SECRET, { algorithm: 'HS256' }),
-          }
-        );
-        if (result.nonce) {
-          await pendingOtcTokenRepository.storeNonce(newUser.email!, result.nonce, result.otcHash);
+          },
+          signPendingToken: payload => jwt.sign(payload, Config.JWT_SECRET, { algorithm: 'HS256' }),
         }
-      } catch (err) {
-        req.logger.error('Failed to send OTC welcome email for admin-created user', err);
+      );
+      if (result.nonce) {
+        await pendingOtcTokenRepository.storeNonce(newUser.email!, result.nonce, result.otcHash);
       }
-
-      // Return the created user (without sensitive data)
-      res.status(201).json({
-        success: true,
-        message: 'User created successfully',
-        user: {
-          id: newUser.id,
-          username: newUser.username,
-          email: newUser.email,
-          name: newUser.name,
-          isAdmin: newUser.isAdmin,
-          level: newUser.level,
-          currentCredits: newUser.currentCredits,
-          storageLimit: newUser.storageLimit,
-          tags: newUser.tags,
-          createdAt: (newUser as any).createdAt,
-        },
-      });
-    } catch (error) {
-      throw toCreateUserError(error);
+    } catch (err) {
+      req.logger.error('Failed to send OTC welcome email for admin-created user', err);
     }
+
+    // Return the created user (without sensitive data)
+    res.status(201).json({
+      success: true,
+      message: 'User created successfully',
+      user: {
+        id: newUser.id,
+        username: newUser.username,
+        email: newUser.email,
+        name: newUser.name,
+        isAdmin: newUser.isAdmin,
+        level: newUser.level,
+        currentCredits: newUser.currentCredits,
+        storageLimit: newUser.storageLimit,
+        tags: newUser.tags,
+        createdAt: (newUser as any).createdAt,
+      },
+    });
   })
 );
 
