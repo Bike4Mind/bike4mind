@@ -174,7 +174,8 @@ const recordReprice = (
     action: 'settings.model_price.repriced',
     target: { kind: 'settings', id: `${modelId}:${unit}`, displayName: `${modelId} price (${unit})` },
     summary: `${revertToSeed ? 'reverted to seed price for' : 'repriced'} model ${modelId}`,
-    changes: [{ field: `${modelId}.${unit}.pricing`, before, after }],
+    // Model IDs and units are metadata; secret-like path segments would redact the prices.
+    changes: [{ field: 'pricing', before, after }],
     details: { modelId, unit, note, revertToSeed },
   });
 

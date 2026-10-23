@@ -1,6 +1,9 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import type { IAdminAuditLogRepository } from '@bike4mind/common';
+import type { RecordAdminActionFromRequestInput } from '@server/utils/adminAudit';
+import { recordAdminAction } from '../../../../../../b4m-core/services/src/adminAuditService/recordAdminAction';
 
 // Middleware stripped so the handler body runs directly (same pattern as
 // pages/api/email/__tests__/verify.test.ts). The chain object doubles as the
@@ -580,7 +583,7 @@ describe('POST /api/admin/model-prices admin audit', () => {
     expect(mockAudit.mock.calls[0][1]).toMatchObject({
       action: 'settings.model_price.repriced',
       target: { kind: 'settings', id: 'gpt-x:per_token' },
-      changes: [{ field: 'gpt-x.per_token.pricing', before: inForceRow.pricing, after: newPricing }],
+      changes: [{ field: 'pricing', before: inForceRow.pricing, after: newPricing }],
     });
     expect(mockAppend.mock.invocationCallOrder[0]).toBeLessThan(mockAudit.mock.invocationCallOrder[0]);
   });
@@ -597,6 +600,48 @@ describe('POST /api/admin/model-prices admin audit', () => {
       details: { revertToSeed: true },
     });
   });
+
+  it.each(
+    (['per_token', 'per_image', 'per_minute'] as const).flatMap(unit =>
+      (['reprice', 'revert-to-seed'] as const).flatMap(action =>
+        ['gpt-x', 'vendor/secret-model'].map(modelId => ({ unit, action, modelId }))
+      )
+    )
+  )(
+    'preserves stored pricing through audit redaction for $modelId $unit $action',
+    async ({ unit, action, modelId }) => {
+      const before = { '0': TIER };
+      const after = { '0': { input: 5e-6, output: 20e-6 } };
+      const appendAudit = vi.fn<IAdminAuditLogRepository['append']>();
+      mockRowsInForce.mockResolvedValue([{ modelId, unit, pricing: before, note: 'invoice A' }]);
+      mockGenerateSeed.mockResolvedValue([{ modelId, unit, pricing: after }]);
+      mockAudit.mockImplementationOnce(async (_request: unknown, input: RecordAdminActionFromRequestInput) => {
+        await recordAdminAction(
+          {
+            ...input,
+            actor: { kind: 'user', scope: 'platform', userId: 'admin-1', name: 'Admin', wasAdmin: true },
+            context: { source: 'admin_ui' },
+          },
+          { db: { adminAuditLog: { append: appendAudit } } }
+        );
+        return null;
+      });
+
+      await call({
+        method: 'POST',
+        body:
+          action === 'reprice' ? { modelId, unit, pricing: after, note: 'updated price' } : { modelId, unit, action },
+      }).run();
+
+      expect(appendAudit).toHaveBeenCalledOnce();
+      expect(appendAudit.mock.calls[0][0]).toMatchObject({
+        action: 'settings.model_price.repriced',
+        target: { kind: 'settings', id: `${modelId}:${unit}` },
+        changes: [{ field: 'pricing', before, after }],
+        details: { modelId, unit, revertToSeed: action === 'revert-to-seed' },
+      });
+    }
+  );
 
   it('does not audit an idempotent resubmit that appended nothing', async () => {
     mockRowsInForce.mockResolvedValue([inForceRow]);
