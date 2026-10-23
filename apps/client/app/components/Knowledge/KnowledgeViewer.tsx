@@ -99,6 +99,7 @@ import { buildArtifactPublishWiring } from '@client/app/utils/publishApi';
 import { brand } from '@client/app/utils/themes/colors';
 import JSONViewer from './JSONViewer';
 import { api } from '@client/app/contexts/ApiContext';
+import { findArtifactSaveTarget } from '@client/app/utils/artifactPersistence';
 import { useQueryClient } from '@tanstack/react-query';
 import { useArtifact } from '@client/app/hooks/data/artifacts';
 import { useArtifactPersistence } from '@client/app/hooks/useArtifactPersistence';
@@ -404,6 +405,12 @@ const buttonTooltipTitle = (item: KnowledgeItem) => {
   if (!isWithinSizeLimit(item)) return 'Edit with AI disabled. File is too large.';
   if (!isAiEditableFile(item)) return 'Edit with AI disabled. This file type is not supported.';
   return 'Edit with AI';
+};
+
+/** The version a PUT /api/artifacts/[id] landed on (`{ artifact: { version } }`), else the fallback's. */
+const savedVersionOf = (response: { data?: { artifact?: { version?: unknown } } }, fallback: { version: number }) => {
+  const version = response.data?.artifact?.version;
+  return typeof version === 'number' ? version : fallback.version;
 };
 
 interface KnowledgeViewerProps {
@@ -1908,6 +1915,8 @@ const KnowledgeContent: React.FC<{
         };
 
         const response = await api.put(`/api/artifacts/${currentArtifact.id}`, updatePayload);
+        // Into the open tab too, so a viewer that remounts after the save opens on that version.
+        saveOpenArtifactContent(item.id, { ...updatedArtifact, version: savedVersionOf(response, updatedArtifact) });
 
         toast.success('React component saved successfully!');
 
@@ -1926,6 +1935,26 @@ const KnowledgeContent: React.FC<{
 
         // If artifact doesn't exist (404), create it first
         if (updateError?.response?.status === 404 || updateError?.name === 'NotFoundError') {
+          const savedId = await findArtifactSaveTarget(currentArtifact.id, 'react', currentSession?.id);
+          if (savedId) {
+            // Always a new version: the row may have moved on from what this panel loaded.
+            const response = await api.put(`/api/artifacts/${savedId}`, {
+              title: currentArtifact.title,
+              content: updatedContent,
+              metadata: currentArtifact.metadata,
+              createNewVersion: true,
+            });
+            saveOpenArtifactContent(
+              item.id,
+              { ...updatedArtifact, id: savedId, version: savedVersionOf(response, updatedArtifact) },
+              savedId
+            );
+            toast.success('React component saved successfully!');
+            queryClient.invalidateQueries({ queryKey: ['artifactVersions', savedId] });
+            queryClient.invalidateQueries({ queryKey: ['artifact', savedId] });
+            return response.data;
+          }
+
           // Create the artifact in Quest 4 system with the original ID
           const createPayload = {
             id: currentArtifact.id, // Use the AI-generated ID directly

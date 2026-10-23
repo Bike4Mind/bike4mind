@@ -25,8 +25,13 @@ interface Body {
 const store = { rows: [] as Row[], clock: 0 };
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 
-const get = vi.fn(async (_url: string, config?: { params?: Record<string, unknown> }) => {
+const get = vi.fn(async (url: string, config?: { params?: Record<string, unknown> }) => {
   await tick();
+  if (url !== '/api/artifacts') {
+    const row = store.rows.find(r => url === `/api/artifacts/${r.id}`);
+    if (!row) throw Object.assign(new Error('Not found'), { response: { status: 404 } });
+    return { status: 200, data: { artifact: { ...row } } };
+  }
   const params = config?.params ?? {};
   const rows = store.rows
     .filter(row => row.sessionId === params.sessionId && row.type === params.type)
@@ -75,7 +80,7 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
   },
 }));
 
-import { findExistingArtifactId, persistArtifacts } from './artifactPersistence';
+import { findArtifactSaveTarget, findExistingArtifactId, persistArtifacts } from './artifactPersistence';
 
 const SESSION = 's1';
 
@@ -216,5 +221,38 @@ describe('findExistingArtifactId', () => {
 
     expect(await findExistingArtifactId('react', '', SESSION)).toBeNull();
     expect(get).not.toHaveBeenCalled();
+  });
+});
+
+describe('findArtifactSaveTarget', () => {
+  it("points a save at the session's row for the identifier a dead id carries", async () => {
+    seed({ id: 'artifact_react_App_9_1', type: 'react', identifier: 'App' });
+
+    expect(await findArtifactSaveTarget('artifact_react_App_9_0', 'react', SESSION)).toBe('artifact_react_App_9_1');
+  });
+
+  it('keeps an identifier that contains underscores whole', async () => {
+    seed({ id: 'artifact_react_my_app_9_1', type: 'react', identifier: 'my_app' });
+    seed({ id: 'artifact_react_my_9_0', type: 'react', identifier: 'my' });
+
+    expect(await findArtifactSaveTarget('artifact_react_my_app_9_0', 'react', SESSION)).toBe(
+      'artifact_react_my_app_9_1'
+    );
+  });
+
+  it("waits out the reply's own persist rather than racing it to a second row", async () => {
+    const timer = block('react', 'Timer', 'v1', 1);
+    const persisting = persistArtifacts([timer], SESSION);
+
+    expect(await findArtifactSaveTarget(timer.id, 'react', SESSION)).toBe(timer.id);
+    await persisting;
+    expect(store.rows).toHaveLength(1);
+  });
+
+  it('returns null when the session has no row for it, so the caller creates one', async () => {
+    seed({ id: 'artifact_react_Other_9_0', type: 'react', identifier: 'Other' });
+
+    expect(await findArtifactSaveTarget('artifact_react_App_9_0', 'react', SESSION)).toBeNull();
+    expect(await findArtifactSaveTarget('legacy-id', 'react', SESSION)).toBeNull();
   });
 });

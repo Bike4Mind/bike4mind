@@ -1,7 +1,7 @@
 import React, { FC, useState, useEffect } from 'react';
 import { Box, Typography } from '@mui/joy';
 import { generateCompleteArtifactId, getArtifactTimestamp } from '@client/app/utils/artifactParser';
-import { getCachedArtifactId, useArtifactIdResolver } from './ArtifactIdResolver';
+import { getCachedArtifactId, getProvisionalArtifactId, useArtifactIdResolver } from './ArtifactIdResolver';
 import { getArtifactHandler, type ParsedArtifact } from './registry';
 import type { ReactArtifactGroupRole } from '@client/app/utils/reactArtifactGroup';
 
@@ -10,6 +10,7 @@ import './handlers';
 
 type ArtifactRendererProps = {
   artifact: ParsedArtifact;
+  /** Position in the reply's full parse, the index useStreamingArtifactPersistence mints ids with. */
   index: number;
   messageId: string;
   sessionId?: string;
@@ -23,29 +24,41 @@ type ArtifactRendererProps = {
  */
 const ArtifactRenderer: FC<ArtifactRendererProps> = ({ artifact, index, messageId, sessionId, reactGroup }) => {
   const { resolveArtifactId } = useArtifactIdResolver();
+  const identifier = artifact.identifier ?? '';
   // Seeded from the module cache rather than starting at null: resolution is async, so a
   // null start renders the loading placeholder for a frame on every mount. In a virtualized
   // transcript that is every time the message scrolls back into view, and since the
   // placeholder is shorter than the card, the list measures the short frame and then jumps
   // to correct itself. A resolved artifact now renders at its real height straight away.
-  const cachedId = getCachedArtifactId(artifact.type, artifact.identifier ?? '', sessionId);
-  const [resolvedId, setResolvedId] = useState<string | null>(cachedId);
-  const [isResolving, setIsResolving] = useState(!cachedId);
+  const cachedId = getCachedArtifactId(artifact.type, identifier, sessionId);
+  const provisionalId = cachedId
+    ? null
+    : getProvisionalArtifactId(artifact.type, identifier, sessionId, messageId, index);
+  const [resolvedId, setResolvedId] = useState<string | null>(cachedId ?? provisionalId);
+  const [isResolving, setIsResolving] = useState(!(cachedId ?? provisionalId));
+  // Bumped once this reply's rows are saved, so a provisional id is checked against them.
+  const [persistedCount, setPersistedCount] = useState(0);
+  // Already looked up and minted for this message and index: skip a request per remount until
+  // the reply's rows land.
+  const trustProvisional = !!provisionalId && persistedCount === 0;
 
   useEffect(() => {
-    if (cachedId) return;
+    const onPersisted = (event: Event) => {
+      if ((event as CustomEvent<{ questId?: string } | undefined>).detail?.questId === messageId) {
+        setPersistedCount(count => count + 1);
+      }
+    };
+    window.addEventListener('artifacts-persisted', onPersisted);
+    return () => window.removeEventListener('artifacts-persisted', onPersisted);
+  }, [messageId]);
+
+  useEffect(() => {
+    if (cachedId || trustProvisional) return;
     let isCancelled = false;
 
     const resolveId = async () => {
       try {
-        const id = await resolveArtifactId(
-          artifact.type,
-          artifact.identifier ?? '',
-          artifact.content,
-          messageId,
-          index,
-          sessionId
-        );
+        const id = await resolveArtifactId(artifact.type, identifier, artifact.content, messageId, index, sessionId);
         if (!isCancelled) {
           setResolvedId(id);
         }
@@ -53,7 +66,7 @@ const ArtifactRenderer: FC<ArtifactRendererProps> = ({ artifact, index, messageI
         console.error('Error resolving artifact ID:', error);
         if (!isCancelled) {
           const timestamp = getArtifactTimestamp(messageId);
-          const fallbackId = generateCompleteArtifactId(artifact.type, artifact.identifier ?? '', timestamp, index);
+          const fallbackId = generateCompleteArtifactId(artifact.type, identifier, timestamp, index);
           setResolvedId(fallbackId);
         }
       } finally {
@@ -68,9 +81,22 @@ const ArtifactRenderer: FC<ArtifactRendererProps> = ({ artifact, index, messageI
     return () => {
       isCancelled = true;
     };
-  }, [artifact.type, artifact.identifier, artifact.content, messageId, index, sessionId, resolveArtifactId, cachedId]);
+  }, [
+    artifact.type,
+    identifier,
+    artifact.content,
+    messageId,
+    index,
+    sessionId,
+    resolveArtifactId,
+    cachedId,
+    trustProvisional,
+    persistedCount,
+  ]);
 
-  if (isResolving || !resolvedId) {
+  const artifactId = cachedId ?? (trustProvisional ? provisionalId : resolvedId);
+
+  if (!artifactId || (isResolving && !cachedId && !trustProvisional)) {
     return (
       <Box
         data-testid="artifact-loading"
@@ -91,7 +117,7 @@ const ArtifactRenderer: FC<ArtifactRendererProps> = ({ artifact, index, messageI
 
   return (
     <Box data-testid={`artifact-renderer-${artifact.type}`}>
-      <handler.PreviewCard artifact={artifact} artifactId={resolvedId} index={index} reactGroup={reactGroup} />
+      <handler.PreviewCard artifact={artifact} artifactId={artifactId} index={index} reactGroup={reactGroup} />
     </Box>
   );
 };
