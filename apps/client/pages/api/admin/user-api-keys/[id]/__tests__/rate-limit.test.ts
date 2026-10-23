@@ -155,6 +155,25 @@ describe('PATCH /api/admin/user-api-keys/[id]/rate-limit', () => {
     );
   });
 
+  it('still succeeds when the best-effort audit write itself fails', async () => {
+    const { adminAuditService } = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
+    const { req, res } = patch({ id: 'key-1' }, { requestsPerMinute: 600 }, admin);
+    recordAdminActionFromRequest.mockImplementationOnce((_req: unknown, input: any) =>
+      adminAuditService.recordAdminAction(
+        { ...input, actor: { kind: 'user', scope: 'platform', userId: 'admin-1' }, context: {} },
+        { db: { adminAuditLog: { append: vi.fn().mockRejectedValue(new Error('audit down')) } }, logger: req.logger }
+      )
+    );
+
+    await mockRefs.patchHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(req.logger.error).toHaveBeenCalledWith(
+      '[ADMIN_AUDIT_WRITE_FAILED]',
+      expect.objectContaining({ action: 'user.api_key.rate_limit_updated' })
+    );
+  });
+
   it('records nothing when the key is not found', async () => {
     findById.mockResolvedValue(null);
     const { req, res } = patch({ id: 'key-1' }, { requestsPerMinute: 600 }, admin);
