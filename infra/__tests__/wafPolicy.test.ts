@@ -947,48 +947,61 @@ describe('wafPolicy', () => {
   });
 
   describe('bot control in count', () => {
+    type Transformation = { Priority: number; Type: string };
+    type ByteMatch = { ByteMatchStatement: { TextTransformations: Transformation[] } };
+    type BotControlRule = Omit<WafRule, 'Statement'> & {
+      Statement: {
+        ManagedRuleGroupStatement: {
+          VendorName: string;
+          Name: string;
+          ManagedRuleGroupConfigs: unknown[];
+          RuleActionOverrides?: unknown[];
+          ScopeDownStatement: {
+            NotStatement: { Statement: { OrStatement: { Statements: ByteMatch[] } } };
+          };
+        };
+      };
+    };
     const forStage = (stage: string): WafRule[] =>
       JSON.parse(buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage }));
 
+    const botControlForStage = (stage: string): BotControlRule | undefined =>
+      forStage(stage).find(rule => rule.Name === BOT_CONTROL_RULE) as BotControlRule | undefined;
+
     for (const stage of ['dev', 'production']) {
       it(`runs the group at Priority 20 on ${stage}`, () => {
-        const rule = forStage(stage).find(r => r.Name === BOT_CONTROL_RULE);
+        const rule = botControlForStage(stage);
         expect(rule).toBeDefined();
         expect(rule!.Priority).toBe(20);
         expect(rule!.Action).toBeUndefined();
-        // any: ManagedRuleGroupStatement is deeply nested and not usefully typed here
-        const mgs = (rule!.Statement as any).ManagedRuleGroupStatement;
+        const mgs = rule!.Statement.ManagedRuleGroupStatement;
         expect(mgs.VendorName).toBe('AWS');
         expect(mgs.Name).toBe('AWSManagedRulesBotControlRuleSet');
       });
 
       it(`uses the common inspection level on ${stage}, never targeted`, () => {
-        const rule = forStage(stage).find(r => r.Name === BOT_CONTROL_RULE);
-        // any: see above
-        const configs = (rule!.Statement as any).ManagedRuleGroupStatement.ManagedRuleGroupConfigs;
+        const rule = botControlForStage(stage);
+        const configs = rule!.Statement.ManagedRuleGroupStatement.ManagedRuleGroupConfigs;
         expect(configs).toEqual([{ AWSManagedRulesBotControlRuleSet: { InspectionLevel: 'COMMON' } }]);
         expect(JSON.stringify(rule)).not.toContain('TARGETED');
       });
 
       it(`counts the whole ${stage} group rather than blocking`, () => {
-        const rule = forStage(stage).find(r => r.Name === BOT_CONTROL_RULE);
+        const rule = botControlForStage(stage);
         expect(rule!.OverrideAction).toEqual({ Count: {} });
-        expect(rule!.OverrideAction).not.toEqual({ None: {} });
-        // any: see above
-        expect((rule!.Statement as any).ManagedRuleGroupStatement.RuleActionOverrides).toBeUndefined();
+        expect(rule!.Statement.ManagedRuleGroupStatement.RuleActionOverrides).toBeUndefined();
       });
 
       it(`skips exactly the static and image prefixes on ${stage}, decode then normalize then lowercase`, () => {
-        const rule = forStage(stage).find(r => r.Name === BOT_CONTROL_RULE);
-        // any: see above
-        const scopeDown = (rule!.Statement as any).ManagedRuleGroupStatement.ScopeDownStatement;
+        const rule = botControlForStage(stage);
+        const scopeDown = rule!.Statement.ManagedRuleGroupStatement.ScopeDownStatement;
         const found = scopeDownExemptions(`${stage} ${BOT_CONTROL_RULE} scope-down`, scopeDown);
         expect(found).toEqual(botControlExemptions());
 
-        const orderOf = (s: any) =>
-          [...s.ByteMatchStatement.TextTransformations]
-            .sort((a: { Priority: number }, b: { Priority: number }) => a.Priority - b.Priority)
-            .map((x: { Type: string }) => x.Type);
+        const orderOf = (statement: ByteMatch) =>
+          [...statement.ByteMatchStatement.TextTransformations]
+            .sort((left, right) => left.Priority - right.Priority)
+            .map(transformation => transformation.Type);
         for (const s of scopeDown.NotStatement.Statement.OrStatement.Statements) {
           expect(orderOf(s)).toEqual(['URL_DECODE', 'NORMALIZE_PATH', 'LOWERCASE']);
         }
@@ -1003,9 +1016,8 @@ describe('wafPolicy', () => {
     }
 
     it('is identical between the two stage files', () => {
-      const pick = (stage: string) => forStage(stage).find(r => r.Name === BOT_CONTROL_RULE);
-      expect(pick('production')).toBeDefined();
-      expect(pick('production')).toEqual(pick('dev'));
+      expect(botControlForStage('production')).toBeDefined();
+      expect(botControlForStage('production')).toEqual(botControlForStage('dev'));
     });
   });
 
