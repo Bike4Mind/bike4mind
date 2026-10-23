@@ -347,6 +347,7 @@ export interface ProjectBindingController {
 
 export interface ConversationController {
   session: ChatSession | null;
+  setHistory: (enabled: boolean) => Promise<void>;
   messages: ChatMessage[];
   /** Set while a reply for THIS session is streaming. */
   streaming: boolean;
@@ -986,6 +987,17 @@ export function useConversation(
     [sessionId, onSummaryChanged]
   );
 
+  const setHistory = useCallback(
+    async (enabled: boolean) => {
+      if (!sessionId) return;
+      const updated = await window.b4m.chat.setSessionHistory(sessionId, enabled);
+      if (!updated) return;
+      setSession(current => (current ? { ...current, historyEnabled: updated.historyEnabled } : current));
+      onSummaryChanged(updated);
+    },
+    [sessionId, onSummaryChanged]
+  );
+
   const setReasoningEffort = useCallback(
     async (effort: ReasoningEffortSetting) => {
       if (!sessionId) return;
@@ -1145,6 +1157,7 @@ export function useConversation(
 
   return {
     session,
+    setHistory,
     messages,
     streaming,
     turn,

@@ -93,17 +93,36 @@ describe('ModelCatalog', () => {
   beforeEach(() => {
     get = vi.fn().mockResolvedValue({ models: [wireModel(), wireModel({ id: 'dall-e-3', type: 'image' })] });
     environmentUrl = 'http://localhost:3000';
-    catalog = new ModelCatalog({
-      logger: { debug: vi.fn(), warn: vi.fn() },
-      getApiClient: () => ({ get }) as unknown as AuthenticatedApiClient,
-      getEnvironmentUrl: () => environmentUrl,
-    });
+    catalog = new ModelCatalog(
+      {
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        getApiClient: () => ({ get }) as unknown as AuthenticatedApiClient,
+        getEnvironmentUrl: () => environmentUrl,
+      },
+      { models: async () => [] } as never
+    );
   });
 
   it('serves a second read from cache', async () => {
     expect((await catalog.list()).models.map(model => model.id)).toEqual(['claude-sonnet-4-5-20250929']);
     await catalog.list();
     expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it('expires a catalog containing local models quickly so a stopped runtime disappears', async () => {
+    const local = { models: vi.fn().mockResolvedValue([{ id: 'local:ollama:qwen', name: 'qwen' }]) };
+    catalog = new ModelCatalog(
+      {
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        getApiClient: () => ({ get }) as unknown as AuthenticatedApiClient,
+        getEnvironmentUrl: () => environmentUrl,
+      },
+      local as never
+    );
+    await catalog.list();
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 5_001);
+    local.models.mockResolvedValue([]);
+    expect((await catalog.list()).models.some(model => model.id.startsWith('local:'))).toBe(false);
   });
 
   it('retains thinking capability through an expired failed read without offering stale models', async () => {
@@ -166,11 +185,14 @@ describe('ModelCatalog', () => {
   });
 
   it('refuses to guess while signed out', async () => {
-    catalog = new ModelCatalog({
-      logger: { debug: vi.fn(), warn: vi.fn() },
-      getApiClient: () => null,
-      getEnvironmentUrl: () => environmentUrl,
-    });
+    catalog = new ModelCatalog(
+      {
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        getApiClient: () => null,
+        getEnvironmentUrl: () => environmentUrl,
+      },
+      { models: async () => [] } as never
+    );
 
     expect((await catalog.list()).error).toMatch(/sign in/i);
   });

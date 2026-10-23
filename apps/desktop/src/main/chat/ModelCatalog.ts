@@ -3,6 +3,7 @@ import type { VideoModel } from '@bike4mind/common';
 import type { ChatModelCatalog, ChatModelOption } from '@shared/chat';
 import { parseVideoModels } from './media/videoModels';
 import { supportsReasoningEffort } from './reasoningEffort';
+import { OllamaLocal } from './OllamaLocal';
 
 /**
  * The model list is per-DEPLOYMENT and per-ACCOUNT, never a constant in this client.
@@ -73,7 +74,10 @@ export class ModelCatalog {
 
   private videoCache: { environmentUrl: string; models: VideoModel[]; expiresAt: number } | null = null;
 
-  constructor(private readonly deps: ModelCatalogDeps) {}
+  constructor(
+    private readonly deps: ModelCatalogDeps,
+    private readonly local = new OllamaLocal()
+  ) {}
 
   /** Cached models for the current environment, without a round trip. Null when nothing is cached. */
   cached(): ChatModelOption[] | null {
@@ -97,8 +101,9 @@ export class ModelCatalog {
       if (hit) return { models: hit };
     }
 
+    const local = await this.local.models();
     const api = this.deps.getApiClient();
-    if (!api) return { models: [], error: 'Sign in to see the models this server offers.' };
+    if (!api) return local.length ? { models: local } : { models: [], error: 'Sign in to see models.' };
 
     let models: ChatModelOption[];
     try {
@@ -107,9 +112,12 @@ export class ModelCatalog {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.deps.logger.warn(`CHAT: model list lookup failed: ${message}`);
-      return { models: [], error: 'Could not load the model list from this server.' };
+      return local.length
+        ? { models: local }
+        : { models: [], error: 'Could not load the model list from this server.' };
     }
 
+    models = [...models.filter(model => !local.some(candidate => candidate.id === model.id)), ...local];
     if (models.length === 0) {
       this.cache = null;
       this.deps.logger.warn('CHAT: server returned no tool-capable text models');
@@ -119,7 +127,7 @@ export class ModelCatalog {
     this.cache = {
       environmentUrl: this.deps.getEnvironmentUrl(),
       models,
-      expiresAt: Date.now() + CACHE_TTL_MS,
+      expiresAt: Date.now() + (local.length > 0 ? 5_000 : CACHE_TTL_MS),
     };
     this.deps.logger.debug(`CHAT: ${models.length} model(s) available`);
     return { models };
@@ -221,6 +229,7 @@ export function selectUsableModels(wire: unknown): ChatModelOption[] {
       // Decided here rather than read off the wire: the catalog does not report it, and the
       // renderer has to disable the effort picker on a model that would ignore the field.
       supportsReasoningEffort: supportsReasoningEffort(model.id as string),
+      supportsTools: true,
       ...(model.backend === 'ollama' && model.can_think === true ? { thinkingToggle: true } : {}),
     }));
 }

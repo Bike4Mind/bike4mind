@@ -83,6 +83,8 @@ import { ModelCatalog } from './ModelCatalog';
 import { ModelPreference } from './ModelPreference';
 import { SessionActivity } from './SessionActivity';
 import { SessionStore } from './SessionStore';
+import { LocalHistory } from './LocalHistory';
+import { OllamaLocal } from './OllamaLocal';
 import { sessionScopeFor, sessionScopeKey } from './sessionScope';
 import {
   branchCheckouts,
@@ -411,10 +413,18 @@ export function registerChat(
     writeClipboard: text => clipboard.writeText(text),
     logger,
   });
-  const models = new ModelCatalog({
-    logger,
-    getApiClient: () => auth.getApiClient(),
-    getEnvironmentUrl: () => auth.getState().environment.url,
+  const local = new OllamaLocal();
+  const models = new ModelCatalog(
+    {
+      logger,
+      getApiClient: () => auth.getApiClient(),
+      getEnvironmentUrl: () => auth.getState().environment.url,
+    },
+    local
+  );
+  const history = new LocalHistory(join(userData, 'local-history.sqlite'), () => {
+    const scope = sessionScopeFor(auth.getState());
+    return scope ? sessionScopeKey(scope) : null;
   });
 
   const send = (channel: string, payload: unknown) => {
@@ -501,7 +511,10 @@ export function registerChat(
 
   const browser = new BrowserManager(
     (sessionId, state) => send(IPC_CHANNELS.browserPageState, { sessionId, ...state }),
-    state => send(IPC_CHANNELS.browserCookiesChanged, state)
+    state => send(IPC_CHANNELS.browserCookiesChanged, state),
+    async (sessionId, snapshot) => {
+      if ((await store.get(sessionId))?.historyEnabled) history.capturePage(sessionId, snapshot.model);
+    }
   );
 
   const service = new ChatService({
@@ -529,6 +542,8 @@ export function registerChat(
     browser,
     screen: desktopScreenCapturer(app.getName()),
     prepareImage: prepareToolImage,
+    history,
+    local,
     artifacts,
     queue,
     skills,
@@ -600,6 +615,12 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatSetSessionModel, (_event, sessionId: string, model: string) =>
     service.setSessionModel(sessionId, model)
   );
+  ipcMain.handle(IPC_CHANNELS.chatSetSessionHistory, (_event, sessionId: string, enabled: boolean) =>
+    service.setSessionHistory(sessionId, enabled === true)
+  );
+  ipcMain.handle(IPC_CHANNELS.chatSearchHistory, (_event, query: string) => service.searchHistory(String(query ?? '')));
+  ipcMain.handle(IPC_CHANNELS.chatClearHistory, () => history.clear());
+  ipcMain.handle(IPC_CHANNELS.chatHistoryState, () => history.state());
   // Validated here rather than trusted, like the approval mode below: an unrecognised value
   // must not reach the store, where it would be sent verbatim on the next turn.
   ipcMain.handle(IPC_CHANNELS.chatSetSessionReasoningEffort, (_event, sessionId: string, effort: unknown) => {

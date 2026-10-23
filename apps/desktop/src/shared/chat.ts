@@ -856,6 +856,8 @@ export interface ChatModelOption {
    * THINKING_OFF_SETTING (off).
    */
   thinkingToggle?: boolean;
+  /** Local models can remain useful without tool-call support. */
+  supportsTools?: boolean;
 }
 
 /** The setting a `thinkingToggle` model's "Off" is stored as; any other setting thinks. */
@@ -1077,6 +1079,8 @@ interface ChatSessionMeta {
    * which is what separates it from delete.
    */
   archived?: boolean;
+  /** Explicit consent to copy this session and its pages into the rebuildable local index. */
+  historyEnabled?: boolean;
 }
 
 /** A session without its messages - what the sidebar needs, so a long thread is not loaded to list it. */

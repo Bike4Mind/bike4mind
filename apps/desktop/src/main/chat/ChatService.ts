@@ -105,10 +105,15 @@ import {
   supportsPromptCache,
   withCacheBreakpoints,
   type CompletionMessage,
+  type CompletionRequest,
 } from './completions';
 import { describeAlways } from './approvalScope';
 import { reasoningEffortFor, requestsThinking } from './reasoningEffort';
 import { addUsage, foldUsage } from './streamEvents';
+import type { CompletionStreamEvent } from './streamEvents';
+import { LOCAL_MODEL_PREFIX, OllamaLocal } from './OllamaLocal';
+import type { LocalHistory } from './LocalHistory';
+import type { LocalHistoryResult } from '@shared/history';
 import { findStaleResults, historyRounds, sentHistory, toolResultContent } from './contextPruning';
 import { stalePlanReminder, unfinishedPlanReminder } from './planReminder';
 import { buildExploreContext, shouldOfferExplore } from './explore';
@@ -407,6 +412,8 @@ export interface ChatServiceDeps {
   screen?: ScreenCapturer;
   /** Fits an image a tool shows the model. Absent in tests, where file_read then describes an image in text. */
   prepareImage?: ImageContext['prepare'];
+  history?: LocalHistory;
+  local?: OllamaLocal;
   /** Paths kept out of reach of shell commands whatever the user granted. Enforced by the file tools, and by the shell only when SANDBOX_SHELL_COMMANDS is on. */
   protectedPaths?: readonly string[];
   /**
@@ -753,6 +760,17 @@ export class ChatService {
 
   listModels(force = false): Promise<ChatModelCatalog> {
     return this.deps.models?.list(force) ?? Promise.resolve({ models: [] });
+  }
+
+  async setSessionHistory(sessionId: string, enabled: boolean): Promise<ChatSessionSummary | null> {
+    const summary = await this.deps.store.setHistoryEnabled(sessionId, enabled);
+    const session = summary && enabled ? await this.deps.store.get(sessionId) : null;
+    if (session) this.deps.history?.captureSession(session);
+    return summary;
+  }
+
+  searchHistory(query: string): LocalHistoryResult[] {
+    return this.deps.history?.search(query) ?? [];
   }
 
   /** What Settings offers for the next-prompt hint; see suggestionModelChoices. */
@@ -1581,7 +1599,8 @@ export class ChatService {
     const { released, seedHops } = options;
     const notes = released?.notes ?? options.notes;
     const api = this.deps.getApiClient();
-    if (!api) return { ok: false, error: 'Sign in to send a message.' };
+    if (!api && !existing.model.startsWith(LOCAL_MODEL_PREFIX))
+      return { ok: false, error: 'Sign in to send a message.' };
     // First turns only: they are where a session start spends its time.
     const timer = existing.messages.length === 0 ? new PhaseTimer() : undefined;
 
@@ -1681,7 +1700,7 @@ export class ChatService {
     // A turn with no prose - an attachment on its own - is left with the filenames appendMessage
     // named it after. There is nothing there to summarise, so the call would spend credits to
     // rephrase a list of files the user recognises as written.
-    if (isFirstPrompt && prompt) void this.nameSession(session, api, prompt);
+    if (isFirstPrompt && prompt && api) void this.nameSession(session, api, prompt);
 
     timer?.lap('startReply');
     if (timer) this.deps.logger.debug(`CHAT: first turn ${sessionId} timing ${timer.summary()}`);
@@ -1911,7 +1930,7 @@ export class ChatService {
    */
   private startReply(
     session: ChatSession,
-    api: AuthenticatedApiClient,
+    api: AuthenticatedApiClient | null,
     resume?: ResumedReply & { id: string },
     /**
      * How far down an agent-to-agent chain this turn is: 0 for one the user typed, and the
@@ -2058,7 +2077,7 @@ export class ChatService {
   private async runReply(
     session: ChatSession,
     replyId: string,
-    api: AuthenticatedApiClient,
+    api: AuthenticatedApiClient | null,
     controller: AbortController,
     resume?: ResumedReply
   ): Promise<TurnOutcome> {
@@ -2092,16 +2111,20 @@ export class ChatService {
     try {
       // Read before any await: a folder changed while the config loads must still reach the first refresh.
       let scopeVersion = this.scopeVersion(sessionId);
-      const serverConfig = await this.resolveServerConfig(api);
+      const localTurn = session.model.startsWith(LOCAL_MODEL_PREFIX);
+      if (!api && !localTurn) throw new Error('Sign in to send a message.');
+      const serverConfig = api ? await this.resolveServerConfig(api) : { endpoint: '', cdnUrl: '' };
       // A spawned session's seed run has nobody watching it; a turn the user typed into it does.
       const ask = !session.origin || this.attendedTurns.has(sessionId);
       let { roots, workingDirectory } = await this.resolveToolScope(session);
-      const media = this.buildMediaContext(session, api, serverConfig.cdnUrl);
+      const media = api ? this.buildMediaContext(session, api, serverConfig.cdnUrl) : undefined;
       // A wrapper over the client and nothing more: a turn that never searches makes no request.
-      const web = webContextFor(api, {
-        searches: this.webSearches.turn(sessionId),
-        log: line => this.deps.logger.warn(line),
-      });
+      const web = api
+        ? webContextFor(api, {
+            searches: this.webSearches.turn(sessionId),
+            log: line => this.deps.logger.warn(line),
+          })
+        : undefined;
       // Started now and awaited where the tool list is built, so it overlaps the reads below.
       // Asked every turn that can generate, from a short cache: a server with no video model gets
       // no generate_video at all rather than one that fails when called.
@@ -2144,7 +2167,7 @@ export class ChatService {
         : undefined;
       const offerExplore = shouldOfferExplore(catalog?.models ?? [], session.model);
       const exploreFor = (granted: readonly string[]): ExploreContext | undefined =>
-        granted.length > 0 && offerExplore
+        api && granted.length > 0 && offerExplore
           ? buildExploreContext({
               axios: api.getAxiosInstance(),
               endpoint: serverConfig.endpoint,
@@ -2175,24 +2198,25 @@ export class ChatService {
         : undefined;
       const videoModels = await videoModelsRead;
       const toolsFor = (granted: readonly string[]) =>
-        toolsForRequest({
-          modelId: session.model,
-          roots: granted,
-          media: !!media,
-          video: videoModels,
-          host: !!host,
-          explore: !!explore,
-          browser: !!browser,
-          screen: !!screen,
-          memory: !!memory,
-          skills: !!skills,
-          web: true,
-          // See ToolDefinition.interactive.
-          ask,
-          suggestions: !session.origin,
-          mcp: mcpTools.map(binding => binding.definition.schema),
-          mcpServers: !!this.deps.mcp,
-        });
+        modelOption?.supportsTools === false
+          ? []
+          : toolsForRequest({
+              modelId: session.model,
+              roots: granted,
+              media: !!media,
+              video: videoModels,
+              host: !!host,
+              explore: !!explore,
+              browser: !!browser,
+              memory: !!memory,
+              skills: !!skills,
+              web: !!web,
+              // See ToolDefinition.interactive.
+              ask,
+              suggestions: !session.origin,
+              mcp: mcpTools.map(binding => binding.definition.schema),
+              mcpServers: !!this.deps.mcp,
+            });
       let tools = toolsFor(roots);
       // A resumed reply replays the interrupted turn's tool results to the model, so untrusted
       // text it had already read is still in front of it: it starts out as tainted as the turn
@@ -2222,20 +2246,21 @@ export class ChatService {
       );
       const projectContext = await contextBlock;
       const skillsSection = await skillsBlock;
+      const toolsSupported = modelOption?.supportsTools !== false;
       const systemMessage = () =>
         buildSystemMessage(
-          roots,
-          !!media,
-          !!host,
-          !!explore,
-          this.deps.mcp ? mcpServers : null,
+          toolsSupported ? roots : [],
+          toolsSupported && !!media,
+          toolsSupported && !!host,
+          toolsSupported && !!explore,
+          toolsSupported && this.deps.mcp ? mcpServers : null,
           session.project,
           this.deps.dependencies?.promptLines(session.id) ?? [],
           projectContext,
-          !!browser,
+          toolsSupported && !!browser,
           patchEdits,
-          !!memory,
-          skillsSection,
+          toolsSupported && !!memory,
+          toolsSupported ? skillsSection : '',
           ask,
           session.model,
           true,
@@ -2281,48 +2306,60 @@ export class ChatService {
           this.emit({ type: 'phase', sessionId, messageId: replyId, phase })
         );
         setPhase(WAITING);
-        const failure = await streamRound(
-          api.getAxiosInstance(),
-          serverConfig.endpoint,
-          {
-            model: session.model,
-            messages: cacheable ? withCacheBreakpoints(wire) : wire,
-            tools,
-            thinking: askForThinking,
-            // Dev log only; never sent on the wire. See CompletionRequest.sessionId.
-            sessionId,
-            ...effortField,
-            ...(maxTokens ? { maxTokens } : {}),
-          },
-          event => {
-            if (event.type === 'meta') probe?.frame('meta');
-            // `error` never reaches here (the transport throws on it); `meta` carries no reply.
-            if (event.type === 'error' || event.type === 'meta') return;
-            if (event.text || event.type === 'tool_use') timer.firstToken();
-            if (event.text) {
-              const split = splitThinking.push(event.text);
-              // An empty split is either a bare thinking marker or text the filter is holding
-              // back as a possible partial marker; only the first is a thinking frame.
-              const marker = !split.text && !split.reasoning && THINK_MARKER.test(event.text);
-              probe?.frame(split.text ? 'text' : split.reasoning ? 'reasoning' : marker ? 'marker' : 'text');
-              if (split.text) setPhase(RESPONDING);
-              else if (split.reasoning || marker) setPhase(THINKING);
-              append(split);
-            }
-            if (event.toolStarted) {
-              probe?.frame('toolStart');
-              setPhase({ kind: 'writing-tool', name: event.toolStarted.name });
-            }
-            if (event.type === 'tool_use') {
-              probe?.frame('toolUse');
-              if (event.tools) requested.push(...event.tools);
-              if (event.thinking) turnThinking = event.thinking;
-            }
-            if (event.stopReason) stopReason = event.stopReason;
-            turnUsage = foldUsage(turnUsage, event);
-          },
-          controller.signal
-        );
+        const onCompletionEvent = (event: CompletionStreamEvent): void => {
+          if (event.type === 'meta') probe?.frame('meta');
+          if (event.type === 'error' || event.type === 'meta') return;
+          if (event.text || event.type === 'tool_use') timer.firstToken();
+          if (event.text) {
+            const split = splitThinking.push(event.text);
+            const marker = !split.text && !split.reasoning && THINK_MARKER.test(event.text);
+            probe?.frame(split.text ? 'text' : split.reasoning ? 'reasoning' : marker ? 'marker' : 'text');
+            if (split.text) setPhase(RESPONDING);
+            else if (split.reasoning || marker) setPhase(THINKING);
+            append(split);
+          }
+          if (event.toolStarted) {
+            probe?.frame('toolStart');
+            setPhase({ kind: 'writing-tool', name: event.toolStarted.name });
+          }
+          if (event.type === 'tool_use') {
+            probe?.frame('toolUse');
+            if (event.tools) requested.push(...event.tools);
+            if (event.thinking) turnThinking = event.thinking;
+          }
+          if (event.stopReason) stopReason = event.stopReason;
+          turnUsage = foldUsage(turnUsage, event);
+        };
+        const failure = session.model.startsWith(LOCAL_MODEL_PREFIX)
+          ? await streamLocalRound(
+              this.deps.local ?? new OllamaLocal(),
+              {
+                model: session.model,
+                messages: wire,
+                tools,
+                thinking: askForThinking,
+                sessionId,
+                ...effortField,
+                ...(maxTokens ? { maxTokens } : {}),
+              },
+              onCompletionEvent,
+              controller.signal
+            )
+          : await streamRound(
+              api!.getAxiosInstance(),
+              serverConfig.endpoint,
+              {
+                model: session.model,
+                messages: cacheable ? withCacheBreakpoints(wire) : wire,
+                tools,
+                thinking: askForThinking,
+                sessionId,
+                ...effortField,
+                ...(maxTokens ? { maxTokens } : {}),
+              },
+              onCompletionEvent,
+              controller.signal
+            );
         append(splitThinking.flush());
         const timing = timer.end();
         if (probe) this.logRoundPhases(sessionId, session.model, roundIndex, probe.end());
@@ -2698,12 +2735,13 @@ export class ChatService {
     // and the 'done' that follows hands the reply over whole.
     this.live.delete(sessionId);
     if (!resumed) {
-      await this.deps.store.appendMessage(sessionId, message);
+      const updated = await this.deps.store.appendMessage(sessionId, message);
+      if (updated) this.deps.history?.captureSession(updated);
       return;
     }
     // stopReason and error are set explicitly, undefined included: a resumed run that finishes
     // must clear the budget stop the previous one left behind, and `Partial` would keep it.
-    await this.deps.store.updateMessage(sessionId, message.id, {
+    const updated = await this.deps.store.updateMessage(sessionId, message.id, {
       content: message.content,
       stopReason: message.stopReason,
       error: message.error,
@@ -2713,6 +2751,7 @@ export class ChatService {
       artifacts: message.artifacts,
       usage: message.usage,
     });
+    if (updated) this.deps.history?.captureSession(updated);
   }
 
   /**
@@ -5282,6 +5321,20 @@ const THINK_MARKER = /<\/?think>/;
 async function streamRound(...args: Parameters<typeof streamCompletion>): Promise<Error | null> {
   try {
     await streamCompletion(...args);
+    return null;
+  } catch (err) {
+    return err instanceof Error ? err : new Error(String(err));
+  }
+}
+
+async function streamLocalRound(
+  local: OllamaLocal,
+  request: CompletionRequest,
+  onEvent: (event: CompletionStreamEvent) => void,
+  signal?: AbortSignal
+): Promise<Error | null> {
+  try {
+    await local.stream(request, onEvent, signal);
     return null;
   } catch (err) {
     return err instanceof Error ? err : new Error(String(err));

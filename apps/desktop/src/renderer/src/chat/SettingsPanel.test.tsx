@@ -27,6 +27,8 @@ describe('the Settings screen', () => {
     expect(html).toContain('data-entry="server"');
     expect(html).toContain('data-entry="updates"');
     expect(html).toContain('data-entry="worktree-default"');
+    expect(html).toContain('data-entry="local-history"');
+    expect(html).toContain('settings-clear-history-btn');
     expect(html).not.toContain('data-entry="permissions"');
     expect(html).not.toContain('data-entry="claude-import"');
   });
