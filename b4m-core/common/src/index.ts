@@ -108,6 +108,7 @@ export * from './utils/deepLinks';
 export * from './utils/skillMdSource';
 export * from './utils/claudeMarketplace';
 export * from './utils/emailList';
+export * from './utils/emailDomain';
 export * from './utils/requireEnv';
 export * from './utils/bedrockCredentials';
 export * from './utils/internalStaffDomains';

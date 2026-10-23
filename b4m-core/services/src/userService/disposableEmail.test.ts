@@ -1,28 +1,62 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { IAdminSettingsRepository } from '@bike4mind/common';
-import { isDisposableEmail, shouldBlockDisposableEmail } from './disposableEmail';
+import { isAdminBlockedEmailDomain, isDisposableEmail, shouldBlockDisposableEmail } from './disposableEmail';
 
-const adminSettingsWith = (settingValue: unknown) => {
-  const findBySettingName = vi.fn().mockResolvedValue(settingValue === undefined ? null : { settingValue });
+const adminSettingsWith = (settings: Record<string, unknown>) => {
+  const findBySettingName = vi.fn(async (name: string) =>
+    name in settings ? { settingName: name, settingValue: settings[name] } : null
+  );
   // Only findBySettingName is read by the gate.
   return { adminSettings: { findBySettingName } as unknown as IAdminSettingsRepository, findBySettingName };
 };
 
 describe('shouldBlockDisposableEmail', () => {
   it('blocks a disposable email when the setting is unset (default ON)', async () => {
-    const { adminSettings } = adminSettingsWith(undefined);
+    const { adminSettings } = adminSettingsWith({});
     expect(await shouldBlockDisposableEmail('x@mailinator.com', { adminSettings })).toBe(true);
   });
 
   it('allows a disposable email when blockDisposableEmails is switched OFF', async () => {
-    const { adminSettings } = adminSettingsWith('false');
+    const { adminSettings } = adminSettingsWith({ blockDisposableEmails: 'false' });
     expect(await shouldBlockDisposableEmail('x@mailinator.com', { adminSettings })).toBe(false);
   });
 
-  it('never blocks, or reads the setting for, a non-disposable email', async () => {
-    const { adminSettings, findBySettingName } = adminSettingsWith(true);
+  it('never blocks, or reads the disposable toggle for, an email on no list', async () => {
+    const { adminSettings, findBySettingName } = adminSettingsWith({ blockDisposableEmails: true });
     expect(await shouldBlockDisposableEmail('x@gmail.com', { adminSettings })).toBe(false);
-    expect(findBySettingName).not.toHaveBeenCalled();
+    expect(findBySettingName).not.toHaveBeenCalledWith('blockDisposableEmails');
+  });
+
+  it('blocks a subdomain of an admin-blocked domain', async () => {
+    const { adminSettings } = adminSettingsWith({ blockedEmailDomains: JSON.stringify(['kashre.com']) });
+    expect(await shouldBlockDisposableEmail('aubrey28b850@np.kashre.com', { adminSettings })).toBe(true);
+  });
+
+  it('blocks an admin-blocked domain even when blockDisposableEmails is OFF', async () => {
+    const { adminSettings } = adminSettingsWith({ blockDisposableEmails: false, blockedEmailDomains: ['kashre.com'] });
+    expect(await shouldBlockDisposableEmail('x@kashre.com', { adminSettings })).toBe(true);
+  });
+});
+
+describe('isAdminBlockedEmailDomain', () => {
+  it('is false when the setting is unset', async () => {
+    const { adminSettings } = adminSettingsWith({});
+    expect(await isAdminBlockedEmailDomain('x@kashre.com', { adminSettings })).toBe(false);
+  });
+
+  it('matches entries case-insensitively and ignores invalid stored entries', async () => {
+    const { adminSettings } = adminSettingsWith({ blockedEmailDomains: ['not a domain', ' KASHRE.com '] });
+    expect(await isAdminBlockedEmailDomain('X@NP.Kashre.COM', { adminSettings })).toBe(true);
+  });
+
+  it('does not match a domain that only ends with the same letters', async () => {
+    const { adminSettings } = adminSettingsWith({ blockedEmailDomains: ['kashre.com'] });
+    expect(await isAdminBlockedEmailDomain('x@notkashre.com', { adminSettings })).toBe(false);
+  });
+
+  it('is false for a stored value that is not a list', async () => {
+    const { adminSettings } = adminSettingsWith({ blockedEmailDomains: 'kashre.com' });
+    expect(await isAdminBlockedEmailDomain('x@kashre.com', { adminSettings })).toBe(false);
   });
 });
 

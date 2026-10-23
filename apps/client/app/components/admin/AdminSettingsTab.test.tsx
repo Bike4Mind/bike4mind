@@ -295,6 +295,7 @@ describe('AdminSettingsTab Credits System group', () => {
     for (const key of ['billOperationalUsage', 'blockDisposableEmails', 'syntheticUserEmailDomains']) {
       expect(screen.getByTestId(`generic-setting-${key}`), key).toBeTruthy();
     }
+    expect(screen.getByTestId('string-list-setting-blockedEmailDomains')).toBeTruthy();
   });
 
   it('links to the Growth and Pricing tab', () => {

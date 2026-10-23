@@ -8,6 +8,7 @@ import {
   isPricePerCreditBelowFloor,
   maskSensitiveSettingValue,
   MIN_PRICE_PER_CREDIT_USD,
+  partitionDomainList,
   partitionEmailList,
   settingsMap,
 } from '@bike4mind/common';
@@ -78,6 +79,14 @@ const handler = baseApi().put(
       const { valid, invalid } = partitionEmailList(value);
       if (invalid.length > 0) {
         throw new BadRequestError(`Not a valid email address: ${invalid.map(e => JSON.stringify(e)).join(', ')}`);
+      }
+      value = valid;
+    }
+
+    if (key === 'blockedEmailDomains') {
+      const { valid, invalid } = partitionDomainList(value);
+      if (invalid.length > 0) {
+        throw new BadRequestError(`Not a valid domain: ${invalid.map(d => JSON.stringify(d)).join(', ')}`);
       }
       value = valid;
     }

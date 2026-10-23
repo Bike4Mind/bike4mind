@@ -359,6 +359,32 @@ describe('settings/update reviewer email list', () => {
   });
 });
 
+describe('settings/update blocked email domain list', () => {
+  beforeEach(() => {
+    stored = null;
+    findOneAndUpdate.mockReset();
+    vi.clearAllMocks();
+  });
+
+  it('refuses a list with an invalid domain and names the entry', async () => {
+    await expect(runHandler('blockedEmailDomains', ['kashre.com', 'not a domain'])).rejects.toMatchObject({
+      statusCode: 400,
+      message: expect.stringContaining('not a domain'),
+    });
+    expect(findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('stores a valid list normalized and deduped', async () => {
+    stageWriteResult('blockedEmailDomains', ['kashre.com', 'xzcoot.com']);
+    await runHandler('blockedEmailDomains', [' Kashre.com', '@kashre.com', '*.xzcoot.com']);
+    expect(findOneAndUpdate).toHaveBeenCalledWith(
+      { settingName: 'blockedEmailDomains' },
+      { $set: { settingValue: ['kashre.com', 'xzcoot.com'] } },
+      expect.anything()
+    );
+  });
+});
+
 describe('settings/update admin audit trail', () => {
   beforeEach(() => {
     order.length = 0;
