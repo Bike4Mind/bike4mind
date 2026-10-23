@@ -46,6 +46,11 @@ describe('isHostAllowlisted', () => {
     expect(isHostAllowlisted('bash_execute')).toBe(false);
   });
 
+  it('approves a tool from a server that is itself named mcp', () => {
+    allow(['mcp__mcp__*']);
+    expect(isHostAllowlisted('mcp__search', { isMcpTool: true })).toBe(true);
+  });
+
   it('does not let a mcp__ pattern reach a non-MCP tool whose name looks namespaced', () => {
     allow(['mcp__host__*', 'mcp__*']);
     expect(isHostAllowlisted('host__read_self')).toBe(false);
