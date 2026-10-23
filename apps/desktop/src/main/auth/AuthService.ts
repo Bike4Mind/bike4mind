@@ -75,12 +75,6 @@ const SESSION_EXPIRED_MESSAGE = 'Your session expired. Sign in again to continue
 const SIGNED_OUT_ELSEWHERE_MESSAGE = 'You were signed out in another window. Sign in again to continue.';
 
 /**
- * How often a session waiting on re-authentication looks for one another instance sharing the
- * vault signed in or refreshed. One small file read; nothing goes to the server.
- */
-export const VAULT_WATCH_INTERVAL_MS = 10_000;
-
-/**
  * Owns the whole device-authorization flow and every token, in the main process.
  *
  * Nothing here returns a credential to a caller: the only outward channel is
@@ -94,11 +88,10 @@ export class AuthService {
   private tokenStore: TokenStore | null = null;
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
   private refreshAttempt = 0;
-  private vaultWatchTimer: ReturnType<typeof setInterval> | null = null;
 
   /**
    * The access token a request was refused with even after a refresh. The vault keeps it (only a
-   * rejected refresh token clears it), so the vault watch must not adopt it straight back. Memory
+   * rejected refresh token clears it), so adoptStoredSession must not take it straight back. Memory
    * only, never logged.
    */
   private rejectedAccessToken: string | null = null;
@@ -159,6 +152,7 @@ export class AuthService {
       return;
     }
     if (this.state.busy === 'signing-in') return;
+    if (await this.adoptStoredSession()) return;
 
     const generation = ++this.signInGeneration;
     const device = this.device;
@@ -277,7 +271,6 @@ export class AuthService {
     this.signInGeneration++;
     this.photoGeneration++;
     this.clearRefreshTimer();
-    this.clearVaultWatch();
   }
 
   private endpointUrl(): string {
@@ -379,7 +372,6 @@ export class AuthService {
           // Re-authentication was already under way (a session adopted from the vault, or a fresh
           // sign-in, that was refused): stay on the conversation and keep waiting.
           this.patch({ status: 'signed-out', busy: 'idle', error: failure.error });
-          this.watchVault();
           return;
         }
         this.patch({ status: 'signed-out', busy: 'idle', user: undefined, error: failure.error });
@@ -582,8 +574,8 @@ export class AuthService {
    *
    * A session that ends while the user is working becomes `reauthRequired`: the window stays on
    * the conversation (drafts, the thread, the failed turn) with one notice to sign in again, and
-   * the vault is watched for a session another instance stores meanwhile. One that ends before
-   * the user ever got in, during restore or sign-in, shows the plain sign-in card as before.
+   * a session another instance stores meanwhile is picked up (see adoptStoredSession). One that
+   * ends before the user ever got in, during restore or sign-in, shows the plain sign-in card.
    */
   private endSession(reason: string, message: string = SESSION_EXPIRED_MESSAGE): void {
     this.deps.logger.warn(`AUTH: signed out: ${reason}`);
@@ -594,7 +586,6 @@ export class AuthService {
     const error = { message, remedy: 'retry-sign-in' as const };
     if (this.state.status === 'signed-in' || this.state.reauthRequired) {
       this.patch({ status: 'signed-out', busy: 'idle', pending: undefined, error, reauthRequired: true });
-      this.watchVault();
       return;
     }
 
@@ -603,37 +594,30 @@ export class AuthService {
     this.patch({ status: 'signed-out', busy: 'idle', user: undefined, pending: undefined, error });
   }
 
-  private watchVault(): void {
-    this.clearVaultWatch();
+  /**
+   * While waiting on re-authentication, carry on with a session another instance sharing the
+   * vault signed in or refreshed. Event-driven (window focus, the sign-in action), never on a
+   * timer: one small file read, nothing sent to the server unless there is a new token to try.
+   * Resolves true when this instance is signed in again.
+   */
+  async adoptStoredSession(): Promise<boolean> {
     const url = this.endpointUrl();
-    this.vaultWatchTimer = setInterval(() => void this.adoptStoredSession(url), VAULT_WATCH_INTERVAL_MS);
-  }
-
-  private clearVaultWatch(): void {
-    if (this.vaultWatchTimer) {
-      clearInterval(this.vaultWatchTimer);
-      this.vaultWatchTimer = null;
-    }
-  }
-
-  /** Another instance sharing the vault signed in or refreshed: carry on with its session. */
-  private async adoptStoredSession(url: string): Promise<void> {
     const waiting = () =>
       this.state.reauthRequired === true &&
       this.state.status === 'signed-out' &&
       this.state.busy === 'idle' &&
       url === this.endpointUrl();
-    if (!waiting()) return;
+    if (!waiting()) return false;
 
     const tokens = await this.deps.vault.reloadTokens(url);
-    if (!tokens || tokens.accessToken === this.rejectedAccessToken || !waiting()) return;
+    if (!tokens || tokens.accessToken === this.rejectedAccessToken || !waiting()) return false;
 
     this.deps.logger.warn('AUTH: adopting a session another instance stored');
-    this.clearVaultWatch();
-    // Marked before the round trip: if it is refused, the watch must wait for a newer one.
+    // Marked before the round trip: if it is refused, only a newer token is worth trying.
     this.rejectedAccessToken = tokens.accessToken;
     this.patch({ status: 'initializing', busy: 'restoring', error: undefined });
     await this.identify(tokens);
+    return this.state.status === 'signed-in';
   }
 
   private clearRefreshTimer(): void {
@@ -718,7 +702,6 @@ export class AuthService {
   }
 
   private setState(next: AuthState): void {
-    if (!next.reauthRequired) this.clearVaultWatch();
     this.state = next;
     this.deps.onStateChanged(next);
   }

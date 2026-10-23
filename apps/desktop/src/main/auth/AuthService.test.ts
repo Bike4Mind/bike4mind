@@ -9,13 +9,7 @@ import {
   type RefreshTokenResponse,
 } from '@bike4mind/client-auth';
 import type { AuthState } from '@shared/auth';
-import {
-  AuthService,
-  DESKTOP_OAUTH_CLIENT_ID,
-  readPhotoSource,
-  toDesktopUser,
-  VAULT_WATCH_INTERVAL_MS,
-} from './AuthService';
+import { AuthService, DESKTOP_OAUTH_CLIENT_ID, readPhotoSource, toDesktopUser } from './AuthService';
 import { fetchProfilePhoto, LOCAL_FILE_PROXY_BASE, type ProfilePhotoCache } from './profilePhoto';
 import { TokenVault, type SecretCipher, type VaultFile } from './tokenVault';
 
@@ -685,16 +679,53 @@ describe('AuthService token refresh', () => {
     // Kept for the other instances sharing the vault; only this one stops presenting it.
     expect(await vault.reloadTokens(HOSTED)).toMatchObject({ refreshToken: 'refresh-1' });
 
-    await vi.advanceTimersByTimeAsync(VAULT_WATCH_INTERVAL_MS * 2);
+    await expect(service.adoptStoredSession()).resolves.toBe(false);
     expect(service.getState()).toMatchObject({ status: 'signed-out', reauthRequired: true });
 
     // Another instance signs in; this one carries on with that session, no sign-in of its own.
     accepted.add('access-7');
     await new TokenVault(cipher, file, silentLogger).setTokens(HOSTED, storedTokens(7, 30 * 60_000));
-    await vi.advanceTimersByTimeAsync(VAULT_WATCH_INTERVAL_MS);
+    await expect(service.adoptStoredSession()).resolves.toBe(true);
 
     expect(service.getState()).toMatchObject({ status: 'signed-in', reauthRequired: undefined });
     await expect(service.getApiClient()?.get('/api/anything')).resolves.toBeTruthy();
+    service.dispose();
+  });
+
+  it('keeps the session and the vault when the refresh on a 401 cannot reach the server', async () => {
+    const network = new AxiosError('connect ECONNREFUSED', 'ECONNREFUSED');
+    const { service, accepted, vault } = await signedIn(vi.fn().mockRejectedValue(network));
+    accepted.clear();
+
+    const err = await service
+      .getApiClient()
+      ?.get('/api/anything')
+      .catch((e: unknown) => e);
+
+    expect(err).not.toBeInstanceOf(SessionRevokedError);
+    expect(service.getState()).toMatchObject({ status: 'signed-in' });
+    expect(service.getState().reauthRequired).toBeUndefined();
+    expect(await vault.reloadTokens(HOSTED)).toMatchObject({ refreshToken: 'refresh-0' });
+    service.dispose();
+  });
+
+  it('adopts a session another instance stored when the user asks to sign in, with no device flow', async () => {
+    const file = memoryFile();
+    const { service, accepted, device } = await signedIn(vi.fn().mockResolvedValue(rotation(1)), file);
+    accepted.clear();
+    await service
+      .getApiClient()
+      ?.get('/api/anything')
+      .catch(() => undefined);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(service.getState().reauthRequired).toBe(true);
+
+    accepted.add('access-7');
+    await new TokenVault(cipher, file, silentLogger).setTokens(HOSTED, storedTokens(7, 30 * 60_000));
+    await service.signIn();
+
+    expect(service.getState()).toMatchObject({ status: 'signed-in', reauthRequired: undefined });
+    expect(device.initiateDeviceFlow).not.toHaveBeenCalled();
     service.dispose();
   });
 
