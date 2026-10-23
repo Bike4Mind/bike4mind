@@ -104,4 +104,29 @@ describe('OllamaBackend identity reminder', () => {
     expect(chat).toHaveBeenCalledTimes(2);
     for (const call of chat.mock.calls) expect(reminderCount(call[0])).toBe(1);
   });
+
+  // Applied after the strip: the reminder belongs on what is actually sent, so a tool-ordering
+  // system prompt that the strip removes must not carry the identity line away with it.
+  it('prepends the reminder after stripping a requiresTool system message', async () => {
+    const tool: ICompletionOptionTools = {
+      toolFn: vi.fn(async () => '4'),
+      toolSchema: {
+        name: 'math_evaluate',
+        description: 'Evaluate math',
+        parameters: { type: 'object', properties: { expression: { type: 'string' } }, required: ['expression'] },
+      },
+    };
+    const { backend, chat } = makeBackend([answer('ok')]);
+
+    await run(
+      backend,
+      [
+        { role: 'user', content: 'go' },
+        { role: 'system', content: 'You MUST call math_evaluate.', requiresTool: 'math_evaluate' },
+      ],
+      { executeTools: true, tools: [tool], _internal: { toolCallCount: 0, maxToolCalls: 0 } }
+    );
+
+    expect(systemContents(chat.mock.calls[0][0])).toEqual([REMINDER]);
+  });
 });

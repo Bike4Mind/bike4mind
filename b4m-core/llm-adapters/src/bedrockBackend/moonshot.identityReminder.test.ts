@@ -35,4 +35,19 @@ describe('MoonshotBedrockBackend identity reminder', () => {
 
     expect(body.messages).toEqual([{ role: 'user', content: 'hi' }]);
   });
+
+  it('sends the caller system message unappended when the caller opts out', () => {
+    const body = payloadOf(
+      [
+        { role: 'system', content: 'You are terse.' },
+        { role: 'user', content: 'hi' },
+      ],
+      { omitIdentityReminder: true }
+    );
+
+    expect(body.messages).toEqual([
+      { role: 'system', content: 'You are terse.' },
+      { role: 'user', content: 'hi' },
+    ]);
+  });
 });
