@@ -10,7 +10,7 @@ import { type MigrationFile } from './index';
  * index already exists. Id backdated below 20260922000001, whose test asserts it stays highest.
  */
 const migration: MigrationFile = {
-  id: 20260921235987,
+  id: 20260921235984,
   name: 'ensure artifact session identifier index',
 
   up: async () => {

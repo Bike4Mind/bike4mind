@@ -77,16 +77,16 @@ export function groupReactArtifacts<T extends GroupableArtifact>(
       queue.push(...(imports.get(next) ?? []));
     }
 
-    const files: Record<string, string> = {};
+    const files = new Map<string, string>();
     const siblings: { identifier: string; title: string }[] = [];
     const dependencies = new Set(extractReactDependencies(entry.content));
     for (const [identifier, file] of latest) {
       if (file === entry) continue;
-      files[identifier] = file.content;
+      files.set(identifier, file.content);
       if (reached.has(file)) siblings.push({ identifier, title: file.title });
       extractReactDependencies(file.content).forEach(dep => dependencies.add(dep));
     }
-    roles.set(entry, { role: 'entry', files, dependencies: [...dependencies], siblings });
+    roles.set(entry, { role: 'entry', files: Object.fromEntries(files), dependencies: [...dependencies], siblings });
 
     // A sibling reachable from two entries is labelled with the first one in the reply.
     for (const file of reached) {

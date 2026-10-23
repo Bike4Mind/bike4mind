@@ -185,6 +185,23 @@ describe('persistArtifacts - React versioning', () => {
     expect(put).toHaveBeenCalledWith('/api/artifacts/artifact_react_todo_0_0', expect.anything());
   });
 
+  it.each(['App', 'my_app'])(
+    'versions a saved legacy %s row whose identifier exists only in its id',
+    async identifier => {
+      const legacyId = `artifact_react_${identifier}_0_0`;
+      seed({ id: legacyId, type: 'react', content: 'user edit', metadata: { legacyId } });
+
+      await persistArtifacts([block('react', identifier, 'updated')], SESSION);
+
+      expect(post).not.toHaveBeenCalled();
+      expect(put).toHaveBeenCalledWith(
+        `/api/artifacts/${legacyId}`,
+        expect.objectContaining({ content: 'updated', createNewVersion: true })
+      );
+      expect(store.rows).toEqual([expect.objectContaining({ id: legacyId, version: 2, content: 'updated' })]);
+    }
+  );
+
   it('keeps creating a new row per block for non-React types', async () => {
     seed({ id: 'artifact_html_page_0_0', type: 'html', identifier: 'page' });
 
@@ -215,6 +232,32 @@ describe('findExistingArtifactId', () => {
     expect(await findExistingArtifactId('html', 'page', SESSION)).toBe('artifact_html_page_0_0');
     expect(get).toHaveBeenCalledTimes(2);
   });
+
+  it.each([
+    ['artifact_react_app_123_0', 'app', true],
+    ['artifact_react_my_app_123_0', 'my_app', true],
+    ['artifact_react_app_2_123_0', 'app_2', true],
+    ['artifact_react_app_123_0', 'ap', false],
+    ['artifact_react_my_app_123_0', 'my', false],
+    ['artifact_html_app_123_0', 'app', false],
+    ['prefix_react_app_123_0', 'app', false],
+    ['artifact_react_app', 'app', false],
+    ['artifact_react_app_time_0', 'app', false],
+    ['artifact_react_app_123_index', 'app', false],
+  ] as const)('matches the complete legacy id %s against %s (%s)', async (id, identifier, matches) => {
+    seed({ id, type: 'react' });
+
+    expect(await findExistingArtifactId('react', identifier, SESSION)).toBe(matches ? id : null);
+  });
+
+  it.each([{ identifier: 'Other' }, { metadata: { originalIdentifier: 'Other' } }])(
+    'does not override an explicit identifier with an id segment (%j)',
+    async extra => {
+      seed({ id: 'artifact_react_App_123_0', type: 'react', ...extra });
+
+      expect(await findExistingArtifactId('react', 'App', SESSION)).toBeNull();
+    }
+  );
 
   it('does not query for an empty identifier', async () => {
     seed({ id: 'artifact_react_old_0_0', type: 'react', identifier: 'old' });
