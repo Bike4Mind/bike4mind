@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import { Types } from 'mongoose';
 
 const h = vi.hoisted(() => ({
   audit: vi.fn(),
@@ -150,6 +151,21 @@ describe('liveops triage configs admin audit', () => {
       method: 'PUT',
       query: { id: CONFIG_ID },
       body: { enabled: true, name: 'Nightly' },
+    });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(h.audit).not.toHaveBeenCalled();
+  });
+
+  it('PUT does not audit when a Slack-bound config is saved unchanged', async () => {
+    const slackWorkspaceId = new Types.ObjectId();
+    h.findById.mockResolvedValue({ id: CONFIG_ID, name: 'Nightly', enabled: true, slackWorkspaceId });
+    h.updateConfig.mockResolvedValue({ id: CONFIG_ID, name: 'Nightly', enabled: true, slackWorkspaceId });
+
+    const { res } = await call(itemHandler, {
+      method: 'PUT',
+      query: { id: CONFIG_ID },
+      body: { enabled: true, name: 'Nightly', slackWorkspaceId: slackWorkspaceId.toString() },
     });
 
     expect(res._getStatusCode()).toBe(200);
