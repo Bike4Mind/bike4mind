@@ -750,6 +750,16 @@ describe('POST /api/admin/users/:userId/generate-api-key - admin audit', () => {
     expect(mockLogEvent).not.toHaveBeenCalled();
   });
 
+  it('attributes the revoke to the real admin when acting under impersonation', async () => {
+    mockRecordAdminAction.mockRejectedValueOnce(new Error('audit down'));
+    const { req, res } = post({ name: 'key', scopes: ['notebooks:read'] });
+    (req as any).user.impersonatedBy = 'real-admin';
+
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow('audit down');
+
+    expect(mockRevokeKey).toHaveBeenCalledWith('k1', 'real-admin', expect.any(String));
+  });
+
   it('still surfaces the audit failure and logs the live key when the revoke also fails', async () => {
     mockRecordAdminAction.mockRejectedValueOnce(new Error('audit down'));
     mockRevokeKey.mockRejectedValueOnce(new Error('revoke down'));

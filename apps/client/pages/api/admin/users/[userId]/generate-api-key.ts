@@ -280,7 +280,7 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
       } catch (error) {
         // Surface the audit failure even if the revoke also fails; the log names the key left live.
         await userApiKeyRepository
-          .revokeIfNotDisabled(newApiKey.id, req.user.id, 'admin audit write failed')
+          .revokeIfNotDisabled(newApiKey.id, req.user.impersonatedBy ?? req.user.id, 'admin audit write failed')
           .catch((revokeError: unknown) => {
             req.logger.error('Failed to revoke unaudited API key', { keyId: newApiKey.id, revokeError });
           });
