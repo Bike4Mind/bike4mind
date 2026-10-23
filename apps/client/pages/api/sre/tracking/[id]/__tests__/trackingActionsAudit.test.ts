@@ -60,6 +60,8 @@ vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({ getSourceQueueUrl:
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
+import { GitHubService } from '@server/services/githubService';
+import { dispatchIssueToSre } from '@bike4mind/server-utils/integrations/github/sreWebhookDispatch';
 import dismissHandler from '../dismiss';
 import rerunHandler from '../rerun';
 import retryHandler from '../retry';
@@ -119,6 +121,28 @@ describe('SRE tracking actions admin audit', () => {
       target: { kind: 'settings', id: TRACKING_ID },
     });
     expect(h.sendToQueue.mock.invocationCallOrder[0]).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
+  });
+
+  it('rerun records a blocked GitHub dispatch with its reason', async () => {
+    h.findFullById.mockResolvedValue({ ...trackingDoc('dismissed'), source: 'GITHUB_ISSUE', githubIssueNumber: 7 });
+    vi.mocked(GitHubService.forSystem).mockResolvedValue({
+      getIssue: vi
+        .fn()
+        .mockResolvedValue({ number: 7, state: 'open', title: 't', html_url: 'u', body: null, labels: [] }),
+    } as unknown as Awaited<ReturnType<typeof GitHubService.forSystem>>);
+    vi.mocked(dispatchIssueToSre).mockResolvedValue({ dispatched: false, reason: 'label-mismatch' } as Awaited<
+      ReturnType<typeof dispatchIssueToSre>
+    >);
+
+    const { res } = await post(rerunHandler);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(h.audit).toHaveBeenCalledTimes(1);
+    expect(h.audit.mock.calls[0][1]).toMatchObject({
+      action: 'ops.sre.tracking_rerun',
+      summary: 'rerun of SRE tracking fp-1 blocked (label-mismatch)',
+      details: { source: 'GITHUB_ISSUE', dispatched: false, reason: 'label-mismatch' },
+    });
   });
 
   it('retry records ops.sre.tracking_retried after re-queueing', async () => {
