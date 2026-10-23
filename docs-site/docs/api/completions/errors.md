@@ -58,7 +58,7 @@ Log the `request_id` from the error body (also sent as the `X-Request-ID` header
 
 ## Unknown model
 
-A 400 with `errorCode: "unknown_model"` means the model is not in the catalog or not available to you. Call `GET /api/v1/models` for the ids you can use.
+A 400 with `errorCode: "unknown_model"` means the model id is not available to you. Check `GET /api/v1/models` for the ids you can use.
 
 ## Related
 

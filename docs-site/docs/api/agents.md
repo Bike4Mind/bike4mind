@@ -27,17 +27,17 @@ GET /agents
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `search` | string | Search query for agent names | - |
-| `owned` | boolean | Only return user-owned agents | false |
-| `public` | boolean | Include public agents | true |
+| `query` | string | Search query for agent names | empty |
 | `page` | number | Page number for pagination | 1 |
-| `limit` | number | Number of agents per page | 20 |
+| `limit` | number | Number of agents per page | 10 |
+| `orderBy` | string | `createdAt`, `updatedAt` or `name` | `updatedAt` |
+| `orderDirection` | string | `asc` or `desc` | `desc` |
 
 #### Response
 
 ```json
 {
-  "agents": [
+  "data": [
     {
       "id": "agent_123",
       "name": "Marketing Assistant",
@@ -56,12 +56,8 @@ GET /agents
       "createdAt": "2024-01-15T10:30:00Z"
     }
   ],
-  "pagination": {
-    "page": 1,
-    "limit": 20,
-    "total": 1,
-    "totalPages": 1
-  }
+  "hasMore": false,
+  "total": 1
 }
 ```
 

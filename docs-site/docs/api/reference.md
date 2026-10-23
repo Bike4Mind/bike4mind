@@ -34,7 +34,7 @@ curl https://app.bike4mind.com/api/agents \
 
 ## Pagination
 
-List endpoints accept `page` and `limit` query parameters and return a `pagination` object alongside the items.
+`GET /api/agents` accepts `page` (default 1) and `limit` (default 10) query parameters and returns `{ data, hasMore, total }`: the items for the page, whether more pages follow, and the total match count. The handler sets no maximum for `limit`.
 
 ## Errors
 

@@ -294,7 +294,7 @@ curl -X POST https://app.bike4mind.com/api/ai/v1/completions \
 
 ## Testing Different Models
 
-Call `GET /api/v1/models` with your API key to list the model ids available to you, then change the `model` field in any example above.
+Call `GET /api/v1/models` with your API key to list the model ids available to you. Ids depend on which providers the deployment and your own provider keys enable, so if an example returns 400 `unknown_model`, use an id from that list. Change the `model` field in any example above.
 
 ---
 

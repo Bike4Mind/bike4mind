@@ -33,6 +33,8 @@ curl -X POST https://app.bike4mind.com/api/ai/v1/completions \
   }'
 ```
 
+Model ids depend on which providers the deployment and your own provider keys enable. If this returns 400 `unknown_model`, call `GET /api/v1/models` and use an id from that list.
+
 **Response (SSE stream):**
 
 ```

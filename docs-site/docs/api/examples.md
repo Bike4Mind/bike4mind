@@ -287,7 +287,7 @@ async function getAllPages<T>(
     
     allItems.push(...response.data);
     
-    hasMore = response.pagination.hasNext;
+    hasMore = response.hasMore;
     page++;
   }
 

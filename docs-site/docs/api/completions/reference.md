@@ -27,11 +27,11 @@ Send your API key as `Authorization: Bearer b4m_live_<key>`, or with the legacy 
 
 ## Choosing a model
 
-Call `GET /api/v1/models` with your API key to list the model ids you can use. The list depends on which providers are available to you. An unknown or unavailable model returns a 400 with `errorCode: "unknown_model"`.
+Call `GET /api/v1/models` with your API key to list the model ids you can use. The list depends on which providers the deployment and your own provider keys enable, so if a sample returns 400 `unknown_model`, use an id from that list. An unknown or unavailable model returns a 400 with `errorCode: "unknown_model"`.
 
 ## Response
 
-A successful request is always answered with a server-sent event stream (`text/event-stream`), whether or not you set a `stream` flag. The stream carries a `meta` event, then `content` and `tool_use` events with `usage` and `credits`, and ends with `data: [DONE]`. The last event carries a `stopReason`; treat `max_tokens` as a truncated reply. See [Streaming](./streaming.md) for how to parse it.
+A successful request is always answered with a server-sent event stream (`text/event-stream`), whether or not you set a `stream` flag. The stream carries a `meta` event, then `content` and `tool_use` events with `usage` and `credits`, and ends with `data: [DONE]`. The last `content` event carries `usage` and `credits`. See [Streaming](./streaming.md) for how to parse it.
 
 ## Credits
 
