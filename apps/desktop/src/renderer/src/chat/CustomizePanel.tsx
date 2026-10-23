@@ -582,13 +582,33 @@ export function CustomizeScreen({
                 aria-label={name}
                 aria-disabled="true"
                 data-testid="customize-plugin-card"
-                variant="soft"
-                sx={{ p: 2, borderRadius: 'md', color: 'text.secondary', cursor: 'not-allowed' }}
+                variant="outlined"
+                sx={{
+                  p: 2,
+                  borderRadius: 'md',
+                  borderStyle: 'dashed',
+                  bgcolor: 'background.level1',
+                  color: 'text.tertiary',
+                  opacity: 0.65,
+                  cursor: 'not-allowed',
+                }}
               >
-                <Typography level="h3" sx={{ fontSize: 'var(--joy-fontSize-md)', color: 'text.secondary' }}>
-                  {name}
-                </Typography>
-                <Typography level="body-sm" textColor="text.secondary" data-testid="customize-plugin-status">
+                <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1}>
+                  <Typography level="h3" sx={{ fontSize: 'var(--joy-fontSize-md)', color: 'text.tertiary' }}>
+                    {name}
+                  </Typography>
+                  <IconButton
+                    disabled
+                    size="sm"
+                    variant="outlined"
+                    color="neutral"
+                    aria-label={`Add ${name}`}
+                    data-testid="customize-plugin-add-btn"
+                  >
+                    +
+                  </IconButton>
+                </Stack>
+                <Typography level="body-sm" textColor="text.tertiary" data-testid="customize-plugin-status">
                   <Box component="span" aria-hidden="true" sx={{ mr: 0.75 }}>
                     {'\uD83D\uDEA7'}
                   </Box>

@@ -181,11 +181,20 @@ describe('the Customize screen', () => {
       expect(card.tagName).toBe('ARTICLE');
       expect(card.getAttribute('aria-disabled')).toBe('true');
       expect(card.querySelector('h3')?.textContent).toBe(card.getAttribute('aria-label'));
-      expect(card.querySelector('button, a, input, select, textarea, [tabindex], [role="button"]')).toBeNull();
+      expect(Number(getComputedStyle(card).opacity)).toBeLessThan(1);
+      expect(getComputedStyle(card).borderTopStyle).toBe('dashed');
+      const addButton = card.querySelector<HTMLButtonElement>('[data-testid="customize-plugin-add-btn"]')!;
+      expect(addButton.disabled).toBe(true);
+      expect(addButton.textContent?.trim()).toBe('+');
+      expect(addButton.getAttribute('aria-label')).toBe(`Add ${card.getAttribute('aria-label')}`);
+      expect(card.querySelectorAll('button')).toHaveLength(1);
+      expect(card.querySelector('a, input, select, textarea, [tabindex="0"], [role="button"]')).toBeNull();
       const status = card.querySelector('[data-testid="customize-plugin-status"]')!;
       expect(status.querySelector('[aria-hidden="true"]')?.textContent).toBe('\uD83D\uDEA7');
       expect(status.lastChild?.textContent?.trim()).toBe('Under construction');
       act(() => {
+        addButton.click();
+        addButton.focus();
         card.click();
         card.focus();
         card.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
