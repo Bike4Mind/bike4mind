@@ -31,7 +31,7 @@ import {
   type ModelAdmission,
 } from '@bike4mind/services/llm/modelAdmission';
 import { getSettingsMap, getSettingsValue, usdToCredits, usdToCreditsStochastic } from '@bike4mind/utils';
-import { assertApiKeyOrgMembership } from '@bike4mind/server-utils/billing/assertApiKeyOrgMembership';
+import { assertApiKeyOrgMembership } from '@server/billing/assertApiKeyOrgMembership';
 import { getUserEntitlements } from '@server/entitlements';
 import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
 import {
