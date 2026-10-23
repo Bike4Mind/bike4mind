@@ -110,6 +110,16 @@ describe('useSemanticSearch onError', () => {
     expect(useAdvancedSearch.getState().semanticSearchError).toBe(message);
   });
 
+  it("surfaces the server's message when AI features are disabled on the account (403)", async () => {
+    const message = 'AI features are disabled on your account by an administrator. Please contact support.';
+    post.mockRejectedValue(axiosError(403, { error: message }));
+    const { result } = renderSemanticSearch();
+
+    await expect(result.current.mutateAsync({ query: 'anything' })).rejects.toBeDefined();
+
+    expect(useAdvancedSearch.getState().semanticSearchError).toBe(message);
+  });
+
   it('keeps the axios message for other errors', async () => {
     post.mockRejectedValue(axiosError(500, { error: 'boom' }));
     const { result } = renderSemanticSearch();
