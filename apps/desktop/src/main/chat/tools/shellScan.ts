@@ -54,9 +54,10 @@ export interface ShellScan {
 
 const CHANGES_DIRECTORY = new Set(['cd', 'chdir', 'pushd', 'popd']);
 const COPIES = new Set(['cp', 'mv', 'install', 'ln']);
-const DOWNLOAD_OUTPUT: Record<string, readonly string[]> = {
-  curl: ['--output', '-o'],
-  wget: ['--output-document', '-O'],
+// The short flag may close a cluster (`-fsSLo`, `-qO`); curl's `-O` names no path, so case matters.
+const DOWNLOAD_OUTPUT: Record<string, { long: string; short: RegExp }> = {
+  curl: { long: '--output', short: /^-[a-zA-Z]*?o(.*)$/ },
+  wget: { long: '--output-document', short: /^-[a-zA-Z]*?O(.*)$/ },
 };
 const GIT_CONFIG_SETS =
   /^(set|unset|edit|-e|--edit|--add|--unset|--unset-all|--replace-all|--rename-section|--remove-section|rename-section|remove-section)$/;
@@ -926,8 +927,15 @@ export async function scanShell(
       const operands = rest.filter(arg => !arg.startsWith('-'));
       if (program === 'tee') operands.forEach(noteWrite);
       for (const [index, arg] of rest.entries()) {
-        const named = DOWNLOAD_OUTPUT[program]?.find(option => arg === option || arg.startsWith(option));
-        if (named) noteWrite(arg === named ? (rest[index + 1] ?? '') : arg.slice(named.length).replace(/^=/, ''));
+        const output = DOWNLOAD_OUTPUT[program];
+        const value = !output
+          ? undefined
+          : arg === output.long
+            ? ''
+            : arg.startsWith(`${output.long}=`)
+              ? arg.slice(output.long.length + 1)
+              : output.short.exec(arg)?.[1];
+        if (value !== undefined) noteWrite(value || (rest[index + 1] ?? ''));
         if (program === 'dd' && arg.startsWith('of=')) noteWrite(arg.slice(3));
       }
       const [sub, verb, ...after] = commandTokens([program, ...rest]).slice(1);

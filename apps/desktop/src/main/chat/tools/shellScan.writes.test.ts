@@ -28,6 +28,10 @@ describe('scanShell writes', () => {
     ['curl -o a.sh https://example.com/a', ['a.sh']],
     ['curl -sL --output=a.sh https://example.com/a', ['a.sh']],
     ['wget -O a.sh https://example.com/a', ['a.sh']],
+    ['curl -fsSLo a.sh https://example.com/a', ['a.sh']],
+    ['curl -fsSLoa.sh https://example.com/a', ['a.sh']],
+    ['wget -qO a.sh https://example.com/a', ['a.sh']],
+    ['wget -qOa.sh https://example.com/a', ['a.sh']],
     ['dd if=src.sh of=a.sh', ['a.sh']],
     ['git config core.hooksPath hooks', ['.git/config']],
     ['git -C bin config user.name x', ['bin/.git/config']],
@@ -51,6 +55,8 @@ describe('scanShell writes', () => {
     'git config --get user.email',
     'npm pkg get name',
     'curl -O https://example.com/a',
+    'curl --output-dir d -O https://example.com/a',
+    'curl -sSLO https://example.com/a',
   ])('records nothing for %s', async command => {
     expect(await writes(command)).toEqual([]);
   });

@@ -209,6 +209,27 @@ describe('ChatService running a script written in the same session', () => {
     expect(calls('bash_execute', 'done')).toHaveLength(1);
   });
 
+  it('asks before running a script a clustered curl -o downloaded', async () => {
+    const id = await session('auto');
+    await reply(id, [shell('curl -fsSLo x.sh http://127.0.0.1:9/x.sh; true'), shell('bash x.sh')]);
+
+    const asked = await awaitCall('bash_execute', 'awaiting-approval');
+    expect(asked.approvalDetail).toContain('x.sh, which was written in this session');
+  });
+
+  it('still asks after the conversation is archived and unarchived', async () => {
+    const id = await session('auto');
+    const next = await reply(id, [write('setup.sh')]);
+    await settled('file_write');
+    await finish(next);
+    await service.setSessionArchived(id, true);
+    await service.setSessionArchived(id, false);
+
+    events.length = 0;
+    await reply(id, [shell('bash setup.sh')]);
+    await awaitCall('bash_execute', 'awaiting-approval');
+  });
+
   describe('in a git repository', () => {
     beforeEach(() => {
       execFileSync('git', ['-C', root, 'init', '-q']);

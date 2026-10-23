@@ -23,7 +23,8 @@ interface SessionWrites {
 /**
  * Files each session wrote, through the write tools or a shell command. Auto mode asks before a
  * command runs one of them (see shellTools' shellApproval), so a script is never written and run
- * unseen. Forgotten when the session closes (chat/index.ts).
+ * unseen. Forgotten when the session is deleted (ChatService), kept across archive. In memory
+ * only, so an app restart forgets them.
  */
 const bySession = new Map<string, SessionWrites>();
 const evicted = new Set<string>();
