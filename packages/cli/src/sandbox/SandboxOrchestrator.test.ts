@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { SandboxOrchestrator } from './SandboxOrchestrator.js';
+import os from 'os';
 import { DEFAULT_SANDBOX_CONFIG } from './types.js';
 import type { SandboxConfig, SandboxViolation } from './types.js';
 import type { SandboxRuntime, WrapCommandOptions } from './runtime/SandboxRuntimeAdapter.js';
@@ -167,6 +168,22 @@ describe('SandboxOrchestrator', () => {
   });
 
   describe('filesystem defaults', () => {
+    it.each(['~/.npmrc', `${os.homedir()}/.npmrc`, '$HOME/.docker/config.json', '$HOME/.config/gh/../gh/hosts.yml'])(
+      'removes a saved allow for denied credential alias %s',
+      allowedPath => {
+        const saved = enabledConfig({
+          filesystem: {
+            writeOnlyToWorkingDir: true,
+            allowedReadPaths: [allowedPath, '$HOME/.gitconfig'],
+            deniedPaths: [],
+          },
+        });
+        const { filesystem } = new SandboxOrchestrator(saved, createMockRuntime()).getConfig();
+        expect(filesystem.allowedReadPaths).toEqual(['$HOME/.gitconfig']);
+        expect(saved.filesystem.allowedReadPaths).toContain(allowedPath);
+      }
+    );
+
     it('enforces default denies on a saved config carrying older arrays', () => {
       const saved = enabledConfig({
         filesystem: {

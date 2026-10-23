@@ -2,7 +2,7 @@
  * Abstract sandbox runtime adapter with platform detection and factory.
  */
 import os from 'os';
-import { accessSync, constants } from 'fs';
+import { accessSync, constants, lstatSync, readFileSync, realpathSync } from 'fs';
 import path from 'path';
 import type { FilesystemConfig, SandboxPlatform, WrappedCommand } from '../types.js';
 
@@ -70,14 +70,74 @@ export function expandPath(pathStr: string): string {
 
 /** Paths under cwd that stay read-only inside the writable working directory. */
 export function getProtectedWorkspacePaths(cwd: string): string[] {
-  const git = path.join(cwd, '.git');
-  return [
-    path.join(git, 'config'),
-    path.join(git, 'config.worktree'),
-    path.join(git, 'commondir'),
-    path.join(git, 'hooks'),
+  const git = findGitEntry(cwd);
+  const repositoryRoot = path.dirname(git);
+  const protectedPaths = new Set([
+    path.join(cwd, '.git'),
     path.join(cwd, '.bike4mind'),
-  ];
+    git,
+    path.join(repositoryRoot, '.bike4mind'),
+  ]);
+  let ancestor = cwd;
+  while (path.dirname(ancestor) !== ancestor) {
+    if (['.git', '.bike4mind'].includes(path.basename(ancestor))) protectedPaths.add(ancestor);
+    ancestor = path.dirname(ancestor);
+  }
+  const gitFile = readMetadataFile(git);
+  const gitDirectory = gitFile?.match(/^gitdir:\s*(.+)\s*$/)?.[1];
+  if (gitDirectory) {
+    const metadataPath = path.resolve(repositoryRoot, gitDirectory.trim());
+    protectedPaths.add(metadataPath);
+    const commonDirectory = readMetadataFile(path.join(metadataPath, 'commondir'))?.trim();
+    if (commonDirectory) protectedPaths.add(path.resolve(metadataPath, commonDirectory));
+  }
+  for (const protectedPath of [...protectedPaths]) protectedPaths.add(resolveSandboxPath(protectedPath));
+  return [...protectedPaths];
+}
+
+function findGitEntry(cwd: string): string {
+  let directory = cwd;
+  while (true) {
+    const gitPath = path.join(directory, '.git');
+    try {
+      lstatSync(gitPath);
+      return gitPath;
+    } catch (error) {
+      if (!(error instanceof Error && 'code' in error && ['ENOENT', 'ENOTDIR'].includes(String(error.code)))) {
+        throw error;
+      }
+    }
+    const parentDirectory = path.dirname(directory);
+    if (parentDirectory === directory) return path.join(cwd, '.git');
+    directory = parentDirectory;
+  }
+}
+
+function readMetadataFile(filePath: string): string | undefined {
+  try {
+    return readFileSync(filePath, 'utf8');
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && ['ENOENT', 'ENOTDIR', 'EISDIR'].includes(String(error.code))) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+/** Resolve aliases so sensitive symlinks are protected at their actual target. */
+export function resolveSandboxPath(pathString: string): string {
+  const expandedPath = path.resolve(expandPath(pathString));
+  try {
+    return realpathSync(expandedPath);
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && ['ENOENT', 'ENOTDIR'].includes(String(error.code))) {
+      const parentPath = path.dirname(expandedPath);
+      return parentPath === expandedPath
+        ? expandedPath
+        : path.join(resolveSandboxPath(parentPath), path.basename(expandedPath));
+    }
+    throw error;
+  }
 }
 
 /**

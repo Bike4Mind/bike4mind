@@ -91,11 +91,27 @@ describe('SeatbeltRuntime', () => {
 
       const allowIdx = profile.indexOf('(allow file-write* (subpath "/Users/test/project"))');
       expect(allowIdx).toBeGreaterThan(-1);
-      expect(profile).toContain('(deny file-write* (literal "/Users/test/project/.git"))');
-      for (const p of ['.git/config', '.git/config.worktree', '.git/commondir', '.git/hooks', '.bike4mind']) {
+      for (const p of ['.git', '.bike4mind']) {
         const denyIdx = profile.indexOf(`(deny file-write* (subpath "/Users/test/project/${p}"))`);
         expect(denyIdx).toBeGreaterThan(allowIdx);
       }
+    });
+
+    it('applies credential denies after overlapping read allowances', () => {
+      const home = os.homedir();
+      const profile = runtime.generateProfile({
+        command: 'cat ~/.npmrc',
+        cwd: '/Users/test/project',
+        filesystemConfig: {
+          writeOnlyToWorkingDir: true,
+          allowedReadPaths: ['$HOME', '~/.npmrc'],
+          deniedPaths: ['$HOME/.npmrc'],
+        },
+        networkEnabled: false,
+      });
+      const denyIndex = profile.indexOf(`(deny file-read* file-write* (subpath "${home}/.npmrc"))`);
+      expect(denyIndex).toBeGreaterThan(profile.indexOf(`(allow file-read* (subpath "${home}"))`));
+      expect(denyIndex).toBeGreaterThan(profile.indexOf(`(allow file-read* (subpath "${home}/.npmrc"))`));
     });
 
     it('allows writes to temp directories', () => {

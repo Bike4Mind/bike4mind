@@ -24,18 +24,28 @@ describe('recent_changes git invocation', () => {
   });
 
   it('passes the hardening config flags on every git call', async () => {
+    spawnMock
+      .mockImplementationOnce(() => fakeProc('src/example.ts\n'))
+      .mockImplementationOnce(() => fakeProc(' M src/example.ts\n'))
+      .mockImplementationOnce(() => fakeProc('2\t1\tsrc/example.ts\n'));
     const logger = { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() };
     const tool = recentChangesTool.implementation({ logger } as never);
-    await tool.toolFn({ include_stats: true });
+    const result = await tool.toolFn({ include_stats: true, path: 'src', since: '2 days ago' });
 
-    expect(spawnMock).toHaveBeenCalled();
-    const subcommands = new Set<string>();
-    for (const [bin, args] of spawnMock.mock.calls as [string, string[]][]) {
-      expect(bin).toBe('git');
-      expect(args.slice(0, 4)).toEqual(['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false']);
-      subcommands.add(args[4]);
+    const hardeningArgs = ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false'];
+    const commands = [
+      ['log', '--since=2 days ago', '--name-only', '--pretty=format:', '--', 'src'],
+      ['status', '--porcelain', '--', 'src'],
+      ['log', '--since=2 days ago', '--numstat', '--pretty=format:', '--', 'src'],
+    ];
+    expect(spawnMock).toHaveBeenCalledTimes(commands.length);
+    for (const [index, command] of commands.entries()) {
+      expect(spawnMock).toHaveBeenNthCalledWith(index + 1, 'git', [...hardeningArgs, ...command], {
+        cwd: process.cwd(),
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
     }
-    expect(subcommands.has('status')).toBe(true);
-    expect(subcommands.has('log')).toBe(true);
+    expect(result).toContain('Unstaged (1):');
+    expect(result).toContain('src/example.ts (1 commits) (+2/-1)');
   });
 });

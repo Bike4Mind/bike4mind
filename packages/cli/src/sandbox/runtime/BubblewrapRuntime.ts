@@ -9,10 +9,10 @@
  */
 import os from 'os';
 import path from 'path';
-import { mkdirSync, statSync } from 'fs';
+import { lstatSync, mkdirSync, statSync } from 'fs';
 import type { SandboxPlatform, WrappedCommand } from '../types.js';
 import {
-  expandPath,
+  resolveSandboxPath,
   getProtectedWorkspacePaths,
   isBinaryAvailable,
   type SandboxRuntime,
@@ -39,8 +39,8 @@ export class BubblewrapRuntime implements SandboxRuntime {
 
   wrapCommand(options: WrapCommandOptions): WrappedCommand {
     const { command, cwd, filesystemConfig, env } = options;
-    const expandedDenied = filesystemConfig.deniedPaths.map(expandPath);
-    const expandedAllowed = filesystemConfig.allowedReadPaths.map(expandPath);
+    const expandedDenied = filesystemConfig.deniedPaths.map(resolveSandboxPath);
+    const expandedAllowed = filesystemConfig.allowedReadPaths.map(resolveSandboxPath);
 
     const args: string[] = [];
 
@@ -54,40 +54,44 @@ export class BubblewrapRuntime implements SandboxRuntime {
     args.push('--proc', SPECIAL_MOUNTS.proc);
     args.push('--tmpfs', SPECIAL_MOUNTS.tmp);
 
-    // Working directory: read-write bind
-    args.push('--bind', cwd, cwd);
-
-    // Later mounts shadow earlier ones, so these re-binds must follow the cwd bind
-    // A bind mountpoint cannot be renamed or removed (EBUSY); a worktree .git file is bound read-only
-    const gitPath = path.join(cwd, '.git');
-    const gitKind = pathKind(gitPath);
-    if (gitKind === 'dir') args.push('--bind', gitPath, gitPath);
-    else if (gitKind === 'file') args.push('--ro-bind', gitPath, gitPath);
-
-    // --ro-bind needs an existing source, so create the project dir first
-    const projectDir = path.join(cwd, '.bike4mind');
-    let projectDirReady = true;
-    try {
-      mkdirSync(projectDir, { recursive: true });
-    } catch {
-      projectDirReady = false;
-    }
-    for (const protectedPath of getProtectedWorkspacePaths(cwd)) {
-      if (protectedPath === projectDir) {
-        if (projectDirReady) args.push('--ro-bind', protectedPath, protectedPath);
-      } else {
-        args.push('--ro-bind-try', protectedPath, protectedPath);
-      }
-    }
-
-    // Home directory: bind read-only for tool configs, then overlay denied paths
+    // Parent mounts must precede child mounts or they shadow the writable cwd.
     const homeDir = os.homedir();
     args.push('--ro-bind', homeDir, homeDir);
 
     // Allowed read paths (already covered by home bind, but explicit for non-home paths)
     for (const allowedPath of expandedAllowed) {
-      if (!allowedPath.startsWith(homeDir)) {
+      if (allowedPath !== homeDir && !allowedPath.startsWith(`${homeDir}${path.sep}`)) {
         args.push('--ro-bind-try', allowedPath, allowedPath);
+      }
+    }
+
+    args.push('--bind', cwd, cwd);
+
+    // Protect the whole metadata directory, including config/hooks that do not exist yet.
+    // Git writes require the usual unsandboxed permission escalation.
+    const protectedPaths = getProtectedWorkspacePaths(cwd);
+    const resolvedCwd = resolveSandboxPath(cwd);
+    for (const protectedPath of protectedPaths) {
+      const resolvedPath = resolveSandboxPath(protectedPath);
+      if (resolvedCwd === resolvedPath || resolvedCwd.startsWith(`${resolvedPath}${path.sep}`)) {
+        throw new Error(`Cannot use protected metadata as sandbox cwd: ${cwd}`);
+      }
+    }
+    const projectDir = path.join(cwd, '.bike4mind');
+    mkdirSync(projectDir, { recursive: true });
+    for (const protectedPath of protectedPaths) {
+      try {
+        if (lstatSync(protectedPath).isSymbolicLink()) {
+          throw new Error(`Cannot protect sandbox metadata symlink: ${protectedPath}`);
+        }
+      } catch (error) {
+        if (!(error instanceof Error && 'code' in error && ['ENOENT', 'ENOTDIR'].includes(String(error.code)))) {
+          throw error;
+        }
+      }
+      const resolvedPath = resolveSandboxPath(protectedPath);
+      if (protectedPath === projectDir || pathKind(resolvedPath) !== 'missing') {
+        args.push('--ro-bind', resolvedPath, resolvedPath);
       }
     }
 
@@ -141,8 +145,11 @@ export class BubblewrapRuntime implements SandboxRuntime {
 function pathKind(p: string): 'dir' | 'file' | 'missing' {
   try {
     return statSync(p).isDirectory() ? 'dir' : 'file';
-  } catch {
-    return 'missing';
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && ['ENOENT', 'ENOTDIR'].includes(String(error.code))) {
+      return 'missing';
+    }
+    throw error;
   }
 }
 

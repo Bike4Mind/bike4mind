@@ -17,7 +17,8 @@ import type {
   SandboxViolation,
 } from './types.js';
 import { DEFAULT_SANDBOX_CONFIG } from './types.js';
-import type { SandboxRuntime } from './runtime/SandboxRuntimeAdapter.js';
+import path from 'path';
+import { resolveSandboxPath, type SandboxRuntime } from './runtime/SandboxRuntimeAdapter.js';
 import type { ProxyManager } from './proxy/ProxyManager.js';
 import type { ViolationLogStore } from './logging/ViolationLogStore.js';
 
@@ -35,7 +36,17 @@ export class SandboxOrchestrator {
     // Saved configs carry full arrays, so schema defaults never reach them; always enforce the built-in denies
     const fsConfig = this.config.filesystem;
     fsConfig.deniedPaths = [...new Set([...DEFAULT_SANDBOX_CONFIG.filesystem.deniedPaths, ...fsConfig.deniedPaths])];
-    fsConfig.allowedReadPaths = fsConfig.allowedReadPaths.filter(p => !fsConfig.deniedPaths.includes(p));
+    const deniedPaths = fsConfig.deniedPaths.map(resolveSandboxPath);
+    fsConfig.allowedReadPaths = fsConfig.allowedReadPaths.filter(allowedPath => {
+      const resolvedAllowedPath = resolveSandboxPath(allowedPath);
+      return !deniedPaths.some(deniedPath => {
+        const relativePath = path.relative(deniedPath, resolvedAllowedPath);
+        return (
+          relativePath === '' ||
+          (!relativePath.startsWith(`..${path.sep}`) && relativePath !== '..' && !path.isAbsolute(relativePath))
+        );
+      });
+    });
     this.runtime = runtime ?? null;
     this.proxyManager = proxyManager ?? null;
   }
@@ -49,7 +60,11 @@ export class SandboxOrchestrator {
    * 3. If runtime is not available -> unsandboxed with warning
    * 4. Otherwise -> sandbox the command
    */
-  shouldSandbox(command: string, cwd: string): SandboxDecision {
+  shouldSandbox(
+    command: string,
+    cwd: string,
+    validateWorkingDirectory?: (cwd: string) => string | undefined
+  ): SandboxDecision {
     // 1. Sandbox disabled
     if (!this.config.enabled || this.config.mode === 'disabled') {
       return { type: 'unsandboxed', requiresPermission: true };
@@ -79,6 +94,9 @@ export class SandboxOrchestrator {
         reason: 'Sandbox runtime not available on this platform',
       };
     }
+
+    const workingDirectoryError = validateWorkingDirectory?.(cwd);
+    if (workingDirectoryError) return { type: 'blocked', reason: workingDirectoryError };
 
     // 4. Sandbox the command
     const proxyEnv = this.proxyManager?.getProxyEnv() ?? {};

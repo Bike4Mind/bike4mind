@@ -1,11 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { BubblewrapRuntime } from './BubblewrapRuntime.js';
 import os from 'os';
+import path from 'path';
 import { mkdirSync, statSync } from 'fs';
 
 vi.mock('fs', async () => {
   const actual = await vi.importActual<typeof import('fs')>('fs');
-  return { ...actual, mkdirSync: vi.fn(), statSync: vi.fn() };
+  return { ...actual, mkdirSync: vi.fn(), statSync: vi.fn(), realpathSync: (p: string) => p };
 });
 
 const fsEntry = (isDir: boolean) => ({ isDirectory: () => isDir }) as ReturnType<typeof statSync>;
@@ -17,7 +18,7 @@ describe('BubblewrapRuntime', () => {
     vi.mocked(mkdirSync).mockReset();
     vi.mocked(statSync).mockReset();
     vi.mocked(statSync).mockImplementation(() => {
-      throw new Error('ENOENT');
+      throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
     });
   });
 
@@ -29,6 +30,46 @@ describe('BubblewrapRuntime', () => {
   });
 
   describe('wrapCommand', () => {
+    it.each(['.git', '.bike4mind'])('fails closed for a replaceable %s symlink', async metadataEntry => {
+      const fs = await vi.importActual<typeof import('fs')>('fs');
+      const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'sandbox-symlink-'));
+      try {
+        const target = path.join(fixture, 'target');
+        fs.mkdirSync(target);
+        fs.symlinkSync(target, path.join(fixture, metadataEntry));
+        expect(() =>
+          runtime.wrapCommand({
+            command: 'true',
+            cwd: fixture,
+            filesystemConfig: { writeOnlyToWorkingDir: true, allowedReadPaths: [], deniedPaths: [] },
+            networkEnabled: false,
+          })
+        ).toThrow('Cannot protect sandbox metadata symlink');
+      } finally {
+        fs.rmSync(fixture, { recursive: true, force: true });
+      }
+    });
+
+    it('rejects a metadata cwd before creating a project config directory on the host', async () => {
+      const fs = await vi.importActual<typeof import('fs')>('fs');
+      const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'sandbox-cwd-'));
+      try {
+        const cwd = path.join(fixture, '.git', 'hooks');
+        fs.mkdirSync(cwd, { recursive: true });
+        expect(() =>
+          runtime.wrapCommand({
+            command: 'true',
+            cwd,
+            filesystemConfig: { writeOnlyToWorkingDir: true, allowedReadPaths: [], deniedPaths: [] },
+            networkEnabled: false,
+          })
+        ).toThrow('Cannot use protected metadata as sandbox cwd');
+        expect(mkdirSync).not.toHaveBeenCalled();
+      } finally {
+        fs.rmSync(fixture, { recursive: true, force: true });
+      }
+    });
+
     it('includes read-only system binds', () => {
       const result = runtime.wrapCommand({
         command: 'ls -la',
@@ -80,11 +121,11 @@ describe('BubblewrapRuntime', () => {
 
       const bindIdx = result.args.findIndex((a, i) => a === '--bind' && result.args[i + 1] === '/home/test/project');
       expect(bindIdx).toBeGreaterThan(-1);
-      for (const p of ['.git/config', '.git/config.worktree', '.git/commondir', '.git/hooks', '.bike4mind']) {
+      for (const p of ['.bike4mind']) {
         const full = `/home/test/project/${p}`;
         const idx = result.args.indexOf(full);
         expect(idx).toBeGreaterThan(bindIdx);
-        expect(result.args[idx - 1]).toBe(p === '.bike4mind' ? '--ro-bind' : '--ro-bind-try');
+        expect(result.args[idx - 1]).toBe('--ro-bind');
         expect(result.args[idx + 1]).toBe(full);
       }
     });
@@ -106,7 +147,7 @@ describe('BubblewrapRuntime', () => {
       const home = os.homedir();
       vi.mocked(statSync).mockImplementation(p => {
         if (p === `${home}/.netrc`) return fsEntry(false);
-        throw new Error('ENOENT');
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
       });
       const result = runtime.wrapCommand({
         command: 'true',
@@ -123,35 +164,65 @@ describe('BubblewrapRuntime', () => {
       expect(result.args).not.toContain(`${home}/.missing`);
     });
 
-    it('skips the .bike4mind bind when the dir cannot be created', () => {
+    it('fails closed when .bike4mind cannot be created', () => {
       vi.mocked(mkdirSync).mockImplementation(() => {
         throw new Error('EROFS');
       });
-      const result = runtime.wrapCommand({
-        command: 'true',
-        cwd: '/home/test/project',
-        filesystemConfig: { writeOnlyToWorkingDir: true, allowedReadPaths: [], deniedPaths: [] },
-        networkEnabled: false,
-      });
-      expect(result.args).not.toContain('/home/test/project/.bike4mind');
+      expect(() =>
+        runtime.wrapCommand({
+          command: 'true',
+          cwd: '/home/test/project',
+          filesystemConfig: { writeOnlyToWorkingDir: true, allowedReadPaths: [], deniedPaths: [] },
+          networkEnabled: false,
+        })
+      ).toThrow('EROFS');
     });
 
-    it('binds a .git directory as a mountpoint before the inner ro-binds', () => {
-      vi.mocked(statSync).mockImplementation(() => fsEntry(true));
+    it('binds the entire .git read-only even when hooks/config are absent', () => {
+      vi.mocked(statSync).mockImplementation(p => {
+        if (p === '/home/test/project/.git') return fsEntry(true);
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      });
       const result = runtime.wrapCommand({
-        command: 'true',
+        command: 'mkdir .git/hooks',
         cwd: '/home/test/project',
         filesystemConfig: { writeOnlyToWorkingDir: true, allowedReadPaths: [], deniedPaths: [] },
         networkEnabled: false,
       });
-      const git = '/home/test/project/.git';
-      const gitIdx = result.args.indexOf(git);
-      expect(result.args[gitIdx - 1]).toBe('--bind');
-      for (const p of ['config', 'config.worktree', 'commondir', 'hooks']) {
-        const idx = result.args.indexOf(`${git}/${p}`);
-        expect(result.args[idx - 1]).toBe('--ro-bind-try');
-        expect(idx).toBeGreaterThan(gitIdx);
-      }
+      const gitIndex = result.args.indexOf('/home/test/project/.git');
+      expect(result.args.slice(gitIndex - 1, gitIndex + 2)).toEqual([
+        '--ro-bind',
+        '/home/test/project/.git',
+        '/home/test/project/.git',
+      ]);
+      expect(result.args).not.toContain('/home/test/project/.git/hooks');
+      expect(result.args).not.toContain('/home/test/project/.git/config');
+    });
+
+    it('mounts the home directory before the writable cwd and protected children', () => {
+      const cwd = `${os.homedir()}/project`;
+      const result = runtime.wrapCommand({
+        command: 'touch x',
+        cwd,
+        filesystemConfig: { writeOnlyToWorkingDir: true, allowedReadPaths: [], deniedPaths: [] },
+        networkEnabled: false,
+      });
+      expect(result.args.indexOf(os.homedir())).toBeLessThan(result.args.indexOf(cwd));
+      expect(result.args.indexOf(cwd)).toBeLessThan(result.args.indexOf(`${cwd}/.bike4mind`));
+    });
+
+    it('does not treat an unreadable denied path as missing', () => {
+      vi.mocked(statSync).mockImplementation(() => {
+        throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+      });
+      expect(() =>
+        runtime.wrapCommand({
+          command: 'cat secret',
+          cwd: '/home/test/project',
+          filesystemConfig: { writeOnlyToWorkingDir: true, allowedReadPaths: [], deniedPaths: ['/secret'] },
+          networkEnabled: false,
+        })
+      ).toThrow('EACCES');
     });
 
     it('binds a worktree .git file read-only', () => {
@@ -164,6 +235,7 @@ describe('BubblewrapRuntime', () => {
       });
       const gitIdx = result.args.indexOf('/home/test/project/.git');
       expect(result.args[gitIdx - 1]).toBe('--ro-bind');
+      expect(result.args).not.toContain('/home/test/project/.git/config');
     });
 
     it('mounts denied paths as tmpfs', () => {
