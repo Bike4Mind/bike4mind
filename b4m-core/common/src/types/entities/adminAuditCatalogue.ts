@@ -134,10 +134,10 @@ export const ADMIN_AUDIT_CATALOGUE = {
 
   // Handler coverage: content and directory config
   'settings.modal.variants_updated': { category: 'settings', severity: 'info', write: 'bestEffort' },
-  'settings.modal.variants_cleared': { category: 'settings', severity: 'info', write: 'bestEffort' },
+  'settings.modal.variants_cleared': { category: 'settings', severity: 'notice', write: 'bestEffort' },
   'settings.modal.created': { category: 'settings', severity: 'info', write: 'bestEffort' },
   'settings.modal.updated': { category: 'settings', severity: 'info', write: 'bestEffort' },
-  'settings.modal.deleted': { category: 'settings', severity: 'info', write: 'bestEffort' },
+  'settings.modal.deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
   'settings.release_note.updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
   'settings.release_note.status_changed': { category: 'settings', severity: 'notice', write: 'bestEffort' },
   'settings.business_link.created': { category: 'settings', severity: 'info', write: 'bestEffort' },
