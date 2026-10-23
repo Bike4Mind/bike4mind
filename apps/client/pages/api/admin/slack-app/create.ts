@@ -156,29 +156,38 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
   const appName = manifest.display_information.name;
 
   // A failed audit rolls back the local save; the app already created on Slack is left in place.
-  const workspace = await withTransaction(async () => {
-    const saved = await slackDevWorkspaceRepository.createOrUpdateWithCredentials({
-      slackBotName: manifest.features.bot_user?.display_name,
-      slackAppId: slackData.app_id as string,
-      slackClientId: credentials.client_id,
-      slackClientSecret: credentials.client_secret,
-      slackOAuthSigningSecret: credentials.signing_secret,
-      slackOAuthRedirectUri: manifest.oauth_config.redirect_urls[0],
-      slackVerificationToken: credentials.verification_token,
-      enableWorkflowSteps,
-    });
+  let workspace;
+  try {
+    workspace = await withTransaction(async () => {
+      const saved = await slackDevWorkspaceRepository.createOrUpdateWithCredentials({
+        slackBotName: manifest.features.bot_user?.display_name,
+        slackAppId: slackData.app_id as string,
+        slackClientId: credentials.client_id,
+        slackClientSecret: credentials.client_secret,
+        slackOAuthSigningSecret: credentials.signing_secret,
+        slackOAuthRedirectUri: manifest.oauth_config.redirect_urls[0],
+        slackVerificationToken: credentials.verification_token,
+        enableWorkflowSteps,
+      });
 
-    // Store the config token for future manifest management
-    await slackDevWorkspaceRepository.storeConfigToken(saved.id, configToken);
+      // Store the config token for future manifest management
+      await slackDevWorkspaceRepository.storeConfigToken(saved.id, configToken);
 
-    await recordAdminActionFromRequest(req, {
-      action: 'integration.slack_app.created',
-      target: { kind: 'settings', id: saved.id, displayName: appName },
-      summary: `created slack app ${appName}`,
-      details: { appId: slackData.app_id },
+      await recordAdminActionFromRequest(req, {
+        action: 'integration.slack_app.created',
+        target: { kind: 'settings', id: saved.id, displayName: appName },
+        summary: `created slack app ${appName}`,
+        details: { appId: slackData.app_id },
+      });
+      return saved;
     });
-    return saved;
-  });
+  } catch (error) {
+    req.logger.error('Slack app was created but saving it locally failed; delete the app manually on Slack', {
+      appId: slackData.app_id,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
 
   req.logger.info('✨ [Admin] Created Slack app from manifest and saved credentials', {
     appId: slackData.app_id,

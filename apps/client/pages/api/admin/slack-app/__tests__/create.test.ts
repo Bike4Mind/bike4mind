@@ -110,6 +110,26 @@ describe('POST /api/admin/slack-app/create', () => {
     expect(res.status).not.toHaveBeenCalled();
   });
 
+  it('logs the orphaned Slack app id, without secrets, when the local save fails', async () => {
+    vi.mocked(fetch).mockResolvedValue(okResponse as unknown as Response);
+    mockCreateOrUpdateWithCredentials.mockResolvedValue({ id: 'ws-1' });
+    mockStoreConfigToken.mockResolvedValue(undefined);
+    mockAudit.mockRejectedValue(new Error('audit down'));
+
+    const { req, res, logger } = fire({ manifest, configToken: 'xoxe-config-token' });
+    await expect(handlers.post!(req, res)).rejects.toThrow('audit down');
+
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('delete the app manually on Slack'), {
+      appId: 'A123',
+      error: 'audit down',
+    });
+    const serialized = JSON.stringify(allLoggerArgs(logger));
+    for (const secret of ['secret', 'sig', 'vt', 'xoxe-config-token']) {
+      expect(serialized).not.toContain(`"${secret}"`);
+    }
+    for (const field of SECRET_FIELDS) expect(serialized).not.toContain(field);
+  });
+
   it('never hands a secret to the logger on a successful create', async () => {
     (global.fetch as any).mockResolvedValue({
       json: () =>
