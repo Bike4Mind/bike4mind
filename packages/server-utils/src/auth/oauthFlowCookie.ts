@@ -1,11 +1,6 @@
 import { randomBytes, createHash } from 'crypto';
 import type { Request, Response } from 'express';
-import {
-  appendSetCookie,
-  readCookie,
-  secureAttribute,
-  type CookieResponse,
-} from './refreshCookie';
+import { appendSetCookie, readCookie, secureAttribute, type CookieResponse } from './refreshCookie';
 
 /**
  * Browser-binding cookies for OAuth/SSO flows.

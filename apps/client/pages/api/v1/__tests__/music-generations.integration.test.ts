@@ -236,7 +236,9 @@ describe('POST /api/v1/music-generations', () => {
     describe('without an org-billed key', () => {
       beforeEach(async () => {
         asUser('user-1', HOME_ORG);
-        const actual = await vi.importActual<typeof import('@bike4mind/server-utils/utils/orgAccess')>('@bike4mind/server-utils/utils/orgAccess');
+        const actual = await vi.importActual<typeof import('@bike4mind/server-utils/utils/orgAccess')>(
+          '@bike4mind/server-utils/utils/orgAccess'
+        );
         h.resolveBillingOrgId.mockImplementation(actual.resolveBillingOrgId);
         h.orgFindAccessibleById.mockImplementation(async (_user: unknown, id: string) =>
           id === HOME_ORG ? { id } : null

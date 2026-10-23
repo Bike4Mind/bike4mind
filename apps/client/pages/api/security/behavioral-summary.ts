@@ -8,7 +8,10 @@ import {
   cacheRepository,
 } from '@bike4mind/database';
 import { z } from 'zod';
-import { OperationsModelService, getEffectiveApiKeyByBackend } from '@bike4mind/server-utils/services/operationsModelService';
+import {
+  OperationsModelService,
+  getEffectiveApiKeyByBackend,
+} from '@bike4mind/server-utils/services/operationsModelService';
 import { getLlmByModel } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';

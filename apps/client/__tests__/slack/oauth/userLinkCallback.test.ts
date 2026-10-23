@@ -41,7 +41,9 @@ vi.mock('@bike4mind/server-utils/integrations/integrationAuditLogger', () => ({
     create: () => ({ failure: vi.fn(), success: vi.fn(), setUserId: vi.fn(), setWorkspaceId: vi.fn() }),
   },
 }));
-vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({ encryptToken: (token: string) => `encrypted:${token}` }));
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
+  encryptToken: (token: string) => `encrypted:${token}`,
+}));
 
 import handler from '@pages/api/slack/oauth/user-link/callback';
 

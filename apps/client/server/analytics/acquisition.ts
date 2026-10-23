@@ -1,5 +1,8 @@
 import type { Request } from 'express';
-import type { SubscriptionAcquisition, SubscriptionAcquisitionTouch } from '@bike4mind/server-utils/lib/subscriptions/types';
+import type {
+  SubscriptionAcquisition,
+  SubscriptionAcquisitionTouch,
+} from '@bike4mind/server-utils/lib/subscriptions/types';
 import {
   ACQUISITION_FIELD_LIMIT,
   readAcquisitionCookies,
