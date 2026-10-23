@@ -365,6 +365,23 @@ describe('PermissionManager', () => {
       expect(manager.isSessionTrusted('bash_execute')).toBe(false);
     });
 
+    it.each([
+      ['rg pattern', 'rg --hostname-bin=/tmp/runner --heading pattern'],
+      ['rg pattern', 'rg $OPTIONS pattern'],
+      ['rg pattern', 'rg --* pattern'],
+      ['git log', 'git log --output=/tmp/out'],
+      ['sort names.txt', 'sort $OPTIONS names.txt'],
+      ['date', 'date -s 2026-10-22'],
+      ['file README.md', 'file -C -m rules'],
+      ['npm test', 'npm test --script-shell=/tmp/runner'],
+      ['pnpm test', 'pnpm test --dir=../other'],
+    ])('requires approval for %s escalating to %s', (approved, attempted) => {
+      const manager = new PermissionManager(new ToolCatalog());
+      expect(manager.trustCommandForSession('bash_execute', approved)).not.toBeNull();
+      expect(manager.needsPermission('bash_execute', { command: approved })).toBe(false);
+      expect(manager.needsPermission('bash_execute', { command: attempted })).toBe(true);
+    });
+
     it('remembers nothing for a command it cannot scope, or for a denied tool', () => {
       const manager = new PermissionManager(new ToolCatalog(), [], ['bash_execute']);
       expect(manager.trustCommandForSession('bash_execute', 'git status')).toBeNull();
