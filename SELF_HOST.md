@@ -1136,6 +1136,10 @@ A successful probe taking more than five seconds is also recorded as unhealthy. 
 
 Probes use global `fetch`. If proxy support is added to an integration client, the probes must use equivalent proxy routing so a failed direct connection does not mark a working proxied integration as unavailable.
 
+### Storage counter drift check
+
+Every hour the worker compares each user's and organization's `currentStorageSize` counter with the bytes of the files charged to that owner, using the same sweep hosted deployments run. Self-host always runs it as a dry run: drift is recorded in MongoDB, and no counter is ever rewritten. One pass covers every owner over up to 24 hourly ticks, resuming from a cursor persisted in MongoDB, so a restarted worker continues the pass instead of starting it again. It sends no CloudWatch metrics, and the Slack drift alert only posts if a LiveOps webhook is configured. There is no run at startup.
+
 ### Daily telemetry retention
 
 The single worker removes `promptMeta.contextTelemetry` from eligible Quest records older than 90 days at 03:00 UTC. The existing hosted cleanup and local worker share the same 5,000-record batches and database writes. The cutoff is fixed once per run using UTC calendar days; the exact cutoff remains excluded. Conversation content and other prompt metadata remain intact.
