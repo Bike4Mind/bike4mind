@@ -12,7 +12,8 @@ import { logEvent } from '@server/utils/analyticsLog';
 import { S3Storage } from '@bike4mind/fab-pipeline';
 import { Resource } from 'sst';
 
-const handler = baseApi().post(
+// First-party UI action, so API keys are not accepted (matches confirm-photo.ts).
+const handler = baseApi({ auth: 'jwtOnly' }).post(
   asyncHandler<{}, unknown, unknown, { id: string }>(async (req, res) => {
     const userId = req.query.id;
     if (!userId) throw new Error('User ID is required');
@@ -46,6 +47,7 @@ const handler = baseApi().post(
 
     // photoUrl is deliberately NOT written here: the browser has not PUT the bytes yet, and CloudFront
     // 403s a missing key. confirm-photo.ts points the profile at this file once the object exists.
+    // An upload that is never confirmed leaves this AppFile and its object orphaned; nothing sweeps them yet.
     const file = new AppFile({
       userId,
       name: `${user.name} profile photo`,
