@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 
 const h = vi.hoisted(() => ({
   audit: vi.fn(),
@@ -342,9 +343,10 @@ describe('rapid reply mappings admin audit', () => {
 });
 
 describe('rapid reply admin audit on failed writes', () => {
-  const failures: Array<{ name: string; run: () => Promise<unknown> }> = [
+  const failures: Array<{ name: string; error: new (message: string) => Error; run: () => Promise<unknown> }> = [
     {
       name: 'prompt PUT for a missing prompt',
+      error: NotFoundError,
       run: () => {
         h.prompts.findById.mockResolvedValue(null);
         return call(promptById, 'PUT', { id: 'p1', body: { name: 'x' } });
@@ -352,6 +354,7 @@ describe('rapid reply admin audit on failed writes', () => {
     },
     {
       name: 'prompt PUT when the update returns nothing',
+      error: NotFoundError,
       run: () => {
         h.prompts.findById.mockResolvedValue(prompt);
         h.prompts.updatePrompt.mockResolvedValue(null);
@@ -360,6 +363,7 @@ describe('rapid reply admin audit on failed writes', () => {
     },
     {
       name: 'prompt DELETE when nothing was deleted',
+      error: NotFoundError,
       run: () => {
         h.prompts.findById.mockResolvedValue(prompt);
         h.prompts.deletePrompt.mockResolvedValue(false);
@@ -368,6 +372,7 @@ describe('rapid reply admin audit on failed writes', () => {
     },
     {
       name: 'prompt activate for a missing prompt',
+      error: NotFoundError,
       run: () => {
         h.prompts.findById.mockResolvedValue(null);
         return call(promptActivate, 'POST', { id: 'p1' });
@@ -375,6 +380,7 @@ describe('rapid reply admin audit on failed writes', () => {
     },
     {
       name: 'prompt activate when activation fails',
+      error: NotFoundError,
       run: () => {
         h.prompts.findById.mockResolvedValue(prompt);
         h.prompts.activateVersion.mockResolvedValue(false);
@@ -383,6 +389,7 @@ describe('rapid reply admin audit on failed writes', () => {
     },
     {
       name: 'mapping POST for a duplicate main model',
+      error: BadRequestError,
       run: () => {
         h.mappings.findByMainModel.mockResolvedValue(mapping);
         return call(mappingsIndex, 'POST', {
@@ -390,9 +397,14 @@ describe('rapid reply admin audit on failed writes', () => {
         });
       },
     },
-    { name: 'mapping POST with missing fields', run: () => call(mappingsIndex, 'POST', { body: {} }) },
+    {
+      name: 'mapping POST with missing fields',
+      error: BadRequestError,
+      run: () => call(mappingsIndex, 'POST', { body: {} }),
+    },
     {
       name: 'mapping PUT for a missing mapping',
+      error: NotFoundError,
       run: () => {
         h.mappings.findById.mockResolvedValue(null);
         return call(mappingById, 'PUT', { id: 'm1', body: { enabled: false } });
@@ -400,6 +412,7 @@ describe('rapid reply admin audit on failed writes', () => {
     },
     {
       name: 'mapping DELETE for a missing mapping',
+      error: NotFoundError,
       run: () => {
         h.mappings.findById.mockResolvedValue(null);
         return call(mappingById, 'DELETE', { id: 'm1' });
@@ -407,8 +420,8 @@ describe('rapid reply admin audit on failed writes', () => {
     },
   ];
 
-  it.each(failures)('records nothing for $name', async ({ run }) => {
-    await expect(run()).rejects.toThrow();
+  it.each(failures)('records nothing for $name', async ({ error, run }) => {
+    await expect(run()).rejects.toBeInstanceOf(error);
     expect(h.audit).not.toHaveBeenCalled();
   });
 
@@ -422,7 +435,7 @@ describe('rapid reply admin audit on failed writes', () => {
     ['mapping DELETE', () => call(mappingById, 'DELETE', { isAdmin: false, id: 'm1' })],
     ['mappings bulk', () => call(mappingsBulk, 'POST', { isAdmin: false, body: { operations: [] } })],
   ])('records nothing for a non-admin on %s', async (_name, run) => {
-    await expect(run()).rejects.toThrow();
+    await expect(run()).rejects.toBeInstanceOf(ForbiddenError);
     expect(h.audit).not.toHaveBeenCalled();
   });
 });
