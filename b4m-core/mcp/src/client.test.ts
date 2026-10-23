@@ -1,5 +1,6 @@
-import { describe, it, expect, afterEach } from 'vitest';
-import { createServer, type Server } from 'http';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { createServer, type IncomingMessage, type Server } from 'http';
+import { randomUUID } from 'crypto';
 import { AddressInfo } from 'net';
 import { z } from 'zod';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -84,6 +85,145 @@ describe('MCPClient (streamable-HTTP transport)', () => {
     for (const h of authHeaders) {
       expect(h).toBe(`Bearer ${token}`);
     }
+  });
+});
+
+/**
+ * A server that expires sessions, the way a host with an idle keep-alive does. After expiry it answers
+ * every request carrying the old `Mcp-Session-Id` with 404 "Session not found", and the MCP spec says
+ * the client must then start a new session. Driven against a real stateful SDK server transport.
+ */
+describe('MCPClient (expired streamable-HTTP session)', () => {
+  let httpServer: Server | undefined;
+  let client: MCPClient | undefined;
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await client?.disconnect();
+    client = undefined;
+    if (httpServer) {
+      httpServer.closeAllConnections();
+      await new Promise<void>(resolve => httpServer!.close(() => resolve()));
+      httpServer = undefined;
+    }
+  });
+
+  async function readJson(req: IncomingMessage): Promise<unknown> {
+    if (req.method !== 'POST') return undefined;
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(chunk as Buffer);
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  }
+
+  async function startServer() {
+    const sessions = new Map<string, StreamableHTTPServerTransport>();
+    const state = { initializeCount: 0, toolCallCount: 0, failToolCallsWith: undefined as number | undefined };
+
+    httpServer = createServer(async (req, res) => {
+      const body = (await readJson(req)) as { method?: string } | undefined;
+      const sessionId = req.headers['mcp-session-id'] as string | undefined;
+
+      if (body?.method === 'tools/call') {
+        state.toolCallCount++;
+        if (state.failToolCallsWith) {
+          res.writeHead(state.failToolCallsWith).end('boom');
+          return;
+        }
+      }
+
+      if (sessionId) {
+        const transport = sessions.get(sessionId);
+        if (!transport) {
+          res
+            .writeHead(404, { 'content-type': 'application/json' })
+            .end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32001, message: 'Session not found' }, id: null }));
+          return;
+        }
+        await transport.handleRequest(req, res, body);
+        return;
+      }
+
+      state.initializeCount++;
+      const server = new McpServer({ name: 'test-server', version: '1.0.0' });
+      server.registerTool(
+        'echo',
+        { description: 'Echoes its input', inputSchema: { msg: z.string() } },
+        async ({ msg }) => ({ content: [{ type: 'text', text: `echo:${msg}` }] })
+      );
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => randomUUID(),
+        onsessioninitialized: id => {
+          sessions.set(id, transport);
+        },
+      });
+      await server.connect(transport);
+      await transport.handleRequest(req, res, body);
+    });
+
+    await new Promise<void>(resolve => httpServer!.listen(0, '127.0.0.1', () => resolve()));
+    const { port } = httpServer!.address() as AddressInfo;
+
+    /** Forget every session and close its streams, as an idle timeout does. */
+    const expireSessions = async () => {
+      const transports = [...sessions.values()];
+      sessions.clear();
+      await Promise.all(transports.map(t => t.close()));
+    };
+
+    return { url: `http://127.0.0.1:${port}/mcp`, state, expireSessions };
+  }
+
+  async function connect(url: string) {
+    client = new MCPClient({ envVariables: [], name: 'host', url });
+    await client.connectToServer();
+    return client;
+  }
+
+  const textOf = (result: unknown) => (result as { content: Array<{ text: string }> }).content[0].text;
+
+  it('starts a new session and retries the call once when the server has dropped the old one', async () => {
+    const { url, state, expireSessions } = await startServer();
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const mcp = await connect(url);
+    expect(textOf(await mcp.callTool('echo', { msg: 'before' }))).toBe('echo:before');
+
+    await expireSessions();
+    // Let the SDK's idle GET stream notice and fail its first reconnect (default delay 1s) - the
+    // path that used to print stack traces into the terminal.
+    await new Promise(resolve => setTimeout(resolve, 1200));
+
+    expect(textOf(await mcp.callTool('echo', { msg: 'after' }))).toBe('echo:after');
+    expect(state.initializeCount).toBe(2);
+    // The failed POST plus its retry.
+    expect(state.toolCallCount).toBe(3);
+    expect(mcp.tools.map(t => t.name)).toEqual(['echo']);
+    expect(errors).not.toHaveBeenCalled();
+
+    // The new session keeps working without another initialize.
+    expect(textOf(await mcp.callTool('echo', { msg: 'again' }))).toBe('echo:again');
+    expect(state.initializeCount).toBe(2);
+  });
+
+  it('opens one new session for calls that fail together', async () => {
+    const { url, state, expireSessions } = await startServer();
+    const mcp = await connect(url);
+    await expireSessions();
+
+    const results = await Promise.all([mcp.callTool('echo', { msg: 'a' }), mcp.callTool('echo', { msg: 'b' })]);
+
+    expect(results.map(textOf)).toEqual(['echo:a', 'echo:b']);
+    expect(state.initializeCount).toBe(2);
+  });
+
+  it('does not retry an error that is not an expired session', async () => {
+    const { url, state } = await startServer();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const mcp = await connect(url);
+    state.failToolCallsWith = 500;
+
+    await expect(mcp.callTool('echo', { msg: 'x' })).rejects.toThrow(/boom/);
+    expect(state.toolCallCount).toBe(1);
+    expect(state.initializeCount).toBe(1);
   });
 });
 

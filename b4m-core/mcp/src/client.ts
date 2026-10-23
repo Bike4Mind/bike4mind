@@ -1,6 +1,6 @@
 import { Tool } from '@anthropic-ai/sdk/resources/messages';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { StreamableHTTPClientTransport, StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { Readable } from 'stream';
@@ -8,6 +8,15 @@ import path from 'path';
 import { existsSync, readdirSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { buildMcpChildEnv } from './childEnv';
+
+const createSdkClient = () => new Client({ name: 'mcp-client-cli', version: '1.0.0' });
+
+/**
+ * The server no longer knows our session. The MCP spec (streamable HTTP, Session Management) says a
+ * 404 to a request carrying `Mcp-Session-Id` means the session has ended, and the client MUST start a
+ * new one with a fresh InitializeRequest. Servers expire idle sessions, so this is routine, not fatal.
+ */
+const isSessionExpired = (error: unknown): boolean => error instanceof StreamableHTTPError && error.code === 404;
 
 export class MCPClient {
   private mcp: Client;
@@ -22,6 +31,10 @@ export class MCPClient {
   // instead of spawning a stdio child process).
   private url?: string;
   private headers?: Record<string, string>;
+  /** In flight while an expired HTTP session is being replaced; see renewHttpSession. */
+  private renewing?: Promise<void>;
+  /** The last renewal failed (e.g. the server was down), so the next call tries again first. */
+  private renewFailed = false;
   public tools: Tool[] = [];
   public serverName: string;
 
@@ -47,7 +60,7 @@ export class MCPClient {
     /** HTTP headers (e.g. Authorization: Bearer <token>) sent on every request to `url`. */
     headers?: Record<string, string>;
   }) {
-    this.mcp = new Client({ name: 'mcp-client-cli', version: '1.0.0' });
+    this.mcp = createSdkClient();
     // Clone envVariables to avoid mutating caller's array
     this.envVariables = [...envVariables];
     this.serverName = name;
@@ -65,21 +78,7 @@ export class MCPClient {
       // Streamable-HTTP transport: connect to a remote MCP endpoint over HTTP
       // (auth via headers). Skips the stdio child-process spawn entirely.
       if (this.url) {
-        const transport = new StreamableHTTPClientTransport(new URL(this.url), {
-          requestInit: this.headers ? { headers: this.headers } : undefined,
-        });
-        transport.onerror = error => {
-          console.error(`[MCP] Transport error for ${this.serverName}:`, error);
-        };
-        this.transport = transport;
-        await this.mcp.connect(transport);
-
-        const toolsResult = await this.mcp.listTools();
-        this.tools = toolsResult.tools.map(tool => ({
-          name: tool.name,
-          description: tool.description,
-          input_schema: tool.inputSchema,
-        }));
+        await this.connectHttp(this.url);
         return;
       }
 
@@ -191,6 +190,68 @@ export class MCPClient {
     }
   }
 
+  private async connectHttp(url: string) {
+    const transport = new StreamableHTTPClientTransport(new URL(url), {
+      requestInit: this.headers ? { headers: this.headers } : undefined,
+    });
+    let sessionExpired = false;
+    transport.onerror = error => {
+      // Once the session is gone (or this transport has been replaced) the SDK keeps retrying the idle
+      // GET stream and reports each 404 and the final "Maximum reconnection attempts" here. None of
+      // it needs the user: the next tool call starts a new session (see callTool).
+      if (sessionExpired || transport !== this.transport) return;
+      if (isSessionExpired(error)) {
+        sessionExpired = true;
+        return;
+      }
+      // One line, no stack: this prints into an interactive terminal.
+      console.error(`[MCP] Transport error for ${this.serverName}: ${error.message}`);
+    };
+    this.transport = transport;
+    await this.mcp.connect(transport);
+
+    const toolsResult = await this.mcp.listTools();
+    this.tools = toolsResult.tools.map(tool => ({
+      name: tool.name,
+      description: tool.description,
+      input_schema: tool.inputSchema,
+    }));
+  }
+
+  /**
+   * Replace an expired HTTP session with a new one: a fresh SDK client and transport, re-initialized,
+   * tools re-listed. `expired` is the client the failing call used, so calls that fail together share
+   * one new session instead of each opening their own.
+   */
+  private renewHttpSession(expired: Client): Promise<void> {
+    if (this.mcp !== expired) return this.renewing ?? Promise.resolve();
+    const url = this.url as string;
+    this.mcp = createSdkClient();
+    this.transport = null;
+    this.renewing = (async () => {
+      try {
+        // Close, not terminate: the server has already forgotten the session, so a DELETE would 404 too.
+        await expired.close();
+      } catch {}
+      try {
+        await this.connectHttp(url);
+        this.renewFailed = false;
+      } catch (e) {
+        this.renewFailed = true;
+        if (this.transport) {
+          try {
+            await this.transport.close();
+          } catch {}
+          this.transport = null;
+        }
+        throw e;
+      }
+    })().finally(() => {
+      this.renewing = undefined;
+    });
+    return this.renewing;
+  }
+
   /**
    * Read lines from the child process stderr stream and dispatch to the callback.
    * Uses Node.js stream events; errors are silently caught (stream closes on disconnect).
@@ -230,11 +291,21 @@ export class MCPClient {
   async callTool(toolName: string, toolArgs: unknown) {
     try {
       const args = toolArgs && typeof toolArgs === 'object' ? (toolArgs as Record<string, unknown>) : undefined;
-      const result = await this.mcp.callTool({
-        name: toolName,
-        arguments: args,
-      });
-      return result;
+      await this.renewing;
+      if (this.renewFailed) await this.renewHttpSession(this.mcp);
+      const client = this.mcp;
+      const sessionId = this.transport instanceof StreamableHTTPClientTransport ? this.transport.sessionId : undefined;
+      try {
+        return await client.callTool({ name: toolName, arguments: args });
+      } catch (error) {
+        // The server rejects an unknown session before running anything, so one retry on a new session
+        // cannot run the tool twice. A call that was in flight on the same dead session when another
+        // call renewed it fails with "Connection closed" instead of the 404, and is retried the same way.
+        const replaced = this.mcp !== client;
+        if (!sessionId || !(replaced || isSessionExpired(error))) throw error;
+        await this.renewHttpSession(client);
+        return await this.mcp.callTool({ name: toolName, arguments: args });
+      }
     } catch (error) {
       // Check if this is a connection closed error
       const isConnectionError =
