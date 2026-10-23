@@ -23,6 +23,7 @@ import { Ollama, Message as OllamaMessage, Options as OllamaOptions, Tool, ToolC
 import { ILogger, Logger } from '@bike4mind/observability';
 import { Agent } from 'undici';
 import { convertMessagesToOpenAIFormat } from './messageFormatConverter';
+import { appendIdentityReminderToMessages, buildIdentityReminder } from './identityReminder';
 import { executeToolsBatch, shouldEndTurnAfterTools } from './executeToolsBatch';
 import { attachFullToolResult, truncateToolResult } from './recordToolResult';
 import {
@@ -325,11 +326,17 @@ export class OllamaBackend implements ICompletionBackend {
     }
 
     const formattedTools = offerTools ? this.formatTools(options.tools ?? []) : [];
+    // Applied after the strip to what is actually sent, and on a copy: the tool round below
+    // recurses with the caller's `messages`, so mutating would stack a reminder per round.
+    const conversationMessages = offerTools ? messages : stripToolDependentMessages(messages);
+    const requestMessages = options.omitIdentityReminder
+      ? conversationMessages
+      : appendIdentityReminderToMessages(conversationMessages, buildIdentityReminder(model));
     const baseRequest = {
       model,
       // This backend withholds tools in place rather than recursing, so the strip has to track
       // `offerTools` here: prompts ordering the model to use a tool must not outlive the tools.
-      messages: this.buildMessages(offerTools ? messages : stripToolDependentMessages(messages)),
+      messages: this.buildMessages(requestMessages),
       options: await this.buildModelOptions(model, options),
       ...(formattedTools.length > 0 && { tools: formattedTools }),
       // Drive Ollama's reasoning from the Thinking toggle. Gated upstream by

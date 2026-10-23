@@ -39,7 +39,8 @@ async function run(
   await backend.complete(
     'qwen2.5-coder:3b',
     [{ role: 'user', content: 'go' } as any],
-    { stream: false, ...options } as any,
+    // These suites assert the wire message mapping; the identity line is covered separately.
+    { stream: false, omitIdentityReminder: true, ...options } as any,
     async (texts, info) => {
       texts.forEach(t => {
         if (t) out.push(t);
@@ -431,7 +432,10 @@ describe('OllamaBackend.buildMessages image handling', () => {
   // Drive a plain completion and return the message the api chat call received.
   async function sentMessage(content: unknown) {
     const { backend, chat } = makeBackend(answer);
-    await backend.complete('moondream', [{ role: 'user', content } as any], { stream: false } as any, async () => {});
+    await backend.complete('moondream', [{ role: 'user', content } as any], {
+      stream: false,
+      omitIdentityReminder: true,
+    } as any, async () => {});
     return (chat.mock.calls[0][0] as { messages: Array<{ content: string; images?: string[] }> }).messages[0];
   }
 
@@ -482,7 +486,7 @@ describe('OllamaBackend.buildMessages replayed tool calls', () => {
     await backend.complete(
       'qwen3:8b',
       history,
-      { stream: false, executeTools: false, tools: [mathTool(async () => '4')] },
+      { stream: false, executeTools: false, tools: [mathTool(async () => '4')], omitIdentityReminder: true },
       async () => {}
     );
     const request = chat.mock.calls[0]?.[0];
