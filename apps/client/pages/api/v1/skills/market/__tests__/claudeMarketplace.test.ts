@@ -9,7 +9,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'crypto';
 import { createMocks } from 'node-mocks-http';
 import { ApiKeyScope, getClaudeMarketplaceContract, getClaudePluginZipContract } from '@bike4mind/common';
-import { decideScopeGate } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
+import { decideScopeGate } from '@server/middlewares/apiKeyScopeGate';
 
 const {
   mockFind,

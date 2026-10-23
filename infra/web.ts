@@ -433,7 +433,7 @@ export const web = new sst.aws.Nextjs(
       // 'true' to fall back to plain res.json on every route using the helper.
       DISABLE_RESPONSE_GZIP: process.env.DISABLE_RESPONSE_GZIP || '',
       // Comma-separated API-key scopes whose route gates are still rolling out
-      // (packages/server-utils/src/middlewares/apiKeyScopeGate.ts). While a scope is listed,
+      // (apps/client/server/middlewares/apiKeyScopeGate.ts). While a scope is listed,
       // a route requiring it logs a missing-scope key instead of 403ing it, so
       // production keys can be re-minted before enforcement starts. Empty (the
       // default) enforces every declared gate. Declared here so the lever is
