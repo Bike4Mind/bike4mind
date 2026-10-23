@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { CapabilityLedger } from './CapabilityLedger';
+import { SessionStore } from '../SessionStore';
 
 const directories: string[] = [];
 
@@ -18,6 +19,77 @@ afterEach(async () =>
 );
 
 describe('CapabilityLedger', () => {
+  it('does not resurrect a native session grant from a snapshot taken before revocation', async () => {
+    const { path, store } = await makeLedger();
+    const input = {
+      subject: { kind: 'session', sessionId: 's' } as const,
+      capability: 'files' as const,
+      scope: { kind: 'path', value: '/tmp/extra' } as const,
+      source: 'approval' as const,
+    };
+    const native = await store.grant(input);
+    const snapshot = {
+      roots: [],
+      trustedProjects: [],
+      permissions: { user: { allow: [], ask: [], deny: [] }, projects: {} },
+      sessions: [{ id: 's', grantedDirectories: ['/tmp/extra'] }],
+    };
+    await store.migrate(snapshot);
+    expect((await store.state()).grants).toHaveLength(1);
+    await store.revoke(native.id);
+    const restarted = new CapabilityLedger(path);
+    await restarted.migrate(snapshot);
+    expect((await restarted.state()).grants.filter(grant => !grant.revokedAt)).toHaveLength(0);
+    // New consent is still handled by the native writer after the historical revoke.
+    const renewed = await restarted.grant(input);
+    expect(renewed.id).not.toBe(native.id);
+    expect((await restarted.state()).grants.filter(grant => !grant.revokedAt)).toHaveLength(1);
+  });
+
+  it('migrates persisted explicit session folders after account loading and keeps revoked folders removed', async () => {
+    const { path, store } = await makeLedger();
+    const sessionsPath = join(path, '..', 'sessions');
+    const sessions = new SessionStore(sessionsPath, 'test-model');
+    const chat = await sessions.create();
+    await sessions.addGrantedDirectory(chat.id, '/tmp/chat-extra');
+    const code = await sessions.create(undefined, { mode: 'code' });
+    await sessions.setProject(code.id, {
+      name: 'project',
+      directory: '/tmp/project',
+      workingDirectory: '/tmp/worktree',
+      branch: 'main',
+      workspace: false,
+      contextDirectories: ['/tmp/code-extra'],
+    });
+    const persisted = new SessionStore(sessionsPath, 'test-model');
+    const migration = {
+      roots: [],
+      trustedProjects: [],
+      permissions: { user: { allow: [], ask: [], deny: [] }, projects: {} },
+      sessions: await persisted.list(),
+    };
+    await store.migrate(migration);
+    await new CapabilityLedger(path).migrate(migration);
+    const state = await store.state();
+    expect(state.grants).toHaveLength(2);
+    expect(state.grants.map(grant => grant.scope.value).sort()).toEqual(['/tmp/chat-extra', '/tmp/code-extra']);
+    const chatGrant = state.grants.find(
+      grant => grant.subject.kind === 'session' && grant.subject.sessionId === chat.id
+    );
+    if (!chatGrant) throw new Error('Missing chat directory grant');
+    await store.revoke(chatGrant.id, async () => {
+      await persisted.removeContextDirectory(chat.id, '/tmp/chat-extra');
+    });
+    await store.migrate({ ...migration, sessions: await persisted.list() });
+    const restarted = await new CapabilityLedger(path).state();
+    expect(restarted.grants.filter(grant => !grant.revokedAt).map(grant => grant.scope.value)).toEqual([
+      '/tmp/code-extra',
+    ]);
+    // A repeated legacy snapshot cannot resurrect a grant migrated and then revoked.
+    await store.migrate(migration);
+    expect((await store.state()).grants.filter(grant => !grant.revokedAt)).toHaveLength(1);
+  });
+
   it('deduplicates repeated concurrent grants of the same session authority until revoked', async () => {
     const { store } = await makeLedger();
     const input = {

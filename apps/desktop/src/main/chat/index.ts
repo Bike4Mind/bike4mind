@@ -379,9 +379,7 @@ export function registerChat(
     new PermissionRuleStore(join(userData, 'permission-rules.json')).read(),
   ])
     .then(async ([roots, trustedProjects, stored]) => {
-      await capabilityLedger.revokeMatching(
-        grant => grant.subject.kind === 'session' && grant.scope.kind !== 'path'
-      );
+      await capabilityLedger.revokeMatching(grant => grant.subject.kind === 'session' && grant.scope.kind !== 'path');
       await capabilityLedger.migrate({ roots, trustedProjects, permissions: stored });
     })
     .catch(error => logger.warn(`CAPABILITIES: could not migrate grants: ${String(error)}`));
@@ -667,6 +665,13 @@ export function registerChat(
   );
   ipcMain.handle(IPC_CHANNELS.capabilitiesGetState, async () => {
     await capabilitiesReady;
+    // SessionStore resolves the signed-in account per operation; startup can precede sign-in.
+    await capabilityLedger.migrate({
+      roots: [],
+      trustedProjects: [],
+      permissions: { user: { allow: [], ask: [], deny: [] }, projects: {} },
+      sessions: await store.list(),
+    });
     return capabilityLedger.state();
   });
   ipcMain.handle(IPC_CHANNELS.capabilitiesRevoke, async (_event, grantId: unknown) => {

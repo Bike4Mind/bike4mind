@@ -86,6 +86,11 @@ type GrantInput = {
 };
 
 interface MigrationInput {
+  sessions?: readonly {
+    id: string;
+    grantedDirectories?: readonly string[];
+    project?: { contextDirectories: readonly string[] };
+  }[];
   roots: readonly string[];
   trustedProjects: readonly string[];
   permissions: { user: PermissionRuleLists; projects: Record<string, PermissionRuleLists> };
@@ -202,7 +207,8 @@ export class CapabilityLedger {
       (await this.read()).flatMap(event => (event.type === 'grant' && event.migrationKey ? [event.migrationKey] : []))
     );
     const additions: Array<Parameters<CapabilityLedger['grant']>[0]> = [];
-    const active = (await this.currentState()).grants.filter(grant => !grant.revokedAt && !grant.expiredAt);
+    const history = (await this.currentState()).grants;
+    const active = history.filter(grant => !grant.revokedAt && !grant.expiredAt);
     for (const root of input.roots) {
       const value = resolve(root);
       additions.push({
@@ -212,6 +218,18 @@ export class CapabilityLedger {
         source: 'migration',
         migrationKey: `path:${value}`,
       });
+    }
+    for (const session of input.sessions ?? []) {
+      for (const directory of [...(session.grantedDirectories ?? []), ...(session.project?.contextDirectories ?? [])]) {
+        const value = resolve(directory);
+        additions.push({
+          subject: { kind: 'session', sessionId: session.id },
+          capability: 'files',
+          scope: { kind: 'path', value },
+          source: 'migration',
+          migrationKey: `session-path:${session.id}:${value}`,
+        });
+      }
     }
     for (const directory of input.trustedProjects) {
       const value = resolve(directory);
@@ -239,6 +257,9 @@ export class CapabilityLedger {
     }
     for (const addition of additions) {
       if (existing.has(addition.migrationKey!)) continue;
+      // A session snapshot may predate removal. Only fill missing history: a fresh
+      // user grant is recorded by the native writer, never by replaying old directories.
+      if (addition.subject.kind === 'session' && history.some(grant => sameMigrationGrant(grant, addition))) continue;
       if (active.some(grant => sameMigrationGrant(grant, addition))) continue;
       await this.createGrant(addition);
       existing.add(addition.migrationKey!);
@@ -309,6 +330,9 @@ function sameMigrationGrant(grant: CapabilityGrant, addition: GrantInput): boole
   if (grant.capability !== addition.capability || grant.scope.kind !== addition.scope.kind) return false;
   if (grant.scope.value !== addition.scope.value || grant.subject.kind !== addition.subject.kind) return false;
   if (grant.subject.kind === 'desktop-user') return true;
+  if (grant.subject.kind === 'session' && addition.subject.kind === 'session') {
+    return grant.subject.sessionId === addition.subject.sessionId;
+  }
   return (
     grant.subject.kind === 'project' &&
     addition.subject.kind === 'project' &&
