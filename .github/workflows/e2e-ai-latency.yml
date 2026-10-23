@@ -146,8 +146,8 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Install Playwright Chromium
-        working-directory: apps/client
-        run: npx playwright install chromium --with-deps
+        timeout-minutes: 12
+        uses: ./.github/actions/install-playwright-chromium
 
       - name: Wait for deployment to be healthy
         env:
@@ -406,12 +406,8 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Install Playwright Chromium
-        working-directory: apps/client
-        # Cap the install: the yauzl/Node>=24.16 extraction wedge
-        # (playwright#40724) can hang this step indefinitely, idling to the job
-        # cap. Fail fast instead.
-        timeout-minutes: 8
-        run: npx playwright install chromium --with-deps
+        timeout-minutes: 12
+        uses: ./.github/actions/install-playwright-chromium
 
       - name: Wait for deployment to be healthy
         env:
