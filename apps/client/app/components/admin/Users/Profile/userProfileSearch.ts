@@ -20,10 +20,15 @@ export type UserProfileSearch = { tab?: UserProfileTab };
 export const isUserProfileTab = (value: unknown): value is UserProfileTab =>
   typeof value === 'string' && (USER_PROFILE_TABS as readonly string[]).includes(value);
 
-/** The route's `validateSearch`. The default tab is left out of the URL to keep links short. */
+/**
+ * The route's `validateSearch`. The default tab is left out of the URL to keep links short.
+ * A dropped tab is returned as an explicit `undefined`: TanStack Router builds a child route's search
+ * as `{ ...parentSearch, ...validated }`, and the root's search is the raw query, so omitting the key
+ * would let `?tab=nonsense` through to the page.
+ */
 export const parseUserProfileSearch = (search: Record<string, unknown>): UserProfileSearch => {
   const tab = search.tab;
-  return isUserProfileTab(tab) && tab !== DEFAULT_USER_PROFILE_TAB ? { tab } : {};
+  return { tab: isUserProfileTab(tab) && tab !== DEFAULT_USER_PROFILE_TAB ? tab : undefined };
 };
 
 /**

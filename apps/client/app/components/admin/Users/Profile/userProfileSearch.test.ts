@@ -6,13 +6,15 @@ describe('parseUserProfileSearch', () => {
     expect(parseUserProfileSearch({ tab })).toEqual({ tab });
   });
 
+  // The router spreads the validated search over the raw parent search, so assert on that merge.
+  const routeSearch = (raw: Record<string, unknown>) => ({ ...raw, ...parseUserProfileSearch(raw) });
+
   it('drops the default tab so links stay short', () => {
-    expect(parseUserProfileSearch({ tab: 'overview' })).toEqual({});
+    expect(routeSearch({ tab: 'overview' }).tab).toBeUndefined();
   });
 
-  it('drops an unknown tab rather than opening an empty panel', () => {
-    expect(parseUserProfileSearch({ tab: 'billing' })).toEqual({});
-    expect(parseUserProfileSearch({ tab: 3 })).toEqual({});
+  it.each(['nonsense', 'Activity', '', 3])('drops the unknown tab %j rather than opening an empty panel', tab => {
+    expect(routeSearch({ tab }).tab).toBeUndefined();
   });
 });
 

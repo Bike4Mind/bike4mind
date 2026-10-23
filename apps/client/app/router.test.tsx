@@ -273,6 +273,6 @@ describe('admin user profile route', () => {
   it('deep-links a tab through ?tab=', () => {
     const validate = (search: Record<string, unknown>) => adminUserProfileRoute.options.validateSearch(search);
     expect(validate({ tab: 'admin' })).toEqual({ tab: 'admin' });
-    expect(validate({ tab: 'nope' })).toEqual({});
+    expect({ tab: 'nope', ...validate({ tab: 'nope' }) }.tab).toBeUndefined();
   });
 });
