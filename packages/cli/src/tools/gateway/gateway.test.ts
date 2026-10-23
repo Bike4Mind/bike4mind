@@ -24,7 +24,7 @@ import { PermissionManager } from '../../utils/PermissionManager.js';
 import { ToolCatalog } from './toolCatalog.js';
 import { PermissionDeniedError } from '@bike4mind/common';
 import { useCliStore } from '../../store/index.js';
-import { resetHostAllowlistCacheForTests } from './stages/hostAllowlist.js';
+import { __resetHostAllowlistCacheForTests } from './stages/hostAllowlist.js';
 import { executeTool } from '../../llm/ToolRouter';
 import { getCliOnlyTools, resolveEditLocalFile } from '@bike4mind/services/llm/tools/cliTools';
 
@@ -77,7 +77,7 @@ describe('wrapToolWithPermission: host allowlist in claude form (mcp__<server>__
   afterEach(() => {
     if (original === undefined) delete process.env.B4M_ALLOWED_TOOLS;
     else process.env.B4M_ALLOWED_TOOLS = original;
-    resetHostAllowlistCacheForTests();
+    __resetHostAllowlistCacheForTests();
   });
 
   function mcpTool(name: string): ICompletionOptionTools {
@@ -86,7 +86,7 @@ describe('wrapToolWithPermission: host allowlist in claude form (mcp__<server>__
 
   it('runs an MCP tool named <server>__<tool> without a prompt when mcp__<server>__* is allowed', async () => {
     process.env.B4M_ALLOWED_TOOLS = JSON.stringify(['mcp__host__*']);
-    resetHostAllowlistCacheForTests();
+    __resetHostAllowlistCacheForTests();
     const prompt = vi.fn();
     const wrapped = wrap(mcpTool('host__read_self'), prompt, new PermissionManager(new ToolCatalog(), [], []));
 
@@ -96,7 +96,7 @@ describe('wrapToolWithPermission: host allowlist in claude form (mcp__<server>__
 
   it('still prompts for a non-MCP tool with the same name shape', async () => {
     process.env.B4M_ALLOWED_TOOLS = JSON.stringify(['mcp__host__*']);
-    resetHostAllowlistCacheForTests();
+    __resetHostAllowlistCacheForTests();
     const prompt = vi.fn(async () => ({ action: 'allow-once' }));
     const wrapped = wrap(tool('host__read_self'), prompt, new PermissionManager(new ToolCatalog(), [], []));
 

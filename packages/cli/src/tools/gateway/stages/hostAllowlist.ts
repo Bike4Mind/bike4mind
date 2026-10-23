@@ -38,6 +38,6 @@ export function isHostAllowlisted(toolName: string, opts: { isMcpTool?: boolean 
 }
 
 /** Test seam: drop the parsed B4M_ALLOWED_TOOLS so the next call re-reads the env. */
-export function resetHostAllowlistCacheForTests(): void {
+export function __resetHostAllowlistCacheForTests(): void {
   cachedAllowedTools = undefined;
 }

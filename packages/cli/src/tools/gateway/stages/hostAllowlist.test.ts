@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { isHostAllowlisted, resetHostAllowlistCacheForTests } from './hostAllowlist.js';
+import { isHostAllowlisted, __resetHostAllowlistCacheForTests } from './hostAllowlist.js';
 
 function allow(patterns: string[] | undefined): void {
   if (patterns === undefined) delete process.env.B4M_ALLOWED_TOOLS;
   else process.env.B4M_ALLOWED_TOOLS = JSON.stringify(patterns);
-  resetHostAllowlistCacheForTests();
+  __resetHostAllowlistCacheForTests();
 }
 
 describe('isHostAllowlisted', () => {
@@ -14,7 +14,7 @@ describe('isHostAllowlisted', () => {
   afterEach(() => {
     if (original === undefined) delete process.env.B4M_ALLOWED_TOOLS;
     else process.env.B4M_ALLOWED_TOOLS = original;
-    resetHostAllowlistCacheForTests();
+    __resetHostAllowlistCacheForTests();
   });
 
   it('approves nothing when no allowlist is set', () => {

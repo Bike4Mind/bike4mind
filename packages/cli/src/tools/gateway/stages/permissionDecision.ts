@@ -8,7 +8,7 @@ import { commandTextOf } from '../toolPolicy.js';
 export type AutoRunInput = {
   toolName: string;
   /** The tool came from an MCP server (`_isMcpTool`); lets `mcp__<server>__*` host patterns match it. */
-  isMcpTool?: boolean;
+  isMcpTool: boolean;
   /** A gate (high-risk command, fuzzy edit) demanded an explicit prompt; nothing below may skip it. */
   forcePrompt: boolean;
   isSandboxed: boolean;
