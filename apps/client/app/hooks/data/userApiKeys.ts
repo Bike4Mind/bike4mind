@@ -177,7 +177,7 @@ export function useCreateUserApiKey({ onSuccess }: { onSuccess?: (result: Create
       if (onSuccess) onSuccess(result);
     },
     onError: (error: Error) => {
-      // The trust message is a full sentence: the Zod-message splitter would mangle it on ', '.
+      // Shown verbatim: parseValidationError reshapes any message containing ':' as Zod output.
       toast.error(isTrustRequiredError(error) ? error.response.data.error : parseValidationError(error));
     },
   });

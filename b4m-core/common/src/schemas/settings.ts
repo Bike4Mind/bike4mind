@@ -2111,7 +2111,7 @@ export const API_SERVICE_GROUPS = {
     id: 'apiKeyTrustService',
     name: 'API Key Trust Gate',
     description: 'Who may mint personal API keys, and how hard keys of untrusted accounts are throttled',
-    icon: 'Key',
+    icon: 'Security',
     settings: [
       { key: 'apiKeyTrustGateEnabled', order: 1 },
       { key: 'apiKeyMinAccountAgeDays', order: 2 },
@@ -3397,7 +3397,7 @@ export const settingsMap = {
     name: 'API Key Trust Gate',
     defaultValue: true,
     description:
-      'Restricts personal API key creation for untrusted accounts: an unverified email cannot mint keys, and a verified account that has not purchased, is younger than the minimum age and is not admin-approved is limited to the untrusted key cap. Off restores unrestricted minting and lifts the untrusted rate limit.',
+      'Restricts personal API key creation for untrusted accounts: an unverified email cannot mint keys, and a verified account that has not purchased, is younger than the minimum age and is not admin-approved is limited to the untrusted key cap. Off restores unrestricted minting and lifts the untrusted rate limit. Changes reach running servers within about 5 minutes (settings cache).',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.API_KEY_TRUST.id,
     order: 1,
@@ -3413,6 +3413,7 @@ export const settingsMap = {
     category: 'SecOps',
     group: API_SERVICE_GROUPS.API_KEY_TRUST.id,
     order: 2,
+    dependsOn: 'apiKeyTrustGateEnabled',
   }),
   maxActiveKeysUntrusted: makeNumberSetting({
     key: 'maxActiveKeysUntrusted',
@@ -3426,6 +3427,7 @@ export const settingsMap = {
     category: 'SecOps',
     group: API_SERVICE_GROUPS.API_KEY_TRUST.id,
     order: 3,
+    dependsOn: 'apiKeyTrustGateEnabled',
   }),
   apiKeyUntrustedRateLimitPerMin: makeNumberSetting({
     key: 'apiKeyUntrustedRateLimitPerMin',
@@ -3439,6 +3441,7 @@ export const settingsMap = {
     category: 'SecOps',
     group: API_SERVICE_GROUPS.API_KEY_TRUST.id,
     order: 4,
+    dependsOn: 'apiKeyTrustGateEnabled',
   }),
   blockDisposableEmails: makeBooleanSetting({
     key: 'blockDisposableEmails',

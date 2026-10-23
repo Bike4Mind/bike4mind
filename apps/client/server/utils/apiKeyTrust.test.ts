@@ -1,12 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CreditHolderType } from '@bike4mind/common';
 
-const { getActiveSubscriptionsForUser, settingsMap } = vi.hoisted(() => ({
+const { getActiveSubscriptionsForUser, getRequestActiveSubscriptions, settingsMap } = vi.hoisted(() => ({
   getActiveSubscriptionsForUser: vi.fn(),
+  getRequestActiveSubscriptions: vi.fn(),
   settingsMap: vi.fn(),
 }));
 
-vi.mock('@server/entitlements/activeSubscriptions', () => ({ getActiveSubscriptionsForUser }));
+vi.mock('@server/entitlements/activeSubscriptions', () => ({
+  getActiveSubscriptionsForUser,
+  getRequestActiveSubscriptions,
+}));
 vi.mock('@bike4mind/database', () => ({ adminSettingsRepository: {} }));
 vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/utils')>()),
@@ -14,6 +18,10 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
 }));
 
 import { applyUntrustedRateLimit, resolveApiKeyTrust } from './apiKeyTrust';
+import type { ActiveSubscriptionsRequest } from '@server/entitlements/activeSubscriptions';
+
+// Only handed through to the mocked reader, so an opaque stand-in is enough.
+const request = {} as ActiveSubscriptionsRequest;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const youngVerified = {
@@ -50,6 +58,19 @@ describe('resolveApiKeyTrust', () => {
     const { assessment } = await resolveApiKeyTrust(youngVerified);
     expect(getActiveSubscriptionsForUser).toHaveBeenCalledWith('user-1');
     expect(assessment).toEqual({ status: 'trusted' });
+  });
+
+  it('reads subscriptions through the request memo when given a request', async () => {
+    getRequestActiveSubscriptions.mockResolvedValue([{ priceId: 'price_x' }]);
+    const { assessment } = await resolveApiKeyTrust(youngVerified, request);
+    expect(getRequestActiveSubscriptions).toHaveBeenCalledWith(request);
+    expect(getActiveSubscriptionsForUser).not.toHaveBeenCalled();
+    expect(assessment).toEqual({ status: 'trusted' });
+  });
+
+  it('propagates a failed subscription read instead of guessing', async () => {
+    getRequestActiveSubscriptions.mockRejectedValue(new Error('db down'));
+    await expect(resolveApiKeyTrust(youngVerified, request)).rejects.toThrow('db down');
   });
 
   it('restores current behavior when the gate is switched off', async () => {

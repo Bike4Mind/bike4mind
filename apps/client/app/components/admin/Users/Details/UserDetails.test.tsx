@@ -1,11 +1,15 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
+import { AxiosError, type AxiosResponse } from 'axios';
+import { toast } from 'sonner';
 import UserDetails from './UserDetails';
+
+vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 const h = vi.hoisted(() => ({ resetMutate: vi.fn(), post: vi.fn() }));
 
@@ -52,6 +56,11 @@ describe('UserDetails - MFA reset reason', () => {
 });
 
 describe('UserDetails - API key trust toggle', () => {
+  beforeEach(() => {
+    h.post.mockReset();
+    vi.mocked(toast.error).mockClear();
+  });
+
   it('reflects the current approval and posts the new value when toggled', async () => {
     h.post.mockResolvedValue({ data: { apiKeyTrustApproved: true } });
     render(<UserDetails user={user} editedFields={{}} onFieldChange={vi.fn()} />, { wrapper: TestWrapper });
@@ -70,5 +79,21 @@ describe('UserDetails - API key trust toggle', () => {
     render(<UserDetails user={trusted} editedFields={{}} onFieldChange={vi.fn()} />, { wrapper: TestWrapper });
 
     expect(screen.getByTestId('admin-user-api-key-trust-toggle')).toBeChecked();
+  });
+
+  it('toasts the server error string when the toggle request fails, and leaves the switch unchecked', async () => {
+    const serverMessage = 'Cannot approve: user email is not verified';
+    h.post.mockRejectedValue(
+      new AxiosError('Request failed', 'ERR_BAD_REQUEST', undefined, undefined, {
+        status: 400,
+        data: { error: serverMessage },
+      } as AxiosResponse)
+    );
+    render(<UserDetails user={user} editedFields={{}} onFieldChange={vi.fn()} />, { wrapper: TestWrapper });
+
+    fireEvent.click(screen.getByTestId('admin-user-api-key-trust-toggle'));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(serverMessage));
+    expect(screen.getByTestId('admin-user-api-key-trust-toggle')).not.toBeChecked();
   });
 });

@@ -6,6 +6,7 @@ import {
   ApiKeyTrustSubject,
   assessApiKeyTrust,
   describeApiKeyTrustRequirement,
+  untrustedOwnerMayMint,
 } from '../trust';
 import {
   API_KEY_USER_CAP_ERROR_CODE,
@@ -117,6 +118,31 @@ describe('describeApiKeyTrustRequirement', () => {
   });
 });
 
+describe('untrustedOwnerMayMint', () => {
+  const notYetTrusted = (maxActiveKeys: number): Extract<ApiKeyTrustAssessment, { status: 'untrusted' }> => ({
+    status: 'untrusted',
+    reason: 'not_yet_trusted',
+    maxActiveKeys,
+    trustedAfter: new Date('2026-10-29T00:00:00Z'),
+  });
+
+  it('never allows an unverified email', () => {
+    expect(untrustedOwnerMayMint({ status: 'untrusted', reason: 'email_unverified' }, 0)).toBe(false);
+  });
+
+  it('allows a mint while personal keys are under the allowance', () => {
+    expect(untrustedOwnerMayMint(notYetTrusted(1), 0)).toBe(true);
+  });
+
+  it('refuses once the allowance is used up', () => {
+    expect(untrustedOwnerMayMint(notYetTrusted(1), 1)).toBe(false);
+  });
+
+  it('refuses everything when the allowance is zero', () => {
+    expect(untrustedOwnerMayMint(notYetTrusted(0), 0)).toBe(false);
+  });
+});
+
 describe('createUserApiKey trust gate', () => {
   const docImpl = (doc: Record<string, unknown>) => ({ ...doc, id: 'key-1', createdAt: new Date() });
   const makeRepo = (createIfUnderCap = vi.fn().mockImplementation(docImpl)) => ({
@@ -157,7 +183,7 @@ describe('createUserApiKey trust gate', () => {
   it('caps a not-yet-trusted account at its untrusted allowance', async () => {
     const repo = makeRepo();
     await createUserApiKey('user-1', params, adapters(repo, notYetTrusted(1)));
-    expect(repo.createIfUnderCap).toHaveBeenCalledWith(expect.anything(), 1, 'standard');
+    expect(repo.createIfUnderCap).toHaveBeenCalledWith(expect.anything(), 1, 'personal');
   });
 
   it('reports the trust code, not the generic cap code, when the untrusted allowance is used up', async () => {
@@ -196,6 +222,18 @@ describe('createUserApiKey trust gate', () => {
       { ...params, organizationId: 'org-1', billingOwnerType: CreditHolderType.Organization },
       adapters(repo, { status: 'untrusted', reason: 'email_unverified' })
     );
+    expect(repo.createIfUnderCap).toHaveBeenCalledWith(expect.anything(), MAX_ACTIVE_KEYS_PER_USER, 'standard');
+  });
+
+  it('mints an org-billed key without a trust assessment', async () => {
+    const repo = makeRepo();
+    await expect(
+      createUserApiKey(
+        'user-1',
+        { ...params, organizationId: 'org-1', billingOwnerType: CreditHolderType.Organization },
+        adapters(repo)
+      )
+    ).resolves.toBeDefined();
     expect(repo.createIfUnderCap).toHaveBeenCalledWith(expect.anything(), MAX_ACTIVE_KEYS_PER_USER, 'standard');
   });
 

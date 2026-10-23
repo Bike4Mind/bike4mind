@@ -202,7 +202,8 @@ const handler = baseApi()
       ? { userId, billingOwnerType: CreditHolderType.Organization, organizationId }
       : { userId, billingOwnerType: CreditHolderType.User };
     const screenedBranding = await gateEmbedBrandingWrite(brandingOwner, brandingCheck.value);
-    const { assessment: trust } = await resolveApiKeyTrust(req.user);
+    // Org-billed keys are not trust-gated, so skip the subscription reads the assessment may cost.
+    const trust = organizationId ? undefined : (await resolveApiKeyTrust(req.user, req)).assessment;
 
     const newApiKey = await userApiKeyService.createUserApiKey(
       userId,

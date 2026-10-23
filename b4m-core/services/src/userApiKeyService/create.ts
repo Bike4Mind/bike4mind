@@ -25,7 +25,7 @@ import { API_KEY_RATE_LIMIT_DEFAULTS, apiKeyRateLimitSchema } from './rateLimit'
 import { assertNoScopeEscalation } from './assertNoScopeEscalation';
 import { generateCallbackSigningSecret } from './callbackSigningSecret';
 import { computeKeyDigest } from './keyDigest';
-import { ApiKeyTrustAssessment, apiKeyTrustRequiredError } from './trust';
+import { ApiKeyTrustAssessment, apiKeyTrustRequiredError, untrustedOwnerMayMint } from './trust';
 
 // Sanity ceiling for a per-embed-key spend cap, in whole credits - a guard against
 // fat-finger/overflow values, not a product limit. Shared with the spend-cap update
@@ -136,14 +136,13 @@ interface CreateUserApiKeyAdapters {
   /** Expiry of the calling API key, when it has one. A key may not mint a child that outlives it. */
   callerExpiresAt?: Date;
   /**
-   * The owner's standing with the API key trust gate (trust.ts). REQUIRED for the same reason
-   * `db.agents` is: a creation path that forgot it would silently mint for untrusted accounts.
-   * Ignored for the system user and org-billed keys; the exchange pool takes no assessment.
+   * The owner's standing with the API key trust gate (trust.ts). Ignored for the system user,
+   * org-billed keys and the exchange pool; every other mint without one fails closed, so a
+   * creation path that forgot it cannot silently mint for an untrusted account. Optional only so
+   * system-user callers that predate the gate keep compiling.
    */
-  trust: ApiKeyTrustAssessment;
+  trust?: ApiKeyTrustAssessment;
 }
-
-type MintUserApiKeyAdapters = Omit<CreateUserApiKeyAdapters, 'trust'> & { trust?: ApiKeyTrustAssessment };
 
 export interface CreateUserApiKeyResult {
   id: string;
@@ -206,7 +205,7 @@ export const createUserApiKey = async (
 export const createExchangeUserApiKey = async (
   userId: string,
   parameters: CreateExchangeUserApiKeyParameters,
-  adapters: Omit<CreateUserApiKeyAdapters, 'trust'>
+  adapters: CreateUserApiKeyAdapters
 ): Promise<CreateUserApiKeyResult> =>
   mintUserApiKey(
     userId,
@@ -217,7 +216,7 @@ export const createExchangeUserApiKey = async (
 const mintUserApiKey = async (
   userId: string,
   parameters: MintUserApiKeyParameters,
-  adapters: MintUserApiKeyAdapters
+  adapters: CreateUserApiKeyAdapters
 ): Promise<CreateUserApiKeyResult> => {
   const { db, systemUserId } = adapters;
   const schema = adapters.isKnownScope
@@ -339,14 +338,16 @@ const mintUserApiKey = async (
   // Skip only for the shared system user - keyed on userId === systemUserId (NOT on
   // scope) to prevent rogue-admin bypass.
   const isSystemUser = systemUserId && userId === systemUserId;
-  const pool = isExchangeKey ? 'oauth-exchange' : 'standard';
   const untrusted = isSystemUser || isExchangeKey || billsOrg ? null : untrustedAssessment(adapters.trust);
-  if (untrusted && (untrusted.reason === 'email_unverified' || untrusted.maxActiveKeys <= 0)) {
+  // Refuse up front when there is no allowance at all; createIfUnderCap enforces the count atomically.
+  if (untrusted && !untrustedOwnerMayMint(untrusted, 0)) {
     throw apiKeyTrustRequiredError(untrusted);
   }
+  // An untrusted owner's allowance counts personal keys only: org-billed keys are not trust-limited.
+  const pool = isExchangeKey ? 'oauth-exchange' : untrusted ? 'personal' : 'standard';
   const cap = isExchangeKey
     ? MAX_ACTIVE_EXCHANGE_KEYS_PER_USER
-    : untrusted
+    : untrusted?.reason === 'not_yet_trusted'
       ? Math.min(untrusted.maxActiveKeys, MAX_ACTIVE_KEYS_PER_USER)
       : MAX_ACTIVE_KEYS_PER_USER;
 

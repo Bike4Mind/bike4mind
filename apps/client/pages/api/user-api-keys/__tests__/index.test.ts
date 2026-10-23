@@ -713,7 +713,11 @@ describe('POST /api/user-api-keys - contributed scopes', () => {
 });
 
 describe('POST /api/user-api-keys - trust gate', () => {
-  beforeEach(() => createUserApiKey.mockClear());
+  beforeEach(() => {
+    createUserApiKey.mockClear();
+    resolveApiKeyTrust.mockClear();
+    findIdsAdministeredBy.mockResolvedValue([]);
+  });
 
   it("hands the caller's trust assessment to the service, which enforces it", async () => {
     const assessment = { status: 'untrusted', reason: 'email_unverified' };
@@ -722,11 +726,26 @@ describe('POST /api/user-api-keys - trust gate', () => {
 
     await mockRefs.postHandler!(req, res);
 
-    expect(resolveApiKeyTrust).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }));
+    expect(resolveApiKeyTrust).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'u1' }), expect.anything());
     expect(createUserApiKey).toHaveBeenCalledWith(
       'u1',
       expect.anything(),
       expect.objectContaining({ trust: assessment })
+    );
+  });
+
+  it('skips the trust assessment for an org-billed mint and passes trust undefined', async () => {
+    findIdsAdministeredBy.mockResolvedValue(['org-1']);
+    const { req, res } = post({ name: 'widget', scopes: ['embed:chat'], agentId: 'agent-1', organizationId: 'org-1' });
+
+    await mockRefs.postHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(201);
+    expect(resolveApiKeyTrust).not.toHaveBeenCalled();
+    expect(createUserApiKey).toHaveBeenCalledWith(
+      'u1',
+      expect.anything(),
+      expect.objectContaining({ trust: undefined })
     );
   });
 });

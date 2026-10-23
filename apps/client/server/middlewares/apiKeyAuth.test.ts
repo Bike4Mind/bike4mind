@@ -231,10 +231,14 @@ describe('apiKeyAuth preauthorizedLakeIds binding', () => {
     const req = makeReq();
 
     expect((await run(undefined, req)).passed).toBe(true);
-    expect(applyUntrustedRateLimitMock).toHaveBeenCalledWith(expect.objectContaining({ id: 'user-1' }), {
-      rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
-      billingOwnerType: CreditHolderType.User,
-    });
+    expect(applyUntrustedRateLimitMock).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user-1' }),
+      {
+        rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+        billingOwnerType: CreditHolderType.User,
+      },
+      req
+    );
     expect((req as Request & { apiKeyInfo?: { rateLimit?: unknown } }).apiKeyInfo?.rateLimit).toEqual({
       requestsPerMinute: 20,
       requestsPerDay: 1000,
