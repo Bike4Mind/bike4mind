@@ -228,6 +228,20 @@ class SubscriptionRepository extends BaseRepository<ISubscription & IMongoDocume
       .lean({ virtuals: true });
   }
 
+  /**
+   * The same write as updateByStripeSubscriptionId, resolving to the row as it stood just before
+   * it. The pre-image comes from the write itself, so a caller comparing before and after sees
+   * exactly the change this write made, even with another update to the row in flight; a separate
+   * read first could see a state another write has already replaced. Null when there is no row.
+   */
+  updateByStripeSubscriptionIdReturningBefore(
+    subscriptionId: string,
+    data: Partial<ISubscription>
+  ): Promise<ISubscription | null> {
+    if (!subscriptionId) return Promise.resolve(null);
+    return this.model.findOneAndUpdate({ subscriptionId }, data, { new: false }).lean({ virtuals: true });
+  }
+
   markPastDue(subscriptionId: string): Promise<ISubscription | null> {
     if (!subscriptionId) return Promise.resolve(null);
     return this.model

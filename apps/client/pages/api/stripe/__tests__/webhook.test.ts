@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   findUserById: vi.fn(),
   findUserByStripeCustomerId: vi.fn(),
   findByPaymentIntentId: vi.fn(),
+  updateTransactionStatus: vi.fn(),
   emitBillingEvent: vi.fn(),
 }));
 
@@ -35,7 +36,10 @@ vi.mock('@server/middlewares/baseApi', () => {
 });
 vi.mock('@bike4mind/database', () => ({
   creditLotRepository: {},
-  creditTransactionRepository: { findByPaymentIntentId: mocks.findByPaymentIntentId },
+  creditTransactionRepository: {
+    findByPaymentIntentId: mocks.findByPaymentIntentId,
+    updateTransactionStatus: mocks.updateTransactionStatus,
+  },
   organizationRepository: {},
   userRepository: { findById: mocks.findUserById, findByStripeCustomerId: mocks.findUserByStripeCustomerId },
 }));
@@ -353,7 +357,7 @@ describe('billing events for Overwatch', () => {
     data: { object: { id: 'pi_9', amount: 999, currency: 'usd', customer: 'cus_9', metadata } },
   });
 
-  it('reports a failed credit-pack payment, keyed on the Stripe event, before the ledger check returns', async () => {
+  it('reports a failed credit-pack payment, keyed on the Stripe event, though the ledger has no row', async () => {
     mocks.findUserByStripeCustomerId.mockResolvedValue(owner);
 
     const res = await deliver(failedIntent({ environment: 'test', credits: '100', userId: 'user_1' }));
@@ -367,6 +371,17 @@ describe('billing events for Overwatch', () => {
         metadata: { kind: 'credits', value: 9.99, currency: 'USD' },
       },
     ]);
+  });
+
+  it('marks the ledger row failed even when the report never settles', async () => {
+    mocks.findByPaymentIntentId.mockResolvedValue({ id: 'tx_9' });
+    mocks.emitBillingEvent.mockReturnValue(new Promise(() => {}));
+
+    // Not awaited: the handler waits on the report, which here never settles.
+    void deliver(failedIntent({ environment: 'test', credits: '100', userId: 'user_1' }));
+    await vi.waitFor(() => expect(mocks.emitBillingEvent).toHaveBeenCalled());
+
+    expect(mocks.updateTransactionStatus).toHaveBeenCalledWith('pi_9', 'failed');
   });
 
   it("ignores a subscription's payment intent and another stage's", async () => {

@@ -62,24 +62,26 @@ export const handler = withEventContext(async (event, logger) => {
     return;
   }
 
-  // The row as it stood before this update, for the lifecycle events below. The write replaces
-  // it with Stripe's current state and this event carries only the subscription id, so this
-  // read is the one record of what changed. The cancel and change routes do not write the row
-  // themselves, so an in-app change reaches here exactly as a Billing Portal one does. A failed
-  // read costs only the events: it must not fail the sync below, which is what bills correctly.
-  const before = await subscriptionRepository.findByStripeSubscriptionId(subscription.id).catch(() => null);
-
-  // Ownership: `updateByStripeSubscriptionId` returning a row is the only evidence
-  // this stage owns the subscription, and the invoice cleanup is an irreversible
-  // money-affecting write - so it must not run for an event this stage has no row
-  // for (a Dashboard-created subscription, or an event fanned out to several stage
+  // Ownership: the write below finding a row is the only evidence this stage owns
+  // the subscription, and the invoice cleanup is an irreversible money-affecting
+  // write - so it must not run for an event this stage has no row for (a
+  // Dashboard-created subscription, or an event fanned out to several stage
   // endpoints). Same guard as the `deleted` branch in pages/api/stripe/webhook.ts.
   let owned = false;
+  // The row as this update's own write found it, for the lifecycle events below. The write
+  // replaces it with Stripe's current state and this event carries only the subscription id, so
+  // the pre-image is the one record of what changed. Taken from the write rather than a read
+  // before it, so an update running alongside cannot slip in between and leave this comparing
+  // against a state that is already gone. Nothing extra to fail: the sync either writes and
+  // returns it, or fails as it always could. The cancel and change routes do not write the row
+  // themselves, so an in-app change reaches here exactly as a Billing Portal one does.
+  let before: ISubscription | null = null;
 
   // Update subscription in unified Subscription model
   const shouldInvalidateOrgs = await withTransaction(async () => {
     const [item] = subscription.items.data;
-    const updatedSubscription = await subscriptionRepository.updateByStripeSubscriptionId(subscription.id, {
+    // Reassigned on a retried transaction, so both hold the attempt that committed.
+    before = await subscriptionRepository.updateByStripeSubscriptionIdReturningBefore(subscription.id, {
       status: subscription.status,
       periodStartsAt: dayjs.unix(item.current_period_start).toDate(),
       periodEndsAt: dayjs.unix(item.current_period_end).toDate(),
@@ -87,7 +89,7 @@ export const handler = withEventContext(async (event, logger) => {
       priceId: item.price.id,
       quantity: item.quantity ?? 1,
     });
-    owned = updatedSubscription !== null;
+    owned = before !== null;
 
     if (metadata.ownerType === SubscriptionOwnerType.Organization) {
       // Keep organization.seats and the active Subscription.quantity in sync
@@ -114,19 +116,13 @@ export const handler = withEventContext(async (event, logger) => {
       }
     }
 
-    if (!updatedSubscription) {
+    if (!owned) {
       logger.warn(`Subscription not found: ${subscription.id}`);
       return false;
     }
 
     return false;
   });
-
-  // Straight after the write commits, so a later failure in this handler cannot lose them.
-  // Never throws.
-  if (owned && before) {
-    await emitSubscriptionChangeEvents(before, subscription);
-  }
 
   // A cancel recorded at Stripe - the Billing Portal path, where Stripe is the
   // only actor and none of our API routes are called - leaves the unpaid invoice
@@ -157,6 +153,13 @@ export const handler = withEventContext(async (event, logger) => {
     if (cleanupFailed) {
       await emitMetric('Lumina5/Entitlements', 'DunningCleanupFailed', 1, { reason: 'void_failed' });
     }
+  }
+
+  // After the invoice cleanup, so a slow analytics emit cannot hold up the void that stops
+  // dunning, and before anything else that could throw: everything above swallows its own
+  // failures, so once the write commits nothing can skip these. Never throws.
+  if (owned && before) {
+    await emitSubscriptionChangeEvents(before, subscription);
   }
 
   // sendToClient calls must be outside the transaction to avoid
@@ -217,16 +220,21 @@ function cancelIsPending(status: string, canceling: boolean): boolean {
 }
 
 /**
- * The lifecycle events one subscription update carries, read off the row before it and Stripe's
- * state after it: a move to another price, and a period-end cancel being set or withdrawn. This
- * event fires on every update (renewals, seat changes, status moves), so each is sent only on the
- * transition, never on a repeat of the same state. A subscription that is over is
- * customer.subscription.deleted's to report (subscription_ended), not this one's.
+ * The lifecycle events one subscription update carries, read off the row its write replaced and
+ * Stripe's state after it: a move to another price, and a period-end cancel being set or
+ * withdrawn. This event fires on every update (renewals, seat changes, status moves), so each is
+ * sent only when this write changed the row, not on a write that repeats the state it found. A
+ * subscription that is over is customer.subscription.deleted's to report (subscription_ended),
+ * not this one's.
+ *
+ * The events follow the row, which is only as current as the Stripe state each update fetched.
+ * Updates running at once each see the state the other left, so they cannot both report one
+ * transition; but one that fetched an older state and wrote it last moves the row back, reports
+ * that move, and the next update reports the move forward again.
  *
  * Only user-owned subscriptions, like purchases: no one user's signup can attribute an
- * organization's. Each occurrence names the row version it changed from, so a redelivered or
- * concurrently processed update sends the same eventId and the receiver keeps one event. Never
- * throws.
+ * organization's. Each occurrence names the row version it changed from, so each transition has
+ * its own eventId. Never throws.
  */
 async function emitSubscriptionChangeEvents(before: ISubscription, subscription: Stripe.Subscription) {
   try {

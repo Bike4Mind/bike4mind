@@ -662,12 +662,23 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
     case 'payment_intent.payment_failed': {
       const intent = event.data.object;
 
-      // A failed credit-pack payment, reported before the ledger check below: the ledger only
+      // Only act if credits were pre-allocated for this payment intent
+      const failedTx = await creditTransactionRepository.findByPaymentIntentId(intent.id);
+      if (failedTx) {
+        // Mark transaction as failed (idempotent - no unique constraint needed here)
+        await creditTransactionRepository.updateTransactionStatus(intent.id, CreditPurchaseStatus.Failed);
+
+        req.logger.info(`Marked credit transaction ${failedTx.id} as failed for payment_intent ${intent.id}`);
+      } else {
+        req.logger.debug(`No pre-allocated credits found for failed payment_intent ${intent.id}, skipping`);
+      }
+
+      // A failed credit-pack payment, reported whether or not the ledger above had a row: it only
       // ever holds completed purchases (grantCreditPurchase writes on success, and start-payment
-      // writes nothing), so that check finds no row for a real failure and returns. The same
-      // filters as payment_intent.succeeded keep subscription intents (invoice.payment_failed
-      // reports those) and other stages' intents out. One event per failed confirmation, keyed on
-      // the Stripe event, which a redelivery repeats. Never throws.
+      // writes nothing), so a real failure finds none. After the ledger work, so a slow or broken
+      // emit cannot hold it up. The same filters as payment_intent.succeeded keep subscription
+      // intents (invoice.payment_failed reports those) and other stages' intents out. One event
+      // per failed confirmation, keyed on the Stripe event, which a redelivery repeats. Never throws.
       if (
         intent.metadata?.environment === Resource.App.stage &&
         Number(intent.metadata?.credits) >= 1 &&
@@ -686,18 +697,6 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
           },
         });
       }
-
-      // Only act if credits were pre-allocated for this payment intent
-      const failedTx = await creditTransactionRepository.findByPaymentIntentId(intent.id);
-      if (!failedTx) {
-        req.logger.debug(`No pre-allocated credits found for failed payment_intent ${intent.id}, skipping`);
-        break;
-      }
-
-      // Mark transaction as failed (idempotent - no unique constraint needed here)
-      await creditTransactionRepository.updateTransactionStatus(intent.id, CreditPurchaseStatus.Failed);
-
-      req.logger.info(`Marked credit transaction ${failedTx.id} as failed for payment_intent ${intent.id}`);
 
       break;
     }
