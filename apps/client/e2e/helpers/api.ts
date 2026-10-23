@@ -875,7 +875,10 @@ export async function apiDeleteGrantedTeam(
 ): Promise<void> {
   const baseURL = process.env.API_URL || 'http://localhost:3000';
   await apiRevokeTeamGrant(request, adminToken, organizationId);
-  await request.delete(`${baseURL}/api/organizations/${organizationId}`, {
+  const res = await request.delete(`${baseURL}/api/organizations/${organizationId}`, {
     headers: { Authorization: `Bearer ${adminToken}` },
   });
+  if (!res.ok() && res.status() !== 404) {
+    console.warn(`Team ${organizationId} was not deleted (${res.status()}): ${await res.text()}`);
+  }
 }
