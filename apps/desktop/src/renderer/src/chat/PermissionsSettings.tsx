@@ -238,6 +238,8 @@ export function PermissionsSettings({
   const changing = useRef(false);
   const [ledger, setLedger] = useState<CapabilityLedgerState | null>(null);
   const [ledgerError, setLedgerError] = useState<string | null>(null);
+  const [ledgerAttempt, setLedgerAttempt] = useState(0);
+  const [permissionsStale, setPermissionsStale] = useState(false);
 
   const mutate = useCallback(async (change: () => Promise<boolean>) => {
     if (changing.current) return false;
@@ -264,11 +266,33 @@ export function PermissionsSettings({
   useEffect(() => {
     const api = window.b4m.capabilities;
     if (!api) return;
+    let live = true;
     void api
       .getState()
-      .then(setLedger)
-      .catch(error => setLedgerError(String(error)));
-  }, []);
+      .then(next => {
+        if (!live) return;
+        setLedger(next);
+        setLedgerError(null);
+      })
+      .catch(error => {
+        if (live) setLedgerError(String(error));
+      });
+    return () => {
+      live = false;
+    };
+  }, [state, ledgerAttempt]);
+
+  useEffect(() => {
+    const deadlines = ledger?.grants.flatMap(grant =>
+      grant.expiresAt && !grant.revokedAt && !grant.expiredAt ? [Date.parse(grant.expiresAt)] : []
+    );
+    if (!deadlines?.length) return;
+    const timeout = window.setTimeout(
+      () => setLedgerAttempt(attempt => attempt + 1),
+      Math.min(Math.max(0, Math.min(...deadlines) - Date.now()), 2_147_483_647)
+    );
+    return () => window.clearTimeout(timeout);
+  }, [ledger]);
 
   const projectChoices = useMemo(() => {
     const directories = new Set([
@@ -301,6 +325,32 @@ export function PermissionsSettings({
       }),
     [scope, onState, mutate]
   );
+
+  if (permissionsStale) {
+    return (
+      <Stack spacing={1}>
+        <Typography color="danger" role="alert">
+          Permission rules need to be reloaded before making another change.
+        </Typography>
+        {(ledgerError || error) && <Typography color="danger">{ledgerError || error}</Typography>}
+        <Button
+          disabled={pending}
+          data-testid="permissions-reload-btn"
+          onClick={() =>
+            void mutate(async () => {
+              onState(await window.b4m.permissions.getState());
+              setPermissionsStale(false);
+              setLedgerError(null);
+              setError(null);
+              return true;
+            })
+          }
+        >
+          Reload permission rules
+        </Button>
+      </Stack>
+    );
+  }
 
   if (!state && loadError) {
     return (
@@ -419,12 +469,27 @@ export function PermissionsSettings({
           state={ledger}
           error={ledgerError}
           onRevoke={async grantId => {
-            setLedgerError(null);
-            try {
-              setLedger(await window.b4m.capabilities.revoke(grantId));
-            } catch (error) {
-              setLedgerError(String(error));
-            }
+            await mutate(async () => {
+              setLedgerError(null);
+              setError(null);
+              setPermissionsStale(true);
+              try {
+                const nextLedger = await window.b4m.capabilities.revoke(grantId);
+                setLedger(nextLedger);
+                return true;
+              } catch (error) {
+                setError(`Could not revoke capability: ${String(error)}`);
+                return false;
+              } finally {
+                // Enforcement can succeed before persisting its audit event fails.
+                try {
+                  onState(await window.b4m.permissions.getState());
+                  setPermissionsStale(false);
+                } catch (error) {
+                  setError(`Could not reload permission rules: ${String(error)}`);
+                }
+              }
+            });
           }}
         />
 

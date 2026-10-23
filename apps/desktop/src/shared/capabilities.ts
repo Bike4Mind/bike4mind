@@ -17,6 +17,8 @@ export interface CapabilityGrant {
   capability: Capability;
   scope: CapabilityScope;
   createdAt: string;
+  /** Exact standing approval to remove when this session grant is revoked. */
+  approvalKey?: string;
   expiresAt?: string;
   revokedAt?: string;
   expiredAt?: string;

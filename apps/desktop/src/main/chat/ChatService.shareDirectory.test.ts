@@ -12,6 +12,7 @@ import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 import type { WorkspaceResolution } from './project/workspace';
 import { ApprovalGate } from './tools/ApprovalGate';
+import { CapabilityLedger } from './capabilities/CapabilityLedger';
 
 // A worktree cut that holds until a test releases it; every other call is the real resolver.
 const cut = vi.hoisted(() => ({ hold: null as Promise<WorkspaceResolution> | null }));
@@ -36,7 +37,7 @@ function harness(
   store: SessionStore,
   streams: PassThrough[],
   events: ChatStreamEvent[],
-  deps: { protectedPaths?: readonly string[] } = {}
+  deps: { protectedPaths?: readonly string[]; capabilities?: CapabilityLedger; access?: AccessStore } = {}
 ) {
   const post = vi.fn().mockImplementation(() => {
     const stream = new PassThrough();
@@ -128,6 +129,28 @@ describe('ChatService.shareDirectory', () => {
     expect((await store.get(id))?.grantedDirectories).toBeUndefined();
   });
 
+  it('tracks session folder grants, removals and conversation deletion in the ledger', async () => {
+    h.service.dispose();
+    const capabilities = new CapabilityLedger(join(base, 'capabilities.json'));
+    h = harness(store, streams, events, { capabilities });
+    const { id } = await h.service.createSession();
+    await h.service.shareDirectory(id, outside);
+    let grants = (await capabilities.state()).grants;
+    expect(grants).toHaveLength(1);
+    expect(grants[0]).toMatchObject({
+      subject: { kind: 'session', sessionId: id },
+      capability: 'files',
+      scope: { kind: 'path', value: outside },
+    });
+    await h.service.removeContextDirectory(id, outside);
+    expect((await capabilities.state()).grants[0].revokedAt).toEqual(expect.any(String));
+    await h.service.shareDirectory(id, outside);
+    await h.service.deleteSession(id);
+    grants = (await capabilities.state()).grants;
+    expect(grants).toHaveLength(2);
+    expect(grants.every(grant => grant.revokedAt !== undefined)).toBe(true);
+  });
+
   it('gives a Chat session a granted folder instead', async () => {
     const chat = await h.service.createSession();
 
@@ -190,6 +213,23 @@ describe('ChatService.shareDirectory', () => {
     expect((await awaitSettled('read-1')).preview).toContain('outside notes');
     await h.awaitRound(2);
     expect(h.lastToolResult(1)).toContain(`now shared: ${outside}`);
+  });
+
+  it('drops a revoked global folder while a reply is streaming', async () => {
+    h.service.dispose();
+    let globalRoots = [outside];
+    h = harness(store, streams, events, { access: { list: async () => globalRoots } as unknown as AccessStore });
+    const { id } = await h.service.createSession();
+    await h.service.send(id, 'read the notes');
+    await h.awaitRound(1);
+    globalRoots = [];
+    h.service.refreshAccessScopes();
+    streams[0].write(toolTurn('revoked-read', 'file_read', { path: join(outside, 'NOTES.md') }));
+    streams[0].write(frame('[DONE]'));
+    const denied = await awaitSettled('revoked-read');
+    expect(denied.status).toBe('denied');
+    expect(denied.error).toContain('shared folders changed');
+    expect(denied.preview).toBeUndefined();
   });
 
   it('drops a folder removed mid-turn before the next round runs its calls', async () => {

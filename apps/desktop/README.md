@@ -806,6 +806,18 @@ renderer drop both workarounds above and cut roughly a megabyte.
 
 ## Standing permission rules
 
+Settings -> Permissions also shows the local capability ledger: active grants for files,
+tools, browser origins, imported identity, project trust and credit-spending actions,
+followed by their audit history. Revoke removes the corresponding stored permission or
+conversation allowance immediately. A separate overlapping allow can still authorize a
+call; inspect the remaining grants and permission rules if a prompt does not reappear.
+Conversation allowances end when the desktop restarts; durable grants are migrated into
+the ledger on startup. Imported browser identity remains separate from anonymous access.
+
+If the ledger cannot be loaded or a revoke fails, Settings displays the error. Check that
+the desktop's user-data directory is writable, then retry. A failed revoke must not be
+treated as confirmation that access ended.
+
 Open Settings -> Permissions to add allow, ask, or deny rules for every project or one
 project. Rules use Claude Code syntax, for example `Bash(git status:*)`,
 `Read(~/notes/**)`, and `WebFetch(domain:docs.example.com)`. Deny takes precedence over
