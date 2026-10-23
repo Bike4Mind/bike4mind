@@ -47,6 +47,20 @@ export const GROWTH_PRICING_SECTIONS: ReadonlyArray<{
     keys: ['allowOpenRegistration', 'defaultFreeCredits', 'ReferralCreditsAmount'],
   },
   {
+    id: 'referral-rewards',
+    title: 'Referral rewards for inviters',
+    description:
+      'What an inviter earns when an invited friend becomes active or subscribes. Every reward starts at 0 (off); raise an amount to switch that reward on.',
+    keys: [
+      'ReferralFirstAnswerCredits',
+      'ReferralFirstPaymentCredits',
+      'ReferralSecondPaymentCredits',
+      'ReferralHoldDays',
+      'ReferralInvitesPerUser',
+      'ReferralAlertRewardsPerDay',
+    ],
+  },
+  {
     id: 'credits',
     title: 'Credits and pricing',
     description: 'How usage is metered and what credits cost.',
@@ -116,6 +130,9 @@ export const describeDerivedValue = (key: SettingKey, value: unknown): string | 
   switch (key) {
     case 'defaultFreeCredits':
     case 'ReferralCreditsAmount':
+    case 'ReferralFirstAnswerCredits':
+    case 'ReferralFirstPaymentCredits':
+    case 'ReferralSecondPaymentCredits':
       if (!Number.isFinite(amount)) return null;
       return `${amount.toLocaleString('en-US')} credits = ${formatUsdAmount(creditsToUsdAtFloor(amount))} at the ${floor}`;
     case 'pricePerCredit':

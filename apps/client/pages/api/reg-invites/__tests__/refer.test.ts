@@ -63,7 +63,7 @@ function makeReqRes(user: Record<string, unknown>) {
     emailTitle: 'Join me',
     emailBody: 'Come try this',
   };
-  (req as any).user = user;
+  (req as any).user = { email: 'sender@example.com', ...user };
   (req as any).ability = {};
   (req as any).logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   return { req, res };
@@ -122,6 +122,62 @@ describe('/api/reg-invites/refer — sender verification gate', () => {
   });
 });
 
+describe('/api/reg-invites/refer - own-email aliases', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockReserveReferrals.mockResolvedValue(true);
+    mockInviteFindOne.mockResolvedValue(null);
+    process.env.APP_URL = 'https://app.test.local';
+  });
+
+  it.each(['sender@example.com', 'SENDER+invite@example.com'])(
+    'refuses %s before reserving or minting anything',
+    async target => {
+      const { req, res } = makeReqRes({ id: 'user-1', emailVerified: true, numReferralsAvailable: 3 });
+      (req as any).body.friendEmail = ['friend@example.com', target];
+
+      await expect(handler(req as any, res as any)).rejects.toThrow('cannot invite your own email');
+      expect(mockReserveReferrals).not.toHaveBeenCalled();
+      expect(mockInviteFindOne).not.toHaveBeenCalled();
+    }
+  );
+
+  it('treats Gmail dot and googlemail variants as the sender', async () => {
+    const { req, res } = makeReqRes({
+      id: 'user-1',
+      email: 'jane.doe@gmail.com',
+      emailVerified: true,
+      numReferralsAvailable: 3,
+    });
+    (req as any).body.friendEmail = ['janedoe+x@googlemail.com'];
+
+    await expect(handler(req as any, res as any)).rejects.toThrow('cannot invite your own email');
+    expect(mockReserveReferrals).not.toHaveBeenCalled();
+  });
+
+  it('does not crash for a sender with no email address', async () => {
+    const { req, res } = makeReqRes({
+      id: 'user-1',
+      email: null,
+      emailVerified: false,
+      authProviders: [{ provider: 'google' }],
+      numReferralsAvailable: 3,
+    });
+
+    await handler(req as any, res as any);
+
+    expect(res._getStatusCode()).toBe(201);
+  });
+
+  it('still accepts a different address', async () => {
+    const { req, res } = makeReqRes({ id: 'user-1', emailVerified: true, numReferralsAvailable: 3 });
+
+    await handler(req as any, res as any);
+
+    expect(res._getStatusCode()).toBe(201);
+  });
+});
+
 describe('/api/reg-invites/refer — passwordless email content', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -173,6 +229,7 @@ describe('/api/reg-invites/refer - duplicate addresses', () => {
     };
     (req as any).user = {
       id: 'user-1',
+      email: 'sender@example.com',
       emailVerified: true,
       authProviders: [],
       numReferralsAvailable: 3,

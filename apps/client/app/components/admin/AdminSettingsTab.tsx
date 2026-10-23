@@ -159,6 +159,12 @@ export const GROWTH_PRICING_ONLY_KEYS: ReadonlySet<SettingKey> = new Set<Setting
   'teamPlanMinSeats',
   'teamPlanMaxSeats',
   'teamPlanCreditsPerSeat',
+  'ReferralFirstAnswerCredits',
+  'ReferralFirstPaymentCredits',
+  'ReferralSecondPaymentCredits',
+  'ReferralHoldDays',
+  'ReferralInvitesPerUser',
+  'ReferralAlertRewardsPerDay',
 ]);
 
 // Settings whose value is a list of plain strings get the one-entry-per-line editor.
