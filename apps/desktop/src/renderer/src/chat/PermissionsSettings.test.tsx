@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { PermissionsState } from '@shared/permissions';
+import type { CapabilityLedgerState } from '@shared/capabilities';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PermissionsSettings, permissionsSummary, usePermissions } from './PermissionsSettings';
 
@@ -46,6 +47,34 @@ const state: PermissionsState = {
       note: 'This project is not trusted, so its allow rules are ignored; its ask and deny rules apply.',
       rules: [{ rule: 'Bash(curl:*)', list: 'allow' }],
       additionalDirectories: [],
+    },
+  ],
+};
+
+const ledger: CapabilityLedgerState = {
+  grants: [
+    {
+      id: 'g1',
+      subject: { kind: 'session', sessionId: 'session-one' },
+      capability: 'browser-origin',
+      scope: { kind: 'browser-origin', value: 'https://example.com', access: 'act' },
+      createdAt: '2026-01-01T00:00:00.000Z',
+      source: 'approval',
+    },
+  ],
+  audit: [
+    {
+      sequence: 0,
+      type: 'grant',
+      timestamp: '2026-01-01T00:00:00.000Z',
+      grant: {
+        id: 'g1',
+        subject: { kind: 'session', sessionId: 'session-one' },
+        capability: 'browser-origin',
+        scope: { kind: 'browser-origin', value: 'https://example.com', access: 'act' },
+        createdAt: '2026-01-01T00:00:00.000Z',
+        source: 'approval',
+      },
     },
   ],
 };
@@ -112,6 +141,32 @@ describe('PermissionsSettings collapsing', () => {
         </CssVarsProvider>
       )
     );
+  });
+
+  it('shows grants and audit events and revokes from the active grant', async () => {
+    const revoke = vi
+      .fn()
+      .mockResolvedValue({ ...ledger, grants: [{ ...ledger.grants[0], revokedAt: '2026-01-02T00:00:00.000Z' }] });
+    (window as unknown as { b4m: unknown }).b4m = {
+      chat: { listRecentFolders: async () => [] },
+      capabilities: { getState: async () => ledger, revoke },
+    };
+    await act(async () => {
+      root.unmount();
+      root = createRoot(host);
+      root.render(
+        <CssVarsProvider>
+          <PermissionsSettings state={state} onState={() => {}} />
+        </CssVarsProvider>
+      );
+    });
+    expect(host.querySelectorAll('[data-testid="capability-grant-row"]')).toHaveLength(1);
+    expect(host.querySelectorAll('[data-testid="capability-audit-row"]')).toHaveLength(1);
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('[data-testid="capability-revoke-btn"]')?.click();
+    });
+    expect(revoke).toHaveBeenCalledWith('g1');
+    expect(host.querySelectorAll('[data-testid="capability-grant-row"]')).toHaveLength(0);
   });
 
   afterEach(() => {

@@ -107,6 +107,7 @@ import { ApprovalLog } from './permissions/ApprovalLog';
 import { ClaudeCodeSettings, MANAGED_SETTINGS_PATH } from './permissions/ClaudeCodeSettings';
 import { PermissionRuleStore } from './permissions/PermissionRuleStore';
 import { PermissionService } from './permissions/PermissionService';
+import { CapabilityLedger } from './capabilities/CapabilityLedger';
 import { SkillCatalog } from './skills/SkillCatalog';
 import { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
@@ -129,6 +130,16 @@ import type { ClaudeImportService } from '../claudeImport/ClaudeImportService';
 const VERBOSE = process.env.B4M_DESKTOP_VERBOSE === '1';
 /** Diagnosis only; see apps/desktop/docs/model-wait-findings.md. */
 const TURN_TIMING = process.env.B4M_DESKTOP_TURN_TIMING === '1';
+
+function sameSubject(
+  left: import('@shared/capabilities').CapabilitySubject,
+  right: import('@shared/capabilities').CapabilitySubject
+): boolean {
+  if (left.kind !== right.kind) return false;
+  if (left.kind === 'desktop-user') return true;
+  if (left.kind === 'project' && right.kind === 'project') return left.directory === right.directory;
+  return left.kind === 'session' && right.kind === 'session' && left.sessionId === right.sessionId;
+}
 
 /**
  * The model a new conversation prefers until the user has picked one (see ModelPreference),
@@ -380,6 +391,7 @@ export function registerChat(
     REASONING_EFFORT
   );
   const access = new AccessStore(join(userData, 'tool-access.json'));
+  const capabilityLedger = new CapabilityLedger(join(userData, 'capability-ledger.json'));
   // App-wide like approval-mode.json; see SidebarSectionStore.
   const sidebarSections = new SidebarSectionStore(join(userData, 'sidebar-sections.json'));
   const recentFolders = new RecentFolderStore(join(userData, 'recent-folders.json'));
@@ -401,6 +413,16 @@ export function registerChat(
     logger,
   });
   void permissions.start().catch(error => logger.warn(`PERMISSIONS: could not load rules: ${String(error)}`));
+  void Promise.all([
+    access.list(),
+    projectTrust.list(),
+    new PermissionRuleStore(join(userData, 'permission-rules.json')).read(),
+  ])
+    .then(async ([roots, trustedProjects, stored]) => {
+      await capabilityLedger.revokeMatching(grant => grant.subject.kind === 'session');
+      await capabilityLedger.migrate({ roots, trustedProjects, permissions: stored });
+    })
+    .catch(error => logger.warn(`CAPABILITIES: could not migrate grants: ${String(error)}`));
   const attachments = new AttachmentStore(join(userData, 'attachments'), logger, shrinkImage);
   const media = new MediaStore(join(userData, 'media'));
   registerMediaProtocol(media);
@@ -563,6 +585,7 @@ export function registerChat(
     modelMemory: modelPreference,
     approvals,
     permissions,
+    capabilities: capabilityLedger,
     // App-wide like approval-mode.json: a record of decisions, kept after their conversations.
     approvalLog: new ApprovalLog(join(userData, 'approval-log.jsonl'), message => logger.warn(message)),
     background,
@@ -688,13 +711,70 @@ export function registerChat(
     const parsedLists = permissionLists(lists);
     if (!parsedScope || !parsedLists) return { ok: false, error: 'Not a permission rule list.' };
     const result = await permissions.setRules(parsedScope, parsedLists);
+    if (!result.ok) return result;
+    const subject =
+      parsedScope.kind === 'project'
+        ? ({ kind: 'project', directory: resolve(parsedScope.directory) } as const)
+        : ({ kind: 'desktop-user' } as const);
+    await capabilityLedger.revokeMatching(
+      grant =>
+        grant.capability === 'tool' &&
+        grant.scope.kind === 'permission-rule' &&
+        sameSubject(grant.subject, subject) &&
+        !parsedLists.allow.includes(grant.scope.value)
+    );
+    const active = (await capabilityLedger.state()).grants.filter(
+      grant =>
+        !grant.revokedAt &&
+        !grant.expiredAt &&
+        grant.scope.kind === 'permission-rule' &&
+        sameSubject(grant.subject, subject)
+    );
+    for (const rule of parsedLists.allow) {
+      if (active.some(grant => grant.scope.kind === 'permission-rule' && grant.scope.value === rule)) continue;
+      await capabilityLedger.grant({
+        subject,
+        capability: 'tool',
+        scope: { kind: 'permission-rule', value: rule },
+        source: 'permission-rule',
+      });
+    }
     // An allow typed here answers any card it now covers, in every session.
-    if (result.ok) void approvals.settleCovered();
+    void approvals.settleCovered();
     return result;
   });
   ipcMain.handle(IPC_CHANNELS.permissionsSetSharing, (_event, share: unknown) =>
     permissions.setShareClaudeCode(share === true)
   );
+  ipcMain.handle(IPC_CHANNELS.capabilitiesGetState, () => capabilityLedger.state());
+  ipcMain.handle(IPC_CHANNELS.capabilitiesRevoke, async (_event, grantId: unknown) => {
+    if (typeof grantId !== 'string') return capabilityLedger.state();
+    await capabilityLedger.revoke(grantId, async grant => {
+      if (grant.subject.kind === 'session' && grant.scope.kind === 'browser-origin') {
+        const prefix =
+          grant.scope.access === 'script'
+            ? 'browser-script'
+            : grant.scope.access === 'act'
+              ? 'browser-act'
+              : 'browser-open';
+        const identity = grant.capability === 'imported-identity' ? '-as-you' : '';
+        approvals.revoke(grant.subject.sessionId, `${prefix}${identity}:${grant.scope.value}`);
+      }
+      if (grant.scope.kind === 'path') await access.revoke(grant.scope.value);
+      if (grant.scope.kind === 'project') {
+        await skills.setTrusted(grant.scope.value, false);
+        permissions.invalidate();
+      }
+      if (grant.scope.kind === 'permission-rule') {
+        const scope =
+          grant.subject.kind === 'project'
+            ? ({ kind: 'project', directory: grant.subject.directory } as const)
+            : ({ kind: 'user' } as const);
+        await permissions.revokeAllow(scope, grant.scope.value);
+      }
+    });
+    return capabilityLedger.state();
+  });
   ipcMain.handle(IPC_CHANNELS.chatGetSessionStatuses, () => service.sessionStatuses());
   const rememberFolder = (directory: string | null): void => {
     if (!directory) return;
@@ -1016,11 +1096,31 @@ export function registerChat(
     const options = { properties: ['openDirectory' as const], defaultPath: pickerStart() };
     const picked = await (window ? dialog.showOpenDialog(window, options) : dialog.showOpenDialog(options));
     if (picked.canceled || picked.filePaths.length === 0) return { roots: await access.list() };
-    return { roots: await access.grant(picked.filePaths[0]) };
+    const roots = await access.grant(picked.filePaths[0]);
+    const active = (await capabilityLedger.state()).grants.filter(
+      grant => !grant.revokedAt && !grant.expiredAt && grant.capability === 'files' && grant.scope.kind === 'path'
+    );
+    await capabilityLedger.revokeMatching(
+      grant => grant.capability === 'files' && grant.scope.kind === 'path' && !roots.includes(grant.scope.value)
+    );
+    for (const root of roots) {
+      if (active.some(grant => grant.scope.kind === 'path' && grant.scope.value === root)) continue;
+      await capabilityLedger.grant({
+        subject: { kind: 'desktop-user' },
+        capability: 'files',
+        scope: { kind: 'path', value: root },
+        source: 'folder-picker',
+      });
+    }
+    return { roots };
   });
-  ipcMain.handle(IPC_CHANNELS.toolsRevokeAccess, async (_event, root: string) => ({
-    roots: await access.revoke(root),
-  }));
+  ipcMain.handle(IPC_CHANNELS.toolsRevokeAccess, async (_event, root: string) => {
+    const roots = await access.revoke(root);
+    await capabilityLedger.revokeMatching(
+      grant => grant.capability === 'files' && grant.scope.kind === 'path' && grant.scope.value === resolve(root)
+    );
+    return { roots };
+  });
 
   ipcMain.handle(IPC_CHANNELS.chatListVideoJobs, (_event, sessionId: string) => videoJobs.list(sessionId));
   ipcMain.handle(IPC_CHANNELS.chatCancelVideoJob, (_event, sessionId: string, jobId: string) =>

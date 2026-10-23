@@ -197,6 +197,12 @@ describe('browser tools', () => {
       askInAuto: true,
       askInFull: true,
     });
+
+    const imported = contextFor(fakePage('https://app.example.com/inbox'), ['app.example.com']);
+    expect(await browserEvaluate.approval!({ expression: '1' }, imported.context)).toMatchObject({
+      key: 'browser-script-as-you:https://app.example.com',
+      askInFull: true,
+    });
   });
 
   /**

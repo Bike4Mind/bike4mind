@@ -154,6 +154,16 @@ describe('ApprovalGate', () => {
     expect(gate.pendingApprovals).toBeUndefined();
   });
 
+  it('revokes a standing approval immediately without affecting another session', async () => {
+    const gate = new ApprovalGate();
+    const first = ask(gate, 'session-a');
+    gate.resolve(first.approvalId(), { decision: 'always' });
+    await first.answer;
+    gate.revoke('session-a', 'bash:rm');
+    expect(gate.isStanding('session-a', 'bash:rm')).toBeNull();
+    expect(gate.isStanding('session-b', 'bash:rm')).toBeNull();
+  });
+
   describe('always allow by prefix', () => {
     const always = (patterns: string[], texts: string[], directories: string[] = []): ApprovalAlways => ({
       namespace: 'bash_execute',
@@ -310,6 +320,23 @@ describe('ApprovalGate', () => {
       await allow(gate, always(['ls *'], ['ls']));
       gate.forgetSession('s');
       expect(gate.coversCommands('s', always(['ls *'], ['ls']))).toBe(false);
+    });
+
+    it('drops shell prefix coverage when its standing grant is revoked', async () => {
+      const gate = new ApprovalGate();
+      const remembered = always(['git status *'], ['git status']);
+      await allow(gate, remembered);
+      expect(gate.coversCommands('s', remembered)).toBe(true);
+      gate.revoke('s', 'key');
+      expect(gate.coversCommands('s', remembered)).toBe(false);
+    });
+
+    it('keeps unrelated shell coverage when another grant is revoked', async () => {
+      const gate = new ApprovalGate();
+      const remembered = always(['git status *'], ['git status']);
+      await allow(gate, remembered);
+      gate.revoke('s', 'browser-open:https://example.com');
+      expect(gate.coversCommands('s', remembered)).toBe(true);
     });
   });
 

@@ -43,6 +43,7 @@ import type {
   UpdateProjectResult,
   WorkspacePreparation,
 } from '@shared/chat';
+import type { Capability, CapabilityScope } from '@shared/capabilities';
 import {
   awaitsWorktree,
   branchHolder,
@@ -75,6 +76,7 @@ import {
 import { activeTodos, TODO_TOOL_NAME } from '@shared/todos';
 import { autoFixToolRefusal } from '../pr/autoFix';
 import type { ArtifactPublisher } from './artifacts/ArtifactPublisher';
+import type { CapabilityLedger } from './capabilities/CapabilityLedger';
 import { extractArtifacts, restoreArtifactMarkup } from './artifacts/extract';
 import { DESKTOP_ARTIFACT_PROMPT } from './artifacts/prompt';
 import { isValidBranchName, suggestBranchName } from './project/branchName';
@@ -416,6 +418,7 @@ export interface ChatServiceDeps {
    */
   permissions?: Pick<PermissionService, 'rulesFor' | 'rememberAllows' | 'invalidate'> &
     Partial<Pick<PermissionService, 'dispose'>>;
+  capabilities?: Pick<CapabilityLedger, 'grant' | 'use' | 'revokeMatching'>;
   /** Where each approval decision is appended, across sessions. Absent in tests that do not read it. */
   approvalLog?: Pick<ApprovalLog, 'append'>;
   /** Owns long-running commands. Absent in tests, which then have no background tools. */
@@ -1447,6 +1450,27 @@ export class ChatService {
     const root = session?.project?.workingDirectory;
     if (!root) return this.listSkills(sessionId);
     await this.deps.skills.setTrusted(root, trusted);
+    if (this.deps.capabilities) {
+      if (trusted) {
+        await this.deps.capabilities
+          .grant({
+            subject: { kind: 'project', directory: resolve(root) },
+            capability: 'project-trust',
+            scope: { kind: 'project', value: root },
+            source: 'project-trust',
+          })
+          .catch(error => this.deps.logger.warn(`CAPABILITIES: could not audit project trust: ${String(error)}`));
+      } else {
+        await this.deps.capabilities
+          .revokeMatching(
+            grant =>
+              grant.capability === 'project-trust' &&
+              grant.scope.kind === 'project' &&
+              grant.scope.value === resolve(root)
+          )
+          .catch(error => this.deps.logger.warn(`CAPABILITIES: could not audit project revocation: ${String(error)}`));
+      }
+    }
     // Trust also decides whether the project's Claude Code files may allow anything.
     this.deps.permissions?.invalidate();
     return this.deps.skills.state(root);
@@ -3540,6 +3564,12 @@ export class ChatService {
         // Carried by every row built from `call` from here on, the settled one included.
         if (gated.approval) call.approval = gated.approval;
 
+        if (this.deps.capabilities) {
+          await this.deps.capabilities
+            .use(capabilityFor(call.name, context.approvedKey), capabilityScope(call.name, context.approvedKey))
+            .catch(error => this.deps.logger.warn(`CAPABILITIES: could not audit use: ${String(error)}`));
+        }
+
         startedAt = Date.now();
         this.emit({ type: 'tool-start', sessionId, messageId, call });
 
@@ -4811,6 +4841,29 @@ export class ChatService {
       await gate.settleCovered(saved ? undefined : sessionId);
     } else if (answer.decision === 'always') {
       await gate.settleCovered(sessionId);
+    }
+
+    if (answer.decision === 'always' && this.deps.capabilities) {
+      await this.deps.capabilities
+        .grant({
+          subject: { kind: 'session', sessionId },
+          capability: capabilityFor(call.name, prompt.key),
+          scope: capabilityScope(call.name, prompt.key),
+          source: 'approval',
+        })
+        .catch(error => this.deps.logger.warn(`CAPABILITIES: could not audit grant: ${String(error)}`));
+      if (answer.everywhere) {
+        for (const rule of everywhere) {
+          await this.deps.capabilities
+            .grant({
+              subject: { kind: 'desktop-user' },
+              capability: 'tool',
+              scope: { kind: 'permission-rule', value: rule },
+              source: 'permission-rule',
+            })
+            .catch(error => this.deps.logger.warn(`CAPABILITIES: could not audit permission grant: ${String(error)}`));
+        }
+      }
     }
 
     const picked = findOption(prompt, answer.optionId);
@@ -6474,6 +6527,30 @@ function automaticDisplay(automatic: ChatAutomaticOrigin): string {
 
 /** Reads one attachment's stored bytes, or null when the file is gone. */
 type ReadAttachment = (attachment: ChatAttachment) => Promise<Buffer | null>;
+
+function capabilityFor(toolName: string, approvalKey?: string): Capability {
+  if (spendsCredits(toolName)) return 'credits';
+  if (['file_read', 'file_write', 'file_edit', 'apply_patch', 'glob_files', 'grep_search'].includes(toolName)) {
+    return 'files';
+  }
+  if (approvalKey?.startsWith('browser-')) {
+    return approvalKey.includes('-as-you:') ? 'imported-identity' : 'browser-origin';
+  }
+  return 'tool';
+}
+
+function capabilityScope(toolName: string, approvalKey?: string): CapabilityScope {
+  if (!approvalKey?.startsWith('browser-')) return { kind: 'tool', value: toolName };
+  const origin = approvalKey.slice(approvalKey.indexOf(':') + 1);
+  const access = approvalKey.startsWith('browser-script:')
+    ? 'script'
+    : approvalKey.startsWith('browser-act')
+      ? 'act'
+      : approvalKey.startsWith('browser-open-as-you:')
+        ? 'read'
+        : 'network';
+  return { kind: 'browser-origin', value: origin, access };
+}
 
 /**
  * A user turn that carried attachments, as provider-shaped content blocks.
