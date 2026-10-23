@@ -259,7 +259,7 @@ const resolveOrgGranted = (flat: Metadata, row: CounterLogRow): ResolvedEvent =>
 
 const RESTORE_CONFIG_TYPE = 'whats-new-config';
 
-// Mirrors whats-new-config/restore.ts: one `config` change holding the whole before/after config.
+// Mirrors the retired config restore route: one `config` change holding the whole before/after config.
 const resolveWhatsNewRestore = (flat: Metadata): ResolvedEvent => {
   const { oldConfig, newConfig } = flat;
   const hasConfigs = isRecord(oldConfig) && isRecord(newConfig);
