@@ -16,6 +16,7 @@ import { withTransaction } from '@bike4mind/database';
 import { AdminSettings } from '@bike4mind/database/infra';
 import { invalidateSettingsCache } from '@bike4mind/utils';
 import { decryptAtRest } from '@bike4mind/utils/security';
+import { registrableDomain } from '@bike4mind/utils/registrableDomain';
 
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -87,6 +88,13 @@ const handler = baseApi().put(
       const { valid, invalid } = partitionDomainList(value);
       if (invalid.length > 0) {
         throw new BadRequestError(`Not a valid domain: ${invalid.map(d => JSON.stringify(d)).join(', ')}`);
+      }
+      // Entries match every subdomain, so a bare public suffix (co.uk, github.io) would block everyone on it.
+      const suffixes = valid.filter(d => registrableDomain(d, { allowPrivateDomains: true }) === null);
+      if (suffixes.length > 0) {
+        throw new BadRequestError(
+          `Not an owned domain (public suffix): ${suffixes.map(d => JSON.stringify(d)).join(', ')}`
+        );
       }
       value = valid;
     }

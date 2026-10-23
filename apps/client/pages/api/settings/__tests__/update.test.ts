@@ -374,6 +374,24 @@ describe('settings/update blocked email domain list', () => {
     expect(findOneAndUpdate).not.toHaveBeenCalled();
   });
 
+  it.each([['co.uk'], ['github.io']])('refuses the bare public suffix %s', async suffix => {
+    await expect(runHandler('blockedEmailDomains', ['kashre.com', suffix])).rejects.toMatchObject({
+      statusCode: 400,
+      message: expect.stringContaining(JSON.stringify(suffix)),
+    });
+    expect(findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('accepts a subdomain under a public suffix', async () => {
+    stageWriteResult('blockedEmailDomains', ['burner.co.uk', 'np.kashre.com']);
+    await runHandler('blockedEmailDomains', ['burner.co.uk', 'np.kashre.com']);
+    expect(findOneAndUpdate).toHaveBeenCalledWith(
+      { settingName: 'blockedEmailDomains' },
+      { $set: { settingValue: ['burner.co.uk', 'np.kashre.com'] } },
+      expect.anything()
+    );
+  });
+
   it('stores a valid list normalized and deduped', async () => {
     stageWriteResult('blockedEmailDomains', ['kashre.com', 'xzcoot.com']);
     await runHandler('blockedEmailDomains', [' Kashre.com', '@kashre.com', '*.xzcoot.com']);
