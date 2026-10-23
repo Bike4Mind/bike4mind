@@ -264,8 +264,10 @@ describe('runStorageReconciliation', () => {
     clock = NOW + 3_600_000;
     mockFindByKey.mockResolvedValue({ result: cursor });
     mockListUserIdsAfter.mockReset().mockResolvedValueOnce(users(1, BATCH_SIZE)).mockResolvedValue([]);
+    // Non-zero drift with repair on: only the stability gate keeps the compare-and-set at the assertion below out of reach.
+    mockSumFileSizeByUserId.mockResolvedValueOnce(400);
 
-    const secondTick = await runStorageReconciliation(options({ now: () => clock }));
+    const secondTick = await runStorageReconciliation(options({ now: () => clock, repair: true }));
 
     expect(mockListUserIdsAfter).toHaveBeenCalledExactlyOnceWith('u0199', BATCH_SIZE);
     expect(secondTick).toMatchObject({ checked: 1, passCompleted: true });
