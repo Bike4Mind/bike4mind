@@ -1,10 +1,5 @@
 import { FabFile, releaseNoteRepository } from '@bike4mind/database';
-import {
-  getWhatsNewMediaContract,
-  isImageServeable,
-  NotFoundError,
-  RELEASE_NOTE_MEDIA_FIELDS,
-} from '@bike4mind/common';
+import { getWhatsNewMediaContract, isImageServeable, NotFoundError, releaseNoteMediaUrl } from '@bike4mind/common';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { Resource } from 'sst';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
@@ -28,7 +23,7 @@ const handler = nextRouteForContract(getWhatsNewMediaContract, {
   const note = !malformed && config.enabled ? await releaseNoteRepository.findPublishedById(id, new Date()) : null;
   if (!note || findDeniedInNote(note, config.denylist)) throw new NotFoundError('Release note not found');
 
-  const url = note.video?.[RELEASE_NOTE_MEDIA_FIELDS[asset]];
+  const url = releaseNoteMediaUrl(note, asset);
   const key = url ? ownModalMediaKey(url, Resource.fabFileBucket.name) : null;
   if (!key) throw new NotFoundError('Release note media not found');
   // The moderation gate of /api/files/presigned-url: a held, blocked or deleted upload is never signed.

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { isUpstreamMediaUrl, ownModalMediaKey, toPublicFeedVideo } from './publicMedia';
+import { isUpstreamMediaUrl, ownModalMediaKey, toPublicFeedImage, toPublicFeedVideo } from './publicMedia';
 
 const BUCKET = 'files-bucket';
 const upload = (key: string) => `https://${BUCKET}.s3.us-east-2.amazonaws.com/${key}`;
@@ -49,6 +49,26 @@ describe('toPublicFeedVideo', () => {
       landscape_poster_url: '/api/v1/whats-new/media/n1/landscape-poster',
       portrait_url: 'https://d111.cloudfront.net/tall.mp4',
       portrait_poster_url: null,
+    });
+  });
+});
+
+describe('toPublicFeedImage', () => {
+  const image = { landscapeUrl: upload('modals/still.png'), portraitUrl: 'https://d111.cloudfront.net/tall.png' };
+
+  it('points uploads at the image media routes on APP_URL and keeps linked URLs', () => {
+    vi.stubEnv('APP_URL', 'https://app.example.com/');
+    expect(toPublicFeedImage('n1', image, BUCKET)).toEqual({
+      landscape_url: 'https://app.example.com/api/v1/whats-new/media/n1/image-landscape',
+      portrait_url: 'https://d111.cloudfront.net/tall.png',
+    });
+  });
+
+  it('serves the media route relative to the reader when APP_URL is unset', () => {
+    vi.stubEnv('APP_URL', '');
+    expect(toPublicFeedImage('n1', image, BUCKET)).toEqual({
+      landscape_url: '/api/v1/whats-new/media/n1/image-landscape',
+      portrait_url: 'https://d111.cloudfront.net/tall.png',
     });
   });
 });

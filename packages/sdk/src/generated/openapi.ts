@@ -859,7 +859,7 @@ export interface paths {
     };
     /**
      * Get release note media
-     * @description Redirects to one file of a published release note video: `landscape` and `portrait` are the 16:9 and 9:16 MP4s, the `-poster` assets their still images. The `video` URLs that listWhatsNew returns for uploaded files point here, so a browser can use them as `src` and `poster` as they are. Public: no credentials are needed, and the note must be one listWhatsNew would show. The redirect is cacheable for up to 10 minutes and its target is signed for 1 hour, longer than that, so follow it rather than storing the target. Rate limited per client IP.
+     * @description Redirects to one file of a published release note video or still image: `landscape` and `portrait` are the 16:9 and 9:16 MP4s, the `-poster` assets their still images, and `image-landscape` and `image-portrait` the 16:9 and 9:16 still images of the note's `image`. The `video` and `image` URLs that listWhatsNew returns for uploaded files point here, so a browser can use them as `src` and `poster` as they are. Public: no credentials are needed, and the note must be one listWhatsNew would show. The redirect is cacheable for up to 10 minutes and its target is signed for 1 hour, longer than that, so follow it rather than storing the target. Rate limited per client IP.
      */
     get: operations['getWhatsNewMedia'];
     put?: never;
@@ -4778,6 +4778,10 @@ export interface components {
           landscape_poster_url?: string | null;
           portrait_url?: string | null;
           portrait_poster_url?: string | null;
+        } | null;
+        image?: {
+          landscape_url?: string | null;
+          portrait_url?: string | null;
         } | null;
       }[];
       next_cursor: string | null;
@@ -13301,7 +13305,7 @@ export interface operations {
       header?: never;
       path: {
         id: string;
-        asset: 'landscape' | 'landscape-poster' | 'portrait' | 'portrait-poster';
+        asset: 'landscape' | 'landscape-poster' | 'portrait' | 'portrait-poster' | 'image-landscape' | 'image-portrait';
       };
       cookie?: never;
     };
