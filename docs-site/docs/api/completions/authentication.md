@@ -264,6 +264,8 @@ fetch('/api/my-completion-proxy', {
 });
 
 // Backend code (Node.js/Express)
+import { Readable } from 'node:stream';
+
 app.post('/api/my-completion-proxy', authenticateUser, async (req, res) => {
   // Validate user has permission
   if (!req.user.canUseAI) {
@@ -281,7 +283,9 @@ app.post('/api/my-completion-proxy', authenticateUser, async (req, res) => {
   });
 
   // Stream response back to client
-  response.body.pipe(res);
+  res.status(response.status);
+  res.setHeader('Content-Type', response.headers.get('content-type') ?? 'text/event-stream');
+  Readable.fromWeb(response.body).pipe(res);
 });
 ```
 
@@ -303,7 +307,13 @@ This way, if a development key is compromised, your production environment remai
 
 ### 401 Unauthorized
 
-**Error message:** `"Authentication failed. Provide a valid API key or JWT token."`
+**Response body:**
+
+```json
+{ "error": "Authentication failed. Provide a valid API key or JWT token.", "request_id": "..." }
+```
+
+For some invalid keys the `error` text is more specific, for example `Invalid API key: <reason>`. Branch on the status, not the text.
 
 **Causes:**
 - Missing authentication header
@@ -319,7 +329,15 @@ This way, if a development key is compromised, your production environment remai
 
 ### 403 Forbidden
 
-**Error message:** `"API key does not have permission for AI completions"`
+**Response body:**
+
+```json
+{
+  "error": "API key does not have permission for this endpoint (requires ai:chat or ai:generate)",
+  "required_scopes": ["ai:chat", "ai:generate"],
+  "request_id": "..."
+}
+```
 
 **Causes:**
 - API key missing required scopes (`ai:generate` or `ai:chat`)
@@ -353,7 +371,7 @@ curl -X POST https://app.bike4mind.com/api/ai/v1/completions \
 **Expected failure (invalid key):**
 ```
 HTTP/1.1 401 Unauthorized
-{"type":"error","message":"Authentication failed. Provide a valid API key or JWT token."}
+{"error":"Authentication failed. Provide a valid API key or JWT token.","request_id":"..."}
 ```
 
 ### Testing Programmatically

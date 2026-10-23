@@ -45,7 +45,7 @@ For real outbound email, point the `MAIL_*` variables at an SMTP provider. Use p
 
 ## LLM providers
 
-Set keys only for the providers you want available. Only models for providers with a configured key appear in the model picker; Bedrock-backed models are hidden on self-host. Users can also add or override keys per-user in the app under **Profile menu -> More -> API Keys** (stored encrypted with `SECRET_ENCRYPTION_KEY`).
+Set keys only for the providers you want available. Only models for providers with a configured key appear in the model picker; Bedrock-backed models are hidden on self-host unless `BEDROCK_AWS_ACCESS_KEY_ID` and `BEDROCK_AWS_SECRET_ACCESS_KEY` are set. Users can also add or override keys per-user in the app under **Profile menu -> More -> API Keys** (stored encrypted with `SECRET_ENCRYPTION_KEY`).
 
 | Variable | Provider |
 |---|---|

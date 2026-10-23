@@ -414,6 +414,7 @@ const b4m = createClient({
 
 // List your agents (any spec operation is callable by its operationId)
 const agents = await b4m.call('listAgents');
+// the key needs the agents:read scope (agents:write also works)
 ```
 
 ### Python

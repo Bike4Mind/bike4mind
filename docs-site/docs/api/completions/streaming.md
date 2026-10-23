@@ -274,7 +274,7 @@ The `streamCompletion` function above throws on both. See [Errors](./errors.md) 
 - **curl:** pass `--no-buffer`.
 - **Python requests:** pass `stream=True`.
 - **Node.js and browsers:** `fetch` streams by default.
-- **Proxies (nginx, CDN):** the API sends `X-Accel-Buffering: no`. If you proxy the stream yourself, forward that header and disable response buffering and compression for the route.
+- **Proxies (nginx, CDN):** the API does not set `X-Accel-Buffering`. If you proxy the stream yourself, disable response buffering and compression for the route (for nginx, `proxy_buffering off`, or send `X-Accel-Buffering: no` from your own proxy).
 
 If a stream never starts, check the HTTP status, the `Authorization` header and that the request body is valid JSON. If it never ends, check that you return on `[DONE]` and stop reading afterward.
 

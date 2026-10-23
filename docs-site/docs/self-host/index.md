@@ -138,7 +138,7 @@ The stack is configured for **local, single-host use**: the backing services (Mo
 
 ## What you get (and don't)
 
-Self-host runs the open-core engine - notebooks, multi-LLM chat, agents, the Quest Master, the knowledge engine, and artifacts. Credit metering is **off by default** on self-host (the admin can turn it on) - no Stripe, no billing. Bedrock-backed models are hidden on self-host; only providers with a configured key appear.
+Self-host runs the open-core engine - notebooks, multi-LLM chat, agents, the Quest Master, the knowledge engine, and artifacts. Credit metering is **off by default** on self-host (the admin can turn it on) - no Stripe, no billing. Bedrock-backed models are hidden on self-host unless `BEDROCK_AWS_ACCESS_KEY_ID` and `BEDROCK_AWS_SECRET_ACCESS_KEY` are set; only providers with a configured key appear.
 
 Known gaps today:
 

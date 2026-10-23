@@ -32,6 +32,8 @@ fetch('/api/my-completion-proxy', {
 });
 
 // Backend code (Node.js/Express)
+import { Readable } from 'node:stream';
+
 app.post('/api/my-completion-proxy', authenticateUser, async (req, res) => {
   // Validate user has permission
   if (!req.user.canUseAI) {
@@ -49,7 +51,9 @@ app.post('/api/my-completion-proxy', authenticateUser, async (req, res) => {
   });
 
   // Stream response back to client
-  response.body.pipe(res);
+  res.status(response.status);
+  res.setHeader('Content-Type', response.headers.get('content-type') ?? 'text/event-stream');
+  Readable.fromWeb(response.body).pipe(res);
 });
 ```
 

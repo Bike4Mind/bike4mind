@@ -25,6 +25,7 @@ Branch on the HTTP status and `errorCode` (JSON), or on the event's `code` (stre
 ## Authentication and scopes
 
 - **401** means the key is missing, malformed, revoked or expired. Create a new key from the Profile menu -> More -> API Keys. See [Authentication](./authentication.md).
+- Body validation runs before authentication, so a malformed body returns 422 (or 400 for an empty `messages` array) even without credentials.
 - **403** means the API key does not hold any of the required scopes (`ai:chat` or `ai:generate`). The body lists them in `required_scopes`. Edit the key's scopes or create a new key.
 
 ## Credits
