@@ -160,7 +160,7 @@ export default $config({
     });
 
     // Bob premium infra. Same generated-glue pattern as the overlays above: a no-op when the
-    // overlay is absent. Bob runs its browser task on the cluster, started from its run worker.
+    // overlay is absent. Bob's infra uses the cluster and its run worker.
     const { contributeInfra: contributeBobInfra } = await import('./infra/premium-generated/bob-infra.generated');
     contributeBobInfra({
       lambdaVpc,
