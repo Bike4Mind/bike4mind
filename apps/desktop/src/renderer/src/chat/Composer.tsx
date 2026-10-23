@@ -112,8 +112,8 @@ export function Composer({
    */
   notReady?: string | null;
   /**
-   * What the idle indicator says INSTEAD of a bare "Ready": how full the window is and what is
-   * left to spend. Only the idle case - the three states above all name something the user may
+   * What the idle indicator says INSTEAD of a bare "Ready": the personal credit balance against
+   * its monthly allowance. Only the idle case - the three states above all name something the user may
    * need to act on, and those still win.
    */
   usage?: ComposerUsage | null;

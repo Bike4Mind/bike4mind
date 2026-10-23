@@ -40,6 +40,16 @@ describe('readMonthlyAllowance', () => {
 });
 
 describe('AccountService', () => {
+  it('forwards the monthly allowance with the personal balance', async () => {
+    const get = vi.fn().mockResolvedValue({ credits: { balance: 25_000, monthly_allowance: 50_000 } });
+    await expect(service(get).credits()).resolves.toEqual({ balance: 25_000, monthlyAllowance: 50_000 });
+  });
+
+  it('retains the allowance when the response omits its balance', async () => {
+    const get = vi.fn().mockResolvedValue({ credits: { monthly_allowance: 50_000 } });
+    await expect(service(get).credits()).resolves.toMatchObject({ balance: null, monthlyAllowance: 50_000 });
+  });
+
   it('reports the balance from the account endpoint', async () => {
     const get = vi.fn().mockResolvedValue({ credits: { balance: 31_667 } });
     await expect(service(get).credits()).resolves.toEqual({ balance: 31_667, monthlyAllowance: null });

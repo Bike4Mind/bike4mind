@@ -2,6 +2,7 @@ import type { MeSubscription, MeTier } from '@bike4mind/common';
 import { SubscriptionOwnerType, type ISubscription } from '@client/lib/subscriptions/types';
 import { getEntitlingPlanByPriceId } from '@client/lib/userSubscriptions/utils';
 import { SubscriptionPlanInterval, UserSubscriptionTier } from '@client/lib/userSubscriptions/types';
+import { resolveSubscriptionCycleCredits } from '@client/lib/userSubscriptions/cycleCredits';
 
 const TIER_KEYS: Record<UserSubscriptionTier, MeTier> = {
   [UserSubscriptionTier.Basic]: 'basic',
@@ -63,17 +64,18 @@ export function resolveCallerPlan(active: readonly ActiveSubscription[]): {
   // `getActiveSubscriptionsForUser` returns rows in no guaranteed order, so a tie on
   // rung breaks by the later period end - the subscription that outlasts the rest.
   const best = bestPlan(priced)!;
-  const personal = bestPlan(
-    priced.filter(candidate => candidate.subscription.ownerType === SubscriptionOwnerType.User)
-  );
-  const configuredAllowance = personal?.subscription.customCreditsPerCycle ?? personal?.plan.credits;
-  const personalMonthlyCreditAllowance =
-    personal?.plan.interval === SubscriptionPlanInterval.Monthly &&
-    typeof configuredAllowance === 'number' &&
-    Number.isFinite(configuredAllowance) &&
-    configuredAllowance > 0
-      ? configuredAllowance
-      : null;
+  const personalMonthlyGrants = active.flatMap(subscription => {
+    if (subscription.ownerType !== SubscriptionOwnerType.User) return [];
+    const plan = getEntitlingPlanByPriceId(subscription.priceId);
+    if (!plan) return [null];
+    if (plan.interval !== SubscriptionPlanInterval.Monthly) return [];
+    const credits = resolveSubscriptionCycleCredits(plan.credits, subscription.customCreditsPerCycle);
+    return [credits];
+  });
+  const totalMonthlyCredits = personalMonthlyGrants.reduce<number>((total, credits) => total + (credits ?? 0), 0);
+  const personalMonthlyCreditAllowance = personalMonthlyGrants.every(credits => credits !== null)
+    ? resolveSubscriptionCycleCredits(totalMonthlyCredits)
+    : null;
 
   return {
     tier: best.plan.tier ? TIER_KEYS[best.plan.tier] : 'other',

@@ -51,8 +51,8 @@ export const MeResponseSchema = z.object({
   tier: z.enum(ME_TIERS),
   subscription: MeSubscriptionSchema.nullable(),
   credits: CreditBalanceSchema.extend({
-    /** Credits granted to the personal ledger by one monthly plan cycle. */
-    monthly_allowance: z.number().nonnegative().nullable(),
+    /** Total monthly personal plan grants; older servers may omit this field. */
+    monthly_allowance: z.number().nonnegative().nullable().optional(),
   }),
   /** Entitlement keys the caller currently holds, e.g. `base`. */
   entitlements: z.array(z.string()),
