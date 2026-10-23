@@ -23,7 +23,7 @@ vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => undefin
 vi.mock('@server/auth/issueSession', () => ({ issueSessionForRequest: vi.fn() }));
 vi.mock('@server/auth/tokenGenerator', () => ({ ACCESS_TOKEN_TTL_SECONDS: 3600 }));
 
-const repo = vi.hoisted(() => ({ findByDeviceCode: vi.fn(), update: vi.fn() }));
+const repo = vi.hoisted(() => ({ findByDeviceCode: vi.fn(), recordPollIfDue: vi.fn(), claimApproved: vi.fn() }));
 const tryIncrement = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/database', () => ({
   deviceAuthorizationRepository: repo,
@@ -58,7 +58,9 @@ function request(deviceCode: string, ip = '203.0.113.1') {
 describe('POST /api/oauth/device/token global poll ceiling', () => {
   beforeEach(() => {
     repo.findByDeviceCode.mockReset();
-    repo.update.mockReset();
+    repo.recordPollIfDue.mockReset();
+    repo.claimApproved.mockReset();
+    repo.recordPollIfDue.mockResolvedValue({});
     tryIncrement.mockReset();
   });
 
@@ -100,7 +102,7 @@ describe('POST /api/oauth/device/token global poll ceiling', () => {
     await mockRefs.handler!(req, res);
     expect(res.statusCode).toBe(400);
     expect(res.body).toMatchObject({ error: 'authorization_pending' });
-    expect(repo.update).toHaveBeenCalledWith(expect.objectContaining({ id: 'auth-1', pollCount: 3 }));
+    expect(repo.recordPollIfDue).toHaveBeenCalledWith('auth-1', 5000);
   });
 
   it('keeps expired and unknown-code behavior under the ceiling', async () => {
@@ -114,5 +116,20 @@ describe('POST /api/oauth/device/token global poll ceiling', () => {
     const unknown = request('dc-nope');
     await mockRefs.handler!(unknown.req, unknown.res);
     expect(unknown.res.body).toMatchObject({ error: 'invalid_grant' });
+  });
+
+  it('answers slow_down when the poll is not due', async () => {
+    tryIncrement.mockResolvedValue({ success: true });
+    repo.findByDeviceCode.mockResolvedValue({
+      id: 'auth-1',
+      status: 'approved',
+      userId: 'u1',
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    repo.recordPollIfDue.mockResolvedValue(null);
+    const { req, res } = request('dc-1');
+    await mockRefs.handler!(req, res);
+    expect(res.body).toMatchObject({ error: 'slow_down' });
+    expect(repo.claimApproved).not.toHaveBeenCalled();
   });
 });

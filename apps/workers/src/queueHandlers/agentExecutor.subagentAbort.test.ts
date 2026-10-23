@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
+// Model admission reads admin settings from the real repository; these tests exercise other gates.
+vi.mock('@server/billing/meterPlatformCompletion', () => ({
+  createModelAdmission: async () => ({ admits: async () => true, assert: async () => {} }),
+}));
+
 // The abort/deadline branch in `processSubagentDispatch` (the `abortController.signal.aborted`
 // check AFTER `orchestrator.delegateToAgent` returns) is the one terminal exit the sibling
 // `agentExecutor.subagentCapGate.test.ts` does not cover: those tests all short-circuit at a

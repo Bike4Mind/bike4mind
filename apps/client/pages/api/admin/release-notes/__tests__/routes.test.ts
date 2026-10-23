@@ -18,6 +18,8 @@ const m = vi.hoisted(() => ({
   getSettings: vi.fn(),
   invalidate: vi.fn(),
   upsert: vi.fn(),
+  findSetting: vi.fn(),
+  audit: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -34,6 +36,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@bike4mind/database', () => ({
+  withTransaction: (fn: () => Promise<unknown>) => fn(),
   adminSettingsRepository: {},
   releaseNoteRepository: {
     adminList: m.adminList,
@@ -46,7 +49,10 @@ vi.mock('@bike4mind/database', () => ({
     findOne: m.findOne,
   },
 }));
-vi.mock('@bike4mind/database/infra', () => ({ AdminSettings: { findOneAndUpdate: m.upsert } }));
+vi.mock('@bike4mind/database/infra', () => ({
+  AdminSettings: { findOneAndUpdate: m.upsert, findOne: () => ({ lean: () => m.findSetting() }) },
+}));
+vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: m.audit }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: m.getSettings, invalidateSettingsCache: m.invalidate }));
 
 const { default: listHandler } = await import('@pages/api/admin/release-notes/index');
@@ -92,6 +98,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   m.getSettings.mockResolvedValue({ releaseNotesConfig: { enabled: true, denylist: ['Acme Corp'], embargoHours: 6 } });
   m.findById.mockResolvedValue(note());
+  m.findSetting.mockResolvedValue(null);
+  m.audit.mockResolvedValue(null);
 });
 
 const MALFORMED = { releaseNotesConfig: '{not json' };
@@ -433,6 +441,30 @@ describe('/api/admin/release-notes/config', () => {
     const full = { enabled: false, modelId: 'gpt-4o-mini', embargoHours: 6, denylist: ['Acme Corp'] };
     const { body } = await call(configHandler, { method: 'PUT', body: full });
     expect(body).toEqual({ config: full, malformed: false });
+  });
+
+  it('PUT writes a strict settings.admin_settings.updated entry inside the transaction', async () => {
+    const stored = { enabled: true, modelId: 'gpt-4o-mini', embargoHours: 6, denylist: ['Acme Corp'] };
+    m.findSetting.mockResolvedValue({ settingValue: stored });
+
+    await call(configHandler, { method: 'PUT', body: { embargoHours: 12 } });
+
+    expect(m.audit).toHaveBeenCalledTimes(1);
+    expect(m.audit.mock.calls[0][1]).toMatchObject({
+      action: 'settings.admin_settings.updated',
+      target: { kind: 'settings', id: 'releaseNotesConfig' },
+      changes: [{ field: 'releaseNotesConfig.embargoHours', before: 6, after: 12 }],
+    });
+    expect(m.upsert.mock.invocationCallOrder[0]).toBeLessThan(m.audit.mock.invocationCallOrder[0]);
+  });
+
+  it('PUT does not report success when the audit write rejects', async () => {
+    m.audit.mockRejectedValue(new Error('audit down'));
+
+    const { error } = await call(configHandler, { method: 'PUT', body: { enabled: false } });
+
+    expect(error?.message).toBe('audit down');
+    expect(m.invalidate).not.toHaveBeenCalled();
   });
 
   it.each([{ embargoHours: 169 }, { embargoHours: -1 }, { denylist: 'x' }, { surprise: true }])(

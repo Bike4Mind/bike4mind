@@ -1,15 +1,13 @@
 import React from 'react';
 import { Box, Chip, Sheet, Stack, Typography, useTheme, CircularProgress, Button } from '@mui/joy';
-import {
-  Lock,
-  Key,
-  Mail,
-  Warning,
-  CheckCircle,
-  PersonSearch as PersonSearchIcon,
-  MemoryOutlined as MemoryOutlinedIcon,
-  Refresh as RefreshIcon,
-} from '@mui/icons-material';
+import Lock from '@mui/icons-material/Lock';
+import Key from '@mui/icons-material/Key';
+import Mail from '@mui/icons-material/Mail';
+import Warning from '@mui/icons-material/Warning';
+import CheckCircle from '@mui/icons-material/CheckCircle';
+import PersonSearchIcon from '@mui/icons-material/PersonSearch';
+import MemoryOutlinedIcon from '@mui/icons-material/MemoryOutlined';
+import RefreshIcon from '@mui/icons-material/Refresh';
 import Bike4MindIcon from '@client/app/components/svgs/icons/Bike4MindIcon';
 import { APP_NAME } from '@client/config/general';
 import {

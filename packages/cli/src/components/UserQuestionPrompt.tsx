@@ -2,7 +2,7 @@ import React, { useState, useCallback } from 'react';
 import { Box, Text, useInput } from 'ink';
 import TextInput from 'ink-text-input';
 import type { UserQuestionPayload, UserQuestionResponse, UserQuestionAnswer } from '@bike4mind/services/llm';
-import { escapeTerminalControlChars } from './PermissionPrompt';
+import { escapeTerminalControlChars } from '../utils/sanitizeTerminalText.js';
 
 export interface UserQuestionPromptProps {
   payload: UserQuestionPayload;
@@ -181,7 +181,7 @@ export function UserQuestionPrompt({ payload, onResponse }: UserQuestionPromptPr
 
       {/* Question text */}
       <Box marginTop={1}>
-        <Text bold>{escapeTerminalControlChars(currentQuestion.question)}</Text>
+        <Text bold>{escapeTerminalControlChars(currentQuestion.question, { keepBidiMarks: true })}</Text>
       </Box>
 
       {/* Options */}
@@ -196,7 +196,7 @@ export function UserQuestionPrompt({ payload, onResponse }: UserQuestionPromptPr
               <Text color="cyan">{idx + 1}.</Text>
               <Text color={isHighlighted ? 'cyan' : undefined} bold={isHighlighted}>
                 {' '}
-                {prefix} {escapeTerminalControlChars(opt.label)}
+                {prefix} {escapeTerminalControlChars(opt.label, { keepBidiMarks: true })}
               </Text>
               {/* Inline text input on the same line as Other */}
               {idx === otherIndex && isHighlighted ? (
@@ -210,7 +210,9 @@ export function UserQuestionPrompt({ payload, onResponse }: UserQuestionPromptPr
                 </Box>
               ) : (
                 opt.description &&
-                idx !== otherIndex && <Text dimColor> - {escapeTerminalControlChars(opt.description)}</Text>
+                idx !== otherIndex && (
+                  <Text dimColor> - {escapeTerminalControlChars(opt.description, { keepBidiMarks: true })}</Text>
+                )
               )}
             </Box>
           );

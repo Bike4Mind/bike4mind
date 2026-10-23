@@ -1,7 +1,7 @@
 import { FC, useMemo, useState } from 'react';
 import { Autocomplete, Box, Button, Chip, Modal, ModalClose, ModalDialog, Sheet, Typography } from '@mui/joy';
 import { toast } from 'sonner';
-import { AutoAwesome as SuggestIcon } from '@mui/icons-material';
+import SuggestIcon from '@mui/icons-material/AutoAwesome';
 import { useChatInput } from '@client/app/hooks/useChatInput';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useAdvancedAISettings } from '../AISettings/useAdvancedAISettingsStore';

@@ -1,5 +1,7 @@
 import { Box, CircularProgress, IconButton, Modal, ModalClose, ModalDialog, Tooltip, Typography } from '@mui/joy';
-import { Download as DownloadIcon, PlayArrow as PlayIcon, Pause as PauseIcon } from '@mui/icons-material';
+import DownloadIcon from '@mui/icons-material/Download';
+import PlayIcon from '@mui/icons-material/PlayArrow';
+import PauseIcon from '@mui/icons-material/Pause';
 import { FC, useState, useRef, useEffect } from 'react';
 import { toast } from 'sonner';
 import { blackAlpha } from '@client/app/utils/themes/colors';

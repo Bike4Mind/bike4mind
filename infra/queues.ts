@@ -949,7 +949,8 @@ const githubLakeRevokeQueueSubscription = githubLakeRevokeQueue.subscribe(
 );
 
 // What's New Highlights Queue
-// Generates weekly highlights summary from What's New modals and posts to Slack
+// Generates a highlights summary from What's New modals and posts to Slack.
+// Fed only by the admin generate-highlights route; there is no scheduled trigger.
 const whatsNewHighlightsQueueDLQ = new sst.aws.Queue('whatsNewHighlightsQueueDLQ', {
   transform: {
     queue: {
@@ -1430,7 +1431,7 @@ const overwatchAnalyticsQueueSubscription = overwatchAnalyticsQueue.subscribe(
 //   2. Publishes a continuation message to this queue with `checkpointDepth` incremented
 //   3. A new Lambda invocation CAS-claims the execution and resumes from the checkpoint
 //
-// Self-dispatch safety constraints (see agentExecutor.ts for constants):
+// Self-dispatch safety constraints (see agentExecutor.checkpointDepth.ts for constants):
 //   - CHECKPOINT_DEPTH_WARNING = 25: emits `CheckpointDepthWarning` metric to catch runaway agents early
 //   - MAX_CHECKPOINT_DEPTH    = 50: hard ceiling; Lambda refuses to process and marks the execution failed
 //

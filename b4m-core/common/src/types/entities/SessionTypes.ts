@@ -141,8 +141,8 @@ export interface IAttachmentDelivery {
 
 /**
  * Why a turn's LLM call was retried. Timeouts we raise ourselves are classified ahead of
- * overload, because their error text says "may be overloaded" and would otherwise read as a
- * provider fault. Must stay in sync with classifyTurnRetryReason in @bike4mind/services.
+ * overload so they never read as a provider fault (older backends worded them "may be
+ * overloaded"). Must stay in sync with classifyTurnRetryReason in @bike4mind/services.
  */
 export const TURN_RETRY_REASONS = [
   'stream_idle_timeout',

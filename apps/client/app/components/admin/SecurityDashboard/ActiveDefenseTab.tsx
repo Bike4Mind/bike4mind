@@ -1,9 +1,7 @@
 import { Alert, Box, Button, Chip, CircularProgress, Sheet, Stack, Table, Tooltip, Typography } from '@mui/joy';
-import {
-  PlayArrowOutlined as PlayArrowOutlinedIcon,
-  ShieldOutlined as ShieldOutlinedIcon,
-  WarningAmberOutlined as WarningAmberOutlinedIcon,
-} from '@mui/icons-material';
+import PlayArrowOutlinedIcon from '@mui/icons-material/PlayArrowOutlined';
+import ShieldOutlinedIcon from '@mui/icons-material/ShieldOutlined';
+import WarningAmberOutlinedIcon from '@mui/icons-material/WarningAmberOutlined';
 import { useAttackSimulationData, useRunAttackSimulation } from '@client/app/hooks/data/admin';
 import { useSecurityScanCooldown } from '@client/app/hooks/useSecurityScanCooldown';
 import type { ISecurityFindingDocument, ISecurityFindingRunDocument } from '@bike4mind/database';

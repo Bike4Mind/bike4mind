@@ -44,12 +44,12 @@ const resultContent = (messages: IMessage[], index: number) =>
 const wire = (tools: ICompletionOptionTools[]) => JSON.stringify(tools.map(t => t.toolSchema));
 
 describe('modelServesToolReference', () => {
-  it('is true only for a direct Anthropic model with tool search', () => {
+  it('is true for a Claude model with tool search, direct or Bedrock-served', () => {
     expect(modelServesToolReference(models, NATIVE)).toBe(true);
+    expect(modelServesToolReference(models, BEDROCK)).toBe(true);
   });
 
   it.each([
-    ['a Bedrock-served Claude', BEDROCK],
     ['a non-Anthropic model', OPENAI],
     ['an older Claude', ChatModels.CLAUDE_4_1_OPUS],
     ['a model missing from the list', 'unknown-model'],
@@ -268,13 +268,13 @@ describe('ToolSearchLlmBackend', () => {
     expect(toolSearchLlm.servesToolReference()).toBe(false);
   });
 
-  it('treats a Bedrock-served Claude as non-native: unchanged tools, references as text', async () => {
+  it('treats a Claude model without tool search as non-native: unchanged tools, references as text', async () => {
     const { registry, tools } = setup();
     const { inner, calls } = innerBackend();
     const backend = new ToolSearchLlmBackend(inner, registry, models);
     const history = toolSearchTurn('toolu_1', JSON.stringify(references('mcp__a')));
 
-    await backend.complete(BEDROCK, history, { tools }, noop);
+    await backend.complete(ChatModels.CLAUDE_4_1_OPUS, history, { tools }, noop);
 
     expect(backend.servesToolReference()).toBe(false);
     expect(calls[0].options).toEqual({ tools });

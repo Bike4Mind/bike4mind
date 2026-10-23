@@ -195,6 +195,9 @@ export const ALLOWED_MIME_EXACT: readonly string[] = [
   'application/wasm',
   'application/manifest+json',
   'application/xml',
+  // Every non-page bundle file is served as an attachment, so admitting a document type
+  // here never lets the browser render that file on the app origin.
+  'application/pdf',
   'application/octet-stream',
 ];
 

@@ -68,14 +68,6 @@ vi.mock('@client/app/utils/signupConversion', () => ({
   trackSignupConversion: mockTrackSignupConversion,
 }));
 
-// Stub MUI Joy to avoid needing a CssVarsProvider in every test.
-vi.mock('@mui/joy', () => ({
-  Container: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  Box: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  Typography: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  CircularProgress: () => <div data-testid="spinner" />,
-}));
-
 type MfaChallengeOptions = {
   onComplete: (result: { accessToken: string; user: unknown }) => void;
   onCancel: (mode: 'verify' | 'setup') => void;

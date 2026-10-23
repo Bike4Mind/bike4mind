@@ -8,6 +8,7 @@ import {
 } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { logAuthAudit } from '@server/utils/authAudit';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 /**
  * Admin action: force-logout a user by revoking all their sessions (tokenVersion bump).
@@ -48,6 +49,19 @@ const handler = baseApi().post(
         metadata: { revoked: revokedDevices, scope: 'all', reason: 'session_revoked' },
       });
     }
+    // Read after the service's admin check. The revoke has already happened, so a failed read must not fail it.
+    const target = await userRepository.findById(targetId).catch(() => null);
+    // Mirrors the UserAuthAuditLog row into the admin audit log; best-effort, so it never fails the revoke.
+    await recordAdminActionFromRequest(req, {
+      action: 'user.sessions.revoked',
+      target: {
+        kind: 'user',
+        id: targetId,
+        displayName: target?.name || target?.username || target?.email || targetId,
+      },
+      summary: 'signed the user out of every session',
+      details: { tokenVersion, revokedDevices },
+    });
     return res.status(200).json({ message: 'Sessions revoked', userId: targetId, tokenVersion });
   })
 );

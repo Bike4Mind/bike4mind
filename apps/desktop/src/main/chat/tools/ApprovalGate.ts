@@ -3,23 +3,31 @@ import { sep } from 'node:path';
 import type { ChatApprovalAnswer } from '@shared/chat';
 import type { ApprovalAlways } from './types';
 
-/**
- * A pending approval expires rather than waiting forever. The reply keeps streaming in main
- * after its window closes, so a tool blocked on an answer nobody can give would otherwise hold
- * the turn - and the abort controller - open until the app quits.
- */
-const APPROVAL_TIMEOUT_MS = 10 * 60_000;
-
 /** The `optionId` of a question answer that was closed rather than skipped. */
 export const QUESTION_CANCELLED = 'cancelled';
 
+/**
+ * What settled a card. A card never expires: it waits for a click, and only these close it
+ * without one. 'covered' is a rule or standing answer given on another card (settleCovered),
+ * 'moved-on' a question card closed because a new message was sent (cancelQuestions).
+ */
+export type ApprovalSettledBy = 'user' | 'covered' | 'stopped' | 'conversation-deleted' | 'app-quit' | 'moved-on';
+
+/**
+ * The answer a card settled with, and who gave it. `asked` is false only when the request was
+ * closed before its card was announced, so nobody was ever shown it.
+ */
+export type ApprovalSettlement = ChatApprovalAnswer & { settledBy: ApprovalSettledBy; asked: boolean };
+
 interface PendingApproval {
   sessionId: string;
+  /** See ApprovalRequestOptions.recheck. */
+  recheck?: () => Promise<ChatApprovalAnswer | null>;
   /** False for a tool whose effect cannot be undone: 'always' is downgraded to 'once'. */
   remember: boolean;
-  /** An untimed question card; see ApprovalRequestOptions.untimed. */
+  /** See ApprovalRequestOptions.question. */
   question: boolean;
-  settle(answer: ChatApprovalAnswer): void;
+  settle(answer: ChatApprovalAnswer, settledBy: ApprovalSettledBy): void;
 }
 
 /**
@@ -33,6 +41,11 @@ interface PendingApproval {
 export interface StandingApproval {
   optionId?: string;
   value?: string;
+  /**
+   * Answered on a card that already said the reply had read untrusted content, so the user
+   * consented knowing that, and a later tainted call with the same key need not ask again.
+   */
+  overTaint?: true;
 }
 
 /** The key a standing approval is filed under: the call, plus which way it was allowed. */
@@ -75,12 +88,16 @@ export interface ApprovalRequestOptions {
    * redirect, which is an instruction about one call, from ever becoming a policy.
    */
   rememberable?: readonly string[];
+  /** A question card, which a new message closes via cancelQuestions rather than leaving live. */
+  question?: boolean;
+  /** The card said the reply had read untrusted content; recorded on an 'always' as overTaint. */
+  tainted?: boolean;
   /**
-   * Wait until answered or aborted, with no expiry. For a question card: a person deciding
-   * something the model is blocked on is not an approval nobody can give, and auto-denying it
-   * after ten minutes would throw away the answer they were composing.
+   * Whether a standing answer or rule given since the card was shown now covers this call: the
+   * answer to settle it with, or null to keep asking. Run by settleCovered after another card's
+   * "always", so five parallel fetches need one click rather than five.
    */
-  untimed?: boolean;
+  recheck?: () => Promise<ChatApprovalAnswer | null>;
 }
 
 /**
@@ -88,8 +105,8 @@ export interface ApprovalRequestOptions {
  *
  * Reported from here rather than inferred from the tool-call events, because those are aimed
  * at one open conversation: the gate is what actually knows a background session is blocked.
- * Paired exactly - `settled` fires once for each `requested`, on every exit including timeout,
- * abort and dispose.
+ * Paired exactly - `settled` fires once for each `requested`, on every exit including abort,
+ * forgetSession and dispose.
  */
 export interface ApprovalGateListener {
   requested(sessionId: string): void;
@@ -171,20 +188,19 @@ export class ApprovalGate {
     signal: AbortSignal,
     announce: (approvalId: string) => void,
     options: ApprovalRequestOptions = {}
-  ): Promise<ChatApprovalAnswer> {
+  ): Promise<ApprovalSettlement> {
     const approvalId = randomUUID();
     const remember = options.remember !== false;
 
-    return new Promise<ChatApprovalAnswer>(resolve => {
+    return new Promise<ApprovalSettlement>(resolve => {
       let done = false;
       // Whether the user was ever actually asked. The aborted-before-announce path settles
       // without asking, and reporting that as a settled request would leave the sidebar
       // counting an ask that never happened.
       let announced = false;
-      const settle = (answer: ChatApprovalAnswer) => {
+      const settle = (answer: ChatApprovalAnswer, settledBy: ApprovalSettledBy) => {
         if (done) return;
         done = true;
-        if (timer) clearTimeout(timer);
         signal.removeEventListener('abort', onAbort);
         this.pending.delete(approvalId);
         // An 'always' on an irreversible tool allows THIS call and nothing after it: the
@@ -195,22 +211,30 @@ export class ApprovalGate {
           answer.decision === 'always' &&
           (!options.rememberable || (!!answer.optionId && options.rememberable.includes(answer.optionId)));
         if (keep) {
-          this.remember(sessionId, standingKey(key, answer.optionId), answer);
+          this.remember(sessionId, standingKey(key, answer.optionId), answer, options.tainted === true);
           if (options.always) this.rememberShell(sessionId, key, options.always);
         }
         if (announced) this.listener?.settled(sessionId);
-        resolve(answer.decision === 'always' && !keep ? { ...answer, decision: 'once' } : answer);
+        resolve({
+          ...answer,
+          ...(answer.decision === 'always' && !keep ? { decision: 'once' } : {}),
+          settledBy,
+          asked: announced,
+        });
       };
 
-      const onAbort = () => settle({ decision: 'deny' });
-      const timer = options.untimed ? undefined : setTimeout(() => settle({ decision: 'deny' }), APPROVAL_TIMEOUT_MS);
-      // Unref so a pending approval never keeps the process alive on quit.
-      timer?.unref?.();
+      const onAbort = () => settle({ decision: 'deny' }, 'stopped');
 
-      this.pending.set(approvalId, { sessionId, remember, question: !!options.untimed, settle });
+      this.pending.set(approvalId, {
+        sessionId,
+        remember,
+        question: options.question === true,
+        settle,
+        ...(options.recheck ? { recheck: options.recheck } : {}),
+      });
       signal.addEventListener('abort', onAbort, { once: true });
       if (signal.aborted) {
-        settle({ decision: 'deny' });
+        settle({ decision: 'deny' }, 'stopped');
         return;
       }
 
@@ -222,7 +246,24 @@ export class ApprovalGate {
 
   /** Unknown ids are ignored: a stale click must never answer whatever request came next. */
   resolve(approvalId: string, answer: ChatApprovalAnswer): void {
-    this.pending.get(approvalId)?.settle(answer);
+    this.pending.get(approvalId)?.settle(answer, 'user');
+  }
+
+  /**
+   * Settle every pending card that a new standing answer or rule now covers - this
+   * conversation's, or every conversation's when `sessionId` is omitted (a rule was saved). Walks
+   * only the pending cards, never a transcript; a card without a `recheck` keeps waiting.
+   */
+  async settleCovered(sessionId?: string): Promise<void> {
+    const candidates = [...this.pending.values()].filter(
+      entry => entry.recheck && (sessionId === undefined || entry.sessionId === sessionId)
+    );
+    await Promise.all(
+      candidates.map(async entry => {
+        const answer = await entry.recheck?.().catch(() => null);
+        if (answer) entry.settle(answer, 'covered');
+      })
+    );
   }
 
   /**
@@ -232,7 +273,7 @@ export class ApprovalGate {
   cancelQuestions(sessionId: string): void {
     for (const entry of this.pending.values()) {
       if (entry.sessionId === sessionId && entry.question) {
-        entry.settle({ decision: 'deny', optionId: QUESTION_CANCELLED });
+        entry.settle({ decision: 'deny', optionId: QUESTION_CANCELLED }, 'moved-on');
       }
     }
   }
@@ -243,14 +284,14 @@ export class ApprovalGate {
     this.standingShell.delete(sessionId);
     for (const [approvalId, entry] of this.pending) {
       if (entry.sessionId === sessionId) {
-        entry.settle({ decision: 'deny' });
+        entry.settle({ decision: 'deny' }, 'conversation-deleted');
         this.pending.delete(approvalId);
       }
     }
   }
 
   dispose(): void {
-    for (const entry of this.pending.values()) entry.settle({ decision: 'deny' });
+    for (const entry of this.pending.values()) entry.settle({ decision: 'deny' }, 'app-quit');
     this.pending.clear();
     this.standing.clear();
     this.standingShell.clear();
@@ -265,11 +306,12 @@ export class ApprovalGate {
     this.standingShell.set(sessionId, byKey);
   }
 
-  private remember(sessionId: string, key: string, answer: ChatApprovalAnswer): void {
+  private remember(sessionId: string, key: string, answer: ChatApprovalAnswer, overTaint: boolean): void {
     const keys = this.standing.get(sessionId) ?? new Map<string, StandingApproval>();
     keys.set(key, {
       ...(answer.optionId ? { optionId: answer.optionId } : {}),
       ...(answer.value === undefined ? {} : { value: answer.value }),
+      ...(overTaint || keys.get(key)?.overTaint ? { overTaint: true as const } : {}),
     });
     this.standing.set(sessionId, keys);
   }

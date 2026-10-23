@@ -10,7 +10,7 @@ import {
   resolveFullConfig,
 } from '@bike4mind/common';
 import { GitHubService } from '@server/services/githubService';
-import { postSreFixFailureMessage } from '@server/integrations/slack/sreSlackApproval';
+import { postSreFixFailureMessage } from '@bike4mind/server-utils/integrations/slack/sreSlackApproval';
 
 const SreFixRequestSchema = z.object({
   trackingId: z.string(),

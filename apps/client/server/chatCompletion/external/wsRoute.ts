@@ -3,6 +3,7 @@ import express, { type Request, type Response, type Express } from 'express';
 import {
   CompletionRequestSchema,
   buildCompletionStreamEvent,
+  HTTPError,
   IMessage,
   normalizeCompletionRequest,
   resolveApiCompletionSource,
@@ -40,6 +41,7 @@ import { cliCompletionErrorFields, sanitizeErrorMessage } from '@server/utils/er
 import { emitProcessingFailed } from '../processingFailedMetric';
 import { Resource } from 'sst';
 import { z } from 'zod';
+import { getUserEntitlements } from '@server/entitlements';
 
 /**
  * CLI completions with WebSocket response streaming (`/api/ai/v1/ws-completions`), served by
@@ -215,6 +217,7 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
 
           // Cast: Zod parses content/tools as unknown[], but executeCompletion expects typed arrays
           await executeCompletion({
+            getEntitlements: getUserEntitlements,
             creditHolds: createCompletionCreditHolds(logger),
             userId,
             model,
@@ -279,7 +282,8 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
             logger,
           });
         } catch (error) {
-          logger.error('[CLI_WS_HTTP] Completion error:', error);
+          const level = error instanceof HTTPError && error.statusCode < 500 ? 'warn' : 'error';
+          logger[level]('[CLI_WS_HTTP] Completion error:', error);
           track(emitProcessingFailed('cli-ws', error));
 
           // The 202 is long gone - the error must reach the CLI over the WebSocket.

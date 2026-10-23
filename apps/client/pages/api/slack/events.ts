@@ -5,7 +5,7 @@ initializeSlackPackage();
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { verifySlackRequest } from '@server/integrations/slack/slackWebhookVerification';
-import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
+import { IntegrationAuditLogger } from '@bike4mind/server-utils/integrations/integrationAuditLogger';
 import { User } from '@bike4mind/database/auth';
 import { Organization } from '@bike4mind/database/infra';
 import { Quest } from '@bike4mind/database/content';

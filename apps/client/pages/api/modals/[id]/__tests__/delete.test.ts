@@ -26,7 +26,7 @@ vi.mock('@bike4mind/database/social', () => ({
   },
 }));
 
-vi.mock('@server/services/whatsNewDistribution', () => ({
+vi.mock('@bike4mind/server-utils/services/whatsNewDistribution', () => ({
   WhatsNewDistributionService: {
     deleteModal: vi.fn(async () => {
       throw new Error('s3 down');

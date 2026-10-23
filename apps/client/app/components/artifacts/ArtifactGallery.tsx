@@ -25,27 +25,25 @@ import {
   Dropdown,
   Divider,
 } from '@mui/joy';
-import {
-  Search as SearchIcon,
-  Add as AddIcon,
-  Sort as SortIcon,
-  GridView as GridIcon,
-  ViewList as ListIcon,
-  MoreVert as MoreIcon,
-  Edit as EditIcon,
-  Delete as DeleteIcon,
-  Share as ShareIcon,
-  Download as DownloadIcon,
-  Refresh as RefreshIcon,
-  Code as ReactIcon,
-  Html as HtmlIcon,
-  Image as SvgIcon,
-  AccountTree as MermaidIcon,
-  Description as CodeIcon,
-  School as QuestIcon,
-  InsertDriveFile as FileIcon,
-  AutoAwesome as QuestMasterIcon,
-} from '@mui/icons-material';
+import SearchIcon from '@mui/icons-material/Search';
+import AddIcon from '@mui/icons-material/Add';
+import SortIcon from '@mui/icons-material/Sort';
+import GridIcon from '@mui/icons-material/GridView';
+import ListIcon from '@mui/icons-material/ViewList';
+import MoreIcon from '@mui/icons-material/MoreVert';
+import EditIcon from '@mui/icons-material/Edit';
+import DeleteIcon from '@mui/icons-material/Delete';
+import ShareIcon from '@mui/icons-material/Share';
+import DownloadIcon from '@mui/icons-material/Download';
+import RefreshIcon from '@mui/icons-material/Refresh';
+import ReactIcon from '@mui/icons-material/Code';
+import HtmlIcon from '@mui/icons-material/Html';
+import SvgIcon from '@mui/icons-material/Image';
+import MermaidIcon from '@mui/icons-material/AccountTree';
+import CodeIcon from '@mui/icons-material/Description';
+import QuestIcon from '@mui/icons-material/School';
+import FileIcon from '@mui/icons-material/InsertDriveFile';
+import QuestMasterIcon from '@mui/icons-material/AutoAwesome';
 import { api } from '@client/app/contexts/ApiContext';
 import { toast } from 'sonner';
 import { type ArtifactWithContent } from './types';

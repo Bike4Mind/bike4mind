@@ -33,7 +33,7 @@ import {
   scopedSettingsRepository,
   usageEventRepository,
 } from '@bike4mind/database';
-import { lakeWriteToolDb } from '@server/dataLakes/lakeWriteToolDb';
+import { lakeWriteToolDb } from '@bike4mind/server-utils/dataLakes/lakeWriteToolDb';
 import { NotFoundError } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@bike4mind/server-utils/utils/config';
@@ -59,8 +59,8 @@ import { recallLakeMemoryForSession } from '@server/memory/lakeMemoryRecall';
 import { loadSystemPromptById } from '@server/utils/sessionSystemPromptResolver';
 import { slackToolDefinitions, createPendingActionToolDefs } from '@bike4mind/slack';
 import { cancelPendingActionOnQuest } from '@server/utils/pendingActionExecutor';
-import { buildVideoToolConfig } from '@server/videoGenerations/buildVideoToolConfig';
-import { buildMusicToolConfig } from '@server/musicGenerations/buildMusicToolConfig';
+import { buildVideoToolConfig } from '@bike4mind/server-utils/videoGenerations/buildVideoToolConfig';
+import { buildMusicToolConfig } from '@bike4mind/server-utils/musicGenerations/buildMusicToolConfig';
 import {
   getCreateMusicJobDeps,
   getCreateVideoJobDeps,
@@ -68,6 +68,7 @@ import {
   getVideoJobDeps,
 } from '@server/generationJobs/wiring';
 import { getMcpClientAdapter } from '@server/utils/getMcpClientAdapter';
+import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
 import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
 
 // Cache static ChatCompletion options (DB repos, storage clients, config) across invocations;
@@ -320,6 +321,8 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
     tokenizer: getSharedTokenizer(logger),
     sessionId: params.sessionId,
     user,
+    createCompletionMeter: ({ organizationId, featureLabel }) =>
+      createCompletionMeter(user, logger, featureLabel, { sessionId: params.sessionId, organizationId }),
   });
   logger.debug('ChatCompletionProcess instantiation', { durationMs: Date.now() - optionsStartTime });
 

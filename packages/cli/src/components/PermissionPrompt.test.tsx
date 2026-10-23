@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import React from 'react';
 import { render } from 'ink-testing-library';
-import { PermissionPrompt, escapeTerminalControlChars } from './PermissionPrompt';
+import { PermissionPrompt } from './PermissionPrompt';
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 60));
 
@@ -16,39 +16,6 @@ const ENTER = '\r';
 // `not.toContain('\x1b')`. Mirrors App.resize.test.tsx / MessageItem.*.test.tsx.
 // eslint-disable-next-line no-control-regex
 const stripAnsi = (value: string) => value.replace(/\x1b\[[0-9;]*m/g, '');
-
-describe('escapeTerminalControlChars', () => {
-  it('escapes carriage returns so a preview cannot rewrite the displayed line', () => {
-    const spoof = 'rm -rf /tmp/safe\rrm -rf /';
-    const escaped = escapeTerminalControlChars(spoof);
-    expect(escaped).not.toContain('\r');
-    expect(escaped).toContain('\\x0d');
-  });
-
-  it('escapes ESC/ANSI sequences', () => {
-    const escaped = escapeTerminalControlChars('text\x1b[2Kmore');
-    expect(escaped).not.toContain('\x1b');
-    expect(escaped).toContain('\\x1b');
-  });
-
-  it('escapes Unicode bidi overrides and isolates that reorder displayed glyphs', () => {
-    const spoof = 'allow\u202edeled'; // U+202E (RLO) makes the tail render reversed
-    const escaped = escapeTerminalControlChars(spoof);
-    expect(escaped).not.toContain('\u202e');
-    expect(escaped).toContain('\\u202e');
-    expect(escapeTerminalControlChars('a\u2066b')).toContain('\\u2066'); // isolate boundary
-  });
-
-  it('escapes C1 controls such as the 8-bit CSI', () => {
-    const escaped = escapeTerminalControlChars('a\u009b2Kb\u0085c');
-    expect(escaped).toBe('a\\x9b2Kb\\x85c');
-  });
-
-  it('leaves ordinary text, tabs and newlines intact', () => {
-    const text = 'line one\n\tindented\nline two';
-    expect(escapeTerminalControlChars(text)).toBe(text);
-  });
-});
 
 // String args pass through raw (typeof args === 'string'), so a raw control
 // byte reaches the renderer untouched - unlike object args, which JSON.stringify

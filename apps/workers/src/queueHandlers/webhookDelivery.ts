@@ -25,7 +25,7 @@ import {
 import { WebhookDeliveryStatus } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { decryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
-import { validateTargetUrl } from '@bike4mind/server-utils/utils/ssrfProtection';
+import { fetchPinned, SsrfError, validateTargetUrl } from '@bike4mind/server-utils/utils/ssrfProtection';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import {
   buildSignedWebhookHeaders,
@@ -110,8 +110,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     maxRetries: MAX_RETRIES,
   });
 
-  // 1. SSRF Protection - validate target URL with DNS resolution
-  // Uses async validation to prevent DNS rebinding attacks
+  // 1. SSRF Protection - validate target URL with DNS resolution; the send in step 7 re-checks the dialed address
   const urlValidation = await validateTargetUrl(payload.targetUrl);
   if (!urlValidation.valid) {
     logger.error('SECURITY: SSRF attempt blocked', {
@@ -239,16 +238,21 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   const timeoutId = setTimeout(() => controller.abort(), WEBHOOK_HTTP_TIMEOUT_MS);
 
   try {
-    const response = await fetch(payload.targetUrl, {
-      method: 'POST',
-      headers,
-      body: payloadString,
-      signal: controller.signal,
-      // Step 1 vetted targetUrl only; following a redirect would let a public host bounce this signed
-      // POST to an address it never checked.
-      redirect: 'manual',
-    });
+    const response = await fetchPinned(
+      payload.targetUrl,
+      {
+        method: 'POST',
+        headers,
+        body: payloadString,
+        signal: controller.signal,
+        // Step 1 vetted targetUrl only; following a redirect would let a public host bounce this signed
+        // POST to an address it never checked.
+        redirect: 'manual',
+      },
+      { allowHttp: true, discardBody: true }
+    );
     clearTimeout(timeoutId);
+    await response.body?.cancel().catch(() => undefined);
 
     const processingDurationMs = Date.now() - startTime;
 
@@ -340,6 +344,17 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     clearTimeout(timeoutId);
 
     const processingDurationMs = Date.now() - startTime;
+
+    if (error instanceof SsrfError) {
+      logger.error('SECURITY: SSRF attempt blocked', {
+        targetUrl: payload.targetUrl,
+        error: error.message,
+        subscriptionId: payload.subscriptionId,
+        userId: payload.userId,
+      });
+      await recordDelivery(payload, startTime, WebhookDeliveryStatus.Failed, 0, `Security error: ${error.message}`);
+      return;
+    }
 
     // Handle abort (timeout)
     if (error instanceof Error && error.name === 'AbortError') {

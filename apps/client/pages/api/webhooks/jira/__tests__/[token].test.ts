@@ -10,7 +10,7 @@ vi.mock('@bike4mind/observability', () => ({
 }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: 'key' } }));
 vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({ decryptSecret: vi.fn(() => 'secret') }));
-vi.mock('@server/integrations/integrationAuditLogger', () => ({
+vi.mock('@bike4mind/server-utils/integrations/integrationAuditLogger', () => ({
   IntegrationAuditLogger: {
     create: () => ({ success: vi.fn(), failure: vi.fn(), rateLimited: vi.fn() }),
   },

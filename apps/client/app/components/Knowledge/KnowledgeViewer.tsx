@@ -51,7 +51,10 @@ import FileDownloadOutlinedIcon from '@mui/icons-material/FileDownloadOutlined';
 import CheckIcon from '@mui/icons-material/Check';
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import SendIcon from '@mui/icons-material/Send';
-import { ExpandMore, ExtensionOff, Splitscreen, FormatListNumbered } from '@mui/icons-material';
+import ExpandMore from '@mui/icons-material/ExpandMore';
+import ExtensionOff from '@mui/icons-material/ExtensionOff';
+import Splitscreen from '@mui/icons-material/Splitscreen';
+import FormatListNumbered from '@mui/icons-material/FormatListNumbered';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
 import { create } from 'zustand';
 import {
@@ -106,6 +109,7 @@ import { useQuestExport } from '@client/app/hooks/data/useQuestExport';
 import ErrorBoundary from '@client/app/components/common/ErrorBoundary';
 import { extractMermaidFence } from '@client/app/utils/mermaidFence';
 import { serverStorageLimitMessage } from '@client/app/utils/storageQuota';
+import { getInsufficientCreditsMessage } from '@client/app/utils/error';
 
 // Dynamic imports for artifact viewers
 const ReactArtifactViewer = dynamic(() => import('./ReactArtifactViewer'), {
@@ -997,7 +1001,9 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
       }
     } catch (error) {
       console.error('Edit failed:', error);
-      toast.error(serverStorageLimitMessage(error) ?? 'Failed to generate edit');
+      toast.error(
+        getInsufficientCreditsMessage(error) ?? serverStorageLimitMessage(error) ?? 'Failed to generate edit'
+      );
       throw error; // Re-throw to let EditFileDialog handle it
     }
   };

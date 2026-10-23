@@ -54,7 +54,14 @@ import {
   bobRunQueueDLQ,
   libreoncologyAudioRenderQueueDLQ,
 } from './queues';
-import { telemetryAlertRuleDLQ, sessionEnrichmentDLQ } from './eventBus';
+import {
+  telemetryAlertRuleDLQ,
+  sessionEnrichmentDLQ,
+  billingEventsDeadLetter,
+  emailEventsDeadLetter,
+  notebookEventsDeadLetter,
+  completionEventsDeadLetter,
+} from './eventBus';
 import { emailIngestionQueueDLQ, emailAnalysisQueueDLQ } from './emailIngestion';
 import { emailBatchQueueDLQ, emailJobQueueDLQ } from './emailMarketing';
 import { isMonitoredStage as _isMonitoredStage, buildDlqAlarmSpecs } from '@bike4mind/infra';
@@ -547,6 +554,33 @@ if (isMonitoredStage) {
     displayName: 'Session Enrichment',
     application: 'SessionEnrichment',
     queue: sessionEnrichmentDLQ,
+  });
+
+  // The other event bus dead letters - alarm-only for the same reason (see
+  // infra/eventBusDeadLetter.ts).
+  createDlqAlarms({
+    label: 'billing-events',
+    displayName: 'Billing Events',
+    application: 'Billing',
+    queue: billingEventsDeadLetter.queue,
+  });
+  createDlqAlarms({
+    label: 'email-events',
+    displayName: 'Email Events',
+    application: 'Email',
+    queue: emailEventsDeadLetter.queue,
+  });
+  createDlqAlarms({
+    label: 'notebook-events',
+    displayName: 'Notebook Events',
+    application: 'NotebookCuration',
+    queue: notebookEventsDeadLetter.queue,
+  });
+  createDlqAlarms({
+    label: 'completion-events',
+    displayName: 'Completion Events',
+    application: 'Completions',
+    queue: completionEventsDeadLetter.queue,
   });
 }
 

@@ -10,7 +10,9 @@ import { GetFileIcon } from '@client/app/utils/fabFileUtils';
 import { FC, memo, useState, useEffect, useMemo, useRef, ComponentProps, Children } from 'react';
 import { useMessageEditMode } from '@client/app/hooks/useMessageEditMode';
 import { highlightTextSearch } from '@client/app/components/GenAI/highlight';
-import { EditOutlined as EditOutlinedIcon, KeyboardArrowDown, KeyboardArrowUp } from '@mui/icons-material';
+import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
+import KeyboardArrowDown from '@mui/icons-material/KeyboardArrowDown';
+import KeyboardArrowUp from '@mui/icons-material/KeyboardArrowUp';
 import { useContentTruncation } from '@client/app/hooks/useContentTruncation';
 import remarkBreaks from 'remark-breaks';
 import remarkMath from 'remark-math';
@@ -205,11 +207,7 @@ const PromptContent: FC<{
       <HighlightedCode code={content} language={language} />
     </CodeBlockHeader>
   ) : (
-    <ReactMarkdown
-      remarkPlugins={remarkPlugins}
-      rehypePlugins={rehypePlugins}
-      components={markdownComponents}
-    >
+    <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={markdownComponents}>
       {markdown}
     </ReactMarkdown>
   );

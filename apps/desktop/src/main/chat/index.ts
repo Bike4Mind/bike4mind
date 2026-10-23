@@ -95,6 +95,7 @@ import {
 import { readWorkspaceChanges } from './project/workspaceChanges';
 import { accountSkillsProvider } from './skills/accountSkills';
 import { ProjectTrustStore } from './skills/ProjectTrustStore';
+import { ApprovalLog } from './permissions/ApprovalLog';
 import { ClaudeCodeSettings, MANAGED_SETTINGS_PATH } from './permissions/ClaudeCodeSettings';
 import { PermissionRuleStore } from './permissions/PermissionRuleStore';
 import { PermissionService } from './permissions/PermissionService';
@@ -506,6 +507,8 @@ export function registerChat(
     approvals,
     permissions,
     capabilities: capabilityLedger,
+    // App-wide like approval-mode.json: a record of decisions, kept after their conversations.
+    approvalLog: new ApprovalLog(join(userData, 'approval-log.jsonl'), message => logger.warn(message)),
     background,
     foreground,
     dependencies: new DependencyInstaller(background),
@@ -605,41 +608,42 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatListSessions, () => service.listSessions());
   ipcMain.handle(IPC_CHANNELS.permissionsGetState, () => permissions.state());
   // Shapes checked here: this is the only door a rule comes in by besides the approval card.
-  ipcMain.handle(IPC_CHANNELS.permissionsSetRules, (_event, scope: unknown, lists: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.permissionsSetRules, async (_event, scope: unknown, lists: unknown) => {
     const parsedScope = permissionScope(scope);
     const parsedLists = permissionLists(lists);
     if (!parsedScope || !parsedLists) return { ok: false, error: 'Not a permission rule list.' };
-    return permissions.setRules(parsedScope, parsedLists).then(async result => {
-      if (!result.ok) return result;
-      const subject =
-        parsedScope.kind === 'project'
-          ? ({ kind: 'project', directory: resolve(parsedScope.directory) } as const)
-          : ({ kind: 'desktop-user' } as const);
-      await capabilityLedger.revokeMatching(
-        grant =>
-          grant.capability === 'tool' &&
-          grant.scope.kind === 'permission-rule' &&
-          sameSubject(grant.subject, subject) &&
-          !parsedLists.allow.includes(grant.scope.value)
-      );
-      const active = (await capabilityLedger.state()).grants.filter(
-        grant =>
-          !grant.revokedAt &&
-          !grant.expiredAt &&
-          grant.scope.kind === 'permission-rule' &&
-          sameSubject(grant.subject, subject)
-      );
-      for (const rule of parsedLists.allow) {
-        if (active.some(grant => grant.scope.kind === 'permission-rule' && grant.scope.value === rule)) continue;
-        await capabilityLedger.grant({
-          subject,
-          capability: 'tool',
-          scope: { kind: 'permission-rule', value: rule },
-          source: 'permission-rule',
-        });
-      }
-      return result;
-    });
+    const result = await permissions.setRules(parsedScope, parsedLists);
+    if (!result.ok) return result;
+    const subject =
+      parsedScope.kind === 'project'
+        ? ({ kind: 'project', directory: resolve(parsedScope.directory) } as const)
+        : ({ kind: 'desktop-user' } as const);
+    await capabilityLedger.revokeMatching(
+      grant =>
+        grant.capability === 'tool' &&
+        grant.scope.kind === 'permission-rule' &&
+        sameSubject(grant.subject, subject) &&
+        !parsedLists.allow.includes(grant.scope.value)
+    );
+    const active = (await capabilityLedger.state()).grants.filter(
+      grant =>
+        !grant.revokedAt &&
+        !grant.expiredAt &&
+        grant.scope.kind === 'permission-rule' &&
+        sameSubject(grant.subject, subject)
+    );
+    for (const rule of parsedLists.allow) {
+      if (active.some(grant => grant.scope.kind === 'permission-rule' && grant.scope.value === rule)) continue;
+      await capabilityLedger.grant({
+        subject,
+        capability: 'tool',
+        scope: { kind: 'permission-rule', value: rule },
+        source: 'permission-rule',
+      });
+    }
+    // An allow typed here answers any card it now covers, in every session.
+    void approvals.settleCovered();
+    return result;
   });
   ipcMain.handle(IPC_CHANNELS.permissionsSetSharing, (_event, share: unknown) =>
     permissions.setShareClaudeCode(share === true)

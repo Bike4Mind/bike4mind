@@ -1,6 +1,6 @@
 import EditTagModal, { useEditAppFileTagModal } from '@client/app/components/admin/FilesTab/EditTagModal';
 import { IAppFile, IAppFileDocument, KnowledgeType } from '@bike4mind/common';
-import { Edit } from '@mui/icons-material';
+import Edit from '@mui/icons-material/Edit';
 import { Box, Button, Chip, CircularProgress, IconButton, LinearProgress, Table } from '@mui/joy';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';

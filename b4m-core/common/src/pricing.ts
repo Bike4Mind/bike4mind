@@ -96,6 +96,20 @@ export const MIN_PRICE_PER_CREDIT_USD = (() => {
 /** USD price per credit for display, without float noise (0.0006, not 0.0006000000000000001). */
 export const formatUsdPerCredit = (usd: number): string => `$${Number(usd.toPrecision(6))}`;
 
+/** What a credit amount would sell for at MIN_PRICE_PER_CREDIT_USD, the rate credit packs are priced at. */
+export const creditsToUsdAtFloor = (credits: number): number => credits * MIN_PRICE_PER_CREDIT_USD;
+
+/** USD amount for display ($6.00). A nonzero amount under a cent keeps up to six decimal places ($0.0006) rather than rounding to $0.00. */
+export const formatUsdAmount = (usd: number): string => {
+  const subCent = usd !== 0 && Math.abs(usd) < 0.01;
+  return usd.toLocaleString('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: subCent ? 6 : 2,
+  });
+};
+
 /** True when a per-credit price is below MIN_PRICE_PER_CREDIT_USD (ignoring float noise) or is not finite. */
 export const isPricePerCreditBelowFloor = (usd: number): boolean =>
   !Number.isFinite(usd) || usd < MIN_PRICE_PER_CREDIT_USD * (1 - 1e-9);

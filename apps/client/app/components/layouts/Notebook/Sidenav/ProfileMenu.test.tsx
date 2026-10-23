@@ -50,6 +50,8 @@ vi.mock('@client/app/hooks/useAccessToken', () => ({
   useAccessToken: (select: (s: unknown) => unknown) => select({ impersonating: false }),
 }));
 vi.mock('@client/app/hooks/useAppVersion', () => ({ useAppVersion: () => ({ data: undefined }) }));
+const desktopPromo = vi.hoisted(() => ({ enabled: false }));
+vi.mock('@client/app/hooks/useDesktopPromoEnabled', () => ({ useDesktopPromoEnabled: () => desktopPromo.enabled }));
 const features = vi.hoisted(() => ({ enabled: new Set<string>() }));
 vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
   useFeatureEnabled: () => ({ isFeatureEnabled: (key: string) => features.enabled.has(key) }),
@@ -461,6 +463,40 @@ describe('ProfileMenu - focus after navigating', () => {
     fireEvent.click(screen.getByTestId('profile-menu-connections'));
     expect(router.navigate).toHaveBeenCalledWith({ to: '/integrations', search: { source: 'profile_menu' } });
     expect(screen.queryByTestId('profile-menu-panel')).not.toBeInTheDocument();
+  });
+});
+
+describe('ProfileMenu - desktop app link', () => {
+  beforeEach(() => {
+    router.pathname = '/new';
+    router.navigate.mockClear();
+  });
+
+  afterEach(() => {
+    desktopPromo.enabled = false;
+  });
+
+  const openMenu = () => {
+    render(
+      <TestWrapper>
+        <ProfileMenu />
+      </TestWrapper>
+    );
+    fireEvent.click(screen.getByTestId('profile-menu-card'));
+  };
+
+  it('opens the desktop download page and closes the menu', () => {
+    desktopPromo.enabled = true;
+    openMenu();
+    fireEvent.click(screen.getByTestId('profile-menu-desktop-app'));
+    expect(router.navigate).toHaveBeenCalledWith({ to: '/desktop' });
+    expect(screen.queryByTestId('profile-menu-panel')).not.toBeInTheDocument();
+  });
+
+  it('is absent when the deployment turned the desktop promo off', () => {
+    openMenu();
+    expect(screen.getByTestId('profile-menu-panel')).toBeInTheDocument();
+    expect(screen.queryByTestId('profile-menu-desktop-app')).not.toBeInTheDocument();
   });
 });
 

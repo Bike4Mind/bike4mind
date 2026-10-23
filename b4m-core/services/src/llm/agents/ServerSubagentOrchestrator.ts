@@ -13,6 +13,7 @@ import type { Logger } from '@bike4mind/observability';
 import { usdToCreditsStochastic } from '@bike4mind/utils';
 import { MemberCreditCapError } from '../../creditService';
 import { confirmingServerOf, withoutConfirmPrompt } from '../mcpPendingAction';
+import type { ModelAdmission } from '../modelAdmission';
 
 /** Maximum delegation depth rendered inline in the UI. Children at this
  * depth and beyond have `delegate_to_agent` stripped so nesting stays bounded. */
@@ -365,6 +366,13 @@ export interface ServerOrchestratorDeps {
    * children stay ungated like the parent itself.
    */
   toolPermissions?: SubagentToolPermissions;
+  /**
+   * The delegating user's model admission. When set, an in-process delegation asserts the
+   * resolved model before it runs, matching the dispatched path's own check in
+   * `processSubagentDispatch` (apps/workers agentExecutor.ts). User/org agent definitions are
+   * already filtered by `admitAgentDefinitions`; this is what covers a built-in's pinned model.
+   */
+  modelAdmission?: Pick<ModelAdmission, 'assert'>;
 }
 
 /**
@@ -512,6 +520,20 @@ export class ServerSubagentOrchestrator {
     return parent;
   }
 
+  /** Throws the admission error itself, the same message the dispatched path records on its failed child. */
+  private async assertModelAdmitted(agentName: string, model: string): Promise<void> {
+    try {
+      await this.deps.modelAdmission?.assert(model);
+    } catch (err) {
+      this.deps.logger.warn('[ModelAdmission] Refusing subagent model', {
+        agent: agentName,
+        model,
+        reason: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
+  }
+
   /** Fills `totalCredits` from token usage when the agent did not report it (priced on `model`). */
   private priceCompletion(completionInfo: AgentResult['completionInfo'], effectiveModel: string): void {
     if (completionInfo.totalCredits === undefined && this.deps.availableModels) {
@@ -559,6 +581,7 @@ export class ServerSubagentOrchestrator {
     // from that id alone - so an unserviceable id has to be replaced here or
     // the child Lambda dies on "Failed to create LLM backend".
     const { llm: effectiveLlm, model: effectiveModel } = this.resolveAgentRuntime(agentDef);
+    await this.assertModelAdmitted(agentDef.name, effectiveModel);
     const effectiveThoroughness = thoroughness || agentDef.defaultThoroughness;
     const maxIterations = agentDef.maxIterations[effectiveThoroughness];
 

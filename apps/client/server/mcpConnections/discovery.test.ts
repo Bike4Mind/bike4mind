@@ -70,7 +70,7 @@ vi.mock('@bike4mind/database', () => ({
       ? Buffer.byteLength(JSON.stringify(tools))
       : 2 + tools.length * state.toolBytes + Math.max(tools.length - 1, 0),
 }));
-vi.mock('@server/integrations/integrationAuditLogger', () => ({
+vi.mock('@bike4mind/server-utils/integrations/integrationAuditLogger', () => ({
   IntegrationAuditLogger: {
     create: (context: { action: string; metadata: Record<string, unknown> }) => ({
       success: () => state.audits.push({ action: context.action, metadata: context.metadata }),

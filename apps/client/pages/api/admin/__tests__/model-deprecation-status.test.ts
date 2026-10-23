@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import { CATALOG_SCHEMA_VERSION, ModelCatalogRowInput } from '@bike4mind/common';
+import type { IModelCatalogRow } from '@bike4mind/common';
+import { resolveCatalogRecords } from '@bike4mind/llm-adapters';
 
 // Middleware stripped so the handler body runs directly (same pattern as
 // __tests__/model-prices.test.ts). The chain object doubles as the exported
@@ -59,9 +62,12 @@ import handler from '../model-deprecation-status';
 
 const LIVE_MODEL = { id: 'gpt-live', name: 'Live', backend: 'openai' };
 
-const catalogRow = (modelId: string, lifecycle: Record<string, string>) => ({
+const catalogRow = (
+  modelId: string,
+  lifecycle: NonNullable<IModelCatalogRow['patch']['lifecycle']>
+): IModelCatalogRow => ({
   modelId,
-  schemaVersion: 1,
+  schemaVersion: CATALOG_SCHEMA_VERSION,
   source: 'discovery',
   ownedGroups: ['lifecycle'],
   patch: { lifecycle },
@@ -219,6 +225,44 @@ describe('POST /api/admin/model-deprecation-status', () => {
       replacedBy: 'gpt-live',
     });
   });
+
+  it.each([true, false])(
+    'preserves superseded metadata (%s) through acceptance and catalog merge',
+    async isSuperseded => {
+      const rows: IModelCatalogRow[] = [
+        catalogRow('gpt-live', { status: 'active' }),
+        { ...catalogRow('gpt-sunset', { status: 'active', isSuperseded: true }), source: 'seed' },
+        ...(!isSuperseded
+          ? [
+              {
+                ...catalogRow('gpt-sunset', { status: 'active', isSuperseded: false }),
+                source: 'operator',
+                effectiveFrom: new Date('2026-07-02T00:00:00Z'),
+              },
+            ]
+          : []),
+      ];
+      mockRowsInForce.mockResolvedValue(rows);
+      mockFindByModelId.mockResolvedValue({
+        modelId: 'gpt-sunset',
+        suggestion: { ...SUGGESTION, deprecationDate: '2099-08-01' },
+      });
+      const { run } = call({
+        method: 'POST',
+        body: { modelId: 'gpt-sunset', action: 'accept', note: 'future deprecation confirmed' },
+      });
+      await run();
+
+      expect(mockAppend).toHaveBeenCalledOnce();
+      const appended = ModelCatalogRowInput.parse(mockAppend.mock.calls[0][0]);
+      const merged = resolveCatalogRecords([...rows, { ...appended, schemaVersion: CATALOG_SCHEMA_VERSION }]);
+      expect(merged.get('gpt-sunset')?.record.lifecycle).toMatchObject({
+        status: 'deprecated',
+        deprecationDate: '2099-08-01',
+        isSuperseded,
+      });
+    }
+  );
 
   it('lets the suggestion date win over the one already in force', async () => {
     const { run } = call({

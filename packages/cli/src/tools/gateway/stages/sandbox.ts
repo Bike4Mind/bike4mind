@@ -5,6 +5,7 @@ import type { SandboxOrchestrator } from '../../../sandbox/SandboxOrchestrator.j
 import type { ToolArgs } from '../gatewayTypes.js';
 import type { ToolDescriptor } from '../toolDescriptor.js';
 import { sandboxedCommandArg } from '../toolPolicy.js';
+import { sanitizeTerminalText } from '../../../utils/sanitizeTerminalText.js';
 
 /** How the sandbox pre-step leaves a call: refused, rewritten to run sandboxed, or untouched. */
 export type SandboxPreparation =
@@ -95,7 +96,9 @@ function blockCommand(sandboxOrchestrator: SandboxOrchestrator, command: string,
       detail: reason,
     })
     .catch(() => {});
-  console.error(`\n\x1b[41m\x1b[97m BLOCKED \x1b[0m \x1b[31mSandbox denied this command:\x1b[0m ${reason}\n`);
+  console.error(
+    `\n\x1b[41m\x1b[97m BLOCKED \x1b[0m \x1b[31mSandbox denied this command:\x1b[0m ${sanitizeTerminalText(reason)}\n`
+  );
   return `Command blocked by sandbox: ${reason}`;
 }
 

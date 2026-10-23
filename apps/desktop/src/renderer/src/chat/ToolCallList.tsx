@@ -18,6 +18,7 @@ import { isMcpConfigToolName, MCP_UPDATE_SERVER_TOOL_NAME, parseMcpServerRequest
 import { ASK_USER_TOOL_NAME, parseOutcome, parseQuestions } from '@shared/questions';
 import { WEB_FETCH_TOOL_NAME } from '@shared/webSearch';
 import { ApprovalChoiceButtons } from './ApprovalChoice';
+import { describeApproval } from './approvalAttribution';
 import { DiffView } from './DiffView';
 import { DirectoryRequestCard } from './DirectoryRequestCard';
 import { McpServerRequestCard } from './McpServerRequestCard';
@@ -170,6 +171,12 @@ function NoticeBanner({ notice }: { notice: ChatToolNotice }) {
  * `title` carries the list uncapped and with full paths, because an abbreviated path must not be
  * the only account of what is being granted.
  */
+/** A bare rule allows the tool outright, which its text alone does not say. */
+function ruleScope(rule: string): string {
+  if (rule.includes('(')) return rule;
+  return `${rule} (${rule === 'WebFetch' ? 'every site' : 'every call'})`;
+}
+
 function AlwaysScopeLine({ call }: { call: ChatToolCall }) {
   return (
     <Typography
@@ -180,11 +187,11 @@ function AlwaysScopeLine({ call }: { call: ChatToolCall }) {
       data-testid="chat-tool-approval-scope"
     >
       {call.approvalAlways
-        ? `"Always allow" covers ${call.approvalAlways} for the rest of this conversation.`
-        : '"Always allow" applies for the rest of this conversation.'}
+        ? `"Allow in this chat" covers ${call.approvalAlways} for the rest of this conversation.`
+        : '"Allow in this chat" applies for the rest of this conversation.'}
       {call.approvalRules && call.approvalRules.length > 0 && (
         <span data-testid="chat-tool-approval-rules">
-          {` "In every session" saves ${call.approvalRules.join(', ')} to Settings > Permissions.`}
+          {` "Always allow" saves ${call.approvalRules.map(ruleScope).join(', ')} to Settings > Permissions, so no session asks again.`}
         </span>
       )}
     </Typography>
@@ -300,7 +307,7 @@ function ApprovalPrompt({
                 onClick={() => onRespond(approvalId, { decision: 'always' })}
                 data-testid="chat-tool-approve-always"
               >
-                Always allow
+                Allow in this chat
               </Button>
             )}
             {!irreversible && call.approvalRules && call.approvalRules.length > 0 && (
@@ -312,7 +319,7 @@ function ApprovalPrompt({
                 onClick={() => onRespond(approvalId, { decision: 'always', everywhere: true })}
                 data-testid="chat-tool-approve-everywhere"
               >
-                Always, in every session
+                Always allow
               </Button>
             )}
             <Button
@@ -609,6 +616,7 @@ function ToolGroupRow({ group, onMove }: { group: ToolCallGroup; onMove?: MoveCa
         )}
       </Box>
 
+      <ApprovalAttribution calls={group.calls} />
       {/* Outside the <details>, both of them: a generated image nobody can see until they
           expand a collapsed row is not a rendered image, and "out of credits" is not a detail.
           Still inside the rule, because both belong to the call that produced them. */}
@@ -623,6 +631,34 @@ function ToolGroupRow({ group, onMove }: { group: ToolCallGroup; onMove?: MoveCa
         </Box>
       ))}
     </Box>
+  );
+}
+
+/**
+ * Who let the group's calls run, or stopped them, one muted line per distinct answer. A group of
+ * seven commands "Approve for me" ran reads as one line, not seven of the same.
+ */
+function ApprovalAttribution({ calls }: { calls: readonly ChatToolCall[] }) {
+  const decisions = calls.flatMap(call =>
+    call.approval && call.status !== 'awaiting-approval' ? [call.approval] : []
+  );
+  const lines = [...new Map(decisions.map(approval => [describeApproval(approval), approval])).entries()];
+  if (lines.length === 0) return null;
+  return (
+    <>
+      {lines.map(([text, approval]) => (
+        <Typography
+          key={text}
+          level="body-xs"
+          textColor="text.tertiary"
+          title={approval.decidedBy.kind === 'rule' ? approval.decidedBy.source : undefined}
+          sx={{ overflowWrap: 'anywhere' }}
+          data-testid="tool-call-approval-attribution"
+        >
+          {text}
+        </Typography>
+      ))}
+    </>
   );
 }
 

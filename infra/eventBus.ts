@@ -5,8 +5,18 @@ import { lambdaVpc } from './vpc';
 import { fabFileBucket, generatedImagesBucket, appFilesBucket } from './buckets';
 import { eventBus } from './bus';
 import { notebookCurationQueue, sreFixQueue, sreFixQueueDLQ } from './queues';
+import { createEventBusDeadLetter } from './eventBusDeadLetter';
 
 // Stripe events
+const billingEventsDLQ = new sst.aws.Queue('billingEventsDLQ', {
+  transform: {
+    queue: {
+      messageRetentionSeconds: 1209600, // 14 days for forensics investigation
+    },
+  },
+});
+const billingEventsDeadLetter = createEventBusDeadLetter('billingEventsDLQ', billingEventsDLQ);
+
 const stripeInvoicePaymentSucceededSubscription = eventBus.subscribe(
   'stripe-invoice-payment-succeeded',
   {
@@ -25,12 +35,15 @@ const stripeInvoicePaymentSucceededSubscription = eventBus.subscribe(
         actions: ['cloudwatch:PutMetricData'],
         resources: ['*'],
       },
+      billingEventsDeadLetter.sendPermission,
     ],
+    transform: billingEventsDeadLetter.functionTarget,
   },
   {
     pattern: {
       detailType: ['stripe.invoice.payment_succeeded'],
     },
+    transform: billingEventsDeadLetter.ruleTarget,
   }
 );
 
@@ -51,17 +64,34 @@ const stripeCustomerSubscriptionUpdatedSubscription = eventBus.subscribe(
         actions: ['cloudwatch:PutMetricData'],
         resources: ['*'],
       },
+      billingEventsDeadLetter.sendPermission,
     ],
+    transform: billingEventsDeadLetter.functionTarget,
   },
   {
     pattern: {
       detailType: ['stripe.cus.sub.updated'],
     },
+    transform: billingEventsDeadLetter.ruleTarget,
   }
 );
 
+billingEventsDeadLetter.allowRules([
+  stripeInvoicePaymentSucceededSubscription,
+  stripeCustomerSubscriptionUpdatedSubscription,
+]);
+
 // Email events
-eventBus.subscribe(
+const emailEventsDLQ = new sst.aws.Queue('emailEventsDLQ', {
+  transform: {
+    queue: {
+      messageRetentionSeconds: 1209600, // 14 days for forensics investigation
+    },
+  },
+});
+const emailEventsDeadLetter = createEventBusDeadLetter('emailEventsDLQ', emailEventsDLQ);
+
+const emailSendSubscription = eventBus.subscribe(
   'email-send',
   {
     handler: 'apps/workers/src/events/sendEmail.handler',
@@ -71,13 +101,18 @@ eventBus.subscribe(
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
+    permissions: [emailEventsDeadLetter.sendPermission],
+    transform: emailEventsDeadLetter.functionTarget,
   },
   {
     pattern: {
       detailType: ['email.send'],
     },
+    transform: emailEventsDeadLetter.ruleTarget,
   }
 );
+
+emailEventsDeadLetter.allowRules([emailSendSubscription]);
 
 // Session events
 //
@@ -89,7 +124,7 @@ eventBus.subscribe(
 //   Lambda (2 retries) and then dropped unless the FUNCTION has a dead-letter target
 //   (sessionEnrichmentFunctionDLQ). This is the side a real handler failure lands on.
 // Alarm-only (no source queue to replay into; recovery is re-emitting the event), see
-// infra/dlqAlarms.ts. Guarded by infra/__tests__/sessionEnrichmentDlq.test.ts.
+// infra/dlqAlarms.ts. Guarded by infra/__tests__/eventBusDlq.test.ts.
 const sessionEnrichmentDLQ = new sst.aws.Queue('sessionEnrichmentDLQ', {
   transform: {
     queue: {
@@ -247,8 +282,17 @@ new aws.sqs.QueuePolicy('sessionEnrichmentDLQPolicy', {
     ),
 });
 
-// Notebook Curation events
-eventBus.subscribe(
+// Notebook Curation and Spider events share one dead letter (see infra/eventBusDeadLetter.ts).
+const notebookEventsDLQ = new sst.aws.Queue('notebookEventsDLQ', {
+  transform: {
+    queue: {
+      messageRetentionSeconds: 1209600, // 14 days for forensics investigation
+    },
+  },
+});
+const notebookEventsDeadLetter = createEventBusDeadLetter('notebookEventsDLQ', notebookEventsDLQ);
+
+const notebookCurationStartSubscription = eventBus.subscribe(
   'notebook-curation-start',
   {
     handler: 'apps/workers/src/events/notebookCuration.handler',
@@ -272,17 +316,20 @@ eventBus.subscribe(
         actions: ['bedrock:*'],
         resources: ['*'],
       },
+      notebookEventsDeadLetter.sendPermission,
     ],
+    transform: notebookEventsDeadLetter.functionTarget,
   },
   {
     pattern: {
       detailType: ['notebook.curation.start'],
     },
+    transform: notebookEventsDeadLetter.ruleTarget,
   }
 );
 
 // Notebook Curation Analytics - logs analytics when curation completes
-eventBus.subscribe(
+const notebookCurationAnalyticsSubscription = eventBus.subscribe(
   'notebook-curation-complete-analytics',
   {
     handler: 'apps/workers/src/events/notebookCurationAnalytics.handler',
@@ -293,11 +340,14 @@ eventBus.subscribe(
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
+    permissions: [notebookEventsDeadLetter.sendPermission],
+    transform: notebookEventsDeadLetter.functionTarget,
   },
   {
     pattern: {
       detailType: ['notebook.curation.complete'],
     },
+    transform: notebookEventsDeadLetter.ruleTarget,
   }
 );
 
@@ -317,7 +367,8 @@ eventBus.subscribe(
 // Rule-target DLQ: EventBridge silently DROPS an event once the target's delivery retries
 // are exhausted and no DLQ is configured - a failed alert delivery would vanish without
 // trace. The deadLetterConfig on the rule target (set via transform.target below) captures
-// those undeliverable events instead. Alarmed in infra/dlqAlarms.ts.
+// those undeliverable events instead; the function's deadLetterConfig captures handler failures
+// after Lambda's async retries (see infra/eventBusDeadLetter.ts). Alarmed in infra/dlqAlarms.ts.
 const telemetryAlertRuleDLQ = new sst.aws.Queue('telemetryAlertRuleDLQ', {
   transform: {
     queue: {
@@ -343,7 +394,14 @@ const telemetryAlertSubscription = eventBus.subscribe(
         actions: ['bedrock:*'],
         resources: ['*'],
       },
+      // Lambda delivers async-invoke failures to the DLQ with the function's own role.
+      { actions: ['sqs:SendMessage'], resources: [telemetryAlertRuleDLQ.arn] },
     ],
+    transform: {
+      function: {
+        deadLetterConfig: { targetArn: telemetryAlertRuleDLQ.arn },
+      },
+    },
   },
   {
     pattern: {
@@ -396,14 +454,34 @@ const spiderSubscription = eventBus.subscribe(
         actions: ['bedrock:*'],
         resources: ['*'],
       },
+      notebookEventsDeadLetter.sendPermission,
     ],
+    transform: notebookEventsDeadLetter.functionTarget,
   },
   {
     pattern: {
       detailType: ['spider.start'],
     },
+    transform: notebookEventsDeadLetter.ruleTarget,
   }
 );
+
+notebookEventsDeadLetter.allowRules([
+  notebookCurationStartSubscription,
+  notebookCurationAnalyticsSubscription,
+  spiderSubscription,
+]);
+
+// Completion events. Defined here rather than in infra/llm.ts, which owns the rules, because
+// SlackQuestProcessor (infra/functions.ts) needs the function side too and llm.ts imports it.
+const completionEventsDLQ = new sst.aws.Queue('completionEventsDLQ', {
+  transform: {
+    queue: {
+      messageRetentionSeconds: 1209600, // 14 days for forensics investigation
+    },
+  },
+});
+const completionEventsDeadLetter = createEventBusDeadLetter('completionEventsDLQ', completionEventsDLQ);
 
 // SRE Diagnostician -> Surgeon handoff. The analysis handler emits
 // sre.analysis.completed (apps/client/server/utils/eventBus.ts) and this rule
@@ -429,6 +507,10 @@ sst.aws.Queue.createPolicy('SreFixQueueDLQEventsPolicy', sreFixQueueDLQ.arn);
 export {
   eventBus,
   telemetryAlertRuleDLQ,
+  billingEventsDeadLetter,
+  emailEventsDeadLetter,
+  notebookEventsDeadLetter,
+  completionEventsDeadLetter,
   sessionEnrichmentDLQ,
   sreFixDispatchSubscription,
   sessionAutoNamingSubscription,

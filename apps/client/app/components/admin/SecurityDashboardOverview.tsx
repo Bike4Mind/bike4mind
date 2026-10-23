@@ -1,6 +1,13 @@
 import React from 'react';
 import { Box, Card, CardContent, Typography, Grid, Button, Chip } from '@mui/joy';
-import { Security, Web, Code, VpnKey, CloudQueue, Shield, CheckCircle, WarningAmber } from '@mui/icons-material';
+import Security from '@mui/icons-material/Security';
+import Web from '@mui/icons-material/Web';
+import Code from '@mui/icons-material/Code';
+import VpnKey from '@mui/icons-material/VpnKey';
+import CloudQueue from '@mui/icons-material/CloudQueue';
+import Shield from '@mui/icons-material/Shield';
+import CheckCircle from '@mui/icons-material/CheckCircle';
+import WarningAmber from '@mui/icons-material/WarningAmber';
 import { useSecurityDashboardOverview } from '@client/app/hooks/data/admin';
 import { APP_NAME } from '@client/config/general'; // brand externalized
 

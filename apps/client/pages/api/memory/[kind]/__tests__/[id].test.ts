@@ -80,7 +80,9 @@ vi.mock('@server/utils/auditLog', () => ({
   DataLakeAuditEvents: { LAKE_MEMORY_PURGED: 'LAKE_MEMORY_PURGED' },
   logAuditEvent: h.logAuditEvent,
 }));
-vi.mock('@server/dataLakes/resolveAuditPrincipal', () => ({ resolveAuditPrincipal: vi.fn(() => ({})) }));
+vi.mock('@bike4mind/server-utils/dataLakes/resolveAuditPrincipal', () => ({
+  resolveAuditPrincipal: vi.fn(() => ({})),
+}));
 vi.mock('@server/memory/deepAgentMemoryStore', () => ({ createDeepAgentMemoryStore: vi.fn(() => ({})) }));
 vi.mock('@server/memory/personaAgentMemoryStore', () => ({ createPersonaAgentMemoryStore: vi.fn(() => ({})) }));
 vi.mock('@bike4mind/server-utils/memory/userMementoMemoryStore', () => ({
