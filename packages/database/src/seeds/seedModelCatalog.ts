@@ -70,7 +70,11 @@ function stableStringify(value: unknown): string {
  * ranks discovery above seed per FIELD GROUP (mergeCatalog.outranks; presentation
  * is the exception, where seed ranks first), so the appended row only takes
  * effect for the groups the discovery row does not own.
- * Correcting a group discovery owns remains an operator patch, deliberately -
+ * The exception is a model discovery introduced before an adapter table curated
+ * it: those rows carry placeholders (the slug for a name, contextWindow 0,
+ * autoDisabled), so mergeCatalog lets the curated record reclaim identity, limits
+ * and availability from them.
+ * Correcting any OTHER group discovery owns remains an operator patch, deliberately -
  * recency beating rank at merge time would let any stale discovery row shadow
  * operator intent.
  *
