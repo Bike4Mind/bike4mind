@@ -491,10 +491,10 @@ parent of the shared git dir), with `/` in the branch name written as `+`:
 The layout is reimplemented in `src/main/chat/project/workspace.ts` rather than shelled out
 to the user's `worktree` shell function (`~/.config/b4m/worktree.zsh`, still the source of the
 `+` folder convention and the default base), because a packaged app cannot assume a personal
-shell function exists. Nothing ever writes
-to a `../` path, which would scatter folders that read as separate projects, and the
-repository's own `.gitignore` is never touched. Keeping everything under `.b4m` also means a
-worktree can never collide with a folder the user made themselves, such as `<container>/main`.
+shell function exists. Nothing ever writes to a `../` path, which would scatter folders that
+read as separate projects, and the repository's own `.gitignore` is never touched. Keeping
+everything under `.b4m` also means a worktree can never collide with a folder the user made
+themselves, such as `<container>/main`.
 
 **The chosen branch is a base, not a target.** The session gets a branch of its own, named
 `b4m/<slug>-<hex>` (the slug comes from the session title, the random suffix keeps two sessions
@@ -511,8 +511,9 @@ Cases it handles rather than failing:
   resolution. A worktree some other tool registered for the base branch is never adopted.
 - **The branch does not exist yet** - created from the base's remote-tracking ref once that is
   proven to contain the local base (so a stale local `main` does not start the branch behind),
-  otherwise from the base itself. With no base picked it is `origin/main`, then `origin/master`,
-  then `HEAD`. Always `--no-track`, so a later `git push` does not aim at the base.
+  otherwise from the base itself. With no base picked it is the branch `origin/HEAD` points
+  at, then `origin/main`, then `origin/master`, then `HEAD`. Always `--no-track`, so a later
+  `git push` does not aim at the base.
 
 **An occupied path is refused, never adopted or cleared.** If the target folder is already a
 git worktree holding something else, or exists but is not a worktree, the session fails to
@@ -520,13 +521,13 @@ prepare with a message naming the path. Move it with `git worktree move` (a plai
 git pointing at a path that no longer exists), or pick a different branch.
 
 **A spare checkout makes starting fast.** After a worktree is cut in a repository, the app
-prepares one detached checkout in `.b4m/spare`, shortly afterwards so it does not compete with
+prepares one detached checkout in `.b4m/spare` shortly afterwards, so it does not compete with
 the new session's first moments. The next session moves it into place and switches it to the
 new branch, which rewrites only the files that differ - about 0.2s instead of the 1.3s a full
 checkout takes on this monorepo. It is bounded on every side: a repository gets one only after
 a worktree was cut in it during the current run, at most two repositories keep one (the least
 recently used goes first), an unused spare is removed after 30 minutes, and all of them are
-removed on quit. A spare left behind by a crash is recognised by its git metadata and original
+removed on quit. A spare left behind by a crash is recognized by its git metadata and original
 `HEAD`; one that has been changed, or that the app does not own, is left alone and no spare is
 made.
 
