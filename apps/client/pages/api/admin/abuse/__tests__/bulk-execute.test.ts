@@ -49,6 +49,7 @@ import handler from '../bulk-execute';
 
 const USERS_TARGET = { kind: 'users', userIds: [USER_ID] } as const;
 const REASON = 'Burner-domain credit farming cohort';
+const BOUND = '6a00000000000000ffffffff';
 const fingerprintFor = (target: Parameters<typeof abuseService.bulkAbuseFingerprint>[0], ids: string[]) =>
   abuseService.bulkAbuseFingerprint(target, ALL_ACTIONS, ids);
 
@@ -63,9 +64,9 @@ function succeeded(userId: string) {
   };
 }
 
-async function call(body: Record<string, unknown>, user: Record<string, unknown> = ADMIN) {
+async function call(body: Record<string, unknown>, user: Record<string, unknown> = ADMIN, canEditSettings = true) {
   const { req, res } = createMocks({ method: 'POST', body });
-  (req as unknown as { user: unknown }).user = user;
+  Object.assign(req, { user, ability: { can: () => canEditSettings } });
   await (handler as unknown as (req: unknown, res: unknown) => Promise<unknown>)(req, res);
   return res;
 }
@@ -74,7 +75,7 @@ const validBody = (overrides: Record<string, unknown> = {}) => ({
   target: USERS_TARGET,
   actions: ALL_ACTIONS,
   reason: REASON,
-  previewToken: signBulkAbusePreviewToken(ADMIN.id, fingerprintFor(USERS_TARGET, [USER_ID])),
+  previewToken: signBulkAbusePreviewToken(ADMIN.id, fingerprintFor(USERS_TARGET, [USER_ID]), null),
   ...overrides,
 });
 
@@ -131,13 +132,14 @@ describe('POST /api/admin/abuse/bulk-execute', () => {
   it('refuses a token minted for different actions', async () => {
     const token = signBulkAbusePreviewToken(
       ADMIN.id,
-      abuseService.bulkAbuseFingerprint(USERS_TARGET, { ...ALL_ACTIONS, ban: false }, [USER_ID])
+      abuseService.bulkAbuseFingerprint(USERS_TARGET, { ...ALL_ACTIONS, ban: false }, [USER_ID]),
+      null
     );
     await expect(call(validBody({ previewToken: token }))).rejects.toMatchObject({ statusCode: 409 });
   });
 
   it("refuses another admin's or a forged token", async () => {
-    const othersToken = signBulkAbusePreviewToken(OTHER_ID, fingerprintFor(USERS_TARGET, [USER_ID]));
+    const othersToken = signBulkAbusePreviewToken(OTHER_ID, fingerprintFor(USERS_TARGET, [USER_ID]), null);
     await expect(call(validBody({ previewToken: othersToken }))).rejects.toMatchObject({ statusCode: 400 });
     await expect(call(validBody({ previewToken: 'not-a-token' }))).rejects.toMatchObject({ statusCode: 400 });
     expect(mockExecute).not.toHaveBeenCalled();
@@ -165,11 +167,13 @@ describe('POST /api/admin/abuse/bulk-execute', () => {
     mockExecute.mockImplementation(async () => (order.push('execute'), [succeeded(USER_ID)]));
 
     const res = await call(
-      validBody({ target, previewToken: signBulkAbusePreviewToken(ADMIN.id, fingerprintFor(target, [USER_ID])) })
+      validBody({ target, previewToken: signBulkAbusePreviewToken(ADMIN.id, fingerprintFor(target, [USER_ID]), BOUND) })
     );
 
     expect(mockAddBlockedDomain).toHaveBeenCalledWith(expect.anything(), 'kashre.com');
     expect(order).toEqual(['block', 'execute']);
+    // Re-resolved against the preview's bound, so accounts created since the preview do not 409 it.
+    expect(mockResolve).toHaveBeenCalledWith(target, ADMIN.id, expect.anything(), { upToUserId: BOUND });
     expect(res._getJSONData()).toMatchObject({ blockedDomain: 'kashre.com' });
   });
 
@@ -180,7 +184,11 @@ describe('POST /api/admin/abuse/bulk-execute', () => {
       target,
       actions,
       reason: REASON,
-      previewToken: signBulkAbusePreviewToken(ADMIN.id, abuseService.bulkAbuseFingerprint(target, actions, [USER_ID])),
+      previewToken: signBulkAbusePreviewToken(
+        ADMIN.id,
+        abuseService.bulkAbuseFingerprint(target, actions, [USER_ID]),
+        BOUND
+      ),
     });
     expect(mockAddBlockedDomain).not.toHaveBeenCalled();
     expect(mockExecute).toHaveBeenCalled();
@@ -199,10 +207,30 @@ describe('POST /api/admin/abuse/bulk-execute', () => {
     const res = await call(
       validBody({
         target,
-        previewToken: signBulkAbusePreviewToken(ADMIN.id, fingerprintFor(target, [USER_ID, OTHER_ID])),
+        previewToken: signBulkAbusePreviewToken(ADMIN.id, fingerprintFor(target, [USER_ID, OTHER_ID]), null),
       })
     );
 
     expect(res._getJSONData()).toMatchObject({ succeededCount: 1, failedCount: 1 });
+    // The failed user's own entries rolled back, so the summary is where the failure is recorded.
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'abuse.bulk.executed',
+        details: expect.objectContaining({ failed: [{ userId: OTHER_ID, error: 'boom' }] }),
+      })
+    );
+  });
+
+  it('refuses a domain ban from an admin who cannot edit admin settings', async () => {
+    const target = { kind: 'domain', domain: 'kashre.com' } as const;
+    const body = validBody({
+      target,
+      previewToken: signBulkAbusePreviewToken(ADMIN.id, fingerprintFor(target, [USER_ID]), BOUND),
+    });
+
+    await expect(call(body, ADMIN, false)).rejects.toMatchObject({ statusCode: 403 });
+    expect(mockAddBlockedDomain).not.toHaveBeenCalled();
+    expect(mockExecute).not.toHaveBeenCalled();
   });
 });

@@ -5,6 +5,7 @@ import {
   clawbackAmount,
   executeBulkAbuse,
   isPaidAccount,
+  userIdUpperBound,
   previewBulkAbuseCounts,
   resolveBulkAbuseCohort,
   type BulkAbuseCohortAdapters,
@@ -67,8 +68,8 @@ function cohortAdapters({
       const ids = (filter._id as { $in: string[] }).$in;
       return users.filter(user => ids.includes(user.id));
     }
-    const after = (filter._id as { $gt?: string } | undefined)?.$gt;
-    const page = users.filter(user => !after || user.id > after);
+    const { $gt: after, $lte: upTo } = (filter._id ?? {}) as { $gt?: string; $lte?: string };
+    const page = users.filter(user => (!after || user.id > after) && (!upTo || user.id <= upTo));
     return options?.limit ? page.slice(0, options.limit) : page;
   });
   const adapters: BulkAbuseCohortAdapters = {
@@ -174,6 +175,55 @@ describe('resolveBulkAbuseCohort', () => {
     expect(next.included).toHaveLength(5);
     expect(next).toMatchObject({ hasMore: false, nextAfterUserId: null });
   });
+
+  it('advances the cursor past a scanned row that the domain re-check drops', async () => {
+    const users = Array.from({ length: MAX_BULK_ABUSE_BATCH + 1 }, (_, i) =>
+      i + 1 === MAX_BULK_ABUSE_BATCH ? makeUser(i + 1, { email: 'x@notkashre.com' }) : makeUser(i + 1)
+    );
+    const { adapters } = cohortAdapters({ users });
+
+    const cohort = await resolveBulkAbuseCohort({ kind: 'domain', domain: 'kashre.com' }, ACTOR_ID, adapters);
+    expect(cohort.included).toHaveLength(MAX_BULK_ABUSE_BATCH - 1);
+    expect(cohort.nextAfterUserId).toBe(id(MAX_BULK_ABUSE_BATCH));
+  });
+
+  it('bounds a domain cohort by the preview-time id, so later signups do not change it', async () => {
+    const bound = userIdUpperBound(new Date('2026-01-01T00:00:00Z'));
+    const lateSignup = {
+      ...makeUser(99),
+      id: userIdUpperBound(new Date('2026-01-02T00:00:00Z')).slice(0, 8) + '0'.repeat(16),
+    };
+    const { adapters, find } = cohortAdapters({ users: [makeUser(1), lateSignup] });
+
+    const cohort = await resolveBulkAbuseCohort({ kind: 'domain', domain: 'kashre.com' }, ACTOR_ID, adapters, {
+      upToUserId: bound,
+    });
+
+    expect(cohort.included.map(user => user.id)).toEqual([id(1)]);
+    expect(cohort.upToUserId).toBe(bound);
+    expect(find.mock.calls[0][0]._id).toEqual({ $lte: bound });
+  });
+
+  it('defaults the bound to now and reports none for an explicit user list', async () => {
+    vi.useFakeTimers({ now: new Date('2026-10-23T12:00:00Z'), toFake: ['Date'] });
+    const { adapters } = cohortAdapters({ users: [makeUser(1)] });
+    const domainCohort = await resolveBulkAbuseCohort({ kind: 'domain', domain: 'kashre.com' }, ACTOR_ID, adapters);
+    expect(domainCohort.upToUserId).toBe(userIdUpperBound(new Date('2026-10-23T12:00:00Z')));
+    vi.useRealTimers();
+
+    const usersCohort = await resolveBulkAbuseCohort({ kind: 'users', userIds: [id(1)] }, ACTOR_ID, adapters);
+    expect(usersCohort.upToUserId).toBeNull();
+  });
+});
+
+describe('userIdUpperBound', () => {
+  it('sorts after every id minted up to that second and before the next second', () => {
+    const at = new Date('2026-10-23T12:00:00Z');
+    const seconds = Math.floor(at.getTime() / 1000).toString(16);
+    expect(userIdUpperBound(at)).toBe(`${seconds}ffffffffffffffff`);
+    expect(`${seconds}0123456789abcdef` <= userIdUpperBound(at)).toBe(true);
+    expect(userIdUpperBound(new Date(at.getTime() + 1000)) > userIdUpperBound(at)).toBe(true);
+  });
 });
 
 describe('bulkAbuseFingerprint', () => {
@@ -224,7 +274,8 @@ describe('previewBulkAbuseCounts', () => {
 
     expect(counts).toMatchObject({ activeApiKeyCount: 4, alreadyBannedCount: 1, clawbackCredits: 30 + 50 });
     expect(counts.sample.map(user => user.id)).toEqual([id(1), id(2), id(3)]);
-    expect(count).toHaveBeenCalledWith({ userId: { $in: [id(1), id(2), id(3)] }, status: 'active' });
+    // The same keys execute's deactivateAllByUserId disables: anything not already disabled.
+    expect(count).toHaveBeenCalledWith({ userId: { $in: [id(1), id(2), id(3)] }, status: { $ne: 'disabled' } });
   });
 });
 
@@ -273,6 +324,24 @@ function executeAdapters(users: IUser[], credits: CreditRow[], liveKeys: Record<
 }
 
 describe('executeBulkAbuse', () => {
+  it('ends the realtime connections a revoked key opened, even without a ban', async () => {
+    const user = makeUser(1);
+    const { adapters } = executeAdapters([user], [], { [id(1)]: 1 });
+
+    await executeBulkAbuse([user], ONLY('revokeApiKeys'), ACTOR_ID, adapters);
+
+    expect(adapters.db.realtimeConnections.endConnections).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves realtime connections alone when nothing was revoked or banned', async () => {
+    const user = makeUser(1);
+    const { adapters } = executeAdapters([user], [], {});
+
+    await executeBulkAbuse([user], ONLY('revokeApiKeys'), ACTOR_ID, adapters);
+
+    expect(adapters.db.realtimeConnections.endConnections).not.toHaveBeenCalled();
+  });
+
   it('bans, revokes keys and sessions and claws back the unspent grant, auditing each step', async () => {
     const user = makeUser(1, { currentCredits: 80 });
     const { adapters, store, audit } = executeAdapters(

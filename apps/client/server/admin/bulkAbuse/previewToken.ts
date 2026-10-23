@@ -12,8 +12,15 @@ const TTL_SEC = 15 * 60;
  * Binds a bulk abuse preview to the admin who ran it and to abuseService.bulkAbuseFingerprint of
  * what it showed. Minted by pages/api/admin/abuse/bulk-preview.ts, checked by bulk-execute.ts.
  */
-export function signBulkAbusePreviewToken(adminId: string, fingerprint: string): string {
-  return jwt.sign({ fingerprint, typ: TOKEN_TYPE }, Config.JWT_SECRET, {
+export type BulkAbusePreviewClaims = {
+  adminId: string;
+  fingerprint: string;
+  /** The cohort's upToUserId, so execute re-resolves the same domain users. */
+  upToUserId: string | null;
+};
+
+export function signBulkAbusePreviewToken(adminId: string, fingerprint: string, upToUserId: string | null): string {
+  return jwt.sign({ fingerprint, upToUserId, typ: TOKEN_TYPE }, Config.JWT_SECRET, {
     algorithm: 'HS256',
     audience: AUDIENCE,
     subject: adminId,
@@ -21,12 +28,13 @@ export function signBulkAbusePreviewToken(adminId: string, fingerprint: string):
   });
 }
 
-export function verifyBulkAbusePreviewToken(token: string): { adminId: string; fingerprint: string } | null {
+export function verifyBulkAbusePreviewToken(token: string): BulkAbusePreviewClaims | null {
   try {
     const claims = jwt.verify(token, Config.JWT_SECRET, { algorithms: ['HS256'], audience: AUDIENCE });
     if (typeof claims !== 'object' || claims.typ !== TOKEN_TYPE) return null;
     if (typeof claims.sub !== 'string' || typeof claims.fingerprint !== 'string') return null;
-    return { adminId: claims.sub, fingerprint: claims.fingerprint };
+    const upToUserId = typeof claims.upToUserId === 'string' ? claims.upToUserId : null;
+    return { adminId: claims.sub, fingerprint: claims.fingerprint, upToUserId };
   } catch {
     return null;
   }

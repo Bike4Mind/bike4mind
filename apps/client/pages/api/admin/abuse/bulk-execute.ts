@@ -4,6 +4,7 @@ import {
   normalizeEmailDomain,
   type BulkAbuseExecuteResult,
 } from '@bike4mind/common';
+import { AdminSettings } from '@bike4mind/database/infra';
 import { abuseService } from '@bike4mind/services';
 import { BadRequestError, ConflictError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
@@ -27,13 +28,19 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
     if (!req.user?.isAdmin) throw new ForbiddenError('Unauthorized. Admin access required.');
     const { target, actions, previewToken, reason: rawReason } = BulkAbuseExecuteRequestSchema.parse(req.body);
     await denySelfInBulkAbuseTarget(req, req.user, target);
+    // A domain ban writes blockedEmailDomains, so it needs the settings route's permission too.
+    if (target.kind === 'domain' && actions.ban && !req.ability?.can('update', AdminSettings)) {
+      throw new ForbiddenError('Banning a domain needs permission to edit admin settings.');
+    }
     const reason = parseAdminActionReason(rawReason);
 
     const preview = verifyBulkAbusePreviewToken(previewToken);
     if (!preview || preview.adminId !== req.user.id) {
       throw new BadRequestError('This preview has expired or was not yours. Run the preview again.');
     }
-    const cohort = await abuseService.resolveBulkAbuseCohort(target, req.user.id, bulkAbuseCohortAdapters);
+    const cohort = await abuseService.resolveBulkAbuseCohort(target, req.user.id, bulkAbuseCohortAdapters, {
+      upToUserId: preview.upToUserId ?? undefined,
+    });
     const includedIds = cohort.included.map(user => user.id);
     if (abuseService.bulkAbuseFingerprint(target, actions, includedIds) !== preview.fingerprint) {
       throw new ConflictError('The affected users or actions changed since the preview. Run the preview again.');
@@ -85,6 +92,11 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
         clawedBackCredits: result.clawedBackCredits,
         blockedDomain,
         hasMore: result.hasMore,
+        // A failed user's own entries rolled back with it, so this is the only record of the failure.
+        failed: results
+          .filter(entry => entry.status === 'failed')
+          .map(entry => ({ userId: entry.userId, error: entry.error })),
+        excluded: cohort.excluded.map(({ userId, reason: excludedFor }) => ({ userId, reason: excludedFor })),
       },
     });
 
