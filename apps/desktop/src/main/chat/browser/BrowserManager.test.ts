@@ -29,6 +29,11 @@ const contents = vi.hoisted(() => {
     load: (_url: string): Promise<void> => Promise.resolve(),
     script: (): Promise<unknown> => Promise.resolve(null),
     capture: (..._args: unknown[]): Promise<unknown> => Promise.resolve({ isEmpty: () => true }),
+    /** The DevTools protocol, shared by every contents: what a command answers, and who attached. */
+    cdp: (_method: string, _params?: unknown): Promise<unknown> => Promise.reject(new Error('no DevTools')),
+    debuggerAttached: false,
+    attaches: 0,
+    detaches: 0,
     emit(event: string, ...args: unknown[]) {
       for (const handler of state.handlers.get(event) ?? []) handler({}, ...args);
     },
@@ -74,6 +79,19 @@ vi.mock('electron', () => {
       },
       executeJavaScript: () => contents.script(),
       capturePage: (...args: unknown[]) => contents.capture(...args),
+      debugger: {
+        isAttached: () => contents.debuggerAttached,
+        attach: () => {
+          if (contents.debuggerAttached) throw new Error('Another debugger is already attached');
+          contents.debuggerAttached = true;
+          contents.attaches += 1;
+        },
+        detach: () => {
+          contents.debuggerAttached = false;
+          contents.detaches += 1;
+        },
+        sendCommand: (method: string, params?: unknown) => contents.cdp(method, params),
+      },
       stop: () => {
         contents.stops += 1;
         contents.loadingMainFrame = false;
@@ -130,6 +148,15 @@ vi.mock('electron', () => {
       setVisible = (visible: boolean) => {
         this.visible = visible;
       };
+    },
+    /** A PNG "decodes" to an image that remembers its bytes, at a Retina viewport. */
+    nativeImage: {
+      createFromBuffer: (bytes: Buffer) => ({
+        isEmpty: () => bytes.length === 0,
+        getSize: () => ({ width: 2560, height: 1600 }),
+        resize: ({ width }: { width: number }) => ({ toPNG: () => Buffer.from(`${bytes.toString()}@${width}`) }),
+        toPNG: () => bytes,
+      }),
     },
     session: {
       fromPartition: () => ({
@@ -282,13 +309,16 @@ describe('BrowserManager page deadlines', () => {
     });
   });
 
-  it('bounds a screenshot of a page that never paints', async () => {
+  it('bounds a screenshot of a page that never paints, and lets go of the debugger it attached', async () => {
     const page = await openPage();
-    contents.capture = () => never();
+    contents.cdp = () => never();
+    contents.detaches = 0;
 
     const capturing = expect(page.screenshot()).rejects.toThrow(/did not paint a frame to capture within 15 seconds/);
     await vi.advanceTimersByTimeAsync(15_000);
     await capturing;
+    expect(contents.debuggerAttached).toBe(false);
+    expect(contents.detaches).toBe(1);
   });
 
   it('lists every frame a screenshot would show, the top one first', async () => {
@@ -877,5 +907,108 @@ describe('BrowserManager holding the pane for an overlay', () => {
     manager.setPane(window, 'other', null);
     expect(shown(manager)).toBeUndefined();
     expect(view(page)).toMatchObject({ visible: true, bounds: { x: 0, y: 0, width: 1280, height: 800 } });
+  });
+});
+
+describe('BrowserManager screenshots', () => {
+  const SURFACE_ERROR = 'Current display surface not available for capture';
+  const bounds = { x: 1440, y: 40, width: 560, height: 760 };
+  const frame = {
+    isEmpty: () => false,
+    getSize: () => ({ width: 1120, height: 1520 }),
+    toPNG: () => Buffer.from('pane'),
+  };
+  const png = (text: string) => ({ data: Buffer.from(text).toString('base64') });
+
+  let manager: InstanceType<typeof BrowserManager>;
+  let window: InstanceType<typeof BrowserWindow>;
+  let cdp: ReturnType<typeof vi.fn<(method: string, params?: unknown) => Promise<unknown>>>;
+  const page = () => manager.context('s', async () => undefined).page();
+
+  beforeEach(() => {
+    contents.handlers.clear();
+    contents.url = 'https://example.com/';
+    contents.debuggerAttached = false;
+    contents.attaches = 0;
+    contents.detaches = 0;
+    contents.capture = () => Promise.resolve(frame);
+    cdp = vi.fn(() => Promise.resolve(png('devtools')));
+    contents.cdp = cdp;
+    manager = new BrowserManager();
+    window = new BrowserWindow();
+  });
+
+  it('draws a parked page through DevTools, which needs no display surface, at the tool viewport', async () => {
+    const capture = vi.fn(() => Promise.reject(new Error(SURFACE_ERROR)));
+    contents.capture = capture;
+
+    await expect((await page()).screenshot()).resolves.toEqual(Buffer.from('devtools@1280'));
+    expect(capture).not.toHaveBeenCalled();
+    expect(cdp).toHaveBeenCalledWith('Page.captureScreenshot', { format: 'png' });
+    expect({ attaches: contents.attaches, detaches: contents.detaches }).toEqual({ attaches: 1, detaches: 1 });
+    expect(contents.debuggerAttached).toBe(false);
+  });
+
+  it('captures a page on screen in the pane as before, without the debugger', async () => {
+    const tab = await page();
+    manager.setPane(window, 's', bounds);
+
+    await expect(tab.screenshot()).resolves.toEqual(Buffer.from('pane'));
+    expect(cdp).not.toHaveBeenCalled();
+    expect(contents.attaches).toBe(0);
+  });
+
+  it('falls back to DevTools when the pane has no surface or an empty frame to read', async () => {
+    const tab = await page();
+    manager.setPane(window, 's', bounds);
+
+    contents.capture = () => Promise.reject(new Error(SURFACE_ERROR));
+    await expect(tab.screenshot()).resolves.toEqual(Buffer.from('devtools@1280'));
+    contents.capture = () => Promise.resolve({ isEmpty: () => true });
+    await expect(tab.screenshot()).resolves.toEqual(Buffer.from('devtools@1280'));
+    expect(contents.detaches).toBe(2);
+  });
+
+  it('never calls capturePage on a held page, which would put it back on screen', async () => {
+    const tab = await page();
+    manager.setPane(window, 's', bounds);
+    manager.setPane(window, 's', null);
+    const capture = vi.fn(() => Promise.resolve(frame));
+    contents.capture = capture;
+
+    await expect(tab.screenshot()).resolves.toEqual(Buffer.from('devtools@1280'));
+    expect(capture).not.toHaveBeenCalled();
+  });
+
+  it('says what to do instead when neither capture works, rather than passing on the Chromium error', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const tab = await page();
+      manager.setPane(window, 's', bounds);
+      contents.capture = () => Promise.reject(new Error(SURFACE_ERROR));
+      contents.cdp = () => Promise.reject(new Error('Target closed'));
+
+      const failure = await tab.screenshot().catch((err: Error) => err);
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).message).toMatch(/^Could not capture a screenshot of this page\. browser_snapshot/);
+      expect((failure as Error).message).not.toContain(SURFACE_ERROR);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(SURFACE_ERROR));
+      expect(contents.debuggerAttached).toBe(false);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('says the page rendered nothing when DevTools draws an empty frame', async () => {
+    contents.cdp = () => Promise.resolve({ data: '' });
+    await expect((await page()).screenshot()).rejects.toThrow('The page rendered nothing to capture yet.');
+  });
+
+  it('uses a debugger something else attached, and leaves it attached', async () => {
+    contents.debuggerAttached = true;
+
+    await expect((await page()).screenshot()).resolves.toEqual(Buffer.from('devtools@1280'));
+    expect({ attaches: contents.attaches, detaches: contents.detaches }).toEqual({ attaches: 0, detaches: 0 });
+    expect(contents.debuggerAttached).toBe(true);
   });
 });
