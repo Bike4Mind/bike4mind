@@ -729,6 +729,25 @@ describe('AuthService token refresh', () => {
     service.dispose();
   });
 
+  it('starts no device flow when focus and the sign-in action both adopt the stored session', async () => {
+    const file = memoryFile();
+    const { service, accepted, device } = await signedIn(vi.fn().mockResolvedValue(rotation(1)), file);
+    accepted.clear();
+    await service
+      .getApiClient()
+      ?.get('/api/anything')
+      .catch(() => undefined);
+    await vi.advanceTimersByTimeAsync(0);
+
+    accepted.add('access-7');
+    await new TokenVault(cipher, file, silentLogger).setTokens(HOSTED, storedTokens(7, 30 * 60_000));
+    await Promise.all([service.adoptStoredSession(), service.signIn()]);
+
+    expect(service.getState()).toMatchObject({ status: 'signed-in', reauthRequired: undefined });
+    expect(device.initiateDeviceFlow).not.toHaveBeenCalled();
+    service.dispose();
+  });
+
   it('retries with a token another instance rotated into the vault instead of exchanging', async () => {
     const file = memoryFile();
     const refreshToken = vi.fn();

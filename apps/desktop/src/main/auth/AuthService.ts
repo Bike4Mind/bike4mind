@@ -95,6 +95,7 @@ export class AuthService {
    * only, never logged.
    */
   private rejectedAccessToken: string | null = null;
+  private adopting: Promise<boolean> | null = null;
 
   /**
    * Bumped whenever an in-flight sign-in stops being the current one (cancelled, or the
@@ -598,9 +599,20 @@ export class AuthService {
    * While waiting on re-authentication, carry on with a session another instance sharing the
    * vault signed in or refreshed. Event-driven (window focus, the sign-in action), never on a
    * timer: one small file read, nothing sent to the server unless there is a new token to try.
-   * Resolves true when this instance is signed in again.
+   * Resolves true when this instance is signed in again. Single flight: a click on Sign in in an
+   * unfocused window fires focus too, and the second caller must wait on the first rather than
+   * start a device flow over the session it is adopting.
    */
-  async adoptStoredSession(): Promise<boolean> {
+  adoptStoredSession(): Promise<boolean> {
+    if (!this.adopting) {
+      this.adopting = this.tryAdoptStoredSession().finally(() => {
+        this.adopting = null;
+      });
+    }
+    return this.adopting;
+  }
+
+  private async tryAdoptStoredSession(): Promise<boolean> {
     const url = this.endpointUrl();
     const waiting = () =>
       this.state.reauthRequired === true &&
