@@ -263,6 +263,11 @@ export function setModelCatalogProvider(provider: ModelCatalogProvider | null): 
   _modelCache = null;
 }
 
+/** Whether a catalog provider is wired on THIS module instance; see esmWorkspacePackages.mjs in apps/client. */
+export function hasModelCatalogProvider(): boolean {
+  return _catalogProvider !== null;
+}
+
 /**
  * Backends whose credential is a base URL (the cache key hashes it, since two hosts serve different
  * lists) and whose models exist only in the live listing, so a failed listing hides ids no catalog knows.

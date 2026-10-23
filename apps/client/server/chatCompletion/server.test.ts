@@ -8,6 +8,7 @@ import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { questReplyText, spendCapExceededError } from '@bike4mind/common';
 import { InsufficientCreditsError } from '@bike4mind/services/llm';
 import { QUESTS_NAMESPACE, QUEST_METRICS } from '@bike4mind/infra';
+import { setModelCatalogProvider } from '@bike4mind/llm-adapters';
 
 // SST Resource - the internal shared-secret bearer /process checks, plus the WebSocket
 // management endpoint the ws-completions route streams through.
@@ -124,7 +125,7 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { MONGODB_URI: 'mongodb://x/%STAGE%', STAGE: 'test' },
 }));
 
-import { createApp, drainInFlight, DRAIN_TIMEOUT_MS } from './server';
+import { checkModelCatalogWired, createApp, drainInFlight, DRAIN_TIMEOUT_MS } from './server';
 import { GENERIC_PROCESSING_FAILURE_REPLY } from './internal/route';
 
 const VALID_BODY = { questId: 'q1', sessionId: 's1', userId: 'u1', message: 'hello' };
@@ -372,6 +373,31 @@ describe('ChatCompletion Dockerfile PID 1', () => {
     expect(cmd).toContain('tsx');
     // An ENTRYPOINT would become PID 1 instead of the CMD, hiding a wrapper.
     expect(dockerfileSource).not.toMatch(/^ENTRYPOINT\b/m);
+  });
+
+  it('preloads the hook that keeps one instance per workspace package', () => {
+    const cmdLines = [...dockerfileSource.matchAll(/^CMD\s+(.+)$/gm)].map(m => m[1]);
+    const cmd = JSON.parse(cmdLines[cmdLines.length - 1]) as string[];
+    expect(cmd[cmd.indexOf('./server/chatCompletion/esmWorkspacePackages.mjs') - 1]).toBe('--import');
+  });
+});
+
+describe('checkModelCatalogWired', () => {
+  const logger = { error: vi.fn() };
+  afterEach(() => {
+    setModelCatalogProvider(null);
+    logger.error.mockClear();
+  });
+
+  it('logs an error when the llm-adapters instance completions read has no catalog provider', () => {
+    expect(checkModelCatalogWired(logger)).toBe(false);
+    expect(logger.error).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes once the catalog provider is wired on that instance', () => {
+    setModelCatalogProvider(async () => []);
+    expect(checkModelCatalogWired(logger)).toBe(true);
+    expect(logger.error).not.toHaveBeenCalled();
   });
 });
 
