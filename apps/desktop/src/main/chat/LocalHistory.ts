@@ -52,7 +52,15 @@ export class LocalHistory {
         .map(message => `${message.role === 'user' ? 'User' : 'Assistant'}: ${message.content}`)
         .join('\n')
     );
-    this.put(`session:${session.id}`, 'session', session.id, session.title, '', content, session.updatedAt);
+    this.put(
+      `session:${session.id}`,
+      'session',
+      session.id,
+      safeContent(session.title),
+      '',
+      content,
+      session.updatedAt
+    );
   }
 
   capturePage(sessionId: string, model: BrowserPageModel): void {
@@ -103,8 +111,12 @@ export class LocalHistory {
   }
 
   clear(): LocalHistoryState {
-    this.db.exec('DELETE FROM entries');
-    return { entries: 0 };
+    this.db.prepare('DELETE FROM entries WHERE scope = ?').run(this.scope() ?? '');
+    return this.state();
+  }
+
+  removeSession(sessionId: string): void {
+    this.db.prepare('DELETE FROM entries WHERE session_id = ? AND scope = ?').run(sessionId, this.scope() ?? '');
   }
 
   state(): LocalHistoryState {
@@ -145,9 +157,9 @@ export class LocalHistory {
       );
     this.db
       .prepare(
-        'DELETE FROM entries WHERE rowid IN (SELECT rowid FROM entries ORDER BY captured_at DESC LIMIT -1 OFFSET ?)'
+        'DELETE FROM entries WHERE rowid IN (SELECT rowid FROM entries WHERE scope = ? ORDER BY captured_at DESC LIMIT -1 OFFSET ?)'
       )
-      .run(MAX_ENTRIES);
+      .run(scope, MAX_ENTRIES);
   }
 
   private migrate(): void {

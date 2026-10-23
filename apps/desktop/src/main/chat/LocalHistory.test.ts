@@ -1,3 +1,4 @@
+import { DatabaseSync } from 'node:sqlite';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -60,5 +61,30 @@ describe('LocalHistory', () => {
     expect(history.search('Account B')).toHaveLength(1);
     expect(history.state()).toEqual({ entries: 1 });
     history.close();
+  });
+
+  it('clears and removes only the current scope, and redacts titles', async () => {
+    const path = join(await mkdtemp(join(tmpdir(), 'b4m-history-clear-')), 'history.sqlite');
+    let scope = 'account-a';
+    const history = new LocalHistory(path, () => scope);
+    history.captureSession({ ...session(true), title: 'deploy api_key=sk_live_ABCDEF1234567890' });
+    expect(JSON.stringify(history.search('deploy'))).not.toContain('sk_live_ABCDEF1234567890');
+    scope = 'account-b';
+    history.captureSession({ ...session(true), id: 'other' });
+    history.captureSession({ ...session(true), id: 'keep' });
+    history.removeSession('other');
+    expect(history.state()).toEqual({ entries: 1 });
+    expect(history.clear()).toEqual({ entries: 0 });
+    scope = 'account-a';
+    expect(history.state()).toEqual({ entries: 1 });
+    history.close();
+  });
+
+  it('is not open to a database written by a newer version', async () => {
+    const path = join(await mkdtemp(join(tmpdir(), 'b4m-history-newer-')), 'history.sqlite');
+    const db = new DatabaseSync(path);
+    db.exec('PRAGMA user_version = 99');
+    db.close();
+    expect(() => new LocalHistory(path)).toThrow('newer Bike4Mind version');
   });
 });
