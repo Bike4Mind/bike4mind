@@ -138,7 +138,7 @@ describe('business links admin audit', () => {
     expect(h.audit).toHaveBeenCalledTimes(1);
     expect(h.audit.mock.calls[0][1]).toMatchObject({
       action: 'settings.business_link.imported',
-      target: { kind: 'system', id: 'business-links-import' },
+      target: { kind: 'settings', id: 'business-links-import' },
       details: { created: 1, updated: 1, errors: 1, total: 3 },
     });
   });

@@ -141,7 +141,7 @@ const handler = baseApi().post(
 
       await recordAdminActionFromRequest(req, {
         action: 'settings.business_link.imported',
-        target: { kind: 'system', id: 'business-links-import', displayName: 'business links CSV import' },
+        target: { kind: 'settings', id: 'business-links-import', displayName: 'business links CSV import' },
         summary: `imported business links from CSV (${created} created, ${updated} updated, ${errors} failed)`,
         details: { created, updated, errors, total: parsedRows.length },
       });
