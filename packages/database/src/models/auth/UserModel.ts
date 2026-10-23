@@ -886,6 +886,7 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     userNotes: [UserNoteSchema],
     numReferralsAvailable: { type: Number, default: 0 },
     regInvites: [{ type: Schema.Types.ObjectId, ref: 'User' }],
+    referredByUserId: { type: Schema.Types.ObjectId, ref: 'User', default: null },
     organizationId: { type: Schema.Types.ObjectId, ref: 'Organization' },
     loginRecords: [LoginRecordSchema],
     // reset password
