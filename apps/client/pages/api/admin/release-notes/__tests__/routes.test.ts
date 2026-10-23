@@ -184,6 +184,7 @@ describe('GET /api/admin/release-notes', () => {
     const { error } = await call(listHandler, {
       method: 'GET',
       query: { status: 'hidden' },
+      withheldAdmin: true,
       keyScopes: ['release-notes:write'],
     });
     expect(error?.statusCode).toBe(403);
@@ -195,6 +196,7 @@ describe('GET /api/admin/release-notes', () => {
     const { error, body } = await call(listHandler, {
       method: 'GET',
       query: { tag: 'v2026.10.20.1' },
+      withheldAdmin: true,
       keyScopes: ['release-notes:write'],
     });
     expect(error).toBeUndefined();
@@ -382,6 +384,7 @@ describe('PATCH /api/admin/release-notes/[id] with a release-notes:write key', (
       method: 'PATCH',
       query: { id: ID },
       body: { headline: 'New headline', video: null },
+      withheldAdmin: true,
       keyScopes: ['release-notes:write'],
     });
     expect(error?.statusCode).toBe(403);
@@ -425,6 +428,7 @@ describe('PATCH /api/admin/release-notes/[id] with a release-notes:write key', (
       method: 'PATCH',
       query: { id: ID },
       body: { video },
+      withheldAdmin: true,
       keyScopes: ['release-notes:write'],
     });
     expect(error).toBeUndefined();
@@ -440,6 +444,7 @@ describe('PATCH /api/admin/release-notes/[id] with a release-notes:write key', (
       method: 'PATCH',
       query: { id: ID },
       body: { video: null },
+      withheldAdmin: true,
       keyScopes: ['release-notes:write'],
     });
     expect(error?.statusCode).toBe(404);
@@ -451,6 +456,7 @@ describe('PATCH /api/admin/release-notes/[id] with a release-notes:write key', (
       method: 'PATCH',
       query: { id: ID },
       body: { image: IMAGE },
+      withheldAdmin: true,
       keyScopes: ['release-notes:write'],
     });
     expect(status).toBe(200);
@@ -464,6 +470,7 @@ describe('PATCH /api/admin/release-notes/[id] with a release-notes:write key', (
       method: 'PATCH',
       query: { id: ID },
       body: { video: null, image: IMAGE },
+      withheldAdmin: true,
       keyScopes: ['release-notes:write'],
     });
     expect(error?.statusCode).toBe(400);
@@ -477,6 +484,7 @@ describe('PATCH /api/admin/release-notes/[id] with a release-notes:write key', (
       method: 'PATCH',
       query: { id: ID },
       body: { image: IMAGE },
+      withheldAdmin: true,
       keyScopes: ['release-notes:write'],
     });
     expect(error?.statusCode).toBe(404);
