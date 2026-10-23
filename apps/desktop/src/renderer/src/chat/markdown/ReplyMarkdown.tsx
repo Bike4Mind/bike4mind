@@ -9,6 +9,7 @@ import remarkGfm from 'remark-gfm';
 import type { ChatImageRef } from '@shared/chat';
 import { ExternalLink } from '../ExternalLink';
 import { useImageMenu } from '../ImageContextMenu';
+import { ImageViewer } from '../ImageViewer';
 import { fastRenderer } from './highlightElements';
 import { codeBlockSx, markdownSx } from './markdownSx';
 import { closeOpenFence } from './streamingMarkdown';
@@ -88,6 +89,7 @@ function MarkdownImage({ src, alt, sessionId, ...props }: ComponentProps<'img'> 
   const local = typeof src === 'string' && /^(?:\/|[A-Za-z]:[\\/])/.test(src) ? src : null;
   const [resolved, setResolved] = useState<{ path: string; url: string } | null>(null);
   const [unavailable, setUnavailable] = useState(false);
+  const [viewing, setViewing] = useState(false);
   const localUrl = resolved?.path === local ? resolved.url : null;
 
   useEffect(() => {
@@ -125,21 +127,43 @@ function MarkdownImage({ src, alt, sessionId, ...props }: ComponentProps<'img'> 
       </span>
     );
   }
+  if (localUrl) {
+    const description = alt || 'image';
+    return (
+      <>
+        <Box
+          component="button"
+          type="button"
+          onClick={() => setViewing(true)}
+          aria-label={`View ${description} at full size`}
+          sx={{
+            display: 'block',
+            p: 0,
+            border: 'none',
+            bgcolor: 'transparent',
+            cursor: 'zoom-in',
+            maxWidth: '100%',
+          }}
+          {...menu}
+          data-testid="chat-markdown-image-view-btn"
+        >
+          <img
+            {...props}
+            src={localUrl}
+            alt={alt}
+            onError={() => {
+              setResolved(null);
+              setUnavailable(true);
+            }}
+            data-testid="chat-markdown-image"
+          />
+        </Box>
+        <ImageViewer src={localUrl} alt={description} open={viewing} onClose={() => setViewing(false)} />
+      </>
+    );
+  }
   return (
-    <img
-      {...props}
-      src={localUrl ?? src}
-      alt={alt}
-      onError={() => {
-        if (local) {
-          setResolved(null);
-          setUnavailable(true);
-        }
-      }}
-      tabIndex={menu ? 0 : undefined}
-      {...menu}
-      data-testid="chat-markdown-image"
-    />
+    <img {...props} src={src} alt={alt} tabIndex={menu ? 0 : undefined} {...menu} data-testid="chat-markdown-image" />
   );
 }
 

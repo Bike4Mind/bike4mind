@@ -191,11 +191,22 @@ describe('the image context menu', () => {
     });
     window.b4m.chat.resolveLocalImage = resolveLocalImage;
     const path = '/private/tmp/claude-501/session/scratchpad/testfolder/workspace-tooltip-opaque.png';
-    await render(<ReplyMarkdown sessionId="s1" text={`![Fixed opaque workspace tooltip](${path})`} />);
+    await render(
+      <ImageMenuProvider onAttach={async () => {}}>
+        <ReplyMarkdown sessionId="s1" text={`![Fixed opaque workspace tooltip](${path})`} />
+      </ImageMenuProvider>
+    );
 
     expect(resolveLocalImage).toHaveBeenCalledWith('s1', path);
     expect(byTestId('chat-markdown-image')?.getAttribute('src')).toMatch(/^b4m-media:/);
     expect(byTestId('chat-markdown-image')?.getAttribute('src')).not.toMatch(/localhost|127\.0\.0\.1/);
+
+    await rightClick(byTestId('chat-markdown-image-view-btn')!);
+    expect(byTestId('image-menu-save-btn')).not.toBeNull();
+    await click('image-menu-save-btn');
+
+    await click('chat-markdown-image-view-btn');
+    expect(byTestId('attachment-viewer-image')?.getAttribute('src')).toMatch(/^b4m-media:/);
   });
 
   it('shows loading and unavailable states for a local Markdown image', async () => {
