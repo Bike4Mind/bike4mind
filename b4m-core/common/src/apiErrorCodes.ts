@@ -1,4 +1,5 @@
 export const API_KEY_USER_CAP_ERROR_CODE = 'api_key_user_cap';
+export const API_KEY_TRUST_REQUIRED_ERROR_CODE = 'api_key_trust_required';
 export const AGENT_LIMIT_REACHED_ERROR_CODE = 'agent_limit_reached';
 export const UNKNOWN_MODEL_ERROR_CODE = 'unknown_model';
 export const BILLING_ORGANIZATION_MISMATCH_ERROR_CODE = 'billing_organization_mismatch';
@@ -23,6 +24,8 @@ export const REQUEST_TIMEOUT_ERROR_CODE = 'request_timeout';
 export const API_ERROR_CODES = [
   /** The user must revoke an active API key or wait for one to expire before minting another. */
   API_KEY_USER_CAP_ERROR_CODE,
+  /** The account is not yet trusted to mint (more) API keys; remediation is verifying email, waiting, purchasing or admin approval. */
+  API_KEY_TRUST_REQUIRED_ERROR_CODE,
   /** The user owns as many agents as their tier allows; remediation is deleting one or upgrading. */
   AGENT_LIMIT_REACHED_ERROR_CODE,
   /** The caller cannot afford the request; remediation is buying credits. */

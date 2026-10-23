@@ -19,6 +19,7 @@ import { decideScopeGate, parseStagedScopes, SCOPE_STAGING_ENV_VAR } from '@serv
 import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
 import { resolveRouteTemplate } from '@server/utils/resolveRouteTemplate';
 import { apiKeyGrantsAdmin, withholdAdminRole } from '@server/auth/apiKeyAdminScope';
+import { applyUntrustedRateLimit } from '@server/utils/apiKeyTrust';
 
 type ScopeForbiddenDetail = Pick<z.infer<typeof ScopeForbiddenErrorSchema>, 'required_scopes' | 'also_required_scopes'>;
 
@@ -169,7 +170,10 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScopeValue[], alsoRequiredScop
       req.apiKeyInfo = {
         keyId: validation.keyId!,
         scopes: validation.scopes!,
-        rateLimit: validation.rateLimit!,
+        rateLimit: await applyUntrustedRateLimit(user, {
+          rateLimit: validation.rateLimit!,
+          billingOwnerType: validation.billingOwnerType,
+        }),
         expiresAt: validation.expiresAt,
         productId: validation.productId,
         billingOwnerType: validation.billingOwnerType,

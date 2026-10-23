@@ -54,6 +54,8 @@ const h = vi.hoisted(() => ({
     callbackSigningSecretCreatedAt: new Date('2026-03-01'),
   } as RotateCallbackSigningSecretResponse,
   hasOptiAccess: false,
+  eligibility: { canCreate: true, message: null } as { canCreate: boolean; message: string | null },
+  billingOrgs: [] as { id: string; name: string }[],
 }));
 
 vi.mock('@client/app/hooks/data/opti', () => ({ useOptiAccess: () => h.hasOptiAccess }));
@@ -75,7 +77,8 @@ vi.mock('@client/app/hooks/data/userApiKeys', () => ({
   useRotateUserApiKey: () => ({ mutate: vi.fn(), isPending: false }),
   useRevokeUserApiKey: () => ({ mutate: h.revokeMutate, isPending: false }),
   useDeleteUserApiKey: () => ({ mutate: h.deleteMutate, isPending: false }),
-  useBillingOrganizations: () => ({ data: [], isLoading: false }),
+  useBillingOrganizations: () => ({ data: h.billingOrgs, isLoading: false }),
+  useApiKeyEligibility: () => ({ data: h.eligibility }),
   useRotateCallbackSigningSecret: ({
     onSuccess,
   }: { onSuccess?: (result: RotateCallbackSigningSecretResponse) => void } = {}) => ({
@@ -513,5 +516,55 @@ describe('UserApiKeysTab - Bob scopes', () => {
     const scopes = mintScopes('full');
     expect(scopes).toContain(ApiKeyScope.BOB_READ);
     expect(scopes).toContain(ApiKeyScope.BOB_RUN);
+  });
+});
+
+describe('UserApiKeysTab - API key trust gate', () => {
+  const blocked = { canCreate: false, message: 'Verify your account to create API keys.' };
+
+  beforeEach(() => {
+    h.keys = [activeKey];
+    h.eligibility = { canCreate: true, message: null };
+    h.billingOrgs = [];
+    h.createMutate.mockClear();
+  });
+
+  const openModalAndName = () => {
+    renderTab();
+    fireEvent.click(screen.getByTestId('api-keys-create-btn'));
+    fireEvent.change(screen.getByTestId('api-key-name-input').querySelector('input')!, {
+      target: { value: 'Gated key' },
+    });
+  };
+
+  it('shows no alert and enables submit when the user can create keys', () => {
+    openModalAndName();
+
+    expect(screen.queryByTestId('api-key-trust-alert')).not.toBeInTheDocument();
+    expect(screen.getByTestId('api-key-create-btn')).toBeEnabled();
+  });
+
+  it('disables the main create button when blocked and no organization can be billed', () => {
+    h.eligibility = blocked;
+    renderTab();
+
+    expect(screen.getByTestId('api-keys-create-btn')).toBeDisabled();
+  });
+
+  it('keeps the main create button enabled when blocked but an organization can be billed', () => {
+    h.eligibility = blocked;
+    h.billingOrgs = [{ id: 'org-1', name: 'Acme' }];
+    renderTab();
+
+    expect(screen.getByTestId('api-keys-create-btn')).toBeEnabled();
+  });
+
+  it('shows the alert and disables submit in the modal when blocked and billing a personal account', () => {
+    h.eligibility = blocked;
+    h.billingOrgs = [{ id: 'org-1', name: 'Acme' }];
+    openModalAndName();
+
+    expect(screen.getByTestId('api-key-trust-alert')).toHaveTextContent(blocked.message);
+    expect(screen.getByTestId('api-key-create-btn')).toBeDisabled();
   });
 });

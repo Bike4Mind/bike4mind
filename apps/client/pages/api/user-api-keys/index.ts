@@ -10,6 +10,7 @@ import {
 } from '@server/entitlements/embedKeyEntitlement';
 import { EMBED_WHITELABEL_ENTITLEMENT_KEY } from '@client/lib/entitlements/registry';
 import { logEventSafe } from '@server/utils/analyticsLog';
+import { resolveApiKeyTrust } from '@server/utils/apiKeyTrust';
 import {
   ApiKeyScope,
   CreditHolderType,
@@ -201,6 +202,7 @@ const handler = baseApi()
       ? { userId, billingOwnerType: CreditHolderType.Organization, organizationId }
       : { userId, billingOwnerType: CreditHolderType.User };
     const screenedBranding = await gateEmbedBrandingWrite(brandingOwner, brandingCheck.value);
+    const { assessment: trust } = await resolveApiKeyTrust(req.user);
 
     const newApiKey = await userApiKeyService.createUserApiKey(
       userId,
@@ -232,6 +234,7 @@ const handler = baseApi()
         callerScopes: req.apiKeyInfo ? (req.apiKeyInfo.scopes ?? []) : undefined,
         callerExpiresAt: req.apiKeyInfo?.expiresAt,
         isKnownScope: isKnownApiKeyScope,
+        trust,
       }
     );
 

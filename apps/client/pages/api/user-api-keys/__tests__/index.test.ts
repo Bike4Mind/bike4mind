@@ -97,6 +97,8 @@ vi.mock('@client/app/premium-generated/premiumApiKeyScopes.generated', () => ({
     },
   ],
 }));
+const resolveApiKeyTrust = vi.hoisted(() => vi.fn().mockResolvedValue({ assessment: { status: 'trusted' } }));
+vi.mock('@server/utils/apiKeyTrust', () => ({ resolveApiKeyTrust }));
 
 import { CreditHolderType } from '@bike4mind/common';
 import { resolveApiKeyScopeAccess } from '@server/entitlements/apiKeyScopeAccess';
@@ -707,5 +709,24 @@ describe('POST /api/user-api-keys - contributed scopes', () => {
     const { req, res } = post({ name: 'k', scopes });
     await mockRefs.postHandler!(req, res);
     expect(createUserApiKey).toHaveBeenCalledWith('u1', expect.objectContaining({ scopes }), expect.anything());
+  });
+});
+
+describe('POST /api/user-api-keys - trust gate', () => {
+  beforeEach(() => createUserApiKey.mockClear());
+
+  it("hands the caller's trust assessment to the service, which enforces it", async () => {
+    const assessment = { status: 'untrusted', reason: 'email_unverified' };
+    resolveApiKeyTrust.mockResolvedValueOnce({ assessment });
+    const { req, res } = post({ name: 'k', scopes: ['ai:chat'] });
+
+    await mockRefs.postHandler!(req, res);
+
+    expect(resolveApiKeyTrust).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }));
+    expect(createUserApiKey).toHaveBeenCalledWith(
+      'u1',
+      expect.anything(),
+      expect.objectContaining({ trust: assessment })
+    );
   });
 });
