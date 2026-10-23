@@ -13,15 +13,21 @@ export type ElevenLabsOperation = 'music' | 'sound';
 // The budget is the generator's own fetch deadline, which is already sized under the 60s serving
 // cap (see MUSIC_GENERATION_TIMEOUT_MS) - waiting for capacity spends it rather than extending it.
 // minAttemptMs is the shortest provider call worth starting: a track needs longer than a clip.
+// The budgets are getters so the utils constants are read per call, not at module load: this module is
+// re-exported from @bike4mind/services, and suites that partially mock @bike4mind/utils would fail to load.
 const OPERATIONS = {
   music: {
     limitSetting: 'elevenLabsMusicConcurrencyLimit',
-    budgetMs: MUSIC_GENERATION_TIMEOUT_MS,
+    get budgetMs() {
+      return MUSIC_GENERATION_TIMEOUT_MS;
+    },
     minAttemptMs: 25_000,
   },
   sound: {
     limitSetting: 'elevenLabsSoundConcurrencyLimit',
-    budgetMs: SOUND_GENERATION_TIMEOUT_MS,
+    get budgetMs() {
+      return SOUND_GENERATION_TIMEOUT_MS;
+    },
     minAttemptMs: 15_000,
   },
 } as const;
