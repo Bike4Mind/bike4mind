@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildDlqAlarmSpecs, DLQ_ALARM_DEFAULTS } from '../dlqAlarmSpecs.js';
+import { bindDlqAlarmDimensions, buildDlqAlarmSpecs, DLQ_ALARM_DEFAULTS } from '../dlqAlarmSpecs.js';
 
 const NAMING = { appName: 'b4m', stage: 'production' };
 
@@ -128,5 +128,35 @@ describe('buildDlqAlarmSpecs', () => {
     expect(() => buildDlqAlarmSpecs({ label: '', displayName: 'X', application: 'App' }, NAMING)).toThrow(
       'label is required'
     );
+  });
+});
+
+describe('bindDlqAlarmDimensions', () => {
+  const DIMENSIONS = { QueueName: 'b4m-production-dlq-image-generation' };
+  const [messages, age] = buildDlqAlarmSpecs(
+    { label: 'image-generation', displayName: 'Image Generation', application: 'ImageGeneration' },
+    NAMING
+  );
+
+  it('puts the dimensions at the alarm level for the flat messages alarm', () => {
+    expect(bindDlqAlarmDimensions(messages, DIMENSIONS)).toEqual({ dimensions: DIMENSIONS });
+  });
+
+  it('puts them on every input metric query for the metric-math age alarm', () => {
+    const bound = bindDlqAlarmDimensions(age, DIMENSIONS);
+    if (!('metricQueries' in bound)) throw new Error('expected the age spec to bind metricQueries');
+    expect(bound.metricQueries.map(query => query.metric?.dimensions)).toEqual([
+      DIMENSIONS,
+      DIMENSIONS,
+      undefined, // the expression query reads no metric
+    ]);
+    // Alarm-level dimensions are rejected alongside metricQueries; they belong on the queries.
+    expect(bound).not.toHaveProperty('dimensions');
+  });
+
+  it('leaves the spec it binds untouched', () => {
+    bindDlqAlarmDimensions(age, DIMENSIONS);
+    if (age.kind !== 'age') throw new Error(`expected an age spec, got ${age.kind}`);
+    expect(age.args.metricQueries.map(query => query.metric?.dimensions)).toEqual([undefined, undefined, undefined]);
   });
 });

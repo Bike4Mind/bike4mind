@@ -35,11 +35,12 @@ export {
 export type {
   DlqAlarmDefaults,
   DlqAlarmDescriptor,
-  DlqAlarmNaming,
   DlqAlarmKind,
+  DlqAlarmMetricQuery,
+  DlqAlarmNaming,
   DlqAlarmSpec,
 } from './dlqAlarmSpecs.js';
-export { buildDlqAlarmSpecs, DLQ_ALARM_DEFAULTS } from './dlqAlarmSpecs.js';
+export { bindDlqAlarmDimensions, buildDlqAlarmSpecs, DLQ_ALARM_DEFAULTS } from './dlqAlarmSpecs.js';
 export type {
   EcsServiceHealthAlarmDefaults,
   EcsServiceHealthAlarmDescriptor,

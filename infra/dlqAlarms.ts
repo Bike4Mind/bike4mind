@@ -9,9 +9,10 @@
  *   for 3 consecutive 60s evaluation periods (3 min) before firing
  * - Message age: any message older than 1 hour (3600s) triggers alarm
  *   (single evaluation period — the 1hr threshold already provides built-in delay)
- * - Missing data: 'ignore', which holds the current state, so an SQS datapoint gap cannot
- *   resolve a firing alarm to OK and re-page on the next point. The age alarms score
- *   IF(visible > 0, age, 0) because SQS stops publishing the age metric on an empty queue
+ * - Missing data: 'ignore', which holds the current state, so a range with no SQS datapoint
+ *   cannot resolve a firing alarm to OK and re-page on the next point. The age alarms score
+ *   IF(visible > 0, age, 0) because SQS stops publishing the age metric on an empty queue;
+ *   their one known residual is documented at the age alarms below.
  *
  * Stage-gated: Only deployed to `dev` and `production` stages.
  * Set ENABLE_MONITORING=true to opt in for other stages.
@@ -60,7 +61,7 @@ import {
 import { telemetryAlertRuleDLQ, sessionEnrichmentDLQ } from './eventBus';
 import { emailIngestionQueueDLQ, emailAnalysisQueueDLQ } from './emailIngestion';
 import { emailBatchQueueDLQ, emailJobQueueDLQ } from './emailMarketing';
-import { isMonitoredStage as _isMonitoredStage, buildDlqAlarmSpecs } from '@bike4mind/infra';
+import { isMonitoredStage as _isMonitoredStage, bindDlqAlarmDimensions, buildDlqAlarmSpecs } from '@bike4mind/infra';
 import type { DlqDescriptor } from '@bike4mind/infra';
 
 const MONITORED_STAGES = ['dev', 'production'] as const;
@@ -177,8 +178,10 @@ if (isMonitoredStage) {
     evaluationPeriods: 1,
     threshold: 3600,
     treatMissingData: 'ignore',
-    // SQS stops publishing the age metric once the queue is empty; the IF keeps a drained
-    // DLQ resolvable to OK while a gap with a message present still holds the state.
+    // SQS stops publishing the age metric once the queue is empty; visible is still published
+    // as 0, so the IF scores a drained DLQ 0 and it reaches OK. Residual: a period that hides
+    // only the age while visible > 0 scores 0 too (IF's documented rule), so that partial gap
+    // can still resolve the alarm to OK and re-page on the next age datapoint.
     metricQueries: [
       {
         id: 'visible',
@@ -529,19 +532,9 @@ function createDlqAlarms(dlq: Omit<InfraDlqDescriptor, 'sourceQueue'>) {
   // resource-bound pieces (queue dimensions, SNS actions) are wired here.
   const dimensions = { QueueName: dlq.queue.nodes.queue.name };
   for (const spec of buildDlqAlarmSpecs(dlq, { appName: $app.name, stage: $app.stage })) {
-    // A metric-math alarm carries its dimensions on the input metrics, not the alarm.
-    const bound =
-      spec.kind === 'age'
-        ? {
-            metricQueries: spec.args.metricQueries.map(query =>
-              query.metric ? { ...query, metric: { ...query.metric, dimensions } } : query
-            ),
-          }
-        : { dimensions };
-
     new aws.cloudwatch.MetricAlarm(spec.resourceName, {
       ...spec.args,
-      ...bound,
+      ...bindDlqAlarmDimensions(spec, dimensions),
       alarmActions: [dlqAlarmTopic!.arn],
       okActions: [dlqAlarmTopic!.arn],
     });

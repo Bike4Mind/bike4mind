@@ -1,9 +1,19 @@
 /**
  * Pure spec builder for the standard per-DLQ CloudWatch alarm pair (message
  * count + message age). Extracts the alarm-shape knowledge from each product's
- * dlqAlarms.ts builder loop; the product supplies only the resource-bound
- * pieces (queue dimensions, SNS alarm actions) when constructing
- * `new aws.cloudwatch.MetricAlarm(spec.resourceName, { ...spec.args, ... })`.
+ * dlqAlarms.ts builder loop; the product supplies the SNS alarm actions and
+ * binds its queue by spreading `bindDlqAlarmDimensions(spec, dimensions)`:
+ *
+ *   new aws.cloudwatch.MetricAlarm(spec.resourceName, {
+ *     ...spec.args,
+ *     ...bindDlqAlarmDimensions(spec, { QueueName: dlq.queue.nodes.queue.name }),
+ *     alarmActions: [topic.arn],
+ *     okActions: [topic.arn],
+ *   });
+ *
+ * An age spec is metric math, and CloudWatch rejects the alarm-level metric fields alongside
+ * `metricQueries`, so its dimensions belong on the input queries only - the helper puts them
+ * wherever the spec's kind needs them.
  *
  * Missing data is `'ignore'`, which holds the current alarm state. `'notBreaching'` scored a
  * skipped SQS datapoint as a passing period, so a gap flipped ALARM to OK and the next real
@@ -11,8 +21,15 @@
  * range with no datapoints at all still leaves ALARM for INSUFFICIENT_DATA and back.
  *
  * SQS publishes ApproximateAgeOfOldestMessage only while the queue holds a message, so the age
- * alarm reads it through metric math, `IF(visible > 0, age, 0)`. An empty queue scores 0 and
- * still resolves to OK; a gap while a message is present scores nothing and holds state.
+ * alarm reads it through metric math, `IF(visible > 0, age, 0)`. ApproximateNumberOfMessagesVisible
+ * is still published as 0 for an empty queue, so a drained DLQ scores 0 and reaches OK; a range
+ * with no datapoint at all drops the expression, which `'ignore'` holds.
+ *
+ * Known residual: when a period publishes `visible > 0` but no `age`, IF's documented
+ * missing-data rule scores the true branch 0 - a passing datapoint - so an age-only gap still
+ * walks ALARM -> OK -> ALARM. Holding through that needs `FILL(age, REPEAT)`, whose documented
+ * delayed-publish behaviour can pin an evaluation-periods-1 alarm unless it also moves to M-of-N;
+ * not worth that trade for the narrower partial gap.
  */
 
 export interface DlqAlarmDefaults {
@@ -61,8 +78,6 @@ export interface DlqAlarmNaming {
   stage: string;
 }
 
-export type DlqAlarmKind = 'messages' | 'age';
-
 /** One query of an alarm's metric math (structurally a Pulumi MetricAlarmMetricQuery). */
 export interface DlqAlarmMetricQuery {
   id: string;
@@ -72,7 +87,7 @@ export interface DlqAlarmMetricQuery {
   metric?: {
     namespace: string;
     metricName: string;
-    /** Filled in by the product, which owns the queue. */
+    /** Bound by `bindDlqAlarmDimensions`, because only the product knows its queue. */
     dimensions?: Record<string, string>;
     period: number;
     stat: 'Maximum';
@@ -115,6 +130,26 @@ export type DlqAlarmSpec =
         metricQueries: DlqAlarmMetricQuery[];
       };
     };
+
+/** Derived from the spec union, so a new kind cannot leave this union behind. */
+export type DlqAlarmKind = DlqAlarmSpec['kind'];
+
+/**
+ * Binds the owning queue to the fields a spec's shape keeps its dimensions in: a flat messages
+ * alarm takes alarm-level `dimensions`, a metric-math age alarm takes them on every input metric.
+ * Spread the result into the MetricAlarm args.
+ */
+export function bindDlqAlarmDimensions(
+  spec: DlqAlarmSpec,
+  dimensions: Record<string, string>
+): { dimensions: Record<string, string> } | { metricQueries: DlqAlarmMetricQuery[] } {
+  if (spec.kind === 'messages') return { dimensions };
+  return {
+    metricQueries: spec.args.metricQueries.map(query =>
+      query.metric ? { ...query, metric: { ...query.metric, dimensions } } : query
+    ),
+  };
+}
 
 /**
  * Builds the standard [message-count, message-age] alarm spec pair for one DLQ.
