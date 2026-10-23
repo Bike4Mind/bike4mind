@@ -108,6 +108,23 @@ describe('POST /api/reg-invites/migrate', () => {
     expect(h.findOrg).not.toHaveBeenCalled();
   });
 
+  it('still responds when the best-effort audit write fails and returns null', async () => {
+    h.audit.mockResolvedValueOnce(null);
+    const res = { json: vi.fn() };
+    await h.handler!(
+      {
+        body: { usersData: [{ email: 'a@b.test', name: 'A' }], sendEmail: false },
+        user: { id: 'admin-1', isAdmin: true },
+        ability: {},
+        logger: {},
+      },
+      res
+    );
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ createdUsers: [expect.objectContaining({ email: 'a@b.test' })] })
+    );
+  });
+
   it('does not audit a run that migrated nobody', async () => {
     h.createUser.mockRejectedValue(new Error('boom'));
     await expect(run([{ email: 'a@b.test', name: 'A' }])).rejects.toThrow(/no users were migrated/i);
