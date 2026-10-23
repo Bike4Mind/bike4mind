@@ -10,6 +10,7 @@ const h = vi.hoisted(() => ({
   update: vi.fn(),
   create: vi.fn(),
   claimForSending: vi.fn(),
+  claimForStart: vi.fn(),
   cancelPendingAttempts: vi.fn(),
   sendToQueue: vi.fn(),
 }));
@@ -34,6 +35,7 @@ vi.mock('@bike4mind/database', () => ({
     update: h.update,
     create: h.create,
     claimForSending: h.claimForSending,
+    claimForStart: h.claimForStart,
   },
   emailSendAttemptRepository: { cancelPendingAttempts: h.cancelPendingAttempts },
   withTransaction: (fn: () => Promise<unknown>) => fn(),
@@ -76,12 +78,13 @@ beforeEach(() => {
   h.update.mockImplementation(async (input: Record<string, unknown>) => ({ ...draftJob, ...input }));
   h.create.mockImplementation(async (input: Record<string, unknown>) => ({ id: 'job-2', ...input }));
   h.claimForSending.mockResolvedValue(draftJob);
+  h.claimForStart.mockResolvedValue(draftJob);
   h.cancelPendingAttempts.mockResolvedValue(3);
   h.sendToQueue.mockResolvedValue(undefined);
 });
 
 describe('POST /api/admin/email/jobs/:id/start', () => {
-  it('writes the strict audit after the status change and before the enqueue', async () => {
+  it('writes the strict audit after the claim and before the enqueue', async () => {
     const { req, res } = await call(startHandler, 'POST');
 
     expect(res._getStatusCode()).toBe(200);
@@ -92,16 +95,34 @@ describe('POST /api/admin/email/jobs/:id/start', () => {
       target: { kind: 'settings', id: 'job-1', displayName: 'Launch' },
     });
     expect(h.audit.mock.calls[0][1].details).not.toHaveProperty('subject');
-    expect(h.update.mock.invocationCallOrder[0]).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
+    expect(h.claimForStart).toHaveBeenCalledWith('job-1', { startedBy: 'admin-1' });
+    expect(h.claimForStart.mock.invocationCallOrder[0]).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
     expect(h.audit.mock.invocationCallOrder[0]).toBeLessThan(h.sendToQueue.mock.invocationCallOrder[0]);
   });
 
   it('records a test-mode job at notice severity under its own action', async () => {
-    h.findById.mockResolvedValue({ ...draftJob, isTestMode: true });
+    h.claimForStart.mockResolvedValue({ ...draftJob, isTestMode: true });
 
     await call(startHandler, 'POST');
 
     expect(h.audit.mock.calls[0][1]).toMatchObject({ action: 'email.job.test_started' });
+  });
+
+  it('rejects an already-started job without auditing or enqueuing', async () => {
+    h.claimForStart.mockResolvedValue(null);
+    h.findById.mockResolvedValue({ ...draftJob, status: 'queued' });
+
+    await expect(call(startHandler, 'POST')).rejects.toThrow('Job has already been started');
+
+    expect(h.audit).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('rejects a missing job', async () => {
+    h.claimForStart.mockResolvedValue(null);
+    h.findById.mockResolvedValue(null);
+
+    await expect(call(startHandler, 'POST')).rejects.toThrow('Job not found');
   });
 
   it('sends nothing when the audit write fails', async () => {

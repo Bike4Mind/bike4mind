@@ -1,5 +1,5 @@
 import { emailJobRepository, withTransaction } from '@bike4mind/database';
-import { ApiKeyScope, EmailJobStatus } from '@bike4mind/common';
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
@@ -13,30 +13,29 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
 
   const { id } = req.query as { id: string };
 
-  const job = await emailJobRepository.findById(id);
-  if (!job) {
-    throw new NotFoundError('Job not found');
-  }
+  const actingUserId = req.user.id;
 
-  if (job.status !== EmailJobStatus.DRAFT) {
-    throw new BadRequestError('Job has already been started');
-  }
-
-  // Strict audit shares the status transaction and runs before the enqueue, so a failed audit sends nothing.
-  await withTransaction(async () => {
-    await emailJobRepository.update({
-      id,
-      status: EmailJobStatus.QUEUED,
-      startedBy: req.user!.id,
-    });
+  // Strict audit shares the claim transaction and runs before the enqueue, so a failed audit sends nothing.
+  const job = await withTransaction(async () => {
+    const claimed = await emailJobRepository.claimForStart(id, { startedBy: actingUserId });
+    if (!claimed) return null;
 
     await recordAdminActionFromRequest(req, {
-      action: job.isTestMode ? 'email.job.test_started' : 'email.job.started',
-      target: { kind: 'settings', id, displayName: job.name },
-      summary: `started email job ${job.name}`,
-      details: { templateId: job.templateId, isTestMode: job.isTestMode },
+      action: claimed.isTestMode ? 'email.job.test_started' : 'email.job.started',
+      target: { kind: 'settings', id, displayName: claimed.name },
+      summary: `started email job ${claimed.name}`,
+      details: { templateId: claimed.templateId, isTestMode: claimed.isTestMode },
     });
+
+    return claimed;
   });
+  if (!job) {
+    const existingJob = await emailJobRepository.findById(id);
+    if (!existingJob) {
+      throw new NotFoundError('Job not found');
+    }
+    throw new BadRequestError('Job has already been started');
+  }
 
   // Send to job queue
   await sendToQueue(getSourceQueueUrl('emailJobQueue'), {
