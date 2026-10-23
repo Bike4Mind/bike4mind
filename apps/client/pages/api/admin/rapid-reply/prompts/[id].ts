@@ -203,9 +203,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
     await recordAdminActionFromRequest(req, {
       action: 'settings.rapid_reply_prompt.deleted',
-      target: { kind: 'settings', id, displayName: `Rapid reply prompt ${currentPrompt.name}` },
+      target: {
+        kind: 'settings',
+        id: currentPrompt.parentId || currentPrompt.id,
+        displayName: `Rapid reply prompt ${currentPrompt.name}`,
+      },
       summary: `deleted rapid reply prompt ${currentPrompt.name}`,
-      details: { name: currentPrompt.name, wasActive: currentPrompt.isActive },
+      details: { promptId: id, name: currentPrompt.name, wasActive: currentPrompt.isActive },
     });
 
     return res.json({ success: true, message: 'Rapid reply prompt deleted successfully' });
