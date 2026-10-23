@@ -87,7 +87,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
       summary: `saved changes to version ${version} of system prompt ${promptId}`,
       details: {
         version,
-        changedFields: Object.entries({ content, name, description, category, tags, variables, enabled })
+        fieldsSent: Object.entries({ content, name, description, category, tags, variables, enabled })
           .filter(([, value]) => value !== undefined)
           .map(([field]) => field),
       },
