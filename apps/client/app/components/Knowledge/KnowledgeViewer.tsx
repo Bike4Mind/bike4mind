@@ -1478,7 +1478,9 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
             // On phones the toolbar has too many icon buttons to fit beside the file
             // selector, so stack them (selector on top, controls below) and let the
             // controls row wrap - otherwise download/close overflow off-screen (#457).
-            gridTemplateColumns: isMobile ? '1fr' : '1fr auto',
+            // The selector's floor: globals.css `min-width: 0` lets the controls take every pixel of a
+            // narrow panel and squeeze it to a sliver; with it they wrap instead.
+            gridTemplateColumns: isMobile ? '1fr' : 'minmax(160px, 1fr) auto',
             gap: '1rem',
             width: '100%',
           }}
@@ -1491,7 +1493,7 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
               indicator={
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: '6px', pointerEvents: 'none' }}>
                   {knowledgeItems.length > 1 && (
-                    <Box component="span" fontSize={'80%'} sx={(theme: Theme) => ({ opacity: '0.5' })}>
+                    <Box component="span" fontSize={'80%'} sx={{ opacity: '0.5', whiteSpace: 'nowrap' }}>
                       {knowledgeItems.length} files
                     </Box>
                   )}

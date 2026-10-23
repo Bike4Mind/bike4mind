@@ -304,3 +304,35 @@ describe('ReactArtifactViewer saving a new version', () => {
     expect(versionLabel()).toHaveTextContent('Version 1');
   });
 });
+
+describe('ReactArtifactViewer toolbar on a narrow panel', () => {
+  const solo = reactArtifact('artifact_react_narrow_1_0', 'Narrow', 'export default function N() { return null; }', []);
+
+  it('keeps every action named while its label can collapse to the icon', async () => {
+    renderViewer(solo);
+    await act(async () => {});
+    expect(screen.getByRole('button', { name: 'Enable Edit Mode' })).toHaveAttribute('aria-label', 'Enable Edit Mode');
+
+    await enableEditMode();
+    for (const name of ['Lock', 'Revert', 'Save']) {
+      const button = screen.getByRole('button', { name });
+      expect(button).toHaveAttribute('aria-label', name);
+      expect(button.querySelector('.react-artifact-viewer-toolbar-label')).toHaveTextContent(name);
+    }
+  });
+
+  it('wraps the toolbar and hides the action labels when the header is narrow', () => {
+    renderViewer(solo);
+    const header = screen.getByTestId('react-artifact-viewer-header');
+    const headerStyle = getComputedStyle(header);
+    expect(headerStyle.flexWrap).toBe('wrap');
+    expect(headerStyle.getPropertyValue('container-type')).toBe('inline-size');
+
+    const css = Array.from(document.querySelectorAll('style'))
+      .map(style => style.textContent ?? '')
+      .join('\n');
+    const compactRule = css.match(/@container \(max-width: ?720px\)\{[^@]*\}\}/)?.[0] ?? '';
+    expect(compactRule).toMatch(/\.react-artifact-viewer-toolbar-label[^{]*\{display:none;\}/);
+    expect(compactRule).toContain('.artifact-version-dropdown-label');
+  });
+});
