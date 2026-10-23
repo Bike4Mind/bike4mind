@@ -10,7 +10,7 @@ import type { EmbeddingModelCapabilities } from './types';
 const VOYAGE_SHORTENABLE_DIMENSIONS = { kind: 'discrete', native: 1024, values: [256, 512, 1024, 2048] } as const;
 
 // Ollama embedders run on the operator's own hardware: an explicit $0 rate, not null, so cost settlement stays quiet.
-const OLLAMA_PRICING = { usdPerMillionTokens: 0 };
+const OLLAMA_PRICING = { usdPerMillionTokens: 0 } as const;
 
 // Ollama maxInputTokens is kept at a retrieval size (2048 for Qwen3, not its 32k): it sizes chunks and Ollama's
 // num_ctx (OllamaEmbeddingService), and a large window balloons embedder VRAM for no RAG gain.
