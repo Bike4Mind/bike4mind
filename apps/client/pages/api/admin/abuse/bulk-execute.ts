@@ -23,7 +23,7 @@ import { verifyBulkAbusePreviewToken } from '@server/admin/bulkAbuse/previewToke
  * token exactly, so an admin can only execute what they were shown. Each user is its own
  * transaction: failures are reported per user and the rest continue.
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
+const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }).post(
   asyncHandler(async (req, res) => {
     if (!req.user?.isAdmin) throw new ForbiddenError('Unauthorized. Admin access required.');
     const { target, actions, previewToken, reason: rawReason } = BulkAbuseExecuteRequestSchema.parse(req.body);
