@@ -57,7 +57,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       if (data.organizationId) await assertOrganizationExists(data.organizationId);
       // Only a changed plan is checked, so an admin can still edit or disable a rule whose plan
       // was removed from the catalog after it was saved.
-      // Also the "before" side of the audit diff.
+      // Also the "before" side of the audit diff. Read outside the transaction, so a concurrent PUT
+      // can leave `before` stale; acceptable for a last-writer-wins edit.
       const stored = await partnerSignupRuleRepository.findById(id);
       if (data.subscription && stored?.subscription?.priceId !== data.subscription.priceId) {
         assertKnownSubscriptionPlan(data.subscription);
