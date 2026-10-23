@@ -82,14 +82,7 @@ function BranchFilter({
 /** The controller plus what the chips currently say; see `describeChipRow`. */
 type ChipBinding = ProjectBindingController & { chips: ChipRowState };
 
-/**
- * The height every control in this row is drawn at.
- *
- * Set by the branch pill, the one control here whose height is content-driven rather than
- * declared: an 18px body-xs line inside a Joy button's 4px block padding, plus the pill's own
- * border. Every Joy `sm` default lands under it - a Chip is 20px, an IconButton 24 - so each
- * control is pinned to this number instead of left to find its own.
- */
+/** Height of granted-folder chips in non-Code conversations, in px. */
 const ROW_HEIGHT = 28;
 
 /** Joy's `sm` Chip, used only for granted folders in non-Code conversations. */
