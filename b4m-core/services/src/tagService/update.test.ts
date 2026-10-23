@@ -389,8 +389,8 @@ describe('tagService - update', () => {
       expect(mockTagRepo.update).toHaveBeenCalledWith(expect.objectContaining({ name: atCap }));
     });
 
-    // The client PUTs the whole tag, so a colour edit re-sends the stored name. Tag creation sets no
-    // cap, so an existing over-long tag must still be editable.
+    // The client PUTs the whole tag, so a colour edit re-sends the stored name. Tags created before
+    // create was capped can be over-long and must still be editable.
     it('still allows a colour-only edit of a tag whose stored name is already over the cap', async () => {
       const longName = 'x'.repeat(MAX_LAKE_FILE_TAG_NAME_LENGTH + 1);
       (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc({ name: longName }));
@@ -411,6 +411,16 @@ describe('tagService - update', () => {
         `cannot be longer than ${MAX_LAKE_FILE_TAG_NAME_LENGTH} characters`
       );
       expect(mockFabFileRepo.updateTagsByUserId).not.toHaveBeenCalled();
+      expect(mockTagRepo.update).not.toHaveBeenCalled();
+    });
+
+    // UTF-16 code units, the same unit as the other lake tag-name caps: 66 emoji are 132 units.
+    it('measures the cap in UTF-16 code units, not code points', async () => {
+      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc({ name: 'invoices' }));
+
+      await expect(update(userId, { id: existingTagId, name: '\u{1F600}'.repeat(66) }, adapters)).rejects.toThrow(
+        `cannot be longer than ${MAX_LAKE_FILE_TAG_NAME_LENGTH} characters`
+      );
       expect(mockTagRepo.update).not.toHaveBeenCalled();
     });
 
