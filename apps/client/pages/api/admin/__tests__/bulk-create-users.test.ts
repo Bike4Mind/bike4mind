@@ -70,7 +70,13 @@ describe('POST /api/admin/bulk-create-users', () => {
         expect.objectContaining({
           action: 'user.bulk_created',
           target: expect.objectContaining({ kind: 'system', id: 'bulk-create-users' }),
-          details: { count: 2, failedCount: 1, createdUserIds: expect.arrayContaining(['new-1', 'new-2']) },
+          details: {
+            count: 2,
+            failedCount: 1,
+            createdUserIds: expect.arrayContaining(['new-1', 'new-2']),
+            startingCreditsTotal: 0,
+            startingCreditsByUserId: { 'new-1': 0, 'new-2': 0 },
+          },
         })
       );
     });
@@ -90,6 +96,31 @@ describe('POST /api/admin/bulk-create-users', () => {
       };
       expect(details.count).toBe(101);
       expect(details.createdUserIds).toHaveLength(100);
+    });
+
+    it('counts a row that fails after creation in failedCount', async () => {
+      h.publish.mockRejectedValueOnce(new Error('publish failed'));
+
+      await h.handler!(makeReq([{ email: 'a@b.test' }]), okRes());
+
+      expect(h.recordAdminAction).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ details: expect.objectContaining({ count: 1, failedCount: 1 }) })
+      );
+    });
+
+    it('records the starting credits granted, in total and per audited user', async () => {
+      h.createUser
+        .mockResolvedValueOnce({ id: 'new-1', email: 'a@b.test', name: 'a', storageLimit: 1000 })
+        .mockResolvedValueOnce({ id: 'new-2', email: 'c@b.test', name: 'c', storageLimit: 1000 });
+
+      await h.handler!(makeReq([{ email: 'a@b.test', startingCredits: 50 }, { email: 'c@b.test' }]), okRes());
+
+      const { details } = h.recordAdminAction.mock.calls[0][1] as {
+        details: { startingCreditsTotal: number; startingCreditsByUserId: Record<string, number> };
+      };
+      expect(details.startingCreditsTotal).toBe(50);
+      expect(details.startingCreditsByUserId).toEqual({ 'new-1': 50, 'new-2': 0 });
     });
 
     it('records nothing when no row was created', async () => {

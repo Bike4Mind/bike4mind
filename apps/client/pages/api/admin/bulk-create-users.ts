@@ -63,6 +63,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
     }
 
     const createdUserIds: string[] = [];
+    const startingCreditsById = new Map<string, number>();
     const results = await Promise.all(
       users.map(async userData => {
         try {
@@ -110,6 +111,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
 
           await userRepository.update({ id: newUser.id, storageLimit: newUser.storageLimit, tags: newUser.tags });
           createdUserIds.push(newUser.id);
+          startingCreditsById.set(newUser.id, validatedData.startingCredits ?? 0);
 
           const brand = process.env.APP_NAME || '';
           const logoUrl = getLogoUrl();
@@ -186,14 +188,17 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
     // Rows commit independently and their invites are already sent, so there is no single write to
     // wrap; one best-effort entry covers the batch so a failed audit write cannot 500 a created batch.
     if (createdUserIds.length > 0) {
+      const auditedIds = createdUserIds.slice(0, AUDITED_USER_ID_LIMIT);
       await recordAdminActionFromRequest(req, {
         action: 'user.bulk_created',
         target: { kind: 'system', id: 'bulk-create-users', displayName: 'Bulk user import' },
         summary: `bulk created ${createdUserIds.length} user(s)`,
         details: {
           count: createdUserIds.length,
-          failedCount: results.length - createdUserIds.length,
-          createdUserIds: createdUserIds.slice(0, AUDITED_USER_ID_LIMIT),
+          failedCount: results.filter(r => !r.success).length,
+          createdUserIds: auditedIds,
+          startingCreditsTotal: [...startingCreditsById.values()].reduce((sum, credits) => sum + credits, 0),
+          startingCreditsByUserId: Object.fromEntries(auditedIds.map(id => [id, startingCreditsById.get(id) ?? 0])),
         },
       });
     }
