@@ -310,6 +310,16 @@ describe('POST /api/auth/refreshToken - opaque token rotation', () => {
       expect(cookies.some(c => c.startsWith('__Host-b4m_rt='))).toBe(false);
     });
 
+    it('rejects a bare-name cookie whose session no longer exists', async () => {
+      mockFindBySid.mockResolvedValue(null);
+
+      const { outcome, cookies } = await refresh();
+
+      expect(outcome).toMatchObject({ name: 'UnauthorizedError' });
+      expect(mockRotateSession).not.toHaveBeenCalled();
+      expect(cookies.some(c => c.startsWith('__Host-b4m_rt='))).toBe(false);
+    });
+
     it('rejects a bare-name cookie once the acceptance window has closed', async () => {
       vi.setSystemTime(new Date('2026-11-30T00:00:00Z'));
       mockFindBySid.mockResolvedValue({ sid: 'sid', createdAt: new Date('2026-10-01T00:00:00Z') });

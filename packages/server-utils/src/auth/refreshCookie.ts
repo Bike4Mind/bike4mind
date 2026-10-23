@@ -40,7 +40,8 @@ const HOST_PREFIX = '__Host-';
 const LEGACY_COOKIE_PATH = '/api';
 
 /** Any subdomain can write the bare name, so it is honored only for sessions that predate the prefix,
- *  and not at all after the second date. */
+ *  and not at all after the second date. The cutoff must not precede the production deploy, or
+ *  sessions created in between are logged out on their next refresh. */
 export const LEGACY_REFRESH_COOKIE_SESSION_CUTOFF = new Date('2026-10-30T00:00:00Z');
 export const LEGACY_REFRESH_COOKIE_ACCEPTED_UNTIL = new Date('2026-11-30T00:00:00Z');
 
