@@ -44,5 +44,6 @@ describe('hasPublishedEmbeddingRate', () => {
   it('is false for a catalog model without a rate and for an unknown id', () => {
     expect(hasPublishedEmbeddingRate(VoyageAIEmbeddingModel.VOYAGE_FINANCE_3)).toBe(false);
     expect(hasPublishedEmbeddingRate('made-up-embedding-model')).toBe(false);
+    expect(hasPublishedEmbeddingRate('constructor')).toBe(false);
   });
 });

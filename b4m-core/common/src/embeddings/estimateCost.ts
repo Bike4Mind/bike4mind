@@ -2,7 +2,9 @@ import type { SupportedEmbeddingModel } from '../schemas/embedding';
 import { EMBEDDING_MODEL_CATALOG } from './catalog';
 
 const usdPerTokenOf = (model: string): number | undefined => {
-  const pricing = EMBEDDING_MODEL_CATALOG[model as SupportedEmbeddingModel]?.pricing;
+  // hasOwn: an id like 'constructor' must not resolve to an Object.prototype member.
+  if (!Object.hasOwn(EMBEDDING_MODEL_CATALOG, model)) return undefined;
+  const { pricing } = EMBEDDING_MODEL_CATALOG[model as SupportedEmbeddingModel];
   return pricing ? pricing.usdPerMillionTokens / 1_000_000 : undefined;
 };
 
