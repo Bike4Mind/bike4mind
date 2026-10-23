@@ -201,7 +201,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'org.partner_signup_rule.updated': { category: 'access', severity: 'notice', write: 'strict' },
   'org.partner_signup_rule.deleted': { category: 'access', severity: 'notice', write: 'strict' },
   'org.partner_signup_rule.backfilled': { category: 'access', severity: 'notice', write: 'bestEffort' },
-  'user.reg_invite.migrated': { category: 'account', severity: 'critical', write: 'bestEffort' },
+  'user.accounts.migrated': { category: 'account', severity: 'critical', write: 'bestEffort' },
   'user.reg_invite.updated': { category: 'access', severity: 'notice', write: 'strict' },
   'user.reg_invite.created': { category: 'access', severity: 'notice', write: 'strict' },
   'user.waitlist_subscriber.deleted': { category: 'support', severity: 'info', write: 'bestEffort' },

@@ -82,7 +82,7 @@ describe('POST /api/reg-invites/migrate', () => {
     expect(h.audit).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
-        action: 'user.reg_invite.migrated',
+        action: 'user.accounts.migrated',
         target: { kind: 'system', id: 'reg_invite_migration', displayName: 'user migration' },
         details: expect.objectContaining({ requested: 2, migrated: 1, failed: 1 }),
       })
