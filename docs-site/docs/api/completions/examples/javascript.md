@@ -28,7 +28,7 @@ const b4m = createClient({
 await withRetry(async () => {
   let text = ''; // Reset partial output on every attempt
   for await (const event of b4m.completions({
-    model: 'claude-sonnet-5-5',
+    model: 'claude-sonnet-5',
     messages: [{ role: 'user', content: 'Hello!' }],
   })) {
     if (event.type === 'content') text += event.text;
@@ -110,6 +110,8 @@ export async function streamCompletion(
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
+  let stopReason;
+  let requestId;
 
   try {
     while (true) {
@@ -123,7 +125,12 @@ export async function streamCompletion(
       for (const line of lines) {
         if (!line.startsWith('data: ')) continue;
         const data = line.slice(6).trim();
-        if (data === '[DONE]') return;
+        if (data === '[DONE]') {
+          if (stopReason === 'max_tokens') {
+            throw new CompletionError('Reply truncated: max_tokens reached', { code: 'max_tokens', requestId });
+          }
+          return;
+        }
 
         let event;
         try {
@@ -131,6 +138,8 @@ export async function streamCompletion(
         } catch {
           throw new CompletionError(`Malformed stream event: ${data}`);
         }
+        if (event.requestId) requestId = event.requestId;
+        if (typeof event.stopReason === 'string') stopReason = event.stopReason;
 
         // The HTTP status is already 200, so a failure arrives as an event
         if (event.type === 'error') {
@@ -165,7 +174,7 @@ import { streamCompletion } from './b4m-stream.js';
 
 try {
   await streamCompletion(
-    { model: 'claude-sonnet-5-5', messages: [{ role: 'user', content: 'Write a haiku about coding' }] },
+    { model: 'claude-sonnet-5', messages: [{ role: 'user', content: 'Write a haiku about coding' }] },
     (event) => {
       if (event.type === 'content') process.stdout.write(event.text);
     },
@@ -266,11 +275,11 @@ export class B4MCompletionClient {
 // Usage
 const client = new B4MCompletionClient(process.env.B4M_API_KEY!);
 
-await client.stream('claude-sonnet-5-5', [{ role: 'user', content: 'Hello!' }], { max_tokens: 1024 }, (event) => {
+await client.stream('claude-sonnet-5', [{ role: 'user', content: 'Hello!' }], { max_tokens: 1024 }, (event) => {
   if (event.type === 'content') process.stdout.write(event.text!);
 });
 
-console.log(await client.complete('claude-sonnet-5-5', [{ role: 'user', content: 'What is 2+2?' }]));
+console.log(await client.complete('claude-sonnet-5', [{ role: 'user', content: 'What is 2+2?' }]));
 ```
 
 ---
@@ -323,7 +332,7 @@ interface Message {
   content: string;
 }
 
-export function useCompletion({ model = 'claude-sonnet-5-5', endpoint = '/api/chat' } = {}) {
+export function useCompletion({ model = 'claude-sonnet-5', endpoint = '/api/chat' } = {}) {
   const [response, setResponse] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -393,7 +402,7 @@ async function completionWithTools(apiKey: string, userQuery: string) {
     let responseText = '';
     let thinking: unknown[] = [];
 
-    await streamCompletion({ model: 'claude-sonnet-5-5', messages, tools }, (event) => {
+    await streamCompletion({ model: 'claude-sonnet-5', messages, tools }, (event) => {
       if (event.type === 'content' || event.type === 'tool_use') responseText += event.text;
       if (event.type === 'tool_use') toolCalls = event.tools ?? [];
       if (event.thinking) thinking = event.thinking;
@@ -518,7 +527,7 @@ client.on('complete', () => process.stdout.write(displayedText));
 client.on('usage', (usage) => console.log('\nTokens:', usage));
 client.on('failure', (error) => console.error('Error:', error.message));
 
-await client.complete('claude-sonnet-5-5', [{ role: 'user', content: 'Hello!' }]);
+await client.complete('claude-sonnet-5', [{ role: 'user', content: 'Hello!' }]);
 ```
 
 The event is named `failure` because Node throws on an `EventEmitter` `'error'` event that has no listener.

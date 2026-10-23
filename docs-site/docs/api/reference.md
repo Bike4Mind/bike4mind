@@ -40,7 +40,7 @@ curl https://app.bike4mind.com/api/agents \
 
 Errors use standard HTTP statuses. See [Error Handling](./errors.md). Running out of credits is a 422 with `errorCode: "insufficient_credits"` (never 402).
 
-A 403 means missing permissions or scopes.
+A 403 with `required_scopes` means the key lacks a scope. A 403 without it means the account is suspended or under a dispute: contact support.
 
 ## Real-time updates
 

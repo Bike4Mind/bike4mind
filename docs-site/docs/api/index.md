@@ -40,7 +40,7 @@ Bike4Mind exposes two API surfaces - pick the one that fits your use case:
 curl -N -X POST https://app.bike4mind.com/api/ai/v1/completions \
   -H "Authorization: Bearer $B4M_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"model": "claude-sonnet-5-5", "messages": [{"role": "user", "content": "Hello!"}]}'
+  -d '{"model": "claude-sonnet-5", "messages": [{"role": "user", "content": "Hello!"}]}'
 ```
 
 The response is a stream of server-sent events. For every field and status code, see the [API reference](https://app.bike4mind.com/api/v1/docs).

@@ -106,7 +106,7 @@ curl -X POST https://app.bike4mind.com/api/ai/v1/completions \
   -H "Content-Type: application/json" \
   --no-buffer \
   -d '{
-    "model": "claude-sonnet-5-5",
+    "model": "claude-sonnet-5",
     "messages": [
       {
         "role": "user",
@@ -306,7 +306,7 @@ async function streamWithThinking(messages) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: 'claude-sonnet-5-5',
+      model: 'claude-sonnet-5',
       messages: messages,
       max_tokens: 4000,
       options: { thinking: { enabled: true, budget_tokens: 2048 } },
@@ -471,7 +471,7 @@ function trackTokenUsage(event) {
 3. **No exposed blocks** - Not every response returns readable thinking metadata
 
 **Solutions:**
-- Send `options.thinking.enabled: true` and use a model that can think (`claude-sonnet-5-5`, etc.)
+- Send `options.thinking.enabled: true` and use a model that can think (`claude-sonnet-5`, etc.)
 - Try a more complex query that requires reasoning
 
 ### Too Much Thinking

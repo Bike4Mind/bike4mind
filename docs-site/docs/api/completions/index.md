@@ -26,7 +26,7 @@ curl -X POST https://app.bike4mind.com/api/ai/v1/completions \
   -H "Content-Type: application/json" \
   --no-buffer \
   -d '{
-    "model": "claude-sonnet-5-5",
+    "model": "claude-sonnet-5",
     "messages": [
       {"role": "user", "content": "Hello, world!"}
     ]
@@ -71,7 +71,7 @@ curl -X POST https://app.bike4mind.com/api/ai/v1/completions \
   -H "Content-Type: application/json" \
   --no-buffer \
   -d '{
-    "model": "claude-sonnet-5-5",
+    "model": "claude-sonnet-5",
     "messages": [
       {"role": "user", "content": "What is 2+2?"}
     ]
@@ -111,7 +111,7 @@ The minimal request requires:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `model` | string | Model identifier (e.g., `"claude-sonnet-5-5"`) |
+| `model` | string | Model identifier (e.g., `"claude-sonnet-5"`) |
 | `messages` | array | Conversation history with role and content |
 
 **Message structure:**

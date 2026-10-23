@@ -58,7 +58,7 @@ for (const [rule, bad, good] of cases) {
 const apiFindings = (text, path = 'api/x.md') => scanText(text, path).map((f) => f.rule);
 
 for (const [bad, good] of [
-  ['use claude-3-5-sonnet', 'use claude-sonnet-5-5'],
+  ['use claude-3-5-sonnet', 'use claude-sonnet-5'],
   ['use claude-3-opus', 'use claude-opus-4'],
   ['use gpt-3.5-turbo', 'use gpt-4o'],
   ['use gemini-pro', 'use gemini-2.5-pro'],

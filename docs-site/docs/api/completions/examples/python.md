@@ -113,10 +113,17 @@ def stream_completion(
         if not response.ok:
             raise http_error(response.status_code, response.text, response.headers.get("Retry-After"))
 
+        stop_reason = None
+        request_id = None
         for sse in SSEClient(response).events():
             if sse.data == "[DONE]":
+                if stop_reason == "max_tokens":
+                    raise CompletionError("Reply truncated: max_tokens reached", code="max_tokens", request_id=request_id)
                 return
-            on_event(parse_event(sse.data, response.status_code))
+            event = parse_event(sse.data, response.status_code)
+            request_id = event.get("requestId") or request_id
+            stop_reason = event.get("stopReason") or stop_reason
+            on_event(event)
 
         raise CompletionError("Stream ended without [DONE] or an error event")
 ```
@@ -136,7 +143,7 @@ def print_text(event):
 
 stream_completion(
     os.environ["B4M_API_KEY"],
-    {"model": "claude-sonnet-5-5", "messages": [{"role": "user", "content": "Write a haiku about Python"}]},
+    {"model": "claude-sonnet-5", "messages": [{"role": "user", "content": "Write a haiku about Python"}]},
     print_text,
 )
 ```
@@ -227,7 +234,7 @@ class B4MCompletionClient:
 if __name__ == "__main__":
     client = B4MCompletionClient(os.environ["B4M_API_KEY"])
     try:
-        print(client.complete("claude-sonnet-5-5", [{"role": "user", "content": "What is 2+2?"}]))
+        print(client.complete("claude-sonnet-5", [{"role": "user", "content": "What is 2+2?"}]))
     finally:
         client.close()
 ```
@@ -285,7 +292,7 @@ def completion_with_tools(api_key: str, user_query: str) -> str:
                 thinking = event["thinking"]
 
         stream_completion(
-            api_key, {"model": "claude-sonnet-5-5", "messages": messages, "tools": TOOLS}, handle_event
+            api_key, {"model": "claude-sonnet-5", "messages": messages, "tools": TOOLS}, handle_event
         )
 
         if not tool_calls:
@@ -368,6 +375,8 @@ class AsyncB4MCompletionClient:
             # An incremental decoder keeps a multibyte character that is split across chunks intact
             decoder = codecs.getincrementaldecoder("utf-8")()
             buffer = ""
+            stop_reason = None
+            request_id = None
 
             async for chunk in response.content.iter_any():
                 buffer += decoder.decode(chunk)
@@ -379,8 +388,15 @@ class AsyncB4MCompletionClient:
                             continue
                         data = line[6:].strip()
                         if data == "[DONE]":
+                            if stop_reason == "max_tokens":
+                                raise CompletionError(
+                                    "Reply truncated: max_tokens reached", code="max_tokens", request_id=request_id
+                                )
                             return
-                        on_event(parse_event(data, response.status))
+                        event = parse_event(data, response.status)
+                        request_id = event.get("requestId") or request_id
+                        stop_reason = event.get("stopReason") or stop_reason
+                        on_event(event)
 
         raise CompletionError("Stream ended without [DONE] or an error event")
 
@@ -402,7 +418,7 @@ class AsyncB4MCompletionClient:
 async def main():
     async with AsyncB4MCompletionClient(os.environ["B4M_API_KEY"]) as client:
         results = await asyncio.gather(*[
-            client.complete("claude-sonnet-5-5", [{"role": "user", "content": f"Count to {i}"}])
+            client.complete("claude-sonnet-5", [{"role": "user", "content": f"Count to {i}"}])
             for i in range(1, 4)
         ])
         for i, result in enumerate(results, 1):
@@ -485,7 +501,7 @@ if __name__ == "__main__":
         os.environ["B4M_API_KEY"], requests_per_minute=int(os.environ["B4M_REQUESTS_PER_MINUTE"])
     )
     try:
-        print(client.complete("claude-sonnet-5-5", [{"role": "user", "content": "Hello!"}]))
+        print(client.complete("claude-sonnet-5", [{"role": "user", "content": "Hello!"}]))
     finally:
         client.close()
 ```

@@ -173,7 +173,7 @@ const response = await fetch('https://app.bike4mind.com/api/ai/v1/completions', 
     'Content-Type': 'application/json',
   },
   body: JSON.stringify({
-    model: 'claude-sonnet-5-5',
+    model: 'claude-sonnet-5',
     messages: [
       {
         role: 'user',
@@ -251,7 +251,7 @@ const followUpResponse = await fetch('https://app.bike4mind.com/api/ai/v1/comple
     'Content-Type': 'application/json',
   },
   body: JSON.stringify({
-    model: 'claude-sonnet-5-5',
+    model: 'claude-sonnet-5',
     messages: [
       {
         role: 'user',

@@ -34,7 +34,7 @@ X-API-Key: b4m_live_xxxxxxxxxxxx
 curl -X POST https://app.bike4mind.com/api/ai/v1/completions \
   -H "Authorization: Bearer b4m_live_xxxxxxxxxxxx" \
   -H "Content-Type: application/json" \
-  -d '{"model": "claude-sonnet-5-5", "messages": [...]}'
+  -d '{"model": "claude-sonnet-5", "messages": [...]}'
 ```
 
 ### 2. JWT Token (Fallback)
@@ -53,7 +53,7 @@ Authorization: Bearer <jwt-token>
 curl -X POST https://app.bike4mind.com/api/ai/v1/completions \
   -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." \
   -H "Content-Type: application/json" \
-  -d '{"model": "claude-sonnet-5-5", "messages": [...]}'
+  -d '{"model": "claude-sonnet-5", "messages": [...]}'
 ```
 
 ---
@@ -340,7 +340,8 @@ For some invalid keys the `error` text is more specific, for example `Invalid AP
 ```
 
 **Causes:**
-- API key missing required scopes (`ai:generate` or `ai:chat`)
+- API key missing required scopes (`ai:generate` or `ai:chat`); the body includes `required_scopes`
+- If the body has no `required_scopes`, the account is suspended or under a dispute. Contact support; retrying or changing scopes will not help
 
 **Solutions:**
 1. Open the Profile menu -> More -> API Keys
@@ -361,7 +362,7 @@ curl -X POST https://app.bike4mind.com/api/ai/v1/completions \
   -H "Content-Type: application/json" \
   --no-buffer \
   -d '{
-    "model": "claude-sonnet-5-5",
+    "model": "claude-sonnet-5",
     "messages": [{"role": "user", "content": "test"}]
   }'
 ```
@@ -388,7 +389,7 @@ async function testAuth(apiKey) {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-5-5',
+        model: 'claude-sonnet-5',
         messages: [{ role: 'user', content: 'test' }]
       })
     });
@@ -421,7 +422,7 @@ def test_auth(api_key):
                 'Content-Type': 'application/json',
             },
             json={
-                'model': 'claude-sonnet-5-5',
+                'model': 'claude-sonnet-5',
                 'messages': [{'role': 'user', 'content': 'test'}]
             },
             stream=True

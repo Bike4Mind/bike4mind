@@ -33,7 +33,7 @@ curl -X POST https://app.bike4mind.com/api/ai/v1/completions \
   --no-buffer \
   -w "\nHTTP %{http_code}\n" \
   -d '{
-    "model": "claude-sonnet-5-5",
+    "model": "claude-sonnet-5",
     "messages": [
       {"role": "user", "content": "Hello!"}
     ]
@@ -64,7 +64,7 @@ curl -X POST https://app.bike4mind.com/api/ai/v1/completions \
   -H "Content-Type: application/json" \
   --no-buffer \
   -d '{
-    "model": "claude-sonnet-5-5",
+    "model": "claude-sonnet-5",
     "messages": [
       {"role": "user", "content": "Write a short poem"}
     ],
@@ -85,7 +85,7 @@ curl -X POST https://app.bike4mind.com/api/ai/v1/completions \
   -H "Content-Type: application/json" \
   --no-buffer \
   -d '{
-    "model": "claude-sonnet-5-5",
+    "model": "claude-sonnet-5",
     "messages": [
       {"role": "user", "content": "What is the capital of France?"},
       {"role": "assistant", "content": "The capital of France is Paris."},
@@ -106,7 +106,7 @@ curl -X POST https://app.bike4mind.com/api/ai/v1/completions \
   -H "Content-Type: application/json" \
   --no-buffer \
   -d '{
-    "model": "claude-sonnet-5-5",
+    "model": "claude-sonnet-5",
     "messages": [
       {
         "role": "system",
@@ -132,7 +132,7 @@ curl -X POST https://app.bike4mind.com/api/ai/v1/completions \
   -H "Content-Type: application/json" \
   --no-buffer \
   -d '{
-    "model": "claude-sonnet-5-5",
+    "model": "claude-sonnet-5",
     "messages": [
       {"role": "user", "content": "What is the weather in London?"}
     ],
@@ -171,7 +171,7 @@ curl -X POST https://app.bike4mind.com/api/ai/v1/completions \
   -H "Content-Type: application/json" \
   --no-buffer \
   -d '{
-    "model": "claude-sonnet-5-5",
+    "model": "claude-sonnet-5",
     "messages": [{"role": "user", "content": "Hello!"}]
   }'
 ```
@@ -184,7 +184,7 @@ curl -X POST https://app.bike4mind.com/api/ai/v1/completions \
   -H "Content-Type: application/json" \
   --no-buffer \
   -d '{
-    "model": "claude-sonnet-5-5",
+    "model": "claude-sonnet-5",
     "messages": [{"role": "user", "content": "Hello!"}]
   }'
 ```
@@ -202,7 +202,7 @@ curl -X POST https://app.bike4mind.com/api/ai/v1/completions \
   --no-buffer \
   -v \
   -d '{
-    "model": "claude-sonnet-5-5",
+    "model": "claude-sonnet-5",
     "messages": [{"role": "user", "content": "Hello!"}]
   }'
 ```
@@ -225,7 +225,7 @@ curl -X POST https://app.bike4mind.com/api/ai/v1/completions \
   -H "Content-Type: application/json" \
   --no-buffer \
   -d '{
-    "model": "claude-sonnet-5-5",
+    "model": "claude-sonnet-5",
     "messages": [{"role": "user", "content": "Count to 5"}]
   }' | grep "^data:"
 ```
@@ -239,7 +239,7 @@ curl -X POST https://app.bike4mind.com/api/ai/v1/completions \
   --no-buffer \
   -v \
   -d '{
-    "model": "claude-sonnet-5-5",
+    "model": "claude-sonnet-5",
     "messages": [{"role": "user", "content": "Hello!"}]
   }' 2>&1 | grep -E "^(< |> )"
 ```
@@ -263,7 +263,7 @@ done < <(curl -sS --no-buffer -X POST https://app.bike4mind.com/api/ai/v1/comple
   -H "Authorization: Bearer $B4M_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "claude-sonnet-5-5",
+    "model": "claude-sonnet-5",
     "messages": [{"role": "user", "content": "Hello!"}]
   }')
 
@@ -285,7 +285,7 @@ curl -X POST https://app.bike4mind.com/api/ai/v1/completions \
   -H "Content-Type: application/json" \
   --no-buffer \
   -d '{
-    "model": "claude-sonnet-5-5",
+    "model": "claude-sonnet-5",
     "messages": [{"role": "user", "content": "Write a story"}]
   }' > response.txt
 ```
@@ -309,7 +309,7 @@ curl -X POST https://app.bike4mind.com/api/ai/v1/completions \
   --no-buffer \
   -w "\nHTTP %{http_code}\n" \
   -d '{
-    "model": "claude-sonnet-5-5",
+    "model": "claude-sonnet-5",
     "messages": [{"role": "user", "content": "Hello!"}]
   }'
 ```
@@ -341,7 +341,7 @@ curl -X POST https://app.bike4mind.com/api/ai/v1/completions \
   --no-buffer \
   -w "\nHTTP %{http_code}\n" \
   -d '{
-    "model": "claude-sonnet-5-5"
+    "model": "claude-sonnet-5"
   }'
 ```
 
@@ -359,7 +359,7 @@ time curl -X POST https://app.bike4mind.com/api/ai/v1/completions \
   -H "Content-Type: application/json" \
   --no-buffer \
   -d '{
-    "model": "claude-sonnet-5-5",
+    "model": "claude-sonnet-5",
     "messages": [{"role": "user", "content": "Hello!"}]
   }' > /dev/null
 ```
@@ -373,7 +373,7 @@ curl -w "Time to first byte: %{time_starttransfer}s\n" \
   -H "Content-Type: application/json" \
   --no-buffer \
   -d '{
-    "model": "claude-sonnet-5-5",
+    "model": "claude-sonnet-5",
     "messages": [{"role": "user", "content": "Hello!"}]
   }' > /dev/null
 ```

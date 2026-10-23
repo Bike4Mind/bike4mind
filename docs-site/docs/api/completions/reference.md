@@ -31,7 +31,7 @@ Call `GET /api/v1/models` with your API key to list the model ids you can use. T
 
 ## Response
 
-A successful request is always answered with a server-sent event stream (`text/event-stream`), whether or not you set a `stream` flag. The stream carries a `meta` event, then `content` and `tool_use` events with `usage` and `credits`, and ends with `data: [DONE]`. The last `content` event carries `usage` and `credits`. See [Streaming](./streaming.md) for how to parse it.
+A successful request is always answered with a server-sent event stream (`text/event-stream`), whether or not you set a `stream` flag. The stream carries a `meta` event, then `content` and `tool_use` events with `usage` and `credits`, and ends with `data: [DONE]`. The last `content` event carries `usage` and `credits`. The final `content` event also carries `stopReason` when the provider reports one. `max_tokens` means the reply was truncated (raise `max_tokens` or reduce thinking); an absent `stopReason` means unknown, not truncated. See [Streaming](./streaming.md) for how to parse it.
 
 ## Credits
 
@@ -51,7 +51,7 @@ Each API key has a per-minute and a per-day request limit; the in-app reference 
 Anything checked before the model provider is called fails with a JSON body and a real HTTP status, and no stream opens:
 
 - 401: missing or invalid credentials.
-- 403: the API key does not hold any of the required scopes. The body names them in `required_scopes`.
+- 403: with `required_scopes` in the body, the API key lacks a scope. Without `required_scopes`, the account is suspended or under a dispute: contact support.
 - 422: the body failed schema validation, or insufficient credits (see above).
 - 429: rate limited. Wait `Retry-After` seconds.
 

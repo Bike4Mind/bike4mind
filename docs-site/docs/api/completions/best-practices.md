@@ -30,7 +30,7 @@ fetch('https://app.bike4mind.com/api/ai/v1/completions', {
 fetch('/api/my-completion-proxy', {
   method: 'POST',
   headers: { 'Authorization': `Bearer ${userJWT}`, 'Content-Type': 'application/json' },
-  body: JSON.stringify({ model: 'claude-sonnet-5-5', messages })
+  body: JSON.stringify({ model: 'claude-sonnet-5', messages })
 });
 
 // Backend code (Node.js/Express)
@@ -197,7 +197,7 @@ class RequestQueue {
 const queue = new RequestQueue(5); // Max 5 concurrent requests
 
 async function makeQueuedRequest(messages) {
-  return queue.add(() => client.complete('claude-sonnet-5-5', messages));
+  return queue.add(() => client.complete('claude-sonnet-5', messages));
 }
 ```
 
@@ -484,7 +484,7 @@ async function deduplicatedRequest(key, fetchFn) {
 // Usage
 const response = await deduplicatedRequest(
   `completion:${JSON.stringify(messages)}`,
-  () => client.complete('claude-sonnet-5-5', messages)
+  () => client.complete('claude-sonnet-5', messages)
 );
 ```
 

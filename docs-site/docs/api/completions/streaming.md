@@ -82,7 +82,7 @@ async function streamCompletion(messages, onEvent, { signal } = {}) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: 'claude-sonnet-5-5',
+      model: 'claude-sonnet-5',
       messages: messages
     }),
     signal,
@@ -99,6 +99,8 @@ async function streamCompletion(messages, onEvent, { signal } = {}) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
+  let stopReason;
+  let requestId;
 
   try {
     while (true) {
@@ -113,7 +115,12 @@ async function streamCompletion(messages, onEvent, { signal } = {}) {
         if (!line.startsWith('data: ')) continue;
         const data = line.slice(6).trim();
 
-        if (data === '[DONE]') return;
+        if (data === '[DONE]') {
+          if (stopReason === 'max_tokens') {
+            throw Object.assign(new Error('Reply truncated: max_tokens reached'), { code: 'max_tokens', requestId });
+          }
+          return;
+        }
 
         let event;
         try {
@@ -121,6 +128,8 @@ async function streamCompletion(messages, onEvent, { signal } = {}) {
         } catch {
           throw new Error(`Malformed stream event: ${data}`);
         }
+        if (event.requestId) requestId = event.requestId;
+        if (typeof event.stopReason === 'string') stopReason = event.stopReason;
 
         // The HTTP status is already 200, so a failure arrives as an event
         if (event.type === 'error') {
@@ -164,6 +173,7 @@ try {
 3. `[DONE]` means the stream finished cleanly. A stream that ends without it and without an `error` event is incomplete.
 4. Wrap only `JSON.parse` in try/catch and treat malformed data as a failure; do not skip the line. Exceptions from your own handler must propagate.
 5. An `error` event is terminal: throw with its `code` and `requestId`.
+   The final `content` event carries `stopReason` when the provider reports one. `max_tokens` means the reply was truncated even though `[DONE]` follows: raise `max_tokens` or reduce thinking. A missing `stopReason` means unknown, not truncated.
 6. Check `response.ok` before you read the body, and log the raw `data` when parsing fails.
 7. Ignore event types you do not recognize instead of throwing; new types can be added.
 8. Pass an `AbortSignal` such as `AbortSignal.timeout(ms)` as the `signal` option so a stalled connection cannot hang forever.
@@ -200,12 +210,14 @@ def stream_completion(api_key: str, messages: list):
     with requests.post(
         "https://app.bike4mind.com/api/ai/v1/completions",
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        json={"model": "claude-sonnet-5-5", "messages": messages},
+        json={"model": "claude-sonnet-5", "messages": messages},
         stream=True,  # Without this, requests buffers the whole response
     ) as response:
         response.raise_for_status()
 
         done = False
+        stop_reason = None
+        request_id = None
         for event in SSEClient(response).events():
             if event.data == "[DONE]":
                 done = True
@@ -220,10 +232,14 @@ def stream_completion(api_key: str, messages: list):
             if data.get("type") == "error":
                 raise StreamError(data["message"], data.get("code"), data.get("requestId"))
 
+            request_id = data.get("requestId") or request_id
+            stop_reason = data.get("stopReason") or stop_reason
             print(data)
 
         if not done:
             raise StreamError("Stream ended without [DONE] or an error event")
+        if stop_reason == "max_tokens":
+            raise StreamError("Reply truncated: max_tokens reached", "max_tokens", request_id)
 
 # Usage
 if __name__ == "__main__":
@@ -247,7 +263,7 @@ curl -X POST https://app.bike4mind.com/api/ai/v1/completions \
   -H "Content-Type: application/json" \
   --no-buffer \
   -d '{
-    "model": "claude-sonnet-5-5",
+    "model": "claude-sonnet-5",
     "messages": [
       {"role": "user", "content": "Count to 5"}
     ]
