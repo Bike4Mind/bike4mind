@@ -177,10 +177,18 @@ def with_retry(fn: Callable[[], Any], max_attempts: int = 3) -> Any:
 ```
 
 ```python
-with_retry(lambda: stream_completion(api_key, payload, print_text))
+def attempt():
+    parts = []
+    stream_completion(
+        api_key, payload, lambda event: parts.append(event["text"]) if event["type"] == "content" else None
+    )
+    return "".join(parts)
+
+
+print(with_retry(attempt))
 ```
 
-A retry restarts the stream from the beginning, so discard any partial output collected by `on_event` before you call it again.
+A retry restarts the stream from the beginning. Reset accumulators inside `fn` on every attempt, and publish buffered output only after success. Do not automatically retry a callback that executes tools or performs other side effects.
 
 ---
 

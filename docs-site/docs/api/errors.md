@@ -306,7 +306,7 @@ The retry table and the in-stream error codes are in [Completions errors](./comp
 - Ensure token is properly formatted: `Bearer <token>`
 
 **403 Forbidden**
-- On the completions endpoint, a 403 without `required_scopes` means the account is suspended or under a dispute: contact support, because retrying or changing scopes will not help
+- On the completions endpoint, a 403 without `required_scopes` may mean the account is suspended or under a dispute (contact support), or a JWT caller needs to enroll in MFA in the web app. Changing key scopes does not resolve these account restrictions
 - Verify user has required permissions
 - Check organization membership
 - Confirm subscription tier supports the feature

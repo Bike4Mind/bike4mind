@@ -27,15 +27,24 @@ const b4m = createClient({
 
 await withRetry(async () => {
   let text = ''; // Reset partial output on every attempt
+  let stopReason: string | undefined;
+  let requestId: string | undefined;
   for await (const event of b4m.completions({
     model: 'claude-sonnet-5',
     messages: [{ role: 'user', content: 'Hello!' }],
   })) {
+    if (event.type === 'meta') requestId = event.requestId;
+    if (event.type === 'content' || event.type === 'tool_use') {
+      stopReason = event.stopReason ?? stopReason;
+    }
     if (event.type === 'content') text += event.text;
     // The SDK yields in-band error events instead of throwing them
     if (event.type === 'error') {
       throw new CompletionError(event.message, { code: event.code, requestId: event.requestId });
     }
+  }
+  if (stopReason === 'max_tokens') {
+    throw new CompletionError('Reply truncated: max_tokens reached', { code: 'max_tokens', requestId });
   }
   process.stdout.write(text); // Publish only a successful attempt
 });

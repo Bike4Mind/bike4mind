@@ -62,7 +62,7 @@ curl -X POST https://app.bike4mind.com/api/ai/v1/completions \
 
 Follow these steps to create an API key:
 
-### Step 1: Navigate to API Keys Settings
+### Step 1: Open API Keys
 
 1. Log in to your B4M account
 2. Open the **Profile** menu, then choose **More** -> **API Keys**
@@ -341,7 +341,7 @@ For some invalid keys the `error` text is more specific, for example `Invalid AP
 
 **Causes:**
 - API key missing required scopes (`ai:generate` or `ai:chat`); the body includes `required_scopes`
-- If the body has no `required_scopes`, the account is suspended or under a dispute. Contact support; retrying or changing scopes will not help
+- If the body has no `required_scopes`, the account may be suspended or under a dispute; contact support. JWT requests can also be blocked by required MFA enrollment: complete enrollment in the web app. Changing key scopes does not resolve these account restrictions
 
 **Solutions:**
 1. Open the Profile menu -> More -> API Keys

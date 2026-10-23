@@ -293,7 +293,7 @@ Revoking your app's access in B4M stops new exchanges wherever the consent check
 
 `POST /api/ai/v1/completions` checks everything it can before it opens the stream: the JSON body, the key and its scopes, the rate limit, the model and the user's credits. Any of those failing returns a JSON error with a real HTTP status and no stream:
 
-Every status code and its `errorCode` values are listed in the [in-app API reference](https://app.bike4mind.com/api/v1/docs). Branch on the status and `errorCode`, never on the `error` prose. A key missing a scope is a 403 and `required_scopes` names the scopes; a 403 without `required_scopes` means the account is suspended or under a dispute, so contact support.
+Every status code and its `errorCode` values are listed in the [in-app API reference](https://app.bike4mind.com/api/v1/docs). Branch on the status and `errorCode`, never on the `error` prose. A key missing a scope is a 403 and `required_scopes` names the scopes. Without it, the account may be suspended or under a dispute (contact support), or a JWT caller may need to enroll in MFA in the web app.
 
 Out of credits is a 422 with `errorCode: "insufficient_credits"` (never 402). A failure body also carries `request_id`, which arrives as the `X-Request-ID` header too.
 

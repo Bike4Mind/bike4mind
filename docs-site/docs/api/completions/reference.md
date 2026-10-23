@@ -27,7 +27,9 @@ Send your API key as `Authorization: Bearer b4m_live_<key>`, or with the legacy 
 
 ## Choosing a model
 
-Call `GET /api/v1/models` with your API key to list the model ids you can use. The list depends on which providers the deployment and your own provider keys enable, so if a sample returns 400 `unknown_model`, use an id from that list. An unknown or unavailable model returns a 400 with `errorCode: "unknown_model"`.
+Call `GET /api/v1/models` with your API key to list the model ids you can use. The list depends on which providers the deployment and your own provider keys enable, so if a sample returns 400 `unknown_model` or 503 `provider_not_configured`, use an id from that list. An unknown model returns a 400 with `errorCode: "unknown_model"`; a catalogued model whose provider is not configured returns 503 `provider_not_configured`.
+
+After adding or activating a provider key, allow up to 60 seconds for `GET /api/v1/models` to reflect it: model lists are cached per user.
 
 ## Response
 
@@ -51,7 +53,7 @@ Each API key has a per-minute and a per-day request limit; the in-app reference 
 Anything checked before the model provider is called fails with a JSON body and a real HTTP status, and no stream opens:
 
 - 401: missing or invalid credentials.
-- 403: with `required_scopes` in the body, the API key lacks a scope. Without `required_scopes`, the account is suspended or under a dispute: contact support.
+- 403: with `required_scopes` in the body, the API key lacks a scope. Without it, the account may be suspended or under a dispute (contact support), or a JWT caller may need to enroll in MFA in the web app.
 - 422: the body failed schema validation, or insufficient credits (see above).
 - 429: rate limited. Wait `Retry-After` seconds.
 
