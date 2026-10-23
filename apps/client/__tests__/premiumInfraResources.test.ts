@@ -182,6 +182,18 @@ describe('infra resource glue', () => {
     expect(result.stderr).toContain('not written as a string literal: coreLabel');
   });
 
+  it('reads a core DLQ label in either quote style', () => {
+    mkdirSync(join(sandbox, 'infra'), { recursive: true });
+    writeFileSync(join(sandbox, 'infra/secrets.ts'), "export const s = new sst.Secret('CORE_A', 'x');\n");
+    writeFileSync(
+      join(sandbox, 'infra/dlqAlarms.ts'),
+      'const D = [{ label: "double-quoted" }, { label: \'single-quoted\' }];\n'
+    );
+    const result = runCodegen();
+    expect(result.status, result.stderr).toBe(0);
+    expect(readTargets()[1]).toContain('coreDlqLabels: readonly string[] | null = ["double-quoted","single-quoted"]');
+  });
+
   it('emits null core names without infra/, so the runtime registers nothing', () => {
     writeOverlay({ secrets: [{ name: 'EXAMPLE_API_TOKEN' }] });
     expect(runCodegen().status).toBe(0);

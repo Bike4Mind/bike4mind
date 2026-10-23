@@ -1924,7 +1924,7 @@ function readCoreDlqLabels() {
         'Codegen reads core labels from literals; write the label inline.'
     );
   }
-  const labels = [...code.matchAll(/\blabel:\s*'([a-z0-9]+(?:-[a-z0-9]+)*)'/g)].map(m => m[1]);
+  const labels = [...code.matchAll(/\blabel:\s*(['"])([a-z0-9]+(?:-[a-z0-9]+)*)\1/g)].map(m => m[2]);
   return [...new Set(labels)].sort();
 }
 
