@@ -9,7 +9,11 @@ import type { ReactArtifactGroupRole } from '@client/app/utils/reactArtifactGrou
 vi.mock('@client/app/hooks/data/settings', () => ({
   useExperimentalFeatureSettings: () => ({ data: [{ settingName: 'EnableReactViewer', settingValue: 'true' }] }),
 }));
-vi.mock('@client/app/components/artifacts', () => ({ ArtifactVersionDropdown: () => null }));
+vi.mock('@client/app/components/artifacts', () => ({
+  ArtifactVersionDropdown: ({ currentVersion }: { currentVersion: number }) => (
+    <span data-testid="artifact-version-dropdown-current">Version {currentVersion}</span>
+  ),
+}));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: vi.fn() } }));
 vi.mock('@client/app/utils/artifactPersistence', () => ({
   checkArtifactExists: vi.fn().mockResolvedValue(true),
@@ -21,6 +25,8 @@ vi.mock('@client/app/utils/artifactPersistence', () => ({
 }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
+import { api } from '@client/app/contexts/ApiContext';
+import { getSelectedArtifactVersion, setSelectedArtifactVersion } from '@client/app/hooks/useSessionLayout';
 import ReactArtifactViewer from './ReactArtifactViewer';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -204,5 +210,97 @@ describe('ReactArtifactViewer for a single-file artifact', () => {
     expect(screen.queryByTestId('react-artifact-file-tabs')).not.toBeInTheDocument();
     expect(screen.queryByTestId('react-artifact-viewer-used-by-label')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Enable Edit Mode/ })).toBeInTheDocument();
+  });
+});
+
+describe('ReactArtifactViewer saving a new version', () => {
+  const V1_CODE = 'export default function Counter() { return <p>v1-marker</p>; }';
+  const counter = { ...reactArtifact('artifact_react_counter_1_0', 'Counter', V1_CODE, ['react']), version: 1 };
+  const versionLabel = () => screen.getByTestId('artifact-version-dropdown-current');
+
+  /** Mirrors KnowledgeViewer: a save writes the new content into the artifact but keeps its old version. */
+  function SavingHost({
+    initial = counter,
+    savedVersions,
+    reopenWith,
+  }: {
+    initial?: ReactArtifact;
+    savedVersions: number[];
+    reopenWith?: ReactArtifact;
+  }) {
+    const [artifact, setArtifact] = React.useState<ReactArtifact>(initial);
+    const saves = React.useRef(0);
+    const onSave = async (content: string) => {
+      setArtifact(current => ({ ...current, content }));
+      return { artifact: { version: savedVersions[saves.current++] } };
+    };
+    return (
+      <>
+        <ReactArtifactViewer artifact={artifact} onSave={onSave} />
+        {reopenWith && <button data-testid="host-reopen" onClick={() => setArtifact(reopenWith)} />}
+      </>
+    );
+  }
+
+  async function renderHost(props: React.ComponentProps<typeof SavingHost>) {
+    render(
+      <TestWrapper>
+        <SavingHost {...props} />
+      </TestWrapper>
+    );
+    await act(async () => {});
+    fireEvent.click(screen.getByTestId('react-artifact-code-tab'));
+    await enableEditMode();
+  }
+
+  async function editAndSave(code: string) {
+    fireEvent.change(codePanel().querySelector('textarea') as HTMLTextAreaElement, { target: { value: code } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    });
+  }
+
+  afterEach(() => {
+    setSelectedArtifactVersion(counter.id, undefined);
+  });
+
+  it('shows each saved version on the version selector', async () => {
+    await renderHost({ savedVersions: [2, 3] });
+    expect(versionLabel()).toHaveTextContent('Version 1');
+
+    await editAndSave(V1_CODE.replace('v1-marker', 'v2-marker'));
+    expect(versionLabel()).toHaveTextContent('Version 2');
+    expect(codePanel()).toHaveTextContent('v2-marker');
+
+    await editAndSave(V1_CODE.replace('v1-marker', 'v3-marker'));
+    expect(versionLabel()).toHaveTextContent('Version 3');
+  });
+
+  it('selects the saved version when an older one was being viewed', async () => {
+    setSelectedArtifactVersion(counter.id, 1);
+    vi.mocked(api.get).mockResolvedValueOnce({ data: { data: { content: V1_CODE } } });
+    const latest = { ...counter, content: V1_CODE.replace('v1-marker', 'v2-marker'), version: 2 };
+    await renderHost({ initial: latest, savedVersions: [3] });
+    expect(versionLabel()).toHaveTextContent('Version 1');
+    expect(codePanel().querySelector('textarea')).toHaveValue(V1_CODE);
+    expect(screen.getByText(/Viewing version 1/)).toBeInTheDocument();
+
+    await editAndSave(V1_CODE.replace('v1-marker', 'from-v1-marker'));
+
+    expect(versionLabel()).toHaveTextContent('Version 3');
+    expect(screen.queryByText(/Viewing version/)).not.toBeInTheDocument();
+    expect(getSelectedArtifactVersion(counter.id)).toBeUndefined();
+  });
+
+  it('follows the artifact again once it is reopened with other content', async () => {
+    const reply = { ...counter, content: V1_CODE.replace('v1-marker', 'reply-marker'), version: 1 };
+    await renderHost({ savedVersions: [2], reopenWith: reply });
+    await editAndSave(V1_CODE.replace('v1-marker', 'v2-marker'));
+    expect(versionLabel()).toHaveTextContent('Version 2');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Lock' }));
+    fireEvent.click(screen.getByTestId('host-reopen'));
+    expect(codePanel()).toHaveTextContent('reply-marker');
+    expect(versionLabel()).toHaveTextContent('Version 1');
   });
 });

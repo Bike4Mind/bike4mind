@@ -230,14 +230,21 @@ const ReactArtifactViewer: React.FC<ReactArtifactViewerProps> = ({
   // Check if this is a legacy artifact ID
   const isLegacyArtifact = !artifact.id.startsWith('artifact_');
 
+  // The host's optimistic save update keeps the pre-save artifact.version, so the version a save
+  // returned stands for as long as the artifact still carries the content that was saved.
+  const [lastSave, setLastSave] = useState<{ version: number; content: string } | null>(null);
+
   // Update currentVersion when artifact changes (but not when viewing a different version)
   useEffect(() => {
-    const artifactVersion = artifact.version;
+    const artifactVersion =
+      lastSave && lastSave.content === artifact.content
+        ? Math.max(lastSave.version, artifact.version ?? 0)
+        : artifact.version;
     // Don't reset version if user is actively viewing a different version
     if (artifactVersion && artifactVersion !== currentVersion && !isViewingDifferentVersion) {
       setCurrentVersion(artifactVersion);
     }
-  }, [artifact, currentVersion, isViewingDifferentVersion]);
+  }, [artifact, currentVersion, isViewingDifferentVersion, lastSave]);
 
   // Update editableCode when artifact content changes (but not when in edit mode or viewing a different version)
   useEffect(() => {
@@ -361,28 +368,32 @@ const ReactArtifactViewer: React.FC<ReactArtifactViewerProps> = ({
     }
 
     setIsSaving(true);
+    const savedCode = editableCode;
     try {
-      const result = await onSave(editableCode);
+      const result = await onSave(savedCode);
       // Don't update editableCode here; the parent re-renders with the updated artifact.
 
-      // Update the current version if a new version was created.
+      // Select the saved version, which is now the latest, even when an older one was being viewed.
       // Handle both {version: number} and {artifact: {version: number}} response formats
       const newVersion = result?.artifact?.version ?? result?.version;
-      if (newVersion && typeof newVersion === 'number' && newVersion !== currentVersion) {
+      if (newVersion && typeof newVersion === 'number') {
+        setLastSave({ version: newVersion, content: savedCode });
         setCurrentVersion(newVersion);
-        saveArtifactVersionToLocalStorage(artifact.id, newVersion, editableCode);
+        setIsViewingDifferentVersion(false);
+        setSelectedArtifactVersion(artifact.id, undefined);
+        saveArtifactVersionToLocalStorage(artifact.id, newVersion, savedCode);
       }
 
       saveArtifactToLocalStorage({
         id: artifact.id,
         type: artifact.type,
         title: artifact.title,
-        content: editableCode,
+        content: savedCode,
         version: newVersion || currentVersion,
         metadata: artifact.metadata,
       });
 
-      setHasChanges(false);
+      setOriginalCode(savedCode);
 
       onSaveSuccess?.();
     } catch (error) {
