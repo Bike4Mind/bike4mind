@@ -16,7 +16,9 @@ import {
   ModalDialog,
   ModalClose,
   Divider,
+  Tooltip,
   useTheme,
+  type ButtonProps,
 } from '@mui/joy';
 import { type ReactArtifact } from '@bike4mind/common';
 import ArtifactModeTabs from '@client/app/components/common/ArtifactModeTabs';
@@ -63,6 +65,18 @@ interface ReactArtifactViewerProps {
   onSave?: (updatedContent: string) => Promise<any>;
   onSaveSuccess?: () => void;
 }
+
+// At or below this toolbar width (the side panel beside the chat), action buttons drop their labels.
+const COMPACT_TOOLBAR_MAX_WIDTH_PX = 720;
+
+/** A toolbar action whose label collapses to its icon on a narrow toolbar; the tooltip and accessible name keep it. */
+const ToolbarButton = ({ label, ...props }: ButtonProps & { label: string }) => (
+  <Tooltip title={label} disableInteractive>
+    <Button size="sm" aria-label={label} {...props}>
+      <span className="react-artifact-viewer-toolbar-label">{label}</span>
+    </Button>
+  </Tooltip>
+);
 
 const DisabledPreviewMessage = () => (
   <Alert color="warning" sx={{ m: 2, height: '100%', display: 'flex', alignItems: 'center' }}>
@@ -518,15 +532,29 @@ const ReactArtifactViewer: React.FC<ReactArtifactViewerProps> = ({
           }}
         >
           <Box
+            className="react-artifact-viewer-header"
+            data-testid="react-artifact-viewer-header"
             sx={{
               borderBottom: '1px solid',
               borderColor: 'divider',
               px: 2,
               py: 1,
               display: 'flex',
+              flexWrap: 'wrap',
               justifyContent: 'space-between',
               alignItems: 'center',
+              gap: 1,
               flexShrink: 0,
+              containerType: 'inline-size',
+              // globals.css sets `min-width: 0` on everything, so without this the tabs and buttons
+              // squeeze into each other instead of wrapping onto another row.
+              '& > .react-artifact-viewer-tab-list, & .react-artifact-viewer-toolbar > *': { flexShrink: 0 },
+              [`@container (max-width: ${COMPACT_TOOLBAR_MAX_WIDTH_PX}px)`]: {
+                '& .react-artifact-viewer-toolbar-label, & .artifact-version-dropdown-history-text, & .artifact-version-dropdown-label':
+                  { display: 'none' },
+                '& .react-artifact-viewer-toolbar .MuiButton-root': { '--Button-gap': '0px' },
+                '& .artifact-version-dropdown-button': { minWidth: 'auto' },
+              },
             }}
           >
             {group?.role === 'sibling' ? (
@@ -548,46 +576,49 @@ const ReactArtifactViewer: React.FC<ReactArtifactViewerProps> = ({
               />
             )}
 
-            <Stack className="react-artifact-viewer-toolbar" direction="row" spacing={1} alignItems="center">
+            <Stack
+              className="react-artifact-viewer-toolbar"
+              direction="row"
+              spacing={1}
+              useFlexGap
+              flexWrap="wrap"
+              alignItems="center"
+              justifyContent="flex-end"
+              sx={{ ml: 'auto' }}
+            >
               {canEdit && !isEditMode && (
-                <Button
+                <ToolbarButton
                   className="react-artifact-viewer-edit-toggle view-only"
-                  size="sm"
+                  label="Enable Edit Mode"
                   variant="outlined"
                   color="neutral"
                   startDecorator={<UnlockIcon />}
                   onClick={() => setShowEditWarningModal(true)}
-                >
-                  Enable Edit Mode
-                </Button>
+                />
               )}
 
               {canEdit && isEditMode && (
                 <>
-                  <Button
+                  <ToolbarButton
                     className="react-artifact-viewer-edit-toggle editing"
-                    size="sm"
+                    label="Lock"
                     variant="outlined"
                     color="warning"
                     startDecorator={<LockIcon />}
                     onClick={() => setIsEditMode(false)}
-                  >
-                    Lock
-                  </Button>
-                  <Button
+                  />
+                  <ToolbarButton
                     className="react-artifact-viewer-revert-button"
-                    size="sm"
+                    label="Revert"
                     variant="outlined"
                     color="neutral"
                     startDecorator={<UndoIcon />}
                     onClick={handleRevert}
                     disabled={!hasChanges}
-                  >
-                    Revert
-                  </Button>
-                  <Button
+                  />
+                  <ToolbarButton
                     className="react-artifact-viewer-save-button"
-                    size="sm"
+                    label={!isPersisted ? 'Save to Database' : 'Save'}
                     variant="solid"
                     color={!isPersisted ? 'success' : 'primary'}
                     startDecorator={<SaveIcon />}
@@ -598,9 +629,7 @@ const ReactArtifactViewer: React.FC<ReactArtifactViewerProps> = ({
                     }}
                     disabled={(!hasChanges && isPersisted) || isSaving}
                     loading={isSaving}
-                  >
-                    {!isPersisted ? 'Save to Database' : 'Save'}
-                  </Button>
+                  />
                 </>
               )}
 
