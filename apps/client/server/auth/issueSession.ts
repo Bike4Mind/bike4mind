@@ -22,8 +22,9 @@ const NOT_A_LOGIN: ReadonlySet<AuthSessionCreatedVia> = new Set(['impersonation'
 /**
  * Server-side convenience wrapper over authSessionService.issueSession: binds the AuthSession
  * repository, the JWT access-token signer, request-derived device metadata, and the request
- * logger, so each login/mint endpoint is a one-liner. Also logs the login AuthEvent. Returns the access JWT + opaque refresh
- * token (and the sid, if a caller needs it, e.g. to keep the current device on a revoke-others).
+ * logger, so each login/mint endpoint is a one-liner. Also logs the login AuthEvent. Returns the
+ * access JWT + opaque refresh token (and the sid, if a caller needs it, e.g. to keep the current
+ * device on a revoke-others).
  */
 export async function issueSessionForRequest(
   req: RequestLike,

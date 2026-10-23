@@ -46,6 +46,7 @@ const mockEmitSignupFunnelEvents = vi.fn().mockResolvedValue(undefined);
 vi.mock('@server/utils/auth/oauthSourceTag', () => ({
   stampOAuthSourceTag: (...a: unknown[]) => mockStampSourceTag(...a),
 }));
+vi.mock('@server/auth/networkMeta', () => ({ recordSignupNetwork: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@server/analytics/funnel', () => ({
   recordSignupAcquisition: (...a: unknown[]) => mockRecordSignupAcquisition(...a),
   emitSignupFunnelEvents: (...a: unknown[]) => mockEmitSignupFunnelEvents(...a),

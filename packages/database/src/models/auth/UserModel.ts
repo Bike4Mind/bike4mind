@@ -22,6 +22,7 @@ import { CountersSchema } from '../infra/ops/CounterModel';
 import BaseRepository from '@bike4mind/db-core';
 import { executeFacetCompatible } from '../../utils/documentdb-compat';
 import { buildCollectionSearchPipeline } from '../../queries/collectionSearchQuery';
+import { NETWORK_META_FIELDS } from './networkMetaFields';
 
 function escapeRegExp(input: string): string {
   return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -835,12 +836,7 @@ const UserAcquisitionSchema = new Schema(
 
 const SignupMetaSchema = new Schema(
   {
-    ip: { type: String, default: null },
-    userAgent: { type: String, default: null },
-    asn: { type: Number, default: null },
-    asnOrg: { type: String, default: null },
-    country: { type: String, default: null },
-    isDatacenter: { type: Boolean, default: null },
+    ...NETWORK_META_FIELDS,
     capturedAt: { type: Date, required: true },
   },
   { _id: false }

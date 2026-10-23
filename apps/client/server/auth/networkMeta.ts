@@ -1,12 +1,10 @@
 import type { INetworkMeta } from '@bike4mind/common';
 import { authEventRepository, User } from '@bike4mind/database';
-import type { Logger } from '@bike4mind/observability';
 import { getClientIp, getClientNetwork, type ClientIpRequest } from '@bike4mind/server-utils/utils/ip';
 import { DATACENTER_ASNS } from './datacenterAsns';
 
 export type NetworkRequest = ClientIpRequest & {
   headers: Record<string, string | string[] | undefined>;
-  logger?: Logger;
 };
 
 /**
@@ -27,30 +25,35 @@ export function readNetworkMeta(req: NetworkRequest): INetworkMeta {
   };
 }
 
-function warn(req: NetworkRequest, message: string, err: unknown): void {
-  const error = err instanceof Error ? err.message : String(err);
-  if (req.logger) req.logger.warn(message, { error });
-  else console.warn(message, error);
+// console.warn, as recordSignupAcquisition does: a log call that could itself throw would break
+// the never-throw contract below.
+function warnNotRecorded(what: string, err: unknown): void {
+  console.warn(`[auth] ${what} not recorded`, err instanceof Error ? err.message : err);
 }
 
 /**
  * Stamp the signup's network on the new user (once: a retried handler keeps the first capture) and
- * log a signup AuthEvent. Never throws: losing this metadata must not fail an account creation.
+ * log a signup AuthEvent. Each write fails on its own. Never throws: losing this metadata must not
+ * fail an account creation.
  */
 export async function recordSignupNetwork(opts: {
   req: NetworkRequest;
   userId: string;
   method: string;
 }): Promise<void> {
+  const meta = readNetworkMeta(opts.req);
   try {
-    const meta = readNetworkMeta(opts.req);
     await User.updateOne(
       { _id: opts.userId, signupMeta: null },
       { $set: { signupMeta: { ...meta, capturedAt: new Date() } } }
     );
+  } catch (err) {
+    warnNotRecorded('signup network metadata', err);
+  }
+  try {
     await authEventRepository.record({ ...meta, userId: opts.userId, type: 'signup', method: opts.method });
   } catch (err) {
-    warn(opts.req, '[auth] signup network metadata not recorded', err);
+    warnNotRecorded('signup event', err);
   }
 }
 
@@ -64,6 +67,6 @@ export async function recordLoginEvent(opts: { req: NetworkRequest; userId: stri
       method: opts.method,
     });
   } catch (err) {
-    warn(opts.req, '[auth] login event not recorded', err);
+    warnNotRecorded('login event', err);
   }
 }
