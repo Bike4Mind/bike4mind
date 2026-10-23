@@ -10,6 +10,7 @@ const m = vi.hoisted(() => ({
   adminList: vi.fn(),
   edit: vi.fn(),
   attachVideo: vi.fn(),
+  attachImage: vi.fn(),
   hide: vi.fn(),
   unhide: vi.fn(),
   publishNow: vi.fn(),
@@ -42,6 +43,7 @@ vi.mock('@bike4mind/database', () => ({
     adminList: m.adminList,
     edit: m.edit,
     attachVideo: m.attachVideo,
+    attachImage: m.attachImage,
     hide: m.hide,
     unhide: m.unhide,
     publishNow: m.publishNow,
@@ -61,6 +63,10 @@ const { default: statusHandler } = await import('@pages/api/admin/release-notes/
 const { default: configHandler } = await import('@pages/api/admin/release-notes/config');
 
 const ID = '64b7f0c2a1b2c3d4e5f60718';
+const IMAGE = {
+  landscapeUrl: 'https://d111.cloudfront.net/still.png',
+  portraitUrl: 'https://d111.cloudfront.net/still-9x16.png',
+};
 const note = (overrides: Record<string, unknown> = {}) => ({
   id: ID,
   releaseTag: 'v1.2.3',
@@ -248,6 +254,41 @@ describe('PATCH /api/admin/release-notes/[id]', () => {
     expect(body.video).toEqual(video);
   });
 
+  it('sets an image and passes it to the edit', async () => {
+    m.edit.mockResolvedValue({ kind: 'ok', note: note({ image: IMAGE }) });
+    const { status, body } = await call(editHandler, { method: 'PATCH', query: { id: ID }, body: { image: IMAGE } });
+    expect(status).toBe(200);
+    expect(m.edit).toHaveBeenCalledWith(ID, { image: IMAGE });
+    expect(body.image).toEqual(IMAGE);
+  });
+
+  it('clears the image with null', async () => {
+    m.edit.mockResolvedValue({ kind: 'ok', note: note() });
+    const { error } = await call(editHandler, { method: 'PATCH', query: { id: ID }, body: { image: null } });
+    expect(error).toBeUndefined();
+    expect(m.edit).toHaveBeenCalledWith(ID, { image: null });
+  });
+
+  it('refuses an image on a disallowed host with 400', async () => {
+    const { error } = await call(editHandler, {
+      method: 'PATCH',
+      query: { id: ID },
+      body: { image: { landscapeUrl: 'https://evil.example.com/s.png' } },
+    });
+    expect(error?.statusCode).toBe(400);
+    expect(error?.message).toContain('image.landscapeUrl');
+    expect(m.edit).not.toHaveBeenCalled();
+  });
+
+  it('serves the stored image on the admin note, and null when there is none', async () => {
+    m.findOne.mockResolvedValue(note({ image: IMAGE }));
+    const withImage = await call(listHandler, { method: 'GET', query: { tag: 'v1.2.3' } });
+    expect(withImage.body.data[0].image).toEqual(IMAGE);
+    m.findOne.mockResolvedValue(note());
+    const without = await call(listHandler, { method: 'GET', query: { tag: 'v1.2.3' } });
+    expect(without.body.data[0].image).toBeNull();
+  });
+
   it.each([
     ['empty headline', { headline: '' }],
     ['video on a disallowed host', { video: { landscapeUrl: 'https://evil.example.com/wide.mp4' } }],
@@ -292,7 +333,7 @@ describe('PATCH /api/admin/release-notes/[id]', () => {
 });
 
 describe('PATCH /api/admin/release-notes/[id] with a release-notes:write key', () => {
-  it('refuses any field but video with 403 and edits nothing', async () => {
+  it('refuses any field but video or image with 403 and edits nothing', async () => {
     const { error } = await call(editHandler, {
       method: 'PATCH',
       query: { id: ID },
@@ -303,6 +344,7 @@ describe('PATCH /api/admin/release-notes/[id] with a release-notes:write key', (
     expect(error?.message).toContain('headline');
     expect(m.edit).not.toHaveBeenCalled();
     expect(m.attachVideo).not.toHaveBeenCalled();
+    expect(m.attachImage).not.toHaveBeenCalled();
   });
 
   it('sets the video through attachVideo, which leaves editedAt alone, never through edit', async () => {
@@ -327,6 +369,43 @@ describe('PATCH /api/admin/release-notes/[id] with a release-notes:write key', (
       method: 'PATCH',
       query: { id: ID },
       body: { video: null },
+      keyScopes: ['release-notes:write'],
+    });
+    expect(error?.statusCode).toBe(404);
+  });
+
+  it('sets the image through attachImage, which leaves editedAt alone, never through edit', async () => {
+    m.attachImage.mockResolvedValue({ kind: 'ok', note: note({ image: IMAGE, editedAt: null }) });
+    const { status, body } = await call(editHandler, {
+      method: 'PATCH',
+      query: { id: ID },
+      body: { image: IMAGE },
+      keyScopes: ['release-notes:write'],
+    });
+    expect(status).toBe(200);
+    expect(m.attachImage).toHaveBeenCalledWith(ID, IMAGE);
+    expect(m.edit).not.toHaveBeenCalled();
+    expect(body.editedAt).toBeNull();
+  });
+
+  it('refuses video and image in one request with 400 and writes nothing', async () => {
+    const { error } = await call(editHandler, {
+      method: 'PATCH',
+      query: { id: ID },
+      body: { video: null, image: IMAGE },
+      keyScopes: ['release-notes:write'],
+    });
+    expect(error?.statusCode).toBe(400);
+    expect(error?.message).toContain('send one per request');
+    for (const fn of [m.attachVideo, m.attachImage, m.edit]) expect(fn).not.toHaveBeenCalled();
+  });
+
+  it('answers 404 when the note to attach an image to is gone', async () => {
+    m.attachImage.mockResolvedValue({ kind: 'notFound' });
+    const { error } = await call(editHandler, {
+      method: 'PATCH',
+      query: { id: ID },
+      body: { image: IMAGE },
       keyScopes: ['release-notes:write'],
     });
     expect(error?.statusCode).toBe(404);
