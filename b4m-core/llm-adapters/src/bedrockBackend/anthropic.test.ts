@@ -274,7 +274,11 @@ describe('translateStreamChunk', () => {
   });
 
   it('message_delta omits stopReason when the provider reports none', () => {
-    const r = backend.translateStreamChunk('claude', { type: 'message_delta', delta: {}, usage: { output_tokens: 20 } });
+    const r = backend.translateStreamChunk('claude', {
+      type: 'message_delta',
+      delta: {},
+      usage: { output_tokens: 20 },
+    });
     expect(r.chunk?.stopReason).toBeUndefined();
   });
 
