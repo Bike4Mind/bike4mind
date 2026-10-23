@@ -135,12 +135,14 @@ export const ADMIN_AUDIT_CATALOGUE = {
   // Handler coverage: liveops, sre and queues
 
   // ops
+
+  // Handler coverage: liveops, sre and queues
   'ops.triage_config.created': { category: 'settings', severity: 'notice', write: 'bestEffort' },
   'ops.triage_config.updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
   'ops.triage_config.deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
   'ops.sre.scan_triggered': { category: 'support', severity: 'notice', write: 'bestEffort' },
   'ops.sre.run_triggered': { category: 'support', severity: 'notice', write: 'bestEffort' },
-  'ops.sre.pattern_updated': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'ops.sre.pattern_updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
   'ops.sre.tracking_dismissed': { category: 'support', severity: 'notice', write: 'bestEffort' },
   'ops.sre.tracking_rerun': { category: 'support', severity: 'notice', write: 'bestEffort' },
   'ops.sre.tracking_retried': { category: 'support', severity: 'notice', write: 'bestEffort' },

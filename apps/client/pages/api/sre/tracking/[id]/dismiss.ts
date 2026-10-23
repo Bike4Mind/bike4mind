@@ -85,7 +85,7 @@ const handler = baseApi().post(
 
     await recordAdminActionFromRequest(req, {
       action: 'ops.sre.tracking_dismissed',
-      target: { kind: 'settings', id, displayName: `SRE tracking ${doc.errorFingerprint}` },
+      target: { kind: 'system', id, displayName: `SRE tracking ${doc.errorFingerprint}` },
       summary: `dismissed SRE tracking ${doc.errorFingerprint}`,
       reason: parsed.data.reason,
       details: { previousStatus: doc.status, repoSlug: doc.repoSlug ?? SRE_DEFAULT_REPO_SLUG },
