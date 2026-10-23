@@ -220,12 +220,14 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         changes: Object.keys(changes).length > 0 ? changes : undefined,
       });
 
-      await recordAdminActionFromRequest(req, {
-        action: 'ops.triage_config.updated',
-        target: { kind: 'settings', id, displayName: updatedConfig.name },
-        summary: `updated triage config ${updatedConfig.name}`,
-        details: { operation: action, changedFields: Object.keys(changes) },
-      });
+      if (Object.keys(changes).length > 0) {
+        await recordAdminActionFromRequest(req, {
+          action: 'ops.triage_config.updated',
+          target: { kind: 'settings', id, displayName: updatedConfig.name },
+          summary: `updated triage config ${updatedConfig.name}`,
+          details: { operation: action, changedFields: Object.keys(changes) },
+        });
+      }
 
       return res.json(updatedConfig);
     } catch (error) {
