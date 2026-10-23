@@ -136,8 +136,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
 
       if (!dryRun) {
         await recordAdminActionFromRequest(req, {
-          action: 'ops.message_counts.recalculated',
-          target: { kind: 'system', id: 'message-counts-recalculation', displayName: 'Message count recalculation' },
+          action: 'ops.spider_job.started',
+          target: { kind: 'system', id: 'spider-job', displayName: 'Spider notebook grooming job' },
           summary: `started notebook grooming job for ${totalNotebooks} notebooks`,
           details: { spiderJobId, totalNotebooks, operations: requestedOperations },
         });

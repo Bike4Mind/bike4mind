@@ -77,8 +77,8 @@ describe('POST /api/admin/recalculate-message-counts credit pre-flight', () => {
     await run({ operations: ['messageCount'] });
     expect(mockAudit).toHaveBeenCalledTimes(1);
     expect(mockAudit.mock.calls[0][1]).toMatchObject({
-      action: 'ops.message_counts.recalculated',
-      target: { kind: 'system', id: 'message-counts-recalculation' },
+      action: 'ops.spider_job.started',
+      target: { kind: 'system', id: 'spider-job' },
       details: { totalNotebooks: TOTAL_NOTEBOOKS, operations: ['messageCount'] },
     });
     expect(mockPublishStart.mock.invocationCallOrder[1]).toBeLessThan(mockAudit.mock.invocationCallOrder[0]);
