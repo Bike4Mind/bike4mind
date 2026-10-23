@@ -47,6 +47,7 @@ const claude = (id: string, backend: 'anthropic' | 'bedrock', thinkingStyle?: 'a
   backend,
   max_tokens: 128_000,
   can_think: true,
+  pricing: { 200_000: { input: 1 / 1_000_000, output: 1 / 1_000_000 } },
   ...(thinkingStyle ? { thinkingStyle } : {}),
 });
 
@@ -62,6 +63,7 @@ const OPENAI = {
   backend: 'openai',
   max_tokens: 128_000,
   can_think: true,
+  pricing: { 200_000: { input: 1 / 1_000_000, output: 1 / 1_000_000 } },
 };
 
 function buildDb() {

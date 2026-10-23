@@ -47,6 +47,7 @@ const ADAPTIVE_MODEL = {
   max_tokens: 128_000,
   can_think: true,
   thinkingStyle: 'adaptive' as const,
+  pricing: { 200_000: { input: 1 / 1_000_000, output: 1 / 1_000_000 } },
 };
 
 function buildDb() {
@@ -128,6 +129,7 @@ describe('executeCompletion - thinking', () => {
       backend: 'ollama',
       max_tokens: 8192,
       can_think: true,
+      freeToRun: true,
     };
 
     it.each([

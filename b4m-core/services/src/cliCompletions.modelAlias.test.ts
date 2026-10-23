@@ -22,6 +22,7 @@ const { DATED_GPT_4_1 } = vi.hoisted(() => ({
     type: 'text',
     backend: 'openai',
     max_tokens: 32_768,
+    pricing: { 200_000: { input: 1 / 1_000_000, output: 1 / 1_000_000 } },
   },
 }));
 
