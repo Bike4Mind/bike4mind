@@ -2,6 +2,7 @@ import { emailTemplateRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { ApiKeyScope } from '@bike4mind/common';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 /**
  * Clone an existing email template to create a new one
@@ -41,6 +42,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     variables: existing.variables,
     isActive: false, // Start as inactive so admin can review before activating
     createdBy: req.user.id,
+  });
+
+  await recordAdminActionFromRequest(req, {
+    action: 'email.template.cloned',
+    target: { kind: 'settings', id: cloned.id, displayName: cloned.name },
+    summary: `cloned email template ${existing.name}`,
+    details: { sourceTemplateId: id, slug: cloned.slug },
   });
 
   return res.status(201).json(cloned);

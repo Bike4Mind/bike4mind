@@ -453,6 +453,50 @@ describe('proxy origin verification', () => {
   });
 });
 
+describe('proxy server-action probes', () => {
+  function makePost(url: string, headers: Record<string, string> = {}): NextRequest {
+    return { ...makeRequest(url, headers), method: 'POST' } as NextRequest;
+  }
+
+  it.each(['/', '/dashboard', '/api/health'])('404s a POST to %s carrying Next-Action + RSC headers', path => {
+    const response = proxy(makePost(`https://app.bike4mind.com${path}`, { 'Next-Action': 'x', RSC: '1' }));
+    expect(response.status).toBe(404);
+  });
+
+  it('404s a Next-Action header even without RSC', () => {
+    expect(proxy(makePost('https://app.bike4mind.com/', { 'Next-Action': 'x' })).status).toBe(404);
+  });
+
+  it('passes an ordinary API POST through', () => {
+    const response = proxy(makePost('https://app.bike4mind.com/api/health', { 'content-type': 'application/json' }));
+    expect(response.status).toBe(200);
+  });
+
+  describe('ordering against the [SECURITY] guards', () => {
+    beforeEach(() => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+      vi.restoreAllMocks();
+    });
+
+    it('still 403s and logs a direct-origin probe', () => {
+      vi.stubEnv('ORIGIN_VERIFY_SECRET', 'a'.repeat(48));
+      const response = proxy(makePost('https://abc.lambda-url.us-east-2.on.aws/', { 'Next-Action': 'x' }));
+      expect(response.status).toBe(403);
+      expect(String(vi.mocked(console.warn).mock.calls)).toContain('Blocked direct-origin request');
+    });
+
+    it('still 400s and logs a probe on a malformed path', () => {
+      const response = proxy(makePost('https://app.bike4mind.com/%25zz', { 'Next-Action': 'x' }));
+      expect(response.status).toBe(400);
+      expect(String(vi.mocked(console.warn).mock.calls)).toContain('Blocked malformed URL encoding');
+    });
+  });
+});
+
 describe('proxy configured object-store origin', () => {
   afterEach(() => {
     vi.unstubAllEnvs();

@@ -2,7 +2,7 @@ import { Logger } from '@bike4mind/observability';
 import {
   ApiKeyBillingOwnerType,
   ApiKeyStoredSecret,
-  ApiKeyScope,
+  ApiKeyScopeValue,
   ApiKeyStatus,
   IEmbedBranding,
   IUserApiKeyDocument,
@@ -22,7 +22,7 @@ export interface ValidationResult {
   isValid: boolean;
   userId?: string;
   keyId?: string;
-  scopes?: ApiKeyScope[];
+  scopes?: ApiKeyScopeValue[];
   rateLimit?: {
     requestsPerMinute: number;
     requestsPerDay: number;

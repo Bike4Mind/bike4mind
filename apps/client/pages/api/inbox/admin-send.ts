@@ -9,6 +9,7 @@ import * as z from 'zod';
 import { logEvent } from '@server/utils/analyticsLog';
 import { InboxEvents } from '@bike4mind/common';
 import { Resource } from 'sst';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 const handler = baseApi().post(
   asyncHandler(async (req, res) => {
@@ -61,6 +62,13 @@ const handler = baseApi().post(
       },
       { ability: req.ability }
     );
+
+    await recordAdminActionFromRequest(req, {
+      action: 'support.inbox.message_sent',
+      target: { kind: 'user', id: receiverUser.id, displayName: receiverUser.username },
+      summary: `sent inbox message to ${receiverUser.username}`,
+      details: { inboxMessageId: newInbox.id, type, titleLength: title.length },
+    });
 
     return res.status(200).json(newInbox);
   })
