@@ -84,7 +84,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
             }
           : null,
         userIdCount: Array.isArray(userIds) ? userIds.length : null,
-        testRecipientCount: Array.isArray(testRecipients) ? testRecipients.length : 0,
+        testRecipientCount: testMode ? getTestRecipients(testRecipients, claimed.testEmailAddresses).length : 0,
       },
     });
 
