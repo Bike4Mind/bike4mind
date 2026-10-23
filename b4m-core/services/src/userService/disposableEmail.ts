@@ -29,6 +29,16 @@ const DISPOSABLE_DOMAINS = new Set<string>(disposableDomains as string[]);
 export const isDisposableEmail = (email: string): boolean =>
   emailDomainCandidates(email).some(domain => DISPOSABLE_DOMAINS.has(domain));
 
+const blockedDomainsFrom = (settingValue: unknown): Set<string> => {
+  const parsed = settingsMap.blockedEmailDomains.schema.safeParse(settingValue);
+  return new Set(parsed.success ? partitionDomainList(parsed.data).valid : []);
+};
+
+const blockDisposableFrom = (settingValue: unknown): boolean => {
+  const parsed = settingsMap.blockDisposableEmails.schema.safeParse(settingValue);
+  return parsed.success ? parsed.data : true;
+};
+
 /**
  * True when the email is on (or under) a domain in the admin-edited blockedEmailDomains setting,
  * which covers fresh burner domains the static package has not caught up to.
@@ -38,9 +48,7 @@ export const isAdminBlockedEmailDomain = async (
   { adminSettings }: { adminSettings: IAdminSettingsRepository }
 ): Promise<boolean> => {
   const setting = await adminSettings.findBySettingName('blockedEmailDomains');
-  const parsed = settingsMap.blockedEmailDomains.schema.safeParse(setting?.settingValue);
-  if (!parsed.success) return false;
-  return isEmailInDomains(email, new Set(partitionDomainList(parsed.data).valid));
+  return isEmailInDomains(email, blockedDomainsFrom(setting?.settingValue));
 };
 
 /**
@@ -57,6 +65,19 @@ export const shouldBlockDisposableEmail = async (
   if (await isAdminBlockedEmailDomain(email, { adminSettings })) return true;
   if (!isDisposableEmail(email)) return false;
   const setting = await adminSettings.findBySettingName('blockDisposableEmails');
-  const parsed = settingsMap.blockDisposableEmails.schema.safeParse(setting?.settingValue);
-  return parsed.success ? parsed.data : true;
+  return blockDisposableFrom(setting?.settingValue);
+};
+
+/**
+ * shouldBlockDisposableEmail as a sync predicate over settings read once, for callers that check
+ * many emails in a loop (packages/scripts/backfillOAuthStartingGrant.ts).
+ */
+export const createSignupEmailGate = async (
+  adminSettings: IAdminSettingsRepository
+): Promise<(email: string) => boolean> => {
+  const settings = await adminSettings.findBySettingNames(['blockedEmailDomains', 'blockDisposableEmails']);
+  const valueOf = (name: string) => settings.find(s => s.settingName === name)?.settingValue;
+  const blockedDomains = blockedDomainsFrom(valueOf('blockedEmailDomains'));
+  const blockDisposable = blockDisposableFrom(valueOf('blockDisposableEmails'));
+  return email => isEmailInDomains(email, blockedDomains) || (blockDisposable && isDisposableEmail(email));
 };

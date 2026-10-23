@@ -1,6 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { IAdminSettingsRepository } from '@bike4mind/common';
-import { isAdminBlockedEmailDomain, isDisposableEmail, shouldBlockDisposableEmail } from './disposableEmail';
+import {
+  createSignupEmailGate,
+  isAdminBlockedEmailDomain,
+  isDisposableEmail,
+  shouldBlockDisposableEmail,
+} from './disposableEmail';
 
 const adminSettingsWith = (settings: Record<string, unknown>) => {
   const findBySettingName = vi.fn(async (name: string) =>
@@ -29,7 +34,7 @@ describe('shouldBlockDisposableEmail', () => {
 
   it('blocks a subdomain of an admin-blocked domain', async () => {
     const { adminSettings } = adminSettingsWith({ blockedEmailDomains: JSON.stringify(['kashre.com']) });
-    expect(await shouldBlockDisposableEmail('aubrey28b850@np.kashre.com', { adminSettings })).toBe(true);
+    expect(await shouldBlockDisposableEmail('x@np.kashre.com', { adminSettings })).toBe(true);
   });
 
   it('blocks a domain on both lists when blockDisposableEmails is OFF', async () => {
@@ -65,6 +70,30 @@ describe('isAdminBlockedEmailDomain', () => {
   it('is false for a stored value that is not a list', async () => {
     const { adminSettings } = adminSettingsWith({ blockedEmailDomains: 'kashre.com' });
     expect(await isAdminBlockedEmailDomain('x@kashre.com', { adminSettings })).toBe(false);
+  });
+});
+
+describe('createSignupEmailGate', () => {
+  const gateWith = async (settings: Record<string, unknown>) => {
+    const findBySettingNames = vi.fn(async (names: string[]) =>
+      names.filter(name => name in settings).map(name => ({ settingName: name, settingValue: settings[name] }))
+    );
+    const gate = await createSignupEmailGate({ findBySettingNames } as unknown as IAdminSettingsRepository);
+    return { gate, findBySettingNames };
+  };
+
+  it('reads the settings once and checks many emails without further reads', async () => {
+    const { gate, findBySettingNames } = await gateWith({ blockedEmailDomains: ['kashre.com'] });
+    expect(gate('x@np.kashre.com')).toBe(true);
+    expect(gate('x@mailinator.com')).toBe(true);
+    expect(gate('x@gmail.com')).toBe(false);
+    expect(findBySettingNames).toHaveBeenCalledTimes(1);
+  });
+
+  it('allows a disposable email but still blocks the admin list when blockDisposableEmails is OFF', async () => {
+    const { gate } = await gateWith({ blockDisposableEmails: 'false', blockedEmailDomains: ['kashre.com'] });
+    expect(gate('x@mailinator.com')).toBe(false);
+    expect(gate('x@kashre.com')).toBe(true);
   });
 });
 
