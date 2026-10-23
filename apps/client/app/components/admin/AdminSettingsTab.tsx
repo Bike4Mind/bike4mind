@@ -231,7 +231,7 @@ const AdminSettingsTab: React.FC = () => {
 
       if (!settingInfo) return false;
 
-      if (GROWTH_PRICING_ONLY_KEYS.has(settingConfig.key)) return false;
+      if ((GROWTH_PRICING_ONLY_KEYS as ReadonlySet<string>).has(settingConfig.key)) return false;
 
       // Hide settings that have dedicated custom UI in other admin tabs
       if (
