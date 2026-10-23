@@ -840,7 +840,7 @@
           },
           "safety_tolerance": {
             "type": "integer",
-            "maximum": 5.0,
+            "maximum": 7.0,
             "minimum": 0.0,
             "title": "Safety Tolerance",
             "default": 2,
@@ -1031,7 +1031,7 @@
           },
           "safety_tolerance": {
             "type": "integer",
-            "maximum": 5.0,
+            "maximum": 7.0,
             "minimum": 0.0,
             "title": "Safety Tolerance",
             "default": 2
@@ -1108,7 +1108,7 @@
           },
           "safety_tolerance": {
             "type": "integer",
-            "maximum": 5.0,
+            "maximum": 7.0,
             "minimum": 0.0,
             "title": "Safety Tolerance",
             "default": 2
