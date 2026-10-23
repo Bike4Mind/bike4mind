@@ -131,6 +131,15 @@ describe('context telemetry admin audit', () => {
     expect(h.updateOne.mock.invocationCallOrder[0]).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
   });
 
+  it('does not log a GDPR failure when the audit write throws after a deletion', async () => {
+    h.findById.mockReturnValueOnce(query(quest)).mockReturnValueOnce(query({ promptMeta: {} }));
+    h.audit.mockRejectedValueOnce(new Error('audit down'));
+
+    await expect(run('delete', 'delete')).rejects.toThrow('audit down');
+    expect(h.auditLogCreate).toHaveBeenCalledTimes(1);
+    expect(h.auditLogCreate.mock.calls[0][0]).toMatchObject({ action: 'delete', outcome: 'success' });
+  });
+
   it('does not audit a deletion that finds no telemetry', async () => {
     h.findById.mockReturnValueOnce(query({ promptMeta: {} }));
 
