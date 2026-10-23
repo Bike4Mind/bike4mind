@@ -34,7 +34,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
       action: 'email.job.started',
       target: { kind: 'settings', id, displayName: job.name },
       summary: `started email job ${job.name}`,
-      details: { templateId: job.templateId, subject: job.subject, isTestMode: job.isTestMode },
+      details: { templateId: job.templateId, isTestMode: job.isTestMode },
     });
   });
 

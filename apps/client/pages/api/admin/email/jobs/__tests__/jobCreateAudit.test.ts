@@ -52,6 +52,7 @@ describe('POST /api/admin/email/jobs', () => {
       target: { kind: 'settings', id: 'job-9', displayName: 'Launch' },
       details: { templateId: 'tpl-1' },
     });
+    expect(h.audit.mock.calls[0][1].details).not.toHaveProperty('subject');
     expect(h.create.mock.invocationCallOrder[0]).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
   });
 });

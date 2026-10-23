@@ -68,7 +68,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
       summary: `${testMode ? 'sent test of' : 'sent'} email job ${claimed.name}`,
       details: {
         templateId: claimed.templateId,
-        subject: claimed.subject,
         testMode: Boolean(testMode),
         recipientFilter: recipientFilter ?? null,
         userIdCount: Array.isArray(userIds) ? userIds.length : null,

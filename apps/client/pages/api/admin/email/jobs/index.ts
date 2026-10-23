@@ -103,7 +103,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       action: 'email.job.created',
       target: { kind: 'settings', id: job.id, displayName: job.name },
       summary: `created email job ${job.name}`,
-      details: { templateId, subject: job.subject, isTestMode: Boolean(job.isTestMode) },
+      details: { templateId, isTestMode: Boolean(job.isTestMode) },
     });
 
     return res.status(201).json(job);

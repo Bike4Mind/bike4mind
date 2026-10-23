@@ -91,6 +91,7 @@ describe('POST /api/admin/email/jobs/:id/start', () => {
       action: 'email.job.started',
       target: { kind: 'settings', id: 'job-1', displayName: 'Launch' },
     });
+    expect(h.audit.mock.calls[0][1].details).not.toHaveProperty('subject');
     expect(h.update.mock.invocationCallOrder[0]).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
     expect(h.audit.mock.invocationCallOrder[0]).toBeLessThan(h.sendToQueue.mock.invocationCallOrder[0]);
   });
@@ -116,6 +117,7 @@ describe('POST /api/admin/email/jobs/:id/send', () => {
       target: { kind: 'settings', id: 'job-1', displayName: 'Launch' },
       details: { userIdCount: 2, testMode: false },
     });
+    expect(h.audit.mock.calls[0][1].details).not.toHaveProperty('subject');
     expect(h.claimForSending.mock.invocationCallOrder[0]).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
     expect(h.audit.mock.invocationCallOrder[0]).toBeLessThan(h.sendToQueue.mock.invocationCallOrder[0]);
   });
