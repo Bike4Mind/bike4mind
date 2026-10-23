@@ -309,12 +309,15 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
 /**
- * Whether curation may reclaim this group from this row. Identity and limits are what introducing a
- * model made discovery state - the id it pinned as a name, the 0 its record requires - so only those
- * placeholders yield. An active row's nonzero window is a measurement (an aggregator's join, a
- * source's own figure), and a row a source disabled after promotion keeps it. Availability is
- * decided separately: alongside discovery's own refusal it carries the provider's answer to "can
- * this be called", and a model the account cannot invoke must stay disabled.
+ * Whether curation may reclaim this group from this row.
+ *
+ * Identity yields for every introduction - the curated label replaces whatever the row stated, a
+ * pinned slug or a feed's own name - and for any row carrying its id as its name. Limits yields from
+ * an introduction whose window is the 0 placeholder or which is not active; a nonzero window on an
+ * active row is a measurement (an aggregator's join, a source's own figure), and a row a source
+ * disabled after promotion keeps it. Availability is decided separately: alongside discovery's own
+ * refusal it carries the provider's answer to "can this be called", and a model the account cannot
+ * invoke must stay disabled.
  */
 function yieldsToCuration(row: IModelCatalogRow, group: FieldGroup): boolean {
   if (row.source !== 'discovery') return false;
@@ -328,17 +331,24 @@ function yieldsToCuration(row: IModelCatalogRow, group: FieldGroup): boolean {
  * Discovery writes `autoDisabled` when promotion refuses a model, so its own disable is a verdict.
  * A provider's disable ("not entitled in this AWS account") is a fact it reported, and curation has
  * no better claim on it.
+ *
+ * The row's `availability` contributor decides when it has one: a run that could not re-ask the
+ * provider carries the earlier credit forward while promotion restamps the reason, so a provider's
+ * disable can be wearing discovery's verdict wording. Only rows written before contributors existed
+ * fall back to the wording.
  */
 function inventsDisable(row: IModelCatalogRow): boolean {
   if (row.patch.autoDisabled !== true) return false;
+  const availability = row.contributors?.find(entry => entry.group === 'availability');
+  if (availability) return availability.source === 'discovery';
   const reason = row.patch.autoDisabledReason;
-  if (typeof reason === 'string' && reason.length > 0) return isDiscoveryVerdict(reason);
-  // No reason on the row to read: consult the per-group contributors instead, which only a row
-  // written before they existed lacks.
-  return row.contributors?.some(entry => entry.group === 'availability' && entry.source === 'discovery') === true;
+  return typeof reason === 'string' && reason.length > 0 && isDiscoveryVerdict(reason);
 }
 
-/** The writer pins the model id as the name when a feed publishes none, so a row can carry its id as its label. */
+/**
+ * A row carrying its id as its name: the id the writer pins when a feed publishes none, or a feed
+ * that names models by id (Ollama).
+ */
 const namesItself = (row: IModelCatalogRow): boolean =>
   typeof row.patch.name === 'string' && row.patch.name === row.modelId;
 
@@ -351,10 +361,11 @@ const isActive = (row: IModelCatalogRow): boolean => row.patch.lifecycle?.status
  *
  * The durable marker is `autoDisabled`: promotion writes `false` on the way out, so a row still
  * holding `true` is one discovery keeps out of the pickers, and the id-for-a-name and zero window it
- * had to state are placeholders. A promoted row keeps its claims even when the feed named the model
- * by its id (Ollama), so its measured window still corrects the curated one; `yieldsToCuration`
- * makes the identity exception for the id the writer pinned, and keeps the window of a row that is
- * active - including one a source has since disabled. Availability is not this marker's to decide.
+ * had to state are placeholders. A promoted row keeps its limits claim even when the feed named the
+ * model by its id (Ollama), so its measured window still corrects the curated one. `yieldsToCuration`
+ * still gives identity to the curated label for any row carrying its id as its name - the writer's
+ * pinned slug, or a feed that names models by id - and keeps the window of a row that is active,
+ * including one a source has since disabled. Availability is not this marker's to decide.
  */
 function isIntroduction(row: IModelCatalogRow): boolean {
   if (row.source !== 'discovery') return false;

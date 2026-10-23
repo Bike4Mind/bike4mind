@@ -73,10 +73,10 @@ function stableStringify(value: unknown): string {
  * The exception is a model discovery introduced before an adapter table curated
  * it - a row still holding `autoDisabled`, i.e. one discovery keeps out of the
  * pickers, or one from before that flag was carried forward that still owns
- * `lifecycle` at 'discovered'. Such a row had to state a placeholder identity
- * and limits (the slug it pinned for a name, contextWindow 0), so mergeCatalog
- * lets the curated record reclaim both, and availability too where the disable
- * is discovery's own verdict rather than a provider's.
+ * `lifecycle` at 'discovered'. For such a row mergeCatalog lets the curated
+ * record reclaim identity (whatever name the row stated) and limits (the window
+ * it stated, unless the row is active with a nonzero one), and availability too
+ * where the row credits the disable to discovery rather than to a provider.
  * Correcting any OTHER group discovery owns remains an operator patch, deliberately -
  * recency beating rank at merge time would let any stale discovery row shadow
  * operator intent.
