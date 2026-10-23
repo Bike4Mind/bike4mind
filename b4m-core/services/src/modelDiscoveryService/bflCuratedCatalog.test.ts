@@ -14,6 +14,7 @@ import { describe, expect, it } from 'vitest';
 import { FluxImageCostCalculator, type FluxModel } from '../llm/imageCostCalculator/FluxImageCostCalculator';
 import { testCredentials } from './__fixtures__/fakes';
 import { planCatalogWrites } from './catalogWrite';
+import { discoveryContributorsInForce, discoveryGroupsInForce } from './runModelDiscovery';
 import { normalizeBflOpenApi } from './sources/bfl';
 import openapi from './sources/__fixtures__/bfl/openapi.json';
 
@@ -43,6 +44,18 @@ const FLUX_2_IDS: BFLImageModel[] = [
 ];
 
 const bflTable = async (): Promise<ModelInfo[]> => new BFLBackend('test-key').getModelInfo();
+
+/**
+ * The feed as the build before this branch read it: it also reported `contextWindow: 0` and spelled
+ * the vendor 'bfl'. Both are what made the row it introduced claim `limits` at 0 and what makes the
+ * first run after the upgrade plan a vendor correction. Rebuilt from the current parser so the row
+ * under test is still the one the writer produces, not a hand-written approximation.
+ */
+const preCurationFeed = (): ReturnType<typeof normalizeBflOpenApi> =>
+  normalizeBflOpenApi(openapi).map(record => ({
+    ...record,
+    patch: { ...record.patch, vendor: 'bfl', contextWindow: 0 },
+  }));
 
 /** The catalog a fresh install has after seeding: the adapter literal, as seed rows. */
 const seedRows = async (): Promise<IModelCatalogRow[]> =>
@@ -125,8 +138,11 @@ describe('BFL discovery over the curated table', () => {
   });
 
   it('proposes no change to a model the curated table already describes', async () => {
-    const { rows } = await curatedPlan();
+    const { rows, sightedModelIds } = await curatedPlan();
 
+    // Guard the guard: a feed that emitted no FLUX.2 record would satisfy the assertion below
+    // vacuously, and so would a build that dropped them all before the plan saw them.
+    expect(FLUX_2_IDS.filter(id => sightedModelIds.has(id))).toEqual(FLUX_2_IDS);
     expect(rows.filter(record => FLUX_2_IDS.includes(record.modelId as BFLImageModel))).toEqual([]);
   });
 });
@@ -135,11 +151,12 @@ describe('a catalog discovery reached before the adapter table curated it', () =
   /**
    * The row the pre-change build wrote for every endpoint the moment BFL listed it: its slug for
    * a name, contextWindow 0, autoDisabled and status 'discovered'. Planned from an empty catalog
-   * rather than hand-written so it is the row the writer actually produces.
+   * by the writer itself rather than hand-written, fed the facts that build read - it still
+   * reported the 0, which is what made its row claim `limits`.
    */
   const introducedRows = async (): Promise<IModelCatalogRow[]> => {
     const { rows } = planCatalogWrites({
-      contributions: [{ name: 'bfl', kind: 'provider', records: normalizeBflOpenApi(openapi) }],
+      contributions: [{ name: 'bfl', kind: 'provider', records: preCurationFeed() }],
       base: new Map(),
       coveredBackends: new Set<string>([ModelBackend.BFL]),
       operatorOwnedModelIds: new Set(),
@@ -148,25 +165,23 @@ describe('a catalog discovery reached before the adapter table curated it', () =
       runStartedAt: INTRODUCED_AT,
       runId: 'run-before-curation',
     });
-    return rows.map(
-      // `vendor: 'bfl'` is what that build's source emitted; the catalog spells it otherwise, so the
-      // first run after the upgrade plans a correction row on top of the introduction.
-      row =>
-        ({
-          ...row,
-          patch: { ...row.patch, vendor: 'bfl' },
-          effectiveFrom: INTRODUCED_AT,
-        }) as unknown as IModelCatalogRow
-    );
+    return rows.map(row => ({ ...row, effectiveFrom: INTRODUCED_AT }) as unknown as IModelCatalogRow);
   };
 
   const render = async (rows: IModelCatalogRow[]) => mergeCatalogWithDrops(await bflTable(), rows, BFL_KEYS);
+
+  const flux2Of = ({ models }: { models: ModelInfo[] }) =>
+    models.filter(model => FLUX_2_IDS.includes(model.id as BFLImageModel));
 
   /** The scheduled run after the upgrade: planning against the catalog the deployed build left. */
   const nextRun = async (rows: IModelCatalogRow[]): Promise<IModelCatalogRow[]> => {
     const { rows: planned } = planCatalogWrites({
       contributions: [{ name: 'bfl', kind: 'provider', records: normalizeBflOpenApi(openapi) }],
       base: resolveCatalogRecords(rows),
+      // What production hands the plan, so the correction rows re-claim what the superseded
+      // discovery row owned rather than what this run happened to observe.
+      priorDiscoveryGroups: discoveryGroupsInForce(rows),
+      priorContributors: discoveryContributorsInForce(rows),
       coveredBackends: new Set<string>([ModelBackend.BFL]),
       operatorOwnedModelIds: new Set(),
       credentials: testCredentials(),
@@ -202,6 +217,7 @@ describe('a catalog discovery reached before the adapter table curated it', () =
     for (const id of FLUX_2_IDS) {
       const row = introduced.find(candidate => candidate.modelId === id);
       expect(row?.patch, `${id} was not introduced`).toMatchObject({ name: id, contextWindow: 0, autoDisabled: true });
+      expect(row?.ownedGroups, `${id}'s introduction claimed no limits`).toContain('limits');
       expect(row?.patch.lifecycle?.status).toBe('discovered');
     }
   });
@@ -214,16 +230,32 @@ describe('a catalog discovery reached before the adapter table curated it', () =
     const fresh = await render(await seedRows());
     const upgraded = await render([...(await introducedRows()), ...(await seedRows())]);
 
-    const ofInterest = ({ models }: { models: ModelInfo[] }) =>
-      models.filter(model => FLUX_2_IDS.includes(model.id as BFLImageModel));
-    expect(ofInterest(upgraded)).toEqual(ofInterest(fresh));
+    expect(flux2Of(upgraded)).toEqual(flux2Of(fresh));
   });
 
   it('keeps the curated record after the next discovery run snapshots over it', async () => {
     const upgraded = [...(await introducedRows()), ...(await seedRows())];
     const planned = await nextRun(upgraded);
-    // That build's rows spell the vendor the old way, so the upgrade does plan a correction.
-    expect(planned.length).toBeGreaterThan(0);
+
+    // Pin the rows this run plans for the endpoints. `planned.length > 0` is satisfied by the five
+    // non-FLUX.2 vendor corrections alone, and the render below would not notice their absence.
+    const plannedFlux2 = planned.filter(record => FLUX_2_IDS.includes(record.modelId as BFLImageModel));
+    expect(plannedFlux2.map(record => record.modelId).sort()).toEqual([...FLUX_2_IDS].sort());
+    for (const record of plannedFlux2) {
+      // Still an introduction: the slug it pinned and discovery's own disable, carried forward.
+      expect(record.patch, `${record.modelId}'s snapshot stopped being a placeholder`).toMatchObject({
+        name: record.modelId,
+        autoDisabled: true,
+      });
+      // The groups production re-claims from the row this snapshot supersedes, not just this run's.
+      expect(record.ownedGroups, `${record.modelId} lost the superseded row's claims`).toEqual(
+        expect.arrayContaining(['lifecycle', 'availability'])
+      );
+    }
+
+    const before = await render(upgraded);
+    const after = await render([...upgraded, ...planned]);
+    expect(flux2Of(after), 'the snapshot changed what the picker serves').toEqual(flux2Of(before));
 
     await expectCurated([...upgraded, ...planned]);
   });

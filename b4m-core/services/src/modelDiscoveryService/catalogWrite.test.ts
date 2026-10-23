@@ -3,8 +3,9 @@ import {
   ModelBackend,
   type IModelCatalogRow,
   type IModelCatalogRowInput,
+  type ModelInfo,
 } from '@bike4mind/common';
-import { resolveCatalogRecords } from '@bike4mind/llm-adapters';
+import { mergeCatalogWithDrops, resolveCatalogRecords } from '@bike4mind/llm-adapters';
 import { describe, expect, it } from 'vitest';
 import { testCredentials } from './__fixtures__/fakes';
 import { DISCOVERY_CONTRIBUTOR, planCatalogWrites, type CatalogWriteInput } from './catalogWrite';
@@ -259,6 +260,40 @@ describe('planCatalogWrites', () => {
       expect(disabled.patch).toMatchObject({ autoDisabledReason: 'not entitled in this AWS account' });
 
       expect(plan(bedrockRun(['ON_DEMAND'], unentitled, disabled)).rows).toHaveLength(0);
+    });
+
+    it('serves a curated model disabled by a provider-declared disable', () => {
+      // The row is an introduction, and curation reclaims what an introduction invents - the slug,
+      // the 0. Not its disable here: this one is the provider's answer, and serving the model
+      // enabled would fail at every dispatch instead.
+      const { rows } = plan(bedrockRun(['ON_DEMAND'], { ...available, authorizationStatus: 'NOT_AUTHORIZED' }));
+      const curated: ModelInfo = {
+        id: MODEL as ModelInfo['id'],
+        type: 'text',
+        name: 'Claude Opus 9',
+        backend: ModelBackend.Bedrock,
+        contextWindow: 200_000,
+        max_tokens: 8_192,
+        pricing: {},
+        can_stream: true,
+        supportsTools: true,
+        supportsImageVariation: false,
+        rank: 1,
+        description: 'the curated description',
+      };
+
+      const { models } = mergeCatalogWithDrops([curated], rows as unknown as IModelCatalogRow[], {
+        apiKeys: null,
+        isSelfHost: false,
+        bedrockReachable: true,
+      });
+
+      expect(models[0]).toMatchObject({
+        name: 'Claude Opus 9',
+        contextWindow: 200_000,
+        disabled: true,
+        disabledReason: 'not entitled in this AWS account',
+      });
     });
 
     it('leaves a manual disable in force when it lifts its own', () => {
