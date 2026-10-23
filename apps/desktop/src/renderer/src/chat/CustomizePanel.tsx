@@ -517,7 +517,9 @@ export function CustomizeScreen({
       <Box sx={{ borderBottom: '1px solid', borderColor: 'divider' }}>
         <Stack direction="row" alignItems="center" spacing={1} sx={{ ...contentColumnSx, py: 1.25 }}>
           <Stack sx={{ flex: 1, minWidth: 0 }}>
-            <Typography level="title-sm">Customize</Typography>
+            <Typography level="title-sm" component="h1">
+              Customize
+            </Typography>
             <Typography level="body-xs" textColor="text.tertiary">
               {CUSTOMIZE_INTRO}
             </Typography>
@@ -571,7 +573,7 @@ export function CustomizeScreen({
               ...contentColumnSx,
               py: 2,
               display: 'grid',
-              gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))' },
+              gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 240px), 1fr))',
               gap: 2,
             }}
           >
@@ -580,7 +582,6 @@ export function CustomizeScreen({
                 key={name}
                 component="article"
                 aria-label={name}
-                aria-disabled="true"
                 data-testid="customize-plugin-card"
                 variant="outlined"
                 sx={{
@@ -588,13 +589,16 @@ export function CustomizeScreen({
                   borderRadius: 'md',
                   borderStyle: 'dashed',
                   bgcolor: 'background.level1',
-                  color: 'text.tertiary',
-                  opacity: 0.65,
+                  color: 'text.secondary',
                   cursor: 'not-allowed',
                 }}
               >
                 <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1}>
-                  <Typography level="h3" sx={{ fontSize: 'var(--joy-fontSize-md)', color: 'text.tertiary' }}>
+                  <Typography
+                    level="h3"
+                    component="h2"
+                    sx={{ fontSize: 'var(--joy-fontSize-md)', color: 'text.secondary' }}
+                  >
                     {name}
                   </Typography>
                   <IconButton
@@ -608,7 +612,7 @@ export function CustomizeScreen({
                     +
                   </IconButton>
                 </Stack>
-                <Typography level="body-sm" textColor="text.tertiary" data-testid="customize-plugin-status">
+                <Typography level="body-sm" textColor="text.secondary" data-testid="customize-plugin-status">
                   <Box component="span" aria-hidden="true" sx={{ mr: 0.75 }}>
                     {'\uD83D\uDEA7'}
                   </Box>

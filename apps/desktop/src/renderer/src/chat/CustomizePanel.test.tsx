@@ -148,6 +148,7 @@ describe('the Customize screen', () => {
     const tabs = [...container.querySelectorAll<HTMLElement>('[role="tab"]')];
     expect(tabs.map(tab => tab.textContent)).toEqual(['Skills', 'MCP', 'Plugins']);
     expect(tabs[0]?.getAttribute('aria-selected')).toBe('true');
+    expect(container.querySelector('h1')?.textContent).toBe('Customize');
     expect(isVisible(byTestId('skills-settings'))).toBe(true);
     expect(isVisible(byTestId('customize-plugins-grid'))).toBe(false);
   });
@@ -179,9 +180,7 @@ describe('the Customize screen', () => {
     act(() => pluginsTab.focus());
     for (const card of cards) {
       expect(card.tagName).toBe('ARTICLE');
-      expect(card.getAttribute('aria-disabled')).toBe('true');
-      expect(card.querySelector('h3')?.textContent).toBe(card.getAttribute('aria-label'));
-      expect(Number(getComputedStyle(card).opacity)).toBeLessThan(1);
+      expect(card.querySelector('h2')?.textContent).toBe(card.getAttribute('aria-label'));
       expect(getComputedStyle(card).borderTopStyle).toBe('dashed');
       const addButton = card.querySelector<HTMLButtonElement>('[data-testid="customize-plugin-add-btn"]')!;
       expect(addButton.disabled).toBe(true);
@@ -192,8 +191,16 @@ describe('the Customize screen', () => {
       const status = card.querySelector('[data-testid="customize-plugin-status"]')!;
       expect(status.querySelector('[aria-hidden="true"]')?.textContent).toBe('\uD83D\uDEA7');
       expect(status.lastChild?.textContent?.trim()).toBe('Under construction');
+      const grid = byTestId('customize-plugins-grid')!;
+      const onClick = vi.fn();
+      grid.addEventListener('click', onClick, true);
+      try {
+        act(() => addButton.click());
+        expect(onClick).not.toHaveBeenCalled();
+      } finally {
+        grid.removeEventListener('click', onClick, true);
+      }
       act(() => {
-        addButton.click();
         addButton.focus();
         card.click();
         card.focus();
