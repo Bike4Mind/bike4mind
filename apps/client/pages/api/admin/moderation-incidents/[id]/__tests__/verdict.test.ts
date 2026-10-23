@@ -650,13 +650,46 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
       }
     );
 
-    it.each(verdicts)('fails %s without a 200 when the audit write rejects', async verdict => {
-      arrange[verdict]();
+    it.each(verdicts.filter(v => v !== 'confirmed_csam'))(
+      'fails %s without a 200 when the audit write rejects',
+      async verdict => {
+        arrange[verdict]();
+        audit.record.mockRejectedValue(new Error('audit down'));
+        const res = makeRes();
+
+        await expect(runHandler(makeReq(bodyFor(verdict)), res)).rejects.toThrow('audit down');
+        expect(res.status).not.toHaveBeenCalledWith(200);
+      }
+    );
+
+    it('persists the NCMEC report id and returns 500 when the confirmed_csam audit write rejects', async () => {
+      arrange.confirmed_csam();
       audit.record.mockRejectedValue(new Error('audit down'));
+      mockSetNcmecReportId.mockResolvedValue(undefined);
       const res = makeRes();
 
-      await expect(runHandler(makeReq(bodyFor(verdict)), res)).rejects.toThrow('audit down');
-      expect(res.status).not.toHaveBeenCalledWith(200);
+      await runHandler(makeReq({ verdict: 'confirmed_csam' }), res);
+
+      expect(mockSetNcmecReportId).toHaveBeenCalledWith('inc-1', 'RPT-001');
+      expect(mockSetNcmecReportId.mock.invocationCallOrder[0]).toBeGreaterThan(
+        audit.record.mock.invocationCallOrder[0]
+      );
+      expect(res.status).toHaveBeenCalledWith(500);
+      const body = (res.json as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(body).toMatchObject({ ncmecReportId: 'RPT-001' });
+      expect(body.error).toContain('retry_finish');
+    });
+
+    it('still returns 500 with the report id when persisting it after a failed audit also fails', async () => {
+      arrange.confirmed_csam();
+      audit.record.mockRejectedValue(new Error('audit down'));
+      mockSetNcmecReportId.mockRejectedValue(new Error('db down'));
+      const res = makeRes();
+
+      await runHandler(makeReq({ verdict: 'confirmed_csam' }), res);
+
+      expect(res.status).toHaveBeenCalledWith(500);
+      expect((res.json as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({ ncmecReportId: 'RPT-001' });
     });
 
     it('records the NCMEC report id for a confirmed_csam verdict', async () => {
