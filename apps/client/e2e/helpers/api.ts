@@ -299,8 +299,8 @@ export async function apiLoginStandingUser(
 
 /**
  * Pull the refresh token out of a Set-Cookie response header. Playwright joins multiple
- * Set-Cookie headers with newlines, so scan line by line. Mirrors REFRESH_COOKIE_NAME in
- * packages/server-utils/src/auth/refreshCookie.ts - keep in sync.
+ * Set-Cookie headers with newlines, so scan line by line. Mirrors sessionCookieName in
+ * packages/server-utils/src/auth/refreshCookie.ts (prefixed on https, bare on http) - keep in sync.
  */
 export function refreshTokenFromSetCookie(setCookieHeader: string | undefined): string | null {
   if (!setCookieHeader) return null;
@@ -308,7 +308,8 @@ export function refreshTokenFromSetCookie(setCookieHeader: string | undefined): 
     const [pair] = line.split(';');
     const eq = pair.indexOf('=');
     if (eq === -1) continue;
-    if (pair.slice(0, eq).trim() === 'b4m_rt') {
+    const name = pair.slice(0, eq).trim();
+    if (name === '__Host-b4m_rt' || name === 'b4m_rt') {
       const value = pair.slice(eq + 1).trim();
       return value.length > 0 ? value : null;
     }
