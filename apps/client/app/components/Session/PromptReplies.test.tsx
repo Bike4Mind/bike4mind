@@ -1,13 +1,14 @@
 import React from 'react';
 import { beforeEach, describe, it, expect, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { TRUNCATED_FINISH_REASON } from '@bike4mind/common';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { getThemeConfig } from '../../utils/themes';
-import { parseArtifactsWithFallback } from '../../utils/artifactParser';
+import { parseArtifactsWithFallback, type ParsedArtifact } from '../../utils/artifactParser';
+import { useStreamingArtifactPersistence } from '../../hooks/useStreamingArtifactPersistence';
 import {
   classifyGeneratedFiles,
   createCodeComponent,
@@ -40,6 +41,26 @@ vi.mock('@client/app/hooks/useMessageEditMode', () => {
   const state = { editingMessageId: undefined, editTarget: undefined, clearEdit: vi.fn() };
   return { useMessageEditMode: (selector: (s: typeof state) => unknown) => selector(state) };
 });
+
+// Stands in for the id resolver's no-row-yet path: the card shows the id it would mint from the
+// index it was handed, which is what has to match the row persistence writes.
+vi.mock('./artifacts/ArtifactRenderer', async () => {
+  const { generateCompleteArtifactId, getArtifactTimestamp } =
+    await vi.importActual<typeof import('../../utils/artifactParser')>('../../utils/artifactParser');
+  return {
+    default: ({ artifact, index, messageId }: { artifact: ParsedArtifact; index: number; messageId: string }) => (
+      <div data-testid={`artifact-card-${artifact.identifier}`}>
+        {generateCompleteArtifactId(artifact.type, artifact.identifier ?? '', getArtifactTimestamp(messageId), index)}
+      </div>
+    ),
+  };
+});
+
+const { persistArtifactsMock } = vi.hoisted(() => ({ persistArtifactsMock: vi.fn(() => Promise.resolve()) }));
+vi.mock('@client/app/utils/artifactPersistence', async importOriginal => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  persistArtifacts: persistArtifactsMock,
+}));
 
 describe('retrieval-floor banner wiring in a rendered reply', () => {
   const appTheme = extendTheme({ ...getThemeConfig() });
@@ -652,5 +673,53 @@ describe('reply UI side effects: live only on first arrival', () => {
     const { rerender } = render(reply(id, 'running'));
     rerender(reply(id, 'done'));
     expect(handler).not.toHaveBeenCalled();
+  });
+});
+
+describe('artifact card ids agree with the rows persistence writes', () => {
+  const appTheme = extendTheme({ ...getThemeConfig() });
+  const questId = 'artifact-ids-quest';
+  const stopwatch =
+    '<artifact identifier="Stopwatch" type="application/vnd.ant.react" title="Stopwatch">\n' +
+    'export default function Stopwatch() { return null; }\n</artifact>';
+  const app =
+    '<artifact identifier="App" type="application/vnd.ant.react" title="App">\n' +
+    'import Stopwatch from "./Stopwatch";\nexport default function App() { return <Stopwatch />; }\n</artifact>';
+  const board = '<artifact identifier="board" type="application/vnd.ant.chess" title="Board">no position</artifact>';
+  const midStream = `Here is the timer:\n\n${stopwatch}\n\nAnd the app that uses it:`;
+  const finished = `${midStream}\n\n${app}\n\nAnd a board:\n\n${board}`;
+
+  const reply = (questMasterReply: string, status: string) => (
+    <QueryClientProvider client={new QueryClient()}>
+      <CssVarsProvider theme={appTheme}>
+        <PromptReplies
+          messageData={{ id: questId, sessionId: 'session-1', questMasterReply, status } as never}
+          onSendMessage={async () => {}}
+        />
+      </CssVarsProvider>
+    </QueryClientProvider>
+  );
+
+  const persistedIds = async (replyText: string) => {
+    persistArtifactsMock.mockClear();
+    const { result } = renderHook(() => useStreamingArtifactPersistence());
+    result.current.persistArtifactsFromQuest({ id: questId, sessionId: 'session-1', replies: [replyText] });
+    await waitFor(() => expect(persistArtifactsMock).toHaveBeenCalledTimes(1));
+    const [rows] = persistArtifactsMock.mock.calls[0] as unknown as [{ id: string; identifier?: string }[]];
+    return Object.fromEntries(rows.map(row => [row.identifier, row.id]));
+  };
+
+  it('gives each finished card the id its row is saved under, chess included in the count', async () => {
+    const { rerender } = render(reply(midStream, 'running'));
+    // Mid-stream the earlier artifact is the only one parsed, so it sits at index 0 - not the
+    // index it ends up with. That id is provisional; the resolver must not keep it.
+    const midStreamId = screen.getByTestId('artifact-card-Stopwatch').textContent;
+
+    rerender(reply(finished, 'done'));
+    const rows = await persistedIds(finished);
+
+    expect(screen.getByTestId('artifact-card-App')).toHaveTextContent(rows.App);
+    expect(screen.getByTestId('artifact-card-Stopwatch')).toHaveTextContent(rows.Stopwatch);
+    expect(midStreamId).not.toBe(rows.Stopwatch);
   });
 });

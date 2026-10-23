@@ -135,6 +135,8 @@ describe('KnowledgeViewer with a multi-file React entry', () => {
   beforeEach(() => {
     h.viewerProps.length = 0;
     h.api.put.mockReset();
+    h.api.get.mockReset();
+    h.api.post.mockReset();
     h.latest = latestVersion(1, ENTRY_CODE);
     setKnowledgeViewer({ selectedTabIndex: 0, showLineNumbers: false });
     useSessionLayout.setState({
@@ -229,5 +231,48 @@ describe('KnowledgeViewer with a multi-file React entry', () => {
     });
     expect(state.artifactData?.id).toBe(ENTRY_ID);
     expect(state.selectedArtifactId).toBe(ENTRY_ID);
+  });
+
+  it('records the saved version on the open tab, so a remounted viewer opens on it', async () => {
+    render(viewerTree());
+    await act(async () => {});
+
+    await saveEntry(EDITED_CODE);
+
+    const state = useSessionLayout.getState();
+    expect(state.artifactData?.content).toMatchObject({ id: ENTRY_ID, version: 2, content: EDITED_CODE });
+    expect(state.recentArtifacts.find(a => a.id === ENTRY_ID)?.content).toMatchObject({ version: 2 });
+    expect((reactViewerProps().at(-1)?.artifact as ReactArtifact).version).toBe(2);
+  });
+
+  // A card can carry an id minted before its reply was saved, or one restored from a stale
+  // layout. Creating a row under that id would leave a second copy beside the reply's own.
+  it("lands a save on the session's row for the entry when the card's id names none", async () => {
+    const SAVED_ID = 'artifact_react_app_1700000000000_1';
+    render(viewerTree());
+    await act(async () => {});
+    h.api.put
+      .mockRejectedValueOnce(Object.assign(new Error('Not found'), { response: { status: 404 } }))
+      .mockResolvedValueOnce({ data: { artifact: { id: SAVED_ID, version: 2 } } });
+    h.api.get.mockResolvedValue({ data: { artifacts: [{ id: SAVED_ID }] } });
+
+    const onSave = reactViewerProps().at(-1)?.onSave as (content: string) => Promise<unknown>;
+    await act(async () => {
+      await onSave(EDITED_CODE);
+    });
+
+    expect(h.api.get).toHaveBeenCalledWith('/api/artifacts', {
+      params: expect.objectContaining({ sessionId: SESSION_ID, type: 'react', identifier: 'app' }),
+    });
+    expect(h.api.put).toHaveBeenLastCalledWith(
+      `/api/artifacts/${SAVED_ID}`,
+      expect.objectContaining({ content: EDITED_CODE, createNewVersion: true })
+    );
+    expect(h.api.post).not.toHaveBeenCalled();
+    expect(useSessionLayout.getState().artifactData).toMatchObject({
+      id: SAVED_ID,
+      reactGroup: ENTRY_GROUP,
+      content: { id: SAVED_ID, version: 2, content: EDITED_CODE },
+    });
   });
 });

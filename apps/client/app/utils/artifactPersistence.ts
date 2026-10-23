@@ -3,6 +3,8 @@ import { isQuotaExceededError } from './localStorageUtils';
 
 // Track only active persistence operations
 const activePersistenceOps = new Map<string, Promise<void>>();
+// Whole persistArtifacts calls, including blocks still queued behind an earlier one.
+const activePersistenceBatches = new Set<Promise<unknown>>();
 
 // LocalStorage keys
 const ARTIFACT_STORAGE_KEY = 'artifacts';
@@ -202,7 +204,13 @@ export async function persistArtifacts(
     chains.set(artifact.identifier, next);
     return next;
   });
-  await Promise.allSettled(persistPromises);
+  const batch = Promise.allSettled(persistPromises);
+  activePersistenceBatches.add(batch);
+  try {
+    await batch;
+  } finally {
+    activePersistenceBatches.delete(batch);
+  }
 }
 
 /**
@@ -254,6 +262,31 @@ export async function findExistingArtifactId(
     console.warn('Error finding existing artifact:', error);
     return null;
   }
+}
+
+/**
+ * The row a save of `artifactId` belongs on after a PUT to that id found nothing, or null when
+ * the session has none and the caller should create it. A card's id can name no row: it was
+ * minted before the reply was saved, or restored from a stale layout. Its identifier still names
+ * the session's row, and creating one under the dead id would leave a duplicate beside it.
+ */
+export async function findArtifactSaveTarget(
+  artifactId: string,
+  type: string,
+  sessionId?: string
+): Promise<string | null> {
+  // A save right after a reply finishes can beat that reply's own persist to the server.
+  const inFlight = [...activePersistenceBatches, ...activePersistenceOps.values()];
+  if (inFlight.length > 0) {
+    await Promise.allSettled(inFlight);
+    if (await checkArtifactExists(artifactId)) return artifactId;
+  }
+  // Minted as artifact_{type}_{identifier}_{timestamp}_{index}; the identifier may itself hold `_`.
+  const prefix = `artifact_${type}_`;
+  const identifier = artifactId.startsWith(prefix)
+    ? /^(.+)_\d+_\d+$/.exec(artifactId.slice(prefix.length))?.[1]
+    : undefined;
+  return identifier ? findExistingArtifactId(type, identifier, sessionId) : null;
 }
 
 // LocalStorage functions

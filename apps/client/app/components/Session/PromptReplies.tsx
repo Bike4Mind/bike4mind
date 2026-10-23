@@ -1911,7 +1911,8 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
             <ArtifactRenderer
               key={`${artifact.type}_${artifact.identifier}_${index}`}
               artifact={artifact}
-              index={index}
+              // The full parse's index, chess included, which is what persistence numbers ids by.
+              index={artifacts.indexOf(artifact)}
               messageId={messageId ?? 'unknown'}
               sessionId={currentSessionId ?? undefined}
               reactGroup={reactArtifactGroups.get(artifact)}
