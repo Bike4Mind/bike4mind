@@ -31,7 +31,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     });
 
     await recordAdminActionFromRequest(req, {
-      action: 'email.job.started',
+      action: job.isTestMode ? 'email.job.test_started' : 'email.job.started',
       target: { kind: 'settings', id, displayName: job.name },
       summary: `started email job ${job.name}`,
       details: { templateId: job.templateId, isTestMode: job.isTestMode },

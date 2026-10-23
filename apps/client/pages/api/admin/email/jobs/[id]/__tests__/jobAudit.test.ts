@@ -96,6 +96,14 @@ describe('POST /api/admin/email/jobs/:id/start', () => {
     expect(h.audit.mock.invocationCallOrder[0]).toBeLessThan(h.sendToQueue.mock.invocationCallOrder[0]);
   });
 
+  it('records a test-mode job at notice severity under its own action', async () => {
+    h.findById.mockResolvedValue({ ...draftJob, isTestMode: true });
+
+    await call(startHandler, 'POST');
+
+    expect(h.audit.mock.calls[0][1]).toMatchObject({ action: 'email.job.test_started' });
+  });
+
   it('sends nothing when the audit write fails', async () => {
     h.audit.mockRejectedValue(new Error('audit down'));
 
@@ -120,6 +128,15 @@ describe('POST /api/admin/email/jobs/:id/send', () => {
     expect(h.audit.mock.calls[0][1].details).not.toHaveProperty('subject');
     expect(h.claimForSending.mock.invocationCallOrder[0]).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
     expect(h.audit.mock.invocationCallOrder[0]).toBeLessThan(h.sendToQueue.mock.invocationCallOrder[0]);
+  });
+
+  it('records a test-mode send under its own action', async () => {
+    await call(sendHandler, 'POST', { testMode: true, testRecipients: ['t@example.com'] });
+
+    expect(h.audit.mock.calls[0][1]).toMatchObject({
+      action: 'email.job.test_sent',
+      details: { testMode: true, testRecipientCount: 1 },
+    });
   });
 
   it('sends nothing when the audit write fails', async () => {

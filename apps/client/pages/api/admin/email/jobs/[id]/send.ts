@@ -63,7 +63,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     }
 
     await recordAdminActionFromRequest(req, {
-      action: 'email.job.sent',
+      action: testMode ? 'email.job.test_sent' : 'email.job.sent',
       target: { kind: 'settings', id, displayName: claimed.name },
       summary: `${testMode ? 'sent test of' : 'sent'} email job ${claimed.name}`,
       details: {
