@@ -9,6 +9,8 @@
  *   for 3 consecutive 60s evaluation periods (3 min) before firing
  * - Message age: any message older than 1 hour (3600s) triggers alarm
  *   (single evaluation period — the 1hr threshold already provides built-in delay)
+ * - Missing data: treated as no information, not as a passing period, so an SQS
+ *   datapoint gap cannot resolve a firing alarm to OK and re-page on the next point
  *
  * Stage-gated: Only deployed to `dev` and `production` stages.
  * Set ENABLE_MONITORING=true to opt in for other stages.
@@ -158,7 +160,7 @@ if (isMonitoredStage) {
     period: 60,
     statistic: 'Maximum',
     threshold: 0,
-    treatMissingData: 'notBreaching',
+    treatMissingData: 'missing',
     dimensions: { QueueName: dlqAlarmHandlerDlq.name },
     alarmActions: [oobAlarmTopic.arn],
     tags: { Application: 'AlarmPipeline', Severity: 'Critical', MonitoringType: 'DLQ' },
@@ -177,7 +179,7 @@ if (isMonitoredStage) {
     period: 60,
     statistic: 'Maximum',
     threshold: 3600,
-    treatMissingData: 'notBreaching',
+    treatMissingData: 'missing',
     dimensions: { QueueName: dlqAlarmHandlerDlq.name },
     alarmActions: [oobAlarmTopic.arn],
     tags: { Application: 'AlarmPipeline', Severity: 'High', MonitoringType: 'DLQ' },
