@@ -1,8 +1,10 @@
 import {
   BrowserWindow,
+  nativeImage,
   WebContentsView,
   session as electronSession,
   type BaseWindow,
+  type NativeImage,
   type Session,
   type WebContents,
 } from 'electron';
@@ -50,6 +52,9 @@ const EVALUATE_TIMEOUT_MS = 30_000;
 /** How long a script held by a load gets to run once that load is stopped. Measured at under 10ms. */
 const STOP_RELEASE_MS = 2_000;
 const CAPTURE_TIMEOUT_MS = 15_000;
+const CAPTURE_FAILED =
+  'Could not capture a screenshot of this page. browser_snapshot still reads its text and elements; ' +
+  "if a picture is needed, ask the user to open this conversation's browser pane, then try browser_screenshot again.";
 /** A freeze-frame later than this is drawn after the hide it was for has usually ended. */
 const STILL_TIMEOUT_MS = 1_000;
 const STILL_JPEG_QUALITY = 80;
@@ -122,8 +127,8 @@ function consoleEntry(args: ConsoleArgs): { level: string; message: string; sour
  * A `WebContentsView` rather than a window of its own, because that is the only thing Electron
  * can put INSIDE the app window as a pane. It is always the child of some window: the app
  * window while the user is looking at it, and otherwise the hidden one created alongside it.
- * That hidden window is what keeps a parked page composited, so `capturePage` still has
- * something to return - a view belonging to no window at all paints nothing.
+ * That hidden window keeps a parked page alive and laid out at the viewport, but it is never
+ * shown, so it gives the page no surface for `capturePage` to read; see {@link capture}.
  */
 class ElectronPage implements BrowserPage {
   /** Where the view sits when it is not in the pane. Also the page's keep-alive; see above. */
@@ -141,6 +146,14 @@ class ElectronPage implements BrowserPage {
   private commits = 0;
   /** Set by close(), so the host's own 'closed' does not run the teardown a second time. */
   private closing = false;
+  /** In the app window but hidden for a moment; see hold(). */
+  private held = false;
+  /**
+   * Live screenshots using the debugger, and whether they own its attachment. A timeout
+   * releases only its own use so overlapping captures can finish within their deadlines.
+   */
+  private debuggerUsers = 0;
+  private attachedDebugger = false;
   /** Agent steps running in this page right now; a popup opened during one is the agent's. */
   private acting = 0;
   private actedAt = 0;
@@ -288,6 +301,7 @@ class ElectronPage implements BrowserPage {
     this.moveTo(window);
     this.view.setBounds(bounds);
     this.view.setVisible(true);
+    this.held = false;
   }
 
   /**
@@ -295,11 +309,14 @@ class ElectronPage implements BrowserPage {
    * to the parked viewport and back for every menu, and {@link still} captures it as it looked.
    */
   hold(): void {
-    if (!this.gone) this.view.setVisible(false);
+    if (this.gone) return;
+    this.view.setVisible(false);
+    this.held = true;
   }
 
   /** Take the view back out of the app window, at the size every tool has always seen. */
   park(): void {
+    this.held = false;
     if (this.host.isDestroyed()) {
       this.detach();
       return;
@@ -506,16 +523,83 @@ class ElectronPage implements BrowserPage {
   }
 
   async screenshot(): Promise<Buffer> {
-    const image = await within(this.contents.capturePage(), CAPTURE_TIMEOUT_MS);
-    if (image === TIMED_OUT) {
-      throw new Error(
-        `The page did not paint a frame to capture within ${seconds(CAPTURE_TIMEOUT_MS)}; it is not responding.`
-      );
+    const controller = new AbortController();
+    try {
+      const image = await within(this.capture(controller.signal), CAPTURE_TIMEOUT_MS);
+      if (image === TIMED_OUT) {
+        throw new Error(
+          `The page did not paint a frame to capture within ${seconds(CAPTURE_TIMEOUT_MS)}; it is not responding.`
+        );
+      }
+      if (image.isEmpty()) throw new Error('The page rendered nothing to capture yet. Try again once it has loaded.');
+      // A Retina capture is twice the viewport; the extra pixels only cost the model image tokens.
+      const { width } = image.getSize();
+      return (width > VIEWPORT.width ? image.resize({ width: VIEWPORT.width, quality: 'best' }) : image).toPNG();
+    } finally {
+      controller.abort();
     }
-    if (image.isEmpty()) throw new Error('The page rendered nothing to capture yet. Try again once it has loaded.');
-    // A Retina capture is twice the viewport; the extra pixels only cost the model image tokens.
-    const { width } = image.getSize();
-    return (width > VIEWPORT.width ? image.resize({ width: VIEWPORT.width, quality: 'best' }) : image).toPNG();
+  }
+
+  /**
+   * `capturePage` reads the compositor surface, which only a view on screen in the pane has. A
+   * parked view's host is never shown: one never in the pane rejects with "Current display
+   * surface not available for capture" however long it waits, and one parked since rejects with
+   * a viz error or returns a frame from before it was parked. DevTools draws a fresh frame
+   * without a surface, so it takes every page off screen, and any the pane fails to capture.
+   */
+  private async capture(signal: AbortSignal): Promise<NativeImage> {
+    const contents = this.contents;
+    let failure: unknown = 'off screen';
+    if (this.parent !== this.host && !this.held) {
+      try {
+        const image = await contents.capturePage();
+        if (!image.isEmpty()) return image;
+        failure = 'an empty frame';
+      } catch (err) {
+        failure = err;
+      }
+    }
+    // capturePage can settle after its caller has timed out; do not start more work then.
+    signal.throwIfAborted();
+    try {
+      return await this.captureWithDevTools(contents, signal);
+    } catch (err) {
+      signal.throwIfAborted();
+      console.warn(`BROWSER: could not capture ${this.currentUrl()}: ${String(failure)}; DevTools: ${String(err)}`);
+      throw new Error(CAPTURE_FAILED);
+    }
+  }
+
+  /** Attached for this capture only. A debugger something else attached is used and left attached. */
+  private async captureWithDevTools(contents: WebContents, signal: AbortSignal): Promise<NativeImage> {
+    const cdp = contents.debugger;
+    if (!cdp.isAttached()) {
+      cdp.attach('1.3');
+      this.attachedDebugger = true;
+    }
+    this.debuggerUsers += 1;
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      signal.removeEventListener('abort', release);
+      this.debuggerUsers -= 1;
+      if (this.debuggerUsers === 0) this.releaseDebugger();
+    };
+    signal.addEventListener('abort', release, { once: true });
+    try {
+      const { data } = (await cdp.sendCommand('Page.captureScreenshot', { format: 'png' })) as { data: string };
+      return nativeImage.createFromBuffer(Buffer.from(data, 'base64'));
+    } finally {
+      release();
+    }
+  }
+
+  /** Detaching the last live capture also rejects commands abandoned after their deadline. */
+  private releaseDebugger(): void {
+    if (!this.attachedDebugger) return;
+    this.attachedDebugger = false;
+    if (!this.webContents.isDestroyed() && this.webContents.debugger.isAttached()) this.webContents.debugger.detach();
   }
 
   async evaluate(expression: string): Promise<unknown> {
