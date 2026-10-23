@@ -61,7 +61,6 @@ import {
 import { useMcpServers } from '@client/app/hooks/data/mcpServers';
 import { useConfig } from '@client/app/hooks/data/settings';
 import { AGENT_ONLY_MCP_SERVERS } from '@client/app/components/common/ToolIndicators';
-import { IMAGE_TOOL_PRICE_TOOLTIP, useImageToolPrice } from './useImageToolPrice';
 
 /**
  * Tooltip shown when a tool is disabled because its required API key/config is
@@ -199,13 +198,11 @@ interface ToolLabelProps {
   dim?: boolean;
   // Blue accent line under the description, e.g. to flag an agent-only integration.
   agentOnlyNote?: string;
-  // Muted line under the description, e.g. the selected model and its price.
-  detail?: React.ReactNode;
 }
 
 // Two-line label (name + inline description) used in place of the old
 // name-plus-(i)-tooltip pattern, so users can read what a tool does without hovering.
-const ToolLabel = ({ name, description, dim = false, agentOnlyNote, detail }: ToolLabelProps) => (
+const ToolLabel = ({ name, description, dim = false, agentOnlyNote }: ToolLabelProps) => (
   <Box sx={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1 }}>
     <Typography
       level="body-sm"
@@ -239,11 +236,6 @@ const ToolLabel = ({ name, description, dim = false, agentOnlyNote, detail }: To
         sx={{ color: 'primary.500', fontSize: '0.7rem', lineHeight: 1.3, mt: '12px' }}
       >
         {agentOnlyNote}
-      </Typography>
-    )}
-    {detail && (
-      <Typography level="body-xs" noWrap sx={{ color: 'text.secondary', fontSize: '0.7rem', lineHeight: 1.3, mt: 0.5 }}>
-        {detail}
       </Typography>
     )}
   </Box>
@@ -356,8 +348,6 @@ const ToolsSection = ({
 
   const [deepResearchConfigOpen, setDeepResearchConfigOpen] = useState(false);
   const [imageGenModelSelectionOpen, setImageGenModelSelectionOpen] = useState(false);
-  const imageModel = useLLM(state => state.imageModel);
-  const imageToolPrice = useImageToolPrice(imageModel);
 
   const thinking = useLLM(state => state.thinking);
 
@@ -1040,17 +1030,6 @@ const ToolsSection = ({
                 <ToolLabel
                   name={getToolDisplayName('image_generation')}
                   description={getToolDescription('image_generation')}
-                  detail={
-                    imageToolPrice && (
-                      <Tooltip title={IMAGE_TOOL_PRICE_TOOLTIP} placement="top">
-                        <span data-testid="image-generation-model-price">
-                          {imageToolPrice.modelName}
-                          {' \u00b7 '}
-                          {imageToolPrice.label}
-                        </span>
-                      </Tooltip>
-                    )
-                  }
                 />
               </Box>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>

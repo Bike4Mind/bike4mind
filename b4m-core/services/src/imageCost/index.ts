@@ -1,5 +1,4 @@
 import {
-  GenerateImageToolCall,
   ImageModels,
   ModelInfo,
   isGPTImageModel,
@@ -13,8 +12,6 @@ import { OpenAICostInput, OpenAIImageCostCalculator } from '../llm/imageCostCalc
 import { FluxImageCostCalculator } from '../llm/imageCostCalculator/FluxImageCostCalculator';
 import { GeminiImageCostCalculator } from '../llm/imageCostCalculator/GeminiImageCostCalculator';
 import { CostInput } from '../llm/imageCostCalculator/types';
-import { toImageCostInput } from '../llm/tools/imageToolBilling';
-import { resolveImageArgs } from '../llm/tools/implementation/imageGeneration/resolveImageArgs';
 
 /**
  * Shared image cost estimation. Kept in its own module (not the charging path in
@@ -96,30 +93,4 @@ export function estimateImageCredits(
     );
   }
   return { requiredCredits, usdCost: totalUsdCost };
-}
-
-/**
- * Credits for ONE image from the image_generation tool at the client's saved selection
- * (`imageConfig`), for the pre-send price shown in the Smart Tools picker. Resolves args
- * through `resolveImageArgs` and prices through `toImageCostInput`, the same pair
- * `ToolBuilder.settleImageCredits` charges with, so the gpt-image-1 -> gpt-image-2 upgrade
- * and the omitted-quality pin match settlement. The assistant can still override
- * n/quality/size per call, so this is the price at the saved settings, not a quote.
- * Returns null when the resolved model is not in `models` or cannot be priced. A free model
- * (local-image) returns 0: settlement charges nothing, though `requiredCredits` floors at 1.
- */
-export function estimateImageToolCredits(
-  models: ModelInfo[],
-  imageConfig: GenerateImageToolCall | undefined
-): { model: string; credits: number } | null {
-  const { model, size, quality } = resolveImageArgs(imageConfig, {});
-  const modelInfo = models.find(m => m.id === model);
-  if (!modelInfo) return null;
-  try {
-    const input = toImageCostInput('image_generation', { model, size, quality });
-    const { requiredCredits, usdCost } = estimateImageCredits(modelInfo, 1, input);
-    return { model, credits: usdCost === 0 ? 0 : requiredCredits };
-  } catch {
-    return null;
-  }
 }
