@@ -1,4 +1,4 @@
-import { RegInviteEvents, requireEnv } from '@bike4mind/common';
+import { RegInviteEvents, inboxAliasKey, requireEnv } from '@bike4mind/common';
 import { IRegistrationInvite, RegInviteStatusType } from '@bike4mind/common';
 import { registrationInviteRepository, User, userRepository } from '@bike4mind/database';
 import { logEvent } from '@server/utils/analyticsLog';
@@ -45,6 +45,14 @@ const handler = baseApi().post(
     const hasOAuthProvider = (user.authProviders?.length ?? 0) > 0;
     if (!user.emailVerified && !hasOAuthProvider) {
       throw new BadRequestError('Please verify your email address before sending referral invites');
+    }
+
+    // An alias of the sender's own inbox would let one person redeem their own invite for the
+    // inviter reward. Refused before reserveReferrals so nothing is charged.
+    // Emailless OAuth accounts have no inbox to alias.
+    const senderInbox = user.email ? inboxAliasKey(user.email) : null;
+    if (senderInbox && friendEmail.some(target => inboxAliasKey(target) === senderInbox)) {
+      throw new BadRequestError('You cannot invite your own email address');
     }
 
     // Pre-resolve which targets already have an account, so the loop below can skip sending
