@@ -324,7 +324,15 @@ describe('the workspace form', () => {
     expect(form.querySelector('[data-testid="session-chip-add-context"]')?.textContent).toContain('Add directory');
     expect(form.querySelector('[data-testid="session-chip-context"]')).toBeNull();
     expect(form.querySelectorAll('[data-testid$="-row"]')).toHaveLength(4);
-    expect(getComputedStyle(form).overflowX).toBe('hidden');
+    for (const [testId, label] of [
+      ['session-chip-project', 'Project folder'],
+      ['session-chip-branch-btn', 'Git branch'],
+    ]) {
+      const button = form.querySelector(`[data-testid="${testId}"]`) as HTMLElement;
+      const [labelId] = (button.getAttribute('aria-labelledby') ?? '').split(' ');
+      expect(document.getElementById(labelId)?.textContent).toBe(label);
+      expect(document.querySelector(`label[for="${button.id}"]`)?.textContent).toBe(label);
+    }
   });
 
   it('adds and explicitly removes additional directories', async () => {
@@ -347,6 +355,22 @@ describe('the workspace form', () => {
     expect(removeContextDirectory).toHaveBeenCalledWith('/Users/someone/shared');
     expect(host.querySelector('[data-testid="session-workspace-directory-remove-btn"]')?.textContent).toBe('Remove');
     expect(host.querySelector('[data-testid="session-chip-context"]')).toBeNull();
+  });
+
+  it('holds directory removal while a binding change is in flight', async () => {
+    await act(async () =>
+      root.render(
+        <SessionChips
+          project={project({ contextDirectories: ['/Users/someone/shared'] })}
+          binding={{ ...binding, busy: true, addContextDirectory, removeContextDirectory }}
+          settledTurns={0}
+        />
+      )
+    );
+    await act(async () => undefined);
+
+    const remove = host.querySelector('[data-testid="session-workspace-directory-remove-btn"]') as HTMLButtonElement;
+    expect(remove.disabled).toBe(true);
   });
 });
 

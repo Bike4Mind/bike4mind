@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
@@ -83,11 +83,11 @@ function BranchFilter({
 type ChipBinding = ProjectBindingController & { chips: ChipRowState };
 
 /** Height of granted-folder chips in non-Code conversations, in px. */
-const ROW_HEIGHT = 28;
+const CHIP_HEIGHT = 28;
 
 /** Joy's `sm` Chip, used only for granted folders in non-Code conversations. */
 const chipSx: SxProps = {
-  '--Chip-minHeight': `${ROW_HEIGHT}px`,
+  '--Chip-minHeight': `${CHIP_HEIGHT}px`,
   '--Chip-paddingInline': '8px',
   gap: '6px',
 };
@@ -215,10 +215,13 @@ function RecentFolderItem({
  * first pick in this very session, say) shows up the next time without a remount.
  */
 function ProjectChip({
+  id,
   binding,
   current,
   placement,
 }: {
+  /** The enclosing FormControl's id, so its label names this button. */
+  id: string;
   binding: ChipBinding;
   current: string | null;
   placement: ChipPlacement;
@@ -250,6 +253,8 @@ function ProjectChip({
             disabled={binding.busy || !folder.enabled}
             startDecorator={<FolderIcon />}
             sx={formButtonSx}
+            id={id}
+            aria-labelledby={`${id}-label ${id}`}
             slotProps={{ root: { 'data-testid': 'session-chip-project' } }}
           >
             <Typography level="body-xs" textColor="inherit" noWrap>
@@ -319,6 +324,7 @@ function BranchChip({
   placement: ChipPlacement;
 }) {
   const [filter, setFilter] = useState('');
+  const branchId = useId();
   const { branch: branchChip, worktree, branchNotice, unset, locked } = binding.chips;
 
   const matches = useMemo(() => {
@@ -335,7 +341,7 @@ function BranchChip({
 
   return (
     <Stack spacing={1} sx={formRowSx} data-testid="session-chip-branch">
-      <FormControl size="sm" sx={formRowSx} data-testid="session-workspace-branch-row">
+      <FormControl id={branchId} size="sm" sx={formRowSx} data-testid="session-workspace-branch-row">
         <FormLabel>Git branch</FormLabel>
         <Dropdown onOpenChange={(_event, open) => open && setFilter('')}>
           <Tooltip title={branchChip.tooltip} size="sm" variant="soft" placement={placement.tooltip} sx={chipTooltipSx}>
@@ -349,6 +355,8 @@ function BranchChip({
                 disabled={binding.busy || !branchChip.enabled}
                 startDecorator={<BranchIcon />}
                 sx={formButtonSx}
+                id={branchId}
+                aria-labelledby={`${branchId}-label ${branchId}`}
                 slotProps={{ root: { 'data-testid': 'session-chip-branch-btn' } }}
               >
                 <Typography level="body-xs" textColor="inherit" noWrap>
@@ -592,7 +600,7 @@ function ContextChips({
   placement: ChipPlacement;
 }) {
   const { addContext } = binding.chips;
-  const directories = [...(project?.contextDirectories ?? []), ...granted];
+  const directories = [...new Set([...(project?.contextDirectories ?? []), ...granted])];
 
   return (
     <Stack spacing={1} sx={formRowSx} data-testid="session-workspace-directories-row">
@@ -614,20 +622,31 @@ function ContextChips({
         </Box>
       </Tooltip>
 
-      {directories.filter((directory, index) => directories.indexOf(directory) === index).length > 0 && (
+      {directories.length > 0 && (
         <Stack spacing={0.75} data-testid="session-workspace-directory-list">
-          {directories
-            .filter((directory, index) => directories.indexOf(directory) === index)
-            .map(directory => (
-              <DirectoryRow key={directory} directory={directory} onRemove={binding.removeContextDirectory} />
-            ))}
+          {directories.map(directory => (
+            <DirectoryRow
+              key={directory}
+              directory={directory}
+              busy={binding.busy}
+              onRemove={binding.removeContextDirectory}
+            />
+          ))}
         </Stack>
       )}
     </Stack>
   );
 }
 
-function DirectoryRow({ directory, onRemove }: { directory: string; onRemove: (directory: string) => Promise<void> }) {
+function DirectoryRow({
+  directory,
+  busy,
+  onRemove,
+}: {
+  directory: string;
+  busy: boolean;
+  onRemove: (directory: string) => Promise<void>;
+}) {
   const home = useHomeDirectory();
   const shown = displayPath(directory, home, Number.POSITIVE_INFINITY);
   return (
@@ -645,6 +664,7 @@ function DirectoryRow({ directory, onRemove }: { directory: string; onRemove: (d
         size="sm"
         variant="plain"
         color="neutral"
+        disabled={busy}
         onClick={() => void onRemove(directory)}
         aria-label={`Remove ${shown}`}
         data-testid="session-workspace-directory-remove-btn"
@@ -883,6 +903,7 @@ export function SessionChips({
 
   const dismiss = useCallback(() => binding.dismissError(), [binding]);
   const placement = PLACEMENT[layout];
+  const projectId = useId();
 
   return (
     <Box sx={layout === 'row' ? { ...contentColumnSx, pt: 1 } : undefined} data-testid={`session-chips-${layout}`}>
@@ -905,12 +926,14 @@ export function SessionChips({
 
       <Stack
         spacing={1.25}
-        sx={{ width: '100%', minWidth: 0, overflowX: 'hidden' }}
+        // Above the composer the content column is far wider than a form needs; the embedded
+        // setup in ChatShell caps itself at the same width.
+        sx={{ width: '100%', minWidth: 0, ...(layout === 'row' ? { maxWidth: 420 } : {}) }}
         data-testid="session-workspace-form"
       >
-        <FormControl size="sm" sx={formRowSx} data-testid="session-workspace-project-row">
+        <FormControl id={projectId} size="sm" sx={formRowSx} data-testid="session-workspace-project-row">
           <FormLabel>Project folder</FormLabel>
-          <ProjectChip binding={bound} current={project?.directory ?? null} placement={placement} />
+          <ProjectChip id={projectId} binding={bound} current={project?.directory ?? null} placement={placement} />
         </FormControl>
         <BranchChip
           project={project}
