@@ -68,7 +68,7 @@ export const SNAPSHOT_PAGE = String.raw`function (maxChars, inView) {
   document.querySelectorAll('[' + ATTR + ']').forEach(function (el) {
     var ref = el.getAttribute(ATTR);
     var value = Number(ref);
-    if (!/^[1-9]\d*$/.test(ref || '') || seenRefs[ref]) {
+    if (!/^[1-9]\d*$/.test(ref || '') || !Number.isSafeInteger(value) || value >= Number.MAX_SAFE_INTEGER || seenRefs[ref]) {
       el.removeAttribute(ATTR);
       return;
     }
@@ -165,6 +165,9 @@ export const SNAPSHOT_PAGE = String.raw`function (maxChars, inView) {
     if (tag === 'INPUT') {
       var type = el.type || 'text';
       if (type === 'checkbox' || type === 'radio') return { ref: ref, kind: 'toggle', element: type, label: label };
+      if (type === 'button' || type === 'submit' || type === 'reset' || type === 'image' || type === 'file') {
+        return { ref: ref, kind: 'click', element: 'input', label: label };
+      }
       return { ref: ref, kind: 'type', element: 'input', label: label, inputType: type };
     }
     if (tag === 'TEXTAREA') return { ref: ref, kind: 'type', element: 'textarea', label: label };
@@ -192,7 +195,14 @@ export const SNAPSHOT_PAGE = String.raw`function (maxChars, inView) {
     if (node.matches(INTERACTIVE)) {
       if (!shown(node)) return;
       var ref = node.getAttribute(ATTR);
-      if (!ref) { ref = String(next++); node.setAttribute(ATTR, ref); }
+      if (!ref) {
+        while (!Number.isSafeInteger(next) || seenRefs[String(next)]) {
+          next = Number.isSafeInteger(next) ? next + 1 : 1;
+        }
+        ref = String(next++);
+        seenRefs[ref] = true;
+        node.setAttribute(ATTR, ref);
+      }
       if (push(depth, '[' + ref + '] ' + describe(node))) addModel('action', actionOf(node, ref));
       // A button's, link's or select's own text is already in its description.
       if (node.tagName !== 'SELECT' && node.tagName !== 'BUTTON' && node.tagName !== 'A') {
@@ -228,6 +238,7 @@ export const SNAPSHOT_PAGE = String.raw`function (maxChars, inView) {
   }
 
   walk(document.body || document.documentElement, 0);
+  model.truncated = model.truncated || truncated;
   return { url: location.href, title: document.title, text: lines.join('\n'), truncated: truncated, model: model };
 }`;
 

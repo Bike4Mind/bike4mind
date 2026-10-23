@@ -41,3 +41,20 @@ describe('browser page model', () => {
     }
   });
 });
+
+describe('claim source integrity', () => {
+  it('rejects duplicate block and claim identifiers', () => {
+    const page = model();
+    page.blocks.push({ id: 'b1', kind: 'text', text: 'Other text' });
+    expect(browserPageModelSchema.safeParse(page).success).toBe(false);
+    const duplicateClaims = model();
+    duplicateClaims.claims.push(duplicateClaims.claims[0]);
+    expect(browserPageModelSchema.safeParse(duplicateClaims).success).toBe(false);
+  });
+
+  it('rejects spans beyond the source even when slice would clamp them', () => {
+    const page = model();
+    page.claims[0] = { id: 'c1', text: 'A verified statement.', source: { blockId: 'b1', start: 0, end: 100 } };
+    expect(browserPageModelSchema.safeParse(page).success).toBe(false);
+  });
+});

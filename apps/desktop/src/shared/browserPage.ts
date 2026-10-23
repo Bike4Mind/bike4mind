@@ -91,6 +91,15 @@ export const browserPageModelSchema = z
   })
   .superRefine((model, context) => {
     const blocks = new Map(model.blocks.map(block => [block.id, block]));
+    for (const [kind, items] of [['blocks', model.blocks], ['claims', model.claims]] as const) {
+      const ids = new Set<string>();
+      for (const [index, item] of items.entries()) {
+        if (ids.has(item.id)) {
+          context.addIssue({ code: 'custom', message: `Duplicate ${kind} id ${item.id}`, path: [kind, index, 'id'] });
+        }
+        ids.add(item.id);
+      }
+    }
     const refs = new Set<string>();
     for (const action of model.actions) {
       if (refs.has(action.ref)) {
@@ -106,6 +115,7 @@ export const browserPageModelSchema = z
       }
       if (
         claim.source.start > claim.source.end ||
+        claim.source.end > block.text.length ||
         block.text.slice(claim.source.start, claim.source.end) !== claim.text
       ) {
         context.addIssue({
