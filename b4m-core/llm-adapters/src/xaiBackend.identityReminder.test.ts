@@ -38,6 +38,20 @@ describe('XAIBackend identity reminder', () => {
     expect(messages[0]).toMatchObject({ role: 'system', content: `You are terse.\n\n${REMINDER}` });
   });
 
+  it('appends the reminder to the last system message only', async () => {
+    const messages = await send([
+      { role: 'system', content: 'first layer' },
+      { role: 'system', content: 'last layer' },
+      { role: 'user', content: 'hi' },
+    ]);
+
+    expect(messages).toEqual([
+      { role: 'system', content: 'first layer' },
+      { role: 'system', content: `last layer\n\n${REMINDER}` },
+      { role: 'user', content: 'hi' },
+    ]);
+  });
+
   it('prepends a system message when the call carries none', async () => {
     const messages = await send([{ role: 'user', content: 'hi' }]);
 

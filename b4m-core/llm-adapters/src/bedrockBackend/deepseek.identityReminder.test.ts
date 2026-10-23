@@ -25,6 +25,16 @@ describe('DeepSeekBedrockBackend identity reminder', () => {
     expect(body.system?.[0].text).toBe(`You are terse.\n\n${REMINDER}`);
   });
 
+  it('appends one reminder after the final caller system layer', () => {
+    const body = payloadOf([
+      { role: 'system', content: 'first' },
+      { role: 'system', content: 'last' },
+      { role: 'user', content: 'hi' },
+    ]);
+
+    expect(body.system?.[0].text).toBe(`first\nlast\n\n${REMINDER}`);
+  });
+
   it('adds the reminder as a system field when the caller supplies only user turns', () => {
     const body = payloadOf([{ role: 'user', content: 'hi' }]);
 

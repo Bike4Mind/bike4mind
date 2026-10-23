@@ -41,6 +41,22 @@ describe('OllamaBackend identity reminder', () => {
     expect(systemContents(chat.mock.calls[0][0])).toEqual([`You are terse.\n\n${REMINDER}`]);
   });
 
+  it('appends the reminder to the last system message only', async () => {
+    const { backend, chat } = makeBackend([answer('ok')]);
+
+    await run(backend, [
+      { role: 'system', content: 'first layer' },
+      { role: 'system', content: 'last layer' },
+      { role: 'user', content: 'hi' },
+    ]);
+
+    expect(chat.mock.calls[0][0].messages).toEqual([
+      { role: 'system', content: 'first layer' },
+      { role: 'system', content: `last layer\n\n${REMINDER}` },
+      { role: 'user', content: 'hi' },
+    ]);
+  });
+
   it('prepends a system message when the call carries none', async () => {
     const { backend, chat } = makeBackend([answer('ok')]);
 
