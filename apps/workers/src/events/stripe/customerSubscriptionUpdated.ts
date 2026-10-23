@@ -1,5 +1,5 @@
 import { organizationRepository, withTransaction } from '@bike4mind/database';
-import { entitlementsForPriceIds } from '@bike4mind/server-utils/lib/entitlements/registry';
+import { entitlementsForPriceIds } from '@client/lib/entitlements/registry';
 import { StripeSubscriptionMetadataSchema } from '@bike4mind/server-utils/lib/subscriptions/schema';
 import { SubscriptionMetadata, SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { subscriptionRepository } from '@server/models/Subscription';

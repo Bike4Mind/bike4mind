@@ -63,7 +63,7 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
 
 // Fixture mapping: the real registry rows are covered by their own tests;
 // here we only need "mapped" vs "unmapped" prices.
-vi.mock('@bike4mind/server-utils/lib/entitlements/registry', () => ({
+vi.mock('@client/lib/entitlements/registry', () => ({
   entitlementsForPriceIds: (priceIds: string[]) => new Set(priceIds.includes('price_pro') ? ['someproduct:pro'] : []),
 }));
 
