@@ -422,10 +422,16 @@ export function registerChat(
     },
     local
   );
-  const history = new LocalHistory(join(userData, 'local-history.sqlite'), () => {
-    const scope = sessionScopeFor(auth.getState());
-    return scope ? sessionScopeKey(scope) : null;
-  });
+  // History is an opt-in, rebuildable index: an unopenable file must not take chat down with it.
+  let history: LocalHistory | undefined;
+  try {
+    history = new LocalHistory(join(userData, 'local-history.sqlite'), () => {
+      const scope = sessionScopeFor(auth.getState());
+      return scope ? sessionScopeKey(scope) : null;
+    });
+  } catch (err) {
+    logger.warn(`CHAT: local history is unavailable: ${err instanceof Error ? err.message : err}`);
+  }
 
   const send = (channel: string, payload: unknown) => {
     logDownstream(channel, payload);
@@ -513,7 +519,7 @@ export function registerChat(
     (sessionId, state) => send(IPC_CHANNELS.browserPageState, { sessionId, ...state }),
     state => send(IPC_CHANNELS.browserCookiesChanged, state),
     async (sessionId, snapshot) => {
-      if ((await store.get(sessionId))?.historyEnabled) history.capturePage(sessionId, snapshot.model);
+      if ((await store.get(sessionId))?.historyEnabled) history?.capturePage(sessionId, snapshot.model);
     }
   );
 
@@ -619,8 +625,8 @@ export function registerChat(
     service.setSessionHistory(sessionId, enabled === true)
   );
   ipcMain.handle(IPC_CHANNELS.chatSearchHistory, (_event, query: string) => service.searchHistory(String(query ?? '')));
-  ipcMain.handle(IPC_CHANNELS.chatClearHistory, () => history.clear());
-  ipcMain.handle(IPC_CHANNELS.chatHistoryState, () => history.state());
+  ipcMain.handle(IPC_CHANNELS.chatClearHistory, () => history?.clear() ?? { entries: 0 });
+  ipcMain.handle(IPC_CHANNELS.chatHistoryState, () => history?.state() ?? { entries: 0 });
   // Validated here rather than trusted, like the approval mode below: an unrecognised value
   // must not reach the store, where it would be sent verbatim on the next turn.
   ipcMain.handle(IPC_CHANNELS.chatSetSessionReasoningEffort, (_event, sessionId: string, effort: unknown) => {

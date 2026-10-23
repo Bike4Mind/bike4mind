@@ -764,6 +764,7 @@ export class ChatService {
 
   async setSessionHistory(sessionId: string, enabled: boolean): Promise<ChatSessionSummary | null> {
     const summary = await this.deps.store.setHistoryEnabled(sessionId, enabled);
+    if (!enabled) this.deps.history?.removeSession(sessionId);
     const session = summary && enabled ? await this.deps.store.get(sessionId) : null;
     if (session) this.deps.history?.captureSession(session);
     return summary;
@@ -1371,6 +1372,7 @@ export class ChatService {
   private async cleanupDeletedSession(sessionId: string, deleteStoredSession: boolean): Promise<void> {
     // Before the stop, so an open card is recorded as closed by the delete rather than by a stop.
     this.deps.approvals?.forgetSession(sessionId);
+    this.deps.history?.removeSession(sessionId);
     this.stop(sessionId);
     this.doomLoop.forget(sessionId);
     this.webSearches.forget(sessionId);
@@ -1992,6 +1994,8 @@ export class ChatService {
     const available = this.deps.models?.cached();
     if (!available || available.length === 0) return { session };
     if (available.some(model => model.id === session.model)) return { session };
+    // A device-local model is never swapped for a hosted one: that would send the conversation to the server.
+    if (session.model.startsWith(LOCAL_MODEL_PREFIX)) return { session };
 
     const replacement = await this.pickModel(available);
     if (!replacement) return { session };
@@ -2307,11 +2311,14 @@ export class ChatService {
         );
         setPhase(WAITING);
         const onCompletionEvent = (event: CompletionStreamEvent): void => {
+          // `error` never reaches here (the transport throws on it); `meta` carries no reply.
           if (event.type === 'meta') probe?.frame('meta');
           if (event.type === 'error' || event.type === 'meta') return;
           if (event.text || event.type === 'tool_use') timer.firstToken();
           if (event.text) {
             const split = splitThinking.push(event.text);
+            // An empty split is either a bare thinking marker or text the filter is holding
+            // back as a possible partial marker; only the first is a thinking frame.
             const marker = !split.text && !split.reasoning && THINK_MARKER.test(event.text);
             probe?.frame(split.text ? 'text' : split.reasoning ? 'reasoning' : marker ? 'marker' : 'text');
             if (split.text) setPhase(RESPONDING);
@@ -2338,6 +2345,7 @@ export class ChatService {
                 messages: wire,
                 tools,
                 thinking: askForThinking,
+                // Dev log only; never sent on the wire. See CompletionRequest.sessionId.
                 sessionId,
                 ...effortField,
                 ...(maxTokens ? { maxTokens } : {}),
@@ -2353,6 +2361,7 @@ export class ChatService {
                 messages: cacheable ? withCacheBreakpoints(wire) : wire,
                 tools,
                 thinking: askForThinking,
+                // Dev log only; never sent on the wire. See CompletionRequest.sessionId.
                 sessionId,
                 ...effortField,
                 ...(maxTokens ? { maxTokens } : {}),

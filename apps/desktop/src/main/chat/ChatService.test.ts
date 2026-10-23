@@ -110,6 +110,53 @@ describe('ChatService', () => {
     expect((await offline.getSession(id))?.messages.at(-1)?.content).toBe('Offline answer');
   });
 
+  it('keeps a local session on its local model when the cached catalog lacks it', async () => {
+    const model = `${LOCAL_MODEL_PREFIX}llama3.2`;
+    const localStore = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-local-reconcile-')), model);
+    const localEvents: ChatStreamEvent[] = [];
+    const local = {
+      stream: vi.fn(async (_request, emit) => emit({ type: 'content', text: 'ok', stopReason: 'end_turn' })),
+    };
+    const hosted = [{ id: 'hosted-model', name: 'Hosted', backend: 'anthropic', supportsTools: true }];
+    const service = new ChatService({
+      store: localStore,
+      access: { list: async () => [] } as unknown as AccessStore,
+      models: { list: async () => ({ models: hosted }), cached: () => hosted } as unknown as ModelCatalog,
+      local: local as never,
+      logger: { debug: vi.fn(), warn: vi.fn() },
+      getApiClient: () => null,
+      getEnvironmentUrl: () => '',
+      emit: event => localEvents.push(event),
+    });
+    const { id } = await service.createSession();
+    await localStore.setModel(id, model);
+    await service.send(id, 'still local');
+    await waitFor(localEvents, 'done');
+    expect(local.stream).toHaveBeenCalledWith(expect.objectContaining({ model }), expect.anything(), expect.anything());
+    expect((await service.getSession(id))?.model).toBe(model);
+  });
+
+  it('drops indexed history when it is switched off or the session is deleted', async () => {
+    const history = { removeSession: vi.fn(), captureSession: vi.fn(), search: vi.fn(() => []) };
+    const service = new ChatService({
+      store,
+      access: { list: async () => [] } as unknown as AccessStore,
+      history: history as never,
+      logger: { debug: vi.fn(), warn: vi.fn() },
+      getApiClient: () => null,
+      getEnvironmentUrl: () => '',
+      emit: () => undefined,
+    });
+    const { id } = await service.createSession();
+    await service.setSessionHistory(id, true);
+    expect(history.captureSession).toHaveBeenCalledTimes(1);
+    await service.setSessionHistory(id, false);
+    expect(history.removeSession).toHaveBeenCalledWith(id);
+    history.removeSession.mockClear();
+    await service.deleteSession(id);
+    expect(history.removeSession).toHaveBeenCalledWith(id);
+  });
+
   // A window opening a conversation mid-turn has only getSession to go on: replies are stored
   // when they settle, so without the live copy it showed the prompt alone until the end.
   it('includes the reply still streaming when a conversation is opened mid-turn', async () => {
