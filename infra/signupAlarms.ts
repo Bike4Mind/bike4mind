@@ -12,6 +12,7 @@ const MONITORED_STAGES = ['dev', 'production'] as const;
 const isMonitoredStage = _isMonitoredStage($app.stage, MONITORED_STAGES, process.env.ENABLE_MONITORING);
 
 const threshold = parseSignupCodeSendAlarmThreshold(process.env.SIGNUP_CODE_SEND_ALARM_PER_HOUR);
+const metricNamespace = `${$app.name}/${$app.stage}/Signup`;
 
 if (isMonitoredStage && threshold !== undefined) {
   if (!dlqAlarmTopic) {
@@ -32,12 +33,11 @@ if (isMonitoredStage && threshold !== undefined) {
   new aws.cloudwatch.LogMetricFilter('signupCodeSendsFilter', {
     name: `${$app.name}-${$app.stage}-signup-code-sends`,
     logGroupName: serverLogGroupName,
-    // Term match, both required: one timing line per request, and only the send route logs
-    // that path. The line is Lambda-prefixed text, so a JSON selector pattern would not match.
-    pattern: '"req-timing" "/api/otc/send"',
+    // Match the JSON message field inside Lambda-prefixed logs, not caller-controlled metadata.
+    pattern: '%\\x22message\\x22:\\x22otc-code-dispatched\\x22%',
     metricTransformation: {
       name: 'SignupCodeSends',
-      namespace: 'Lumina5/Signup',
+      namespace: metricNamespace,
       value: '1',
       unit: 'Count',
     },
@@ -45,11 +45,11 @@ if (isMonitoredStage && threshold !== undefined) {
 
   new aws.cloudwatch.MetricAlarm('signupCodeSendRate', {
     name: `${$app.name}-${$app.stage}-signup-code-send-rate`,
-    alarmDescription: 'Signup code sends per hour above the configured ceiling',
+    alarmDescription: 'Sign-in code email dispatches per hour at or above the configured ceiling',
     comparisonOperator: 'GreaterThanOrEqualToThreshold',
     evaluationPeriods: 1,
     metricName: 'SignupCodeSends',
-    namespace: 'Lumina5/Signup',
+    namespace: metricNamespace,
     period: 3600,
     statistic: 'Sum',
     threshold,
