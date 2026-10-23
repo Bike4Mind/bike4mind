@@ -703,9 +703,25 @@ describe('AuthService token refresh', () => {
       .catch((e: unknown) => e);
 
     expect(err).not.toBeInstanceOf(SessionRevokedError);
+    expect((err as Error).message).toBe('Could not renew your session. Check your connection and try again.');
     expect(service.getState()).toMatchObject({ status: 'signed-in' });
     expect(service.getState().reauthRequired).toBeUndefined();
     expect(await vault.reloadTokens(HOSTED)).toMatchObject({ refreshToken: 'refresh-0' });
+    service.dispose();
+  });
+
+  it('says the session expired, not to check the connection, when launch finds the refresh rejected', async () => {
+    vi.useFakeTimers();
+    process.env[BAKED] = HOSTED;
+    const { service, vault } = buildWithSharedClient({ refreshToken: vi.fn().mockRejectedValue(httpError(401)) });
+    await vault.setTokens(HOSTED, storedTokens(0, 60_000));
+
+    await service.initialize();
+
+    expect(service.getState()).toMatchObject({
+      status: 'signed-out',
+      error: { message: 'Your session expired. Sign in again to continue.', remedy: 'retry-sign-in' },
+    });
     service.dispose();
   });
 

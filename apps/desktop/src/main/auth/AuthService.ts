@@ -677,9 +677,8 @@ export class AuthService {
       timeoutMs: 30_000,
       headers: { 'User-Agent': this.deps.userAgent, 'X-B4M-Client': this.deps.userAgent },
       reauthMessages: {
-        // Thrown for a refresh that could not complete (network, 5xx). A rejected one is shown as
-        // the re-auth notice instead, so this wording only ever describes the transient case.
-        refreshFailed: 'Could not renew your session. Check your connection and try again.',
+        refreshFailed: SESSION_EXPIRED_MESSAGE,
+        refreshUnavailable: 'Could not renew your session. Check your connection and try again.',
         stillUnauthorized: SESSION_EXPIRED_MESSAGE,
       },
     };

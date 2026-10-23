@@ -44,8 +44,13 @@ export interface RefreshingOAuthClient {
  * "open Settings"), so the host supplies them rather than this package inventing wording.
  */
 export interface ReauthMessages {
-  /** A refresh attempt failed and the stored access token is already expired. */
+  /** The refresh endpoint rejected the refresh token: the session is over. */
   refreshFailed: string;
+  /**
+   * A refresh could not complete (network, timeout, 5xx, 429) and the tokens were kept.
+   * Defaults to `refreshFailed`.
+   */
+  refreshUnavailable?: string;
   /** A request still 401d after a successful refresh. */
   stillUnauthorized: string;
   /** A request 401d and there are no stored tokens to refresh. */
@@ -164,8 +169,9 @@ export class AuthenticatedApiClient {
     this.reauthMessages = {
       notLoggedIn: 'Authentication failed: not logged in.',
       ...options.reauthMessages,
+      refreshUnavailable: options.reauthMessages.refreshUnavailable ?? options.reauthMessages.refreshFailed,
     };
-    const { refreshFailed, stillUnauthorized, notLoggedIn } = this.reauthMessages;
+    const { refreshUnavailable, stillUnauthorized, notLoggedIn } = this.reauthMessages;
 
     this.client = axios.create({
       baseURL: options.baseUrl,
@@ -225,7 +231,7 @@ export class AuthenticatedApiClient {
         if (error.response?.status === 401 && !originalRequest._retry) {
           originalRequest._retry = true;
 
-          // Outside the try: the catch below would rewrite a no-token throw as refreshFailed.
+          // Outside the try: the catch below would rewrite a no-token throw as refreshUnavailable.
           const tokens = await this.tokenStore.getAuthTokens();
 
           if (!tokens) {
@@ -264,11 +270,12 @@ export class AuthenticatedApiClient {
               throw refreshError;
             }
             // A 5xx / network / timeout / 429 is a transient outage: the tokens stay, and a plain
-            // Error (same message, so string-matching callers are unaffected) keeps
+            // Error (`refreshUnavailable` defaults to the old message, so string-matching callers
+            // are unaffected) keeps
             // revoke-vs-transient consumers retrying instead of tearing down.
             const refreshMsg = refreshError instanceof Error ? refreshError.message : 'Unknown error';
             this.logger.warn(`AUTH: Token refresh failed: ${refreshMsg}`);
-            throw new Error(refreshFailed);
+            throw new Error(refreshUnavailable);
           }
 
           originalRequest.headers.Authorization = `Bearer ${refreshed.accessToken}`;

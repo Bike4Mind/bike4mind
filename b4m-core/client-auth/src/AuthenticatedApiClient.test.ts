@@ -137,6 +137,24 @@ describe('AuthenticatedApiClient refresh failures', () => {
     expect(onTokensCleared).toHaveBeenCalledWith(expect.stringContaining(`HTTP ${status}`));
   });
 
+  it('words a rejected refresh and one that could not complete apart when the host says how', async () => {
+    const reauthMessages = { ...MESSAGES, refreshUnavailable: 'Could not reach the server.' };
+    const rejected = build(memoryStore(tokens()).store, vi.fn().mockRejectedValue(httpError(401)), vi.fn(), {
+      reauthMessages,
+    });
+    const unreachable = build(memoryStore(tokens()).store, vi.fn().mockRejectedValue(httpError(503)), vi.fn(), {
+      reauthMessages,
+    });
+
+    const revoked = await rejection(rejected.client.get('/api/identify'));
+    const transient = await rejection(unreachable.client.get('/api/identify'));
+
+    expect(revoked).toBeInstanceOf(SessionRevokedError);
+    expect(revoked.message).toBe(MESSAGES.refreshFailed);
+    expect(transient).not.toBeInstanceOf(SessionRevokedError);
+    expect(transient.message).toBe('Could not reach the server.');
+  });
+
   it('does not clear a token that another process rotated in while the rejected exchange was in flight', async () => {
     const memory = memoryStore(tokens());
     const newer = tokens({ accessToken: 'access-9', refreshToken: 'refresh-9' });
