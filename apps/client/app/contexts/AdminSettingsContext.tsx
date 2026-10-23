@@ -95,7 +95,7 @@ const fetchAdminSettings = async (): Promise<Record<string, string | object>> =>
   const mergedSettings = mergeIntoDefaults(response.data);
   const fetchTime = Date.now() - startTime;
   console.log(
-    `✅ [AdminSettings] Fetched ${response.data.length} settings from DB, merged with ${allSettingDefinitions().length} defaults (${fetchTime}ms)`
+    `[AdminSettings] Fetched ${response.data.length} settings from DB, merged with ${allSettingDefinitions().length} defaults (${fetchTime}ms)`
   );
   return mergedSettings;
 };
