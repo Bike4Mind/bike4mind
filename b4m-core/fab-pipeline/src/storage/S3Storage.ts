@@ -19,6 +19,11 @@ import { NodeHttpHandler } from '@smithy/node-http-handler';
 import { Agent } from 'https';
 import { createS3Client } from './createS3Client';
 
+const isInvalidRangeError = (error: unknown): boolean => {
+  const e = error as { name?: string; $metadata?: { httpStatusCode?: number } } | null;
+  return e?.name === 'InvalidRange' || e?.$metadata?.httpStatusCode === 416;
+};
+
 export class S3Storage extends BaseStorage {
   private s3: S3Client;
   private presignS3: S3Client;
@@ -157,21 +162,27 @@ export class S3Storage extends BaseStorage {
   /**
    * Ranged read of the first `length` bytes of an object - lets a caller
    * byte-sniff a file's real type from magic numbers without downloading the whole object.
-   * S3 clamps an out-of-range `Range` header to the object's actual size, so this is safe
-   * to call on objects smaller than `length` too. Mirrors `getPreview`'s Range-header
+   * S3 clamps a range that starts inside the object to its actual size, so objects smaller
+   * than `length` are fine. A 0-byte object has no byte 0 to start from, so S3 answers 416
+   * InvalidRange; that is returned as an empty `Buffer`. Mirrors `getPreview`'s Range-header
    * pattern but returns the raw `Buffer` instead of a UTF-8 string (binary-safe).
    */
   async downloadRange(path: string, length: number): Promise<Buffer> {
-    const { Body } = await this.s3.send(
-      new GetObjectCommand({
-        Bucket: this.bucketName,
-        Key: path,
-        Range: `bytes=0-${length - 1}`,
-      })
-    );
+    try {
+      const { Body } = await this.s3.send(
+        new GetObjectCommand({
+          Bucket: this.bucketName,
+          Key: path,
+          Range: `bytes=0-${length - 1}`,
+        })
+      );
 
-    if (!Body) throw new Error('File content is empty or not available');
-    return await this.streamToBuffer(Body as Readable);
+      if (!Body) throw new Error('File content is empty or not available');
+      return await this.streamToBuffer(Body as Readable);
+    } catch (error) {
+      if (isInvalidRangeError(error)) return Buffer.alloc(0);
+      throw error;
+    }
   }
 
   async delete(path: string): Promise<void> {
@@ -303,14 +314,19 @@ export class S3Storage extends BaseStorage {
   }
 
   async getPreview(path: string): Promise<string> {
-    const response = await this.s3.send(
-      new GetObjectCommand({
-        Bucket: this.bucketName,
-        Key: path,
-        Range: 'bytes=0-5120', // First 5KB
-      })
-    );
-    return await response.Body!.transformToString('utf-8');
+    try {
+      const response = await this.s3.send(
+        new GetObjectCommand({
+          Bucket: this.bucketName,
+          Key: path,
+          Range: 'bytes=0-5120', // First 5KB
+        })
+      );
+      return await response.Body!.transformToString('utf-8');
+    } catch (error) {
+      if (isInvalidRangeError(error)) return '';
+      throw error;
+    }
   }
 
   async getMetadata(path: string) {
