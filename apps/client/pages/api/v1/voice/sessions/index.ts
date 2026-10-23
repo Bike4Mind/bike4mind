@@ -42,6 +42,7 @@ import {
 } from '@bike4mind/server-utils/voice/voiceSessionLimits';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import { requestTurnAuth } from '@server/auth/turnAuth';
+import { adminRoleWithheldFor } from '@server/auth/apiKeyAdminScope';
 
 const DEFAULT_MODEL = ChatModels.CLAUDE_4_6_SONNET as ChatModelName;
 // Mirror v1's concurrency guard so a user (or a leaked session endpoint) can't
@@ -176,6 +177,7 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
       sessionId: String(resolvedSessionId),
       reasoningModelId,
       ...requestTurnAuth(req),
+      ...(adminRoleWithheldFor(req.apiKeyInfo) ? { adminRoleWithheld: true } : {}),
       voiceHoldStartedAt: holdStartedAt.toISOString(),
     },
     // Expires with the hold's window, not a fresh window per token: ElevenLabs replays it on every

@@ -145,6 +145,11 @@ export interface CompletionParams {
     userApiKeys?: IUserApiKeyRepository;
   };
   /**
+   * Applied to the reloaded caller before model admission, e.g. to withhold an admin role the
+   * authenticating API key does not grant. The org-membership check reads the stored role.
+   */
+  scopeActor?: <U extends { isAdmin?: boolean }>(actor: U) => U;
+  /**
    * API key information if authenticated via API key
    * Used for credit transaction tracking and audit logging
    */
@@ -500,10 +505,11 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   const settings = await getSettingsMap(db, { names: ['enforceCredits'], skipCache: true });
   const enforceCredits = getSettingsValue('enforceCredits', settings);
 
-  const [actor, modelConfigs] = await Promise.all([
+  const [storedActor, modelConfigs] = await Promise.all([
     db.users.findById(userId),
     loadModelConfigurations(db.adminSettings),
   ]);
+  const actor = storedActor && params.scopeActor ? params.scopeActor(storedActor) : storedActor;
   await createModelAdmission({
     user: actor ?? {},
     configs: modelConfigs,

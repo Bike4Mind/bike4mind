@@ -18,6 +18,7 @@ import type { z } from 'zod';
 import { decideScopeGate, parseStagedScopes, SCOPE_STAGING_ENV_VAR } from '@server/middlewares/apiKeyScopeGate';
 import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
 import { resolveRouteTemplate } from '@server/utils/resolveRouteTemplate';
+import { apiKeyGrantsAdmin, withholdAdminRole } from '@server/auth/apiKeyAdminScope';
 
 type ScopeForbiddenDetail = Pick<z.infer<typeof ScopeForbiddenErrorSchema>, 'required_scopes' | 'also_required_scopes'>;
 
@@ -160,6 +161,9 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScope[], alsoRequiredScopes?: 
       }
       // The same gate the JWT/CLI/WebSocket surfaces use, so the two cannot drift.
       assertAccountStateUsable(user);
+
+      // Admin authority over an API key comes from the key's scope, not from who minted it.
+      if (!apiKeyGrantsAdmin(validation.scopes)) withholdAdminRole(user);
 
       req.user = user;
       req.apiKeyInfo = {
