@@ -92,3 +92,16 @@ export function clientIdFromAuthorizeRedirect(redirectTo: unknown): string | und
   const [id] = ids;
   return isOAuthClientIdShape(id) ? id : undefined;
 }
+
+/** Lets a federated app's server ask /api/oauth/federated-admin whether its user is a B4M admin. */
+export const FEDERATED_ADMIN_STATUS_SCOPE = 'federated:admin-status';
+
+// Never part of a registration's default allowedScopes (oauthClientAdmin.ts FEDERATED_SCOPES):
+// each is granted to a client deliberately, one client at a time.
+export const OAUTH_OPT_IN_SCOPES = [FEDERATED_ADMIN_STATUS_SCOPE] as const;
+
+/** Entries of `scopes` that are not opt-in scopes; empty when every one may be granted. */
+export function nonOptInScopes(scopes: readonly string[]): string[] {
+  const allowed: readonly string[] = OAUTH_OPT_IN_SCOPES;
+  return scopes.filter(s => !allowed.includes(s));
+}

@@ -38,6 +38,67 @@ describe('S3Storage.upload', () => {
   });
 });
 
+describe('S3Storage ranged reads on empty objects', () => {
+  const setup = () => {
+    const storage = new S3Storage('test-bucket', 'us-east-2');
+    const client = (storage as unknown as { s3: { send: (...args: unknown[]) => Promise<unknown> } }).s3;
+    return { storage, send: vi.spyOn(client, 'send') };
+  };
+  const s3Error = (name: string, httpStatusCode: number) =>
+    Object.assign(new Error(name), { name, $metadata: { httpStatusCode } });
+
+  it('downloadRange returns an empty buffer when S3 answers 416 InvalidRange', async () => {
+    const { storage, send } = setup();
+    send.mockRejectedValue(s3Error('InvalidRange', 416));
+
+    const result = await storage.downloadRange('uploads/__init__.py', 4100);
+
+    expect(result).toEqual(Buffer.alloc(0));
+  });
+
+  it('downloadRange returns the ranged bytes for a non-empty object', async () => {
+    const { storage, send } = setup();
+    send.mockResolvedValue({ Body: Readable.from([Buffer.from('abc')]) });
+
+    await expect(storage.downloadRange('uploads/a.txt', 4100)).resolves.toEqual(Buffer.from('abc'));
+  });
+
+  it.each([
+    ['AccessDenied', 403],
+    ['SlowDown', 503],
+  ])('downloadRange still propagates %s', async (name, status) => {
+    const { storage, send } = setup();
+    send.mockRejectedValue(s3Error(name, status));
+
+    await expect(storage.downloadRange('uploads/a.txt', 4100)).rejects.toMatchObject({ name });
+  });
+
+  it('getPreview returns an empty string when S3 answers 416 InvalidRange', async () => {
+    const { storage, send } = setup();
+    send.mockRejectedValue(s3Error('InvalidRange', 416));
+
+    await expect(storage.getPreview('uploads/__init__.py')).resolves.toBe('');
+  });
+
+  it.each([
+    ['only the error name matches', 'InvalidRange', 400],
+    ['only the HTTP status matches', 'RequestedRangeNotSatisfiable', 416],
+  ])('treats a range error as empty when %s', async (_case, name, status) => {
+    const { storage, send } = setup();
+    send.mockRejectedValue(s3Error(name, status));
+
+    await expect(storage.downloadRange('uploads/__init__.py', 4100)).resolves.toEqual(Buffer.alloc(0));
+    await expect(storage.getPreview('uploads/__init__.py')).resolves.toBe('');
+  });
+
+  it('getPreview still propagates other S3 errors', async () => {
+    const { storage, send } = setup();
+    send.mockRejectedValue(s3Error('AccessDenied', 403));
+
+    await expect(storage.getPreview('uploads/a.txt')).rejects.toMatchObject({ name: 'AccessDenied' });
+  });
+});
+
 describe('S3Storage upload input handling', () => {
   const setup = () => {
     const storage = new S3Storage('test-bucket', 'us-east-2');

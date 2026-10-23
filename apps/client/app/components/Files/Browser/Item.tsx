@@ -10,7 +10,7 @@ import {
 } from '@bike4mind/common';
 import { useUpdateFabFile } from '@client/app/hooks/data/fabFiles';
 import { ImageModerationPlaceholder } from '@client/app/components/Session/ImageModerationPlaceholder';
-import { Description } from '@mui/icons-material';
+import Description from '@mui/icons-material/Description';
 import ArticleIcon from '@mui/icons-material/Article';
 import AudiotrackIcon from '@mui/icons-material/Audiotrack';
 import CodeIcon from '@mui/icons-material/Code';

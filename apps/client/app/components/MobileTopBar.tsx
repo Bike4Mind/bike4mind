@@ -1,6 +1,6 @@
 import React from 'react';
 import { Box, IconButton, Typography } from '@mui/joy';
-import { ArrowBack as ArrowBackIcon } from '@mui/icons-material';
+import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 
 interface MobileTopBarProps {
   title: string;

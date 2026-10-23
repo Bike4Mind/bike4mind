@@ -15,6 +15,7 @@ import { hasAcceptedPolicy } from '@bike4mind/server-utils/auth/consentGate';
 import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
 import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from '@server/auth/mfaEnforcement';
 import { UnauthorizedError, ForbiddenError, TooManyRequestsError } from '@bike4mind/server-utils/utils/errors';
+import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
 import { z } from 'zod';
 
 /** `additionalInfo` of a rate-limit TooManyRequestsError; transports turn it into response headers. */
@@ -212,8 +213,8 @@ function toApiKeyInfo(v: {
  *
  * Exactly one copy of the gate: `apiKeyAuth` calls {@link assertAccountStateUsable} rather than
  * repeating these conditions. The thrown error class is the status contract: the Function-URL
- * adapter (defineLambdaRoute) answers a ForbiddenError with 403 and every other auth throw with
- * 401, and the apiKeyOrJwt resolver (resolveContractAuth) surfaces a key's ForbiddenError when
+ * adapter (defineLambdaRoute) answers a ForbiddenError with 403, a 5xx HTTPError (see
+ * toApiKeyAuthError) with that status, and every other auth throw with 401, and the apiKeyOrJwt resolver (resolveContractAuth) surfaces a key's ForbiddenError when
  * the JWT fallback also fails. No apiKeyOrJwt transport forwards it yet: its only caller, the
  * Fargate SSE route (sseRoute.ts), reports any auth throw as a generic failure.
  *
@@ -233,8 +234,9 @@ async function assertOwnerAccountUsable(userId: string): Promise<void> {
 
 /**
  * Verify API key from headers
- * @throws Error if API key is invalid, expired, missing required scope, or owned by
- * a banned/disputed/suspended account
+ * @throws UnauthorizedError/ForbiddenError if API key is invalid, expired, missing required scope, or
+ * owned by a banned/disputed/suspended account; a 5xx HTTPError (see toApiKeyAuthError) when the
+ * check itself fails, e.g. the database is unreachable
  */
 export async function verifyApiKey(
   headers: Record<string, string | undefined>,
@@ -243,7 +245,7 @@ export async function verifyApiKey(
   const apiKey = extractApiKeyFromHeaders(headers);
 
   if (!apiKey) {
-    throw new Error('No API key provided');
+    throw new UnauthorizedError('No API key provided');
   }
 
   try {
@@ -252,7 +254,9 @@ export async function verifyApiKey(
     });
 
     if (!validation.isValid || !validation.userId || !validation.keyId || !validation.scopes || !validation.rateLimit) {
-      throw new Error(validation.reason ? `Invalid API key: ${validation.reason}` : 'Invalid or expired API key');
+      throw new UnauthorizedError(
+        validation.reason ? `Invalid API key: ${validation.reason}` : 'Invalid or expired API key'
+      );
     }
 
     const requiredScopes = options?.requiredScopes ?? DEFAULT_COMPLETION_SCOPES;
@@ -269,10 +273,7 @@ export async function verifyApiKey(
 
     return toApiKeyInfo(validation);
   } catch (error) {
-    if (error instanceof Error) {
-      throw error;
-    }
-    throw new Error('Failed to verify API key');
+    throw toApiKeyAuthError(error);
   }
 }
 
@@ -295,10 +296,10 @@ export async function verifyBridgeApiKey(headers: Record<string, string | undefi
  */
 function assertEmbedCredential(info: ApiKeyInfo): void {
   if (info.billingOwnerType !== CreditHolderType.Organization || !info.organizationId) {
-    throw new Error('Embed keys must be organization-owned');
+    throw new UnauthorizedError('Embed keys must be organization-owned');
   }
   if (!info.agentId) {
-    throw new Error('Embed key is not bound to an agent');
+    throw new UnauthorizedError('Embed key is not bound to an agent');
   }
 }
 
@@ -306,7 +307,9 @@ function assertEmbedCredential(info: ApiKeyInfo): void {
  * Verify an API key that authorizes the public embed completion surface (the
  * raw-key path: X-API-Key / Authorization). Requires the EMBED_CHAT scope plus
  * the embed credential-class properties above.
- * @throws Error if the key lacks EMBED_CHAT, is not org-owned, or has no agent.
+ * @throws UnauthorizedError/ForbiddenError if the key lacks EMBED_CHAT, is not org-owned, or has no
+ * agent; a 5xx HTTPError (see toApiKeyAuthError) when the check itself fails, e.g. the database is
+ * unreachable
  */
 export async function verifyEmbedApiKey(headers: Record<string, string | undefined>): Promise<ApiKeyInfo> {
   const info = await verifyApiKey(headers, { requiredScopes: [ApiKeyScope.EMBED_CHAT] });
@@ -320,27 +323,34 @@ export async function verifyEmbedApiKey(headers: Record<string, string | undefin
  * scope, and credential-class checks, so a session token cannot outlive a key
  * that was revoked/disabled within its short TTL - the revocation-safety the
  * token itself cannot provide.
- * @throws Error if the key is missing, not active, or not a valid embed key.
+ * @throws UnauthorizedError if the key is missing, not active, or not a valid embed key;
+ * a 5xx HTTPError (see toApiKeyAuthError) when the check itself fails.
  */
 export async function verifyEmbedKeyById(keyId: string): Promise<ApiKeyInfo> {
-  // Share the exact post-lookup gates (status, expiry, last-used, projection) with
-  // the raw-key path via validateUserApiKeyById, so a future gate added to key
-  // validation propagates to the session-token path automatically.
-  const validation = await userApiKeyService.validateUserApiKeyById(keyId, {
-    db: { userApiKeys: userApiKeyRepository },
-  });
+  try {
+    // Share the exact post-lookup gates (status, expiry, last-used, projection) with
+    // the raw-key path via validateUserApiKeyById, so a future gate added to key
+    // validation propagates to the session-token path automatically.
+    const validation = await userApiKeyService.validateUserApiKeyById(keyId, {
+      db: { userApiKeys: userApiKeyRepository },
+    });
 
-  if (!validation.isValid || !validation.userId || !validation.keyId || !validation.scopes || !validation.rateLimit) {
-    throw new Error(validation.reason ? `Invalid embed key: ${validation.reason}` : 'Invalid or expired embed key');
-  }
-  if (!validation.scopes.includes(ApiKeyScope.EMBED_CHAT)) {
-    throw new Error('API key does not have permission for this endpoint (requires embed:chat)');
-  }
+    if (!validation.isValid || !validation.userId || !validation.keyId || !validation.scopes || !validation.rateLimit) {
+      throw new UnauthorizedError(
+        validation.reason ? `Invalid embed key: ${validation.reason}` : 'Invalid or expired embed key'
+      );
+    }
+    if (!validation.scopes.includes(ApiKeyScope.EMBED_CHAT)) {
+      throw new UnauthorizedError('API key does not have permission for this endpoint (requires embed:chat)');
+    }
 
-  const info = toApiKeyInfo(validation);
-  assertEmbedCredential(info);
-  await assertOwnerAccountUsable(info.userId);
-  return info;
+    const info = toApiKeyInfo(validation);
+    assertEmbedCredential(info);
+    await assertOwnerAccountUsable(info.userId);
+    return info;
+  } catch (error) {
+    throw toApiKeyAuthError(error);
+  }
 }
 
 /**

@@ -8,6 +8,7 @@ const {
   estimateSoundCredits,
   generate,
   getSettingsValue,
+  getSettingsMap,
   findById,
   orgFindById,
   orgFindAccessibleById,
@@ -23,6 +24,7 @@ const {
   estimateSoundCredits: vi.fn(),
   generate: vi.fn(),
   getSettingsValue: vi.fn(),
+  getSettingsMap: vi.fn(),
   findById: vi.fn(),
   orgFindById: vi.fn(),
   orgFindAccessibleById: vi.fn(),
@@ -159,8 +161,8 @@ vi.mock('@bike4mind/services', async () => {
 });
 vi.mock('@bike4mind/utils', () => ({
   aiSoundService: () => ({ generate: (...a: unknown[]) => generate(...a) }),
-  getSettingsMap: vi.fn(async () => ({})),
   getSettingsValue: (...a: unknown[]) => getSettingsValue(...a),
+  getSettingsMap: (...a: unknown[]) => getSettingsMap(...a),
 }));
 vi.mock('@server/utils/saveGeneratedAssetToFiles', () => ({
   saveGeneratedAssetToFiles: (...a: unknown[]) => saveGeneratedAssetToFiles(...a),
@@ -200,6 +202,7 @@ beforeEach(() => {
     estimateSoundCredits,
     generate,
     getSettingsValue,
+    getSettingsMap,
     findById,
     orgFindById,
     orgFindAccessibleById,
@@ -217,6 +220,7 @@ beforeEach(() => {
   upload.mockReset().mockResolvedValue(undefined);
   getSignedUrl.mockReset().mockResolvedValue('https://s3/offload');
   getEffectiveApiKey.mockResolvedValue('eleven-key');
+  getSettingsMap.mockResolvedValue({});
   generate.mockResolvedValue({ audio: Buffer.from('boom'), contentType: 'audio/mpeg' });
   findById.mockResolvedValue({ id: 'u1', currentCredits: 100 });
   // Default reservation results (post-decrement balance, non-negative == funded).
@@ -227,6 +231,16 @@ beforeEach(() => {
 });
 
 describe('POST /api/ai/sound-effects', () => {
+  it('passes skipCache for enforceCredits so an admin flip applies on the next request', async () => {
+    getSettingsValue.mockReturnValue(true);
+    estimateSoundCredits.mockReturnValue({ requiredCredits: 12, usdCost: 0.006, billedSeconds: 3 });
+
+    const { promise } = run({ text: 'explosion', durationSeconds: 3 });
+    await promise;
+
+    expect(getSettingsMap).toHaveBeenCalledWith(expect.anything(), { names: ['enforceCredits'], skipCache: true });
+  });
+
   it('reserves then settles the user charge on a successful generation (enforceCredits on)', async () => {
     getSettingsValue.mockReturnValue(true);
     estimateSoundCredits.mockReturnValue({ requiredCredits: 12, usdCost: 0.006, billedSeconds: 3 });
@@ -470,6 +484,26 @@ describe('POST /api/ai/sound-effects', () => {
 
     expect(res._getStatusCode()).toBe(422);
     expect(getEffectiveApiKey).not.toHaveBeenCalled();
+  });
+
+  it('rejects a 451-character prompt (422) before resolving a key or calling the provider', async () => {
+    const { res, promise } = run({ text: 'x'.repeat(451), durationSeconds: 3 });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(422);
+    expect(getEffectiveApiKey).not.toHaveBeenCalled();
+    expect(generate).not.toHaveBeenCalled();
+  });
+
+  it('accepts a 450-character prompt and forwards it to the provider', async () => {
+    getSettingsValue.mockReturnValue(false);
+    estimateSoundCredits.mockReturnValue({ requiredCredits: 12, usdCost: 0.006, billedSeconds: 3 });
+
+    const { res, promise } = run({ text: 'x'.repeat(450), durationSeconds: 3 });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(generate).toHaveBeenCalledWith('x'.repeat(450), expect.anything());
   });
 
   it.each(['alaw_8000', ''])('refuses format %j with 422, before reserving or generating', async format => {

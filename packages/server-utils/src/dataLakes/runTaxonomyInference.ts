@@ -1,4 +1,5 @@
-import type { IFabFileDocument, InferTaxonomyResponse } from '@bike4mind/common';
+import type { IFabFileDocument, IMessage, InferTaxonomyResponse } from '@bike4mind/common';
+import { withMeteredCompletion, type CompletionUsage, type MeteredCompletion } from '@bike4mind/services';
 import OpenAI from 'openai';
 
 /**
@@ -117,7 +118,12 @@ const formatSize = (bytes: number): string => {
 export async function runTaxonomyInference(
   openaiApiKey: string,
   folderTree: TaxonomyFolderEntry[],
-  options?: { existingPrefix?: string; context?: string }
+  options?: {
+    existingPrefix?: string;
+    context?: string;
+    /** Reserves the call's credits before the provider is called (see analyzeBatchTaxonomy). */
+    reserve?: (messages: IMessage[], maxTokens: number) => Promise<MeteredCompletion>;
+  }
 ): Promise<InferTaxonomyResponse> {
   const openai = new OpenAI({ apiKey: openaiApiKey });
 
@@ -148,15 +154,24 @@ export async function runTaxonomyInference(
   // Not wrapped in try/catch: a failure here (auth/rate-limit/server/network) is a genuine
   // API-call problem, not a response-format one, and is left to propagate so the caller can
   // treat it as a real failure instead of silently getting an empty "success."
-  const completion = await openai.chat.completions.create({
-    model: 'gpt-4o-mini',
-    messages: [
-      { role: 'system', content: SYSTEM_PROMPT },
-      { role: 'user', content: userPrompt },
-    ],
-    response_format: { type: 'json_object' },
-    temperature: 0.3,
-    max_tokens: 4000,
+  const messages: IMessage[] = [
+    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'user', content: userPrompt },
+  ];
+  const maxTokens = 4000;
+  const usage: CompletionUsage = {};
+  const metered = await options?.reserve?.(messages, maxTokens);
+  const completion = await withMeteredCompletion(metered, usage, async () => {
+    const result = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: messages as OpenAI.Chat.ChatCompletionMessageParam[],
+      response_format: { type: 'json_object' },
+      temperature: 0.3,
+      max_tokens: maxTokens,
+    });
+    usage.inputTokens = result.usage?.prompt_tokens;
+    usage.outputTokens = result.usage?.completion_tokens;
+    return result;
   });
 
   // `?.` all the way through `choices`, not just its elements: a 200 response with a

@@ -2,12 +2,12 @@ import { Request } from 'express';
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_READ_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { resolveAccessibleLakes, queryDataLakeArticles, type DataLakeArticlesQuery } from '@server/dataLakes';
-import { narrowAccessibleLakes } from '@server/dataLakes/narrowAccessibleLakes';
+import { narrowAccessibleLakes } from '@bike4mind/server-utils/dataLakes/narrowAccessibleLakes';
 import { adminSettingsRepository, lakeAccessEventRepository } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
-import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
-import { firstQueryValue } from '@server/dataLakes/firstQueryValue';
+import { resolveAuditPrincipal } from '@bike4mind/server-utils/dataLakes/resolveAuditPrincipal';
+import { firstQueryValue } from '@bike4mind/server-utils/dataLakes/firstQueryValue';
 
 /**
  * GET /api/data-lakes/articles

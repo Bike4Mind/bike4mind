@@ -1,4 +1,4 @@
-import { useEffect, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useState, type KeyboardEvent, type ReactNode } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
@@ -47,7 +47,7 @@ const VISIBILITY_OPTIONS: { value: SkillListingVisibility; title: string; body: 
   {
     value: 'public',
     title: 'Public',
-    body: 'Anyone on Bike4Mind can find and import it. Held for a reviewer if the scan flags anything.',
+    body: 'Anyone on Bike4Mind can find and import it.',
   },
   { value: 'organization', title: 'Organization', body: 'Only members of the organization you choose can see it.' },
   {
@@ -122,7 +122,7 @@ export function versionOutcome(
         body:
           version.riskTier === 'high'
             ? 'It declares tools that act outside the conversation, so a reviewer must approve it first.'
-            : 'Public listings with findings are checked by a person before they go live.',
+            : 'Listings with findings are checked by a person before they go live.',
       };
     case 'rejected':
       return {
@@ -507,6 +507,10 @@ export function SkillUploadDialog({
           </FormControl>
         )}
         <TagInput tags={tags} onChange={setTags} />
+        <Alert color="neutral" variant="soft" data-testid="skill-publish-scan-disclosure">
+          At every visibility, the scan can reject a submission or hold it for a reviewer before it goes live. Future
+          edits are submitted as new versions.
+        </Alert>
         <DialogActions>
           <Button
             loading={busy}
@@ -737,12 +741,12 @@ export function useSkillUpload(onSaved?: () => void, sessionId?: string | null) 
   const [open, setOpen] = useState<{ preview: Preview; listing?: { id: string; name: string } } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const start = async (load: () => Promise<SkillUploadPreview>, listing?: { id: string; name: string }) => {
+  const start = useCallback(async (load: () => Promise<SkillUploadPreview>, listing?: { id: string; name: string }) => {
     setError(null);
     const preview = await load();
     if (preview.ok) setOpen({ preview, ...(listing ? { listing } : {}) });
     else if (!preview.canceled) setError(preview.error);
-  };
+  }, []);
 
   const dialog = open ? (
     <SkillUploadDialog

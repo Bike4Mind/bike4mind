@@ -56,24 +56,22 @@ import { useGetFileTags, useCreateFileTag } from '@client/app/hooks/data/tag';
 import DateTimePicker from '@client/app/components/common/fields/DateTimePicker';
 import PopularTargetsModal from './PopularTargets/index';
 import TagForm from '@client/app/components/Tag/Form';
-import {
-  Assignment,
-  Description,
-  Link,
-  Explore,
-  Schedule,
-  AccessTime,
-  EventRepeat,
-  Save,
-  Cancel,
-  RocketLaunch,
-  TrendingUp,
-  Add,
-  Delete,
-  Search,
-  Label,
-  Tag,
-} from '@mui/icons-material';
+import Assignment from '@mui/icons-material/Assignment';
+import Description from '@mui/icons-material/Description';
+import Link from '@mui/icons-material/Link';
+import Explore from '@mui/icons-material/Explore';
+import Schedule from '@mui/icons-material/Schedule';
+import AccessTime from '@mui/icons-material/AccessTime';
+import EventRepeat from '@mui/icons-material/EventRepeat';
+import Save from '@mui/icons-material/Save';
+import Cancel from '@mui/icons-material/Cancel';
+import RocketLaunch from '@mui/icons-material/RocketLaunch';
+import TrendingUp from '@mui/icons-material/TrendingUp';
+import Add from '@mui/icons-material/Add';
+import Delete from '@mui/icons-material/Delete';
+import Search from '@mui/icons-material/Search';
+import Label from '@mui/icons-material/Label';
+import Tag from '@mui/icons-material/Tag';
 import { usePopularTargets } from '@client/app/components/ResearchTasks/PopularTargets/hooks';
 import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 import useRefineText from '@client/app/hooks/useRefineText';

@@ -3,6 +3,11 @@ import type { GenerationProviderJobHandle } from '../generation';
 export const VIDEO_MODES = ['text_to_video', 'image_to_video'] as const;
 export type VideoMode = (typeof VIDEO_MODES)[number];
 
+// What an input image is for. snake_case to share names with the FabFile lineage roles (derivedFrom), so a saved
+// clip can record each input under its role.
+export const VIDEO_INPUT_ROLES = ['first_frame', 'last_frame', 'reference', 'style'] as const;
+export type VideoInputRole = (typeof VIDEO_INPUT_ROLES)[number];
+
 export const ASPECT_RATIOS = ['16:9', '9:16', '1:1', '4:3', '3:4', '3:2', '2:3', '21:9'] as const;
 export type AspectRatio = (typeof ASPECT_RATIOS)[number];
 
@@ -29,6 +34,8 @@ export type VideoModelCapabilities = {
   provider: VideoProviderId;
   displayName: string;
   modes: readonly VideoMode[];
+  // The input roles this model accepts and how many of each. A first_frame entry is what image_to_video needs.
+  inputs: Partial<Record<VideoInputRole, { max: number }>>;
   duration: DurationCapability;
   aspectRatios: readonly AspectRatio[];
   resolutions: readonly ResolutionTier[];

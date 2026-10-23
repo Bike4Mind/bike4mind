@@ -56,7 +56,7 @@ import {
   type ConnectedFolderReachability,
   type DriveChange,
   type DriveFile,
-} from '@server/integrations/google/drive/driveClient';
+} from '@bike4mind/server-utils/integrations/google/drive/driveClient';
 import {
   walkFolder,
   fetchDriveFileContent,

@@ -36,6 +36,12 @@ export const ADMIN_AUDIT_CATALOGUE = {
     write: 'strict',
     escalatesAboveGrantThreshold: true,
   },
+  'org.credits.refunded': {
+    category: 'credits',
+    severity: 'notice',
+    write: 'strict',
+    escalatesAboveGrantThreshold: true,
+  },
   'user.subscription.granted': { category: 'credits', severity: 'notice', write: 'strict' },
   'user.credits.adjusted': {
     category: 'credits',
@@ -55,6 +61,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
 
   'user.deleted': { category: 'account', severity: 'critical', write: 'strict' },
   'user.deletion.denied': { category: 'account', severity: 'critical', write: 'bestEffort' },
+  // notice, not info: the same entry carries an admin's change to another user's email, password, tags and ban state.
+  'user.profile.updated': { category: 'account', severity: 'notice', write: 'bestEffort' },
 
   'org.seats.changed': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.seats.ceiling_raised': { category: 'org', severity: 'info', write: 'bestEffort' },
@@ -70,6 +78,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'settings.admin_settings.updated': { category: 'settings', severity: 'notice', write: 'strict' },
   'settings.whats_new.updated': { category: 'settings', severity: 'info', write: 'bestEffort' },
   'settings.whats_new.synced': { category: 'settings', severity: 'info', write: 'bestEffort' },
+  'settings.whats_new.generation_triggered': { category: 'settings', severity: 'info', write: 'bestEffort' },
   'settings.security_scan.enabled': { category: 'settings', severity: 'notice', write: 'bestEffort' },
   'settings.security_scan.disabled': { category: 'settings', severity: 'notice', write: 'bestEffort' },
   'settings.security_scan.triggered': { category: 'settings', severity: 'notice', write: 'bestEffort' },
@@ -86,8 +95,24 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.email.verification_resent': { category: 'identity', severity: 'info', write: 'bestEffort' },
   'user.email.change_resent': { category: 'identity', severity: 'info', write: 'bestEffort' },
   'user.email.change_cancelled': { category: 'identity', severity: 'info', write: 'bestEffort' },
+  'user.sessions.revoked': { category: 'identity', severity: 'notice', write: 'bestEffort' },
   'user.mfa.reset': { category: 'identity', severity: 'notice', write: 'strict' },
   'user.mfa.denied': { category: 'identity', severity: 'critical', write: 'bestEffort' },
+
+  // Handler coverage: secrets and integration credentials
+  'settings.system_secret.upserted': { category: 'settings', severity: 'critical', write: 'strict' },
+  'settings.system_secret.deleted': { category: 'settings', severity: 'critical', write: 'strict' },
+  'integration.github_connection.created': { category: 'settings', severity: 'critical', write: 'strict' },
+  'integration.github_connection.updated': { category: 'settings', severity: 'critical', write: 'strict' },
+  'integration.github_connection.deleted': { category: 'settings', severity: 'critical', write: 'strict' },
+  'integration.github_connection.key_rotated': { category: 'settings', severity: 'critical', write: 'strict' },
+  'integration.slack_app.created': { category: 'settings', severity: 'critical', write: 'strict' },
+  'integration.slack_app.reconnected': { category: 'settings', severity: 'critical', write: 'strict' },
+  'integration.slack_app.manifest_updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'integration.slack_workspace.deactivated': { category: 'settings', severity: 'critical', write: 'strict' },
+  'identity.sso_provider.created': { category: 'identity', severity: 'critical', write: 'strict' },
+  'identity.sso_provider.updated': { category: 'identity', severity: 'critical', write: 'strict' },
+  'identity.sso_provider.deleted': { category: 'identity', severity: 'critical', write: 'strict' },
 
   'audit.exported': { category: 'support', severity: 'info', write: 'bestEffort' },
 } as const satisfies Record<string, AdminAuditCatalogueEntry>;

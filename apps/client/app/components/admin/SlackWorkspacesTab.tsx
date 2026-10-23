@@ -26,19 +26,17 @@ import {
   Divider,
   Tooltip,
 } from '@mui/joy';
-import {
-  Refresh,
-  Delete,
-  Warning,
-  Add,
-  Download,
-  Cancel,
-  CheckCircle,
-  Error,
-  InfoOutlined,
-  Update,
-  LinkOff,
-} from '@mui/icons-material';
+import Refresh from '@mui/icons-material/Refresh';
+import Delete from '@mui/icons-material/Delete';
+import Warning from '@mui/icons-material/Warning';
+import Add from '@mui/icons-material/Add';
+import Download from '@mui/icons-material/Download';
+import Cancel from '@mui/icons-material/Cancel';
+import CheckCircle from '@mui/icons-material/CheckCircle';
+import Error from '@mui/icons-material/Error';
+import InfoOutlined from '@mui/icons-material/InfoOutlined';
+import Update from '@mui/icons-material/Update';
+import LinkOff from '@mui/icons-material/LinkOff';
 import Image from 'next/image';
 import { toast } from 'sonner';
 import { isAxiosError } from 'axios';

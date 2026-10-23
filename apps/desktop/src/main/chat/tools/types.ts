@@ -1,5 +1,6 @@
 import type { CustomCommand } from '@bike4mind/cli/skills';
 import type { VideoModel } from '@bike4mind/common';
+import type { BrowserSnapshot } from '@shared/browserPage';
 import type { McpServerState, McpServersState } from '@shared/mcp';
 import type {
   ChatApprovalOption,
@@ -153,10 +154,7 @@ export interface BrowserPage {
   stop(): void;
   back(): Promise<void>;
   /** With `inView`, only what intersects the viewport. */
-  snapshot(
-    maxChars: number,
-    inView?: boolean
-  ): Promise<{ url: string; title: string; text: string; truncated: boolean }>;
+  snapshot(maxChars: number, inView?: boolean): Promise<BrowserSnapshot>;
   click(ref: string): Promise<string>;
   /** Scroll and describe what moved; an element target resolves to its visible name. */
   scroll(target: ScrollTarget): Promise<string>;
@@ -503,6 +501,8 @@ export interface ApprovalPrompt {
   always?: ApprovalAlways;
   /** For an MCP tool: the server's slug and the tool's own name, which an `mcp__server__tool` rule names. */
   mcp?: { server: string; tool: string };
+  /** What "always allow" in this conversation covers, for a `key` broader than this one call. */
+  alwaysCovers?: string;
 }
 
 export interface ApprovalAlways {

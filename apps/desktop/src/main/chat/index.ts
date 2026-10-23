@@ -6,6 +6,7 @@ import {
   app,
   BrowserWindow,
   clipboard,
+  ClipboardItem,
   dialog,
   ipcMain,
   nativeImage,
@@ -57,6 +58,7 @@ import type { AuthService } from '../auth';
 import { createMainLogger } from '../logger';
 import { ApprovalModePreference } from './ApprovalModePreference';
 import { SidebarSectionStore } from './SidebarSectionStore';
+import { registerImageMenuIpc } from './imageMenuIpc';
 import { registerSessionCreateIpc } from './sessionCreateIpc';
 import { placeNewSession, registerSidebarIpc } from './sidebarIpc';
 import { AttachmentStore } from './AttachmentStore';
@@ -81,7 +83,7 @@ import { ModelCatalog } from './ModelCatalog';
 import { ModelPreference } from './ModelPreference';
 import { SessionActivity } from './SessionActivity';
 import { SessionStore } from './SessionStore';
-import { sessionScopeFor } from './sessionScope';
+import { sessionScopeFor, sessionScopeKey } from './sessionScope';
 import {
   branchCheckouts,
   currentBranch,
@@ -90,8 +92,10 @@ import {
   projectDisplayName,
   unusableProjectReason,
 } from './project/git';
+import { readWorkspaceChanges } from './project/workspaceChanges';
 import { accountSkillsProvider } from './skills/accountSkills';
 import { ProjectTrustStore } from './skills/ProjectTrustStore';
+import { ApprovalLog } from './permissions/ApprovalLog';
 import { ClaudeCodeSettings, MANAGED_SETTINGS_PATH } from './permissions/ClaudeCodeSettings';
 import { PermissionRuleStore } from './permissions/PermissionRuleStore';
 import { PermissionService } from './permissions/PermissionService';
@@ -100,6 +104,7 @@ import { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
 import { DependencyInstaller } from './project/dependencyInstall';
 import { RecentFolderStore } from './project/RecentFolderStore';
+import { SpareWorktrees } from './project/workspace';
 import { folderToRemember } from './project/recentFolderToRecord';
 import { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 import { parseReasoningEffortSetting, storedReasoningEffortSetting } from './reasoningEffort';
@@ -108,6 +113,8 @@ import { devLog } from '../devlog/DevLogSink';
 import { registerPullRequests } from '../pr';
 import type { PrMonitor } from '../pr/PrMonitor';
 import { appWindows } from '../windows';
+import { registerClaudeImport } from '../claudeImport';
+import type { ClaudeImportService } from '../claudeImport/ClaudeImportService';
 
 const VERBOSE = process.env.B4M_DESKTOP_VERBOSE === '1';
 /** Diagnosis only; see apps/desktop/docs/model-wait-findings.md. */
@@ -203,6 +210,10 @@ export interface RegisteredChat {
   browser: BrowserManager;
   /** Each conversation's pull request, and the timers that watch it. */
   pullRequests: PrMonitor;
+  /** Import from Claude; started once the window is up so it never delays launch. */
+  claudeImport: ClaudeImportService;
+  /** Spare checkouts, removed on the quit pass that can wait for git. */
+  spareWorktrees: SpareWorktrees;
 }
 
 /**
@@ -331,10 +342,11 @@ export function registerChat(
   // App-wide like approval-mode.json; see SidebarSectionStore.
   const sidebarSections = new SidebarSectionStore(join(userData, 'sidebar-sections.json'));
   const recentFolders = new RecentFolderStore(join(userData, 'recent-folders.json'));
+  const spareWorktrees = new SpareWorktrees();
   // The trust file is its own file beside tool-access.json, and for the same reason: both record
   // a consent the user gave once and should not be asked for again on every launch.
   const projectTrust = new ProjectTrustStore(join(userData, 'project-skill-trust.json'));
-  const skills = new SkillCatalog(projectTrust, accountSkillsProvider(auth, userData));
+  const skills = new SkillCatalog(projectTrust, accountSkillsProvider(auth, userData), logger);
   // App-wide like approval-mode.json. Claude Code's files are only ever read; the protected roots
   // are folders no allow rule may cover, since a call writing there would grant itself more.
   const home = app.getPath('home');
@@ -472,9 +484,12 @@ export function registerChat(
     modelMemory: modelPreference,
     approvals,
     permissions,
+    // App-wide like approval-mode.json: a record of decisions, kept after their conversations.
+    approvalLog: new ApprovalLog(join(userData, 'approval-log.jsonl'), message => logger.warn(message)),
     background,
     foreground,
     dependencies: new DependencyInstaller(background),
+    spareWorktrees,
     media,
     videoJobs,
     activity,
@@ -570,11 +585,14 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatListSessions, () => service.listSessions());
   ipcMain.handle(IPC_CHANNELS.permissionsGetState, () => permissions.state());
   // Shapes checked here: this is the only door a rule comes in by besides the approval card.
-  ipcMain.handle(IPC_CHANNELS.permissionsSetRules, (_event, scope: unknown, lists: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.permissionsSetRules, async (_event, scope: unknown, lists: unknown) => {
     const parsedScope = permissionScope(scope);
     const parsedLists = permissionLists(lists);
     if (!parsedScope || !parsedLists) return { ok: false, error: 'Not a permission rule list.' };
-    return permissions.setRules(parsedScope, parsedLists);
+    const result = await permissions.setRules(parsedScope, parsedLists);
+    // An allow typed here answers any card it now covers, in every session.
+    if (result.ok) void approvals.settleCovered();
+    return result;
   });
   ipcMain.handle(IPC_CHANNELS.permissionsSetSharing, (_event, share: unknown) =>
     permissions.setShareClaudeCode(share === true)
@@ -605,7 +623,10 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatPickProjectDirectory, (event): Promise<string | null> => pickDirectory(event.sender));
   ipcMain.handle(IPC_CHANNELS.chatListRecentFolders, () => recentFolders.list());
   ipcMain.handle(IPC_CHANNELS.chatRemoveRecentFolder, async (_event, directory: unknown) => {
-    if (typeof directory === 'string') await recentFolders.remove(directory);
+    if (typeof directory === 'string') {
+      await recentFolders.remove(directory);
+      void spareWorktrees.forget(directory);
+    }
     return recentFolders.list();
   });
 
@@ -660,6 +681,19 @@ export function registerChat(
     service.removeContextDirectory(sessionId, directory)
   );
   ipcMain.handle(IPC_CHANNELS.chatGetSession, (_event, sessionId: string) => service.getSession(sessionId));
+  // Keyed by session rather than by a path from the renderer, so this only ever reads the folder
+  // the session's own tools run in. A failure is logged, not shown: the bar is a passive readout,
+  // and a repository git cannot read already says so on the branch chip beside it.
+  ipcMain.handle(IPC_CHANNELS.chatWorkspaceChanges, async (_event, sessionId: unknown) => {
+    if (typeof sessionId !== 'string') return null;
+    const session = await store.get(sessionId);
+    try {
+      return await readWorkspaceChanges(session?.project);
+    } catch (err) {
+      logger.warn(`CHAT: could not read workspace changes for ${sessionId}: ${String(err)}`);
+      return null;
+    }
+  });
   ipcMain.handle(IPC_CHANNELS.chatRenameSession, (_event, sessionId: string, title: string) =>
     service.renameSession(sessionId, title)
   );
@@ -739,6 +773,30 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatDiscardAttachment, (_event, sessionId: string, attachmentId: string) =>
     attachments.discard(sessionId, attachmentId)
   );
+
+  registerImageMenuIpc(ipcMain, {
+    media,
+    attachments,
+    readFile: path => readFile(path),
+    // Decoded from the bytes, not the path: attachment files carry no extension to decode by.
+    // Re-encoded as PNG, the one image type every platform clipboard takes.
+    copyImage: async bytes => {
+      const image = nativeImage.createFromBuffer(bytes);
+      if (image.isEmpty()) return false;
+      const png = image.toPNG();
+      await clipboard.write([new ClipboardItem({ 'image/png': new Blob([png], { type: 'image/png' }) })]);
+      return true;
+    },
+    copyText: text => clipboard.writeText(text),
+    pickSavePath: async (sender, options) => {
+      const window = BrowserWindow.fromWebContents(sender);
+      const picked = await (window ? dialog.showSaveDialog(window, options) : dialog.showSaveDialog(options));
+      return picked.canceled || !picked.filePath ? null : picked.filePath;
+    },
+    copyFile: (from, to) => copyFile(from, to),
+    reveal: path => shell.showItemInFolder(path),
+    downloadsDirectory: () => app.getPath('downloads'),
+  });
 
   ipcMain.handle(IPC_CHANNELS.chatListArtifacts, () => artifactLibrary.list());
   ipcMain.handle(IPC_CHANNELS.chatReadArtifact, (_event, artifactId: string) => artifactLibrary.read(artifactId));
@@ -894,7 +952,27 @@ export function registerChat(
     return { ok: true, expiresAt: link.expiresAt };
   });
 
-  return { service, background, mcp, browser, pullRequests };
+  const claudeImport = registerClaudeImport(ipcMain, {
+    home,
+    userData,
+    store,
+    attachments,
+    scopeKey: () => {
+      const scope = sessionScopeFor(auth.getState());
+      return scope ? sessionScopeKey(scope) : null;
+    },
+    pickModel: () => service.modelForNewSession().catch(() => undefined),
+    listSessions: () => store.list(),
+    deleteImported: async (sessionId, scopeKey) => {
+      const outcome = await service.deleteImportedSession(sessionId, scopeKey);
+      if (outcome === 'removed') await pullRequests.forget(sessionId);
+      return outcome;
+    },
+    send,
+    logger,
+  });
+
+  return { service, background, mcp, browser, pullRequests, claudeImport, spareWorktrees };
 }
 
 export { ChatService } from './ChatService';

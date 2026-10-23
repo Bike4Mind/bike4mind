@@ -129,3 +129,50 @@ describe('Feedback tab params', () => {
     }
   });
 });
+
+describe('Webhook Audit Logs and Model Logs tab params', () => {
+  const webhookSearch = {
+    tab: 'webhook-audit-logs',
+    webhookRange: '30d',
+    webhookRepo: 'acme/widgets',
+    webhookEvent: 'push',
+    webhookStatus: 'failed',
+    webhookSource: 'org',
+    webhookDeliveryId: '8f1c2e40-1d2b-11ef-9a3c-5b1e2d3c4f5a',
+  };
+  const modelLogsSearch = {
+    tab: 'model-logs',
+    modelLogsPage: 2,
+    modelLogsLimit: 25,
+    modelLogsFrom: '2026-09-01',
+    modelLogsTo: '2026-09-30',
+    modelLogsModel: 'gpt-4',
+  };
+
+  it('coerces each param in validateSearch and drops invalid ones', () => {
+    expect(
+      parseAdminSearch({ webhookRange: '1y', webhookDeliveryId: '../x', modelLogsLimit: '25', modelLogsFrom: 'soon' })
+    ).toMatchObject({
+      webhookRange: undefined,
+      webhookDeliveryId: undefined,
+      modelLogsLimit: 25,
+      modelLogsFrom: undefined,
+    });
+  });
+
+  it('never accepts the model logs free-text search', () => {
+    expect(parseAdminSearch({ search: 'my prompt' })).not.toHaveProperty('search');
+  });
+
+  it.each([
+    ['webhook-audit-logs', webhookSearch, 'model-logs'],
+    ['model-logs', modelLogsSearch, 'webhook-audit-logs'],
+  ] as const)('keeps %s params on their tab and drops them on a switch away', (slug, search, otherSlug) => {
+    expect(adminSearchForTab(search, slug)).toMatchObject(search);
+
+    const switched = adminSearchForTab(search, otherSlug);
+    for (const key of Object.keys(search).filter(key => key !== 'tab')) {
+      expect(switched[key as keyof typeof switched], key).toBeUndefined();
+    }
+  });
+});

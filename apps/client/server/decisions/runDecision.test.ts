@@ -45,6 +45,7 @@ vi.mock('@server/files/loadAccessibleFabFile', () => ({ loadAccessibleFabFile: v
 vi.mock('@bike4mind/utils/imageResize', () => ({ ensureImageWithinDimensionLimit: vi.fn(async (b: Buffer) => b) }));
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ download: vi.fn() }) }));
 
+import { getSettingsMap } from '@bike4mind/utils';
 import { TEST_DECISION_MARKERS } from '@bike4mind/utils/decisionProviders';
 import { runDecision } from './runDecision';
 
@@ -92,6 +93,11 @@ describe('runDecision', () => {
       expect.objectContaining({ feature: 'decision', provider: 'test', status: 'ok', source: 'agent' })
     );
     expect(response.answers.map(answer => answer.name)).toEqual(['is_urgent', 'team']);
+  });
+
+  it('reads enforceCredits past the settings cache so an admin flip applies on the next call', async () => {
+    await run();
+    expect(getSettingsMap).toHaveBeenCalledWith(expect.anything(), { names: ['enforceCredits'], skipCache: true });
   });
 
   it('refunds on a provider failure and records an error usage row with zero tokens', async () => {

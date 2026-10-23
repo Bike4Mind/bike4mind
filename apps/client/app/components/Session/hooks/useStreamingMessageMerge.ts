@@ -6,6 +6,7 @@ import type { IChatCompletion } from '@client/app/hooks/useSubscribeChatCompleti
 import { isTerminalQuestStatus, terminalQuests } from '@client/app/hooks/chatCompletionState';
 import { checkQuestTimeout } from '@client/app/utils/sessionsAPICalls';
 import { updateAllQueryData } from '@client/app/utils/react-query';
+import { isOptimisticId } from '@client/app/utils/llm';
 import type { Dispatch, SetStateAction } from 'react';
 
 /**
@@ -102,6 +103,8 @@ export function useStreamingMessageMerge({
           // notice never renders blank in the window before `baseQuest` reflects it.
           reply: chatCompletion.quest.errorCode ? (chatCompletion.quest.reply ?? baseQuest.reply) : baseQuest.reply,
           promptMeta: mergedPromptMeta,
+          // baseQuest is the first frame's snapshot, and a stalled turn's retries only arrive later.
+          turnTiming: chatCompletion.quest.turnTiming ?? baseQuest.turnTiming,
         };
       }
       // Fallback: streaming chunks arrived before React Query loaded the quest.
@@ -126,6 +129,7 @@ export function useStreamingMessageMerge({
         questMasterPlanId: sq.questMasterPlanId,
         // any: sq is the Zod-inferred StreamedChatCompletionAction['quest'] shape, which does not model promptMeta
         promptMeta: (sq as any).promptMeta,
+        turnTiming: sq.turnTiming,
       } as IChatHistoryItem;
     }
 
@@ -160,7 +164,7 @@ export function useStreamingMessageMerge({
   useEffect(() => {
     const latest = flattenQuests[0];
     if (!latest || latest.status !== 'running') return;
-    if (chatCompletion.quest?.id) return;
+    if (chatCompletion.quest?.id === latest.id && !chatCompletion.completed) return;
 
     const timer = setTimeout(() => {
       queryClient.invalidateQueries({
@@ -169,7 +173,7 @@ export function useStreamingMessageMerge({
     }, 10000);
 
     return () => clearTimeout(timer);
-  }, [flattenQuests, chatCompletion.quest?.id, sessionId, queryClient]);
+  }, [flattenQuests, chatCompletion.quest?.id, chatCompletion.completed, sessionId, queryClient]);
 
   // The websocket can miss the whole stream, leaving the composer on Stop for a quest the
   // server already ended. A held quest's cache entry is written only by its own frames or a
@@ -190,6 +194,16 @@ export function useStreamingMessageMerge({
     );
   }, [chatCompletion.completed, heldQuestId, heldQuestCachedStatus, setChatCompletion]);
 
+  // Also covers the spinner-only window (no streaming data, e.g. the held quest belongs to another
+  // session id) so a lost terminal frame cannot strand a running quest.
+  const latestQuest = flattenQuests[0];
+  const recoverId =
+    streamingMessageData?.status === 'running'
+      ? streamingMessageData.id
+      : !streamingMessageData && showOptimisticSpinner && latestQuest && !isOptimisticId(latestQuest.id)
+        ? latestQuest.id
+        : null;
+
   // Streaming recovery poll: while a quest sits at 'running', poll the server for its authoritative
   // state. Two failure modes strand the client on an eternal "Running..." spinner, both invisible to
   // the WebSocket stream:
@@ -209,21 +223,22 @@ export function useStreamingMessageMerge({
   // terminal state for an already-done quest or one whose heartbeat has been stale >120s, so a live
   // streaming chat (fresh heartbeat) is left untouched no matter how much text it has streamed.
   useEffect(() => {
-    const questId = streamingMessageData?.id;
-    if (!questId) return;
-    if (streamingMessageData.status !== 'running') return;
+    if (!recoverId) return;
 
     let cancelled = false;
 
     const poll = async () => {
       try {
-        const updatedQuest = await checkQuestTimeout(questId);
+        const updatedQuest = await checkQuestTimeout(recoverId);
         if (cancelled) return;
         if (isTerminalQuestStatus(updatedQuest.status)) {
-          terminalQuests.markTerminal(questId, updatedQuest.updatedAt);
-          updateAllQueryData(queryClient, 'quests', 'write', updatedQuest, {
-            keysAllowedToCreate: [['quests', 'session', sessionId]],
-          });
+          terminalQuests.markTerminal(recoverId, updatedQuest.updatedAt);
+          // The quest may be cached under its real session while the view still holds an optimistic id.
+          const keys = [['quests', 'session', sessionId]];
+          if (updatedQuest.sessionId && updatedQuest.sessionId !== sessionId) {
+            keys.push(['quests', 'session', updatedQuest.sessionId]);
+          }
+          updateAllQueryData(queryClient, 'quests', 'write', updatedQuest, { keysAllowedToCreate: keys });
           setChatCompletion({ quest: undefined, completed: true, stopped: false });
           resetStreaming(sessionId);
           clearInterval(interval);
@@ -241,9 +256,9 @@ export function useStreamingMessageMerge({
       cancelled = true;
       clearInterval(interval);
     };
-    // streamingMessageData is a fresh object whenever the merge recomputes, so its
-    // reference covers any change to .id/.replies/.status - no need to list those separately.
-  }, [streamingMessageData, queryClient, sessionId, setChatCompletion, resetStreaming]);
+    // Keyed on primitives: streamingMessageData is a fresh object on every merge recompute and
+    // would reset the poll interval before it ever fires.
+  }, [recoverId, queryClient, sessionId, setChatCompletion, resetStreaming]);
 
   const isStreaming = !!streamingMessageData;
 

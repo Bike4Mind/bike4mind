@@ -146,7 +146,7 @@ runs:
         # Pick the diff range from the trigger that fired THIS run.
         case "$EVENT_NAME" in
           push)
-            # Direct push to main/prod: per-push range. No PR to scope to,
+            # Direct push to main: per-push range. No PR to scope to,
             # and each push is one deploy unit.
             BASE="$PUSH_BEFORE"; HEAD="$PUSH_AFTER" ;;
           pull_request)
@@ -193,7 +193,7 @@ runs:
         # under `set -e`, the step aborts without writing to GITHUB_OUTPUT and
         # every downstream job would interpret missing output as "skip". Force
         # an explicit deployable=true on error so a transient diff failure on a
-        # prod push doesn't silently drop a release.
+        # push to main doesn't silently drop a release.
         NON_DOC=$(git diff --name-only "$BASE" "$HEAD" -- . "${EXCLUDES[@]}") || {
           echo "git diff (deployable) failed unexpectedly after range validation; failing open."
           echo "deployable=true" >> "$GITHUB_OUTPUT"

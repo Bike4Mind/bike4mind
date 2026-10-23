@@ -308,21 +308,26 @@ export const TIER1_SECRET_SPECS: readonly Tier1SecretSpec[] = [
     exposure: 'stored user secrets are encrypted under a key published in this repository',
   },
   {
+    name: 'MEMORY_KEY_SECRET',
+    enforcement: 'always',
+    validate: validateSharedSecret,
+    hint: setHint('MEMORY_KEY_SECRET', RANDOM_HEX),
+    exposure: 'memory principal keys would be stored alongside their ciphertext without wrapping',
+  },
+  {
     name: 'CHAT_COMPLETION_INTERNAL_SECRET',
     enforcement: 'always',
     validate: validateSharedSecret,
     hint: setHint('CHAT_COMPLETION_INTERNAL_SECRET', RANDOM_HEX),
     exposure: 'the internal quest-dispatch bearer is a value published in this repository',
   },
-  ...INGEST_TOKENS.map(
-    (name): Tier1SecretSpec => ({
-      name,
-      enforcement: 'production',
-      validate: validateSharedSecret,
-      hint: setHint(name, RANDOM_HEX),
-      exposure: 'the ingest route it gates accepts unauthenticated writes',
-    })
-  ),
+  ...INGEST_TOKENS.map((name): Tier1SecretSpec => ({
+    name,
+    enforcement: 'production',
+    validate: validateSharedSecret,
+    hint: setHint(name, RANDOM_HEX),
+    exposure: 'the ingest route it gates accepts unauthenticated writes',
+  })),
   {
     name: 'NCMEC_ESP_ID',
     enforcement: 'warn',
@@ -331,7 +336,7 @@ export const TIER1_SECRET_SPECS: readonly Tier1SecretSpec[] = [
       if (isCommonPlaceholder(value)) return { isValid: false, status: 'placeholder', severity: 'error' };
       return { isValid: true, status: 'configured', severity: 'info' };
     },
-    hint: (stage) => `AWS_PROFILE=<your-profile> pnpm sst secret set NCMEC_ESP_ID "<your-esp-id>" --stage ${stage}`,
+    hint: stage => `AWS_PROFILE=<your-profile> pnpm sst secret set NCMEC_ESP_ID "<your-esp-id>" --stage ${stage}`,
     exposure: 'NCMEC CyberTipline reporting is disabled; confirmed CSAM incidents cannot be submitted',
   },
   {
@@ -342,7 +347,7 @@ export const TIER1_SECRET_SPECS: readonly Tier1SecretSpec[] = [
       if (isCommonPlaceholder(value)) return { isValid: false, status: 'placeholder', severity: 'error' };
       return { isValid: true, status: 'configured', severity: 'info' };
     },
-    hint: (stage) => `AWS_PROFILE=<your-profile> pnpm sst secret set NCMEC_API_KEY "<your-api-key>" --stage ${stage}`,
+    hint: stage => `AWS_PROFILE=<your-profile> pnpm sst secret set NCMEC_API_KEY "<your-api-key>" --stage ${stage}`,
     exposure: 'NCMEC CyberTipline reporting is disabled; confirmed CSAM incidents cannot be submitted',
   },
   {
@@ -353,7 +358,8 @@ export const TIER1_SECRET_SPECS: readonly Tier1SecretSpec[] = [
       if (isCommonPlaceholder(value)) return { isValid: false, status: 'placeholder', severity: 'error' };
       return { isValid: true, status: 'configured', severity: 'info' };
     },
-    hint: (stage) => `AWS_PROFILE=<your-profile> pnpm sst secret set NCMEC_ESP_EMAIL "<esp-contact@yourdomain.com>" --stage ${stage}`,
+    hint: stage =>
+      `AWS_PROFILE=<your-profile> pnpm sst secret set NCMEC_ESP_EMAIL "<esp-contact@yourdomain.com>" --stage ${stage}`,
     exposure: 'NCMEC CyberTipline reports will be rejected; the ESP contact email is required by the API',
   },
 ];

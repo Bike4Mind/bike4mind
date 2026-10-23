@@ -1,7 +1,8 @@
 import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import React from 'react';
 import { Chip, Tooltip } from '@mui/joy';
-import { CheckCircle, RadioButtonUnchecked } from '@mui/icons-material';
+import CheckCircle from '@mui/icons-material/CheckCircle';
+import RadioButtonUnchecked from '@mui/icons-material/RadioButtonUnchecked';
 
 interface MFAStatusBadgeProps {
   user: AdminUserListItem;

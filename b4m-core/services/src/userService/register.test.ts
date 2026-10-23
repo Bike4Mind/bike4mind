@@ -112,23 +112,23 @@ describe('registerUser', () => {
   describe('disposable-email blocking', () => {
     it('rejects registration with a disposable-domain email', async () => {
       const params = { ...baseParams, email: 'burner@mailinator.com' };
-      await expect(registerUser(params, mockAdapters)).rejects.toThrow('Disposable email addresses are not allowed');
+      await expect(registerUser(params, mockAdapters)).rejects.toThrow('This email domain is not allowed');
       expect(mockAdapters.db.users.create).not.toHaveBeenCalled();
     });
 
     it('rejects a subdomain of a disposable domain', async () => {
       const params = { ...baseParams, email: 'burner@anything.mailinator.com' };
-      await expect(registerUser(params, mockAdapters)).rejects.toThrow('Disposable email addresses are not allowed');
+      await expect(registerUser(params, mockAdapters)).rejects.toThrow('This email domain is not allowed');
     });
 
     it('rejects disposable domains regardless of email casing', async () => {
       const params = { ...baseParams, email: 'Burner@MAILINATOR.COM' };
-      await expect(registerUser(params, mockAdapters)).rejects.toThrow('Disposable email addresses are not allowed');
+      await expect(registerUser(params, mockAdapters)).rejects.toThrow('This email domain is not allowed');
     });
 
     it('rejects the fully-qualified (trailing-dot) disposable form', async () => {
       const params = { ...baseParams, email: 'burner@mailinator.com.' };
-      await expect(registerUser(params, mockAdapters)).rejects.toThrow('Disposable email addresses are not allowed');
+      await expect(registerUser(params, mockAdapters)).rejects.toThrow('This email domain is not allowed');
     });
 
     it('allows a disposable email when blockDisposableEmails is switched OFF', async () => {
@@ -140,6 +140,17 @@ describe('registerUser', () => {
       });
       const params = { ...baseParams, email: 'burner@mailinator.com' };
       await expect(registerUser(params, mockAdapters)).resolves.toBeDefined();
+    });
+
+    it('rejects an email on an admin-blocked domain even with blockDisposableEmails OFF', async () => {
+      mockAdapters.db.adminSettings.findBySettingName = vi.fn().mockImplementation((name: string) => {
+        if (name === 'blockedEmailDomains') return Promise.resolve({ settingValue: ['kashre.com'] });
+        if (name === 'blockDisposableEmails') return Promise.resolve({ settingValue: 'false' });
+        return Promise.resolve(null);
+      });
+      const params = { ...baseParams, email: 'x@np.kashre.com' };
+      await expect(registerUser(params, mockAdapters)).rejects.toThrow('This email domain is not allowed');
+      expect(mockAdapters.db.users.create).not.toHaveBeenCalled();
     });
 
     it('rejects a malformed email address', async () => {

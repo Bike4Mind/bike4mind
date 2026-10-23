@@ -1,12 +1,19 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
 // `any` below is deliberate test-mock plumbing for the next-connect / node-mocks-http chain,
 // matching the repo's handler-test convention.
+// Read when the route module loads, which is before any test body runs
+vi.hoisted(() => {
+  process.env.S3_PRESIGN_ENDPOINT = 'http://localhost:9000';
+  process.env.SERVER_DOMAIN = 'example.test';
+});
+
 const mockRefs = vi.hoisted(() => ({
   putHandler: null as null | ((req: any, res: any) => unknown),
   modal: null as any,
   updateExistingModalCall: undefined as any,
+  findOneAndUpdate: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -23,7 +30,10 @@ vi.mock('@server/middlewares/baseApi', () => {
 vi.mock('@bike4mind/database/social', () => ({
   ModalModel: {
     findById: () => Promise.resolve(mockRefs.modal),
-    findOneAndUpdate: () => Promise.resolve(mockRefs.modal),
+    findOneAndUpdate: (...args: unknown[]) => {
+      mockRefs.findOneAndUpdate(...args);
+      return Promise.resolve(mockRefs.modal);
+    },
   },
 }));
 
@@ -32,7 +42,7 @@ vi.mock('@server/utils/cacheExternalImage', () => ({
   cacheExternalImages: vi.fn(async (images: unknown[]) => images),
 }));
 
-vi.mock('@server/services/whatsNewDistribution', () => ({
+vi.mock('@bike4mind/server-utils/services/whatsNewDistribution', () => ({
   WhatsNewDistributionService: {
     updateExistingModal: vi.fn(async (...args: unknown[]) => {
       mockRefs.updateExistingModalCall = args;
@@ -52,7 +62,7 @@ vi.mock('@bike4mind/services', () => ({
   MODAL_SAFE_DEFAULT_KEY: 'customer',
 }));
 
-import { WhatsNewDistributionService } from '@server/services/whatsNewDistribution';
+import { WhatsNewDistributionService } from '@bike4mind/server-utils/services/whatsNewDistribution';
 import { emitModalGenerationMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
 import '@pages/api/modals/[id]/update';
 
@@ -115,5 +125,63 @@ describe('PUT /api/modals/[id] - S3 distribution repository metadata', () => {
     release();
     await pending;
     expect(res._getStatusCode()).toBe(200);
+  });
+});
+
+afterAll(() => {
+  delete process.env.S3_PRESIGN_ENDPOINT;
+  delete process.env.SERVER_DOMAIN;
+});
+
+describe('PUT /api/modals/[id] - video', () => {
+  const video = {
+    landscapeUrl: 'https://bucket.s3.us-east-2.amazonaws.com/modals/demo-16x9.mp4',
+    landscapePosterUrl: 'https://bucket.s3.us-east-2.amazonaws.com/modals/demo-16x9.png',
+    portraitUrl: 'https://d111.cloudfront.net/demo-9x16.mp4',
+    portraitPosterUrl: null,
+  };
+
+  beforeEach(() => {
+    mockRefs.findOneAndUpdate.mockClear();
+    mockRefs.modal = { _id: { toString: () => MODAL_ID }, tags: [], toObject: () => mockRefs.modal };
+  });
+
+  it('persists the video urls', async () => {
+    const { req, res } = mocks({ video });
+    await mockRefs.putHandler!(req, res);
+
+    const [, update] = mockRefs.findOneAndUpdate.mock.calls[0];
+    expect(update.$set.video).toEqual(video);
+  });
+
+  it('accepts clearing the video', async () => {
+    const { req, res } = mocks({ video: null });
+    await mockRefs.putHandler!(req, res);
+
+    const [, update] = mockRefs.findOneAndUpdate.mock.calls[0];
+    expect(update.$set.video).toBeNull();
+  });
+
+  it.each([
+    ['the self-host object store', 'http://localhost:9000/fab-bucket/modals/demo.mp4'],
+    ['the files host', 'https://files.dev.example.test/modals/demo.mp4'],
+  ])('accepts a url on %s', async (_case, url) => {
+    const { req, res } = mocks({ video: { landscapeUrl: url } });
+    await mockRefs.putHandler!(req, res);
+
+    const [, update] = mockRefs.findOneAndUpdate.mock.calls[0];
+    expect(update.$set.video).toEqual({ landscapeUrl: url });
+  });
+
+  it.each([
+    ['another port on the object store host', { landscapeUrl: 'http://localhost:9001/fab-bucket/a.mp4' }],
+    ['https on the http-only object store', { landscapeUrl: 'https://localhost:9000/fab-bucket/a.mp4' }],
+    ['a non-http url', { ...video, landscapeUrl: 'javascript:alert(1)' }],
+    ['a host the CSP does not allow', { ...video, landscapeUrl: 'https://cdn.example.com/a.mp4' }],
+    ['a poster without its video', { portraitPosterUrl: video.landscapePosterUrl }],
+  ])('rejects %s', async (_case, bad) => {
+    const { req, res } = mocks({ video: bad });
+    await expect(mockRefs.putHandler!(req, res)).rejects.toThrow();
+    expect(mockRefs.findOneAndUpdate).not.toHaveBeenCalled();
   });
 });

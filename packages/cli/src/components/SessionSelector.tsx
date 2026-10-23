@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import SelectInput from 'ink-select-input';
 import type { Session } from '../storage/types';
+import { sanitizeTerminalText } from '../utils/sanitizeTerminalText.js';
 
 interface SessionSelectorProps {
   sessions: Session[];
@@ -68,8 +69,9 @@ export function SessionSelector({ sessions, currentSession, onSelect, onCancel }
     // Find the most recent user message
     const userMessages = session.messages.filter(msg => msg.role === 'user');
     const lastUserMessage = userMessages[userMessages.length - 1];
+    const lastContent = lastUserMessage ? sanitizeTerminalText(lastUserMessage.content) : '';
     const preview = lastUserMessage
-      ? lastUserMessage.content.slice(0, 50).replace(/\n/g, ' ') + (lastUserMessage.content.length > 50 ? '...' : '')
+      ? lastContent.slice(0, 50).replace(/\n/g, ' ') + (lastContent.length > 50 ? '...' : '')
       : 'No messages';
 
     const timeAgo = formatTimeAgo(session.updatedAt);
@@ -129,7 +131,7 @@ export function SessionSelector({ sessions, currentSession, onSelect, onCancel }
   return (
     <Box flexDirection="column" marginY={1}>
       <Box marginBottom={1} flexDirection="column">
-        <Text bold>Resume session: &quot;{selectedSession?.name}&quot;</Text>
+        <Text bold>Resume session: &quot;{sanitizeTerminalText(selectedSession?.name ?? '')}&quot;</Text>
         <Text dimColor>
           {selectedSession?.messages.length} messages | {selectedSession?.model} |{' '}
           {selectedSession?.metadata?.totalTokens?.toLocaleString() ?? 0} tokens

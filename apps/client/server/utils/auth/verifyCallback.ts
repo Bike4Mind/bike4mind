@@ -3,7 +3,7 @@ import { User, authSessionRepository, realtimeConnectionRepository, type IUserOb
 import { Logger } from '@bike4mind/observability';
 import { authSessionService } from '@bike4mind/services';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
-import { omit } from 'lodash';
+import omit from 'lodash/omit';
 import { requireNonSystemUser } from '@server/auth/requireNonSystemUser';
 import {
   applyEmailVerifiedGrants,

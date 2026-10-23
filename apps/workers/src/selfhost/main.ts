@@ -39,6 +39,7 @@ import { registerGenerationJobSweep } from './generationJobSweep';
 import { registerSkillMarketReviewSla } from './skillMarketReviewSla';
 import { registerAdminAuditAlerts } from './adminAuditAlerts';
 import { registerRealtimeConnectionSweep } from './realtimeConnectionSweep';
+import { registerIntegrationHealthCheck } from './integrationHealthCheck';
 import { registerLakeHealthSweep } from './lakeHealthSweep';
 import { registerGitHubLakeReconcile } from './githubLakeReconcile';
 import { registerLakeConnectorOrphanReap } from './lakeConnectorOrphanReap';
@@ -111,6 +112,7 @@ async function main() {
   registerSkillMarketReviewSla(worker);
   registerAdminAuditAlerts(worker);
   registerRealtimeConnectionSweep(worker);
+  registerIntegrationHealthCheck(worker, bootLogger);
   registerLakeHealthSweep(worker);
   registerGitHubLakeReconcile(worker);
   registerLakeConnectorOrphanReap(worker);

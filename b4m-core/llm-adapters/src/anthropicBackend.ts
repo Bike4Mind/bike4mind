@@ -9,6 +9,7 @@ import type {
 import { CloudWatchClient, PutMetricDataCommand, StandardUnit } from '@aws-sdk/client-cloudwatch';
 import {
   ChatModels,
+  BadRequestError,
   createThinkMarkerEscaper,
   IMessage,
   MessageContentText,
@@ -45,6 +46,7 @@ import {
 } from './toolPairingUtils';
 import { capCacheControlMarkers, getCachingAdapter, logCacheStats } from './caching/adapters';
 import { systemContentToText } from './systemContent';
+import { sortToolsForStableCacheKey } from './caching/stableToolOrder';
 import { toAnthropicContent } from './anthropicContent';
 import { anthropicBetaHeader, PROMPT_CACHING_BETA, TOOL_CHANGES_BETA } from './toolChanges';
 import {
@@ -70,6 +72,12 @@ import {
 } from './thinkingParams';
 import { DispatchModel } from './dispatchModel';
 import { logAnthropicLimitResponse, pickRateLimitHeaders } from './anthropicRateLimitLog';
+import { openObservedMessageStream } from './anthropicObservedStream';
+import {
+  createAnthropicRequestTimeoutError,
+  createAnthropicStreamTimeoutError,
+  type LlmStreamTimeoutKind,
+} from './llmTimeoutErrors';
 import { addReasoningTokens, reasoningTokensField, reasoningTokensFromUsage } from './reasoningTokens';
 import { acquireSlot, type SlotRelease } from './_anthropicSemaphore';
 import { appendIdentityReminder, buildIdentityReminder } from './identityReminder';
@@ -124,6 +132,11 @@ const DEFAULT_IDLE_TIMEOUT_MS = 90000; // 90s between events for standard models
 const THINKING_IDLE_TIMEOUT_MS = 180000; // 180s for thinking models (can pause during extended thinking)
 const REQUEST_TIMEOUT_MS = 60000; // 60s timeout for the initial API request before any streaming starts
 const SLOW_MODEL_REQUEST_TIMEOUT_MS = 120000; // 120s for slow/opus-class models that need longer to begin streaming
+/**
+ * Keepalive pings stretch the idle limit up to this multiple of it, measured from the last real
+ * event, so a generation hung behind a live, still-pinging connection is still cut off.
+ */
+const KEEPALIVE_SILENCE_CEILING_FACTOR = 2;
 
 /**
  * Largest max_tokens the SDK will accept without streaming. It derives a projected
@@ -1026,7 +1039,9 @@ export class AnthropicBackend implements ICompletionBackend {
     // bust the cache key on every model identifier change).
     // Omitted for callers whose contract is a bare completion (API promptMode raw) -
     // with no system messages left either, the request then carries no system at all.
-    const identityReminder = options.omitIdentityReminder ? null : buildIdentityReminder(model);
+    const identityReminder = options.omitIdentityReminder
+      ? null
+      : buildIdentityReminder(model, options.modelDisplayName);
     let system: string | Array<{ type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }> | undefined;
     if (anySystemCacheControlled) {
       const systemMessages = messages.filter(m => m.role === 'system' && !isToolChangeMessage(m));
@@ -1093,8 +1108,9 @@ export class AnthropicBackend implements ICompletionBackend {
       // a PRIOR turn that had tools, even when THIS turn offers none (e.g. toolMode switched off
       // between turns) - Anthropic rejects any tool_use/tool_result block when `tools` is absent
       // from the request regardless of pairing, and a balanced count means the mismatch repair
-      // below never fires. Strip proactively instead of relying on the post-400 retry in
-      // ChatCompletionProcess's isToolPairingError net to recover a request we can predict fails.
+      // below never fires. Strip proactively instead of relying on the post-400 retry in the
+      // completion loop's isToolPairingError net (services/src/llm/llmErrorPredicates.ts) to
+      // recover a request we can predict fails.
       if (!options.tools?.length) {
         this.logger.warn(
           `[Pre-API #6181] Tool blocks present (tool_use: ${toolUseCount}, tool_result: ${toolResultCount}, server: ${serverBlockCount}) but no tools offered this turn. Stripping all tool blocks.`
@@ -1118,6 +1134,10 @@ export class AnthropicBackend implements ICompletionBackend {
           filteredMessages = stripAllToolBlocks(filteredMessages, this.logger);
         }
       }
+    }
+
+    if (!filteredMessages.some(message => message.role === 'user' || message.role === 'assistant')) {
+      throw new BadRequestError('request must contain at least one non-empty user or assistant message');
     }
 
     // Resolved here rather than at the thinking block below, because max_tokens needs it:
@@ -1474,6 +1494,7 @@ export class AnthropicBackend implements ICompletionBackend {
           // Track idle timeout state at a scope accessible to catch block
           let isIdleTimeout = false;
           let idleTimeoutMsForError = 0; // Store for error message
+          let idleTimeoutKind: LlmStreamTimeoutKind = 'stream_idle';
 
           // Degeneration state, also read from the catch block. The idle timer
           // cannot cover this case - it resets on every stream event, and a
@@ -1491,7 +1512,9 @@ export class AnthropicBackend implements ICompletionBackend {
             // aborts leaves the queue instead of consuming a slot it can no longer use.
             let release: SlotRelease | undefined;
             try {
+              const slotRequestedAt = Date.now();
               release = await acquireSlot({ tenantKey: this._endUserId, signal: combinedSignal });
+              options._internal?.turnTelemetry?.onSemaphoreWait(Date.now() - slotRequestedAt);
               // Diagnostic logging: Capture payload size to help debug hanging issues
               const payloadForSize = { ...apiParams, stream: true };
               const payloadSizeBytes = Buffer.byteLength(JSON.stringify(payloadForSize), 'utf8');
@@ -1515,14 +1538,19 @@ export class AnthropicBackend implements ICompletionBackend {
 
               roundStart = Date.now();
               // Wrap with retry for transient network errors (TLS abort, fetch terminated)
+              // Bound once the idle timer exists below; body bytes arriving before then are covered
+              // by the request timeout.
+              let onStreamBytes = () => {};
               const stream = await withRetry(
                 () =>
-                  this._api.messages.create(
+                  openObservedMessageStream(
+                    this._api,
                     { ...apiParams, stream: true },
                     {
                       signal: combinedSignal,
                       ...(requestExtraHeaders ? { headers: requestExtraHeaders } : {}),
-                    }
+                    },
+                    () => onStreamBytes()
                   ),
                 {
                   maxRetries: 3,
@@ -1532,6 +1560,7 @@ export class AnthropicBackend implements ICompletionBackend {
                   isRetryable: err => isRetryableError(err) && !isUserInitiatedAbort(err, options.abortSignal),
                   logger: this.logger,
                   abortSignal: combinedSignal,
+                  onRetry: ({ error, delayMs }) => options._internal?.turnTelemetry?.onRetry({ error, delayMs, model }),
                 }
               ).then(r => r.result);
 
@@ -1606,16 +1635,21 @@ export class AnthropicBackend implements ICompletionBackend {
               let idleTimer: ReturnType<typeof setTimeout> | undefined;
               let eventCount = 0;
               let lastEventType = '';
+              let lastEventAt = Date.now();
 
               const resetIdleTimer = () => {
                 if (!enableIdleTimeout) return;
                 if (idleTimer) clearTimeout(idleTimer);
                 // Use shorter timeout for first event (initial connection)
-                const timeoutMs = eventCount === 0 ? INITIAL_TIMEOUT_MS : idleTimeoutMs;
+                const limitMs = eventCount === 0 ? INITIAL_TIMEOUT_MS : idleTimeoutMs;
+                const ceilingRemainingMs = limitMs * KEEPALIVE_SILENCE_CEILING_FACTOR - (Date.now() - lastEventAt);
+                const timeoutMs = Math.max(0, Math.min(limitMs, ceilingRemainingMs));
                 idleTimer = setTimeout(() => {
                   // Mark idle timeout for catch block (must happen before abort)
                   isIdleTimeout = true;
-                  idleTimeoutMsForError = timeoutMs;
+                  // Silence since the last real event, which pings may have stretched past limitMs.
+                  idleTimeoutMsForError = Math.round((Date.now() - lastEventAt) / 1000) * 1000;
+                  idleTimeoutKind = eventCount === 0 ? 'first_event' : 'stream_idle';
 
                   // WARN, not error: an idle/streaming timeout is expected and
                   // recoverable (user retries); error severity would page LiveOps
@@ -1624,7 +1658,8 @@ export class AnthropicBackend implements ICompletionBackend {
                     model,
                     eventCount,
                     lastEventType,
-                    timeoutMs,
+                    limitMs,
+                    silentMs: idleTimeoutMsForError,
                     toolCount: options.tools?.length || 0,
                     mcpToolCount: options.tools?.filter(t => (t as { _isMcpTool?: boolean })._isMcpTool).length || 0,
                   });
@@ -1635,8 +1670,10 @@ export class AnthropicBackend implements ICompletionBackend {
                 }, timeoutMs);
               };
 
-              // Start initial timeout
+              // Start initial timeout. Raw body bytes also count as activity, so the keepalive pings
+              // a silently thinking model sends hold the timer off, up to the silence ceiling.
               resetIdleTimer();
+              onStreamBytes = resetIdleTimer;
 
               try {
                 for await (const event of stream as AsyncIterable<RawMessageStreamEvent>) {
@@ -1644,6 +1681,7 @@ export class AnthropicBackend implements ICompletionBackend {
                   // Reset idle timer on each event
                   eventCount++;
                   lastEventType = event.type;
+                  lastEventAt = Date.now();
                   resetIdleTimer();
                   const streamedText: string[] = [];
                   if (event.type === 'content_block_start') {
@@ -1789,8 +1827,8 @@ export class AnthropicBackend implements ICompletionBackend {
                             {
                               model,
                               toolName: func[event.index].name,
-                              parametersPreview: (func[event.index].parameters || '').substring(0, 100),
-                              error: e instanceof Error ? e.message : String(e),
+                              parametersLength: (func[event.index].parameters || '').length,
+                              errorType: e instanceof Error ? e.name : typeof e,
                             }
                           );
                           collectedContent[event.index].input = {};
@@ -1860,7 +1898,9 @@ export class AnthropicBackend implements ICompletionBackend {
                   }
                 }
               } finally {
-                // CRITICAL: Always cleanup idle timer to prevent memory leaks
+                // CRITICAL: Always cleanup idle timer to prevent memory leaks. Unbind the byte hook
+                // first: a chunk the body pipe already read could otherwise re-arm it.
+                onStreamBytes = () => {};
                 if (idleTimer) clearTimeout(idleTimer);
                 modelDoneAt = Date.now();
               }
@@ -1912,11 +1952,7 @@ export class AnthropicBackend implements ICompletionBackend {
                     funcEntries: func.filter(f => f?.name).length,
                   }
                 );
-                reject(
-                  new Error(
-                    `Anthropic API stream timeout - no response received within ${idleTimeoutMsForError / 1000} seconds. The model may be overloaded. Try simplifying your request or using fewer tools.`
-                  )
-                );
+                reject(createAnthropicStreamTimeoutError(idleTimeoutKind, idleTimeoutMsForError));
                 return;
               }
 
@@ -1953,9 +1989,11 @@ export class AnthropicBackend implements ICompletionBackend {
                   lastEventType,
                   funcEntries: func.filter(f => f?.name).length,
                 });
-                // Worded to include "stream timeout" so ChatCompletionProcess's
-                // isStreamIdleTimeoutError retries once and then falls back, the same as
-                // the Bedrock truncation error in bedrockBackend/base.ts. Must not say
+                // Worded to include "stream timeout" so the completion loop's
+                // isStreamIdleTimeoutError (services/src/llm/llmErrorPredicates.ts) retries once and
+                // then falls back, the same as
+                // the Bedrock truncation error in bedrockBackend/base.ts. The "without message_stop"
+                // phrase must stay in sync with isTruncatedStreamError in llmErrorPredicates.ts. Must not say
                 // "aborted": isAbortError would then treat it as a benign cancel.
                 reject(
                   new Error(
@@ -2113,11 +2151,7 @@ export class AnthropicBackend implements ICompletionBackend {
                     model,
                     toolCount: options.tools?.length || 0,
                   });
-                  reject(
-                    new Error(
-                      `Anthropic API request timeout after ${requestTimeoutMs}ms - no streaming response received`
-                    )
-                  );
+                  reject(createAnthropicRequestTimeoutError(requestTimeoutMs));
                 } else if (degenerateVerdict) {
                   // Our own abort after the output degenerated into repetition.
                   // Resolve rather than reject: the text emitted before the loop
@@ -2163,11 +2197,7 @@ export class AnthropicBackend implements ICompletionBackend {
                     toolCount: options.tools?.length || 0,
                     idleTimeoutMs: idleTimeoutMsForError,
                   });
-                  reject(
-                    new Error(
-                      `Anthropic API stream timeout - no response received within ${idleTimeoutMsForError / 1000} seconds. The model may be overloaded. Try simplifying your request or using fewer tools.`
-                    )
-                  );
+                  reject(createAnthropicStreamTimeoutError(idleTimeoutKind, idleTimeoutMsForError));
                 } else {
                   // User-initiated abort - resolve gracefully
                   this.logger.debug('Anthropic request was aborted (likely client disconnect)');
@@ -2351,7 +2381,6 @@ export class AnthropicBackend implements ICompletionBackend {
                   isMcpTool: outcome.isMcpTool,
                   durationMs: outcome.durationMs,
                   resultLength: resultStr.length,
-                  resultPreview: resultStr.substring(0, 100) + (resultStr.length > 100 ? '...' : ''),
                 });
 
                 // Track per-outcome whether this specific tool produced artifacts, so the
@@ -2549,8 +2578,10 @@ export class AnthropicBackend implements ICompletionBackend {
         let roundStart = Date.now();
         let release: SlotRelease | undefined;
         try {
+          const slotRequestedAt = Date.now();
           release = await acquireSlot({ tenantKey: this._endUserId, signal: options.abortSignal });
           roundStart = Date.now();
+          options._internal?.turnTelemetry?.onSemaphoreWait(roundStart - slotRequestedAt);
           // Wrap with retry for transient network errors (TLS abort, fetch terminated)
           response = await withRetry(
             () =>
@@ -2566,6 +2597,7 @@ export class AnthropicBackend implements ICompletionBackend {
               isRetryable: err => isRetryableError(err) && !isUserInitiatedAbort(err, options.abortSignal),
               logger: this.logger,
               abortSignal: options.abortSignal,
+              onRetry: ({ error, delayMs }) => options._internal?.turnTelemetry?.onRetry({ error, delayMs, model }),
             }
           ).then(r => r.result);
         } finally {
@@ -2631,18 +2663,23 @@ export class AnthropicBackend implements ICompletionBackend {
           throw new Error(`Anthropic safety classifier refusal for ${model} — falling back to an alternative model`);
         }
 
-        // Populate toolsUsed from func before callback (non-streaming path)
+        // Populate toolsUsed from func (non-streaming path)
         // Include ID for history reconstruction
-        for (const tool of func) {
-          // Allow empty parameters (some tools don't require input)
-          if (tool?.name) {
-            toolsUsed.push({
-              name: tool.name,
-              arguments: tool.parameters || '{}',
-              id: tool.id,
-            });
+        const recordToolCalls = () => {
+          for (const tool of func) {
+            // Allow empty parameters (some tools don't require input)
+            if (tool?.name) {
+              toolsUsed.push({
+                name: tool.name,
+                arguments: tool.parameters || '{}',
+                id: tool.id,
+              });
+            }
           }
-        }
+        };
+        // A reported (not executed) call is recorded only for the [null] send below: every send
+        // carrying toolsUsed becomes its own tool_use frame for the completions API.
+        if (options.executeTools !== false) recordToolCalls();
 
         const usage = 'usage' in response ? response.usage : undefined;
         const usageWithCacheNS = usage as
@@ -2834,7 +2871,6 @@ export class AnthropicBackend implements ICompletionBackend {
                   isMcpTool: outcome.isMcpTool,
                   durationMs: outcome.durationMs,
                   resultLength: resultStr.length,
-                  resultPreview: resultStr.substring(0, 100) + (resultStr.length > 100 ? '...' : ''),
                 });
 
                 let thisToolHadArtifact = false;
@@ -2985,6 +3021,7 @@ export class AnthropicBackend implements ICompletionBackend {
             this.logger.debug(
               `[Tool Execution] executeTools=false, passing tool calls to callback with ${thinkingBlocks?.length || 0} thinking blocks`
             );
+            recordToolCalls();
             // Terminal leaf - emit accumulated total plus this turn's tokens.
             // The cb above (gated on isTerminalTurn) already emitted this
             // turn's tokens to streamedText for the executeTools=true branch and
@@ -3064,7 +3101,7 @@ export class AnthropicBackend implements ICompletionBackend {
   }
 
   formatTools(tools: ICompletionOptionTools[] = [], providerTools: ToolSearchServerTool[] = []) {
-    const customTools = tools.map(tool => {
+    const customTools = sortToolsForStableCacheKey(tools).map(tool => {
       const { parameters, ...rest } = tool.toolSchema;
       // `strict` is an OpenAI-only tool field. Anthropic rejects it with
       // "tools.N.custom.strict: Extra inputs are not permitted", so strip it from the
@@ -3096,8 +3133,8 @@ export class AnthropicBackend implements ICompletionBackend {
         model: context.model,
         toolName: context.name,
         isMcpTool: context.isMcpTool,
-        parametersPreview: parameters.substring(0, 100),
-        error: parseError instanceof Error ? parseError.message : String(parseError),
+        parameterLength: parameters.length,
+        errorType: parseError instanceof Error ? parseError.name : 'UnknownError',
       });
       // Defensive fallback ID - Anthropic's ToolUseBlock always provides `id`,
       // but we guard against edge cases like partial stream data.
@@ -3156,7 +3193,7 @@ export class AnthropicBackend implements ICompletionBackend {
         this.logger.warn('[AnthropicBackend] Failed to parse tool parameters in pushToolMessages, using empty object', {
           toolName: tool.name,
           parametersPreview: (tool.parameters || '').substring(0, 100),
-          error: parseError instanceof Error ? parseError.message : String(parseError),
+          errorType: parseError instanceof Error ? parseError.name : 'UnknownError',
         });
         parsedInput = {};
       }
@@ -3185,7 +3222,7 @@ export class AnthropicBackend implements ICompletionBackend {
         this.logger.warn('[AnthropicBackend] Failed to parse tool parameters in pushToolMessages, using empty object', {
           toolName: tool.name,
           parametersPreview: (tool.parameters || '').substring(0, 100),
-          error: parseError instanceof Error ? parseError.message : String(parseError),
+          errorType: parseError instanceof Error ? parseError.name : 'UnknownError',
         });
         parsedInput = {};
       }
@@ -3254,10 +3291,7 @@ export class AnthropicBackend implements ICompletionBackend {
   }
 
   /**
-   * Filter out irrelevant messages for Anthropic API.
-   * Remove all messages with `system` role, except tool change messages, which stay in place.
-   * Remove messages that have no reply from the assistant, except for the last one.
-   * Also remove the first message if it's from the assistant.
+   * Removes system messages except tool changes, blank content, and duplicate adjacent turns.
    */
   private filterRelevantMessages(messages: IMessage[]): IMessage[] {
     const formattedMessages = messages

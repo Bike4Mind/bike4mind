@@ -29,7 +29,6 @@ import {
   emailAnalysisQueueDLQ,
 } from './emailIngestion';
 import { eventBus } from './eventBus';
-import { slackEventBus } from './bus';
 import { mcpHandler } from './mcp';
 import {
   fabFileChunkQueue,
@@ -265,7 +264,6 @@ export const web = new sst.aws.Nextjs(
       publishedArtifactsBucket,
       qaArtifactsBucket,
       eventBus,
-      slackEventBus,
       uploadCompleteFunction,
       notebookImportFunction,
       lambdaFunctionNames,

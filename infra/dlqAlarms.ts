@@ -58,7 +58,14 @@ import {
   bobRunQueueDLQ,
   libreoncologyAudioRenderQueueDLQ,
 } from './queues';
-import { telemetryAlertRuleDLQ, sessionEnrichmentDLQ } from './eventBus';
+import {
+  telemetryAlertDeadLetter,
+  sessionEnrichmentDeadLetter,
+  billingEventsDeadLetter,
+  emailEventsDeadLetter,
+  notebookEventsDeadLetter,
+  completionEventsDeadLetter,
+} from './eventBus';
 import { emailIngestionQueueDLQ, emailAnalysisQueueDLQ } from './emailIngestion';
 import { emailBatchQueueDLQ, emailJobQueueDLQ } from './emailMarketing';
 import { isMonitoredStage as _isMonitoredStage, bindDlqAlarmDimensions, buildDlqAlarmSpecs } from '@bike4mind/infra';
@@ -565,24 +572,44 @@ if (isMonitoredStage) {
     queue: fabFileModerationDLQ,
   });
 
-  // Telemetry Alert rule DLQ - alarm-only for the same reason as fabFileModerationDLQ:
-  // it backs the EventBridge telemetry-alert rule target (see infra/eventBus.ts), not an
-  // sst.aws.Queue `.subscribe()` consumer, so there is no source queue for the admin
-  // "replay" UI to re-enqueue into (recovery is re-emitting the event onto the bus).
+  // Event bus dead letters - alarm-only for the same reason: they back EventBridge rule
+  // targets and their Lambdas' async-invoke failures, not a queue consumer, so there is no
+  // source queue to replay into (see infra/eventBusDeadLetter.ts).
   createDlqAlarms({
     label: 'telemetry-alert-rule',
     displayName: 'Telemetry Alert Rule',
     application: 'TelemetryAlerts',
-    queue: telemetryAlertRuleDLQ,
+    queue: telemetryAlertDeadLetter.queue,
   });
-
-  // Session enrichment DLQ - alarm-only for the same reason: it backs the session.* rule
-  // targets and their Lambdas' async-invoke failures (see infra/eventBus.ts), not a queue consumer.
   createDlqAlarms({
     label: 'session-enrichment',
     displayName: 'Session Enrichment',
     application: 'SessionEnrichment',
-    queue: sessionEnrichmentDLQ,
+    queue: sessionEnrichmentDeadLetter.queue,
+  });
+  createDlqAlarms({
+    label: 'billing-events',
+    displayName: 'Billing Events',
+    application: 'Billing',
+    queue: billingEventsDeadLetter.queue,
+  });
+  createDlqAlarms({
+    label: 'email-events',
+    displayName: 'Email Events',
+    application: 'Email',
+    queue: emailEventsDeadLetter.queue,
+  });
+  createDlqAlarms({
+    label: 'notebook-events',
+    displayName: 'Notebook Events',
+    application: 'NotebookCuration',
+    queue: notebookEventsDeadLetter.queue,
+  });
+  createDlqAlarms({
+    label: 'completion-events',
+    displayName: 'Completion Events',
+    application: 'Completions',
+    queue: completionEventsDeadLetter.queue,
   });
 }
 

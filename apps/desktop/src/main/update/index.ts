@@ -1,8 +1,10 @@
+import { join } from 'node:path';
 import { app, ipcMain } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import { IPC_CHANNELS } from '@shared/ipc';
 import type { UpdateBusyReport, UpdateState } from '@shared/update';
-import { resolveFeedUrl } from './feed';
+import { DismissedUpdatePreference } from './DismissedUpdatePreference';
+import { releasePageUrl, resolveFeedUrl } from './feed';
 import { UpdateService, type UpdaterPort } from './UpdateService';
 import { appWindows } from '../windows';
 
@@ -34,6 +36,14 @@ const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 const VERBOSE = process.env.B4M_DESKTOP_VERBOSE === '1';
 
+/**
+ * Dev-only: pretend the feed offers this version, so the notice can be seen without a packaged
+ * build or a release. Read at runtime (not baked like the feed) and ignored in a packaged app.
+ * `B4M_DESKTOP_FAKE_UPDATE=9.9.9 pnpm dev`.
+ */
+const FAKE_UPDATE_VERSION = process.env.B4M_DESKTOP_FAKE_UPDATE?.trim() || null;
+const FAKE_FIRST_CHECK_DELAY_MS = 3_000;
+
 export interface RegisteredUpdates {
   service: UpdateService;
   /** Stops the scheduled checks. Called on the way out so no timer outlives the app. */
@@ -56,7 +66,10 @@ export interface UpdateDeps {
  */
 export function registerUpdates(deps: UpdateDeps): RegisteredUpdates {
   const feedUrl = resolveFeedUrl(CONFIGURED_FEED);
-  const enabled = app.isPackaged && feedUrl !== null;
+  const fakeVersion = app.isPackaged ? null : FAKE_UPDATE_VERSION;
+  const real = app.isPackaged && feedUrl !== null;
+  const enabled = real || fakeVersion !== null;
+  const log = (message: string) => console.warn(message);
 
   const send = (state: UpdateState) => {
     for (const window of appWindows()) {
@@ -65,7 +78,14 @@ export function registerUpdates(deps: UpdateDeps): RegisteredUpdates {
   };
 
   let port: UpdaterPort | null = null;
-  if (enabled && feedUrl) {
+  if (fakeVersion !== null) {
+    port = {
+      // Answers the way electron-updater does: the outcome as an event, not the promise value.
+      check: async () => service.apply({ type: 'available', version: fakeVersion, at: Date.now() }),
+      download: async () => log('[update] fake update: download is not simulated'),
+      install: () => log('[update] fake update: install is not simulated'),
+    };
+  } else if (real && feedUrl) {
     // Downloading is the user's choice, not a side effect of launching: it is their bandwidth
     // and their disk. And nothing installs itself on quit - an update applied because the user
     // closed the window is an update they never agreed to.
@@ -91,9 +111,13 @@ export function registerUpdates(deps: UpdateDeps): RegisteredUpdates {
     busy: deps.busy,
     prepareQuit: deps.prepareQuit,
     onChanged: send,
+    releaseUrl: version => releasePageUrl(feedUrl, version),
+    dismissed: new DismissedUpdatePreference(join(app.getPath('userData'), 'update-notice.json')),
+    log,
   });
+  void service.restoreDismissed();
 
-  if (enabled) {
+  if (real) {
     autoUpdater.on('update-available', info => {
       service.apply({ type: 'available', version: info.version, at: Date.now() });
     });
@@ -112,6 +136,8 @@ export function registerUpdates(deps: UpdateDeps): RegisteredUpdates {
     // Both are applied because only one of them can bite: the reducer ignores 'download-failed'
     // unless a download is running, and ignores 'unreachable' unless nothing is on offer. Which
     // one this error was is exactly what electron-updater does not tell us.
+    // The log line for these comes from UpdateService, since the same error also rejects the
+    // check or download promise it is awaiting.
     autoUpdater.on('error', () => {
       service.apply({ type: 'download-failed' });
       service.apply({ type: 'unreachable' });
@@ -121,13 +147,18 @@ export function registerUpdates(deps: UpdateDeps): RegisteredUpdates {
   ipcMain.handle(IPC_CHANNELS.updateGetState, () => service.snapshot());
   ipcMain.handle(IPC_CHANNELS.updateCheck, () => service.check());
   ipcMain.handle(IPC_CHANNELS.updateDownload, () => service.download());
+  ipcMain.handle(IPC_CHANNELS.updateDismiss, (_event, version: unknown) =>
+    typeof version === 'string' ? service.dismiss(version) : undefined
+  );
   // Coerced rather than trusted: this is the one door to quitting the app, and anything that is
   // not an explicit `true` has to land as "ask the user first".
   ipcMain.handle(IPC_CHANNELS.updateInstall, (_event, force: unknown) => service.install(force === true));
 
   const timers: NodeJS.Timeout[] = [];
   if (enabled) {
-    timers.push(setTimeout(() => void service.check(), FIRST_CHECK_DELAY_MS));
+    timers.push(
+      setTimeout(() => void service.check(), fakeVersion !== null ? FAKE_FIRST_CHECK_DELAY_MS : FIRST_CHECK_DELAY_MS)
+    );
     timers.push(setInterval(() => void service.check(), CHECK_INTERVAL_MS));
     // Neither timer is a reason for the process to stay alive.
     for (const timer of timers) timer.unref?.();

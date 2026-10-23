@@ -8,7 +8,7 @@
  * For PR testing, temporarily set ENABLE_WAF=true (don't forget to unset before merging).
  */
 
-import { buildDevWafRuleJson, getDevWafMeta } from './wafPolicy';
+import { buildDevWafRuleJson, getDevWafMeta, parseWafBlockedIps } from './wafPolicy';
 import { WAF_REDACTED_HEADERS } from './wafRedaction';
 import { secrets } from './secrets';
 import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
@@ -27,7 +27,8 @@ const wafProviderUsEast1 = isWafEnabled
 /**
  * Emergency IP block set.
  *
- * WAF requires at least one address in the IPSet. Use a TEST-NET IP that should never appear in real traffic.
+ * Addresses come from the WAF_BLOCKED_IPS deploy variable (comma-separated IPv4 or CIDR). WAF requires
+ * at least one address, so an empty list falls back to a TEST-NET placeholder that never appears in real traffic.
  */
 export const wafEmergencyIpSet = isWafEnabled
   ? new aws.wafv2.IpSet(
@@ -39,7 +40,7 @@ export const wafEmergencyIpSet = isWafEnabled
         description: `Emergency IP block list - ${$app.stage}`,
         scope: 'CLOUDFRONT',
         ipAddressVersion: 'IPV4',
-        addresses: ['192.0.2.0/32'],
+        addresses: parseWafBlockedIps(process.env.WAF_BLOCKED_IPS),
       },
       {
         provider: wafProviderUsEast1,

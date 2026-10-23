@@ -2,7 +2,7 @@
  * @vitest-environment node
  */
 import { describe, it, expect } from 'vitest';
-import { getDevWafMeta, buildDevWafRuleJson } from '../wafPolicy';
+import { getDevWafMeta, buildDevWafRuleJson, parseWafBlockedIps } from '../wafPolicy';
 
 interface WafRule {
   Name: string;
@@ -115,6 +115,17 @@ const ingestExemptions = (): UriPathMatch[] =>
     textTransformations: ['LOWERCASE'],
   }));
 
+const BOT_CONTROL_RULE = 'AWS-AWSManagedRulesBotControlRuleSet';
+
+// Prefix, not EXACTLY: the whole static and image trees are skipped. Full transformation chain so
+// an encoded or oddly cased path cannot dodge the skip, and cannot slip into it either.
+const botControlExemptions = (): UriPathMatch[] =>
+  ['/_next/static/', '/_next/image'].map(searchString => ({
+    searchString,
+    positionalConstraint: 'STARTS_WITH',
+    textTransformations: ['URL_DECODE', 'NORMALIZE_PATH', 'LOWERCASE'],
+  }));
+
 /**
  * Which managed rule groups may narrow themselves, and the complete exemption list each one
  * carries. Pinned as whole sets, because an assertion that only looks for what should be present
@@ -135,7 +146,14 @@ const EXPECTED_SCOPE_DOWNS: Record<string, UriPathMatch[]> = {
     ...ingestExemptions(),
   ],
   'AWS-AWSManagedRulesKnownBadInputsRuleSet': ingestExemptions(),
+  [BOT_CONTROL_RULE]: botControlExemptions(),
 };
+
+/**
+ * Groups that narrow themselves by inclusion (the group applies to these paths only) rather than
+ * by exemption, so they cannot be expressed in EXPECTED_SCOPE_DOWNS.
+ */
+const INCLUSION_SCOPED_GROUPS = ['AWS-AWSManagedRulesAnonymousIpList'];
 
 /** Managed rule group rules for a stage, by rule name. */
 function managedRules(stage: string): Map<string, WafRule> {
@@ -279,6 +297,7 @@ describe('wafPolicy', () => {
       );
       expect(ruleGroupNames).toContain('AWSManagedRulesCommonRuleSet');
       expect(ruleGroupNames).toContain('AWSManagedRulesKnownBadInputsRuleSet');
+      expect(ruleGroupNames).toContain('AWSManagedRulesAnonymousIpList');
     });
 
     it('sets AdminProtection_URIPATH to Count so the SPA /admin route is not blocked (#9180)', () => {
@@ -422,7 +441,7 @@ describe('wafPolicy', () => {
           .map(rule => rule.Name)
           .sort();
         expect(scopedDown, `${stage}: only these groups may narrow themselves`).toEqual(
-          Object.keys(EXPECTED_SCOPE_DOWNS).sort()
+          [...Object.keys(EXPECTED_SCOPE_DOWNS), ...INCLUSION_SCOPED_GROUPS].sort()
         );
 
         for (const [ruleName, expected] of Object.entries(EXPECTED_SCOPE_DOWNS)) {
@@ -443,7 +462,8 @@ describe('wafPolicy', () => {
       it(`exempts the scanner ingest paths identically in every scoped ${stage} group`, () => {
         const managed = managedRules(stage);
 
-        for (const ruleName of Object.keys(EXPECTED_SCOPE_DOWNS)) {
+        // Bot Control counts only and skips static paths; it is not a signature group.
+        for (const ruleName of Object.keys(EXPECTED_SCOPE_DOWNS).filter(n => n !== BOT_CONTROL_RULE)) {
           // any: see the helpers above
           const scopeDown = (managed.get(ruleName)!.Statement as any).ManagedRuleGroupStatement.ScopeDownStatement;
           const ingest = scopeDownExemptions(`${stage} ${ruleName} scope-down`, scopeDown).filter(m =>
@@ -635,7 +655,11 @@ describe('wafPolicy', () => {
       expect(emergency).toBeDefined();
       expect(emergency!.Action).toEqual({ Block: {} });
 
-      for (const rule of rules.filter(r => (r.Statement as any).ManagedRuleGroupStatement)) {
+      // Bot Control is the one group that counts wholesale; the 'bot control in count' suite pins it.
+      const enforcing = rules.filter(
+        r => (r.Statement as any).ManagedRuleGroupStatement && r.Name !== BOT_CONTROL_RULE
+      );
+      for (const rule of enforcing) {
         expect(rule.OverrideAction, `${rule.Name} must not be overridden to Count wholesale`).toEqual({
           None: {},
         });
@@ -855,6 +879,176 @@ describe('wafPolicy', () => {
         positionalConstraint: 'EXACTLY',
         textTransformations: ['LOWERCASE'],
       });
+    });
+  });
+
+  // /api/otc/ is the email sign-in path as well as signup, so a Block here locks VPN, Tor and
+  // cloud-egress users out of logging in. Both rules stay on Count until the metric has been read;
+  // switching either to Block is a deliberate, separate change.
+  describe('anonymous IP list on the sign-in code routes', () => {
+    const ruleName = 'AWS-AWSManagedRulesAnonymousIpList';
+    const forStage = (stage: string): WafRule[] =>
+      JSON.parse(buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage }));
+
+    for (const stage of ['dev', 'production']) {
+      it(`runs the group at Priority 1 on ${stage}`, () => {
+        const rule = forStage(stage).find(r => r.Name === ruleName);
+        expect(rule).toBeDefined();
+        expect(rule!.Priority).toBe(1);
+        expect(rule!.OverrideAction).toEqual({ None: {} });
+        expect(rule!.Action).toBeUndefined();
+        // any: ManagedRuleGroupStatement is deeply nested and not usefully typed here
+        const mgs = (rule!.Statement as any).ManagedRuleGroupStatement;
+        expect(mgs.VendorName).toBe('AWS');
+        expect(mgs.Name).toBe('AWSManagedRulesAnonymousIpList');
+      });
+
+      it(`keeps both ${stage} group rules on Count (shadow mode)`, () => {
+        const rule = forStage(stage).find(r => r.Name === ruleName);
+        // any: see above
+        const mgs = (rule!.Statement as any).ManagedRuleGroupStatement;
+        expect(mgs.RuleActionOverrides).toEqual([
+          { Name: 'AnonymousIPList', ActionToUse: { Count: {} } },
+          { Name: 'HostingProviderIPList', ActionToUse: { Count: {} } },
+        ]);
+      });
+
+      it(`scopes the ${stage} group to /api/otc/ with decode, normalize, lowercase in order`, () => {
+        const rule = forStage(stage).find(r => r.Name === ruleName);
+        // any: see above
+        const scopeDown = (rule!.Statement as any).ManagedRuleGroupStatement.ScopeDownStatement;
+        expect(Object.keys(scopeDown)).toEqual(['ByteMatchStatement']);
+        expect(Object.keys(scopeDown.ByteMatchStatement.FieldToMatch)).toEqual(['UriPath']);
+        expect(scopeDown.ByteMatchStatement.SearchString).toBe('/api/otc/');
+        expect(scopeDown.ByteMatchStatement.PositionalConstraint).toBe('STARTS_WITH');
+
+        const ordered = [...scopeDown.ByteMatchStatement.TextTransformations]
+          .sort((a: { Priority: number }, b: { Priority: number }) => a.Priority - b.Priority)
+          .map((t: { Type: string }) => t.Type);
+        expect(ordered).toEqual(['URL_DECODE', 'NORMALIZE_PATH', 'LOWERCASE']);
+      });
+
+      it(`orders the ${stage} group after Allow-LLM-API and before emergency-ip-block`, () => {
+        const rules = forStage(stage);
+        const group = rules.find(r => r.Name === ruleName)!;
+        const allow = rules.find(r => r.Name === 'Allow-LLM-API')!;
+        const emergency = rules.find(r => r.Name === 'emergency-ip-block')!;
+        expect(allow.Priority).toBeLessThan(group.Priority);
+        expect(group.Priority).toBeLessThan(emergency.Priority);
+        expect(rules.map(r => r.Name).indexOf(ruleName)).toBe(rules.map(r => r.Name).indexOf('Allow-LLM-API') + 1);
+      });
+    }
+
+    it('is identical between the two stage files', () => {
+      const pick = (stage: string) => forStage(stage).find(r => r.Name === ruleName);
+      expect(pick('production')).toBeDefined();
+      expect(pick('production')).toEqual(pick('dev'));
+    });
+  });
+
+  describe('bot control in count', () => {
+    type Transformation = { Priority: number; Type: string };
+    type ByteMatch = { ByteMatchStatement: { TextTransformations: Transformation[] } };
+    type BotControlRule = Omit<WafRule, 'Statement'> & {
+      Statement: {
+        ManagedRuleGroupStatement: {
+          VendorName: string;
+          Name: string;
+          ManagedRuleGroupConfigs: unknown[];
+          RuleActionOverrides?: unknown[];
+          ScopeDownStatement: {
+            NotStatement: { Statement: { OrStatement: { Statements: ByteMatch[] } } };
+          };
+        };
+      };
+    };
+    const forStage = (stage: string): WafRule[] =>
+      JSON.parse(buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage }));
+
+    const botControlForStage = (stage: string): BotControlRule | undefined =>
+      forStage(stage).find(rule => rule.Name === BOT_CONTROL_RULE) as BotControlRule | undefined;
+
+    for (const stage of ['dev', 'production']) {
+      it(`runs the group at Priority 20 on ${stage}`, () => {
+        const rule = botControlForStage(stage);
+        expect(rule).toBeDefined();
+        expect(rule!.Priority).toBe(20);
+        expect(rule!.Action).toBeUndefined();
+        const mgs = rule!.Statement.ManagedRuleGroupStatement;
+        expect(mgs.VendorName).toBe('AWS');
+        expect(mgs.Name).toBe('AWSManagedRulesBotControlRuleSet');
+      });
+
+      it(`uses the common inspection level on ${stage}, never targeted`, () => {
+        const rule = botControlForStage(stage);
+        const configs = rule!.Statement.ManagedRuleGroupStatement.ManagedRuleGroupConfigs;
+        expect(configs).toEqual([{ AWSManagedRulesBotControlRuleSet: { InspectionLevel: 'COMMON' } }]);
+        expect(JSON.stringify(rule)).not.toContain('TARGETED');
+      });
+
+      it(`counts the whole ${stage} group rather than blocking`, () => {
+        const rule = botControlForStage(stage);
+        expect(rule!.OverrideAction).toEqual({ Count: {} });
+        expect(rule!.Statement.ManagedRuleGroupStatement.RuleActionOverrides).toBeUndefined();
+      });
+
+      it(`skips exactly the static and image prefixes on ${stage}, decode then normalize then lowercase`, () => {
+        const rule = botControlForStage(stage);
+        const scopeDown = rule!.Statement.ManagedRuleGroupStatement.ScopeDownStatement;
+        const found = scopeDownExemptions(`${stage} ${BOT_CONTROL_RULE} scope-down`, scopeDown);
+        expect(found).toEqual(botControlExemptions());
+
+        const orderOf = (statement: ByteMatch) =>
+          [...statement.ByteMatchStatement.TextTransformations]
+            .sort((left, right) => left.Priority - right.Priority)
+            .map(transformation => transformation.Type);
+        for (const s of scopeDown.NotStatement.Statement.OrStatement.Statements) {
+          expect(orderOf(s)).toEqual(['URL_DECODE', 'NORMALIZE_PATH', 'LOWERCASE']);
+        }
+      });
+
+      it(`is the last ${stage} rule, by priority and by position`, () => {
+        const rules = forStage(stage);
+        const maxPriority = Math.max(...rules.map(r => r.Priority));
+        expect(rules.find(r => r.Priority === maxPriority)!.Name).toBe(BOT_CONTROL_RULE);
+        expect(rules[rules.length - 1].Name).toBe(BOT_CONTROL_RULE);
+      });
+    }
+
+    it('is identical between the two stage files', () => {
+      expect(botControlForStage('production')).toBeDefined();
+      expect(botControlForStage('production')).toEqual(botControlForStage('dev'));
+    });
+  });
+
+  describe('parseWafBlockedIps', () => {
+    const placeholder = ['192.0.2.0/32'];
+
+    it('returns the placeholder when nothing is configured', () => {
+      expect(parseWafBlockedIps(undefined)).toEqual(placeholder);
+      expect(parseWafBlockedIps('')).toEqual(placeholder);
+      expect(parseWafBlockedIps(' , ,')).toEqual(placeholder);
+    });
+
+    it('appends /32 to a bare address', () => {
+      expect(parseWafBlockedIps('1.2.3.4')).toEqual(['1.2.3.4/32']);
+    });
+
+    it('trims, drops empties and keeps CIDR entries', () => {
+      expect(parseWafBlockedIps(' 1.2.3.4 , 10.0.0.0/8 ,,')).toEqual(['1.2.3.4/32', '10.0.0.0/8']);
+    });
+
+    it('collapses duplicates, including a bare address and its /32, preserving order', () => {
+      expect(parseWafBlockedIps('5.6.7.8,1.2.3.4,5.6.7.8,1.2.3.4/32')).toEqual(['5.6.7.8/32', '1.2.3.4/32']);
+    });
+
+    it('rejects anything that is not an IPv4 address or CIDR', () => {
+      expect(() => parseWafBlockedIps('not-an-ip')).toThrow(/not-an-ip/);
+      expect(() => parseWafBlockedIps('1.2.3.4/40')).toThrow(/1\.2\.3\.4\/40/);
+      expect(() => parseWafBlockedIps('0.0.0.0/0')).toThrow(/0\.0\.0\.0\/0/);
+      expect(() => parseWafBlockedIps('1.2.3.4/08')).toThrow(/1\.2\.3\.4\/08/);
+      expect(() => parseWafBlockedIps('::1')).toThrow(/::1/);
+      expect(() => parseWafBlockedIps('1.2.3.4,999.1.1.1')).toThrow(/999\.1\.1\.1/);
     });
   });
 });

@@ -54,16 +54,16 @@ beforeEach(() => {
 describe('CreditOfferActions', () => {
   it('leads with the Pro plan from plan data and keeps the pack secondary', () => {
     renderActions('low');
-    expect(screen.getByTestId('session-subscribe-btn')).toHaveTextContent(/^Subscribe$/);
+    expect(screen.getByTestId('session-subscribe-btn')).toHaveTextContent(/^Get Pro$/);
     expect(screen.getByTestId('session-credits-btn')).toHaveAttribute('data-secondary', 'true');
     expect(screen.queryByTestId('credit-offer-ask-admin-btn')).toBeNull();
   });
 
-  it('puts Subscribe on the far right once credits are out, after Add Credits', () => {
+  it('offers Top up and Get Pro once credits are out', () => {
     renderActions('out');
     const buttons = screen.getAllByRole('button');
     expect(buttons.map(b => b.getAttribute('data-testid'))).toEqual(['session-credits-btn', 'session-subscribe-btn']);
-    expect(screen.getByTestId('session-credits-btn')).toHaveTextContent('Add Credits');
+    expect(screen.getByTestId('session-credits-btn')).toHaveTextContent('Top up');
   });
 
   it('offers a subscriber only a credit pack, never the plan they already hold', () => {

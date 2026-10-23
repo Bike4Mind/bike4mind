@@ -1,6 +1,7 @@
 import React from 'react';
 import { Stack, Tab, TabList, Typography } from '@mui/joy';
-import { PlayArrow as PreviewIcon, Code as CodeIcon } from '@mui/icons-material';
+import PreviewIcon from '@mui/icons-material/PlayArrow';
+import CodeIcon from '@mui/icons-material/Code';
 
 /**
  * The Preview/Code tab strip every renderable artifact shows in the full viewer.

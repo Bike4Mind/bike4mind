@@ -49,7 +49,7 @@ vi.mock('@bike4mind/database', () => ({
 const mockAuditSuccess = vi.fn();
 const mockAuditFailure = vi.fn();
 
-vi.mock('@server/integrations/integrationAuditLogger', () => ({
+vi.mock('@bike4mind/server-utils/integrations/integrationAuditLogger', () => ({
   IntegrationAuditLogger: {
     create: vi.fn().mockReturnValue({
       success: (...args: any[]) => mockAuditSuccess(...args),

@@ -267,6 +267,7 @@ describe('/api/auth/okta/callback — account-link email-equality gate', () => {
     });
 
     expect(res._getRedirectUrl()).toMatch(/^\/auth\/success#token=/);
+    expect(res._getRedirectUrl()).not.toContain('firstSignupSession');
     expect(mockAuthFailCreate).not.toHaveBeenCalled();
     // Routine refresh must NOT bump tokenVersion nor revoke existing sessions.
     const updateArg = mockUpdateOne.mock.calls[0]?.[1] ?? {};
@@ -389,12 +390,29 @@ describe('/api/auth/okta/callback — account-link email-equality gate', () => {
     });
 
     expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ email: 'new@example.com' }));
+    expect(res._getRedirectUrl()).toContain('firstSignupSession=1');
     expect(res._getRedirectUrl()).toMatch(/^\/auth\/success#token=/);
     expect(mockAuthFailCreate).not.toHaveBeenCalled();
     // The new account never visits /api/email/verify, so its domain grant runs here.
     expect(mockApplyOAuthSignupDomainGrant).toHaveBeenCalledWith('new-user', 'new@example.com');
     // Okta gets no flat grant: the account is not created pending-free-credits.
     expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('tags');
+  });
+
+  it('carries a fresh-account marker through an MFA handoff', async () => {
+    mockVerifyState.mockReturnValue({ valid: true, payload: {} });
+    mockGetConfig.mockResolvedValue({
+      config: { issuer: 'https://okta.example.com' },
+      source: 'sst',
+      idp: undefined,
+    });
+    mockResolveSecondFactor.mockResolvedValue({ kind: 'enroll', mfaToken: 'pending-tok' });
+    const res = await runCallback({
+      user: null,
+      userInfo: { sub: 'okta-new', email: 'new@example.com', email_verified: true, name: 'New User' },
+    });
+    expect(res._getRedirectUrl()).toContain('mfa=setup');
+    expect(res._getRedirectUrl()).toContain('firstSignupSession=1');
   });
 
   it('skips the domain grant for a new account created without a verified email', async () => {

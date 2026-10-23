@@ -8,7 +8,7 @@ import { useDeleteAllFiles } from '@client/app/hooks/data/fabFiles';
 import { useDeleteAllSessions } from '@client/app/hooks/data/sessions';
 import { useDownload } from '@client/app/hooks/useDownload';
 import useToggle from '@client/app/hooks/useToggle';
-import { CloudUpload } from '@mui/icons-material';
+import CloudUpload from '@mui/icons-material/CloudUpload';
 import DeleteOutline from '@mui/icons-material/DeleteOutline';
 import { Button, Grid, Stack, Box, Modal, ModalDialog, ModalClose, Switch, Input } from '@mui/joy';
 import axios from 'axios';

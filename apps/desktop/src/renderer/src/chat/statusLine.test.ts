@@ -3,7 +3,10 @@ import type { ChatMessage, ChatReplyRound, ChatToolCall, ChatToolStatus, ModelPh
 import type { PendingCode } from './codeStream';
 import {
   activityDetail,
+  allowanceArc,
+  allowanceColor,
   contextPercent,
+  creditAllowancePercent,
   contextTokens,
   describeActivity,
   describeReplyCost,
@@ -16,8 +19,6 @@ import {
   formatTokens,
   inputSide,
   latestReply,
-  occupancyArc,
-  occupancyColor,
   statusFields,
   STALL_AFTER_MS,
   writingProse,
@@ -84,11 +85,14 @@ describe('totalTokens with caching', () => {
 });
 
 describe('formatCost', () => {
-  it('prefers the server dollar figure and falls back to credits', () => {
-    expect(formatCost({ usdCost: 3.2 })).toBe('$3.20');
-    expect(formatCost({ usdCost: 0.004 })).toBe('$0.0040');
+  it('defaults to credits and only shows dollars when explicitly enabled', () => {
+    expect(formatCost({ usdCost: 3.2 })).toBeNull();
+    expect(formatCost({ usdCost: 3.2 }, true)).toBe('$3.20');
+    expect(formatCost({ usdCost: 0.004 }, true)).toBe('$0.0040');
     expect(formatCost({ creditsUsed: 1234.4 })).toBe('1,234 credits');
-    expect(formatCost({ usdCost: 1, creditsUsed: 9 })).toBe('$1.00');
+    expect(formatCost({ usdCost: 1, creditsUsed: 9 })).toBe('9 credits');
+    expect(formatCost({ usdCost: 1, creditsUsed: 9 }, true)).toBe('$1.00');
+    expect(formatCost({ creditsUsed: 0.4 })).toBe('<1 credit');
   });
 
   it('is null when the server sent no cost', () => {
@@ -116,10 +120,15 @@ describe('formatCreditsSpent', () => {
 
 describe('describeReplyCost', () => {
   it('adds the split and the dollar figure, and never repeats the credits headline', () => {
-    expect(describeReplyCost({ inputTokens: 1200, outputTokens: 300, creditsUsed: 9, usdCost: 0.004 })).toBe(
+    expect(describeReplyCost({ inputTokens: 1200, outputTokens: 300, creditsUsed: 9, usdCost: 0.004 }, true)).toBe(
       '1.2k new input, 300 output\n$0.0040'
     );
     expect(describeReplyCost({ inputTokens: 1200, creditsUsed: 9 })).toBe('1.2k new input');
+  });
+
+  it('hides dollars by default even when the server reports them', () => {
+    expect(describeReplyCost({ inputTokens: 1200, usdCost: 0.004 })).toBe('1.2k new input');
+    expect(describeReplyCost({ usdCost: 0.004 })).toBeNull();
   });
 
   it('is null when there is nothing to add', () => {
@@ -146,11 +155,11 @@ describe('describeSplit', () => {
 
 describe('statusFields with usage', () => {
   it('shows the total without cache reads, and the cost, when there is one', () => {
-    const usage = { inputTokens: 100, cacheReadInputTokens: 5000, outputTokens: 50, usdCost: 0.5 };
+    const usage = { inputTokens: 100, cacheReadInputTokens: 5000, outputTokens: 50, usdCost: 0.5, creditsUsed: 9 };
     expect(statusFields({ startedAt: 0, tokens: totalTokens(usage), usage }, 12_000, 'Thinking...')).toEqual([
       '12s',
       '150 tokens',
-      '$0.50',
+      '9 credits',
       'Thinking...',
     ]);
   });
@@ -564,7 +573,9 @@ describe('latestReply', () => {
     expect(contextTokens(latestReply([before, boundary]))).toBeNull();
     // Unknown rather than estimated, which is this file's rule everywhere: the next request is
     // what states the new occupancy, and a client-side guess drawn as a fact would be worse.
-    expect(usageLabel({ contextTokens: null, contextLimit: 200_000, credits: 31_667 })).toBe('Context --');
+    expect(usageLabel({ contextTokens: null, contextLimit: 200_000, credits: 31_667, monthlyAllowance: null })).toBe(
+      'Credits personal balance; no monthly plan allowance'
+    );
   });
 
   it('reports the first reply measured after the boundary, not the ones before it', () => {
@@ -626,11 +637,11 @@ describe('latestReply', () => {
   });
 });
 
-describe('occupancyArc', () => {
+describe('allowanceArc', () => {
   it('draws the occupancy it is given, up to a full ring', () => {
-    expect(occupancyArc(22)).toBe(22);
-    expect(occupancyArc(100)).toBe(100);
-    expect(occupancyArc(140)).toBe(100);
+    expect(allowanceArc(22)).toBe(22);
+    expect(allowanceArc(100)).toBe(100);
+    expect(allowanceArc(140)).toBe(100);
   });
 
   /**
@@ -638,106 +649,117 @@ describe('occupancyArc', () => {
    * empty ring that means nothing was measured. The floor is the ring's version of "<1%".
    */
   it('floors a real but tiny occupancy to an arc that can be seen', () => {
-    expect(occupancyArc(0)).toBe(4);
-    expect(occupancyArc(1)).toBe(4);
-    expect(occupancyArc(5)).toBe(5);
+    expect(allowanceArc(0)).toBe(0);
+    expect(allowanceArc(1)).toBe(4);
+    expect(allowanceArc(5)).toBe(5);
   });
 });
 
-describe('occupancyColor', () => {
+describe('allowanceColor', () => {
   it('names the band rather than a colour, so both themes get their own value', () => {
-    expect(occupancyColor(0)).toBe('primary');
-    expect(occupancyColor(74)).toBe('primary');
-    expect(occupancyColor(75)).toBe('warning');
-    expect(occupancyColor(89)).toBe('warning');
-    expect(occupancyColor(90)).toBe('danger');
-    expect(occupancyColor(100)).toBe('danger');
+    expect(allowanceColor(0)).toBe('danger');
+    expect(allowanceColor(10)).toBe('danger');
+    expect(allowanceColor(11)).toBe('warning');
+    expect(allowanceColor(25)).toBe('warning');
+    expect(allowanceColor(26)).toBe('primary');
+    expect(allowanceColor(100)).toBe('primary');
   });
 
   // An unstated window is not a full one, and borrowing the full-window colour for it would
   // be the same something-shown-as-a-fact this file refuses everywhere else.
   it('is neutral for an occupancy nobody stated', () => {
-    expect(occupancyColor(null)).toBe('neutral');
+    expect(allowanceColor(null)).toBe('neutral');
   });
 });
 
-describe('contextPercent', () => {
+describe('creditAllowancePercent', () => {
   it('is null when either half of the fraction is missing, never a percentage of a guess', () => {
-    expect(contextPercent(null, 200_000)).toBeNull();
-    expect(contextPercent(44_000, null)).toBeNull();
-    expect(contextPercent(44_000, 0)).toBeNull();
+    expect(creditAllowancePercent(null, 50_000)).toBeNull();
+    expect(creditAllowancePercent(25_000, null)).toBeNull();
+    expect(creditAllowancePercent(25_000, 0)).toBeNull();
+    expect(creditAllowancePercent(75_000, 50_000)).toBe(150);
   });
 });
 
 describe('usageLabel', () => {
-  const known: ComposerUsage = { contextTokens: 44_000, contextLimit: 200_000, credits: 31_667 };
+  const known: ComposerUsage = {
+    contextTokens: 44_000,
+    contextLimit: 200_000,
+    credits: 25_000,
+    monthlyAllowance: 50_000,
+  };
 
   it('carries the window figure alone; the balance is a hover away', () => {
-    expect(usageLabel(known)).toBe('Context 22%');
-    expect(usageLabel(known)).not.toContain('credits');
+    expect(usageLabel(known)).toBe('Credits 50% of monthly plan allowance');
   });
 
   it('keeps its shape when the window figure is missing, so the row does not jump', () => {
-    expect(usageLabel({ ...known, contextTokens: null })).toBe('Context --');
-    expect(usageLabel({ ...known, contextLimit: null })).toBe('Context --');
+    expect(usageLabel({ ...known, monthlyAllowance: null })).toBe(
+      'Credits personal balance; no monthly plan allowance'
+    );
+    expect(usageLabel({ ...known, monthlyAllowance: 0 })).toBe('Credits personal balance; no monthly plan allowance');
   });
 
   // The hover target has to survive a balance this client could not read, and a window figure
   // it has not measured - otherwise the one field that still knows something is unreachable.
   it('still shows a field while either figure is known', () => {
-    expect(usageLabel({ ...known, credits: null })).toBe('Context 22%');
-    expect(usageLabel({ contextTokens: null, contextLimit: null, credits: 0 })).toBe('Context --');
+    expect(usageLabel({ ...known, credits: null })).toBe('Credits loading');
+    expect(
+      usageLabel({
+        contextTokens: null,
+        contextLimit: null,
+        credits: null,
+        monthlyAllowance: null,
+        creditsError: 'Offline',
+      })
+    ).toBe('Credits unavailable - Offline');
   });
 
   it('says nothing when it knows nothing, leaving the caller its own fallback', () => {
-    expect(usageLabel({ contextTokens: null, contextLimit: null, credits: null })).toBeNull();
+    expect(usageLabel({ contextTokens: null, contextLimit: null, credits: null, monthlyAllowance: null })).toBe(
+      'Credits loading'
+    );
   });
 });
 
 describe('describeUsage', () => {
   it('spells both figures out and names them apart from what the turn cost', () => {
-    const detail = describeUsage({
+    const usage: ComposerUsage = {
       contextTokens: 44_000,
       contextLimit: 200_000,
-      credits: 31_667,
-      lastTurn: { inputTokens: 2000, cacheReadInputTokens: 120_000, outputTokens: 500, usdCost: 0.42 },
-    });
-    expect(detail).toContain('Context 44k / 200k (22%)');
-    expect(detail).toContain('Credits 31,667 personal balance');
-    expect(detail).toContain('Last turn 2.0k new input, 120k cached, 500 output - $0.42');
+      credits: 25_000,
+      monthlyAllowance: 50_000,
+      lastTurn: {
+        inputTokens: 2000,
+        cacheReadInputTokens: 120_000,
+        outputTokens: 500,
+        usdCost: 0.42,
+        creditsUsed: 84,
+      },
+    };
+    const detail = describeUsage(usage);
+    expect(detail).not.toContain('Context');
+    expect(detail).toContain('Credits 25,000 personal balance / 50,000 monthly plan allowance (50%)');
+    expect(detail).toContain('Last turn 2.0k new input, 120k cached, 500 output - 84 credits');
+    expect(describeUsage(usage, true)).toContain('Last turn 2.0k new input, 120k cached, 500 output - $0.42');
   });
 
-  it('measures against the capped limit, and says where it compacts and what the model allows', () => {
-    const detail = describeUsage({
-      contextTokens: 111_000,
-      contextLimit: 400_000,
-      modelWindow: 1_050_000,
-      credits: 12,
-    });
-    expect(detail).toContain('Context 111k / 400k (28%)');
-    expect(detail).toContain("Compacts automatically at 360k - the model's own window is 1.1M");
-  });
-
-  it('leaves the model window out when it is the limit itself', () => {
-    const detail = describeUsage({ contextTokens: 44_000, contextLimit: 200_000, modelWindow: 200_000, credits: 12 });
-    expect(detail).toContain('Compacts automatically at 180k');
-    expect(detail).not.toContain('own window');
-  });
-
-  it('reports the tokens without inventing a window when the model states none', () => {
-    const detail = describeUsage({ contextTokens: 44_000, contextLimit: null, credits: 12 });
-    expect(detail).toContain('Context 44k used - this model reports no window size');
-    expect(detail).not.toContain('%');
+  it('does not invent a percentage for a missing, unlimited, or zero allowance', () => {
+    for (const monthlyAllowance of [null, 0]) {
+      const detail = describeUsage({ contextTokens: null, contextLimit: null, credits: 12, monthlyAllowance });
+      expect(detail).toBe('Credits 12 personal balance - no monthly plan allowance');
+      expect(detail).not.toContain('%');
+    }
   });
 
   it('says why the balance is missing rather than showing a zero', () => {
     const detail = describeUsage({
-      contextTokens: null,
-      contextLimit: 200_000,
       credits: null,
+      monthlyAllowance: 50_000,
+      contextTokens: null,
+      contextLimit: null,
       creditsError: 'Could not read your balance from this server.',
     });
-    expect(detail).toContain('Context - nothing measured in this conversation yet');
     expect(detail).toContain('Credits - Could not read your balance from this server.');
     expect(detail).not.toContain('Credits 0');
   });
@@ -765,13 +787,15 @@ describe('a real turn against a very large window', () => {
   // Under half a percent of a 1.05M window. "0%" would render a measured context exactly like
   // no context at all, which is the one thing every other field here refuses to do.
   it('says <1% rather than 0% for an occupancy that is real but tiny', () => {
-    const usage: ComposerUsage = { contextTokens: 4190, contextLimit: 1_050_000, credits: 1991 };
-    expect(usageLabel(usage)).toBe('Context <1%');
-    expect(describeUsage(usage)).toContain('Context 4.2k / 1.1M (<1%)');
+    const usage: ComposerUsage = { contextTokens: 4190, contextLimit: 1_050_000, credits: 1, monthlyAllowance: 50_000 };
+    expect(usageLabel(usage)).toBe('Credits <1% of monthly plan allowance');
+    expect(describeUsage(usage)).toContain('(<1%)');
   });
 
   it('still says 0% when there is genuinely nothing in the window', () => {
-    expect(usageLabel({ contextTokens: 0, contextLimit: 1_050_000, credits: 1991 })).toBe('Context 0%');
+    expect(usageLabel({ contextTokens: 0, contextLimit: 1_050_000, credits: 0, monthlyAllowance: 50_000 })).toBe(
+      'Credits 0% of monthly plan allowance'
+    );
   });
 
   // A turn costs tens of credits against a balance in the thousands. Compacting the balance
@@ -779,7 +803,8 @@ describe('a real turn against a very large window', () => {
   // Exact rather than compacted, because the balance only appears on hover now and a reader
   // who went looking for it wants the figure, not a rounded "2.0k" that a turn cannot move.
   it('moves the balance on hover after a single turn', () => {
-    const at = (credits: number) => describeUsage({ contextTokens: 4190, contextLimit: 1_050_000, credits });
+    const at = (credits: number) =>
+      describeUsage({ contextTokens: 4190, contextLimit: 1_050_000, credits, monthlyAllowance: 50_000 });
     expect(at(2045)).toContain('Credits 2,045 personal balance');
     expect(at(1991)).toContain('Credits 1,991 personal balance');
   });

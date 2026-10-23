@@ -87,7 +87,7 @@ vi.mock('@server/utils/auditLog', () => ({
   logAuditEvent: h.logAuditEvent,
   DataLakeAuditEvents: { LAKE_DOCUMENT_PURGED: 'LAKE_DOCUMENT_PURGED' },
 }));
-vi.mock('@server/dataLakes/recomputeStatsForLakeTags', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/recomputeStatsForLakeTags', () => ({
   recomputeStatsForLakeTags: h.recomputeStatsForLakeTags,
 }));
 vi.mock('@bike4mind/server-utils/memory/ledgerMemoryStore', () => ({ shredMemoryFromSource: h.shredMemoryFromSource }));

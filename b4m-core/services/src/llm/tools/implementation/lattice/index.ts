@@ -7,12 +7,14 @@ import { Logger } from '@bike4mind/observability';
  * the Lattice three-layer architecture (Data, Rules, Views).
  */
 
+import { z } from 'zod';
 import { ToolContext, ToolDefinition } from '../../base/types';
 import { isObjectIdShaped } from '../../base/objectId';
 import { buildNewModel, getModelForWrite } from '../../../../latticeService/latticeModelService';
 import { splitEquals } from '@bike4mind/common';
 import type { ILatticeModel, LatticeEntityType, LatticeDataType, LatticeOperation } from '@bike4mind/common';
 import { escapeArtifactBodyJson, sanitizeArtifactTitle } from '../../utils/artifactEmission';
+import { createStructuredResultValidator } from '../../base/resultValidators';
 
 // Shared types
 
@@ -341,6 +343,14 @@ Call: lattice_create_model with:
   }),
 };
 
+/**
+ * The JSON envelope every lattice tool except lattice_create_model returns. A `success: false`
+ * envelope (model not found, write failed) fails the schema just like malformed output.
+ */
+const LatticeSuccessResultSchema = z.object({ success: z.literal(true), action: z.string() });
+
+export const validateLatticeResult = createStructuredResultValidator(LatticeSuccessResultSchema);
+
 const toEntityId = (name: string) => name.toLowerCase().replace(/\s+/g, '_');
 
 const MAX_LISTED_ENTITIES = 50;
@@ -448,6 +458,7 @@ export const latticeAddEntityTool: ToolDefinition = {
         }`,
       });
     },
+    validateResult: validateLatticeResult,
     toolSchema: {
       name: 'lattice_add_entity',
       description: `Add a line item, account, period, or other entity to a Lattice model.
@@ -593,7 +604,7 @@ export const latticeSetValueTool: ToolDefinition = {
             data: model.data,
             updatedAt: new Date(),
           });
-          context.logger.info(`[Lattice] Set ${entityId}.${attributeKey} = ${value} in model ${modelId}`);
+          context.logger.info(`[Lattice] Set ${entityId}.${attributeKey} in model ${modelId}`);
         } catch (error) {
           context.logger.error(`[Lattice] Failed to persist value to database:`, error);
           return JSON.stringify({
@@ -617,6 +628,7 @@ export const latticeSetValueTool: ToolDefinition = {
         message: `Set ${entityName}.${attributeKey} = ${value}`,
       });
     },
+    validateResult: validateLatticeResult,
     toolSchema: {
       name: 'lattice_set_value',
       description: `Set a specific value in a Lattice model.
@@ -799,6 +811,7 @@ export const latticeCreateRuleTool: ToolDefinition = {
         message: `Created rule "${name}": ${formula}.${entityCreatedMessage}`,
       });
     },
+    validateResult: validateLatticeResult,
     toolSchema: {
       name: 'lattice_create_rule',
       description: `Create a formula or calculation rule in a Lattice model.
@@ -874,6 +887,7 @@ export const latticeQueryTool: ToolDefinition = {
         message: `Querying model for: ${query}`,
       });
     },
+    validateResult: validateLatticeResult,
     toolSchema: {
       name: 'lattice_query',
       description: `Query a Lattice model for specific values or aggregations.
@@ -931,6 +945,7 @@ export const latticeExplainTool: ToolDefinition = {
         message: `Explaining calculation for ${entityName}.${attributeKey}`,
       });
     },
+    validateResult: validateLatticeResult,
     toolSchema: {
       name: 'lattice_explain',
       description: `Explain how a value in a Lattice model was calculated.

@@ -18,11 +18,14 @@ const run = async (scopes: ApiKeyScope[]) => {
 };
 
 describe('apiKeyAnomalyDetection', () => {
-  it('skips qa:ingest keys (CI runners have ephemeral IPs)', async () => {
-    const { res, next } = await run([ApiKeyScope.QA_INGEST]);
-    expect(next).toHaveBeenCalledOnce();
-    expect(res.once).not.toHaveBeenCalled();
-  });
+  it.each([ApiKeyScope.QA_INGEST, ApiKeyScope.OVERWATCH_INGEST_WRITE, ApiKeyScope.RELEASE_NOTES_WRITE])(
+    'skips %s keys (CI runners and product backends have ephemeral IPs)',
+    async scope => {
+      const { res, next } = await run([scope]);
+      expect(next).toHaveBeenCalledOnce();
+      expect(res.once).not.toHaveBeenCalled();
+    }
+  );
   it('still schedules detection for ordinary keys', async () => {
     const { res } = await run([ApiKeyScope.AI_CHAT]);
     expect(res.once).toHaveBeenCalledWith('finish', expect.any(Function));

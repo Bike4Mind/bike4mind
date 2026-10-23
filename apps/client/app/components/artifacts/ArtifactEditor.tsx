@@ -25,17 +25,15 @@ import {
   Tooltip,
   useTheme,
 } from '@mui/joy';
-import {
-  Save as SaveIcon,
-  Preview as PreviewIcon,
-  Close as CloseIcon,
-  Add as AddIcon,
-  Remove as RemoveIcon,
-  Undo as UndoIcon,
-  Lock as LockIcon,
-  Public as PublicIcon,
-  Group as GroupIcon,
-} from '@mui/icons-material';
+import SaveIcon from '@mui/icons-material/Save';
+import PreviewIcon from '@mui/icons-material/Preview';
+import CloseIcon from '@mui/icons-material/Close';
+import AddIcon from '@mui/icons-material/Add';
+import RemoveIcon from '@mui/icons-material/Remove';
+import UndoIcon from '@mui/icons-material/Undo';
+import LockIcon from '@mui/icons-material/Lock';
+import PublicIcon from '@mui/icons-material/Public';
+import GroupIcon from '@mui/icons-material/Group';
 import { api } from '@client/app/contexts/ApiContext';
 import { toast } from 'sonner';
 import { type BaseArtifact } from '@bike4mind/common';

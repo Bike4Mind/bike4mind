@@ -69,6 +69,8 @@ export interface ISkillListing {
   pendingVersion?: number | null;
   /** Monotonic counter used to number new versions. */
   latestVersion: number;
+  /** Organization listings' Claude Code plugin name: assigned at first approval, never changed. */
+  claudePluginName?: string;
 
   // Denormalized from the current approved version so browse/search/cards read only the listing.
   name: string;

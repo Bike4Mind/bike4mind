@@ -28,23 +28,45 @@ export const IMAGE_MAX_EDGE = 1568;
 export const MAX_ATTACHMENTS_PER_TURN = 10;
 
 /** The image types every vision-capable provider in this stack accepts. */
-const IMAGE_MEDIA_TYPES: Record<string, string> = {
+const IMAGE_MEDIA_TYPES = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
   '.gif': 'image/gif',
   '.webp': 'image/webp',
+} as const;
+
+export type ImageMediaType = (typeof IMAGE_MEDIA_TYPES)[keyof typeof IMAGE_MEDIA_TYPES];
+
+const IMAGE_TYPE_LIST: readonly string[] = Object.values(IMAGE_MEDIA_TYPES);
+
+/** The same table for a lookup by an extension read off a filename. */
+const IMAGE_TYPE_BY_EXTENSION: Record<string, ImageMediaType> = IMAGE_MEDIA_TYPES;
+
+/**
+ * The extension a saved copy takes. Keyed by every type above, so adding one there and not here
+ * is a compile error rather than a file named `image-<date>.undefined`.
+ */
+const EXTENSION_BY_IMAGE_TYPE: Record<ImageMediaType, string> = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/gif': 'gif',
+  'image/webp': 'webp',
 };
 
 /** Only these can be re-encoded without losing something (animation, in the other two). */
 const SHRINKABLE = new Set(['image/png', 'image/jpeg']);
 
-export function isImageMediaType(mediaType: string): boolean {
-  return Object.values(IMAGE_MEDIA_TYPES).includes(mediaType);
+export function isImageMediaType(mediaType: string): mediaType is ImageMediaType {
+  return IMAGE_TYPE_LIST.includes(mediaType);
 }
 
-export function imageMediaTypeForName(name: string): string | null {
-  return IMAGE_MEDIA_TYPES[extname(name).toLowerCase()] ?? null;
+export function extensionForImageType(mediaType: ImageMediaType): string {
+  return EXTENSION_BY_IMAGE_TYPE[mediaType];
+}
+
+export function imageMediaTypeForName(name: string): ImageMediaType | null {
+  return IMAGE_TYPE_BY_EXTENSION[extname(name).toLowerCase()] ?? null;
 }
 
 /**

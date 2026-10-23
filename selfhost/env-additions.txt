@@ -87,3 +87,7 @@ MAIL_FROM=bike4mind@chat.example.com
 # BACK UP SECRET_ENCRYPTION_KEY somewhere safe - it is write-once and cannot be
 # rotated in place; losing it makes DB-encrypted secrets unrecoverable.
 # =====================================================================
+
+# Persistent master key for memory DEK envelope encryption. Generate once: openssl rand -hex 32
+# Back this up with the other encryption keys; do not replace it during redeploys.
+MEMORY_KEY_SECRET=

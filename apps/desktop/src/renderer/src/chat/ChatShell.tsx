@@ -16,23 +16,27 @@ import { activeTodos } from '@shared/todos';
 import { ArtifactLibraryPanel } from './ArtifactLibraryPanel';
 import { SkillMarketPanel } from './SkillMarketPanel';
 import { BackgroundTaskChip, BackgroundTaskPanel } from './BackgroundTaskPanel';
-import { readPanelFlag, writePanelFlag } from './backgroundTasks';
+import { readPanelFlag, spawnedSessions, writePanelFlag } from './backgroundTasks';
 import { BrowserPane } from './BrowserPane';
 import { readBrowserPaneOpen, writeBrowserPaneOpen } from './agentBrowser';
 import { ApprovalModePill } from './ApprovalModePill';
 import { Composer } from './Composer';
 import { CustomizeNavItem, CustomizeScreen } from './CustomizePanel';
-import { GlobeIcon, TerminalIcon } from './icons';
+import { GlobeIcon, PanelRightIcon, TerminalIcon } from './icons';
 import { MessageThread } from './MessageThread';
-import { columnStackSx, contentColumnSx } from './layout';
+import { chatShellRootSx, columnStackSx, contentColumnSx } from './layout';
 import { ModelPicker } from './ModelPicker';
 import { ReasoningEffortPicker } from './ReasoningEffortPicker';
 import { GrantedFolderChips, SessionChips } from './SessionChips';
-import { PrStatusBar } from './PrStatusBar';
+import { SESSION_PANEL_ID, SessionPanel } from './SessionPanel';
+import { panelFitsBesideThread, useElementWidth, useSessionPanelPrefs } from './sessionPanelState';
+import { createPullRequestPrompt } from './changesBarModel';
+import { useWorkspaceChanges } from './useWorkspaceChanges';
 import { openInSessionBrowser } from './prLinks';
 import { usePrSummaries, usePullRequest } from './usePullRequest';
 import { SessionList } from './SessionList';
-import { SettingsScreen } from './SettingsPanel';
+import { isUntouchedImport, projectForGroup } from './grouping';
+import { useImportedInline } from './importedInline';
 import { TerminalPanel } from './TerminalPanel';
 import {
   isTerminalToggle,
@@ -46,6 +50,7 @@ import { useSpawnSuggestions } from './useSpawnSuggestions';
 import { TurnDot, turnState } from './TurnDot';
 import { TurnStatus } from './TurnStatus';
 import { workspacePhrase } from './workspaceProgress';
+import { canHoldWorktree, worktreeByDefault } from './worktreeDefault';
 import { presentReply } from './codeStream';
 import { seedOnArrival } from './firstRunSeed';
 import { readLastSession, useLastSession } from './lastSession';
@@ -53,6 +58,7 @@ import { newSessionInProject } from './newSessionInProject';
 import { roundsOf } from './replyRounds';
 import { contextTokens, describeActivity, latestReply, writingProse, type ComposerUsage } from './statusLine';
 import { useAccountCredits } from './useAccountCredits';
+import { ImageMenuProvider } from './ImageContextMenu';
 import { toAttachmentInputs, useAttachmentDraft } from './useAttachments';
 import { useBackgroundProcesses } from './useBackgroundProcesses';
 import { useVideoJobs, VideoJobsContext } from './useVideoJobs';
@@ -62,6 +68,8 @@ import { useSidebarSections } from './useSidebarSections';
 import { usePromptSuggestion } from './usePromptSuggestion';
 import { useFileDrop } from './useFileDrop';
 import { useSkills } from './useSkills';
+import { useSessionStartTiming } from './useSessionStartTiming';
+import { SpawnFailureToast } from './SpawnFailureToast';
 
 function SessionHeader({ title, onRename }: { title: string; onRename: (title: string) => void }) {
   const [editing, setEditing] = useState(false);
@@ -114,8 +122,8 @@ function SessionHeader({ title, onRename }: { title: string; onRename: (title: s
  * The working directory a Code session's commands actually run in, under its title.
  *
  * Only shown when it differs from the project directory, because that difference IS the
- * worktree toggle: the chip row above the composer says which branch and that a worktree is on,
- * and this is the one thing it cannot fit - where that resolved to.
+ * worktree toggle: the session panel says which branch and that a worktree is on, and this is
+ * the one thing it cannot fit - where that resolved to.
  */
 function WorkingDirectoryLine({ project }: { project: ChatProject }) {
   if (project.workingDirectory === project.directory) return null;
@@ -132,19 +140,16 @@ function WorkingDirectoryLine({ project }: { project: ChatProject }) {
  * What the main pane is showing. One value rather than a flag per screen, so the screens
  * cannot both be up and nothing has to remember to shut the other one.
  */
-type ChatScreen = 'conversation' | 'artifacts' | 'customize' | 'settings' | 'skill-market';
+type ChatScreen = 'conversation' | 'artifacts' | 'customize' | 'skill-market';
 
 /**
- * The sidebar's account strip, given the dot that says whether a reply is running and the way
- * to open Settings.
+ * The sidebar's account strip, given the dot that says whether a reply is running.
  *
  * A function rather than a node because the two halves are owned in different places: this
  * component knows the turn state, and the account strip knows where a glyph goes in its own
- * row. Handing the finished dot down keeps both where they belong - see TurnDot. The opener
- * rides along for the same reason: Settings is a screen in this pane, and the account menu is
- * where a user who knew the server lived under their name will still go looking for it.
+ * row. Handing the finished dot down keeps both where they belong - see TurnDot.
  */
-export type AccountStrip = (status: ReactNode, openSettings: () => void) => ReactNode;
+export type AccountStrip = (status: ReactNode) => ReactNode;
 
 export function ChatShell({ auth, account }: { auth?: AuthState | null; account?: AccountStrip }) {
   const {
@@ -183,6 +188,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
   // Until this is false the shell does not know which conversation it will show, so it draws
   // none of the empty-state copy that would otherwise flash up before the real one.
   const settling = loading || restoring;
+  const [importedInline] = useImportedInline();
 
   const conversation = useConversation(activeId, apply);
   // The header follows the sidebar's copy of the title, so a rename from any row - including
@@ -193,6 +199,15 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
   // transcript under this one's id until the read lands.
   const opening = settling || (!!activeId && conversation.session?.id !== activeId);
   const spawnSuggestions = useSpawnSuggestions(conversation.session);
+  const markSessionStart = useSessionStartTiming(sessions);
+  const startSuggestion = spawnSuggestions.start;
+  const onStartSuggestion = useCallback(
+    (request: Parameters<typeof startSuggestion>[0]) => {
+      if (request.placement !== 'here') markSessionStart('suggestion');
+      return startSuggestion(request);
+    },
+    [startSuggestion, markSessionStart]
+  );
   const background = useBackgroundProcesses(activeId);
   const videoJobs = useVideoJobs(activeId);
   const skills = useSkills(activeId);
@@ -217,10 +232,12 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
   const pullRequest = usePullRequest(screen === 'conversation' ? activeId : null);
   // What the browser pane trades width with; see BrowserPane.
   const conversationColumn = useRef<HTMLDivElement | null>(null);
+  const panelPrefs = useSessionPanelPrefs();
+  // The thread region the session panel floats over; its width decides docked or popover.
+  const [threadRegion, threadRegionWidth] = useElementWidth<HTMLDivElement>();
+  const [panelPopoverOpen, setPanelPopoverOpen] = useState(false);
+  const panelToggle = useRef<HTMLButtonElement | null>(null);
 
-  // Stable, because the account strip is rebuilt on every turn of the conversation and this is
-  // the one thing in it that has no reason to change.
-  const openSettings = useCallback(() => setScreen('settings'), []);
   // The listing the market opens onto, when it was opened for one (an update badge).
   const [marketListing, setMarketListing] = useState<SkillMarketListingRef | null>(null);
   const openSkillMarket = useCallback((listing?: SkillMarketListingRef) => {
@@ -243,6 +260,13 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
       writeBrowserPaneOpen(!current);
       return !current;
     });
+  }, []);
+
+  const selectSession = useCallback((sessionId: string) => {
+    // A screen takes over the same pane the transcript lives in, so picking a conversation has
+    // to put it back or the click reads as doing nothing.
+    setScreen('conversation');
+    setActiveId(sessionId);
   }, []);
 
   const terminalOpen = !!activeId && terminalSessions.includes(activeId);
@@ -310,11 +334,9 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
       ? `${modelOption.name} cannot read images. Pick a model that can, or remove the image before sending.`
       : null;
 
-  // A Code session with no project has no working directory, so main refuses the turn. Nothing
-  // is written out in prose: the unset folder chip a few pixels above is the thing to act on,
-  // and the composer names the state in one word where the reader already looks for "can I
-  // send?". Main's refusal stays as the guard, and surfaces through chat-send-error if a turn
-  // ever reaches it.
+  // A Code session with no project has no working directory, so main refuses the turn. The
+  // centered workspace form is the thing to act on, and the composer names the state in one word
+  // where the reader already looks for "can I send?". Main's refusal stays as the guard.
   const unbound = conversation.session?.mode === 'code' && !conversation.session.project;
 
   /**
@@ -343,18 +365,39 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
   const turnOpen = conversation.streaming || sessionStatus === 'processing' || sessionStatus === 'needs-action';
   const plan = useMemo(() => activeTodos(conversation.messages, turnOpen), [conversation.messages, turnOpen]);
 
+  const workspaceChanges = useWorkspaceChanges(
+    screen === 'conversation' ? activeId : null,
+    conversation.session?.project,
+    conversation.settledTurns
+  );
+  // The sidebar summary as well as the bar: a dismissed PR bar reports no binding, but the PR is
+  // still this session's, and offering to open a second one for the same branch would be wrong.
+  const hasPullRequest = !!pullRequest?.binding || (!!activeId && prSummaries.has(activeId));
+  const spawned = useMemo(() => spawnedSessions(sessions, statuses, activeId), [sessions, statuses, activeId]);
+  const initialCodeSetup = conversation.session?.mode === 'code' && conversation.messages.length === 0;
+
   /**
-   * What the composer's usage indicator reports: how full the window is, and what is left.
+   * The session panel: a Code session with a folder after its first message. Until then the same
+   * controls are centered in the empty transcript, and a Chat session has nothing to put in it.
    *
-   * The context figure comes from the last reply's LAST request, never from the turn's summed
-   * usage - see contextTokens. It is measured against the capped limit (effectiveContextLimit)
-   * rather than the raw window, and that limit is real even for a model that states no window:
-   * the cap applies either way.
-   *
-   * `turnOpen` is handed on so the figure survives the turn it is shown during: the reply being
-   * streamed has measured nothing yet, and without it the indicator would read as unknown from
-   * the moment the user pressed send until the reply landed. See latestReply.
+   * Docked when it fits beside the reading column, and then its open flag is remembered; on a
+   * narrower pane it folds into the header button and opens as a popover, which is never left open
+   * across conversations or launches.
    */
+  const panelProject =
+    !opening && !initialCodeSetup && conversation.session?.mode === 'code' ? conversation.session.project : undefined;
+  const panelDocked = threadRegionWidth === null || panelFitsBesideThread(threadRegionWidth);
+  const panelShown = !!panelProject && (panelDocked ? panelPrefs.open : panelPopoverOpen);
+  const bindingErrorHidden =
+    !!panelProject && !!conversation.project.error && (!panelShown || panelPrefs.collapsed.has('environment'));
+  const { toggleOpen: togglePanelOpen } = panelPrefs;
+  const togglePanel = useCallback(() => {
+    if (panelDocked) togglePanelOpen();
+    else setPanelPopoverOpen(current => !current);
+  }, [panelDocked, togglePanelOpen]);
+  const closePanelPopover = useCallback(() => setPanelPopoverOpen(false), []);
+  useEffect(() => setPanelPopoverOpen(false), [activeId, panelDocked, screen]);
+
   const composerUsage: ComposerUsage = useMemo(() => {
     const reply = latestReply(conversation.messages, turnOpen);
     return {
@@ -362,10 +405,18 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
       contextLimit: effectiveContextLimit(modelOption?.contextWindow),
       modelWindow: modelOption?.contextWindow ?? null,
       credits: credits.balance,
+      monthlyAllowance: credits.monthlyAllowance,
       ...(credits.error ? { creditsError: credits.error } : {}),
       lastTurn: reply?.usage ?? null,
     };
-  }, [conversation.messages, turnOpen, modelOption?.contextWindow, credits.balance, credits.error]);
+  }, [
+    conversation.messages,
+    turnOpen,
+    modelOption?.contextWindow,
+    credits.balance,
+    credits.monthlyAllowance,
+    credits.error,
+  ]);
 
   // What the turn in flight is doing, read off the reply being streamed into the thread. Only
   // the last message can be that reply, so nothing earlier is consulted.
@@ -427,16 +478,20 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
     if (settling) return;
     const open = sessions.find(session => session.id === activeId);
     if (open?.mode === mode) return;
-    setActiveId(sessions.find(session => session.mode === mode)?.id ?? null);
-  }, [settling, activeId, sessions, mode]);
+    // A live Claude Code CLI session is always the newest import; landing on it would select a
+    // row hidden in the shut "Imported from Claude" section instead of the user's own work.
+    const candidate = (session: ChatSessionSummary) =>
+      session.mode === mode && (importedInline || !isUntouchedImport(session));
+    setActiveId(sessions.find(candidate)?.id ?? null);
+  }, [settling, activeId, sessions, mode, importedInline]);
 
   /**
    * Make a session, without touching what the pane is showing. The two callers differ on that:
    * the New button is a click on the sidebar and has to put the transcript back, the first-run
    * seeding below must not pull a user out of the screen they opened.
    *
-   * A Code session is created UNBOUND - no directory, no branch - and the chip row above the
-   * composer is where a project gets chosen. Creating one used to open the OS folder picker
+   * A Code session is created UNBOUND - no directory, no branch - and its empty transcript is where
+   * a project gets chosen. Creating one used to open the OS folder picker
    * first, which meant dismissing that dialog produced nothing at all: no session, no message,
    * and no way back in. Nothing is asked up front now, so there is nothing left to cancel.
    */
@@ -458,9 +513,10 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
    */
   const onCreate = useCallback(async () => {
     setScreen('conversation');
+    markSessionStart('new');
     const created = await startSession();
     if (created) setActiveId(created);
-  }, [startSession]);
+  }, [startSession, markSessionStart]);
 
   /**
    * New, from a user section's header or menu: the same session New makes, but in that section
@@ -506,18 +562,24 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
    *
    * The folder is what defines the group, so it carries across and the dialog stays shut.
    * Nothing else does - see newSessionInProject for why the branch is left for the user to
-   * pick on the new session.
+   * pick on the new session. The worktree toggle follows the user's default, and git is only
+   * asked whether the folder can hold one when that default is on.
    */
   const onCreateInProject = useCallback(
     async (directory: string) => {
-      const sibling = sessions.find(session => session.project?.directory === directory)?.project;
+      const sibling = projectForGroup(sessions, directory);
       if (!sibling) return;
-      setScreen('conversation');
       clearCodeError();
-      const created = await createCode(newSessionInProject(sibling));
+      markSessionStart('project');
+      // Before the screen switches, so the git calls never leave the previous session's
+      // composer live under the new one's id.
+      const inWorktree =
+        worktreeByDefault() && canHoldWorktree(await window.b4m.chat.inspectProject(sibling.directory));
+      setScreen('conversation');
+      const created = await createCode(newSessionInProject(sibling, inWorktree));
       if (created) setActiveId(created);
     },
-    [sessions, createCode, clearCodeError]
+    [sessions, createCode, clearCodeError, markSessionStart]
   );
 
   const onDelete = useCallback(
@@ -529,7 +591,8 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
   );
 
   return (
-    <Box sx={{ position: 'relative', display: 'flex', height: '100vh', bgcolor: 'background.body' }} {...drop.handlers}>
+    <Box sx={chatShellRootSx} {...drop.handlers} data-testid="chat-shell">
+      <SpawnFailureToast />
       {drop.over && (
         <Box
           sx={{
@@ -561,12 +624,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
         prSummaries={prSummaries}
         collapsed={collapsed}
         onToggleCollapsed={() => setCollapsed(current => !current)}
-        onSelect={sessionId => {
-          // A screen takes over the same pane the transcript lives in, so picking a
-          // conversation has to put it back or the click reads as doing nothing.
-          setScreen('conversation');
-          setActiveId(sessionId);
-        }}
+        onSelect={selectSession}
         onCreate={() => void onCreate()}
         onOpenArtifacts={() => setScreen('artifacts')}
         onCreateInProject={directory => void onCreateInProject(directory)}
@@ -583,10 +641,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
         onDismissSectionError={dismissSectionError}
         customize={<CustomizeNavItem onOpen={() => setScreen('customize')} />}
         footer={account?.(
-          <TurnDot
-            state={turnState({ streaming: turnOpen, disabled: !activeId || creatingCode, notReady: unbound })}
-          />,
-          openSettings
+          <TurnDot state={turnState({ streaming: turnOpen, disabled: !activeId || creatingCode, notReady: unbound })} />
         )}
       />
 
@@ -600,8 +655,6 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
           onClose={() => setScreen('conversation')}
           onOpenSkillMarket={openSkillMarket}
         />
-      ) : screen === 'settings' ? (
-        <SettingsScreen auth={auth ?? null} onClose={() => setScreen('conversation')} />
       ) : (
         <Stack ref={conversationColumn} sx={{ flex: 1, minWidth: 0, ...columnStackSx }}>
           <Box sx={{ borderBottom: '1px solid', borderColor: 'divider' }}>
@@ -623,6 +676,28 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
                   </Typography>
                 )}
               </Box>
+              {panelProject && (
+                <Tooltip
+                  size="sm"
+                  variant="soft"
+                  placement="bottom-end"
+                  title={panelShown ? 'Hide the session panel' : 'Show the session panel'}
+                >
+                  <IconButton
+                    ref={panelToggle}
+                    size="sm"
+                    variant={panelShown ? 'soft' : 'plain'}
+                    color="neutral"
+                    aria-expanded={panelShown}
+                    aria-controls={panelShown ? SESSION_PANEL_ID : undefined}
+                    aria-label={panelShown ? 'Hide the session panel' : 'Show the session panel'}
+                    onClick={togglePanel}
+                    data-testid="chat-toggle-session-panel-btn"
+                  >
+                    <PanelRightIcon />
+                  </IconButton>
+                </Tooltip>
+              )}
               {/* Inside the reading column, not out at the window edge: a tooltip opening from
                   here cannot reach the pane, and a tooltip over the pane would be drawn behind
                   the web page - see agentBrowser.ts. */}
@@ -683,74 +758,162 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
             </Box>
           </Box>
 
-          {opening ? (
-            <Box sx={{ flex: 1 }} data-testid="chat-thread-opening" />
-          ) : (
-            <VideoJobsContext.Provider value={videoJobs}>
-              <WebLinkContext.Provider value={openInBrowserPane}>
-                <MessageThread
-                  // Remounted per conversation, so its window and scroll start over and nothing it
-                  // set going outlives the conversation it was for. Prefixed because PrStatusBar, a
-                  // sibling, is keyed on the bare id: two siblings sharing a key leave one of them
-                  // mounted in the DOM after React drops it.
-                  key={`thread-${activeId ?? 'none'}`}
-                  messages={conversation.messages}
-                  sessionId={activeId}
-                  // What stands in for the transcript when there is no session to have one. It is the
-                  // only control on screen that starts one from here, so it is a button and not a
-                  // sentence pointing at the sidebar: the header above says what the state is, this
-                  // says what to do about it, and the composer's placeholder names the same step.
-                  noSession={
-                    <Stack spacing={1.5} alignItems="center">
-                      <Typography level="body-sm" textColor="text.tertiary" data-testid="chat-thread-no-session">
-                        {mode === 'code'
-                          ? 'Start a Code session to run a task here.'
-                          : 'Start a conversation to send your first message.'}
-                      </Typography>
-                      <Button
-                        size="sm"
-                        variant="soft"
-                        loading={creatingCode}
-                        onClick={() => void onCreate()}
-                        data-testid="chat-start-session-btn"
-                      >
-                        {mode === 'code' ? 'New Code session' : 'New conversation'}
-                      </Button>
-                    </Stack>
-                  }
-                  // turnOpen, not `streaming`: a turn this window never saw start - after a reload, or
-                  // one parked at the approval gate - is still running, and Continue must not be
-                  // offered on top of it.
-                  streaming={turnOpen}
-                  onRespond={conversation.respondToApproval}
-                  onMove={background.moveToBackground}
-                  onContinue={() => void conversation.continueReply()}
-                  status={conversation.turn && <TurnStatus turn={conversation.turn} activity={activity} />}
-                  // At the foot of the thread rather than above the composer: a background command is
-                  // something this conversation started, so it reads as the last thing that happened
-                  // in it. It scrolls with the transcript, which is the trade - the panel is reached
-                  // from the bottom of the thread, not from a bar that is always on screen.
-                  footer={
-                    <>
-                      {/* The turn line's own slot only exists once a reply does, and the worktree is
+          {/* The region the session panel floats over: the thread and nothing below it, so the
+              card can never reach the composer, and everything it does not cover stays live. */}
+          <Box
+            ref={threadRegion}
+            sx={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}
+          >
+            {opening ? (
+              <Box sx={{ flex: 1 }} data-testid="chat-thread-opening" />
+            ) : (
+              <VideoJobsContext.Provider value={videoJobs}>
+                <WebLinkContext.Provider value={openInBrowserPane}>
+                  {/* Keyed so an open menu can never carry an image into another conversation,
+                    should a switch ever skip the `opening` gate that unmounts this today. */}
+                  <ImageMenuProvider key={activeId ?? 'none'} onAttach={activeId ? draft.attachImage : undefined}>
+                    <MessageThread
+                      // Remounted per conversation, so its window and scroll start over and nothing it
+                      // set going outlives the conversation it was for. Prefixed, as the session panel
+                      // beside it is: two siblings sharing a key leave one of them mounted in the DOM
+                      // after React drops it.
+                      key={`thread-${activeId ?? 'none'}`}
+                      messages={conversation.messages}
+                      sessionId={activeId}
+                      // What stands in for the transcript when there is no session to have one. It is the
+                      // only control on screen that starts one from here, so it is a button and not a
+                      // sentence pointing at the sidebar: the header above says what the state is, this
+                      // says what to do about it, and the composer's placeholder names the same step.
+                      noSession={
+                        <Stack spacing={1.5} alignItems="center">
+                          <Typography level="body-sm" textColor="text.tertiary" data-testid="chat-thread-no-session">
+                            {mode === 'code'
+                              ? 'Start a Code session to run a task here.'
+                              : 'Start a conversation to send your first message.'}
+                          </Typography>
+                          <Button
+                            size="sm"
+                            variant="soft"
+                            loading={creatingCode}
+                            onClick={() => void onCreate()}
+                            data-testid="chat-start-session-btn"
+                          >
+                            {mode === 'code' ? 'New Code session' : 'New conversation'}
+                          </Button>
+                        </Stack>
+                      }
+                      emptySession={
+                        initialCodeSetup ? (
+                          <Box
+                            sx={{ width: '100%', maxWidth: 420, minWidth: 0 }}
+                            data-testid="chat-code-workspace-setup"
+                          >
+                            <Typography level="title-sm" sx={{ mb: 1.5 }}>
+                              Set up this workspace
+                            </Typography>
+                            <SessionChips
+                              layout="embedded"
+                              project={conversation.session?.project ?? null}
+                              {...(conversation.session?.grantedDirectories
+                                ? { grantedDirectories: conversation.session.grantedDirectories }
+                                : {})}
+                              binding={conversation.project}
+                              settledTurns={conversation.settledTurns}
+                              preparing={conversation.preparing !== null}
+                            />
+                          </Box>
+                        ) : undefined
+                      }
+                      // turnOpen, not `streaming`: a turn this window never saw start - after a reload, or
+                      // one parked at the approval gate - is still running, and Continue must not be
+                      // offered on top of it.
+                      streaming={turnOpen}
+                      onRespond={conversation.respondToApproval}
+                      onMove={background.moveToBackground}
+                      onContinue={() => void conversation.continueReply()}
+                      status={conversation.turn && <TurnStatus turn={conversation.turn} activity={activity} />}
+                      // At the foot of the thread rather than above the composer: a background command is
+                      // something this conversation started, so it reads as the last thing that happened
+                      // in it. It scrolls with the transcript, which is the trade - the panel is reached
+                      // from the bottom of the thread, not from a bar that is always on screen.
+                      footer={
+                        <>
+                          {/* The turn line's own slot only exists once a reply does, and the worktree is
                       cut before there is one; this sits where that line will appear. */}
-                      {!conversation.turn && conversation.preparing && (
-                        <Box data-testid="chat-workspace-status">
-                          <TurnStatus
-                            turn={{ startedAt: conversation.preparing.since, tokens: null }}
-                            activity={{ kind: 'tool', label: workspacePhrase(conversation.preparing) }}
-                          />
-                        </Box>
-                      )}
-                      <BackgroundTaskChip running={background.running} onClick={() => setTasksPanelOpen(true)} />
-                    </>
-                  }
-                />
-              </WebLinkContext.Provider>
-            </VideoJobsContext.Provider>
-          )}
+                          {!conversation.turn && conversation.preparing && (
+                            <Box data-testid="chat-workspace-status">
+                              <TurnStatus
+                                turn={{ startedAt: conversation.preparing.since, tokens: null }}
+                                activity={{ kind: 'tool', label: workspacePhrase(conversation.preparing) }}
+                              />
+                            </Box>
+                          )}
+                          {/* The panel lists these itself while it is on screen. */}
+                          {!panelShown && (
+                            <BackgroundTaskChip running={background.running} onClick={() => setTasksPanelOpen(true)} />
+                          )}
+                        </>
+                      }
+                    />
+                  </ImageMenuProvider>
+                </WebLinkContext.Provider>
+              </VideoJobsContext.Provider>
+            )}
 
-          <TodoPanel todos={plan} turnOpen={turnOpen} />
+            {panelShown && panelProject && conversation.session && (
+              <SessionPanel
+                // Keyed so an action error or an unfolded list does not follow the user to the next
+                // conversation.
+                key={`panel-${activeId ?? 'none'}`}
+                variant={panelDocked ? 'docked' : 'popover'}
+                collapsed={panelPrefs.collapsed}
+                onToggleSection={panelPrefs.toggleSection}
+                onDismiss={closePanelPopover}
+                anchor={panelToggle}
+                environment={{
+                  project: panelProject,
+                  ...(conversation.session.grantedDirectories
+                    ? { grantedDirectories: conversation.session.grantedDirectories }
+                    : {}),
+                  binding: conversation.project,
+                  settledTurns: conversation.settledTurns,
+                  inUse: conversation.messages.length > 0,
+                  preparing: conversation.preparing !== null,
+                }}
+                changes={{
+                  workspace: workspaceChanges,
+                  hasPullRequest,
+                  pullRequest,
+                  pullRequestActions: {
+                    onDismiss: () =>
+                      activeId ? window.b4m.pullRequests.dismiss(activeId) : Promise.resolve({ ok: true as const }),
+                    onRefresh: () => activeId && void window.b4m.pullRequests.refresh(activeId),
+                    onSetOption: (option, enabled) =>
+                      activeId
+                        ? window.b4m.pullRequests.setOption(activeId, option, enabled)
+                        : Promise.resolve({ ok: false as const, error: 'No conversation is open.' }),
+                    onOpenLink: openInBrowserPane,
+                  },
+                  busy: turnOpen,
+                  // Straight to the conversation, not through onSend: that one also sends whatever
+                  // is attached in the composer, which the user staged for a different message.
+                  onCreatePullRequest: changes => void conversation.send(createPullRequestPrompt(changes)),
+                }}
+                context={composerUsage}
+                plan={{ todos: plan, turnOpen }}
+                background={{
+                  processes: background.processes,
+                  spawned,
+                  onStopProcess: background.stop,
+                  onStopSession: sessionId => void window.b4m.chat.stopReply(sessionId),
+                  onOpenSession: selectSession,
+                  onShowOutput: () => setTasksPanelOpen(true),
+                }}
+              />
+            )}
+          </Box>
+
+          {!panelShown && <TodoPanel todos={plan} turnOpen={turnOpen} />}
 
           {/* A compaction is a round trip the user is waiting on, with nothing streaming into the
               thread to show for it. Above the error slot, because a refusal replaces it. */}
@@ -800,41 +963,28 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
             </Box>
           )}
 
-          <PrStatusBar
-            // Keyed so an action error on one conversation's bar does not follow the user to the next.
-            key={activeId ?? 'none'}
-            state={pullRequest}
-            onDismiss={() =>
-              activeId ? window.b4m.pullRequests.dismiss(activeId) : Promise.resolve({ ok: true as const })
-            }
-            onRefresh={() => activeId && void window.b4m.pullRequests.refresh(activeId)}
-            onSetOption={(option, enabled) =>
-              activeId
-                ? window.b4m.pullRequests.setOption(activeId, option, enabled)
-                : Promise.resolve({ ok: false as const, error: 'No conversation is open.' })
-            }
-            onOpenLink={openInBrowserPane}
-          />
-
           <SpawnSuggestionTray
             suggestions={spawnSuggestions.suggestions}
-            onStart={spawnSuggestions.start}
+            onStart={onStartSuggestion}
             onDismiss={spawnSuggestions.dismiss}
           />
 
-          {/* Every Code session, bound or not. The chips are how a project is chosen, so gating
-            them on one already being chosen is what made them unreachable. */}
-          {conversation.session?.mode === 'code' && (
-            <SessionChips
-              project={conversation.session.project ?? null}
-              {...(conversation.session.grantedDirectories
-                ? { grantedDirectories: conversation.session.grantedDirectories }
-                : {})}
-              binding={conversation.project}
-              settledTurns={conversation.settledTurns}
-              inUse={conversation.messages.length > 0}
-            />
-          )}
+          {/* After first use, an unbound session or a hidden panel error still needs these controls
+            above the composer. Empty Code sessions render them in the transcript instead. */}
+          {conversation.session?.mode === 'code' &&
+            !initialCodeSetup &&
+            (!conversation.session.project || bindingErrorHidden) && (
+              <SessionChips
+                project={conversation.session.project ?? null}
+                {...(conversation.session.grantedDirectories
+                  ? { grantedDirectories: conversation.session.grantedDirectories }
+                  : {})}
+                binding={conversation.project}
+                settledTurns={conversation.settledTurns}
+                inUse={conversation.messages.length > 0}
+                preparing={conversation.preparing !== null}
+              />
+            )}
           {conversation.session && conversation.session.mode !== 'code' && (
             <GrantedFolderChips
               directories={conversation.session.grantedDirectories ?? []}

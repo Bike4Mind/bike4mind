@@ -28,3 +28,9 @@ describe('CliCompletionRequestAction options.tools', () => {
     expect(CliCompletionRequestAction.parse(request(tools)).options?.tools).toEqual(tools);
   });
 });
+
+describe('CliCompletionRequestAction messages', () => {
+  it('rejects an empty messages array', () => {
+    expect(CliCompletionRequestAction.safeParse({ ...request([]), messages: [] }).success).toBe(false);
+  });
+});
