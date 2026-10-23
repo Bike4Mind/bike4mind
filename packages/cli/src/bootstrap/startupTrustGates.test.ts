@@ -91,4 +91,9 @@ describe('hostInertNotice', () => {
     expect(notice).toContain('/work/repo');
     expect(notice).toContain('/trust folder');
   });
+
+  it('escapes control bytes in the root, like the trust prompt it replaces', () => {
+    const notice = hostInertNotice('/work/\x1b[2Jrepo');
+    expect(notice).not.toContain('\x1b');
+  });
 });

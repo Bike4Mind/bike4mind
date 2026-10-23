@@ -5,6 +5,8 @@
  * Kept pure (no Ink, no ConfigStore) so the decision is testable without rendering the app.
  */
 
+import { escapeTerminalControlChars } from '../utils/sanitizeTerminalText.js';
+
 /**
  * The B4M_* variables bin/bike4mind-cli.mjs sets from the claude-compatible host flags
  * (--mcp-config, --append-system-prompt, --allowedTools, --settings, --session-id, --resume).
@@ -73,10 +75,13 @@ export function shouldPromptMcpApproval(input: McpApprovalGateInput): boolean {
   return input.pendingCount > 0 && !input.alreadyResolved && input.isTty && !input.hostLaunch;
 }
 
-/** The one-line notice printed when a host launch leaves an untrusted folder's config inert. */
+/**
+ * The one-line notice printed when a host launch leaves an untrusted folder's config inert. The path
+ * is escaped like the trust prompt it replaces, since a directory name can carry control bytes.
+ */
 export function hostInertNotice(projectRoot: string): string {
   return (
-    `Project config in ${projectRoot} left inert (host launch with a queued prompt; no trust prompt shown). ` +
+    `Project config in ${escapeTerminalControlChars(projectRoot)} left inert (host launch with a queued prompt; no trust prompt shown). ` +
     'Run /trust folder to trust it.'
   );
 }
