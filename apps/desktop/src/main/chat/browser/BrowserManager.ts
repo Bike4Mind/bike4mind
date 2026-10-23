@@ -7,6 +7,7 @@ import {
   type WebContents,
 } from 'electron';
 import type { CookieImportState } from '@shared/browserCookies';
+import { browserSnapshotSchema, type BrowserSnapshot } from '@shared/browserPage';
 import type { ChatMedia } from '@shared/chat';
 import { browserTabShortcut, MAX_BROWSER_TABS, type BrowserTabShortcut } from '@shared/browserTabs';
 import { normalizeUrl } from '@shared/browserUrl';
@@ -28,7 +29,6 @@ import {
   SNAPSHOT_PAGE,
   type ElementOutcome,
   type ScrollTarget,
-  type SnapshotResult,
 } from './pageScripts';
 
 /**
@@ -464,8 +464,9 @@ class ElectronPage implements BrowserPage {
     history.goBack();
   }
 
-  async snapshot(maxChars: number, inView = false): Promise<SnapshotResult> {
-    return this.script<SnapshotResult>(pageCall(SNAPSHOT_PAGE, maxChars, inView), 'Reading the page');
+  async snapshot(maxChars: number, inView = false): Promise<BrowserSnapshot> {
+    const snapshot = await this.script<unknown>(pageCall(SNAPSHOT_PAGE, maxChars, inView), 'Reading the page');
+    return browserSnapshotSchema.parse(snapshot);
   }
 
   async scroll(target: ScrollTarget): Promise<string> {

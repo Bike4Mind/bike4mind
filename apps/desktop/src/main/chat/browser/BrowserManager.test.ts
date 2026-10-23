@@ -224,7 +224,16 @@ describe('BrowserManager page deadlines', () => {
 
   it('stops a load holding a snapshot past the deadline, which lets the snapshot run', async () => {
     const page = await openPage();
-    const snap = { url: 'u', title: 't', text: 'partial page', truncated: false };
+    const model = {
+      url: 'u',
+      title: 't',
+      capturedAt: '2026-10-24T12:00:00.000Z',
+      blocks: [],
+      actions: [],
+      claims: [],
+      truncated: false,
+    };
+    const snap = { url: 'u', title: 't', text: 'partial page', truncated: false, model };
     contents.script = () => heldBehindLoad(snap);
 
     const reading = page.snapshot(1000);
