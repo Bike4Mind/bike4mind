@@ -183,6 +183,7 @@ describe('hash bridge (parent) navigate handling', () => {
     ['a double-encoded dot-dot segment', `${BASE}/%252e%252e/report.pdf`],
     ['a double-encoded slash', `${BASE}/..%252fapi/report.pdf`],
     ['a double-encoded single dot', `${BASE}/%252e/report.pdf`],
+    ['an encoded percent sign', `${BASE}/files/100%25.pdf`],
     ['an encoded slash', `${BASE}/..%2fapi/report.pdf`],
     ['a backslash', `${BASE}/..\\..\\api`],
     ['an encoded backslash', `${BASE}/..%5c..%5capi`],
@@ -277,6 +278,10 @@ describe('hash bridge (parent) navigate handling', () => {
 });
 
 describe('a rendered file link, end to end through the browser URL parser', () => {
+  afterEach(() => {
+    delete (navigator as { userActivation?: unknown }).userActivation;
+  });
+
   /** Render the link as the server does, click it in the frame, and hand the posted path to the parent. */
   function route(fileName: string): { posted: unknown[]; fetchDownload: ReturnType<typeof vi.fn> } {
     window.history.replaceState(null, '', BASE);
@@ -306,7 +311,6 @@ describe('a rendered file link, end to end through the browser URL parser', () =
     Object.defineProperty(navigator, 'userActivation', { value: { isActive: true }, configurable: true });
     eval(HASH_BRIDGE_JS);
     for (const data of posted) window.dispatchEvent(new MessageEvent('message', { data, source: frame.contentWindow }));
-    delete (navigator as { userActivation?: unknown }).userActivation;
     return { posted, fetchDownload };
   }
 
