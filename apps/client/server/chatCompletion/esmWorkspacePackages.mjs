@@ -13,9 +13,8 @@
  * workspace scope: third-party dual packages keep Node's default resolution. Resolution only runs
  * at module load, so this adds no per-request work.
  *
- * Must stay preloaded wherever server code runs under tsx: the hosted Dockerfile.chatcompletion
- * CMD, infra/chatCompletion.ts's `sst dev` command, and every self-host process via
- * selfhostSstAlias.mjs. server.ts's checkModelCatalogWired logs loudly if it is missing.
+ * Preloaded by every self-host tsx process via selfhostSstAlias.mjs. server.ts's
+ * checkModelCatalogWired logs loudly in any process where the split is still present.
  */
 import Module from 'node:module';
 

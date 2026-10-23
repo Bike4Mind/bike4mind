@@ -374,12 +374,6 @@ describe('ChatCompletion Dockerfile PID 1', () => {
     // An ENTRYPOINT would become PID 1 instead of the CMD, hiding a wrapper.
     expect(dockerfileSource).not.toMatch(/^ENTRYPOINT\b/m);
   });
-
-  it('preloads the hook that keeps one instance per workspace package', () => {
-    const cmdLines = [...dockerfileSource.matchAll(/^CMD\s+(.+)$/gm)].map(m => m[1]);
-    const cmd = JSON.parse(cmdLines[cmdLines.length - 1]) as string[];
-    expect(cmd[cmd.indexOf('./server/chatCompletion/esmWorkspacePackages.mjs') - 1]).toBe('--import');
-  });
 });
 
 describe('checkModelCatalogWired', () => {

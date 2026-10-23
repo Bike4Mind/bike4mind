@@ -241,8 +241,7 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
   // still listens on 8080 (Dockerfile ENV PORT=8080, ALB forwards 80->8080). dev.url must
   // match the local port so the frontend's dispatchQuest reaches the local server.
   dev: {
-    command:
-      'node --import tsx --import ./server/chatCompletion/esmWorkspacePackages.mjs server/chatCompletion/server.ts',
+    command: 'node --import tsx server/chatCompletion/server.ts',
     directory: 'apps/client',
     url: 'http://localhost:8788',
   },

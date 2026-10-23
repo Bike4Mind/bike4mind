@@ -68,6 +68,5 @@ WORKDIR /app/apps/client
 # relay that can exit (or SIGKILL) before the drain in server.ts runs. `pnpm exec tsx`
 # exits on SIGTERM and PID 1 exiting SIGKILLs the namespace; the tsx CLI instead SIGKILLs
 # the script if it doesn't ack SIGTERM within ~30ms, which a blocked event loop never can.
-# Resolves @server/* and @/* from apps/client/tsconfig.json (cwd here). The second --import keeps
-# one instance per @bike4mind/* package (see server/chatCompletion/esmWorkspacePackages.mjs).
-CMD ["node", "--import", "tsx", "--import", "./server/chatCompletion/esmWorkspacePackages.mjs", "server/chatCompletion/server.ts"]
+# Resolves @server/* and @/* from apps/client/tsconfig.json (cwd here).
+CMD ["node", "--import", "tsx", "server/chatCompletion/server.ts"]
