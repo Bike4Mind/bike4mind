@@ -97,9 +97,28 @@ describe('page scripts', () => {
     expect(again.model.actions.map(action => action.ref)).toEqual(refs);
   });
 
+  it.each(['9007199254740992', '9007199254740990'])('handles page-authored ref %s without overflow', ref => {
+    inPage(`document.querySelector('input').setAttribute('data-b4m-ref', '${ref}');`);
+    const snap = run<SnapshotResult>(SNAPSHOT_PAGE, 10_000);
+    const refs = snap.model.actions.map(action => action.ref);
+    expect(new Set(refs).size).toBe(refs.length);
+    expect(refs.every(ref => Number.isSafeInteger(Number(ref)))).toBe(true);
+  });
+
+  it.each([
+    ['text', 'type'], ['email', 'type'], ['password', 'type'],
+    ['checkbox', 'toggle'], ['radio', 'toggle'],
+    ['button', 'click'], ['submit', 'click'], ['reset', 'click'], ['image', 'click'], ['file', 'click'],
+  ])('models input[%s] as a %s action', (inputType, kind) => {
+    inPage(`document.body.innerHTML = '<input type="${inputType}" aria-label="Control">';`);
+    const snap = run<SnapshotResult>(SNAPSHOT_PAGE, 10_000);
+    expect(snap.model.actions).toEqual([expect.objectContaining({ kind, label: 'Control' })]);
+  });
+
   it('stops at the size limit and says so', () => {
     const snap = run<SnapshotResult>(SNAPSHOT_PAGE, 40);
     expect(snap.truncated).toBe(true);
+    expect(snap.model.truncated).toBe(true);
     expect(snap.text.length).toBeLessThanOrEqual(40);
   });
 
