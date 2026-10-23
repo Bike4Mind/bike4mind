@@ -23,13 +23,20 @@ import {
 } from '@bike4mind/database';
 import {
   AdminSettings,
+  EmailJob,
   Organization,
   SlackDevWorkspace,
+  emailJobRepository,
   organizationRepository,
   scopedSettingsRepository,
   slackDevWorkspaceRepository,
 } from '@bike4mind/database/infra';
-import { CreditHolderType } from '@bike4mind/common';
+import {
+  CreditHolderType,
+  EmailCategory,
+  EmailJobOverallStatus,
+  EmailJobStatus,
+} from '@bike4mind/common';
 import {
   adminAuditService,
   authSessionService,
@@ -37,6 +44,7 @@ import {
   mfaService,
   scopedSettingsService,
 } from '@bike4mind/services';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -333,6 +341,84 @@ describe('strict admin audit writes roll back the action on a real replica set',
       expect(await PasskeyCredentialModel.countDocuments({ userId: target.id })).toBe(1);
       expect(await TrustedDeviceModel.countDocuments({ userId: target.id })).toBe(1);
       expect((await User.findById(target.id).lean())?.mfa?.totpEnabled).toBe(true);
+    });
+  });
+
+  describe('email job claims', () => {
+    const seedJob = (overallStatus = EmailJobOverallStatus.DRAFT) =>
+      EmailJob.create({
+        name: 'Launch',
+        templateId: 'tpl-1',
+        category: EmailCategory.MARKETING,
+        createdBy: 'admin-1',
+        status: EmailJobStatus.DRAFT,
+        overallStatus,
+      });
+
+    const jobState = async (id: string) => {
+      const job = await EmailJob.findById(id).lean();
+      return {
+        status: job?.status,
+        overallStatus: job?.overallStatus,
+        lastSentAt: job?.lastSentAt,
+        startedBy: job?.startedBy,
+      };
+    };
+
+    it('a failed audit write leaves a send claim uncommitted', async () => {
+      const job = await seedJob(EmailJobOverallStatus.COMPLETE);
+      const before = await jobState(job.id);
+
+      await expect(
+        withTransaction(async () => {
+          await emailJobRepository.claimForSending(job.id, { lastSentAt: new Date(), lastSentBy: 'admin-1' });
+          await record('email.job.sent', failingStore, job.id);
+        })
+      ).rejects.toThrow('audit store unavailable');
+
+      expect(await jobState(job.id)).toEqual(before);
+    });
+
+    it('a failed audit write leaves a start claim uncommitted', async () => {
+      const job = await seedJob();
+
+      await expect(
+        withTransaction(async () => {
+          await emailJobRepository.claimForStart(job.id, { startedBy: 'admin-1' });
+          await record('email.job.started', failingStore, job.id);
+        })
+      ).rejects.toThrow('audit store unavailable');
+
+      expect(await jobState(job.id)).toMatchObject({ status: EmailJobStatus.DRAFT, startedBy: undefined });
+    });
+
+    it('commits a start claim with its audit entry and refuses a second claim', async () => {
+      const job = await seedJob();
+
+      const claim = () =>
+        withTransaction(async () => {
+          const claimed = await emailJobRepository.claimForStart(job.id, { startedBy: 'admin-1' });
+          if (claimed) await record('email.job.started', adminAuditLogRepository, job.id);
+          return claimed;
+        });
+
+      expect(await claim()).not.toBeNull();
+      expect(await claim()).toBeNull();
+      expect(await jobState(job.id)).toMatchObject({ status: EmailJobStatus.QUEUED, startedBy: 'admin-1' });
+      expect(await AdminAuditLogModel.countDocuments({ action: 'email.job.started' })).toBe(1);
+    });
+
+    it('an error thrown after a send claim restores the previous overall status', async () => {
+      const job = await seedJob(EmailJobOverallStatus.COMPLETE);
+
+      await expect(
+        withTransaction(async () => {
+          await emailJobRepository.claimForSending(job.id, { lastSentAt: new Date(), lastSentBy: 'admin-1' });
+          throw new BadRequestError('Test mode requires at least one test recipient email address.');
+        })
+      ).rejects.toThrow('Test mode requires');
+
+      expect(await jobState(job.id)).toMatchObject({ overallStatus: EmailJobOverallStatus.COMPLETE });
     });
   });
 });
