@@ -66,7 +66,7 @@ describe('POST /api/admin/emergency-login', () => {
   });
 
   describe('admin audit', () => {
-    it('records user.emergency_login.succeeded with the matched account as actor and target', async () => {
+    it('records user.emergency_login.challenged with the matched account as actor and target', async () => {
       const { res } = await callHandler();
 
       expect(res.statusCode).toBe(200);
@@ -75,7 +75,7 @@ describe('POST /api/admin/emergency-login', () => {
         expect.anything(),
         { kind: 'user', scope: 'platform', userId: 'u1' },
         expect.objectContaining({
-          action: 'user.emergency_login.succeeded',
+          action: 'user.emergency_login.challenged',
           target: expect.objectContaining({ kind: 'user', id: 'u1' }),
         })
       );

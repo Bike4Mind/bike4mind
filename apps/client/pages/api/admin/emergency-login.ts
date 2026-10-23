@@ -35,14 +35,14 @@ const auditEmergencyLogin = (
   req: Parameters<typeof recordAdminActionForActor>[0],
   account: MatchedAccount,
   outcome:
-    | { action: 'user.emergency_login.succeeded' }
+    | { action: 'user.emergency_login.challenged' }
     | { action: 'user.emergency_login.denied'; reason: EmergencyLoginDenialReason }
 ) =>
   recordAdminActionForActor(req, toUserActor(account, 'platform'), {
     action: outcome.action,
     target: { kind: 'user', id: account.id, displayName: account.email ?? account.username },
     summary:
-      outcome.action === 'user.emergency_login.succeeded'
+      outcome.action === 'user.emergency_login.challenged'
         ? 'emergency login password accepted, second factor challenged'
         : `emergency login denied (${outcome.reason})`,
     details: outcome.action === 'user.emergency_login.denied' ? { reason: outcome.reason } : undefined,
@@ -140,7 +140,7 @@ const handler = baseApi({ auth: false })
       };
 
       // Written before the pending token leaves the server: a failed audit write denies the login.
-      await auditEmergencyLogin(req, user, { action: 'user.emergency_login.succeeded' });
+      await auditEmergencyLogin(req, user, { action: 'user.emergency_login.challenged' });
 
       res.setHeader('X-Emergency-Access', 'true');
       res.setHeader('X-Access-Timestamp', new Date().toISOString());
