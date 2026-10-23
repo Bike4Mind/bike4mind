@@ -5925,7 +5925,7 @@ export function registerContributedSettings(
   return result;
 }
 
-/** Tests only: drops every contributed definition. */
+/** @internal Tests only: drops every contributed definition. */
 export function resetContributedSettings(): void {
   contributedSettings.clear();
 }
