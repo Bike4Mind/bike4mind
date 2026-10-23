@@ -75,11 +75,14 @@ export function normalizeBflOpenApi(payload: unknown): DiscoveredModel[] {
       modelId: id,
       patch: compact<Partial<ModelRecord>>({
         id,
-        vendor: 'bfl',
+        // The catalog's own vendor spelling (inferVendor, @bike4mind/common), so discovery does
+        // not propose a rename of every seeded BFL model on every run.
+        vendor: 'black-forest-labs',
         backend: ModelBackend.BFL,
         type: 'image',
-        // Image models have no token context; 0 is the catalog's "not applicable".
-        contextWindow: 0,
+        // No contextWindow: there is no token context to report, and the 0 that means "not
+        // applicable" would still claim the `limits` group, burying the real budget a curated
+        // record carries. planCatalogWrites fills the 0 an introduction needs without claiming it.
         supportsImageVariation: IMAGE_INPUT_PROPERTIES.some(property => properties.includes(property)),
         supportsSafetyTolerance: properties.includes('safety_tolerance'),
       }),

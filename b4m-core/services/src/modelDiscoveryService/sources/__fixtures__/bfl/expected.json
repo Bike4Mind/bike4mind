@@ -3,10 +3,9 @@
     "modelId": "flux-2-flex",
     "patch": {
       "id": "flux-2-flex",
-      "vendor": "bfl",
+      "vendor": "black-forest-labs",
       "backend": "bfl",
       "type": "image",
-      "contextWindow": 0,
       "supportsImageVariation": true,
       "supportsSafetyTolerance": true
     }
@@ -15,10 +14,9 @@
     "modelId": "flux-2-klein-4b",
     "patch": {
       "id": "flux-2-klein-4b",
-      "vendor": "bfl",
+      "vendor": "black-forest-labs",
       "backend": "bfl",
       "type": "image",
-      "contextWindow": 0,
       "supportsImageVariation": true,
       "supportsSafetyTolerance": true
     }
@@ -27,10 +25,9 @@
     "modelId": "flux-2-klein-9b",
     "patch": {
       "id": "flux-2-klein-9b",
-      "vendor": "bfl",
+      "vendor": "black-forest-labs",
       "backend": "bfl",
       "type": "image",
-      "contextWindow": 0,
       "supportsImageVariation": true,
       "supportsSafetyTolerance": true
     }
@@ -39,10 +36,9 @@
     "modelId": "flux-2-klein-9b-preview",
     "patch": {
       "id": "flux-2-klein-9b-preview",
-      "vendor": "bfl",
+      "vendor": "black-forest-labs",
       "backend": "bfl",
       "type": "image",
-      "contextWindow": 0,
       "supportsImageVariation": true,
       "supportsSafetyTolerance": true
     }
@@ -51,10 +47,9 @@
     "modelId": "flux-2-max",
     "patch": {
       "id": "flux-2-max",
-      "vendor": "bfl",
+      "vendor": "black-forest-labs",
       "backend": "bfl",
       "type": "image",
-      "contextWindow": 0,
       "supportsImageVariation": true,
       "supportsSafetyTolerance": true
     }
@@ -63,10 +58,9 @@
     "modelId": "flux-2-pro",
     "patch": {
       "id": "flux-2-pro",
-      "vendor": "bfl",
+      "vendor": "black-forest-labs",
       "backend": "bfl",
       "type": "image",
-      "contextWindow": 0,
       "supportsImageVariation": true,
       "supportsSafetyTolerance": true
     }
@@ -75,10 +69,9 @@
     "modelId": "flux-2-pro-preview",
     "patch": {
       "id": "flux-2-pro-preview",
-      "vendor": "bfl",
+      "vendor": "black-forest-labs",
       "backend": "bfl",
       "type": "image",
-      "contextWindow": 0,
       "supportsImageVariation": true,
       "supportsSafetyTolerance": true
     }
@@ -87,10 +80,9 @@
     "modelId": "flux-dev",
     "patch": {
       "id": "flux-dev",
-      "vendor": "bfl",
+      "vendor": "black-forest-labs",
       "backend": "bfl",
       "type": "image",
-      "contextWindow": 0,
       "supportsImageVariation": true,
       "supportsSafetyTolerance": true
     }
@@ -99,10 +91,9 @@
     "modelId": "flux-kontext-pro",
     "patch": {
       "id": "flux-kontext-pro",
-      "vendor": "bfl",
+      "vendor": "black-forest-labs",
       "backend": "bfl",
       "type": "image",
-      "contextWindow": 0,
       "supportsImageVariation": true,
       "supportsSafetyTolerance": true
     }
@@ -111,10 +102,9 @@
     "modelId": "flux-pro-1.1",
     "patch": {
       "id": "flux-pro-1.1",
-      "vendor": "bfl",
+      "vendor": "black-forest-labs",
       "backend": "bfl",
       "type": "image",
-      "contextWindow": 0,
       "supportsImageVariation": true,
       "supportsSafetyTolerance": true
     }
@@ -123,10 +113,9 @@
     "modelId": "flux-pro-1.1-ultra",
     "patch": {
       "id": "flux-pro-1.1-ultra",
-      "vendor": "bfl",
+      "vendor": "black-forest-labs",
       "backend": "bfl",
       "type": "image",
-      "contextWindow": 0,
       "supportsImageVariation": true,
       "supportsSafetyTolerance": true
     }
@@ -135,10 +124,9 @@
     "modelId": "flux-tools/vto-v2",
     "patch": {
       "id": "flux-tools/vto-v2",
-      "vendor": "bfl",
+      "vendor": "black-forest-labs",
       "backend": "bfl",
       "type": "image",
-      "contextWindow": 0,
       "supportsImageVariation": true,
       "supportsSafetyTolerance": true
     }
