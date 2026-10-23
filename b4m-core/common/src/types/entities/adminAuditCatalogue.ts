@@ -114,6 +114,24 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'identity.sso_provider.updated': { category: 'identity', severity: 'critical', write: 'strict' },
   'identity.sso_provider.deleted': { category: 'identity', severity: 'critical', write: 'strict' },
 
+  // Handler coverage: email and messaging
+  // Job entries record the claim and enqueue request, not delivery.
+  'email.job.started': { category: 'support', severity: 'critical', write: 'strict' },
+  'email.job.sent': { category: 'support', severity: 'critical', write: 'strict' },
+  'email.job.test_sent': { category: 'support', severity: 'notice', write: 'strict' },
+  'email.job.created': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'email.job.updated': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'email.job.cloned': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'email.job.scheduled': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'email.job.cancelled': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'email.template.created': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'email.template.updated': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'email.template.deleted': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'email.template.cloned': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'email.template.test_sent': { category: 'support', severity: 'info', write: 'bestEffort' },
+  'support.inbox.message_sent': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'support.pr_report.sent': { category: 'support', severity: 'info', write: 'bestEffort' },
+
   'audit.exported': { category: 'support', severity: 'info', write: 'bestEffort' },
 } as const satisfies Record<string, AdminAuditCatalogueEntry>;
 
