@@ -104,7 +104,7 @@ const CreateTeamModal = () => {
   const isSubmitting = isDevelopment ? createTeamDev.isPending : subscribeTeamPlan.isPending;
 
   return (
-    <Modal open={isOpen} onClose={handleClose} className="create-team-modal">
+    <Modal open={isOpen} onClose={handleClose} className="create-team-modal" data-testid="create-team-modal">
       <ModalDialog sx={{ gap: '30px', width: '100%' }} maxWidth="460px" className="create-team-modal-dialog">
         <ModalClose className="create-team-modal-close" />
 
@@ -120,6 +120,7 @@ const CreateTeamModal = () => {
             onChange={e => setTeamName(e.target.value)}
             disabled={isLoading || hasError}
             className="create-team-name-input"
+            slotProps={{ input: { 'data-testid': 'create-team-name-input' } }}
           />
         </FormControl>
 
@@ -172,7 +173,13 @@ const CreateTeamModal = () => {
         )}
 
         <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem' }} className="create-team-actions">
-          <Button variant="outlined" color="neutral" onClick={handleClose} className="create-team-cancel-button">
+          <Button
+            variant="outlined"
+            color="neutral"
+            onClick={handleClose}
+            className="create-team-cancel-button"
+            data-testid="create-team-cancel-btn"
+          >
             Cancel
           </Button>
           <Button

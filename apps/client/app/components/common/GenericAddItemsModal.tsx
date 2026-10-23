@@ -57,6 +57,7 @@ export interface GenericAddItemsModalProps<T> {
   value?: string[];
   showButtonBadge?: boolean;
   searchMinLength?: number;
+  triggerTestId?: string;
 }
 
 function GenericAddItemsModal<T>({
@@ -95,6 +96,7 @@ function GenericAddItemsModal<T>({
   value,
   showButtonBadge = true,
   searchMinLength,
+  triggerTestId,
 }: GenericAddItemsModalProps<T>) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -157,6 +159,7 @@ function GenericAddItemsModal<T>({
     <>
       <Button
         className="generic-add-items-modal-trigger"
+        data-testid={triggerTestId}
         sx={{
           width: { xs: 'auto', sm: '190px' },
           fontSize: { xs: '0.875rem', sm: '1rem' },
@@ -186,6 +189,7 @@ function GenericAddItemsModal<T>({
       >
         <ModalDialog
           className="generic-add-items-modal-dialog"
+          data-testid="generic-add-items-modal"
           sx={{
             width: responsiveModalWidth,
             maxWidth: '95vw',
@@ -242,6 +246,7 @@ function GenericAddItemsModal<T>({
                         sx={{ width: '100%' }}
                         placeholder={searchPlaceholder}
                         onChange={e => handleSearch(e.target.value)}
+                        slotProps={{ input: { 'data-testid': 'generic-add-items-search-input' } }}
                         startDecorator={<SearchIcon />}
                       />
                     )}
@@ -254,6 +259,7 @@ function GenericAddItemsModal<T>({
                     sx={{ width: '100%', pr: { xs: '15px', sm: '30px' } }}
                     placeholder={searchPlaceholder}
                     onChange={e => handleSearch(e.target.value)}
+                    slotProps={{ input: { 'data-testid': 'generic-add-items-search-input' } }}
                     startDecorator={<SearchIcon />}
                   />
                 )
@@ -273,7 +279,7 @@ function GenericAddItemsModal<T>({
                     const itemId = getItemId(item);
                     const isSelected = selectedIds.includes(itemId);
                     return (
-                      <Box key={itemId} onClick={() => handleItemSelect(itemId)}>
+                      <Box key={itemId} onClick={() => handleItemSelect(itemId)} data-testid="generic-add-items-item">
                         {renderItem(item, isSelected, () => handleItemSelect(itemId))}
                       </Box>
                     );
@@ -331,6 +337,7 @@ function GenericAddItemsModal<T>({
             </Button>
             <Button
               className="generic-add-items-modal-add-button"
+              data-testid="generic-add-items-submit-btn"
               sx={{
                 minWidth: { xs: '100%', sm: '140px' },
                 minHeight: { xs: '36px', sm: '32px' },

@@ -18,6 +18,7 @@ import { AdminPage } from './pages/AdminPage';
 import { TavernPage } from './pages/TavernPage';
 import { DataLakePage } from './pages/DataLakePage';
 import { SkillsPage } from './pages/SkillsPage';
+import { TeamsPage } from './pages/TeamsPage';
 import { getTestUsers } from './helpers/test-users';
 
 type VerifyAnswersOptions = {
@@ -44,6 +45,7 @@ type TestFixtures = {
   tavernPage: TavernPage;
   dataLakePage: DataLakePage;
   skillsPage: SkillsPage;
+  teamsPage: TeamsPage;
   loginAsAdmin: () => Promise<void>;
   loginAsUser: (user: SpecAuth) => Promise<void>;
   /** Mutable per-test identity the page.goto override authenticates as; loginAs* rewrites `current`
@@ -182,6 +184,10 @@ export const test = base.extend<TestFixtures>({
 
   skillsPage: async ({ page }, use) => {
     await use(new SkillsPage(page));
+  },
+
+  teamsPage: async ({ page }, use) => {
+    await use(new TeamsPage(page));
   },
 
   loginAsAdmin: async ({ page, authState }, use) => {
