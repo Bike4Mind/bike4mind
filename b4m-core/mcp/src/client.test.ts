@@ -28,10 +28,30 @@ describe('MCPClient (streamable-HTTP transport)', () => {
   });
 
   /** Start a stateless streamable-HTTP MCP server exposing a single `echo` tool. */
-  async function startServer(authHeaders: (string | undefined)[]): Promise<string> {
+  async function startServer(authHeaders: (string | undefined)[], toolCalls?: { count: number; fail404: boolean }) {
     httpServer = createServer(async (req, res) => {
       // Record the Authorization header on every request (the assertion target).
       authHeaders.push(req.headers['authorization']);
+      if (toolCalls && req.method === 'POST') {
+        const chunks: Buffer[] = [];
+        for await (const chunk of req) chunks.push(chunk as Buffer);
+        const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { method?: string };
+        if (body.method === 'tools/call') {
+          toolCalls.count++;
+          if (toolCalls.fail404) {
+            res.writeHead(404).end('Not Found');
+            return;
+          }
+        }
+        const server = new McpServer({ name: 'test-server', version: '1.0.0' });
+        server.registerTool('echo', { inputSchema: { msg: z.string() } }, async ({ msg }) => ({
+          content: [{ type: 'text', text: `echo:${msg}` }],
+        }));
+        const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+        await server.connect(transport);
+        await transport.handleRequest(req, res, body);
+        return;
+      }
 
       // Stateless: fresh server + transport per request.
       const server = new McpServer({ name: 'test-server', version: '1.0.0' });
@@ -54,6 +74,18 @@ describe('MCPClient (streamable-HTTP transport)', () => {
     const { port } = httpServer!.address() as AddressInfo;
     return `http://127.0.0.1:${port}/mcp`;
   }
+
+  it('does not retry a 404 from a server that issued no session id', async () => {
+    const toolCalls = { count: 0, fail404: false };
+    const url = await startServer([], toolCalls);
+    const client = new MCPClient({ envVariables: [], name: 'host', url });
+    await client.connectToServer();
+    toolCalls.fail404 = true;
+
+    await expect(client.callTool('echo', { msg: 'x' })).rejects.toThrow(/Not Found/);
+    expect(toolCalls.count).toBe(1);
+    await client.disconnect();
+  });
 
   it('connects over HTTP, sends Bearer token on every request, lists and calls a tool', async () => {
     const authHeaders: (string | undefined)[] = [];
@@ -117,7 +149,18 @@ describe('MCPClient (expired streamable-HTTP session)', () => {
 
   async function startServer() {
     const sessions = new Map<string, StreamableHTTPServerTransport>();
-    const state = { initializeCount: 0, toolCallCount: 0, failToolCallsWith: undefined as number | undefined };
+    const state = {
+      initializeCount: 0,
+      toolCallCount: 0,
+      slowRuns: 0,
+      failToolCallsWith: undefined as number | undefined,
+      failInitializeWith: undefined as number | undefined,
+    };
+    // `slow` signals when it starts running and finishes only when the test releases it.
+    let slowStarted!: () => void;
+    const slowRunning = new Promise<void>(resolve => (slowStarted = resolve));
+    let releaseSlow!: () => void;
+    const slowReleased = new Promise<void>(resolve => (releaseSlow = resolve));
 
     httpServer = createServer(async (req, res) => {
       const body = (await readJson(req)) as { method?: string } | undefined;
@@ -143,6 +186,10 @@ describe('MCPClient (expired streamable-HTTP session)', () => {
         return;
       }
 
+      if (state.failInitializeWith) {
+        res.writeHead(state.failInitializeWith).end('down');
+        return;
+      }
       state.initializeCount++;
       const server = new McpServer({ name: 'test-server', version: '1.0.0' });
       server.registerTool(
@@ -150,6 +197,12 @@ describe('MCPClient (expired streamable-HTTP session)', () => {
         { description: 'Echoes its input', inputSchema: { msg: z.string() } },
         async ({ msg }) => ({ content: [{ type: 'text', text: `echo:${msg}` }] })
       );
+      server.registerTool('slow', { description: 'Runs until released', inputSchema: {} }, async () => {
+        state.slowRuns++;
+        slowStarted();
+        await slowReleased;
+        return { content: [{ type: 'text', text: 'slow' }] };
+      });
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
         onsessioninitialized: id => {
@@ -170,7 +223,10 @@ describe('MCPClient (expired streamable-HTTP session)', () => {
       await Promise.all(transports.map(t => t.close()));
     };
 
-    return { url: `http://127.0.0.1:${port}/mcp`, state, expireSessions };
+    /** Forget every session but leave open streams alone, so a response already being computed still arrives. */
+    const forgetSessions = () => sessions.clear();
+
+    return { url: `http://127.0.0.1:${port}/mcp`, state, expireSessions, forgetSessions, slowRunning, releaseSlow };
   }
 
   async function connect(url: string) {
@@ -196,7 +252,7 @@ describe('MCPClient (expired streamable-HTTP session)', () => {
     expect(state.initializeCount).toBe(2);
     // The failed POST plus its retry.
     expect(state.toolCallCount).toBe(3);
-    expect(mcp.tools.map(t => t.name)).toEqual(['echo']);
+    expect(mcp.tools.map(t => t.name)).toEqual(['echo', 'slow']);
     expect(errors).not.toHaveBeenCalled();
 
     // The new session keeps working without another initialize.
@@ -224,6 +280,62 @@ describe('MCPClient (expired streamable-HTTP session)', () => {
     await expect(mcp.callTool('echo', { msg: 'x' })).rejects.toThrow(/boom/);
     expect(state.toolCallCount).toBe(1);
     expect(state.initializeCount).toBe(1);
+  });
+
+  it('throws when the retry on the new session gets a 404 too, without retrying again', async () => {
+    const { url, state, expireSessions } = await startServer();
+    const mcp = await connect(url);
+    await expireSessions();
+    state.failToolCallsWith = 404;
+
+    await expect(mcp.callTool('echo', { msg: 'x' })).rejects.toThrow(/boom/);
+    // The first call and one retry, on one new session.
+    expect(state.toolCallCount).toBe(2);
+    expect(state.initializeCount).toBe(2);
+  });
+
+  it('tries again on the next call when opening the new session failed', async () => {
+    const { url, state, expireSessions } = await startServer();
+    const mcp = await connect(url);
+    await expireSessions();
+    state.failInitializeWith = 503;
+
+    await expect(mcp.callTool('echo', { msg: 'down' })).rejects.toThrow();
+    expect(state.initializeCount).toBe(1);
+
+    state.failInitializeWith = undefined;
+    expect(textOf(await mcp.callTool('echo', { msg: 'up' }))).toBe('echo:up');
+    expect(state.initializeCount).toBe(2);
+  });
+
+  it('shares one renewal between concurrent calls after a failed one', async () => {
+    const { url, state, expireSessions } = await startServer();
+    const mcp = await connect(url);
+    await expireSessions();
+    state.failInitializeWith = 503;
+    await expect(mcp.callTool('echo', { msg: 'down' })).rejects.toThrow();
+    state.failInitializeWith = undefined;
+
+    const results = await Promise.all([mcp.callTool('echo', { msg: 'a' }), mcp.callTool('echo', { msg: 'b' })]);
+
+    expect(results.map(textOf)).toEqual(['echo:a', 'echo:b']);
+    expect(state.initializeCount).toBe(2);
+  });
+
+  it('does not cut off or re-run a call in flight when another call renews the session', async () => {
+    const { url, state, forgetSessions, slowRunning, releaseSlow } = await startServer();
+    const mcp = await connect(url);
+
+    const slow = mcp.callTool('slow', {});
+    await slowRunning;
+    // The server forgets the session while `slow` is running; the next call gets the 404 and renews.
+    forgetSessions();
+    expect(textOf(await mcp.callTool('echo', { msg: 'b' }))).toBe('echo:b');
+    expect(state.initializeCount).toBe(2);
+
+    releaseSlow();
+    expect(textOf(await slow)).toBe('slow');
+    expect(state.slowRuns).toBe(1);
   });
 });
 
