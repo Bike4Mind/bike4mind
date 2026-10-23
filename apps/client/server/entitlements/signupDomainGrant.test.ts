@@ -32,7 +32,7 @@ vi.mock('@server/subscriptions/grantIndividualAdminSubscription', () => ({
 
 const mockEntitlementsForEmail = vi.fn();
 const mockSignupCreditsForKeys = vi.fn();
-vi.mock('@bike4mind/server-utils/lib/entitlements/registry', () => ({
+vi.mock('@client/lib/entitlements/registry', () => ({
   entitlementsForEmail: (...a: unknown[]) => mockEntitlementsForEmail(...a),
   signupCreditsForKeys: (...a: unknown[]) => mockSignupCreditsForKeys(...a),
 }));

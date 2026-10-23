@@ -8,7 +8,7 @@ import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { logEvent } from '@server/utils/analyticsLog';
 import { AuthEvents, ConflictError } from '@bike4mind/common';
 import { logAuditEvent, EmailAuditEvents, calculateTokenAge } from '@server/utils/auditLog';
-import { entitlementsForEmail } from '@bike4mind/server-utils/lib/entitlements/registry';
+import { entitlementsForEmail } from '@client/lib/entitlements/registry';
 import { pushEntitlementInvalidation } from '@server/entitlements/invalidate';
 import { isEligibleForFreeCredits, releaseVerifiedPendingFreeCredits } from '@server/auth/emailVerifiedGrants';
 import { z } from 'zod';
