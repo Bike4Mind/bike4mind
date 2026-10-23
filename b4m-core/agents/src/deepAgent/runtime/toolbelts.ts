@@ -8,6 +8,8 @@
  * builder needs db/storage and is wired by the host, keeping this module pure
  * and testable.
  */
+import { z } from 'zod';
+
 export interface ToolbeltProfile {
   role: string;
   description: string;
@@ -76,25 +78,32 @@ export const TOOLBELT_PROFILES: Record<string, ToolbeltProfile> = {
 // contribution can add a role but never redefine a built-in one.
 const contributedToolbelts = new Map<string, ToolbeltProfile>();
 
-// The act step reads these on every wake, so a profile missing one would fail each wake of its role.
-function isToolbeltShaped(profile: ToolbeltProfile): boolean {
-  return (
-    typeof profile.role === 'string' &&
-    profile.role.length > 0 &&
-    Array.isArray(profile.enabledToolNames) &&
-    profile.enabledToolNames.every(name => typeof name === 'string') &&
-    Number.isInteger(profile.maxIterations) &&
-    profile.maxIterations > 0 &&
-    Number.isFinite(profile.maxTotalTokens) &&
-    Number.isFinite(profile.temperature) &&
-    (profile.codeExecute === undefined || typeof profile.codeExecute === 'boolean')
-  );
+const toolbeltRuntimeSchema = z.object({
+  role: z.string().min(1),
+  enabledToolNames: z.array(z.string()),
+  maxIterations: z.number().int().positive(),
+  maxTotalTokens: z.number().positive(),
+  temperature: z.number(),
+  codeExecute: z.boolean().optional(),
+});
+
+function isToolbeltShaped(profile: unknown): boolean {
+  return toolbeltRuntimeSchema.safeParse(profile).success;
 }
 
 // A host module re-evaluated in the same process (dev HMR, `vi.resetModules`) registers the same
 // profiles again; that is not a collision worth reporting.
 function isSameToolbelt(a: ToolbeltProfile, b: ToolbeltProfile): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
+  return (
+    a.role === b.role &&
+    a.description === b.description &&
+    a.maxIterations === b.maxIterations &&
+    a.maxTotalTokens === b.maxTotalTokens &&
+    a.temperature === b.temperature &&
+    a.codeExecute === b.codeExecute &&
+    a.enabledToolNames.length === b.enabledToolNames.length &&
+    a.enabledToolNames.every((name, index) => name === b.enabledToolNames[index])
+  );
 }
 
 /**
@@ -116,7 +125,7 @@ export function registerToolbelts(profiles: readonly ToolbeltProfile[]): { taken
       taken.push(profile.role);
       continue;
     }
-    contributedToolbelts.set(profile.role, profile);
+    contributedToolbelts.set(profile.role, { ...profile, enabledToolNames: [...profile.enabledToolNames] });
   }
   return { taken, invalid };
 }

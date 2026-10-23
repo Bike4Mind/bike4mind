@@ -340,14 +340,15 @@ export interface IAgentExecution {
   enableArtifacts?: boolean;
   /**
    * The orchestration profile's deniedTools, persisted when the profile is resolved (new
-   * executions; the surface-scoped optimizer profile re-resolves every invocation and does
-   * not need this copy). Continuations re-read it because the profile itself does not
+   * executions). Continuations re-read it because a pinned profile itself does not
    * survive a Lambda handoff - `startPayload.agentId` is gone on a resume, so a persisted
    * agent's denials would otherwise evaporate from the first permission card or handoff.
    * Same durability pattern as `enableLattice` above. Distinct from `deniedTools` below,
    * which is the per-execution user-approval denial list.
    */
   profileDeniedTools?: string[];
+  /** Whether the start payload pinned an agent; absent on executions predating this marker. */
+  profileIsPinned?: boolean;
   /**
    * The toolbelt names the first invocation resolved (profile + payload, ambient Smart Tools
    * included, denials already subtracted). Continuations replay this instead of recomputing,
@@ -766,6 +767,7 @@ const AgentExecutionSchema = new mongoose.Schema(
     // `default: undefined` so an absent field stays absent (a bare [String] would
     // materialize [] on every doc, indistinguishable from "profile denies nothing").
     profileDeniedTools: { type: [String], default: undefined },
+    profileIsPinned: { type: Boolean },
     resolvedEnabledTools: { type: [String], default: undefined },
     scopeDeniedTools: { type: [String], default: undefined },
     apiKeyId: { type: String },
@@ -1476,10 +1478,13 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
     await this.model.updateOne({ _id: id }, { $set: { connectionId } });
   }
 
-  /** Written once when the orchestration profile resolves; continuations re-read it
+  /** Written atomically with profile provenance when the orchestration profile resolves; continuations re-read it
    *  (see IAgentExecution.profileDeniedTools). */
-  async persistProfileDeniedTools(id: string, profileDeniedTools: string[]): Promise<void> {
-    await this.model.updateOne({ _id: id }, { $set: { profileDeniedTools } });
+  async persistProfileDeniedTools(id: string, profileDeniedTools: string[], profileIsPinned?: boolean): Promise<void> {
+    await this.model.updateOne(
+      { _id: id },
+      { $set: { profileDeniedTools, ...(profileIsPinned !== undefined ? { profileIsPinned } : {}) } }
+    );
   }
 
   /** Written once on the first invocation; continuations re-read it

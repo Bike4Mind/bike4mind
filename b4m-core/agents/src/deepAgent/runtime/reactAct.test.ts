@@ -129,6 +129,45 @@ describe('resolveToolbeltProfile', () => {
     expect(profile.enabledToolNames).not.toContain('bash_execute');
   });
 
+  it.each([0, -1])('rejects a nonpositive contributed token ceiling: %s', maxTotalTokens => {
+    const role = `invalid-token-budget-${maxTotalTokens}`;
+    expect(registerToolbelts([{ ...TOOLBELT_PROFILES[DEFAULT_TOOLBELT_ROLE], role, maxTotalTokens }])).toEqual({
+      taken: [],
+      invalid: 1,
+    });
+    expect(resolveToolbeltProfile(role).role).toBe(DEFAULT_TOOLBELT_ROLE);
+  });
+
+  it('keeps a snapshot of contributed toolbelt settings and tool names', () => {
+    const original = {
+      ...TOOLBELT_PROFILES[DEFAULT_TOOLBELT_ROLE],
+      role: 'snapshot-role',
+      enabledToolNames: ['web_search'],
+      maxIterations: 4,
+    };
+    registerToolbelts([original]);
+    original.role = 'changed-role';
+    original.enabledToolNames.push('bash_execute');
+    original.maxIterations = 999;
+
+    expect(resolveToolbeltProfile('snapshot-role')).toMatchObject({
+      role: 'snapshot-role',
+      enabledToolNames: ['web_search'],
+      maxIterations: 4,
+    });
+    expect(resolveToolbeltProfile('changed-role').role).toBe(DEFAULT_TOOLBELT_ROLE);
+  });
+
+  it('recognizes identical toolbelts independently of property order or unrelated metadata', () => {
+    const original = { ...TOOLBELT_PROFILES[DEFAULT_TOOLBELT_ROLE], role: 'ordered-registration' };
+    registerToolbelts([original]);
+    const reversed = Object.fromEntries(Object.entries(original).reverse()) as unknown as typeof original;
+    const cyclicMetadata: Record<string, unknown> = { bigint: 1n };
+    cyclicMetadata.self = cyclicMetadata;
+
+    expect(registerToolbelts([{ ...reversed, ...{ metadata: cyclicMetadata } }])).toEqual({ taken: [], invalid: 0 });
+  });
+
   it('resolves a contributed role and drops one whose role is taken', () => {
     const contributed = { ...TOOLBELT_PROFILES[DEFAULT_TOOLBELT_ROLE], role: 'contributed-role', maxIterations: 4 };
     const clash = { ...TOOLBELT_PROFILES['paper-repro'], maxIterations: 1 };

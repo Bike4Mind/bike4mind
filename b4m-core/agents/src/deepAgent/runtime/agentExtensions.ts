@@ -10,6 +10,7 @@
  * with a warning, so one bad package cannot take the executor down.
  */
 
+import { z } from 'zod';
 import type { ToolbeltProfile } from './toolbelts';
 
 /**
@@ -151,34 +152,46 @@ interface Stored<T> {
 
 const THOROUGHNESS_LEVELS = ['quick', 'medium', 'very_thorough'] as const;
 
-function isStringList(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every(item => typeof item === 'string');
+const orchestrationProfileSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  allowedTools: z.array(z.string()),
+  deniedTools: z.array(z.string()),
+  maxIterations: z.object({
+    quick: z.number().int().positive(),
+    medium: z.number().int().positive(),
+    very_thorough: z.number().int().positive(),
+  }),
+  defaultThoroughness: z.enum(THOROUGHNESS_LEVELS),
+  isSynthetic: z.boolean(),
+  allowedToolsFromDefaults: z.boolean().optional(),
+  toolsetIsExclusive: z.boolean().optional(),
+  systemPrompt: z.string().optional(),
+  confidenceGateThreshold: z.number().min(0).max(1).optional(),
+});
+
+function isProfileShaped(value: unknown): value is ResolvedOrchestrationProfile {
+  return orchestrationProfileSchema.safeParse(value).success;
 }
 
-// The executor reads these fields straight off the profile, and its iteration ceiling is
-// `maxIterations[defaultThoroughness]`, so a contributed build must supply every one of them.
-function isProfileShaped(value: unknown): value is ResolvedOrchestrationProfile {
-  if (value === null || typeof value !== 'object') return false;
-  const p = value as Partial<ResolvedOrchestrationProfile>;
-  const ceilings = p.maxIterations as Record<string, unknown> | null | undefined;
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
   return (
-    typeof p.id === 'string' &&
-    typeof p.name === 'string' &&
-    isStringList(p.allowedTools) &&
-    isStringList(p.deniedTools) &&
-    ceilings !== null &&
-    typeof ceilings === 'object' &&
-    THOROUGHNESS_LEVELS.every(level => Number.isInteger(ceilings[level]) && (ceilings[level] as number) > 0) &&
-    THOROUGHNESS_LEVELS.includes(p.defaultThoroughness as (typeof THOROUGHNESS_LEVELS)[number]) &&
-    typeof p.isSynthetic === 'boolean' &&
-    (p.allowedToolsFromDefaults === undefined || typeof p.allowedToolsFromDefaults === 'boolean') &&
-    (p.toolsetIsExclusive === undefined || typeof p.toolsetIsExclusive === 'boolean') &&
-    (p.systemPrompt === undefined || typeof p.systemPrompt === 'string') &&
-    (p.confidenceGateThreshold === undefined ||
-      (Number.isFinite(p.confidenceGateThreshold) &&
-        (p.confidenceGateThreshold as number) >= 0 &&
-        (p.confidenceGateThreshold as number) <= 1))
+    value !== null &&
+    (typeof value === 'object' || typeof value === 'function') &&
+    typeof (value as { then?: unknown }).then === 'function'
   );
+}
+
+// Callbacks are synchronous, but a malformed async contribution still needs its rejection handled.
+function observeDiscardedResult(value: unknown, logger: AgentExtensionLogger, id: string): boolean {
+  if (!isPromiseLike(value)) return false;
+  void Promise.resolve(value).catch((error: unknown) => {
+    logger.warn(`[agent-extensions] discarded asynchronous result from "${id}" rejected`, {
+      id,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+  return true;
 }
 
 export function createAgentExtensionRegistry<TTools, TState>(
@@ -213,7 +226,10 @@ export function createAgentExtensionRegistry<TTools, TState>(
         surface: entry.surface,
       });
     }
-    profilesBySurface.set(entry.surface, { entry, source });
+    profilesBySurface.set(entry.surface, {
+      entry: { id: entry.id, surface: entry.surface, build: entry.build },
+      source,
+    });
   };
 
   const registerToolMapGuard = (
@@ -236,7 +252,10 @@ export function createAgentExtensionRegistry<TTools, TState>(
     if (guards.has(entry.id)) {
       return reject(source, `tool-map guard "${entry.id}" is already registered`, { id: entry.id });
     }
-    guards.set(entry.id, { entry, source });
+    guards.set(entry.id, {
+      entry: { id: entry.id, priority: entry.priority, apply: entry.apply },
+      source,
+    });
   };
 
   const sortedGuards = () =>
@@ -268,6 +287,7 @@ export function createAgentExtensionRegistry<TTools, TState>(
       let built: ResolvedOrchestrationProfile | undefined;
       try {
         built = stored.entry.build(ctx);
+        observeDiscardedResult(built, ctx.logger, stored.entry.id);
       } catch (err) {
         ctx.logger.warn(`[agent-extensions] skipped surface profile "${stored.entry.id}": build threw`, {
           id: stored.entry.id,
@@ -287,8 +307,10 @@ export function createAgentExtensionRegistry<TTools, TState>(
       return sortedGuards().reduce((acc, { entry, source }) => {
         if (source === 'builtin') return entry.apply(acc, ctx);
         let next: TTools;
+        let asynchronous: boolean;
         try {
           next = entry.apply({ ...acc }, ctx);
+          asynchronous = observeDiscardedResult(next, ctx.logger, entry.id);
         } catch (err) {
           ctx.logger.warn(`[agent-extensions] skipped tool-map guard "${entry.id}": apply threw`, {
             id: entry.id,
@@ -296,7 +318,7 @@ export function createAgentExtensionRegistry<TTools, TState>(
           });
           return acc;
         }
-        if (next === null || typeof next !== 'object' || typeof (next as { then?: unknown }).then === 'function') {
+        if (next === null || typeof next !== 'object' || asynchronous) {
           ctx.logger.warn(`[agent-extensions] skipped tool-map guard "${entry.id}": apply returned no tool map`, {
             id: entry.id,
           });
