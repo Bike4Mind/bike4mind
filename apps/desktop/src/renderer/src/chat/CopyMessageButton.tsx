@@ -55,7 +55,9 @@ export function CopyMessageButton({ text, testId }: { text: string; testId: stri
   };
 
   return (
-    <>
+    // The live region's containing block; without it the region resolves outside the transcript's
+    // scroller, escapes its clip, and lengthens the document past the window.
+    <Box component="span" sx={{ position: 'relative', display: 'inline-flex' }}>
       <IconButton
         size="sm"
         variant="plain"
@@ -85,6 +87,6 @@ export function CopyMessageButton({ text, testId }: { text: string; testId: stri
       >
         {state === 'idle' ? '' : LABEL[state]}
       </Box>
-    </>
+    </Box>
   );
 }
