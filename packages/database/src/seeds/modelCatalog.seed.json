@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-10-22T05:18:04.841Z",
-  "notice": "Fallback defaults last maintained on 2026-10-22. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
+  "generatedAt": "2026-10-23T10:35:11.722Z",
+  "notice": "Fallback defaults last maintained on 2026-10-23. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
   "entries": [
     {
       "modelId": "anthropic.claude-3-5-sonnet-20240620-v1:0",
@@ -820,6 +820,188 @@
         "description": "DeepSeek's latest model via AWS Bedrock. Large context window, strong reasoning, and high throughput.",
         "logoFile": "deepseek-logo.png",
         "rank": 10
+      }
+    },
+    {
+      "modelId": "flux-2-flex",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "flux-2-flex",
+        "vendor": "black-forest-labs",
+        "backend": "bfl",
+        "type": "image",
+        "name": "FLUX.2 Flex",
+        "contextWindow": 10000,
+        "maxOutputTokens": 10000,
+        "supportsImageVariation": true,
+        "supportsSafetyTolerance": true,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "FLUX.2 Flex - Configurable FLUX.2 generation and editing with guidance and step controls for fine-tuned results.",
+        "rank": 9
+      }
+    },
+    {
+      "modelId": "flux-2-klein-4b",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "flux-2-klein-4b",
+        "vendor": "black-forest-labs",
+        "backend": "bfl",
+        "type": "image",
+        "name": "FLUX.2 Klein 4B",
+        "contextWindow": 10000,
+        "maxOutputTokens": 10000,
+        "supportsImageVariation": true,
+        "supportsSafetyTolerance": true,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "FLUX.2 Klein 4B - Smallest FLUX.2 model, for the fastest and cheapest generation and editing at 4B parameters.",
+        "rank": 12
+      }
+    },
+    {
+      "modelId": "flux-2-klein-9b",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "flux-2-klein-9b",
+        "vendor": "black-forest-labs",
+        "backend": "bfl",
+        "type": "image",
+        "name": "FLUX.2 Klein 9B",
+        "contextWindow": 10000,
+        "maxOutputTokens": 10000,
+        "supportsImageVariation": true,
+        "supportsSafetyTolerance": true,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "FLUX.2 Klein 9B - Compact 9B FLUX.2 model for fast, low-cost generation and editing with up to four reference images.",
+        "rank": 10
+      }
+    },
+    {
+      "modelId": "flux-2-klein-9b-preview",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "flux-2-klein-9b-preview",
+        "vendor": "black-forest-labs",
+        "backend": "bfl",
+        "type": "image",
+        "name": "FLUX.2 Klein 9B (Preview)",
+        "contextWindow": 10000,
+        "maxOutputTokens": 10000,
+        "supportsImageVariation": true,
+        "supportsSafetyTolerance": true,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "FLUX.2 Klein 9B (Preview) - Preview build of FLUX.2 Klein 9B, sharing its generation and editing request contract.",
+        "rank": 11
+      }
+    },
+    {
+      "modelId": "flux-2-max",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "flux-2-max",
+        "vendor": "black-forest-labs",
+        "backend": "bfl",
+        "type": "image",
+        "name": "FLUX.2 Max",
+        "contextWindow": 10000,
+        "maxOutputTokens": 10000,
+        "supportsImageVariation": true,
+        "supportsSafetyTolerance": true,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "FLUX.2 Max - Flagship FLUX.2 generation and editing with the highest output quality and up to eight reference images.",
+        "rank": 6
+      }
+    },
+    {
+      "modelId": "flux-2-pro",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "flux-2-pro",
+        "vendor": "black-forest-labs",
+        "backend": "bfl",
+        "type": "image",
+        "name": "FLUX.2 Pro",
+        "contextWindow": 10000,
+        "maxOutputTokens": 10000,
+        "supportsImageVariation": true,
+        "supportsSafetyTolerance": true,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "FLUX.2 Pro - Production FLUX.2 generation and editing with strong prompt adherence and up to eight reference images.",
+        "rank": 7
+      }
+    },
+    {
+      "modelId": "flux-2-pro-preview",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "flux-2-pro-preview",
+        "vendor": "black-forest-labs",
+        "backend": "bfl",
+        "type": "image",
+        "name": "FLUX.2 Pro (Preview)",
+        "contextWindow": 10000,
+        "maxOutputTokens": 10000,
+        "supportsImageVariation": true,
+        "supportsSafetyTolerance": true,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "FLUX.2 Pro (Preview) - Preview build of FLUX.2 Pro, sharing its generation and editing request contract.",
+        "rank": 8
       }
     },
     {
