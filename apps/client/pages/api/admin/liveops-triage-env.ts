@@ -23,9 +23,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req:
 
   const stage = Resource.App.stage;
 
-  // IS_SOURCE_DEPLOYMENT identifies main/source deployments (bike4mind staging + production)
-  // Fork deployments do NOT have this set, so the tab is hidden from them
-  // Type assertion needed until sst-env.d.ts is regenerated with the new secret
+  // IS_SOURCE_DEPLOYMENT identifies main/source deployments (bike4mind staging + production).
+  // Fork deployments do NOT have it set, so the tab is hidden from them. It is read off the
+  // Resource proxy, which throws when the secret is unlinked - hence the assertion and catch.
   let isSourceDeployment = false;
   try {
     const resource = Resource as unknown as Record<string, { value?: string } | undefined>;

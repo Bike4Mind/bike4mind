@@ -39,10 +39,10 @@ Both the Active and Archived tables share the same structure:
 | Column | Description |
 |--------|-------------|
 | **Title** | The modal title (truncated with ellipsis) |
-| **Date** | Creation date in ISO format |
+| **Date** | Creation date in ISO format; modals left over from the retired generator show the date they were generated |
 | **Status** | Chip showing Active, Disabled, Expired, or Expiring Soon with color coding |
 | **Expiry** | Days remaining until expiry, with color coding (green for more than 7 days, warning for 7 days or fewer, danger for expired, neutral for no expiry) |
-| **Source** | Where the modal originated (e.g., "production", "self") |
+| **Source** | Where the modal originated: `self` for modals authored on this deployment, `production` only on modals left over from a retired production import |
 | **Actions** | View, Edit, Enable/Disable toggle, and Delete buttons |
 
 ### Creating a Modal

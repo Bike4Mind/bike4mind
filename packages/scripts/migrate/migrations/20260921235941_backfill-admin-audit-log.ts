@@ -272,7 +272,7 @@ const resolveWhatsNewRestore = (flat: Metadata): ResolvedEvent => {
   };
 };
 
-// Mirrors whats-new/config.ts: one `syncConfig` change. The old row's per-field `changes` flags are
+// Mirrors the retired sync-config route: one `syncConfig` change. The old row's per-field `changes` flags are
 // derivable from before/after, so they are dropped only when that change is emitted.
 const resolveWhatsNewSyncConfig = (flat: Metadata): ResolvedEvent => {
   const { oldConfig, newConfig } = flat;
