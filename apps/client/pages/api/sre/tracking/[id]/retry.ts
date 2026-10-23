@@ -151,7 +151,7 @@ const handler = baseApi().post(
 
     await recordAdminActionFromRequest(req, {
       action: 'ops.sre.tracking_retried',
-      target: { kind: 'settings', id, displayName: `SRE tracking ${fingerprint}` },
+      target: { kind: 'system', id, displayName: `SRE tracking ${fingerprint}` },
       summary: `retried SRE tracking ${fingerprint}`,
       details: { previousStatus, source, repoSlug: effectiveRepoSlug },
     });

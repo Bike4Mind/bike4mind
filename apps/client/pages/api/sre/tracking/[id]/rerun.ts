@@ -175,7 +175,7 @@ const handler = baseApi().post(
 
       await recordAdminActionFromRequest(req, {
         action: 'ops.sre.tracking_rerun',
-        target: { kind: 'settings', id, displayName: `SRE tracking ${fingerprint}` },
+        target: { kind: 'system', id, displayName: `SRE tracking ${fingerprint}` },
         summary: result.dispatched
           ? `reran SRE tracking ${fingerprint}`
           : `rerun of SRE tracking ${fingerprint} blocked (${result.reason ?? 'unknown'})`,
@@ -217,7 +217,7 @@ const handler = baseApi().post(
 
     await recordAdminActionFromRequest(req, {
       action: 'ops.sre.tracking_rerun',
-      target: { kind: 'settings', id, displayName: `SRE tracking ${fingerprint}` },
+      target: { kind: 'system', id, displayName: `SRE tracking ${fingerprint}` },
       summary: `reran SRE tracking ${fingerprint}`,
       details: { source, repoSlug, dispatched: true },
     });

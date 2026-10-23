@@ -103,7 +103,7 @@ describe('SRE tracking actions admin audit', () => {
     expect(h.audit.mock.calls[0][0]).toBe(req);
     expect(h.audit.mock.calls[0][1]).toMatchObject({
       action: 'ops.sre.tracking_dismissed',
-      target: { kind: 'settings', id: TRACKING_ID },
+      target: { kind: 'system', id: TRACKING_ID },
       reason: 'known noise',
     });
     expect(h.dismiss.mock.invocationCallOrder[0]).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
@@ -118,7 +118,7 @@ describe('SRE tracking actions admin audit', () => {
     expect(h.audit).toHaveBeenCalledTimes(1);
     expect(h.audit.mock.calls[0][1]).toMatchObject({
       action: 'ops.sre.tracking_rerun',
-      target: { kind: 'settings', id: TRACKING_ID },
+      target: { kind: 'system', id: TRACKING_ID },
     });
     expect(h.sendToQueue.mock.invocationCallOrder[0]).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
   });
@@ -154,7 +154,7 @@ describe('SRE tracking actions admin audit', () => {
     expect(h.audit).toHaveBeenCalledTimes(1);
     expect(h.audit.mock.calls[0][1]).toMatchObject({
       action: 'ops.sre.tracking_retried',
-      target: { kind: 'settings', id: TRACKING_ID },
+      target: { kind: 'system', id: TRACKING_ID },
       details: { previousStatus: 'failed' },
     });
     expect(h.sendToQueue.mock.invocationCallOrder[0]).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
