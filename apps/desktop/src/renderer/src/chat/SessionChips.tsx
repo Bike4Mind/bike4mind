@@ -119,13 +119,14 @@ const chipTooltipSx: SxProps = { whiteSpace: 'pre-line' };
  * Where the workspace form lives: centered in an empty transcript or in the session panel's
  * Environment section after the first message.
  */
-export type ChipLayout = 'row' | 'panel';
+export type ChipLayout = 'row' | 'embedded' | 'panel';
 
 /** Menus and tooltips open away from the edge the chips sit against. */
 type ChipPlacement = { menu: 'top-start' | 'bottom-end'; tooltip: 'top-start' | 'left' };
 
 const PLACEMENT: Record<ChipLayout, ChipPlacement> = {
   row: { menu: 'top-start', tooltip: 'top-start' },
+  embedded: { menu: 'bottom-end', tooltip: 'top-start' },
   panel: { menu: 'bottom-end', tooltip: 'left' },
 };
 

@@ -816,6 +816,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
                               Set up this workspace
                             </Typography>
                             <SessionChips
+                              layout="embedded"
                               project={conversation.session?.project ?? null}
                               {...(conversation.session?.grantedDirectories
                                 ? { grantedDirectories: conversation.session.grantedDirectories }

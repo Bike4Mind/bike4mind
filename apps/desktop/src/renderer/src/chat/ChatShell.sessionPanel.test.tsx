@@ -220,8 +220,9 @@ describe('the session panel in the shell', () => {
     await open('unbound');
     expect(find('chat-toggle-session-panel-btn')).toBeNull();
     expect(find('session-panel')).toBeNull();
-    expect(get('chat-code-workspace-setup').contains(find('session-chips-row'))).toBe(true);
-    expect(document.querySelectorAll('[data-testid="session-chips-row"]')).toHaveLength(1);
+    expect(get('chat-code-workspace-setup').contains(find('session-chips-embedded'))).toBe(true);
+    expect(find('session-chips-row')).toBeNull();
+    expect(find('session-chips-panel')).toBeNull();
     expect(find('chat-thread-empty')).toBeNull();
   });
 
@@ -230,7 +231,7 @@ describe('the session panel in the shell', () => {
     await open('bound');
     expect(find('session-panel')).toBeNull();
     expect(find('chat-toggle-session-panel-btn')).toBeNull();
-    expect(get('chat-code-workspace-setup').contains(find('session-chips-row'))).toBe(true);
+    expect(get('chat-code-workspace-setup').contains(find('session-chips-embedded'))).toBe(true);
   });
 
   it('moves workspace controls into the panel once the Code session has messages', async () => {
