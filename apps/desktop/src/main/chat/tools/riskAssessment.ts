@@ -38,6 +38,10 @@ export function spendsCredits(toolName: string): boolean {
  * file or a decoded payload slips past any check on the text, so a command is judged on what it
  * can do (see shellScan) rather than on what it printed.
  *
+ * `screen_capture` is here because a window can show anything - a web page, an email, a chat -
+ * and text in an image steers a model as well as text does. A `file_read` of an image is not:
+ * it is a file in a folder the user shared, judged like the text files beside it.
+ *
  * `browser_*` and every server tool are matched by prefix, so a new one is covered as it ships.
  */
 const READS_UNTRUSTED: ReadonlySet<string> = new Set([
@@ -45,6 +49,7 @@ const READS_UNTRUSTED: ReadonlySet<string> = new Set([
   WEB_SEARCH_TOOL_NAME,
   'skill',
   'session_read',
+  'screen_capture',
 ]);
 
 export function readsUntrusted(toolName: string): boolean {
