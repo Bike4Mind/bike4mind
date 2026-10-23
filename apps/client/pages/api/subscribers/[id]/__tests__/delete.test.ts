@@ -49,6 +49,12 @@ describe('DELETE /api/subscribers/[id]/delete - admin audit', () => {
     expect(h.findOneAndUpdate.mock.invocationCallOrder[0]).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
   });
 
+  it('only matches subscribers that are not already deleted', async () => {
+    h.findOneAndUpdate.mockResolvedValue({ id: 'sub-1', email: 'jane@example.test' });
+    await run();
+    expect(h.findOneAndUpdate.mock.calls[0][0]).toEqual({ _id: 'sub-1', deletedAt: null });
+  });
+
   it('does not audit a missing subscriber', async () => {
     h.findOneAndUpdate.mockResolvedValue(null);
     await expect(run()).rejects.toThrow(/not found/i);

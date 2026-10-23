@@ -12,7 +12,7 @@ const handler = baseApi().delete(
     if (!id) throw new BadRequestError('Invalid ID');
 
     const subscriber = await Subscriber.findOneAndUpdate(
-      { _id: id },
+      { _id: id, deletedAt: null },
       { $set: { deletedAt: new Date() } },
       { new: true }
     );
