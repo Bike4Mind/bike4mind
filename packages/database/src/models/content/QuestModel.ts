@@ -1347,6 +1347,17 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     return result.modifiedCount === 1;
   }
 
+  /**
+   * Refuses once the voice turn is stopped; the counter doubles as the marker the voice retry guard reads.
+   */
+  async claimVoiceVideoStart(questId: string): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: convertId(questId), status: { $ne: 'stopped' } },
+      { $inc: { agentVideoClipsClaimed: 1 } }
+    );
+    return result.modifiedCount === 1;
+  }
+
   /** Give back a slot from claimAgentGenerationSlot whose call started no new job. */
   async releaseAgentGenerationSlot(questId: string, kind: GenerationJobKind): Promise<void> {
     const field = AGENT_GENERATION_SLOT_FIELDS[kind];

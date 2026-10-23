@@ -1,6 +1,7 @@
 import React from 'react';
 import { Box, Chip, CircularProgress, Sheet, Stack, Typography, useTheme } from '@mui/joy';
-import { Key, Warning } from '@mui/icons-material';
+import Key from '@mui/icons-material/Key';
+import Warning from '@mui/icons-material/Warning';
 import { useGetApiUsage } from '@client/app/hooks/data/admin';
 import type { ApiKeyUsageItem } from '@client/app/hooks/data/admin';
 import { formatRateLimitReset } from '@client/app/utils/formatRateLimitReset';

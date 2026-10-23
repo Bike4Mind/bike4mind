@@ -59,6 +59,21 @@ file could not be found; paste or attach the original image again. If the clipbo
 the image format, use **Save image...** instead. A failed attachment appears as a rejection above
 the composer, where it can be dismissed.
 
+## Chat costs
+
+Chat shows the credits reported by the server while a reply streams, after it finishes, and
+in the composer's usage details. Missing credit usage is left blank rather than shown as zero.
+
+In development (`pnpm dev`), Settings offers **Show dollar costs**, off by default. It switches
+the streaming cost and the composer's last-turn cost to the server's dollar figure, and adds
+dollars to the completed reply's tooltip. Completed replies keep their credit headline.
+The choice is saved locally. Production builds hide this setting and always display credits,
+even if a development run previously saved the dollar preference.
+
+If a cost is absent, the server may not have reported it yet; older replies may have no saved
+usage. The app does not estimate credits by converting dollars. A developer dollar display
+falls back to credits when the server reports no dollar figure.
+
 ## Suggested next prompt
 
 Settings has a **Suggested next prompt** switch and model picker. **Automatic** uses a small
@@ -463,31 +478,58 @@ codebase are not consent to read them alongside another.
 
 ### The workspace toggle is a git worktree
 
-Off, the session runs in the project directory. On, it runs in a git worktree for the chosen
-branch, following the layout in `~/.config/b4m/worktree.zsh`: worktrees live inside the
-project's own container directory (the parent of the shared git dir), one folder per branch,
-with `/` in the branch name written as `+`.
+Off, the session runs in the project directory. On, it runs in a git worktree of its own. The
+worktree lives in the app's own `.b4m` folder inside the project's container directory (the
+parent of the shared git dir), with `/` in the branch name written as `+`:
 
 ```
-<container>/.bare              the bare repo
-<container>/main               the main worktree
-<container>/fix+some-branch    one folder per branch
+<container>/.b4m/.gitignore         ignores everything in .b4m, so worktrees stay out of git status
+<container>/.b4m/worktrees/<branch> one folder per session branch, e.g. b4m+fix-login-3fa9c1
+<container>/.b4m/spare              a ready checkout that makes the next one fast (see below)
 ```
 
-That layout is reimplemented in `src/main/chat/project/workspace.ts` rather than shelled out
-to, because a packaged app cannot assume a personal shell function exists. Nothing ever writes
-to a `../` path, which would scatter folders that read as separate projects.
+The layout is reimplemented in `src/main/chat/project/workspace.ts` rather than shelled out
+to the user's `worktree` shell function (`~/.config/b4m/worktree.zsh`, still the source of the
+`+` folder convention and the default base), because a packaged app cannot assume a personal
+shell function exists. Nothing ever writes to a `../` path, which would scatter folders that
+read as separate projects, and the repository's own `.gitignore` is never touched. Keeping
+everything under `.b4m` also means a worktree can never collide with a folder the user made
+themselves, such as `<container>/main`.
 
-Three cases it handles rather than failing:
+**The chosen branch is a base, not a target.** The session gets a branch of its own, named
+`b4m/<slug>-<hex>` (the slug comes from the session title, the random suffix keeps two sessions
+from the same base apart), cut from the branch the user picked. A name that is not an existing
+branch names the session's own branch instead, cut from the default base. Either way the
+session is alone on its branch, so picking `main` never hands back the user's own checkout and
+the app never claims an isolation it did not get. The resolved path is shown under the session
+title whenever it differs from the project directory.
 
-- **The worktree already exists** - adopted, not recreated. A worktree registered for that
-  branch at some _other_ path is adopted too, because git allows a branch in exactly one
-  worktree and `worktree add` would otherwise fail against it.
-- **The branch does not exist** - created from `origin/main` (then `origin/master`, then
-  `HEAD`), `--no-track`, matching the shell helper's default.
-- **The branch is the one the main checkout is on** - resolves _to_ the main checkout, since
-  git permits nothing else. The resolved path is shown under the session title whenever it
-  differs from the project directory, so the app never claims an isolation it did not get.
+Cases it handles rather than failing:
+
+- **The session already has its worktree** - reused, not recreated. Reuse is keyed only on the
+  session's _own_ branch, which is saved on the session and handed back on every later
+  resolution. A worktree some other tool registered for the base branch is never adopted.
+- **The branch does not exist yet** - created from the base's remote-tracking ref once that is
+  proven to contain the local base (so a stale local `main` does not start the branch behind),
+  otherwise from the base itself. With no base picked it is the branch `origin/HEAD` points
+  at, then `origin/main`, then `origin/master`, then `HEAD`. Always `--no-track`, so a later
+  `git push` does not aim at the base.
+
+**An occupied path is refused, never adopted or cleared.** If the target folder is already a
+git worktree holding something else, or exists but is not a worktree, the session fails to
+prepare with a message naming the path. Move it with `git worktree move` (a plain `mv` leaves
+git pointing at a path that no longer exists), or pick a different branch.
+
+**A spare checkout makes starting fast.** After a worktree is cut in a repository, the app
+prepares one detached checkout in `.b4m/spare` shortly afterwards, so it does not compete with
+the new session's first moments. The next session moves it into place and switches it to the
+new branch, which rewrites only the files that differ - about 0.2s instead of the 1.3s a full
+checkout takes on this monorepo. It is bounded on every side: a repository gets one only after
+a worktree was cut in it during the current run, at most two repositories keep one (the least
+recently used goes first), an unused spare is removed after 30 minutes, and all of them are
+removed on quit. A spare left behind by a crash is recognized by its git metadata and original
+`HEAD`; one that has been changed, or that the app does not own, is left alone and no spare is
+made.
 
 **Deleting a session never deletes its worktree.** A worktree can hold uncommitted work, and
 deleting a conversation must not be a way to lose code. Removing one stays a git operation the
@@ -764,9 +806,14 @@ ask, and ask over allow. A shell command needs an allow for every subcommand.
 Native tool rules such as `request_directory` also apply to interactive tools:
 a deny refuses the call, while an allow still requires the tool's interactive response.
 
-The approval card's "Always, in every session" saves the displayed allow rules.
-Irreversible calls cannot save a standing allow. Settings also shows imported Claude
-Code sources read-only. Turn off "Use them here" to stop importing them. An untrusted
+The approval card's "Allow in this chat" remembers consent for this conversation.
+"Always allow" saves the displayed allow rules in Settings -> Permissions, and also
+answers waiting cards those rules cover. For web fetches, both buttons cover every site,
+including after a reply has read web content; the saved rule is `WebFetch`.
+Use a `WebFetch(domain:...)` rule in Settings for a narrower persistent allow.
+Irreversible calls cannot save a standing allow. Browser cards cannot save a rule.
+Settings also shows imported Claude Code sources read-only. Turn off "Use them here"
+to stop importing them. An untrusted
 project contributes ask and deny rules, but cannot grant itself an allow.
 
 If a permission source cannot be read or parsed, tool execution is refused rather than
@@ -774,3 +821,8 @@ dropping its restrictions. Check the path named in the error, repair the JSON or
 permissions, then retry. Claude Code sources reload when their settings change; after
 repairing the desktop rule file, retry the call. A failed Settings save displays an
 error and keeps the previously saved rules active.
+
+If "Always allow" reports that its rule could not be saved, consent still applies in
+this conversation. Retry the save in Settings -> Permissions before relying on it in
+another chat. To restore fetch approval cards, remove the saved `WebFetch` allow and
+start a new chat; existing conversation consent lasts for that conversation.

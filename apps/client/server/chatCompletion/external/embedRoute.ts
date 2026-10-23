@@ -68,6 +68,7 @@ import { resolveEmbedTools } from './embedToolResolver';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { emitProcessingFailed } from '../processingFailedMetric';
 import { z } from 'zod';
+import { getUserEntitlements } from '@server/entitlements';
 
 /**
  * Public embed chat endpoint (`POST /api/embed/chat`), served by the always-on
@@ -116,7 +117,7 @@ const EmbedChatRequestSchema = z.object({
   // rejected here as a clean 400 rather than surfacing as a mid-stream provider
   // error (most backends require a non-empty, user-terminated conversation).
   messages: z
-    .array(z.object({ role: z.enum(['user', 'assistant']), content: z.string().min(1) }))
+    .array(z.object({ role: z.enum(['user', 'assistant']), content: z.string().trim().min(1) }))
     .min(1)
     .refine(m => m[m.length - 1]?.role === 'user', { message: 'the last message must be from the user' }),
   /** Optional echo of the bound agent id; if present it MUST match the key's agent. */
@@ -642,6 +643,7 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
 
       try {
         await executeCompletion({
+          getEntitlements: getUserEntitlements,
           creditHolds: createCompletionCreditHolds(logger),
           userId: actorUserId,
           model: hydrated.model,

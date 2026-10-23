@@ -2,6 +2,7 @@ import type { CliConfig } from '../storage';
 import type { CheckpointStore } from '../storage/CheckpointStore.js';
 import type { PermissionManager } from '../utils';
 import type { SandboxOrchestrator } from '../sandbox/SandboxOrchestrator.js';
+import { sanitizeTerminalText } from '../utils/sanitizeTerminalText.js';
 
 /**
  * Where sandbox status and warnings are written. Interactive startup sends info
@@ -78,9 +79,9 @@ export async function buildSandbox(input: BuildSandboxInput): Promise<BuildSandb
   proxyManager.onEvent(event => {
     if (event.type === 'blocked') {
       log.warn(
-        `\n\x1b[41m\x1b[97m BLOCKED \x1b[0m \x1b[31mNetwork proxy denied connection to\x1b[0m \x1b[1m${event.domain}\x1b[0m \x1b[90m(${event.method})\x1b[0m`
+        `\n\x1b[41m\x1b[97m BLOCKED \x1b[0m \x1b[31mNetwork proxy denied connection to\x1b[0m \x1b[1m${sanitizeTerminalText(event.domain)}\x1b[0m \x1b[90m(${sanitizeTerminalText(event.method)})\x1b[0m`
       );
-      log.warn(`\x1b[90m  Tip: /sandbox:trust-domain ${event.domain}\x1b[0m\n`);
+      log.warn(`\x1b[90m  Tip: /sandbox:trust-domain ${sanitizeTerminalText(event.domain)}\x1b[0m\n`);
 
       // Record network violation
       sandboxOrchestrator

@@ -22,6 +22,7 @@ import { mergeCatalog } from './mergeCatalog';
 import { alignRouteTwinNames } from './routeTwinNames';
 import { buildSupersededIndex, catalogSuccessors, updateReplacedByOverlay } from './resolveDeprecatedModel';
 import AnthropicBedrockBackend from './bedrockBackend/anthropic';
+import ConverseBedrockBackend, { isConverseBedrockModel } from './bedrockBackend/converse';
 import DeepSeekBedrockBackend from './bedrockBackend/deepseek';
 import JurassicTwoBedrockBackend from './bedrockBackend/jurassicTwo';
 import LlamaBedrockBackend from './bedrockBackend/llama';
@@ -85,7 +86,7 @@ export function getLlmByModel(
   // changes behavior. The family path is the only one that can fail loudly:
   // an unknown family throws instead of returning the null that would be
   // indistinguishable from a missing credential (sec 9 item 3).
-  // MUST STAY IN SYNC WITH completionsForwardsNativeTools in @bike4mind/common
+  // MUST STAY IN SYNC WITH servedByDirectAnthropic and servedByClaudeAdapter in @bike4mind/common
   // (claudeToolCapabilities.ts), which restates this family-then-backend routing.
   if (modelInfo.adapterFamily) {
     backend = backendForAdapterFamily(modelInfo.adapterFamily, {
@@ -152,7 +153,7 @@ export function getLlmByModel(
           backend = new MoonshotBedrockBackend();
           break;
         default:
-          backend = null;
+          backend = isConverseBedrockModel(String(modelInfo.id)) ? new ConverseBedrockBackend() : null;
       }
       break;
     case 'anthropic':
@@ -576,9 +577,11 @@ export * from './routeTwinNames';
 
 // Implementations:
 export * from './anthropicBackend';
+export * from './llmTimeoutErrors';
 export * from './anthropicBatchService';
 export * from './awsBackend';
 export * from './bedrockBackend/base';
+export * from './bedrockBackend/converse';
 export * from './bedrockBackend/undifferentiated';
 export * from './bflBackend';
 export * from './geminiBackend';

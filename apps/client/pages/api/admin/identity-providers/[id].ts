@@ -3,7 +3,8 @@ import { Logger } from '@bike4mind/observability';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, NotFoundError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { clearConfigurationCache } from '@server/auth/oktaOidcClient';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, identityProviderResponseSchema } from '@bike4mind/common';
+import { respond } from '@server/utils/respond';
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .get(async (req, res) => {
@@ -24,7 +25,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         throw new NotFoundError('Identity provider not found');
       }
 
-      return res.json(idp);
+      return respond(res, identityProviderResponseSchema, idp);
     } catch (error) {
       console.error('Error fetching identity provider:', error);
       if (error instanceof NotFoundError) {
@@ -78,7 +79,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         Logger.info('[IDP Admin] Cleared Okta OIDC configuration cache after IDP update');
       }
 
-      return res.json(updatedIdp);
+      return respond(res, identityProviderResponseSchema, updatedIdp);
     } catch (error) {
       console.error('Error updating identity provider:', error);
       if (error instanceof NotFoundError) {

@@ -2,7 +2,7 @@ import { ModalModel } from '@bike4mind/database/social';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
-import { WhatsNewDistributionService } from '@server/services/whatsNewDistribution';
+import { WhatsNewDistributionService } from '@bike4mind/server-utils/services/whatsNewDistribution';
 import { emitModalGenerationMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { Logger } from '@bike4mind/observability';

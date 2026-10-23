@@ -11,21 +11,19 @@ import { useLLM } from '@client/app/contexts/LLMContext';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useWebsocket } from '@client/app/contexts/WebsocketContext';
 import { useGetQuestMasterPlan, useUpdateQuestProgress } from '@client/app/hooks/data/quests';
-import {
-  Check as CheckIcon,
-  ExpandMore as ExpandMoreIcon,
-  AutoAwesome as QuestIcon,
-  Extension as SubQuestIcon,
-  Assignment as TaskIcon,
-  RadioButtonChecked as FocusIcon,
-  Refresh as RetryIcon,
-  SkipNext as SkipIcon,
-  MoreVert as MoreVertIcon,
-  PlayArrow as PlayArrowIcon,
-  Science as ScienceIcon,
-  AccountTree as AccountTreeIcon,
-  CheckCircle as CheckCircleIcon,
-} from '@mui/icons-material';
+import CheckIcon from '@mui/icons-material/Check';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import QuestIcon from '@mui/icons-material/AutoAwesome';
+import SubQuestIcon from '@mui/icons-material/Extension';
+import TaskIcon from '@mui/icons-material/Assignment';
+import FocusIcon from '@mui/icons-material/RadioButtonChecked';
+import RetryIcon from '@mui/icons-material/Refresh';
+import SkipIcon from '@mui/icons-material/SkipNext';
+import MoreVertIcon from '@mui/icons-material/MoreVert';
+import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import ScienceIcon from '@mui/icons-material/Science';
+import AccountTreeIcon from '@mui/icons-material/AccountTree';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import {
   Box,
   Button,

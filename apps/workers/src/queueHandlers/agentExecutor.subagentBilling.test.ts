@@ -39,6 +39,15 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
 
 vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
 
+// Model admission reads admin settings from the real repository; these tests exercise other gates.
+const admissionAssertMock = vi.fn(async (_model: string) => {});
+vi.mock('@server/billing/meterPlatformCompletion', () => ({
+  createModelAdmission: async () => ({
+    admits: async () => true,
+    assert: (model: string) => admissionAssertMock(model),
+  }),
+}));
+
 const onDagNodeTerminalMock = vi.fn().mockResolvedValue(undefined);
 vi.mock('./agentExecutorDag', async () => {
   const actual = await vi.importActual<typeof import('./agentExecutorDag')>('./agentExecutorDag');
@@ -325,6 +334,18 @@ describe('processSubagentDispatch admission and billing', () => {
       message: 'provider failed',
       timedOut: false,
     });
+  });
+
+  it('refuses a subagent whose model the platform will not admit before it runs', async () => {
+    admissionAssertMock.mockRejectedValueOnce(new Error('Model "test-model" has no price'));
+
+    const { markFailed } = await dispatch();
+
+    expect(admissionAssertMock).toHaveBeenCalledWith('test-model');
+    expect(markFailed).toHaveBeenCalledWith('child-1', { message: 'Model "test-model" has no price' });
+    expect(delegateToAgentMock).not.toHaveBeenCalled();
+    expect(deductCreditsMock).not.toHaveBeenCalled();
+    expect(onDagNodeTerminalMock).toHaveBeenCalledTimes(1);
   });
 
   it('refuses a subagent on a disabled model before it runs', async () => {

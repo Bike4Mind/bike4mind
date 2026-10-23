@@ -86,7 +86,7 @@ vi.mock('@bike4mind/database', () => ({
 
 const mockSessionsCreate = vi.fn();
 const mockCreateCustomer = vi.fn();
-vi.mock('@server/integrations/stripe/stripe', () => ({
+vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   createCustomer: (...args: unknown[]) => mockCreateCustomer(...args),
   CustomerType: { User: 'User', Organization: 'Organization' },
   stripe: {

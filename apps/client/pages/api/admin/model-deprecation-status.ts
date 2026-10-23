@@ -200,6 +200,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       patch: {
         lifecycle: {
           status: status as (typeof LIFECYCLE_STATUSES)[number],
+          ...(current?.isSuperseded !== undefined ? { isSuperseded: current.isSuperseded } : {}),
           ...(deprecationDate ? { deprecationDate } : {}),
           ...(retirementDate ? { retirementDate } : {}),
           ...(replacedBy ? { replacedBy } : {}),

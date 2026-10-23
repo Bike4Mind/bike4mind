@@ -886,7 +886,11 @@ export class PrMonitor {
   private summaryOf(sessionId: string, binding: PrBinding | null): PrSummary | null {
     if (!binding) return null;
     const snapshot = this.snapshotFor(sessionId, binding);
-    if (snapshot) return { number: binding.number, state: prDisplayState(snapshot.state, snapshot.isDraft) };
+    // live.queued, which the bar's icon and chip also read: set from this launch's reads and the
+    // app's own enqueue, never from the binding file. A PR sits in the queue for minutes, so a
+    // stored flag would keep a row the app has not re-read queued long after it left.
+    const queued = !!this.live.get(sessionId)?.queued;
+    if (snapshot) return { number: binding.number, state: prDisplayState(snapshot.state, snapshot.isDraft, queued) };
     if (!binding.lastState) return null;
     return { number: binding.number, state: prDisplayState(binding.lastState, binding.lastDraft) };
   }

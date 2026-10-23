@@ -122,7 +122,7 @@ import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import {
   HIGHLIGHTS_TEMPLATE_VARIABLES,
   getDefaultHighlightsTemplate,
-} from '@server/whatsNew/whatsNewHighlights.prompt';
+} from '@bike4mind/server-utils/whatsNew/whatsNewHighlights.prompt';
 import { toast } from 'sonner';
 import { useMutation } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';

@@ -98,6 +98,7 @@ export const updateUserSchema = z.object({
       agentModeDefault: z.enum(['off', 'auto', 'on']).optional(),
       showFunTools: z.boolean().optional(),
       showSplashCards: z.boolean().optional(),
+      desktopPromoDismissed: z.boolean().optional(),
     })
     .nullable()
     .optional(),

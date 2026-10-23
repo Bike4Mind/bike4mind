@@ -358,11 +358,11 @@ export const ProviderNotConfiguredErrorSchema = ApiErrorSchema.extend({
 });
 
 /**
- * 400 for a `model` the caller cannot use, or a refused tool search request; `errorCode` is absent on the
- * other 400s (e.g. malformed JSON).
+ * 400 for provider-rejected caller input, a `model` the caller cannot use, or a refused tool search
+ * request; `errorCode` is absent on the other 400s (e.g. malformed JSON).
  */
 export const CompletionsBadRequestErrorSchema = ApiErrorSchema.extend({
-  errorCode: z.enum([UNKNOWN_MODEL_ERROR_CODE, ...COMPLETION_TOOL_ERROR_CODES]).optional(),
+  errorCode: z.enum(['invalid_request', UNKNOWN_MODEL_ERROR_CODE, ...COMPLETION_TOOL_ERROR_CODES]).optional(),
 });
 
 /** @deprecated Use CompletionsBadRequestErrorSchema; kept so the published export does not break. */

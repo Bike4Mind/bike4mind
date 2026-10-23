@@ -64,7 +64,7 @@ vi.mock('@bike4mind/utils', () => ({
 }));
 vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: () => false }));
 vi.mock('@bike4mind/server-utils/dataLakes/requestMembership', () => ({ getRequestMembershipOrgIds: async () => [] }));
-vi.mock('@server/dataLakes/resolveAuditPrincipal', () => ({ resolveAuditPrincipal: () => ({}) }));
+vi.mock('@bike4mind/server-utils/dataLakes/resolveAuditPrincipal', () => ({ resolveAuditPrincipal: () => ({}) }));
 
 import {
   runLakeSemanticSearch,

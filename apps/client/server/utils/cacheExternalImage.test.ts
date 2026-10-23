@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const mockS3Send = vi.hoisted(() => vi.fn());
 const mockValidateTargetUrl = vi.hoisted(() => vi.fn());
+// Forwards to global fetch so the cases below can stub the upstream with vi.stubGlobal.
+const mockFetchPinned = vi.hoisted(() => vi.fn((url: string, init?: RequestInit) => globalThis.fetch(url, init)));
 const s3ClientConfigs = vi.hoisted(() => [] as unknown[]);
 
 vi.mock('sst', () => ({
@@ -25,6 +27,7 @@ vi.mock('@aws-sdk/client-s3', () => ({
 
 vi.mock('@bike4mind/server-utils/utils/ssrfProtection', () => ({
   validateTargetUrl: (...args: unknown[]) => mockValidateTargetUrl(...args),
+  fetchPinned: mockFetchPinned,
 }));
 
 import { cacheExternalImage } from './cacheExternalImage';
@@ -143,6 +146,22 @@ describe('cacheExternalImage', () => {
       // initial attempt + MAX_FETCH_RETRIES (2) = 3 total
       expect(fetchMock).toHaveBeenCalledTimes(3);
       expect(result).toBe(validUrl);
+    });
+
+    it('downloads through the pinned fetch with http allowed and a body cap', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue(new Response(new ArrayBuffer(8), { headers: { 'content-type': 'image/png' } }))
+      );
+
+      const promise = cacheExternalImage(validUrl);
+      await vi.runAllTimersAsync();
+      await promise;
+
+      expect(mockFetchPinned).toHaveBeenCalledWith(validUrl, expect.any(Object), {
+        allowHttp: true,
+        maxBodyBytes: 25 * 1024 * 1024,
+      });
     });
 
     it('does not retry on a non-transient error', async () => {

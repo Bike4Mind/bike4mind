@@ -10,9 +10,9 @@ import {
   INTEGRATION_HEALTH_INTEGRATIONS,
 } from '@bike4mind/database';
 import type { IntegrationName, CircuitBreakerMode } from '@bike4mind/database';
-import { getHealthSummary, runAllProbes, runProbe } from '@server/services/integrationHealthService';
+import { getHealthSummary, runAllProbes, runProbe } from '@bike4mind/server-utils/services/integrationHealthService';
 import { getStatus, clearCache } from '@bike4mind/server-utils/services/integrationCircuitBreaker';
-import { flushBreakerMetrics, getAllBreakerStates, resetBreaker } from '@server/services/mcpCircuitBreakers';
+import { flushBreakerMetrics, getAllBreakerStates, resetBreaker } from '@bike4mind/server-utils/services/mcpCircuitBreakers';
 
 const ensureAdmin = (isAdmin?: boolean | null) => {
   if (!isAdmin) {

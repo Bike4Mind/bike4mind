@@ -42,7 +42,7 @@ import {
 } from '@bike4mind/fab-pipeline';
 import { getSettingsValue } from '../settings';
 import { Logger } from '@bike4mind/observability';
-import { ensureToolPairingIntegrity } from '@bike4mind/llm-adapters';
+import { ensureToolPairingIntegrity, isConverseBedrockModel } from '@bike4mind/llm-adapters';
 import { getFileContent } from '../fabfile';
 import { escapeRegex } from '../escapeRegex';
 import { BadRequestError, CorruptedFileError } from '../errors';
@@ -1728,7 +1728,9 @@ export async function processFabFilesServer(
             if (
               modelInfo.backend === ModelBackend.Anthropic ||
               modelInfo.id.includes('anthropic') ||
-              modelInfo.id.includes('gemini')
+              modelInfo.id.includes('gemini') ||
+              modelInfo.adapterFamily === 'bedrock-converse' ||
+              isConverseBedrockModel(String(modelInfo.id))
             ) {
               // Check image size before downloading (Anthropic has 5MB base64 limit)
               // We use 3.5MB as safe threshold since base64 encoding adds ~33% overhead

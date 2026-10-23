@@ -194,6 +194,16 @@ export function CheckIcon() {
   );
 }
 
+/** Copy to the clipboard: a sheet laid over the one it was copied from. */
+export function CopyIcon() {
+  return (
+    <Glyph>
+      <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
+      <path d="M10.5 5.5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5" />
+    </Glyph>
+  );
+}
+
 /** Appearance: one disc with half of it filled - the same glyph whichever scheme is in force. */
 export function ContrastIcon() {
   return (
@@ -414,16 +424,6 @@ export function ExternalLinkIcon() {
   return (
     <Glyph>
       <path d="M9.5 2.5h4v4M13.5 2.5 8 8M12 9.5v3a1 1 0 01-1 1H3.5a1 1 0 01-1-1V5a1 1 0 011-1h3" />
-    </Glyph>
-  );
-}
-
-/** A file with a plus over a minus: uncommitted or unshipped changes. */
-export function FileDiffIcon() {
-  return (
-    <Glyph>
-      <rect x="2.5" y="2" width="11" height="12" rx="2" />
-      <path d="M8 4.75v4M6 6.75h4M6 11.25h4" />
     </Glyph>
   );
 }

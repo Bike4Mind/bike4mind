@@ -53,6 +53,7 @@ import { recommendTools, mergeTools } from '@client/app/utils/toolRecommender';
 import { resolveActiveOrg } from '@bike4mind/server-utils/utils/resolveActiveOrg';
 import { dataLakeToolsDeniedFor } from '@server/dataLakes/dataLakeScopes';
 import { requestTurnAuth } from '@server/auth/turnAuth';
+import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
 import { runWithDeadline, WAIT_TURN_BUDGET_MS, WAIT_TURN_WIND_DOWN_MS } from '@server/utils/waitTurnDeadline';
 import {
   TIMED_OUT_RUN,
@@ -184,6 +185,13 @@ const handler = nextRouteForContract(chatContract, {
     gpcSignalDetected: req.headers['sec-gpc'] === '1',
     features: new Map<featureNames, ChatCompletionFeature>(),
     logger: req.logger,
+    createCompletionMeter: ({
+      organizationId,
+      featureLabel,
+    }: {
+      organizationId: string | null;
+      featureLabel: string;
+    }) => createCompletionMeter(req.user!, req.logger, featureLabel, { sessionId, organizationId }),
     invokeLambda: async (params: any) => {
       if (simplifiedRequest.wait) {
         // wait=true: the quest is processed inline below (ChatCompletionProcess). Do NOT

@@ -25,7 +25,7 @@ Settings are organized into the following tabs, each with a distinctive icon:
 | Tab | Categories Included | Description |
 |-----|-------------------|-------------|
 | AI Configuration | AI, Knowledge | AI model API keys, embedding settings, context configuration |
-| External Integrations | Tools, Calendar, Slack | Third-party service connections and API credentials |
+| External Integrations | Tools, Slack | Third-party service connections and API credentials |
 | Features | Experimental, Notebooks | Feature flags and experimental feature toggles |
 | Security | AI Moderation | Content moderation and access control rules |
 | User Management | Users, Referrals | User notification settings, seat defaults, credit enforcement |
@@ -54,7 +54,6 @@ Within each tab, settings are grouped by service. Each service group card displa
 | Service Group | Settings | Description |
 |--------------|----------|-------------|
 | Search Service | Serper API key | Web search integration |
-| Google Calendar | Enable/disable, service account email/secret, organizer email | Calendar integration |
 | Slack Integration | Signing secret, bot token, workspace configuration | Slack bot settings |
 | MCP Server | Enable/disable, GitHub client credentials, Atlassian client credentials | Model Context Protocol integration |
 

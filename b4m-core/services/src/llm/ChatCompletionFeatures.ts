@@ -117,7 +117,10 @@ import {
   rankCandidateFilesByRelevance,
   withDeadline,
   type ForcedRetrievalCandidateSelection,
+  type ForcedRetrievalFallbackReason,
 } from './forcedRetrievalCandidateSelection';
+import { meterCompletionBackend, type CompletionMeter } from '../billing/completionMeter';
+import { recordForcedRetrievalCutMetrics } from './forcedRetrievalSelectionMetrics';
 import { blendFollowUpQueryVector, forcedRetrievalFollowUpContext } from './forcedRetrievalQuery';
 import {
   buildSupersessionReport,
@@ -386,6 +389,12 @@ export interface IChatCompletionServiceOptions {
   queue?: IQueueService;
   wsHttpsUrl: string;
   slackWebhookUrl: string;
+  /**
+   * Builds a CompletionMeter billing the turn's owner (`organizationId` = the turn's active org, null =
+   * the user) for platform-key calls the turn makes outside its own credit reservation, e.g. the
+   * QuestMaster plan. Unset = those calls run unmetered (hosts that do not bill).
+   */
+  createCompletionMeter?: (opts: { organizationId: string | null; featureLabel: string }) => CompletionMeter;
   imageProcessorLambdaName?: string; // Lambda function name for image processing
   abilityGetter: (user: IUserDocument | undefined) => MongoAbility;
   /**
@@ -568,6 +577,7 @@ export type ChatCompletionContext = Pick<
   | 'personalCorpusOnly'
   | 'embeddingBinding'
   | 'priorUserPrompts'
+  | 'createCompletionMeter'
 > & {
   sendStatusUpdate: (
     q: IChatHistoryItemDocument,
@@ -613,6 +623,8 @@ export interface ChatCompletionFeature {
     fabFileIds: string[];
     questId: string;
     questMaster: z.infer<typeof QuestMasterParamsSchema> | undefined;
+    /** The turn's active organization, which owns its billing (null/unset = the user). */
+    organizationId?: string | null;
   }) => Promise<{ shouldContinue: boolean }>;
   getContextMessages: (
     quest: IChatHistoryItemDocument,
@@ -1144,6 +1156,7 @@ export class QuestMasterFeature implements ChatCompletionFeature {
     fabFileIds,
     questId,
     questMaster,
+    organizationId,
   }: {
     quest: IChatHistoryItemDocument;
     session: ISessionDocument;
@@ -1156,6 +1169,7 @@ export class QuestMasterFeature implements ChatCompletionFeature {
     fabFileIds: string[];
     questId: string;
     questMaster: z.infer<typeof QuestMasterParamsSchema> | undefined;
+    organizationId?: string | null;
   }): Promise<{ shouldContinue: boolean }> {
     // If questMaster is provided, that means we are to process a task from a QuestMaster plan
     if (questMaster) {
@@ -1233,7 +1247,22 @@ export class QuestMasterFeature implements ChatCompletionFeature {
 
       this.logger.log(`QuestMaster: Fetched ${conversationHistory.length} history messages for context`);
 
-      await this.questMasterRequest(quest, llm, model, startParams, quest.sessionId, message, conversationHistory);
+      // The plan runs before the turn reserves credits, so each plan call is billed on its own (a
+      // provider failure is refunded); a fallback turn after a failed plan pays only for its own reply.
+      const meter = this.chatCompletion.createCompletionMeter?.({
+        organizationId: organizationId ?? null,
+        featureLabel: 'QuestMaster planning',
+      });
+      const plannerLlm = meter ? meterCompletionBackend(llm, meter, modelInfo) : llm;
+      await this.questMasterRequest(
+        quest,
+        plannerLlm,
+        model,
+        startParams,
+        quest.sessionId,
+        message,
+        conversationHistory
+      );
 
       // Refetch to verify the questMasterReply was set
       const updatedQuest = await this.chatCompletion.db.quests.findById(questId);
@@ -1844,6 +1873,10 @@ type ForcedRetrievalCandidateFile = VectorSearchReadinessFile & {
   tags?: { name: string }[];
   documentDate?: Date | null;
 };
+// The ANN candidate pick's outcome. annPickMs is null when no query was sent.
+type AnnCandidatePick<T> =
+  | { ranked: T[]; annPickMs: number }
+  | { ranked: null; reason: ForcedRetrievalFallbackReason; annPickMs: number | null };
 // File ids per chunk query, and chunk rows per query - together these bound how many vectors
 // are resident at once instead of loading every candidate file's chunks up front.
 const FORCED_RETRIEVAL_FILE_BATCH_SIZE = 10;
@@ -2274,6 +2307,13 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    * as much an incomplete answer as ALL of them, and gating on "all" made this unreachable in
    * practice: a fully-mismatched library also has zero scored chunks, which returns before either
    * call site below ever runs.
+   *
+   * A supersession collapse alone is NOT partial: dedupe working as designed drops a stale
+   * generation, not part of the library, so it neither raises the reader notice nor adds the
+   * coverage note to a grounded turn. Its ids still land in `promptMeta.warnings`, and in the
+   * reader-facing reasons it is never listed. A turn that retrieved nothing is the exception: the
+   * call site keeps its `no_match_partial` abstention, because "nothing found" after a collapse
+   * that can be wrong on the bare file-name tier would be a confident false negative.
    */
   private reportCoverage(
     quest: IChatHistoryItemDocument,
@@ -2286,11 +2326,14 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       coverage.stoppedByChunkBudget ||
       coverage.stoppedByCursorStall ||
       anyMismatch ||
-      coverage.filesWithheldReindexing > 0 ||
-      coverage.filesSupersededCollapsed > 0;
-    if (!partial) return false;
+      coverage.filesWithheldReindexing > 0;
+    const supersededOnly = !partial && coverage.filesSupersededCollapsed > 0;
+    if (!partial && !supersededOnly) return false;
 
+    // `reasons` is the diagnostic prose (limits, counts, ids) for the log and `promptMeta.warnings`;
+    // `readerReasons` is the same causes worded for the chat notice, with no ids or internal limits.
     const reasons: string[] = [];
+    const readerReasons: string[] = [];
     if (coverage.moreFilesBeyondCap) {
       // Names the selection RULE, not just the shortfall: candidates come off a fileName-ascending
       // page (see the listing above), so an over-cap library does not lose a random slice - it
@@ -2309,17 +2352,23 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
               `name are considered${coverage.candidateSelection === 'relevance' ? ' (and ranked by relevance)' : ''}, ` +
               'so the rest of the library is never reached'
       );
+      readerReasons.push('More documents matched than one search can cover, so the rest were not checked.');
     }
     if (coverage.stoppedByChunkBudget) {
       reasons.push(`the ${FORCED_RETRIEVAL_MAX_SCANNED_CHUNKS}-chunk per-turn scan budget was reached`);
+      readerReasons.push('The question matched more content than one search can read, so some of it was not checked.');
     }
     if (coverage.stoppedByCursorStall) {
       reasons.push('the passage reader stopped advancing, so part of a document batch was never scanned');
+      readerReasons.push('Part of a document batch could not be read.');
     }
     if (coverage.filesExcludedForeignModel > 0) {
       reasons.push(
         `${coverage.filesExcludedForeignModel} document(s) are embedded with a different model than the ` +
           `${embeddingModel} query and were excluded entirely`
+      );
+      readerReasons.push(
+        `${coverage.filesExcludedForeignModel} document(s) were indexed in a way this search cannot read and were left out.`
       );
     }
     if (coverage.filesWithheldReindexing > 0) {
@@ -2329,11 +2378,16 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         `${coverage.filesWithheldReindexing} document(s) are being re-indexed right now and were withheld - ` +
           'their passages are being replaced and the replacements are not searchable yet; they return on their own'
       );
+      readerReasons.push(
+        `${coverage.filesWithheldReindexing} document(s) are being re-indexed right now and were skipped. ` +
+          'They return on their own.'
+      );
     }
     if (coverage.filesSupersededCollapsed > 0) {
       // Names the ids and the tier, and says the suppression is recoverable - the same contract
       // describeSupersession states, for the same reason: this collapse can be wrong on the bare
-      // file-name tier and the reader is the only one who can tell.
+      // file-name tier and whoever reads the warning is the only one who can tell. No reader-facing
+      // entry: this is dedupe working as designed.
       const named = formatSupersededSample(coverage.superseded, coverage.filesSupersededCollapsed);
       reasons.push(
         `${coverage.filesSupersededCollapsed} document(s) were not ranked because this lake holds a version that ` +
@@ -2348,10 +2402,18 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         `${allScannedMismatched ? 'all ' : ''}${coverage.chunksSkippedDimMismatch} chunk(s) across ` +
           `${coverage.filesWithDimMismatch} document(s) are embedded with a different model and cannot be matched`
       );
+      readerReasons.push(
+        `${coverage.chunksSkippedDimMismatch} passage(s) across ${coverage.filesWithDimMismatch} document(s) ` +
+          'were indexed in a way this search cannot read.'
+      );
     }
-    this.logger.warn(
-      `🔒 Forced retrieval: PARTIAL coverage - ${reasons.join('; ')}. Grounding is based on an incomplete library scan.`
-    );
+    if (supersededOnly) {
+      this.logger.log(`🔒 Forced retrieval: ${reasons.join('; ')}`);
+    } else {
+      this.logger.warn(
+        `🔒 Forced retrieval: PARTIAL coverage - ${reasons.join('; ')}. Grounding is based on an incomplete library scan.`
+      );
+    }
 
     quest.promptMeta = materializePromptMetaSession(quest.promptMeta, {
       sessionId: quest.sessionId,
@@ -2359,13 +2421,17 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     });
     quest.promptMeta.warnings = [
       ...(quest.promptMeta.warnings ?? []),
-      `Knowledge-base grounding scanned only part of the library for this message (${reasons.join('; ')}).`,
+      supersededOnly
+        ? `Knowledge-base grounding skipped superseded documents for this message (${reasons.join('; ')}).`
+        : `Knowledge-base grounding scanned only part of the library for this message (${reasons.join('; ')}).`,
     ];
+    if (supersededOnly) return false;
     // The same signal, structured, because `warnings` is a shared channel: response truncation and
     // artifact elision append there too, so a reader cannot tell a coverage entry from a sibling's
-    // without matching on prose. The chat banner reads THIS field; the string above stays for the
-    // debug inspector and for anything already grepping the warning text.
-    quest.promptMeta.retrievalCoverage = { partial: true, reasons };
+    // without matching on prose. The chat banner reads THIS field, with ids and internal limits
+    // left out; the diagnostic string above stays for the debug inspector and for anything already
+    // grepping the warning text.
+    quest.promptMeta.retrievalCoverage = { partial: true, reasons: readerReasons };
     return true;
   }
 
@@ -2491,6 +2557,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    * A relevance pick ranks them with one ANN query (see rankCandidateFilesByRelevance); anything
    * that stops it - index not queryable, no index-ready file, an error, or the deadline - falls
    * back to the prefix of the given order, which reportCoverage then flags as the by-name cut it is.
+   * A scope over the cap also publishes how it was cut (recordForcedRetrievalCutMetrics).
    */
   private async selectForcedRetrievalCandidates<T extends ForcedRetrievalCandidateFile>(
     files: T[],
@@ -2499,30 +2566,41 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     relevanceSelectionAvailable: boolean
   ): Promise<{ files: T[]; selection: ForcedRetrievalCandidateSelection }> {
     if (files.length <= FORCED_RETRIEVAL_MAX_CANDIDATE_FILES) return { files, selection: 'all' };
-    const ranked = relevanceSelectionAvailable
+    const pick: AnnCandidatePick<T> = relevanceSelectionAvailable
       ? await this.rankCandidatesByAnn(files, queryVector, embeddingModel)
-      : null;
-    if (ranked) return { files: ranked.slice(0, FORCED_RETRIEVAL_MAX_CANDIDATE_FILES), selection: 'relevance' };
+      : { ranked: null, reason: 'relevance-unavailable', annPickMs: null };
+    if (pick.ranked) {
+      await recordForcedRetrievalCutMetrics({ selection: 'relevance', annPickMs: pick.annPickMs }, this.logger);
+      return { files: pick.ranked.slice(0, FORCED_RETRIEVAL_MAX_CANDIDATE_FILES), selection: 'relevance' };
+    }
+    await recordForcedRetrievalCutMetrics(
+      { selection: 'fileName', reason: pick.reason, annPickMs: pick.annPickMs },
+      this.logger
+    );
     return { files: files.slice(0, FORCED_RETRIEVAL_MAX_CANDIDATE_FILES), selection: 'fileName' };
   }
 
   /**
    * The ANN half of selectForcedRetrievalCandidates, run through the same atlasVectorSearch seam
-   * as semanticDataLakeSearch. `null` means "fall back"; never throws.
+   * as semanticDataLakeSearch. `ranked: null` means "fall back by name", with the reason; never throws.
    */
   private async rankCandidatesByAnn<T extends ForcedRetrievalCandidateFile>(
     files: T[],
     queryVector: number[],
     embeddingModel: SupportedEmbeddingModel
-  ): Promise<T[] | null> {
+  ): Promise<AnnCandidatePick<T>> {
     const { fabfilechunks } = this.chatCompletion.db;
-    if (!isAtlasVectorSearchAvailable(fabfilechunks)) return null;
+    if (!isAtlasVectorSearchAvailable(fabfilechunks)) {
+      return { ranked: null, reason: 'relevance-unavailable', annPickMs: null };
+    }
     const now = new Date();
     const annReadyIds = files.filter(f => isVectorSearchReady(f, now)).map(f => f.id);
     if (annReadyIds.length === 0) {
       this.logger.warn('🔒 Forced retrieval: no candidate file is vector-index ready yet - picking candidates by name');
-      return null;
+      return { ranked: null, reason: 'no-ready-file', annPickMs: null };
     }
+    const startedAt = Date.now();
+    const elapsedMs = () => Date.now() - startedAt;
     try {
       // One deadline across both calls: the status read is cached but a cold miss is a round trip.
       const ann = await withDeadline(
@@ -2560,7 +2638,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         this.logger.warn(
           `🔒 Forced retrieval: ${embeddingModel} vector index not queryable - picking candidates by name`
         );
-        return null;
+        // Only the status read ran, so there is no query time to report.
+        return { ranked: null, reason: 'not-queryable', annPickMs: null };
       }
       // An empty answer is not a ranking: ranking on it would return the input (by-name) order
       // while reporting 'relevance', hiding the cut. Seen in the mongot lag window, where the
@@ -2570,22 +2649,23 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         this.logger.warn(
           `🔒 Forced retrieval: ${embeddingModel} vector index returned no hits - picking candidates by name`
         );
-        return null;
+        return { ranked: null, reason: 'no-hits', annPickMs: elapsedMs() };
       }
-      return rankCandidateFilesByRelevance(
+      const ranked = rankCandidateFilesByRelevance(
         files,
         ann.results.map(r => ({ fabFileId: r.fileId, score: r.score })),
         now
       );
+      return { ranked, annPickMs: elapsedMs() };
     } catch (error) {
       if (error instanceof DeadlineExceededError) {
         this.logger.warn(
           `🔒 Forced retrieval: ANN candidate pick ran past ${FORCED_RETRIEVAL_ANN_DEADLINE_MS}ms - picking candidates by name`
         );
-      } else {
-        this.logger.warn('🔒 Forced retrieval: ANN candidate pick failed - picking candidates by name', error);
+        return { ranked: null, reason: 'deadline', annPickMs: elapsedMs() };
       }
-      return null;
+      this.logger.warn('🔒 Forced retrieval: ANN candidate pick failed - picking candidates by name', error);
+      return { ranked: null, reason: 'error', annPickMs: elapsedMs() };
     }
   }
 
@@ -3612,7 +3692,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         // Report coverage first: a refusal grounded on a partially-scanned library is the most
         // misleading outcome there is, because it reads as "the library has nothing on this". The
         // return value is what keeps the abstention block from making exactly that claim.
-        const partial = this.reportCoverage(quest, coverage, embeddingModel);
+        const partial = this.reportCoverage(quest, coverage, embeddingModel) || coverage.filesSupersededCollapsed > 0;
         // The legitimate zero: the corpus WAS scanned and compared, nothing was similar enough.
         // 'ok' per RetrievalSummarySchema - this is the case the field exists to distinguish from
         // "never asked". Partial-scan hedging rides on promptMeta.warnings via reportCoverage above.

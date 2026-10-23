@@ -95,6 +95,7 @@ import {
 import { readWorkspaceChanges } from './project/workspaceChanges';
 import { accountSkillsProvider } from './skills/accountSkills';
 import { ProjectTrustStore } from './skills/ProjectTrustStore';
+import { ApprovalLog } from './permissions/ApprovalLog';
 import { ClaudeCodeSettings, MANAGED_SETTINGS_PATH } from './permissions/ClaudeCodeSettings';
 import { PermissionRuleStore } from './permissions/PermissionRuleStore';
 import { PermissionService } from './permissions/PermissionService';
@@ -483,6 +484,8 @@ export function registerChat(
     modelMemory: modelPreference,
     approvals,
     permissions,
+    // App-wide like approval-mode.json: a record of decisions, kept after their conversations.
+    approvalLog: new ApprovalLog(join(userData, 'approval-log.jsonl'), message => logger.warn(message)),
     background,
     foreground,
     dependencies: new DependencyInstaller(background),
@@ -582,11 +585,14 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatListSessions, () => service.listSessions());
   ipcMain.handle(IPC_CHANNELS.permissionsGetState, () => permissions.state());
   // Shapes checked here: this is the only door a rule comes in by besides the approval card.
-  ipcMain.handle(IPC_CHANNELS.permissionsSetRules, (_event, scope: unknown, lists: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.permissionsSetRules, async (_event, scope: unknown, lists: unknown) => {
     const parsedScope = permissionScope(scope);
     const parsedLists = permissionLists(lists);
     if (!parsedScope || !parsedLists) return { ok: false, error: 'Not a permission rule list.' };
-    return permissions.setRules(parsedScope, parsedLists);
+    const result = await permissions.setRules(parsedScope, parsedLists);
+    // An allow typed here answers any card it now covers, in every session.
+    if (result.ok) void approvals.settleCovered();
+    return result;
   });
   ipcMain.handle(IPC_CHANNELS.permissionsSetSharing, (_event, share: unknown) =>
     permissions.setShareClaudeCode(share === true)

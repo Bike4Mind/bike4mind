@@ -6,12 +6,10 @@ import {
   deleteFileUtility,
   moderateFabFileNow,
 } from '@client/app/utils/filesAPICalls';
-import {
-  ContentCopy as ContentCopyIcon,
-  Download as DownloadIcon,
-  Edit as EditIcon,
-  Description as DescriptionIcon,
-} from '@mui/icons-material';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import DownloadIcon from '@mui/icons-material/Download';
+import EditIcon from '@mui/icons-material/Edit';
+import DescriptionIcon from '@mui/icons-material/Description';
 import {
   Box,
   Button,
@@ -24,7 +22,8 @@ import {
   Typography,
 } from '@mui/joy';
 import SaveIcon from '@mui/icons-material/Save';
-import { ArrowBack as ArrowBackIcon, ArrowForward as ArrowForwardIcon } from '@mui/icons-material';
+import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import { FC, useState, useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
 import ImageMaskerFlux from './ImageMaskerFlux';

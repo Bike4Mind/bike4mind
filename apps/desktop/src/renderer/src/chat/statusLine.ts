@@ -96,24 +96,13 @@ function formatUsd(usd: number): string {
   return `$${usd.toFixed(usd < 0.01 ? 4 : 2)}`;
 }
 
-/** "$3.20" from the server's own figure, or "12 credits" when only credits came; null when neither. */
-export function formatCost(usage: ChatUsage | null | undefined): string | null {
-  if (!usage) return null;
-  if (usage.usdCost !== undefined) return formatUsd(usage.usdCost);
-  if (usage.creditsUsed !== undefined) return `${Math.round(usage.creditsUsed).toLocaleString('en-US')} credits`;
-  return null;
+/** Customer costs use the server's credits; developers can opt into its dollar figure. */
+export function formatCost(usage: ChatUsage | null | undefined, showDollars = false): string | null {
+  if (showDollars && usage?.usdCost !== undefined) return formatUsd(usage.usdCost);
+  return formatCreditsSpent(usage);
 }
 
-/**
- * What one reply cost, in CREDITS - deliberately not formatCost, which prefers the dollar.
- *
- * A reader asking what a reply cost is asking against a balance, and the balance is denominated
- * in credits; "$0.0004" cannot be subtracted from "31,667 credits" by eye. The dollar figure is
- * still the better one for an absolute sense of spend, so it stays - see describeReplyCost.
- *
- * Null when the server reported no credit figure. That is NOT zero, per ChatUsage: a reply from
- * before this was captured, or a turn that failed, has to render nothing rather than "0 credits".
- */
+/** Missing credit usage is unknown; a sub-credit charge must not look free. */
 export function formatCreditsSpent(usage: ChatUsage | null | undefined): string | null {
   const credits = usage?.creditsUsed;
   if (credits === undefined) return null;
@@ -123,17 +112,12 @@ export function formatCreditsSpent(usage: ChatUsage | null | undefined): string 
   return `${formatCredits(credits)} ${Math.round(credits) === 1 ? 'credit' : 'credits'}`;
 }
 
-/**
- * The detail behind that figure: where the tokens went, then what it came to in dollars.
- *
- * The dollar line reads `usdCost` directly rather than calling formatCost, which falls back to
- * credits when no dollar figure came - repeating the headline in the line meant to add to it.
- */
-export function describeReplyCost(usage: ChatUsage | null | undefined): string | null {
+/** Token details, with dollar costs only when the developer explicitly enables them. */
+export function describeReplyCost(usage: ChatUsage | null | undefined, showDollars = false): string | null {
   const lines: string[] = [];
   const split = describeSplit(usage);
   if (split) lines.push(split);
-  if (usage?.usdCost !== undefined) lines.push(formatUsd(usage.usdCost));
+  if (showDollars && usage?.usdCost !== undefined) lines.push(formatUsd(usage.usdCost));
   return lines.length === 0 ? null : lines.join('\n');
 }
 
@@ -338,11 +322,12 @@ export function activityDetail(activity: TurnActivity): ActivityDetail | null {
 }
 
 /** The whole line, dot-separated, as one string - which is also how a test can read it. */
-export function statusFields(turn: TurnProgress, now: number, activity: string): string[] {
+export function statusFields(turn: TurnProgress, now: number, activity: string, showDollars = false): string[] {
+  const cost = formatCost(turn.usage, showDollars);
   return [
     formatElapsed(now - turn.startedAt),
     ...(turn.tokens === null ? [] : [`${formatTokens(turn.tokens)} tokens`]),
-    ...(formatCost(turn.usage) ? [formatCost(turn.usage) as string] : []),
+    ...(cost ? [cost] : []),
     activity,
   ];
 }
@@ -426,7 +411,7 @@ export function occupancyArc(percent: number): number {
  * that to "0%" renders a measured context identically to no context at all - the same
  * something-shown-as-nothing this file avoids everywhere else.
  */
-function formatOccupancy(percent: number, tokens: number): string {
+export function formatOccupancy(percent: number, tokens: number): string {
   if (percent === 0 && tokens > 0) return '<1%';
   return `${percent}%`;
 }
@@ -465,7 +450,7 @@ export function formatCredits(balance: number): string {
  * When the conversation will compact itself, and the model's own window where the cap hides it,
  * so nobody has to work out from "/ 400k" why a 1M model stops short of 1M.
  */
-function describeCompaction(limit: number, modelWindow: number | null): string {
+export function describeCompaction(limit: number, modelWindow: number | null): string {
   const at = `Compacts automatically at ${formatTokens(autoCompactThreshold(limit))}`;
   return modelWindow !== null && modelWindow > limit
     ? `${at} - the model's own window is ${formatTokens(modelWindow)}`
@@ -479,7 +464,7 @@ function describeCompaction(limit: number, modelWindow: number | null): string {
  * same reports and a reader who takes one for the other will conclude the window is far fuller
  * than it is - see inputSide.
  */
-export function describeUsage(usage: ComposerUsage): string | null {
+export function describeUsage(usage: ComposerUsage, showDollars = false): string | null {
   const lines: string[] = [];
 
   if (usage.contextTokens === null) {
@@ -504,7 +489,7 @@ export function describeUsage(usage: ComposerUsage): string | null {
 
   const split = describeSplit(usage.lastTurn);
   if (split) {
-    const cost = formatCost(usage.lastTurn);
+    const cost = formatCost(usage.lastTurn, showDollars);
     lines.push(`Last turn ${split}${cost ? ` - ${cost}` : ''}`);
   }
 

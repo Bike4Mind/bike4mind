@@ -7,8 +7,8 @@ import {
   classifyOperation,
   CircuitBreakerError,
   flushBreakerMetrics,
-} from '@server/services/mcpCircuitBreakers';
-import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
+} from '@bike4mind/server-utils/services/mcpCircuitBreakers';
+import { IntegrationAuditLogger } from '@bike4mind/server-utils/integrations/integrationAuditLogger';
 import type { IntegrationAuditIntegrationName } from '@bike4mind/database';
 import { INTEGRATION_AUDIT_INTEGRATION_NAMES } from '@bike4mind/database';
 import { recordCircuitBreakerRejection } from '@bike4mind/server-utils/utils/cloudwatch';

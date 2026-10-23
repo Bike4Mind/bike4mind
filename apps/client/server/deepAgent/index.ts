@@ -35,7 +35,7 @@ export {
 } from '@bike4mind/agents';
 // Host-private modules: Mongo store, tuned LLM steps + prompts, infra adapters.
 export { MongoDeepAgentStore } from '@bike4mind/server-utils/deepAgent/store';
-export { LlmWakeSteps, type LlmWakeStepsConfig } from './llmSteps';
+export { LlmWakeSteps, type LlmWakeStepsConfig } from '@bike4mind/server-utils/deepAgent/llmSteps';
 export { buildOrientPrompt, buildReflectPrompt, buildGroomPrompt } from '@bike4mind/server-utils/deepAgent/prompts';
 export {
   DEFAULT_WAKE_MODEL_ID,
@@ -57,7 +57,7 @@ export {
   type EnrollDeepAgentInput,
   type EnrollDeepAgentDeps,
   type EnrollDeepAgentResult,
-} from './enroll';
+} from '@bike4mind/server-utils/deepAgent/enroll';
 export {
   runReviewWake,
   createLlmReviewStep,
@@ -80,4 +80,4 @@ export {
   formatWakeLogEntry,
   formatReviewLogEntry,
   type MissionBridgeDeps,
-} from './missionSessionBridge';
+} from '@bike4mind/server-utils/deepAgent/missionSessionBridge';

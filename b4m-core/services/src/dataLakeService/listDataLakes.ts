@@ -152,7 +152,7 @@ interface ListDataLakesAdapters {
     /**
      * Optional GitHub lake-connection lookup. When present, each manageable lake that carries
      * `pendingConnector` also carries `hasGitHubConnection`, read flag-free from the same rows
-     * apps/client/server/dataLakes/assertLakeConnectorFree.ts treats as a GitHub binding. One batched
+     * packages/server-utils/src/dataLakes/assertLakeConnectorFree.ts treats as a GitHub binding. One batched
      * read for the page, never per lake.
      */
     gitHubLakeConnections?: { findBoundDataLakeIds: (ids: string[]) => Promise<string[]> };

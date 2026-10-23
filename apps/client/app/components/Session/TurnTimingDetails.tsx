@@ -1,6 +1,7 @@
 import React from 'react';
 import { Box, Chip, Stack, Typography } from '@mui/joy';
-import { Timer, Warning } from '@mui/icons-material';
+import Timer from '@mui/icons-material/Timer';
+import Warning from '@mui/icons-material/Warning';
 import HistoryIcon from '@mui/icons-material/History';
 import type { ITurnTiming } from '@bike4mind/common';
 import { TURN_RETRY_REASON_LABELS } from './turnTimingFormat';

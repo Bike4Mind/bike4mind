@@ -1,32 +1,9 @@
 import React, { useState, useCallback } from 'react';
 import { Box, Text, useInput } from 'ink';
 import type { PermissionPromptKind } from '../tools/gateway/gatewayTypes.js';
+import { escapeTerminalControlChars } from '../utils/sanitizeTerminalText.js';
 
 export type PermissionResponse = 'allow-once' | 'allow-session' | 'allow-always' | 'deny';
-
-/**
- * Escape characters that let untrusted text render differently from what
- * actually runs, into a visible escape form. Shared by every prompt that shows
- * untrusted text for the user to decide on: tool previews/arguments here,
- * repo-authored MCP definitions (McpApprovalPrompt), the folder-trust path
- * (FolderTrustPrompt), and model-authored ReviewGatePrompt / UserQuestionPrompt text. Display only - never escape the
- * value that is acted on or sent back.
- * These ranges are covered, deliberately and no wider:
- *   - C0 controls (minus tab/newline), DEL and C1 controls -> `\xHH`: a raw
- *     `\r`, ESC or 8-bit CSI (U+009B) could rewrite the line being approved.
- *   - Unicode bidi overrides U+202A..U+202E and isolates U+2066..U+2069
- *     -> `\uXXXX`: these reorder displayed glyphs without changing the
- *     underlying code points, spoofing the same way.
- * Tab and newline are left intact (newline is already the line delimiter).
- * Widen the scope here, so both call sites gain it at once.
- */
-export function escapeTerminalControlChars(text: string): string {
-  // eslint-disable-next-line no-control-regex
-  return text.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]/g, ch => {
-    const code = ch.charCodeAt(0);
-    return code > 0xff ? `\\u${code.toString(16).padStart(4, '0')}` : `\\x${code.toString(16).padStart(2, '0')}`;
-  });
-}
 
 /** Render a diff/preview string, color-coding each line by its prefix (see per-branch comments below). */
 function renderDiffPreview(preview: string): React.ReactNode {

@@ -29,9 +29,10 @@ vi.mock('@bike4mind/server-utils/utils/errors', () => ({
 }));
 
 const mockOrgCreate = vi.fn();
+const mockAddCredits = vi.fn();
 vi.mock('@bike4mind/services', () => ({
   organizationService: { create: (...a: unknown[]) => mockOrgCreate(...a) },
-  creditService: { addCredits: vi.fn() },
+  creditService: { addCreditsWithLedgerRow: (...a: unknown[]) => mockAddCredits(...a) },
 }));
 
 let inTransaction = false;
@@ -100,6 +101,7 @@ describe('POST /api/admin/organizations/grant', () => {
     mockUserFindByEmail.mockResolvedValue({ id: 'owner-1', email: 'owner@example.com' });
     mockOrgCreate.mockResolvedValue({ id: 'org-1', name: 'Acme Corp' });
     mockSubCreate.mockResolvedValue({ id: 'sub-1' });
+    mockAddCredits.mockResolvedValue({ creditHolder: {}, creditTransactionId: 'tx-grant' });
   });
 
   it('requires the ADMIN scope so an under-scoped admin-owned key is 403d by apiKeyAuth', () => {
@@ -135,7 +137,18 @@ describe('POST /api/admin/organizations/grant', () => {
         action: 'org.credits.granted',
         target: expect.objectContaining({ kind: 'organization', id: 'org-1', displayName: 'Acme Corp' }),
         reason: 'Sales-approved pilot',
+        related: { creditTransactionId: 'tx-grant' },
       })
+    );
+  });
+
+  it('records no related ledger link when there are no initial credits', async () => {
+    const { run } = call({ body: { ...BODY, initialCredits: 0 } });
+    await run();
+    expect(mockAddCredits).not.toHaveBeenCalled();
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ related: undefined })
     );
   });
 

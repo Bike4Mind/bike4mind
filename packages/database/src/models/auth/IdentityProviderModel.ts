@@ -1,6 +1,7 @@
 import mongoose, { Document, Model, model, Schema } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 import { decryptAtRest, encryptAtRest } from '@bike4mind/utils/security';
+import type { IdentityProviderSecretPresence } from '@bike4mind/common';
 
 export interface IIdentityProviderDocument extends Document {
   id: string;
@@ -54,7 +55,7 @@ export interface IIdentityProviderDocument extends Document {
  * whether one is stored. See findAllWithSecretPresence.
  */
 export type IdentityProviderWithSecretPresence = IIdentityProviderDocument & {
-  hasSecrets: { decryptionPvk: boolean; privateCert: boolean; clientSecret: boolean };
+  hasSecrets: IdentityProviderSecretPresence;
 };
 
 export interface IIdentityProviderRepository {

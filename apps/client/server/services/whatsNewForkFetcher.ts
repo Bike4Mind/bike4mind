@@ -13,7 +13,7 @@ import {
   ManifestSchema,
   Manifest,
   ManifestModalEntry,
-} from './whatsNewDistribution';
+} from '@bike4mind/server-utils/services/whatsNewDistribution';
 
 // Configuration constants
 const WHATS_NEW_TAG = 'whats-new' as const;

@@ -24,6 +24,12 @@ import { getClientIp, truncateIp } from '@bike4mind/server-utils/utils/ip';
 import * as z from 'zod';
 import { requireStepUp } from '@server/auth/stepUp';
 import {
+  diffProfileFields,
+  profileFieldsSent,
+  readProfileSnapshot,
+  recordProfileUpdate,
+} from '@server/users/profileUpdateAudit';
+import {
   denySelfAdminAction,
   isSameUserId,
   isSelfOrImpersonator,
@@ -167,6 +173,8 @@ const handler = baseApi().put(
     const currentUser = req.user;
 
     const isSelf = isSameUserId(currentUser.id, userId);
+    // An admin editing someone else, or any edit made while impersonating, is mirrored as user.profile.updated.
+    const mirrorsProfileUpdate = !isSelf || !!currentUser.impersonatedBy;
 
     // Non-admin users can only update their own profile
     if (!currentUser.isAdmin && !isSelf) {
@@ -263,6 +271,9 @@ const handler = baseApi().put(
         ? await getPreviousConsentLevel(userId, incomingTelemetryLevel, body.preferences)
         : undefined;
 
+      const profileFields = mirrorsProfileUpdate ? profileFieldsSent(body) : [];
+      const profileBefore = profileFields.length > 0 ? await readProfileSnapshot(userId, profileFields) : null;
+
       req.logger.updateMetadata({ updatedFields: Object.keys(body) });
       await commitWithSessionEnd(
         req,
@@ -299,7 +310,7 @@ const handler = baseApi().put(
             });
           }
           if (creditAdjustment) {
-            const { credits, previousBalance, resultingBalance } = creditAdjustment;
+            const { credits, previousBalance, resultingBalance, creditTransactionId } = creditAdjustment;
             await recordAdminActionFromRequest(req, {
               action: 'user.credits.adjusted',
               target: auditTarget,
@@ -307,6 +318,7 @@ const handler = baseApi().put(
               reason: creditAdjustment.note,
               changes: [{ field: 'currentCredits', before: previousBalance, after: resultingBalance }],
               details: { credits },
+              related: creditTransactionId ? { creditTransactionId } : undefined,
             });
           }
           return { snapshot, updated };
@@ -317,6 +329,13 @@ const handler = baseApi().put(
           return reason && { userId, reason, actorUserId: currentUser.id !== userId ? currentUser.id : undefined };
         }
       );
+
+      if (profileFields.length > 0) {
+        await recordProfileUpdate(req, {
+          target: auditTarget,
+          changes: diffProfileFields(profileFields, profileBefore, await readProfileSnapshot(userId, profileFields)),
+        });
+      }
 
       // Log consent change only after successful update
       if (incomingTelemetryLevel) {
@@ -354,6 +373,9 @@ const handler = baseApi().put(
         ? await getPreviousConsentLevel(userId, incomingTelemetryLevel, body.preferences)
         : undefined;
 
+      const profileFields = mirrorsProfileUpdate ? profileFieldsSent(body) : [];
+      const profileBefore = profileFields.length > 0 ? await readProfileSnapshot(userId, profileFields) : null;
+
       const update = () =>
         userService.updateUser(userId, body, {
           db: {
@@ -368,6 +390,16 @@ const handler = baseApi().put(
         await commitWithSessionEnd(req, update, () => ({ userId, reason: 'password_changed' }));
       } else {
         await update();
+      }
+
+      if (profileFields.length > 0) {
+        const targetSnapshot = (await User.findById(userId)
+          .select('name username email')
+          .lean()) as AuditTargetSnapshot | null;
+        await recordProfileUpdate(req, {
+          target: userAuditTarget(userId, targetSnapshot),
+          changes: diffProfileFields(profileFields, profileBefore, await readProfileSnapshot(userId, profileFields)),
+        });
       }
 
       // Log consent change only after successful update
