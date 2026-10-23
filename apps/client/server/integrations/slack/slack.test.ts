@@ -238,7 +238,20 @@ describe('postMessageToSlack', () => {
     expect(mocks.post).toHaveBeenCalledWith(
       liveopsUrl,
       { text: 'ops alert' },
-      { headers: { 'Content-Type': 'application/json' } }
+      { headers: { 'Content-Type': 'application/json' }, timeout: 10_000 }
+    );
+  });
+  it('bounds a security notification and reports a timed out delivery', async () => {
+    const securityUrl = 'https://hooks.slack.com/services/security';
+    mocks.getSettingsMap.mockResolvedValue({ SlackSecurityAlertsWebhookUrl: securityUrl });
+    mocks.post.mockRejectedValue(new Error('timeout of 3000ms exceeded'));
+    await expect(postMessageToSlack('domain held', 'SlackSecurityAlertsWebhookUrl', { timeoutMs: 3000 })).resolves.toBe(
+      false
+    );
+    expect(mocks.post).toHaveBeenCalledWith(
+      securityUrl,
+      { text: 'domain held' },
+      { headers: { 'Content-Type': 'application/json' }, timeout: 3000 }
     );
   });
 });

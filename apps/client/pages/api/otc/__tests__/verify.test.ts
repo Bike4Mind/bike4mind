@@ -1,3 +1,4 @@
+import { signupProtection } from '@server/auth/signupProtection';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import {
@@ -625,6 +626,7 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
       expect(res._getStatusCode()).toBe(200);
       expect(registerParams().sourceClientId).toBe('b4m_acme_0a1b2c3d');
       expect(mockRegisterViaOTC.mock.calls[0][1].db.oauthClients).toBe(oauthClientRepository);
+      expect(mockRegisterViaOTC.mock.calls[0][1].db.signupProtection).toBe(signupProtection);
     });
 
     it.each([

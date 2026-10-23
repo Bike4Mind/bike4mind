@@ -433,6 +433,9 @@ export const SettingKeySchema = z.enum([
   'apiKeyMinAccountAgeDays',
   'maxActiveKeysUntrusted',
   'apiKeyUntrustedRateLimitPerMin',
+  'signupBurstThreshold',
+  'signupBurstWindowHours',
+  'signupBurstAutoHold',
   'defaultFreeCredits',
   'teamPlanMinSeats',
   'teamPlanMaxSeats',
@@ -2046,6 +2049,9 @@ export const API_SERVICE_GROUPS = {
       { key: 'billOperationalUsage', order: 1 },
       { key: 'blockDisposableEmails', order: 2 },
       { key: 'blockedEmailDomains', order: 3 },
+      { key: 'signupBurstThreshold', order: 5 },
+      { key: 'signupBurstWindowHours', order: 6 },
+      { key: 'signupBurstAutoHold', order: 7 },
       { key: 'syntheticUserEmailDomains', order: 4 },
       { key: 'turnstileEnabled', order: 5 },
       { key: 'turnstileFailClosed', order: 6 },
@@ -3512,6 +3518,37 @@ export const settingsMap = {
     // Plain strings so one malformed stored entry cannot fail the whole list; the update route
     // refuses invalid entries and readers filter with partitionDomainList.
     schema: z.array(z.string()),
+  }),
+  signupBurstThreshold: makeNumberSetting({
+    key: 'signupBurstThreshold',
+    name: 'Signup Burst Threshold',
+    defaultValue: 5,
+    int: true,
+    min: 3,
+    max: 1000,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description: 'Minimum verified signups with generated email patterns before a domain is held for review.',
+  }),
+  signupBurstWindowHours: makeNumberSetting({
+    key: 'signupBurstWindowHours',
+    name: 'Signup Burst Window (hours)',
+    defaultValue: 6,
+    int: true,
+    min: 1,
+    max: 168,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description: 'Rolling window for verified signup pattern detection.',
+  }),
+  signupBurstAutoHold: makeBooleanSetting({
+    key: 'signupBurstAutoHold',
+    name: 'Auto-hold Signup Bursts',
+    defaultValue: false,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description:
+      'Hold patterned signup domains for admin review and defer their pending free credits. Granted balances are never changed. Review in Signup Domain Holds.',
   }),
   defaultFreeCredits: makeNumberSetting({
     key: 'defaultFreeCredits',
@@ -5617,8 +5654,7 @@ export const FORCED_RETRIEVAL_SETTING_KEYS = [
   'forcedRetrievalSpreadFloorPct',
 ] as const satisfies readonly SettingKey[];
 
-// ============================================================================
-// Public settings projection - the security boundary for the unauthenticated
+// =====================================================================// Public settings projection - the security boundary for the unauthenticated
 // CDN config artifact (docs/perf/mobile-startup-latency.md, M2.5).
 //
 // SINGLE source of truth for what may be served without authentication. The
@@ -5626,8 +5662,7 @@ export const FORCED_RETRIEVAL_SETTING_KEYS = [
 // public if explicitly tagged. `isSensitive` is a separate (opt-out) boundary
 // used by the authenticated /api/settings/fetch admin path and is NOT sufficient
 // for public exposure (e.g. sreAgentConfig is !isSensitive but operational).
-// ============================================================================
-
+// =====================================================================
 /** Minimal shape of a stored admin setting document (Mongo/ORM-agnostic). */
 export interface AdminSettingDoc {
   settingName: string;

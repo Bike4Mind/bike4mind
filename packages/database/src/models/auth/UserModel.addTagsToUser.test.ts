@@ -24,6 +24,21 @@ describe('UserModel.addTagsToUser', () => {
     expect(reloaded?.tags).toEqual(['Partner', 'cohort-a']);
   });
 
+  it('normalizes legacy null tags while preserving simultaneous additions', async () => {
+    const user = await User.create({
+      username: 'legacy-null',
+      name: 'Legacy',
+      email: 'legacy@example.com',
+      tags: null,
+    });
+    await Promise.all([
+      userRepository.addTagsToUser(user.id, ['pending-free-credits']),
+      userRepository.addTagsToUser(user.id, ['existing-tag']),
+    ]);
+    const reloaded = await User.findById(user.id);
+    expect(reloaded?.tags).toEqual(expect.arrayContaining(['pending-free-credits', 'existing-tag']));
+  });
+
   it('leaves the user untouched for an empty list', async () => {
     const user = await User.create({ username: 'empty', name: 'Empty', email: 'empty@example.com', tags: ['beta'] });
 
