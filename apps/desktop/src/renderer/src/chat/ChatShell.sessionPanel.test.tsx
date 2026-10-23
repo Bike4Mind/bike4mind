@@ -400,3 +400,62 @@ describe('the session panel in the shell', () => {
     expect(get('session-chips-error-row').textContent).toBe('Could not read the repository');
   });
 });
+
+/**
+ * Absolutely positioned elements that a scroller does not clip: their containing block lies
+ * outside an overflow box they sit in, so they are laid out against the shell instead of the
+ * transcript and a long thread lengthens the window's own document.
+ */
+function escapingAbsolutes(): HTMLElement[] {
+  const positioned = (el: Element) => getComputedStyle(el).position !== 'static';
+  const clips = (el: Element) => {
+    const style = getComputedStyle(el);
+    return [style.overflow, style.overflowX, style.overflowY].some(value => value && value !== 'visible');
+  };
+  return [...document.querySelectorAll<HTMLElement>('body *')].filter(el => {
+    if (getComputedStyle(el).position !== 'absolute') return false;
+    for (let node = el.parentElement; node && node !== document.body; node = node.parentElement) {
+      if (positioned(node)) return false;
+      if (clips(node)) return true;
+    }
+    return false;
+  });
+}
+
+describe('the shell layout', () => {
+  it('pins the shell to the viewport so the window itself never scrolls', async () => {
+    paneWidth(1600);
+    await open('bound');
+
+    const shell = getComputedStyle(get('chat-shell'));
+    expect(shell.height).toBe('100vh');
+    expect(shell.overflow).toBe('clip');
+  });
+
+  it('keeps every absolutely positioned element inside the scroller it sits in', async () => {
+    paneWidth(1600);
+    const at = '2026-10-01T00:00:00.000Z';
+    transcript = [
+      { id: 'u1', role: 'user', content: 'First question', createdAt: at },
+      { id: 'a1', role: 'assistant', content: 'First answer', createdAt: at },
+      { id: 'u2', role: 'user', content: 'Second question', createdAt: at },
+      { id: 'a2', role: 'assistant', content: 'Second answer', createdAt: at },
+    ] as ChatMessage[];
+    await open('bound');
+
+    const statuses = document.querySelectorAll<HTMLElement>('[data-testid="chat-message-user-copy-btn-status"]');
+    expect(statuses).toHaveLength(2);
+    // The scroller is positioned too, so the walker alone would not notice the button's own wrapper going.
+    for (const status of statuses) expect(getComputedStyle(status.parentElement as Element).position).toBe('relative');
+    expect(escapingAbsolutes().map(el => el.dataset.testid ?? el.outerHTML.slice(0, 80))).toEqual([]);
+  });
+
+  it('docks the session panel outside the transcript scroller, so it does not scroll with the thread', async () => {
+    paneWidth(1600);
+    transcript = [
+      { id: 'u1', role: 'user', content: 'A question', createdAt: '2026-10-01T00:00:00.000Z' },
+    ] as ChatMessage[];
+    await open('bound');
+    expect(get('chat-thread').contains(get('session-panel'))).toBe(false);
+  });
+});
