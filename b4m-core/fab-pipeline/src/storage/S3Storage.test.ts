@@ -80,6 +80,17 @@ describe('S3Storage ranged reads on empty objects', () => {
     await expect(storage.getPreview('uploads/__init__.py')).resolves.toBe('');
   });
 
+  it.each([
+    ['only the error name matches', 'InvalidRange', 400],
+    ['only the HTTP status matches', 'RequestedRangeNotSatisfiable', 416],
+  ])('treats a range error as empty when %s', async (_case, name, status) => {
+    const { storage, send } = setup();
+    send.mockRejectedValue(s3Error(name, status));
+
+    await expect(storage.downloadRange('uploads/__init__.py', 4100)).resolves.toEqual(Buffer.alloc(0));
+    await expect(storage.getPreview('uploads/__init__.py')).resolves.toBe('');
+  });
+
   it('getPreview still propagates other S3 errors', async () => {
     const { storage, send } = setup();
     send.mockRejectedValue(s3Error('AccessDenied', 403));
