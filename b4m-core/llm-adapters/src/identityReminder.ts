@@ -1,8 +1,11 @@
 import type { IMessage } from '@bike4mind/common';
 
 /**
- * Model-identity line the Anthropic-family adapters (anthropicBackend, bedrockBackend/anthropic)
- * close every system parameter with, and openaiBackend closes its lead system message with.
+ * Model-identity line appended to the final system prompt layer, so a model without a
+ * `current_model_details` tool can still answer which model it is.
+ *
+ * String-shaped system parameters use `appendIdentityReminder`; OpenAI-shaped message arrays use
+ * `appendIdentityReminderToMessages`.
  *
  * It sits last. On the Anthropic adapters that keeps the model id out of the cached system prefix;
  * openaiBackend matches the order for parity only, since OpenAI's prompt cache has no breakpoints.
