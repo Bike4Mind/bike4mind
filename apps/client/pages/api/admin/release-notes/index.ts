@@ -17,7 +17,9 @@ const QuerySchema = z.object({
 const api = baseApi({ requiredScopes: [ApiKeyScope.ADMIN, ApiKeyScope.RELEASE_NOTES_WRITE] });
 
 const handler = api.get(async (req, res) => {
-  if (!req.user?.isAdmin) {
+  // The job key holds release-notes:write and no admin scope, so apiKeyAuth withholds the owner's admin
+  // role on req.user; the narrow form that key gets is enforced below.
+  if (!req.user?.isAdmin && !isReleaseNotesWriteOnlyKey(req)) {
     throw new ForbiddenError('Unauthorized. Admin access required.');
   }
 

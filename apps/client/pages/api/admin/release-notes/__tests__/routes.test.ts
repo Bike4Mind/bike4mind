@@ -192,6 +192,30 @@ describe('GET /api/admin/release-notes', () => {
     expect(body.data[0]).toMatchObject({ releaseTag: 'v2026.10.20.1' });
   });
 
+  // apiKeyAuth withholds the admin role from a key without the admin scope, so the job key arrives with isAdmin false.
+  it('lets a release-notes:write key without the admin role look a note up by tag', async () => {
+    m.findOne.mockResolvedValue(note({ releaseTag: 'v2026.10.23.2' }));
+    const { error, body } = await call(listHandler, {
+      method: 'GET',
+      isAdmin: false,
+      query: { tag: 'v2026.10.23.2' },
+      keyScopes: ['release-notes:write'],
+    });
+    expect(error).toBeUndefined();
+    expect(body.data[0]).toMatchObject({ releaseTag: 'v2026.10.23.2' });
+  });
+
+  it('still refuses a release-notes:write key without the admin role that browses without a tag', async () => {
+    const { error } = await call(listHandler, {
+      method: 'GET',
+      isAdmin: false,
+      query: {},
+      keyScopes: ['release-notes:write'],
+    });
+    expect(error?.statusCode).toBe(403);
+    expect(m.adminList).not.toHaveBeenCalled();
+  });
+
   it('leaves an admin:* key free to browse without a tag', async () => {
     m.adminList.mockResolvedValue({ items: [], hasMore: false });
     const { error } = await call(listHandler, { method: 'GET', query: {}, keyScopes: ['admin:*'] });
@@ -345,6 +369,21 @@ describe('PATCH /api/admin/release-notes/[id] with a release-notes:write key', (
     expect(m.edit).not.toHaveBeenCalled();
     expect(m.attachVideo).not.toHaveBeenCalled();
     expect(m.attachImage).not.toHaveBeenCalled();
+  });
+
+  it('sets the video for a key without the admin role, as apiKeyAuth hands it over', async () => {
+    const video = { landscapeUrl: 'https://d111.cloudfront.net/wide.mp4' };
+    m.attachVideo.mockResolvedValue({ kind: 'ok', note: note({ video, editedAt: null }) });
+    const { error, status } = await call(editHandler, {
+      method: 'PATCH',
+      isAdmin: false,
+      query: { id: ID },
+      body: { video },
+      keyScopes: ['release-notes:write'],
+    });
+    expect(error).toBeUndefined();
+    expect(status).toBe(200);
+    expect(m.attachVideo).toHaveBeenCalledWith(ID, video);
   });
 
   it('sets the video through attachVideo, which leaves editedAt alone, never through edit', async () => {
