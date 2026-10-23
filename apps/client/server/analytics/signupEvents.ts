@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import type { OverwatchUtm } from '@bike4mind/common';
 import type { AcquisitionTouches } from '@bike4mind/server-utils/lib/subscriptions/acquisition';
+import { minorUnitsPerMajor } from '../integrations/stripe/currency';
 import { emitProductEvent, HOST_PRODUCT_ID, ingestKeyFor } from './emitActiveEvent';
 import { pseudonymizeUserId } from './pseudonymize';
 
@@ -225,14 +226,15 @@ export async function emitBillingEvent(opts: {
  * never sent. The occurrence is the Stripe id of the payment (invoice or payment intent).
  *
  * `value` is in the currency's major unit (29.99, not 2999), the GA4 convention the client pixel
- * also follows; checkout bills two-decimal currencies only (USD), so dividing by 100 is exact.
+ * also follows. The divisor follows the currency (minorUnitsPerMajor): a yen amount is already
+ * whole yen, so dividing every currency by 100 would under-report it 100x.
  */
 export async function emitPurchaseEvents(opts: {
   user: PurchaseCreditUser | null | undefined;
   /** The Stripe invoice id or payment intent id the money was collected on. */
   paymentId: string;
   kind: PurchaseKind;
-  /** The amount collected, in minor units (cents). */
+  /** The amount collected, in the currency's minor unit (cents for USD, yen for JPY). */
   amountMinor: number | null | undefined;
   currency: string | null | undefined;
   /** Stripe's billing_reason for an invoice: `subscription_create`, `subscription_cycle`, ... */
@@ -247,7 +249,7 @@ export async function emitPurchaseEvents(opts: {
     occurrence: paymentId,
     metadata: {
       kind,
-      value: amountMinor / 100,
+      value: amountMinor / minorUnitsPerMajor(currency),
       currency: currency.toUpperCase(),
       ...(billingReason && { billingReason }),
     },

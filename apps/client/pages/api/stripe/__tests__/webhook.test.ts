@@ -239,6 +239,27 @@ describe('billing events for Overwatch', () => {
     ]);
   });
 
+  it("reports the value in the currency's own major unit: yen have no minor unit", async () => {
+    await deliver(failedInvoice({ amount_due: 3000, currency: 'jpy', attempt_count: 1 }));
+    expect(sent()[0].metadata).toMatchObject({ value: 3000, currency: 'JPY' });
+
+    mocks.emitBillingEvent.mockClear();
+    await deliver({
+      id: 'evt_10',
+      type: 'payment_intent.payment_failed',
+      data: {
+        object: {
+          id: 'pi_10',
+          amount: 1500,
+          currency: 'jpy',
+          customer: 'cus_9',
+          metadata: { environment: 'test', credits: '100' },
+        },
+      },
+    });
+    expect(sent()[0].metadata).toEqual({ kind: 'credits', value: 1500, currency: 'JPY' });
+  });
+
   it('names no user for an organization invoice, and reports nothing with nothing due', async () => {
     mocks.markPastDue.mockResolvedValue({
       ...userRow,
@@ -263,13 +284,20 @@ describe('billing events for Overwatch', () => {
       createdAt: new Date('2026-01-01T00:00:00Z'),
       canceledAt: new Date('2026-01-31T12:00:00Z'),
     });
+    // A payload without start_date or ended_at: the row's createdAt to the delivery time.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-01-31T12:00:00Z'));
 
-    await deliver({
-      type: 'customer.subscription.deleted',
-      data: {
-        object: { id: 'sub_1', canceled_at: 1_769_860_800, metadata: {}, cancellation_details: { reason: null } },
-      },
-    });
+    try {
+      await deliver({
+        type: 'customer.subscription.deleted',
+        data: {
+          object: { id: 'sub_1', canceled_at: 1_769_860_800, metadata: {}, cancellation_details: { reason: null } },
+        },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
 
     expect(sent()).toEqual([
       {
@@ -280,6 +308,34 @@ describe('billing events for Overwatch', () => {
         metadata: { reason: 'unknown', plan: 'unknown', daysSubscribed: 30 },
       },
     ]);
+  });
+
+  it("counts a period-end cancel's days from Stripe's start to its end, not to the cancel request", async () => {
+    mocks.updateByStripeSubscriptionId.mockResolvedValue({
+      ...userRow,
+      status: 'canceled',
+      // The row was written well after the subscription started (a migrated or re-synced row).
+      createdAt: new Date('2026-03-01T00:00:00Z'),
+      canceledAt: new Date('2026-02-11T00:00:00Z'),
+    });
+    const at = (iso: string) => Math.floor(new Date(iso).getTime() / 1000);
+
+    await deliver({
+      type: 'customer.subscription.deleted',
+      data: {
+        object: {
+          id: 'sub_1',
+          start_date: at('2026-01-01T00:00:00Z'),
+          // Requested on Feb 11, effective at the period end on Mar 31.
+          canceled_at: at('2026-02-11T00:00:00Z'),
+          ended_at: at('2026-03-31T12:00:00Z'),
+          metadata: {},
+          cancellation_details: { reason: 'cancellation_requested' },
+        },
+      },
+    });
+
+    expect(sent()[0].metadata).toMatchObject({ reason: 'cancellation_requested', daysSubscribed: 89 });
   });
 
   it('reports nothing for a subscription this stage has no row for', async () => {

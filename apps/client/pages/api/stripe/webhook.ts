@@ -23,6 +23,7 @@ import {
   stripe,
 } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { voidOpenSubscriptionInvoices } from '@server/integrations/stripe/dunning';
+import { minorUnitsPerMajor } from '@server/integrations/stripe/currency';
 import { postMessageToSlack } from '@server/integrations/slack/slack';
 import { sendToClient } from '@server/websocket/utils';
 import { creditService, userService } from '@bike4mind/services';
@@ -299,7 +300,14 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       // Churn, whoever ended it: an in-app cancel, the Billing Portal, a period-end cancel taking
       // effect, or Stripe giving up on payment. This is the one place every path reaches. Keyed
       // on the subscription, which ends once, so a redelivery sends the same event. Never throws.
-      const daysSubscribed = wholeDaysBetween(rowTimestamps(updated).createdAt, updated.canceledAt ?? new Date());
+      // How long it ran is Stripe's start_date to ended_at, not canceled_at: on a period-end
+      // cancel, canceled_at is when the cancel was requested, which can be weeks before the end.
+      // The row's createdAt and the delivery time stand in for a payload missing either.
+      const startedAt = subscription.start_date
+        ? dayjs.unix(subscription.start_date).toDate()
+        : rowTimestamps(updated).createdAt;
+      const endedAt = subscription.ended_at ? dayjs.unix(subscription.ended_at).toDate() : new Date();
+      const daysSubscribed = wholeDaysBetween(startedAt, endedAt);
       await emitBillingEvent({
         user: await subscriptionEventUser(updated),
         event: 'subscription_ended',
@@ -640,7 +648,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
           occurrence: `${invoice.id}:${invoice.attempt_count ?? 0}`,
           metadata: {
             kind: 'subscription',
-            value: invoice.amount_due / 100,
+            value: invoice.amount_due / minorUnitsPerMajor(invoice.currency),
             currency: invoice.currency.toUpperCase(),
             attempt: invoice.attempt_count ?? 0,
             ...(invoice.billing_reason && { billingReason: invoice.billing_reason }),
@@ -671,7 +679,11 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
           user: await creditBuyerForEvents(customerId, intent.metadata?.userId),
           event: 'payment_failed',
           occurrence: event.id,
-          metadata: { kind: 'credits', value: intent.amount / 100, currency: intent.currency.toUpperCase() },
+          metadata: {
+            kind: 'credits',
+            value: intent.amount / minorUnitsPerMajor(intent.currency),
+            currency: intent.currency.toUpperCase(),
+          },
         });
       }
 

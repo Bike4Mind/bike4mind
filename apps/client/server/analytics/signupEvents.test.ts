@@ -207,6 +207,11 @@ describe('emitPurchaseEvents', () => {
     });
   });
 
+  it("reports the value in the currency's own major unit: yen have no minor unit", async () => {
+    await emitPurchaseEvents(invoice({ amountMinor: 3000, currency: 'jpy' }));
+    expect(mockEmit.mock.calls[0][0].metadata).toMatchObject({ value: 3000, currency: 'JPY' });
+  });
+
   it('sends the same eventId for a redelivered payment and a different one for another payment', async () => {
     await emitPurchaseEvents(invoice());
     await emitPurchaseEvents(invoice());
