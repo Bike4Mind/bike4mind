@@ -1,16 +1,25 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-const { mockAdminDeleteUser, mockRepoDelete, mockPurge, mockReadGrants, mockRecord, mockDeny, mockWithTransaction } =
-  vi.hoisted(() => ({
-    mockRecord: vi.fn(),
-    mockDeny: vi.fn(),
-    mockWithTransaction: vi.fn(),
-    mockAdminDeleteUser: vi.fn(),
-    mockRepoDelete: vi.fn(),
-    mockPurge: vi.fn(),
-    mockReadGrants: vi.fn(),
-  }));
+const {
+  mockAdminDeleteUser,
+  mockRepoDelete,
+  mockFindById,
+  mockPurge,
+  mockReadGrants,
+  mockRecord,
+  mockDeny,
+  mockWithTransaction,
+} = vi.hoisted(() => ({
+  mockRecord: vi.fn(),
+  mockDeny: vi.fn(),
+  mockWithTransaction: vi.fn(),
+  mockAdminDeleteUser: vi.fn(),
+  mockRepoDelete: vi.fn(),
+  mockFindById: vi.fn(),
+  mockPurge: vi.fn(),
+  mockReadGrants: vi.fn(),
+}));
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => ({
@@ -30,7 +39,7 @@ vi.mock('@bike4mind/database', () => ({
   realtimeConnectionRepository: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
   userRepository: {
     delete: (...a: unknown[]) => mockRepoDelete(...a),
-    findById: vi.fn().mockResolvedValue({ id: 'u1', name: 'Target' }),
+    findById: (...a: unknown[]) => mockFindById(...a),
   },
   adminSettingsRepository: {},
   withTransaction: (fn: () => unknown) => mockWithTransaction(fn),
@@ -70,6 +79,7 @@ async function run(options: { user?: { id: string; isAdmin: boolean }; body?: un
 beforeEach(() => {
   mockAdminDeleteUser.mockReset();
   mockRepoDelete.mockReset().mockResolvedValue({ deletedCount: 1 });
+  mockFindById.mockReset().mockResolvedValue({ id: 'u1', name: 'Target' });
   mockPurge.mockReset().mockResolvedValue(undefined);
   mockReadGrants.mockReset().mockResolvedValue(null);
   mockRecord.mockReset().mockResolvedValue(null);
@@ -96,15 +106,18 @@ describe('DELETE /api/users/[id]/delete', () => {
   });
 
   it('reports the deletion to Overwatch, as no action of the user, keyed on a pseudonym', async () => {
+    // The account as read just before the delete, with the touches its credit follows.
     const deleted = {
       id: 'u1',
       level: 'PaidUser',
       subscribedUntil: '2099-01-01T00:00:00.000Z',
       createdAt: new Date(Date.now() - 10.5 * 24 * 60 * 60 * 1000),
+      acquisition: { firstTouch: { source: 'widgets' } },
     };
+    mockFindById.mockResolvedValue(deleted);
     mockAdminDeleteUser.mockImplementation(async (_admin: string, _p: unknown, { db }: DeleteAdapters) => {
       await db.users.delete('u1');
-      return deleted;
+      return { id: 'u1' };
     });
 
     const { call } = await run();
@@ -156,7 +169,13 @@ describe('DELETE /api/users/[id]/delete', () => {
     expect(body).toContain('&lt;i&gt;A&lt;/i&gt;');
   });
 
-  it('still purges when a notification throws after the delete committed', async () => {
+  it('still purges, and still reports the deletion, when a notification throws after the delete committed', async () => {
+    const order: string[] = [];
+    mockPurge.mockImplementation(async () => void order.push('purge'));
+    mockEmitBillingEvent.mockImplementation(async () => {
+      order.push('report');
+      return [];
+    });
     mockAdminDeleteUser.mockImplementation(async (_admin: string, _p: unknown, { db }: DeleteAdapters) => {
       await db.users.delete('u1');
       throw new Error('mailer down');
@@ -166,6 +185,11 @@ describe('DELETE /api/users/[id]/delete', () => {
 
     await expect(call).rejects.toThrow('mailer down');
     expect(mockPurge).toHaveBeenCalledWith('u1', expect.objectContaining({ deletedBy: 'admin1' }));
+    // A retry would 404, so this is the only chance to send it.
+    expect(mockEmitBillingEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ user: expect.objectContaining({ id: 'u1' }), event: 'account_deleted' })
+    );
+    expect(order).toEqual(['purge', 'report']);
   });
 
   it('does not purge when the delete never ran (unauthorized or not found)', async () => {
@@ -176,6 +200,7 @@ describe('DELETE /api/users/[id]/delete', () => {
     await expect(call).rejects.toThrow('not authorized');
     expect(mockRepoDelete).not.toHaveBeenCalled();
     expect(mockPurge).not.toHaveBeenCalled();
+    expect(mockEmitBillingEvent).not.toHaveBeenCalled();
   });
 
   it('reads the integration grants before the delete and hands them to the purge', async () => {
@@ -313,6 +338,7 @@ describe('DELETE /api/users/[id]/delete', () => {
 
       await expect(call).rejects.toThrow('audit down');
       expect(mockPurge).not.toHaveBeenCalled();
+      expect(mockEmitBillingEvent).not.toHaveBeenCalled();
     });
   });
 });
