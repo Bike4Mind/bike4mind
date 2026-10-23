@@ -63,4 +63,25 @@ describe('PATCH /api/sre/patterns/[id] admin audit', () => {
     });
     expect(h.update.mock.invocationCallOrder[0]).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
   });
+
+  it('skips the entry when the PATCH changes nothing', async () => {
+    h.findById.mockResolvedValue({ id: PATTERN_ID, isActive: true, workaroundIneffective: false });
+    h.update.mockResolvedValue({
+      id: PATTERN_ID,
+      isActive: true,
+      workaroundIneffective: false,
+      rootCauseTrackingIssue: null,
+    });
+    const { req, res } = createMocks({
+      method: 'PATCH',
+      query: { id: PATTERN_ID },
+      body: { isActive: true, rootCauseTrackingIssue: null },
+    });
+    (req as unknown as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
+
+    await (handler as unknown as Route)(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(h.audit).not.toHaveBeenCalled();
+  });
 });
