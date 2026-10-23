@@ -869,12 +869,6 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     '1b96e0c9771ef7c02e7791e814f07c88cf23e8c02f0408d10d3de9b583111f70',
     'Hosted production analytics report; not applicable to a portable deployment.'
   ),
-  hostedOnly(
-    'schedule:infra/cron.ts:whatsNewSyncCron',
-    'c22c6f1da3086a35aef715f6e018e820751605f3b9bd9015ec3066fb890198cd',
-    'Imports hosted announcements; not applicable to a portable deployment.',
-    ['cloudwatch:PutMetricData']
-  ),
   gap(
     'schedule:infra/securityAlerts.ts:SecurityAlertsSchedule',
     'aa4dee6442687bf18f254f1de11a4180049760781332890f006025e80f059ca6',
