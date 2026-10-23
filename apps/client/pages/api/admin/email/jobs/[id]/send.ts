@@ -18,6 +18,11 @@ const RecipientFilterSchema = z
   })
   .optional();
 
+// The worker only enters test mode when the enqueued list is non-empty, so stored addresses must be merged in.
+const getTestRecipients = (requested?: string[], stored?: string[]) => [
+  ...new Set([...(requested || []), ...(stored || [])]),
+];
+
 /**
  * POST /api/admin/email/jobs/:id/send
  *
@@ -56,8 +61,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     if (!claimed) return null;
 
     if (testMode) {
-      const allTestRecipients = [...(testRecipients || []), ...(claimed.testEmailAddresses || [])];
-      if (allTestRecipients.length === 0) {
+      if (getTestRecipients(testRecipients, claimed.testEmailAddresses).length === 0) {
         throw new BadRequestError('Test mode requires at least one test recipient email address.');
       }
     }
@@ -102,7 +106,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     // Send options
     userIds,
     testMode: testMode || false,
-    testRecipients: testRecipients || [],
+    testRecipients: testMode ? getTestRecipients(testRecipients, job.testEmailAddresses) : testRecipients || [],
     testSubjectIndicator: testSubjectIndicator !== false, // Default to true
     triggeredBy: req.user.name || req.user.email,
     // Pass recipient filter from form to ensure we use current state, not stale job data
