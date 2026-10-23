@@ -67,6 +67,13 @@ export function resolveScreenTarget(target: string, sources: readonly ScreenSour
   );
 }
 
+function approvedSourceId(key: string | undefined): string | undefined {
+  const prefix = `${SCREEN_CAPTURE_TOOL_NAME}\x00`;
+  if (!key?.startsWith(prefix)) return undefined;
+  const id = key.slice(prefix.length);
+  return /^(window|screen):/.test(id) ? id : undefined;
+}
+
 const READ_AS_YOU = 'What it shows, from any app on screen, goes to the model.';
 
 export const screenCapture: ToolDefinition = {
@@ -134,6 +141,14 @@ export const screenCapture: ToolDefinition = {
     }
 
     const source = resolveScreenTarget(target, sources);
+    // A title is matched again here, and the window it named may have closed since the card was
+    // answered; only the window the user saw named is captured.
+    const approvedId = approvedSourceId(context.approvedKey);
+    if (approvedId && approvedId !== source.id) {
+      throw new Error(
+        `The windows changed after the user approved the capture: "${target}" now matches ${describeSource(source)}, which was not approved. Call screen_capture again.`
+      );
+    }
     context.report?.label(`Captured ${describeSource(source)}`);
     const bytes = await screen.capturer.capture(source.id, TOOL_IMAGE_MAX_EDGE);
     if (!bytes) {

@@ -128,6 +128,26 @@ describe('ChatService images shown by tools', () => {
     expect(JSON.stringify(post.mock.calls[2][1].messages)).not.toContain('"type":"image"');
   });
 
+  it('caps the images one round sends and tells the model how many were left out', async () => {
+    const id = await codeSession('full');
+    await service.send(id, 'look at them all');
+    await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
+    const tools = Array.from({ length: 10 }, (_, index) => ({
+      id: `read_${index}`,
+      name: 'file_read',
+      arguments: JSON.stringify({ path: join(root, 'shot.png') }),
+    }));
+    streams[0].write(frame({ type: 'tool_use', tools }));
+    streams[0].write(frame('[DONE]'));
+    await vi.waitUntil(() => post.mock.calls.length === 2, { timeout: 3000, interval: 5 });
+    const turn = (post.mock.calls[1][1].messages as WireMessage[]).at(-1);
+    const content = turn?.content as { type: string; text?: string }[];
+    expect(content.filter(block => block.type === 'image')).toHaveLength(8);
+    expect(content[0].text).toBe(
+      "Images from the file_read calls above. 2 more were left out to keep the request under the provider's size limit; read or capture them in smaller batches."
+    );
+  });
+
   it('declares screen_capture and tells the model what it is for', async () => {
     const id = await codeSession();
     await service.send(id, 'hi');

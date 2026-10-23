@@ -2484,22 +2484,28 @@ export class ChatService {
           lastResult.content = [lastResult.content, '', 'The user changed the shared folders:', ...rootNote].join('\n');
         }
         wire.push({ role: 'user', content: results });
-        const shown = settled.flatMap(call => {
-          const images = this.takeImages(call.id);
-          return images.length > 0 ? [{ name: call.name, images }] : [];
-        });
-        const shots = shown.flatMap(entry => entry.images);
-        if (shots.length > 0 && vision) {
-          const from = [...new Set(shown.map(entry => entry.name))].join(', ');
+        const { kept, dropped } = withinImageBudget(
+          settled.flatMap(call => this.takeImages(call.id).map(image => ({ call, image })))
+        );
+        if (kept.length > 0 && vision) {
+          const calls = new Set(kept.map(entry => entry.call.id)).size;
+          const from = [...new Set(kept.map(entry => entry.call.name))].join(', ');
+          const left =
+            dropped > 0
+              ? ` ${dropped} more were left out to keep the request under the provider's size limit; read or capture them in smaller batches.`
+              : '';
           // Its own user turn, not blocks beside the tool results: the OpenAI conversion keeps only
           // the tool_result blocks of such a turn and would drop the image silently.
           wire.push({
             role: 'user',
             content: [
-              { type: 'text', text: `${shots.length === 1 ? 'Image' : 'Images'} from the ${from} call above.` },
-              ...shots.map(shot => ({
+              {
+                type: 'text',
+                text: `${kept.length === 1 ? 'Image' : 'Images'} from the ${from} call${calls === 1 ? '' : 's'} above.${left}`,
+              },
+              ...kept.map(({ image }) => ({
                 type: 'image',
-                source: { type: 'base64', media_type: shot.mediaType, data: shot.data },
+                source: { type: 'base64', media_type: image.mediaType, data: image.data },
               })),
             ],
           });
@@ -5073,6 +5079,25 @@ function pickSecrets(typed: unknown, keys: readonly string[]): Record<string, st
  */
 /** Only the latest screenshots stay as pixels; each one is resent every round until the turn ends. */
 const KEPT_SCREENSHOTS = 2;
+
+/**
+ * What one round's image turn may carry. KEPT_SCREENSHOTS such turns are resent every round, and
+ * the providers refuse a request body over about 32 MB, base64 included.
+ */
+const MAX_ROUND_IMAGES = 8;
+const MAX_ROUND_IMAGE_CHARS = 10 * 1024 * 1024;
+
+/** The images that fit this round's budget, in call order; the rest are counted, not sent. */
+function withinImageBudget<T extends { image: { data: string } }>(shown: readonly T[]): { kept: T[]; dropped: number } {
+  const kept: T[] = [];
+  let chars = 0;
+  for (const entry of shown) {
+    if (kept.length >= MAX_ROUND_IMAGES || chars + entry.image.data.length > MAX_ROUND_IMAGE_CHARS) break;
+    kept.push(entry);
+    chars += entry.image.data.length;
+  }
+  return { kept, dropped: shown.length - kept.length };
+}
 
 function pruneScreenshots(wire: CompletionMessage[], turns: number[]): void {
   while (turns.length > KEPT_SCREENSHOTS) {

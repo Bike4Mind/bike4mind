@@ -129,6 +129,15 @@ describe('screen_capture', () => {
     expect(capture).not.toHaveBeenCalled();
   });
 
+  it('refuses to capture a different window than the approved one', async () => {
+    const { context, capture } = setup();
+    const approved: ToolContext = { ...context, approvedKey: 'screen_capture\x00window:99:0' };
+    await expect(screenCapture.run({ target: 'inbox' }, approved)).rejects.toThrow(/changed after the user approved/);
+    expect(capture).not.toHaveBeenCalled();
+    const same: ToolContext = { ...context, approvedKey: 'screen_capture\x00window:12:0' };
+    await expect(screenCapture.run({ target: 'inbox' }, same)).resolves.toMatch(/Captured the window "Inbox - Mail"/);
+  });
+
   describe('approval', () => {
     it('names the resolved window and keys on its id, asking in auto mode too', async () => {
       const { context } = setup();
