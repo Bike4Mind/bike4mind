@@ -300,6 +300,56 @@ describe('GET /api/files/download', () => {
     expect(tempFiles.length).toBe(1);
   });
 
+  // A row can carry both: a list read mints and stores a presigned URL that is dead an hour
+  // later, so the freshly signed URL must win over whatever is stored.
+  it('prefers a freshly signed URL over a stored, stale fileUrl', async () => {
+    (FabFile.find as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        filePath: 'uploads/u1/a.txt',
+        fileUrl: 'https://stale.example/uploads/u1/a.txt?X-Amz-Expires=3600',
+        mimeType: 'text/plain',
+        fileName: 'a.txt',
+        moderationStatus: 'clean',
+      },
+    ]);
+
+    const { res } = makeRes();
+    await handler(reqWithAbility(), res);
+
+    expect(h.getSignedUrl).toHaveBeenCalledWith('uploads/u1/a.txt', 'get');
+    expect(getContentFromFabfile).toHaveBeenCalledWith({
+      fileUrl: 'https://signed.example/uploads/u1/a.txt',
+      mimeType: 'text/plain',
+      strict: true,
+    });
+    expect(tempFiles.length).toBe(1);
+  });
+
+  // Signing is a per-file failure like any other. It sits inside the same try as the fetch, so a
+  // bad object key costs that one file rather than rejecting the handler and 500ing the export.
+  it('skips a file whose URL cannot be signed and still zips the readable one', async () => {
+    (FabFile.find as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { filePath: 'broken/a.txt', mimeType: 'text/plain', fileName: 'a.txt', moderationStatus: 'clean' },
+      { filePath: 'ok/b.txt', mimeType: 'text/plain', fileName: 'b.txt', moderationStatus: 'clean' },
+    ]);
+    h.getSignedUrl.mockRejectedValueOnce(new Error('sign failed'));
+
+    const { res, getSent } = makeRes();
+    await handler(reqWithAbility(), res);
+
+    // The unreadable row never reaches the extractor, and never becomes a temp entry.
+    expect(getContentFromFabfile).toHaveBeenCalledTimes(1);
+    expect(getContentFromFabfile).toHaveBeenCalledWith({
+      fileUrl: 'https://signed.example/ok/b.txt',
+      mimeType: 'text/plain',
+      strict: true,
+    });
+    expect(createTempFile).toHaveBeenCalledTimes(1);
+    expect(tempFiles.length).toBe(1);
+    expect((zipFiles as ReturnType<typeof vi.fn>).mock.calls[0][0]).toEqual(tempFiles);
+    expect(getSent()).toEqual(ZIP_BYTES);
+  });
+
   it('skips a file whose freshly signed URL cannot be read instead of zipping it empty', async () => {
     (FabFile.find as ReturnType<typeof vi.fn>).mockResolvedValue([
       { filePath: 'unreadable/a.txt', mimeType: 'text/plain', fileName: 'a.txt', moderationStatus: 'clean' },
