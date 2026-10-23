@@ -2,6 +2,7 @@ import vm from 'node:vm';
 import { describe, it, expect } from 'vitest';
 import {
   buildReactArtifactBundle,
+  findRelativeModuleReferences,
   resolveReactArtifactFiles,
   UnsupportedReactDependencyError,
   ReactArtifactTranspileError,
@@ -207,17 +208,103 @@ describe('multi-file side-effect imports', () => {
 });
 
 describe('resolveReactArtifactFiles', () => {
-  it('walks sibling-to-sibling imports transitively, in files order, through cycles', () => {
+  it('walks sibling-to-sibling imports transitively, in files order, through cycles', async () => {
     const files = {
       C: `import A from './A';`,
       A: `import B from '../lib/b.jsx';`,
       B: `export { x } from './C';`,
       D: 'unreached',
     };
-    expect(resolveReactArtifactFiles(`import A from './A';`, files)).toEqual(['C', 'A', 'B']);
+    await expect(resolveReactArtifactFiles(`import A from './A';`, files)).resolves.toEqual(['C', 'A', 'B']);
   });
 
-  it('ignores type-only relative imports', () => {
-    expect(resolveReactArtifactFiles(`import type T from './types';`, {})).toEqual([]);
+  it('ignores type-only relative imports', async () => {
+    await expect(resolveReactArtifactFiles(`import type T from './types';`, {})).resolves.toEqual([]);
+  });
+});
+
+// The preview only resolves the require() calls Babel emits for real imports, so publish must not
+// treat a relative path that only appears in a comment or a string as a sibling file.
+const COMMENT_ONLY = `import { useState } from 'react';
+
+// ============================================================
+// Counter.jsx  (kept here since artifacts can't have sibling files -
+// relative imports like \`import Counter from "./Counter"\` are blocked
+// by the sandbox. This section is written exactly as it would be.
+// ============================================================
+function Counter() {
+  const [n] = useState(3);
+  return <span>{n}</span>;
+}
+
+function App() {
+  return <main><Counter /></main>;
+}
+
+export default App;`;
+
+describe('relative paths outside import statements', () => {
+  const app = (body: string) => `${body}\nexport default function App() { return <p>{label}</p>; }`;
+
+  it.each([
+    ['a line comment', COMMENT_ONLY],
+    ['a block comment', app(`/* import X from './X' */\nconst label = 'x';`)],
+    ['a multi-line block comment', app(`/*\n * import X from './X';\n * import './side';\n */\nconst label = 'x';`)],
+    ['a string literal', app(`const label = "import X from './X'";`)],
+    ['a single-quoted string', app(`const label = 'import X from "./X"';`)],
+    ['a template literal', app("const label = `import X from './X'; require('./Y')`;")],
+    ['JSX text', `export default function App() { return <p>import X from './X'</p>; }`],
+  ])('publishes a single file whose only relative path is in %s', async (_label, source) => {
+    await expect(findRelativeModuleReferences(source)).resolves.toEqual([]);
+    const { indexHtml } = await buildReactArtifactBundle({ source, title: 'App' });
+    expect(validateBundle({ indexHtml, manifest: [{ path: 'index.html', mimeType: 'text/html' }] }).valid).toBe(true);
+    expect(indexHtml).not.toContain('.run(');
+    expect(renderInert(indexHtml)).not.toMatch(/^Error/);
+  });
+
+  it('keeps the mentioned text verbatim in the published script', async () => {
+    const source = app(`const label = 'import X from "./X"';`);
+    const { indexHtml } = await buildReactArtifactBundle({ source, title: 'App' });
+    expect(inlineBootstrap(indexHtml)).toContain(`'import X from "./X"'`);
+  });
+
+  it('still rejects a real relative import with no sibling, with the same message', async () => {
+    await expect(
+      buildReactArtifactBundle({
+        source: `import Counter from './Counter';\nexport default function App() { return <Counter />; }`,
+        title: 'App',
+      })
+    ).rejects.toThrow('Cannot resolve "./Counter": no artifact file is named "counter". Available files: none.');
+  });
+
+  it('resolves only the real import when a commented one sits next to it', async () => {
+    const source = `// import Gone from './Gone';
+import Stopwatch from './Stopwatch';
+/* export { x } from './AlsoGone'; */
+export default function App() { return <main><Stopwatch /></main>; }`;
+    await expect(resolveReactArtifactFiles(source, { Stopwatch: STOPWATCH })).resolves.toEqual(['Stopwatch']);
+    const { indexHtml } = await buildReactArtifactBundle({ source, title: 'App', files: { Stopwatch: STOPWATCH } });
+    expect(renderInert(indexHtml)).toBe('<main><span>7</span></main>');
+  });
+
+  it('finds every real relative form, in source order, once each', async () => {
+    const source = `import A from './A';
+import './side';
+export { b } from '../lib/b';
+export * from './c';
+const d = require('./d');
+const e = import('./e');
+import type T from './types';
+import { type U } from './u';
+import A2 from './A';
+export default function App() { return null; }`;
+    await expect(findRelativeModuleReferences(source)).resolves.toEqual([
+      './A',
+      './side',
+      '../lib/b',
+      './c',
+      './d',
+      './e',
+    ]);
   });
 });

@@ -118,6 +118,43 @@ export default function C() {
   });
 });
 
+describe('a relative path mentioned only in a comment or string', () => {
+  beforeEach(() => {
+    document.body.innerHTML = '<div id="root"></div>';
+    installReactStub();
+  });
+
+  it('publishes and mounts as a single file, keeping the mention as text', async () => {
+    const source = `import { useState } from 'react';
+
+// ============================================================
+// Counter.jsx  (kept here since artifacts can't have sibling files -
+// relative imports like \`import Counter from "./Counter"\` are blocked
+// by the sandbox. This section is written exactly as it would be.
+// ============================================================
+function Counter() {
+  const [count] = useState(5);
+  return <span>{count}</span>;
+}
+
+const NOTE = 'import Other from "./Other"';
+
+function App() {
+  return <main><Counter /><em>{NOTE}</em></main>;
+}
+
+export default App;`;
+    const { indexHtml } = await buildReactArtifactBundle({ source, title: 'App' });
+
+    new Function(extractBootstrap(indexHtml))();
+
+    const root = document.getElementById('root')!;
+    expect(root.textContent).not.toContain('Error:');
+    expect(root.querySelector('span')?.textContent).toBe('5');
+    expect(root.querySelector('em')?.textContent).toBe('import Other from "./Other"');
+  });
+});
+
 describe('LUCIDE_WRAPPER_FN executes (the icon logic that previously shipped invisible icons)', () => {
   it('builds a real SVG from a lucide node array and passes through props', () => {
     installReactStub(); // provides window.React for the wrapper's React.createElement calls

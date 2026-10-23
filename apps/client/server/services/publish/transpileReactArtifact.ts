@@ -83,13 +83,96 @@ function getBabel(): Promise<typeof import('@babel/standalone')> {
 }
 
 const WS = /\s/;
+const RELATIVE_SPECIFIER = /^\.\.?\//;
 
-// Statement boundaries, the type-only strip and the relative-import guard come from
-// @client/app/utils/importStatements, whose factory source the sandbox preview
-// (apps/client/pages/api/react-artifact-sandbox.ts) evaluates in the browser, so preview and publish
-// find the same imports by construction. The import-rewrite callback below is NOT shared: the
-// sandbox keeps its own (it drops every react import, where this one binds non-hook names).
+// Statement boundaries and the type-only strip come from @client/app/utils/importStatements, whose
+// factory source the sandbox preview (apps/client/pages/api/react-artifact-sandbox.ts) evaluates in
+// the browser. The import-rewrite callback below is NOT shared: the sandbox keeps its own (it drops
+// every react import, where this one binds non-hook names). Which relative imports are real is
+// decided from Babel's parse instead (findRelativeModuleReferences).
 export { findRelativeImport, stripTypeOnlyImports };
+
+type AstNode = { type: string } & Record<string, unknown>;
+
+function isAstNode(value: unknown): value is AstNode {
+  return typeof value === 'object' && value !== null && typeof (value as { type?: unknown }).type === 'string';
+}
+
+function stringLiteralValue(node: unknown): string | null {
+  return isAstNode(node) && node.type === 'StringLiteral' && typeof node.value === 'string' ? node.value : null;
+}
+
+// Child keys that never hold code: comments carry the very text this parse exists to ignore.
+const NON_CODE_KEYS = new Set(['loc', 'extra', 'comments', 'leadingComments', 'trailingComments', 'innerComments']);
+
+/**
+ * Every distinct relative specifier `source` loads at run time (value import/export-from, side-effect
+ * import, `require('./x')`, `import('./x')`), in source order, from Babel's parse. The preview's module
+ * runtime only resolves the require() calls Babel's CommonJS transform emits for these, so a path
+ * that appears only in a comment or a string is never one, and must not be one here either.
+ */
+export async function findRelativeModuleReferences(source: string): Promise<string[]> {
+  const Babel = await getBabel();
+  let ast: unknown;
+  try {
+    ast = Babel.packages.parser.parse(source, { sourceType: 'module', plugins: ['jsx', 'typescript'] });
+  } catch {
+    // Unparseable: keep the text scan so the transform itself reports the error, file name included.
+    return findRelativeImports(stripTypeOnlyImports(source));
+  }
+  const found: string[] = [];
+  const add = (specifier: string | null): void => {
+    if (specifier !== null && RELATIVE_SPECIFIER.test(specifier) && !found.includes(specifier)) found.push(specifier);
+  };
+  // Explicit stack with children pushed in reverse: a source-order walk that deeply nested user code
+  // cannot overflow.
+  const stack: unknown[] = [ast];
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (Array.isArray(node)) {
+      for (let i = node.length - 1; i >= 0; i--) stack.push(node[i]);
+      continue;
+    }
+    if (!isAstNode(node)) continue;
+    switch (node.type) {
+      case 'ImportDeclaration': {
+        const specifiers = Array.isArray(node.specifiers) ? node.specifiers : [];
+        const typeOnly =
+          node.importKind === 'type' ||
+          node.importKind === 'typeof' ||
+          (specifiers.length > 0 && specifiers.every(s => isAstNode(s) && s.importKind === 'type'));
+        if (!typeOnly) add(stringLiteralValue(node.source));
+        break;
+      }
+      case 'ExportNamedDeclaration':
+      case 'ExportAllDeclaration':
+        if (node.exportKind !== 'type') add(stringLiteralValue(node.source));
+        break;
+      case 'ImportExpression':
+        add(stringLiteralValue(node.source));
+        break;
+      case 'CallExpression': {
+        const callee = node.callee;
+        const args = Array.isArray(node.arguments) ? node.arguments : [];
+        const loads =
+          isAstNode(callee) &&
+          (callee.type === 'Import' || (callee.type === 'Identifier' && callee.name === 'require'));
+        if (loads && args.length === 1) add(stringLiteralValue(args[0]));
+        break;
+      }
+      case 'TSImportEqualsDeclaration':
+        if (node.importKind !== 'type' && isAstNode(node.moduleReference)) {
+          add(stringLiteralValue(node.moduleReference.expression));
+        }
+        break;
+    }
+    const keys = Object.keys(node);
+    for (let i = keys.length - 1; i >= 0; i--) {
+      if (!NON_CODE_KEYS.has(keys[i])) stack.push(node[keys[i]]);
+    }
+  }
+  return found;
+}
 
 // Uses the module's scanImportStatements binding (not the factory-internal one) so the survivor
 // tests can stub the scan and prove findSurvivingEsmImport catches what it misses.
@@ -185,8 +268,6 @@ export function rewriteImportsToRequire(rawSource: string, opts: { keepRelative?
   if (!opts.keepRelative) assertNoSurvivingEsmImport(rewritten);
   return rewritten;
 }
-
-const RELATIVE_SPECIFIER = /^\.\.?\//;
 
 function assertNoSurvivingEsmImport(code: string): void {
   const survivor = findSurvivingEsmImport(code);
@@ -307,13 +388,15 @@ export function unwrapDefaultExport(transformed: string): string {
  * bootstrap reads. Output contains no import/export statements and no eval.
  */
 export async function transpileReactSource(source: string): Promise<string> {
-  // Strip type-only imports first so a type-only relative import isn't misread as a sibling file.
-  // This path has no sibling files, so any relative import gets the missing-file error.
+  // This path has no sibling files, so any real relative import gets the missing-file error.
+  await resolveReactArtifactFiles(source, {});
   const cleaned = stripTypeOnlyImports(source);
-  resolveReactArtifactFiles(cleaned, {});
 
   const Babel = await getBabel();
-  const withRequires = rewriteImportsToRequire(cleaned);
+  // Past the check above, a relative statement the text scan finds sits in a comment or a string:
+  // keep it verbatim, as the preview's module path does.
+  const withRequires = rewriteImportsToRequire(cleaned, { keepRelative: true });
+  assertNoSurvivingEsmImport(withRequires);
 
   let transformed: string | null | undefined;
   try {
@@ -355,13 +438,13 @@ export async function transpileReactSource(source: string): Promise<string> {
  * order. Throws the module runtime's own "Cannot resolve" error, as a ReactArtifactTranspileError,
  * for an import that matches no file or several, so publish rejects what the page would fail on.
  */
-export function resolveReactArtifactFiles(entry: string, files: Record<string, string>): string[] {
+export async function resolveReactArtifactFiles(entry: string, files: Record<string, string>): Promise<string[]> {
   const keys = Object.keys(files);
   const resolve = createArtifactModuleResolver(moduleBaseName, keys);
   const reached = new Set<string>();
   const queue = [entry];
   while (queue.length > 0) {
-    for (const specifier of findRelativeImports(stripTypeOnlyImports(queue.shift() as string))) {
+    for (const specifier of await findRelativeModuleReferences(queue.shift() as string)) {
       let key: string;
       try {
         key = resolve(specifier);
@@ -548,7 +631,7 @@ export async function buildReactArtifactBundle(input: {
       'React artifact must export a component as its default export (e.g. `export default MyComponent`).'
     );
   }
-  if (findRelativeImport(stripTypeOnlyImports(input.source)) === null) {
+  if ((await findRelativeModuleReferences(input.source)).length === 0) {
     assertPublishableDependencies(input.source);
     const dependencies = extractImportedModules(input.source).filter(m =>
       Object.prototype.hasOwnProperty.call(PUBLISH_REACT_DEP_SCRIPTS, m)
@@ -559,7 +642,7 @@ export async function buildReactArtifactBundle(input: {
 
   const files = input.files ?? {};
   const reached: Record<string, string> = Object.create(null);
-  for (const key of resolveReactArtifactFiles(input.source, files)) reached[key] = files[key];
+  for (const key of await resolveReactArtifactFiles(input.source, files)) reached[key] = files[key];
   const sources = [input.source, ...Object.values(reached)];
   sources.forEach(src => assertPublishableDependencies(src, { allowRelativeSideEffects: true }));
   const dependencies = [...new Set(sources.flatMap(extractImportedModules))].filter(m =>
