@@ -5,6 +5,7 @@ const mockCreateUser = vi.fn();
 const mockFindByEmail = vi.fn();
 const mockUpdate = vi.fn();
 const mockAddMember = vi.fn();
+const mockFindOrganizationById = vi.fn();
 const mockLogEvent = vi.fn();
 const mockPublish = vi.fn();
 
@@ -29,7 +30,9 @@ vi.mock('@bike4mind/database/auth', () => ({
 }));
 
 vi.mock('@bike4mind/database/infra', () => ({
-  organizationRepository: {},
+  organizationRepository: {
+    findById: (...args: unknown[]) => mockFindOrganizationById(...args),
+  },
 }));
 
 vi.mock('@server/utils/adminAudit', () => ({
@@ -101,6 +104,7 @@ describe('/api/reg-invites/migrate', () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    mockFindOrganizationById.mockResolvedValue(null);
     mockLogo.url = 'https://example.com/logo.png';
 
     mockRes = {
@@ -284,6 +288,10 @@ describe('/api/reg-invites/migrate', () => {
       mockReq.user,
       { organizationId: 'org-456', userId: 'new-user-4', force: true },
       expect.objectContaining({ db: expect.any(Object) })
+    );
+    expect(mockFindOrganizationById).toHaveBeenCalledWith('org-456');
+    expect(mockRes.json).toHaveBeenCalledWith(
+      expect.objectContaining({ createdUsers: [{ name: 'Charlie', email: 'charlie@example.com' }] })
     );
   });
 
