@@ -30,7 +30,9 @@ export class OllamaLocal {
       body: JSON.stringify({
         model,
         stream: true,
-        messages: request.messages.map(toMessage),
+        messages: toMessages(request.messages),
+        ...(request.thinking ? { think: true } : {}),
+        ...(request.maxTokens ? { options: { num_predict: request.maxTokens } } : {}),
         ...(request.tools?.length
           ? { tools: request.tools.map(tool => ({ type: 'function', function: tool.toolSchema })) }
           : {}),
@@ -46,9 +48,9 @@ export class OllamaLocal {
       pending += decoder.write(Buffer.from(value));
       const lines = pending.split('\n');
       pending = lines.pop() ?? '';
-      for (const line of lines) if (line.trim()) emitFrame(JSON.parse(line), onEvent);
+      for (const line of lines) emitLine(line, onEvent);
     }
-    if (pending.trim()) emitFrame(JSON.parse(pending), onEvent);
+    emitLine(pending, onEvent);
   }
 
   private async model(name: string): Promise<ChatModelOption | null> {
@@ -87,11 +89,78 @@ export class OllamaLocal {
   }
 }
 
-function toMessage(message: CompletionMessage): Record<string, unknown> {
-  return {
-    role: message.role,
-    content: typeof message.content === 'string' ? message.content : JSON.stringify(message.content),
-  };
+interface Block {
+  type?: unknown;
+  text?: unknown;
+  id?: unknown;
+  name?: unknown;
+  input?: unknown;
+  tool_use_id?: unknown;
+  content?: unknown;
+  source?: { data?: unknown };
+}
+
+function blockText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content.map(block => (block && typeof block === 'object' ? blockText((block as Block).text) : '')).join('');
+}
+
+/**
+ * Maps the Anthropic-style blocks `ChatService` builds onto Ollama's chat format: tool calls on the
+ * assistant message, one `role: 'tool'` message per result, screenshots in `images`.
+ */
+function toMessages(messages: CompletionMessage[]): Record<string, unknown>[] {
+  const toolNames = new Map<string, string>();
+  return messages.flatMap(message => {
+    if (typeof message.content === 'string') return [{ role: message.role, content: message.content }];
+    const blocks = message.content.filter((b): b is Block => !!b && typeof b === 'object');
+    const text = blocks.map(block => (block.type === 'text' ? blockText(block.text) : '')).join('');
+    const toolCalls = blocks.flatMap(block => {
+      if (block.type !== 'tool_use' || typeof block.name !== 'string') return [];
+      if (typeof block.id === 'string') toolNames.set(block.id, block.name);
+      return [{ function: { name: block.name, arguments: block.input ?? {} } }];
+    });
+    const results = blocks.flatMap(block =>
+      block.type === 'tool_result'
+        ? [
+            {
+              role: 'tool',
+              content: blockText(block.content),
+              ...(typeof block.tool_use_id === 'string' && toolNames.has(block.tool_use_id)
+                ? { tool_name: toolNames.get(block.tool_use_id) }
+                : {}),
+            },
+          ]
+        : []
+    );
+    const images = blocks.flatMap(block =>
+      block.type === 'image' && typeof block.source?.data === 'string' ? [block.source.data] : []
+    );
+    const own =
+      text || toolCalls.length > 0 || images.length > 0
+        ? [
+            {
+              role: message.role,
+              content: text,
+              ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+              ...(images.length > 0 ? { images } : {}),
+            },
+          ]
+        : [];
+    return [...results, ...own];
+  });
+}
+
+function emitLine(line: string, onEvent: (event: CompletionStreamEvent) => void): void {
+  if (!line.trim()) return;
+  let frame: unknown;
+  try {
+    frame = JSON.parse(line);
+  } catch {
+    return;
+  }
+  emitFrame(frame, onEvent);
 }
 
 function emitFrame(frame: unknown, onEvent: (event: CompletionStreamEvent) => void): void {
@@ -99,8 +168,10 @@ function emitFrame(frame: unknown, onEvent: (event: CompletionStreamEvent) => vo
   const raw = frame as {
     done?: unknown;
     done_reason?: unknown;
+    error?: unknown;
     message?: { content?: unknown; thinking?: unknown; tool_calls?: unknown[] };
   };
+  if (typeof raw.error === 'string') throw new Error(raw.error);
   if (typeof raw.message?.thinking === 'string' && raw.message.thinking)
     onEvent({ type: 'content', text: `<think>${raw.message.thinking}</think>` });
   if (typeof raw.message?.content === 'string' && raw.message.content)
