@@ -108,6 +108,7 @@ export enum AdminTab {
   IntegrationDemand = 65,
   AuditLog = 66,
   Dashboard = 67,
+  SignupDomainHolds = 68,
 }
 
 /**
@@ -161,6 +162,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
       },
       { Icon: PeopleIcon, tab: AdminTab.Subscribers, label: 'Subscribers', badge: 'waitingSubscribers' },
       { Icon: HandshakeIcon, tab: AdminTab.PartnerSignupRules, label: 'Partner Signup Rules' },
+      { Icon: HandshakeIcon, tab: AdminTab.SignupDomainHolds, label: 'Signup Domain Holds' },
       { Icon: EmailIcon, tab: AdminTab.EmailMarketing, label: 'Email Marketing' },
       { Icon: PeopleIcon, tab: AdminTab.Subscriptions, label: 'Subscriptions' },
       { Icon: BusinessIcon, tab: AdminTab.Organizations, label: 'Organizations' },

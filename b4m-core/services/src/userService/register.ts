@@ -4,6 +4,7 @@ import {
   ICreditTransactionRepository,
   IUserDocument,
   IUserRepository,
+  type SignupProtection,
 } from '@bike4mind/common';
 import { IRegInviteDocument, RegInviteStatusType, RepositoryUpdateOptions } from '@bike4mind/common';
 import { ISubscriberRepository } from '@bike4mind/common';
@@ -63,6 +64,7 @@ export type RegisterUserParameters = z.infer<typeof registerUserSchema>;
 interface RegisterUserAdapters {
   db: {
     users: IUserRepository;
+    signupProtection?: SignupProtection;
     adminSettings: IAdminSettingsRepository;
     registrationInvites: {
       findByCode: (code: string) => Promise<IRegInviteDocument | null>;
@@ -405,18 +407,18 @@ export const registerViaOTC = async (
   const newUser = await registerUser(params, adapters);
 
   const taggedUser = { ...newUser, tags: [...new Set([...(newUser.tags ?? []), 'Customer'])] };
-  const hasPendingCredits = taggedUser.tags.includes(PENDING_FREE_CREDITS_TAG);
 
   let finalTags = taggedUser.tags;
   let pendingCreditGrant = newUser.pendingCreditGrant ?? null;
 
-  if (hasPendingCredits && db.creditTransactions) {
+  if (db.creditTransactions) {
     const release = await releasePendingFreeCredits(taggedUser, {
       db: {
         adminSettings: db.adminSettings,
         creditTransactions: db.creditTransactions,
         creditLots: db.creditLots,
         users: db.users,
+        signupProtection: db.signupProtection,
       },
       reason: 'OTC registration (email verified)',
       logger,
