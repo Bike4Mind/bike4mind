@@ -288,7 +288,9 @@ describe('GET /api/files/download', () => {
     const { res } = makeRes();
     await handler(reqWithAbility(), res);
 
-    expect(h.getSignedUrl).toHaveBeenCalledWith('uploads/u1/a.txt', 'get', { audience: 'browser' });
+    // No `audience: 'browser'`: that signs against S3_PRESIGN_ENDPOINT, which a self-host app
+    // container cannot reach, so the server-side fetch would fail and export nothing.
+    expect(h.getSignedUrl).toHaveBeenCalledWith('uploads/u1/a.txt', 'get');
     expect(getContentFromFabfile).toHaveBeenCalledWith({
       fileUrl: 'https://signed.example/uploads/u1/a.txt',
       mimeType: 'text/plain',

@@ -33,9 +33,11 @@ const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(
         try {
           // The stored fileUrl is a presigned URL: unset on client uploads and stale an hour
           // after it was minted, and only a read of the first page refreshes it. Sign the
-          // durable object key at export time, as the single-file download does.
+          // durable object key at export time. No `audience`: this URL is fetched here, on the
+          // server, so it must sign against AWS_ENDPOINT_URL_S3 rather than the browser-facing
+          // S3_PRESIGN_ENDPOINT that a self-host install cannot reach from the app container.
           const fileUrl = knowledge.filePath
-            ? await getFilesStorage().getSignedUrl(knowledge.filePath, 'get', { audience: 'browser' })
+            ? await getFilesStorage().getSignedUrl(knowledge.filePath, 'get')
             : knowledge.fileUrl;
           // strict: a missing URL or a failed fetch must be distinguishable from empty text,
           // so the file can be skipped instead of archived as a 0-byte entry.
