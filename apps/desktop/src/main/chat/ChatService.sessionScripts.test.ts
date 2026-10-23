@@ -130,6 +130,45 @@ describe('ChatService running a script written in the same session', () => {
     }
   );
 
+  describe('apply_patch', () => {
+    /** Applies a patch, then runs `command`. */
+    async function patchThenRun(body: string[], command: string): Promise<void> {
+      const id = await session('auto');
+      await service.setSessionModel(id, 'gpt-5');
+      await service.send(id, 'go');
+      await vi.waitUntil(() => streams.length === 1, { timeout: 5000, interval: 5 });
+      const patchText = ['*** Begin Patch', ...body, '*** End Patch'].join('\n');
+      streams[0].write(toolTurn('c0', 'apply_patch', { patchText }));
+      streams[0].write(frame('[DONE]'));
+      await settled('apply_patch');
+      expect(calls('apply_patch', 'done')).toHaveLength(1);
+      await vi.waitUntil(() => streams.length === 2, { timeout: 5000, interval: 5 });
+      streams[1].write(toolTurn('c1', 'bash_execute', { command, cwd: root }));
+      streams[1].write(frame('[DONE]'));
+    }
+
+    it('asks before running a script it added', async () => {
+      await patchThenRun([`*** Add File: ${join(root, 'setup.sh')}`, '+echo hi'], 'bash setup.sh');
+
+      await awaitCall('bash_execute', 'awaiting-approval');
+    });
+
+    it('asks before running a script it renamed', async () => {
+      await patchThenRun(
+        [
+          `*** Update File: ${join(root, 'run.sh')}`,
+          `*** Move to: ${join(root, 'moved.sh')}`,
+          '@@',
+          '-echo old',
+          '+echo new',
+        ],
+        'bash moved.sh'
+      );
+
+      await awaitCall('bash_execute', 'awaiting-approval');
+    });
+  });
+
   it('asks before running a script from another folder after a cd', async () => {
     const id = await session('auto');
     await reply(id, [write('tools/go.sh'), shell('cd tools && bash go.sh')]);
