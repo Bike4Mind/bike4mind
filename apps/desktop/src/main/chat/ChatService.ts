@@ -43,7 +43,6 @@ import type {
   UpdateProjectResult,
   WorkspacePreparation,
 } from '@shared/chat';
-import type { Capability, CapabilityScope } from '@shared/capabilities';
 import {
   awaitsWorktree,
   branchHolder,
@@ -77,6 +76,7 @@ import { activeTodos, TODO_TOOL_NAME } from '@shared/todos';
 import { autoFixToolRefusal } from '../pr/autoFix';
 import type { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import type { CapabilityLedger } from './capabilities/CapabilityLedger';
+import { capabilityFor, capabilityScope } from './capabilities/approvalCapabilities';
 import { extractArtifacts, restoreArtifactMarkup } from './artifacts/extract';
 import { DESKTOP_ARTIFACT_PROMPT } from './artifacts/prompt';
 import { isValidBranchName, suggestBranchName } from './project/branchName';
@@ -1410,10 +1410,29 @@ export class ChatService {
   }
 
   /** Also any time: the running turn drops the folder before its next tool call. */
-  async removeContextDirectory(sessionId: string, directory: string): Promise<ChatSessionSummary | null> {
-    const updated = await this.deps.store.removeContextDirectory(sessionId, directory);
-    if (updated) this.bumpScope(sessionId);
+  async removeContextDirectory(
+    sessionId: string,
+    directory: string,
+    auditCapability = true
+  ): Promise<ChatSessionSummary | null> {
+    const normalizedDirectory = resolve(directory);
+    const updated = await this.deps.store.removeContextDirectory(sessionId, normalizedDirectory);
+    if (updated) {
+      this.bumpScope(sessionId);
+      if (auditCapability)
+        await this.deps.capabilities?.revokeMatching(
+          grant =>
+            grant.subject.kind === 'session' &&
+            grant.subject.sessionId === sessionId &&
+            grant.scope.kind === 'path' &&
+            grant.scope.value === normalizedDirectory
+        );
+    }
     return updated;
+  }
+
+  refreshAccessScopes(): void {
+    for (const sessionId of this.active.keys()) this.bumpScope(sessionId);
   }
 
   private scopeVersion(sessionId: string): number {
@@ -1601,6 +1620,9 @@ export class ChatService {
     this.deps.approvals?.forgetSession(sessionId);
     this.deps.history?.removeSession(sessionId, historyScope);
     this.stop(sessionId);
+    await this.deps.capabilities
+      ?.revokeMatching(grant => grant.subject.kind === 'session' && grant.subject.sessionId === sessionId)
+      .catch(error => this.deps.logger.warn(`CAPABILITIES: could not audit session deletion: ${String(error)}`));
     this.doomLoop.forget(sessionId);
     this.webSearches.forget(sessionId);
     this.scopeVersions.delete(sessionId);
@@ -4849,10 +4871,11 @@ export class ChatService {
           subject: { kind: 'session', sessionId },
           capability: capabilityFor(call.name, prompt.key),
           scope: capabilityScope(call.name, prompt.key),
+          approvalKey: prompt.key,
           source: 'approval',
         })
         .catch(error => this.deps.logger.warn(`CAPABILITIES: could not audit grant: ${String(error)}`));
-      if (answer.everywhere) {
+      if (savedEverywhere) {
         for (const rule of everywhere) {
           await this.deps.capabilities
             .grant({
@@ -5143,6 +5166,14 @@ export class ChatService {
         : await this.deps.store.addGrantedDirectory(sessionId, directory);
     if (!updated) return { ok: false };
     this.bumpScope(sessionId);
+    await this.deps.capabilities
+      ?.grant({
+        subject: { kind: 'session', sessionId },
+        capability: 'files',
+        scope: { kind: 'path', value: directory },
+        source: 'approval',
+      })
+      .catch(error => this.deps.logger.warn(`CAPABILITIES: could not audit folder grant: ${String(error)}`));
     return { ok: true, session: updated };
   }
 
@@ -6527,30 +6558,6 @@ function automaticDisplay(automatic: ChatAutomaticOrigin): string {
 
 /** Reads one attachment's stored bytes, or null when the file is gone. */
 type ReadAttachment = (attachment: ChatAttachment) => Promise<Buffer | null>;
-
-function capabilityFor(toolName: string, approvalKey?: string): Capability {
-  if (spendsCredits(toolName)) return 'credits';
-  if (['file_read', 'file_write', 'file_edit', 'apply_patch', 'glob_files', 'grep_search'].includes(toolName)) {
-    return 'files';
-  }
-  if (approvalKey?.startsWith('browser-')) {
-    return approvalKey.includes('-as-you:') ? 'imported-identity' : 'browser-origin';
-  }
-  return 'tool';
-}
-
-function capabilityScope(toolName: string, approvalKey?: string): CapabilityScope {
-  if (!approvalKey?.startsWith('browser-')) return { kind: 'tool', value: toolName };
-  const origin = approvalKey.slice(approvalKey.indexOf(':') + 1);
-  const access = approvalKey.startsWith('browser-script:')
-    ? 'script'
-    : approvalKey.startsWith('browser-act')
-      ? 'act'
-      : approvalKey.startsWith('browser-open-as-you:')
-        ? 'read'
-        : 'network';
-  return { kind: 'browser-origin', value: origin, access };
-}
 
 /**
  * A user turn that carried attachments, as provider-shaped content blocks.

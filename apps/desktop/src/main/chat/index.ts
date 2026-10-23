@@ -108,6 +108,7 @@ import { ClaudeCodeSettings, MANAGED_SETTINGS_PATH } from './permissions/ClaudeC
 import { PermissionRuleStore } from './permissions/PermissionRuleStore';
 import { PermissionService } from './permissions/PermissionService';
 import { CapabilityLedger } from './capabilities/CapabilityLedger';
+import { revokeSessionCapability } from './capabilities/approvalCapabilities';
 import { SkillCatalog } from './skills/SkillCatalog';
 import { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
@@ -413,13 +414,13 @@ export function registerChat(
     logger,
   });
   void permissions.start().catch(error => logger.warn(`PERMISSIONS: could not load rules: ${String(error)}`));
-  void Promise.all([
+  const capabilitiesReady = Promise.all([
     access.list(),
     projectTrust.list(),
     new PermissionRuleStore(join(userData, 'permission-rules.json')).read(),
   ])
     .then(async ([roots, trustedProjects, stored]) => {
-      await capabilityLedger.revokeMatching(grant => grant.subject.kind === 'session');
+      await capabilityLedger.revokeMatching(grant => grant.subject.kind === 'session' && grant.scope.kind !== 'path');
       await capabilityLedger.migrate({ roots, trustedProjects, permissions: stored });
     })
     .catch(error => logger.warn(`CAPABILITIES: could not migrate grants: ${String(error)}`));
@@ -585,7 +586,20 @@ export function registerChat(
     modelMemory: modelPreference,
     approvals,
     permissions,
-    capabilities: capabilityLedger,
+    capabilities: {
+      grant: async input => {
+        await capabilitiesReady;
+        return capabilityLedger.grant(input);
+      },
+      use: async (...args) => {
+        await capabilitiesReady;
+        return capabilityLedger.use(...args);
+      },
+      revokeMatching: async match => {
+        await capabilitiesReady;
+        return capabilityLedger.revokeMatching(match);
+      },
+    },
     // App-wide like approval-mode.json: a record of decisions, kept after their conversations.
     approvalLog: new ApprovalLog(join(userData, 'approval-log.jsonl'), message => logger.warn(message)),
     background,
@@ -710,6 +724,7 @@ export function registerChat(
     const parsedScope = permissionScope(scope);
     const parsedLists = permissionLists(lists);
     if (!parsedScope || !parsedLists) return { ok: false, error: 'Not a permission rule list.' };
+    await capabilitiesReady;
     const result = await permissions.setRules(parsedScope, parsedLists);
     if (!result.ok) return result;
     const subject =
@@ -746,21 +761,23 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.permissionsSetSharing, (_event, share: unknown) =>
     permissions.setShareClaudeCode(share === true)
   );
-  ipcMain.handle(IPC_CHANNELS.capabilitiesGetState, () => capabilityLedger.state());
+  ipcMain.handle(IPC_CHANNELS.capabilitiesGetState, async () => {
+    await capabilitiesReady;
+    return capabilityLedger.state();
+  });
   ipcMain.handle(IPC_CHANNELS.capabilitiesRevoke, async (_event, grantId: unknown) => {
+    await capabilitiesReady;
     if (typeof grantId !== 'string') return capabilityLedger.state();
     await capabilityLedger.revoke(grantId, async grant => {
-      if (grant.subject.kind === 'session' && grant.scope.kind === 'browser-origin') {
-        const prefix =
-          grant.scope.access === 'script'
-            ? 'browser-script'
-            : grant.scope.access === 'act'
-              ? 'browser-act'
-              : 'browser-open';
-        const identity = grant.capability === 'imported-identity' ? '-as-you' : '';
-        approvals.revoke(grant.subject.sessionId, `${prefix}${identity}:${grant.scope.value}`);
+      revokeSessionCapability(grant, approvals);
+      if (grant.scope.kind === 'path') {
+        if (grant.subject.kind === 'session')
+          await service.removeContextDirectory(grant.subject.sessionId, grant.scope.value, false);
+        else {
+          await access.revoke(grant.scope.value);
+          service.refreshAccessScopes();
+        }
       }
-      if (grant.scope.kind === 'path') await access.revoke(grant.scope.value);
       if (grant.scope.kind === 'project') {
         await skills.setTrusted(grant.scope.value, false);
         permissions.invalidate();
@@ -1096,12 +1113,23 @@ export function registerChat(
     const options = { properties: ['openDirectory' as const], defaultPath: pickerStart() };
     const picked = await (window ? dialog.showOpenDialog(window, options) : dialog.showOpenDialog(options));
     if (picked.canceled || picked.filePaths.length === 0) return { roots: await access.list() };
+    await capabilitiesReady;
     const roots = await access.grant(picked.filePaths[0]);
+    service.refreshAccessScopes();
     const active = (await capabilityLedger.state()).grants.filter(
-      grant => !grant.revokedAt && !grant.expiredAt && grant.capability === 'files' && grant.scope.kind === 'path'
+      grant =>
+        !grant.revokedAt &&
+        !grant.expiredAt &&
+        grant.subject.kind === 'desktop-user' &&
+        grant.capability === 'files' &&
+        grant.scope.kind === 'path'
     );
     await capabilityLedger.revokeMatching(
-      grant => grant.capability === 'files' && grant.scope.kind === 'path' && !roots.includes(grant.scope.value)
+      grant =>
+        grant.subject.kind === 'desktop-user' &&
+        grant.capability === 'files' &&
+        grant.scope.kind === 'path' &&
+        !roots.includes(grant.scope.value)
     );
     for (const root of roots) {
       if (active.some(grant => grant.scope.kind === 'path' && grant.scope.value === root)) continue;
@@ -1115,9 +1143,15 @@ export function registerChat(
     return { roots };
   });
   ipcMain.handle(IPC_CHANNELS.toolsRevokeAccess, async (_event, root: string) => {
+    await capabilitiesReady;
     const roots = await access.revoke(root);
+    service.refreshAccessScopes();
     await capabilityLedger.revokeMatching(
-      grant => grant.capability === 'files' && grant.scope.kind === 'path' && grant.scope.value === resolve(root)
+      grant =>
+        grant.subject.kind === 'desktop-user' &&
+        grant.capability === 'files' &&
+        grant.scope.kind === 'path' &&
+        grant.scope.value === resolve(root)
     );
     return { roots };
   });
