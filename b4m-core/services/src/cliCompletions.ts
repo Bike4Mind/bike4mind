@@ -500,7 +500,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // through a chat backend cannot be served by this text endpoint.
   if (modelInfo && modelInfo.type !== 'text') {
     throw new BadRequestError(
-      `Model '${params.model}' is a ${modelInfo.type} model and cannot be used for text completions.`,
+      `Model '${params.model}' (type: ${modelInfo.type}) cannot be used for text completions.`,
       { errorCode: UNKNOWN_MODEL_ERROR_CODE }
     );
   }

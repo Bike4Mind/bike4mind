@@ -178,19 +178,18 @@ describe('executeCompletion onReady', () => {
 
   it('refuses an image model with a 400 unknown_model before any hold, getLlmByModel, onReady or provider call', async () => {
     vi.mocked(getAvailableModels).mockResolvedValueOnce([
-      { ...CATALOGUED_MODEL, id: 'gpt-image-1', type: 'image' } as never,
+      { ...CATALOGUED_MODEL, id: 'gpt-image-2', type: 'image' } as never,
     ]);
     const { db, users } = buildDb();
     const onReady = vi.fn();
 
-    const error = await executeCompletion({ ...baseParams, model: 'gpt-image-1', db, onReady }).catch(
+    const error = await executeCompletion({ ...baseParams, model: 'gpt-image-2', db, onReady }).catch(
       (e: unknown) => e
     );
 
     expect(error).toBeInstanceOf(BadRequestError);
     expect(error).toMatchObject({ statusCode: 400, additionalInfo: { errorCode: 'unknown_model' } });
-    expect((error as Error).message).toContain('image');
-    expect((error as Error).message).toContain('text completions');
+    expect((error as Error).message).toBe("Model 'gpt-image-2' (type: image) cannot be used for text completions.");
     expect(users.incrementCredits).not.toHaveBeenCalled();
     // Proves the guard runs before backend construction, not merely before the provider call.
     expect(getLlmByModel).not.toHaveBeenCalled();
@@ -207,10 +206,15 @@ describe('executeCompletion onReady', () => {
       const { db, users } = buildDb();
       const onReady = vi.fn();
 
-      await expect(executeCompletion({ ...baseParams, model: 'non-text-model', db, onReady })).rejects.toMatchObject({
-        statusCode: 400,
-        additionalInfo: { errorCode: 'unknown_model' },
-      });
+      const error = await executeCompletion({ ...baseParams, model: 'non-text-model', db, onReady }).catch(
+        (e: unknown) => e
+      );
+
+      expect(error).toBeInstanceOf(BadRequestError);
+      expect(error).toMatchObject({ statusCode: 400, additionalInfo: { errorCode: 'unknown_model' } });
+      expect((error as Error).message).toBe(
+        `Model 'non-text-model' (type: ${type}) cannot be used for text completions.`
+      );
       expect(users.incrementCredits).not.toHaveBeenCalled();
       expect(getLlmByModel).not.toHaveBeenCalled();
       expect(onReady).not.toHaveBeenCalled();
