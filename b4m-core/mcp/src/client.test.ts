@@ -5,6 +5,8 @@ import { AddressInfo } from 'net';
 import { z } from 'zod';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { MCPClient } from './client';
 import path from 'path';
 
@@ -28,7 +30,10 @@ describe('MCPClient (streamable-HTTP transport)', () => {
   });
 
   /** Start a stateless streamable-HTTP MCP server exposing a single `echo` tool. */
-  async function startServer(authHeaders: (string | undefined)[], toolCalls?: { count: number; fail404: boolean }) {
+  async function startServer(
+    authHeaders: (string | undefined)[],
+    toolCalls?: { count: number; failureStatus?: number }
+  ) {
     httpServer = createServer(async (req, res) => {
       // Record the Authorization header on every request (the assertion target).
       authHeaders.push(req.headers['authorization']);
@@ -38,8 +43,8 @@ describe('MCPClient (streamable-HTTP transport)', () => {
         const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { method?: string };
         if (body.method === 'tools/call') {
           toolCalls.count++;
-          if (toolCalls.fail404) {
-            res.writeHead(404).end('Not Found');
+          if (toolCalls.failureStatus) {
+            res.writeHead(toolCalls.failureStatus).end('tool request failed');
             return;
           }
         }
@@ -76,15 +81,34 @@ describe('MCPClient (streamable-HTTP transport)', () => {
   }
 
   it('does not retry a 404 from a server that issued no session id', async () => {
-    const toolCalls = { count: 0, fail404: false };
+    const toolCalls = { count: 0, failureStatus: undefined as number | undefined };
     const url = await startServer([], toolCalls);
     const client = new MCPClient({ envVariables: [], name: 'host', url });
     await client.connectToServer();
-    toolCalls.fail404 = true;
+    toolCalls.failureStatus = 404;
 
-    await expect(client.callTool('echo', { msg: 'x' })).rejects.toThrow(/Not Found/);
+    await expect(client.callTool('echo', { msg: 'x' })).rejects.toThrow(/tool request failed/);
     expect(toolCalls.count).toBe(1);
     await client.disconnect();
+  });
+
+  it('keeps reporting transport failures after a stateless 404', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const toolCalls = { count: 0, failureStatus: undefined as number | undefined };
+    const url = await startServer([], toolCalls);
+    const client = new MCPClient({ envVariables: [], name: 'host', url });
+    try {
+      await client.connectToServer();
+      toolCalls.failureStatus = 404;
+      await expect(client.callTool('echo', {})).rejects.toThrow(/tool request failed/);
+      errors.mockClear();
+      toolCalls.failureStatus = 500;
+      await expect(client.callTool('echo', {})).rejects.toThrow(/tool request failed/);
+      expect(errors).toHaveBeenCalledWith(expect.stringContaining('tool request failed'));
+    } finally {
+      await client.disconnect();
+      errors.mockRestore();
+    }
   });
 
   it('connects over HTTP, sends Bearer token on every request, lists and calls a tool', async () => {
@@ -155,12 +179,17 @@ describe('MCPClient (expired streamable-HTTP session)', () => {
       slowRuns: 0,
       failToolCallsWith: undefined as number | undefined,
       failInitializeWith: undefined as number | undefined,
+      holdNextToolCall: false,
     };
     // `slow` signals when it starts running and finishes only when the test releases it.
     let slowStarted!: () => void;
     const slowRunning = new Promise<void>(resolve => (slowStarted = resolve));
     let releaseSlow!: () => void;
     const slowReleased = new Promise<void>(resolve => (releaseSlow = resolve));
+    let heldCallStarted!: () => void;
+    const heldCallRunning = new Promise<void>(resolve => (heldCallStarted = resolve));
+    let releaseHeldCall!: () => void;
+    const heldCallReleased = new Promise<void>(resolve => (releaseHeldCall = resolve));
 
     httpServer = createServer(async (req, res) => {
       const body = (await readJson(req)) as { method?: string } | undefined;
@@ -168,6 +197,11 @@ describe('MCPClient (expired streamable-HTTP session)', () => {
 
       if (body?.method === 'tools/call') {
         state.toolCallCount++;
+        if (state.holdNextToolCall) {
+          state.holdNextToolCall = false;
+          heldCallStarted();
+          await heldCallReleased;
+        }
         if (state.failToolCallsWith) {
           res.writeHead(state.failToolCallsWith).end('boom');
           return;
@@ -226,7 +260,16 @@ describe('MCPClient (expired streamable-HTTP session)', () => {
     /** Forget every session but leave open streams alone, so a response already being computed still arrives. */
     const forgetSessions = () => sessions.clear();
 
-    return { url: `http://127.0.0.1:${port}/mcp`, state, expireSessions, forgetSessions, slowRunning, releaseSlow };
+    return {
+      url: `http://127.0.0.1:${port}/mcp`,
+      state,
+      expireSessions,
+      forgetSessions,
+      slowRunning,
+      releaseSlow,
+      heldCallRunning,
+      releaseHeldCall,
+    };
   }
 
   async function connect(url: string) {
@@ -320,6 +363,95 @@ describe('MCPClient (expired streamable-HTTP session)', () => {
 
     expect(results.map(textOf)).toEqual(['echo:a', 'echo:b']);
     expect(state.initializeCount).toBe(2);
+  });
+
+  it('does not reconnect after disconnecting a client whose renewal failed', async () => {
+    const { url, state, expireSessions } = await startServer();
+    const mcp = await connect(url);
+    await expireSessions();
+    state.failInitializeWith = 503;
+    await expect(mcp.callTool('echo', { msg: 'down' })).rejects.toThrow();
+
+    await mcp.disconnect();
+    state.failInitializeWith = undefined;
+    await expect(mcp.callTool('echo', { msg: 'after disconnect' })).rejects.toThrow();
+    expect(state.initializeCount).toBe(1);
+  });
+
+  it.each([false, true])('does not renew an old call after disconnect (reconnected: %s)', async reconnect => {
+    const { url, state } = await startServer();
+    const mcp = await connect(url);
+    let rejectCall!: (error: Error) => void;
+    let callStarted!: () => void;
+    const started = new Promise<void>(resolve => (callStarted = resolve));
+    // Hold delivery of an SDK error across disconnect to exercise the caller's continuation.
+    vi.spyOn(Client.prototype, 'callTool').mockImplementationOnce(() => {
+      callStarted();
+      return new Promise((_, reject) => (rejectCall = reject));
+    });
+    const pending = mcp.callTool('echo', { msg: 'delayed' }).then(
+      () => 'unexpected success',
+      (error: unknown) => error
+    );
+    await started;
+    await mcp.disconnect();
+    if (reconnect) await mcp.connectToServer();
+    rejectCall(new StreamableHTTPError(404, 'Session not found'));
+
+    expect(await pending).toBeInstanceOf(Error);
+    expect(state.initializeCount).toBe(reconnect ? 2 : 1);
+  });
+
+  it('does not retry a tool or publish renewed tools when disconnected during renewal', async () => {
+    const { url, state, expireSessions } = await startServer();
+    const mcp = await connect(url);
+    const originalTools = mcp.tools;
+    await expireSessions();
+    let listStarted!: () => void;
+    const listing = new Promise<void>(resolve => (listStarted = resolve));
+    let releaseList!: () => void;
+    const released = new Promise<void>(resolve => (releaseList = resolve));
+    const listTools = Client.prototype.listTools;
+    vi.spyOn(Client.prototype, 'listTools').mockImplementationOnce(async function (this: Client, ...args) {
+      const result = await listTools.apply(this, args);
+      listStarted();
+      await released;
+      return result;
+    });
+    const pending = mcp.callTool('echo', {}).then(
+      () => 'unexpected success',
+      (error: unknown) => error
+    );
+    await listing;
+    await mcp.disconnect();
+    releaseList();
+
+    expect(await pending).toBeInstanceOf(Error);
+    expect(mcp.tools).toBe(originalTools);
+    expect(state.initializeCount).toBe(2);
+    expect(state.toolCallCount).toBe(1);
+  });
+
+  it('renews again when an old call gets its 404 after another renewal failed', async () => {
+    const { url, state, expireSessions, heldCallRunning, releaseHeldCall } = await startServer();
+    const mcp = await connect(url);
+    await expireSessions();
+    state.holdNextToolCall = true;
+    const delayed = mcp.callTool('echo', { msg: 'delayed' });
+    // Attach rejection handling before driving the other call, even if the assertion fails.
+    const delayedResult = delayed.then(textOf, (error: unknown) => error);
+    await heldCallRunning;
+    state.failInitializeWith = 503;
+    try {
+      await expect(mcp.callTool('echo', { msg: 'down' })).rejects.toThrow();
+    } finally {
+      state.failInitializeWith = undefined;
+      releaseHeldCall();
+    }
+
+    expect(await delayedResult).toBe('echo:delayed');
+    expect(state.initializeCount).toBe(2);
+    expect(state.toolCallCount).toBe(3);
   });
 
   it('does not cut off or re-run a call in flight when another call renews the session', async () => {

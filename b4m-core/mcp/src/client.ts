@@ -39,6 +39,9 @@ export class MCPClient {
   private inFlight = new Map<Client, number>();
   /** Replaced clients that still had calls in flight; closed when their last call settles. */
   private retired = new Set<Client>();
+  private disconnected = false;
+  // Disconnect invalidates pending continuations even if connectToServer is called again.
+  private connectionVersion = 0;
   public tools: Tool[] = [];
   public serverName: string;
 
@@ -78,6 +81,7 @@ export class MCPClient {
   }
 
   async connectToServer() {
+    this.disconnected = false;
     try {
       // Streamable-HTTP transport: connect to a remote MCP endpoint over HTTP
       // (auth via headers). Skips the stdio child-process spawn entirely.
@@ -196,6 +200,7 @@ export class MCPClient {
 
   /** `client` is passed in, not read from `this.mcp`, so a connect can never pick up a client a later renewal created. */
   private async connectHttp(url: string, client: Client) {
+    const version = this.connectionVersion;
     const transport = new StreamableHTTPClientTransport(new URL(url), {
       requestInit: this.headers ? { headers: this.headers } : undefined,
     });
@@ -205,7 +210,7 @@ export class MCPClient {
       // GET stream and reports each 404 and the final "Maximum reconnection attempts" here. None of
       // it needs the user: the next tool call starts a new session (see callTool).
       if (sessionExpired || transport !== this.transport) return;
-      if (isSessionExpired(error)) {
+      if (transport.sessionId && isSessionExpired(error)) {
         sessionExpired = true;
         return;
       }
@@ -214,8 +219,10 @@ export class MCPClient {
     };
     this.transport = transport;
     await client.connect(transport);
+    this.assertConnection(version);
 
     const toolsResult = await client.listTools();
+    this.assertConnection(version);
     this.tools = toolsResult.tools.map(tool => ({
       name: tool.name,
       description: tool.description,
@@ -226,12 +233,13 @@ export class MCPClient {
   /**
    * Replace an expired HTTP session with a new one: a fresh SDK client and transport, re-initialized,
    * tools re-listed. `expired` is the client the failing call used. A renewal already in flight is
-   * shared, and a client that has already been replaced is not replaced again, so calls that fail
-   * together open one new session between them.
+   * shared, and a successful replacement is reused, so calls that fail together open one new session.
+   * A failed replacement can be retried even when the expired call used an older client.
    */
-  private renewHttpSession(expired: Client): Promise<void> {
+  private renewHttpSession(expired: Client, version: number): Promise<void> {
+    this.assertConnection(version);
     if (this.renewing) return this.renewing;
-    if (this.mcp !== expired) return Promise.resolve();
+    if (this.mcp !== expired && !this.renewFailed) return Promise.resolve();
     const url = this.url as string;
     const client = createSdkClient();
     this.mcp = client;
@@ -242,12 +250,14 @@ export class MCPClient {
         await this.connectHttp(url, client);
         this.renewFailed = false;
       } catch (e) {
-        this.renewFailed = true;
-        if (this.transport) {
-          try {
-            await this.transport.close();
-          } catch {}
-          this.transport = null;
+        if (this.connectionVersion === version) {
+          this.renewFailed = true;
+          if (this.transport) {
+            try {
+              await this.transport.close();
+            } catch {}
+            this.transport = null;
+          }
         }
         throw e;
       }
@@ -255,6 +265,12 @@ export class MCPClient {
       this.renewing = undefined;
     });
     return this.renewing;
+  }
+
+  private assertConnection(version: number) {
+    if (this.disconnected || this.connectionVersion !== version) {
+      throw new Error(`MCP client for ${this.serverName} is disconnected.`);
+    }
   }
 
   /**
@@ -324,9 +340,13 @@ export class MCPClient {
 
   async callTool(toolName: string, toolArgs: unknown) {
     try {
+      const version = this.connectionVersion;
+      this.assertConnection(version);
       const args = toolArgs && typeof toolArgs === 'object' ? (toolArgs as Record<string, unknown>) : undefined;
       await this.renewing;
-      if (this.renewFailed) await this.renewHttpSession(this.mcp);
+      this.assertConnection(version);
+      if (this.renewFailed) await this.renewHttpSession(this.mcp, version);
+      this.assertConnection(version);
       const client = this.mcp;
       const sessionId = this.transport instanceof StreamableHTTPClientTransport ? this.transport.sessionId : undefined;
       try {
@@ -337,7 +357,8 @@ export class MCPClient {
         // the tool twice. Any other error - including a call cut off mid-flight - may have reached the
         // tool, so it is thrown, never retried. The retry itself is not retried.
         if (!sessionId || !isSessionExpired(error)) throw error;
-        await this.renewHttpSession(client);
+        await this.renewHttpSession(client, version);
+        this.assertConnection(version);
         return await this.callOn(this.mcp, toolName, args);
       }
     } catch (error) {
@@ -358,6 +379,9 @@ export class MCPClient {
   }
 
   async disconnect() {
+    this.disconnected = true;
+    this.connectionVersion++;
+    this.renewFailed = false;
     try {
       // Only attempt to close if transport exists and is connected
       for (const client of this.retired) client.close().catch(() => {});
