@@ -133,6 +133,7 @@ export default $config({
       lambdaVpc,
       DEFAULT_LAMBDA_ENVIRONMENT,
       tavernHeartbeatQueue,
+      bobRunQueueSubscription,
       cluster,
       resolvedVpcId,
       PRODUCTION_STAGES,
@@ -159,12 +160,14 @@ export default $config({
     });
 
     // Bob premium infra. Same generated-glue pattern as the overlays above: a no-op when the
-    // overlay is absent.
+    // overlay is absent. Bob runs its browser task on the cluster, started from its run worker.
     const { contributeInfra: contributeBobInfra } = await import('./infra/premium-generated/bob-infra.generated');
     contributeBobInfra({
       lambdaVpc,
       allSecrets,
       defaultLambdaEnvironment: DEFAULT_LAMBDA_ENVIRONMENT,
+      cluster,
+      runWorker: bobRunQueueSubscription,
     });
 
     const { contributeInfra: contributePiInfra } = await import('./infra/premium-generated/pi-infra.generated');
