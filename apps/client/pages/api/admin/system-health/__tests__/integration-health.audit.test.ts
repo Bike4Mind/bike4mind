@@ -124,6 +124,17 @@ describe('integration-health admin audit', () => {
     expect(h.clearCache.mock.invocationCallOrder[0]).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
   });
 
+  it('records a first override as changing from the default auto mode', async () => {
+    h.getOverride.mockResolvedValue(null);
+    h.setOverride.mockResolvedValue({ integration: 'slack', mode: 'force_open', setBy: 'admin-1' });
+
+    await call('put', { integration: 'slack', mode: 'force_open' });
+
+    expect(h.audit.mock.calls[0][1]).toMatchObject({
+      changes: [{ field: 'mode', before: 'auto', after: 'force_open' }],
+    });
+  });
+
   it('does not audit a rejected override', async () => {
     await expect(call('put', { integration: 'slack', mode: 'bogus' })).rejects.toThrow();
     expect(h.audit).not.toHaveBeenCalled();
