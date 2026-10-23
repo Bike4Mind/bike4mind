@@ -24,7 +24,7 @@ const SUBSCRIBE_PATH = '/api/organizations/subscriptions/subscribe';
 const STRIPE_CHECKOUT_URL = /^https:\/\/checkout\.stripe\.com\//;
 // PHP and its peso sign, the currency staging checkout once opened in; written as an escape so the
 // file stays ASCII.
-const PESO = /₱|\bPHP\b/;
+const PESO = /\u20B1|\bPHP\b/;
 
 /** The app's Teams page URL; `new URL` so a trailing slash on API_URL can't produce `//organizations`. */
 const teamsUrl = (baseURL: string | undefined): string => new URL('/organizations', baseURL).href;
