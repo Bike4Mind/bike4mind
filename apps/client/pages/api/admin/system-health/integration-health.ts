@@ -160,7 +160,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       },
       summary: `set circuit breaker mode for ${override.integration} to ${override.mode}`,
       reason: override.reason,
-      changes: [{ field: 'mode', before: previous?.mode ?? null, after: override.mode }],
+      changes: [{ field: 'mode', before: previous?.mode ?? 'auto', after: override.mode }],
       details: { integration: override.integration, mode: override.mode },
     });
 
