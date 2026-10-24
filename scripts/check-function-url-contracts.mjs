@@ -51,10 +51,29 @@ const SPECIFIER_PATTERNS = [
 
 const CLOSERS = { '(': ')', '[': ']', '{': '}' };
 
+// A `/` after one of these characters or words starts a regex literal; after anything else it divides.
+const REGEX_PRECEDERS = '(,=:[{;!&|?+-*%~^<>';
+const REGEX_KEYWORDS = new Set([
+  'return',
+  'typeof',
+  'case',
+  'in',
+  'of',
+  'throw',
+  'void',
+  'delete',
+  'new',
+  'yield',
+  'await',
+]);
+
 /**
  * Replaces comments with spaces (newlines kept) so offset-preserving scans see
- * code only. String and template literals are preserved, since the handler
- * literal has to be read back out; comment markers inside them are not comments.
+ * code only. String, template and regex literals are preserved, since the handler
+ * literal has to be read back out; comment markers and quotes inside them are not
+ * comments or literal openers. Regex detection is the usual previous-token
+ * heuristic, so a `)` or `}` before `/` reads as division (and JSX closing tags
+ * can read as a short regex, bounded at end of line).
  */
 export function stripComments(source) {
   // Code units, not code points: every offset below is a UTF-16 index.
@@ -62,6 +81,30 @@ export function stripComments(source) {
   const blank = (from, to) => {
     for (let k = from; k < to; k++) if (out[k] !== '\n' && out[k] !== '\r') out[k] = ' ';
   };
+
+  // True when a `/` at $i sits where an expression can start, judged from the
+  // blanked output so far (comments are already spaces).
+  function startsRegex(i) {
+    let j = i - 1;
+    while (j >= 0 && /\s/.test(out[j])) j--;
+    if (j < 0 || REGEX_PRECEDERS.includes(out[j])) return true;
+    let k = j;
+    while (k >= 0 && /[\w$]/.test(out[k])) k--;
+    return REGEX_KEYWORDS.has(out.slice(k + 1, j + 1).join(''));
+  }
+
+  // Index just past the regex literal that starts at $i, or i + 1 when the line
+  // ends first (it was division after all).
+  function regexEnd(i) {
+    let inClass = false;
+    for (let k = i + 1; k < source.length && source[k] !== '\n'; k++) {
+      if (source[k] === '\\') k++;
+      else if (source[k] === '[') inClass = true;
+      else if (source[k] === ']') inClass = false;
+      else if (source[k] === '/' && !inClass) return k + 1;
+    }
+    return i + 1;
+  }
 
   // Index just past the string/template literal that starts at $i.
   function stringEnd(i) {
@@ -103,6 +146,8 @@ export function stripComments(source) {
         while (i < source.length && !(source[i] === '*' && source[i + 1] === '/')) i++;
         i = Math.min(i + 2, source.length);
         blank(start, i);
+      } else if (c === '/' && startsRegex(i)) {
+        i = regexEnd(i);
       } else if (c === '"' || c === "'" || c === '`') {
         i = stringEnd(i);
       } else if (depth !== undefined && c === '{') {

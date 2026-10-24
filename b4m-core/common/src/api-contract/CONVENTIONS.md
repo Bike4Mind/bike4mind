@@ -336,7 +336,7 @@ for the whole window. Removing an alias is a major-version change.
 - **A Lambda exposed through a Function URL needs a contract too.** An `sst.aws.Function` in
   `infra/` with `url:` serves requests with none of the Next.js middleware chain, so the
   handler must be built on `defineLambdaRoute(contract, ...)`: the gate accepts a call in the
-  handler file or in a local module up to three imports away (the transport is
+  handler file or in a module up to three imports away, reached by a relative or `@workers/*` import (the transport is
   `apps/workers/src/cli/defineLambdaRoute.ts`; a thin entry that imports the routed module is
   fine, see `CliToolHandler`). `scripts/check-contract-gate.sh` fails otherwise. Handlers
   under `premium-generated/` are skipped, since they are re-exported from an overlay. The

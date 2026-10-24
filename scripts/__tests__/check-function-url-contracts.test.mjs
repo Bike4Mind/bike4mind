@@ -73,6 +73,28 @@ describe('stripComments', () => {
     expect(clean).toContain("/What's New/i");
   });
 
+  it.each([
+    ['a paired quote and a trailing comment', "const q = /[\"']/; // don't keep defineLambdaRoute(c, f)"],
+    ['a stray backtick', 'const fence = /```/g;\n// defineLambdaRoute(c, f)'],
+    ['a /* in a character class', 'const glob = /[/*]/;\n// defineLambdaRoute(c, f)'],
+    ['a // in a character class', "const re = /['//]/; // defineLambdaRoute(c, f)"],
+  ])('blanks a comment after a regex literal with %s', (_name, source) => {
+    const clean = stripComments(source);
+    expect(clean).toHaveLength(source.length);
+    expect(clean).not.toContain('defineLambdaRoute');
+    expect(clean.slice(0, source.indexOf(';') + 1)).toBe(source.slice(0, source.indexOf(';') + 1));
+  });
+
+  it('keeps real code after a regex that holds // and a quote', () => {
+    const source = "const re = /['//]/; export const handler = defineLambdaRoute(c, f);";
+    expect(stripComments(source)).toBe(source);
+  });
+
+  it('treats / as division after an identifier, a paren or a literal', () => {
+    const source = "const a = b / c; const d = (e) / 2; const s = 'x' / 1; // gone";
+    expect(stripComments(source)).toBe(source.replace('// gone', '       '));
+  });
+
   it('handles a nested ${...} expression inside a template', () => {
     const source = 'const p = `${a / b} // kept`; // gone';
     const clean = stripComments(source);
@@ -114,6 +136,14 @@ describe('findUrlFunctions', () => {
     expect(scan(fnDeclaration(ROUTER_URL)).exposed).toEqual([
       { file: 'infra/fn.ts', handler: 'apps/workers/src/thing.handler' },
     ]);
+  });
+
+  it('parses Function options that carry a quote-bearing regex', () => {
+    const text = fnDeclaration([HANDLER, "  environment: { PATTERN: /What's New/ },", '  url: true,']);
+    expect(scan(text)).toEqual({
+      exposed: [{ file: 'infra/fn.ts', handler: 'apps/workers/src/thing.handler' }],
+      problems: [],
+    });
   });
 
   it('ignores url: false and url: undefined', () => {
@@ -346,6 +376,40 @@ describe('main', () => {
     const r = run(dir);
     expect(r.status).toBe(1);
     expect(r.stdout.trim()).toBe('apps/workers/src/thing.ts');
+  });
+
+  it.each([
+    [
+      'a paired quote and a trailing comment',
+      "const quoteRe = /[\"']/; // don't forget defineLambdaRoute(contract, handler)",
+    ],
+    ['a stray backtick', 'const fence = /```/g;\n// defineLambdaRoute(contract, handler)'],
+  ])('exits 1 when the only defineLambdaRoute is in a comment after a regex with %s', (_name, extra) => {
+    const dir = writeTree({
+      'infra/fn.ts': fnDeclaration([HANDLER, '  url: true,']),
+      'apps/workers/src/thing.ts': `${RAW_HANDLER}\n${extra}\n`,
+    });
+    const r = run(dir);
+    expect(r.status).toBe(1);
+    expect(r.stdout.trim()).toBe('apps/workers/src/thing.ts');
+  });
+
+  it('still sees a Function URL declared after a /* inside a regex in infra', () => {
+    const dir = writeTree({
+      'infra/fn.ts': `const glob = /[/*]/;\n${fnDeclaration([HANDLER, '  url: true,'])}`,
+      'apps/workers/src/thing.ts': RAW_HANDLER,
+    });
+    const r = run(dir);
+    expect(r.status).toBe(1);
+    expect(r.stdout.trim()).toBe('apps/workers/src/thing.ts');
+  });
+
+  it('passes a real defineLambdaRoute call on the line of a regex holding //', () => {
+    const dir = writeTree({
+      'infra/fn.ts': fnDeclaration([HANDLER, '  url: true,']),
+      'apps/workers/src/thing.ts': "const re = /['//]/; export const handler = defineLambdaRoute(c, f);",
+    });
+    expect(run(dir).status).toBe(0);
   });
 
   it('passes the CliToolHandler shape: the wrapper imports the routed module', () => {
