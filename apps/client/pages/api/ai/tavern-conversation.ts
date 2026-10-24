@@ -4,6 +4,7 @@ import { ensureTavernAccess } from '@bike4mind/server-utils/utils/errors';
 import { OperationsModelService } from '@client/services/operationsModelService';
 import { agentRepository } from '@bike4mind/database';
 import { agentMemoryService } from '@bike4mind/services';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 /**
  * /api/ai/tavern-conversation - Two-mode endpoint for live NPC conversations.
@@ -122,6 +123,7 @@ const handler = baseApi()
     })
   )
   .post(async (req: any, res) => {
+    assertAiAccessAllowed(req.user);
     ensureTavernAccess(req.user);
 
     const { characters, history, userMessage, topic, agentIds } = req.body || {};
