@@ -81,10 +81,17 @@ const DEPLOY_REVISION_HEADER = 'x-deployed-revision';
 
 const noteDeployedRevision = (headers: unknown): void => {
   const record = headers as Record<string, unknown> | undefined;
-  // A cacheable response (CDN s-maxage or browser max-age) can be replayed from the previous
-  // deploy with that deploy's revision, so it must neither set nor be compared against the baseline.
+  // Freshness and stale-reuse windows can replay a previous deploy's revision. Such responses
+  // must neither set nor be compared against the baseline. Accept quoted and zero-padded ages too.
   const cacheControl = record?.['cache-control'];
-  if (typeof cacheControl === 'string' && /\b(?:s-maxage|max-age)=[1-9]/i.test(cacheControl)) return;
+  if (
+    typeof cacheControl === 'string' &&
+    !/(?:^|,)\s*no-store\s*(?:,|$)/i.test(cacheControl) &&
+    /(?:^|,)\s*(?:s-maxage|max-age|stale-while-revalidate|stale-if-error)\s*=\s*(?:0*[1-9]\d*|"0*[1-9]\d*")\s*(?:,|$)/i.test(
+      cacheControl
+    )
+  )
+    return;
   const revision = record?.[DEPLOY_REVISION_HEADER];
   if (typeof revision === 'string' && observeDeployedRevision(revision)) {
     useClientOutdatedStore.getState().markOutdated();

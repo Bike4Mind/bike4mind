@@ -45,7 +45,7 @@ vi.mock('@bike4mind/server-utils/auth/refreshCookie', () => ({
   setAdminReturnCookie: (...a: unknown[]) => mockSetAdminReturnCookie(...a),
 }));
 
-import { ForbiddenError } from '@bike4mind/common';
+import { ForbiddenError, HTTPError } from '@bike4mind/common';
 import { httpErrorToResponse } from '@server/middlewares/errorHandler';
 import { ADMIN_ACTION_REASON_MISSING_MESSAGE } from '@server/utils/adminAudit';
 import handler from '../loginAs';
@@ -102,7 +102,9 @@ describe('POST /api/users/:id/loginAs - respond() boundary', () => {
   it('tells a stale tab to reload when the request carries no reason key', async () => {
     const { req, res } = post({ mfaToken: '123456' });
 
-    const error = await (handler as any)(req, res).catch((e: unknown) => e);
+    const invokeHandler = handler as unknown as (request: typeof req, response: typeof res) => Promise<void>;
+    const error = await invokeHandler(req, res).catch((error: unknown) => error);
+    if (!(error instanceof HTTPError)) throw error;
     const { status, body } = httpErrorToResponse(error, undefined);
 
     expect(status).toBe(400);

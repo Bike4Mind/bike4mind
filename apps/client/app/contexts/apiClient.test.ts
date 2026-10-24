@@ -98,4 +98,39 @@ describe('api deploy-revision interceptor', () => {
     await requestWith(adapterWith('rev-b', 200, { 'cache-control': 'no-store' }));
     expect(isOutdated()).toBe(true);
   });
+
+  it.each([
+    'private, max-age="3600"',
+    'public, s-maxage="300"',
+    'private, max-age = 3600',
+    'private, max-age=03600',
+    'PUBLIC, S-MAXAGE=300',
+    'max-age=0, stale-while-revalidate=600',
+    'max-age=0, stale-if-error="600"',
+  ])('ignores replayable revisions for %s in both baseline and comparison', async cacheControl => {
+    const cachedHeaders = { 'cache-control': cacheControl };
+    await requestWith(adapterWith('cached-rev', 200, cachedHeaders));
+    await requestWith(adapterWith('live-rev'));
+    expect(isOutdated()).toBe(false);
+
+    await requestWith(adapterWith('cached-rev', 200, cachedHeaders));
+    expect(isOutdated()).toBe(false);
+
+    await expect(requestWith(adapterWith('cached-rev', 500, cachedHeaders))).rejects.toBeInstanceOf(AxiosError);
+    expect(isOutdated()).toBe(false);
+  });
+
+  it.each([
+    'max-age=0',
+    's-maxage="000"',
+    'max-age=0, stale-while-revalidate=0',
+    'x-max-age=300',
+    'max-age=invalid',
+    'no-store, max-age=3600',
+    'max-age=3600, NO-STORE',
+  ])('still observes live revisions for %s', async cacheControl => {
+    await requestWith(adapterWith('rev-a', 200, { 'cache-control': cacheControl }));
+    await requestWith(adapterWith('rev-b', 200, { 'cache-control': cacheControl }));
+    expect(isOutdated()).toBe(true);
+  });
 });

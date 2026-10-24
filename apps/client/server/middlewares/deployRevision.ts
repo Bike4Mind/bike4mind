@@ -10,12 +10,12 @@ export const DEPLOY_REVISION_HEADER = 'X-Deployed-Revision';
 const REVISION_PATTERN = /^[a-f0-9]{40}$/;
 const FINGERPRINT_PATTERN = /^[a-f0-9]{64}$/;
 
-/** This process's deploy identity, preferring the commit over the build fingerprint. */
+/** Prefer the full build identity: distinct builds can share the same core commit. */
 export const getDeployedRevision = (): string | undefined => {
-  const revision = process.env.B4M_DEPLOYED_REVISION;
-  if (revision && REVISION_PATTERN.test(revision)) return revision;
   const fingerprint = process.env.B4M_BUILD_FINGERPRINT;
   if (fingerprint && FINGERPRINT_PATTERN.test(fingerprint)) return fingerprint;
+  const revision = process.env.B4M_DEPLOYED_REVISION;
+  if (revision && REVISION_PATTERN.test(revision)) return revision;
   return undefined;
 };
 

@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { NextFunction, Request, Response } from 'express';
-import { DEPLOY_REVISION_HEADER, deployRevision } from './deployRevision';
+import { DEPLOY_REVISION_HEADER, deployRevision, getDeployedRevision } from './deployRevision';
 
 const REVISION = 'a'.repeat(40);
 const FINGERPRINT = 'b'.repeat(64);
@@ -35,13 +35,32 @@ describe('deployRevision', () => {
     expect(setHeader).toHaveBeenCalledWith(DEPLOY_REVISION_HEADER, FINGERPRINT);
   });
 
-  it('prefers the revision over the fingerprint', () => {
+  it('prefers the full build fingerprint over the core revision', () => {
     vi.stubEnv('B4M_DEPLOYED_REVISION', REVISION);
     vi.stubEnv('B4M_BUILD_FINGERPRINT', FINGERPRINT);
 
     const { setHeader } = run();
 
-    expect(setHeader).toHaveBeenCalledWith(DEPLOY_REVISION_HEADER, REVISION);
+    expect(setHeader).toHaveBeenCalledWith(DEPLOY_REVISION_HEADER, FINGERPRINT);
+  });
+
+  it('changes identity when a new build shares the same core revision', () => {
+    vi.stubEnv('B4M_DEPLOYED_REVISION', REVISION);
+    vi.stubEnv('B4M_BUILD_FINGERPRINT', FINGERPRINT);
+    const firstIdentity = getDeployedRevision();
+
+    const nextFingerprint = 'c'.repeat(64);
+    vi.stubEnv('B4M_BUILD_FINGERPRINT', nextFingerprint);
+
+    expect(firstIdentity).toBe(FINGERPRINT);
+    expect(getDeployedRevision()).toBe(nextFingerprint);
+  });
+
+  it('uses the core revision when the fingerprint is malformed', () => {
+    vi.stubEnv('B4M_DEPLOYED_REVISION', REVISION);
+    vi.stubEnv('B4M_BUILD_FINGERPRINT', 'not-a-fingerprint');
+
+    expect(run().setHeader).toHaveBeenCalledWith(DEPLOY_REVISION_HEADER, REVISION);
   });
 
   it('uses the fingerprint when the revision is malformed', () => {
