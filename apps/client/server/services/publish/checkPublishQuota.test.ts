@@ -170,13 +170,6 @@ describe('checkPublishQuota', () => {
     expect(over.error).toContain('including its earlier versions');
   });
 
-  it("adds each row's archived versions to its bundle bytes in the usage aggregation", async () => {
-    aggregateMock.mockResolvedValue(usage(1024));
-    await checkPublishQuota({ ownerId: 'u1', incoming: { bytes: 1, fileCount: 1 } });
-    const pipeline = aggregateMock.mock.calls[0][0] as Array<{ $group?: { totalBytes: unknown } }>;
-    expect(JSON.stringify(pipeline[1].$group!.totalBytes)).toContain('indexBytes');
-  });
-
   it('treats an empty aggregation result as zero usage', async () => {
     aggregateMock.mockResolvedValue([]);
     const result = await checkPublishQuota({
@@ -206,5 +199,24 @@ describe('archivedVersionBytes', () => {
   it('reads a missing or empty history as 0', () => {
     expect(archivedVersionBytes(undefined, 'c')).toBe(0);
     expect(archivedVersionBytes([], undefined)).toBe(0);
+  });
+
+  it('counts a sha recorded twice once, at its larger indexBytes, and excludes every copy of the current one', () => {
+    const versions = [
+      { sha256Index: 'a', indexBytes: 300 },
+      { sha256Index: 'a', indexBytes: 350 },
+      { sha256Index: 'a' },
+      { sha256Index: 'c', indexBytes: 500 },
+      { sha256Index: 'c', indexBytes: 500 },
+    ];
+    expect(archivedVersionBytes(versions, 'c')).toBe(350);
+  });
+
+  it('treats the latest entry as current when the page has no sha256Index, as the serve route does', () => {
+    const versions = [
+      { sha256Index: 'a', indexBytes: 300 },
+      { sha256Index: 'b', indexBytes: 200 },
+    ];
+    expect(archivedVersionBytes(versions, undefined)).toBe(300);
   });
 });

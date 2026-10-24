@@ -332,6 +332,49 @@ describe('archived versions in usage (real database)', () => {
     expect(over.details).toMatchObject({ scope: 'org', current: ORG_CAP - 1000 });
   });
 
+  it('counts a sha recorded twice once, at its larger indexBytes', async () => {
+    // Concurrent finalizes can push the same sha twice; its archive is still one blob.
+    await seed([
+      page({
+        bytes: 1000,
+        sha256Index: 'sha-current',
+        versions: [
+          version('sha-a', 300),
+          version('sha-a', 350),
+          version('sha-current', 500),
+          version('sha-current', 500),
+        ],
+      }),
+    ]);
+
+    const over = await checkPublishQuota({ ownerId: OWNER, incoming: { bytes: USER_CAP, fileCount: 1 } });
+
+    if (over.ok) throw new Error('expected the page to count toward the user byte cap');
+    expect(over.details.current).toBe(1350);
+  });
+
+  it('treats the latest entry as current on a row without sha256Index, as the serve route does', async () => {
+    await seed([page({ bytes: 1000, versions: [version('sha-a', 300), version('sha-latest', 500)] })]);
+
+    const over = await checkPublishQuota({ ownerId: OWNER, incoming: { bytes: USER_CAP, fileCount: 1 } });
+
+    if (over.ok) throw new Error('expected the page to count toward the user byte cap');
+    expect(over.details.current).toBe(1300);
+  });
+
+  it('reads a row whose versions field is null or absent as its bundle alone, alongside a counted row', async () => {
+    await seed([page({ bytes: 1000, sha256Index: 'sha-current', versions: [version('sha-a', 300)] })]);
+    // Written around Mongoose, which would default `versions` to [].
+    const noHistory: Record<string, unknown> = page({ bytes: 4000 });
+    delete noHistory.versions;
+    await PublishedArtifact.collection.insertMany([{ ...page({ bytes: 2000 }), versions: null }, noHistory]);
+
+    const over = await checkPublishQuota({ ownerId: OWNER, incoming: { bytes: USER_CAP, fileCount: 1 } });
+
+    if (over.ok) throw new Error('expected the pages to count toward the user byte cap');
+    expect(over.details.current).toBe(7300);
+  });
+
   it("leaves a soft-deleted page's archived versions out", async () => {
     await seed([
       page({

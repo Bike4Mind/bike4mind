@@ -65,29 +65,27 @@ export interface VersionBytes {
 /**
  * Bytes a page's archived versions occupy: the `indexBytes` of every history entry except the
  * current one, whose bytes are the live index.html already counted in `size.totalBytes`.
- * Must stay in sync with ARCHIVED_VERSION_BYTES, the same sum inside the usage aggregation.
+ * Without `currentSha` (rows older than the field) the latest entry is current, as in the serve
+ * route. Each sha counts once, at its largest `indexBytes`: the archive is one blob per sha
+ * (`versions/{sha}.html`), and concurrent finalizes can record a sha twice (see the serve route's
+ * read-time dedupe). Must stay in sync with `aggregateUsage`, the same sum inside the aggregation.
  */
 export function archivedVersionBytes(
   versions: readonly VersionBytes[] | undefined,
   currentSha: string | undefined
 ): number {
-  // Entries recorded before indexBytes was tracked count 0, so no owner is pushed over a cap retroactively.
-  return (versions ?? []).reduce((sum, v) => (v.sha256Index === currentSha ? sum : sum + (v.indexBytes ?? 0)), 0);
+  const list = versions ?? [];
+  const current = currentSha ?? list[list.length - 1]?.sha256Index;
+  const bySha = new Map<string, number>();
+  for (const v of list) {
+    if (v.sha256Index === current) continue;
+    // Entries recorded before indexBytes was tracked count 0, so no owner is pushed over a cap retroactively.
+    bySha.set(v.sha256Index, Math.max(bySha.get(v.sha256Index) ?? 0, v.indexBytes ?? 0));
+  }
+  let total = 0;
+  for (const bytes of bySha.values()) total += bytes;
+  return total;
 }
-
-// archivedVersionBytes as a per-row aggregation expression, so usage stays a single query.
-const ARCHIVED_VERSION_BYTES = {
-  $reduce: {
-    input: { $ifNull: ['$versions', []] },
-    initialValue: 0,
-    in: {
-      $add: [
-        '$$value',
-        { $cond: [{ $eq: ['$$this.sha256Index', '$sha256Index'] }, 0, { $ifNull: ['$$this.indexBytes', 0] }] },
-      ],
-    },
-  },
-};
 
 /** Sum active artifact footprints (bundle plus archived versions) for a match filter, excluding one key. */
 async function aggregateUsage(
@@ -99,14 +97,33 @@ async function aggregateUsage(
     // Exclude the row being overwritten so its bytes don't inflate usage.
     filter.$nor = [{ tier: replacing.tier, scopeId: replacing.scopeId, slug: replacing.slug }];
   }
+  // archivedVersionBytes per row, as group stages so a long history stays linear: one document per
+  // (page, version sha), then per page, then the total. A page with no history unwinds to one document.
   const [row] = await PublishedArtifact.aggregate<{ totalBytes: number }>([
     { $match: filter },
     {
-      $group: {
-        _id: null,
-        totalBytes: { $sum: { $add: [{ $ifNull: ['$size.totalBytes', 0] }, ARCHIVED_VERSION_BYTES] } },
+      $project: {
+        bundleBytes: { $ifNull: ['$size.totalBytes', 0] },
+        currentSha: { $ifNull: ['$sha256Index', { $arrayElemAt: ['$versions.sha256Index', -1] }] },
+        versions: { $ifNull: ['$versions', []] },
       },
     },
+    { $unwind: { path: '$versions', preserveNullAndEmptyArrays: true } },
+    {
+      $group: {
+        _id: { page: '$_id', sha: '$versions.sha256Index' },
+        bundleBytes: { $first: '$bundleBytes' },
+        archivedBytes: {
+          $max: {
+            $cond: [{ $eq: ['$versions.sha256Index', '$currentSha'] }, 0, { $ifNull: ['$versions.indexBytes', 0] }],
+          },
+        },
+      },
+    },
+    {
+      $group: { _id: '$_id.page', bundleBytes: { $first: '$bundleBytes' }, archivedBytes: { $sum: '$archivedBytes' } },
+    },
+    { $group: { _id: null, totalBytes: { $sum: { $add: ['$bundleBytes', '$archivedBytes'] } } } },
   ]);
   return { totalBytes: row?.totalBytes ?? 0 };
 }

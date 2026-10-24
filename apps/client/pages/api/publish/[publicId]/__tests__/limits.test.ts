@@ -405,6 +405,21 @@ describe('archived versions', () => {
     expect(archiveOf('sha-current')?.length).toBe(CURRENT.length);
   });
 
+  it('revise archives the stored index.html bytes as they are, and records their length', async () => {
+    // Not valid UTF-8: decoding and re-encoding would swap the byte for a 3-byte replacement character.
+    const stored = Buffer.concat([Buffer.from(CURRENT), Buffer.from([0xe9])]);
+    m.download.mockResolvedValue(stored);
+    m.findOneLean.mockResolvedValue({ ...artifact(stored.length), versions: [] });
+
+    const res = await run(reviseHandler);
+
+    expect(res.statusCode).toBe(200);
+    expect(archiveOf('sha-current')?.equals(stored)).toBe(true);
+    expect(pushedVersions()[0]).toEqual(
+      expect.objectContaining({ sha256Index: 'sha-current', indexBytes: stored.length })
+    );
+  });
+
   it('restore records indexBytes on the version it archives and on a restored copy history lacks', async () => {
     m.findOneLean.mockResolvedValue({ ...artifact(), versions: [{ sha256Index: 'sha-prev', indexBytes: 50 }] });
 

@@ -155,18 +155,19 @@ const handler = baseApi().post(async (req, res) => {
     }
 
     const storage = getPublishedArtifactsStorage();
-    let currentHtml: string;
+    // The stored bytes are what gets archived (and counted), not a re-encoding of the decoded text.
+    let currentBuf: Buffer;
     try {
-      const buf = await storage.download(`${artifact.storageKeyPrefix}index.html`);
-      if (buf.length > MAX_REVISE_INDEX_BYTES) {
-        return res.status(422).json({
-          error: `index.html (${buf.length}B) is too large to AI-revise in this version (max ${MAX_REVISE_INDEX_BYTES}B)`,
-        });
-      }
-      currentHtml = buf.toString('utf-8');
+      currentBuf = await storage.download(`${artifact.storageKeyPrefix}index.html`);
     } catch {
       return res.status(500).json({ error: 'Artifact index.html missing from storage' });
     }
+    if (currentBuf.length > MAX_REVISE_INDEX_BYTES) {
+      return res.status(422).json({
+        error: `index.html (${currentBuf.length}B) is too large to AI-revise in this version (max ${MAX_REVISE_INDEX_BYTES}B)`,
+      });
+    }
+    const currentHtml = currentBuf.toString('utf-8');
 
     // Counted before the model call rather than after the storage-quota check below, because the
     // model call is the costly part and the quota can only be checked once its output is known.
@@ -227,9 +228,6 @@ const handler = baseApi().post(async (req, res) => {
       f.path === 'index.html' ? { ...f, size: revisedBuf.length, sha256: newIndexSha } : f
     );
     const totalBytes = newManifest.reduce((sum, f) => sum + f.size, 0);
-    // The current version's CONTENT, archived below before overwriting so a bad
-    // revision can be rolled back (previousVersionMeta only stores metadata).
-    const archivedBuf = Buffer.from(currentHtml, 'utf-8');
     const now = new Date();
 
     // Record the version, deduped by content sha and backfilling the version being
@@ -243,7 +241,7 @@ const handler = baseApi().post(async (req, res) => {
         publishedBy: artifact.lastPublishedBy ?? artifact.ownerId,
         size: artifact.size,
         sha256Index: currentSha,
-        indexBytes: archivedBuf.length,
+        indexBytes: currentBuf.length,
       });
       haveShas.add(currentSha);
     }
@@ -273,8 +271,10 @@ const handler = baseApi().post(async (req, res) => {
       return res.status(quota.status).json({ error: quota.error, code: quota.code, details: quota.details });
     }
 
+    // Archive the current version's stored bytes before overwriting, so a bad revision can be
+    // rolled back (previousVersionMeta only stores metadata).
     await storage
-      .upload(archivedBuf, `${artifact.storageKeyPrefix}versions/${currentSha}.html`, {
+      .upload(currentBuf, `${artifact.storageKeyPrefix}versions/${currentSha}.html`, {
         ContentType: 'text/html',
       })
       .catch(() =>
