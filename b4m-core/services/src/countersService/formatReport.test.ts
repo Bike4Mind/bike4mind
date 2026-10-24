@@ -146,6 +146,16 @@ describe('formatCustomSlackMessage - most active users leaderboard', () => {
     expect(message).not.toContain('<https://');
   });
 
+  it('escapes Slack control characters when no app URL is configured', () => {
+    const message = formatCustomSlackMessage('App', {
+      metrics: {},
+      userActivity: activity([{ _id: 'u1', email: 'a&b<c>@example.com', interactions: 1, creditsSpent: 1 }]),
+    });
+
+    expect(message).toContain('a&amp;b&lt;c&gt;@example.com - 1 credits, 1 events');
+    expect(message).not.toContain('a&b<c>');
+  });
+
   it('falls back to event counts for engagement when nobody spent', () => {
     const message = formatCustomSlackMessage('App', {
       metrics: {},

@@ -442,10 +442,9 @@ export const formatCustomSlackMessage = (
       if (index === 2) medal = '🥉';
 
       const displayName = user.email || `User ${user._id?.substring(0, 8)}`;
-      // Slack mrkdwn reserves & < > inside a link label.
+      // Slack mrkdwn reserves & < > in both linked and plain text.
       const label = displayName.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      const name =
-        appUrl && user._id ? `<${toAbsoluteUrl(appUrl, adminUserProfilePath(user._id))}|${label}>` : displayName;
+      const name = appUrl && user._id ? `<${toAbsoluteUrl(appUrl, adminUserProfilePath(user._id))}|${label}>` : label;
       const engagement = engagementByCredits ? (user.creditsSpent ?? 0) : user.interactions;
       const engagementLevel = getEngagementLevel(engagement, maxEngagement);
       const spend = `${(user.creditsSpent ?? 0).toLocaleString()} credits`;

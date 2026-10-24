@@ -9,6 +9,7 @@ import {
   FacetResults,
   parseInternalStaffDomains,
   internalStaffEmailRegex,
+  type TopUserResult,
 } from '@bike4mind/common';
 import { dayjs } from '@bike4mind/common';
 import utc from 'dayjs/plugin/utc';
@@ -17,8 +18,18 @@ import utc from 'dayjs/plugin/utc';
 dayjs.extend(utc);
 import BaseRepository from '@bike4mind/db-core';
 import { executeFacetCompatible, convertPipelineForDocumentDB } from '../../../utils/documentdb-compat';
+import { CreditTransaction } from '../../billing/CreditTransactionModel';
 
 export interface ICounterLogModel extends mongoose.Model<ICounterLogDocument, {}, {}>, ICounterLogRepository {}
+
+function newAccountExpression(createdAtField: string, windowEnd: Date) {
+  return {
+    $and: [
+      { $gt: [createdAtField, dayjs(windowEnd).subtract(168, 'hours').toDate()] },
+      { $lte: [createdAtField, windowEnd] },
+    ],
+  };
+}
 
 // CounterLog.userId is a free-form string and real rows carry non-ObjectId values such as
 // 'SYSTEM'. Every user $lookup below therefore derives userObjectId with
@@ -29,6 +40,59 @@ export interface ICounterLogModel extends mongoose.Model<ICounterLogDocument, {}
 class CounterLogRepository extends BaseRepository<ICounterLogDocument> implements ICounterLogRepository {
   constructor(model: ICounterLogModel) {
     super(model);
+  }
+
+  private async findDailySpendingUsers(start: Date, end: Date, staffRegex: RegExp | null): Promise<TopUserResult[]> {
+    return CreditTransaction.aggregate<TopUserResult>(
+      convertPipelineForDocumentDB([
+        {
+          $match: {
+            ownerType: 'User',
+            type: { $in: [...AI_USAGE_TRANSACTION_TYPES] },
+            createdAt: { $gte: start, $lte: end },
+          },
+        },
+        { $group: { _id: '$ownerId', creditsSpent: { $sum: { $abs: '$credits' } } } },
+        { $match: { creditsSpent: { $gt: 0 } } },
+        { $addFields: { userObjectId: { $convert: { input: '$_id', to: 'objectId', onError: null } } } },
+        {
+          $lookup: {
+            from: 'users',
+            let: { userObjectId: '$userObjectId' },
+            pipeline: [
+              { $match: { $expr: { $eq: ['$_id', '$$userObjectId'] } } },
+              { $project: { _id: 1, email: 1, createdAt: 1 } },
+            ],
+            as: 'user',
+          },
+        },
+        { $unwind: '$user' },
+        ...(staffRegex ? [{ $match: { $nor: [{ 'user.email': { $regex: staffRegex } }] } }] : []),
+        {
+          $lookup: {
+            from: 'counterlogs',
+            let: { userId: '$_id' },
+            pipeline: [
+              { $match: { datetime: { $gte: start, $lte: end } } },
+              { $match: { $expr: { $eq: ['$userId', '$$userId'] } } },
+              { $count: 'count' },
+            ],
+            as: 'events',
+          },
+        },
+        {
+          $project: {
+            _id: 1,
+            email: { $ifNull: ['$user.email', null] },
+            creditsSpent: 1,
+            interactions: { $ifNull: [{ $arrayElemAt: ['$events.count', 0] }, 0] },
+            isNew: newAccountExpression('$user.createdAt', end),
+          },
+        },
+        { $sort: { creditsSpent: -1, interactions: -1, _id: 1 } },
+        { $limit: 20 },
+      ])
+    ).allowDiskUse(true);
   }
 
   async findRecentByUserIdAndHasMetadata(userId: string): Promise<ICounterLogDocument[]> {
@@ -615,9 +679,8 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
             { $limit: 3 },
           ]
         : [
-            // Daily leaderboard: ranked by what the user spent, not raw event volume. Every
-            // exclusion and the ordering run before $limit, since the twenty candidates must be
-            // chosen by the same key the report ranks on.
+            // Event candidates fill the leaderboard after spenders from the separate ledger query.
+            // Exclude non-users and staff before choosing the top twenty by event count.
             {
               $match: {
                 datetime: { $gte: weekStartDate, $lte: weekEndDate },
@@ -647,29 +710,8 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
               $group: {
                 _id: '$userId',
                 interactions: { $sum: 1 },
-                email: { $first: '$userDetails.email' },
+                email: { $first: { $ifNull: ['$userDetails.email', null] } },
                 userCreatedAt: { $first: '$userDetails.createdAt' },
-              },
-            },
-            {
-              // The user's own AI spend for the same window. usage rows are stored negative, so
-              // the magnitude is what "spent" means here; AI_USAGE_TRANSACTION_TYPES keeps admin
-              // adjustments and transfers out of the ranking.
-              $lookup: {
-                from: 'credittransactions',
-                let: { uid: '$_id' },
-                pipeline: [
-                  {
-                    $match: {
-                      ownerType: 'User',
-                      type: { $in: [...AI_USAGE_TRANSACTION_TYPES] },
-                      createdAt: { $gte: weekStartDate, $lte: weekEndDate },
-                    },
-                  },
-                  { $match: { $expr: { $eq: ['$ownerId', '$$uid'] } } },
-                  { $group: { _id: null, creditsSpent: { $sum: { $abs: '$credits' } } } },
-                ],
-                as: 'spend',
               },
             },
             {
@@ -677,15 +719,13 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
                 _id: 1,
                 email: 1,
                 interactions: 1,
-                creditsSpent: { $ifNull: [{ $arrayElemAt: ['$spend.creditsSpent', 0] }, 0] },
+                creditsSpent: { $literal: 0 },
                 // Against the window's own end, so a re-rendered past date stays correct. Hours, not days: DST-safe.
-                isNew: {
-                  $cond: [{ $gte: ['$userCreatedAt', dayjs(weekEndDate).subtract(168, 'hours').toDate()] }, true, false],
-                },
+                isNew: newAccountExpression('$userCreatedAt', weekEndDate),
               },
             },
             // _id breaks exact ties so the same data always renders in the same order.
-            { $sort: { creditsSpent: -1, interactions: -1, _id: 1 } },
+            { $sort: { interactions: -1, _id: 1 } },
             { $limit: 20 },
           ],
       topOrganizations: [
@@ -983,15 +1023,31 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
     });
 
     // Execute the aggregation with DocumentDB compatibility
-    const result = await executeFacetCompatible(
-      this.model,
-      [], // No base pipeline for this aggregation
-      convertedFacetStages
-    );
+    const [result, spendingUsers] = await Promise.all([
+      executeFacetCompatible(this.model, [], convertedFacetStages),
+      isWeeklyReport
+        ? Promise.resolve([])
+        : this.findDailySpendingUsers(weekStartDate, weekEndDate, internalStaffRegex),
+    ]);
 
     // Process the results to match the expected format (similar to the original $project stage)
     if (result && result.length > 0) {
       const facetData = result[0];
+      // Paid API paths may write a ledger row without a counter event. Each query returns its
+      // best twenty, so their bounded union contains the overall best twenty, including zero-spend users.
+      const dailyTopUsers = new Map<string, TopUserResult>(
+        [...(facetData.topUsers ?? []), ...spendingUsers].map((user: TopUserResult) => [user._id, user])
+      );
+      const topUsers = isWeeklyReport
+        ? facetData.topUsers || []
+        : [...dailyTopUsers.values()]
+            .sort(
+              (first, second) =>
+                (second.creditsSpent ?? 0) - (first.creditsSpent ?? 0) ||
+                second.interactions - first.interactions ||
+                (first._id < second._id ? -1 : first._id > second._id ? 1 : 0)
+            )
+            .slice(0, 20);
 
       // Apply the same transformations as the original $project stage
       const processedResult = [
@@ -1003,7 +1059,7 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
           allUsers: facetData.allUsers || [],
           internalUsers: facetData.internalUsers || [],
           weeklyActiveUsers: facetData.weeklyActiveUsers || [],
-          topUsers: facetData.topUsers || [],
+          topUsers,
           topModels: facetData.topModels || [],
           topOrganizations: facetData.topOrganizations || [],
           peakDay:
