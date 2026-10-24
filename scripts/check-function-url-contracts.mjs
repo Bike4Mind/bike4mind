@@ -40,6 +40,7 @@ const FUNCTION_PATTERN = /new\s+sst\.aws\.Function\s*\(/g;
 const ROUTE_ALIAS_PATTERN = /\bdefineLambdaRoute\s+as\s+([A-Za-z_$][\w$]*)/g;
 // Type-only imports erase at build time, so they never pull a module into the bundle.
 const TYPE_ONLY_IMPORT_PATTERN = /\b(?:import|export)\s+type\s[^;'"]*?\bfrom\s*(['"])[^'"\n]+\1/g;
+const INLINE_TYPE_IMPORT_PATTERN = /\b(?:import|export)\s*\{([^}]*)\}\s*from\s*(['"])[^'"\n]+\2/g;
 
 const SPECIFIER_PATTERNS = [
   /\bfrom\s*(['"])([^'"\n]+)\1/g,
@@ -62,7 +63,7 @@ export function stripComments(source) {
     for (let k = from; k < to; k++) if (out[k] !== '\n' && out[k] !== '\r') out[k] = ' ';
   };
 
-  // Index just past the literal opening at $i.
+  // Index just past the string/template literal that starts at $i.
   function stringEnd(i) {
     const quote = source[i];
     i++;
@@ -115,7 +116,7 @@ export function stripComments(source) {
   return out.join('');
 }
 
-/** Index just past the string/template literal opening at $i. */
+/** Index just past the string/template literal that starts at $i. */
 function plainStringEnd(text, i) {
   const quote = text[i];
   i++;
@@ -208,9 +209,13 @@ function topLevelProps(literal, fileText, problems, file) {
     const body = part.trim();
     const spread = body.match(/^\.\.\.\s*([A-Za-z_$][\w$]*)$/);
     if (spread) {
-      const decl = fileText.match(
-        new RegExp(`\\bconst\\s+${spread[1].replace(/\$/g, '\\$')}\\s*(?::[^=]+)?=\\s*(?=\\{)`)
-      );
+      // More than one `const NAME` (shadowed or sibling) is ambiguous: the url could be in either.
+      const name = spread[1].replace(/\$/g, '\\$');
+      const declared = new RegExp(`\\bconst\\s+${name}(?![\\w$])`, 'g');
+      const decl =
+        [...fileText.matchAll(declared)].length === 1
+          ? fileText.match(new RegExp(`${declared.source}\\s*(?::[^;]*?)?=\\s*(?=\\{)`))
+          : null;
       const inner = decl && topLevelProps(fileText.slice(decl.index + decl[0].length), fileText, problems, file);
       if (inner) Object.assign(props, inner);
       else problems.push(`${file}: cannot resolve spread '...${spread[1]}' in 'new sst.aws.Function' options`);
@@ -222,6 +227,7 @@ function topLevelProps(literal, fileText, problems, file) {
     }
     const match = part.match(/^\s*(?:([A-Za-z_$][\w$]*)|'([^'\n]*)'|"([^"\n]*)")\s*:/);
     if (match) props[match[1] ?? match[2] ?? match[3]] = part.slice(match[0].length).trim();
+    else if (body) problems.push(`${file}: cannot inspect '${body}' in 'new sst.aws.Function' options`);
   }
   return props;
 }
@@ -326,6 +332,17 @@ function resolveImport(fromFile, spec, exists) {
   return null;
 }
 
+// `import { type A, type B } from 'x'` erases like `import type`; a mixed list still pulls the module in.
+function dropTypeOnlyImports(text) {
+  return text.replace(TYPE_ONLY_IMPORT_PATTERN, '').replace(INLINE_TYPE_IMPORT_PATTERN, (whole, members) => {
+    const names = members
+      .split(',')
+      .map(m => m.trim())
+      .filter(Boolean);
+    return names.length > 0 && names.every(m => /^type\s/.test(m)) ? '' : whole;
+  });
+}
+
 function importSpecifiers(text) {
   const specs = [];
   for (const pattern of SPECIFIER_PATTERNS) {
@@ -360,7 +377,7 @@ export function usesDefineLambdaRoute(root, entryFile, io = {}) {
 
       const names = ['defineLambdaRoute', ...[...clean.matchAll(ROUTE_ALIAS_PATTERN)].map(m => m[1])];
       if (new RegExp(`\\b(?:${names.map(n => n.replace(/\$/g, '\\$')).join('|')})\\s*\\(`).test(clean)) return true;
-      for (const spec of importSpecifiers(clean.replace(TYPE_ONLY_IMPORT_PATTERN, ''))) {
+      for (const spec of importSpecifiers(dropTypeOnlyImports(clean))) {
         const target = resolveImport(file, spec, exists);
         if (target && !seen.has(target)) next.push(target);
       }

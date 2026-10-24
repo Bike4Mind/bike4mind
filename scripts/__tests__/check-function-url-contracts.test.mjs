@@ -377,3 +377,98 @@ describe('main', () => {
     expect(r.stderr).toContain('Infra directory not found');
   });
 });
+
+describe('unreadable options elements', () => {
+  const RAW_FN = "new sst.aws.Function('F', {";
+
+  it.each([
+    ['shorthand url', `const url = true;\n${RAW_FN}\n  handler: 'apps/workers/src/raw.handler',\n  url,\n});`, 'url'],
+    [
+      'getter url',
+      `${RAW_FN}\n  handler: 'apps/workers/src/raw.handler',\n  get url() { return true; },\n});`,
+      'get url()',
+    ],
+  ])('reports a %s instead of dropping it', (_label, text, element) => {
+    const { exposed, problems } = scan(text);
+    expect(exposed).toEqual([]);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain(`cannot inspect '${element}`);
+  });
+
+  it('exits 2 for a shorthand url end to end', () => {
+    const dir = writeTree({
+      'infra/fn.ts': `const url = true;\n${RAW_FN}\n  handler: 'apps/workers/src/raw.handler',\n  url,\n});`,
+      'apps/workers/src/raw.ts': RAW_HANDLER,
+    });
+    expect(run(dir).status).toBe(2);
+  });
+
+  it('reports a non-identifier spread', () => {
+    const { problems } = scan(`${RAW_FN}\n  handler: 'apps/workers/src/raw.handler',\n  ...opts.more,\n});`);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('cannot inspect a spread or computed key');
+  });
+});
+
+describe('same-file spread resolution', () => {
+  const spreadInto = decls => `${decls}\nexport const f = new sst.aws.Function('F', { ...CFG });`;
+
+  it('fails closed when the spread name is declared twice', () => {
+    const { exposed, problems } = scan(
+      spreadInto(
+        "const CFG = { handler: 'apps/workers/src/raw.handler' };\nfunction g() { const CFG = { handler: 'apps/workers/src/raw.handler', url: true }; }"
+      )
+    );
+    expect(exposed).toEqual([]);
+    expect(problems[0]).toContain("cannot resolve spread '...CFG'");
+  });
+
+  it('resolves a single declaration whose annotation contains an arrow type', () => {
+    const { exposed, problems } = scan(
+      spreadInto("const CFG: Record<string, () => void> = { handler: 'apps/workers/src/raw.handler', url: true };")
+    );
+    expect(problems).toEqual([]);
+    expect(exposed).toEqual([{ file: 'infra/fn.ts', handler: 'apps/workers/src/raw.handler' }]);
+  });
+
+  it('still resolves the real agent-executor spread', () => {
+    const text = fs.readFileSync(path.join(REPO_ROOT, 'infra/agentExecutor.ts'), 'utf8');
+    expect(findUrlFunctions([{ file: 'infra/agentExecutor.ts', text }]).problems).toEqual([]);
+  });
+
+  it('exits 2 with ::error:: when a crash happens inside main() (recursive spread)', () => {
+    const dir = writeTree({
+      'infra/fn.ts': "const shared = { ...shared };\nnew sst.aws.Function('F', { ...shared });",
+    });
+    const r = run(dir);
+    expect(r.status).toBe(2);
+    expect(r.stderr).toContain('::error::Function URL contract scan crashed');
+    expect(r.stdout).toBe('');
+  });
+});
+
+describe('inline type imports', () => {
+  const ENTRY = 'apps/workers/src/entry.ts';
+  const routed = { 'apps/workers/src/routed.ts': 'export const h = defineLambdaRoute(c, f);' };
+
+  it.each([
+    ['inline type specifier', "import { type Foo } from './routed';\nexport const handler = raw;"],
+    ['export type', "export type { Foo } from './routed';\nexport const handler = raw;"],
+  ])('does not follow an %s', (_label, entry) => {
+    expect(usesDefineLambdaRoute('/repo', ENTRY, virtualFs({ [ENTRY]: entry, ...routed }))).toBe(false);
+  });
+
+  it('follows a list that mixes a type with a value import', () => {
+    const io = virtualFs({ [ENTRY]: "import { type Foo, h } from './routed';\nexport const handler = h;", ...routed });
+    expect(usesDefineLambdaRoute('/repo', ENTRY, io)).toBe(true);
+  });
+});
+
+describe('real infra declarations', () => {
+  it('discovers the CliToolHandler Function URL', () => {
+    const text = fs.readFileSync(path.join(REPO_ROOT, 'infra/cliToolHandler.ts'), 'utf8');
+    expect(findUrlFunctions([{ file: 'infra/cliToolHandler.ts', text }]).exposed).toEqual([
+      { file: 'infra/cliToolHandler.ts', handler: 'apps/workers/src/cli/tools.handler.handler' },
+    ]);
+  });
+});

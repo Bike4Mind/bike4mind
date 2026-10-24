@@ -193,9 +193,9 @@ fi
 
 report "$ALLOWLIST_FUNCTION_URL" "$url_violators" \
   "have an infra/ Function URL handler that is not built on defineLambdaRoute" \
-  "Fix: build the handler on defineLambdaRoute(contract, handler) so it validates the request,
-authenticates; then add the contract to contracts/index.ts and regenerate the spec (see
-b4m-core/common/src/api-contract/README.md).
+  "Fix: build the handler on defineLambdaRoute(contract, handler) so it validates the request and
+authenticates; then add the contract to contracts/index.ts and regenerate the spec, which is
+what registers it in the OpenAPI spec (see b4m-core/common/src/api-contract/README.md).
 Do NOT add to $ALLOWLIST_FUNCTION_URL for new code: entries there are frozen debt, and each
 needs a trailing '# reason'." || failed=1
 
