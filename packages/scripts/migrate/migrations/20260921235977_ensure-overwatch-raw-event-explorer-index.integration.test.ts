@@ -52,6 +52,16 @@ async function winningIndexes(filter: Record<string, unknown>, sort?: Record<str
   return [...new Set(indexNamesIn(explained.queryPlanner.winningPlan))];
 }
 
+/** The same for an aggregation: its plan sits under the leading `$cursor` unless the engine pushed the whole pipeline down. */
+async function winningAggregateIndexes(pipeline: Record<string, unknown>[]): Promise<string[]> {
+  const explained = (await OverwatchRawEvent.collection.aggregate(pipeline).explain('queryPlanner')) as {
+    queryPlanner?: { winningPlan: unknown };
+    stages?: { $cursor?: { queryPlanner?: { winningPlan: unknown } } }[];
+  };
+  const planner = explained.queryPlanner ?? explained.stages?.[0]?.$cursor?.queryPlanner;
+  return [...new Set(indexNamesIn(planner?.winningPlan))];
+}
+
 describe('ensure-overwatch-raw-event-explorer-index migration (real DB)', () => {
   it('builds the product, event, timestamp index', async () => {
     let idx = (await OverwatchRawEvent.collection.indexes()).find(i => i.name === INDEX_NAME);
@@ -74,12 +84,24 @@ describe('ensure-overwatch-raw-event-explorer-index migration (real DB)', () => 
     expect(idx).toBeDefined();
   });
 
+  it('agrees with the schema declaration, so autoIndex after it is a no-op', async () => {
+    await migration.up();
+    // What autoIndex runs on every cold boot. Name or option drift between the schema and the migration
+    // fails whichever builds second with IndexOptionsConflict, and when that is the migration, the deploy.
+    await OverwatchRawEvent.createIndexes();
+
+    const sameKey = (await OverwatchRawEvent.collection.indexes()).filter(
+      i => JSON.stringify(i.key) === JSON.stringify({ productId: 1, event: 1, timestamp: -1 })
+    );
+    expect(sameKey.map(i => i.name)).toEqual([INDEX_NAME]);
+  });
+
   it('wins the plan for a named-event range read over the product-window index', async () => {
     await OverwatchRawEvent.collection.createIndex({ productId: 1, timestamp: -1 });
     await migration.up();
 
     // A product window dominated by events the read does not name, which is the case the index is for.
-    const events = ['visit', 'article_read', 'cta_click', 'signup', 'purchase'];
+    const common = ['visit', 'article_read', 'cta_click'];
     await OverwatchRawEvent.collection.insertMany(
       Array.from({ length: 500 }, (_, i) => ({
         eventId: `e-${i}`,
@@ -87,7 +109,7 @@ describe('ensure-overwatch-raw-event-explorer-index migration (real DB)', () => 
         productId: 'blog',
         userId: `u-${i % 40}`,
         sessionId: `s-${i % 80}`,
-        event: i % 50 === 0 ? 'signup' : events[i % 3],
+        event: i % 50 === 0 ? 'signup' : i % 50 === 25 ? 'purchase' : common[i % 3],
         timestamp: new Date(Date.UTC(2026, 9, 1) + i * 60_000).toISOString(),
         createdAt: new Date(),
       })) as never[]
@@ -99,6 +121,17 @@ describe('ensure-overwatch-raw-event-explorer-index migration (real DB)', () => 
     // The funnel, attribution and roads: an `$in` of a few.
     expect(
       await winningIndexes({ productId: 'blog', event: { $in: ['signup', 'purchase'] }, timestamp: range })
+    ).toEqual([INDEX_NAME]);
+    // The explorer reads through aggregations, with its credited and user-action residuals in the head `$match`.
+    const explorerMatch = {
+      productId: 'blog',
+      event: 'signup',
+      timestamp: range,
+      'metadata.attribution': { $ne: 'self-reported' },
+      'metadata.userAction': { $nin: [false, 'false'] },
+    };
+    expect(
+      await winningAggregateIndexes([{ $match: explorerMatch }, { $group: { _id: '$userId', n: { $sum: 1 } } }])
     ).toEqual([INDEX_NAME]);
     // Why the product-window index stays: data health's newest-event seek names no event, and only
     // that index hands back a product's events in timestamp order.
