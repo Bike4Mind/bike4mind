@@ -126,6 +126,22 @@ describe('admin/create-user', () => {
       expect(res.status).toHaveBeenCalledWith(201);
     });
 
+    it('records the storage limit the created user ended up with, not the requested one', async () => {
+      mockCreateUser.mockResolvedValue({
+        id: 'u-sl',
+        email: 'audited@example.com',
+        username: 'audited',
+        storageLimit: 1000,
+      });
+
+      await runHandler(makeReq({ ...body, storageLimit: 5000 }), makeRes());
+
+      expect(mockRecordAdminAction).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ details: expect.objectContaining({ storageLimit: 1000 }) })
+      );
+    });
+
     it('never records the supplied password', async () => {
       mockCreateUser.mockResolvedValue({ id: 'u-pw', email: 'audited@example.com', username: 'audited' });
 

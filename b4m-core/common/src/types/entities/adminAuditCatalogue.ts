@@ -134,7 +134,12 @@ export const ADMIN_AUDIT_CATALOGUE = {
 
   // Handler coverage: users and credentials
   'user.created': { category: 'account', severity: 'critical', write: 'strict' },
-  'user.bulk_created': { category: 'account', severity: 'notice', write: 'bestEffort' },
+  'user.bulk_created': {
+    category: 'account',
+    severity: 'notice',
+    write: 'bestEffort',
+    escalatesAboveGrantThreshold: true,
+  },
   'user.emergency_login.challenged': { category: 'access', severity: 'critical', write: 'strict' },
   'user.emergency_login.denied': { category: 'access', severity: 'notice', write: 'bestEffort' },
   'user.api_key.generated': { category: 'access', severity: 'critical', write: 'strict' },

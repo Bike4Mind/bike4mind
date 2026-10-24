@@ -190,18 +190,24 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
     // every created account so a failed audit write cannot 500 a created batch.
     if (createdUserIds.length > 0) {
       const auditedIds = createdUserIds.slice(0, AUDITED_USER_ID_LIMIT);
-      await recordAdminActionFromRequest(req, {
-        action: 'user.bulk_created',
-        target: { kind: 'system', id: 'bulk-create-users', displayName: 'Bulk user import' },
-        summary: `bulk created ${createdUserIds.length} user(s)`,
-        details: {
-          count: createdUserIds.length,
-          failedCount: results.filter(r => !r.success).length,
-          createdUserIds: auditedIds,
-          startingCreditsTotal: [...startingCreditsById.values()].reduce((sum, credits) => sum + credits, 0),
-          startingCreditsByUserId: Object.fromEntries(auditedIds.map(id => [id, startingCreditsById.get(id) ?? 0])),
-        },
-      });
+      const startingCreditsTotal = [...startingCreditsById.values()].reduce((sum, credits) => sum + credits, 0);
+      try {
+        await recordAdminActionFromRequest(req, {
+          action: 'user.bulk_created',
+          target: { kind: 'system', id: 'bulk-create-users', displayName: 'Bulk user import' },
+          summary: `bulk created ${createdUserIds.length} user(s)`,
+          details: {
+            count: createdUserIds.length,
+            failedCount: results.filter(r => !r.success).length,
+            createdUserIds: auditedIds,
+            credits: startingCreditsTotal,
+            startingCreditsTotal,
+            startingCreditsByUserId: Object.fromEntries(auditedIds.map(id => [id, startingCreditsById.get(id) ?? 0])),
+          },
+        });
+      } catch (error) {
+        req.logger.error('[ADMIN_AUDIT_WRITE_FAILED]', { action: 'user.bulk_created', error });
+      }
     }
 
     // Validates after users are created and invites sent: a bad success row would 500 a batch that

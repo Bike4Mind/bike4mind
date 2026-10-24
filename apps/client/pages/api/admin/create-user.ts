@@ -119,7 +119,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
           isAdmin: validatedData.isAdmin,
           level: validatedData.level,
           initialCredits: validatedData.initialCredits,
-          storageLimit: validatedData.storageLimit,
+          storageLimit: created.storageLimit,
           tags: validatedData.tags,
         },
       });

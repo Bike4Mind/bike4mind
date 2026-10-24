@@ -74,6 +74,7 @@ describe('POST /api/admin/bulk-create-users', () => {
             count: 2,
             failedCount: 1,
             createdUserIds: expect.arrayContaining(['new-1', 'new-2']),
+            credits: 0,
             startingCreditsTotal: 0,
             startingCreditsByUserId: { 'new-1': 0, 'new-2': 0 },
           },
@@ -127,6 +128,7 @@ describe('POST /api/admin/bulk-create-users', () => {
             count: 1,
             failedCount: 1,
             createdUserIds: ['new-1'],
+            credits: 50,
             startingCreditsTotal: 50,
             startingCreditsByUserId: { 'new-1': 50 },
           },
@@ -154,9 +156,10 @@ describe('POST /api/admin/bulk-create-users', () => {
       await h.handler!(makeReq([{ email: 'a@b.test', startingCredits: 50 }, { email: 'c@b.test' }]), okRes());
 
       const { details } = h.recordAdminAction.mock.calls[0][1] as {
-        details: { startingCreditsTotal: number; startingCreditsByUserId: Record<string, number> };
+        details: { credits: number; startingCreditsTotal: number; startingCreditsByUserId: Record<string, number> };
       };
       expect(details.startingCreditsTotal).toBe(50);
+      expect(details.credits).toBe(details.startingCreditsTotal);
       expect(details.startingCreditsByUserId).toEqual({ 'new-1': 50, 'new-2': 0 });
     });
 
