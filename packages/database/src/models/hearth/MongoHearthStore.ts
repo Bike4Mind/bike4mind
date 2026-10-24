@@ -161,10 +161,12 @@ export class HearthChannelCapError extends ConflictError {
  * Create a channel only if the owner is under the cap.
  *
  * Count, insert, re-count: the last writer to insert counted every other
- * writer, so survivors never exceed the cap, while racers at the boundary may
- * all roll back (a retry fixes it). Same trade as
- * McpConnectionModel.createWithinUserCap, chosen over an atomic counter because
- * no delete path exists to keep a counter honest.
+ * writer, so unused rows never push the total past the cap, while racers at the
+ * boundary may all roll back (a retry fixes it). A row that already took an
+ * event before its re-count is kept, so the total can overshoot by the number of
+ * such racers; with no delete path that overshoot is permanent but bounded. Same
+ * trade as McpConnectionModel.createWithinUserCap, chosen over an atomic counter
+ * because no delete path exists to keep a counter honest.
  */
 async function createChannelWithinCap(userId: Types.ObjectId, name: string): Promise<IHearthChannelDoc> {
   const atCap = (await HearthChannel.countDocuments({ userId })) >= MAX_HEARTH_CHANNELS_PER_USER;

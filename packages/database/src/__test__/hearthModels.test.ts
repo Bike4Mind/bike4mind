@@ -326,6 +326,31 @@ describe('Hearth models + MongoHearthStore', () => {
       expect(await HearthChannel.countDocuments({ _id: { $in: seededIds } })).toBe(seededIds.length);
     });
 
+    it('keeps a row that took an event before the re-count and returns it', async () => {
+      await seedChannels(USER, MAX_HEARTH_CHANNELS_PER_USER - 1);
+      const realCreate = HearthChannel.create.bind(HearthChannel);
+      const create = vi.spyOn(HearthChannel, 'create').mockImplementationOnce((async (doc: unknown) => {
+        const row = await realCreate(doc as never);
+        // A concurrent writer fills the last slot and the row takes an event.
+        await HearthChannel.insertMany([{ userId: new Types.ObjectId(USER), name: 'filler' }]);
+        await HearthChannel.updateOne({ _id: row._id }, { $set: { nextSeq: 1 } });
+        return row;
+      }) as never);
+
+      const channel = await hearthRepository.createChannel(USER, 'in-use');
+      create.mockRestore();
+
+      expect(await HearthChannel.exists({ _id: channel._id })).not.toBeNull();
+    });
+
+    it('a storage failure on create propagates unchanged, not as a cap refusal', async () => {
+      const boom = new Error('storage down');
+      const create = vi.spyOn(HearthChannel, 'create').mockRejectedValueOnce(boom as never);
+
+      await expect(hearthRepository.ensureChannelByName(USER, 'anything')).rejects.toBe(boom);
+      create.mockRestore();
+    });
+
     it('a same-name loser whose winner vanished retries into a live channel', async () => {
       const create = vi
         .spyOn(HearthChannel, 'create')
