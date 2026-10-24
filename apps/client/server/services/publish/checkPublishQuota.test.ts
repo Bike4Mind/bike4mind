@@ -140,7 +140,7 @@ describe('checkPublishQuota', () => {
 
   it('excludes the overwritten key from the org aggregation too', async () => {
     aggregateMock.mockResolvedValue(usage(1024));
-    const replacing = { tier: 'org', scopeId: 'org1', slug: 'my-page' } as const;
+    const replacing = { tier: 'organization', scopeId: 'org1', slug: 'my-page' } as const;
     await checkPublishQuota({
       ownerId: 'u1',
       orgScopeId: 'org1',
