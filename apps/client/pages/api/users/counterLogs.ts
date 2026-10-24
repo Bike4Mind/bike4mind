@@ -651,6 +651,7 @@ const generateDailyReportResponse = async (
         ...dateMetrics,
         date,
         aiInsights,
+        appUrl: process.env.APP_URL?.trim(),
       });
 
       if (isHistoricalDate) {
