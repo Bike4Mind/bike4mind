@@ -43,31 +43,64 @@ export const RESERVED_USERNAME_PREFIX = 'persona-';
 
 export const RESERVED_USERNAME_MESSAGE = `Usernames starting with "${RESERVED_USERNAME_PREFIX}" are reserved. Please choose another username.`;
 
-// Lookalikes of the prefix's characters that NFKD does not fold: other scripts' letters, Latin small
-// capitals, and dashes. Fullwidth, mathematical and other compatibility forms fold under NFKD.
+// Lookalikes of the prefix's characters that NFKD does not fold, after lower-casing: other scripts'
+// letters, Latin small capitals, and dashes. Fullwidth, mathematical and other compatibility forms
+// fold under NFKD. Cherokee and Greek capitals are listed by their lower-case forms, and Lisu, which
+// has no case, spells the whole prefix. Taken from the Unicode confusables table (UTS #39).
 const RESERVED_PREFIX_CONFUSABLES: Readonly<Record<string, string>> = {
   '\u0440': 'p', // Cyrillic er
   '\u03c1': 'p', // Greek rho
   '\u1d18': 'p', // small capital p
+  '\u2ca3': 'p', // Coptic ro
+  '\uabb2': 'p', // Cherokee tlv (capital looks like P)
+  '\ua4d1': 'p', // Lisu pa
+  '\u146d': 'p', // Canadian syllabics ki
   '\u0435': 'e', // Cyrillic ie
   '\u04bd': 'e', // Cyrillic abkhasian che
   '\u1d07': 'e', // small capital e
+  '\u03b5': 'e', // Greek epsilon (capital looks like E)
+  '\uab32': 'e', // blackletter e
+  '\uab7c': 'e', // Cherokee gv (capital looks like E)
+  '\ua4f0': 'e', // Lisu e
   '\u0433': 'r', // Cyrillic ghe
   '\u0280': 'r', // small capital r
+  '\u1d26': 'r', // Greek small capital gamma
+  '\u2c85': 'r', // Coptic gamma
+  '\uab47': 'r', // r without handle
+  '\uab71': 'r', // Cherokee e (capital looks like R)
+  '\uab81': 'r', // Cherokee hu
+  '\uaba2': 'r', // Cherokee sv (capital looks like R)
+  '\ua4e3': 'r', // Lisu zha
+  '\u1587': 'r', // Canadian syllabics tlhi
   '\u0455': 's', // Cyrillic dze
   '\ua731': 's', // small capital s
+  '\u01bd': 's', // tone five
+  '\uabaa': 's', // Cherokee du (capital looks like S)
+  '\ua4e2': 's', // Lisu sa
   '\u043e': 'o', // Cyrillic o
   '\u03bf': 'o', // Greek omicron
+  '\u03c3': 'o', // Greek sigma
   '\u0585': 'o', // Armenian oh
   '\u1d0f': 'o', // small capital o
+  '\u1d11': 'o', // sideways o
+  '\u2c9f': 'o', // Coptic o
+  '\uab3d': 'o', // blackletter o
+  '\ua4f3': 'o', // Lisu o
   '\u0578': 'n', // Armenian vo
   '\u057c': 'n', // Armenian ra
   '\u03b7': 'n', // Greek eta
+  '\u03bd': 'n', // Greek nu (capital looks like N)
   '\u0274': 'n', // small capital n
+  '\u2c9b': 'n', // Coptic ni
+  '\ua4e0': 'n', // Lisu na
   '\u0430': 'a', // Cyrillic a
   '\u03b1': 'a', // Greek alpha
   '\u0251': 'a', // Latin alpha
   '\u1d00': 'a', // small capital a
+  '\uab64': 'a', // inverted alpha
+  '\uab7a': 'a', // Cherokee go (capital looks like A)
+  '\ua4ee': 'a', // Lisu a
+  '\u15c5': 'a', // Canadian syllabics carrier gho
   '\u2010': '-',
   '\u2011': '-',
   '\u2012': '-',
@@ -102,8 +135,8 @@ export function isReservedUsername(raw: string): boolean {
 }
 
 /**
- * Remove the reserved prefix, and any separators after it, from the front of `raw` until what is
- * left is not reserved, so a generated username never claims it. May return ''.
+ * Remove the reserved prefix, and any separators or invisible characters after it, from the front
+ * of `raw` until what is left is not reserved, so a generated username never claims it. May return ''.
  */
 export function stripReservedUsernamePrefix(raw: string): string {
   let rest = raw;
@@ -114,7 +147,7 @@ export function stripReservedUsernamePrefix(raw: string): string {
     rest = chars
       .slice(cut)
       .join('')
-      .replace(/^[\s._'\-\p{M}]+/u, '');
+      .replace(/^[\s._'\-\p{M}\p{Default_Ignorable_Code_Point}]+/u, '');
   }
   return rest;
 }

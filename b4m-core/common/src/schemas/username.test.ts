@@ -116,6 +116,11 @@ describe('isReservedUsername', () => {
     ['Cyrillic dze for s', 'per\u0455ona-x'],
     ['Armenian vo for n', 'perso\u0578a-x'],
     ['Latin small capitals', '\u1d18\u1d07\u0280\ua731\u1d0f\u0274\u1d00-x'],
+    ['Greek capital epsilon and nu among Latin capitals', 'P\u0395RSO\u039dA-x'],
+    ['Cherokee capitals among Latin capitals', '\u13e2\u13ac\u13d2\u13daON\u13aa-x'],
+    ['Lisu letters for the whole word', '\ua4d1\ua4f0\ua4e3\ua4e2\ua4f3\ua4e0\ua4ee-x'],
+    ['Coptic ro and o', '\u2ca3ers\u2c9fna-x'],
+    ['Greek sigma for o', 'pers\u03c3na-x'],
     ['a non-breaking hyphen', 'persona\u2011x'],
     ['an en dash', 'persona\u2013x'],
     ['a fullwidth hyphen-minus (NFKC)', 'persona\uff0dx'],
@@ -176,6 +181,12 @@ describe('sanitizeUsername never yields a reserved username', () => {
     expect(sanitizeUsername('persona-')).toBe('');
     expect(sanitizeUsername('PERSONA-')).toBe('');
     expect(sanitizeUsername('persona-...')).toBe('');
+  });
+
+  it('does not leave an invisible username behind the stripped prefix', () => {
+    expect(sanitizeUsername('persona-ㅤ')).toBe('');
+    expect(sanitizeUsername('persona-ㅤﾠ')).toBe('');
+    expect(sanitizeUsername('persona-ㅤerin')).toBe('erin');
   });
 
   it('strips a prefix that only appears after truncation', () => {
