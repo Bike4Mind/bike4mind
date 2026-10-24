@@ -1,6 +1,7 @@
 import bcrypt from 'bcryptjs';
 import {
   ConflictError,
+  IAdminSettingsRepository,
   IUserDocument,
   IUserPreferences,
   IUserRepository,
@@ -10,6 +11,7 @@ import {
 import { BadRequestError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { isDuplicateKeyErrorOn } from './duplicateKeyError';
+import { assertUsernameNotReserved } from './reservedUsername';
 
 export const USERNAME_TAKEN_MESSAGE = 'That username is taken.';
 export const EMAIL_IN_USE_MESSAGE = 'That email address is already in use.';
@@ -109,6 +111,9 @@ export type UpdateUserParameters = z.infer<typeof updateUserSchema>;
 export interface UpdateUserAdapters {
   db: {
     users: IUserRepository;
+    // Reads the synthetic test domains that let a verified test account keep a reserved username.
+    // Absent: no reserved username is allowed.
+    adminSettings?: Pick<IAdminSettingsRepository, 'findBySettingName'>;
   };
 }
 
@@ -205,15 +210,24 @@ function mergePreferences(
 }
 
 /**
+ * Who may take a reserved username (isReservedUsername): an admin editing an account passes
+ * `allowReservedUsername: true`; a self-service change is checked by assertUsernameNotReserved.
+ */
+export type ReservedUsernamePolicy =
+  | { allowReservedUsername: true }
+  | { allowReservedUsername?: false; adminSettings?: Pick<IAdminSettingsRepository, 'findBySettingName'> };
+
+/**
  * Validate a requested username change and normalize it in place on `params`. An absent or
  * unchanged username is left alone, so a legacy username that predates the rules never blocks
- * an unrelated profile save. Throws 400 on a rule violation and 409 when another account holds
- * the name case-insensitively.
+ * an unrelated profile save. Throws 400 on a rule violation or a reserved name the policy does not
+ * allow, and 409 when another account holds the name case-insensitively.
  */
 export async function validateUsernameChange(
-  user: Pick<IUserDocument, 'id' | 'username'>,
+  user: Pick<IUserDocument, 'id' | 'username' | 'email' | 'emailVerified'>,
   params: { username?: string },
-  users: Pick<IUserRepository, 'existsOtherUserWithUsername'>
+  users: Pick<IUserRepository, 'existsOtherUserWithUsername'>,
+  reserved: ReservedUsernamePolicy
 ): Promise<void> {
   if (params.username === undefined || params.username === user.username) return;
 
@@ -223,6 +237,10 @@ export async function validateUsernameChange(
   }
   params.username = parsed.data;
   if (parsed.data === user.username) return;
+
+  if (!reserved.allowReservedUsername) {
+    await assertUsernameNotReserved(parsed.data, user.emailVerified ? user.email : null, reserved.adminSettings);
+  }
 
   if (await users.existsOtherUserWithUsername(parsed.data, user.id)) {
     throw new ConflictError(USERNAME_TAKEN_MESSAGE);
@@ -255,7 +273,7 @@ export async function updateUser(userId: string, parameters: UpdateUserParameter
     throw new Error('User not found');
   }
 
-  await validateUsernameChange(userPassword, params, db.users);
+  await validateUsernameChange(userPassword, params, db.users, { adminSettings: db.adminSettings });
 
   const updatedUser = applyBaseUserUpdates(userPassword, params);
 

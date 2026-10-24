@@ -146,7 +146,7 @@ export function PublishedArtifactSettings({
           slotProps={{ input: { 'data-testid': `published-artifact-tag-input-${a.publicId}` } }}
           sx={{ flex: 1, minWidth: 0 }}
         />
-        <Typography level="body-xs" sx={{ opacity: 0.6, whiteSpace: 'nowrap' }}>
+        <Typography level="body-xs" textColor="text.tertiary" sx={{ whiteSpace: 'nowrap' }}>
           {(a.tags ?? []).length}/{PUBLISH_TAGS_MAX}
         </Typography>
       </Box>
@@ -156,7 +156,7 @@ export function PublishedArtifactSettings({
           {sourceKindLabel(a.source.kind)}
         </Chip>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
-          <Typography level="body-xs" sx={{ opacity: 0.7 }}>
+          <Typography level="body-xs" textColor="text.tertiary">
             Visibility
           </Typography>
           <Select
@@ -177,7 +177,7 @@ export function PublishedArtifactSettings({
 
         {isBundle && (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
-            <Typography level="body-xs" sx={{ opacity: 0.7 }}>
+            <Typography level="body-xs" textColor="text.tertiary">
               Comments
             </Typography>
             <Switch
@@ -335,7 +335,7 @@ export function PublishedArtifactSettings({
       {isBundle && (a.versionsCount ?? 0) < 2 && (
         <Typography
           level="body-xs"
-          sx={{ opacity: 0.7 }}
+          textColor="text.tertiary"
           data-testid={`published-artifact-single-version-${a.publicId}`}
         >
           Only one version published -{' '}

@@ -434,6 +434,15 @@ describe('adminUpdateUser - username changes', () => {
 
     expect(update.mock.calls[0][0].username).toBe('New Name');
   });
+
+  it('lets an admin give an account the reserved test-persona prefix', async () => {
+    const { adapters, update, target } = makeAdapters(100);
+    target.username = 'oldname';
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, username: 'persona-seed' }, adapters);
+
+    expect(update.mock.calls[0][0].username).toBe('persona-seed');
+  });
 });
 
 describe('adminUpdateUser - email changes', () => {

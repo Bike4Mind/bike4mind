@@ -1,7 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { registerUser, registerViaOTC, RegisterUserParameters } from './register';
 import { BadRequestError } from '@bike4mind/utils';
-import { CURRENT_POLICY_VERSION, RegInviteStatusType, PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
+import {
+  CURRENT_POLICY_VERSION,
+  RegInviteStatusType,
+  PENDING_FREE_CREDITS_TAG,
+  RESERVED_USERNAME_MESSAGE,
+} from '@bike4mind/common';
 import * as creditService from '../creditService';
 
 const baseParams: RegisterUserParameters = {
@@ -106,6 +111,58 @@ describe('registerUser', () => {
     const limitedInvite = mockAdapters.db.registrationInvites.update.mock.calls[0][0];
     expect(limitedInvite.used).toBe(limitedInvite.usageHistory[0].usedAt);
     expect(mockAdapters.db.registrationInvites.update.mock.calls[0][1]).toBeUndefined();
+  });
+
+  describe('reserved username prefix', () => {
+    const withSyntheticDomains = (domains: string) => {
+      const base = mockAdapters.db.adminSettings.findBySettingName.getMockImplementation();
+      mockAdapters.db.adminSettings.findBySettingName.mockImplementation((name: string) =>
+        name === 'syntheticUserEmailDomains' ? Promise.resolve({ settingValue: domains }) : base(name)
+      );
+    };
+
+    it.each([
+      'persona-alice',
+      'Persona-Alice',
+      '  PERSONA-alice',
+      '\u0440\u0435rs\u043ena-alice',
+      '\uff50ersona-alice',
+    ])('rejects %j for an ordinary signup with the reserved-name message', async username => {
+      const error = await registerUser({ ...baseParams, username }, mockAdapters).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(BadRequestError);
+      expect((error as Error).message).toBe(RESERVED_USERNAME_MESSAGE);
+      expect(mockAdapters.db.users.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects it when the email is on a domain that is not configured as synthetic', async () => {
+      withSyntheticDomains('test.example');
+      await expect(
+        registerUser({ ...baseParams, username: 'persona-alice', email: 'alice@example.com' }, mockAdapters)
+      ).rejects.toThrow(RESERVED_USERNAME_MESSAGE);
+    });
+
+    it('allows it when the proven email is on a configured synthetic test domain', async () => {
+      withSyntheticDomains('@Test.Example, qa.example.org');
+      const result = await registerUser(
+        { ...baseParams, username: 'persona-alice', email: 'alice@sub.test.example' },
+        mockAdapters
+      );
+      expect(result.username).toBe('persona-alice');
+    });
+
+    it('rejects it when the settings read fails', async () => {
+      mockAdapters.db.adminSettings.findBySettingName.mockImplementation((name: string) =>
+        name === 'syntheticUserEmailDomains' ? Promise.reject(new Error('db down')) : Promise.resolve(null)
+      );
+      await expect(
+        registerUser({ ...baseParams, username: 'persona-alice', email: 'alice@test.example' }, mockAdapters)
+      ).rejects.toThrow(RESERVED_USERNAME_MESSAGE);
+    });
+
+    it('leaves names that only contain the word alone', async () => {
+      const result = await registerUser({ ...baseParams, username: 'personal-site' }, mockAdapters);
+      expect(result.username).toBe('personal-site');
+    });
   });
 
   // --- disposable-email blocking ---
@@ -374,7 +431,7 @@ describe('registerUser', () => {
       expect(result).toMatchObject({ email: noInviteParams.email });
     });
 
-    it('allows registration when invite check is skipped (OTC — email already proven)', async () => {
+    it('allows registration when invite check is skipped (OTC \u2014 email already proven)', async () => {
       setAllowOpenRegistration('false');
       const result = await registerUser(noInviteParams, { ...mockAdapters, skipInviteCheck: true });
       expect(result).toMatchObject({ email: noInviteParams.email });
