@@ -6,13 +6,13 @@ Audit of the three queue pairs that each run their own consumer Lambda: email ma
 
 Merge two queues into one queue + one consumer Lambda only where **consumer profile, retry policy and memory class all match**. Otherwise keep them separate. If in doubt, keep.
 
-"Consumer profile" follows the existing SRE merge precedent (`infra/queues.ts`, comment above `sreJobQueueDLQ`): timeout, memory, IAM and resource links, and batch shape. It does not mean byte-identical handler code; that merge put two different handlers behind one dispatch discriminated by a `jobType` field.
+"Consumer profile" follows the existing SRE merge precedent (`infra/queues.ts`, comment above `sreJobQueueDLQ`): timeout, queue visibility, memory, IAM and resource links, and batch shape. It does not mean byte-identical handler code; that merge put two different handlers behind one dispatch discriminated by a `jobType` field.
 
 ## Verdicts
 
 | Pair | Queues | Verdict | Reason |
 |---|---|---|---|
-| Email job / batch | `emailJobQueue`, `emailBatchQueue` | Keep | Memory class, timeout, batch shape and visibility all differ, and the two handlers are a fan-out producer and a sender. |
+| Email job / batch | `emailJobQueue`, `emailBatchQueue` | Keep | Memory class, timeout, batch shape and queue visibility all differ, and the two handlers are a fan-out producer and a sender. |
 | Email ingestion / analysis | `emailIngestionQueue`, `emailAnalysisQueue` | Keep | IAM differs (`bedrock:*` plus SES vs `bedrock:InvokeModel`), timeout differs (5 vs 2 minutes), and the parser is an S3-event consumer while the analyzer takes `{ emailId }`. |
 | Release notes / highlights | `whatsNewGenerationQueue`, `whatsNewHighlightsQueue` | Merge (follow-up: https://github.com/Bike4Mind/bike4mind/issues/5662) | The two subscriptions match field for field (timeout, links, permissions, files, batch shape) and both use retry 3 with identical 14-day encrypted DLQs. |
 
@@ -31,7 +31,7 @@ Evidence: `infra/emailMarketing.ts`.
 | Batch shape | `SINGLE_RECORD_BATCH` (size 1) | `partialResponses: true` over the handler's record loop |
 | Links | secrets, `websocketApi`, `emailBatchQueue`, `eventBus` | secrets, `websocketApi`, `eventBus` |
 | Extra env | none | `APP_URL` (tracking links) |
-| Retry / DLQ | retry 3, default DLQ (4-day, unencrypted) | retry 3, default DLQ (4-day, unencrypted) |
+| Retry / DLQ | retry 3, default DLQ (4-day, SSE-SQS default, no KMS key) | retry 3, default DLQ (4-day, SSE-SQS default, no KMS key) |
 | Producers | `apps/client/pages/api/admin/email/jobs/[id]/start.ts`, `apps/client/pages/api/admin/email/jobs/[id]/send.ts`, `apps/workers/src/cron/emailCampaignScheduler.ts` | `apps/workers/src/queueHandlers/emailJobOrchestrator.ts` (`Resource.emailBatchQueue.url`) |
 
 Scaling: no reserved concurrency on either. The orchestrator fans a job out into batches of `EMAILS_PER_BATCH = 25` (`emailJobOrchestrator.ts`, same directory), sent 10 messages per `SendMessageBatch`.
@@ -54,9 +54,11 @@ Evidence: `infra/emailIngestion.ts`.
 | Links | secrets, ingestion bucket, both queues, `fabFileBucket`, `generatedImagesBucket`, `websocketApi` | secrets, `websocketApi`, `fabFileBucket`, `generatedImagesBucket` |
 | Payload | S3 `ObjectCreated` event (raw-emails/ prefix) | `{ emailId }` |
 | Producer | S3 bucket notification (`emailIngestionBucketNotification`) | the parser Lambda |
-| Retry / DLQ | retry 3, default DLQ (4-day, unencrypted) | retry 3, default DLQ (4-day, unencrypted) |
+| Retry / DLQ | retry 3, default DLQ (4-day, SSE-SQS default, no KMS key) | retry 3, default DLQ (4-day, SSE-SQS default, no KMS key) |
 
-Memory, runtime and retry match. Timeout, batch shape, IAM and links do not. Merging would give the LLM analyzer the SES send permission and a wider Bedrock grant, and would let a slow analysis hold up parsing of inbound mail. **Verdict: keep.** Reason: the pair fails the profile criterion on IAM and timeout, so a merge widens the analyzer's permissions.
+Scaling: neither queue sets reserved concurrency (`infra/emailIngestion.ts`); the parser is driven by S3 events and enqueues one analysis message per email.
+
+Memory, runtime and retry match. Timeout, queue visibility (5 vs 3 minutes), batch shape, IAM and links do not. Merging would give the LLM analyzer the SES send permission and a wider Bedrock grant, and would let a slow analysis hold up parsing of inbound mail. **Verdict: keep.** Reason: the pair fails the profile criterion on IAM and timeout, so a merge widens the analyzer's permissions.
 
 ## 3. What's New
 
@@ -77,11 +79,16 @@ Evidence: `infra/queues.ts` (release notes on the legacy `whatsNewGenerationQueu
 | Retry / DLQ | retry 3, 14-day, KMS-encrypted DLQ; queue KMS-encrypted | identical |
 | Payload | `ReleaseNotesJobPayloadSchema` (`b4m-core/common/src/schemas/releaseNotes.ts`), already carries `kind: 'release-notes'` | `WhatsNewHighlightsPayloadSchema` (`packages/server-utils/src/whatsNew/whatsNewHighlights.types.ts`), no discriminator |
 
-No row differs except the handler. Memory is "unset for both, so the same SST default"; no number is asserted. **Verdict: merge**, using the SRE pattern: one queue, one dispatch that routes on a discriminator (`kind`; highlights would gain one).
+No subscription-config row differs except the handler; the payload shapes differ too (highlights has no discriminator and would gain one). Memory is "unset for both, so the same SST default"; no number is asserted.
+
+Scaling: neither subscription sets reserved concurrency today (`infra/queues.ts`, `whatsNewGenerationQueueSubscription` and `whatsNewHighlightsQueueSubscription`). The SRE merge reserved capacity to preserve the pre-merge aggregate (`infra/queues.ts`, `sreJobQueueSubscription`); the What's New merge should decide explicitly whether to reserve any, since an unreserved shared pool has no cap on a highlights backfill.
+
+**Verdict: merge.** Reason: no subscription-config field differs except the handler, and both use retry 3 with identical 14-day KMS-encrypted DLQs. Use the SRE pattern: one queue, one dispatch that routes on a discriminator (`kind`; highlights would gain one).
 
 Producers (all must keep working through a migration):
 
 - Release notes: `packages/scripts/src/releaseNotes/releaseNotesEnqueue.ts`, run from `.github/workflows/prod-release.yml`. It reads `RELEASE_NOTES_QUEUE_URL` from a GitHub secret, gated by `vars.RELEASE_NOTES_ENABLED` and an assumed role from `secrets.AWS_RELEASE_NOTES_ROLE_ARN`. The queue URL and role are provisioned outside this repo.
+- Release notes, operator-run: `packages/scripts/src/releaseNotes/releaseNotesBackfill.ts` reads `RELEASE_NOTES_QUEUE_URL` or `--queue-url` and sends the same payload.
 - Highlights: `apps/client/pages/api/admin/generate-highlights.ts` (admin route) and `apps/workers/src/cron/whatsNewHighlights.ts` via `infra/cron.ts` (`whatsNewHighlightsCron`, currently `enabled: false`).
 
 Risks a merge must handle:
@@ -110,8 +117,11 @@ Every in-repo file a merged queue touches:
 - `infra/cron.ts`: `whatsNewHighlightsCron` links `whatsNewHighlightsQueue`.
 - `packages/server-utils/src/utils/dlqRegistry.ts` and its test: registry labels and source queues.
 - `b4m-core/resource/src/manifestCoverage.test.ts`: exemptions for both queues.
-- `packages/scripts/src/selfhostParityPolicy.ts`: queue and schedule parity entries for both queues.
+- `packages/scripts/src/selfhostParityPolicy.ts`: queue parity entries for both queues (and both DLQs); the only schedule entry is `whatsNewHighlightsCron`.
 - `infra/__tests__/releaseNotesQueue.test.ts`: matches the release-notes subscription by variable name and handler.
-- Handlers and producers: `apps/workers/src/queueHandlers/releaseNotes.ts`, `apps/workers/src/queueHandlers/whatsNewHighlights.ts`, `packages/scripts/src/releaseNotes/releaseNotesEnqueue.ts`, `apps/client/pages/api/admin/generate-highlights.ts`, `apps/client/pages/api/admin/whats-new-backfill.ts`, `apps/workers/src/cron/whatsNewHighlights.ts`, and the two payload schemas above.
+- Worker tests (`pnpm --filter @bike4mind/workers test`): `apps/workers/src/queueHandlers/whatsNewHighlights.test.ts` and `whatsNewHighlights.model.test.ts` build highlights payloads without `kind`, so a required discriminator breaks them; `releaseNotes.test.ts` and `releaseNotes.e2e.test.ts` hardcode `kind: 'release-notes'` and may need touching depending on the routing shape. Fix the fixtures; do not make `kind` optional.
+- `sst-env.d.ts`: checked-in resource types for both queues and DLQs; stale after a queue is removed until the next deploy regenerates it.
+- `docs-site/docs/deployment/architecture.md`: the published queue table row for `whatsNewGenerationQueue` (docs-site auto-deploys on merge).
+- Handlers and producers: `apps/workers/src/queueHandlers/releaseNotes.ts`, `apps/workers/src/queueHandlers/whatsNewHighlights.ts`, `packages/scripts/src/releaseNotes/releaseNotesEnqueue.ts`, `packages/scripts/src/releaseNotes/releaseNotesBackfill.ts`, `apps/client/pages/api/admin/generate-highlights.ts`, `apps/client/pages/api/admin/whats-new-backfill.ts`, `apps/workers/src/cron/whatsNewHighlights.ts`, and the two payload schemas above.
 
 Out of repo: the `RELEASE_NOTES_QUEUE_URL` and `AWS_RELEASE_NOTES_ROLE_ARN` secrets and the `RELEASE_NOTES_ENABLED` variable in the GitHub repo settings, and the role's `sqs:SendMessage` grant on the queue.
