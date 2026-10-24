@@ -296,12 +296,32 @@ describe('CounterLogRepository.metricsByDate - daily topUsers leaderboard', () =
     expect(result.topUsers?.[0]).toEqual(expect.objectContaining({ interactions: 1, creditsSpent: 500 }));
   });
 
+  it('counts only in-window AI usage toward creditsSpent', async () => {
+    const user = await seedUser('mixed@example.com');
+    await CounterLog.insertMany([logFor(user, inWindow)]);
+    await spendFor(user, 50);
+    await spendFor(user, 900, new Date('2026-06-02T12:00:00.000Z'));
+    await mongoose.connection.collection('credittransactions').insertMany(
+      ['generic_deduct', 'transfer_credit'].map(type => ({
+        ownerId: user,
+        ownerType: 'User',
+        type,
+        credits: -700,
+        createdAt: inWindow,
+      }))
+    );
+
+    const [result] = await counterLogRepository.metricsByDate(REPORT_DATE);
+
+    expect(result.topUsers?.[0]).toEqual(expect.objectContaining({ creditsSpent: 50 }));
+  });
+
   it('breaks a spend tie by event count', async () => {
     const busier = await seedUser('busier@example.com');
     const quieter = await seedUser('quieter@example.com');
-    await CounterLog.insertMany([logFor(busier, inWindow), logFor(busier, inWindow), logFor(quieter, inWindow)]);
-    await spendFor(busier, 100);
+    await CounterLog.insertMany([logFor(quieter, inWindow), logFor(busier, inWindow), logFor(busier, inWindow)]);
     await spendFor(quieter, 100);
+    await spendFor(busier, 100);
 
     const [result] = await counterLogRepository.metricsByDate(REPORT_DATE);
 

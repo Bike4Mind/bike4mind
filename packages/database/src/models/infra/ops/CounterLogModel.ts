@@ -678,9 +678,9 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
                 email: 1,
                 interactions: 1,
                 creditsSpent: { $ifNull: [{ $arrayElemAt: ['$spend.creditsSpent', 0] }, 0] },
-                // Against the window's own end, so a re-rendered past date stays correct.
+                // Against the window's own end, so a re-rendered past date stays correct. Hours, not days: DST-safe.
                 isNew: {
-                  $cond: [{ $gte: ['$userCreatedAt', dayjs(weekEndDate).subtract(7, 'days').toDate()] }, true, false],
+                  $cond: [{ $gte: ['$userCreatedAt', dayjs(weekEndDate).subtract(168, 'hours').toDate()] }, true, false],
                 },
               },
             },

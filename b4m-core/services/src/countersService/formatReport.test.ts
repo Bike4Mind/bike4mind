@@ -122,8 +122,18 @@ describe('formatCustomSlackMessage - most active users leaderboard', () => {
     });
 
     expect(message).toContain(
-      '🏆 🔥 <https://app.example/admin/users/u1|alice@example.com> - 420 credits, 120 events 🆕'
+      '🏆 🔥 <https://app.example/admin?tab=users&userId=u1|alice@example.com> - 420 credits, 120 events 🆕'
     );
+  });
+
+  it('escapes Slack control characters in the link label', () => {
+    const message = formatCustomSlackMessage('App', {
+      metrics: {},
+      userActivity: activity([{ _id: 'u1', email: 'a&b<c>@example.com', interactions: 1, creditsSpent: 1 }]),
+      appUrl: 'https://app.example',
+    });
+
+    expect(message).toContain('|a&amp;b&lt;c&gt;@example.com>');
   });
 
   it('omits the link when no app URL is configured', () => {

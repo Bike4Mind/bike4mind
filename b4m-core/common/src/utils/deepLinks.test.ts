@@ -56,12 +56,15 @@ describe('deepLinks', () => {
     expect(record.searchParams.get(ADMIN_TAB_PARAM)).toBe(ADMIN_FEEDBACK_TAB_SLUG);
   });
 
-  it('addresses one user profile under /admin/users', () => {
-    expect(adminUserProfilePath('abc123')).toBe('/admin/users/abc123');
+  it('opens one user on the admin Users tab', () => {
+    const url = new URL(adminUserProfilePath('abc123'), 'https://app.example');
+    expect(url.pathname).toBe('/admin');
+    expect(url.searchParams.get(ADMIN_TAB_PARAM)).toBe(ADMIN_USERS_TAB_SLUG);
+    expect(url.searchParams.get('userId')).toBe('abc123');
 
-    const crafted = new URL(adminUserProfilePath('../../admin?tab=users'), 'https://app.example');
-    expect(crafted.pathname).toBe('/admin/users/..%2F..%2Fadmin%3Ftab%3Dusers');
-    expect(crafted.search).toBe('');
+    const crafted = new URL(adminUserProfilePath('x&tab=billing'), 'https://app.example');
+    expect(crafted.searchParams.get(ADMIN_TAB_PARAM)).toBe(ADMIN_USERS_TAB_SLUG);
+    expect(crafted.searchParams.get('userId')).toBe('x&tab=billing');
   });
 
   it('joins an origin whether or not it carries a trailing slash', () => {
