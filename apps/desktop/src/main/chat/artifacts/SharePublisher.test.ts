@@ -162,13 +162,34 @@ describe('SharePublisher', () => {
 
   it('reads a quota refusal as a limit rather than a fault', async () => {
     post.mockImplementationOnce(async () => {
-      throw httpError(413, { error: 'Published-artifact limit reached', code: 'publish_quota_artifacts' });
+      throw httpError(413, { error: 'Publish storage quota reached', code: 'quota_bytes_exceeded' });
     });
 
     const result = await publisher.publish(request());
 
     expect(result.status).toBe('quota');
-    expect(result.reason).toBe('Published-artifact limit reached');
+    expect(result.reason).toBe('Publish storage quota reached');
+  });
+
+  it('reads a finalize-time quota refusal as a limit and names storage when the server gives no message', async () => {
+    post.mockImplementation(async (url: string) => {
+      if (url.endsWith('/upload-url')) {
+        return {
+          data: {
+            draftId: DRAFT_ID,
+            uploadUrls: [{ path: 'index.html', url: 'https://bucket.test/put', expiresAt: 'later' }],
+          },
+        };
+      }
+      throw httpError(413, { code: 'quota_bytes_exceeded' });
+    });
+
+    const result = await publisher.publish(request());
+
+    expect(result).toEqual({
+      status: 'quota',
+      reason: 'You have reached your published-storage limit. Remove a publication to make room.',
+    });
   });
 
   it('says the outcome is UNKNOWN when finalize never answered', async () => {
