@@ -12,6 +12,7 @@ const dbMocks = vi.hoisted(() => ({
   restrictDuplicatePublications: vi.fn(),
   checkPublishQuota: vi.fn(),
   findOneAndUpdate: vi.fn(),
+  consumePublishAction: vi.fn(),
 }));
 
 // baseApi().post(fn) returns fn, so `export default handler` IS the handler function.
@@ -46,6 +47,7 @@ vi.mock('@server/services/publish/invalidatePublishCdn', () => ({
 vi.mock('@server/services/publish/restrictDuplicatePublications', () => ({
   restrictDuplicatePublications: dbMocks.restrictDuplicatePublications,
 }));
+vi.mock('@server/services/publish/publishRateLimit', () => ({ consumePublishAction: dbMocks.consumePublishAction }));
 
 import handler, { deriveTitle, truncateAtWord } from '../reply';
 
@@ -166,6 +168,26 @@ describe('POST /api/publish/reply - ownership', () => {
     dbMocks.sessionLean.mockResolvedValue(null);
     const res = await run(makeReq({ id: OWNER, isAdmin: false }));
     expect(res.statusCode).toBe(404);
+  });
+
+  it("counts the publish against the caller's daily allowance, by their account age", async () => {
+    const createdAt = new Date('2026-10-20T00:00:00.000Z');
+    const req = makeReq({ id: OWNER, isAdmin: false });
+    await run({ ...req, user: { ...req.user, createdAt } });
+    expect(dbMocks.consumePublishAction).toHaveBeenCalledTimes(1);
+    expect(dbMocks.consumePublishAction).toHaveBeenCalledWith({ id: OWNER, isAdmin: false, createdAt });
+  });
+
+  it('counts an API-key caller against the key owner, the same allowance a browser session uses', async () => {
+    const req = makeReq({ id: OWNER, isAdmin: false });
+    await run({ ...req, apiKeyInfo: { keyId: 'key1', scopes: [] } });
+    expect(dbMocks.consumePublishAction).toHaveBeenCalledWith(expect.objectContaining({ id: OWNER }));
+  });
+
+  it('does not count a publish that was refused before it could be written', async () => {
+    dbMocks.sessionLean.mockResolvedValue({ userId: 'someone-else' });
+    await run(makeReq({ id: OWNER, isAdmin: false }));
+    expect(dbMocks.consumePublishAction).not.toHaveBeenCalled();
   });
 
   // A b4m_map fence in `renderedBody` refers to places by id only - it must resolve against a

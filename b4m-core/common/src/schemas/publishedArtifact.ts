@@ -158,8 +158,8 @@ export const PUBLISH_LIMITS = {
  * The byte cap is the cost guard. There is deliberately no page-count cap: a
  * count adds nothing to the byte bound, and it stops the heaviest sharers.
  * Abuse (phishing hosting) is handled per page by report and takedown, not by
- * a lifetime quota. The publish write routes carry no per-user rate limit of
- * their own; only API-key callers are metered (per key, by `apiKeyRateLimit`).
+ * a lifetime quota. How often a user may publish is `PUBLISH_RATE_LIMITS`
+ * below; API-key callers are additionally metered per key by `apiKeyRateLimit`.
  *
  * Enforcement is aggregate-on-read: at publish time we sum `size.totalBytes`
  * for the owner's active rows, then compare against these caps. Two
@@ -185,6 +185,26 @@ export const PUBLISH_QUOTAS = {
 } as const;
 
 export type PublishQuotaScope = keyof typeof PUBLISH_QUOTAS;
+
+/**
+ * Per-user daily publish allowance: how many publish actions one user may take in any rolling
+ * `windowMs`, counted across the publish write routes (upload-url, reply, fabfile, revise,
+ * restore). finalize is not counted, since every draft it promotes came from a counted upload-url.
+ * Accounts younger than `newAccount.maxAgeMs` (by the user's `createdAt`) get the lower
+ * `newAccount.maxActions`. API-key callers count toward the key owner's allowance. Admins are
+ * exempt. Enforced by apps/client/server/services/publish/publishRateLimit.ts.
+ */
+export const PUBLISH_RATE_LIMITS = {
+  windowMs: 24 * 60 * 60 * 1000, // rolling 24 hours
+  maxActions: 200,
+  newAccount: {
+    maxAgeMs: 7 * 24 * 60 * 60 * 1000, // 7 days
+    maxActions: 20,
+  },
+} as const;
+
+/** Error `code` on the 429 a publish write route answers once `PUBLISH_RATE_LIMITS` is used up. */
+export const PUBLISH_RATE_LIMITED = 'publish_rate_limited';
 
 export const ALLOWED_MIME_PREFIXES: readonly string[] = ['image/', 'font/', 'audio/', 'video/'];
 export const ALLOWED_MIME_EXACT: readonly string[] = [

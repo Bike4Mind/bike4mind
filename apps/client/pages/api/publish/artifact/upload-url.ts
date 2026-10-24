@@ -14,6 +14,7 @@ import {
   checkScopePermission,
   resolveVisibility,
   checkPublishQuota,
+  consumePublishAction,
   mintDraftUploadUrl,
   mayRepublishSlug,
   SLUG_OWNED_BY_OTHER,
@@ -130,6 +131,10 @@ const handler = baseApi().post(async (req, res) => {
   if (!quota.ok) {
     return res.status(quota.status).json({ error: quota.error, code: quota.code, details: quota.details });
   }
+
+  // The daily publish allowance is counted here, once per bundle publish: finalize only promotes
+  // the draft this issues, so it is not counted again. Throws a 429 when the allowance is used up.
+  await consumePublishAction(req.user);
 
   // ── Issue draft + presigned PUT URLs ──
   const draftId = uuidv4();

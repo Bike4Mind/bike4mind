@@ -4,6 +4,7 @@ import type { CitableSource, PublishScopeTier, PublishVisibility } from '@bike4m
 import { checkPublishQuota } from './checkPublishQuota';
 import { invalidatePublishCdn, toCacheTarget } from './invalidatePublishCdn';
 import type { MinimalLogger } from './minimalLogger';
+import { consumePublishAction } from './publishRateLimit';
 import { restrictDuplicatePublications } from './restrictDuplicatePublications';
 
 export type SettleSource =
@@ -12,6 +13,8 @@ export type SettleSource =
 export interface SettlePublicationInput {
   ownerId: string;
   isAdmin?: boolean;
+  /** The owner's account creation time, which picks their daily publish allowance (publishRateLimit.ts). */
+  ownerCreatedAt: Date | string | undefined;
   source: SettleSource;
   tier: PublishScopeTier;
   scopeId: string;
@@ -37,7 +40,8 @@ function newPublicId(): string {
  * the owner already handed out is the one the new scope and visibility apply to. Owner-keyed, so
  * an admin publishing someone else's source never rewrites the owner's record. Afterwards purges
  * the CDN when a cached public copy can exist and narrows older duplicates
- * (restrictDuplicatePublications). Returns the saved record, or the status + body to answer with.
+ * (restrictDuplicatePublications). Returns the saved record, or the status + body to answer with;
+ * throws the 429 from consumePublishAction when the owner's daily publish allowance is used up.
  */
 export async function settlePublication(input: SettlePublicationInput) {
   const { ownerId, source, tier, scopeId, visibility, renderedBody } = input;
@@ -80,6 +84,9 @@ export async function settlePublication(input: SettlePublicationInput) {
       body: { error: quota.error, code: quota.code, details: quota.details },
     };
   }
+
+  // Counted after every refusal above, so a rejected publish does not use up the allowance.
+  await consumePublishAction({ id: ownerId, isAdmin: input.isAdmin, createdAt: input.ownerCreatedAt });
 
   const publishedAt = new Date();
   const saved = await PublishedArtifact.findOneAndUpdate(

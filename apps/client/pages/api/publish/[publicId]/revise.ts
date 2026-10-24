@@ -5,7 +5,14 @@ import { getPublishedArtifactsStorage } from '@bike4mind/server-utils/utils/stor
 import { enqueuePublishThumbnail } from '@bike4mind/server-utils/utils/publishThumbnails';
 import { PublishedArtifact, Annotation } from '@bike4mind/database';
 import type { IMessage, PublishScopeTier, PublishVisibility } from '@bike4mind/common';
-import { validateBundle, buildPublishUrlPath, invalidatePublishCdn, toCacheTarget } from '@server/services/publish';
+import {
+  validateBundle,
+  buildPublishUrlPath,
+  invalidatePublishCdn,
+  toCacheTarget,
+  checkInPlaceRewriteQuota,
+  consumePublishAction,
+} from '@server/services/publish';
 import { OperationsModelService } from '@client/services/operationsModelService';
 
 /**
@@ -157,6 +164,11 @@ const handler = baseApi().post(async (req, res) => {
       return res.status(500).json({ error: 'Artifact index.html missing from storage' });
     }
 
+    // Counted before the model call rather than after the storage-quota check below, because the
+    // model call is the costly part and the quota can only be checked once its output is known.
+    // Throws a 429 when the daily publish allowance is used up; `finally` still frees the lock.
+    await consumePublishAction(req.user);
+
     // ── Run the LLM (in-monorepo path; accumulate the non-streamed completion). ──
     const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel();
     req.logger.info(`[REVISE] ${publicId} using ${modelInfo.name} (${modelInfo.backend}) on ${open.length} comments`);
@@ -202,6 +214,24 @@ const handler = baseApi().post(async (req, res) => {
       return res.status(422).json({ error: 'Revised HTML failed validation', violations: validation.violations });
     }
 
+    const revisedBuf = Buffer.from(revisedHtml, 'utf-8');
+    const newIndexSha = createHash('sha256').update(revisedBuf).digest('hex');
+    const newManifest = artifact.manifest.map(f =>
+      f.path === 'index.html' ? { ...f, size: revisedBuf.length, sha256: newIndexSha } : f
+    );
+    const totalBytes = newManifest.reduce((sum, f) => sum + f.size, 0);
+
+    // Storage quota on the net change: only index.html is rewritten, so the page grows by the
+    // revised index.html's size minus the current one's (see checkInPlaceRewriteQuota).
+    const quota = await checkInPlaceRewriteQuota({
+      isAdmin: req.user.isAdmin,
+      artifact,
+      next: { bytes: totalBytes, fileCount: newManifest.length },
+    });
+    if (!quota.ok) {
+      return res.status(quota.status).json({ error: quota.error, code: quota.code, details: quota.details });
+    }
+
     // Preserve the current version's CONTENT before overwriting so a bad
     // revision can be rolled back (previousVersionMeta only stores metadata).
     await storage
@@ -213,14 +243,7 @@ const handler = baseApi().post(async (req, res) => {
       );
 
     // ── Write the new index.html in place + recompute version metadata. ──
-    const revisedBuf = Buffer.from(revisedHtml, 'utf-8');
     await storage.upload(revisedBuf, `${artifact.storageKeyPrefix}index.html`, { ContentType: 'text/html' });
-    const newIndexSha = createHash('sha256').update(revisedBuf).digest('hex');
-
-    const newManifest = artifact.manifest.map(f =>
-      f.path === 'index.html' ? { ...f, size: revisedBuf.length, sha256: newIndexSha } : f
-    );
-    const totalBytes = newManifest.reduce((sum, f) => sum + f.size, 0);
     const now = new Date();
 
     // Record the version, deduped by content sha and backfilling the version being
