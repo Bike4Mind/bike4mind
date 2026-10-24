@@ -435,6 +435,7 @@ export function PublishShareModal({
           setCommentsOn(state.commentPolicy === 'open' || state.commentPolicy === 'restricted');
           setDiscoverableOn(state.discoverable);
           setGateKind(state.accessGate?.kind ?? 'none');
+          setStoredGate(state.accessGate?.kind ?? null);
           if (state.accessGate?.kind === 'domain') setGateDomainsText(state.accessGate.allowedDomains.join(', '));
         }
         if (links?.shareToken) setShareToken(links.shareToken);
@@ -512,9 +513,12 @@ export function PublishShareModal({
     try {
       const r = await publish(visibility, { mode, existingSlug: existing?.slug });
       if (stagedGate) {
-        await updatePublishedAccessGate(r.publicId, stagedGate).catch(() => {
-          toast.warning('Published, but protecting the link failed - set access below before sharing.');
-        });
+        await updatePublishedAccessGate(r.publicId, stagedGate).then(
+          () => setStoredGate(stagedGate.kind),
+          () => {
+            toast.warning('Published, but protecting the link failed - set access below before sharing.');
+          }
+        );
       }
       // The publish callback creates the item with the server-default comment policy
       // ('none'); if the user left comments enabled, turn them on. Re-assert the PRESERVED

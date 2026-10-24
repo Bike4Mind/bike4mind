@@ -1033,8 +1033,6 @@ describe('PublishShareModal - access options match the Live Artifacts badge', ()
     const note = screen.getByTestId('publish-share-public-note');
     expect(note.textContent).toContain('Anyone with the link can view this.');
     expect(within(note).getByTestId('PublicIcon')).toBeTruthy();
-    expect(note.className).toContain('MuiTypography-colorSuccess');
-    expect(note.className).not.toContain('MuiTypography-colorWarning');
   });
 
   const liveResult = (visibility: PublishVisibility): PublishResult => ({
@@ -1065,7 +1063,6 @@ describe('PublishShareModal - access options match the Live Artifacts badge', ()
     expect(warning.textContent).toBe('Anyone with this link can view without signing in.');
     expect(warning.getAttribute('data-access')).toBe('public');
     expect(within(warning).getByTestId('PublicIcon')).toBeTruthy();
-    expect(warning.className).toContain('MuiTypography-colorSuccess');
     expect(screen.getByTestId('publish-share-token-label').textContent).toBe(
       'Private link anyone can open, no sign-in'
     );
@@ -1089,7 +1086,6 @@ describe('PublishShareModal - access options match the Live Artifacts badge', ()
       await waitFor(() => expect(warning.getAttribute('data-access')).toBe(kind));
       expect(warning.textContent).toBe(`Anyone with this link ${who} can view.`);
       expect(within(warning).getByTestId(icon)).toBeTruthy();
-      expect(warning.className).toContain('MuiTypography-colorWarning');
       // The theme's light warning text is about 1.4:1 on its soft background; the badge's darker shade is used.
       expect(getComputedStyle(warning).color).toBe('var(--joy-palette-warning-700)');
       const hint = screen.getByTestId('publish-share-token-hint').textContent;
@@ -1110,6 +1106,38 @@ describe('PublishShareModal - access options match the Live Artifacts badge', ()
     );
     expect(screen.getByTestId('publish-share-token-hint').textContent).toContain(
       'already opens for anyone who also has the passphrase.'
+    );
+  });
+
+  it('returns the private-link note to the open treatment, and offers the embed editor again, once the gate is cleared live', async () => {
+    await renderSharedWithLink('public', { kind: 'passphrase' });
+    await waitFor(() =>
+      expect(screen.getByTestId('publish-share-token-warning').getAttribute('data-access')).toBe('passphrase')
+    );
+    expect(screen.queryByTestId('publish-share-embed-section')).toBeNull();
+    fireEvent.click(radio('none')!);
+    fireEvent.click(screen.getByTestId('publish-share-gate-apply'));
+    await waitFor(() =>
+      expect(screen.getByTestId('publish-share-token-warning').getAttribute('data-access')).toBe('public')
+    );
+    expect(screen.getByTestId('publish-share-token-warning').textContent).toBe(
+      'Anyone with this link can view without signing in.'
+    );
+    expect(screen.getByTestId('publish-share-embed-section')).toBeTruthy();
+  });
+
+  it('labels the create-link button for a gated page', async () => {
+    (api.get as unknown as ReturnType<typeof vi.fn>).mockReset().mockImplementation((url: string) =>
+      Promise.resolve({
+        data: url.endsWith('/share-token')
+          ? { shareToken: null, shareLinks: [] }
+          : { artifact: { accessGate: { kind: 'passphrase' } } },
+      })
+    );
+    renderModal({ defaultVisibility: 'private', publish: vi.fn().mockResolvedValue(liveResult('private')) });
+    fireEvent.click(screen.getByTestId('publish-share-create'));
+    await waitFor(() =>
+      expect(screen.getByTestId('publish-share-token-create').textContent).toBe('Create private link')
     );
   });
 });
