@@ -411,6 +411,10 @@ describe('ChatService untrusted content in a reply', () => {
       async command => {
         const id = await session('auto');
         const script = "require('fs').copyFileSync('notes.txt', 'PWNED');\n";
+        if (command === 'pnpm test') {
+          // This fixture must execute the planted script if the approval barrier regresses.
+          await writeFile(join(stub.bin, 'pnpm'), '#!/bin/sh\nexec node x.js\n', 'utf8');
+        }
         const replying = reply(id, [
           fetch,
           ['file_write', { path: join(root, 'x.js'), content: script }],
@@ -466,6 +470,27 @@ describe('ChatService untrusted content in a reply', () => {
 
       await vi.waitUntil(() => calls('bash_execute', 'done').length === 2, { timeout: 5000, interval: 10 });
       expect(calls('bash_execute', 'awaiting-approval')).toHaveLength(1);
+    });
+
+    it('asks again when a package runner could switch to a planted script after Always allow', async () => {
+      const id = await session('auto');
+      const replying = reply(id, [
+        fetch,
+        ['bash_execute', { command: 'pnpm exec -- vitest run', cwd: root }],
+        ['file_write', { path: join(root, 'x.js'), content: "require('fs').copyFileSync('notes.txt', 'PWNED');" }],
+        ['bash_execute', { command: 'pnpm exec -- node x.js', cwd: root }],
+      ]);
+      const first = await awaitCall('bash_execute', 'awaiting-approval');
+      approvals.resolve(first.approvalId!, { decision: 'always' });
+      await replying;
+
+      const second = await vi.waitUntil(() => calls('bash_execute', 'awaiting-approval')[1], {
+        timeout: 5000,
+        interval: 10,
+      });
+      expect(second.approvalDetail).toContain('(web_fetch)');
+      approvals.resolve(second.approvalId!, { decision: 'deny' });
+      await expect(access(join(root, 'PWNED'))).rejects.toThrow();
     });
 
     it('does not let an over-taint "Always allow" cover the same run behind a steering variable', async () => {

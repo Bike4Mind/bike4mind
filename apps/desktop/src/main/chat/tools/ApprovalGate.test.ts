@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApprovalGate, patternMatches } from './ApprovalGate';
 import { commandTokens } from './bashArity';
+import { scanShell } from './shellScan';
 import type { ChatApprovalAnswer } from '@shared/chat';
 import type { ApprovalAlways } from './types';
 
@@ -232,6 +233,51 @@ describe('ApprovalGate', () => {
       await allow(gate, always(['node *'], ['node a.js']), true);
       expect(gate.coversCommands('s', always(['node *'], ['node b.js']), true)).toBe(false);
       expect(gate.coversCommands('s', always(['node *'], ['node b.js']))).toBe(true);
+    });
+
+    const scanned = async (command: string): Promise<ApprovalAlways> => {
+      const result = await scanShell(command, process.cwd(), [process.cwd()]);
+      if (!result) throw new Error('command did not parse');
+      return {
+        namespace: 'bash_execute',
+        commands: result.commands.map(({ always: pattern, ...entry }) => ({ ...entry, pattern })),
+        directories: result.directories,
+      };
+    };
+    it.each([
+      ['pnpm exec vitest run a.test.ts', 'pnpm exec vitest run b.test.ts'],
+      ['pnpm test a', 'pnpm test b'],
+      ['make test -j1', 'make test -j2'],
+      ['pnpm run node a', 'pnpm run node b'],
+      ['bun x vitest run a.test.ts', 'bun x vitest run b.test.ts'],
+    ])('carries the bounded prefix from %s over taint', async (first, later) => {
+      const gate = new ApprovalGate();
+      await allow(gate, await scanned(first), true);
+      expect(gate.coversCommands('s', await scanned(later), true)).toBe(true);
+    });
+
+    it.each([
+      ['pnpm exec -- vitest run', 'pnpm exec -- node -e "process.exit(1)"'],
+      ['npm x vitest run', 'npm x some-other-package'],
+      ['yarn exec vitest run', 'yarn exec node x.js'],
+      ['pnpm exec node a.js', 'pnpm exec node b.js'],
+      ['pnpm exec "node" a.js', 'pnpm exec "node" b.js'],
+      ['pnpm exec /usr/bin/node a.js', 'pnpm exec /usr/bin/node b.js'],
+      ['pnpm node a.js', 'pnpm node b.js'],
+      ['pnpm exec tsx a.ts', 'pnpm exec tsx -e "process.exit(1)"'],
+      ['npm exec ts-node a.ts', 'npm exec ts-node -e "process.exit(1)"'],
+      ['bun x tsx a.ts', 'bun x tsx -e "process.exit(1)"'],
+      ['pnpm tsx a.ts', 'pnpm tsx -e "process.exit(1)"'],
+      ['pnpm exec pypy3 a.py', 'pnpm exec pypy3 b.py'],
+      ['deno run a.js', 'deno run b.js'],
+      ['go run a.go', 'go run b.go'],
+      ['poetry run pytest', 'poetry run python x.py'],
+      ['docker exec container echo ok', 'docker exec container node x.js'],
+    ])('does not carry the unbounded runner prefix from %s over taint', async (first, later) => {
+      const gate = new ApprovalGate();
+      await allow(gate, await scanned(first), true);
+      const next = await scanned(later);
+      expect(gate.coversCommands('s', next, true)).toBe(false);
     });
 
     it('never covers an opaque command over taint, whatever was answered', async () => {
