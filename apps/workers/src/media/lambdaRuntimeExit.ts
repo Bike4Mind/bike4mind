@@ -49,6 +49,8 @@ export function exitAfterEachInvocation(
         headers: { 'Content-Type': 'application/json' },
       };
     } catch (err) {
+      // The runtime client logs a failed invocation; posting the error ourselves must not drop that line.
+      console.error('publish thumbnail renderer: the invocation failed', err);
       const errorType = err instanceof Error ? err.name.replace(/[^\w.]/g, '') || 'Error' : 'Error';
       const errorMessage = err instanceof Error ? err.message : String(err);
       post = {

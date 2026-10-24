@@ -83,6 +83,7 @@ describe('exitAfterEachInvocation', () => {
       })
     );
     expect(order).toEqual([`post ${ERROR_URL}`, 'exit 0']);
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining('invocation failed'), failure);
   });
 
   it.each([
