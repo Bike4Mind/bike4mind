@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes/themePrimitives';
 
@@ -47,6 +47,33 @@ describe('ManageSharingPanel', () => {
       commentPolicy: 'none',
     });
     expect(screen.getByTestId('manage-gate-section')).not.toBeNull();
+    expect(screen.queryByTestId('manage-embed-section')).toBeNull();
+  });
+
+  it('tells the parent about an applied gate, so the row badge can follow it', async () => {
+    const onGateChange = vi.fn();
+    apiGet.mockClear().mockResolvedValue({
+      data: { artifact: { visibility: 'public', accessGate: null, embedOrigins: [], commentPolicy: 'none' } },
+    });
+    render(
+      <Wrapper>
+        <ManageSharingPanel
+          publicId="pub-1"
+          title="My Artifact"
+          shareUrl="https://app.x/p/u/u1/s"
+          visibility="public"
+          onGateChange={onGateChange}
+        />
+      </Wrapper>
+    );
+    await screen.findByTestId('manage-sharing-panel');
+
+    fireEvent.click(screen.getByTestId('manage-gate-domain'));
+    fireEvent.change(screen.getByTestId('manage-gate-domains-input'), { target: { value: 'acme.com' } });
+    fireEvent.click(screen.getByTestId('manage-gate-apply'));
+
+    await waitFor(() => expect(onGateChange).toHaveBeenCalledWith({ kind: 'domain', allowedDomains: ['acme.com'] }));
+    // The panel's own state moved too: a gated page has no embed editor.
     expect(screen.queryByTestId('manage-embed-section')).toBeNull();
   });
 

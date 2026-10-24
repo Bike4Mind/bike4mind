@@ -57,9 +57,18 @@ vi.mock('@client/app/utils/printToPdf', () => ({
   printHtmlForPdf: (...a: unknown[]) => mockPrint(...a),
 }));
 
-// Stub the panel so this test targets the toggle wiring, not the panel's fetch.
+// Stub the panel so this test targets the toggle wiring, not the panel's fetch. The buttons stand
+// in for a gate apply in the real AccessGateEditor.
 vi.mock('@client/app/components/common/ManageSharingPanel', () => ({
-  ManageSharingPanel: (p: { publicId: string }) => <div data-testid={`stub-panel-${p.publicId}`} />,
+  ManageSharingPanel: (p: { publicId: string; onGateChange?: (gate: { kind: 'passphrase' } | null) => void }) => (
+    <div data-testid={`stub-panel-${p.publicId}`}>
+      <button
+        data-testid={`stub-panel-set-passphrase-${p.publicId}`}
+        onClick={() => p.onGateChange?.({ kind: 'passphrase' })}
+      />
+      <button data-testid={`stub-panel-clear-gate-${p.publicId}`} onClick={() => p.onGateChange?.(null)} />
+    </div>
+  ),
 }));
 
 import PublishedArtifactsTabContent from './PublishedArtifactsTabContent';
@@ -957,7 +966,7 @@ describe('PublishedArtifactsTabContent - access badge and aligned columns', () =
     expect(screen.getByTestId('published-artifact-views-pub-2').textContent).toBe('0');
   });
 
-  it('shows the view count and a short updated date in their own cells', async () => {
+  it('shows the view count and a short published date in their own cells', async () => {
     mockList.mockResolvedValue(page([{ ...bundleRow, viewCount: 1234, publishedAt: '2020-03-05T12:00:00.000Z' }]));
     renderTab();
     await screen.findByTestId('published-artifact-views-pub-1');
@@ -975,14 +984,31 @@ describe('PublishedArtifactsTabContent - access badge and aligned columns', () =
     expect(screen.getByTestId('published-artifact-views-pub-1').getAttribute('title')).toBe('1250000 views');
   });
 
+  it('keeps a four-digit view count exact and abbreviates from 10,000', async () => {
+    mockList.mockResolvedValue(
+      page([
+        { ...bundleRow, publicId: 'views-4', viewCount: 9_999 },
+        { ...bundleRow, publicId: 'views-5', viewCount: 10_000 },
+      ])
+    );
+    renderTab();
+    await screen.findByTestId('published-artifact-views-views-4');
+
+    expect(screen.getByTestId('published-artifact-views-views-4').textContent).toBe('9999');
+    expect(screen.getByTestId('published-artifact-views-views-5').textContent).not.toBe('10000');
+  });
+
   it('labels the columns with a header row', async () => {
     renderTab();
     await screen.findByTestId('published-artifact-pub-1');
 
     const header = screen.getByTestId('published-artifacts-columns');
-    for (const word of ['Title', 'Access', 'Versions', 'Views', 'Updated']) {
+    for (const word of ['Title', 'Access', 'Versions', 'Views', 'Published']) {
       expect(header.textContent).toContain(word);
     }
+    // The date cell is publishedAt; "Updated" would promise the updatedAt order of the
+    // Recently updated sort, which a rename or tag edit also moves.
+    expect(header.textContent).not.toContain('Updated');
   });
 
   it('groups the facet chips under Tags, Type, Access and Comments, with visibility and gate together', async () => {
@@ -1019,6 +1045,12 @@ describe('PublishedArtifactsTabContent - access badge and aligned columns', () =
     const priv = screen.getByTestId('published-artifacts-facet-visibility-private').closest('div');
     expect(priv?.textContent).toBe('Private 1');
     expect(priv?.querySelector('svg')).not.toBeNull();
+    // The Public filter counts gated pages too, unlike the badge, and says so.
+    expect(screen.getByTestId('published-artifacts-facet-visibility-public').getAttribute('title')).toMatch(
+      /including passphrase and domain gated/
+    );
+    // The group label already says Comments; the chip does not repeat it.
+    expect(screen.getByTestId('published-artifacts-facet-comments').closest('div')?.textContent).toBe('On 3');
   });
 
   it('omits a facet group that has no chips instead of showing an orphan label', async () => {
@@ -1048,5 +1080,55 @@ describe('PublishedArtifactsTabContent - access badge and aligned columns', () =
 
     fireEvent.click(screen.getByTestId('published-artifacts-facet-visibility-public'));
     await waitFor(() => expect(lastQuery().visibility).toBe('public'));
+  });
+
+  it('still filters on the comments chip', async () => {
+    mockList.mockResolvedValue(
+      page([bundleRow], { facets: { kind: {}, visibility: {}, gate: {}, comments: 2, tag: {} } })
+    );
+    renderTab();
+    await screen.findByTestId('published-artifacts-facet-comments');
+
+    fireEvent.click(screen.getByTestId('published-artifacts-facet-comments'));
+    await waitFor(() => expect(lastQuery().comments).toBe('on'));
+  });
+
+  it('keeps the gate visible on a private row, which the Passphrase filter also returns', async () => {
+    // The server enforces a gate on a non-public page's private links, and counts it under the
+    // gate facet - so the row must not read as a bare Private chip once that filter is on.
+    mockList.mockResolvedValue(page([{ ...bundleRow, visibility: 'private', gateKind: 'passphrase' }]));
+    renderTab();
+    const badge = await screen.findByTestId('published-artifact-access-pub-1');
+
+    expect(badge.textContent).toBe('Private');
+    expect(badge.getAttribute('data-link-gate')).toBe('passphrase');
+    expect(badge.querySelector('[data-testid="KeyIcon"]')).not.toBeNull();
+    expect(badge.getAttribute('title')).toMatch(/Private links also need the passphrase/);
+  });
+
+  it('moves the badge as soon as the sharing panel changes the gate, without refetching the page', async () => {
+    renderTab();
+    await screen.findByTestId('published-artifact-access-pub-1');
+    expandRow('pub-1');
+    fireEvent.click(screen.getByTestId('published-artifact-manage-pub-1'));
+    const listCalls = () => mockList.mock.calls.filter(c => (c[0] as { facets?: boolean }).facets !== true).length;
+    const facetCalls = () => mockList.mock.calls.filter(c => (c[0] as { facets?: boolean }).facets === true).length;
+    const listBefore = listCalls();
+    const facetsBefore = facetCalls();
+
+    fireEvent.click(screen.getByTestId('stub-panel-set-passphrase-pub-1'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('published-artifact-access-pub-1').getAttribute('data-access')).toBe('passphrase')
+    );
+    // The open panel stays mounted (its show-once passphrase lives there), and the counts refresh.
+    expect(screen.getByTestId('stub-panel-pub-1')).not.toBeNull();
+    await waitFor(() => expect(facetCalls()).toBeGreaterThan(facetsBefore));
+    expect(listCalls()).toBe(listBefore);
+
+    fireEvent.click(screen.getByTestId('stub-panel-clear-gate-pub-1'));
+    await waitFor(() =>
+      expect(screen.getByTestId('published-artifact-access-pub-1').getAttribute('data-access')).toBe('public')
+    );
   });
 });

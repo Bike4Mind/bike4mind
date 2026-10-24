@@ -47,6 +47,7 @@ import {
   type ManagedArtifact,
   type ManagedListFacets,
   type ManagedListPage,
+  type PublishAccessGateRead,
   updatePublishedTags,
   fetchMyTagVocabulary,
 } from '@client/app/utils/publishApi';
@@ -117,7 +118,7 @@ const VISIBILITY_LABEL: Record<PublishVisibility, string> = {
 };
 
 /** Column template shared by the header and every row, so each piece of metadata lines up down the
- *  list: cover, title (takes the slack), access, versions, views, updated, actions. Fixed widths
+ *  list: cover, title (takes the slack), access, versions, views, published date, actions. Fixed widths
  *  are sized for the widest content in each column (a "Passphrase" chip, "12 versions"). */
 const ROW_COLUMNS = '26px minmax(0, 1fr) 128px 92px 64px 80px 68px';
 
@@ -279,6 +280,21 @@ export default function PublishedArtifactsTabContent() {
     setFilter(key, (filters[key] === value ? null : value) as Filters[K]);
 
   const invalidate = () => void qc.invalidateQueries({ queryKey: ['published-artifacts', 'mine'] });
+
+  /** A gate edit in the sharing panel: patch the row in place so its access badge is right at once,
+   *  and refresh only the facet counts. A full list refetch could drop the row from a filtered or
+   *  re-sorted page, unmounting the panel and the show-once passphrase it is still displaying. */
+  const onGateChange = (publicId: string, gate: PublishAccessGateRead) => {
+    qc.setQueriesData<ManagedListPage>({ queryKey: ['published-artifacts', 'mine'] }, prev =>
+      prev
+        ? {
+            ...prev,
+            artifacts: prev.artifacts.map(a => (a.publicId === publicId ? { ...a, gateKind: gate?.kind } : a)),
+          }
+        : prev
+    );
+    void qc.invalidateQueries({ queryKey: ['published-artifacts', 'mine', 'facets'] });
+  };
 
   // The caller's own tag vocabulary, for autocomplete. Deliberately OUTSIDE the
   // ['published-artifacts','mine'] prefix: under it, every visibility toggle and comment switch
@@ -617,7 +633,7 @@ export default function PublishedArtifactsTabContent() {
                   onClick={() => toggleFilter('comments', 'on')}
                   slotProps={{ action: { 'data-testid': 'published-artifacts-facet-comments' } }}
                 >
-                  comments {facets.comments}
+                  On {facets.comments}
                 </Chip>
               </FacetGroup>
             )}
@@ -664,7 +680,9 @@ export default function PublishedArtifactsTabContent() {
             <Box sx={{ gridColumn: '3' }}>Access</Box>
             <Box sx={{ gridColumn: '4', textAlign: 'right' }}>Versions</Box>
             <Box sx={{ gridColumn: '5', textAlign: 'right' }}>Views</Box>
-            <Box sx={{ gridColumn: '6', textAlign: 'right' }}>Updated</Box>
+            {/* The cell is publishedAt (the last publish), not updatedAt: "Updated" would claim the
+                order of the Recently updated sort, which also moves on a rename or tag edit. */}
+            <Box sx={{ gridColumn: '6', textAlign: 'right' }}>Published</Box>
           </Box>
           {artifacts.map(a => {
             const path = sharePath(a);
@@ -1101,6 +1119,7 @@ export default function PublishedArtifactsTabContent() {
                       title={a.title}
                       shareUrl={url}
                       visibility={a.visibility}
+                      onGateChange={gate => onGateChange(a.publicId, gate)}
                     />
                   </Box>
                 )}
