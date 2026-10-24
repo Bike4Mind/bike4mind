@@ -60,6 +60,7 @@ import {
   isModelProviderConfigured,
   isAdaptiveThinkingByDefault,
 } from '@bike4mind/llm-adapters';
+import { sentBelowReasoningFloor } from '@bike4mind/llm-adapters/model-sizing';
 import { WORKFLOW_REMINDER_MARKER } from '@bike4mind/agents';
 import { Logger } from '@bike4mind/observability';
 import { getEffectiveLLMApiKeys } from './apiKeyService';
@@ -623,6 +624,19 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       : undefined,
     modelInfo
   );
+  const reasoningShortfall =
+    modelInfo &&
+    sentBelowReasoningFloor({
+      requested: options?.maxTokens,
+      fallback: DEFAULT_OUTPUT_MAX_TOKENS,
+      modelInfo,
+      modelMaxOutputTokens: modelInfo.max_tokens,
+      thinking,
+    });
+  if (reasoningShortfall) {
+    // Honored as set; logged so an empty reply at max_tokens can be traced to the caller's budget.
+    logger?.info?.('[cliCompletions] max_tokens below reasoning floor', { model, ...reasoningShortfall });
+  }
 
   const requestTools = useServerTools ? params.serverTools! : (promotedTools ?? []);
   const cacheStrategy = buildClaudeCacheStrategy(modelInfo, messages, requestTools.length > 0, source);

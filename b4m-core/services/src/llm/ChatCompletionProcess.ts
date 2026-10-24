@@ -118,7 +118,7 @@ import {
   toRetrievalFilter,
   type RetrievalExclusionOptions,
 } from '@bike4mind/utils/retrievalExclusion';
-import { sentMaxTokensFor } from '@bike4mind/llm-adapters/model-sizing';
+import { sentBelowReasoningFloor, sentMaxTokensFor } from '@bike4mind/llm-adapters/model-sizing';
 import {
   resolveOutputMaxTokens,
   reasonsWithinOutputBudget,
@@ -2840,6 +2840,20 @@ export class ChatCompletionProcess {
         modelInfo,
         modelMaxOutputTokens: modelMaxOutput,
       });
+      const reasoningShortfall = sentBelowReasoningFloor({
+        requested: params.max_tokens,
+        fallback: DEFAULT_OUTPUT_MAX_TOKENS,
+        modelInfo,
+        modelMaxOutputTokens: modelMaxOutput,
+        thinking: params.thinking,
+      });
+      if (reasoningShortfall) {
+        // Honored as set; logged so an empty reply at max_tokens can be traced to the setting.
+        logger.info('[ChatCompletion] max_tokens below reasoning floor', {
+          model: modelInfo.id,
+          ...reasoningShortfall,
+        });
+      }
       // Reserve the non-history overhead that shares this budget before applying the
       // fraction, so heavier-payload turns (more tools, a longer running summary, a
       // large prompt) compact SOONER rather than overflowing first - this is the
