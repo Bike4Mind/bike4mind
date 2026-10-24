@@ -1,11 +1,14 @@
 import { RESERVED_USERNAME_PREFIX } from '../schemas/username';
 
-/** Lower-cased domains from a comma/whitespace separated list; leading `@` tolerated. */
+/**
+ * Lower-cased domains from a comma/whitespace separated list. A leading `@` or `*.` and a trailing
+ * dot are tolerated: every entry already covers its subdomains, so `*.test.example` is `test.example`.
+ */
 export function parseSyntheticDomainList(raw: unknown): string[] {
   if (typeof raw !== 'string') return [];
   return raw
     .split(/[\s,]+/)
-    .map(d => d.trim().toLowerCase().replace(/^@/, ''))
+    .map(d => d.trim().toLowerCase().replace(/^@/, '').replace(/^\*\./, '').replace(/\.+$/, ''))
     .filter(Boolean);
 }
 

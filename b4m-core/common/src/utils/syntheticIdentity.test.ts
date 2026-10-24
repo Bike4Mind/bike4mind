@@ -10,6 +10,11 @@ describe('parseSyntheticDomainList', () => {
     ]);
   });
 
+  it('reads a wildcard or trailing-dot entry as the bare domain, so it is not silently inert', () => {
+    expect(parseSyntheticDomainList('*.test.example, qa.example.org.')).toEqual(['test.example', 'qa.example.org']);
+    expect(isSyntheticIdentity({ email: 'x@test.example' }, parseSyntheticDomainList('*.Test.Example'))).toBe(true);
+  });
+
   it.each([undefined, null, 3, ''])('reads %s as no domains', raw => {
     expect(parseSyntheticDomainList(raw)).toEqual([]);
   });
