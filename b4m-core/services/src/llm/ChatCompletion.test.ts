@@ -8623,7 +8623,7 @@ describe('ChatCompletionProcess', () => {
       async ({ disableUserIntegrations, expected }) => {
         const buildMcpToolsSpy = vi
           .spyOn(ToolBuilder.prototype, 'buildMcpTools')
-          .mockResolvedValue({ mcpToolsByServer: {}, serverAgentConfig: {} });
+          .mockResolvedValue({ mcpToolsByServer: {}, serverAgentConfig: {}, customMcpToolNames: new Set() });
         buildMcpToolsSpy.mockClear();
         try {
           await runWithBuildToolsSpy({
@@ -8813,7 +8813,7 @@ describe('ChatCompletionProcess', () => {
       const buildToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue([]);
       const buildMcpToolsSpy = vi
         .spyOn(ToolBuilder.prototype, 'buildMcpTools')
-        .mockResolvedValue({ mcpToolsByServer: {}, serverAgentConfig: {} });
+        .mockResolvedValue({ mcpToolsByServer: {}, serverAgentConfig: {}, customMcpToolNames: new Set() });
       buildMcpToolsSpy.mockClear();
       const complete = vi.fn().mockImplementation(async (_m, _msgs, _opts, cb) => cb(['Hi!']));
       mockedGetLlmByModel.mockReturnValue({
@@ -8967,6 +8967,7 @@ describe('ChatCompletionProcess', () => {
       const buildMcpToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildMcpTools').mockResolvedValue({
         mcpToolsByServer: opts.connectedMcpTools ? { notion: mcpTools } : {},
         serverAgentConfig: {},
+        customMcpToolNames: new Set<string>(),
       });
       const buildToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockImplementation(options => {
         if (!opts.connectedMcpTools) return [];

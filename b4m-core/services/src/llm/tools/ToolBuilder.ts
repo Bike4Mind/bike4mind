@@ -933,7 +933,7 @@ export class ToolBuilder {
           tools.forEach(tool => customMcpToolNames.add(tool.name));
         }
       } catch (customError) {
-        logger.error('🛠️ [MCP] Failed to load custom connector tools - continuing without them:', customError);
+        logger.error('[MCP] Failed to load custom connector tools - continuing without them:', customError);
       }
     }
 
