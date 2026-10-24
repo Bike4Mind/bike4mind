@@ -17,10 +17,11 @@ import { type Page } from '@playwright/test';
  * necessary.
  */
 
-/** Mirrors REFRESH_COOKIE_NAME / COOKIE_PATH in packages/server-utils/src/auth/refreshCookie.ts.
+/** Mirrors sessionCookieName in packages/server-utils/src/auth/refreshCookie.ts: a production
+ *  (https) stage uses the __Host- prefixed name on Path=/, plain-http dev the bare name on /api.
  *  Hardcoded so the e2e suite doesn't import from the app - keep in sync. */
-const REFRESH_COOKIE_NAME = 'b4m_rt';
-const REFRESH_COOKIE_PATH = '/api';
+const REFRESH_COOKIE_BASE_NAME = 'b4m_rt';
+const REFRESH_COOKIE_NAMES = [`__Host-${REFRESH_COOKIE_BASE_NAME}`, REFRESH_COOKIE_BASE_NAME];
 
 interface SeedTokens {
   accessToken: string;
@@ -30,18 +31,14 @@ interface SeedTokens {
 /** Plant the refresh cookie on the browser context so the next navigation boots authenticated. */
 async function injectRefreshCookie(page: Page, tokens: SeedTokens): Promise<void> {
   const baseURL = process.env.API_URL || 'http://localhost:3000';
-  const { hostname } = new URL(baseURL);
-  await page.context().addCookies([
-    {
-      name: REFRESH_COOKIE_NAME,
-      value: tokens.refreshToken,
-      domain: hostname,
-      path: REFRESH_COOKIE_PATH,
-      httpOnly: true,
-      // Secure is omitted: e2e runs against plain http, and a Secure cookie would be dropped.
-      sameSite: 'Strict',
-    },
-  ]);
+  const { hostname, protocol, origin } = new URL(baseURL);
+  const common = { value: tokens.refreshToken, httpOnly: true, sameSite: 'Strict' as const };
+  // `url` (not `domain`) keeps the cookie host-only, which the __Host- prefix requires.
+  const cookie =
+    protocol === 'https:'
+      ? { ...common, name: REFRESH_COOKIE_NAMES[0], url: `${origin}/`, secure: true }
+      : { ...common, name: REFRESH_COOKIE_BASE_NAME, domain: hostname, path: '/api' };
+  await page.context().addCookies([cookie]);
 }
 
 /**
@@ -103,7 +100,7 @@ export async function seedAuthOnPage(page: Page, tokens: SeedTokens): Promise<vo
   // user-context store still holds the old identity at this point, but the router guard awaits
   // the bootstrap refresh (which rewrites currentUser) before reading it, so nothing renders
   // under the stale identity.
-  await page.context().clearCookies({ name: REFRESH_COOKIE_NAME });
+  for (const name of REFRESH_COOKIE_NAMES) await page.context().clearCookies({ name });
   await injectRefreshCookie(page, tokens);
   await page.goto('/');
 }

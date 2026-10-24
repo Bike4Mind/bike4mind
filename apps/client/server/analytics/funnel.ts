@@ -144,6 +144,15 @@ export async function emitFunnelEvent(opts: {
   return true;
 }
 
+// A stage an admin caused (create-user, bulk-create-users, an admin verifying the email) is still
+// the stage, but not a day its user was active: `userAction: false` keeps Overwatch from counting
+// them in DAU, or as a new user, before they have signed in once; their first real request does
+// that. Overwatch also leaves `userAction: false` signups out of the funnel's signup count, so an
+// admin-created account does not inflate signups either.
+function funnelMethodMetadata(method: string): { method: string; userAction?: false } {
+  return { method, ...(method === 'admin' && { userAction: false as const }) };
+}
+
 /**
  * The funnel stages of a brand-new account. An unverified signup with nothing granted skips
  * credits_granted: the stable eventId would lock in 0 and drop the grant that arrives at
@@ -157,7 +166,7 @@ export async function emitSignupFunnelEvents(opts: {
   emailVerified: boolean;
   creditsGranted: number;
 }): Promise<void> {
-  const metadata = { method: opts.method };
+  const metadata = funnelMethodMetadata(opts.method);
   await Promise.all([
     opts.emailVerified && emitFunnelEvent({ user: opts.user, event: 'email_verified', metadata }),
     (opts.emailVerified || opts.creditsGranted > 0) &&
@@ -180,7 +189,7 @@ export async function emitEmailVerifiedFunnelEvents(opts: {
   creditsGranted: number;
 }): Promise<void> {
   if (!signedUpAfterLaunch(opts.user.createdAt)) return;
-  const metadata = { method: opts.method };
+  const metadata = funnelMethodMetadata(opts.method);
   await Promise.all([
     emitFunnelEvent({ user: opts.user, event: 'email_verified', metadata }),
     emitFunnelEvent({

@@ -1,7 +1,7 @@
 import { IUserDocument } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { User, inboxRepository } from '@bike4mind/database';
+import { inboxRepository } from '@bike4mind/database';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { sendToClient } from '@server/websocket/utils';
 import { logEvent } from '@server/utils/analyticsLog';
@@ -15,13 +15,13 @@ const handler = baseApi().delete(
 
     if (!id) throw new BadRequestError('Invalid ID');
 
-    const [inbox, user] = await Promise.all([inboxRepository.findById(id), User.findById(userId)]);
+    const inbox = await inboxRepository.findById(id);
 
-    if (!inbox || (!user?.isAdmin && inbox.receiverId !== userId)) throw new BadRequestError('Inbox not found');
+    if (!inbox || (!req.user?.isAdmin && inbox.receiverId !== userId)) throw new BadRequestError('Inbox not found');
 
     // Admins can delete using the inbox item's actual receiverId; otherwise
     // use the current user's id (the receiver) to enforce ownership.
-    const receiverIdForDeletion = user?.isAdmin ? inbox.receiverId : userId;
+    const receiverIdForDeletion = req.user?.isAdmin ? inbox.receiverId : userId;
     const deletedInboxItem = await inboxRepository.deleteByReceiverId(receiverIdForDeletion, id);
 
     const wsEndpoint = Resource.websocket.managementEndpoint;

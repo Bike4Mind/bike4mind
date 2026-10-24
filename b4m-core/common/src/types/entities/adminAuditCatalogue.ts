@@ -99,6 +99,39 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.mfa.reset': { category: 'identity', severity: 'notice', write: 'strict' },
   'user.mfa.denied': { category: 'identity', severity: 'critical', write: 'bestEffort' },
 
+  // Handler coverage: secrets and integration credentials
+  'settings.system_secret.upserted': { category: 'settings', severity: 'critical', write: 'strict' },
+  'settings.system_secret.deleted': { category: 'settings', severity: 'critical', write: 'strict' },
+  'integration.github_connection.created': { category: 'settings', severity: 'critical', write: 'strict' },
+  'integration.github_connection.updated': { category: 'settings', severity: 'critical', write: 'strict' },
+  'integration.github_connection.deleted': { category: 'settings', severity: 'critical', write: 'strict' },
+  'integration.github_connection.key_rotated': { category: 'settings', severity: 'critical', write: 'strict' },
+  'integration.slack_app.created': { category: 'settings', severity: 'critical', write: 'strict' },
+  'integration.slack_app.reconnected': { category: 'settings', severity: 'critical', write: 'strict' },
+  'integration.slack_app.manifest_updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'integration.slack_workspace.deactivated': { category: 'settings', severity: 'critical', write: 'strict' },
+  'identity.sso_provider.created': { category: 'identity', severity: 'critical', write: 'strict' },
+  'identity.sso_provider.updated': { category: 'identity', severity: 'critical', write: 'strict' },
+  'identity.sso_provider.deleted': { category: 'identity', severity: 'critical', write: 'strict' },
+
+  // Handler coverage: email and messaging
+  // Job entries record the claim and enqueue request, not delivery.
+  'email.job.started': { category: 'support', severity: 'critical', write: 'strict' },
+  'email.job.sent': { category: 'support', severity: 'critical', write: 'strict' },
+  'email.job.test_sent': { category: 'support', severity: 'notice', write: 'strict' },
+  'email.job.created': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'email.job.updated': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'email.job.cloned': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'email.job.scheduled': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'email.job.cancelled': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'email.template.created': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'email.template.updated': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'email.template.deleted': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'email.template.cloned': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'email.template.test_sent': { category: 'support', severity: 'info', write: 'bestEffort' },
+  'support.inbox.message_sent': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'support.pr_report.sent': { category: 'support', severity: 'info', write: 'bestEffort' },
+
   'audit.exported': { category: 'support', severity: 'info', write: 'bestEffort' },
 } as const satisfies Record<string, AdminAuditCatalogueEntry>;
 

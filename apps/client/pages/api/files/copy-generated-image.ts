@@ -24,6 +24,7 @@ import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-uti
 import { userCanAccessGeneratedImage } from '@bike4mind/server-utils/utils/generatedImageAccess';
 import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
 import { z } from 'zod';
+import { requesterScopedUsers } from '@server/auth/apiKeyAdminScope';
 
 const copyGeneratedImageSchema = z.object({
   imageS3Key: z.string().describe('The S3 key of the image in the generatedImagesBucket'),
@@ -91,7 +92,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
               // enforcement override would silently not apply on this door.
               scopedSettings: scopedSettingsRepository,
               fabFiles: FabFile,
-              users: User,
+              users: requesterScopedUsers(req, User),
               organizations: organizationRepository,
               dataLakes: dataLakeRepository,
             },

@@ -61,6 +61,13 @@ the composer, where it can be dismissed.
 
 ## Chat costs
 
+The footer ring shows your personal credit balance as a percentage of your monthly personal
+plan allowance. Organization credit pools are separate. A balance above the allowance, for
+example after rollover or a top-up, fills the ring while the tooltip keeps the actual percentage.
+Accounts without a monthly personal allowance show the balance without a percentage.
+If the balance or allowance is unavailable, check that you are signed in and can reach the
+backend; older backends may not report an allowance. The separate Context panel shows context usage.
+
 Chat shows the credits reported by the server while a reply streams, after it finishes, and
 in the composer's usage details. Missing credit usage is left blank rather than shown as zero.
 
@@ -478,31 +485,58 @@ codebase are not consent to read them alongside another.
 
 ### The workspace toggle is a git worktree
 
-Off, the session runs in the project directory. On, it runs in a git worktree for the chosen
-branch, following the layout in `~/.config/b4m/worktree.zsh`: worktrees live inside the
-project's own container directory (the parent of the shared git dir), one folder per branch,
-with `/` in the branch name written as `+`.
+Off, the session runs in the project directory. On, it runs in a git worktree of its own. The
+worktree lives in the app's own `.b4m` folder inside the project's container directory (the
+parent of the shared git dir), with `/` in the branch name written as `+`:
 
 ```
-<container>/.bare              the bare repo
-<container>/main               the main worktree
-<container>/fix+some-branch    one folder per branch
+<container>/.b4m/.gitignore         ignores everything in .b4m, so worktrees stay out of git status
+<container>/.b4m/worktrees/<branch> one folder per session branch, e.g. b4m+fix-login-3fa9c1
+<container>/.b4m/spare              a ready checkout that makes the next one fast (see below)
 ```
 
-That layout is reimplemented in `src/main/chat/project/workspace.ts` rather than shelled out
-to, because a packaged app cannot assume a personal shell function exists. Nothing ever writes
-to a `../` path, which would scatter folders that read as separate projects.
+The layout is reimplemented in `src/main/chat/project/workspace.ts` rather than shelled out
+to the user's `worktree` shell function (`~/.config/b4m/worktree.zsh`, still the source of the
+`+` folder convention and the default base), because a packaged app cannot assume a personal
+shell function exists. Nothing ever writes to a `../` path, which would scatter folders that
+read as separate projects, and the repository's own `.gitignore` is never touched. Keeping
+everything under `.b4m` also means a worktree can never collide with a folder the user made
+themselves, such as `<container>/main`.
 
-Three cases it handles rather than failing:
+**The chosen branch is a base, not a target.** The session gets a branch of its own, named
+`b4m/<slug>-<hex>` (the slug comes from the session title, the random suffix keeps two sessions
+from the same base apart), cut from the branch the user picked. A name that is not an existing
+branch names the session's own branch instead, cut from the default base. Either way the
+session is alone on its branch, so picking `main` never hands back the user's own checkout and
+the app never claims an isolation it did not get. The resolved path is shown under the session
+title whenever it differs from the project directory.
 
-- **The worktree already exists** - adopted, not recreated. A worktree registered for that
-  branch at some _other_ path is adopted too, because git allows a branch in exactly one
-  worktree and `worktree add` would otherwise fail against it.
-- **The branch does not exist** - created from `origin/main` (then `origin/master`, then
-  `HEAD`), `--no-track`, matching the shell helper's default.
-- **The branch is the one the main checkout is on** - resolves _to_ the main checkout, since
-  git permits nothing else. The resolved path is shown under the session title whenever it
-  differs from the project directory, so the app never claims an isolation it did not get.
+Cases it handles rather than failing:
+
+- **The session already has its worktree** - reused, not recreated. Reuse is keyed only on the
+  session's _own_ branch, which is saved on the session and handed back on every later
+  resolution. A worktree some other tool registered for the base branch is never adopted.
+- **The branch does not exist yet** - created from the base's remote-tracking ref once that is
+  proven to contain the local base (so a stale local `main` does not start the branch behind),
+  otherwise from the base itself. With no base picked it is the branch `origin/HEAD` points
+  at, then `origin/main`, then `origin/master`, then `HEAD`. Always `--no-track`, so a later
+  `git push` does not aim at the base.
+
+**An occupied path is refused, never adopted or cleared.** If the target folder is already a
+git worktree holding something else, or exists but is not a worktree, the session fails to
+prepare with a message naming the path. Move it with `git worktree move` (a plain `mv` leaves
+git pointing at a path that no longer exists), or pick a different branch.
+
+**A spare checkout makes starting fast.** After a worktree is cut in a repository, the app
+prepares one detached checkout in `.b4m/spare` shortly afterwards, so it does not compete with
+the new session's first moments. The next session moves it into place and switches it to the
+new branch, which rewrites only the files that differ - about 0.2s instead of the 1.3s a full
+checkout takes on this monorepo. It is bounded on every side: a repository gets one only after
+a worktree was cut in it during the current run, at most two repositories keep one (the least
+recently used goes first), an unused spare is removed after 30 minutes, and all of them are
+removed on quit. A spare left behind by a crash is recognized by its git metadata and original
+`HEAD`; one that has been changed, or that the app does not own, is left alone and no spare is
+made.
 
 **Deleting a session never deletes its worktree.** A worktree can hold uncommitted work, and
 deleting a conversation must not be a way to lose code. Removing one stays a git operation the

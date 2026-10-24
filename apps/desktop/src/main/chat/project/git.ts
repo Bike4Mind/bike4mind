@@ -3,6 +3,7 @@ import { realpath, stat } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import type { BranchCheckout } from '@shared/chat';
+import { hostGitArgs, hostNetworkGitArgs } from '../../git/hostGitArgs';
 
 const execFileAsync = promisify(execFile);
 
@@ -43,9 +44,18 @@ export function readableGitMessage(stderr: string): string {
     .trim();
 }
 
-export async function git(directory: string, args: readonly string[]): Promise<string> {
+export function git(directory: string, args: readonly string[]): Promise<string> {
+  return runGit(directory, args, hostGitArgs(args));
+}
+
+/** For calls that reach a remote, which can run configured credential, ssh and askpass commands. */
+function gitNetwork(directory: string, args: readonly string[]): Promise<string> {
+  return hostNetworkGitArgs(args, directory).then(full => runGit(directory, args, full));
+}
+
+async function runGit(directory: string, args: readonly string[], fullArgs: readonly string[]): Promise<string> {
   try {
-    const { stdout } = await execFileAsync('git', [...args], {
+    const { stdout } = await execFileAsync('git', [...fullArgs], {
       cwd: directory,
       timeout: GIT_TIMEOUT_MS,
       maxBuffer: MAX_GIT_OUTPUT_BYTES,
@@ -369,7 +379,7 @@ export function fetchRemoteFor(directory: string, baseRef: string): Promise<void
   const key = `${directory}\u0000${baseRef}`;
   const recent = recentFetches.get(key);
   if (recent && Date.now() - recent.at < FETCH_FRESH_MS) return recent.done;
-  const done = git(directory, [
+  const done = gitNetwork(directory, [
     'fetch',
     '--quiet',
     '--no-tags',

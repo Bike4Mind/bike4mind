@@ -34,6 +34,7 @@ import { buildWorkflowState, withFlushedWorkflowState, type WorkflowStores } fro
 import { formatStep, extractCompactInstructions } from '../utils';
 import { renderWorkflowReminder } from '../utils/workflowReminder.js';
 import { logger } from '../utils/Logger';
+import { sanitizeTerminalText } from '../utils/sanitizeTerminalText.js';
 import { isConnectionDrop } from '../llm/modelCallError';
 import type { ToolCatalog } from '../tools/gateway/toolCatalog.js';
 import type { TodoStore } from '../tools/writeTodosTool.js';
@@ -533,7 +534,7 @@ async function runHeldTurn(message: string, ctx: TurnContext): Promise<void> {
     }
 
     // Handle other errors - clean message for users, full stack in debug logs
-    console.error(`\n❌ ${rawMessage}\n`);
+    console.error(`\n\u274C ${sanitizeTerminalText(rawMessage)}\n`);
     logger.debug(`Full error details: ${error instanceof Error ? error.stack || error.message : String(error)}`);
   } finally {
     // Tavern: the ReAct turn has settled. Parity with Claude Code's

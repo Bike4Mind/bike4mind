@@ -4,6 +4,7 @@ import { premiumWorkspaceDeniedTools } from '@server/premium-generated/premiumWo
 import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';
 
 const mockProcess = vi.hoisted(() => vi.fn());
+const processOptions = vi.hoisted(() => vi.fn());
 
 // This exercises only the db-adapter assembly in getStaticOptions: the surface
 // save_content_to_data_lake (-> saveContentAdapters in adapters.ts) reads from. Mocks mirror
@@ -51,6 +52,9 @@ vi.mock('@bike4mind/services/llm', async () => {
   return {
     ...actual,
     ChatCompletionProcess: class {
+      constructor(options: unknown) {
+        processOptions(options);
+      }
       process = mockProcess;
     },
   };
@@ -155,4 +159,26 @@ describe('processQuest', () => {
       expect.objectContaining({ body: expect.objectContaining({ authOrigin: 'apiKey', apiKeyId: 'k1' }) })
     );
   }, 120_000);
+
+  it.each([
+    ['withholds the admin role when the payload says so', true, false],
+    ['keeps the stored role for a payload without the field', undefined, true],
+  ])(
+    '%s',
+    async (_, adminRoleWithheld, expected) => {
+      const { User } = await import('@bike4mind/database');
+      vi.mocked(User.findById).mockResolvedValueOnce({ _id: 'user-1', isAdmin: true } as never);
+      const { processQuest } = await import('./questProcessor');
+      const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() };
+      processOptions.mockClear();
+
+      await processQuest(
+        { userId: 'user-1', sessionId: 'session-1', questId: 'quest-1', params: {}, adminRoleWithheld } as never,
+        logger as never
+      );
+
+      expect(processOptions.mock.calls[0][0].user.isAdmin).toBe(expected);
+    },
+    120_000
+  );
 });

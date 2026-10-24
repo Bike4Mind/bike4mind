@@ -35,6 +35,7 @@ import {
 } from '@server/files/fileScopes';
 import { getS3Url } from '@client/app/utils/s3Url';
 import { Resource } from 'sst';
+import { persistedIsAdmin, requesterScopedUsers } from '@server/auth/apiKeyAdminScope';
 
 // No caller-chosen `prefix`: the key namespace decides how the S3 upload hook treats an object,
 // and a prefix such as `tmp` lands in one it skips (`isUntrackedFabFileKey`), so the object
@@ -72,8 +73,10 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_OR_RELEASE_NOTES_SCOPES })
       const { user } = req;
 
       const parsed = createFabFileSchema.parse(req.body);
-      const adminModalMedia = !!user.isAdmin && parsed.purpose === 'modal-media';
       const releaseNotesOnly = isReleaseNotesOnlyUpload(req);
+      // A release-notes key arrives with the owner's admin role withheld; it still counts when the owner is an admin.
+      const adminModalMedia =
+        (!!user.isAdmin || (releaseNotesOnly && persistedIsAdmin(user))) && parsed.purpose === 'modal-media';
       if (!adminModalMedia && releaseNotesOnly) {
         throw new ForbiddenError("This API key may only upload What's New media; files:write is required", {
           required_scopes: FILES_WRITE_SCOPES,
@@ -159,7 +162,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_OR_RELEASE_NOTES_SCOPES })
           db: {
             adminSettings: adminSettingsRepository,
             fabFiles: FabFile,
-            users: User,
+            users: requesterScopedUsers(req, User),
             organizations: organizationRepository,
             dataLakes: dataLakeRepository,
             // The service re-gates the lake tag internally, so its inputs must stay at least as

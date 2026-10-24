@@ -223,7 +223,7 @@ export interface paths {
     };
     /**
      * Get the authenticated caller
-     * @description Returns the authenticated caller: stable id, display name, plan tier, personal credit balance, and entitlement keys. The subject is always the credential holder - this endpoint accepts no user id, owner id, or impersonation parameter of any kind, so a key can only ever read its own owner. `credits.balance` is the caller's personal ledger; a call billed to an organization draws on a pool this number does not describe. Gate on `tier != "free"` for "does this caller hold a paid plan (own or org seat)" and on `subscription.price_id` for which product - the `basic`/`pro` rungs come from an internal plan ladder and do not track a plan's marketing name. An org seat (a Team plan held by the caller's organization) confers that org plan's tier and `subscription`, even when the caller pays nothing personally, so `tier != "free"` does not by itself mean the caller is billed. Responses are never cacheable. Authenticate with an API key (`b4m_live_`) carrying `me:read`, or a JWT.
+     * @description Returns the authenticated caller: stable id, display name, plan tier, personal credit balance, and entitlement keys. The subject is always the credential holder - this endpoint accepts no user id, owner id, or impersonation parameter of any kind, so a key can only ever read its own owner. `credits.balance` is the caller's personal ledger; a call billed to an organization draws on a pool this number does not describe. `credits.monthly_allowance` totals monthly personal plan grants, including custom grants; it is null when unavailable and may be omitted by older servers. Gate on `tier != "free"` for "does this caller hold a paid plan (own or org seat)" and on `subscription.price_id` for which product - the `basic`/`pro` rungs come from an internal plan ladder and do not track a plan's marketing name. An org seat (a Team plan held by the caller's organization) confers that org plan's tier and `subscription`, even when the caller pays nothing personally, so `tier != "free"` does not by itself mean the caller is billed. Responses are never cacheable. Authenticate with an API key (`b4m_live_`) carrying `me:read`, or a JWT.
      */
     get: operations['getMe'];
     put?: never;
@@ -859,7 +859,7 @@ export interface paths {
     };
     /**
      * Get release note media
-     * @description Redirects to one file of a published release note video: `landscape` and `portrait` are the 16:9 and 9:16 MP4s, the `-poster` assets their still images. The `video` URLs that listWhatsNew returns for uploaded files point here, so a browser can use them as `src` and `poster` as they are. Public: no credentials are needed, and the note must be one listWhatsNew would show. The redirect is cacheable for up to 10 minutes and its target is signed for 1 hour, longer than that, so follow it rather than storing the target. Rate limited per client IP.
+     * @description Redirects to one file of a published release note video or still image: `landscape` and `portrait` are the 16:9 and 9:16 MP4s, the `-poster` assets their still images, and `image-landscape` and `image-portrait` the 16:9 and 9:16 still images of the note's `image`. The `video` and `image` URLs that listWhatsNew returns for uploaded files point here, so a browser can use them as `src` and `poster` as they are. Public: no credentials are needed, and the note must be one listWhatsNew would show. The redirect is cacheable for up to 10 minutes and its target is signed for 1 hour, longer than that, so follow it rather than storing the target. Rate limited per client IP.
      */
     get: operations['getWhatsNewMedia'];
     put?: never;
@@ -2265,7 +2265,8 @@ export interface components {
      *         "current_period_ends_at": "2026-10-18T00:00:00.000Z"
      *       },
      *       "credits": {
-     *         "balance": 31667
+     *         "balance": 31667,
+     *         "monthly_allowance": 50000
      *       },
      *       "entitlements": [
      *         "base"
@@ -2286,6 +2287,7 @@ export interface components {
       } | null;
       credits: {
         balance: number;
+        monthly_allowance?: number | null;
       };
       entitlements: string[];
     };
@@ -4776,6 +4778,10 @@ export interface components {
           landscape_poster_url?: string | null;
           portrait_url?: string | null;
           portrait_poster_url?: string | null;
+        } | null;
+        image?: {
+          landscape_url?: string | null;
+          portrait_url?: string | null;
         } | null;
       }[];
       next_cursor: string | null;
@@ -7339,6 +7345,37 @@ export interface operations {
           'application/json': components['schemas']['generateMusicResponse422'];
         };
       };
+      /** @description The API key exceeded its rate limit, or the provider stayed at its concurrency limit for longer than the request could wait. `Retry-After` says when to try again; reserved credits are refunded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Seconds to wait before retrying. */
+          'Retry-After'?: string;
+          /** @description RFC 9745: when this endpoint was deprecated. Always `@1792022400` on this endpoint. */
+          Deprecation?: string;
+          /** @description RFC 8594: the first day this endpoint may stop being served. Always `Fri, 15 Jan 2027 00:00:00 GMT` on this endpoint. */
+          Sunset?: string;
+          /** @description RFC 8288: the replacement endpoint (`rel="successor-version"`). Always `</api/v1/music-generations>; rel="successor-version"` on this endpoint. */
+          Link?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
       /** @description The provider failed to generate the track; reserved credits are refunded. */
       502: {
         headers: {
@@ -7615,6 +7652,31 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['generateSoundEffectResponse422'];
+        };
+      };
+      /** @description The API key exceeded its rate limit, or the provider stayed at its concurrency limit for longer than the request could wait. `Retry-After` says when to try again; reserved credits are refunded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Seconds to wait before retrying. */
+          'Retry-After'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
         };
       };
       /** @description The provider failed to generate the effect; reserved credits are refunded. */
@@ -13299,7 +13361,7 @@ export interface operations {
       header?: never;
       path: {
         id: string;
-        asset: 'landscape' | 'landscape-poster' | 'portrait' | 'portrait-poster';
+        asset: 'landscape' | 'landscape-poster' | 'portrait' | 'portrait-poster' | 'image-landscape' | 'image-portrait';
       };
       cookie?: never;
     };

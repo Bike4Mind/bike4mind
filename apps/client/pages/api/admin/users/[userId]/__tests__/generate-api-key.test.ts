@@ -89,6 +89,28 @@ vi.mock('@server/utils/analyticsLog', () => ({
   },
 }));
 
+vi.mock('@client/app/premium-generated/premiumApiKeyScopes.generated', () => ({
+  premiumApiKeyScopes: [
+    {
+      value: 'acme:read',
+      label: 'Acme: Read',
+      description: 'Read Acme records',
+      endpoints: ['GET /api/acme'],
+      requiredEntitlement: 'acme:pro',
+    },
+  ],
+}));
+
+const targetAccess = vi.hoisted(() => ({ entitlements: new Set<string>(), bypass: false }));
+const mockResolveTargetAccess = vi.hoisted(() => vi.fn());
+vi.mock('@server/entitlements', () => ({ toEntitlementUser: (user: unknown) => user }));
+vi.mock('@server/entitlements/apiKeyScopeAccess', () => ({
+  resolveApiKeyScopeAccessForUser: mockResolveTargetAccess.mockImplementation(async () => ({
+    bypass: targetAccess.bypass,
+    entitlements: targetAccess.entitlements,
+  })),
+}));
+
 import '../generate-api-key';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
@@ -112,6 +134,65 @@ function post(body: unknown, opts: { isAdmin?: boolean; userId?: string } = {}) 
   (req as any).logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   return { req, res };
 }
+
+describe('POST /api/admin/users/:userId/generate-api-key - contributed scope entitlement', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    targetAccess.entitlements = new Set();
+    targetAccess.bypass = false;
+    mockUserFind.mockResolvedValue({ id: 'target-user', username: 'targetUser' });
+    mockCreateKey.mockResolvedValue({ id: 'k1', name: 'key', scopes: ['acme:read'] });
+    mockLogEvent.mockResolvedValue(undefined);
+  });
+
+  it('refuses a contributed scope the target does not hold the entitlement for, without minting', async () => {
+    const { req, res } = post({ name: 'acme', scopes: ['acme:read', 'notebooks:read'] });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/not available on the target account: acme:read/);
+    expect(mockResolveTargetAccess).toHaveBeenCalledWith(expect.objectContaining({ id: 'target-user' }));
+    expect(mockCreateKey).not.toHaveBeenCalled();
+  });
+
+  it('mints a contributed scope for a target holding its entitlement', async () => {
+    targetAccess.entitlements = new Set(['acme:pro']);
+    const { req, res } = post({ name: 'acme', scopes: ['acme:read'] });
+    await mockRefs.postHandler!(req, res);
+    expect(res._getStatusCode()).toBe(201);
+    expect(mockCreateKey).toHaveBeenCalledWith(
+      'target-user',
+      expect.objectContaining({ scopes: ['acme:read'] }),
+      expect.objectContaining({ isKnownScope: expect.any(Function) })
+    );
+    const adapters = mockCreateKey.mock.calls[0][2] as { isKnownScope: (value: string) => boolean };
+    expect(adapters.isKnownScope('acme:read')).toBe(true);
+    expect(adapters.isKnownScope('acme:write')).toBe(false);
+  });
+
+  it('does not mint when the target entitlement lookup fails', async () => {
+    const failure = new Error('entitlement lookup unavailable');
+    mockResolveTargetAccess.mockRejectedValueOnce(failure);
+    const { req, res } = post({ name: 'acme', scopes: ['acme:read'] });
+
+    await expect(mockRefs.postHandler!(req, res)).rejects.toBe(failure);
+    expect(mockCreateKey).not.toHaveBeenCalled();
+  });
+
+  it('honors the target admin/developer bypass without its entitlement', async () => {
+    targetAccess.bypass = true;
+    const { req, res } = post({ name: 'acme', scopes: ['acme:read'] });
+
+    await mockRefs.postHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(201);
+    expect(mockCreateKey).toHaveBeenCalled();
+  });
+
+  it('does not resolve the target access for built-in scopes only', async () => {
+    const { req, res } = post({ name: 'plain', scopes: ['notebooks:read'] });
+    await mockRefs.postHandler!(req, res);
+    expect(res._getStatusCode()).toBe(201);
+    expect(mockResolveTargetAccess).not.toHaveBeenCalled();
+  });
+});
 
 describe('POST /api/admin/users/:userId/generate-api-key - scope allowlist guard', () => {
   beforeEach(() => {

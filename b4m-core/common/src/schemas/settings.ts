@@ -427,6 +427,7 @@ export const SettingKeySchema = z.enum([
   'enableTeamPlan',
   'allowOpenRegistration',
   'blockDisposableEmails',
+  'blockedEmailDomains',
   'defaultFreeCredits',
   'teamPlanMinSeats',
   'teamPlanMaxSeats',
@@ -512,6 +513,8 @@ export const SettingKeySchema = z.enum([
   'enableVoiceSession',
   'voiceV2Enabled',
   'elevenLabsServerApiKey',
+  'elevenLabsMusicConcurrencyLimit',
+  'elevenLabsSoundConcurrencyLimit',
   'voiceSessionAiVoice',
   'voiceSessionTranscriptionModel',
   'voiceSessionVadType',
@@ -1715,6 +1718,8 @@ export const API_SERVICE_GROUPS = {
       { key: 'voiceSessionVadEagerness', order: 5 },
       { key: 'voiceV2Enabled', order: 6 },
       { key: 'elevenLabsServerApiKey', order: 7 },
+      { key: 'elevenLabsMusicConcurrencyLimit', order: 8 },
+      { key: 'elevenLabsSoundConcurrencyLimit', order: 9 },
     ],
   },
   XAI: {
@@ -1950,7 +1955,8 @@ export const API_SERVICE_GROUPS = {
     settings: [
       { key: 'billOperationalUsage', order: 1 },
       { key: 'blockDisposableEmails', order: 2 },
-      { key: 'syntheticUserEmailDomains', order: 3 },
+      { key: 'blockedEmailDomains', order: 3 },
+      { key: 'syntheticUserEmailDomains', order: 4 },
     ],
   },
   KNOWLEDGE: {
@@ -3335,6 +3341,18 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
+  blockedEmailDomains: makeObjectSetting<string[]>({
+    key: 'blockedEmailDomains',
+    name: 'Blocked Email Domains',
+    defaultValue: [],
+    description:
+      'Email domains blocked from signup credits, one per line, on top of the built-in disposable list. A domain also blocks every subdomain (kashre.com blocks x@np.kashre.com). Applies even when Block Disposable Emails is OFF. Registration is refused; OAuth signup and email change still create the account but withhold the free-credit grant, and the OAuth starting-grant backfill skips these users. Existing accounts can still sign in. Bare public suffixes (co.uk, github.io) are refused. Enter internationalized domains in punycode (xn--...); a Unicode-domain email is not matched against them.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+    // Plain strings so one malformed stored entry cannot fail the whole list; the update route
+    // refuses invalid entries and readers filter with partitionDomainList.
+    schema: z.array(z.string()),
+  }),
   defaultFreeCredits: makeNumberSetting({
     key: 'defaultFreeCredits',
     // Read by the new-user welcome to state the amount an unverified sign-up is about to unlock.
@@ -4580,6 +4598,34 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.VOICE_SESSION.id,
     order: 11,
+  }),
+  // Defaults mirror the ElevenLabs plan's concurrency caps; raise them when the plan is upgraded.
+  // Read by runElevenLabsWithCapacity in @bike4mind/services.
+  elevenLabsMusicConcurrencyLimit: makeNumberSetting({
+    key: 'elevenLabsMusicConcurrencyLimit',
+    name: 'ElevenLabs Music Concurrency Limit',
+    defaultValue: 2,
+    min: 1,
+    max: 100,
+    int: true,
+    description:
+      'How many music generations from the music API may run at once on the server ElevenLabs key, across all users (async music generation jobs, which chat uses, are not counted). Match it to the ElevenLabs plan: extra requests wait briefly for a free slot instead of failing with a provider 429. Requests on a personal ElevenLabs key are not counted.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.VOICE_SESSION.id,
+    order: 12,
+  }),
+  elevenLabsSoundConcurrencyLimit: makeNumberSetting({
+    key: 'elevenLabsSoundConcurrencyLimit',
+    name: 'ElevenLabs Sound-Effects Concurrency Limit',
+    defaultValue: 5,
+    min: 1,
+    max: 100,
+    int: true,
+    description:
+      'How many sound-effect generations from the sound-effects API and chat may run at once on the server ElevenLabs key, across all users. Match it to the ElevenLabs plan: extra requests wait briefly for a free slot instead of failing with a provider 429. Requests on a personal ElevenLabs key are not counted.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.VOICE_SESSION.id,
+    order: 13,
   }),
   voiceSessionAiVoice: makeStringSetting({
     key: 'voiceSessionAiVoice',

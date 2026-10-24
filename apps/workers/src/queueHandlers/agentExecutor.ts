@@ -1850,6 +1850,8 @@ async function processExecution(
           findAllByIds: sessionRepository.findAllByIds.bind(sessionRepository),
         },
         quests: questRepository,
+        // ElevenLabs shared-key concurrency slots for audio_generation (runElevenLabsWithCapacity).
+        caches: cacheRepository,
       },
       sessionRepository: sessionRepository,
       storage: getFilesStorage(),
@@ -3966,6 +3968,8 @@ async function processSubagentDispatch(
           findAllByIds: sessionRepository.findAllByIds.bind(sessionRepository),
         },
         quests: questRepository,
+        // ElevenLabs shared-key concurrency slots for audio_generation (runElevenLabsWithCapacity).
+        caches: cacheRepository,
       },
       sessionRepository,
       storage: getFilesStorage(),

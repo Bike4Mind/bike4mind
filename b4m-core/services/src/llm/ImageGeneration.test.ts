@@ -13,7 +13,7 @@ import {
   usdToCredits,
 } from '@bike4mind/common';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
-import { getSettingsMap } from '@bike4mind/utils';
+import { ClientMessageSender, getSettingsMap } from '@bike4mind/utils';
 import { OMITTED_QUALITY_TIER, OpenAIImageCostCalculator } from './imageCostCalculator/OpenAIImageCostCalculator';
 import { estimateImageCredits } from '../imageCost';
 import type { Logger } from '@bike4mind/observability';
@@ -21,6 +21,7 @@ import { silentLogger, statusLog } from '../__tests__/utils/testUtils';
 import { getSettingsValue, ImageModerationBlockedError } from '@bike4mind/utils';
 import { moderateImageOrThrow } from './imageModerationGate';
 import { deductCreditsWithOrgSupport } from '../creditService';
+import { startQuestHeartbeat } from './questHeartbeat';
 
 // The real stochastic rounding, with its draw pinned so the final debit is assertable.
 const { settlementDraw } = vi.hoisted(() => ({ settlementDraw: vi.fn(() => 0.5) }));
@@ -72,7 +73,8 @@ vi.mock('../creditService', async importOriginal => {
 
 vi.mock('./imageModerationGate', () => ({ moderateImageOrThrow: vi.fn(async () => undefined) }));
 
-vi.mock('./questHeartbeat', () => ({
+vi.mock('./questHeartbeat', async importOriginal => ({
+  ...(await importOriginal<typeof import('./questHeartbeat')>()),
   startQuestHeartbeat: vi.fn().mockResolvedValue(() => undefined),
 }));
 
@@ -1961,5 +1963,65 @@ describe('ImageGenerationService quest partial writes', () => {
 
       expect(logger.error).toHaveBeenCalledWith('Error processing image generation:', failure);
     });
+  });
+});
+
+describe('ImageGenerationService.process (terminal state on early failure)', () => {
+  const body = {
+    sessionId: 'session1',
+    questId: 'quest1',
+    userId: 'user1',
+    prompt: 'a red bicycle',
+    model: ImageModels.GEMINI_2_5_FLASH_IMAGE,
+  } as any;
+
+  const makeService = (questStatus: string | undefined, usersFindById: ReturnType<typeof vi.fn>) => {
+    const quest = { id: 'quest1', sessionId: 'session1', status: questStatus } as any;
+    const update = vi.fn(async () => undefined);
+    const service = new ImageGenerationService({
+      db: {
+        quests: { findById: vi.fn(async () => quest), update, updateMany: vi.fn(async () => undefined) },
+        users: { findById: usersFindById },
+        organizations: { findById: vi.fn(async () => null) },
+      },
+      logEvent: vi.fn().mockResolvedValue(undefined),
+      abilityGetter: vi.fn().mockReturnValue({}),
+      storage: {} as any,
+      fabFileStorage: {} as any,
+      wsHttpsUrl: 'https://ws.example.com',
+    } as any);
+    return { service, quest, update };
+  };
+
+  beforeEach(() => {
+    vi.mocked(startQuestHeartbeat).mockClear();
+    vi.mocked(ClientMessageSender).mockClear();
+  });
+
+  it('settles the quest with an error and an error frame when the user lookup rejects', async () => {
+    const { service, quest, update } = makeService(undefined, vi.fn().mockRejectedValue(new Error('db down')));
+
+    await service.process({ body, logger: silentLogger });
+
+    expect(quest.type).toBe('error');
+    expect(quest.status).toBe('done');
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ id: 'quest1', type: 'error', status: 'done' }));
+    const sender = vi.mocked(ClientMessageSender).mock.results[0].value as { sendToClient: ReturnType<typeof vi.fn> };
+    expect(sender.sendToClient).toHaveBeenCalledWith(
+      'user1',
+      'https://ws.example.com',
+      expect.objectContaining({ quest: expect.objectContaining({ type: 'error', status: 'done' }) })
+    );
+  });
+
+  it.each(['done', 'stopped'])('does nothing when the quest is already %s', async status => {
+    const users = vi.fn();
+    const { service, update } = makeService(status, users);
+
+    await service.process({ body, logger: silentLogger });
+
+    expect(startQuestHeartbeat).not.toHaveBeenCalled();
+    expect(users).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
   });
 });

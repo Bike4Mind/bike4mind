@@ -9,12 +9,13 @@
  * - Never returns decrypted secret values
  */
 
-import { systemSecretRepository } from '@bike4mind/database';
+import { systemSecretRepository, withTransaction } from '@bike4mind/database';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, NotFoundError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { clearSecretCache, resolveSecret } from '@server/managers/systemSecretsManager';
 import { Logger } from '@bike4mind/observability';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 /**
  * Mask a secret value for display (show only last 4 chars).
@@ -94,11 +95,19 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       }
 
       // Delete the DB record (will fall back to SST value)
-      const deleted = await systemSecretRepository.deleteSecret(id);
+      await withTransaction(async () => {
+        const deleted = await systemSecretRepository.deleteSecret(id);
 
-      if (!deleted) {
-        throw new NotFoundError('Secret not found');
-      }
+        if (!deleted) {
+          throw new NotFoundError('Secret not found');
+        }
+
+        await recordAdminActionFromRequest(req, {
+          action: 'settings.system_secret.deleted',
+          target: { kind: 'settings', id: secret.secretName, displayName: secret.secretName },
+          summary: `deleted system secret override ${secret.secretName}`,
+        });
+      });
 
       // Clear cache so SST value is used
       clearSecretCache(secret.secretName);

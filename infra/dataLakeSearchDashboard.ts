@@ -171,8 +171,9 @@ if (isMonitoredStage) {
           width: 12,
           height: 6,
           properties: {
-            // Chat turns on a lake past forced retrieval's 100-file cap. Average is the share cut by
-            // file name rather than by relevance; the Reason series say which fallback fired.
+            // Chat turns whose scope was cut to forced retrieval's 100-file cap, including a single
+            // lake listed at the cap. Average is the share cut by file name rather than by relevance;
+            // the Reason series say which fallback fired.
             title: 'Forced Retrieval: By-Name Cut Rate',
             metrics: [
               [NAMESPACE, 'ForcedRetrievalByNameCut', 'Stage', $app.stage, { stat: 'Average', label: 'By-name share' }],

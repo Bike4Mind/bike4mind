@@ -2,7 +2,14 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
-import type { BackgroundProcessInfo, ChatMessage, ChatProject, ChatSession, ChatSessionSummary } from '@shared/chat';
+import type {
+  BackgroundProcessInfo,
+  ChatMessage,
+  ChatProject,
+  ChatSession,
+  ChatSessionSummary,
+  SendMessageResult,
+} from '@shared/chat';
 import { EMPTY_SIDEBAR_SECTIONS } from '@shared/sidebarSections';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
@@ -16,11 +23,15 @@ vi.mock('./SessionChips', () => ({
   SessionChips: ({
     layout = 'row',
     binding,
+    inUse = false,
+    project,
   }: {
     layout?: string;
+    inUse?: boolean;
+    project: ChatProject | null;
     binding: { error: { message: string } | null; chooseDirectory: (directory: string) => Promise<void> };
   }) => (
-    <div data-testid={`session-chips-${layout}`}>
+    <div data-testid={`session-chips-${layout}`} data-in-use={inUse} data-project-directory={project?.directory}>
       <button data-testid={`session-chips-pick-${layout}`} onClick={() => void binding.chooseDirectory('/elsewhere')} />
       {binding.error && <span data-testid={`session-chips-error-${layout}`}>{binding.error.message}</span>}
     </div>
@@ -80,6 +91,7 @@ function quietBridge(overrides: Record<string, unknown>) {
 let transcript: ChatMessage[] = [];
 let processes: BackgroundProcessInfo[] = [];
 let updateProject: () => Promise<unknown> = async () => ({ ok: true });
+let sendMessage: () => Promise<SendMessageResult>;
 
 let root: Root | null = null;
 let host: HTMLElement | null = null;
@@ -94,6 +106,7 @@ beforeEach(() => {
   transcript = [];
   processes = [];
   updateProject = async () => ({ ok: true });
+  sendMessage = async () => ({ ok: true, messageId: 'm1' });
   Element.prototype.scrollIntoView = () => undefined;
   vi.stubGlobal(
     'IntersectionObserver',
@@ -123,6 +136,7 @@ beforeEach(() => {
         listBackgroundProcesses: async () => processes,
         inspectProject: async () => ({ currentBranch: 'main', branches: [] }),
         updateProject: () => updateProject(),
+        sendMessage: () => sendMessage(),
         getQueuedMessages: async () => [],
         getSessionStatuses: async () => [],
         listModels: async () => ({ models: [] }),
@@ -172,9 +186,32 @@ async function open(sessionId: string, mode: 'code' | 'chat' = 'code') {
   await act(async () => undefined);
 }
 
+async function sendFirstMessage() {
+  const input = get('chat-composer-input');
+  const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+  if (!setter) throw new Error('no textarea value setter');
+  await act(async () => {
+    setter.call(input, 'Fix the login form');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await act(async () => get('chat-send-btn').click());
+}
+
+function deferSend() {
+  let resolveSend: (result: SendMessageResult) => void = () => {
+    throw new Error('send has not started');
+  };
+  sendMessage = () =>
+    new Promise<SendMessageResult>(resolve => {
+      resolveSend = resolve;
+    });
+  return (result: SendMessageResult) => resolveSend(result);
+}
+
 describe('the session panel in the shell', () => {
   it('docks over the thread of a Code session with a folder, holding the chips the composer used to', async () => {
     paneWidth(1600);
+    transcript = [{ id: 'm1', role: 'user', content: 'Hello', createdAt: '2026-10-01T00:00:00.000Z' }];
     await open('bound');
 
     expect(get('session-panel').dataset.variant).toBe('docked');
@@ -185,6 +222,7 @@ describe('the session panel in the shell', () => {
 
   it('hides from the header button and remembers it', async () => {
     paneWidth(1600);
+    transcript = [{ id: 'm1', role: 'user', content: 'Hello', createdAt: '2026-10-01T00:00:00.000Z' }];
     await open('bound');
 
     await act(async () => get('chat-toggle-session-panel-btn').click());
@@ -200,6 +238,7 @@ describe('the session panel in the shell', () => {
 
   it('folds into the header button on a narrow pane and opens as a popover that Escape shuts', async () => {
     paneWidth(900);
+    transcript = [{ id: 'm1', role: 'user', content: 'Hello', createdAt: '2026-10-01T00:00:00.000Z' }];
     await open('bound');
     expect(find('session-panel')).toBeNull();
 
@@ -212,12 +251,88 @@ describe('the session panel in the shell', () => {
     expect(window.localStorage.getItem('b4m.sessionPanel.open')).toBeNull();
   });
 
-  it('is not offered on an unbound Code session, whose chips stay above the composer', async () => {
+  it('centers setup in an empty Code transcript without duplicating it above the composer', async () => {
     paneWidth(1600);
     await open('unbound');
     expect(find('chat-toggle-session-panel-btn')).toBeNull();
     expect(find('session-panel')).toBeNull();
-    expect(find('session-chips-row')).not.toBeNull();
+    expect(get('chat-code-workspace-setup').contains(find('session-chips-embedded'))).toBe(true);
+    expect(find('session-chips-row')).toBeNull();
+    expect(find('session-chips-panel')).toBeNull();
+    expect(find('chat-thread-empty')).toBeNull();
+  });
+
+  it('centers setup for an empty bound Code session instead of opening the panel', async () => {
+    paneWidth(1600);
+    await open('bound');
+    expect(find('session-panel')).toBeNull();
+    expect(find('chat-toggle-session-panel-btn')).toBeNull();
+    expect(get('chat-code-workspace-setup').contains(find('session-chips-embedded'))).toBe(true);
+  });
+
+  it('moves workspace controls into the panel once the Code session has messages', async () => {
+    paneWidth(1600);
+    transcript = [{ id: 'm1', role: 'user', content: 'Hello', createdAt: '2026-10-01T00:00:00.000Z' }];
+    await open('bound');
+    expect(get('session-panel').contains(find('session-chips-panel'))).toBe(true);
+    expect(find('chat-code-workspace-setup')).toBeNull();
+    expect(find('session-chips-row')).toBeNull();
+  });
+
+  it('moves the same session into the panel and locks its grounding on the first send', async () => {
+    paneWidth(1600);
+    const resolveSend = deferSend();
+    await open('bound');
+    expect(get('session-chips-embedded').dataset.inUse).toBe('false');
+
+    await sendFirstMessage();
+
+    expect(get('chat-message-user').textContent).toContain('Fix the login form');
+    expect(get('session-panel').contains(get('session-chips-panel'))).toBe(true);
+    expect(get('session-chips-panel').dataset.inUse).toBe('true');
+    expect(find('chat-code-workspace-setup')).toBeNull();
+    expect(find('session-chips-embedded')).toBeNull();
+    expect(find('session-chips-row')).toBeNull();
+
+    await act(async () => resolveSend({ ok: true, messageId: 'm1' }));
+    expect(get('session-chips-panel').dataset.inUse).toBe('true');
+  });
+
+  it('restores one editable embedded setup when the first send is refused', async () => {
+    paneWidth(1600);
+    const resolveSend = deferSend();
+    await open('bound');
+    await sendFirstMessage();
+    expect(get('session-chips-panel').dataset.inUse).toBe('true');
+
+    await act(async () => resolveSend({ ok: false, error: 'Could not start the turn' }));
+
+    expect(get('chat-send-error').textContent).toBe('Could not start the turn');
+    expect(find('chat-message-user')).toBeNull();
+    expect(document.querySelectorAll('[data-testid="chat-code-workspace-setup"]')).toHaveLength(1);
+    expect(document.querySelectorAll('[data-testid="session-chips-embedded"]')).toHaveLength(1);
+    expect(get('session-chips-embedded').dataset.inUse).toBe('false');
+    expect(find('session-panel')).toBeNull();
+    expect(find('session-chips-panel')).toBeNull();
+    expect(find('session-chips-row')).toBeNull();
+  });
+
+  it('keeps setup embedded after choosing a folder before the first message', async () => {
+    paneWidth(1600);
+    updateProject = async () => ({
+      ok: true,
+      session: session('unbound', { project: { ...PROJECT, directory: '/elsewhere', workingDirectory: '/elsewhere' } }),
+    });
+    await open('unbound');
+
+    await act(async () => get('session-chips-pick-embedded').click());
+
+    expect(get('session-chips-embedded').dataset.projectDirectory).toBe('/elsewhere');
+    expect(get('session-chips-embedded').dataset.inUse).toBe('false');
+    expect(get('chat-code-workspace-setup').contains(get('session-chips-embedded'))).toBe(true);
+    expect(find('session-panel')).toBeNull();
+    expect(find('chat-toggle-session-panel-btn')).toBeNull();
+    expect(find('session-chips-row')).toBeNull();
   });
 
   it('is not offered on a Chat session', async () => {
@@ -272,6 +387,7 @@ describe('the session panel in the shell', () => {
 
   it('shows a project binding error above the composer once the panel is hidden', async () => {
     paneWidth(1600);
+    transcript = [{ id: 'm1', role: 'user', content: 'Hello', createdAt: '2026-10-01T00:00:00.000Z' }];
     updateProject = async () => ({ ok: false, error: 'Could not read the repository' });
     await open('bound');
 
@@ -282,5 +398,64 @@ describe('the session panel in the shell', () => {
     await act(async () => get('chat-toggle-session-panel-btn').click());
     expect(find('session-panel')).toBeNull();
     expect(get('session-chips-error-row').textContent).toBe('Could not read the repository');
+  });
+});
+
+/**
+ * Absolutely positioned elements that a scroller does not clip: their containing block lies
+ * outside an overflow box they sit in, so they are laid out against the shell instead of the
+ * transcript and a long thread lengthens the window's own document.
+ */
+function escapingAbsolutes(): HTMLElement[] {
+  const positioned = (el: Element) => getComputedStyle(el).position !== 'static';
+  const clips = (el: Element) => {
+    const style = getComputedStyle(el);
+    return [style.overflow, style.overflowX, style.overflowY].some(value => value && value !== 'visible');
+  };
+  return [...document.querySelectorAll<HTMLElement>('body *')].filter(el => {
+    if (getComputedStyle(el).position !== 'absolute') return false;
+    for (let node = el.parentElement; node && node !== document.body; node = node.parentElement) {
+      if (positioned(node)) return false;
+      if (clips(node)) return true;
+    }
+    return false;
+  });
+}
+
+describe('the shell layout', () => {
+  it('pins the shell to the viewport so the window itself never scrolls', async () => {
+    paneWidth(1600);
+    await open('bound');
+
+    const shell = getComputedStyle(get('chat-shell'));
+    expect(shell.height).toBe('100vh');
+    expect(shell.overflow).toBe('clip');
+  });
+
+  it('keeps every absolutely positioned element inside the scroller it sits in', async () => {
+    paneWidth(1600);
+    const at = '2026-10-01T00:00:00.000Z';
+    transcript = [
+      { id: 'u1', role: 'user', content: 'First question', createdAt: at },
+      { id: 'a1', role: 'assistant', content: 'First answer', createdAt: at },
+      { id: 'u2', role: 'user', content: 'Second question', createdAt: at },
+      { id: 'a2', role: 'assistant', content: 'Second answer', createdAt: at },
+    ] as ChatMessage[];
+    await open('bound');
+
+    const statuses = document.querySelectorAll<HTMLElement>('[data-testid="chat-message-user-copy-btn-status"]');
+    expect(statuses).toHaveLength(2);
+    // The scroller is positioned too, so the walker alone would not notice the button's own wrapper going.
+    for (const status of statuses) expect(getComputedStyle(status.parentElement as Element).position).toBe('relative');
+    expect(escapingAbsolutes().map(el => el.dataset.testid ?? el.outerHTML.slice(0, 80))).toEqual([]);
+  });
+
+  it('docks the session panel outside the transcript scroller, so it does not scroll with the thread', async () => {
+    paneWidth(1600);
+    transcript = [
+      { id: 'u1', role: 'user', content: 'A question', createdAt: '2026-10-01T00:00:00.000Z' },
+    ] as ChatMessage[];
+    await open('bound');
+    expect(get('chat-thread').contains(get('session-panel'))).toBe(false);
   });
 });

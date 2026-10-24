@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { realpath, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
+import { NotAuthenticatedError, SessionRevokedError, type AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type {
   ChatApprovalDecidedBy,
   ChatApprovalSystemReason,
@@ -43,7 +43,14 @@ import type {
   UpdateProjectResult,
   WorkspacePreparation,
 } from '@shared/chat';
-import { awaitsWorktree, branchHolder, isTurnBudgetStop, messagesSinceBoundary } from '@shared/chat';
+import {
+  awaitsWorktree,
+  branchHolder,
+  isResumableStop,
+  isTurnBudgetStop,
+  messagesSinceBoundary,
+  SESSION_EXPIRED_STOP,
+} from '@shared/chat';
 import { shouldAutoCompact } from '@shared/contextLimit';
 import { applyLiveEvent, startReply } from '@shared/liveReply';
 import { NO_SKILLS, type SkillsState } from '@shared/skills';
@@ -134,6 +141,7 @@ import type { McpManager, McpToolBinding } from './mcp/McpManager';
 import { desktopAppGuidance, mcpServerLines } from './mcp/prompt';
 import { describeFlags, modelSafeRequest, planMcpServerRequest } from './tools/mcpTools';
 import type { AccessStore } from './tools/AccessStore';
+import { forgetSessionWrites } from './tools/sessionScripts';
 import {
   QUESTION_CANCELLED,
   type ApprovalGate,
@@ -173,6 +181,9 @@ import {
   type SpawnSuggestionHost,
   type SuggestionOutcome,
   type SkillContext,
+  type ImageContext,
+  type ScreenCapturer,
+  type ScreenContext,
   type ToolContext,
   type ToolDefinition,
   type ToolReporter,
@@ -238,7 +249,10 @@ const TURN_LIMITS: TurnLimits = {
 };
 
 /** How a turn ended. Only 'completed' lets a queued message go out; see settleQueue. */
-type TurnOutcome = 'completed' | 'aborted' | 'failed';
+type TurnOutcome = 'completed' | 'aborted' | 'failed' | 'expired';
+
+/** Stored on a turn the session expired under; the thread shows it as paused, not as an error. */
+const SESSION_PAUSED_MESSAGE = 'Your session expired before this reply finished. Sign in again, then press Continue.';
 
 type SendOptions = {
   /** Only launchSpawned may consume the initial-turn reservation. */
@@ -389,6 +403,10 @@ export interface ChatServiceDeps {
   mcp?: McpManager;
   /** The agent's hidden browser. Absent in tests that do not exercise it; the tools are then not declared. */
   browser?: BrowserProvider;
+  /** Other apps' windows, for screen_capture. Absent in tests that do not exercise it; the tool is then not declared. */
+  screen?: ScreenCapturer;
+  /** Fits an image a tool shows the model. Absent in tests, where file_read then describes an image in text. */
+  prepareImage?: ImageContext['prepare'];
   /** Paths kept out of reach of shell commands whatever the user granted. Enforced by the file tools, and by the shell only when SANDBOX_SHELL_COMMANDS is on. */
   protectedPaths?: readonly string[];
   /**
@@ -1340,6 +1358,8 @@ export class ChatService {
     this.webSearches.forget(sessionId);
     this.scopeVersions.delete(sessionId);
     await this.deps.background?.killSession(sessionId);
+    // Only on delete: an archived conversation can be unarchived, and its scripts must still ask.
+    forgetSessionWrites(sessionId);
     this.deps.sessionClosed?.(sessionId);
     await this.deps.browser?.closeSession(sessionId);
     await this.deps.attachments?.deleteSession(sessionId);
@@ -1694,7 +1714,7 @@ export class ChatService {
     if (!session) return { ok: false, error: 'That conversation no longer exists.' };
 
     const last = session.messages[session.messages.length - 1];
-    if (!last || last.role !== 'assistant' || !isTurnBudgetStop(last.stopReason)) {
+    if (!last || last.role !== 'assistant' || !isResumableStop(last.stopReason)) {
       return { ok: false, error: 'There is nothing to continue here.' };
     }
 
@@ -2111,6 +2131,17 @@ export class ChatService {
       const effortField = effort ? { reasoningEffort: effort } : {};
       // Silence is not "no": see ChatModelOption.supportsVision.
       const vision = catalog?.models.find(option => option.id === session.model)?.supportsVision !== false;
+      const images: ImageContext | undefined = this.deps.prepareImage
+        ? { vision, prepare: this.deps.prepareImage }
+        : undefined;
+      // A wrapper only: nothing is listed or captured until the model calls the tool.
+      const screenCapturer = this.deps.screen;
+      const screen: ScreenContext | undefined = screenCapturer
+        ? {
+            capturer: screenCapturer,
+            keepScreenshot: (bytes, caption) => this.keepScreenshot(sessionId, bytes, caption),
+          }
+        : undefined;
       const offerExplore = shouldOfferExplore(catalog?.models ?? [], session.model);
       const exploreFor = (granted: readonly string[]): ExploreContext | undefined =>
         granted.length > 0 && offerExplore
@@ -2152,6 +2183,7 @@ export class ChatService {
           host: !!host,
           explore: !!explore,
           browser: !!browser,
+          screen: !!screen,
           memory: !!memory,
           skills: !!skills,
           web: true,
@@ -2206,7 +2238,8 @@ export class ChatService {
           skillsSection,
           ask,
           session.model,
-          true
+          true,
+          !!screen
         );
       wire.unshift(systemMessage());
       // Taken whether or not it is used, so a nudge the model ignored once does not follow the
@@ -2390,6 +2423,8 @@ export class ChatService {
                 host,
                 explore,
                 browser,
+                screen,
+                images,
                 memory,
                 skills,
                 web,
@@ -2462,17 +2497,28 @@ export class ChatService {
           lastResult.content = [lastResult.content, '', 'The user changed the shared folders:', ...rootNote].join('\n');
         }
         wire.push({ role: 'user', content: results });
-        const shots = settled.flatMap(call => this.takeImages(call.id));
-        if (shots.length > 0 && vision) {
+        const { kept, dropped } = withinImageBudget(
+          settled.flatMap(call => this.takeImages(call.id).map(image => ({ call, image })))
+        );
+        if (kept.length > 0 && vision) {
+          const calls = new Set(kept.map(entry => entry.call.id)).size;
+          const from = [...new Set(kept.map(entry => entry.call.name))].join(', ');
+          const left =
+            dropped > 0
+              ? ` ${dropped} more were left out to keep the request under the provider's size limit; read or capture them in smaller batches.`
+              : '';
           // Its own user turn, not blocks beside the tool results: the OpenAI conversion keeps only
           // the tool_result blocks of such a turn and would drop the image silently.
           wire.push({
             role: 'user',
             content: [
-              { type: 'text', text: 'Screenshot from the browser_screenshot call above.' },
-              ...shots.map(shot => ({
+              {
+                type: 'text',
+                text: `${kept.length === 1 ? 'Image' : 'Images'} from the ${from} call${calls === 1 ? '' : 's'} above.${left}`,
+              },
+              ...kept.map(({ image }) => ({
                 type: 'image',
-                source: { type: 'base64', media_type: shot.mediaType, data: shot.data },
+                source: { type: 'base64', media_type: image.mediaType, data: image.data },
               })),
             ],
           });
@@ -2575,8 +2621,12 @@ export class ChatService {
       // message the user has already typed behind a button they may never press.
       return controller.signal.aborted ? 'aborted' : 'completed';
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      this.deps.logger.warn(`CHAT: reply failed: ${message}`);
+      // The client already refreshed and retried; what is left is a session only signing in
+      // again can fix, and AuthService is showing the one notice that says so.
+      const expired = err instanceof SessionRevokedError || err instanceof NotAuthenticatedError;
+      const message = expired ? SESSION_PAUSED_MESSAGE : err instanceof Error ? err.message : String(err);
+      this.deps.logger.warn(expired ? 'CHAT: reply paused: the session expired' : `CHAT: reply failed: ${message}`);
+      const stop = expired ? { stopReason: SESSION_EXPIRED_STOP } : {};
 
       // Persisted even though it failed: a thread that silently drops the turn leaves the
       // user's own prompt sitting there with no explanation next time they open it.
@@ -2586,11 +2636,12 @@ export class ChatService {
         content,
         createdAt: new Date().toISOString(),
         error: message,
+        ...stop,
         ...(toolCalls.length > 0 ? { toolCalls } : {}),
         ...(usage ? { usage } : {}),
       });
-      this.emit({ type: 'error', sessionId, messageId: replyId, message });
-      return 'failed';
+      this.emit({ type: 'error', sessionId, messageId: replyId, message, ...stop });
+      return expired ? 'expired' : 'failed';
     }
   }
 
@@ -2691,7 +2742,8 @@ export class ChatService {
       this.flushQueue(sessionId);
       return;
     }
-    const stranded = this.deps.queue?.releaseAll(sessionId, outcome === 'aborted' ? 'stopped' : 'failed') ?? [];
+    const reason = outcome === 'aborted' ? 'stopped' : outcome === 'expired' ? 'session-expired' : 'failed';
+    const stranded = this.deps.queue?.releaseAll(sessionId, reason) ?? [];
     void this.strandRelay(sessionId, stranded).catch(() => undefined);
   }
 
@@ -2771,6 +2823,8 @@ export class ChatService {
       host: HostContext | undefined;
       explore: ExploreContext | undefined;
       browser: BrowserContext | undefined;
+      screen: ScreenContext | undefined;
+      images: ImageContext | undefined;
       memory: MemoryStore | undefined;
       skills: SkillContext | undefined;
       web: WebContext | undefined;
@@ -2789,7 +2843,21 @@ export class ChatService {
     messageId: string,
     signal: AbortSignal
   ): Promise<ChatToolCall[]> {
-    const { roots, workingDirectory, media, host, explore, browser, memory, skills, web, patchEdits, ask } = scope;
+    const {
+      roots,
+      workingDirectory,
+      media,
+      host,
+      explore,
+      browser,
+      screen,
+      images,
+      memory,
+      skills,
+      web,
+      patchEdits,
+      ask,
+    } = scope;
     return Promise.all(
       requested.map(async request => {
         const call: ChatToolCall = {
@@ -2919,6 +2987,8 @@ export class ChatService {
           ...(host ? { host } : {}),
           ...(explore ? { explore } : {}),
           ...(browser ? { browser } : {}),
+          ...(screen ? { screen } : {}),
+          ...(images ? { images } : {}),
           ...(memory ? { memory } : {}),
           ...(skills ? { skills } : {}),
           ...(web ? { web } : {}),
@@ -4047,15 +4117,14 @@ export class ChatService {
           ...(standing.value === undefined ? {} : { value: standing.value }),
         };
       }
-      if (currentlyTainted) return null;
-
       // A shell command whose every sub-command was allowed before, by prefix, runs - but not
-      // past a directory outside the project that the user has not allowed too.
+      // past a directory outside the project that the user has not allowed too. Over a tainted
+      // reply, only prefixes the user allowed on a card that already named the taint count.
       const always = prompt.always;
       if (
         always &&
         !prompt.askInAuto &&
-        gate.coversCommands(sessionId, always) &&
+        gate.coversCommands(sessionId, always, currentlyTainted) &&
         gate.uncoveredDirectories(sessionId, always.directories).length === 0
       ) {
         return { decision: 'once' };
@@ -4823,7 +4892,8 @@ export function buildSystemMessage(
   skillsSection = '',
   ask = false,
   modelId = '',
-  web = false
+  web = false,
+  screen = false
 ): CompletionMessage {
   if (roots.length === 0) {
     return {
@@ -4848,6 +4918,7 @@ export function buildSystemMessage(
         // The browser is not file access and is not withheld with it: a conversation that can
         // read nothing on disk can still open a page, and needs to be told how.
         ...(browser ? BROWSER_GUIDANCE : []),
+        ...(screen ? SCREEN_GUIDANCE : []),
         ...(web ? WEB_GUIDANCE : []),
         ...(media ? MEDIA_GUIDANCE : []),
         ...(host ? HOST_GUIDANCE : []),
@@ -4924,7 +4995,8 @@ export function buildSystemMessage(
             'reading the file first.',
           ]),
       'file_read returns the whole file, up to 2000 lines; pass offset and limit only when you',
-      'already know which part you need or the file is too large to read at once.',
+      'already know which part you need or the file is too large to read at once. It shows you a',
+      'PNG, JPEG, GIF or WebP file as an image, so read a screenshot or image to look at it.',
       ...(explore
         ? [
             'For open-ended exploration across many files, call explore instead - a faster read-only',
@@ -4963,6 +5035,7 @@ export function buildSystemMessage(
       'Make the first request early and let the app correct your assumptions, rather than reading',
       'the whole feature first. Unit tests passing is not an end-to-end result.',
       ...(browser ? BROWSER_GUIDANCE : []),
+      ...(screen ? SCREEN_GUIDANCE : []),
       ...(web ? WEB_GUIDANCE : []),
       'Never invent a file name, size or contents, or the output of a command: if a tool did not',
       'return it, you do not know it.',
@@ -5025,15 +5098,32 @@ function pickSecrets(typed: unknown, keys: readonly string[]): Record<string, st
 /** Only the latest screenshots stay as pixels; each one is resent every round until the turn ends. */
 const KEPT_SCREENSHOTS = 2;
 
+/**
+ * What one round's image turn may carry. KEPT_SCREENSHOTS such turns are resent every round, and
+ * the providers refuse a request body over about 32 MB, base64 included.
+ */
+const MAX_ROUND_IMAGES = 8;
+const MAX_ROUND_IMAGE_CHARS = 10 * 1024 * 1024;
+
+/** The images that fit this round's budget, in call order; the rest are counted, not sent. */
+function withinImageBudget<T extends { image: { data: string } }>(shown: readonly T[]): { kept: T[]; dropped: number } {
+  const kept: T[] = [];
+  let chars = 0;
+  for (const entry of shown) {
+    if (kept.length >= MAX_ROUND_IMAGES || chars + entry.image.data.length > MAX_ROUND_IMAGE_CHARS) break;
+    kept.push(entry);
+    chars += entry.image.data.length;
+  }
+  return { kept, dropped: shown.length - kept.length };
+}
+
 function pruneScreenshots(wire: CompletionMessage[], turns: number[]): void {
   while (turns.length > KEPT_SCREENSHOTS) {
     const index = turns.shift();
     if (index === undefined) break;
     wire[index] = {
       role: 'user',
-      content: [
-        { type: 'text', text: '[An earlier screenshot was here. Take a new one if you need to see the page.]' },
-      ],
+      content: [{ type: 'text', text: '[An earlier image was here. Capture or read it again if you need to see it.]' }],
     };
   }
 }
@@ -5054,6 +5144,14 @@ const BROWSER_GUIDANCE: readonly string[] = [
   'selects and closes them; browser_navigate with new_tab opens a page beside the current one.',
   'A link that opens a new tab opens it in the background and the step result says which tab;',
   'select it to use it. The user can switch tabs too, so check the list before relying on one.',
+];
+
+const SCREEN_GUIDANCE: readonly string[] = [
+  'screen_capture looks at other apps on this computer: without a target it lists the open',
+  'windows, and with a window title or id it captures that window as an image you and the user',
+  'see. To check a desktop app - an Electron dev build you started with bash_background, say -',
+  'wait for its window to open, then capture it by title instead of guessing how it looks. Each',
+  'capture asks the user first. For web pages use the browser tools.',
 ];
 
 const WEB_GUIDANCE: readonly string[] = [

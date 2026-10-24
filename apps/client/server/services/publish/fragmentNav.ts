@@ -125,9 +125,12 @@ export function buildFragmentNavScriptTag(config: FragmentNavConfig): string {
  * `{ path, hash, page, download }` for a same-origin path that is the bundle root this
  * document is showing (derived from its own location) or sits under it, else null. It
  * rejects anything a URL parser would rewrite (`.%2e`, `%2e.`, backslashes, `//`), any
- * segment that DECODES to `.`/`..` or carries `/` or `\` after one decode, or would after a
- * second (double encoding), any query but a file's `?download=1`, and any other origin - so
- * the only places a bundle can send the viewer are its own pages and files.
+ * segment that DECODES to `.`/`..` or still carries `%`, `/` or `\` after one decode (double
+ * encoding), any query but a file's `?download=1`, and any other origin - so the only places
+ * a bundle can send the viewer are its own pages and files. Refusing `%` also refuses a file
+ * whose name contains one: the hosted request path is decoded once before the app sees it,
+ * so `100%25.pdf` reaches the router as `100%.pdf` and fails there with a 400 anyway. If the
+ * edge stops decoding, a second-decode check can replace this refusal.
  */
 export const BUNDLE_PATH_JS = String.raw`function b4mBundleBase(){
   return (/^\/(?:p\/(?:u|pj|o)\/[^/]+\/[^/]+|a\/[^/]+)(?=\/|$)/.exec(location.pathname)||[''])[0];
@@ -148,9 +151,8 @@ function b4mBundlePath(path){
   if(u.origin!==location.origin||u.pathname!==p||u.search){return null;}
   var segs=p.split('/');
   for(var i=1;i<segs.length;i++){
-    var d,d2;try{d=decodeURIComponent(segs[i]);}catch(e){return null;}
-    try{d2=decodeURIComponent(d);}catch(e){d2=d;}
-    if(d===''||d==='.'||d==='..'||/[\/\\]/.test(d)||d2==='.'||d2==='..'||/[\/\\]/.test(d2)){return null;}
+    var d;try{d=decodeURIComponent(segs[i]);}catch(e){return null;}
+    if(d===''||d==='.'||d==='..'||/[%\/\\]/.test(d)){return null;}
   }
   var page=p===base||/\.html?$/i.test(p);
   if(page&&download){return null;}

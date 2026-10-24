@@ -5,6 +5,7 @@ import type { SandboxOrchestrator } from '../../../sandbox/SandboxOrchestrator.j
 import type { ToolArgs } from '../gatewayTypes.js';
 import type { ToolDescriptor } from '../toolDescriptor.js';
 import { sandboxedCommandArg } from '../toolPolicy.js';
+import { sanitizeTerminalText } from '../../../utils/sanitizeTerminalText.js';
 
 /** How the sandbox pre-step leaves a call: refused, rewritten to run sandboxed, or untouched. */
 export type SandboxPreparation =
@@ -38,17 +39,20 @@ export function prepareSandbox(
   } catch {
     // Not-yet-resolvable path: keep the lexical resolution.
   }
-  const decision = sandboxOrchestrator.shouldSandbox(command, cwd);
+  const decision = sandboxOrchestrator.shouldSandbox(command, cwd, workingDirectory => {
+    if (isPathAllowed(workingDirectory, allowedDirectories).allowed) return undefined;
+    return (
+      `working directory ${workingDirectory} is outside the sandbox writable root ` +
+      `(grant it with '/add-dir ${workingDirectory}' or run from within the workspace)`
+    );
+  });
 
   if (decision.type === 'blocked') {
     return { kind: 'blocked', message: blockCommand(sandboxOrchestrator, command, decision.reason) };
   }
 
   if (decision.type === 'sandbox') {
-    // Confine the writable root to the same allow-list the core file tools
-    // honor. A model-supplied cwd outside the workspace would otherwise
-    // become the sandbox's read-write bind; reject it (and drop the temp
-    // sandbox profile shouldSandbox already built) before it can execute.
+    // Defensive check for alternate orchestrators that do not invoke the pre-wrap validator.
     if (!isPathAllowed(cwd, allowedDirectories).allowed) {
       cleanupSandboxFiles(decision.wrappedCommand.cleanupPaths);
       return {
@@ -95,7 +99,9 @@ function blockCommand(sandboxOrchestrator: SandboxOrchestrator, command: string,
       detail: reason,
     })
     .catch(() => {});
-  console.error(`\n\x1b[41m\x1b[97m BLOCKED \x1b[0m \x1b[31mSandbox denied this command:\x1b[0m ${reason}\n`);
+  console.error(
+    `\n\x1b[41m\x1b[97m BLOCKED \x1b[0m \x1b[31mSandbox denied this command:\x1b[0m ${sanitizeTerminalText(reason)}\n`
+  );
   return `Command blocked by sandbox: ${reason}`;
 }
 

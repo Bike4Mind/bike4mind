@@ -169,7 +169,7 @@
     "mermaid": "^11.16.1",
     "mime-types": "^3.0.2",
     "mongoose": "^8.24.1",
-    "next": "16.4.0",
+    "next": "16.4.1",
     "next-connect": "^0.13.0",
     "nodemailer": "^10.1.0",
     "nuqs": "^2.10.1",

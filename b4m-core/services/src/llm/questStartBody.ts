@@ -65,6 +65,11 @@ export const QuestStartBodySchema = z
      * through invoke()'s own server-set `apiKeyId` argument.
      */
     apiKeyId: z.string().optional(),
+    /**
+     * The authenticating key lacks the admin scope, so the worker withholds the owner's admin role
+     * on the user it reloads. Server-set like `apiKeyId`; absent means not withheld.
+     */
+    adminRoleWithheld: z.boolean().optional(),
     /** See ChatCompletionInvokeParamsSchema.systemPrompt - must stay in sync with it. */
     systemPrompt: z.string().max(PROMPT_TEXT_MAX).optional(),
     enableAgents: z.boolean().optional(),

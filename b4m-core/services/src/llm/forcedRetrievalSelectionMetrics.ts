@@ -11,11 +11,9 @@ import type { ForcedRetrievalFallbackReason } from './forcedRetrievalCandidateSe
  * invisible without reading logs. On production it was 7 of 16 large-lake turns, all on the ANN
  * deadline after an idle index (see apps/workers/src/cron/dataLakeVectorIndexKeepWarm.ts).
  *
- * Scope: the candidate pick only. With relevance unavailable on a single lake the listing page is
- * already the cap, so that by-name cut happens in the query and publishes nothing here.
- *
- * Keep the names below in sync with infra/dataLakeSearchDashboard.ts; the tests pin the literals
- * because infra/ cannot import them.
+ * Keep the names below in sync with infra/dataLakeSearchDashboard.ts and the
+ * forcedRetrievalByNameCut alarm in infra/alarms.ts; the tests pin the literals because infra/
+ * cannot import them.
  */
 
 /** 1 for a by-name cut, 0 for a relevance pick, so Average is the fallback rate and Sum the count. */
@@ -31,7 +29,8 @@ export type ForcedRetrievalCutMetrics =
   | { selection: 'fileName'; reason: ForcedRetrievalFallbackReason; annPickMs: number | null };
 
 /**
- * Emits one datapoint set per turn whose scope overflowed the cap. Never throws, and no-ops outside
+ * Emits one datapoint set per turn whose candidates were cut to the cap: servable files over it, or
+ * a single-lake listing the query already cut at it. Never throws, and no-ops outside
  * deployed stages (`SEED_STAGE_NAME`, as in dataLakeSearchMetrics.ts, whose bounded-client
  * rationale applies here too: this is awaited on the chat turn).
  */

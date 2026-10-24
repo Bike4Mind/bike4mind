@@ -56,7 +56,21 @@ describe('ChatService interrupting a running tool', () => {
         finishNavigation = resolve;
       }),
     back: async () => undefined,
-    snapshot: async () => ({ url: 'http://localhost:3080/app', title: 'App', text: 'late page', truncated: false }),
+    snapshot: async () => ({
+      url: 'http://localhost:3080/app',
+      title: 'App',
+      text: 'late page',
+      truncated: false,
+      model: {
+        url: 'http://localhost:3080/app',
+        title: 'App',
+        capturedAt: '2026-10-24T12:00:00.000Z',
+        blocks: [],
+        actions: [],
+        claims: [],
+        truncated: false,
+      },
+    }),
     click: async () => 'Add',
     scroll: async () => 'Add',
     fill: async () => 'filled',

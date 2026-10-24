@@ -491,7 +491,7 @@ describe('updateUser', () => {
   });
 
   it('strips `photoUrl` from a self-update - cannot point the profile photo at a foreign S3 key', async () => {
-    // photoUrl is an S3 key that upload-photo.ts later dereferences for deletion. A self-set
+    // photoUrl is an S3 key that confirm-photo.ts later dereferences for deletion. A self-set
     // value could target a file the caller does not own; it was removed from updateUserSchema,
     // so secureParameters drops it here while leaving any pre-existing value untouched.
     const user = {

@@ -1,3 +1,5 @@
+import type { BrowserSnapshot } from '@shared/browserPage';
+
 /**
  * Scripts that run INSIDE the page the agent's browser has open. Plain JavaScript source rather
  * than TypeScript functions: the main process has no DOM types, and a bundler may inject helper
@@ -8,12 +10,7 @@
  * clicks "ref 12" from the text it just read instead of guessing a CSS selector.
  */
 
-export interface SnapshotResult {
-  url: string;
-  title: string;
-  text: string;
-  truncated: boolean;
-}
+export type SnapshotResult = BrowserSnapshot;
 
 export type ElementOutcome = { ok: true; description: string } | { ok: false; error: string };
 
@@ -54,9 +51,28 @@ export const SNAPSHOT_PAGE = String.raw`function (maxChars, inView) {
   var lines = [];
   var size = 0;
   var truncated = false;
+  var modelLimit = Math.max(1000, Math.floor(maxChars * 0.4));
+  var model = {
+    url: location.href,
+    title: document.title,
+    capturedAt: new Date().toISOString(),
+    blocks: [],
+    actions: [],
+    claims: [],
+    truncated: false
+  };
+  var nextBlock = 1;
+  var nextClaim = 1;
   var next = 1;
+  var seenRefs = {};
   document.querySelectorAll('[' + ATTR + ']').forEach(function (el) {
-    var value = Number(el.getAttribute(ATTR));
+    var ref = el.getAttribute(ATTR);
+    var value = Number(ref);
+    if (!/^[1-9]\d*$/.test(ref || '') || !Number.isSafeInteger(value) || value >= Number.MAX_SAFE_INTEGER || seenRefs[ref]) {
+      el.removeAttribute(ATTR);
+      return;
+    }
+    seenRefs[ref] = true;
     if (value >= next) next = value + 1;
   });
 
@@ -68,11 +84,30 @@ export const SNAPSHOT_PAGE = String.raw`function (maxChars, inView) {
     return rect.bottom > 0 && rect.right > 0 && rect.top < window.innerHeight && rect.left < window.innerWidth;
   }
   function push(depth, line) {
-    if (truncated) return;
+    if (truncated) return false;
     var indented = '  '.repeat(Math.min(depth, 8)) + line;
-    if (size + indented.length > maxChars) { truncated = true; return; }
+    if (size + indented.length > maxChars) { truncated = true; return false; }
     lines.push(indented);
     size += indented.length + 1;
+    return true;
+  }
+  function addModel(kind, item, claimText) {
+    if (model.truncated) return;
+    var list = kind === 'block' ? model.blocks : model.actions;
+    list.push(item);
+    var claim;
+    if (claimText !== undefined) {
+      claim = { id: 'c' + nextClaim, text: claimText, source: { blockId: item.id, start: 0, end: claimText.length } };
+      model.claims.push(claim);
+    }
+    if (JSON.stringify(model).length > modelLimit) {
+      list.pop();
+      if (claim) model.claims.pop();
+      model.truncated = true;
+      return;
+    }
+    if (kind === 'block') nextBlock++;
+    if (claim) nextClaim++;
   }
   function textOf(el) { return clean(el.innerText !== undefined && !isJsdom ? el.innerText : el.textContent); }
   function labelOf(el) {
@@ -124,11 +159,34 @@ export const SNAPSHOT_PAGE = String.raw`function (maxChars, inView) {
     if (el.disabled || el.getAttribute('aria-disabled') === 'true') parts.push('disabled');
     return parts.join(' ');
   }
+  function actionOf(el, ref) {
+    var tag = el.tagName;
+    var label = labelOf(el);
+    if (tag === 'INPUT') {
+      var type = el.type || 'text';
+      if (type === 'checkbox' || type === 'radio') return { ref: ref, kind: 'toggle', element: type, label: label };
+      if (type === 'button' || type === 'submit' || type === 'reset' || type === 'image' || type === 'file') {
+        return { ref: ref, kind: 'click', element: 'input', label: label };
+      }
+      return { ref: ref, kind: 'type', element: 'input', label: label, inputType: type };
+    }
+    if (tag === 'TEXTAREA') return { ref: ref, kind: 'type', element: 'textarea', label: label };
+    if (tag === 'SELECT') return { ref: ref, kind: 'select', element: 'select', label: label };
+    if (el.isContentEditable) return { ref: ref, kind: 'type', element: 'editable', label: label };
+    var role = el.getAttribute('role');
+    if (role === 'checkbox' || role === 'switch') return { ref: ref, kind: 'toggle', element: role, label: label };
+    var action = { ref: ref, kind: 'click', element: role || tag.toLowerCase(), label: label };
+    if (tag === 'A') action.href = el.getAttribute('href') || '';
+    return action;
+  }
   function walk(node, depth) {
     if (truncated) return;
     if (node.nodeType === 3) {
       var text = clean(node.textContent);
-      if (text && shown(node.parentElement)) push(depth, text.slice(0, 300));
+      if (text && shown(node.parentElement)) {
+        text = text.slice(0, 300);
+        if (push(depth, text)) addModel('block', { id: 'b' + nextBlock, kind: 'text', text: text }, text);
+      }
       return;
     }
     if (node.nodeType !== 1 || SKIP[node.tagName.toUpperCase()]) return;
@@ -137,8 +195,15 @@ export const SNAPSHOT_PAGE = String.raw`function (maxChars, inView) {
     if (node.matches(INTERACTIVE)) {
       if (!shown(node)) return;
       var ref = node.getAttribute(ATTR);
-      if (!ref) { ref = String(next++); node.setAttribute(ATTR, ref); }
-      push(depth, '[' + ref + '] ' + describe(node));
+      if (!ref) {
+        while (!Number.isSafeInteger(next) || seenRefs[String(next)]) {
+          next = Number.isSafeInteger(next) ? next + 1 : 1;
+        }
+        ref = String(next++);
+        seenRefs[ref] = true;
+        node.setAttribute(ATTR, ref);
+      }
+      if (push(depth, '[' + ref + '] ' + describe(node))) addModel('action', actionOf(node, ref));
       // A button's, link's or select's own text is already in its description.
       if (node.tagName !== 'SELECT' && node.tagName !== 'BUTTON' && node.tagName !== 'A') {
         for (i = 0; i < node.childNodes.length; i++) {
@@ -149,22 +214,32 @@ export const SNAPSHOT_PAGE = String.raw`function (maxChars, inView) {
     }
     var heading = /^H([1-6])$/.exec(node.tagName);
     if (heading) {
-      if (shown(node)) push(depth, '#'.repeat(Number(heading[1])) + ' ' + clean(node.textContent));
+      if (shown(node)) {
+        var headingText = clean(node.textContent);
+        if (push(depth, '#'.repeat(Number(heading[1])) + ' ' + headingText)) {
+          addModel('block', { id: 'b' + nextBlock, kind: 'heading', level: Number(heading[1]), text: headingText });
+        }
+      }
       return;
     }
     if (node.tagName === 'IMG') {
       var alt = clean(node.getAttribute('alt'));
-      if (alt && shown(node)) push(depth, 'image ' + JSON.stringify(alt));
+      if (alt && shown(node) && push(depth, 'image ' + JSON.stringify(alt))) {
+        addModel('block', { id: 'b' + nextBlock, kind: 'image', alt: alt });
+      }
       return;
     }
     var role = node.getAttribute('role');
     var landmark = role === 'dialog' || role === 'alertdialog' || role === 'alert' || role === 'status' || node.tagName === 'DIALOG';
-    if (landmark && shown(node)) push(depth, '<' + (role || 'dialog') + '>');
+    if (landmark && shown(node) && push(depth, '<' + (role || 'dialog') + '>')) {
+      addModel('block', { id: 'b' + nextBlock, kind: 'landmark', role: role || 'dialog' });
+    }
     for (i = 0; i < node.childNodes.length; i++) walk(node.childNodes[i], landmark ? depth + 1 : depth);
   }
 
   walk(document.body || document.documentElement, 0);
-  return { url: location.href, title: document.title, text: lines.join('\n'), truncated: truncated };
+  model.truncated = model.truncated || truncated;
+  return { url: location.href, title: document.title, text: lines.join('\n'), truncated: truncated, model: model };
 }`;
 
 /** (ref) => ElementOutcome. Scroll the element into view and click it the way a user's click lands. */
