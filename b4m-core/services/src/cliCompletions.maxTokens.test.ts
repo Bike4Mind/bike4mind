@@ -67,6 +67,7 @@ import {
 } from '@bike4mind/common';
 import { ADAPTIVE_THINKING_MAX_TOKENS_FLOOR } from '@bike4mind/llm-adapters';
 import { DEFAULT_OUTPUT_MAX_TOKENS, usdToCredits } from '@bike4mind/utils';
+import { Logger } from '@bike4mind/observability';
 import { executeCompletion } from './cliCompletions';
 import { isMemberCreditCapExceeded } from './creditService';
 
@@ -192,24 +193,43 @@ describe('executeCompletion - output budget', () => {
     expect(capturedOptions).not.toHaveProperty('reasoningEffort');
   });
 
-  // An explicit budget below the floor starves the same way an absent one used to: the
-  // reasoning consumes it and the turn ends at max_tokens with no visible text.
-  it('raises an explicit budget below the floor on an adaptive model', async () => {
+  it('never raises a budget the caller asked for explicitly', async () => {
     availableModels = [ADAPTIVE_MODEL];
     const { db } = buildDb();
 
     await executeCompletion({ ...baseParams, model: 'adaptive-model', db, options: { maxTokens: 1000 } });
 
-    expect(capturedOptions?.maxTokens).toBe(64_000);
+    expect(capturedOptions?.maxTokens).toBe(1000);
   });
 
-  it('never raises an explicit budget on a model that does not reason inside it', async () => {
-    availableModels = [PLAIN_MODEL];
+  // Telemetry only: how often an API or CLI caller's own low budget meets a reasoning model.
+  it('logs an explicit budget below the reasoning floor and still sends it', async () => {
+    availableModels = [ADAPTIVE_MODEL];
     const { db } = buildDb();
+    const logger = new Logger({ minLevel: 'error' });
+    const info = vi.spyOn(logger, 'info');
 
-    await executeCompletion({ ...baseParams, model: 'plain-model', db, options: { maxTokens: 1000 } });
+    await executeCompletion({ ...baseParams, model: 'adaptive-model', db, logger, options: { maxTokens: 1000 } });
 
     expect(capturedOptions?.maxTokens).toBe(1000);
+    expect(info).toHaveBeenCalledWith('[cliCompletions] max_tokens below reasoning floor', {
+      model: 'adaptive-model',
+      requested: 1000,
+      floor: ADAPTIVE_THINKING_MAX_TOKENS_FLOOR,
+    });
+  });
+
+  it('does not log the reasoning floor for an absent budget or a non-reasoning model', async () => {
+    const { db } = buildDb();
+    const logger = new Logger({ minLevel: 'error' });
+    const info = vi.spyOn(logger, 'info');
+
+    availableModels = [ADAPTIVE_MODEL];
+    await executeCompletion({ ...baseParams, model: 'adaptive-model', db, logger });
+    availableModels = [PLAIN_MODEL];
+    await executeCompletion({ ...baseParams, model: 'plain-model', db, logger, options: { maxTokens: 1000 } });
+
+    expect(info).not.toHaveBeenCalledWith('[cliCompletions] max_tokens below reasoning floor', expect.anything());
   });
 
   // The declared cap CLAMPS the sized budget, so the floor is a floor only up to what the
@@ -349,11 +369,10 @@ describe('executeCompletion - output budget', () => {
       model: 'adaptive-model',
       db: { ...db, organizations: organizations as any },
       billingOrganizationId: 'org1',
-      // Above the reasoning floor, so the budget reaches the cap check unchanged.
-      options: { maxTokens: 100_000 },
+      options: { maxTokens: 50_000 },
     });
 
-    expect(vi.mocked(isMemberCreditCapExceeded)).toHaveBeenCalledWith(organization, 'user1', 100);
+    expect(vi.mocked(isMemberCreditCapExceeded)).toHaveBeenCalledWith(organization, 'user1', 50);
   });
 
   // Without this the CLI cannot tell a cut-off reply from a finished one, which is what

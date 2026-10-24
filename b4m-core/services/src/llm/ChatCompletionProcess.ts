@@ -121,7 +121,7 @@ import {
 import { sentMaxTokensFor } from '@bike4mind/llm-adapters/model-sizing';
 import {
   resolveOutputMaxTokens,
-  wasOutputBudgetRaised,
+  belowReasoningFloor,
   reasonsWithinOutputBudget,
   getAvailableModels,
   getLlmByModel,
@@ -2841,12 +2841,18 @@ export class ChatCompletionProcess {
         modelInfo,
         modelMaxOutputTokens: modelMaxOutput,
       });
-      if (wasOutputBudgetRaised(params.max_tokens, safeMaxTokens)) {
-        // Usually a saved "Max output tokens" setting carried over from a model that did not
-        // reason; logged so a starved-looking turn can be told apart from a raised one.
-        this.logger.info(
-          `[ChatCompletion] Raised max_tokens ${params.max_tokens} -> ${safeMaxTokens}: ${modelInfo.id} reasons inside its output budget`
-        );
+      const reasoningShortfall = belowReasoningFloor({
+        requested: params.max_tokens,
+        fallback: DEFAULT_OUTPUT_MAX_TOKENS,
+        modelInfo,
+        modelMaxOutputTokens: modelMaxOutput,
+      });
+      if (reasoningShortfall) {
+        // Honored as set; logged so an empty reply at max_tokens can be traced to the setting.
+        logger.info('[ChatCompletion] max_tokens below reasoning floor', {
+          model: modelInfo.id,
+          ...reasoningShortfall,
+        });
       }
       // Reserve the non-history overhead that shares this budget before applying the
       // fraction, so heavier-payload turns (more tools, a longer running summary, a
@@ -3048,9 +3054,9 @@ export class ChatCompletionProcess {
       // attached-file content we extract has to be derived from them.
       const contextLimit = effectiveContextWindow(modelInfo);
       // safeMaxTokens is resolved once further up, where the verbatim-history window
-      // needs it too. An explicit caller budget is honored as-is except on a model that
-      // reasons inside it, where it is lifted to the reasoning floor - see
-      // resolveOutputMaxTokens, and note it feeds the credit pre-reservation and the window below.
+      // needs it too. An explicit caller budget is honored as-is; only its absence is
+      // sized for the model. See resolveOutputMaxTokens for why raising an explicit
+      // value is not free (it feeds the credit pre-reservation and the window below).
 
       // Fetch buffer for URL/file content. Deliberately NOT safeMaxTokens: this is a
       // *content* budget, unrelated to the output cap (same confusion called out for

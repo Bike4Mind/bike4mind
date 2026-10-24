@@ -126,9 +126,8 @@ export interface AgentContext {
   /**
    * Maximum tokens per completion. Leave unset unless the caller genuinely wants a
    * specific ceiling: absence is meaningful and lets the server size the budget for
-   * the model (see resolveOutputMaxTokens). A small number here is lifted to the
-   * reasoning floor on models that spend reasoning tokens inside the output budget,
-   * so it only binds on models that do not.
+   * the model (see resolveOutputMaxTokens). Pinning a small number here starves
+   * models that spend reasoning tokens inside the output budget.
    */
   maxTokens?: number;
   /**

@@ -110,7 +110,7 @@ export function resolveAnthropicEffort(input: {
   );
 }
 
-// Lives in common so the settings UI can warn against the same number this module enforces.
+// Lives in common so the settings UI can warn against the same number this module sizes with.
 export { ADAPTIVE_THINKING_MAX_TOKENS_FLOOR };
 
 /**
@@ -278,13 +278,18 @@ export function resolveOutputMaxTokens({
 }
 
 /**
- * Whether resolveOutputMaxTokens raised an explicit caller budget - true only when the caller
- * named a usable number and the resolved budget is larger. An absent request is sized, not
- * raised, so it never counts.
+ * The reasoning floor an explicit budget falls below, or undefined when it does not. Telemetry
+ * only: resolveOutputMaxTokens still honors the budget, so callers log this to trace a reply that
+ * ends empty at max_tokens back to a low setting. The floor is what an unstated budget resolves to
+ * on this model, so a budget at a model cap below ADAPTIVE_THINKING_MAX_TOKENS_FLOOR is not reported.
  */
-export function wasOutputBudgetRaised(requested: number | undefined, resolved: number): boolean {
-  const explicit = usableTokenCount(requested);
-  return explicit !== undefined && resolved > explicit;
+export function belowReasoningFloor(
+  args: Parameters<typeof resolveOutputMaxTokens>[0]
+): { requested: number; floor: number } | undefined {
+  const requested = usableTokenCount(args.requested);
+  if (requested === undefined || !reasonsWithinOutputBudget(args.modelInfo)) return undefined;
+  const floor = resolveOutputMaxTokens({ ...args, requested: undefined });
+  return requested < floor ? { requested, floor } : undefined;
 }
 
 /**

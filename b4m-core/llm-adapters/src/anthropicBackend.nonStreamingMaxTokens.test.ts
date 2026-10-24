@@ -77,8 +77,7 @@ describe('AnthropicBackend non-streaming max_tokens ceiling', () => {
   it('leaves a modest non-streaming budget untouched', async () => {
     const { backend, getCaptured } = buildBackend();
 
-    // A non-reasoning model, so the adaptive floor does not lift the budget first.
-    await runComplete(backend, { stream: false, maxTokens: 4096 }, ChatModels.CLAUDE_4_5_SONNET);
+    await runComplete(backend, { stream: false, maxTokens: 4096 });
 
     expect(getCaptured()[0].max_tokens).toBe(4096);
   });

@@ -67,9 +67,7 @@ import {
   planReasoningEffort,
   resolveAnthropicEffort,
   resolveOutputMaxTokens,
-  wasOutputBudgetRaised,
   THINKING_ANSWER_HEADROOM_TOKENS,
-  usableTokenCount,
   type AnthropicEffort,
   type ReasoningEffortPlan,
   type ThinkingConfig,
@@ -1359,12 +1357,6 @@ export class AnthropicBackend implements ICompletionBackend {
             ? { kind: 'default' }
             : requested;
         this.isThinkingEnabled = this.applyReasoningEffortPlan(apiParams, plan);
-        // The reasoning floor in resolveOutputMaxTokens exists for turns that think. With
-        // thinking switched off the caller's own budget is a plain length limit again.
-        const explicitMaxTokens = usableTokenCount(options.maxTokens);
-        if (plan.kind === 'off' && explicitMaxTokens !== undefined) {
-          apiParams.max_tokens = Math.min(apiParams.max_tokens, explicitMaxTokens);
-        }
         this.logger.debug(
           `[AnthropicBackend] reasoningEffort=${reasoningEffort} -> ${plan.kind}: max_tokens=${apiParams.max_tokens}`
         );
@@ -1373,14 +1365,6 @@ export class AnthropicBackend implements ICompletionBackend {
       }
     } else {
       this.isThinkingEnabled = false;
-    }
-
-    if (wasOutputBudgetRaised(options.maxTokens, apiParams.max_tokens)) {
-      // Reached by callers that skip ChatCompletionProcess (agent mode, subagents), which
-      // would otherwise get an empty reply with no trace of why.
-      this.logger.info(
-        `[AnthropicBackend] Raised max_tokens ${options.maxTokens} -> ${apiParams.max_tokens} for ${model}`
-      );
     }
 
     // Apply prompt caching if enabled

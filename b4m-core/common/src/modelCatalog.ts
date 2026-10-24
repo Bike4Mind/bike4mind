@@ -16,8 +16,9 @@ export const DEFAULT_MAX_OUTPUT_TOKENS = 4096;
  * short replies but keeps reasoning from consuming the whole budget and leaving
  * no room for the visible answer. Both paths that size an adaptive model's output
  * budget read it (llm-adapters thinkingParams.ts): buildThinkingParams (thinking
- * explicitly enabled) and resolveOutputMaxTokens (the minimum for every turn, named
- * budget or not). The client's Max output tokens slider warns below it.
+ * explicitly enabled) and resolveOutputMaxTokens (the default when a caller names no
+ * budget; an explicit budget below it is honored and only logged, see
+ * belowReasoningFloor). The client's Max output tokens slider warns below it.
  */
 export const ADAPTIVE_THINKING_MAX_TOKENS_FLOOR = 64_000;
 

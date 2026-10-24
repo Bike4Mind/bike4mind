@@ -55,6 +55,7 @@ import {
   reasonsWithinOutputBudget,
   RUNTIME_DISCOVERED_BACKENDS,
   resolveOutputMaxTokens,
+  belowReasoningFloor,
   type ICompletionOptions,
   type ICompletionOptionTools,
   isModelProviderConfigured,
@@ -595,6 +596,18 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         modelMaxOutputTokens: modelInfo.max_tokens,
       })
     : (options?.maxTokens ?? DEFAULT_OUTPUT_MAX_TOKENS);
+  const reasoningShortfall =
+    modelInfo &&
+    belowReasoningFloor({
+      requested: options?.maxTokens,
+      fallback: DEFAULT_OUTPUT_MAX_TOKENS,
+      modelInfo,
+      modelMaxOutputTokens: modelInfo.max_tokens,
+    });
+  if (reasoningShortfall) {
+    // Honored as set; logged so an empty reply at max_tokens can be traced to the caller's budget.
+    logger?.info?.('[cliCompletions] max_tokens below reasoning floor', { model, ...reasoningShortfall });
+  }
   // Before any credit reservation, so a refused tool search request costs nothing.
   const wireTools = prepareWireTools(options?.tools, messages, modelInfo);
   // Promote wire tools to ICompletionOptionTools by stamping a no-op toolFn.
