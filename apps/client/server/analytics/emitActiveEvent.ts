@@ -8,6 +8,7 @@ import {
 import type { OverwatchUtm } from '@bike4mind/common';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
+import { laneMetadata } from './lane';
 import { pseudonymizeUserId } from './pseudonymize';
 
 const NOT_CONFIGURED = 'not-configured';
@@ -86,6 +87,8 @@ export interface EmitOptions {
   pseudoUserId: string;
   sessionId: string;
   userType: 'subscriber' | 'free';
+  /** A test persona or test-domain account: its event is stamped with the synthetic lane (lane.ts). */
+  isSynthetic?: boolean;
   referrer?: string;
   utm?: OverwatchUtm;
 }
@@ -98,7 +101,9 @@ export interface VisitEmitOptions {
 }
 
 /**
- * One event per active user per day: the signal DAU is counted from.
+ * One event per active user per day: the signal DAU is counted from. A synthetic user's is marked
+ * with the synthetic lane rather than dropped, so persona activity can be told apart from real
+ * activity instead of being counted as one.
  */
 export async function emitActiveEvent(opts: EmitOptions): Promise<void> {
   return postEvent({
@@ -107,7 +112,7 @@ export async function emitActiveEvent(opts: EmitOptions): Promise<void> {
     event: 'active',
     ...(opts.referrer !== undefined && { referrer: opts.referrer }),
     ...(opts.utm !== undefined && { utm: opts.utm }),
-    metadata: { userType: opts.userType },
+    metadata: { userType: opts.userType, ...laneMetadata(opts) },
   });
 }
 
