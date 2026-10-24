@@ -21,7 +21,7 @@ export function useLocalHistory(query: string, sessions: readonly ChatSessionSum
       setRevision(current => current + 1);
     };
     window.addEventListener(LOCAL_HISTORY_CHANGED, invalidate);
-    const unsubscribe = window.b4m?.chat.onHistoryChanged?.(invalidate);
+    const unsubscribe = window.b4m?.chat?.onHistoryChanged?.(invalidate);
     return () => {
       window.removeEventListener(LOCAL_HISTORY_CHANGED, invalidate);
       unsubscribe?.();
