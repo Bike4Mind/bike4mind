@@ -41,6 +41,8 @@ import {
   slackExportQueue,
   githubWebhookQueue,
   questExportQueue,
+  publishThumbnailQueue,
+  publishThumbnailQueueDLQ,
   dataLakeCleanupQueue,
   dataLakeCleanupQueueDLQ,
   dataLakeTaxonomyQueue,
@@ -162,6 +164,7 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
     'drive-disconnect-purge': driveDisconnectPurgeQueueDLQ.url,
     'github-lake-ingest': githubLakeIngestQueueDLQ.url,
     'github-lake-revoke': githubLakeRevokeQueueDLQ.url,
+    'publish-thumbnail': publishThumbnailQueueDLQ.url,
   },
 });
 
@@ -224,6 +227,7 @@ const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
     driveDisconnectPurgeQueue: driveDisconnectPurgeQueue.url,
     githubLakeIngestQueue: githubLakeIngestQueue.url,
     githubLakeRevokeQueue: githubLakeRevokeQueue.url,
+    publishThumbnailQueue: publishThumbnailQueue.url,
   },
 });
 

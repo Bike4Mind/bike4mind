@@ -565,6 +565,38 @@ describe('proxy configured object-store origin', () => {
   });
 });
 
+// The owner's management listing shows thumbnails as presigned GETs on the published-artifacts
+// bucket (server/services/publish/thumbnailUrl.ts). img-src governs the <img>; connect-src governs
+// the service worker's image-cache re-fetch. A policy that narrows either drops them silently.
+describe('proxy CSP admits owner-only artifact thumbnail links', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  const admits = (csp: string, directive: string, url: string) => {
+    const { protocol, host, origin } = new URL(url);
+    const sources = (csp.match(new RegExp(`${directive} ([^;]*)`))?.[1] ?? '').trim().split(/\s+/);
+    return sources.some(source => {
+      if (source === origin) return true;
+      const wildcard = /^(https?:)\/\/\*\.([^/]+)$/.exec(source);
+      return !!wildcard && wildcard[1] === protocol && host.endsWith(`.${wildcard[2]}`);
+    });
+  };
+  const thumbnailPath = `/publish-thumbnails/pub1/${'a'.repeat(64)}.webp?X-Amz-Signature=fixture`;
+
+  it.each(['img-src', 'connect-src'])('%s admits a hosted presigned S3 link', directive => {
+    vi.stubEnv('S3_PRESIGN_ENDPOINT', '');
+    const csp = proxy(makeRequest('https://app.example.invalid/home')).headers.get('Content-Security-Policy') ?? '';
+    expect(admits(csp, directive, `https://example-bucket.s3.us-east-1.amazonaws.com${thumbnailPath}`)).toBe(true);
+  });
+
+  it.each(['img-src', 'connect-src'])('%s admits a self-host object-store link', directive => {
+    vi.stubEnv('S3_PRESIGN_ENDPOINT', 'https://objects.example.invalid');
+    const csp = proxy(makeRequest('https://app.example.invalid/home')).headers.get('Content-Security-Policy') ?? '';
+    expect(admits(csp, directive, `https://objects.example.invalid/example-bucket${thumbnailPath}`)).toBe(true);
+  });
+});
+
 describe("proxy upstream What's New feed origin", () => {
   afterEach(() => {
     vi.unstubAllEnvs();

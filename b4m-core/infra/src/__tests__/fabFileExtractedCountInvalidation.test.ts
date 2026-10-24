@@ -75,6 +75,8 @@ const NOT_A_REWRITE = new Set([
   'apps/client/server/generationJobs/slackJobDelivery.ts',
   'apps/workers/src/queueHandlers/orgFeedbackSummary.ts',
   'apps/workers/src/queueHandlers/questExport.ts',
+  // Stages HTML and stores published-artifact thumbnails; neither upload rewrites FabFile content.
+  'apps/workers/src/queueHandlers/publishThumbnail.ts',
 ]);
 
 /**
