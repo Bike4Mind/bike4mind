@@ -13,8 +13,9 @@ import {
  * Every publish write route (upload-url, reply/fabfile via settlePublication, revise, restore)
  * calls `consumePublishAction` once, after its own validation, permission and storage-quota
  * checks and before it does the work, so a refused or invalid request does not use up the
- * allowance. A route that is counted and then fails before anything is published (revise's model
- * call or output checks, a storage write) hands the action back with the receipt's `refund`.
+ * allowance. A route that is counted and then fails before anything is published (a failed storage
+ * or record write, say) hands the action back with the receipt's `refund`, except that a revise
+ * attempt that reaches the model keeps its count whatever the outcome.
  * finalize does not call it: it only promotes a draft a counted upload-url issued.
  *
  * Storage is the shared Mongo cache's lease primitive (`cacheRepository.tryAcquireLease`), used

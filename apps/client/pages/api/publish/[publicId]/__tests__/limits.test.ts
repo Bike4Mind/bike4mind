@@ -19,6 +19,7 @@ const m = vi.hoisted(() => ({
   consume: vi.fn(),
   refund: vi.fn(),
   validate: vi.fn(),
+  getModel: vi.fn(),
   complete: vi.fn(),
 }));
 
@@ -62,8 +63,7 @@ vi.mock('@server/services/publish', async () => {
 });
 vi.mock('@client/services/operationsModelService', () => ({
   OperationsModelService: {
-    getOperationsModel: () =>
-      Promise.resolve({ modelId: 'm1', llm: { complete: m.complete }, modelInfo: { name: 'Model', backend: 'test' } }),
+    getOperationsModel: () => m.getModel(),
   },
 }));
 
@@ -143,6 +143,11 @@ beforeEach(() => {
   m.refund.mockResolvedValue(undefined);
   m.consume.mockResolvedValue({ refund: m.refund });
   m.validate.mockReturnValue({ valid: true, violations: [] });
+  m.getModel.mockResolvedValue({
+    modelId: 'm1',
+    llm: { complete: m.complete },
+    modelInfo: { name: 'Model', backend: 'test' },
+  });
   previousVersionIs(BIGGER);
   modelReturns(BIGGER);
 });
@@ -196,10 +201,10 @@ describe.each([
     });
     expect(indexWrites()).toHaveLength(0);
     expect(recordWrites()).toHaveLength(0);
-    // revise counts before the model call, so its quota refusal comes after and hands the action
-    // back; restore checks the quota first and never counts.
+    // revise counts before the model call, and an attempt that reached the model keeps its count
+    // even when the quota then refuses it; restore checks the quota first and never counts.
     expect(m.consume).toHaveBeenCalledTimes(countsBeforeQuota ? 1 : 0);
-    expect(m.refund).toHaveBeenCalledTimes(countsBeforeQuota ? 1 : 0);
+    expect(m.refund).not.toHaveBeenCalled();
     expect(lockReleased()).toBe(true);
   });
 
@@ -249,13 +254,24 @@ describe('revise - daily publish allowance', () => {
     expect(m.refund).not.toHaveBeenCalled();
   });
 
-  it('hands the action back when the model call fails', async () => {
+  it('hands the action back when the revise ends before the model is called', async () => {
+    const noModel = new Error('no operations model configured');
+    m.getModel.mockRejectedValue(noModel);
+
+    await expect(run(reviseHandler)).rejects.toBe(noModel);
+    expect(m.consume).toHaveBeenCalledTimes(1);
+    expect(m.complete).not.toHaveBeenCalled();
+    expect(m.refund).toHaveBeenCalledTimes(1);
+    expect(lockReleased()).toBe(true);
+  });
+
+  it('keeps the action when the model call fails', async () => {
     const modelDown = new Error('model unavailable');
     m.complete.mockRejectedValue(modelDown);
 
     await expect(run(reviseHandler)).rejects.toBe(modelDown);
     expect(m.consume).toHaveBeenCalledTimes(1);
-    expect(m.refund).toHaveBeenCalledTimes(1);
+    expect(m.refund).not.toHaveBeenCalled();
     expect(indexWrites()).toHaveLength(0);
     expect(lockReleased()).toBe(true);
   });
@@ -263,34 +279,34 @@ describe('revise - daily publish allowance', () => {
   it.each([
     { kind: 'not a complete document', output: 'not html at all' },
     { kind: 'truncated', output: '<html></html>' },
-  ])('hands the action back when the model output is $kind', async ({ output }) => {
+  ])('keeps the action when the model output is $kind', async ({ output }) => {
     modelReturns(output);
 
     const res = await run(reviseHandler);
 
     expect(res.statusCode).toBe(502);
-    expect(m.refund).toHaveBeenCalledTimes(1);
+    expect(m.refund).not.toHaveBeenCalled();
     expect(indexWrites()).toHaveLength(0);
   });
 
-  it('hands the action back when the revised page fails validation', async () => {
+  it('keeps the action when the revised page fails validation', async () => {
     m.validate.mockReturnValue({ valid: false, violations: [{ rule: 'external-script' }] });
 
     const res = await run(reviseHandler);
 
     expect(res.statusCode).toBe(422);
-    expect(m.refund).toHaveBeenCalledTimes(1);
+    expect(m.refund).not.toHaveBeenCalled();
     expect(indexWrites()).toHaveLength(0);
   });
 
-  it('hands the action back when the revised page cannot be stored', async () => {
+  it('keeps the action when the revised page cannot be stored', async () => {
     const storageDown = new Error('storage unavailable');
     m.upload.mockImplementation((_buf: unknown, key: string) =>
       key === `${PREFIX}index.html` ? Promise.reject(storageDown) : Promise.resolve()
     );
 
     await expect(run(reviseHandler)).rejects.toBe(storageDown);
-    expect(m.refund).toHaveBeenCalledTimes(1);
+    expect(m.refund).not.toHaveBeenCalled();
     expect(recordWrites()).toHaveLength(0);
   });
 
