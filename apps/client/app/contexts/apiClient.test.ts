@@ -84,6 +84,15 @@ describe('api deploy-revision interceptor', () => {
     expect(isOutdated()).toBe(false);
   });
 
+  it('ignores a browser-private-cache response with an older revision', async () => {
+    const PRIVATE_CACHE = { 'cache-control': 'private, max-age=3600' };
+    await requestWith(adapterWith('rev-b', 200, PRIVATE_CACHE));
+    await requestWith(adapterWith('rev-c'));
+    expect(isOutdated()).toBe(false);
+    await requestWith(adapterWith('rev-b', 200, PRIVATE_CACHE));
+    expect(isOutdated()).toBe(false);
+  });
+
   it('still marks outdated on a genuine uncached a -> b sequence', async () => {
     await requestWith(adapterWith('rev-a', 200, { 'cache-control': 'no-store' }));
     await requestWith(adapterWith('rev-b', 200, { 'cache-control': 'no-store' }));
