@@ -1,10 +1,14 @@
-import type { IMcpServerDocument } from '@bike4mind/common';
+import { requiresMcpConnectionToolApproval, type IMcpServerDocument } from '@bike4mind/common';
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import {
   generateMcpToolsFromCache,
   shouldLiveFetchTools,
   buildMcpToolCacheUpdate,
+  customMcpToolId,
+  generateCustomMcpTools,
+  loadCustomMcpConnections,
+  type CustomMcpToolHost,
   type McpToolSchema,
 } from '@bike4mind/services/llm';
 
@@ -22,12 +26,33 @@ export interface LoadAgentMcpToolsDeps {
     getTools: () => Promise<Array<{ name: string; description?: string; input_schema?: Record<string, unknown> }>>;
     callTool: (toolName: string, toolArgs: unknown) => Promise<unknown>;
   }>;
+  /** Custom connectors; omitted -> none offered. */
+  customMcp?: CustomMcpToolHost;
   logger: Logger;
 }
 
 export interface AgentMcpTools {
   mcpToolsByServer: Record<string, Array<{ name: string } & ICompletionOptionTools>>;
   serverAgentConfig: { selectedRepositories?: string; githubUsername?: string };
+  /** Custom tools allowed to run without a prompt; the executor seeds them into `approvedTools`. */
+  autoApprovedCustomToolNames: string[];
+  /** These tools must ignore remembered approvals (org policy or an explicit always-ask choice). */
+  approvalRequiredCustomToolNames: string[];
+}
+
+/**
+ * Adds current automatic approvals and removes remembered choices overridden by policy.
+ * Used by both the top-level execution and dispatched children.
+ */
+export function withAutoApprovedCustomTools(
+  approvedTools: readonly string[] | undefined,
+  autoApprovedCustomToolNames: readonly string[],
+  approvalRequiredCustomToolNames: readonly string[] = []
+): string[] {
+  const requiresApproval = new Set(approvalRequiredCustomToolNames);
+  return [...new Set([...(approvedTools ?? []), ...autoApprovedCustomToolNames])].filter(
+    name => !requiresApproval.has(name)
+  );
 }
 
 /**
@@ -43,10 +68,12 @@ export async function loadAgentMcpTools(
 ): Promise<AgentMcpTools> {
   const { logger } = deps;
   const mcpToolsByServer: AgentMcpTools['mcpToolsByServer'] = {};
+  const autoApprovedCustomToolNames: string[] = [];
+  const approvalRequiredCustomToolNames: string[] = [];
 
   if (!opts.enableMCPServer) {
     logger.info('[AgentExecutor][MCP] EnableMCPServer is off - 0 MCP tools loaded');
-    return { mcpToolsByServer, serverAgentConfig: {} };
+    return { mcpToolsByServer, serverAgentConfig: {}, autoApprovedCustomToolNames, approvalRequiredCustomToolNames };
   }
 
   const servers = await deps.mcpServers.find({ enabled: true, userId: opts.userId });
@@ -97,6 +124,30 @@ export async function loadAgentMcpTools(
     }
   }
 
+  // Own try/catch: a custom-connector failure drops custom tools only. There is no approval hook
+  // here - the executor's permission gate pauses every tool that is not in `approvedTools`.
+  if (deps.customMcp) {
+    try {
+      for (const connection of await loadCustomMcpConnections(deps.customMcp, opts.userId, logger)) {
+        const tools = generateCustomMcpTools(connection, { userId: opts.userId, host: deps.customMcp });
+        mcpToolsByServer[connection.slug] = tools;
+        for (const tool of connection.tools) {
+          const name = customMcpToolId(connection.slug, tool.name);
+          if (!requiresMcpConnectionToolApproval(tool, connection.requireApprovalForAll)) {
+            autoApprovedCustomToolNames.push(name);
+          }
+          if (connection.requireApprovalForAll || tool.approval === 'always_ask') {
+            approvalRequiredCustomToolNames.push(name);
+          }
+        }
+      }
+    } catch (err) {
+      logger.warn('[AgentExecutor][MCP] Failed to load custom connector tools - continuing without them', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   const githubServer = servers.find(s => s.name === 'github');
   let selectedRepositories: string | undefined;
   if (githubServer?.metadata?.selectedRepositories?.length) {
@@ -108,5 +159,10 @@ export async function loadAgentMcpTools(
     perServer: Object.fromEntries(Object.entries(mcpToolsByServer).map(([k, v]) => [k, v.length])),
   });
 
-  return { mcpToolsByServer, serverAgentConfig: { selectedRepositories, githubUsername } };
+  return {
+    mcpToolsByServer,
+    serverAgentConfig: { selectedRepositories, githubUsername },
+    autoApprovedCustomToolNames,
+    approvalRequiredCustomToolNames,
+  };
 }

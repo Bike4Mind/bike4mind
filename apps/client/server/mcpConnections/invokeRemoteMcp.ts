@@ -7,8 +7,9 @@ import {
   NotFoundError,
   TooManyRequestsError,
   mcpApiKeyHeaderNameProblem,
+  isReadOnlyMcpConnectionTool,
+  requiresMcpConnectionToolApproval,
   type IMcpConnectionDocument,
-  type IMcpConnectionTool,
   type McpConnectionLastErrorInput,
   type McpConnectionTransport,
 } from '@bike4mind/common';
@@ -20,7 +21,6 @@ import {
   RemoteMcpClient,
   RemoteMcpError,
   RemoteMcpProtocolError,
-  RemoteMcpUpstreamError,
   validateRemoteMcpUrl,
   type RemoteMcpCallToolResult,
   type RemoteMcpClientConfig,
@@ -28,6 +28,9 @@ import {
   type RemoteMcpLimits,
   type RemoteMcpListToolsResult,
 } from '@bike4mind/mcp/remote';
+import { describeRemoteMcpError } from './describeRemoteMcpError';
+
+export { describeRemoteMcpError };
 import { cleanMcpToolText } from '@bike4mind/server-utils/mcpConnections/toolDiscovery';
 import { registrableDomain } from '@bike4mind/utils/registrableDomain';
 import { Resource } from 'sst';
@@ -136,10 +139,10 @@ export class CustomMcpPolicyBlockedError extends ForbiddenError {
   }
 }
 
-/** A policy requires the user to approve each call, and this one was not approved. */
+/** Policy or the tool settings require approval, and this call was not approved. */
 export class CustomMcpApprovalRequiredError extends ForbiddenError {
   constructor() {
-    super('Your organization requires approval before each tool call', { code: 'approval_required' });
+    super('This tool call requires approval', { code: 'approval_required' });
     this.name = 'CustomMcpApprovalRequiredError';
   }
 }
@@ -169,7 +172,7 @@ export interface InvokeRemoteMcpCallTool extends InvokeRemoteMcpBase {
   action: 'callTool';
   toolName: string;
   args?: Record<string, unknown>;
-  /** The user approved this specific call; required while any policy sets `requireApprovalForAll`. */
+  /** The user or agent gate approved this call; required by policy and the saved tool approval mode. */
   approved?: boolean;
 }
 
@@ -185,33 +188,6 @@ export interface InvokeRemoteMcpOptions {
 
 function sha256(value: string): string {
   return createHash('sha256').update(value, 'utf8').digest('hex');
-}
-
-/** Short, fixed text per failure: the server's own error text is never reflected back. */
-export function describeRemoteMcpError(
-  error: RemoteMcpError,
-  authKind: IMcpConnectionDocument['auth']['kind']
-): string {
-  switch (error.code) {
-    case 'invalid_url':
-      return error.message;
-    case 'ssrf_blocked':
-      return 'The server address resolves to a private or blocked network';
-    case 'timeout':
-      return 'The server did not answer in time';
-    case 'auth_required':
-      return authKind === 'api_key' ? 'The server rejected the API key' : 'The server requires sign-in';
-    case 'auth_failed':
-      return 'The server refused the credentials';
-    case 'protocol':
-      return 'The server did not respond as an MCP server';
-    case 'size_cap':
-      return 'The server response was too large';
-    case 'upstream_5xx':
-      return error instanceof RemoteMcpUpstreamError
-        ? `The server returned an error (HTTP ${error.status})`
-        : 'The server returned an error';
-  }
 }
 
 /**
@@ -347,14 +323,10 @@ function buildAuthHeaders(connection: IMcpConnectionDocument): Record<string, st
   throw new RemoteMcpAuthRequiredError({});
 }
 
-/** Read-only only when the server says so and does not also call it destructive; no hint is a write. */
-function isReadOnlyTool(tool: IMcpConnectionTool | undefined): boolean {
-  return tool?.annotations?.readOnlyHint === true && tool.annotations.destructiveHint !== true;
-}
-
 function operationTypeFor(connection: IMcpConnectionDocument, request: InvokeRemoteMcpRequest): OperationType {
   if (request.action === 'listTools') return 'read';
-  return isReadOnlyTool(connection.tools.find(tool => tool.name === request.toolName)) ? 'read' : 'write';
+  const tool = connection.tools.find(tool => tool.name === request.toolName);
+  return tool && isReadOnlyMcpConnectionTool(tool) ? 'read' : 'write';
 }
 
 function transportFor(connection: IMcpConnectionDocument, action: RemoteMcpAction): McpConnectionTransport {
@@ -453,14 +425,20 @@ export async function invokeRemoteMcp(
       audit.failure('tool_not_approved');
       throw new ConflictError('This tool has not been reviewed and enabled', { code: 'tool_not_approved' });
     }
-    if (!isReadOnlyTool(tool) && context.policies.some(policy => !policy.allowWriteTools)) {
+    if (!isReadOnlyMcpConnectionTool(tool) && context.policies.some(policy => !policy.allowWriteTools)) {
       audit.failure('policy_blocked', { policyVerdict: 'write_tools_not_allowed' });
       throw new CustomMcpPolicyBlockedError(
         'Your organization allows only read-only tools from custom connectors',
         'write_tools_not_allowed'
       );
     }
-    if (request.approved !== true && context.policies.some(policy => policy.requireApprovalForAll)) {
+    if (
+      request.approved !== true &&
+      requiresMcpConnectionToolApproval(
+        tool,
+        context.policies.some(policy => policy.requireApprovalForAll)
+      )
+    ) {
       audit.failure('approval_required');
       throw new CustomMcpApprovalRequiredError();
     }

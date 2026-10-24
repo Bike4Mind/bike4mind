@@ -108,7 +108,7 @@ import type { CitableSource, WebSearchPlace } from '@bike4mind/common';
 
 // Artifact system (extracted modules)
 import ArtifactRenderer from './artifacts/ArtifactRenderer';
-import { isConfirmableMcpTool } from '@client/app/utils/confirmableMcpTool';
+import { isConfirmableMcpTool, isCustomConnectorAction } from '@client/app/utils/confirmableMcpTool';
 import {
   extractChessJson,
   validateChessFen,
@@ -784,7 +784,7 @@ function getPendingActionError(error: unknown, fallbackMessage: string): { messa
 
 // The confirm route executes only allowlisted write tools, so any other pending action gets no card.
 export const PendingActionButtons: FC<PendingActionButtonsProps> = props =>
-  isConfirmableMcpTool(props.pendingAction.tool) ? (
+  isConfirmableMcpTool(props.pendingAction.tool) || isCustomConnectorAction(props.pendingAction) ? (
     <PendingActionButtonsContent key={props.pendingAction.ts} {...props} />
   ) : null;
 
@@ -900,6 +900,7 @@ const PendingActionButtonsContent: FC<PendingActionButtonsProps> = ({ pendingAct
     );
   }
 
+  const customConnector = pendingAction.customConnector;
   const toolDisplayName = pendingAction.tool.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
 
   return (
@@ -915,8 +916,19 @@ const PendingActionButtonsContent: FC<PendingActionButtonsProps> = ({ pendingAct
     >
       <Typography level="body-sm" sx={{ mb: 1.5, fontWeight: 'md' }}>
         Ready to execute: {toolDisplayName}
+        {customConnector && ` on ${customConnector.displayName} (${customConnector.urlHost})`}
       </Typography>
-      <GitHubProjectActionTarget tool={pendingAction.tool} params={pendingAction.params} />
+      {customConnector && (
+        <Box
+          component="pre"
+          data-testid="mcp-custom-action-args"
+          sx={{ m: 0, mb: 1.5, p: 1, maxHeight: 200, overflow: 'auto', fontSize: 'xs', whiteSpace: 'pre-wrap' }}
+        >
+          {JSON.stringify(pendingAction.params, null, 2)}
+        </Box>
+      )}
+      {/* display_* params are injected by the built-in wrappers; on a custom action they are model-supplied. */}
+      {!customConnector && <GitHubProjectActionTarget tool={pendingAction.tool} params={pendingAction.params} />}
       <Stack direction="row" spacing={1}>
         <Button
           size="sm"
