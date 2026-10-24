@@ -174,6 +174,19 @@ const GATED_LINK_WHO: Record<StoredGate, string> = {
   passphrase: 'who also has the passphrase',
   domain: 'who signs in with a verified email from an allowed domain',
 };
+/** GATED_LINK_WHO for a plural subject ("viewers who ..."). */
+const GATED_VIEWERS_WHO: Record<StoredGate, string> = {
+  passphrase: 'who also have the passphrase',
+  domain: 'who sign in with a verified email from an allowed domain',
+};
+
+/** The sentence a shared non-public option's hint adds about its private links, or null when there is
+ *  nothing to add. The hints carry no closing period, so the caller ends that sentence first. */
+function privateLinkHintNote(storedGate: StoredGate | null | undefined): string | null {
+  if (storedGate === null) return null;
+  if (storedGate === undefined) return 'Private-link access depends on its access settings.';
+  return `Private links open only for viewers ${GATED_VIEWERS_WHO[storedGate]}.`;
+}
 
 /** The PublishAccessBadge chip's text color, including its light-mode warning shade. */
 const softTextColor = (color: ColorPaletteProp, mode: 'light' | 'dark') =>
@@ -653,8 +666,11 @@ export function PublishShareModal({
 
   const readStoredGate = async () => {
     if (!result) return;
+    const revision = gateRevision.current;
     try {
       const state = await getPublishedManageState(result.publicId);
+      // A clear (or a reopen) that landed while this read was out is newer than what it returned.
+      if (revision !== gateRevision.current) return;
       setStoredGate(state.accessGate?.kind ?? null);
     } catch {
       /* the refusal toast already said why; the seed read's own warning covers an unreadable record */
@@ -837,6 +853,7 @@ export function PublishShareModal({
           >
             {visibilityOptions.map(o => {
               const selected = visibility === o.value;
+              const linkNote = phase === 'shared' && o.value !== 'public' ? privateLinkHintNote(storedGate) : null;
               return (
                 <Box
                   key={o.value}
@@ -865,14 +882,12 @@ export function PublishShareModal({
                       <Typography level="title-sm" sx={{ lineHeight: 1.2 }}>
                         {o.label}
                       </Typography>
-                      <Typography level="body-xs" sx={{ opacity: 0.75 }}>
-                        {o.hint}
-                        {phase === 'shared' &&
-                          o.value !== 'public' &&
-                          storedGate !== null &&
-                          (storedGate === undefined
-                            ? ' Private-link access depends on its access settings.'
-                            : ` Private links open only for viewers ${GATED_LINK_WHO[storedGate]}.`)}
+                      <Typography
+                        level="body-xs"
+                        sx={{ opacity: 0.75 }}
+                        data-testid={`publish-share-visibility-${o.value}-hint`}
+                      >
+                        {linkNote ? `${o.hint}. ${linkNote}` : o.hint}
                       </Typography>
                     </Box>
                   </Box>

@@ -36,6 +36,9 @@ const Wrapper = ({ children }: { children: React.ReactNode }) => (
   </QueryClientProvider>
 );
 
+// One client for the file, emptied after each test so no cached query outlives the test that made it.
+afterEach(() => queryClient.clear());
+
 const noopPublish = vi.fn<[], Promise<PublishResult>>();
 
 /** Read the checked radio input by its `value` attribute (visibility radios carry no label).
@@ -130,6 +133,7 @@ describe('PublishShareModal - immediate stored gate updates before readback', ()
       stored: { kind: 'passphrase' },
       input: { kind: 'passphrase', passphrase: 'correct horse' },
       who: 'who also has the passphrase',
+      viewersWho: 'who also have the passphrase',
       icon: 'KeyIcon',
     },
     {
@@ -137,6 +141,7 @@ describe('PublishShareModal - immediate stored gate updates before readback', ()
       stored: { kind: 'domain', allowedDomains: ['example.com'] },
       input: { kind: 'domain', allowedDomains: ['example.com'] },
       who: 'who signs in with a verified email from an allowed domain',
+      viewersWho: 'who sign in with a verified email from an allowed domain',
       icon: 'DomainIcon',
     },
   ] as const;
@@ -189,7 +194,10 @@ describe('PublishShareModal - immediate stored gate updates before readback', ()
     expect(screen.getByTestId('publish-share-token-label').textContent).toBe('Private link');
     expect(screen.getByTestId('publish-share-token-hint').textContent).toContain(gate.who);
     expect(screen.getByTestId('publish-share-token-hint').textContent).not.toContain('without signing in');
-    if (visibilityHint) expect(screen.getByTestId('publish-share-visibility-private').textContent).toContain(gate.who);
+    if (visibilityHint)
+      expect(screen.getByTestId('publish-share-visibility-private-hint').textContent).toBe(
+        `Only you, and anyone you send a private link to. Private links open only for viewers ${gate.viewersWho}.`
+      );
     fireEvent.click(createLink);
     const warning = await screen.findByTestId('publish-share-token-warning');
     expect(warning.getAttribute('data-access')).toBe(gate.kind);
@@ -1699,5 +1707,121 @@ describe('PublishShareModal - clearing a gate stored on a non-public page', () =
     clickClear();
 
     expect(screen.getByTestId('confirmation-dialog').textContent).toBe(editorDialog);
+  });
+
+  it('sends one clear when the confirm button is pressed twice', async () => {
+    fakeServer('private', { kind: 'passphrase' });
+    await renderShared();
+    await screen.findByTestId('publish-share-stored-gate');
+    let finishWrite: () => void = () => {};
+    apiPatch.mockReset().mockImplementation(
+      () =>
+        new Promise(resolve => {
+          finishWrite = () => resolve({ data: {} });
+        })
+    );
+
+    clickClear();
+    confirmClear();
+    confirmClear();
+    await act(async () => finishWrite());
+
+    await waitFor(() => expect(screen.queryByTestId('publish-share-stored-gate')).toBeNull());
+    expect(gateWrites()).toHaveLength(1);
+  });
+
+  it('keeps a clear that landed while the record was being re-read after a refusal', async () => {
+    fakeServer('private', { kind: 'passphrase' });
+    await renderShared();
+    await screen.findByTestId('publish-share-stored-gate');
+    // The re-read a refusal starts stays out until after the clear, then answers with the old gate.
+    let answerRead: () => void = () => {};
+    const getShareToken = apiGet.getMockImplementation()!;
+    apiGet.mockImplementation((url: string) =>
+      url.endsWith('/share-token')
+        ? getShareToken(url)
+        : new Promise(resolve => {
+            answerRead = () =>
+              resolve({ data: { artifact: { visibility: 'private', accessGate: { kind: 'passphrase' } } } });
+          })
+    );
+
+    fireEvent.click(screen.getByTestId('publish-share-token-revoke'));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(REFUSAL));
+    clickClear();
+    confirmClear();
+    await waitFor(() => expect(screen.queryByTestId('publish-share-stored-gate')).toBeNull());
+
+    await act(async () => answerRead());
+    expect(screen.queryByTestId('publish-share-stored-gate')).toBeNull();
+    expect(screen.getByTestId('publish-share-token-label').textContent).toBe(
+      'Private link anyone can open, no sign-in'
+    );
+  });
+});
+
+/** A shared non-public option's hint is two sentences: who the page is for, then what its private links need. */
+describe('PublishShareModal - non-public option hints once shared', () => {
+  const apiGet = api.get as unknown as ReturnType<typeof vi.fn>;
+  const PRIVATE = 'Only you, and anyone you send a private link to';
+  const TEAM = 'Members of Acme, and anyone you send a private link to';
+  const PASSPHRASE = 'Private links open only for viewers who also have the passphrase.';
+  const DOMAIN = 'Private links open only for viewers who sign in with a verified email from an allowed domain.';
+  const UNKNOWN = 'Private-link access depends on its access settings.';
+  beforeEach(() => vi.mocked(toast.warning).mockClear());
+
+  const renderSharedWith = async (visibility: PublishVisibility, gate: unknown, { seedFails = false } = {}) => {
+    apiGet.mockReset().mockImplementation((url: string) => {
+      if (url.endsWith('/share-token')) return Promise.resolve({ data: { shareToken: null, shareLinks: [] } });
+      if (seedFails) return Promise.reject(new Error('Record unavailable'));
+      return Promise.resolve({ data: { artifact: { visibility, accessGate: gate } } });
+    });
+    render(
+      <Wrapper>
+        <PublishShareModal
+          open
+          onClose={() => {}}
+          publish={vi.fn().mockResolvedValue({
+            publicId: 'pub-1',
+            url: '/p/u/u1/s',
+            tier: visibility === 'organization' ? 'organization' : 'user',
+            scopeId: 'u1',
+            slug: 's',
+            visibility,
+            publishedAt: '2026-01-01T00:00:00.000Z',
+          })}
+          title="My artifact"
+          defaultVisibility={visibility}
+          orgOption={{ label: 'Team', hint: 'Members of Acme' }}
+        />
+      </Wrapper>
+    );
+    fireEvent.click(screen.getByTestId('publish-share-create'));
+    await screen.findByTestId('publish-share-token-create');
+  };
+  const hint = (value: string) => screen.getByTestId(`publish-share-visibility-${value}-hint`).textContent;
+
+  it.each([
+    ['passphrase', { kind: 'passphrase' }, PASSPHRASE],
+    ['domain', { kind: 'domain', allowedDomains: ['example.com'] }, DOMAIN],
+  ] as const)('ends the Private and Team hints before naming the stored %s gate', async (_kind, gate, sentence) => {
+    await renderSharedWith('organization', gate);
+    await waitFor(() => expect(hint('private')).toBe(`${PRIVATE}. ${sentence}`));
+    expect(hint('organization')).toBe(`${TEAM}. ${sentence}`);
+    expect(hint('public')).toBe('Anyone you send the link to can view it');
+  });
+
+  it('ends the Private hint before saying a record that could not be read leaves access unknown', async () => {
+    await renderSharedWith('private', null, { seedFails: true });
+    await waitFor(() => expect(toast.warning).toHaveBeenCalled());
+    expect(hint('private')).toBe(`${PRIVATE}. ${UNKNOWN}`);
+  });
+
+  it('adds nothing to the Private hint when no gate is stored', async () => {
+    await renderSharedWith('private', null);
+    await waitFor(() =>
+      expect(screen.getByTestId('publish-share-token-create').textContent).toContain('anyone can open')
+    );
+    expect(hint('private')).toBe(PRIVATE);
   });
 });
