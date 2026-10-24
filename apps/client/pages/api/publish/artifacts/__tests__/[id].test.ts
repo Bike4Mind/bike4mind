@@ -133,7 +133,34 @@ describe('GET public artifact - share-token capability', () => {
     const select = vi.fn();
     await getArtifact({ id: 'someone-else', isAdmin: false }, makePublicArtifactRow(), select);
     expect(select).toHaveBeenCalledOnce();
-    expect(select).toHaveBeenCalledWith('-shareTokens.token');
+    expect(select).toHaveBeenCalledWith('-shareTokens.token -thumbnail');
+  });
+});
+
+describe('owner-only thumbnails on the single-artifact route', () => {
+  const thumbnail = { key: `publish-thumbnails/pub-1/${'a'.repeat(64)}.webp`, versionId: 'a'.repeat(64) };
+
+  it('projects the stored thumbnail record out of the GET, so not even an admin read carries the key', async () => {
+    const select = vi.fn();
+    await getArtifact({ id: 'admin-1', isAdmin: true }, makePublicArtifactRow(), select);
+    expect(String(select.mock.calls[0][0]).split(' ')).toContain('-thumbnail');
+  });
+
+  it('never echoes the thumbnail record in a PATCH response', async () => {
+    const artifact = makeArtifact();
+    const toJSON = artifact.toJSON.bind(artifact);
+    artifact.toJSON = () => ({ ...toJSON(), thumbnail });
+    findOne.mockResolvedValue(artifact);
+    const { req, res } = createMocks({ method: 'PATCH' });
+    (req as unknown as { query: unknown }).query = { id: 'pub-1' };
+    (req as unknown as { user?: unknown }).user = { id: OWNER };
+    (req as unknown as { body: unknown }).body = { title: 'Renamed' };
+    (req as unknown as { logger: unknown }).logger = { warn: vi.fn(), error: vi.fn(), info: vi.fn() };
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(JSON.stringify(res._getJSONData())).not.toContain('publish-thumbnails');
+    expect('thumbnail' in res._getJSONData().artifact).toBe(false);
   });
 });
 
