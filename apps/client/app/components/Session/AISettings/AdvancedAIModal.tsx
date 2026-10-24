@@ -52,7 +52,7 @@ import {
   isKontextModel as isKontextImageModel,
   ADAPTIVE_THINKING_MAX_TOKENS_FLOOR,
 } from '@bike4mind/common';
-import { reasonsWithinOutputBudget } from '@bike4mind/llm-adapters/model-sizing';
+import { reasonsWithinOutputBudget, sentMaxTokensFor } from '@bike4mind/llm-adapters/model-sizing';
 import { INFINITE_VALUE } from '@client/app/components/FibonacciSlider';
 import { ResearchModeConfiguration, ResearchModeState } from '@client/app/types/ResearchMode';
 import { useLLM, LLMContextProps } from '@client/app/contexts/LLMContext';
@@ -656,6 +656,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
   commonInputStyles,
   mode,
 }) => {
+  const thinking = useLLM(s => s.thinking);
   if (!modelInfo) return null;
 
   // Provider and capability notices, rendered as one stacked block below the description.
@@ -713,9 +714,13 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
   const isOutputAdjustable = outputCeiling > MIN_OUTPUT_TOKENS;
   // A model that reasons inside this budget can spend all of it before writing a reply, and the
   // server sends the value as set (resolveOutputMaxTokens), so warn below the floor it would give an
-  // unset budget. Same predicate as the server's belowReasoningFloor telemetry.
+  // unset budget. Measured on what is sent, as the server's sentBelowReasoningFloor telemetry is: with
+  // thinking on, the Anthropic adapters already raise it to the floor (sentMaxTokensFor).
   const reasoningFloor = Math.min(ADAPTIVE_THINKING_MAX_TOKENS_FLOOR, outputCeiling);
-  const isBelowReasoningFloor = !readOnly && reasonsWithinOutputBudget(modelInfo) && outputTokens < reasoningFloor;
+  const isBelowReasoningFloor =
+    !readOnly &&
+    reasonsWithinOutputBudget(modelInfo) &&
+    sentMaxTokensFor(modelInfo, thinking, outputTokens) < reasoningFloor;
 
   // The session-wide switches, defined once and rendered two ways. Desktop keeps them inline beside
   // the section title; mobile has no room for four controls on that row, so there the title keeps

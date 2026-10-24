@@ -84,6 +84,7 @@ const modelInfoRows = vi.hoisted(() => [
     max_tokens: 128_000,
     thinkingStyle: 'adaptive' as string | undefined,
     can_think: undefined as boolean | undefined,
+    backend: undefined as string | undefined,
     dispatchProfile: undefined as { maxTokensParam: string; toolTransport: string } | undefined,
   },
 ]);
@@ -94,11 +95,12 @@ vi.mock('@client/app/hooks/data/useModelInfo', () => ({
 
 import { AdvancedAIModal } from './AdvancedAIModal';
 
-const renderDetails = (maxTokens: number) => {
+const renderDetails = (maxTokens: number, thinking?: { enabled: boolean; budget_tokens: number }) => {
   llmState = {
     model: 'claude-adaptive',
     temperature: 0.9,
     max_tokens: maxTokens,
+    thinking,
     tools: [],
     researchMode: undefined,
     addResearchConfiguration: vi.fn(),
@@ -128,6 +130,7 @@ describe('AdvancedAIModal - Max output tokens below the reasoning floor', () => 
       max_tokens: 128_000,
       thinkingStyle: 'adaptive',
       can_think: undefined,
+      backend: undefined,
       dispatchProfile: undefined,
     });
   });
@@ -165,6 +168,27 @@ describe('AdvancedAIModal - Max output tokens below the reasoning floor', () => 
     renderDetails(8192);
 
     expect(screen.getByTestId('token-allocation-reasoning-floor-warning')).toHaveTextContent('Values below 32 000');
+  });
+
+  // With thinking on, the Anthropic adapters send at least the floor (sentMaxTokensFor), so the
+  // warning would describe a budget that is never sent.
+  it('does not warn when thinking on an Anthropic adaptive model already sends the floor', () => {
+    Object.assign(modelInfoRows[0], { can_think: true, backend: 'anthropic' });
+    renderDetails(8192, { enabled: true, budget_tokens: 16_000 });
+
+    expect(screen.queryByTestId('token-allocation-reasoning-floor-warning')).toBeNull();
+  });
+
+  it('still warns with thinking on where the adapter sends the value as set', () => {
+    Object.assign(modelInfoRows[0], {
+      thinkingStyle: undefined,
+      can_think: true,
+      backend: 'openai',
+      dispatchProfile: { maxTokensParam: 'max_completion_tokens', toolTransport: 'chat' },
+    });
+    renderDetails(8192, { enabled: true, budget_tokens: 16_000 });
+
+    expect(screen.getByTestId('token-allocation-reasoning-floor-warning')).toBeInTheDocument();
   });
 
   // A model that does not reason inside its budget gets exactly that budget as its answer length.
