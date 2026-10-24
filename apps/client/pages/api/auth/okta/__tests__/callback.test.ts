@@ -114,6 +114,7 @@ vi.mock('@server/utils/auth/oauthSignupGrants', () => ({
 vi.mock('@server/auth/emailVerifiedGrants', () => ({
   applyEmailVerifiedGrants: (...a: unknown[]) => mockApplyEmailVerifiedGrants(...a),
 }));
+vi.mock('@server/auth/networkMeta', () => ({ recordSignupNetwork: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@server/analytics/funnel', () => ({
   recordSignupAcquisition: (...a: unknown[]) => mockRecordSignupAcquisition(...a),
   emitSignupFunnelEvents: (...a: unknown[]) => mockEmitSignupFunnelEvents(...a),

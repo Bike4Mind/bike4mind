@@ -22,6 +22,7 @@ import { CountersSchema } from '../infra/ops/CounterModel';
 import BaseRepository from '@bike4mind/db-core';
 import { executeFacetCompatible } from '../../utils/documentdb-compat';
 import { buildCollectionSearchPipeline } from '../../queries/collectionSearchQuery';
+import { NETWORK_META_FIELDS } from './networkMetaFields';
 
 function escapeRegExp(input: string): string {
   return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -834,6 +835,14 @@ const UserAcquisitionSchema = new Schema(
   { _id: false }
 );
 
+const SignupMetaSchema = new Schema(
+  {
+    ...NETWORK_META_FIELDS,
+    capturedAt: { type: Date, required: true },
+  },
+  { _id: false }
+);
+
 export const UserSchema = new Schema<IUserDocument, IUserModel>(
   {
     username: { type: String, required: true, unique: true },
@@ -1096,6 +1105,8 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
 
     // Written once at signup, consent-gated - see IUser.acquisition.
     acquisition: { type: UserAcquisitionSchema, required: false, default: undefined },
+    // Written once at signup - see IUser.signupMeta.
+    signupMeta: { type: SignupMetaSchema, required: false, default: undefined },
     isSynthetic: { type: Boolean, required: false },
     firstValueAt: { type: Date, required: false },
   },
