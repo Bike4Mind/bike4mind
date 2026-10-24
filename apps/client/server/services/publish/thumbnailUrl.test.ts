@@ -1,11 +1,16 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const { getSignedUrl } = vi.hoisted(() => ({ getSignedUrl: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getPublishedArtifactsStorage: () => ({ getSignedUrl }),
 }));
 
-import { signOwnerThumbnailUrl, THUMBNAIL_URL_TTL_SECONDS } from './thumbnailUrl';
+import {
+  signOwnerThumbnailUrl,
+  thumbnailSigningDate,
+  THUMBNAIL_URL_TTL_SECONDS,
+  THUMBNAIL_URL_WINDOW_SECONDS,
+} from './thumbnailUrl';
 
 const KEY = `publish-thumbnails/pub1/${'a'.repeat(64)}.webp`;
 
@@ -14,14 +19,28 @@ beforeEach(() => {
   getSignedUrl.mockResolvedValue('https://signed.example.test/thumb');
 });
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe('thumbnailSigningDate', () => {
+  it('floors to the start of the 15-minute window', () => {
+    expect(THUMBNAIL_URL_WINDOW_SECONDS).toBe(900);
+    expect(thumbnailSigningDate(new Date('2026-03-04T05:14:59.999Z')).toISOString()).toBe('2026-03-04T05:00:00.000Z');
+    expect(thumbnailSigningDate(new Date('2026-03-04T05:15:00.000Z')).toISOString()).toBe('2026-03-04T05:15:00.000Z');
+  });
+});
+
 describe('signOwnerThumbnailUrl', () => {
-  it('presigns a 15-minute browser GET for the artifact own thumbnail', async () => {
+  it('presigns a browser GET from the window start, valid for at least one more window', async () => {
+    vi.useFakeTimers({ now: new Date('2026-03-04T05:07:00.000Z') });
     await expect(signOwnerThumbnailUrl('pub1', KEY)).resolves.toBe('https://signed.example.test/thumb');
-    expect(THUMBNAIL_URL_TTL_SECONDS).toBe(900);
+    expect(THUMBNAIL_URL_TTL_SECONDS).toBe(1800);
     expect(getSignedUrl).toHaveBeenCalledWith(KEY, 'get', {
-      expiresIn: 900,
+      expiresIn: 1800,
       audience: 'browser',
       ResponseContentType: 'image/webp',
+      signingDate: new Date('2026-03-04T05:00:00.000Z'),
     });
   });
 

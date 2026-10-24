@@ -78,7 +78,7 @@ describe('processPublishThumbnailJob', () => {
     );
     expect(h.storage.upload).toHaveBeenCalledWith(IMAGE, KEY, {
       ContentType: 'image/webp',
-      CacheControl: 'private, max-age=86400',
+      CacheControl: 'private, max-age=31536000, immutable',
     });
     expect(h.recordPublishedArtifactThumbnail).toHaveBeenCalledWith('pub1', {
       key: KEY,

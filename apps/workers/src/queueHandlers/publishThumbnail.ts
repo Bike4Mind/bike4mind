@@ -17,6 +17,8 @@ import {
   type OpenThumbnailContext,
 } from '@workers/media/renderHtmlThumbnail';
 
+const THUMBNAIL_CACHE_CONTROL = 'private, max-age=31536000, immutable';
+
 export type PublishThumbnailOutcome = 'rendered' | 'missing' | 'unsupported' | 'superseded' | 'timed-out' | 'discarded';
 
 interface ThumbnailArtifactLean {
@@ -80,7 +82,9 @@ export async function processPublishThumbnailJob(
   }
 
   const key = publishThumbnailKey(job.publicId, job.versionId);
-  await storage.upload(image, key, { ContentType: 'image/webp', CacheControl: 'private, max-age=86400' });
+  // Immutable: the key names the version, so its bytes never change. Pairs with the windowed signing
+  // in apps/client/server/services/publish/thumbnailUrl.ts, which keeps the URL stable to cache on.
+  await storage.upload(image, key, { ContentType: 'image/webp', CacheControl: THUMBNAIL_CACHE_CONTROL });
 
   const recorded = await recordPublishedArtifactThumbnail(job.publicId, {
     key,

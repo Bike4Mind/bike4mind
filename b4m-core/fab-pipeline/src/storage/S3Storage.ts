@@ -208,6 +208,7 @@ export class S3Storage extends BaseStorage {
       ContentLength,
       ResponseContentType,
       ResponseContentDisposition,
+      signingDate,
     }: {
       expiresIn?: number;
       audience?: 'browser';
@@ -224,6 +225,12 @@ export class S3Storage extends BaseStorage {
        */
       ResponseContentType?: string;
       ResponseContentDisposition?: string;
+      /**
+       * Sign as of this instant instead of now; the link is valid from it for `expiresIn` seconds.
+       * Repeated calls with the same value (and credentials) return the identical URL, so a browser
+       * can cache what it points at.
+       */
+      signingDate?: Date;
     } = {}
   ): Promise<string> {
     const bindLength = method !== 'get' && ContentLength !== undefined;
@@ -245,6 +252,7 @@ export class S3Storage extends BaseStorage {
           }),
       {
         expiresIn,
+        ...(signingDate && { signingDate }),
         ...(bindLength && { signableHeaders: new Set(['content-length']) }),
       }
     );

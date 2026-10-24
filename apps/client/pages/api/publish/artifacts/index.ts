@@ -28,8 +28,9 @@ import { signOwnerThumbnailUrl } from '@server/services/publish/thumbnailUrl';
  * from a truncated list - the previous hard `$limit: 200` with no count meant the
  * management tab silently stopped showing the oldest artifacts past that mark.
  *
- * On `mine`, each row the caller owns carries `thumbnailUrl` (a 15-minute presigned GET) once its
- * owner-only thumbnail has rendered. No other listing, and no other route, ever exposes one.
+ * On `mine`, each row the caller owns carries `thumbnailUrl` (a short-lived presigned GET, stable
+ * within a signing window so the browser can cache it; see thumbnailUrl.ts) once its owner-only
+ * thumbnail has rendered. No other listing, and no other route, ever exposes one.
  */
 
 /** Matches the pre-paging hard cap, so an existing caller that sends no `limit` is unaffected. */
