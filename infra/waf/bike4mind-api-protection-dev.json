@@ -54,6 +54,61 @@
       }
     },
     {
+      "Name": "AWS-AWSManagedRulesAnonymousIpList",
+      "Priority": 1,
+      "Statement": {
+        "ManagedRuleGroupStatement": {
+          "VendorName": "AWS",
+          "Name": "AWSManagedRulesAnonymousIpList",
+          "RuleActionOverrides": [
+            {
+              "Name": "AnonymousIPList",
+              "ActionToUse": {
+                "Count": {}
+              }
+            },
+            {
+              "Name": "HostingProviderIPList",
+              "ActionToUse": {
+                "Count": {}
+              }
+            }
+          ],
+          "ScopeDownStatement": {
+            "ByteMatchStatement": {
+              "SearchString": "/api/otc/",
+              "FieldToMatch": {
+                "UriPath": {}
+              },
+              "TextTransformations": [
+                {
+                  "Priority": 0,
+                  "Type": "URL_DECODE"
+                },
+                {
+                  "Priority": 1,
+                  "Type": "NORMALIZE_PATH"
+                },
+                {
+                  "Priority": 2,
+                  "Type": "LOWERCASE"
+                }
+              ],
+              "PositionalConstraint": "STARTS_WITH"
+            }
+          }
+        }
+      },
+      "OverrideAction": {
+        "None": {}
+      },
+      "VisibilityConfig": {
+        "SampledRequestsEnabled": true,
+        "CloudWatchMetricsEnabled": true,
+        "MetricName": "AWS-AWSManagedRulesAnonymousIpList"
+      }
+    },
+    {
       "Name": "emergency-ip-block",
       "Priority": 2,
       "Statement": {
@@ -125,7 +180,7 @@
       "Priority": 4,
       "Statement": {
         "RateBasedStatement": {
-          "Limit": 10000,
+          "Limit": 5000,
           "EvaluationWindowSec": 300,
           "AggregateKeyType": "IP",
           "ScopeDownStatement": {
@@ -633,7 +688,7 @@
       "Priority": 10,
       "Statement": {
         "RateBasedStatement": {
-          "Limit": 50000,
+          "Limit": 20000,
           "EvaluationWindowSec": 300,
           "AggregateKeyType": "IP",
           "ScopeDownStatement": {
@@ -819,7 +874,7 @@
       "Priority": 11,
       "Statement": {
         "RateBasedStatement": {
-          "Limit": 1000,
+          "Limit": 500,
           "EvaluationWindowSec": 300,
           "AggregateKeyType": "IP",
           "ScopeDownStatement": {
@@ -861,7 +916,7 @@
       "Priority": 12,
       "Statement": {
         "RateBasedStatement": {
-          "Limit": 2000,
+          "Limit": 1000,
           "EvaluationWindowSec": 300,
           "AggregateKeyType": "IP",
           "ScopeDownStatement": {
@@ -903,7 +958,7 @@
       "Priority": 13,
       "Statement": {
         "RateBasedStatement": {
-          "Limit": 300,
+          "Limit": 100,
           "EvaluationWindowSec": 300,
           "AggregateKeyType": "IP",
           "ScopeDownStatement": {
@@ -945,7 +1000,7 @@
       "Priority": 14,
       "Statement": {
         "RateBasedStatement": {
-          "Limit": 100,
+          "Limit": 50,
           "EvaluationWindowSec": 300,
           "AggregateKeyType": "IP",
           "ScopeDownStatement": {
@@ -987,7 +1042,7 @@
       "Priority": 15,
       "Statement": {
         "RateBasedStatement": {
-          "Limit": 1000,
+          "Limit": 500,
           "EvaluationWindowSec": 300,
           "AggregateKeyType": "IP",
           "ScopeDownStatement": {
@@ -1029,7 +1084,7 @@
       "Priority": 16,
       "Statement": {
         "RateBasedStatement": {
-          "Limit": 5000,
+          "Limit": 2000,
           "EvaluationWindowSec": 300,
           "AggregateKeyType": "IP",
           "ScopeDownStatement": {
@@ -1219,7 +1274,7 @@
       "Priority": 17,
       "Statement": {
         "RateBasedStatement": {
-          "Limit": 50000,
+          "Limit": 20000,
           "EvaluationWindowSec": 300,
           "AggregateKeyType": "IP",
           "ScopeDownStatement": {
@@ -1398,6 +1453,87 @@
         "SampledRequestsEnabled": true,
         "CloudWatchMetricsEnabled": true,
         "MetricName": "static-asset-rate-limit-prod-shadow"
+      }
+    },
+    {
+      "Name": "AWS-AWSManagedRulesBotControlRuleSet",
+      "Priority": 20,
+      "Statement": {
+        "ManagedRuleGroupStatement": {
+          "VendorName": "AWS",
+          "Name": "AWSManagedRulesBotControlRuleSet",
+          "ManagedRuleGroupConfigs": [
+            {
+              "AWSManagedRulesBotControlRuleSet": {
+                "InspectionLevel": "COMMON"
+              }
+            }
+          ],
+          "ScopeDownStatement": {
+            "NotStatement": {
+              "Statement": {
+                "OrStatement": {
+                  "Statements": [
+                    {
+                      "ByteMatchStatement": {
+                        "SearchString": "/_next/static/",
+                        "FieldToMatch": {
+                          "UriPath": {}
+                        },
+                        "TextTransformations": [
+                          {
+                            "Priority": 0,
+                            "Type": "URL_DECODE"
+                          },
+                          {
+                            "Priority": 1,
+                            "Type": "NORMALIZE_PATH"
+                          },
+                          {
+                            "Priority": 2,
+                            "Type": "LOWERCASE"
+                          }
+                        ],
+                        "PositionalConstraint": "STARTS_WITH"
+                      }
+                    },
+                    {
+                      "ByteMatchStatement": {
+                        "SearchString": "/_next/image",
+                        "FieldToMatch": {
+                          "UriPath": {}
+                        },
+                        "TextTransformations": [
+                          {
+                            "Priority": 0,
+                            "Type": "URL_DECODE"
+                          },
+                          {
+                            "Priority": 1,
+                            "Type": "NORMALIZE_PATH"
+                          },
+                          {
+                            "Priority": 2,
+                            "Type": "LOWERCASE"
+                          }
+                        ],
+                        "PositionalConstraint": "STARTS_WITH"
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "OverrideAction": {
+        "Count": {}
+      },
+      "VisibilityConfig": {
+        "SampledRequestsEnabled": true,
+        "CloudWatchMetricsEnabled": true,
+        "MetricName": "AWS-AWSManagedRulesBotControlRuleSet"
       }
     }
   ],

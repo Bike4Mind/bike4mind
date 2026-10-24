@@ -60,7 +60,12 @@ describe('apiKeyScopes catalog', () => {
     // commissions billable work must not carry one - otherwise a "Read-only" or "Read & write" key
     // silently gains the ability to spend. Table, not one-off asserts, so a future spend scope
     // (the way `datalake:query` joined `optihashi:compute`) has to be added here to pass.
-    const spendScopes = [ApiKeyScope.OPTIHASHI_COMPUTE, ApiKeyScope.DATALAKE_QUERY, ApiKeyScope.AI_DECIDE];
+    const spendScopes = [
+      ApiKeyScope.OPTIHASHI_COMPUTE,
+      ApiKeyScope.DATALAKE_QUERY,
+      ApiKeyScope.AI_DECIDE,
+      ApiKeyScope.BOB_RUN,
+    ];
     for (const scope of spendScopes) {
       expect(scope.endsWith(':read'), `${scope} must not end in :read`).toBe(false);
       expect(scope.endsWith(':write'), `${scope} must not end in :write`).toBe(false);
@@ -86,9 +91,57 @@ describe('apiKeyScopes catalog', () => {
     expect(ApiKeyScope.OVERWATCH_READ.endsWith(':read')).toBe(true);
   });
 
+  it('lists the v1 text-refinement endpoint under ai:generate, not the legacy route', () => {
+    // `endpoints` renders verbatim in the profile API-keys tab, so this is the user-facing
+    // pointer to the published route. The legacy route was dropped from the list deliberately.
+    const ai = USER_API_KEY_SCOPES.find(s => s.value === ApiKeyScope.AI_GENERATE)!;
+    expect(ai.endpoints).toContain('POST /api/v1/text-refinements');
+    expect(ai.endpoints).not.toContain('POST /api/ai/refineText');
+  });
+
+  it('pins the Bob scope strings the Bob routes and the CLI tools are built against', () => {
+    // Keys store the string, not the member name, and both consumers match on it.
+    expect(ApiKeyScope.BOB_READ).toBe('bob:read');
+    expect(ApiKeyScope.BOB_RUN).toBe('bob:run');
+  });
+
+  it('makes bob:read user-mintable and lands it in the read-only preset', () => {
+    // Deliberate, as for overwatch:read: every Bob read is scoped to the key's owner and
+    // starts nothing, so the default Read-only preset may carry it. If a Bob route behind
+    // this scope ever starts work or spends, the scope has to lose the suffix.
+    expect(genericValues).toContain(ApiKeyScope.BOB_READ);
+    expect(ApiKeyScope.BOB_READ.endsWith(':read')).toBe(true);
+  });
+
+  it('makes bob:run user-mintable but keeps it out of the read and read/write presets', () => {
+    // The spend half: it spends the owner's credits and publishes a report as them, so,
+    // like optihashi:compute, it carries no suffix a preset is built from (the spend-scope
+    // table above pins that too) and is only ever picked by hand or by Full access.
+    expect(genericValues).toContain(ApiKeyScope.BOB_RUN);
+    expect(ApiKeyScope.BOB_RUN.endsWith(':read')).toBe(false);
+    expect(ApiKeyScope.BOB_RUN.endsWith(':write')).toBe(false);
+  });
+
+  it('offers both Bob scopes to every account and confines neither', () => {
+    // Ungated: every signed-in account can use Bob, so no product flag hides them. Not
+    // confined: a confined scope must be a key's only scope, which would forbid the pair.
+    const offered = genericApiKeyScopesFor(NO_ACCESS).map(s => s.value);
+    for (const scope of [ApiKeyScope.BOB_READ, ApiKeyScope.BOB_RUN]) {
+      expect(offered).toContain(scope);
+      expect(GATED_API_KEY_SCOPES[scope]).toBeUndefined();
+      expect(CONFINED_API_KEY_SCOPES).not.toContain(scope);
+      expect(DEDICATED_FLOW_SCOPES.has(scope)).toBe(false);
+    }
+  });
+
   it('lists qa:ingest as admin-only, never user-selectable', () => {
     expect(ADMIN_ONLY_API_KEY_SCOPES.map(s => s.value)).toContain(ApiKeyScope.QA_INGEST);
     expect(userValues).not.toContain(ApiKeyScope.QA_INGEST);
+  });
+
+  it('lists release-notes:write as admin-only, never user-selectable', () => {
+    expect(ADMIN_ONLY_API_KEY_SCOPES.map(s => s.value)).toContain(ApiKeyScope.RELEASE_NOTES_WRITE);
+    expect(userValues).not.toContain(ApiKeyScope.RELEASE_NOTES_WRITE);
   });
 
   it('keeps the Overwatch read scope distinct from the ingest write scope', () => {
@@ -154,8 +207,20 @@ describe('apiKeyScopes vs the shared CONFINED_API_KEY_SCOPES', () => {
   });
 });
 
-const ALL_ACCESS: ApiKeyScopeAccess = { hasOptiAccess: true, hasOverwatchAccess: true, hearthEnabled: true };
-const NO_ACCESS: ApiKeyScopeAccess = { hasOptiAccess: false, hasOverwatchAccess: false, hearthEnabled: false };
+const ALL_ACCESS: ApiKeyScopeAccess = {
+  hasOptiAccess: true,
+  hasOverwatchAccess: true,
+  hearthEnabled: true,
+  bypass: true,
+  entitlements: new Set(),
+};
+const NO_ACCESS: ApiKeyScopeAccess = {
+  hasOptiAccess: false,
+  hasOverwatchAccess: false,
+  hearthEnabled: false,
+  bypass: false,
+  entitlements: new Set(),
+};
 const gatedBy = (flag: keyof ApiKeyScopeAccess) =>
   (Object.entries(GATED_API_KEY_SCOPES) as [ApiKeyScope, keyof ApiKeyScopeAccess][])
     .filter(([, gate]) => gate === flag)

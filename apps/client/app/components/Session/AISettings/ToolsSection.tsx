@@ -1,40 +1,38 @@
 import SupportsToolsIcon from '@client/app/components/svgs/SupportsToolsIcon';
-import {
-  AutoAwesome as AutoAwesomeIcon,
-  Compare as CompareIcon,
-  Language as LanguageIcon,
-  Schedule as DateTimeIcon,
-  Casino as DiceIcon,
-  Image as ImageIcon,
-  MusicNote as MusicIcon,
-  GraphicEq as AudioIcon,
-  Videocam as VideoIcon,
-  Calculate as MathIcon,
-  Schema as MermaidIcon,
-  Search as SearchIcon,
-  Science as ScienceIcon,
-  WbSunny as WeatherIcon,
-  AutoFixHigh as PromptEnhancementIcon,
-  BarChart as RechartsIcon,
-  Settings as SettingsIcon,
-  HdrAuto as AtlassianIcon,
-  History as HistoryIcon,
-  NightsStay as MoonIcon,
-  WbTwilight as SunriseIcon,
-  Satellite as SatelliteIcon,
-  Explore as PlanetIcon,
-  GridView as LatticeIcon,
-  FolderOpen as KnowledgeBaseIcon,
-  Extension as ChessIcon,
-  ExpandMore as ExpandMoreIcon,
-  Functions as WolframIcon,
-  TableChart as ExcelIcon,
-  ShowChart as FinanceIcon,
-  Close as CloseIcon,
-  PlaylistAddCheck as OnlyPickedToolsIcon,
-  SaveAlt as SaveToDataLakeIcon,
-  Balance as DecideIcon,
-} from '@mui/icons-material';
+import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
+import CompareIcon from '@mui/icons-material/Compare';
+import LanguageIcon from '@mui/icons-material/Language';
+import DateTimeIcon from '@mui/icons-material/Schedule';
+import DiceIcon from '@mui/icons-material/Casino';
+import ImageIcon from '@mui/icons-material/Image';
+import MusicIcon from '@mui/icons-material/MusicNote';
+import AudioIcon from '@mui/icons-material/GraphicEq';
+import VideoIcon from '@mui/icons-material/Videocam';
+import MathIcon from '@mui/icons-material/Calculate';
+import MermaidIcon from '@mui/icons-material/Schema';
+import SearchIcon from '@mui/icons-material/Search';
+import ScienceIcon from '@mui/icons-material/Science';
+import WeatherIcon from '@mui/icons-material/WbSunny';
+import PromptEnhancementIcon from '@mui/icons-material/AutoFixHigh';
+import RechartsIcon from '@mui/icons-material/BarChart';
+import SettingsIcon from '@mui/icons-material/Settings';
+import AtlassianIcon from '@mui/icons-material/HdrAuto';
+import HistoryIcon from '@mui/icons-material/History';
+import MoonIcon from '@mui/icons-material/NightsStay';
+import SunriseIcon from '@mui/icons-material/WbTwilight';
+import SatelliteIcon from '@mui/icons-material/Satellite';
+import PlanetIcon from '@mui/icons-material/Explore';
+import LatticeIcon from '@mui/icons-material/GridView';
+import KnowledgeBaseIcon from '@mui/icons-material/FolderOpen';
+import ChessIcon from '@mui/icons-material/Extension';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import WolframIcon from '@mui/icons-material/Functions';
+import ExcelIcon from '@mui/icons-material/TableChart';
+import FinanceIcon from '@mui/icons-material/ShowChart';
+import CloseIcon from '@mui/icons-material/Close';
+import OnlyPickedToolsIcon from '@mui/icons-material/PlaylistAddCheck';
+import SaveToDataLakeIcon from '@mui/icons-material/SaveAlt';
+import DecideIcon from '@mui/icons-material/Balance';
 import { Box, Grid, Input, Tooltip, Typography, IconButton } from '@mui/joy';
 import type { BoxProps } from '@mui/joy';
 import SwitchSelector from '@client/app/components/common/fields/SwitchSelector';
@@ -61,6 +59,7 @@ import {
 import { useMcpServers } from '@client/app/hooks/data/mcpServers';
 import { useConfig } from '@client/app/hooks/data/settings';
 import { AGENT_ONLY_MCP_SERVERS } from '@client/app/components/common/ToolIndicators';
+import { IMAGE_TOOL_PRICE_TOOLTIP, useImageToolPrice } from './useImageToolPrice';
 
 /**
  * Tooltip shown when a tool is disabled because its required API key/config is
@@ -198,11 +197,13 @@ interface ToolLabelProps {
   dim?: boolean;
   // Blue accent line under the description, e.g. to flag an agent-only integration.
   agentOnlyNote?: string;
+  // Muted line under the description, e.g. the selected model and its price.
+  detail?: React.ReactNode;
 }
 
 // Two-line label (name + inline description) used in place of the old
 // name-plus-(i)-tooltip pattern, so users can read what a tool does without hovering.
-const ToolLabel = ({ name, description, dim = false, agentOnlyNote }: ToolLabelProps) => (
+const ToolLabel = ({ name, description, dim = false, agentOnlyNote, detail }: ToolLabelProps) => (
   <Box sx={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1 }}>
     <Typography
       level="body-sm"
@@ -236,6 +237,11 @@ const ToolLabel = ({ name, description, dim = false, agentOnlyNote }: ToolLabelP
         sx={{ color: 'primary.500', fontSize: '0.7rem', lineHeight: 1.3, mt: '12px' }}
       >
         {agentOnlyNote}
+      </Typography>
+    )}
+    {detail && (
+      <Typography level="body-xs" noWrap sx={{ color: 'text.secondary', fontSize: '0.7rem', lineHeight: 1.3, mt: 0.5 }}>
+        {detail}
       </Typography>
     )}
   </Box>
@@ -348,6 +354,8 @@ const ToolsSection = ({
 
   const [deepResearchConfigOpen, setDeepResearchConfigOpen] = useState(false);
   const [imageGenModelSelectionOpen, setImageGenModelSelectionOpen] = useState(false);
+  const imageModel = useLLM(state => state.imageModel);
+  const imageToolPrice = useImageToolPrice(imageModel);
 
   const thinking = useLLM(state => state.thinking);
 
@@ -1030,6 +1038,17 @@ const ToolsSection = ({
                 <ToolLabel
                   name={getToolDisplayName('image_generation')}
                   description={getToolDescription('image_generation')}
+                  detail={
+                    imageToolPrice && (
+                      <Tooltip title={IMAGE_TOOL_PRICE_TOOLTIP} placement="top">
+                        <span data-testid="image-generation-model-price">
+                          {imageToolPrice.modelName}
+                          {' \u00b7 '}
+                          {imageToolPrice.label}
+                        </span>
+                      </Tooltip>
+                    )
+                  }
                 />
               </Box>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>

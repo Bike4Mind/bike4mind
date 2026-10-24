@@ -105,6 +105,7 @@ export async function handleMcpCommand(subcommand: string, argv: McpCommandArgs)
         port: typeof argv.port === 'number' ? argv.port : undefined,
         apiKey: typeof argv.apiKey === 'string' ? argv.apiKey : undefined,
         apiUrl: typeof argv.apiUrl === 'string' ? argv.apiUrl : undefined,
+        token: typeof argv.token === 'string' ? argv.token : undefined,
         version: packageJson.version,
       });
       break;

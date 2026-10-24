@@ -1,0 +1,69 @@
+name: 'Install Playwright Chromium'
+description: >-
+  Install the Playwright Chromium browser and its system dependencies without
+  letting a slow apt mirror fail the job. The browser download is cached per
+  Playwright version and capped, since the yauzl/Node>=24.16 extraction wedge
+  (playwright#40724) can hang it indefinitely. The apt step is capped
+  separately: the runner image already ships nearly every library Chromium
+  needs (the rest is mostly fonts), so when the mirror crawls past the cap we
+  keep going as long as Chromium actually launches, and fail only if it does
+  not. Interrupted package configuration must also recover successfully within
+  one minute before tests can run.
+
+  Requires node_modules to be installed in working-directory.
+
+inputs:
+  working-directory:
+    description: 'Directory whose node_modules provides @playwright/test'
+    required: false
+    default: 'apps/client'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Resolve Playwright version
+      id: version
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        v=$(node -p "require('@playwright/test/package.json').version")
+        test -n "$v"
+        echo "version=$v" >> "$GITHUB_OUTPUT"
+
+    - name: Cache Playwright browsers
+      uses: actions/cache@v5
+      with:
+        path: ~/.cache/ms-playwright
+        key: ${{ runner.os }}-${{ runner.arch }}-ms-playwright-chromium-${{ steps.version.outputs.version }}
+
+    - name: Download Chromium
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      # Kill the whole group at the deadline; TERM can orphan resistant children.
+      # A no-op on a cache hit.
+      run: timeout --signal=KILL 5m npx playwright install chromium
+
+    - name: Install Chromium system dependencies
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        # Shorten per-file stalls: apt's defaults let each dead connection sit
+        # for minutes before moving on.
+        printf 'Acquire::Retries "3";\nAcquire::http::Timeout "20";\nAcquire::https::Timeout "20";\n' \
+          | sudo tee /etc/apt/apt.conf.d/80-ci-timeouts > /dev/null
+
+        # Run timeout itself as root so playwright (seeing uid 0) calls apt-get
+        # directly in timeout's process group. Wrapped the other way round,
+        # sudo starts apt in its own pty session and the kill never reaches it:
+        # apt kept downloading and upgrading libs under the running tests.
+        rc=0
+        sudo env "PATH=$PATH" timeout --signal=KILL 5m npx playwright install-deps chromium || rc=$?
+        if [ "$rc" -eq 0 ]; then
+          exit 0
+        fi
+
+        echo "::warning::Playwright system dependency install failed (exit $rc); recovering package state before checking whether Chromium launches"
+        # Finish interrupted package configuration before starting tests.
+        # A failed or hung repair leaves the runner unsafe to reuse.
+        sudo timeout --signal=KILL 1m dpkg --configure -a
+        node -e "require('@playwright/test').chromium.launch().then((b) => b.close())"

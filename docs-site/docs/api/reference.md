@@ -33,6 +33,12 @@ API keys are also accepted, sent as `x-api-key: <key>` or `Authorization: Bearer
 ## AI Services API
 
 ### Audio Transcription
+
+Transcription has a 45-second provider deadline measured from request arrival. If a recording takes
+too long, the request returns `504` and releases its reserved credits before the hosted server's
+60-second limit. Upload the recording again with a new file key and try a shorter clip. AWS batch
+jobs may finish remotely after the request ends; their temporary output expires automatically.
+
 **POST** `/api/ai/transcribe`
 
 Transcribe audio files using OpenAI Whisper.
@@ -82,32 +88,6 @@ Generate images using AWS Bedrock.
   "questId": "quest_123",
   "status": "queued",
   "estimatedTime": 30
-}
-```
-
-### LLM Inference
-**POST** `/api/infer`
-
-Direct LLM inference for text generation.
-
-**Request:**
-```json
-{
-  "model": "gpt-4",
-  "messages": [
-    {
-      "role": "user",
-      "content": "Explain quantum computing"
-    }
-  ],
-  "stream": false
-}
-```
-
-**Response:**
-```json
-{
-  "result": "Quantum computing is a revolutionary approach..."
 }
 ```
 

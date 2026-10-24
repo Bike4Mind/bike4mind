@@ -72,9 +72,10 @@ import {
   type ApiKeyTable,
 } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
-import { Permission, OPTI_SURFACE } from '@bike4mind/common';
+import { Permission } from '@bike4mind/common';
 import { accessibleBy } from '@casl/mongoose';
-import { lakeWriteToolDb } from '@server/dataLakes/lakeWriteToolDb';
+import { lakeWriteToolDb } from '@bike4mind/server-utils/dataLakes/lakeWriteToolDb';
+import { getUserEntitlements } from '@server/entitlements';
 import { runDecisionTool } from '@server/decisions/runDecisionTool';
 import { executionTurnAuth } from '@server/auth/turnAuth';
 import defineAbilitiesFor from '@server/auth/ability';
@@ -84,6 +85,7 @@ import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premi
 import {
   ReActAgent,
   type AgentCheckpoint,
+  type AgentResult,
   type AgentStep,
   type GatedToolCall,
   type IterationResult,
@@ -97,6 +99,7 @@ import {
   ServerAgentStore,
   ServerSubagentOrchestrator,
   PARENT_DEADLINE_BUFFER_MS,
+  spentResultOf,
   type ServerSubagentTracker,
   type SubagentHandoffSignal,
   type ChildExecutionStatus,
@@ -126,22 +129,24 @@ import {
   settleGatedCall as settleGatedCallImpl,
   type GatedAction,
 } from './agentExecutorUtils/toolPermissions';
-import { guardDecomposeOnce } from './agentExecutorUtils/decomposeGuard';
 import { resolveDisplayAnswer } from './agentExecutorUtils/truncatedReply';
-import { evaluateConfidenceGate } from './agentExecutorUtils/confidenceGate';
-import { guardPlanCompletion } from './agentExecutorUtils/planCompletionGuard';
-import { injectBriefContext } from './agentExecutorUtils/briefContextInjector';
+import {
+  evaluateConfidenceGate,
+  formatConfidenceGateReason,
+  decideIterationConfidencePause,
+} from './agentExecutorUtils/confidenceGate';
 import { rehydrateOptiPlanState, ledgerForWrite } from './agentExecutorUtils/optiPlanLedger';
 import {
   buildDagResumeReport,
   clampMaxIterationsForOverCapAggregationWake,
+  clampMaxIterationsForUnrunnableAggregationWake,
   isDagAggregationWake,
   makeDagDispatcher,
   onDagNodeTerminal,
 } from './agentExecutorDag';
 import { collectDagChildArtifactBlocks } from '@server/utils/agentDagArtifacts';
 import type { DagHandoffSignal } from '@bike4mind/services/llm';
-import type { ModelInfo } from '@bike4mind/common';
+import { filterRunnableModels, type LLMModelConfig, type ModelInfo } from '@bike4mind/common';
 // `buildFirstIterationQuery` lives in its own module so it can be
 // unit-tested without dragging in this file's server-only dependency graph
 // (Mongo, AWS SDK, ReActAgent, etc.). `maybeBuildFirstIterationQuery` wraps
@@ -170,6 +175,11 @@ import { buildReActAgentRuntimeConfig } from './agentExecutor.reActAgentConfig';
 // fold can be unit-tested with injected effect doubles; see `agentExecutor.billing.ts`.
 import {
   billIteration,
+  lastRequestInputTokens,
+  nextIterationCredits,
+  uncoveredIterationCredits,
+  buildInProcessBalanceCheck,
+  readPayerBalance as loadPayerBalance,
   reseedCounters,
   addToolUsage,
   takeToolUsage,
@@ -181,6 +191,13 @@ import {
   type PendingToolUsage,
 } from './agentExecutor.billing';
 import { buildSubagentToolConfig } from './agentExecutor.subagentToolConfig';
+import {
+  aggregationWakeStartIteration as wakeStartIterationOf,
+  aggregationGraceReasonOf,
+  refusesUnrunnableModel,
+  shouldGateIteration,
+  stopUnfundedIteration,
+} from './agentExecutor.iterationCreditGate';
 import { buildAgentVideoToolConfig, getAgentVideoToolConfigDeps } from './agentExecutor.videoToolConfig';
 import { buildAgentMusicToolConfig, getAgentMusicToolConfigDeps } from './agentExecutor.musicToolConfig';
 import { publishRunGenerationJobs } from './agentExecutor.generationJobs';
@@ -192,7 +209,7 @@ import {
   mcpSessionDisabledTools,
   type ResolvedOrchestrationProfile,
 } from './agentExecutor.orchestrationProfile';
-import { buildOptiOrchestrationProfile } from './agentExecutor.optiProfile';
+import { executorAgentExtensions } from './agentExecutor.agentExtensions';
 // Wire schemas live in their own side-effect-free module so unit tests can
 // import them without dragging this file's Mongo/AWS/ReActAgent deps and the
 // `registerLambdaErrorHandlers()` call into the test sandbox. See
@@ -205,8 +222,11 @@ import {
   type SubagentDispatchPayload,
 } from './agentExecutor.schemas';
 import { enforceCheckpointDepth } from './agentExecutor.checkpointDepth';
+import { createInflightStepPersister } from './agentExecutor.inflightSteps';
 import { runIterationWithDeadlineGuard } from './agentExecutor.iterationDeadline';
 import { Config } from '@bike4mind/server-utils/utils/config';
+import { createModelAdmission } from '@server/billing/meterPlatformCompletion';
+import { admitAgentDefinitions } from './agentExecutor.modelAdmission';
 import { Resource } from 'sst';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
@@ -692,11 +712,10 @@ async function loadMcpToolsForSession(
  *   iteration (see `deductCreditsWithOrgSupport`), so here the re-fetch catches a
  *   member who crosses the cap mid-invocation, before ever reaching a delegate/
  *   coordinate call.
- * - A dispatched subagent does NOT deduct its own iterations to the org wallet yet
- *   (Phase 1 known gap - it only bumps its own audit counter via
- *   `incrementCreditsUsed`), so here the re-fetch cannot see this subagent's own
- *   spend; it only picks up billing from the parent or a concurrent execution for
- *   the same member since the entry-gate snapshot.
+ * - A dispatched subagent deducts its spend only once its run ends
+ *   (`chargeSubagentTokens`), so here the re-fetch cannot see this subagent's own
+ *   in-flight spend; it picks up billing from the parent, finished delegations, or a
+ *   concurrent execution for the same member since the entry-gate snapshot.
  * Extracted as a standalone function so this behavior is directly unit testable
  * without spinning up either handler.
  */
@@ -710,6 +729,14 @@ export function buildInProcessCreditCapCheck(
     const freshOrg = await organizations.findById(organizationId);
     return Boolean(freshOrg && creditService.isMemberAtOrOverCap(freshOrg, userId));
   };
+}
+
+/**
+ * Live balance of whoever pays for a run, re-read per call so a gate never decides on a
+ * snapshot. Shared by the iteration gate and in-process subagent admission.
+ */
+async function readPayerBalance(payer: { organizationId?: string | null; userId: string }): Promise<number> {
+  return loadPayerBalance(payer, { organizations: organizationRepository, users: userRepository });
 }
 
 /**
@@ -744,10 +771,14 @@ export function attachedFileIdsForRun(
  *
  * Never throws. Extraction is an enhancement over the metadata preamble - a failure here has to
  * leave the run behaving exactly as it did before, not kill the turn.
+ *
+ * Exported so the run-time wiring (which session id the stale-reference scrub is scoped to, and the
+ * trim it reports back) is testable without driving the whole Lambda handler.
  */
-async function materializeAttachmentsForRun(args: {
+export async function materializeAttachmentsForRun(args: {
   execution: {
     userId: string;
+    sessionId?: string;
     query: string;
     messageFileIds?: string[];
     sessionFabFileIds?: string[];
@@ -759,6 +790,8 @@ async function materializeAttachmentsForRun(args: {
   modelInfo?: ModelInfo;
   apiKeyTable: ApiKeyTable;
   logger: Logger;
+  /** Told which pinned ids the stale-reference scrub detached, so the caller can trim its copy. */
+  onKnowledgeIdsScrubbed?: (removed: string[]) => void;
 }) {
   const { execution, sessionKnowledgeIds, scope, lakeAccess, modelInfo, apiKeyTable, logger } = args;
 
@@ -865,10 +898,13 @@ async function materializeAttachmentsForRun(args: {
     // every later run - the chat path does the same, through the same helper and the same two
     // gates. `materialized.delivery.droppedIds` is deliberately NOT the input: it also names live
     // files this run simply could not inline, and detaching those would destroy notebook contents.
-    await sessionService.scrubMissingKnowledgeIds(sessionKnowledgeIds, materialized.notices, {
-      db: { fabFiles: fabFileRepository, sessions: sessionRepository },
-      logger,
-    });
+    const scrubbed = await sessionService.scrubMissingKnowledgeIds(
+      sessionKnowledgeIds,
+      materialized.notices,
+      { db: { fabFiles: fabFileRepository, sessions: sessionRepository }, logger },
+      execution.sessionId
+    );
+    if (scrubbed.length > 0) args.onKnowledgeIdsScrubbed?.(scrubbed);
 
     return materialized;
   } catch (err) {
@@ -905,6 +941,14 @@ async function processExecution(
     sendWs,
   });
   if (terminated) return;
+
+  // Drained in the `finally` below so no in-flight write outlives this invocation.
+  const inflightSteps = createInflightStepPersister({
+    executionId,
+    persistSteps: agentExecutionRepository.updateInflightSteps.bind(agentExecutionRepository),
+    logger,
+    emitMetric,
+  });
 
   try {
     // Load execution document
@@ -1067,16 +1111,69 @@ async function processExecution(
     // miss the lookup and throw instead of running on the mapped replacement.
     const resolvedModelId = resolveDeprecatedModelId(execution.model, 'agentExecutor');
     const modelInfo = models.find((m: { id: string }) => m.id === resolvedModelId);
+    const modelAccess = await loadRunnableModels(models, user as IUserDocument, logger);
+    if (!modelAccess.ok && !isAggregationOnlyWake) {
+      await agentExecutionRepository.markFailed(executionId, {
+        message: 'Unable to load model configuration. Please retry.',
+      });
+      await sendWs('failed', { executionId, reason: modelAccess.reason });
+      return;
+    }
+    const runnableModels = modelAccess.ok ? modelAccess.models : [];
+    const modelRunnable = modelInfo ? runnableModels.includes(modelInfo) : false;
+    // An aggregation-only wake is exempt: its children have already been paid for and only the
+    // wrap-up iteration that returns their results is left, so a transient settings read or a
+    // model disabled mid-run must not strand that work. Same exemption as the credit floor and
+    // the member cap below.
+    if (refusesUnrunnableModel({ hasModel: Boolean(modelInfo), isRunnable: modelRunnable, isAggregationOnlyWake })) {
+      logger.warn('[AgentExecutor] Model is disabled or not accessible to this user; refusing execution', {
+        model: resolvedModelId,
+      });
+      await agentExecutionRepository.markFailed(executionId, {
+        message: `Model "${resolvedModelId}" is not available to this user`,
+      });
+      await sendWs('failed', { executionId, reason: 'model_unavailable' });
+      return;
+    }
     const llm = getLlmByModel(apiKeyTable as ApiKeyTable, { modelInfo, logger, endUserId: execution.userId });
     if (!llm) throw new Error(`Failed to create LLM backend for model "${execution.model}"`);
     llm.currentModel = resolvedModelId;
 
-    // Pre-flight credit check
+    // Same admission rule as chat (b4m-core/services/src/llm/modelAdmission.ts), after the remap so the
+    // model that actually runs is the one checked. Admission only: billing stays per-iteration.
+    const modelAdmission = await createModelAdmission(user as IUserDocument, models);
+    const refusal = await modelAdmission.assert(resolvedModelId).then(
+      () => null,
+      (err: Error) => err
+    );
+    if (refusal) {
+      logger.warn('[ModelAdmission] Refusing agent execution model', {
+        model: resolvedModelId,
+        reason: refusal.message,
+      });
+      await agentExecutionRepository.markFailed(executionId, { message: refusal.message });
+      await sendWs('failed', { executionId, reason: 'model_not_admitted' });
+      return;
+    }
+
+    // Pre-flight credit check. With enforcement on, the balance must cover one whole iteration
+    // (nextIterationCredits), the same bar the loop re-checks before every later one. An
+    // aggregation-only wake keeps the plain floor here, like the member cap below: its children
+    // already spent from this balance, and refusing it would strand their paid-for results. Its
+    // loop iteration is exempted too (see `aggregationWakeStartIteration`).
+    const enforceCredits = (await adminSettingsRepository.getSettingsValue('enforceCredits')) === true;
+    // Resumed runs price the next request at the size of the last one they sent.
+    let lastInputTokens = isNewExecution
+      ? 0
+      : lastRequestInputTokens((execution.checkpoint as AgentCheckpoint | undefined)?.turnUsage);
     const userCredits = (user as IUserDocument).currentCredits ?? 0;
     const orgCredits = organization?.currentCredits ?? 0;
     const availableCredits = organization ? orgCredits : userCredits;
-    if (availableCredits <= 0) {
-      logger.warn('[Credits] Insufficient credits to start execution', { availableCredits });
+    const gateIterations = enforceCredits && Boolean(modelInfo);
+    const requiredCredits =
+      gateIterations && modelInfo && !isAggregationOnlyWake ? nextIterationCredits(modelInfo, lastInputTokens) : 0;
+    if (availableCredits <= 0 || availableCredits < requiredCredits) {
+      logger.warn('[Credits] Insufficient credits to start execution', { availableCredits, requiredCredits });
       await agentExecutionRepository.markFailed(executionId, {
         message: 'Insufficient credits to run agent execution',
       });
@@ -1151,28 +1248,35 @@ async function processExecution(
     // Resolved only on new executions; continuations carry forward whatever the
     // first invocation set up (checkpoint replay restores agent state).
     let orchestrationProfile: ResolvedOrchestrationProfile | undefined;
-    // Optimizer surface with no pinned `@agent`: use the opti-scoped profile (optimizer
-    // tools only, image-gen/delegation denied, higher iteration ceiling, ReAct loop
-    // prompt) instead of the generic synthetic default. Resolved on continuations too,
+    // A surface with a registered profile and no pinned `@agent` (the optimizer surface: optimizer
+    // tools only, image-gen/delegation denied, higher iteration ceiling, ReAct loop prompt) uses
+    // that profile instead of the generic synthetic default. Resolved on continuations too,
     // NOT just new executions: it's a deterministic function of the persisted
     // `session.surface`, and the tool list is rebuilt on every Lambda invocation, so a
     // post-permission / post-timeout resume (isNewExecution=false, no startPayload) would
     // otherwise collapse the toolbelt to mission-only and the loop could no longer
     // formulate/schedule to advance the ladder. An explicit `@agent` mention still wins
-    // on the initial send (it sets `startPayload.agentId` -> the persisted-agent path).
-    if (!startPayload?.agentId && session.surface === OPTI_SURFACE) {
-      // Premium tool names come from the generated map (the same one merged into `externalTools`
-      // below), so a tool an overlay registers is offerable here without editing a list by hand.
-      const premiumToolNames = Object.keys(premiumLlmTools);
-      // An empty map means codegen ran with no overlay hydrated. The loop then has no optimizer
-      // tools at all and answers in prose, which reads as a model failure rather than a build one -
-      // so say it once, here, where the cause is known.
-      if (premiumToolNames.length === 0) {
-        logger.warn('[opti] optimizer surface resolved no premium tools; the agent has only core generics', {
+    // across continuations too; its provenance is persisted with the profile denials.
+    // Contributed tool names come from the generated map (the same one merged into `externalTools`
+    // below), so a contributed tool is offerable here without editing a list by hand.
+    const profileIsPinned = isNewExecution ? Boolean(startPayload?.agentId) : execution.profileIsPinned;
+    const surfaceProfile = profileIsPinned
+      ? undefined
+      : executorAgentExtensions.resolveSurfaceProfile(session.surface, {
           executionId,
+          logger,
+          contributedToolNames: Object.keys(premiumLlmTools),
         });
-      }
-      orchestrationProfile = buildOptiOrchestrationProfile({ premiumToolNames });
+    if (surfaceProfile) {
+      // Legacy rows cannot identify their original profile. Retain their denials while keeping
+      // surface defaults available, so an ambiguous resume never widens the original policy.
+      orchestrationProfile =
+        !isNewExecution && profileIsPinned === undefined
+          ? {
+              ...surfaceProfile,
+              deniedTools: [...new Set([...surfaceProfile.deniedTools, ...(execution.profileDeniedTools ?? [])])],
+            }
+          : surfaceProfile;
     } else if (isNewExecution) {
       // `getSettingsValue<K>` is generic-narrowed to `SettingValue<K>` -
       // `OrchestrationDefaults` here - so no cast is needed.
@@ -1217,7 +1321,11 @@ async function processExecution(
       // itself does not survive a Lambda handoff (startPayload.agentId is gone on a
       // resume), and the delegation gate below reads these every invocation. Same
       // durability pattern as enableLattice.
-      await agentExecutionRepository.persistProfileDeniedTools(executionId, orchestrationProfile.deniedTools);
+      await agentExecutionRepository.persistProfileDeniedTools(
+        executionId,
+        orchestrationProfile.deniedTools,
+        Boolean(startPayload?.agentId)
+      );
     }
     if (orchestrationProfile) {
       logger.info('[Orchestration] Resolved profile', {
@@ -1255,7 +1363,10 @@ async function processExecution(
     let orgAgents: ServerAgentDefinition[] = [];
     try {
       const userStored = await agentRepository.listForUser(execution.userId);
-      userAgents = pickRunnableAgents(userStored).map(toServerAgentDefinition);
+      userAgents = await admitAgentDefinitions(
+        pickRunnableAgents(userStored).map(toServerAgentDefinition),
+        modelAdmission
+      );
     } catch (err) {
       // Don't fail execution if user agents can't be loaded - fall back to built-ins + org.
       logger.warn('[AgentStore] Failed to load user agents; continuing without user overlay', {
@@ -1266,7 +1377,10 @@ async function processExecution(
     if (execution.organizationId) {
       try {
         const orgStored = await agentRepository.listForOrganization(execution.organizationId);
-        orgAgents = pickRunnableAgents(orgStored).map(toServerAgentDefinition);
+        orgAgents = await admitAgentDefinitions(
+          pickRunnableAgents(orgStored).map(toServerAgentDefinition),
+          modelAdmission
+        );
       } catch (err) {
         logger.warn('[AgentStore] Failed to load org agents; continuing without org overlay', {
           organizationId: execution.organizationId,
@@ -1483,6 +1597,22 @@ async function processExecution(
         // `dispatchBackgroundAgent` never runs to completion in this Lambda. So
         // here the child is always still `running` and we own the terminal write.
         const credits = result.completionInfo.totalCredits ?? 0;
+        // In-process subagents are by definition NOT background (background always
+        // dispatches), so the rollup applies - match PR 1's behaviour. A tracked result is
+        // charged here and only here (`billedByTracker` keeps `onSubagentCredits` off it), and
+        // before the terminal write: the orchestrator swallows a throw from this hook, so a
+        // failed write must not skip the charge.
+        await chargeSubagentTokens(
+          {
+            user: user as IUserDocument,
+            organization,
+            sessionId: execution.sessionId,
+            questId: execution.questId,
+            model: result.model,
+            completionInfo: result.completionInfo,
+          },
+          logger
+        );
         await agentExecutionRepository.markComplete(childExecutionId, {
           answer: result.finalAnswer,
           steps: result.steps,
@@ -1491,10 +1621,6 @@ async function processExecution(
           reachedMaxIterations: result.completionInfo.reachedMaxIterations,
           totalCredits: credits,
         });
-        // In-process subagents are by definition NOT background (background always
-        // dispatches), so the rollup applies - match PR 1's behaviour. The rollup
-        // updates the parent's audit counter only; `creditService.deductCreditsWithOrgSupport`
-        // is not yet called for subagent tokens (Phase 1 known gap).
         if (credits > 0) {
           await agentExecutionRepository.incrementCreditsUsed(executionId, credits);
         }
@@ -1513,13 +1639,32 @@ async function processExecution(
         // the client - raw `Error.message` can leak internal paths, DB connection
         // info, or stack fragments. `timedOut` is a typed signal so downstream
         // consumers don't substring-match `message`.
+        // A timed-out or failed subagent spent tokens until it ended; they are charged like a
+        // completed run's, and before the terminal write for the same reason as `onComplete`.
+        if (partialResult) {
+          await chargeSubagentTokens(
+            {
+              user: user as IUserDocument,
+              organization,
+              sessionId: execution.sessionId,
+              questId: execution.questId,
+              model: partialResult.model,
+              completionInfo: partialResult.completionInfo,
+            },
+            logger
+          );
+        }
         await agentExecutionRepository.markFailed(childExecutionId, { message: error, timedOut: isTimeout });
+        const partialCredits = partialResult?.completionInfo.totalCredits ?? 0;
+        if (partialCredits > 0) {
+          await agentExecutionRepository.incrementCreditsUsed(executionId, partialCredits);
+        }
         await sendWs('subagent_failed', {
           executionId,
           childExecutionId,
           error: isTimeout ? 'Subagent timed out' : 'Subagent execution failed',
           isTimeout,
-          partialAnswer: partialResult?.finalAnswer,
+          partialAnswer: isTimeout ? partialResult?.finalAnswer : undefined,
         });
       },
       onLambdaDispatch: async ({ childExecutionId, subagentConfig, depth }) => {
@@ -1713,6 +1858,8 @@ async function processExecution(
           findAllByIds: sessionRepository.findAllByIds.bind(sessionRepository),
         },
         quests: questRepository,
+        // ElevenLabs shared-key concurrency slots for audio_generation (runElevenLabsWithCapacity).
+        caches: cacheRepository,
       },
       sessionRepository: sessionRepository,
       storage: getFilesStorage(),
@@ -1724,6 +1871,7 @@ async function processExecution(
         adminSettingsEnforceCredits: false, // Agent executor handles billing per-iteration, not per-tool
         models,
       },
+      subagentModels: runnableModels,
       apiKeyTable: apiKeyTable as ApiKeyTable,
       // The delegation tools are injected as OBJECTS keyed on these two deps, never on
       // `enabledTools` names (issue #1829), so a profile that denies them - the optimizer
@@ -1751,8 +1899,15 @@ async function processExecution(
         execution.organizationId,
         execution.userId
       ),
+      // In-process subagents skip `processSubagentDispatch`'s balance admission, and the loop's
+      // per-iteration gate only runs between this run's own iterations.
+      checkInsufficientCredits: buildInProcessBalanceCheck(enforceCredits, models, () =>
+        readPayerBalance({ organizationId: organization?.id, userId: (user as IUserDocument).id })
+      ),
       // In-process children are classified against this run's own lists.
       toolPermissions: { approvedTools, deniedTools },
+      // In-process children admit their model like a dispatched child does (processSubagentDispatch).
+      modelAdmission,
     };
 
     // Accumulate filenames of images generated by tools during the run. Unlike the
@@ -1857,8 +2012,29 @@ async function processExecution(
         publishRunPendingAction({ executionId, questId: runQuestId, action, questRepository, sendWs, logger }),
       sessionId: execution.sessionId,
       questId: runQuestId,
-      onSubagentCredits: credits => {
-        logger.info(`[Credits] Subagent used ${credits} credits`);
+      // Only spend no tracker bills reaches here: an in-process subagent whose `tracker.onStart`
+      // failed, so it ran untracked, or such a run's failure (see `reportSubagentCredits`).
+      onSubagentCredits: async (credits, meta) => {
+        await chargeSubagentTokens(
+          {
+            user: user as IUserDocument,
+            organization,
+            sessionId: execution.sessionId,
+            questId: execution.questId,
+            model: meta?.model ?? resolvedModelId,
+            completionInfo: {
+              totalCredits: credits,
+              totalInputTokens: meta?.inputTokens ?? 0,
+              totalOutputTokens: meta?.outputTokens ?? 0,
+            },
+          },
+          logger
+        );
+        await agentExecutionRepository
+          .incrementCreditsUsed(executionId, credits)
+          .catch(err =>
+            logger.warn('[Credits] failed to roll an untracked subagent spend into the run total', { err })
+          );
       },
       onSubagentStatusUpdate: async status => {
         await sendWs('progress', { executionId, status });
@@ -1963,16 +2139,13 @@ async function processExecution(
     // - inject brief (outermost, #57): gives the loop the real active brief in-context so it passes
     //   the exact problem to solve/edit instead of reconstructing it. Wraps last, so it augments real
     //   tool observations and leaves guard redirects (non-envelope strings) untouched.
-    const guardedPremiumTools = injectBriefContext(
-      guardPlanCompletion(
-        guardDecomposeOnce(premiumLlmTools, optiPlanState, () =>
-          logger.info('[opti] blocked a repeat optihashi_decompose call (advancing existing plan)', { executionId })
-        ),
-        optiPlanState,
-        () =>
-          logger.info('[opti] plan complete -- all planned steps solved; steering to final summary', { executionId })
-      )
-    );
+    // Registered in agentExecutor.agentExtensions.ts in that order; a contributed guard wraps inside them.
+    const guardedPremiumTools = executorAgentExtensions.applyToolMapGuards(premiumLlmTools, {
+      executionId,
+      logger,
+      surface: session.surface,
+      runState: optiPlanState,
+    });
 
     // Dedupe: a caller may already have enabled create_mission/mission_status;
     // a raw append would make buildSharedTools wrap the same tool twice.
@@ -2047,7 +2220,7 @@ async function processExecution(
     //
     // Admin setting AND the caller's request flag, via the same resolver the chat pipeline uses - so
     // an opt-out is honoured on an autonomous run too, where no human is reading each turn. See
-    // `server/utils/artifactGate.ts` for the start-payload/doc precedence.
+    // `packages/server-utils/src/utils/artifactGate.ts` for the start-payload/doc precedence.
     const enableArtifacts = resolveAgentArtifactGate({
       adminEnableArtifacts: await adminSettingsRepository.getSettingsValue('EnableArtifacts'),
       startPayloadEnableArtifacts: startPayload?.enableArtifacts,
@@ -2139,13 +2312,7 @@ async function processExecution(
       // boundary write and overwrite `checkpoint.steps` with a stale
       // snapshot.
       if (step.type !== 'final_answer') {
-        void agentExecutionRepository.updateInflightSteps(executionId, agent.getSteps()).catch(err => {
-          logger.warn('[Stream] Failed to persist in-flight steps', {
-            executionId,
-            error: err instanceof Error ? err.message : String(err),
-          });
-          void emitMetric('Lumina5/AgentExecutor', 'InflightStepsPersistFailed', 1);
-        });
+        inflightSteps.persist(agent.getSteps());
       }
     };
     agent.on('thought', streamStep);
@@ -2430,6 +2597,10 @@ async function processExecution(
     // --- Iteration loop ---
     let iterationResult: IterationResult | undefined;
     let iterationIndex = isNewExecution ? 0 : ((execution.checkpoint as AgentCheckpoint)?.iteration ?? 0);
+    // An aggregation-only wake gets one ungated wrap-up iteration to return its children's
+    // already-paid-for results. Anything past that is gated like any other iteration, so a parent
+    // with a low balance cannot keep running on unconditional debits in the same Lambda.
+    const aggregationWakeStartIteration = wakeStartIterationOf(isAggregationOnlyWake, iterationIndex);
 
     // Captured once and reused below at `displayAnswer` - the truncation message needs to know
     // whether a later `reachedMaxIterations` was caused by THIS clamp specifically (where a
@@ -2440,6 +2611,14 @@ async function processExecution(
     maxIterations = clampMaxIterationsForOverCapAggregationWake({
       isAggregationOnlyWake,
       isOverCap: isOverCapForAggregationClamp,
+      maxIterations,
+      iterationIndex,
+    });
+    // A wake whose model stopped being runnable gets the same one-iteration bound: the exempt
+    // wrap-up returns the children's results, and nothing re-checks the model inside the loop.
+    maxIterations = clampMaxIterationsForUnrunnableAggregationWake({
+      isAggregationOnlyWake,
+      isRunnable: !modelInfo || (modelAccess.ok && modelRunnable),
       maxIterations,
       iterationIndex,
     });
@@ -2559,8 +2738,8 @@ async function processExecution(
           // call, and the next one clears `iterationConfidences` at its own start
           // regardless - see `ReActAgent.takeIterationConfidence`.
           takeIterationConfidence: () => agent.takeIterationConfidence(),
-          recordIterationConfidence: (id, confidence) =>
-            agentExecutionRepository.recordIterationConfidence(id, confidence),
+          recordIterationConfidence: (id, confidence, options) =>
+            agentExecutionRepository.recordIterationConfidence(id, confidence, options),
           setPendingGate: (id, gate) => agentExecutionRepository.setPendingGate(id, gate),
           recordGateEmitted: id => agentExecutionRepository.recordGateEmitted(id),
         }
@@ -2641,6 +2820,40 @@ async function processExecution(
         return;
       }
 
+      // Each iteration settles with an unconditional debit, so stop before one the payer's live
+      // balance cannot cover rather than letting the run carry the balance below zero. The one
+      // aggregation-only wake extension is exempt for its first iteration only.
+      const gateThisIteration = shouldGateIteration({
+        enforceCredits,
+        hasModel: Boolean(modelInfo),
+        iterationIndex,
+        wakeStartIteration: aggregationWakeStartIteration,
+      });
+      if (gateThisIteration && modelInfo) {
+        const stopped = await stopUnfundedIteration(
+          {
+            executionId,
+            iterationIndex,
+            modelInfo,
+            lastInputTokens,
+            readBalance: () =>
+              readPayerBalance({ organizationId: organization?.id, userId: (user as IUserDocument).id }),
+            snapshot: () => {
+              const checkpoint = agent.toCheckpoint();
+              return { steps: checkpoint.steps, partialAnswer: extractFinalAnswer(checkpoint.steps) };
+            },
+          },
+          {
+            markFailed: (id, error) => agentExecutionRepository.markFailed(id, error),
+            sendWs,
+            persistRunAsQuest: (id, message) =>
+              persistRunAsQuest(id, message, logger, generatedImages, undefined, allSideEffects, retrievalSummary),
+            logger,
+          }
+        );
+        if (stopped) return;
+      }
+
       // Run one iteration. The `[ATTACHED FILES]` preamble is gated to
       // iteration 0 of a new execution - continuation Lambdas replay the
       // checkpoint, which already embeds the preamble in the first user
@@ -2655,6 +2868,11 @@ async function processExecution(
           ? await materializeAttachmentsForRun({
               execution,
               sessionKnowledgeIds: session.knowledgeIds ?? [],
+              // Keeps the first-iteration preamble below from listing a file just detached.
+              onKnowledgeIdsScrubbed: removed => {
+                const dropped = new Set(removed);
+                session.knowledgeIds = (session.knowledgeIds ?? []).filter(id => !dropped.has(id));
+              },
               scope: fabFileReadScope,
               lakeAccess: await attachmentLakeAccess(),
               modelInfo,
@@ -2840,6 +3058,7 @@ async function processExecution(
         ledgerForWrite(optiPlanState)
       );
       await billIterationIfNeeded(iterationIndex, iterationResult.checkpoint, counters);
+      lastInputTokens = lastRequestInputTokens(iterationResult.checkpoint.turnUsage) || lastInputTokens;
 
       // Permission check. The calls listed here were withheld BEFORE execution by
       // `toolGate`, so nothing has run and nothing has been billed for them yet -
@@ -2994,6 +3213,8 @@ async function processExecution(
       // checked on non-terminal iterations (a final_answer iteration is
       // complete by definition; pausing it would discard the answer).
       // Failed tool calls do not count toward it - see `evaluateConfidenceGate`.
+      // It pauses on a streak of low iterations, not one (`LOW_CONFIDENCE_STREAK_TO_PAUSE`);
+      // the streak is persisted on the execution doc so it survives continuations.
       // Per-profile override wins over the global default; a profile threshold of 0
       // disables the gate entirely (confidence is never < 0) for unattended loops.
       const confidenceGateThreshold = orchestrationProfile?.confidenceGateThreshold ?? CONFIDENCE_GATE_THRESHOLD;
@@ -3004,15 +3225,15 @@ async function processExecution(
         threshold: confidenceGateThreshold,
         iterationSteps: iterationResult.allSteps,
       });
-      if (gate !== null) {
-        // Telemetry (#56 M1.1): record every iteration the gate evaluates -
-        // including ones that complete in the same turn (isComplete=true) or
-        // clear the threshold - so `evaluatedCount` is the true denominator for
-        // fire rate. `recordGateEmitted` below increments the numerator only on
-        // a real pause. Baseline observability before touching signal quality.
-        await agentExecutionRepository.recordIterationConfidence(executionId, gate.confidence);
-      }
-      if (gate?.pause) {
+      // Telemetry: record every iteration the gate evaluates -
+      // including ones that complete in the same turn (isComplete=true) or
+      // clear the threshold - so `evaluatedCount` is the true denominator for
+      // fire rate. `recordGateEmitted` below increments the numerator only on
+      // a real pause. Baseline observability before touching signal quality.
+      const decision = await decideIterationConfidencePause(gate, (confidence, options) =>
+        agentExecutionRepository.recordIterationConfidence(executionId, confidence, options)
+      );
+      if (gate !== null && decision?.pause) {
         // 0-indexed wire convention: the agent reports 1-indexed
         // `this.iterations`, but the client's `IterationStream` and
         // `permission_request` use 0-indexed (see the matching subtraction
@@ -3020,7 +3241,11 @@ async function processExecution(
         // consistent so the eventual gate UI doesn't render an off-by-one
         // iteration label relative to the permission card.
         const wireIteration = Math.max(0, gate.iteration - 1);
-        const reason = `Iteration confidence ${(gate.confidence * 100).toFixed(0)}% below threshold ${(confidenceGateThreshold * 100).toFixed(0)}%`;
+        const reason = formatConfidenceGateReason(
+          gate.confidence,
+          confidenceGateThreshold,
+          decision.lowConfidenceStreak
+        );
         const gatePayload = { iteration: wireIteration, confidence: gate.confidence, reason };
         logger.info('[ConfidenceGate] Pausing execution for human review', { executionId, ...gatePayload });
         // `updateCheckpoint` above already persisted the current iteration's
@@ -3053,12 +3278,6 @@ async function processExecution(
         return;
       }
 
-      // TODO(Phase 2): Add mid-execution credit exhaustion check here.
-      // Pre-flight check at line ~280 prevents starting with 0 credits, but once
-      // running, credits are deducted without re-checking balance. A user with 1
-      // credit can run many iterations. Re-read user/org credits periodically and
-      // stop execution if exhausted.
-
       // Check if agent is done
       if (iterationResult.isComplete || iterationResult.reachedMaxIterations) {
         break;
@@ -3083,7 +3302,13 @@ async function processExecution(
       finalAnswer,
       dagAggregationFallbackSummary,
       configuredMaxIterations,
-      isOverCapGraceIteration: isAggregationOnlyWake && isOverCapForAggregationClamp,
+      aggregationGraceReason: aggregationGraceReasonOf({
+        modelAccessOk: modelAccess.ok,
+        isAggregationOnlyWake,
+        hasModel: Boolean(modelInfo),
+        isRunnable: modelRunnable,
+        isOverCap: isOverCapForAggregationClamp,
+      }),
     });
 
     await agentExecutionRepository.markComplete(executionId, {
@@ -3189,6 +3414,8 @@ async function processExecution(
         error: cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr),
       });
     }
+  } finally {
+    await inflightSteps.drain();
   }
 }
 
@@ -3262,6 +3489,89 @@ async function fireDagNodeTerminalOnRefusal(args: {
   }
 }
 
+type RunnableModelAccess = { ok: true; models: ModelInfo[] } | { ok: false; reason: 'model_configuration_unavailable' };
+
+/**
+ * The catalog models this user may run: the admission rule a chat turn applies to its
+ * model (`ChatCompletionInvoke`), via `filterRunnableModels`. Runs and subagents are
+ * refused, or fall back to the parent's model, rather than run on anything else.
+ */
+async function loadRunnableModels(
+  models: ModelInfo[],
+  user: IUserDocument,
+  logger: Logger
+): Promise<RunnableModelAccess> {
+  let setting: Awaited<ReturnType<typeof adminSettingsRepository.findOne>>;
+  try {
+    setting = await adminSettingsRepository.findOne({ settingName: 'llmModelConfigurations' });
+  } catch (err) {
+    // Fail closed, like the entitlement read below: an unread configuration could be the one
+    // disabling or gating this model.
+    logger.warn('[AgentExecutor] failed to read model configurations; treating every model as unavailable', {
+      err,
+    });
+    return { ok: false, reason: 'model_configuration_unavailable' };
+  }
+  const configurations = Array.isArray(setting?.settingValue) ? (setting.settingValue as LLMModelConfig[]) : [];
+  const isAdmin = user.isAdmin ?? false;
+  const needsEntitlements = !isAdmin && configurations.some(config => (config.allowedEntitlements?.length ?? 0) > 0);
+  const entitlementKeys = needsEntitlements
+    ? await getUserEntitlements(user).catch(err => {
+        logger.warn('[AgentExecutor] entitlement lookup failed; treating the user as holding none', { err });
+        return [];
+      })
+    : [];
+  return { ok: true, models: filterRunnableModels(models, configurations, user.tags ?? [], isAdmin, entitlementKeys) };
+}
+
+/**
+ * Debits a subagent's own LLM spend from the run's payer (the org pool when org-billed),
+ * the same wallet the parent's iterations settle against. Logged rather than thrown, so a
+ * billing failure never replaces the subagent's terminal status.
+ */
+async function chargeSubagentTokens(
+  args: {
+    user: IUserDocument;
+    organization: Parameters<typeof creditService.deductCreditsWithOrgSupport>[0]['organization'];
+    sessionId: string;
+    questId: string;
+    model: string;
+    completionInfo: Pick<AgentResult['completionInfo'], 'totalCredits' | 'totalInputTokens' | 'totalOutputTokens'>;
+  },
+  logger: Logger
+): Promise<void> {
+  const credits = args.completionInfo.totalCredits ?? 0;
+  if (credits <= 0) return;
+  await creditService
+    .deductCreditsWithOrgSupport(
+      {
+        type: 'text_generation_usage',
+        user: args.user,
+        organization: args.organization,
+        credits,
+        sessionId: args.sessionId,
+        questId: args.questId,
+        model: args.model,
+        inputTokens: args.completionInfo.totalInputTokens ?? 0,
+        outputTokens: args.completionInfo.totalOutputTokens ?? 0,
+      },
+      {
+        db: {
+          creditTransactions: creditTransactionRepository,
+          users: userRepository,
+          organizations: organizationRepository,
+        },
+      }
+    )
+    .catch(err =>
+      logger.error('[AgentExecutor] failed to charge subagent usage', {
+        credits,
+        model: args.model,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    );
+}
+
 /**
  * Runs a subagent that was dispatched to its own Lambda (either via `background: true`
  * or via the parent's mid-poll handoff when running out of time). The child doc
@@ -3274,12 +3584,11 @@ async function fireDagNodeTerminalOnRefusal(args: {
  * handoff path (in `processExecution`) polls this execution's terminal status
  * and injects the result into the parent's tool history.
  *
- * Credit billing: this updates the child's own `totalCreditsUsed` audit counter
- * via `incrementCreditsUsed`. A DAG parent rolls this counter up when the DAG
- * hook wakes it (see the DAG resume path in `processExecution`). Generated-media
- * cost IS deducted from the wallet (see `settleSubagentMediaUsage`); the agent's
- * own token spend is not yet (Phase 1 known gap - a future PR will add its
- * `creditService.deductCreditsWithOrgSupport`).
+ * Credit billing: the child's token spend (`chargeSubagentTokens`) and generated
+ * media (`settleSubagentMediaUsage`) are deducted from the payer's wallet, and the
+ * child's own `totalCreditsUsed` audit counter is updated via `incrementCreditsUsed`.
+ * A DAG parent rolls that counter up when the DAG hook wakes it (see the DAG resume
+ * path in `processExecution`); the rollup is audit only, never a second charge.
  *
  * KNOWN LIMITATION - no per-iteration checkpointing or self-dispatch.
  * Unlike the top-level `processExecution`, this handler runs `agent.run()` to
@@ -3465,16 +3774,80 @@ async function processSubagentDispatch(
     ]);
     const childModel = resolveDeprecatedModelId(child.model, 'agentExecutorChild');
     const modelInfo = models.find((m: { id: string }) => m.id === childModel);
+
+    // The parent's admission rules, applied to this child's own model and balance: the model
+    // must be runnable by this user, and with enforcement on the balance must cover the first
+    // iteration (see `nextIterationCredits`), not merely be above zero.
+    const modelAccess = await loadRunnableModels(models, user as IUserDocument, logger);
+    const runnableModels = modelAccess.ok ? modelAccess.models : [];
+    const enforceCredits =
+      modelAccess.ok && (await adminSettingsRepository.getSettingsValue('enforceCredits')) === true;
+    const refusal = !modelAccess.ok
+      ? { message: 'Unable to load model configuration. Please retry.', error: modelAccess.reason }
+      : modelInfo && !runnableModels.includes(modelInfo)
+        ? { message: `Model "${childModel}" is not available to this user`, error: 'model_unavailable' }
+        : enforceCredits && modelInfo && uncoveredIterationCredits(availableCredits, modelInfo, 0) !== undefined
+          ? { message: 'Insufficient credits to run subagent', error: 'insufficient_credits' }
+          : null;
+    if (refusal) {
+      logger.warn('[SubagentDispatch] Refusing to start subagent', { model: childModel, reason: refusal.error });
+      await agentExecutionRepository.markFailed(childExecutionId, { message: refusal.message });
+      await sendWs('subagent_failed', {
+        executionId: parentId,
+        childExecutionId,
+        agentName,
+        error: refusal.error,
+        isTimeout: false,
+      });
+      await fireDagNodeTerminalOnRefusal({
+        dagNodeId,
+        parentExecutionId: dagParentExecutionId,
+        childExecutionId,
+        connectionId,
+        logger,
+        sendWs,
+      });
+      return;
+    }
+
     const llm = getLlmByModel(apiKeyTable as ApiKeyTable, { modelInfo, logger, endUserId: child.userId });
     if (!llm) throw new Error(`Failed to create LLM backend for model "${childModel}"`);
     llm.currentModel = childModel;
+
+    const modelAdmission = await createModelAdmission(user as IUserDocument, models);
+    const admissionRefusal = await modelAdmission.assert(childModel).then(
+      () => null,
+      (err: Error) => err
+    );
+    if (admissionRefusal) {
+      await agentExecutionRepository.markFailed(childExecutionId, { message: admissionRefusal.message });
+      await sendWs('subagent_failed', {
+        executionId: parentId,
+        childExecutionId,
+        agentName,
+        error: 'model_not_admitted',
+        isTimeout: false,
+      });
+      await fireDagNodeTerminalOnRefusal({
+        dagNodeId,
+        parentExecutionId: dagParentExecutionId,
+        childExecutionId,
+        connectionId,
+        logger,
+        sendWs,
+      });
+      return;
+    }
 
     // Resolve agent definition (built-in + user/org-scoped overlays).
     let userAgents: ServerAgentDefinition[] = [];
     let orgAgents: ServerAgentDefinition[] = [];
     try {
       const userStored = await agentRepository.listForUser(child.userId);
-      userAgents = pickRunnableAgents(userStored).map(toServerAgentDefinition);
+      userAgents = await admitAgentDefinitions(
+        pickRunnableAgents(userStored).map(toServerAgentDefinition),
+        modelAdmission
+      );
     } catch (err) {
       logger.warn('[AgentStore] Failed to load user agents for subagent dispatch', {
         error: err instanceof Error ? err.message : String(err),
@@ -3483,7 +3856,10 @@ async function processSubagentDispatch(
     if (child.organizationId) {
       try {
         const orgStored = await agentRepository.listForOrganization(child.organizationId);
-        orgAgents = pickRunnableAgents(orgStored).map(toServerAgentDefinition);
+        orgAgents = await admitAgentDefinitions(
+          pickRunnableAgents(orgStored).map(toServerAgentDefinition),
+          modelAdmission
+        );
       } catch (err) {
         logger.warn('[AgentStore] Failed to load org agents for subagent dispatch', {
           error: err instanceof Error ? err.message : String(err),
@@ -3597,6 +3973,8 @@ async function processSubagentDispatch(
           findAllByIds: sessionRepository.findAllByIds.bind(sessionRepository),
         },
         quests: questRepository,
+        // ElevenLabs shared-key concurrency slots for audio_generation (runElevenLabsWithCapacity).
+        caches: cacheRepository,
       },
       sessionRepository,
       storage: getFilesStorage(),
@@ -3605,6 +3983,7 @@ async function processSubagentDispatch(
       llm,
       model: childModel,
       precomputed: { adminSettingsEnforceCredits: false, models },
+      subagentModels: runnableModels,
       apiKeyTable: apiKeyTable as ApiKeyTable,
       // Same dependency gate as the top-level path: the delegate tool is injected as an
       // object keyed on this dep, so a CHILD whose own record denies delegate_to_agent
@@ -3621,7 +4000,11 @@ async function processSubagentDispatch(
       // See `buildInProcessCreditCapCheck` for why this re-fetches rather than reusing
       // the `organization` snapshot captured above.
       checkMemberCreditCap: buildInProcessCreditCapCheck(organizationRepository, child.organizationId, child.userId),
+      checkInsufficientCredits: buildInProcessBalanceCheck(enforceCredits, models, () =>
+        readPayerBalance({ organizationId: child.organizationId, userId: child.userId })
+      ),
       toolPermissions: childToolPermissions,
+      modelAdmission,
     };
     const pendingMediaUsage: PendingToolUsage = {
       costUsd: 0,
@@ -3629,6 +4012,33 @@ async function processSubagentDispatch(
       outputTokens: 0,
       cacheReadTokens: 0,
       cacheWriteTokens: 0,
+    };
+    // Awaited before either terminal write, so a frozen Lambda cannot drop a grandchild's charge.
+    const grandchildCharges: Promise<void>[] = [];
+    const settleTokenCost = async (
+      model: string,
+      completionInfo: Parameters<typeof chargeSubagentTokens>[0]['completionInfo']
+    ): Promise<void> => {
+      await chargeSubagentTokens(
+        {
+          user: user as IUserDocument,
+          organization,
+          sessionId: child.sessionId,
+          questId: child.questId,
+          model,
+          completionInfo,
+        },
+        logger
+      );
+      const credits = completionInfo.totalCredits ?? 0;
+      if (credits > 0) {
+        // An audit failure must not re-enter the charge path or replace the subagent's result.
+        await agentExecutionRepository
+          .incrementCreditsUsed(childExecutionId, credits)
+          .catch(err =>
+            logger.error('[SubagentDispatch] failed to record token audit credits', { childExecutionId, credits, err })
+          );
+      }
     };
     const foldSubagentMediaUsd = (phase: MediaCostPhase, toolName: string, data: unknown) =>
       foldGeneratedMediaUsd({
@@ -3688,6 +4098,17 @@ async function processSubagentDispatch(
       // a lake-access row - but wired now so the native-tool path anticipated below does not
       // start emitting half-linked audit rows. NEVER `child.questId` (#1867).
       questId: child.linkedQuestId,
+      // This subagent's own in-process delegations (no tracker is wired here, so the
+      // orchestrator never dispatches them and this is their only charge).
+      onSubagentCredits: async (credits, meta) => {
+        const charge = settleTokenCost(meta?.model ?? childModel, {
+          totalCredits: credits,
+          totalInputTokens: meta?.inputTokens ?? 0,
+          totalOutputTokens: meta?.outputTokens ?? 0,
+        });
+        grandchildCharges.push(charge);
+        await charge;
+      },
     };
     const subagentToolConfig = buildSubagentToolConfig({
       model: childModel,
@@ -3858,13 +4279,13 @@ async function processSubagentDispatch(
       // Granted to this dispatched subagent only when its `allowedTools` names
       // `lattice_*`; the orchestrator dedupes against `parentTools`.
       optInTools: subagentLatticeTools,
-      availableModels: models,
+      availableModels: runnableModels,
       // Mirrors the delegate_to_agent / coordinate_task wiring. Without it the
       // orchestrator cannot test whether a grandchild's model is serviceable and
       // falls back to pairing this child's backend with the grandchild's model id
       // - the 404 that the pairing fix exists to prevent, one level down.
       resolveBackend: (modelId: string) => {
-        const info = models.find((m: { id: string }) => m.id === modelId);
+        const info = runnableModels.find((m: { id: string }) => m.id === modelId);
         return info
           ? getLlmByModel(apiKeyTable as ApiKeyTable, { modelInfo: info, logger, endUserId: child.userId })
           : null;
@@ -3879,6 +4300,7 @@ async function processSubagentDispatch(
       // levels of delegation below itself regardless of actual chain depth.
       depth,
       toolPermissions: childToolPermissions,
+      modelAdmission,
       // Only present when artifacts are on; makes subagents emit <artifact> tags.
       ...(childArtifactEmissionPrompt && { artifactEmissionPrompt: childArtifactEmissionPrompt }),
     });
@@ -3954,7 +4376,10 @@ async function processSubagentDispatch(
       // settlement round trips would otherwise relabel a completed run as aborted/timed out.
       const runAborted = abortController.signal.aborted;
       await settleMediaCost();
+      await Promise.all(grandchildCharges);
       const credits = result.completionInfo.totalCredits ?? 0;
+      // Every exit with a result (completed, aborted, timed out) spent these tokens.
+      await settleTokenCost(result.model, result.completionInfo);
 
       // If the abort signal fired during the run, treat the result as terminal.
       // The orchestrator's timeout-handling path returns partial results on
@@ -4017,17 +4442,6 @@ async function processSubagentDispatch(
         reachedMaxIterations: result.completionInfo.reachedMaxIterations,
         totalCredits: credits,
       });
-      // Update the child's own audit counter. `markComplete` stores the result
-      // snapshot with `totalCredits`; `incrementCreditsUsed` updates the
-      // top-level `totalCreditsUsed` field used by cap/billing queries.
-      //
-      // KNOWN GAP (Phase 1): no `creditService.deductCreditsWithOrgSupport`
-      // call here - dispatched-subagent tokens are audited only, not deducted
-      // from the user/org wallet. Tracked as a Phase 2 follow-up. Generated
-      // media is deducted separately (`settleMediaCost` above).
-      if (credits > 0) {
-        await agentExecutionRepository.incrementCreditsUsed(childExecutionId, credits);
-      }
       await sendWs('subagent_completed', {
         executionId: parentId,
         childExecutionId,
@@ -4059,6 +4473,11 @@ async function processSubagentDispatch(
       // Read before settling, for the same poller race as the success path above.
       const signalAborted = abortController.signal.aborted;
       await settleMediaCost();
+      await Promise.all(grandchildCharges);
+      const spent = spentResultOf(err);
+      if (spent) {
+        await settleTokenCost(spent.model, spent.completionInfo);
+      }
       const errorMessage = err instanceof Error ? err.message : String(err);
       // Three failure shapes can reach this catch:
       //   1. Our own abort fired during the run and the orchestrator threw

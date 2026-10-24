@@ -6,6 +6,7 @@ import {
   BadRequestError,
   StorageLimitError,
   TooManyRequestsError,
+  ServiceUnavailableError,
   parseStorageLimitErrorInfo,
 } from '@bike4mind/common';
 import { z } from 'zod';
@@ -14,16 +15,17 @@ import errorHandler, { buildErrorBody } from './errorHandler';
 function makeReqRes() {
   const json = vi.fn();
   const status = vi.fn(() => ({ json }));
-  // any: lightweight stand-ins for Express req/res - only the fields errorHandler() touches
-  const set = vi.fn();
-  const res = { status, json, set } as any;
+  // any: lightweight stand-ins for req/res - only the fields errorHandler() touches. Shaped like the
+  // Node ServerResponse Next.js API routes pass (no Express res.set), so an Express-only call fails here.
+  const setHeader = vi.fn();
+  const res = { status, json, setHeader } as any;
   const req = {
     method: 'POST',
     url: '/api/chat',
     requestId: 'trace-err-1',
     logger: { error: vi.fn(), warn: vi.fn() },
   } as any;
-  return { req, res, status, json, set };
+  return { req, res, status, json, setHeader };
 }
 
 describe('errorHandler — request_id in the error envelope', () => {
@@ -285,15 +287,27 @@ describe('errorHandler - expected upstream failures', () => {
 
 describe('errorHandler - rate-limit info on a 429', () => {
   it('sets Retry-After and the rate-limit headers, and keeps the body as it was', () => {
-    const { req, res, status, json, set } = makeReqRes();
+    const { req, res, status, json, setHeader } = makeReqRes();
     errorHandler(
       new TooManyRequestsError('slow down', { retryAfter: 12, rateLimitHeaders: { 'X-RateLimit-Limit-Minute': 10 } }),
       req,
       res
     );
     expect(status).toHaveBeenCalledWith(429);
-    expect(set).toHaveBeenCalledWith({ 'Retry-After': '12', 'X-RateLimit-Limit-Minute': '10' });
+    expect(setHeader).toHaveBeenCalledWith('Retry-After', '12');
+    expect(setHeader).toHaveBeenCalledWith('X-RateLimit-Limit-Minute', '10');
     expect(json).toHaveBeenCalledWith(expect.objectContaining({ retryAfter: 12, error: 'slow down' }));
+  });
+});
+
+describe('errorHandler - a 503 with retryAfter', () => {
+  it('sets Retry-After so a machine client backs off instead of treating its key as bad', () => {
+    const { req, res, status, json, setHeader } = makeReqRes();
+    errorHandler(new ServiceUnavailableError('Authentication temporarily unavailable', { retryAfter: 5 }), req, res);
+    expect(status).toHaveBeenCalledWith(503);
+    expect(setHeader).toHaveBeenCalledWith('Retry-After', '5');
+    expect(json).toHaveBeenCalledWith(expect.objectContaining({ error: 'Authentication temporarily unavailable' }));
+    expect(req.logger.error).toHaveBeenCalledTimes(1);
   });
 });
 

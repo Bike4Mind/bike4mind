@@ -25,6 +25,11 @@ export function partitionPremiumRoutes<T extends PremiumRouteDescriptor>(
         `Premium route ${descriptor.path} sets hostsWorkspace without appShell; only the notebook layout draws a workspace's conversation list`
       );
     }
+    if (descriptor.adminDashboard !== undefined && descriptor.path.includes('$')) {
+      throw new Error(
+        `Premium route ${descriptor.path} sets adminDashboard on a parameterised path; the admin dashboard card links to the literal path`
+      );
+    }
     if (descriptor.public) {
       const gated =
         descriptor.requireEntitlement !== undefined ||

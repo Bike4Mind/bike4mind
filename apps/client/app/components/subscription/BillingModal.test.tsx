@@ -18,6 +18,7 @@ const state = vi.hoisted(() => ({
   credits: 5000,
   account: undefined as { personal: boolean } | undefined,
 }));
+const logEvent = vi.hoisted(() => vi.fn());
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -45,13 +46,40 @@ vi.mock('@client/app/components/Credits/AccountSelector', () => ({
   useSelectedAccount: () => ({ selectedAccount: state.account }),
 }));
 vi.mock('@client/app/hooks/useEffectiveCredits', () => ({ useEffectiveCredits: () => state.credits }));
-vi.mock('./CreditsSection', () => ({ CreditsSection: () => <div data-testid="credits-section-body" /> }));
+vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => ({ mutate: logEvent }) }));
+vi.mock('./CreditsExplanation', () => ({
+  default: () => <div data-testid="credits-explanation" />,
+}));
+vi.mock('./CreditsSection', () => ({
+  CreditsSection: ({
+    onClose,
+    onPurchase,
+    onPaymentPending,
+  }: {
+    onClose: () => void;
+    onPurchase?: () => void;
+    onPaymentPending?: () => void;
+  }) => (
+    <div data-testid="credits-section-body">
+      <button type="button" data-testid="credits-section-see-usage" onClick={onClose} />
+      <button type="button" data-testid="credits-purchase-success" onClick={onPurchase} />
+      <button type="button" data-testid="credits-payment-pending" onClick={onPaymentPending} />
+      <button type="button" data-testid="credits-payment-failed" />
+    </div>
+  ),
+}));
 vi.mock('./PlansSection', () => ({
-  PlansSection: () => <div data-testid="plans-section-body" />,
+  PlansSection: ({ onSubscriptionChanged }: { onSubscriptionChanged?: () => void }) => (
+    <div data-testid="plans-section-body">
+      <button type="button" data-testid="subscription-changed" onClick={onSubscriptionChanged} />
+      <button type="button" data-testid="subscription-canceled" />
+    </div>
+  ),
   PlansSectionSkeleton: () => <div data-testid="plans-section-skeleton" />,
 }));
 
 import BillingModal from './BillingModal';
+import { consumeBillingCheckoutReturn, markBillingCheckoutReturn } from '@client/app/utils/billingCheckoutReturn';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: ReactNode }) => (
@@ -100,6 +128,105 @@ describe('BillingModal', () => {
     })) as unknown as typeof window.matchMedia;
     state.credits = 5000;
     state.account = undefined;
+    logEvent.mockClear();
+  });
+
+  it('logs the open context and a close without purchase', () => {
+    const onClose = vi.fn();
+    const { rerender } = render(
+      <TestWrapper>
+        <BillingModal open focus="credits" entry="credits_chip" onClose={onClose} />
+      </TestWrapper>
+    );
+    expect(logEvent).toHaveBeenCalledWith({
+      type: 'billing_opened',
+      metadata: { entry: 'credits_chip', focus: 'credits', account: 'personal' },
+    });
+    fireEvent.click(screen.getByTestId('billing-modal-close'));
+    expect(onClose).toHaveBeenCalled();
+    rerender(
+      <TestWrapper>
+        <BillingModal open={false} entry="credits_chip" onClose={onClose} />
+      </TestWrapper>
+    );
+    expect(logEvent).toHaveBeenCalledWith({
+      type: 'billing_closed_without_purchase',
+      metadata: { entry: 'credits_chip', focus: 'credits', account: 'personal' },
+    });
+  });
+
+  it('tags the open and close with an org account, which cannot buy personal packs', () => {
+    state.account = { personal: false };
+    const content = (open: boolean) => (
+      <TestWrapper>
+        <BillingModal open={open} entry="credits_chip" onClose={vi.fn()} />
+      </TestWrapper>
+    );
+    const { rerender } = render(content(true));
+    rerender(content(false));
+    expect(logEvent).toHaveBeenCalledWith({
+      type: 'billing_opened',
+      metadata: { entry: 'credits_chip', focus: 'overview', account: 'org' },
+    });
+    expect(logEvent).toHaveBeenCalledWith({
+      type: 'billing_closed_without_purchase',
+      metadata: { entry: 'credits_chip', focus: 'overview', account: 'org' },
+    });
+  });
+
+  it('logs nothing for the open and close that follow a Stripe return, then logs the next cycle', () => {
+    markBillingCheckoutReturn();
+    const content = (open: boolean) => (
+      <TestWrapper>
+        <BillingModal open={open} onClose={vi.fn()} />
+      </TestWrapper>
+    );
+    const { rerender } = render(content(true));
+    rerender(content(false));
+    expect(logEvent).not.toHaveBeenCalled();
+
+    rerender(content(true));
+    rerender(content(false));
+    expect(logEvent).toHaveBeenCalledWith(expect.objectContaining({ type: 'billing_opened' }));
+    expect(logEvent).toHaveBeenCalledWith(expect.objectContaining({ type: 'billing_closed_without_purchase' }));
+    expect(consumeBillingCheckoutReturn()).toBe(false);
+  });
+
+  it.each([
+    ['credits-purchase-success', false],
+    ['credits-payment-pending', false],
+    ['subscription-changed', false],
+    ['credits-payment-failed', true],
+    ['subscription-canceled', true],
+  ])('records abandonment correctly after %s', (testId, abandoned) => {
+    const content = (open: boolean) => (
+      <TestWrapper>
+        <BillingModal open={open} onClose={vi.fn()} />
+      </TestWrapper>
+    );
+    const { rerender } = render(content(true));
+    fireEvent.click(screen.getByTestId(testId));
+    rerender(content(false));
+    const abandonment = expect.objectContaining({ type: 'billing_closed_without_purchase' });
+    if (abandoned) expect(logEvent).toHaveBeenCalledWith(abandonment);
+    else expect(logEvent).not.toHaveBeenCalledWith(abandonment);
+  });
+
+  it('does not count leaving for the usage page as a close without purchase', () => {
+    const onClose = vi.fn();
+    const { rerender } = render(
+      <TestWrapper>
+        <BillingModal open focus="credits" entry="credits_chip" onClose={onClose} />
+      </TestWrapper>
+    );
+    fireEvent.click(screen.getByTestId('credits-section-see-usage'));
+    expect(onClose).toHaveBeenCalled();
+    rerender(
+      <TestWrapper>
+        <BillingModal open={false} entry="credits_chip" onClose={onClose} />
+      </TestWrapper>
+    );
+    expect(logEvent).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'billing_closed_without_purchase' }));
   });
 
   it('says the plan is unavailable, not Free, when the subscriptions read fails, and retries on demand', () => {
@@ -118,6 +245,7 @@ describe('BillingModal', () => {
   it('leads with plans when the user has no subscription, and says they are on Free', () => {
     renderModal();
     expect(sectionOrder()).toEqual(['billing-section-plans', 'billing-section-credits']);
+    expect(screen.getByTestId('credits-explanation')).toBeInTheDocument();
     expect(screen.getByTestId('billing-current-plan')).toHaveTextContent('Free');
     expect(screen.getByTestId('billing-balance')).toHaveTextContent('5,000');
     const icon = screen.getByTestId('billing-balance-icon');

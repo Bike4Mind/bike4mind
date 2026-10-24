@@ -2,7 +2,13 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import { describe, it, expect } from 'vitest';
 import { b4mTools } from '../llm/tools';
-import { proactiveMessageTools } from './generateAndSend';
+import { buildProactiveMessageMessages, proactiveMessageTools } from './generateAndSend';
+import type {
+  IAgentDocument,
+  IChatHistoryItem,
+  ISessionAgentConfigDocument,
+  ISessionDocument,
+} from '@bike4mind/common';
 
 /**
  * generateAndSendProactiveMessage has no harness (it needs an LLM, storage and every repository),
@@ -38,5 +44,49 @@ describe('generateAndSendProactiveMessage tool deps', () => {
   it('does not hand the tools the whole session repository', () => {
     // The whole repo would enable incrementImageCount for images no quest of this run holds.
     expect(source).not.toMatch(/sessions: db\.sessions,/);
+  });
+
+  it('meters the message completion but leaves tool-internal calls on the raw backend', () => {
+    expect(source).toMatch(
+      /const llm = meter \? meterCompletionBackend\(backend, meter, modelInfo, models\) : backend;/
+    );
+    expect(source).toMatch(/\.complete\(model, messages, completionOptions/);
+    expect(source).toMatch(/\n\s+backend,\n\s+\{ web_search:/);
+  });
+});
+
+describe('buildProactiveMessageMessages', () => {
+  const buildMessages = (recentMessages: IChatHistoryItem[]) =>
+    buildProactiveMessageMessages({
+      agent: { name: 'Assistant' } as IAgentDocument,
+      config: { proactiveMessaging: {} } as ISessionAgentConfigDocument,
+      session: {} as ISessionDocument,
+      recentMessages,
+    });
+
+  it('omits an early-stopped prompt while preserving completed and partial turns', () => {
+    const messages = buildMessages([
+      { prompt: 'completed question', status: 'done', replies: ['completed answer'] },
+      { prompt: 'cancelled question', status: 'stopped', replies: [] },
+      { prompt: 'partial question', status: 'stopped', replies: ['partial answer'] },
+    ] as IChatHistoryItem[]);
+
+    expect(messages.slice(1, -1)).toEqual([
+      { role: 'user', content: 'completed question' },
+      { role: 'assistant', content: 'completed answer' },
+      { role: 'user', content: 'partial question' },
+      { role: 'assistant', content: 'partial answer' },
+    ]);
+  });
+
+  it('keeps an error reply stored on a stopped turn', () => {
+    const messages = buildMessages([
+      { prompt: 'failed question', status: 'stopped', replies: ['Request failed'] },
+    ] as IChatHistoryItem[]);
+
+    expect(messages.slice(1, -1)).toEqual([
+      { role: 'user', content: 'failed question' },
+      { role: 'assistant', content: 'Request failed' },
+    ]);
   });
 });

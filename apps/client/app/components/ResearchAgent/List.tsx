@@ -1,7 +1,9 @@
 import { FC } from 'react';
 import { Box, Button, List as JoyList, ListItem, ListItemButton, Typography, Avatar } from '@mui/joy';
 import { blue, brand, purple, brandAlpha, whiteAlpha } from '../../utils/themes/colors';
-import { SmartToy, AutoAwesome, RocketLaunch } from '@mui/icons-material';
+import SmartToy from '@mui/icons-material/SmartToy';
+import AutoAwesome from '@mui/icons-material/AutoAwesome';
+import RocketLaunch from '@mui/icons-material/RocketLaunch';
 import { IResearchAgent } from '@bike4mind/common';
 
 interface ResearchAgentListProps {

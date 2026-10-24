@@ -113,7 +113,7 @@ const handler = baseApi().post(async (req, res) => {
     return res.status(403).json({ error: 'Only the owner can republish this slug', code: SLUG_OWNED_BY_OTHER });
   }
 
-  // ── Cumulative per-owner quota (count + bytes) ──
+  // -- Cumulative per-owner storage quota (bytes only; there is no page-count cap) --
   // Checked here so we reject before issuing presigned URLs (no wasted S3 PUTs).
   // A bundle publish targets a fixed {tier,scopeId,slug}: if a row already exists
   // there it's an in-place overwrite (exclude it from usage so it isn't double

@@ -15,6 +15,7 @@ import {
 import { sessionService } from '@bike4mind/services';
 import { PipelineTimer } from '@bike4mind/llm-adapters';
 import { rateLimit } from '@server/middlewares/rateLimit';
+import { adminRoleWithheldFor } from '@server/auth/apiKeyAdminScope';
 import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
 import {
   getDefaultChatCompletionOptions,
@@ -53,6 +54,7 @@ import { recommendTools, mergeTools } from '@client/app/utils/toolRecommender';
 import { resolveActiveOrg } from '@bike4mind/server-utils/utils/resolveActiveOrg';
 import { dataLakeToolsDeniedFor } from '@server/dataLakes/dataLakeScopes';
 import { requestTurnAuth } from '@server/auth/turnAuth';
+import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
 import { runWithDeadline, WAIT_TURN_BUDGET_MS, WAIT_TURN_WIND_DOWN_MS } from '@server/utils/waitTurnDeadline';
 import {
   TIMED_OUT_RUN,
@@ -184,6 +186,13 @@ const handler = nextRouteForContract(chatContract, {
     gpcSignalDetected: req.headers['sec-gpc'] === '1',
     features: new Map<featureNames, ChatCompletionFeature>(),
     logger: req.logger,
+    createCompletionMeter: ({
+      organizationId,
+      featureLabel,
+    }: {
+      organizationId: string | null;
+      featureLabel: string;
+    }) => createCompletionMeter(req.user!, req.logger, featureLabel, { sessionId, organizationId }),
     invokeLambda: async (params: any) => {
       if (simplifiedRequest.wait) {
         // wait=true: the quest is processed inline below (ChatCompletionProcess). Do NOT
@@ -206,6 +215,7 @@ const handler = nextRouteForContract(chatContract, {
       userId: req.user.id,
       // The key (when one authenticated the turn) also attributes a lake write a tool drives.
       ...turnAuth,
+      adminRoleWithheld: adminRoleWithheldFor(req.apiKeyInfo),
     });
   } catch (error) {
     // invoke validates a caller-supplied model (unknown, disabled, no longer accessible) before it

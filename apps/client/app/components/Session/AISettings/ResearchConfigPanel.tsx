@@ -1,6 +1,7 @@
 import { FC } from 'react';
 import { Box, Card, Typography, Button, Input, IconButton, Stack, Select, Option, Divider, Tooltip } from '@mui/joy';
-import { Close as CloseIcon, KeyboardArrowDown } from '@mui/icons-material';
+import CloseIcon from '@mui/icons-material/Close';
+import KeyboardArrowDown from '@mui/icons-material/KeyboardArrowDown';
 import { ResearchModeConfiguration } from '@client/app/types/ResearchMode';
 import { ChatModelName, ChatModels, NO_TEMPERATURE_MODELS } from '@bike4mind/common';
 import { useAccessibleModels } from '@client/app/hooks/useAccessibleModels';

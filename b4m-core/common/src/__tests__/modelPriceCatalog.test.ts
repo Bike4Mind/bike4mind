@@ -95,6 +95,31 @@ describe('applyModelPriceCatalog', () => {
     expect(priced.pricing[200_000].cache_write).toBe(3e-6);
   });
 
+  it('stamps the catalog source and the row id on a repriced model', () => {
+    const [priced] = applyModelPriceCatalog(
+      [model('gpt-x')],
+      [row('gpt-x', { id: 'row-1' })],
+      new Date('2026-07-15T00:00:00Z')
+    );
+    expect(priced.priceSource).toBe('catalog');
+    expect(priced.priceRowId).toBe('row-1');
+  });
+
+  it('stamps the newest row in force, not an older one', () => {
+    const rows = [
+      row('gpt-x', { id: 'june', effectiveFrom: new Date('2026-06-01T00:00:00Z') }),
+      row('gpt-x', { id: 'july', effectiveFrom: new Date('2026-07-01T00:00:00Z') }),
+    ];
+    const [priced] = applyModelPriceCatalog([model('gpt-x')], rows, new Date('2026-07-15T00:00:00Z'));
+    expect(priced.priceRowId).toBe('july');
+  });
+
+  it('stamps nothing on a model left on its adapter literal', () => {
+    const [unpriced] = applyModelPriceCatalog([model('gpt-x')], [row('other', { id: 'row-1' })], new Date());
+    expect(unpriced.priceSource).toBeUndefined();
+    expect(unpriced.priceRowId).toBeUndefined();
+  });
+
   it('does not mutate the input models', () => {
     const original = model('gpt-x');
     applyModelPriceCatalog([original], [row('gpt-x')], new Date('2026-07-15T00:00:00Z'));

@@ -185,6 +185,35 @@ export function reasonsWithinOutputBudget(modelInfo: ModelInfo): boolean {
   return modelInfo.dispatchProfile?.maxTokensParam === 'max_completion_tokens' && modelInfo.can_think === true;
 }
 
+// Headroom for thinking tokens, which count against Gemini's maxOutputTokens.
+export const GEMINI_THINKING_RESERVE_TOKENS = 16_000;
+
+/**
+ * True when geminiBackend sizes this model's output cap with geminiThinkingOutputCap instead of
+ * sending the requested maxTokens as-is.
+ */
+export function usesGeminiThinkingOutputCap(modelInfo: ModelInfo): boolean {
+  const servedByGemini = modelInfo.adapterFamily
+    ? modelInfo.adapterFamily === 'gemini'
+    : modelInfo.backend === ModelBackend.Gemini;
+  return servedByGemini && modelInfo.can_think === true;
+}
+
+/**
+ * The maxOutputTokens geminiBackend sends for a thinking model: the caller's cap plus thinking
+ * headroom, clamped to the declared cap. callerCapBinds is false when the declared cap is the
+ * tighter bound. completionMeter holds this same number, so both must call this one function.
+ */
+export function geminiThinkingOutputCap(
+  modelInfo: ModelInfo,
+  callerCap: number
+): { maxOutputTokens: number; callerCapBinds: boolean } {
+  const wanted = callerCap + GEMINI_THINKING_RESERVE_TOKENS;
+  // Assumes no live can_think row has max_tokens below the reserve: it would get its catalog cap and no thinking bound.
+  const ceiling = (modelInfo.maxOutputTokensDerived ? undefined : usableTokenCount(modelInfo.max_tokens)) ?? Infinity;
+  return { maxOutputTokens: Math.min(ceiling, wanted), callerCapBinds: wanted < ceiling };
+}
+
 /**
  * Resolves the output budget to send as the model's max-tokens param.
  *

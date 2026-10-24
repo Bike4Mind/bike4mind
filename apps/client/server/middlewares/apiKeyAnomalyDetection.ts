@@ -1,8 +1,14 @@
 import { RequestHandler } from 'express';
 import { ApiKeyAlertService, AnomalyDetectionRequest } from '@server/managers/apiKeyAlertService';
 import { isApiKeyAuth } from './apiKeyAuth';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, type ApiKeyScopeValue } from '@bike4mind/common';
 import { resolveRequestPathname, resolveRouteTemplate } from '@server/utils/resolveRouteTemplate';
+
+const EPHEMERAL_IP_SCOPES: ReadonlySet<ApiKeyScopeValue> = new Set<ApiKeyScopeValue>([
+  ApiKeyScope.OVERWATCH_INGEST_WRITE,
+  ApiKeyScope.QA_INGEST,
+  ApiKeyScope.RELEASE_NOTES_WRITE,
+]);
 
 /**
  * Middleware to detect anomalies in API key usage
@@ -18,10 +24,10 @@ export const apiKeyAnomalyDetection = (): RequestHandler => {
       return next();
     }
 
-    // Ingest keys emit from load-balanced product backends or CI runners with
-    // ephemeral IPs by design; detection would trip the commonIPs baseline.
+    // Ingest and release-video keys emit from load-balanced product backends or CI runners with
+    // ephemeral IPs by design; detection would trip the commonIPs baseline on every run.
     const scopes = req.apiKeyInfo?.scopes;
-    if (scopes?.includes(ApiKeyScope.OVERWATCH_INGEST_WRITE) || scopes?.includes(ApiKeyScope.QA_INGEST)) {
+    if (scopes?.some(scope => EPHEMERAL_IP_SCOPES.has(scope))) {
       return next();
     }
 

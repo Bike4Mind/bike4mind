@@ -100,9 +100,10 @@ export class ModelPriceRepository extends BaseRepository<IModelPriceDocument> im
   }
 
   async rowsInForce(at: Date = new Date()): Promise<IModelPrice[]> {
-    const docs = await this.model.aggregate<IModelPriceDocument>(rowsInForcePipeline(at));
-    // Aggregation bypasses Mongoose casting; Map fields come back as plain objects.
-    return docs.map(doc => ({ ...doc, pricing: doc.pricing }) as IModelPrice);
+    const docs = await this.model.aggregate<IModelPriceDocument & { _id: unknown }>(rowsInForcePipeline(at));
+    // Aggregation bypasses Mongoose casting and virtuals: Map fields come back as plain objects and
+    // `id` has to be set by hand (settlement stamps it on UsageEvent.priceRowId).
+    return docs.map(doc => ({ ...doc, id: String(doc._id), pricing: doc.pricing }) as IModelPrice);
   }
 
   async historyForModel(modelId: string): Promise<IModelPrice[]> {

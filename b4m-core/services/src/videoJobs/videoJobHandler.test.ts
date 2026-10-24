@@ -5,6 +5,7 @@ import {
   estimateVideoCostUsd,
   MAX_INLINE_PROVIDER_OUTPUT_BYTES,
   MAX_VIDEO_OUTPUT_BYTES,
+  type VideoInput,
 } from '@bike4mind/common';
 import {
   createVideoProviderRegistry,
@@ -376,7 +377,7 @@ describe('video job end to end with the test provider', () => {
     expect(t.jobOf(created).state).toBe('succeeded');
     expect(submit).toHaveBeenCalledWith(
       expect.objectContaining({ inputImageFileId: 'f1' }),
-      { inputImage: { bytes: Buffer.from('img'), mimeType: 'image/png' } },
+      { images: [{ role: 'first_frame', bytes: Buffer.from('img'), mimeType: 'image/png' }] },
       expect.objectContaining({ apiKey: 'key' })
     );
   });
@@ -399,9 +400,51 @@ describe('video job end to end with the test provider', () => {
     expect(loadInputImage).toHaveBeenNthCalledWith(2, user.id, { kind: 'generated', key });
     expect(submit).toHaveBeenCalledWith(
       expect.anything(),
-      { inputImage: { bytes: Buffer.from('gen'), mimeType: 'image/webp' } },
+      { images: [{ role: 'first_frame', bytes: Buffer.from('gen'), mimeType: 'image/webp' }] },
       expect.anything()
     );
+  });
+
+  it('loads every role-tagged input and hands them to the provider in request order', async () => {
+    const loadInputImage = vi.fn<VideoJobDeps['loadInputImage']>(async (_userId, ref) => ({
+      bytes: Buffer.from(ref.kind === 'file' ? ref.id : ref.key),
+      mimeType: 'image/png',
+    }));
+    const base = new TestVideoProvider();
+    const submit = vi.fn<VideoProvider['submit']>((req, inputs, ctx) => base.submit(req, inputs, ctx));
+    const t = setup({ loadInputImage, providers: createVideoProviderRegistry([stubProvider({ submit })]) });
+    const inputs: VideoInput[] = [
+      { role: 'first_frame', fileId: 'f1' },
+      { role: 'last_frame', fileId: 'f2' },
+      { role: 'reference', generatedImageKey: 'k.png' },
+    ];
+    const created = await createVideoJob(
+      { user, request: { ...request(), mode: 'image_to_video', inputs }, source: 'studio' },
+      t.deps
+    );
+    await t.runToCompletion();
+    expect(t.jobOf(created).state).toBe('succeeded');
+    expect(loadInputImage).toHaveBeenLastCalledWith(user.id, { kind: 'generated', key: 'k.png' });
+    expect(submit).toHaveBeenCalledWith(
+      expect.anything(),
+      {
+        images: [
+          { role: 'first_frame', bytes: Buffer.from('f1'), mimeType: 'image/png' },
+          { role: 'last_frame', bytes: Buffer.from('f2'), mimeType: 'image/png' },
+          { role: 'reference', bytes: Buffer.from('k.png'), mimeType: 'image/png' },
+        ],
+      },
+      expect.anything()
+    );
+  });
+
+  it('gives a text_to_video job no input images', async () => {
+    const base = new TestVideoProvider();
+    const submit = vi.fn<VideoProvider['submit']>((req, inputs, ctx) => base.submit(req, inputs, ctx));
+    const t = setup({ providers: createVideoProviderRegistry([stubProvider({ submit })]) });
+    await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
+    await t.runToCompletion();
+    expect(submit).toHaveBeenCalledWith(expect.anything(), { images: [] }, expect.anything());
   });
 
   it('fails with input_image_not_found when the image disappears before submit', async () => {

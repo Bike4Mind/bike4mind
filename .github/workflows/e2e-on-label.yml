@@ -70,8 +70,8 @@ jobs:
         run: pnpm core:build
 
       - name: Install Playwright Chromium
-        working-directory: apps/client
-        run: npx playwright install chromium --with-deps
+        timeout-minutes: 12
+        uses: ./.github/actions/install-playwright-chromium
 
       - name: Wait for deployment to be healthy
         env:

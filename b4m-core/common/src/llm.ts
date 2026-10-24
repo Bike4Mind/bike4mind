@@ -85,7 +85,15 @@ export const GenerateImageIvokeParamsSchema = OpenAIImageGenerationInput.extend(
   referenceImageFabFileIds: z.array(z.string()).max(MAX_REFERENCE_IMAGES).optional(),
   tools: z.array(z.union([b4mLLMTools, z.string()])).optional(),
   safety_tolerance: BFLSafetyToleranceSchema,
-  prompt_upsampling: z.boolean().optional(),
+  // prefault rather than optional so the generated spec carries the default; BFL is the only
+  // provider that acts on it (see supportsPromptUpsampling).
+  prompt_upsampling: z
+    .boolean()
+    .prefault(false)
+    .describe(
+      'Let the provider rewrite and expand the prompt before rendering. Applies to Black Forest ' +
+        'Labs (FLUX) models only; other models ignore it. Defaults to false.'
+    ),
   seed: z.number().nullable().optional(),
   output_format: ImageOutputFormatSchema.nullable().optional(),
   /** Resolved by the API route's prompt resolver. Defaults to 'fresh' for first-turn or sessions with no prior image. */
@@ -281,6 +289,12 @@ export const ChatCompletionInvokeParamsSchema = z.object({
         role: z.enum(['user', 'assistant', 'system', 'function', 'tool']),
         content: z.union([z.string(), z.array(z.any())]),
         fabFileIds: z.array(z.string()).optional(),
+        /**
+         * Send this message in the current user turn instead of the system prompt, keeping the
+         * system prefix byte-stable for prompt caching. Only for content that changes every turn
+         * (a view description, a per-send brief); a caller's actual system prompt must not set it.
+         */
+        perTurn: z.boolean().optional(),
       })
     )
     .optional(),

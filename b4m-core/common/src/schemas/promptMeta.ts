@@ -848,9 +848,9 @@ export const RetrievalSummarySchema = z.object({
  * `citables` and `retrieval` - this field needs no merge case in applyQuestStatusChanges: a
  * later tool-arm write that omits it is preserved by the one-level spread.
  *
- * `reasons` is the same diagnostic prose the warnings entry interpolates. It is shown to the
- * reader behind a disclosure rather than in the banner body, because only some reasons are
- * actionable (a document mid-reindex returns on its own; a per-turn chunk budget does not).
+ * `reasons` is reader-facing prose with no document ids or internal limits, shown behind a
+ * disclosure in the chat notice. The diagnostic version (ids, caps, counts) lives only in the
+ * `warnings` entry. A supersession collapse alone does not produce this field at all.
  */
 export const RetrievalCoverageSchema = z.object({
   /** Always true - see the presence contract above. */

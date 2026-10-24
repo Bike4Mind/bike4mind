@@ -18,16 +18,14 @@ import {
   IconButton,
   ButtonGroup,
 } from '@mui/joy';
-import {
-  Article,
-  Send,
-  Edit,
-  Close as CloseIcon,
-  AutoAwesome,
-  AddPhotoAlternate,
-  CalendarToday,
-  Collections,
-} from '@mui/icons-material';
+import Article from '@mui/icons-material/Article';
+import Send from '@mui/icons-material/Send';
+import Edit from '@mui/icons-material/Edit';
+import CloseIcon from '@mui/icons-material/Close';
+import AutoAwesome from '@mui/icons-material/AutoAwesome';
+import AddPhotoAlternate from '@mui/icons-material/AddPhotoAlternate';
+import CalendarToday from '@mui/icons-material/CalendarToday';
+import Collections from '@mui/icons-material/Collections';
 import { toast } from 'sonner';
 import { usePublishBlog } from '@client/app/hooks/data/blog';
 import { useBlogContentEnhancement } from '@client/app/hooks/useBlogContentEnhancement';

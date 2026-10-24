@@ -178,7 +178,7 @@ describe('VeoVideoProvider specifics', () => {
     const bytes = Buffer.from('png');
     await new VeoVideoProvider().submit(
       request({ mode: 'image_to_video', inputImageFileId: 'f1', prompt: recorded.instances[0].prompt }),
-      { inputImage: { bytes, mimeType: 'image/png' } },
+      { images: [{ role: 'first_frame', bytes, mimeType: 'image/png' }] },
       ctx()
     );
     // The recording redacts the image bytes, so compare with them redacted in the sent body too.
@@ -206,7 +206,7 @@ describe('VeoVideoProvider specifics', () => {
     const error = await new VeoVideoProvider()
       .submit(
         request({ mode: 'image_to_video', inputImageFileId: 'f1' }),
-        { inputImage: { bytes: Buffer.from('png'), mimeType: 'image/png' } },
+        { images: [{ role: 'first_frame', bytes: Buffer.from('png'), mimeType: 'image/png' }] },
         ctx()
       )
       .catch((e: unknown) => e);
@@ -218,7 +218,7 @@ describe('VeoVideoProvider specifics', () => {
     const provider = new VeoVideoProvider();
     const handle = await provider.submit(
       request({ mode: 'image_to_video', inputImageFileId: 'f1' }),
-      { inputImage: { bytes: Buffer.from('png'), mimeType: 'image/png' } },
+      { images: [{ role: 'first_frame', bytes: Buffer.from('png'), mimeType: 'image/png' }] },
       ctx()
     );
     expect(await provider.poll(handle, ctx())).toEqual({ status: 'running' });

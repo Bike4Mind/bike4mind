@@ -19,6 +19,8 @@
  */
 export interface AccountCredits {
   balance: number | null;
+  /** Backend-stated grant for one monthly plan cycle. Null means no finite allowance was stated. */
+  monthlyAllowance: number | null;
   /** Set when the read failed. Present with a null balance, never with a real one. */
   error?: string;
 }

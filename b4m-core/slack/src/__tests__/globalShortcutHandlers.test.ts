@@ -256,6 +256,7 @@ describe('GlobalShortcutHandlers', () => {
 
       expect(mockUserFindOne).toHaveBeenCalledWith({
         'slackSettings.slackUserId': 'U12345',
+        'slackSettings.slackTeamId': { $type: 'string', $ne: '' },
       });
     });
   });

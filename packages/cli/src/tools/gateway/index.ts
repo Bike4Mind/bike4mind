@@ -2,6 +2,7 @@ export { wrapToolWithPermission, wrapTools } from './gateway.js';
 export type {
   AgentContext,
   PermissionPromptKind,
+  PermissionPromptOptions,
   ShowPermissionPrompt,
   ToolArgs,
   WrapToolDeps,

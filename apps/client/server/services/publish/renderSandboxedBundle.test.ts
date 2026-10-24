@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { renderSandboxedBundle, type SandboxAsset } from './renderSandboxedBundle';
+import { isBundlePagePath, renderSandboxedBundle, resolveBundlePath, type SandboxAsset } from './renderSandboxedBundle';
 
 const ORIGIN = 'https://app.bike4mind.com';
 const URL_BASE = '/p/u/scope123/my-slug';
@@ -298,5 +298,182 @@ describe('renderSandboxedBundle', () => {
       });
       expect(srcdoc).toContain('window.print');
     });
+  });
+});
+
+describe('resolveBundlePath', () => {
+  it.each([
+    ['index.html', 'style.css', 'style.css'],
+    ['index.html', './img/a.png', 'img/a.png'],
+    ['guide/intro.html', 'figure.png', 'guide/figure.png'],
+    ['guide/intro.html', '../index.html', 'index.html'],
+    ['guide/intro.html', '../files/report.pdf?x=1#p2', 'files/report.pdf'],
+    ['index.html', 'my%20file.pdf', 'my file.pdf'],
+    ['index.html', '', 'index.html'],
+  ])('resolves %s + %s to %s', (page, ref, expected) => {
+    expect(resolveBundlePath(page, ref)).toBe(expected);
+  });
+
+  it.each([
+    ['index.html', '../escape.html'],
+    ['guide/intro.html', '../../escape.html'],
+    ['index.html', '//other.example/x'],
+  ])('rejects %s + %s, which leaves the bundle', (page, ref) => {
+    expect(resolveBundlePath(page, ref)).toBeNull();
+  });
+});
+
+describe('isBundlePagePath', () => {
+  it.each([
+    ['index.html', true],
+    ['guide/Intro.HTM', true],
+    ['figure.svg', false],
+    ['page.xhtml', false],
+    ['page.html.txt', false],
+  ])('%s -> %s', (path, expected) => {
+    expect(isBundlePagePath(path)).toBe(expected);
+  });
+});
+
+describe('renderSandboxedBundle - multi-page bundles', () => {
+  const page = `<html><head></head><body><img src="figure.png"><a href="../index.html#top">Home</a>
+<a href="../files/report.pdf">Report</a><a href="next.html" target="_blank">Next</a><a href="#local">Here</a>
+<a href="../../outside.html">Out</a></body></html>`;
+
+  it('bases a public sub-page at its own directory', () => {
+    const { srcdoc } = renderSandboxedBundle({
+      indexHtml: page,
+      urlBase: URL_BASE,
+      origin: ORIGIN,
+      visibility: 'public',
+      pagePath: 'guide/intro.html',
+    });
+    expect(srcdoc).toContain(`<base href="${ORIGIN}${URL_BASE}/guide/">`);
+  });
+
+  it('inlines page-relative assets and absolutizes same-bundle links in gated mode', () => {
+    const { srcdoc, droppedAssets } = renderSandboxedBundle({
+      indexHtml: page,
+      urlBase: URL_BASE,
+      origin: ORIGIN,
+      visibility: 'private',
+      pagePath: 'guide/intro.html',
+      assets: new Map([['guide/figure.png', asset('PNG', 'image/png')]]),
+    });
+    expect(droppedAssets).toHaveLength(0);
+    expect(srcdoc).toContain(`src="data:image/png;base64,${Buffer.from('PNG').toString('base64')}"`);
+    expect(srcdoc).toContain(`href="${ORIGIN}${URL_BASE}#top"`);
+    expect(srcdoc).toContain(`href="${ORIGIN}${URL_BASE}/files/report.pdf"`);
+    expect(srcdoc).toContain(`href="${ORIGIN}${URL_BASE}/guide/next.html" target="_blank"`);
+    // Fragment-only links and links that leave the bundle are untouched.
+    expect(srcdoc).toContain('href="#local"');
+    expect(srcdoc).toContain('href="../../outside.html"');
+  });
+
+  it("keeps a file link's exact ?download=1 and drops every other query", () => {
+    const { srcdoc } = renderSandboxedBundle({
+      indexHtml:
+        '<html><body><a href="files/deck.pdf?download=1">Get</a><a href="files/deck.pdf?download=1#p2">Get p2</a>' +
+        '<a href="files/deck.pdf?download=1&x=2">Other</a><a href="next.html?download=1">Page</a>' +
+        '<a href="next.html?tab=2#s">Tab</a></body></html>',
+      urlBase: URL_BASE,
+      origin: ORIGIN,
+      visibility: 'private',
+    });
+    expect(srcdoc).toContain(`href="${ORIGIN}${URL_BASE}/files/deck.pdf?download=1"`);
+    expect(srcdoc).toContain(`href="${ORIGIN}${URL_BASE}/files/deck.pdf?download=1#p2"`);
+    expect(srcdoc).toContain(`href="${ORIGIN}${URL_BASE}/files/deck.pdf">Other`);
+    expect(srcdoc).toContain(`href="${ORIGIN}${URL_BASE}/next.html">Page`);
+    expect(srcdoc).toContain(`href="${ORIGIN}${URL_BASE}/next.html#s">Tab`);
+  });
+
+  it('also fixes index links in gated mode, which have no <base> to resolve against', () => {
+    const { srcdoc } = renderSandboxedBundle({
+      indexHtml: '<html><body><a href="poster/poster.html">Poster</a></body></html>',
+      urlBase: URL_BASE,
+      origin: ORIGIN,
+      visibility: 'private',
+    });
+    expect(srcdoc).toContain(`href="${ORIGIN}${URL_BASE}/poster/poster.html"`);
+  });
+
+  it('leaves links alone in self-contained documents (no urlBase)', () => {
+    const { srcdoc } = renderSandboxedBundle({
+      indexHtml: '<html><body><a href="other.html">Other</a></body></html>',
+      urlBase: '',
+      origin: ORIGIN,
+      visibility: 'private',
+      assetMode: 'inline',
+    });
+    expect(srcdoc).toContain('href="other.html"');
+  });
+
+  it('strips frames, <base>, meta refresh and non-blessed scripts from a secondary page only', () => {
+    const risky = `<html><head><base href="https://evil.example/"><meta http-equiv="refresh" content="0;url=https://evil.example">
+<script src="https://evil.example/x.js"></script><script src="/static/lib/chart.js@4.x.js"></script></head>
+<body><iframe src="/login"></iframe><object data="x"></object><script>var ok = 1;</script></body></html>`;
+    const secondary = renderSandboxedBundle({
+      indexHtml: risky,
+      urlBase: URL_BASE,
+      origin: ORIGIN,
+      visibility: 'public',
+      pagePath: 'guide/intro.html',
+    }).srcdoc;
+    expect(secondary).not.toContain('evil.example');
+    expect(secondary).not.toContain('<iframe');
+    expect(secondary).not.toContain('<object');
+    expect(secondary).toContain(`src="${ORIGIN}/static/lib/chart.js@4.x.js"`);
+    expect(secondary).toContain('var ok = 1;');
+    expect(secondary.match(/<base/g) ?? []).toHaveLength(1);
+
+    // The index went through publish-time validation instead; it is not rewritten here.
+    const index = renderSandboxedBundle({
+      indexHtml: '<html><body><object data="x"></object></body></html>',
+      urlBase: URL_BASE,
+      origin: ORIGIN,
+      visibility: 'public',
+    }).srcdoc;
+    expect(index).toContain('<object');
+  });
+
+  it('configures bundle-link routing only when asked to', () => {
+    const routed = renderSandboxedBundle({
+      indexHtml: '<html><body></body></html>',
+      urlBase: URL_BASE,
+      origin: ORIGIN,
+      visibility: 'public',
+      pagePaths: [URL_BASE],
+      routeBundleLinks: true,
+    }).srcdoc;
+    expect(routed).toContain(`"bases":["${URL_BASE}"]`);
+
+    const isolated = renderSandboxedBundle({
+      indexHtml: '<html><body></body></html>',
+      urlBase: URL_BASE,
+      origin: ORIGIN,
+      visibility: 'public',
+      pagePaths: [URL_BASE],
+    }).srcdoc;
+    expect(isolated).toContain('"bases":[]');
+  });
+});
+
+describe('renderSandboxedBundle - signed media in gated renders', () => {
+  it('points media refs at signed URLs instead of inlining or dropping them', () => {
+    const signed = 'https://bundles.s3.example/user/s/clip.mp4?X-Amz-Signature=sig';
+    const { srcdoc, droppedAssets } = renderSandboxedBundle({
+      indexHtml:
+        '<html><body><video src="../media/clip.mp4" poster="../media/still.jpg"></video>' +
+        '<video><source src="../media/clip.mp4" type="video/mp4"></video></body></html>',
+      urlBase: URL_BASE,
+      origin: ORIGIN,
+      visibility: 'private',
+      pagePath: 'pages/player.html',
+      assets: new Map([['media/still.jpg', asset('JPEG', 'image/jpeg')]]),
+      signedAssets: new Map([['media/clip.mp4', signed]]),
+    });
+    expect(droppedAssets).toHaveLength(0);
+    expect(srcdoc.split(`src="${signed}"`)).toHaveLength(3);
+    expect(srcdoc).toContain(`poster="data:image/jpeg;base64,${Buffer.from('JPEG').toString('base64')}"`);
   });
 });

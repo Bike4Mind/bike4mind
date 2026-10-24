@@ -3,7 +3,12 @@ import { useUser } from '../contexts/UserContext';
 import { useVerifyDevice } from '../hooks/data/device-auth';
 import { useState, useEffect } from 'react';
 import { Box, Button, Input, Typography, Alert, Card, CardContent, Divider, Stack, Sheet } from '@mui/joy';
-import { CheckCircle, Security, Terminal, Warning, Info, ErrorOutline } from '@mui/icons-material';
+import CheckCircle from '@mui/icons-material/CheckCircle';
+import Security from '@mui/icons-material/Security';
+import Terminal from '@mui/icons-material/Terminal';
+import Warning from '@mui/icons-material/Warning';
+import Info from '@mui/icons-material/Info';
+import ErrorOutline from '@mui/icons-material/ErrorOutline';
 
 export default function ActivatePage() {
   const navigate = useNavigate();

@@ -314,7 +314,7 @@ function toQuotaRejection(err: unknown): ChatArtifactPublish | null {
   if (!code?.toLowerCase().includes('quota')) return null;
   return {
     status: 'quota',
-    reason: serverMessage(err) ?? 'You have reached your published-artifact limit. Remove a publication to make room.',
+    reason: serverMessage(err) ?? 'You have reached your published-storage limit. Remove a publication to make room.',
   };
 }
 

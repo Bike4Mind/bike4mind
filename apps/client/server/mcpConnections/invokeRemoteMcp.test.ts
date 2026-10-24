@@ -83,7 +83,7 @@ vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   recordCircuitBreakerRejection: vi.fn(async () => undefined),
   recordCircuitBreakerTransition: vi.fn(async () => undefined),
 }));
-vi.mock('@server/integrations/integrationAuditLogger', () => ({
+vi.mock('@bike4mind/server-utils/integrations/integrationAuditLogger', () => ({
   IntegrationAuditLogger: {
     create: (context: Record<string, unknown>) => ({
       success: (extra?: unknown) => state.audits.push({ context, outcome: 'success', extra }),
@@ -107,6 +107,8 @@ const {
   invokeRemoteMcp,
   resolveRemoteMcpRunner,
 } = await import('./invokeRemoteMcp');
+const { recordCircuitBreakerRejection, recordCircuitBreakerTransition } =
+  await import('@bike4mind/server-utils/utils/cloudwatch');
 
 type LookupCallback = (err: NodeJS.ErrnoException | null, addresses: dns.LookupAddress[]) => void;
 const realLookup = dns.lookup;
@@ -515,6 +517,74 @@ describe('invokeRemoteMcp - round trips against the fixture', () => {
     await expect(
       invokeRemoteMcp({ action: 'listTools', connectionId: other, userId: 'user-1' }, { runner, context: context() })
     ).resolves.toBeDefined();
+  });
+
+  // The throw ends the invocation, so the rejection metric must land before it.
+  it('does not throw unavailable until the breaker rejection metric has settled', async () => {
+    const id = seed('/broken');
+    for (let i = 0; i < 5; i++) {
+      await expectRemoteCode(
+        invokeRemoteMcp({ action: 'listTools', connectionId: id, userId: 'user-1' }, { runner, context: context() }),
+        'upstream_5xx'
+      );
+    }
+    let releaseMetric: () => void = () => {};
+    vi.mocked(recordCircuitBreakerRejection).mockReturnValueOnce(
+      new Promise<void>(resolve => {
+        releaseMetric = resolve;
+      })
+    );
+    let settled = false;
+
+    const call = invokeRemoteMcp(
+      { action: 'listTools', connectionId: id, userId: 'user-1' },
+      { runner, context: context() }
+    ).catch((error: unknown) => {
+      settled = true;
+      throw error;
+    });
+    const outcome = expect(call).rejects.toBeInstanceOf(CustomMcpUnavailableError);
+
+    await vi.waitFor(() => expect(recordCircuitBreakerRejection).toHaveBeenCalledWith('custom_mcp'));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(settled).toBe(false);
+
+    releaseMetric();
+    await outcome;
+  });
+
+  // The call that trips the breaker starts a transition metric inside the breaker; the invocation
+  // must drain it before returning.
+  it('does not settle the call that trips the breaker until the transition metric has settled', async () => {
+    const id = seed('/broken');
+    for (let i = 0; i < 4; i++) {
+      await expectRemoteCode(
+        invokeRemoteMcp({ action: 'listTools', connectionId: id, userId: 'user-1' }, { runner, context: context() }),
+        'upstream_5xx'
+      );
+    }
+    let releaseMetric: () => void = () => {};
+    vi.mocked(recordCircuitBreakerTransition).mockReturnValueOnce(
+      new Promise<void>(resolve => {
+        releaseMetric = resolve;
+      })
+    );
+    let settled = false;
+
+    const call = invokeRemoteMcp(
+      { action: 'listTools', connectionId: id, userId: 'user-1' },
+      { runner, context: context() }
+    ).catch((error: unknown) => {
+      settled = true;
+      return error;
+    });
+
+    await vi.waitFor(() => expect(recordCircuitBreakerTransition).toHaveBeenCalled());
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(settled).toBe(false);
+
+    releaseMetric();
+    expect(await call).toMatchObject({ code: 'upstream_5xx' });
   });
 
   it('a refused credential does not count against the breaker', async () => {

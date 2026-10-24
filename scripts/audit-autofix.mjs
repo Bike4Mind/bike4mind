@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 
 // Raises the root pnpm-workspace.yaml overrides past the high/critical advisories that
-// scripts/audit-gate.mjs would fail on, in the same `name@<X: ^X` style as the
-// hand-written fixes. Used by the scheduled audit job in
-// .github/workflows/audit-gate.yml to open an auto-fix PR; a human reviews and
-// merges it. Anything it cannot fix safely (no patched release, an unparseable
-// patched range, an exact pin) is listed for a human instead of guessed.
+// scripts/audit-gate.mjs would fail on, as a floor scoped to the patched version's
+// semver line (`name@>=14.0.0 <14.3.3: ^14.3.3`, or `>=0.M.0` below 1.0.0) so it
+// does not reach a dependent that declares only an older major. Used by the
+// scheduled audit job in .github/workflows/audit-gate.yml to open an auto-fix PR;
+// a human reviews and merges it. Anything it cannot fix safely (no patched
+// release, an unparseable patched range, an exact pin) is listed for a human
+// instead of guessed.
 //
 // Usage: PACKAGES_JSON_REPORT_PATH=report.json AUTOFIX_SUMMARY_PATH=summary.md node scripts/audit-autofix.mjs
 // Writes `changed=true|false` to $GITHUB_OUTPUT, and the skipped advisories to
@@ -55,6 +57,12 @@ function semverLine(v) {
   return major === 0 ? `0.${minor}` : `${major}`;
 }
 
+// The first version on v's semver line, the lower bound of a scoped floor key.
+function lineStart(v) {
+  const [major, minor] = v.match(VERSION).slice(1).map(Number);
+  return major === 0 ? `0.${minor}.0` : `${major}.0.0`;
+}
+
 // Every version of every package in a pnpm v9 lockfile's `packages:` section,
 // whose keys are `name@version` (peer suffixes live under `snapshots:`). A line
 // scan, because the audit job runs without installing a YAML parser.
@@ -77,10 +85,11 @@ export function lockfileVersions(lockText) {
   return versions;
 }
 
-// Why a floor cannot be applied, or null when it can. pnpm applies `name@<X: ^X`
-// to every dependent whose declared range intersects `<X`, and the lockfile does
-// not record declared ranges, so every installed copy, above or below X, must be
-// on X's semver line. Each vulnerable copy must be below X or the floor fixes nothing.
+// Why a floor cannot be applied, or null when it can. pnpm applies a floor key to
+// every dependent whose declared range intersects the key's range (a `*` dependent
+// intersects even a line-scoped one), and the lockfile does not record declared
+// ranges, so every installed copy, above or below X, must be on X's semver line.
+// Each vulnerable copy must be below X or the floor fixes nothing.
 function floorProblem(floor, vulnerable, installed) {
   if (vulnerable.length === 0 && installed.length === 0) return 'no installed version found';
   for (const v of vulnerable) {
@@ -150,15 +159,18 @@ export function computeOverrideFixes(report, allowlist, currentOverrides = {}, i
         skipped.push({ ...a, reason: `\`${pkg}\` is pinned by a plain override (needs a human)` });
       continue;
     }
-    // A floor is `name@<X: ^Y` with Y >= X. Anything else (a per-major range like
+    // A floor is `name@<X: ^Y` or the line-scoped `name@>=L <X: ^Y`, with L the
+    // start of X's semver line and Y >= X. Anything else (a per-major range like
     // `name@>=4.0.0 <5.0.0`, or a line pin like `name@<4.0.0: ^3.15.1`) would be
     // overlapped or replaced across majors, so the package goes to a human.
     const floorOf = k => {
-      const range = parseOverrideKey(k).range;
+      const m = parseOverrideKey(k).range.match(/^(?:>=(\S+) )?<(\S+)$/);
       const value = String(currentOverrides[k]);
-      if (!range.startsWith('<') || !VERSION.test(range.slice(1))) return null;
+      if (!m || !VERSION.test(m[2])) return null;
+      if (m[1] !== undefined && m[1] !== lineStart(m[2])) return null;
+      if (m[1] !== undefined && m[1] === m[2]) return null; // an empty `>=X <X` range
       if (!value.startsWith('^') || !VERSION.test(value.slice(1))) return null;
-      return compareVersions(value.slice(1), range.slice(1)) >= 0 ? range.slice(1) : null;
+      return compareVersions(value.slice(1), m[2]) >= 0 ? m[2] : null;
     };
     const nonFloor = ownKeys.find(k => !floorOf(k));
     if (nonFloor) {
@@ -181,7 +193,19 @@ export function computeOverrideFixes(report, allowlist, currentOverrides = {}, i
         skipped.push({ ...a, reason: `\`${otherLine}\` holds a floor on another major (needs a human)` });
       continue;
     }
-    const newKey = `${pkg}@<${floor}`;
+    // Raising an unscoped `name@<X` keeps it unscoped: narrowing it would release a
+    // dependent of an older major that it forces up today, which the lockfile cannot show.
+    const keepsUnscoped = lowerFloors.some(k => parseOverrideKey(k).range.startsWith('<'));
+    // A scoped floor that starts its own line would be an empty `>=X <X` range.
+    if (!keepsUnscoped && compareVersions(lineStart(floor), floor) === 0) {
+      for (const a of advisories)
+        skipped.push({
+          ...a,
+          reason: `\`${floor}\` starts its semver line, so a scoped floor would match nothing (needs a human)`,
+        });
+      continue;
+    }
+    const newKey = keepsUnscoped ? `${pkg}@<${floor}` : `${pkg}@>=${lineStart(floor)} <${floor}`;
     const newValue = `^${floor}`;
     const from = lowerFloors.map(k => `\`${k}: ${currentOverrides[k]}\``).join(', ') || '(none)';
     if (lowerFloors.length > 0) {

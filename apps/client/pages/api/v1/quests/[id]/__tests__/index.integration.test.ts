@@ -52,7 +52,7 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
 }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
-vi.mock('@server/generationCallback/dispatchQuestCallback', () => ({
+vi.mock('@bike4mind/server-utils/generationCallback/dispatchQuestCallback', () => ({
   dispatchQuestCallback: (...a: unknown[]) => mockDispatchQuestCallback(...a),
 }));
 

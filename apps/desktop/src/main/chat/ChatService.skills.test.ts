@@ -326,6 +326,34 @@ describe('ChatService and skills', () => {
     expect(asked?.approvalDetail).toContain('read content from a skill (skill)');
   });
 
+  it('sends a skill named mid-message as typed, with a note telling the model to run it', async () => {
+    const id = await session();
+    await catalog.setTrusted(project, true);
+
+    const body = await turn(id, 'the build is green, so /ship-it please', 1);
+    const messages = body.messages as { role: string; content: unknown }[];
+    const sent = JSON.stringify(messages[messages.length - 1].content);
+    expect(sent).toContain('the build is green, so /ship-it please');
+    expect(sent).toContain('The user invoked the skill /ship-it in this message');
+    // Not a leading invocation, so the turn is the user's words, not an expanded body.
+    expect((await service.getSession(id))?.messages[0]).toMatchObject({
+      content: 'the build is green, so /ship-it please',
+    });
+    expect((await service.getSession(id))?.messages[0]?.skill).toBeUndefined();
+  });
+
+  it('refuses a user-only skill named mid-message instead of sending it as literal text', async () => {
+    const id = await session();
+    await catalog.setTrusted(project, true);
+
+    const result = await service.send(id, 'keep these in /my-notes for later');
+    expect(result).toMatchObject({
+      ok: false,
+      error: expect.stringContaining('/my-notes can only be run at the start'),
+    });
+    expect(post).not.toHaveBeenCalled();
+  });
+
   it('records an account skill send as account, so the thread can label it', async () => {
     const id = await session();
 

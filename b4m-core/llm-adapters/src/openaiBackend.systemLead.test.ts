@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import { ChatModels, type ICompletionOptionTools } from '@bike4mind/common';
+import { BadRequestError, ChatModels, type ICompletionOptionTools, type IMessage } from '@bike4mind/common';
 import { OpenAIBackend } from './openaiBackend';
 import { buildIdentityReminder } from './identityReminder';
 
@@ -42,6 +42,37 @@ function buildBackend() {
 }
 
 describe('OpenAIBackend lead system message on the wire', () => {
+  it.each([
+    ['system-only', [{ role: 'system', content: CALLER_SYSTEM }] as IMessage[]],
+    ['blank string', [{ role: 'user', content: '  \n ' }] as IMessage[]],
+    ['blank text block', [{ role: 'assistant', content: [{ type: 'text', text: '\t' }] }] as IMessage[]],
+  ])('rejects %s before either provider endpoint is called', async (_label, messages) => {
+    const { backend, chatCreate, responsesCreate } = buildBackend();
+
+    await expect(backend.complete(ChatModels.GPT5_4, messages, {}, async () => {})).rejects.toMatchObject({
+      constructor: BadRequestError,
+      statusCode: 400,
+      message: 'request must contain at least one non-empty user or assistant message',
+    });
+    expect(chatCreate).not.toHaveBeenCalled();
+    expect(responsesCreate).not.toHaveBeenCalled();
+  });
+
+  it('keeps a native assistant tool-call turn substantive when its text content is null', async () => {
+    const { backend, chatCreate } = buildBackend();
+    const messages = [
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{ id: 'call-1', type: 'function', function: { name: 'lookup', arguments: '{}' } }],
+      },
+    ] as IMessage[];
+
+    await backend.complete(ChatModels.GPT5_4, messages, {}, async () => {});
+
+    expect(chatCreate).toHaveBeenCalledOnce();
+  });
+
   it('Chat Completions: caller system text, then the identity reminder', async () => {
     const { backend, chatCreate } = buildBackend();
 

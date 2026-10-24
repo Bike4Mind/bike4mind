@@ -4,6 +4,7 @@ import Spinner from 'ink-spinner';
 import { useCliStore, selectActiveBackgroundAgents } from '../store';
 import { useShallow } from 'zustand/react/shallow';
 import type { BackgroundAgentJob } from '../agents/types';
+import { sanitizeTerminalText } from '../utils/sanitizeTerminalText.js';
 
 /**
  * Renders a single job item (used in both grouped and ungrouped views)
@@ -17,7 +18,8 @@ const JobItem = React.memo(function JobItem({
 }) {
   const elapsed = Math.round((Date.now() - job.startTime) / 1000);
   const maxTaskLength = indented ? 50 : 60;
-  const taskPreview = job.task.length > maxTaskLength ? job.task.slice(0, maxTaskLength - 3) + '...' : job.task;
+  const task = sanitizeTerminalText(job.task);
+  const taskPreview = task.length > maxTaskLength ? task.slice(0, maxTaskLength - 3) + '...' : task;
   const isQueued = job.status === 'queued';
 
   return (
@@ -30,7 +32,7 @@ const JobItem = React.memo(function JobItem({
           <Spinner type="dots" />
         </Text>
       )}
-      <Text color={isQueued ? 'yellow' : 'blue'}> {job.agentName}</Text>
+      <Text color={isQueued ? 'yellow' : 'blue'}> {sanitizeTerminalText(job.agentName)}</Text>
       <Text dimColor>
         {' '}
         [{job.id}] {taskPreview} {isQueued ? '(queued)' : `(${elapsed}s)`}

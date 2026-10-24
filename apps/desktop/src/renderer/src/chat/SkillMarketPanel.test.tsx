@@ -13,6 +13,14 @@ import type {
 } from '@shared/skillMarket';
 import { SkillMarketPanel } from './SkillMarketPanel';
 
+const upload = vi.hoisted(() => ({ onSaved: undefined as (() => void) | undefined }));
+vi.mock('./SkillUploadDialog', () => ({
+  useSkillUpload: (onSaved?: () => void) => {
+    upload.onSaved = onSaved;
+    return { start: vi.fn(), error: null, dialog: <div data-testid="upload-result" /> };
+  },
+}));
+
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 window.matchMedia ??= ((query: string) => ({
@@ -108,6 +116,72 @@ async function click(id: string): Promise<void> {
 }
 
 describe('SkillMarketPanel', () => {
+  it('refreshes browse and recommended listings when an upload changes the market', async () => {
+    await mount();
+    browse.mockResolvedValueOnce({ listings: [{ ...card, name: 'published-skill' }], hasMore: false });
+    recommended.mockResolvedValueOnce({
+      listings: [{ ...card, id: 'l2', name: 'new-recommendation' }],
+      hasMore: false,
+    });
+
+    await act(async () => upload.onSaved?.());
+
+    expect(browse).toHaveBeenCalledTimes(2);
+    expect(recommended).toHaveBeenCalledTimes(2);
+    expect(host?.textContent).toContain('/published-skill');
+    expect(byTestId('skill-market-recommended')?.textContent).toContain('/new-recommendation');
+  });
+
+  it('refreshes the open listing when a header upload changes it', async () => {
+    await mount({ id: 'l1' });
+    const updated = detail();
+    if (!updated.version) throw new Error('Expected a listing version');
+    listing.mockResolvedValueOnce({
+      detail: {
+        ...updated,
+        version: { ...updated.version, snapshot: { ...updated.version.snapshot, body: 'Updated.' } },
+      },
+    });
+
+    await act(async () => upload.onSaved?.());
+
+    expect(listing).toHaveBeenCalledTimes(2);
+    expect(byTestId('skill-listing-body')?.textContent).toBe('Updated.');
+  });
+
+  it('refreshes the market after a My listings upload without replacing its result dialog', async () => {
+    const mine = vi.fn(async () => ({ listings: [] }));
+    Object.assign(window.b4m.skillMarket, { mine });
+    await mount();
+    await click('skill-market-mine-tab');
+    const resultDialog = byTestId('skill-market-mine')?.querySelector('[data-testid="upload-result"]');
+    expect(resultDialog).toBeTruthy();
+
+    await act(async () => upload.onSaved?.());
+
+    expect(mine).toHaveBeenCalledTimes(2);
+    expect(browse).toHaveBeenCalledTimes(2);
+    expect(recommended).toHaveBeenCalledTimes(2);
+    expect(byTestId('skill-market-mine')?.querySelector('[data-testid="upload-result"]')).toBe(resultDialog);
+  });
+
+  it('ignores an older recommendations response after an upload refresh', async () => {
+    let completePrevious: (page: SkillMarketPage) => void = () => {};
+    recommended.mockReturnValueOnce(
+      new Promise(resolve => {
+        completePrevious = resolve;
+      })
+    );
+    await mount();
+    recommended.mockResolvedValueOnce({ listings: [{ ...card, name: 'fresh-recommendation' }], hasMore: false });
+    await act(async () => upload.onSaved?.());
+
+    await act(async () => completePrevious({ listings: [{ ...card, name: 'old-recommendation' }], hasMore: false }));
+
+    expect(byTestId('skill-market-recommended')?.textContent).toContain('/fresh-recommendation');
+    expect(byTestId('skill-market-recommended')?.textContent).not.toContain('/old-recommendation');
+  });
+
   it('lists the market and opens a listing with its safety summary, requested tools and body', async () => {
     await mount();
     expect(browse).toHaveBeenCalledWith(expect.objectContaining({ sort: 'top' }), 1);

@@ -93,6 +93,7 @@ vi.mock('@bike4mind/server-utils/dataLakes/lakeConfigAuditDb', () => ({ lakeConf
 vi.mock('@bike4mind/server-utils/dataLakes/lakeMembershipAuditDb', () => ({ lakeMembershipAuditDb: {} }));
 vi.mock('@server/dataLakes/lakeConfigAuditPrincipal', () => ({ lakeConfigAuditPrincipal: () => ({ kind: 'user' }) }));
 vi.mock('@bike4mind/database', () => ({
+  memoryLedgerRepository: { markSourceShredded: vi.fn().mockResolvedValue(0) },
   adminSettingsRepository: {},
   dataLakeAccessGrantRepository: {},
   dataLakeRepository: { touchIfStable: mockTouchIfStable, findByDatalakeTags: vi.fn().mockResolvedValue([]) },

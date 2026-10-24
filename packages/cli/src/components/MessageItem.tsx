@@ -4,6 +4,7 @@ import { PENDING_ASSISTANT_CONTENT, type Message } from '../storage';
 import type { AgentStep } from '@bike4mind/agents';
 import { DEGENERATE_FINISH_REASON } from '@bike4mind/common';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { sanitizeTerminalText } from '../utils/sanitizeTerminalText.js';
 import { useStdoutDimensions } from '../hooks/useStdoutDimensions.js';
 import {
   splitLiveRows,
@@ -52,15 +53,17 @@ export const MessageItem = React.memo(function MessageItem({
   const oneLine = (text: string) => (isLive ? text.replace(/\s+/g, ' ') : text);
 
   const hasReply = !isUser && message.content !== PENDING_ASSISTANT_CONTENT;
+  // Display copy only; message.content itself stays as stored and sent to the model.
+  const content = React.useMemo(() => sanitizeTerminalText(message.content), [message.content]);
   const allSteps = message.metadata?.steps;
 
   // Live frame: the streaming reply renders as plain one-row lines (its tail
   // only), sharing the row budget with the trace; markdown renders at commit.
   const liveSplit = React.useMemo(() => {
     if (liveRows === undefined) return undefined;
-    const replyRows = hasReply ? wrapReplyRows(message.content, terminalCols - REPLY_INDENT) : [];
+    const replyRows = hasReply ? wrapReplyRows(content, terminalCols - REPLY_INDENT) : [];
     return splitLiveRows(liveRows, { steps: allSteps ?? [], replyRows, showThoughts });
-  }, [liveRows, hasReply, message.content, terminalCols, allSteps, showThoughts]);
+  }, [liveRows, hasReply, content, terminalCols, allSteps, showThoughts]);
 
   const { steps: traceSteps, hiddenSteps }: LiveTraceWindow = React.useMemo(() => {
     if (!allSteps) return { steps: [], hiddenSteps: 0 };
@@ -78,7 +81,7 @@ export const MessageItem = React.memo(function MessageItem({
   // smaller than terminal width). The reliable approach is to pad the
   // text content with literal spaces and put backgroundColor on the
   // <Text> itself.
-  const userPromptText = `❯ ${message.content}`;
+  const userPromptText = `\u276F ${content}`;
   const paddedUserPromptText =
     userPromptText.length >= terminalCols ? userPromptText : userPromptText.padEnd(terminalCols);
 
@@ -109,7 +112,7 @@ export const MessageItem = React.memo(function MessageItem({
                 if (!showThoughts) return null;
                 return (
                   <Box key={idx} marginTop={1} flexDirection="column">
-                    <Text dimColor wrap={traceWrap}>{`💭 ${oneLine(step.content)}`}</Text>
+                    <Text dimColor wrap={traceWrap}>{`\u{1F4AD} ${oneLine(sanitizeTerminalText(step.content))}`}</Text>
                   </Box>
                 );
               }
@@ -131,7 +134,7 @@ export const MessageItem = React.memo(function MessageItem({
                     {/* Name and args share one <Text> so the live frame can hold
                         the pair to a single row; nested <Text> keeps the colours. */}
                     <Text wrap={traceWrap}>
-                      <Text color="yellow">{formattedToolName}</Text>
+                      <Text color="yellow">{sanitizeTerminalText(formattedToolName)}</Text>
                       {!!toolInput && !hideArgs && (
                         <Text dimColor>{` • ${oneLine(truncateValue(toolInput, ACTION_ARG_LIMIT))}`}</Text>
                       )}
@@ -167,9 +170,11 @@ export const MessageItem = React.memo(function MessageItem({
       {!isLive && hasReply && (
         <Box paddingLeft={REPLY_INDENT} marginBottom={1}>
           {message.metadata?.permissionDenied ? (
-            <Text color="yellow">⚠️ {message.content}</Text>
+            <Text color="yellow">
+              {'\u26A0\uFE0F'} {content}
+            </Text>
           ) : (
-            <MarkdownRenderer content={message.content} columns={terminalCols} />
+            <MarkdownRenderer content={content} columns={terminalCols} />
           )}
         </Box>
       )}

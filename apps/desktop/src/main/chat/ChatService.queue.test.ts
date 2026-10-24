@@ -2,8 +2,8 @@ import { mkdtemp, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
-import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
-import type { ChatQueueEvent, ChatStreamEvent } from '@shared/chat';
+import { SessionRevokedError, type AuthenticatedApiClient } from '@bike4mind/client-auth';
+import { SESSION_EXPIRED_STOP, type ChatQueueEvent, type ChatStreamEvent } from '@shared/chat';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
 import { MessageQueue } from './MessageQueue';
@@ -158,6 +158,38 @@ describe('ChatService queued messages', () => {
     expect(queueEvents.at(-1)?.returned?.reason).toBe('failed');
   });
 
+  it('pauses a turn the session expired under, hands queued text back, and continues it after sign-in', async () => {
+    const { id } = await service.createSession();
+    post.mockImplementationOnce(async () => {
+      // What the shared client throws once refresh and retry have both failed.
+      apiClient = null;
+      throw new SessionRevokedError('Your session expired. Sign in again to continue.');
+    });
+    const signedIn = apiClient;
+    await service.send(id, 'first');
+    await waitForEvent('start');
+    await service.send(id, 'typed ahead');
+    await waitForEvent('error');
+
+    expect(events.find(event => event.type === 'error')).toMatchObject({ stopReason: SESSION_EXPIRED_STOP });
+    expect(queueEvents.at(-1)?.returned).toMatchObject({ reason: 'session-expired' });
+    const paused = (await service.getSession(id))?.messages.at(-1);
+    expect(paused).toMatchObject({ role: 'assistant', stopReason: SESSION_EXPIRED_STOP });
+    expect(await service.continueReply(id)).toMatchObject({ ok: false });
+    expect(post).toHaveBeenCalledTimes(1);
+
+    apiClient = signedIn;
+    expect(await service.continueReply(id)).toMatchObject({ ok: true, messageId: paused?.id });
+    await waitForPost(2);
+    await finishReply(1, 'answer');
+    await waitForEvent('done');
+
+    const messages = (await service.getSession(id))?.messages ?? [];
+    expect(messages.map(message => message.role)).toEqual(['user', 'assistant']);
+    expect(messages.at(-1)).toMatchObject({ content: 'answer', stopReason: 'end_turn' });
+    expect(messages.at(-1)?.error).toBeUndefined();
+  });
+
   /**
    * A turn parked awaiting the user's answer is not a finished turn.
    *
@@ -255,6 +287,7 @@ describe('ChatService queued messages', () => {
     const { id } = await service.createSession();
     await service.send(id, 'first');
     await waitForEvent('start');
+    await waitForPost(1);
     await service.send(id, 'second');
     await service.send(id, 'third');
 

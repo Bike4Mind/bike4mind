@@ -1,5 +1,6 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
+import type { IMessage } from '@bike4mind/common';
 import { FORMAT_PROMPT_PRIORITY, IMAGE_PROMPT_PRIORITY } from '@bike4mind/utils';
 import { describe, expect, it } from 'vitest';
 import { ALL_FEATURE_NAMES } from './ChatCompletionFeatures';
@@ -7,16 +8,23 @@ import {
   buildTaggedContextMessages,
   filterByPromptMode,
   filterFeaturesByPromptMode,
+  isPerTurnContext,
   LAKE_CONTENT_LAYER_NAMES,
   LAKE_CONTENT_SOURCES,
   lakeContentTokens,
+  markHistoryCacheAnchor,
+  PER_TURN_CONTEXT_SOURCES,
   PROMPT_SOURCE_METADATA,
   PROMPT_SOURCE_ORDER,
+  relocatePerTurnContext,
   resolveForcedRetrieval,
   markShareablePrefixBoundary,
   SHAREABLE_PREFIX_SOURCES,
+  PER_CALLER_AUTHORED_SOURCES,
   SIDE_EFFECT_ONLY_FEATURES,
   SYSTEM_PROMPT_PRIORITY,
+  TURN_CONTEXT_END,
+  TURN_CONTEXT_HEADER,
   toPromptDetails,
   type PromptSourceId,
   type SystemPromptDetail,
@@ -32,7 +40,7 @@ describe('buildTaggedContextMessages', () => {
       helpCenter: [sys('help center')],
     });
 
-    expect(tagged.map(t => t.source)).toEqual(['dateContext', 'helpCenter', 'mementos']);
+    expect(tagged.map(t => t.source)).toEqual(['helpCenter', 'dateContext', 'mementos']);
   });
 
   it('tags every message with the source that contributed it', () => {
@@ -113,7 +121,9 @@ describe('SYSTEM_PROMPT_PRIORITY', () => {
 describe('SHAREABLE_PREFIX_SOURCES', () => {
   it('is the contiguous leading run of deployment-wide sources', () => {
     const firstPerCaller = PROMPT_SOURCE_ORDER.findIndex(
-      source => !['hardcoded', 'admin'].includes(PROMPT_SOURCE_METADATA[source].origin)
+      source =>
+        !['hardcoded', 'admin'].includes(PROMPT_SOURCE_METADATA[source].origin) ||
+        PER_CALLER_AUTHORED_SOURCES.includes(source)
     );
 
     expect(SHAREABLE_PREFIX_SOURCES).toEqual(PROMPT_SOURCE_ORDER.slice(0, firstPerCaller));
@@ -121,7 +131,9 @@ describe('SHAREABLE_PREFIX_SOURCES', () => {
 
   it('carries no per-caller source, which would make the region unshareable', () => {
     const perCaller = SHAREABLE_PREFIX_SOURCES.filter(
-      source => !['hardcoded', 'admin'].includes(PROMPT_SOURCE_METADATA[source].origin)
+      source =>
+        !['hardcoded', 'admin'].includes(PROMPT_SOURCE_METADATA[source].origin) ||
+        PER_CALLER_AUTHORED_SOURCES.includes(source)
     );
 
     expect(perCaller).toEqual([]);
@@ -133,9 +145,20 @@ describe('SHAREABLE_PREFIX_SOURCES', () => {
     expect(SHAREABLE_PREFIX_SOURCES).not.toContain('recentImages');
   });
 
+  // Each of these is text we author, so `origin` alone would admit it, but each varies by caller:
+  // the date per timezone-day, the admin view appendix per role, the tool context per user and
+  // session, agent prompts per mention. dateContext used to LEAD the run, which made the whole
+  // "shared" head a per-timezone-day cache write.
+  it.each(['dateContext', 'viewRegistryAdmin', 'toolContext', 'agentDetection'] as const)(
+    'keeps the per-caller %s out of the shared run',
+    source => {
+      expect(SHAREABLE_PREFIX_SOURCES).not.toContain(source);
+    }
+  );
+
   it('is wide enough to be worth a breakpoint at all', () => {
-    // A one-source prefix is the failure this table exists to prevent: extraContext sitting at
-    // position 2 cut the run down to dateContext alone, and a ~13-token head can never clear
+    // A one-source prefix is the failure this table exists to prevent: extraContext once sat at
+    // position 2 and cut the run down to the date line alone, and a ~13-token head can never clear
     // Anthropic's 1024-token minimum cacheable block, so the breakpoint would never materialise.
     expect(SHAREABLE_PREFIX_SOURCES.length).toBeGreaterThan(1);
   });
@@ -154,9 +177,9 @@ describe('markShareablePrefixBoundary', () => {
     markShareablePrefixBoundary(tagged);
 
     expect(tagged.map(t => [t.source, t.message.cache === true])).toEqual([
-      ['dateContext', false],
       ['artifactEmission', false],
       ['abstention', true],
+      ['dateContext', false],
       ['sessionPrompt', false],
       ['mementos', false],
     ]);
@@ -183,7 +206,7 @@ describe('markShareablePrefixBoundary', () => {
   it('lands on the last SURVIVING shareable block when a gate dropped the one behind it', () => {
     // The boundary is applied after the promptMode filter for this reason: marking a block that
     // does not ship declares a breakpoint the request never carries.
-    const tagged = buildTaggedContextMessages({ dateContext: [sys('date')], mementos: [sys('per user')] });
+    const tagged = buildTaggedContextMessages({ artifactEmission: [sys('artifacts')], mementos: [sys('per user')] });
 
     markShareablePrefixBoundary(tagged);
 
@@ -465,5 +488,191 @@ describe('feature-to-source reconciliation', () => {
         assemblySource
       )
     ).toBe(true);
+  });
+});
+
+describe('per-turn context placement', () => {
+  const user = (content: string) => ({ role: 'user' as const, content });
+  const tag = (source: PromptSourceId, message: IMessage) => ({ source, message });
+
+  describe('PER_TURN_CONTEXT_SOURCES', () => {
+    it('never overlaps the shareable head, which has to be identical for every caller', () => {
+      for (const source of PER_TURN_CONTEXT_SOURCES) {
+        expect(SHAREABLE_PREFIX_SOURCES).not.toContain(source);
+      }
+    });
+
+    it('keeps the session-stable sources out', () => {
+      for (const stable of ['contextSummary', 'project', 'organizationPrompt', 'sessionPrompt', 'callerPrompt']) {
+        expect(PER_TURN_CONTEXT_SOURCES).not.toContain(stable);
+      }
+    });
+  });
+
+  describe('isPerTurnContext', () => {
+    it.each(['mementos', 'knowledgeRetrieval', 'lakeMemory'] as PromptSourceId[])('moves a %s message', source => {
+      expect(isPerTurnContext(tag(source, sys('text')))).toBe(true);
+    });
+
+    it('keeps the stable sources in system', () => {
+      for (const source of ['contextSummary', 'project', 'callerPrompt', 'dateContext'] as PromptSourceId[]) {
+        expect(isPerTurnContext(tag(source, sys('text')))).toBe(false);
+      }
+    });
+
+    it('moves caller extra context only where the producer flagged it per turn', () => {
+      const view = sys('[Current View Context] User is on the Admin page.');
+      const perSend = sys('Refine the open brief.');
+      const flagged = new Set<IMessage>([view]);
+
+      expect(isPerTurnContext(tag('extraContext', view), flagged)).toBe(true);
+      // Voice, Slack and programmatic launches put a real system prompt through this same channel.
+      expect(isPerTurnContext(tag('extraContext', perSend), flagged)).toBe(false);
+      expect(isPerTurnContext(tag('extraContext', sys('[ADMIN_PROMPT:bike4mind_identity]\nIdentity')), flagged)).toBe(
+        false
+      );
+    });
+
+    it('leaves attachments in system, whose notice is an instruction, and moves only the URL notice', () => {
+      expect(isPerTurnContext(tag('attachedFiles', sys('# Available Files')))).toBe(false);
+      expect(isPerTurnContext(tag('attachedFiles', user('file body')))).toBe(false);
+      expect(isPerTurnContext(tag('urls', sys('# URL content')))).toBe(true);
+      expect(isPerTurnContext(tag('urls', user('page body')))).toBe(false);
+    });
+
+    it('leaves block-array content where it is, since only text can be inlined', () => {
+      const blocks = { role: 'system' as const, content: [{ type: 'text', text: 'x' }] } as unknown as IMessage;
+
+      expect(isPerTurnContext(tag('mementos', blocks))).toBe(false);
+    });
+  });
+
+  describe('relocatePerTurnContext', () => {
+    const head = sys('stable head');
+    const summary = sys('stable summary');
+    const memento = sys('[Memento] likes tea');
+    const passage = sys('[Passages] chunk');
+    const prompt = user('what should I drink?');
+
+    const relocate = (messages: IMessage[], moved: IMessage[], current: IMessage = prompt) =>
+      relocatePerTurnContext(messages, new Set(moved), current);
+
+    it('lifts the per-turn messages out of system into the front of the current user message', () => {
+      const { messages, relocatedCount } = relocate([head, memento, summary, passage, prompt], [memento, passage]);
+
+      expect(relocatedCount).toBe(2);
+      expect(messages.slice(0, 2)).toEqual([head, summary]);
+      expect(messages).toHaveLength(3);
+      expect(messages[2]).toEqual({
+        role: 'user',
+        content: `${TURN_CONTEXT_HEADER}[Memento] likes tea\n\n[Passages] chunk${TURN_CONTEXT_END}what should I drink?`,
+      });
+    });
+
+    it('does not mutate its inputs', () => {
+      const input = [head, memento, prompt];
+
+      relocate(input, [memento]);
+
+      expect(input).toEqual([head, memento, prompt]);
+      expect(prompt.content).toBe('what should I drink?');
+    });
+
+    it('returns the same array when there is nothing to move', () => {
+      const input = [head, prompt];
+
+      expect(relocate(input, [])).toEqual({ messages: input, relocatedCount: 0 });
+      expect(relocate(input, [])).toHaveProperty('messages', input);
+    });
+
+    it('finds the prompt by identity when it is not the last message', () => {
+      const attachment = user('attached file');
+
+      const { messages } = relocate([head, memento, prompt, attachment], [memento]);
+
+      expect(messages.map(m => m.content)).toEqual([
+        'stable head',
+        `${TURN_CONTEXT_HEADER}[Memento] likes tea${TURN_CONTEXT_END}what should I drink?`,
+        'attached file',
+      ]);
+    });
+
+    it('prepends a text block to a prompt that already carries content blocks', () => {
+      const blocks = { role: 'user' as const, content: [{ type: 'text', text: 'hi' }] } as unknown as IMessage;
+
+      const { messages } = relocate([memento, blocks], [memento], blocks);
+
+      expect((messages[0].content as Array<{ text: string }>).map(b => b.text)).toEqual([
+        `${TURN_CONTEXT_HEADER}[Memento] likes tea${TURN_CONTEXT_END}`,
+        'hi',
+      ]);
+    });
+
+    it('leaves the messages where they were when no user turn can receive them', () => {
+      const input = [head, memento, sys('trailing system')];
+
+      expect(relocate(input, [memento])).toEqual({ messages: input, relocatedCount: 0 });
+    });
+
+    it('gives the same system prefix whatever the per-turn context was', () => {
+      const turn = (mementoText: string) => {
+        const m = sys(mementoText);
+        return relocate([head, m, summary, prompt], [m]).messages.filter(x => x.role === 'system');
+      };
+
+      expect(JSON.stringify(turn('[Memento] likes tea'))).toBe(JSON.stringify(turn('[Memento] likes coffee')));
+    });
+  });
+
+  describe('markHistoryCacheAnchor', () => {
+    const head = sys('stable head');
+    const answer = { role: 'assistant' as const, content: 'earlier answer' };
+    const attachment = user('attached file');
+    const prompt = user('this turn');
+
+    it('flags the last history message, not the volatile current turn', () => {
+      const marked = markHistoryCacheAnchor([head, answer, attachment, prompt], answer);
+
+      expect(marked.map(m => m.cache)).toEqual([undefined, true, undefined, undefined]);
+      // A copy, so the caller's array and the persisted message stay unmarked.
+      expect(marked[1]).not.toBe(answer);
+      expect(answer.cache).toBeUndefined();
+    });
+
+    it('anchors on the last message of history when the turn is a bare prompt', () => {
+      expect(markHistoryCacheAnchor([head, answer, prompt], answer).map(m => m.cache)).toEqual([
+        undefined,
+        true,
+        undefined,
+      ]);
+    });
+
+    it('returns the input unchanged when there is no history to anchor', () => {
+      const messages = [head, prompt];
+
+      expect(markHistoryCacheAnchor(messages, undefined)).toBe(messages);
+    });
+
+    // Identity, not position: a history message the build truncated or dropped is not in the payload,
+    // and flagging whatever now sits at its index would cache a message the next turn never repeats.
+    it('returns the input unchanged when the history message did not survive the build', () => {
+      const messages = [head, prompt];
+
+      expect(markHistoryCacheAnchor(messages, answer)).toBe(messages);
+    });
+
+    it('returns the input unchanged rather than flag a system message', () => {
+      const messages = [head, sys('more context'), prompt];
+
+      expect(markHistoryCacheAnchor(messages, messages[1])).toBe(messages);
+    });
+
+    it('returns the input unchanged when the next message shares the anchor role', () => {
+      // Flagging turns the content into a block array, which the adapter then refuses to merge with
+      // the same-role message after it - that message would be dropped instead of joined.
+      const messages = [head, user('no answer yet'), prompt];
+
+      expect(markHistoryCacheAnchor(messages, messages[1])).toBe(messages);
+    });
   });
 });

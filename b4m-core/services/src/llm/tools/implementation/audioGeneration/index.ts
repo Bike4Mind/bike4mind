@@ -14,6 +14,7 @@ import { aiSoundService, aiVoiceService } from '@bike4mind/utils';
 import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
 import { getEffectiveApiKey } from '../../../../apiKeyService';
+import { ProviderBusyError, runElevenLabsWithCapacity } from '../../../../providerCapacity';
 import { saveGeneratedAssetFromTool } from '../../helpers/persistGeneratedFile';
 import { ToolContext, ToolDefinition } from '../../base/types';
 
@@ -116,16 +117,25 @@ export const audioGenerationTool: ToolDefinition = {
         let audio: Buffer;
         let contentType: string;
         try {
-          ({ audio, contentType } = await aiSoundService(SFX_PROVIDER, apiKey, context.logger).generate(text, {
-            durationSeconds,
-            promptInfluence: audioConfig.promptInfluence,
-          }));
+          ({ audio, contentType } = await runElevenLabsWithCapacity(
+            { operation: 'sound', apiKey, db: context.db, logger: context.logger },
+            ({ timeoutMs }) =>
+              aiSoundService(SFX_PROVIDER, apiKey, context.logger, { timeoutMs }).generate(text, {
+                durationSeconds,
+                promptInfluence: audioConfig.promptInfluence,
+              })
+          ));
         } catch (error) {
-          const message = error instanceof Error ? error.message : 'Unknown error';
-          context.logger.error(`[audio_generation] sound-effect generation failed: ${message}`);
+          if (error instanceof ProviderBusyError) {
+            context.logger.warn('[audio_generation] sound-effect provider at capacity', { reason: error.reason });
+            return `Error: the ${SFX_PROVIDER} sound-effects service is busy right now. Try again in about ${error.retryAfterSeconds} seconds.`;
+          }
+          context.logger.error('[audio_generation] sound-effect generation failed', {
+            errorType: error instanceof Error ? error.name : typeof error,
+          });
           // Return a generic message, not the raw vendor error: provider strings can echo
           // API-key hints or upstream URLs into the assistant context. Matches the direct
-          // /api/ai/sound-effects sanitization; the detail stays in the log above.
+          // /api/ai/sound-effects sanitization.
           return `Error: sound-effect request rejected by the ${SFX_PROVIDER} provider.`;
         }
 
@@ -216,8 +226,9 @@ export const audioGenerationTool: ToolDefinition = {
           language: provider === 'elevenlabs' && audioConfig.languageCode ? audioConfig.languageCode : undefined,
         }));
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Unknown error';
-        context.logger.error(`[audio_generation] speech generation failed: ${message}`);
+        context.logger.error('[audio_generation] speech generation failed', {
+          errorType: error instanceof Error ? error.name : typeof error,
+        });
         // Generic message, not the raw vendor error - see the sound-effect branch above.
         return `Error: TTS request rejected by the ${provider} provider.`;
       }

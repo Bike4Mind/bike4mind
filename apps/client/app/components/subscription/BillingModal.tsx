@@ -14,7 +14,13 @@ import type { BillingView } from '@client/app/utils/billingDeepLink';
 import { isDelinquentSubscriptionStatus, pickDisplayedSubscription } from '@client/lib/subscriptions/types';
 import { SUBSCRIPTION_PLANS_MAP } from '@client/lib/userSubscriptions/constants';
 import { CreditsSection } from './CreditsSection';
+import CreditsExplanation from './CreditsExplanation';
 import { PlansSection, PlansSectionSkeleton } from './PlansSection';
+import { FirstRunEvents } from '@bike4mind/common';
+import { useLogEvent } from '@client/app/hooks/data/analytics';
+import { consumeBillingCheckoutReturn } from '@client/app/utils/billingCheckoutReturn';
+
+export type BillingEntry = 'credits_chip' | 'credits_cta' | 'deep_link' | 'profile_menu' | 'unknown';
 
 interface BillingModalProps {
   open: boolean;
@@ -24,6 +30,7 @@ interface BillingModalProps {
    * the dialog and the body at the top.
    */
   focus?: BillingView;
+  entry?: BillingEntry;
   onClose: () => void;
 }
 
@@ -104,7 +111,7 @@ const Section = ({
  * The dialog has a fixed size (full-screen sheet on phones) and only the body scrolls, so loading
  * states and section order never resize it.
  */
-const BillingModal = ({ open, focus, onClose }: BillingModalProps) => {
+const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalProps) => {
   const { t } = useTranslation();
   const transactions = useGetCreditTransactions({ enabled: open });
   const subscriptions = useGetSubscriptions({ enabled: open });
@@ -116,6 +123,36 @@ const BillingModal = ({ open, focus, onClose }: BillingModalProps) => {
   // An org balance is topped up by the org, not from these personal packs, so its banner has no action.
   const { selectedAccount } = useSelectedAccount();
   const isOrgAccount = !!selectedAccount && !selectedAccount.personal;
+  const { mutate: logEvent } = useLogEvent();
+  const openedMetadataRef = useRef<{ entry: BillingEntry; focus: string; account: 'org' | 'personal' } | null>(null);
+  const purchasedRef = useRef(false);
+  const paymentPendingRef = useRef(false);
+  const leftForUsageRef = useRef(false);
+
+  // Abandonment is logged on the open -> closed transition, not in a close handler, so closes made
+  // outside the modal (the `?billing=` host's Back/URL change) count too. The metadata is the one
+  // captured at open, since the deep-link host clears `focus` as it closes.
+  useEffect(() => {
+    if (!open) {
+      const opened = openedMetadataRef.current;
+      if (opened && !purchasedRef.current && !paymentPendingRef.current && !leftForUsageRef.current) {
+        logEvent({ type: FirstRunEvents.BILLING_CLOSED_WITHOUT_PURCHASE, metadata: opened });
+      }
+      openedMetadataRef.current = null;
+      purchasedRef.current = false;
+      paymentPendingRef.current = false;
+      leftForUsageRef.current = false;
+      return;
+    }
+    if (openedMetadataRef.current) return;
+    // Org accounts can't buy personal packs, so their closes are not purchase abandonment.
+    openedMetadataRef.current = { entry, focus: focus ?? 'overview', account: isOrgAccount ? 'org' : 'personal' };
+    if (consumeBillingCheckoutReturn()) {
+      purchasedRef.current = true;
+      return;
+    }
+    logEvent({ type: FirstRunEvents.BILLING_OPENED, metadata: openedMetadataRef.current });
+  }, [open, entry, focus, isOrgAccount, logEvent]);
 
   // The shared display rule (lib/subscriptions/types), so this header and the plan card agree on the row.
   const currentSubscription = useMemo(() => pickDisplayedSubscription(subscriptions.data ?? []), [subscriptions.data]);
@@ -175,7 +212,11 @@ const BillingModal = ({ open, focus, onClose }: BillingModalProps) => {
             : t('billing.plans_upgrade_sub', 'Get a monthly credit allowance instead of topping up by hand.')
       }
     >
-      <PlansSection />
+      <PlansSection
+        onSubscriptionChanged={() => {
+          purchasedRef.current = true;
+        }}
+      />
     </Section>
   );
   const creditsSection = (
@@ -194,7 +235,16 @@ const BillingModal = ({ open, focus, onClose }: BillingModalProps) => {
       <CreditsSection
         transactions={transactions.data ?? []}
         transactionsLoading={transactions.isPending}
-        onClose={onClose}
+        onClose={() => {
+          leftForUsageRef.current = true;
+          onClose();
+        }}
+        onPaymentPending={() => {
+          paymentPendingRef.current = true;
+        }}
+        onPurchase={() => {
+          purchasedRef.current = true;
+        }}
       />
     </Section>
   );
@@ -305,6 +355,7 @@ const BillingModal = ({ open, focus, onClose }: BillingModalProps) => {
               )}
             </Box>
           </Box>
+          {open && <CreditsExplanation />}
           {(noCredits || isLowCredits) && (
             <Box
               role="status"

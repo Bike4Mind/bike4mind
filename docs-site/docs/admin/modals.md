@@ -64,7 +64,7 @@ The wizard steps differ slightly depending on whether you are creating a modal o
 |------|------|--------|
 | 1 | Type | Choose between Modal and Banner |
 | 2 | Content | Title (required), Subtitle, Description (required), Close button toggle, Agree button toggle |
-| 3 | Media | Upload image via drag-and-drop or enter a URL directly |
+| 3 | Media | Upload image via drag-and-drop or enter a URL directly. Optionally add a product video: a 16:9 cut, a 9:16 cut, and a poster image for each. A poster needs its video, and invalid URLs block Next |
 | 4 | Targeting | Start date (required), End date (required), Priority, Enable toggle, User tags with suggestions |
 | 5 | Behavior | Display frequency preset (First Time Only, Weekly Reminder, Persistent, Custom) |
 | 6 | Review | Summary of all settings with live preview option |
@@ -75,7 +75,7 @@ The wizard steps differ slightly depending on whether you are creating a modal o
 |------|------|--------|
 | 1 | Type | Choose between Modal and Banner |
 | 2 | Message | Notification title (required), Banner message (required), Optional description, Close/action button toggles |
-| 3 | Media | Same as modal |
+| 3 | Media | Image only (no video) |
 | 4 | Targeting | Same as modal |
 | 5 | Behavior | Same as modal |
 | 6 | Review | Same as modal |

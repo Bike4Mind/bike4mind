@@ -1,5 +1,15 @@
 # @bike4mind/resource
 
+## 2.0.0
+
+### Major Changes
+
+- [#5257](https://github.com/Bike4Mind/bike4mind/pull/5257) [`068b941`](https://github.com/Bike4Mind/bike4mind/commit/068b941bead19a117b6902b57d9f9a121ed4ad90) Thanks [@onoya](https://github.com/onoya)! - protect stored credentials and private data
+
+### Patch Changes
+
+- [#5243](https://github.com/Bike4Mind/bike4mind/pull/5243) [`727e6f7`](https://github.com/Bike4Mind/bike4mind/commit/727e6f7d6af6405d695d3e703d8285b479c0b81f) Thanks [@onoya](https://github.com/onoya)! - publish Slack completions on AppEventBus and drop SlackEventBus
+
 ## 1.0.1
 
 ### Patch Changes

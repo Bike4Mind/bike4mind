@@ -35,7 +35,7 @@ import 'filepond/dist/filepond.min.css';
 const FilePondComponent = FilePond as any;
 import 'filepond-plugin-image-preview/dist/filepond-plugin-image-preview.css';
 
-import { IModal } from '@bike4mind/common';
+import { IModal, getModalVideoErrors } from '@bike4mind/common';
 
 // Icons
 import CloseIcon from '@mui/icons-material/Close';
@@ -64,6 +64,8 @@ import GenericModal from '@client/app/components/modals/GenericModal';
 import { getS3Url } from '@client/app/utils/s3';
 import { useGetPresignedUrl } from '@client/app/hooks/data/fabFiles';
 import { useConfig } from '@client/app/hooks/data/settings';
+import AdminModalVideoFields from './AdminModalVideoFields';
+import { videoUrlsOf } from '@client/app/components/modals/whatsNewSlideMedia';
 
 interface EditModalProps {
   isOpen: boolean;
@@ -143,6 +145,7 @@ const EditModalNew: React.FC<EditModalProps> = ({ isOpen, onClose, modalData, on
         endDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
         imageUrl: '',
         images: [],
+        video: null,
         textMessage: '',
         tags: [],
         numberOfAgrees: {
@@ -160,9 +163,15 @@ const EditModalNew: React.FC<EditModalProps> = ({ isOpen, onClose, modalData, on
       }
   );
 
+  // Stored and uploaded video URLs pass the form check whatever their host (see AdminModalVideoFields)
+  const [trustedVideoUrls, setTrustedVideoUrls] = useState<ReadonlySet<string>>(
+    () => new Set(videoUrlsOf(modalData?.video))
+  );
+
   useEffect(() => {
     if (modalData) {
       setModalFields(modalData);
+      setTrustedVideoUrls(new Set(videoUrlsOf(modalData.video)));
     }
   }, [modalData]);
 
@@ -305,6 +314,11 @@ const EditModalNew: React.FC<EditModalProps> = ({ isOpen, onClose, modalData, on
     }
   };
 
+  // Banners have no slider slot for a video, so their video is dropped rather than validated or saved
+  const hasVideoErrors = () =>
+    !modalFields.isBanner &&
+    Object.keys(getModalVideoErrors(modalFields.video, { allowedUrls: trustedVideoUrls })).length > 0;
+
   const validateCurrentStep = (): boolean => {
     const errors: Record<string, string> = {};
 
@@ -316,6 +330,9 @@ const EditModalNew: React.FC<EditModalProps> = ({ isOpen, onClose, modalData, on
       case 'banner-content':
         if (!modalFields.title) errors.title = 'Banner title is required';
         if (!modalFields.textMessage) errors.textMessage = 'Banner message is required';
+        break;
+      case 'media':
+        if (hasVideoErrors()) errors.video = 'Fix the product video URLs';
         break;
       case 'targeting':
         if (!modalFields.startDate) errors.startDate = 'Start date is required';
@@ -344,7 +361,13 @@ const EditModalNew: React.FC<EditModalProps> = ({ isOpen, onClose, modalData, on
       return;
     }
 
-    onSave(modalFields);
+    if (hasVideoErrors()) {
+      setValidationErrors({ video: 'Fix the product video URLs' });
+      setCurrentStep(steps.findIndex(s => s.id === 'media'));
+      return;
+    }
+
+    onSave(modalFields.isBanner ? { ...modalFields, video: null } : modalFields);
     onClose();
   };
 
@@ -614,7 +637,7 @@ const EditModalNew: React.FC<EditModalProps> = ({ isOpen, onClose, modalData, on
                                 mimeType: file.type,
                                 fileSize: file.size,
                                 public: true,
-                                prefix: 'modals',
+                                purpose: 'modal-media',
                               },
                               file,
                               abortController.signal
@@ -676,6 +699,24 @@ const EditModalNew: React.FC<EditModalProps> = ({ isOpen, onClose, modalData, on
                       style={{ maxWidth: '100%', maxHeight: '200px', borderRadius: '8px' }}
                     />
                   </Box>
+                )}
+
+                {!modalFields.isBanner && (
+                  <>
+                    <Divider />
+                    <AdminModalVideoFields
+                      value={modalFields.video}
+                      onChange={video => setModalFields(prev => ({ ...prev, video }))}
+                      bucketName={fabfileBucketName}
+                      trustedUrls={trustedVideoUrls}
+                      onUploaded={url => setTrustedVideoUrls(prev => new Set(prev).add(url))}
+                    />
+                    {validationErrors.video && (
+                      <Typography level="body-sm" color="danger" data-testid="modal-video-step-error">
+                        {validationErrors.video}
+                      </Typography>
+                    )}
+                  </>
                 )}
               </Stack>
             </CardContent>
@@ -947,6 +988,19 @@ const EditModalNew: React.FC<EditModalProps> = ({ isOpen, onClose, modalData, on
                       </Typography>
                       <Typography>{modalFields.description || 'Not set'}</Typography>
                     </Box>
+
+                    {!modalFields.isBanner && modalFields.video && (
+                      <Box>
+                        <Typography level="body-sm" fontWeight="lg">
+                          Video:
+                        </Typography>
+                        <Typography data-testid="modal-review-video-text">
+                          {[modalFields.video.landscapeUrl && '16:9', modalFields.video.portraitUrl && '9:16']
+                            .filter(Boolean)
+                            .join(' + ') || 'Posters only'}
+                        </Typography>
+                      </Box>
+                    )}
 
                     <Box>
                       <Typography level="body-sm" fontWeight="lg">

@@ -296,6 +296,7 @@ Revoking your app's access in B4M stops new exchanges wherever the consent check
 | Status | Meaning | `errorCode` |
 |--------|---------|-------------|
 | 400 | Malformed JSON, or a `model` B4M does not know or cannot serve you. | - |
+| 400 | The model provider rejected your request. Change the request or choose another model; do not retry it unchanged. | `invalid_request` |
 | 401 | The key was rejected. Re-mint once (see "One re-mint" above). | - |
 | 403 | The key lacks a scope this endpoint needs; `required_scopes` names them. | - |
 | 405 | Wrong HTTP method; use `POST`. | - |
@@ -304,7 +305,7 @@ Revoking your app's access in B4M stops new exchanges wherever the consent check
 | 422 | The body failed validation; `error` names the failing fields. | - |
 | 429 | Rate limited. Wait `Retry-After` seconds, then retry. When called with an API key, `X-RateLimit-*` headers show the window state. | - |
 | 500 | Internal error. Retry, and log `request_id` if it persists. | - |
-| 503 | The database is unavailable, or the model's provider is not configured on this deployment. Retry later or pick another model. | `provider_not_configured` for the model case |
+| 503 | The database is unavailable, the model's provider is not configured on this deployment, or the self-hosted model server that lists the model (Ollama, local image) is unreachable. Retry later or pick another model. | `provider_not_configured` for the model cases |
 
 The body is `{ "error": "...", "request_id": "...", "errorCode": "..." }` (`errorCode` only where the table shows one), and `request_id` also arrives as the `X-Request-ID` header. Branch on the status and `errorCode`, never on `error`, which is prose and can change. The public API never returns 402.
 
@@ -315,6 +316,7 @@ Once the stream opens the status is 200 and stays 200. A failure after that poin
 ```
 
 - `code: "insufficient_credits"`: the user ran out of credits mid-generation. Prompt them to top up their B4M balance.
+- `code: "invalid_request"`: the model provider rejected your request. Change the request or choose another model; do not retry it unchanged. The provider's own response body is never forwarded.
 - `code: "provider_rejected"`: the model provider refused B4M's credentials. Your key is fine; retry later or pick another model.
 - `code: "content_blocked"`: the model declined the request. Retrying the same prompt gets the same answer; rephrase it or pick another model.
 - `code: "provider_error"`: the model provider failed. Retry, or pick another model. The provider's own response body is never forwarded.

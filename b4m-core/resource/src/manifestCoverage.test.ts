@@ -154,8 +154,8 @@ const PENDING_SCOPE_DECISION: Record<string, string> = {
   // Same feature family, surfaced once the scanner learned to read a wide cast and a wrapped
   // access. Worth noting for whoever wires it: the 500 guard at generate-highlights.ts cannot
   // fire on self-host, because the shim's Proxy throws on the property access before `?.url` is
-  // ever evaluated. The cron site degrades to a logged error instead.
-  whatsNewHighlightsQueue: 'admin route + highlights cron; needs the same content-generation decision',
+  // ever evaluated.
+  whatsNewHighlightsQueue: 'admin route; needs the same content-generation decision',
   secopsTriageQueue: 'admin security-dashboard ingest; needs Prowler and AWS findings',
   sreJobQueue: 'admin SRE rerun/retry routes; handler needs Bedrock and CloudWatch',
 };

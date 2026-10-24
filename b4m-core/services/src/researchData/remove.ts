@@ -1,7 +1,15 @@
-import { chargedBytes, IResearchAgentRepository, IResearchDataRepository, storageOwnerOf } from '@bike4mind/common';
+import {
+  chargedBytes,
+  IProjectRepository,
+  IResearchAgentRepository,
+  IResearchDataRepository,
+  IUserRepository,
+  storageOwnerOf,
+} from '@bike4mind/common';
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { DeleteFabFileAdapter } from '../fabFileService';
+import { cleanUpDeletedFileReferences } from '../fabFileService/cleanUpDeletedFileReferences';
 import { adjustOwnerStorage, type OwnerStorageCounters } from '../fabFileService/ownerStorage';
 import { deleteFabFile } from '../fabFileService/delete';
 
@@ -14,6 +22,8 @@ type ResarchDataRemoveParams = z.infer<typeof researchDataRemoveSchema>;
 
 type ResearchDataRemoveAdapters = DeleteFabFileAdapter & {
   db: OwnerStorageCounters & {
+    users: Pick<IUserRepository, 'findById' | 'update' | 'pullSystemFilesForUsers'>;
+    projects?: Pick<IProjectRepository, 'pullFileReferences'>;
     researchDatas: Pick<IResearchDataRepository, 'delete' | 'findByIdAndResearchAgentId'>;
     researchAgents: Pick<IResearchAgentRepository, 'findByIdAndUserId'>;
   };
@@ -46,5 +56,13 @@ export const remove = async (
   const result = await deleteFabFile(userId, { id: researchData.fabFileId }, adapters);
   if (result.action === 'deleted' && result.fabFile) {
     await adjustOwnerStorage(adapters.db, storageOwnerOf(result.fabFile), -chargedBytes(result.fabFile));
+  }
+  if (result.references) {
+    // No logger: this adapter's logger is the narrower LakeConfigAuditLogger, and the unlink only
+    // logs its own failures.
+    await cleanUpDeletedFileReferences(result.references, {
+      users: adapters.db.users,
+      projects: adapters.db.projects,
+    });
   }
 };

@@ -10,6 +10,7 @@ import { collectDataForDate } from '@server/services/whatsNewDataCollector';
 import { Logger } from '@bike4mind/observability';
 import type { WhatsNewGenerationPayload } from '@bike4mind/server-utils/whatsNew/whatsNewGeneration.types';
 import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { ApiKeyScope, WHATS_NEW_DEFAULT_REPOSITORY, WHATS_NEW_DEFAULT_TARGET_BRANCH } from '@bike4mind/common';
 
 // Rate limiting - 3 requests per minute to allow retries after gateway timeouts
@@ -175,6 +176,20 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       },
       { upsert: true }
     );
+    await recordAdminActionFromRequest(req, {
+      action: 'settings.whats_new.generation_triggered',
+      target: { kind: 'settings', id: 'whatsNewBackfill', displayName: "What's New backfill" },
+      summary: `${dryRun ? 'dry-ran' : 'ran'} a What's New backfill for ${sortedDates.length} date(s)`,
+      details: {
+        job: 'backfill',
+        dryRun: !!dryRun,
+        dates: sortedDates,
+        queued: results.queued.length,
+        skipped: results.skipped.length,
+        noPRs: results.noPRs.length,
+        failed: results.failed.length,
+      },
+    });
 
     return res.json({
       success: true,

@@ -8,6 +8,7 @@ import { lakeMembershipAuditDb } from '@bike4mind/server-utils/dataLakes/lakeMem
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
+import { requesterScopedUsers } from '@server/auth/apiKeyAdminScope';
 
 type TagIdQuery = { id?: string | string[] };
 
@@ -49,7 +50,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
             tags: fileTagRepository,
             fabFiles: fabFileRepository,
             dataLakes: dataLakeRepository,
-            users: userRepository,
+            users: requesterScopedUsers(req, userRepository),
             // A prefix-arm rename can flip a draft lake to active; without these that transition
             // would be the one status change the history does not contain.
             ...lakeConfigAuditDb,

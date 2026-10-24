@@ -21,12 +21,10 @@ import {
   Badge,
   Alert,
 } from '@mui/joy';
-import {
-  Add as AddIcon,
-  CheckCircle as CheckCircleIcon,
-  Settings as SettingsIcon,
-  AutoAwesome as AutoAwesomeIcon,
-} from '@mui/icons-material';
+import AddIcon from '@mui/icons-material/Add';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import SettingsIcon from '@mui/icons-material/Settings';
+import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import { toast } from 'sonner';
 import { api } from '@client/app/contexts/ApiContext';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';

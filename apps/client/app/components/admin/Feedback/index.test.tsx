@@ -104,7 +104,6 @@ const defaultPaginationReturn: UseFeedbackPaginationReturn = {
   handlePageChange: vi.fn(),
   itemsPerPage: 20,
   handleItemsPerPageChange: vi.fn(),
-  resetPage: vi.fn(),
 };
 
 const makeOperationsReturn = (
@@ -114,6 +113,7 @@ const makeOperationsReturn = (
   feedback,
   organizations: [],
   total: feedback.length,
+  totalSettled: true,
   loading: false,
   refreshFeedback: vi.fn(),
   handleStatusChange: vi.fn(),
@@ -211,6 +211,43 @@ describe('FeedbackTab', () => {
       await userEvent.click(screen.getByRole('option', { name: 'All Subjects' }));
 
       expect(defaultFiltersReturn.setSubject).toHaveBeenCalledWith(undefined);
+    });
+  });
+
+  describe('a page from the URL past the last one', () => {
+    const onPage = (currentPage: number) => {
+      const handlePageChange = vi.fn();
+      mocks.useFeedbackPagination.mockReturnValue({ ...defaultPaginationReturn, currentPage, handlePageChange });
+      return handlePageChange;
+    };
+
+    it('moves to the last page once the total has settled', () => {
+      const handlePageChange = onPage(5);
+      mocks.useFeedbackOperations.mockReturnValue(makeOperationsReturn([makeFeedbackItem()], { total: 45 }));
+
+      renderFeedbackTab();
+
+      expect(handlePageChange).toHaveBeenCalledWith(3);
+    });
+
+    it('is left alone while the total still belongs to a previous query', () => {
+      const handlePageChange = onPage(5);
+      mocks.useFeedbackOperations.mockReturnValue(
+        makeOperationsReturn([makeFeedbackItem()], { total: 0, totalSettled: false })
+      );
+
+      renderFeedbackTab();
+
+      expect(handlePageChange).not.toHaveBeenCalled();
+    });
+
+    it('leaves a reachable page alone', () => {
+      const handlePageChange = onPage(3);
+      mocks.useFeedbackOperations.mockReturnValue(makeOperationsReturn([makeFeedbackItem()], { total: 45 }));
+
+      renderFeedbackTab();
+
+      expect(handlePageChange).not.toHaveBeenCalled();
     });
   });
 });

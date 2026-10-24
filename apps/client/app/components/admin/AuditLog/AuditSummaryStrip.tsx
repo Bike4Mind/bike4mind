@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import { Alert, Button, ButtonGroup, Card, Stack, Typography } from '@mui/joy';
 import {
   AUDIT_SUMMARY_WINDOWS,
@@ -9,13 +8,16 @@ import {
 import { useAuditSummary } from '@client/app/hooks/data/adminAuditLog';
 import { AUDIT_SAVED_VIEWS, DENIED_FILTERS } from './auditSavedViews';
 
-const DEFAULT_WINDOW: AuditSummaryWindow = 30;
 const TOP_GRANTERS_SHOWN = 3;
 
 const savedViewFilters = (key: string): AuditLogFilters =>
   AUDIT_SAVED_VIEWS.find(view => view.key === key)?.filters ?? {};
 
-type AuditSummaryStripProps = { onApply(filters: AuditLogFilters): void };
+type AuditSummaryStripProps = {
+  windowDays: AuditSummaryWindow;
+  onWindowChange(windowDays: AuditSummaryWindow): void;
+  onApply(filters: AuditLogFilters): void;
+};
 
 const formatCredits = (credits: number) => credits.toLocaleString('en-US');
 
@@ -30,8 +32,7 @@ const creditTileDetail = ({ count, deductedCredits, topGranters }: AuditSummary[
 
 type Tile = { key: string; label: string; value: string; detail?: string; filters: AuditLogFilters };
 
-export const AuditSummaryStrip: React.FC<AuditSummaryStripProps> = ({ onApply }) => {
-  const [windowDays, setWindowDays] = useState<AuditSummaryWindow>(DEFAULT_WINDOW);
+export const AuditSummaryStrip: React.FC<AuditSummaryStripProps> = ({ windowDays, onWindowChange, onApply }) => {
   const { data: summary, isError } = useAuditSummary(windowDays);
 
   const tiles: Tile[] = summary
@@ -72,7 +73,7 @@ export const AuditSummaryStrip: React.FC<AuditSummaryStripProps> = ({ onApply })
           <Button
             key={days}
             variant={days === windowDays ? 'solid' : 'outlined'}
-            onClick={() => setWindowDays(days)}
+            onClick={() => onWindowChange(days)}
             data-testid={`audit-summary-window-${days}-btn`}
           >
             {days}d

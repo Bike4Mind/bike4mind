@@ -37,12 +37,14 @@ vi.mock('./PaymentModal', () => ({
     onClose,
     onConfirmResult,
     onPayment,
+    onPaymentPending,
     productName,
   }: {
     isOpen: boolean;
     onClose: () => void;
     onConfirmResult: (result: ConfirmResult) => void;
     onPayment: () => void;
+    onPaymentPending?: () => void;
     productName: string;
   }) =>
     isOpen ? (
@@ -50,6 +52,7 @@ vi.mock('./PaymentModal', () => ({
         <span data-testid="payment-modal-title">{productName}</span>
         <button data-testid="payment-modal-confirm-btn" onClick={() => onConfirmResult(confirmResult)} />
         <button data-testid="payment-modal-pay-btn" onClick={onPayment} />
+        <button data-testid="payment-modal-pending-btn" onClick={onPaymentPending} />
         <button data-testid="payment-modal-close-btn" onClick={onClose} />
       </div>
     ) : null,
@@ -76,6 +79,27 @@ describe('PaymentButton funnel events', () => {
     apiPost.mockResolvedValue({
       data: { clientSecret: 'pi_1_secret_x', publishableKey: 'pk_test', paymentIntentId: 'pi_1' },
     });
+  });
+
+  it('propagates retrieved pending state and does not abandon the checkout on close', async () => {
+    const onPayment = vi.fn();
+    const onPaymentPending = vi.fn();
+    render(
+      <TestWrapper>
+        <PaymentButton
+          transactionType={TransactionType.Package}
+          packageId={CreditPackageId.Usd20}
+          onPayment={onPayment}
+          onPaymentPending={onPaymentPending}
+        />
+      </TestWrapper>
+    );
+    await userEvent.click(screen.getByTestId('credits-purchase-btn'));
+    await userEvent.click(await screen.findByTestId('payment-modal-pending-btn'));
+    await userEvent.click(screen.getByTestId('payment-modal-close-btn'));
+    expect(onPaymentPending).toHaveBeenCalledTimes(1);
+    expect(onPayment).not.toHaveBeenCalled();
+    expect(loggedTypes()).not.toContain(CreditPurchaseEvents.PAYMENT_ABANDONED);
   });
 
   it('records the request, the opened form and the confirm result against the intent', async () => {

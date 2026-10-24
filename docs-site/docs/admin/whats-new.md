@@ -48,6 +48,8 @@ Set the `WHATS_NEW_FEED_URL` environment variable to the https URL of another de
 
 The URL may instead point at a [JSON Feed](https://jsonfeed.org) document, such as the `whats-new.json` a marketing site publishes for its own What's New page. Each item becomes one slide: its title, its `content_text` (or `summary` when text is blank), its first tag as the label and its `date_published` as the date. Items without a date are skipped, and entries are cursor-paginated newest first. A JSON Feed may live on this deployment's own domain; this deployment's own `/api/v1/whats-new` route is refused both directly and as a redirect target, since fetching it would recurse.
 
+An upstream note's video or still image is served from the upstream deployment's own media route (`/api/v1/whats-new/media/...`), so setting `WHATS_NEW_FEED_URL` also adds its origin to the `img-src`, `connect-src` and `media-src` Content Security Policy directives. An upstream video or image with any URL outside that origin or this deployment's media allowlist is dropped (each on its own) and the slide shows without it.
+
 ## Active Modals
 
 The Active Modals section displays all local What's New modals, partitioned into two groups:
@@ -128,7 +130,7 @@ Batch operations:
 
 ## Weekly Highlights to Slack
 
-This card is visible on main environments (production, dev, PR previews) but not on fork environments. It configures automatic generation of weekly highlight summaries from What's New modals, posted to a Slack channel.
+This card is visible on main environments (production, dev, PR previews) but not on fork environments. It configures on-demand generation of weekly highlight summaries from What's New modals, posted to a Slack channel. There is no automatic schedule: highlights are generated only when an admin clicks **Generate Now**.
 
 ### Configuration
 
@@ -136,7 +138,7 @@ The configuration is in a collapsible accordion with the following settings:
 
 | Setting | Description |
 |---------|-------------|
-| **Enabled Toggle** | Turn weekly auto-generation on or off |
+| **Enabled Toggle** | Saved with the config but currently has no effect, since there is no automatic schedule |
 | **Slack Channel ID** | The Slack channel (starts with C) where highlights are posted |
 | **Slack Team ID** | The Slack workspace/team ID (starts with T) |
 | **Attach Markdown File** | When enabled, a `.md` file is attached to the Slack message |
@@ -171,7 +173,7 @@ A "Preview" button on the success alert opens the last generated highlights text
 
 - On non-source environments, configure the distribution URL before enabling auto-sync to ensure modals can be fetched.
 - Use the expiry date to automatically archive announcements after they become stale, rather than manually disabling them.
-- When configuring Weekly Highlights, test with "Generate Now" before enabling the automatic schedule to verify the Slack integration works correctly.
+- When configuring Weekly Highlights, use a test Slack channel for the first "Generate Now" run to verify the Slack integration works correctly.
 - Keep announcement descriptions concise and use Markdown formatting for readability.
 
 ---

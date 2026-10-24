@@ -10,7 +10,7 @@ import {
   isSlackUserValidationError,
   isSlackUserValidationErrorByMessage,
   createSlackExportError,
-} from '@server/integrations/slack/slackExportErrors';
+} from '@bike4mind/server-utils/integrations/slack/slackExportErrors';
 
 /**
  * Slack Channel Export API

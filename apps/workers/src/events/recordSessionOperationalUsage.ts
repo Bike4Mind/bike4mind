@@ -1,4 +1,4 @@
-import { getTextModelCost, getTurnsCost, IUserDocument, ModelInfo } from '@bike4mind/common';
+import { buildUsagePriceStamp, getTextModelCost, getTurnsCost, IUserDocument, ModelInfo } from '@bike4mind/common';
 import { recordOperationalUsage } from '@bike4mind/services';
 import {
   adminSettingsRepository,
@@ -85,6 +85,10 @@ export async function recordSessionOperationalUsage(args: RecordSessionOperation
         cachedInputTokens: cacheReadTokens,
         cacheWriteTokens,
         costUsd,
+        priceStamp: buildUsagePriceStamp(modelInfo, {
+          turns: completionInfo?.turnUsage,
+          tierBasisTokens: inputTokens + cacheReadTokens + cacheWriteTokens,
+        }),
         latencyMs: Date.now() - args.startTime,
         source: 'system',
         finishReason: completionInfo?.stopReason,

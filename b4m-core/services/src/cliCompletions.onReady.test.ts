@@ -10,7 +10,14 @@ vi.mock('./creditService', async importOriginal => ({
 const { CATALOGUED_MODEL, order, mockComplete } = vi.hoisted(() => {
   const order: string[] = [];
   return {
-    CATALOGUED_MODEL: { id: 'gpt-4.1-2025-04-14', backend: 'openai', max_tokens: 32_768 },
+    CATALOGUED_MODEL: {
+      id: 'gpt-4.1-2025-04-14',
+      type: 'text',
+      backend: 'openai',
+      contextWindow: 200_000,
+      max_tokens: 32_768,
+      pricing: { 200_000: { input: 1 / 1_000_000, output: 1 / 1_000_000 } },
+    },
     order,
     mockComplete: vi.fn(async () => {
       order.push('complete');
@@ -39,7 +46,8 @@ vi.mock('@bike4mind/common', async importOriginal => ({
 }));
 
 import { BadRequestError } from '@bike4mind/common';
-import { getAvailableModels } from '@bike4mind/llm-adapters';
+import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
+import { getSettingsValue } from '@bike4mind/utils';
 import { InsufficientCreditsError } from './llm/ChatCompletionProcess';
 import { executeCompletion } from './cliCompletions';
 
@@ -74,6 +82,7 @@ const baseParams = {
 describe('executeCompletion onReady', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(getSettingsValue).mockReturnValue(true);
     order.length = 0;
   });
 
@@ -97,6 +106,47 @@ describe('executeCompletion onReady', () => {
       BadRequestError
     );
     expect(onReady).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['system-only', [{ role: 'system', content: 'system prompt' }]],
+    ['blank user text', [{ role: 'user', content: '  \n\t ' }]],
+    ['blank assistant text block', [{ role: 'assistant', content: [{ type: 'text', text: '\t ' }] }]],
+  ])('refuses a %s conversation before the credit hold, onReady, or provider call', async (_label, messages) => {
+    const { db, users } = buildDb();
+    const onReady = vi.fn();
+
+    await expect(executeCompletion({ ...baseParams, messages: messages as never, db, onReady })).rejects.toMatchObject({
+      statusCode: 400,
+      message: 'request must contain at least one non-empty user or assistant message',
+    });
+    expect(users.incrementCredits).not.toHaveBeenCalled();
+    expect(onReady).not.toHaveBeenCalled();
+    expect(mockComplete).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      'image-only',
+      [{ role: 'user', content: [{ type: 'image_url', image_url: { url: 'https://example.com/a.png' } }] }],
+    ],
+    [
+      'tool call',
+      [
+        {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: 'call-1', name: 'lookup', input: {} }],
+        },
+      ],
+    ],
+  ])('keeps a %s conversation eligible for dispatch', async (_label, messages) => {
+    const { db } = buildDb();
+    const onReady = vi.fn();
+
+    await executeCompletion({ ...baseParams, messages: messages as never, db, onReady });
+
+    expect(onReady).toHaveBeenCalledOnce();
+    expect(mockComplete).toHaveBeenCalledOnce();
   });
 
   it('refuses a disabled model with a 400 unknown_model before any hold, onReady or provider call', async () => {
@@ -127,6 +177,53 @@ describe('executeCompletion onReady', () => {
     expect((error as Error).message).toContain('is currently unavailable.');
     expect((error as Error).message).not.toContain('undefined');
   });
+
+  it.each([true, false])('refuses an image model before dispatch with enforceCredits=%s', async enforceCredits => {
+    vi.mocked(getSettingsValue).mockReturnValue(enforceCredits);
+    vi.mocked(getAvailableModels).mockResolvedValueOnce([
+      { ...CATALOGUED_MODEL, id: 'gpt-image-2', type: 'image' } as never,
+    ]);
+    const { db, users } = buildDb();
+    const onReady = vi.fn();
+
+    const error = await executeCompletion({ ...baseParams, model: 'gpt-image-2', db, onReady }).catch(
+      (e: unknown) => e
+    );
+
+    expect(error).toBeInstanceOf(BadRequestError);
+    expect(error).toMatchObject({ statusCode: 400, additionalInfo: { errorCode: 'unknown_model' } });
+    expect((error as Error).message).toBe("Model 'gpt-image-2' (type: image) cannot be used for text completions.");
+    expect(users.incrementCredits).not.toHaveBeenCalled();
+    // Proves the guard runs before backend construction, not merely before the provider call.
+    expect(getLlmByModel).not.toHaveBeenCalled();
+    expect(onReady).not.toHaveBeenCalled();
+    expect(mockComplete).not.toHaveBeenCalled();
+  });
+
+  it.each(['image', 'video', 'speech-to-text'] as const)(
+    'refuses a non-text model (type %s) with a 400 unknown_model and no side effects',
+    async type => {
+      vi.mocked(getAvailableModels).mockResolvedValueOnce([
+        { ...CATALOGUED_MODEL, id: 'non-text-model', type } as never,
+      ]);
+      const { db, users } = buildDb();
+      const onReady = vi.fn();
+
+      const error = await executeCompletion({ ...baseParams, model: 'non-text-model', db, onReady }).catch(
+        (e: unknown) => e
+      );
+
+      expect(error).toBeInstanceOf(BadRequestError);
+      expect(error).toMatchObject({ statusCode: 400, additionalInfo: { errorCode: 'unknown_model' } });
+      expect((error as Error).message).toBe(
+        `Model 'non-text-model' (type: ${type}) cannot be used for text completions.`
+      );
+      expect(users.incrementCredits).not.toHaveBeenCalled();
+      expect(getLlmByModel).not.toHaveBeenCalled();
+      expect(onReady).not.toHaveBeenCalled();
+      expect(mockComplete).not.toHaveBeenCalled();
+    }
+  );
 
   it('does not call onReady when the credit hold is refused', async () => {
     const { db } = buildDb(-5);

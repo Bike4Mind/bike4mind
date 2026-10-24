@@ -140,12 +140,8 @@ jobs:
             core.warning(`No recent main commit has staging/deploy=success; ${process.env.STATUS_CONTEXT} status will be skipped.`);
 
       - name: Install Playwright Chromium
-        working-directory: apps/client
-        # Cap the install: the yauzl/Node>=24.16 extraction wedge
-        # (playwright#40724) can hang this step indefinitely, idling to the job
-        # cap. Fail fast instead.
-        timeout-minutes: 8
-        run: npx playwright install chromium --with-deps
+        timeout-minutes: 12
+        uses: ./.github/actions/install-playwright-chromium
 
       # A staging deploy in flight swaps the Lambda under the suite, so requests can
       # 401 or 5xx mid-run. When that hits the create-test-user setup it skips the
@@ -504,10 +500,13 @@ jobs:
           if [ ! -f "$CREDITS_FILE" ]; then
             CREDITS_LINES="_No credits data available_"
           else
-            CREDITS_LINES=$(jq -r '[.[] |
+            # Must stay in sync with CREDITS_THRESHOLD in apps/client/e2e/helpers/slack.ts
+            # and scripts/qa-report.mjs.
+            CREDITS_THRESHOLD=60
+            CREDITS_LINES=$(jq -r --argjson threshold "$CREDITS_THRESHOLD" '[.[] |
               (.avgCredits == null) as $missing |
-              (.avgCredits != null and .avgCredits > 30) as $exceeded |
-              "• " + .model + " — credits: " + ((.avgCredits // "Credit Used data unavailable (chip missing or prior failure).") | tostring) + " " + (if $missing then ":x:" elif $exceeded then ":x: _(exceeds threshold of 30)_" else ":white_check_mark:" end)
+              (.avgCredits != null and .avgCredits > $threshold) as $exceeded |
+              "• " + .model + " — credits: " + ((.avgCredits // "Credit Used data unavailable (chip missing or prior failure).") | tostring) + " " + (if $missing then ":x:" elif $exceeded then ":x: _(exceeds threshold of \($threshold))_" else ":white_check_mark:" end)
             ] | join("\\n")' "$CREDITS_FILE")
           fi
           # Emit the AI Credits Slack block as a JSON fragment with a leading comma so it

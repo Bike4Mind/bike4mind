@@ -1,9 +1,9 @@
 import { act, renderHook } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('@tanstack/react-router', async () => (await import('./__tests__/fakeAdminRouter')).fakeRouterModule);
+vi.mock('@tanstack/react-router', async () => (await import('../__tests__/fakeAdminRouter')).fakeRouterModule);
 
-import { fakeAdminRouter } from './__tests__/fakeAdminRouter';
+import { fakeAdminRouter } from '../__tests__/fakeAdminRouter';
 import { DEFAULT_USERS_PARAMS, useUsersParams, useUsersTab, useUsersTabUrlSync } from './useUsersTabParams';
 
 const STORED = {

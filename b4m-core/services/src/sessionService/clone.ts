@@ -89,6 +89,9 @@ export const cloneSession = async (
     // still filtered by availability per turn, and the prompt id resolves only through the
     // session-activatable allowlist (sessionActivatablePrompts.ts).
     enabledTools: session.enabledTools,
+    // Keeps the copy's tool list identical to the source's, which the provider's prompt cache keys
+    // on. Safe to carry: each tool's eligibility is re-checked against the reader every turn.
+    autoAddedTools: session.autoAddedTools,
     disabledTools: session.disabledTools,
     disableUserIntegrations: session.disableUserIntegrations,
     systemPromptId: session.systemPromptId,

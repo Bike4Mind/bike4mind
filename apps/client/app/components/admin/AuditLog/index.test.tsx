@@ -21,11 +21,15 @@ const mocks = vi.hoisted(() => ({
   entryError: false,
   entryRefetchError: false,
   summaryError: false,
+  criticalEntries: [] as unknown[],
+  alertsEnabled: true,
 }));
 
 vi.mock('@client/app/hooks/data/adminAuditLog', () => ({
-  useAuditLog: () => ({
-    data: { pages: [{ entries: mocks.entries, nextCursor: null }] },
+  useAuditLog: (filters: AuditLogFilters) => ({
+    data: {
+      pages: [{ entries: filters.severity === 'critical' ? mocks.criticalEntries : mocks.entries, nextCursor: null }],
+    },
     isLoading: false,
     isError: mocks.listError,
     hasNextPage: false,
@@ -54,6 +58,9 @@ vi.mock('@client/app/hooks/data/adminAuditLog', () => ({
           deletions: 2,
           deniedAttempts: 4,
         },
+  }),
+  useAuditAlertStatus: () => ({
+    data: { alertsEnabled: mocks.alertsEnabled, singleGrantCredits: 50000, dailyGrantCredits: 200000 },
   }),
   downloadAuditLogCsv: mocks.downloadAuditLogCsv,
 }));
@@ -89,6 +96,8 @@ describe('AuditLogPage', () => {
     mocks.entryError = false;
     mocks.entryRefetchError = false;
     mocks.summaryError = false;
+    mocks.criticalEntries = [];
+    mocks.alertsEnabled = true;
   });
 
   it('clicking a saved view sets its filters', () => {
@@ -174,5 +183,34 @@ describe('AuditLogPage', () => {
     expect(screen.getByTestId('audit-drawer')).toBeTruthy();
     expect(mocks.openEntry).not.toHaveBeenCalled();
     expect(mocks.showSnackbar).not.toHaveBeenCalled();
+  });
+
+  it('shows the alerts-off banner only while the webhook is unset', () => {
+    const { unmount } = render(<AuditLogPage />, { wrapper: TestWrapper });
+    expect(screen.queryByTestId('audit-alerts-off-banner')).toBeNull();
+    unmount();
+
+    mocks.alertsEnabled = false;
+    render(<AuditLogPage />, { wrapper: TestWrapper });
+    expect(screen.getByTestId('audit-alerts-off-banner').textContent).toMatch(/alerts are off/i);
+  });
+
+  it('keeps Needs review collapsed when nothing is critical, and opens it on demand', () => {
+    render(<AuditLogPage />, { wrapper: TestWrapper });
+    expect(screen.getByTestId('audit-needs-review-count').textContent).toBe('Nothing critical in 30 days');
+    expect(screen.queryByTestId('audit-needs-review-table')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('audit-needs-review-toggle-btn'));
+    expect(screen.getByTestId('audit-needs-review-table-empty')).toBeTruthy();
+    expect(screen.getByTestId('audit-needs-review-panel').textContent).toContain('above 50,000 credits');
+  });
+
+  it('lists critical entries in Needs review and opens one in the shared drawer', () => {
+    mocks.criticalEntries = [makeAuditEntry({ id: 'c1', severity: 'critical' })];
+    render(<AuditLogPage />, { wrapper: TestWrapper });
+    expect(screen.getByTestId('audit-needs-review-count').textContent).toBe('1 critical in 30 days');
+
+    fireEvent.click(screen.getByTestId('audit-needs-review-table-row-c1'));
+    expect(mocks.openEntry).toHaveBeenCalledWith('c1');
   });
 });

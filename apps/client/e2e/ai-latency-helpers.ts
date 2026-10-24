@@ -147,11 +147,19 @@ export interface PromptResult {
   renderTimeMs: number;
   renderTimeSec: number;
   /**
-   * True for image/artifact prompts. Even measured stream-only their window runs for minutes, so
-   * they are excluded from the gated latency average, which must stay a text-streaming signal that
-   * still catches a real text regression. Absent (falsy) for text prompts.
+   * True when the stream window timed a deliverable: declared up front (image/artifact prompt) or
+   * detected afterwards (see unexpectedArtifact). Even measured stream-only their window runs for
+   * minutes, so they are excluded from the gated latency average, which must stay a text-streaming
+   * signal that still catches a real text regression. Absent (falsy) for chat replies.
    */
   measuresDeliverable?: boolean;
+  /**
+   * A prompt NOT flagged generatesArtifact answered with an artifact card instead of a chat reply.
+   * Its stream window then times artifact generation, not chat streaming, so the result is also
+   * marked measuresDeliverable (out of the gated average) and surfaced in the summary and the
+   * workflow table rather than dropped silently. Absent (falsy) otherwise.
+   */
+  unexpectedArtifact?: boolean;
   /**
    * The prompt never finished: responseTimeSec is the elapsed time when it was abandoned, a FLOOR
    * on the real latency rather than a measurement of it. Recorded so a timed-out prompt still

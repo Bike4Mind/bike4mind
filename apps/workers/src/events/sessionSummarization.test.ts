@@ -12,6 +12,8 @@ import { PERSISTED_SESSION_SUMMARY_TRIGGERS, StorageLimitError } from '@bike4min
 
 const h = vi.hoisted(() => ({
   fabFileStore: [] as Record<string, unknown>[],
+  quests: [{ _id: 'q1', prompt: 'hello', reply: 'world' }] as Record<string, unknown>[],
+  modelMessages: vi.fn(),
   findOne: vi.fn(),
   updateFabFile: vi.fn(),
   createFabFile: vi.fn(),
@@ -50,7 +52,10 @@ vi.mock('@bike4mind/database', () => ({
   User: { findById: h.userFindById },
   Quest: {
     find: vi.fn(() => ({
-      sort: () => ({ limit: async () => [{ _id: 'q1', prompt: 'hello', reply: 'world' }] }),
+      sort: () => ({
+        limit: async (limit: number) => h.quests.slice(0, limit),
+        skip: (offset: number) => ({ limit: async (limit: number) => h.quests.slice(offset, offset + limit) }),
+      }),
     })),
   },
   sessionRepository: {
@@ -105,6 +110,7 @@ vi.mock('@client/services/operationsModelService', () => ({
           _options: unknown,
           onChunk: (chunk: (string | null)[]) => Promise<void>
         ) => {
+          h.modelMessages(_messages);
           await onChunk(['A summary of the session.']);
         },
       },
@@ -129,6 +135,10 @@ const STRANGER = 'user-stranger';
 const SESSION_ID = 'session-1';
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), updateMetadata: vi.fn() };
+
+beforeEach(() => {
+  h.quests = [{ _id: 'q1', prompt: 'hello', reply: 'world' }];
+});
 
 const run = (properties: Record<string, unknown> = {}) =>
   (handler as unknown as (event: unknown, logger: unknown) => Promise<void>)(
@@ -537,7 +547,28 @@ describe('sessionSummarization requester write-time re-check', () => {
       expect.objectContaining({ id: SESSION_ID, summary: 'A summary of the session.', summaryTrigger: 'manual' }),
       { includeGlobalWrite: true }
     );
-    expect(h.publishTag).toHaveBeenCalledWith({ sessionId: SESSION_ID, requesterId: SHAREE });
+    expect(h.publishTag).toHaveBeenCalledWith({ sessionId: SESSION_ID, requesterId: SHAREE, payerId: undefined });
+  });
+
+  it('bills the sharee who asked, not the owner', async () => {
+    h.sessionUpdateWithUpdateAccess.mockResolvedValue({ id: SESSION_ID });
+
+    await run({ requesterId: SHAREE });
+
+    expect(h.recordSessionOperationalUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ user: expect.objectContaining({ id: SHAREE }) })
+    );
+  });
+
+  it('bills the named payer and forwards it to the tag job it queues', async () => {
+    h.sessionUpdateWithUpdateAccess.mockResolvedValue({ id: SESSION_ID });
+
+    await run({ payerId: 'user-admin', callTagging: true });
+
+    expect(h.recordSessionOperationalUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ user: expect.objectContaining({ id: 'user-admin' }) })
+    );
+    expect(h.publishTag).toHaveBeenCalledWith({ sessionId: SESSION_ID, requesterId: undefined, payerId: 'user-admin' });
   });
 
   it('stops before the FabFile, upload and tag job when the requester lost access mid-run', async () => {
@@ -634,5 +665,68 @@ describe('sessionSummarization when the summary file cannot be stored', () => {
     h.createFabFile.mockRejectedValue(new Error('File size exceeds storage limit'));
 
     await expect(run()).rejects.toThrow('File size exceeds storage limit');
+  });
+});
+
+describe('sessionSummarization stopped turns', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.assertLakeAdmission.mockReset();
+    h.session = { id: SESSION_ID, userId: OWNER, name: 'Notebook', tags: [] };
+    h.findOne.mockResolvedValue(null);
+    h.createFabFile.mockResolvedValue({ filePath: 'summary.txt', mimeType: 'text/plain' });
+    h.quests = [
+      { _id: 'q1', prompt: 'cancelled ask', status: 'stopped', replies: [] },
+      { _id: 'q2', prompt: 'partial ask', status: 'stopped', replies: ['partial answer'] },
+    ];
+  });
+
+  it('excludes cancelled prompts while preserving stopped partial answers in the model payload', async () => {
+    await run();
+
+    const messages = h.modelMessages.mock.calls[0][0];
+    expect(messages).toContainEqual({ role: 'user', content: 'Question: partial ask\nAnswer: partial answer' });
+    expect(JSON.stringify(messages)).not.toContain('cancelled ask');
+  });
+
+  it('looks past a full cancelled page to find the next replayable turn', async () => {
+    h.quests = [
+      ...Array.from({ length: 5 }, (_, index) => ({
+        _id: `cancelled-${index}`,
+        prompt: `cancelled ask ${index}`,
+        status: 'stopped',
+        replies: [],
+      })),
+      { _id: 'completed', prompt: 'completed ask', status: 'done', replies: ['completed answer'] },
+    ];
+    await run();
+
+    const messages = h.modelMessages.mock.calls[0][0];
+    expect(messages).toContainEqual({ role: 'user', content: 'Question: completed ask\nAnswer: completed answer' });
+    expect(JSON.stringify(messages)).not.toContain('cancelled ask');
+  });
+
+  it('stops at the end of a full cancelled page without calling the model', async () => {
+    h.quests = Array.from({ length: 5 }, (_, index) => ({
+      _id: `cancelled-${index}`,
+      prompt: 'cancelled ask',
+      status: 'stopped',
+      replies: [],
+    }));
+    await run();
+
+    expect(h.modelMessages).not.toHaveBeenCalled();
+    expect(h.recordSessionOperationalUsage).not.toHaveBeenCalled();
+  });
+
+  it('leaves the stored summary alone when all new turns were cancelled', async () => {
+    h.quests = [h.quests[0]];
+    h.session.summary = 'Existing summary';
+    await run();
+
+    expect(h.modelMessages).not.toHaveBeenCalled();
+    expect(h.session.summary).toBe('Existing summary');
+    expect(h.recordSessionOperationalUsage).not.toHaveBeenCalled();
+    expect(h.createFabFile).not.toHaveBeenCalled();
   });
 });

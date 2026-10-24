@@ -4,7 +4,7 @@ import Button from '@mui/joy/Button';
 import IconButton from '@mui/joy/IconButton';
 import Typography from '@mui/joy/Typography';
 import Snackbar from '@mui/joy/Snackbar';
-import { Close } from '@mui/icons-material';
+import Close from '@mui/icons-material/Close';
 import { useMutation } from '@tanstack/react-query';
 import { useLocation, useNavigate } from '@tanstack/react-router';
 import { useShallow } from 'zustand/react/shallow';

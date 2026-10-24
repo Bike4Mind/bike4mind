@@ -1,13 +1,15 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockEmit, mockGetSetting, mockUserUpdate, mockUpdateOne } = vi.hoisted(() => ({
+const { mockEmit, mockGetSetting, mockLogEventSafe, mockUserUpdate, mockUpdateOne } = vi.hoisted(() => ({
   mockEmit: vi.fn(),
   mockGetSetting: vi.fn(),
+  mockLogEventSafe: vi.fn(),
   mockUserUpdate: vi.fn(),
   mockUpdateOne: vi.fn(),
 }));
 vi.mock('./emitActiveEvent', () => ({ HOST_PRODUCT_ID: 'bike4mind', emitProductEvent: mockEmit }));
+vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe: mockLogEventSafe }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { OVERWATCH_PSEUDONYM_SALT: 'test-salt' } }));
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: mockGetSetting },
@@ -39,6 +41,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockEmit.mockResolvedValue(undefined);
   mockGetSetting.mockResolvedValue('');
+  mockLogEventSafe.mockResolvedValue(undefined);
   mockUserUpdate.mockResolvedValue(null);
   mockUpdateOne.mockResolvedValue({ modifiedCount: 1 });
 });
@@ -221,6 +224,18 @@ describe('emitSignupFunnelEvents', () => {
       ['signup_completed', { method: 'github' }],
     ]);
   });
+
+  it("marks an admin-created account's stages as no action of its user", async () => {
+    // Still a signup, but not a day the new user was active: Overwatch keeps them out of DAU,
+    // and out of its new users, until their own first request.
+    await emitSignupFunnelEvents({ user: { id: 'u1' }, method: 'admin', emailVerified: true, creditsGranted: 50 });
+
+    expect(mockEmit.mock.calls.map(([event]) => [event.event, event.metadata])).toEqual([
+      ['email_verified', { method: 'admin', userAction: false }],
+      ['credits_granted', { amount: 50, source: 'signup', method: 'admin', userAction: false }],
+      ['signup_completed', { method: 'admin', userAction: false }],
+    ]);
+  });
 });
 
 describe('emitEmailVerifiedFunnelEvents', () => {
@@ -234,6 +249,19 @@ describe('emitEmailVerifiedFunnelEvents', () => {
     expect(mockEmit.mock.calls.map(([event]) => [event.event, event.metadata])).toEqual([
       ['email_verified', { method: 'otc' }],
       ['credits_granted', { amount: 70, source: 'signup', method: 'otc' }],
+    ]);
+  });
+
+  it('marks an admin verifying the email as no action of its user', async () => {
+    await emitEmailVerifiedFunnelEvents({
+      user: { id: 'u1', createdAt: new Date('2026-10-11T00:00:00Z') },
+      method: 'admin',
+      creditsGranted: 120,
+    });
+
+    expect(mockEmit.mock.calls.map(([event]) => [event.event, event.metadata])).toEqual([
+      ['email_verified', { method: 'admin', userAction: false }],
+      ['credits_granted', { amount: 120, source: 'signup', method: 'admin', userAction: false }],
     ]);
   });
 
@@ -311,12 +339,34 @@ describe('recordFirstChatValue', () => {
   });
 
   it('records a completed answer as chat first_value', async () => {
-    expect(await recordFirstChatValue({ user, loadQuest: async () => ({ status: 'done', type: 'message' }) })).toBe(
-      true
-    );
+    expect(
+      await recordFirstChatValue({
+        user,
+        loadQuest: async () => ({ status: 'done', type: 'message', creditsUsed: 12 }),
+      })
+    ).toBe(true);
     expect(mockEmit).toHaveBeenCalledWith(
       expect.objectContaining({ event: 'first_value', metadata: expect.objectContaining({ feature: 'chat' }) })
     );
+    expect(mockLogEventSafe).toHaveBeenCalledWith({
+      userId: 'u1',
+      type: 'first_answer_credits',
+      metadata: { credits: 12 },
+    });
+  });
+
+  it('logs zero credits when credit enforcement did not record a cost', async () => {
+    await recordFirstChatValue({ user, loadQuest: async () => ({ status: 'done', type: 'message' }) });
+    expect(mockLogEventSafe).toHaveBeenCalledWith(expect.objectContaining({ metadata: { credits: 0 } }));
+  });
+
+  it('does not log credits when another completion already claimed first value', async () => {
+    mockUpdateOne.mockResolvedValue({ modifiedCount: 0 });
+    await recordFirstChatValue({
+      user,
+      loadQuest: async () => ({ status: 'done', type: 'message', creditsUsed: 12 }),
+    });
+    expect(mockLogEventSafe).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -326,6 +376,7 @@ describe('recordFirstChatValue', () => {
   ])('ignores a quest that is %s', async (_label, quest) => {
     expect(await recordFirstChatValue({ user, loadQuest: async () => quest })).toBe(false);
     expect(mockUpdateOne).not.toHaveBeenCalled();
+    expect(mockLogEventSafe).not.toHaveBeenCalled();
   });
 
   it('never throws when the quest read fails', async () => {

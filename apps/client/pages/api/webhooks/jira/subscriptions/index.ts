@@ -1,3 +1,8 @@
+import { initializeSlackPackage } from '@server/integrations/slack/slackPackageInit';
+import { Logger } from '@bike4mind/observability';
+import { resolveNotificationDestination } from '@bike4mind/slack';
+initializeSlackPackage();
+
 /**
  * Jira Webhook Subscriptions API
  *
@@ -55,6 +60,16 @@ const handler = baseApi()
         // DM target uses the user's linked Slack account - no extra fields needed
       } else {
         throw new BadRequestError('slackTarget.type must be "channel" or "dm"');
+      }
+
+      try {
+        await resolveNotificationDestination(
+          user.id,
+          slackTarget.type === 'channel' ? slackTarget.channelId : undefined
+        );
+      } catch (error) {
+        Logger.warn('Jira Slack destination verification failed', { userId: user.id, error });
+        throw new BadRequestError('Choose a destination you belong to in your linked Slack workspace');
       }
 
       const filterError = validateFilters({ projectFilter, priorityFilter, issueTypeFilter });

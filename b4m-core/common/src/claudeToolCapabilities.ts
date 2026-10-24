@@ -66,20 +66,28 @@ export type CompletionsToolCapabilityModel = ClaudeToolCapabilityModel & {
   adapterFamily?: AdapterFamily;
 };
 
-// Mirrors getLlmByModel's dispatch: a catalog row routes on adapterFamily first, everything else on backend.
+// Mirror getLlmByModel's dispatch: a catalog row routes on adapterFamily first, everything else on backend.
 // MUST STAY IN SYNC WITH getLlmByModel (llm-adapters/src/index.ts) and backendForAdapterFamily
 // (llm-adapters/src/adapterFamilyDispatch.ts).
-// Bedrock Claude is left out until its adapter forwards defer_loading and replays server blocks.
-function completionsForwardsNativeTools(model: CompletionsToolCapabilityModel): boolean {
+function servedByDirectAnthropic(model: CompletionsToolCapabilityModel): boolean {
   return model.adapterFamily ? model.adapterFamily === 'anthropic-messages' : model.backend === ModelBackend.Anthropic;
 }
 
-/** supportsToolChanges, narrowed to models whose `/api/ai/v1/completions` adapter keeps the messages in place and sends the beta. */
+// Both Claude adapters forward defer_loading and server tools and replay server blocks.
+function servedByClaudeAdapter(model: CompletionsToolCapabilityModel): boolean {
+  if (servedByDirectAnthropic(model)) return true;
+  return model.adapterFamily ? model.adapterFamily === 'bedrock-anthropic' : model.backend === ModelBackend.Bedrock;
+}
+
+/**
+ * supportsToolChanges, narrowed to models whose `/api/ai/v1/completions` adapter keeps the messages in place and sends the beta.
+ * Bedrock is left out until mid-conversation tool changes are verified there.
+ */
 export function completionsSupportsToolChanges(model: CompletionsToolCapabilityModel): boolean {
-  return completionsForwardsNativeTools(model) && supportsToolChanges(model);
+  return servedByDirectAnthropic(model) && supportsToolChanges(model);
 }
 
 /** supportsToolSearch, narrowed to models whose `/api/ai/v1/completions` adapter actually forwards it. */
 export function completionsSupportsToolSearch(model: CompletionsToolCapabilityModel): boolean {
-  return completionsForwardsNativeTools(model) && supportsToolSearch(model);
+  return servedByClaudeAdapter(model) && supportsToolSearch(model);
 }

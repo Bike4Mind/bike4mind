@@ -11,7 +11,7 @@ import {
   generateSemanticTelemetryFingerprint,
   getSeverityEmoji,
   formatPrimaryAnomaly,
-} from '@server/services/telemetryFingerprint';
+} from '@bike4mind/server-utils/services/telemetryFingerprint';
 import { checkFingerprintDedup } from '@bike4mind/server-utils/services/issueDedup';
 import { GitHubService } from '@server/services/githubService';
 import {

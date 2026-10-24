@@ -1,5 +1,8 @@
-import { realpath } from 'node:fs/promises';
+import { readlink, realpath } from 'node:fs/promises';
 import { dirname, isAbsolute, join, parse, resolve, sep } from 'node:path';
+
+/** The kernel's own limit (MAXSYMLINKS); past it the open fails with ELOOP anyway. */
+const MAX_LINK_HOPS = 32;
 
 /**
  * Thrown when a tool is pointed outside every granted root. Carries no filesystem detail
@@ -53,7 +56,7 @@ export async function resolveWithinRoots(
   const lexical = isAbsolute(requested) || !baseDirectory ? resolve(requested) : resolve(baseDirectory, requested);
   const realRoots = await Promise.all(roots.map(root => realpath(root).catch(() => resolve(root))));
 
-  const real = await realpathNearest(lexical);
+  const real = await physicalTarget(lexical);
   if (!realRoots.some(root => isWithin(root, real))) throw new PathAccessDenied(requested);
 
   // The lexical path is what the caller gets back: `real` may point at the symlink TARGET,
@@ -124,5 +127,44 @@ export async function realpathNearest(target: string): Promise<string> {
       if (parent === current) return current;
       current = parent;
     }
+  }
+}
+
+/**
+ * Where opening `target` would land, every symlink followed - including a dangling one, which
+ * `open(O_CREAT)` follows to create its target. `realpathNearest` stops at the nearest existing
+ * ancestor, so a link in a granted folder aimed at a file that does not exist yet would look
+ * like a new file inside the folder.
+ */
+export async function physicalTarget(target: string): Promise<string> {
+  try {
+    return await realpath(target);
+  } catch {
+    // A dangling link can contain `..` after another link. Resolve its components in order:
+    // path.resolve(directory, link) would collapse that `..` before following the earlier link.
+    const absolute = resolve(target);
+    let current = parse(absolute).root;
+    let pending = absolute.slice(current.length).split(sep);
+    let hops = 0;
+    while (pending.length > 0) {
+      const part = pending.shift();
+      if (!part || part === '.') continue;
+      if (part === '..') {
+        current = dirname(current);
+        continue;
+      }
+      const candidate = join(current, part);
+      const link = await readlink(candidate).catch(() => null);
+      if (link === null) {
+        // Existing components also supply their canonical casing on case-insensitive volumes.
+        current = await realpath(candidate).catch(() => candidate);
+        continue;
+      }
+      if (++hops > MAX_LINK_HOPS) throw new PathAccessDenied(target);
+      const root = parse(link).root;
+      if (isAbsolute(link)) current = root;
+      pending = [...link.slice(root.length).split(sep), ...pending];
+    }
+    return current;
   }
 }

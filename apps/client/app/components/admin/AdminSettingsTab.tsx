@@ -6,6 +6,7 @@ import {
   API_SERVICE_GROUPS,
   Category,
   CATEGORY_ICONS,
+  type SettingKey,
 } from '@bike4mind/common';
 import { EmbeddingProviderLimits } from './EmbeddingProviderLimits';
 import { useAdminSettingsSearchParams, type SettingSectionKey } from './useAdminSettingsSearchParams';
@@ -14,6 +15,7 @@ import {
   FormControl,
   Input,
   LinearProgress,
+  Link,
   Sheet,
   Stack,
   Typography,
@@ -36,6 +38,8 @@ import { AdminOperationsModelSetting } from './AdminOperationsModelSetting';
 import { AdminGenerationModelsSetting } from './AdminGenerationModelsSetting';
 import { AdminRecommendedModelsSetting } from './AdminRecommendedModelsSetting';
 import { ScopedOverridesByScope } from './ScopedOverridesByScope';
+import { AdminTab } from './adminSidebarConfig';
+import { useAdminModal } from './useAdminModal';
 
 import AdminLogoUpload from './AdminLogoUpload';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
@@ -142,13 +146,29 @@ export const resolveSettingsIcon = (icon: string | undefined): React.FC<{ sx?: S
 
 const settingConfigs = Object.values(settingsMap);
 
+// Edited only on the Growth and Pricing tab (GROWTH_PRICING_SECTIONS in AdminGrowthPricingTab); the
+// Credits System group links there instead. ReferralCreditsAmount is on that tab too but keeps its
+// Referrals editor here, so it is not listed.
+export const GROWTH_PRICING_ONLY_KEYS: ReadonlySet<SettingKey> = new Set<SettingKey>([
+  'allowOpenRegistration',
+  'defaultFreeCredits',
+  'enforceCredits',
+  'pricePerCredit',
+  'lowCreditsThreshold',
+  'enableTeamPlan',
+  'teamPlanMinSeats',
+  'teamPlanMaxSeats',
+  'teamPlanCreditsPerSeat',
+]);
+
 // Settings whose value is a list of plain strings get the one-entry-per-line editor.
-const STRING_LIST_SETTING_KEYS = new Set<string>(['ImageModerationReviewerEmails']);
+const STRING_LIST_SETTING_KEYS = new Set<string>(['ImageModerationReviewerEmails', 'blockedEmailDomains']);
 
 const AdminSettingsTab: React.FC = () => {
   const { section, setSection, searchTerm, setSearchTerm } = useAdminSettingsSearchParams();
   const [allTabs, setAllTabs] = useState<boolean>(false);
   const settingsFromServer = useSettingsFromServer();
+  const setAdminTab = useAdminModal(s => s.setActiveTab);
 
   // Index server values by setting name once, so the hot search/filter paths
   // don't re-scan the whole list per setting on every keystroke.
@@ -196,11 +216,19 @@ const AdminSettingsTab: React.FC = () => {
     [searchTerm, matchesSearch]
   );
 
+  // The Growth and Pricing keys have no editor here, so a search for one points to the tab instead.
+  const growthPricingMatchesSearch = useMemo(
+    () => !!searchTerm && [...GROWTH_PRICING_ONLY_KEYS].some(key => matchesSearch(settingsMap[key], searchTerm)),
+    [searchTerm, matchesSearch]
+  );
+
   const filteredSettings = useMemo(() => {
     return settingConfigs.filter(settingConfig => {
       const settingInfo = settingsMap[settingConfig.key];
 
       if (!settingInfo) return false;
+
+      if (GROWTH_PRICING_ONLY_KEYS.has(settingConfig.key)) return false;
 
       // Hide settings that have dedicated custom UI in other admin tabs
       if (
@@ -447,6 +475,20 @@ const AdminSettingsTab: React.FC = () => {
           {/* The measured counterpart to this group's throughput levers. Scoped to this group
               rather than the AI category: it only makes sense next to the numbers it advises on. */}
           {groupId === API_SERVICE_GROUPS.DATA_LAKE_COST.id && <EmbeddingProviderLimits />}
+
+          {groupId === API_SERVICE_GROUPS.CREDITS.id && (
+            <Typography level="body-sm" sx={{ color: 'text.secondary', mt: 1 }}>
+              Signup, starter credits, credit pricing and team-plan limits are edited on{' '}
+              <Link
+                component="button"
+                onClick={() => setAdminTab(AdminTab.GrowthPricing)}
+                data-testid="admin-settings-credits-growth-pricing-link"
+              >
+                Growth and Pricing
+              </Link>
+              .
+            </Typography>
+          )}
         </CardContent>
       </Card>
     );
@@ -551,6 +593,24 @@ const AdminSettingsTab: React.FC = () => {
               </Tooltip>
             </FormControl>
           </Stack>
+
+          {growthPricingMatchesSearch && (
+            <Typography
+              level="body-sm"
+              sx={{ px: '1rem', pt: 1 }}
+              data-testid="admin-settings-search-growth-pricing-hint"
+            >
+              Signup, starter credits, credit pricing and team-plan limits are edited on{' '}
+              <Link
+                component="button"
+                onClick={() => setAdminTab(AdminTab.GrowthPricing)}
+                data-testid="admin-settings-search-growth-pricing-link"
+              >
+                Growth and Pricing
+              </Link>
+              .
+            </Typography>
+          )}
 
           {allTabs ? (
             <Stack

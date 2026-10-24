@@ -114,3 +114,17 @@ describe('core tool sandbox declaration', () => {
     expect(sandboxedCommandArg(CORE_TOOL_DESCRIPTORS.get('bash_execute'))).toBe('command');
   });
 });
+
+describe('core tool checkpoint declaration', () => {
+  // writePathArg is what makes the gateway checkpoint a call, so only a file-writing tool may carry it.
+  it.each([...CORE_TOOL_DESCRIPTORS].filter(([, descriptor]) => descriptor.writePathArg))(
+    '%s declares a write path and a write effect',
+    (_name, descriptor) => {
+      expect(descriptor.effect).toBe('write');
+    }
+  );
+
+  it.each(['create_file', 'edit_local_file', 'delete_file'])('%s keeps its checkpoint write path', name => {
+    expect(CORE_TOOL_DESCRIPTORS.get(name)?.writePathArg).toBe('path');
+  });
+});

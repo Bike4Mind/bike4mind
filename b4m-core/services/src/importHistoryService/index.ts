@@ -2,7 +2,7 @@ import { Logger } from '@bike4mind/observability';
 import fs, { unlinkSync } from 'fs';
 import yauzl from 'yauzl';
 import { S3Storage } from '@bike4mind/utils';
-import { ImportHistoryAdapters } from './types';
+import { ImportHistoryAdapters, ImportHistoryResult } from './types';
 import axios from 'axios';
 import { processOpenaiConversation } from './importOpenaiHistory';
 import { processClaudeConversation } from './importClaudeHistory';
@@ -24,7 +24,7 @@ export enum ImportSource {
 export const importHistory = async (
   parameters: { userId: string; source: ImportSource; zipFile: string },
   adapters: ImportHistoryAdapters
-) => {
+): Promise<ImportHistoryResult> => {
   const { db, onProgress } = adapters;
   const { userId, source = ImportSource.OPENAI, zipFile } = parameters;
   const user = await db.users.findById(userId);
@@ -62,6 +62,9 @@ export const importHistory = async (
       `Processing ${conversationsJson.length} conversations in ${batches.length} batches of ${BATCH_SIZE}`
     );
 
+    const totalItems = conversationsJson.length;
+    let processedItems = 0;
+
     for (let i = 0; i < batches.length; i++) {
       const batch = batches[i];
       Logger.globalInstance.log(`Processing batch ${i + 1}/${batches.length} (${batch.length} conversations)`);
@@ -70,14 +73,16 @@ export const importHistory = async (
         await Promise.all(batch.map(item => processConversationItem(userId, db, item)));
       });
 
+      processedItems = Math.min((i + 1) * BATCH_SIZE, totalItems);
+
       if (onProgress) {
-        const processedCount = (i + 1) * BATCH_SIZE;
-        const totalCount = conversationsJson.length;
-        const progress = Math.min(Math.round((processedCount / totalCount) * 100), 100);
-        const currentStep = `Processing conversations: ${Math.min(processedCount, totalCount)}/${totalCount}`;
-        await onProgress(progress, currentStep, Math.min(processedCount, totalCount), totalCount);
+        const progress = Math.min(Math.round((processedItems / totalItems) * 100), 100);
+        const currentStep = `Processing conversations: ${processedItems}/${totalItems}`;
+        await onProgress(progress, currentStep, processedItems, totalItems);
       }
     }
+
+    return { processedItems, totalItems };
   } finally {
     // Remove the temp file if we downloaded one.
     if (localZipFile !== zipFile) {

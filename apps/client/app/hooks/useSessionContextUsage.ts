@@ -20,6 +20,8 @@ export type ContextUsageBand = 'normal' | 'warning' | 'danger';
 export interface SessionContextUsage {
   /** Tokens the last completed turn actually assembled as input. */
   actualInputTokens: number;
+  /** Model whose tokenizer sized the assembled input, before any generation fallback. */
+  inputModelId?: string;
   /** The model's full context window. */
   contextLimit: number;
   /** Input budget after reserving output + safety buffer (the real ceiling). */
@@ -73,6 +75,7 @@ export function useSessionContextUsage(sessionId: string | null): SessionContext
     let latestId = '';
     let latest: ContextWindowUsage | null = null;
     let latestCacheReadTokens = 0;
+    let latestInputModelId: string | undefined;
 
     for (const page of data?.pages ?? []) {
       for (const quest of page.data) {
@@ -81,6 +84,7 @@ export function useSessionContextUsage(sessionId: string | null): SessionContext
         if (quest.id && quest.id > latestId) {
           latestId = quest.id;
           latest = usage;
+          latestInputModelId = quest.fallbackInfo?.primaryModel ?? quest.promptMeta?.model?.name;
           latestCacheReadTokens = quest.promptMeta?.tokenUsage?.cacheReadInputTokens ?? 0;
         }
       }
@@ -93,6 +97,7 @@ export function useSessionContextUsage(sessionId: string | null): SessionContext
 
     return {
       actualInputTokens: latest.actualInputTokens,
+      inputModelId: latestInputModelId,
       contextLimit: latest.contextLimit,
       safeMaxInputTokens: latest.safeMaxInputTokens,
       utilizationPercentage: pct,

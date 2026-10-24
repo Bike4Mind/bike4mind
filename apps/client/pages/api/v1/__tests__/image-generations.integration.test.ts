@@ -107,7 +107,7 @@ vi.mock('@bike4mind/database', async orig => {
 const mockGetGenerationCallbackQueueUrl = vi.fn(
   () => 'https://sqs.example.com/generationCallbackQueue' as string | undefined
 );
-vi.mock('@server/generationCallback/dispatchQuestCallback', async orig => ({
+vi.mock('@bike4mind/server-utils/generationCallback/dispatchQuestCallback', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   getGenerationCallbackQueueUrl: () => mockGetGenerationCallbackQueueUrl(),
 }));

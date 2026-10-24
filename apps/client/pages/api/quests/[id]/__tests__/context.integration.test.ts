@@ -104,8 +104,8 @@ describe('GET /api/quests/[id]/context', () => {
       model: { id: 'claude-opus-4-8' },
       categories: { systemPrompt: 2882, systemPromptBilled: 4000, toolDefinitions: 900 },
       layers: [
-        { source: 'hardcoded', name: 'date_time_context', tokenCount: 60, wasIncluded: true },
         { source: 'admin', name: 'artifact_emission', tokenCount: 2822, wasIncluded: true },
+        { source: 'hardcoded', name: 'date_time_context', tokenCount: 60, wasIncluded: true },
       ],
       tools: [{ name: 'search_knowledge_base', offered: true, invocations: 1, successes: 1, durationMs: 120 }],
       retrieval: { attempted: true, outcome: 'ok' },

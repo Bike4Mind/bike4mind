@@ -30,15 +30,21 @@ vi.mock('@bike4mind/server-utils/utils/errors', () => ({
 
 const mockAddCredits = vi.fn();
 vi.mock('@bike4mind/services', () => ({
-  creditService: { addCredits: (...a: unknown[]) => mockAddCredits(...a) },
+  creditService: {
+    addCreditsWithLedgerRow: (...a: unknown[]) => mockAddCredits(...a),
+    // The route distinguishes a replayed key from a real failure by type, so this has to be the
+    // class the route reads, not a stand-in.
+    DuplicateCreditTransactionError: class DuplicateCreditTransactionError extends Error {},
+  },
 }));
 
 let inTransaction = false;
 let insideTransactionAtAudit: boolean | undefined;
 const mockOrgFindById = vi.fn();
+const mockTxFindOne = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   creditLotRepository: {},
-  creditTransactionRepository: {},
+  creditTransactionRepository: { findOne: (...a: unknown[]) => mockTxFindOne(...a) },
   organizationRepository: { findById: (...a: unknown[]) => mockOrgFindById(...a) },
   withTransaction: async (fn: (session: unknown) => Promise<unknown>) => {
     inTransaction = true;
@@ -62,6 +68,8 @@ vi.mock('@server/utils/adminAudit', async importOriginal => ({
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws-endpoint' } } }));
 
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { creditService } from '@bike4mind/services';
+import { creditLotRepository, creditTransactionRepository, organizationRepository } from '@bike4mind/database';
 import handler from '../top-up';
 
 const BODY = { credits: 100, idempotencyKey: 'idem-key-12345', reason: 'Support goodwill top-up' };
@@ -85,7 +93,8 @@ describe('POST /api/admin/organizations/[id]/top-up', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockOrgFindById.mockResolvedValue({ id: 'org-1', userId: 'owner-1' });
-    mockAddCredits.mockResolvedValue(undefined);
+    mockAddCredits.mockResolvedValue({ creditHolder: {}, creditTransactionId: 'tx-topup' });
+    mockTxFindOne.mockResolvedValue(null);
   });
 
   it('requires the ADMIN scope so an under-scoped admin-owned key is 403d by apiKeyAuth', () => {
@@ -119,7 +128,18 @@ describe('POST /api/admin/organizations/[id]/top-up', () => {
         action: 'org.credits.topped_up',
         target: expect.objectContaining({ kind: 'organization', id: 'org-1' }),
         reason: 'Support goodwill top-up',
+        related: { creditTransactionId: 'tx-topup' },
       })
+    );
+  });
+
+  it('omits related when the ledger write reports no row (idempotent retry)', async () => {
+    mockAddCredits.mockResolvedValue({ creditHolder: {}, creditTransactionId: undefined });
+    const { run } = call({});
+    await run();
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ related: undefined })
     );
   });
 
@@ -139,5 +159,163 @@ describe('POST /api/admin/organizations/[id]/top-up', () => {
     await expect(run()).rejects.toMatchObject({ statusCode: 400 });
     expect(mockAddCredits).not.toHaveBeenCalled();
     expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/admin/organizations/[id]/top-up credit kind', () => {
+  const body = { credits: 100, idempotencyKey: 'idem-key-12345', reason: 'Support goodwill top-up' };
+  const dedupeKey = 'admin_topup_org-1_idem-key-12345';
+  const refundKey = 'admin_refund_org-1_idem-key-12345';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockOrgFindById.mockResolvedValue({ id: 'org-1', userId: 'owner-1', name: 'Org One' });
+    mockAddCredits.mockResolvedValue({ creditHolder: {}, creditTransactionId: undefined });
+    mockTxFindOne.mockResolvedValue(null);
+  });
+
+  it('defaults to a subscription grant, unchanged', async () => {
+    const { res, run } = call({ body });
+    await run();
+    expect(mockAddCredits).toHaveBeenCalledTimes(1);
+    expect(mockAddCredits.mock.calls[0][0]).toEqual({
+      ownerId: 'org-1',
+      ownerType: 'Organization',
+      credits: 100,
+      type: 'subscription',
+      stripePaymentIntentId: dedupeKey,
+      metadata: { adminUserId: 'admin-1', reason: 'Support goodwill top-up', source: 'admin_topup' },
+    });
+    expect(mockTxFindOne).not.toHaveBeenCalled();
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'org.credits.topped_up',
+        summary: 'topped up 100 credits',
+        details: { credits: 100, ownerId: 'owner-1' },
+      })
+    );
+    expect(res._getJSONData()).toEqual({ organizationId: 'org-1', creditsAdded: 100 });
+  });
+
+  it('treats an explicit top_up like the default', async () => {
+    const { run } = call({ body: { ...body, kind: 'top_up' } });
+    await run();
+    expect(mockAddCredits.mock.calls[0][0]).toMatchObject({ type: 'subscription', stripePaymentIntentId: dedupeKey });
+  });
+
+  it('keeps the free-text reason as the audit note, not the refund switch', async () => {
+    const { run } = call({ body: { ...body, reason: 'refund' } });
+    await run();
+    expect(mockAddCredits.mock.calls[0][0]).toMatchObject({
+      type: 'subscription',
+      metadata: { reason: 'refund', source: 'admin_topup' },
+    });
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ reason: 'refund' })
+    );
+  });
+
+  it('writes a refund as generic_add with reason refund to the organization, keyed on the idempotency key', async () => {
+    const { res, run } = call({ body: { ...body, kind: 'refund', reason: 'invoice dispute' } });
+    await run();
+    expect(mockAddCredits).toHaveBeenCalledTimes(1);
+    const [params, adapters] = mockAddCredits.mock.calls[0];
+    expect(params).toEqual({
+      ownerId: 'org-1',
+      ownerType: 'Organization',
+      credits: 100,
+      type: 'generic_add',
+      reason: 'refund',
+      description: 'Admin refund',
+      transactionId: refundKey,
+      metadata: { adminUserId: 'admin-1', reason: 'invoice dispute', source: 'admin_refund' },
+    });
+    expect(adapters.creditHolderMethods).toBe(organizationRepository);
+    expect(adapters.db).toEqual({ creditTransactions: creditTransactionRepository, creditLots: creditLotRepository });
+    // A refund must not re-read the aborted session after the swallowed duplicate.
+    expect(adapters.duplicateTransactionId).toBe('throw');
+    expect(res._getJSONData()).toEqual({ organizationId: 'org-1', creditsAdded: 100 });
+  });
+
+  it('audits a refund as its own action inside the same transaction as the credit write', async () => {
+    insideTransactionAtAudit = undefined;
+    const { run } = call({ body: { ...body, kind: 'refund', reason: 'invoice dispute' } });
+    await run();
+    expect(insideTransactionAtAudit).toBe(true);
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'org.credits.refunded',
+        target: expect.objectContaining({ kind: 'organization', id: 'org-1' }),
+        summary: 'refunded 100 credits',
+        reason: 'invoice dispute',
+        details: { credits: 100, ownerId: 'owner-1', kind: 'refund' },
+      })
+    );
+  });
+
+  it('answers 400 for a refund with no reason, before any lookup or credit write', async () => {
+    const { reason: _omitted, ...noReason } = body;
+    const { run } = call({ body: { ...noReason, kind: 'refund' } });
+    await expect(run()).rejects.toMatchObject({ statusCode: 400 });
+    expect(mockTxFindOne).not.toHaveBeenCalled();
+    expect(mockAddCredits).not.toHaveBeenCalled();
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
+  });
+
+  it('keys a refund apart from a top-up submitted with the same idempotency key', async () => {
+    // They dedupe on different fields, so a shared key would be caught by neither index.
+    await call({ body }).run();
+    await call({ body: { ...body, kind: 'refund' } }).run();
+    expect(mockAddCredits.mock.calls[0][0].stripePaymentIntentId).toBe(dedupeKey);
+    expect(mockAddCredits.mock.calls[1][0].transactionId).toBe(refundKey);
+  });
+
+  it('answers a replayed refund as idempotent without crediting or auditing twice', async () => {
+    mockTxFindOne.mockResolvedValue({ id: 'tx-1' });
+    const { res, run } = call({ body: { ...body, kind: 'refund' } });
+    await run();
+    expect(mockTxFindOne).toHaveBeenCalledWith({ transactionId: refundKey });
+    expect(mockAddCredits).not.toHaveBeenCalled();
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
+    expect(res._getJSONData()).toEqual({ organizationId: 'org-1', creditsAdded: 100, idempotent: true });
+  });
+
+  it('answers a refund that lost a concurrent race idempotently instead of failing the request', async () => {
+    mockAddCredits.mockRejectedValue(new creditService.DuplicateCreditTransactionError());
+    const { res, run } = call({ body: { ...body, kind: 'refund' } });
+    await run();
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toEqual({ organizationId: 'org-1', creditsAdded: 100, idempotent: true });
+  });
+
+  it('rethrows a refund failure that is not a duplicate', async () => {
+    const boom = new Error('boom');
+    mockAddCredits.mockRejectedValue(boom);
+    const { res, run } = call({ body: { ...body, kind: 'refund' } });
+    await expect(run()).rejects.toBe(boom);
+    expect(res._isEndCalled()).toBe(false);
+  });
+
+  it('does not look for a winning row when a non-refund top-up fails with a non-11000 error', async () => {
+    mockAddCredits.mockRejectedValue(new Error('boom'));
+    const { run } = call({ body });
+    await expect(run()).rejects.toThrow('boom');
+    expect(mockTxFindOne).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unknown kind before touching credits', async () => {
+    const { run } = call({ body: { ...body, kind: 'gift' } });
+    await expect(run()).rejects.toThrow();
+    expect(mockAddCredits).not.toHaveBeenCalled();
+  });
+
+  it('still rejects a non-admin on the refund path', async () => {
+    const { run } = call({ isAdmin: false, body: { ...body, kind: 'refund' } });
+    await expect(run()).rejects.toThrow(/[Aa]dmin/);
+    expect(mockAddCredits).not.toHaveBeenCalled();
   });
 });

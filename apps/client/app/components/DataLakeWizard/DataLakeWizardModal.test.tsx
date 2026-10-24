@@ -77,6 +77,7 @@ vi.mock('@client/app/hooks/data/settings', () => ({
   useGetSettingsValue: () => undefined,
   useEffectiveEmbeddingModel: () => undefined,
 }));
+vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => ({ mutate: vi.fn() }) }));
 
 // The Drive folder estimate is a ~20s server walk; each test sets the query state it needs.
 const driveEstimate = vi.hoisted(() => ({

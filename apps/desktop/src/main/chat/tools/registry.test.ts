@@ -83,6 +83,12 @@ describe('toolsForRequest', () => {
     expect(names({ roots: ['/tmp'], media: true, host: true })).not.toContain('browser_navigate');
   });
 
+  it('offers screen_capture wherever the app can capture, folder or not', () => {
+    expect(names({ roots: [], media: false, host: false, screen: true })).toContain('screen_capture');
+    expect(names({ roots: ['/tmp'], media: true, host: true, browser: true })).not.toContain('screen_capture');
+    expect(findTool('screen_capture')).toBeDefined();
+  });
+
   it('offers explore only beside the local tools', () => {
     expect(names({ roots: ['/tmp'], media: false, host: false, explore: true })).toContain('explore');
     expect(names({ roots: [], media: false, host: false, explore: true })).not.toContain('explore');

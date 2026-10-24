@@ -6,12 +6,13 @@ import { PUBLISH_QUOTAS, type PublishScopeTier } from '@bike4mind/common';
  *
  * Distinct from the per-bundle `PUBLISH_LIMITS` (which bound a single publish),
  * this caps how much a user - and an organization scope - may host in
- * aggregate, bounding storage cost and the abuse/phishing-hosting surface.
+ * aggregate, bounding storage cost. There is no page-count cap; abuse is
+ * handled per page by report and takedown.
  *
- * Aggregate-on-read: we sum `size.totalBytes` and count active rows for the
- * owner, exclude the artifact being overwritten (a re-publish replaces bytes,
- * it does not add them), then check that the incoming publish still fits. See
- * the overshoot caveat on `PUBLISH_QUOTAS`.
+ * Aggregate-on-read: we sum `size.totalBytes` over active rows for the owner,
+ * exclude the artifact being overwritten (a re-publish replaces bytes, it does
+ * not add them), then check that the incoming publish still fits. See the
+ * overshoot caveat on `PUBLISH_QUOTAS`.
  *
  * Admins bypass quota, mirroring `checkScopePermission`.
  *
@@ -37,7 +38,6 @@ export interface PublishQuotaInput {
 }
 
 export interface QuotaUsage {
-  count: number;
   totalBytes: number;
 }
 
@@ -46,26 +46,26 @@ export type PublishQuotaResult =
   | {
       ok: false;
       status: 413;
-      code: 'quota_artifacts_exceeded' | 'quota_bytes_exceeded';
+      code: 'quota_bytes_exceeded';
       error: string;
       details: { scope: 'user' | 'org'; limit: number; current: number; attempted: number };
     };
 
-/** Sum active artifact bytes + count for a match filter, excluding one key. */
+/** Sum active artifact bytes for a match filter, excluding one key. */
 async function aggregateUsage(
   match: Record<string, unknown>,
   replacing?: { tier: PublishScopeTier; scopeId: string; slug: string } | null
 ): Promise<QuotaUsage> {
   const filter: Record<string, unknown> = { ...match, deletedAt: null };
   if (replacing) {
-    // Exclude the row being overwritten so its bytes/count don't inflate usage.
+    // Exclude the row being overwritten so its bytes don't inflate usage.
     filter.$nor = [{ tier: replacing.tier, scopeId: replacing.scopeId, slug: replacing.slug }];
   }
-  const [row] = await PublishedArtifact.aggregate<{ totalBytes: number; count: number }>([
+  const [row] = await PublishedArtifact.aggregate<{ totalBytes: number }>([
     { $match: filter },
-    { $group: { _id: null, totalBytes: { $sum: '$size.totalBytes' }, count: { $sum: 1 } } },
+    { $group: { _id: null, totalBytes: { $sum: '$size.totalBytes' } } },
   ]);
-  return { totalBytes: row?.totalBytes ?? 0, count: row?.count ?? 0 };
+  return { totalBytes: row?.totalBytes ?? 0 };
 }
 
 function fmtBytes(bytes: number): string {
@@ -79,21 +79,8 @@ function evaluate(
   scope: 'user' | 'org',
   usage: QuotaUsage,
   incoming: { bytes: number; fileCount: number },
-  caps: { maxArtifacts: number; maxTotalBytes: number }
+  caps: { maxTotalBytes: number }
 ): Extract<PublishQuotaResult, { ok: false }> | null {
-  // A re-publish (replacing) keeps the row count flat; only genuinely new rows
-  // add to the count. `usage` already excludes the replaced row, so adding 1
-  // here is correct whether or not this is an overwrite.
-  const projectedCount = usage.count + 1;
-  if (projectedCount > caps.maxArtifacts) {
-    return {
-      ok: false,
-      status: 413,
-      code: 'quota_artifacts_exceeded',
-      error: `Publish quota reached: your ${scope} scope already hosts ${usage.count} of ${caps.maxArtifacts} allowed published pages. Delete an existing page to publish a new one.`,
-      details: { scope, limit: caps.maxArtifacts, current: usage.count, attempted: projectedCount },
-    };
-  }
   const projectedBytes = usage.totalBytes + incoming.bytes;
   if (projectedBytes > caps.maxTotalBytes) {
     return {

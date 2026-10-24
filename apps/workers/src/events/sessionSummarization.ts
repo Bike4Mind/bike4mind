@@ -22,7 +22,7 @@ import {
   KnowledgeType,
   SupportedFabFileMimeTypes,
 } from '@bike4mind/common';
-import { BadRequestError } from '@bike4mind/utils';
+import { BadRequestError, isStoppedBeforeReply } from '@bike4mind/utils';
 import { stripToolOutputMarker } from '@bike4mind/utils/artifactParser';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
@@ -32,7 +32,7 @@ import { recordSessionOperationalUsage } from '@workers/events/recordSessionOper
 
 export const handler = withEventContext(async (event, logger) => {
   const body = SessionEvents.Summarize.schema.parse(event.properties);
-  const { sessionId, userId, callTagging, trigger, requesterId } = body;
+  const { sessionId, userId, callTagging, trigger, requesterId, payerId } = body;
 
   logger.updateMetadata({
     sessionId,
@@ -79,6 +79,12 @@ export const handler = withEventContext(async (event, logger) => {
   }
   const writer = requester ? { id: requester.id, groups: requester.groups } : { id: session.userId, groups: [] };
   const writeOpts = requester ? { includeGlobalWrite: true } : undefined;
+  // Whoever asked pays (a sharee or an admin), not the owner on their behalf.
+  const payer = payerId ? await User.findById(payerId) : (requester ?? user);
+  if (!payer) {
+    logger.warn(`Payer ${payerId} not found, skipping summarization for session ${sessionId}`);
+    return;
+  }
 
   // Before the LLM call, so a requester revoked while the job sat in the queue does not bill the
   // owner for a summary that the write below would refuse anyway.
@@ -95,17 +101,30 @@ export const handler = withEventContext(async (event, logger) => {
   const modelHasChanged = session.summaryModelId && session.summaryModelId !== modelId;
   const needsInitialSummaryId = !session.summaryModelId;
 
-  // Fetch quests created/updated since the last summary (up to 5)
-  const quests = await Quest.find({
+  // Fetch quests created/updated since the last summary (up to 5 turns per page).
+  const questQuery = {
     sessionId: session.id,
     ...(session.summaryAt && !modelHasChanged && !needsInitialSummaryId
       ? {
           $or: [{ createdAt: { $gt: session.summaryAt } }, { updatedAt: { $gt: session.summaryAt } }],
         }
       : {}),
-  })
-    .sort({ timestamp: 1 })
-    .limit(5);
+  };
+  const summaryPageSize = 5;
+  let quests = await Quest.find(questQuery).sort({ timestamp: 1, _id: 1 }).limit(summaryPageSize);
+  let skippedCancelledCount = 0;
+  // A cancelled first page must not hide every later completed turn on each summary attempt.
+  while (quests.length === summaryPageSize && quests.every(quest => isStoppedBeforeReply(quest))) {
+    skippedCancelledCount += summaryPageSize;
+    quests = await Quest.find(questQuery)
+      .sort({ timestamp: 1, _id: 1 })
+      .skip(skippedCancelledCount)
+      .limit(summaryPageSize);
+  }
+  if (!quests.length && skippedCancelledCount > 0) {
+    logger.debug(`No replayable quests to summarize for session ${sessionId}`);
+    return;
+  }
 
   if (!quests?.length && !modelHasChanged && !needsInitialSummaryId) {
     logger.debug(`No latest quests to summarize for session ${sessionId}`);
@@ -117,7 +136,13 @@ export const handler = withEventContext(async (event, logger) => {
     `Summarizing session ${session.id} based on quests ${quests.map(q => q._id).join(', ')} ${session.summary ? '(updating)' : '(new)'}`
   );
 
-  const content = quests
+  const replayableQuests = quests.filter(quest => !isStoppedBeforeReply(quest));
+  if (quests.length > 0 && !replayableQuests.length) {
+    logger.debug(`No replayable quests to summarize for session ${sessionId}`);
+    return;
+  }
+
+  const content = replayableQuests
     .map(quest =>
       [
         `Question: ${quest.prompt}`,
@@ -168,7 +193,7 @@ export const handler = withEventContext(async (event, logger) => {
   });
 
   await recordSessionOperationalUsage({
-    user,
+    user: payer,
     sessionId,
     modelId,
     modelInfo,
@@ -386,7 +411,7 @@ export const handler = withEventContext(async (event, logger) => {
 
   // If requested, queue the tagging job now that the summary is generated
   if (callTagging) {
-    await SessionEvents.Tag.publish({ sessionId: session.id, requesterId });
+    await SessionEvents.Tag.publish({ sessionId: session.id, requesterId, payerId });
   }
 
   await logEvent({ userId: user.id, type: AiEvents.NOTEBOOK_SUMMARIZATION, metadata: { sessionId } });
