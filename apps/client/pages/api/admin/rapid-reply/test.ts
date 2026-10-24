@@ -4,6 +4,7 @@ import { adminSettingsRepository } from '@bike4mind/database/infra';
 import { rapidReplyAuditLogRepository } from '@bike4mind/database/ai';
 import { ChatCompletionProcess, featureNames, ChatCompletionFeature } from '@bike4mind/services/llm';
 import { baseApi } from '@server/middlewares/baseApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { requestTurnAuth } from '@server/auth/turnAuth';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
@@ -44,6 +45,14 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       throw new BadRequestError('mainModelId is required for testing');
     }
 
+    const recordTestRun = async (success: boolean) =>
+      recordAdminActionFromRequest(req, {
+        action: 'settings.rapid_reply.test_run',
+        target: { kind: 'settings', id: mainModelId, displayName: `Rapid reply test for ${mainModelId}` },
+        summary: `ran rapid reply test for ${mainModelId}`,
+        details: { mainModelId, success, simulatedLatency: simulateLatency },
+      });
+
     // Get system settings
     const settings = await adminSettingsRepository.getSettingsValue('RapidReplySettings');
     if (!settings) {
@@ -52,6 +61,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
     // Check if Rapid Reply is enabled
     if (!settings.enabled) {
+      await recordTestRun(false);
       return res.json({
         success: false,
         message: 'Rapid Reply is currently disabled in settings',
@@ -66,6 +76,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     // Find mapping for the main model
     const mapping = await rapidReplyMappingRepository.findByMainModel(mainModelId);
     if (!mapping) {
+      await recordTestRun(false);
       return res.json({
         success: false,
         message: `No Rapid Reply mapping found for model: ${mainModelId}`,
@@ -83,6 +94,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
     // Check if mapping is enabled
     if (!mapping.enabled) {
+      await recordTestRun(false);
       return res.json({
         success: false,
         message: `Rapid Reply mapping for ${mainModelId} is disabled`,
@@ -529,6 +541,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       recommendations.push('Mapping max tokens exceeds default setting. Consider adjusting for consistency.');
     }
 
+    const testSuccess = !errorMessage && !!rapidReplyResponse;
+
     await rapidReplyAuditLogRepository.createLog({
       entityType: 'settings',
       entityId: 'test',
@@ -544,7 +558,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
             latencyCheck,
             mappingFound: true,
             promptsAvailable: activePrompts.length,
-            testSuccess: !errorMessage,
+            testSuccess,
             tokensUsed: actualTokensUsed,
             estimatedCost: actualCost,
             responseGenerated: !!rapidReplyResponse,
@@ -567,7 +581,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       },
     });
 
-    const testSuccess = !errorMessage && !!rapidReplyResponse;
+    await recordTestRun(testSuccess);
 
     console.log(
       `${testSuccess ? '✅' : '❌'} Test ${testSuccess ? 'completed' : 'failed'} for ${mainModelId} - TTFVT: ${rapidReplyTtfvt}ms, Latency: ${actualRapidReplyLatency}ms, Length: ${actualResponseLength}`

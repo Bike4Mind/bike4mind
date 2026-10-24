@@ -132,6 +132,17 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'support.inbox.message_sent': { category: 'support', severity: 'notice', write: 'bestEffort' },
   'support.pr_report.sent': { category: 'support', severity: 'info', write: 'bestEffort' },
 
+  // Handler coverage: rapid reply
+  'settings.rapid_reply_prompt.created': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.rapid_reply_prompt.updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.rapid_reply_prompt.deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.rapid_reply_prompt.activated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.rapid_reply_mapping.created': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.rapid_reply_mapping.updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.rapid_reply_mapping.deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.rapid_reply_mapping.bulk_updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.rapid_reply.test_run': { category: 'settings', severity: 'info', write: 'bestEffort' },
+
   'audit.exported': { category: 'support', severity: 'info', write: 'bestEffort' },
 } as const satisfies Record<string, AdminAuditCatalogueEntry>;
 

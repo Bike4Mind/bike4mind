@@ -2,6 +2,7 @@ import { rapidReplyMappingRepository } from '@bike4mind/database/ai';
 import { rapidReplyAuditLogRepository } from '@bike4mind/database/ai';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
 interface BulkOperation {
@@ -9,6 +10,12 @@ interface BulkOperation {
   action: 'update' | 'delete' | 'enable' | 'disable';
   data?: any;
 }
+
+// Keeps the admin audit document well under Mongo's size limit however large the request.
+const MAX_AUDITED_OPERATIONS = 100;
+// id/action are echoed from an unvalidated body, so they may be any shape or length.
+const toAuditText = (value: unknown) =>
+  value === undefined || value === null ? undefined : String(value).slice(0, 200);
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
   if (!req.user?.isAdmin) {
@@ -23,8 +30,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
 
   const results = [];
   const auditLogs = [];
+  const changedFieldsByIndex = new Map<number, string[]>();
 
-  for (const operation of operations) {
+  for (const [index, operation] of operations.entries()) {
     const { id, action, data } = operation as BulkOperation;
 
     if (!id || !action) {
@@ -105,6 +113,10 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
         result,
       });
 
+      if (action === 'update') {
+        changedFieldsByIndex.set(index, Object.keys(auditChanges));
+      }
+
       // Add to audit log if there were changes
       if (Object.keys(auditChanges).length > 0) {
         auditLogs.push({
@@ -145,6 +157,24 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
 
   const successCount = results.filter(r => r.success).length;
   const failureCount = results.length - successCount;
+
+  await recordAdminActionFromRequest(req, {
+    action: 'settings.rapid_reply_mapping.bulk_updated',
+    target: { kind: 'settings', id: 'rapid-reply-mappings', displayName: 'Rapid reply mappings' },
+    summary: `bulk updated rapid reply mappings (${successCount} succeeded, ${failureCount} failed)`,
+    details: {
+      total: results.length,
+      successful: successCount,
+      failed: failureCount,
+      operations: results.slice(0, MAX_AUDITED_OPERATIONS).map(({ id, action, success }, index) => ({
+        id: toAuditText(id),
+        action: toAuditText(action),
+        success,
+        ...(changedFieldsByIndex.has(index) && { changedFields: changedFieldsByIndex.get(index) }),
+      })),
+      ...(results.length > MAX_AUDITED_OPERATIONS && { truncated: true }),
+    },
+  });
 
   return res.json({
     success: true,
