@@ -63,7 +63,7 @@ GET /agents
 }
 ```
 
-Each agent object carries more fields than shown, such as `systemPrompt`, `visual`, `identity` and credit settings. The list is paged with `page` and `limit`; `hasMore` tells you whether another page exists and `total` is the number of matching agents.
+Agents you own include more fields than shown, such as `systemPrompt`, `visual`, `identity` and credit settings. Agents you do not own, including shared, organization and system agents, use a reduced response that omits `systemPrompt`, ownership fields and credit balances. The list is paged with `page` and `limit`; `hasMore` tells you whether another page exists and `total` is the number of matching agents.
 
 ### Create Agent
 
@@ -176,7 +176,7 @@ PUT /agents/{agentId}
 
 #### Request Body
 
-Send the fields you want to change. Field names match the create request.
+Send the fields you want to change. Field names match the create request. Nested objects such as `personality` and `visual` replace the stored object rather than merging with it; include every nested field you want to preserve.
 
 ```json
 {

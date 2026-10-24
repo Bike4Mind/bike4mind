@@ -116,8 +116,8 @@ async function streamCompletion(messages, onEvent, { signal } = {}) {
         const data = line.slice(6).trim();
 
         if (data === '[DONE]') {
-          if (stopReason === 'max_tokens') {
-            throw Object.assign(new Error('Reply truncated: max_tokens reached'), { code: 'max_tokens', requestId });
+          if (['max_tokens', 'degenerate_repetition', 'refusal', 'pause_turn'].includes(stopReason)) {
+            throw Object.assign(new Error(`Reply did not finish: ${stopReason}`), { code: stopReason, requestId });
           }
           return;
         }
@@ -170,10 +170,10 @@ try {
 **Key points:**
 1. Use `response.body.getReader()` for streaming, and cancel the stream and release the reader in a `finally` block.
 2. Buffer incomplete lines: an event can be split across chunks, so parse only complete `data:` lines. A `JSON.parse` error such as "Unexpected end of JSON input" usually means a missing buffer.
-3. `[DONE]` means the stream finished cleanly. A stream that ends without it and without an `error` event is incomplete.
+3. `[DONE]` means the transport finished; check `stopReason` to tell a finished answer from an incomplete one. A stream that ends without it and without an `error` event is incomplete.
 4. Wrap only `JSON.parse` in try/catch and treat malformed data as a failure; do not skip the line. Exceptions from your own handler must propagate.
 5. An `error` event is terminal: throw with its `code` and `requestId`.
-   The final `content` event carries `stopReason` when the provider reports one. `max_tokens` means the reply was truncated even though `[DONE]` follows: raise `max_tokens` or reduce thinking. A missing `stopReason` means unknown, not truncated.
+   The final `content` event carries `stopReason` when the provider reports one. `max_tokens` means the reply was truncated even though `[DONE]` follows: raise `max_tokens` or reduce thinking. A missing `stopReason` means unknown, not truncated. `degenerate_repetition` means B4M stopped a repeating stream; discard the unusable tail instead of treating it as a finished answer. `refusal` means the model declined the request. `pause_turn` requires continuing the conversation with its provider blocks, as described in the in-app reference; it is not a final answer. The samples reject these known incomplete reasons so callers can handle them explicitly; absent or unrecognized reasons remain compatible with older servers and new providers.
 6. Check `response.ok` before you read the body, and log the raw `data` when parsing fails.
 7. Ignore event types you do not recognize instead of throwing; new types can be added.
 8. Pass an `AbortSignal` such as `AbortSignal.timeout(ms)` as the `signal` option so a stalled connection cannot hang forever.
@@ -238,8 +238,8 @@ def stream_completion(api_key: str, messages: list):
 
         if not done:
             raise StreamError("Stream ended without [DONE] or an error event")
-        if stop_reason == "max_tokens":
-            raise StreamError("Reply truncated: max_tokens reached", "max_tokens", request_id)
+        if stop_reason in {"max_tokens", "degenerate_repetition", "refusal", "pause_turn"}:
+            raise StreamError(f"Reply did not finish: {stop_reason}", stop_reason, request_id)
 
 # Usage
 if __name__ == "__main__":

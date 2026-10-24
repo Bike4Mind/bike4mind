@@ -90,6 +90,21 @@ def parse_event(data: str, status: int) -> Dict[str, Any]:
     return event
 
 
+INCOMPLETE_STOP_REASONS = {"max_tokens", "degenerate_repetition", "refusal", "pause_turn"}
+
+
+def assert_complete_stop_reason(stop_reason, request_id):
+    # Older servers and some providers omit this field; absence alone is not failure.
+    if stop_reason not in INCOMPLETE_STOP_REASONS:
+        return
+    message = (
+        "Reply truncated: max_tokens reached"
+        if stop_reason == "max_tokens"
+        else f"Reply did not finish: {stop_reason}"
+    )
+    raise CompletionError(message, code=stop_reason, request_id=request_id)
+
+
 def stream_completion(
     api_key: str,
     payload: Dict[str, Any],
@@ -102,7 +117,7 @@ def stream_completion(
 
     Raises:
         CompletionError: On an HTTP error, an in-band error event, a malformed
-            event, or a stream that ends without [DONE]
+            event, a known incomplete stop reason, or a stream that ends without [DONE]
     """
     with (session or requests).post(
         f"{base_url}/api/ai/v1/completions",
@@ -117,8 +132,7 @@ def stream_completion(
         request_id = None
         for sse in SSEClient(response).events():
             if sse.data == "[DONE]":
-                if stop_reason == "max_tokens":
-                    raise CompletionError("Reply truncated: max_tokens reached", code="max_tokens", request_id=request_id)
+                assert_complete_stop_reason(stop_reason, request_id)
                 return
             event = parse_event(sse.data, response.status_code)
             request_id = event.get("requestId") or request_id
@@ -342,7 +356,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 import aiohttp
 
-from b4m_stream import BASE_URL, CompletionError, http_error, parse_event, retry_delay
+from b4m_stream import BASE_URL, CompletionError, assert_complete_stop_reason, http_error, parse_event, retry_delay
 
 
 class AsyncB4MCompletionClient:
@@ -396,10 +410,7 @@ class AsyncB4MCompletionClient:
                             continue
                         data = line[6:].strip()
                         if data == "[DONE]":
-                            if stop_reason == "max_tokens":
-                                raise CompletionError(
-                                    "Reply truncated: max_tokens reached", code="max_tokens", request_id=request_id
-                                )
+                            assert_complete_stop_reason(stop_reason, request_id)
                             return
                         event = parse_event(data, response.status)
                         request_id = event.get("requestId") or request_id

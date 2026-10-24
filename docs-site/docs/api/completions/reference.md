@@ -33,7 +33,7 @@ After adding or activating a provider key, allow up to 60 seconds for `GET /api/
 
 ## Response
 
-A successful request is always answered with a server-sent event stream (`text/event-stream`), whether or not you set a `stream` flag. The stream carries a `meta` event, then `content` and `tool_use` events with `usage` and `credits`, and ends with `data: [DONE]`. The last `content` event carries `usage` and `credits`. The final `content` event also carries `stopReason` when the provider reports one. `max_tokens` means the reply was truncated (raise `max_tokens` or reduce thinking); an absent `stopReason` means unknown, not truncated. See [Streaming](./streaming.md) for how to parse it.
+A successful request is always answered with a server-sent event stream (`text/event-stream`), whether or not you set a `stream` flag. The stream carries a `meta` event, then `content` and `tool_use` events with `usage` and `credits`, and ends with `data: [DONE]`. The last `content` event carries `usage` and `credits`. The final `content` event also carries `stopReason` when the provider reports one. `max_tokens` means the reply was truncated (raise `max_tokens` or reduce thinking); an absent `stopReason` means unknown, not truncated. `degenerate_repetition` is an aborted repeating reply, `refusal` is a declined request, and `pause_turn` requires continuation rather than publishing a final answer. See [Streaming](./streaming.md) for how to parse it.
 
 ## Credits
 

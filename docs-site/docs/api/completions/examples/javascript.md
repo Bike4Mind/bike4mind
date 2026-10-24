@@ -18,7 +18,7 @@ npm install @bike4mind/sdk
 
 ```typescript
 import { createClient } from '@bike4mind/sdk';
-import { CompletionError, withRetry } from './b4m-stream.js';
+import { CompletionError, assertCompleteStopReason, withRetry } from './b4m-stream.js';
 
 const b4m = createClient({
   baseUrl: 'https://app.bike4mind.com',
@@ -43,9 +43,7 @@ await withRetry(async () => {
       throw new CompletionError(event.message, { code: event.code, requestId: event.requestId });
     }
   }
-  if (stopReason === 'max_tokens') {
-    throw new CompletionError('Reply truncated: max_tokens reached', { code: 'max_tokens', requestId });
-  }
+  assertCompleteStopReason(stopReason, requestId);
   process.stdout.write(text); // Publish only a successful attempt
 });
 
@@ -79,10 +77,21 @@ export class CompletionError extends Error {
   }
 }
 
+const INCOMPLETE_STOP_REASONS = new Set(['max_tokens', 'degenerate_repetition', 'refusal', 'pause_turn']);
+
+export function assertCompleteStopReason(stopReason, requestId) {
+  // Older servers and some providers omit this field; absence alone is not failure.
+  if (!INCOMPLETE_STOP_REASONS.has(stopReason)) return;
+  const message = stopReason === 'max_tokens'
+    ? 'Reply truncated: max_tokens reached'
+    : `Reply did not finish: ${stopReason}`;
+  throw new CompletionError(message, { code: stopReason, requestId });
+}
+
 /**
  * Streams a completion and calls onEvent for every event before [DONE].
  * Throws CompletionError on an HTTP error, an in-band error event, or a
- * stream that ends without [DONE].
+ * known incomplete stop reason, or a stream that ends without [DONE].
  */
 export async function streamCompletion(
   body,
@@ -135,9 +144,7 @@ export async function streamCompletion(
         if (!line.startsWith('data: ')) continue;
         const data = line.slice(6).trim();
         if (data === '[DONE]') {
-          if (stopReason === 'max_tokens') {
-            throw new CompletionError('Reply truncated: max_tokens reached', { code: 'max_tokens', requestId });
-          }
+          assertCompleteStopReason(stopReason, requestId);
           return;
         }
 
