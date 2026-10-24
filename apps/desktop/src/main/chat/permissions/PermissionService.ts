@@ -143,6 +143,16 @@ export class PermissionService {
     this.invalidate();
   }
 
+  async revokeAllow(scope: PermissionScope, rule: string): Promise<void> {
+    const stored = await this.options.store.read();
+    const lists =
+      scope.kind === 'user'
+        ? stored.user
+        : (stored.projects[resolve(scope.directory)] ?? { allow: [], ask: [], deny: [] });
+    await this.options.store.setLists(scope, { ...lists, allow: lists.allow.filter(entry => entry !== rule) });
+    this.invalidate();
+  }
+
   private async compile(scope: PermissionScopeKey): Promise<PermissionRuleSet> {
     const { home, store, claudeCode, protectedRoots } = this.options;
     const stored = await store.read();
