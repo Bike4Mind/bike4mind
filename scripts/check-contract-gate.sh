@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
-# CI gate over apps/client/pages/api, two scans:
+# CI gate over apps/client/pages/api and infra/, three scans:
 #   1. every file under pages/api/v1/** must use nextRouteForContract.
 #      "Public" = API-key-callable and OpenAPI-registered (CONVENTIONS.md).
 #   2. every file OUTSIDE pages/api/v1 must declare `auth: 'jwtOnly'` (the api-key chain is
 #      never installed in that mode, see server/middlewares/baseApi.ts), or be on the frozen
 #      baseline. A new handler that accepts API keys must go through a v1 contract instead.
+#   3. every `sst.aws.Function` in infra/ that exposes a Function URL (`url:`) must have a
+#      handler built on defineLambdaRoute, or be on the function-url baseline. A Function URL
+#      skips the Next.js middleware chain, so the contract has to be wired at the handler;
+#      the pages/api scans cannot see a Lambda declared in infra/.
 # Exits 1 on any unacknowledged violation.
 #
 # ALLOWLISTS
@@ -13,15 +17,22 @@
 #     Not migration debt: do not add real API handlers here.
 #   scripts/contract-gate-api-key-allowlist.txt (scan 2)
 #     Frozen baseline of handlers that predate the ratchet. It only shrinks.
+#   scripts/contract-gate-function-url-allowlist.txt (scan 3)
+#     Frozen baseline of Function URL handlers that predate the ratchet. It only shrinks,
+#     and every entry must carry a trailing `# reason` (the gate rejects one without).
 
 set -euo pipefail
 
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+
 ALLOWLIST="scripts/contract-gate-allowlist.txt"
 ALLOWLIST_API_KEY="scripts/contract-gate-api-key-allowlist.txt"
+ALLOWLIST_FUNCTION_URL="scripts/contract-gate-function-url-allowlist.txt"
 API_ROOT="apps/client/pages/api"
 API_DIR="$API_ROOT/v1"
+INFRA_DIR="infra"
 
-for f in "$ALLOWLIST" "$ALLOWLIST_API_KEY"; do
+for f in "$ALLOWLIST" "$ALLOWLIST_API_KEY" "$ALLOWLIST_FUNCTION_URL"; do
   if [ ! -f "$f" ]; then
     echo "ERROR: Allowlist not found at $f"
     exit 1
@@ -30,6 +41,11 @@ done
 
 if [ ! -d "$API_DIR" ]; then
   echo "ERROR: API directory not found at $API_DIR"
+  exit 1
+fi
+
+if [ ! -d "$INFRA_DIR" ]; then
+  echo "ERROR: Infra directory not found at $INFRA_DIR"
   exit 1
 fi
 
@@ -147,6 +163,40 @@ report "$ALLOWLIST_API_KEY" "$outside_violators" \
 under /api/v1 behind a contract (CONVENTIONS.md: unversioned /api/* is frozen).
 Last resort (e.g. a deliberately unauthenticated auth: false route, which has no jwtOnly
 form): add it to $ALLOWLIST_API_KEY with a trailing '# reason'." || failed=1
+
+# Scan 3: Functions in infra/ with a Function URL whose handler is not built on
+# defineLambdaRoute. The helper is a dependency-free node script (repo-guards installs
+# nothing); it exits 2 when it cannot read a declaration, which must fail the gate.
+# Every entry in this baseline needs a reason: the file starts empty, so it is not the
+# place for an undocumented exemption.
+reasonless=$(
+  grep -v '^[[:space:]]*#' "$ALLOWLIST_FUNCTION_URL" | grep -v '^[[:space:]]*$' |
+    grep -v '#[[:space:]]*[^[:space:]]' || true
+)
+if [ -n "$reasonless" ]; then
+  echo "::error::allowlist entries in $ALLOWLIST_FUNCTION_URL are missing a '# reason' -- see job log"
+  echo ""
+  echo "ERROR: every entry in $ALLOWLIST_FUNCTION_URL needs a trailing '# reason':"
+  echo "$reasonless" | sed 's/^/  /'
+  echo ""
+  exit 1
+fi
+
+url_status=0
+url_violators=$(node "$SCRIPT_DIR/check-function-url-contracts.mjs" "$PWD") || url_status=$?
+if [ "$url_status" -gt 1 ]; then
+  echo "::error::Function URL contract scan failed (exit ${url_status})"
+  echo "ERROR: Could not scan $INFRA_DIR for Function URLs; refusing to report a clean result."
+  exit 1
+fi
+
+report "$ALLOWLIST_FUNCTION_URL" "$url_violators" \
+  "have an infra/ Function URL handler that is not built on defineLambdaRoute" \
+  "Fix: build the handler on defineLambdaRoute(contract, handler) so it validates the request,
+authenticates, and is registered in the OpenAPI spec (see
+b4m-core/common/src/api-contract/README.md).
+Do NOT add to $ALLOWLIST_FUNCTION_URL for new code: entries there are frozen debt, and each
+needs a trailing '# reason'." || failed=1
 
 if [ "$failed" -eq 0 ]; then
   echo "OK: No contract-gate violations."
