@@ -887,6 +887,10 @@ describe('PublishShareModal - reopening an already-published reply', () => {
     await waitFor(() => expect(radio('organization')?.checked).toBe(true));
     expect(radio('public')?.checked).toBe(false);
     expect(radio('private')?.checked).toBe(false);
+    // With no caller hint, the Team row says what the access badge says.
+    expect(screen.getByTestId('publish-share-visibility-organization').textContent).toContain(
+      PUBLISH_ACCESS_META.organization.description
+    );
   });
 
   it('a reopened Team page can be taken to Private on the same record', async () => {
@@ -953,9 +957,12 @@ describe('PublishShareModal - access options match the Live Artifacts badge', ()
     private: 'LockIcon',
   };
 
-  const renderModal = (props: Partial<React.ComponentProps<typeof PublishShareModal>> = {}) =>
+  const renderModal = (
+    props: Partial<React.ComponentProps<typeof PublishShareModal>> = {},
+    mode: 'light' | 'dark' = 'light'
+  ) =>
     render(
-      <Wrapper>
+      <CssVarsProvider theme={appTheme} defaultMode={mode} modeStorageKey={`share-modal-test-${mode}`}>
         <PublishShareModal
           open
           onClose={() => {}}
@@ -965,49 +972,58 @@ describe('PublishShareModal - access options match the Live Artifacts badge', ()
           orgOption={{ label: 'Team', hint: 'Members of Acme' }}
           {...props}
         />
-      </Wrapper>
+      </CssVarsProvider>
     );
 
-  const expectBadge = (testId: string, access: PublishAccess) => {
-    const badge = screen.getByTestId(testId);
-    expect(badge.getAttribute('data-access')).toBe(access);
-    expect(badge.textContent).toBe(PUBLISH_ACCESS_META[access].label);
-    expect(within(badge).getByTestId(ICON_TEST_ID[access])).toBeTruthy();
-    // Chip color comes from the shared meta, so a gated option stays amber and the rest do not.
+  const expectAccessIcon = (testId: string, access: PublishAccess) => {
+    const icon = screen.getByTestId(testId);
+    expect(icon.getAttribute('data-access')).toBe(access);
+    expect(within(icon).getByTestId(ICON_TEST_ID[access])).toBeTruthy();
+    // Tones come from the shared meta, so a gated option stays amber and the rest do not.
     const color = PUBLISH_ACCESS_META[access].color;
-    expect(badge.className).toContain(`MuiChip-color${color[0].toUpperCase()}${color.slice(1)}`);
+    const style = getComputedStyle(icon);
+    const expected = color === 'warning' ? 'var(--joy-palette-warning-700)' : `var(--joy-palette-${color}-softColor)`;
+    expect(style.color).toBe(expected);
+    expect(style.backgroundColor).toBe(`var(--joy-palette-${color}-softBg)`);
+    // Joy icons ignore the inherited color unless --Icon-color points at it.
+    expect(style.getPropertyValue('--Icon-color')).toBe('currentColor');
   };
 
   it.each([
     ['public', 'public'],
     ['organization', 'organization'],
     ['private', 'private'],
-  ] as const)('shows the %s visibility option with its badge icon, word and color', (value, access) => {
+  ] as const)('draws the %s visibility option with the badge icon and color', (value, access) => {
     renderModal();
-    expectBadge(`publish-share-visibility-${value}-badge`, access);
+    expectAccessIcon(`publish-share-visibility-${value}-icon`, access);
   });
 
   it.each([
     ['none', 'public'],
     ['passphrase', 'passphrase'],
     ['domain', 'domain'],
-  ] as const)('shows the %s gate option with its badge icon, word and color', (value, access) => {
+  ] as const)('draws the %s gate option with the badge icon and color', (value, access) => {
     renderModal();
-    expectBadge(`publish-share-gate-${value}-badge`, access);
+    expectAccessIcon(`publish-share-gate-${value}-icon`, access);
   });
 
-  it('uses green for Public and amber only for the gated options', () => {
-    renderModal();
-    expect(screen.getByTestId('publish-share-visibility-public-badge').className).toContain('MuiChip-colorSuccess');
-    expect(screen.getByTestId('publish-share-gate-passphrase-badge').className).toContain('MuiChip-colorWarning');
-    expect(screen.getByTestId('publish-share-gate-domain-badge').className).toContain('MuiChip-colorWarning');
-    expect(screen.getByTestId('publish-share-visibility-private-badge').className).toContain('MuiChip-colorNeutral');
+  it('uses the badge chip color for a gated option in dark mode, not the light-mode shade', () => {
+    renderModal({}, 'dark');
+    expect(getComputedStyle(screen.getByTestId('publish-share-gate-passphrase-icon')).color).toBe(
+      'var(--joy-palette-warning-softColor)'
+    );
   });
 
-  it('keeps the plain-language option titles and ids beside the badges', () => {
+  it('keeps the plain-language titles and does not repeat the badge word beside them', () => {
     renderModal();
     expect(screen.getByTestId('publish-share-visibility-public').textContent).toContain('Anyone with the link');
-    expect(screen.getByTestId('publish-share-gate-passphrase')).toBeTruthy();
+    expect(screen.getByTestId('publish-share-visibility-public').textContent).not.toContain('Public');
+    expect(screen.getByTestId('publish-share-visibility-organization').textContent).toBe(
+      'TeamMembers of Acme, and anyone you send a private link to'
+    );
+    expect(screen.getByTestId('publish-share-visibility-private').textContent).toBe(
+      `Private${PUBLISH_ACCESS_META.private.description}`
+    );
     expect(radio('public')?.checked).toBe(true);
     expect(radio('none')?.checked).toBe(true);
   });
@@ -1021,26 +1037,79 @@ describe('PublishShareModal - access options match the Live Artifacts badge', ()
     expect(note.className).not.toContain('MuiTypography-colorWarning');
   });
 
-  it('draws the private-link exposure line in the Public treatment too', async () => {
-    const live: PublishResult = {
-      publicId: 'live-1',
-      url: '/p/u/u1/s',
-      tier: 'user',
-      scopeId: 'u1',
-      slug: 's',
-      visibility: 'private',
-      publishedAt: '2026-01-01T00:00:00.000Z',
-    };
-    (api.get as unknown as ReturnType<typeof vi.fn>).mockImplementation((url: string) =>
+  const liveResult = (visibility: PublishVisibility): PublishResult => ({
+    publicId: 'live-1',
+    url: '/p/u/u1/s',
+    tier: 'user',
+    scopeId: 'u1',
+    slug: 's',
+    visibility,
+    publishedAt: '2026-01-01T00:00:00.000Z',
+  });
+
+  /** Publish at `visibility` onto a record holding `accessGate` and a live private link. */
+  const renderSharedWithLink = async (visibility: PublishVisibility, accessGate: unknown = null) => {
+    (api.get as unknown as ReturnType<typeof vi.fn>).mockReset().mockImplementation((url: string) =>
       Promise.resolve({
-        data: url.endsWith('/share-token') ? { shareToken: 'TOK', shareLinks: [] } : { artifact: {} },
+        data: url.endsWith('/share-token') ? { shareToken: 'TOK', shareLinks: [] } : { artifact: { accessGate } },
       })
     );
-    renderModal({ defaultVisibility: 'private', publish: vi.fn().mockResolvedValue(live) });
+    apiPatch.mockClear().mockResolvedValue({ data: {} });
+    renderModal({ defaultVisibility: visibility, publish: vi.fn().mockResolvedValue(liveResult(visibility)) });
     fireEvent.click(screen.getByTestId('publish-share-create'));
-    const warning = await screen.findByTestId('publish-share-token-warning');
-    expect(warning.textContent).toContain('Anyone with this link can view without signing in.');
+    return screen.findByTestId('publish-share-token-warning');
+  };
+
+  it('draws the private-link exposure line in the Public treatment when no gate is stored', async () => {
+    const warning = await renderSharedWithLink('private');
+    expect(warning.textContent).toBe('Anyone with this link can view without signing in.');
+    expect(warning.getAttribute('data-access')).toBe('public');
     expect(within(warning).getByTestId('PublicIcon')).toBeTruthy();
     expect(warning.className).toContain('MuiTypography-colorSuccess');
+    expect(screen.getByTestId('publish-share-token-label').textContent).toBe(
+      'Private link anyone can open, no sign-in'
+    );
+    expect(screen.getByTestId('publish-share-token-hint').textContent).toContain('without signing in');
+  });
+
+  // The server enforces a stored gate on /a/<token> links at every visibility (checkShareGrant).
+  it.each([
+    ['passphrase', { kind: 'passphrase' }, 'KeyIcon', 'who also has the passphrase'],
+    [
+      'domain',
+      { kind: 'domain', allowedDomains: ['example.com'] },
+      'DomainIcon',
+      'who signs in with a verified email from an allowed domain',
+    ],
+  ] as const)(
+    'says a private link also needs the stored %s gate, in the gated treatment',
+    async (kind, gate, icon, who) => {
+      await renderSharedWithLink('private', gate);
+      const warning = screen.getByTestId('publish-share-token-warning');
+      await waitFor(() => expect(warning.getAttribute('data-access')).toBe(kind));
+      expect(warning.textContent).toBe(`Anyone with this link ${who} can view.`);
+      expect(within(warning).getByTestId(icon)).toBeTruthy();
+      expect(warning.className).toContain('MuiTypography-colorWarning');
+      // The theme's light warning text is about 1.4:1 on its soft background; the badge's darker shade is used.
+      expect(getComputedStyle(warning).color).toBe('var(--joy-palette-warning-700)');
+      const hint = screen.getByTestId('publish-share-token-hint').textContent;
+      expect(hint).toContain(`This one opens for anyone you send it to ${who}.`);
+      expect(hint).not.toContain('without signing in');
+      expect(screen.getByTestId('publish-share-token-label').textContent).toBe('Private link');
+    }
+  );
+
+  it('switches the private-link note to the gate once one is applied live', async () => {
+    const warning = await renderSharedWithLink('public');
+    expect(warning.getAttribute('data-access')).toBe('public');
+    fireEvent.click(radio('passphrase')!);
+    fireEvent.change(document.querySelector('input[type="password"]')!, { target: { value: 'correct horse' } });
+    fireEvent.click(screen.getByTestId('publish-share-gate-apply'));
+    await waitFor(() =>
+      expect(screen.getByTestId('publish-share-token-warning').getAttribute('data-access')).toBe('passphrase')
+    );
+    expect(screen.getByTestId('publish-share-token-hint').textContent).toContain(
+      'already opens for anyone who also has the passphrase.'
+    );
   });
 });
