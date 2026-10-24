@@ -157,8 +157,9 @@ export const PUBLISH_LIMITS = {
  *
  * The byte cap is the cost guard. There is deliberately no page-count cap: a
  * count adds nothing to the byte bound, and it stops the heaviest sharers.
- * Abuse (phishing hosting) is handled per page by report and takedown, plus
- * rate limits, not by a lifetime quota.
+ * Abuse (phishing hosting) is handled per page by report and takedown, not by
+ * a lifetime quota. The publish write routes carry no per-user rate limit of
+ * their own; only API-key callers are metered (per key, by `apiKeyRateLimit`).
  *
  * Enforcement is aggregate-on-read: at publish time we sum `size.totalBytes`
  * for the owner's active rows, then compare against these caps. Two

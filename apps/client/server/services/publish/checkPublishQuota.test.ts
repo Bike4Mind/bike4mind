@@ -17,6 +17,15 @@ function usage(totalBytes: number) {
   return [{ _id: null, totalBytes }];
 }
 
+/**
+ * A row that also reports a page count far past the old caps, so a count check reintroduced on
+ * the same aggregation would see it and fail these tests. checkPublishQuota.e2e.test.ts covers
+ * the same ground against a real database.
+ */
+function usageWithPages(totalBytes: number, count: number) {
+  return [{ _id: null, totalBytes, count }];
+}
+
 describe('checkPublishQuota', () => {
   beforeEach(() => {
     aggregateMock.mockReset();
@@ -43,7 +52,7 @@ describe('checkPublishQuota', () => {
 
   it('does not cap how many pages a user may publish while under the byte ceiling', async () => {
     // 5,000 pages of ~10 KB each is far past the old 100-page cap but ~50 MB.
-    aggregateMock.mockResolvedValue(usage(5000 * 10 * 1024));
+    aggregateMock.mockResolvedValue(usageWithPages(5000 * 10 * 1024, 5000));
     const result = await checkPublishQuota({
       ownerId: 'u1',
       incoming: { bytes: 10 * 1024, fileCount: 1 },
@@ -52,7 +61,7 @@ describe('checkPublishQuota', () => {
   });
 
   it('does not cap how many pages an org may host while under the byte ceiling', async () => {
-    aggregateMock.mockResolvedValue(usage(5000 * 10 * 1024));
+    aggregateMock.mockResolvedValue(usageWithPages(5000 * 10 * 1024, 5000));
     const result = await checkPublishQuota({
       ownerId: 'u1',
       orgScopeId: 'org1',
@@ -90,7 +99,24 @@ describe('checkPublishQuota', () => {
     if (result.ok) throw new Error('unreachable');
     expect(result.status).toBe(413);
     expect(result.code).toBe('quota_bytes_exceeded');
-    expect(result.details.scope).toBe('org');
+    expect(result.details).toEqual({
+      scope: 'org',
+      limit: PUBLISH_QUOTAS.org.maxTotalBytes,
+      current: PUBLISH_QUOTAS.org.maxTotalBytes,
+      attempted: PUBLISH_QUOTAS.org.maxTotalBytes + 1024,
+    });
+  });
+
+  it('allows a publish that lands exactly on the byte ceiling and refuses one byte more', async () => {
+    const cap = PUBLISH_QUOTAS.user.maxTotalBytes;
+    aggregateMock.mockResolvedValue(usage(cap - 1024));
+
+    const exact = await checkPublishQuota({ ownerId: 'u1', incoming: { bytes: 1024, fileCount: 1 } });
+    expect(exact.ok).toBe(true);
+
+    const over = await checkPublishQuota({ ownerId: 'u1', incoming: { bytes: 1025, fileCount: 1 } });
+    if (over.ok) throw new Error('expected the byte cap to refuse the publish');
+    expect(over.details).toEqual({ scope: 'user', limit: cap, current: cap - 1024, attempted: cap + 1 });
   });
 
   it('does not check the org ladder for user/project scopes', async () => {
