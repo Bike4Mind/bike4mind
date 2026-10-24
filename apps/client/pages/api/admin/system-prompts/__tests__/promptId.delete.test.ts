@@ -46,6 +46,11 @@ vi.mock('@server/utils/systemPrompts/defaults', () => ({
   getDefaultSystemPrompts: () => mockGetDefaults(),
 }));
 
+const mockAudit = vi.fn();
+vi.mock('@server/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: (...args: unknown[]) => mockAudit(...args),
+}));
+
 import '../[promptId]';
 
 function makeReq(promptId: string, isAdmin = true) {
@@ -70,6 +75,11 @@ describe('DELETE /api/admin/system-prompts/[promptId]', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(mockDeletePrompt).toHaveBeenCalledWith('probe_row', 'admin-1', 'Admin One');
+    expect(mockAudit).toHaveBeenCalledTimes(1);
+    expect(mockAudit.mock.calls[0][1]).toMatchObject({
+      action: 'settings.system_prompt.deleted',
+      target: { kind: 'settings', id: 'probe_row', displayName: 'Probe Row' },
+    });
     const body = res._getJSONData();
     expect(body.success).toBe(true);
     expect(body.data).toMatchObject({ promptId: 'probe_row', deletedVersion: 2, historyPreserved: true });
