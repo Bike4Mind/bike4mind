@@ -8711,6 +8711,25 @@ describe('ChatCompletionProcess', () => {
         ]);
       });
 
+      it('gives replacement actions distinct identities within the same millisecond', async () => {
+        const onPendingAction = await captureOnPendingAction('user1');
+        mockDb.quests.updateIfUnfinished.mockClear();
+        mockDb.quests.update.mockClear();
+        const now = Date.now();
+        const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
+        try {
+          await onPendingAction(request);
+          const firstTimestamp: unknown = savedPendingActions().at(-1)?.ts;
+          if (typeof firstTimestamp !== 'number') throw new Error('No first pending action was saved');
+
+          await onPendingAction({ ...request, args: { title: 'different action' } });
+          expect(savedPendingActions().at(-1)?.ts).toBeGreaterThan(firstTimestamp);
+          expect(savedPendingActions().at(-1)?.params).toEqual({ title: 'different action' });
+        } finally {
+          clock.mockRestore();
+        }
+      });
+
       it('refuses and persists nothing when a teammate in a shared session is acting', async () => {
         const onPendingAction = await captureOnPendingAction('someone-else');
         mockDb.quests.updateIfUnfinished.mockClear();

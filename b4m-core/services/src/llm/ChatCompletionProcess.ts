@@ -3250,7 +3250,9 @@ export class ChatCompletionProcess {
           if (session.userId !== this.user.id) {
             throw new Error('Custom connector actions that need approval can only be run by the notebook owner.');
           }
-          quest.pendingAction = { tool: toolName, params: args, ts: Date.now(), customConnector };
+          // Match the built-in MCP callback: a replaced card must never identify a newer action.
+          const ts = Math.max(Date.now(), (quest.pendingAction?.ts ?? 0) + 1);
+          quest.pendingAction = { tool: toolName, params: args, ts, customConnector };
           await saveQuest(quest);
         },
       });
