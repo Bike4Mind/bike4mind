@@ -240,6 +240,7 @@ import { resolveAndBuildMementosPreamble } from '@workers/utils/getFirstIteratio
 import { resolveExecutionMementoGates } from '@server/utils/resolveExecutionMementoGates';
 import { getFirstIterationSkillsPreamble } from '@workers/utils/getFirstIterationSkillsPreamble';
 import { getMcpClientAdapter } from '@server/utils/getMcpClientAdapter';
+import { customMcpToolHost } from '@server/mcpConnections/customMcpToolHost';
 import { loadAgentMcpTools, type AgentMcpTools } from '@workers/utils/loadAgentMcpTools';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { ApiGatewayManagementApiClient, PostToConnectionCommand } from '@aws-sdk/client-apigatewaymanagementapi';
@@ -666,7 +667,7 @@ async function loadMcpToolsSafe(userId: string, logger: Logger): Promise<AgentMc
   const enableMCPServer = (await adminSettingsRepository.getSettingsValue('EnableMCPServer')) ?? false;
   try {
     return await loadAgentMcpTools(
-      { mcpServers: mcpServerRepository, getMcpClient: getMcpClientAdapter, logger },
+      { mcpServers: mcpServerRepository, getMcpClient: getMcpClientAdapter, customMcp: customMcpToolHost, logger },
       { userId, enableMCPServer }
     );
   } catch (err) {
@@ -674,7 +675,7 @@ async function loadMcpToolsSafe(userId: string, logger: Logger): Promise<AgentMc
       userId,
       error: err instanceof Error ? err.message : String(err),
     });
-    return { mcpToolsByServer: {}, serverAgentConfig: {} };
+    return { mcpToolsByServer: {}, serverAgentConfig: {}, readOnlyCustomToolNames: [] };
   }
 }
 
@@ -697,7 +698,7 @@ async function loadMcpToolsForSession(
 ): Promise<AgentMcpTools> {
   if (session.disableUserIntegrations) {
     logger.info('[AgentExecutor][MCP] Session suppresses user integrations - skipping MCP tool load', { userId });
-    return { mcpToolsByServer: {}, serverAgentConfig: {} };
+    return { mcpToolsByServer: {}, serverAgentConfig: {}, readOnlyCustomToolNames: [] };
   }
   return loadMcpToolsSafe(userId, logger);
 }
@@ -1394,7 +1395,11 @@ async function processExecution(
     // model fabricated results. Mirrors ChatCompletionProcess's buildMcpTools.
     //
     // Gated on the session's isolation contract - see `loadMcpToolsForSession`.
-    const { mcpToolsByServer, serverAgentConfig } = await loadMcpToolsForSession(session, execution.userId, logger);
+    const { mcpToolsByServer, serverAgentConfig, readOnlyCustomToolNames } = await loadMcpToolsForSession(
+      session,
+      execution.userId,
+      logger
+    );
     const agentStore = new ServerAgentStore(serverAgentConfig, { userAgents, orgAgents });
     // MCP servers claimed exclusively by an agent (e.g. atlassian by
     // project_manager). Withheld from the parent LLM's tool list; reach the
@@ -1429,7 +1434,7 @@ async function processExecution(
     // Load current approved/denied tools for permission checking. In-process children are gated
     // on these same lists (`toolPermissions` below); dispatched children and DAG nodes get a
     // copy on their row.
-    const approvedTools = [...(execution.approvedTools ?? [])];
+    const approvedTools = [...new Set([...(execution.approvedTools ?? []), ...readOnlyCustomToolNames])];
     const deniedTools = [...(execution.deniedTools ?? [])];
 
     const subagentTracker: ServerSubagentTracker = {
@@ -3871,7 +3876,11 @@ async function processSubagentDispatch(
     // Gated on the same session isolation contract as the top-level load: this dispatch runs in
     // its own Lambda, so an unguarded load here would hand a subagent every personal MCP server
     // in a session whose whole point is not having them.
-    const { mcpToolsByServer, serverAgentConfig } = await loadMcpToolsForSession(session, child.userId, logger);
+    const { mcpToolsByServer, serverAgentConfig, readOnlyCustomToolNames } = await loadMcpToolsForSession(
+      session,
+      child.userId,
+      logger
+    );
     const agentStore = new ServerAgentStore(serverAgentConfig, { userAgents, orgAgents });
     const agentDef = agentStore.getAgent(agentName);
     if (!agentDef) {
@@ -3904,7 +3913,10 @@ async function processSubagentDispatch(
       : undefined;
     // A dispatched child (subagent or DAG node) cannot pause for approval, so its tool calls
     // are refused unless the parent's lists, copied onto its row at creation, allow them.
-    const childToolPermissions = { approvedTools: child.approvedTools ?? [], deniedTools: child.deniedTools ?? [] };
+    const childToolPermissions = {
+      approvedTools: [...new Set([...(child.approvedTools ?? []), ...readOnlyCustomToolNames])],
+      deniedTools: child.deniedTools ?? [],
+    };
     const toolDeps: ToolBuilderDeps = {
       userId: child.userId,
       user: user as IUserDocument,

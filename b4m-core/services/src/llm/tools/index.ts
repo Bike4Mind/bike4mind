@@ -178,6 +178,7 @@ export const b4mTools = {
 export { generateTools, generateMcpTools, generateMcpToolsFromCache } from './toolGenerators';
 export {
   generateCustomMcpTools,
+  customMcpToolId,
   loadCustomMcpConnections,
   isReadOnlyCustomTool,
   CUSTOM_MCP_DATA_NOTICE,

@@ -211,6 +211,26 @@ describe('PendingActionButtons (MCP confirmation card)', () => {
     sessionStorage.clear();
   });
 
+  it('renders Confirm and Cancel for a custom connector action, with its arguments', () => {
+    renderCard({
+      tool: 'create',
+      params: { title: 'Ship it' },
+      ts: Date.now(),
+      customConnector: { connectionId: 'c1', slug: 'acme', displayName: 'Acme', urlHost: 'mcp.acme.test' },
+    });
+
+    expect(screen.getByTestId('mcp-confirm-btn')).toBeInTheDocument();
+    expect(screen.getByTestId('mcp-cancel-btn')).toBeInTheDocument();
+    expect(screen.getByText(/Acme \(mcp\.acme\.test\)/)).toBeInTheDocument();
+    expect(screen.getByTestId('mcp-custom-action-args')).toHaveTextContent('Ship it');
+  });
+
+  it('renders no card for an unrelated tool with no custom connector', () => {
+    renderCard({ ...pendingAction, tool: 'get_issue' });
+
+    expect(screen.queryByTestId('mcp-confirm-btn')).not.toBeInTheDocument();
+  });
+
   it.each(['add_issue_to_project', 'update_project_item_fields'])(
     'shows the resolved project and issue target before confirming %s',
     async tool => {

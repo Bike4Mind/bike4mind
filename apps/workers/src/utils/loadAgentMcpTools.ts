@@ -5,6 +5,11 @@ import {
   generateMcpToolsFromCache,
   shouldLiveFetchTools,
   buildMcpToolCacheUpdate,
+  customMcpToolId,
+  generateCustomMcpTools,
+  isReadOnlyCustomTool,
+  loadCustomMcpConnections,
+  type CustomMcpToolHost,
   type McpToolSchema,
 } from '@bike4mind/services/llm';
 
@@ -22,12 +27,16 @@ export interface LoadAgentMcpToolsDeps {
     getTools: () => Promise<Array<{ name: string; description?: string; input_schema?: Record<string, unknown> }>>;
     callTool: (toolName: string, toolArgs: unknown) => Promise<unknown>;
   }>;
+  /** Custom connectors; omitted -> none offered. */
+  customMcp?: CustomMcpToolHost;
   logger: Logger;
 }
 
 export interface AgentMcpTools {
   mcpToolsByServer: Record<string, Array<{ name: string } & ICompletionOptionTools>>;
   serverAgentConfig: { selectedRepositories?: string; githubUsername?: string };
+  /** Custom tools safe to run without a prompt; the executor seeds them into `approvedTools`. */
+  readOnlyCustomToolNames: string[];
 }
 
 /**
@@ -43,10 +52,11 @@ export async function loadAgentMcpTools(
 ): Promise<AgentMcpTools> {
   const { logger } = deps;
   const mcpToolsByServer: AgentMcpTools['mcpToolsByServer'] = {};
+  const readOnlyCustomToolNames: string[] = [];
 
   if (!opts.enableMCPServer) {
     logger.info('[AgentExecutor][MCP] EnableMCPServer is off - 0 MCP tools loaded');
-    return { mcpToolsByServer, serverAgentConfig: {} };
+    return { mcpToolsByServer, serverAgentConfig: {}, readOnlyCustomToolNames };
   }
 
   const servers = await deps.mcpServers.find({ enabled: true, userId: opts.userId });
@@ -97,6 +107,27 @@ export async function loadAgentMcpTools(
     }
   }
 
+  // Own try/catch: a custom-connector failure drops custom tools only. There is no approval hook
+  // here - the executor's permission gate pauses every tool that is not in `approvedTools`.
+  if (deps.customMcp) {
+    try {
+      for (const connection of await loadCustomMcpConnections(deps.customMcp, opts.userId, logger)) {
+        const tools = generateCustomMcpTools(connection, { userId: opts.userId, host: deps.customMcp });
+        mcpToolsByServer[connection.slug] = tools;
+        // An org that wants approval before every call must still see the card for reads.
+        if (!connection.requireApprovalForAll) {
+          for (const tool of connection.tools) {
+            if (isReadOnlyCustomTool(tool)) readOnlyCustomToolNames.push(customMcpToolId(connection.slug, tool.name));
+          }
+        }
+      }
+    } catch (err) {
+      logger.warn('[AgentExecutor][MCP] Failed to load custom connector tools - continuing without them', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   const githubServer = servers.find(s => s.name === 'github');
   let selectedRepositories: string | undefined;
   if (githubServer?.metadata?.selectedRepositories?.length) {
@@ -108,5 +139,5 @@ export async function loadAgentMcpTools(
     perServer: Object.fromEntries(Object.entries(mcpToolsByServer).map(([k, v]) => [k, v.length])),
   });
 
-  return { mcpToolsByServer, serverAgentConfig: { selectedRepositories, githubUsername } };
+  return { mcpToolsByServer, serverAgentConfig: { selectedRepositories, githubUsername }, readOnlyCustomToolNames };
 }

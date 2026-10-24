@@ -24,6 +24,8 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => {
   return { getFilesStorage: () => storage };
 });
 
+vi.mock('@server/mcpConnections/customMcpAccess', () => ({ assertCustomMcpEnabled: vi.fn() }));
+vi.mock('@server/mcpConnections/customMcpToolHost', () => ({ customMcpToolHost: { callTool: vi.fn() } }));
 vi.mock('@server/utils/invokeMcpHandler', () => ({ invokeMcpHandler: vi.fn() }));
 vi.mock('@server/utils/downloadAttachmentUrl', () => ({ downloadAttachmentUrl: vi.fn() }));
 vi.mock('@server/utils/pendingActionExecutor', () => ({ claimPendingAction: vi.fn() }));
@@ -47,6 +49,7 @@ import { claimPendingAction } from '@server/utils/pendingActionExecutor';
 import { getSelectedRepositoriesForMcp } from '@bike4mind/server-utils/integrations/github/github-repo-helper';
 import { assertMcpServerEnabled } from '@server/utils/mcpServerFlag';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { customMcpToolHost } from '@server/mcpConnections/customMcpToolHost';
 import handler from '../confirm';
 
 const SESSION_ID = 'aaaaaaaaaaaaaaaaaaaaaaaa';
@@ -483,5 +486,74 @@ describe('POST /api/mcp/confirm', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, pendingActionTs);
     expect(invokeMcpHandler).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/mcp/confirm - custom connector actions', () => {
+  let ts: number;
+  const customAction = () => ({
+    tool: 'create',
+    params: { title: 't' },
+    ts,
+    customConnector: { connectionId: 'c1', slug: 'acme', displayName: 'Acme', urlHost: 'mcp.acme.test' },
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    ts = Date.now();
+    vi.mocked(Session.findById).mockResolvedValue({ userId: 'user-1' } as never);
+    vi.mocked(Quest.findById).mockResolvedValue({ sessionId: SESSION_ID, pendingAction: customAction() } as never);
+    vi.mocked(claimPendingAction).mockResolvedValue(true);
+    vi.mocked(customMcpToolHost.callTool).mockResolvedValue({ result: { content: [] } });
+  });
+
+  it('Confirm claims the action and calls the host with approved: true and the stored params', async () => {
+    const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs: ts });
+
+    expect(res._getJSONData()).toMatchObject({ success: true });
+    expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, ts);
+    expect(customMcpToolHost.callTool).toHaveBeenCalledWith({
+      connectionId: 'c1',
+      userId: 'user-1',
+      toolName: 'create',
+      args: { title: 't' },
+      approved: true,
+    });
+    expect(invokeMcpHandler).not.toHaveBeenCalled();
+  });
+
+  it('Cancel claims the action and never calls the host', async () => {
+    const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: false, pendingActionTs: ts });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, ts);
+    expect(customMcpToolHost.callTool).not.toHaveBeenCalled();
+  });
+
+  it('refuses a replaced action with 409 and no host call', async () => {
+    const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs: ts - 1 });
+
+    expect(res._getStatusCode()).toBe(409);
+    expect(customMcpToolHost.callTool).not.toHaveBeenCalled();
+  });
+
+  it('a second Confirm that loses the claim does not call the host', async () => {
+    vi.mocked(claimPendingAction).mockResolvedValue(false);
+
+    const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs: ts });
+
+    expect(res._getStatusCode()).toBe(409);
+    expect(customMcpToolHost.callTool).not.toHaveBeenCalled();
+  });
+
+  it('reports a host refusal as a failed action', async () => {
+    vi.mocked(customMcpToolHost.callTool).mockRejectedValue(new Error('This tool has not been reviewed and enabled'));
+
+    const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs: ts });
+
+    expect(res._getJSONData()).toMatchObject({
+      success: false,
+      message: 'This tool has not been reviewed and enabled',
+    });
   });
 });

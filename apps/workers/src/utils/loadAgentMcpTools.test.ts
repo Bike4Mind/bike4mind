@@ -179,3 +179,64 @@ describe('loadAgentMcpTools', () => {
     expect(serverAgentConfig.selectedRepositories).toContain('octocat/hello');
   });
 });
+
+describe('loadAgentMcpTools - custom connectors', () => {
+  const tool = (name: string, annotations?: Record<string, boolean>) => ({
+    name,
+    description: 'd',
+    inputSchema: {},
+    enabled: true,
+    state: 'active',
+    annotations,
+  });
+  const offer = (extra: Record<string, unknown> = {}) => ({
+    connectionId: 'c1',
+    slug: 'acme',
+    displayName: 'Acme',
+    urlHost: 'mcp.acme.test',
+    allowWriteTools: true,
+    requireApprovalForAll: false,
+    tools: [tool('search', { readOnlyHint: true }), tool('create')],
+    ...extra,
+  });
+  const run = (customMcp: unknown) =>
+    loadAgentMcpTools(
+      { mcpServers: { find: vi.fn(async () => []) } as any, getMcpClient, customMcp: customMcp as any, logger },
+      { userId: 'u1', enableMCPServer: true }
+    );
+
+  it('groups custom tools by slug and seeds only read-only names', async () => {
+    const { mcpToolsByServer, readOnlyCustomToolNames } = await run({
+      listConnections: vi.fn(async () => [offer()]),
+      callTool: vi.fn(),
+    });
+    expect(mcpToolsByServer.acme.map(t => t.name)).toEqual(['acme__search', 'acme__create']);
+    expect(readOnlyCustomToolNames).toEqual(['acme__search']);
+  });
+
+  it('seeds nothing when the org requires approval for every call', async () => {
+    const { readOnlyCustomToolNames } = await run({
+      listConnections: vi.fn(async () => [offer({ requireApprovalForAll: true })]),
+      callTool: vi.fn(),
+    });
+    expect(readOnlyCustomToolNames).toEqual([]);
+  });
+
+  it('keeps built-in tools when the custom host fails', async () => {
+    const { mcpToolsByServer } = await loadAgentMcpTools(
+      {
+        mcpServers: { find: vi.fn(async () => [atlassian]) } as any,
+        getMcpClient,
+        customMcp: {
+          listConnections: vi.fn(async () => {
+            throw new Error('down');
+          }),
+          callTool: vi.fn(),
+        } as any,
+        logger,
+      },
+      { userId: 'u1', enableMCPServer: true }
+    );
+    expect(Object.keys(mcpToolsByServer)).toEqual(['atlassian']);
+  });
+});
