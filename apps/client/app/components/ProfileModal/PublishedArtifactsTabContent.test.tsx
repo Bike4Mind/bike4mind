@@ -71,7 +71,8 @@ vi.mock('@client/app/components/common/ManageSharingPanel', () => ({
   ),
 }));
 
-import { deletePublishedArtifact } from '@client/app/utils/publishApi';
+import { AxiosError } from 'axios';
+import { deletePublishedArtifact, restorePreviousVersion } from '@client/app/utils/publishApi';
 import PublishedArtifactsTabContent from './PublishedArtifactsTabContent';
 import { PUBLISHED_ARTIFACTS_VIEW_KEY, usePublishedArtifactsView } from './usePublishedArtifactsView';
 
@@ -123,6 +124,17 @@ const page = (rows: unknown[], over: Record<string, unknown> = {}) => ({
 const expandRow = (publicId: string) => fireEvent.click(screen.getByTestId(`published-artifact-expand-${publicId}`));
 /** A bundle that still knows its in-app source, so it can be refreshed. */
 const sourcedRow = { ...bundleRow, publicId: 'pub-3', source: { kind: 'bundle', artifactId: 'artifact_html_x_1_0' } };
+
+const RATE_LIMIT_MESSAGE = "You've published a lot today. Try again in 42 minutes.";
+/** The 429 a publish write route answers once the daily publish allowance is used up. */
+const publishRateLimited = () => {
+  const error = new AxiosError('Request failed with status code 429');
+  error.response = {
+    status: 429,
+    data: { error: RATE_LIMIT_MESSAGE, code: 'publish_rate_limited', retryAfter: 2520 },
+  } as AxiosError['response'];
+  return error;
+};
 
 beforeEach(() => {
   // The view preference is a module-level store backed by localStorage, so it outlives a test unless reset.
@@ -287,6 +299,31 @@ describe('PublishedArtifactsTabContent - refresh from source (issue #1142, optio
     await waitFor(() => expect(mockToastError).toHaveBeenCalled());
     expect(mockToastSuccess).not.toHaveBeenCalled();
     confirm.mockRestore();
+  });
+
+  it("shows the daily publish limit's own message when a refresh is refused with a 429", async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    mockRefresh.mockRejectedValue(publishRateLimited());
+    mockList.mockResolvedValue(page([sourcedRow]));
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-3');
+    expandRow('pub-3');
+
+    fireEvent.click(screen.getByTestId('published-artifact-refresh-pub-3'));
+    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith(RATE_LIMIT_MESSAGE));
+    confirm.mockRestore();
+  });
+
+  it("shows the daily publish limit's own message when a restore is refused with a 429", async () => {
+    vi.mocked(restorePreviousVersion).mockRejectedValueOnce(publishRateLimited());
+    mockList.mockResolvedValue(page([{ ...bundleRow, previousVersionMeta: { sha256Index: 'prev' } }]));
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    expandRow('pub-1');
+
+    fireEvent.click(screen.getByTestId('published-artifact-restore-pub-1'));
+    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith(RATE_LIMIT_MESSAGE));
+    expect(mockToastSuccess).not.toHaveBeenCalled();
   });
 
   it('points the single-version hint at Refresh when the row can use it', async () => {

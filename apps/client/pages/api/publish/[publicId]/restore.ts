@@ -4,7 +4,15 @@ import { getPublishedArtifactsStorage } from '@bike4mind/server-utils/utils/stor
 import { enqueuePublishThumbnail } from '@bike4mind/server-utils/utils/publishThumbnails';
 import { PublishedArtifact } from '@bike4mind/database';
 import type { PublishScopeTier, PublishVisibility } from '@bike4mind/common';
-import { validateBundle, buildPublishUrlPath, invalidatePublishCdn, toCacheTarget } from '@server/services/publish';
+import {
+  validateBundle,
+  buildPublishUrlPath,
+  invalidatePublishCdn,
+  toCacheTarget,
+  checkInPlaceRewriteQuota,
+  consumePublishAction,
+  type PublishActionReceipt,
+} from '@server/services/publish';
 
 /**
  * POST /api/publish/[publicId]/restore[?sha={version}] - roll a published bundle
@@ -82,6 +90,9 @@ const handler = baseApi().post(async (req, res) => {
     return res.status(409).json({ error: 'A revision or restore is already in progress for this artifact' });
   }
 
+  // The counted publish action, handed back in `finally` unless the restored page was written.
+  let action: PublishActionReceipt | undefined;
+  let written = false;
   try {
     const storage = getPublishedArtifactsStorage();
 
@@ -106,6 +117,28 @@ const handler = baseApi().post(async (req, res) => {
       return res.status(422).json({ error: 'Archived version failed validation', violations: validation.violations });
     }
 
+    const restoredBuf = Buffer.from(restoredHtml, 'utf-8');
+    const newSha = createHash('sha256').update(restoredBuf).digest('hex');
+    const newManifest = artifact.manifest.map(f =>
+      f.path === 'index.html' ? { ...f, size: restoredBuf.length, sha256: newSha } : f
+    );
+    const totalBytes = newManifest.reduce((sum, f) => sum + f.size, 0);
+
+    // Storage quota on the net change. The restored bytes become a fresh copy at index.html while
+    // the archive stays put, but usage counts only each live page's current bundle, so the page
+    // grows by the restored index.html's size minus the current one's (see checkInPlaceRewriteQuota).
+    const quota = await checkInPlaceRewriteQuota({
+      isAdmin: req.user.isAdmin,
+      artifact,
+      next: { bytes: totalBytes, fileCount: newManifest.length },
+    });
+    if (!quota.ok) {
+      return res.status(quota.status).json({ error: quota.error, code: quota.code, details: quota.details });
+    }
+
+    // Throws a 429 when the daily publish allowance is used up; `finally` still frees the lock.
+    action = await consumePublishAction(req.user);
+
     // Archive the CURRENT index.html before overwriting, so restore is reversible.
     try {
       const currentBuf = await storage.download(`${artifact.storageKeyPrefix}index.html`);
@@ -117,14 +150,8 @@ const handler = baseApi().post(async (req, res) => {
     }
 
     // Write the restored version as the new current.
-    const restoredBuf = Buffer.from(restoredHtml, 'utf-8');
     await storage.upload(restoredBuf, `${artifact.storageKeyPrefix}index.html`, { ContentType: 'text/html' });
-    const newSha = createHash('sha256').update(restoredBuf).digest('hex');
-
-    const newManifest = artifact.manifest.map(f =>
-      f.path === 'index.html' ? { ...f, size: restoredBuf.length, sha256: newSha } : f
-    );
-    const totalBytes = newManifest.reduce((sum, f) => sum + f.size, 0);
+    written = true;
     const now = new Date();
 
     // versions[] is keyed by content sha (distinct snapshots). Restoring old bytes
@@ -199,6 +226,7 @@ const handler = baseApi().post(async (req, res) => {
       publishedAt: now.toISOString(),
     });
   } finally {
+    if (action && !written) await action.refund();
     // Compare-and-set release: only clear the lock if we still hold it (a lock
     // stolen after the TTL belongs to a newer request).
     await PublishedArtifact.updateOne({ publicId, revisingAt: lockNow }, { $set: { revisingAt: null } }).catch(
