@@ -853,6 +853,12 @@ export async function revokeShareToken(publicId: string): Promise<void> {
   await api.delete(`/api/publish/${publicId}/share-token`);
 }
 
+/** True when a revoke was refused because it would leave a non-public item's access gate with no
+ *  link to enforce it. Mirrors the `code` share-token.ts returns. */
+export function isRevokeOrphanGateRefusal(err: unknown): boolean {
+  return isAxiosError<{ code?: string }>(err) && err.response?.data?.code === 'REVOKE_WOULD_ORPHAN_GATE';
+}
+
 /**
  * Revoke ONE live share link by its `ShareLink.id`, leaving the others working. Returns how
  * many links are still live. Revoking the last one carries the same `REVOKE_WOULD_ORPHAN_GATE`
