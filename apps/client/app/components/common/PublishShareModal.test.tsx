@@ -1020,6 +1020,7 @@ describe('PublishShareModal - publish failure toast', () => {
 
   const publishAndFail = async (publish: ReturnType<typeof vi.fn>) => {
     const toastError = vi.spyOn(toast, 'error').mockImplementation(() => 1);
+    toastError.mockClear();
     render(
       <Wrapper>
         <PublishShareModal open onClose={() => {}} publish={publish} title="My artifact" defaultVisibility="private" />
