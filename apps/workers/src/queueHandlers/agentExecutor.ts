@@ -170,7 +170,7 @@ import {
   sessionDeniedTools,
 } from './agentExecutor.sessionToolPolicy';
 import { toUserFacingFailureMessage } from '@bike4mind/server-utils/utils/agentFailureMessage';
-import { buildReActAgentRuntimeConfig } from './agentExecutor.reActAgentConfig';
+import { buildReActAgentRuntimeConfig, runReasoningShortfall } from './agentExecutor.reActAgentConfig';
 // Per-iteration billing (delta math + #657 context-window guard + tool-internal
 // spend fold, #630) lives in its own side-effect-free module so the guard and the
 // fold can be unit-tested with injected effect doubles; see `agentExecutor.billing.ts`.
@@ -1155,6 +1155,14 @@ async function processExecution(
       await agentExecutionRepository.markFailed(executionId, { message: refusal.message });
       await sendWs('failed', { executionId, reason: 'model_not_admitted' });
       return;
+    }
+    const reasoningShortfall = runReasoningShortfall(execution, modelInfo, isNewExecution);
+    if (reasoningShortfall) {
+      // Honored as set, as on the chat path; logged so an empty answer can be traced to the budget.
+      logger.info('[AgentExecutor] max_tokens below reasoning floor', {
+        model: resolvedModelId,
+        ...reasoningShortfall,
+      });
     }
 
     // Pre-flight credit check. With enforcement on, the balance must cover one whole iteration

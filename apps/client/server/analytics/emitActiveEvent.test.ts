@@ -125,6 +125,19 @@ describe('emitActiveEvent', () => {
     expect((body.event.metadata as Record<string, string>).userType).toBe('subscriber');
   });
 
+  it("stamps the synthetic lane on a synthetic user's event, and nothing on anyone else's", async () => {
+    resetConfig();
+    await emitActiveEvent({ pseudoUserId: 'p1', sessionId: 's1', userType: 'free', isSynthetic: true });
+    await emitActiveEvent({ pseudoUserId: 'p2', sessionId: 's2', userType: 'free', isSynthetic: false });
+    await emitActiveEvent({ pseudoUserId: 'p3', sessionId: 's3', userType: 'free' });
+
+    const metadata = mockFetch.mock.calls.map(
+      ([, init]) =>
+        (JSON.parse((init as RequestInit).body as string) as { event: { metadata: unknown } }).event.metadata
+    );
+    expect(metadata).toEqual([{ userType: 'free', lane: 'synthetic' }, { userType: 'free' }, { userType: 'free' }]);
+  });
+
   it('sends x-api-key header and no Authorization header', async () => {
     resetConfig();
     await emitActiveEvent({ pseudoUserId: 'pseudo-123', sessionId: 'sess-abc', userType: 'free' });

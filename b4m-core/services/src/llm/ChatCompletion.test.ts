@@ -50,6 +50,7 @@ import {
   federatedSharedKeyProviders,
 } from '@bike4mind/llm-adapters';
 import {
+  ADAPTIVE_THINKING_MAX_TOKENS_FLOOR,
   ChatModels,
   DATA_LAKE_TOOL_NAMES,
   DATA_LAKE_WRITE_TOOL_NAMES,
@@ -4536,6 +4537,73 @@ describe('ChatCompletionProcess', () => {
       expect(expectedReasoningHold).toBeGreaterThan(expectedHold);
       expect(expectedReasoningHold).toBeLessThan(ceilingHold);
       expect(mockDb.organizations.incrementCredits).toHaveBeenNthCalledWith(1, 'org1', -expectedReasoningHold);
+    });
+
+    // An explicit budget below the reasoning floor is honored, so the hold is priced on it rather
+    // than on the floor; the shortfall is only logged.
+    it('holds an explicit budget below the reasoning floor as sent and logs the shortfall', async () => {
+      reservationOrgSetup({ thinkingStyle: 'adaptive' });
+      mockDb.organizations.findById.mockResolvedValue({
+        id: 'org1',
+        name: 'Cap Org',
+        currentCredits: 100_000,
+        maxCreditsPerMember: null,
+        userDetails: [{ id: 'user1', usedCredits: 0 }],
+      });
+      mockDb.organizations.incrementCredits = vi.fn().mockResolvedValue({ id: 'org1', currentCredits: -1 });
+      const body = { ...reservationBody(), params: { ...startQuestParams.params, max_tokens: 8192 } };
+
+      await service.process({ body, logger: mockLogger });
+
+      expect(mockDb.organizations.incrementCredits).toHaveBeenNthCalledWith(1, 'org1', -outputOnlyCredits(8192));
+      expect(mockLogger.info).toHaveBeenCalledWith('[ChatCompletion] max_tokens below reasoning floor', {
+        model: ChatModels.GPT4,
+        requested: 8192,
+        floor: ADAPTIVE_THINKING_MAX_TOKENS_FLOOR,
+      });
+    });
+
+    // Thinking on an Anthropic adapter sends at least the floor (buildThinkingParams), so no shortfall.
+    it('does not log the reasoning floor for a thinking turn the adapter raises to it', async () => {
+      reservationOrgSetup({ thinkingStyle: 'adaptive', can_think: true, backend: ModelBackend.Anthropic });
+      mockDb.organizations.findById.mockResolvedValue({
+        id: 'org1',
+        name: 'Cap Org',
+        currentCredits: 100_000,
+        maxCreditsPerMember: null,
+        userDetails: [{ id: 'user1', usedCredits: 0 }],
+      });
+      mockDb.organizations.incrementCredits = vi.fn().mockResolvedValue({ id: 'org1', currentCredits: -1 });
+      const body = {
+        ...reservationBody(),
+        params: { ...startQuestParams.params, max_tokens: 8192, thinking: { enabled: true, budget_tokens: 16_000 } },
+      };
+
+      await service.process({ body, logger: mockLogger });
+
+      expect(mockLogger.info).not.toHaveBeenCalledWith(
+        '[ChatCompletion] max_tokens below reasoning floor',
+        expect.anything()
+      );
+    });
+
+    it('does not log the reasoning floor for a budget above it', async () => {
+      reservationOrgSetup({ thinkingStyle: 'adaptive' });
+      mockDb.organizations.findById.mockResolvedValue({
+        id: 'org1',
+        name: 'Cap Org',
+        currentCredits: 100_000,
+        maxCreditsPerMember: null,
+        userDetails: [{ id: 'user1', usedCredits: 0 }],
+      });
+      mockDb.organizations.incrementCredits = vi.fn().mockResolvedValue({ id: 'org1', currentCredits: -1 });
+
+      await service.process({ body: reservationBody(), logger: mockLogger });
+
+      expect(mockLogger.info).not.toHaveBeenCalledWith(
+        '[ChatCompletion] max_tokens below reasoning floor',
+        expect.anything()
+      );
     });
 
     it('checks the per-member cap against the raw ceiling, not the shrunk hold', async () => {

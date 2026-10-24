@@ -113,6 +113,14 @@ the other signup-funnel events for an account an admin created carry it too, as 
 Overwatch also leaves `userAction: false` signups out of its funnel's signup count,
 so an account an admin created is not counted as a signup.
 
+Synthetic accounts (`User.isSynthetic`: test personas and accounts on a configured
+test domain) are marked rather than dropped on the host's own Overwatch events: the
+signup-funnel events (`signup_completed`, `email_verified`, `credits_granted`,
+`first_value`) and the daily `active` event carry `metadata.lane: "synthetic"`, so
+they can be told apart from real accounts. Real users' events carry no lane. The
+billing and account events above, the cross-product `signup`, and the client-side GA4
+and ad-pixel conversions still send nothing for a synthetic account.
+
 Because the touches were recorded with consent at signup, a purchase is credited
 from them even if the visitor later withdraws cookie consent: the webhook has no
 browser to ask, and the server keeps no per-user consent state. Withdrawal stops

@@ -342,8 +342,10 @@ export const useLLM = create(
     }),
     {
       name: 'llm-settings',
-      version: 6,
+      version: 7,
       migrate: (persistedState: any, version: number) => {
+        // Nothing to migrate in a missing or corrupt entry; the store keeps its defaults.
+        if (!persistedState || typeof persistedState !== 'object' || Array.isArray(persistedState)) return {};
         // Remap any persisted image-model ids that are now legacy/removed (e.g. dall-e-3, flux-dev).
         const remapLegacyImageModels = (state: Record<string, unknown>) => {
           for (const key of ['imageModel', 'lastUsedImageModel'] as const) {
@@ -388,6 +390,17 @@ export const useLLM = create(
         // browsers with no persisted state.
         if (version < 6) {
           if (persistedState.output_format === 'jpeg') persistedState.output_format = 'png';
+        }
+        // Migration v6->v7: a store whose first model was set without a budget (session hydration did,
+        // before it moved to selectSessionModel) kept the DEFAULTS placeholder as its ceiling (see the
+        // refit effect below). Clear that exact value once so it is re-derived. Only with no
+        // defaultTextModel: its one writer, the default-model effect, always replaces the placeholder,
+        // so an 8192 beside it was chosen later and is kept. Residue both ways: a deliberate 8192 on a
+        // store that effect never resolved resets; a pin whose model its fallback branch swapped stays.
+        if (version < 7) {
+          if (persistedState.max_tokens === DEFAULTS.max_tokens && !persistedState.defaultTextModel) {
+            persistedState.max_tokens = 0;
+          }
         }
         return persistedState;
       },
@@ -670,7 +683,16 @@ export const LLMProvider: React.FC = () => {
     // not happened yet: the catalog is still loading, or the active model is an image model this effect
     // does not fit. Clearing here would drop the flag before its run, and the next run would see a model
     // change with allowRaise on - the reset this fix exists to prevent.
-    if (!activeModel || !modelInfoRepo) return;
+    // An empty model is the fresh store (DEFAULTS, or after resetSettings), whose max_tokens is the
+    // placeholder rather than a choice. Recorded so a first model that lands without a budget, before
+    // the default-model effect above can run, counts as a switch and raises the placeholder (session
+    // hydration landed one that way until it moved to selectSessionModel). Without it that first fit
+    // saw no previous model, kept allowRaise off, and pinned 8192 for good.
+    if (!activeModel) {
+      refitModelRef.current = '';
+      return;
+    }
+    if (!modelInfoRepo) return;
     if (isImageModel(activeModel)) return;
     const info = modelInfoRepo.find(m => m.id === activeModel);
     if (!info) {
@@ -688,8 +710,8 @@ export const LLMProvider: React.FC = () => {
     // A switch the app resolved for the user is not a switch they asked for, so it must not raise a
     // ceiling they lowered (#1254). Consumed once: a later, genuine switch to this same model still
     // raises. Session pins without catalog info start with max_tokens=0 and are fitted here too.
-    // `previousModel` is null on the first run that fits anything, which is the fresh-session transition
-    // out of the empty model - the same '' the writer recorded as `from`.
+    // On the fresh-session transition out of the empty model `previousModel` is '' (recorded above) or
+    // null (no run before this one) - either way the same '' the writer recorded as `from`.
     const pendingAutoResolve = autoResolvedModelRef.current;
     const autoResolved = pendingAutoResolve?.to === activeModel && pendingAutoResolve.from === (previousModel ?? '');
     if (pendingAutoResolve?.to === activeModel) autoResolvedModelRef.current = null;
