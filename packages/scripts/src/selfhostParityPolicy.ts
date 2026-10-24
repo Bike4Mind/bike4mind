@@ -519,6 +519,15 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'queue:infra/queues.ts:overwatchAnalyticsQueueDLQ',
     '48d2eb528668fa78a4afbc6df9740bd92ac527dc969f20966da54ac373072e04'
   ),
+  hostedOnly(
+    'queue:infra/queues.ts:publishThumbnailQueue',
+    '5de8a1aa0e5c959b31b09b323e8e7a88503c73056d922a65395ae4100e57ce72',
+    'Owner-only publish thumbnails render in a Lambda-packaged headless Chromium; the self-host worker image ships no browser, so publish skips the enqueue and cards keep their generated cover.'
+  ),
+  broker(
+    'queue:infra/queues.ts:publishThumbnailQueueDLQ',
+    'a1b84e4b8d1c2da1390507f0e1bdd7a567c77e5390ede903ca583acdfdbe87d2'
+  ),
   wired(
     'queue:infra/queues.ts:questExportQueue',
     'daebcc2d0b1021e4c650792ebae48c616d8705525dc24c24db6cf634c604c420',

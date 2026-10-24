@@ -1,4 +1,10 @@
-import { appFilesBucket, fabFileBucket, generatedImagesBucket, slackExportBucket } from './buckets';
+import {
+  appFilesBucket,
+  fabFileBucket,
+  generatedImagesBucket,
+  publishedArtifactsBucket,
+  slackExportBucket,
+} from './buckets';
 import {
   DEFAULT_LAMBDA_ENVIRONMENT,
   PRODUCTION_STAGES,
@@ -757,6 +763,53 @@ const questExportQueueSubscription = questExportQueue.subscribe(
     ],
   },
   SINGLE_RECORD_BATCH
+);
+
+// Publish Thumbnail Queue
+// Owner-only thumbnails of published bundles: one message per artifact version, enqueued by publish
+// finalize, restore and AI revise (enqueuePublishThumbnail in packages/server-utils). The handler
+// renders the stored bundle in headless Chromium (@sparticuz/chromium) and writes a WebP to the
+// private published-artifacts bucket. Hosted only - the self-host worker image ships no browser
+// (see selfhostParityPolicy.ts and manifestCoverage.test.ts).
+const publishThumbnailQueueDLQ = new sst.aws.Queue('publishThumbnailQueueDLQ', {});
+const publishThumbnailQueue = new sst.aws.Queue('publishThumbnailQueue', {
+  visibilityTimeout: '2 minutes', // > the 60-second handler timeout + margin
+  dlq: {
+    queue: publishThumbnailQueueDLQ.arn,
+    retry: 2,
+  },
+});
+const publishThumbnailQueueSubscription = publishThumbnailQueue.subscribe(
+  {
+    handler: 'apps/workers/src/queueHandlers/publishThumbnail.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '60 seconds',
+    // Chromium needs the headroom; @sparticuz/chromium documents ~1.6 GB as its floor.
+    memory: '2048 MB',
+    vpc: lambdaVpc,
+    link: [...allSecrets, publishedArtifactsBucket],
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+      // Origin the blessed /static/lib scripts load from inside the render (renderSandboxedBundle).
+      APP_URL: $dev ? 'http://localhost:3000' : appUrlForLambdaEnv(),
+    },
+    nodejs: {
+      // @sparticuz/chromium resolves its brotli-packed binary relative to its own package dir, so it
+      // cannot be bundled; playwright-core loads its protocol/driver files the same way. sharp is a
+      // native addon (sst externalizes it by default but only ships it when installed). install
+      // runs npm for the Lambda's linux platform, so the right prebuilds land in the zip.
+      install: ['@sparticuz/chromium', 'playwright-core', 'sharp'],
+      esbuild: {
+        external: ['@sparticuz/chromium', 'playwright-core', 'sharp'],
+      },
+    },
+  },
+  {
+    ...SINGLE_RECORD_BATCH,
+    // Each render holds a 2 GB Chromium for up to a minute, and a backfill can enqueue the whole
+    // library at once; cap the fan-out without reserving account concurrency.
+    transform: { eventSourceMapping: { scalingConfig: { maximumConcurrency: 5 } } },
+  }
 );
 
 // Data Lake Cleanup Queue
@@ -1601,6 +1654,7 @@ export {
   githubWebhookQueue,
   webhookDeliveryQueue,
   questExportQueue,
+  publishThumbnailQueue,
   dataLakeCleanupQueue,
   dataLakeTaxonomyQueue,
   dataLakeResearchQueue,
@@ -1637,6 +1691,7 @@ export {
   githubWebhookQueueDLQ,
   webhookDeliveryQueueDLQ,
   questExportQueueDLQ,
+  publishThumbnailQueueDLQ,
   dataLakeCleanupQueueDLQ,
   dataLakeTaxonomyQueueDLQ,
   dataLakeResearchQueueDLQ,
@@ -1675,6 +1730,7 @@ export {
   githubWebhookQueueSubscription,
   webhookDeliveryQueueSubscription,
   questExportQueueSubscription,
+  publishThumbnailQueueSubscription,
   dataLakeCleanupQueueSubscription,
   dataLakeTaxonomyQueueSubscription,
   dataLakeResearchQueueSubscription,
