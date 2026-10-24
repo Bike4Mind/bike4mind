@@ -995,7 +995,9 @@ describe('PublishedArtifactsTabContent - access badge and aligned columns', () =
     await screen.findByTestId('published-artifact-views-views-4');
 
     expect(screen.getByTestId('published-artifact-views-views-4').textContent).toBe('9999');
-    expect(screen.getByTestId('published-artifact-views-views-5').textContent!.length).toBeLessThan(6);
+    const compact = screen.getByTestId('published-artifact-views-views-5').textContent;
+    expect(compact).not.toBe('10000');
+    expect(compact).toBe(new Intl.NumberFormat(undefined, { notation: 'compact' }).format(10_000));
   });
 
   it('labels the columns with a header row', async () => {
