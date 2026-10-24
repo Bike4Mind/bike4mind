@@ -178,13 +178,13 @@ describe('PublishShareModal - immediate stored gate updates before readback', ()
     fireEvent.change(screen.getByTestId('publish-share-gate-domains'), { target: { value: 'example.com' } });
   };
 
-  const expectGatedPrivateLink = async (gate: (typeof gates)[number]) => {
+  const expectGatedPrivateLink = async (gate: (typeof gates)[number], { visibilityHint = true } = {}) => {
     const createLink = await screen.findByTestId('publish-share-token-create');
     expect(createLink.textContent).toBe('Create private link');
     expect(screen.getByTestId('publish-share-token-label').textContent).toBe('Private link');
     expect(screen.getByTestId('publish-share-token-hint').textContent).toContain(gate.who);
     expect(screen.getByTestId('publish-share-token-hint').textContent).not.toContain('without signing in');
-    expect(screen.getByTestId('publish-share-visibility-private').textContent).toContain(gate.who);
+    if (visibilityHint) expect(screen.getByTestId('publish-share-visibility-private').textContent).toContain(gate.who);
     fireEvent.click(createLink);
     const warning = await screen.findByTestId('publish-share-token-warning');
     expect(warning.getAttribute('data-access')).toBe(gate.kind);
@@ -242,6 +242,40 @@ describe('PublishShareModal - immediate stored gate updates before readback', ()
     expect(apiPatch).toHaveBeenCalledWith('/api/publish/artifacts/gate-state', { accessGate: gate.input });
     fireEvent.click(screen.getByTestId('publish-share-visibility-private'));
     await expectGatedPrivateLink(gate);
+  });
+
+  // The stored gate must come from the reopened record or the successful PATCH itself: a seed GET that
+  // never succeeds cannot be what makes the gated copy appear.
+  const mockFailingSeedRead = (reopenedGate?: (typeof gates)[number]['stored']) => {
+    mockPendingReadback();
+    if (reopenedGate) {
+      apiGet.mockResolvedValueOnce({
+        data: { artifact: { visibility: 'private', accessGate: reopenedGate, commentPolicy: 'none' } },
+      });
+    }
+    apiGet.mockImplementation((url: string) =>
+      url.endsWith('/share-token')
+        ? Promise.resolve({ data: { shareToken: null, shareLinks: [] } })
+        : Promise.reject(new Error('Record unavailable'))
+    );
+  };
+
+  it.each(gates)('uses the reopened $kind gate when the follow-up seed GET fails', async gate => {
+    mockFailingSeedRead(gate.stored);
+    renderModal({ resolvePublished: () => Promise.resolve(publication) });
+    await screen.findByTestId('publish-share-url');
+    await expectGatedPrivateLink(gate, { visibilityHint: false });
+  });
+
+  it.each(gates)('uses a staged $kind gate after publish when the seed GET fails', async gate => {
+    mockFailingSeedRead();
+    renderModal();
+    stageGate(gate.kind);
+    fireEvent.click(screen.getByTestId('publish-share-create'));
+    await screen.findByTestId('publish-share-url');
+    expect(apiPatch).toHaveBeenCalledWith('/api/publish/artifacts/gate-state', { accessGate: gate.input });
+    fireEvent.click(screen.getByTestId('publish-share-visibility-private'));
+    await expectGatedPrivateLink(gate, { visibilityHint: false });
   });
 
   it('keeps the live passphrase gate when an older ungated seed read arrives afterward', async () => {
