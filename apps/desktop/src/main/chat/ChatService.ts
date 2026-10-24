@@ -606,6 +606,7 @@ export class ChatService {
    * before its next tool call instead of holding the set it started with. See `refreshScope`.
    */
   private readonly scopeVersions = new Map<string, number>();
+  private readonly historySettings = new Map<string, symbol>();
 
   /**
    * Sends being accepted, per session. A send awaits the store and the model catalog before its
@@ -765,27 +766,39 @@ export class ChatService {
   async setSessionHistory(sessionId: string, enabled: boolean): Promise<ChatSessionSummary | null> {
     if (enabled && !this.deps.history) throw new Error('Local history is unavailable. Restart the app and try again.');
     const historyScope = this.deps.history?.scopeKey() ?? null;
-    const previous = enabled ? await this.deps.store.get(sessionId) : null;
-    const previouslyEnabled = previous?.historyEnabled === true;
-    const summary = await this.deps.store.setHistoryEnabled(sessionId, enabled);
-    if (!enabled) this.deps.history?.removeSession(sessionId, historyScope);
-    const session = summary && enabled ? await this.deps.store.get(sessionId) : null;
-    if (session) {
-      try {
-        this.deps.history?.captureSession(session, historyScope);
-      } catch (error) {
-        if (this.deps.history?.scopeKey() === historyScope) {
-          try {
-            await this.deps.store.setHistoryEnabled(sessionId, previouslyEnabled);
-          } catch (rollbackError) {
-            this.deps.logger.warn(`CHAT: could not restore history preference: ${String(rollbackError)}`);
+    const storeScope = this.deps.store.scopeKey();
+    const historyRevision = this.deps.history?.revision();
+    const key = `${storeScope}:${sessionId}`;
+    const operation = Symbol();
+    this.historySettings.set(key, operation);
+    const isCurrentOperation = () => this.historySettings.get(key) === operation;
+    try {
+      const previous = enabled ? await this.deps.store.get(sessionId) : null;
+      const previouslyEnabled = previous?.historyEnabled === true;
+      const summary = await this.deps.store.setHistoryEnabled(sessionId, enabled, storeScope, isCurrentOperation);
+      if (!isCurrentOperation()) return null;
+      if (!enabled) this.deps.history?.removeSession(sessionId, historyScope);
+      const session = summary && enabled ? await this.deps.store.get(sessionId) : null;
+      if (!isCurrentOperation()) return null;
+      if (session) {
+        try {
+          this.deps.history?.captureSession(session, historyScope, historyRevision);
+        } catch (error) {
+          if (this.deps.history?.scopeKey() === historyScope && this.deps.history?.revision() === historyRevision) {
+            try {
+              await this.deps.store.setHistoryEnabled(sessionId, previouslyEnabled, storeScope, isCurrentOperation);
+            } catch (rollbackError) {
+              this.deps.logger.warn(`CHAT: could not restore history preference: ${String(rollbackError)}`);
+            }
           }
+          throw error;
         }
-        throw error;
       }
+      if (summary && isCurrentOperation()) this.deps.summaryChanged?.(summary);
+      return summary;
+    } finally {
+      if (isCurrentOperation()) this.historySettings.delete(key);
     }
-    if (summary) this.deps.summaryChanged?.(summary);
-    return summary;
   }
 
   searchHistory(query: string): LocalHistoryResult[] {
@@ -3535,11 +3548,15 @@ export class ChatService {
           'A device-local conversation cannot send messages to a hosted model. Choose a local conversation instead.',
       };
     }
+    const title =
+      !from.model.startsWith(LOCAL_MODEL_PREFIX) && target.model.startsWith(LOCAL_MODEL_PREFIX)
+        ? 'Local conversation'
+        : target.title;
     if (target.archived === true) {
       return {
         ok: false,
         reason: 'archived',
-        message: `"${target.title}" is archived. Ask the user to restore it before sending to it.`,
+        message: `"${title}" is archived. Ask the user to restore it before sending to it.`,
       };
     }
 
@@ -3597,10 +3614,6 @@ export class ChatService {
     this.flushQueue(targetId);
 
     this.deps.logger.debug(`CHAT: relayed a message from ${from.id} to ${targetId} at hop ${budget.hops + 1}`);
-    const title =
-      !from.model.startsWith(LOCAL_MODEL_PREFIX) && target.model.startsWith(LOCAL_MODEL_PREFIX)
-        ? 'Local conversation'
-        : target.title;
     return { ok: true, sessionId: targetId, title, queued };
   }
 

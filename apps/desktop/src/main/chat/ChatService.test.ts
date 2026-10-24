@@ -204,6 +204,7 @@ describe('ChatService', () => {
   it('drops indexed history when it is switched off or the session is deleted', async () => {
     const history = {
       scopeKey: () => 'account-a',
+      revision: () => 0,
       removeSession: vi.fn(),
       captureSession: vi.fn(),
       search: vi.fn(() => []),

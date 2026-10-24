@@ -7,11 +7,13 @@ import type { CompletionStreamEvent } from './streamEvents';
 export { LOCAL_MODEL_PREFIX } from '@shared/chat';
 const OLLAMA_URL = 'http://127.0.0.1:11434';
 const TIMEOUT_MS = 1_000;
+const DEFAULT_CONTEXT_TOKENS = 4_096;
 const remoteFields = { remote_host: z.string().optional(), remote_model: z.string().optional() };
 const tagsSchema = z.object({ models: z.array(z.object({ name: z.string().min(1), ...remoteFields })) });
 const showSchema = z.object({
   capabilities: z.array(z.string()),
   model_info: z.record(z.string(), z.unknown()).optional(),
+  parameters: z.string().optional(),
   ...remoteFields,
 });
 
@@ -48,8 +50,13 @@ export class OllamaLocal {
         model,
         stream: true,
         messages: toMessages(request.messages),
-        ...(request.thinking !== undefined ? { think: request.thinking } : {}),
-        ...(request.maxTokens ? { options: { num_predict: request.maxTokens } } : {}),
+        ...(request.thinking !== undefined && inspection.capabilities.includes('thinking')
+          ? { think: request.thinking }
+          : {}),
+        options: {
+          num_ctx: contextWindow(inspection),
+          ...(request.maxTokens ? { num_predict: request.maxTokens } : {}),
+        },
         ...(request.tools?.length
           ? { tools: request.tools.map(tool => ({ type: 'function', function: tool.toolSchema })) }
           : {}),
@@ -85,17 +92,13 @@ export class OllamaLocal {
     // Embedding-only models cannot answer /api/chat; failed inspection is not a plain-text capability.
     if (!show.success || usesRemoteModel(show.data) || !show.data.capabilities.includes('completion')) return null;
     const capabilities = show.data.capabilities;
-    const info = show.data.model_info ?? {};
-    const contextWindow = Object.entries(info).find(
-      ([key, value]) => key.endsWith('.context_length') && typeof value === 'number'
-    )?.[1];
     return {
       id: `${LOCAL_MODEL_PREFIX}${name}`,
       name,
       backend: 'local-ollama',
       supportsTools: capabilities.includes('tools'),
       supportsVision: capabilities.includes('vision'),
-      ...(typeof contextWindow === 'number' ? { contextWindow } : {}),
+      contextWindow: contextWindow(show.data),
       ...(capabilities.includes('thinking') ? { thinkingToggle: true } : {}),
     };
   }
@@ -193,6 +196,8 @@ function emitFrame(frame: unknown, onEvent: (event: CompletionStreamEvent) => vo
     done?: unknown;
     done_reason?: unknown;
     error?: unknown;
+    prompt_eval_count?: unknown;
+    eval_count?: unknown;
     message?: { content?: unknown; thinking?: unknown; tool_calls?: unknown[] };
   };
   if (typeof raw.error === 'string') throw new Error(raw.error);
@@ -216,6 +221,40 @@ function emitFrame(frame: unknown, onEvent: (event: CompletionStreamEvent) => vo
   if (tools.length > 0) onEvent({ type: 'tool_use', tools });
   if (raw.done === true) {
     const stopReason = raw.done_reason === 'length' ? 'max_tokens' : String(raw.done_reason ?? 'end_turn');
-    onEvent({ type: 'content', stopReason });
+    const inputTokens = tokenCount(raw.prompt_eval_count);
+    const outputTokens = tokenCount(raw.eval_count);
+    const usage = {
+      ...(inputTokens !== undefined ? { inputTokens } : {}),
+      ...(outputTokens !== undefined ? { outputTokens } : {}),
+    };
+    onEvent({
+      type: 'content',
+      stopReason,
+      ...(Object.keys(usage).length > 0 ? { usage } : {}),
+    });
   }
+}
+
+/** A missing or invalid measurement must stay unknown rather than becoming zero. */
+function tokenCount(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && Number.isInteger(value)
+    ? value
+    : undefined;
+}
+
+/** Keep the advertised limit equal to the allocation every inference actually requests. */
+function contextWindow(inspection: z.infer<typeof showSchema>): number {
+  const architectureLimit = Object.entries(inspection.model_info ?? {}).find(
+    ([key, value]) => key.endsWith('.context_length') && positiveTokenCount(value) !== undefined
+  )?.[1];
+  const configured = /^num_ctx[ \t]+(\S+)[ \t]*$/m.exec(inspection.parameters ?? '')?.[1];
+  const requested =
+    positiveTokenCount(configured === undefined ? undefined : Number(configured)) ?? DEFAULT_CONTEXT_TOKENS;
+  const maximum = positiveTokenCount(architectureLimit);
+  return maximum === undefined ? requested : Math.min(requested, maximum);
+}
+
+function positiveTokenCount(value: unknown): number | undefined {
+  const count = tokenCount(value);
+  return count !== undefined && count > 0 && Number.isSafeInteger(count) ? count : undefined;
 }

@@ -82,6 +82,23 @@ describe('SessionStore scoping', () => {
     expect(await store.get(hers.id)).toBeNull();
   });
 
+  it('does not apply queued history consent to a recurring id in another account', async () => {
+    at(scope(LOCAL, ALICE));
+    const session = await store.create();
+    const original = await store.get(session.id);
+    const expectedScope = store.scopeKey();
+    at(scope(LOCAL, BOB));
+    await store.create();
+    await writeFile(join(root, sessionScopeKey(scope(LOCAL, BOB)), `${session.id}.json`), JSON.stringify(original));
+    at(scope(LOCAL, ALICE));
+    const pendingRename = store.rename(session.id, 'Renamed in Alice');
+    const consent = store.setHistoryEnabled(session.id, true, expectedScope);
+    at(scope(LOCAL, BOB));
+    await pendingRename;
+    expect(await consent).toBeNull();
+    expect((await store.get(session.id))?.historyEnabled).toBeUndefined();
+  });
+
   it('lists nothing while nobody is signed in', async () => {
     at(scope(LOCAL, ALICE));
     await store.create();

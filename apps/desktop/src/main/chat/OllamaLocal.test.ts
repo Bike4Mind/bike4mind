@@ -28,12 +28,41 @@ describe('OllamaLocal', () => {
         id: `${LOCAL_MODEL_PREFIX}qwen3:8b`,
         supportsTools: true,
         thinkingToggle: true,
-        contextWindow: 32768,
+        contextWindow: 4096,
       }),
     ]);
     expect(vi.mocked(fetch).mock.calls.every(([input]) => String(input).startsWith('http://127.0.0.1:11434/'))).toBe(
       true
     );
+  });
+
+  it.each([
+    { info: {}, parameters: undefined, expected: 4096 },
+    { info: { 'llama.context_length': 32768 }, parameters: undefined, expected: 4096 },
+    { info: { 'llama.context_length': 2048 }, parameters: undefined, expected: 2048 },
+    { info: { 'llama.context_length': -1 }, parameters: undefined, expected: 4096 },
+    { info: { 'llama.context_length': '32768' }, parameters: undefined, expected: 4096 },
+    { info: { 'llama.context_length': 32768 }, parameters: 'num_ctx 8192', expected: 8192 },
+    { info: { 'llama.context_length': 2048 }, parameters: 'num_ctx 8192', expected: 2048 },
+    { info: {}, parameters: 'temperature 0.7\nnum_ctx 8192\n', expected: 8192 },
+    ...['0', '-1', 'Infinity', 'NaN', '1.5', 'invalid'].map(value => ({
+      info: {},
+      parameters: `num_ctx ${value}`,
+      expected: 4096,
+    })),
+  ])('uses the same effective context for discovery and inference: %j', async ({ info, parameters, expected }) => {
+    const fetchMock = vi.fn(async (input: unknown, _init?: RequestInit) => {
+      if (String(input).endsWith('/api/tags')) return Response.json({ models: [{ name: 'llama' }] });
+      if (String(input).endsWith('/api/show'))
+        return Response.json({ capabilities: ['completion'], model_info: info, parameters });
+      return new Response(`${JSON.stringify({ done: true })}\n`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const local = new OllamaLocal();
+    expect((await local.models())[0].contextWindow).toBe(expected);
+    await local.stream({ model: `${LOCAL_MODEL_PREFIX}llama`, messages: [] }, () => undefined);
+    const sent = JSON.parse(String(fetchMock.mock.calls.at(-1)?.[1]?.body)) as { options: { num_ctx: number } };
+    expect(sent.options.num_ctx).toBe(expected);
   });
 
   it('hides the provider when discovery times out or is unavailable', async () => {
@@ -50,6 +79,21 @@ describe('OllamaLocal', () => {
     const pending = new OllamaLocal().models();
     await vi.advanceTimersByTimeAsync(1_001);
     await expect(pending).resolves.toEqual([]);
+  });
+
+  it.each([true, false])('omits thinking %s when the fresh inspection reports a plain model', async thinking => {
+    const fetchMock = vi.fn(async (input: unknown, _init?: RequestInit) =>
+      String(input).endsWith('/api/show')
+        ? Response.json({ capabilities: ['completion'] })
+        : new Response(`${JSON.stringify({ done: true })}\n`)
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    await new OllamaLocal().stream(
+      { model: `${LOCAL_MODEL_PREFIX}llama3.2`, messages: [{ role: 'user', content: 'hi' }], thinking },
+      () => undefined
+    );
+    const sent = JSON.parse(String(fetchMock.mock.calls[1][1]?.body)) as Record<string, unknown>;
+    expect(sent).not.toHaveProperty('think');
   });
 
   it('streams a plain offline answer', async () => {
@@ -78,7 +122,7 @@ describe('OllamaLocal', () => {
   const streamWith = async (body: string, request: Partial<Parameters<OllamaLocal['stream']>[0]> = {}) => {
     const fetchMock = vi.fn(async (input: unknown, _init?: RequestInit) =>
       String(input).endsWith('/api/show')
-        ? Response.json({ capabilities: ['completion'] })
+        ? Response.json({ capabilities: ['completion', 'thinking'] })
         : new Response(body, { status: 200 })
     );
     vi.stubGlobal('fetch', fetchMock);
@@ -119,7 +163,7 @@ describe('OllamaLocal', () => {
     });
     expect(sent.model).toBe('llama');
     expect(sent.think).toBe(true);
-    expect(sent.options).toEqual({ num_predict: 256 });
+    expect(sent.options).toEqual({ num_ctx: 4096, num_predict: 256 });
     expect(sent.messages).toEqual([
       { role: 'user', content: 'look' },
       {
@@ -208,6 +252,28 @@ describe('OllamaLocal', () => {
     expect(fetchMock.mock.calls[1][1]?.signal).toBe(controller.signal);
     expect(cancel).toHaveBeenCalledOnce();
     expect(body.locked).toBe(false);
+  });
+
+  it.each([
+    { prompt_eval_count: 3000, eval_count: 12, usage: { inputTokens: 3000, outputTokens: 12 } },
+    { prompt_eval_count: 0, eval_count: 0, usage: { inputTokens: 0, outputTokens: 0 } },
+    { prompt_eval_count: 3000, usage: { inputTokens: 3000 } },
+    { eval_count: 12, usage: { outputTokens: 12 } },
+    { prompt_eval_count: -1, eval_count: '12', usage: undefined },
+    { prompt_eval_count: 1.5, eval_count: null, usage: undefined },
+  ])('preserves only reported valid token counts: %j', async ({ usage, ...counts }) => {
+    const { events } = await streamWith(`${JSON.stringify({ done: true, ...counts })}\n`);
+    expect(events).toEqual([{ type: 'content', stopReason: 'end_turn', ...(usage ? { usage } : {}) }]);
+  });
+
+  it('ignores token counts on partial frames until the final measurement arrives', async () => {
+    const { events } = await streamWith(
+      `${JSON.stringify({ message: { content: 'answer' }, prompt_eval_count: 20 })}\n${JSON.stringify({ done: true, prompt_eval_count: 30, eval_count: 4 })}\n`
+    );
+    expect(events).toEqual([
+      { type: 'content', text: 'answer' },
+      { type: 'content', stopReason: 'end_turn', usage: { inputTokens: 30, outputTokens: 4 } },
+    ]);
   });
 
   it('fails the turn on an error frame', async () => {

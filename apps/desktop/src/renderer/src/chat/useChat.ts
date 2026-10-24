@@ -998,9 +998,10 @@ export function useConversation(
   const setHistory = useCallback(
     async (enabled: boolean) => {
       if (!sessionId || session?.id !== sessionId) return;
+      const version = historyVersion.current;
       try {
         const updated = await window.b4m.chat.setSessionHistory(sessionId, enabled);
-        if (!updated) return;
+        if (!updated || version !== historyVersion.current) return;
         setSession(current =>
           current?.id === sessionId ? { ...current, historyEnabled: updated.historyEnabled } : current
         );

@@ -201,6 +201,23 @@ it('does not apply a history toggle response to a different conversation', async
   expect(conversation.session?.historyEnabled).not.toBe(true);
 });
 
+it('keeps newer consent pushed by another window when an older toggle response arrives', async () => {
+  await show();
+  const pending = deferred<ChatSession>();
+  setSessionHistory.mockReturnValue(pending.promise);
+  let toggle!: Promise<void>;
+  await act(async () => {
+    toggle = conversation.setHistory(true);
+  });
+  const { messages: _messages, ...summary } = imported('old');
+  await act(async () => {
+    for (const listener of summaries) listener({ ...summary, messageCount: 1, historyEnabled: false });
+    pending.resolve({ ...imported('old'), historyEnabled: true });
+    await toggle;
+  });
+  expect(conversation.session?.historyEnabled).toBe(false);
+});
+
 it('does not change consent using the previous conversation while the selected one loads', async () => {
   await show();
   const pending = deferred<ChatSession | null>();

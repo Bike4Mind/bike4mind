@@ -60,8 +60,14 @@ export class LocalHistory {
     return this.captureRevision;
   }
 
-  captureSession(session: ChatSession, expectedScope = this.scope()): void {
-    if (!session.historyEnabled || !expectedScope || this.scope() !== expectedScope) return;
+  captureSession(session: ChatSession, expectedScope = this.scope(), expectedRevision = this.captureRevision): void {
+    if (
+      !session.historyEnabled ||
+      !expectedScope ||
+      this.scope() !== expectedScope ||
+      expectedRevision !== this.captureRevision
+    )
+      return;
     const content = safeContent(
       session.messages
         .filter(message => !message.system)

@@ -214,6 +214,38 @@ describe('device-local conversation boundary', () => {
     expect((await store.get(targetId))?.archived).toBe(true);
   });
 
+  it('redacts a local title when a hosted relay is refused because the target is archived', async () => {
+    const { service, store, events, post, hostedStreams, queue, create } = await fixture(async () => undefined);
+    const sourceId = await create('hosted');
+    const targetId = await create();
+    await service.renameSession(targetId, 'Private archived local title');
+    await service.setSessionArchived(targetId, true);
+    await service.send(sourceId, 'send to the archived conversation');
+    await vi.waitUntil(() => hostedStreams.length === 1);
+    hostedStreams[0].end(
+      `data: ${JSON.stringify({
+        type: 'tool_use',
+        tools: [
+          {
+            id: 'send-archived',
+            name: 'session_send',
+            arguments: JSON.stringify({ session_id: targetId, message: 'public message' }),
+          },
+        ],
+      })}\n\ndata: [DONE]\n\n`
+    );
+    await vi.waitUntil(() => hostedStreams.length === 2);
+    expect(JSON.stringify(post.mock.calls)).not.toContain('Private archived local title');
+    expect(JSON.stringify(post.mock.calls)).toContain('Local conversation');
+    expect(queue.list(targetId)).toEqual([]);
+    hostedStreams[1].end('data: {"type":"content","text":"Restore it first"}\n\ndata: [DONE]\n\n');
+    await settled(events, sourceId);
+    expect((await store.get(sourceId))?.messages.at(-1)?.toolCalls?.[0]).toMatchObject({
+      status: 'error',
+      error: expect.stringContaining('"Local conversation" is archived'),
+    });
+  });
+
   it('does not reindex a reply after history is opted out during its stream', async () => {
     const history = new LocalHistory(':memory:');
     let finish: (() => void) | undefined;
@@ -234,6 +266,115 @@ describe('device-local conversation boundary', () => {
       await service.setSessionHistory(id, false);
       finish?.();
       await settled(events, id);
+      expect(history.state()).toEqual({ entries: 0 });
+    } finally {
+      history.close();
+    }
+  });
+
+  it.each(['opt-out', 'clear'] as const)(
+    'does not restore history when %s finishes during an enable read',
+    async action => {
+      const history = new LocalHistory(':memory:');
+      const { service, store, create } = await fixture(async () => undefined, { history });
+      try {
+        const id = await create();
+        const get = store.get.bind(store);
+        let finishRead: (() => void) | undefined;
+        vi.spyOn(store, 'get')
+          .mockImplementationOnce(get)
+          .mockImplementationOnce(async sessionId => {
+            const snapshot = await get(sessionId);
+            await new Promise<void>(resolve => {
+              finishRead = resolve;
+            });
+            return snapshot;
+          });
+        const enabling = service.setSessionHistory(id, true);
+        await vi.waitUntil(() => finishRead);
+        if (action === 'opt-out') await service.setSessionHistory(id, false);
+        else history.clear();
+        finishRead?.();
+        await enabling;
+        expect(history.state()).toEqual({ entries: 0 });
+        if (action === 'opt-out') expect((await get(id))?.historyEnabled).toBeUndefined();
+      } finally {
+        history.close();
+      }
+    }
+  );
+
+  it('keeps a later opt-out when an earlier enable is still reading the old preference', async () => {
+    const history = new LocalHistory(':memory:');
+    const { service, store, create } = await fixture(async () => undefined, { history });
+    try {
+      const id = await create();
+      const get = store.get.bind(store);
+      let finishRead: (() => void) | undefined;
+      vi.spyOn(store, 'get').mockImplementationOnce(async sessionId => {
+        const snapshot = await get(sessionId);
+        await new Promise<void>(resolve => {
+          finishRead = resolve;
+        });
+        return snapshot;
+      });
+      const enabling = service.setSessionHistory(id, true);
+      await vi.waitUntil(() => finishRead);
+      await service.setSessionHistory(id, false);
+      finishRead?.();
+      expect(await enabling).toBeNull();
+      expect((await get(id))?.historyEnabled).toBeUndefined();
+      expect(history.state()).toEqual({ entries: 0 });
+    } finally {
+      history.close();
+    }
+  });
+
+  it('does not roll back a newer preference after an earlier capture fails', async () => {
+    const history = new LocalHistory(':memory:');
+    const { service, store, create } = await fixture(async () => undefined, { history });
+    try {
+      const id = await create();
+      vi.spyOn(history, 'captureSession').mockImplementationOnce(() => {
+        throw new Error('index failed');
+      });
+      const setHistoryEnabled = store.setHistoryEnabled.bind(store);
+      let releaseRollback: (() => void) | undefined;
+      vi.spyOn(store, 'setHistoryEnabled')
+        .mockImplementationOnce(setHistoryEnabled)
+        .mockImplementationOnce(async (...args) => {
+          await new Promise<void>(resolve => {
+            releaseRollback = resolve;
+          });
+          return setHistoryEnabled(...args);
+        });
+      const failure = expect(service.setSessionHistory(id, true)).rejects.toThrow('index failed');
+      await vi.waitUntil(() => releaseRollback);
+      await service.setSessionHistory(id, true);
+      releaseRollback?.();
+      await failure;
+      expect((await store.get(id))?.historyEnabled).toBe(true);
+      expect(history.state()).toEqual({ entries: 1 });
+    } finally {
+      history.close();
+    }
+  });
+
+  it('does not change consent after the account switches during its initial read', async () => {
+    let scope = 'account-a';
+    const history = new LocalHistory(':memory:', () => scope);
+    const { service, store, create } = await fixture(async () => undefined, { history });
+    try {
+      const id = await create();
+      vi.spyOn(store, 'scopeKey').mockImplementation(() => scope);
+      const get = store.get.bind(store);
+      vi.spyOn(store, 'get').mockImplementationOnce(async sessionId => {
+        const snapshot = await get(sessionId);
+        scope = 'account-b';
+        return snapshot;
+      });
+      expect(await service.setSessionHistory(id, true)).toBeNull();
+      expect((await get(id))?.historyEnabled).toBeUndefined();
       expect(history.state()).toEqual({ entries: 0 });
     } finally {
       history.close();

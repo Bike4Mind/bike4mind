@@ -107,6 +107,9 @@ the original conversations or disable future capture in opted-in sessions.
 Run Ollama locally on `127.0.0.1:11434` with a downloaded chat model, then choose that model
 in the model picker. From the signed-out screen, choose **Use local models**. These models
 send inference requests to the local daemon; cloud-backed Ollama models are excluded.
+Local requests use a 4,096-token context by default, capped at the model's supported window.
+To use a larger window, set `PARAMETER num_ctx 8192` (or another supported size) in the
+model's Ollama Modelfile; discovery and inference use the same explicit context size.
 Local Code sessions can still use network tools when permitted, so offline inference does not
 make tool execution offline.
 

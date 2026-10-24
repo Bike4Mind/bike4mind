@@ -376,6 +376,13 @@ export class SessionStore {
     return summarize(session);
   }
 
+  /** Capture identity before an asynchronous operation that must not cross accounts. */
+  scopeKey(): string | null {
+    if (!this.scope) return 'default';
+    const scope = this.scope();
+    return scope ? sessionScopeKey(scope) : null;
+  }
+
   async get(id: string): Promise<ChatSession | null> {
     const directory = await this.directoryFor(false);
     return directory ? this.read(directory, id) : null;
@@ -559,12 +566,22 @@ export class SessionStore {
     });
   }
 
-  async setHistoryEnabled(id: string, enabled: boolean): Promise<ChatSessionSummary | null> {
-    return this.mutate(id, session => {
-      if (enabled) session.historyEnabled = true;
-      else delete session.historyEnabled;
-      return true;
-    });
+  async setHistoryEnabled(
+    id: string,
+    enabled: boolean,
+    expectedScope = this.scopeKey(),
+    isCurrentOperation: () => boolean = () => true
+  ): Promise<ChatSessionSummary | null> {
+    return this.mutate(
+      id,
+      session => {
+        if (enabled) session.historyEnabled = true;
+        else delete session.historyEnabled;
+        return true;
+      },
+      expectedScope,
+      isCurrentOperation
+    );
   }
 
   /**
@@ -941,14 +958,18 @@ export class SessionStore {
    */
   private async mutate(
     id: string,
-    change: (session: ChatSession) => boolean | null
+    change: (session: ChatSession) => boolean | null,
+    expectedScope?: string | null,
+    isCurrentOperation: () => boolean = () => true
   ): Promise<ChatSessionSummary | null> {
     return this.serialize(id, async () => {
+      if (!isCurrentOperation() || (expectedScope !== undefined && this.scopeKey() !== expectedScope)) return null;
       const directory = await this.directoryFor(false);
       if (!directory) return null;
       const session = await this.read(directory, id);
       if (!session) return null;
 
+      if (!isCurrentOperation() || (expectedScope !== undefined && this.scopeKey() !== expectedScope)) return null;
       const outcome = change(session);
       if (outcome === null) return null;
       if (outcome) await this.write(directory, session);
