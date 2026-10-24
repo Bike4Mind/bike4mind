@@ -122,10 +122,13 @@ describe('createRenderEnvironment', () => {
   it('refuses to start beside a process that is not part of this runtime, and never signals it', async () => {
     const { table } = fakeProcesses([...platform(), proc(400, 1, 'leftover')]);
     const render = vi.fn(async () => 'rendered');
+    writeFileSync(path.join(scratchRoot, 'kept'), 'not deleted');
 
     await expect(environmentWith(table).run(render)).rejects.toThrow(/unexpected processes \[400 leftover\]/);
     expect(render).not.toHaveBeenCalled();
     expect(table.kill).not.toHaveBeenCalled();
+    // The process check runs first, so a shared host (e.g. `sst dev`) never has its scratch root emptied.
+    expect(readdirSync(scratchRoot)).toEqual(['kept']);
   });
 
   it('withholds the result when a process leaves the tree during the render, and stays poisoned', async () => {
@@ -164,7 +167,9 @@ describe('createRenderEnvironment', () => {
   it('fails closed when the process table cannot be read or does not list this runtime', async () => {
     const unreadable = fakeProcesses(platform()).table;
     unreadable.list.mockRejectedValue(new Error('EACCES: /proc'));
+    writeFileSync(path.join(scratchRoot, 'kept'), 'not deleted');
     await expect(environmentWith(unreadable).run(async () => 'rendered')).rejects.toThrow(/check failed: EACCES/);
+    expect(readdirSync(scratchRoot)).toEqual(['kept']);
 
     const { table } = fakeProcesses([proc(1, 0, 'init')]);
     await expect(environmentWith(table).run(async () => 'rendered')).rejects.toThrow(/does not list this runtime/);

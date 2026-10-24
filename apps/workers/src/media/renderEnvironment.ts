@@ -118,6 +118,9 @@ export function createRenderEnvironment({
       busy = true;
       try {
         // Processes first: a live leftover could refill the directory right after it is emptied.
+        // This order is also what keeps a shared host's scratch root intact: `sst dev` runs this
+        // handler locally with AWS_LAMBDA_RUNTIME_API set, and a shared process table (or a host
+        // with no /proc) fails the process check before anything is deleted.
         for (const check of [strayProcessProblem, scratchProblem]) {
           const problems = await collect([check]);
           if (problems.length) throw poison(problems);
