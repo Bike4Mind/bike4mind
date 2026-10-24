@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/client-auth",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Client-side OAuth 2.0 device-flow authentication shared by the B4M CLI and desktop app",
   "publishConfig": {
     "access": "restricted"

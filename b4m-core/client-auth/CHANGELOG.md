@@ -1,5 +1,11 @@
 # @bike4mind/client-auth
 
+## 0.2.2
+
+### Patch Changes
+
+- [#5647](https://github.com/Bike4Mind/bike4mind/pull/5647) [`2588adc`](https://github.com/Bike4Mind/bike4mind/commit/2588adcf8b7c7211fb72b062d2a3ed803034414f) Thanks [@vinchi777](https://github.com/vinchi777)! - refresh and retry on 401, and ask to sign in again instead of failing every message
+
 ## 0.2.1
 
 ### Patch Changes

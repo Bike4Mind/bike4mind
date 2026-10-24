@@ -1,5 +1,19 @@
 # @bike4mind/sdk
 
+## 1.5.0
+
+### Minor Changes
+
+- [#5617](https://github.com/Bike4Mind/bike4mind/pull/5617) [`22b2349`](https://github.com/Bike4Mind/bike4mind/commit/22b23498c5ea66602b8661a64fb05b8a78d6b1a1) Thanks [@vinchi777](https://github.com/vinchi777)! - show monthly credit allowance in footer
+
+- [#5652](https://github.com/Bike4Mind/bike4mind/pull/5652) [`a898007`](https://github.com/Bike4Mind/bike4mind/commit/a8980077a897e584a0da483a212e505e749cc117) Thanks [@biletskiy6](https://github.com/biletskiy6)! - show a still image on release notes without a video
+
+### Patch Changes
+
+- [#5463](https://github.com/Bike4Mind/bike4mind/pull/5463) [`dd17bbe`](https://github.com/Bike4Mind/bike4mind/commit/dd17bbe1c5a148e550b00452944e6aef178ca809) Thanks [@vinchi777](https://github.com/vinchi777)! - reject unsupported assistant prefill
+
+- [#5558](https://github.com/Bike4Mind/bike4mind/pull/5558) [`b057019`](https://github.com/Bike4Mind/bike4mind/commit/b0570190c06f5370569c182a92facd62f20de8a1) Thanks [@onoya](https://github.com/onoya)! - queue ElevenLabs calls behind shared concurrency slots
+
 ## 1.4.0
 
 ### Minor Changes

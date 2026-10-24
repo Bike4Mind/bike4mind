@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/cli",
-  "version": "4.0.0",
+  "version": "4.1.0",
   "mcpName": "io.github.Bike4Mind/bike4mind",
   "type": "module",
   "description": "Interactive CLI tool for Bike4Mind with ReAct agents",
