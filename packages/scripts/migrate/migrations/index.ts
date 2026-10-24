@@ -203,6 +203,8 @@ import SetLiveopsTriageConfigAuditLogRetention from './20260921235953_set-liveop
 import EnsureFabFileOwnerOrganizationIndex from './20260921235970_ensure-fabfile-owner-organization-index';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import ReconcileOrgStampedFileStorageOwners from './20260921235971_reconcile-org-stamped-file-storage-owners';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
+import EnsureOverwatchRawEventExplorerIndex from './20260921235977_ensure-overwatch-raw-event-explorer-index';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import EnsureAdminAuditLogIndexes from './20260921235940_ensure-adminauditlog-indexes';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
@@ -375,6 +377,7 @@ const coreMigrations: MigrationFile[] = [
   EnsureUserApiKeyAuditLogActorIndex,
   EnsureFabFileOwnerOrganizationIndex,
   ReconcileOrgStampedFileStorageOwners,
+  EnsureOverwatchRawEventExplorerIndex,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,
 ];
