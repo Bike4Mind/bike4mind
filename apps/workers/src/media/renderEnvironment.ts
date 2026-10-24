@@ -17,7 +17,12 @@ import path from 'node:path';
  * A failed check poisons the environment: that render throws RenderEnvironmentError (the
  * orchestrator lets SQS retry it) and every later run is refused. Processes that are not
  * descendants of this runtime are never signalled, only reported. lambdaRuntimeExit.ts then
- * retires the execution environment after every invocation regardless.
+ * retires the runtime after every invocation regardless.
+ *
+ * If Lambda itself ends the invocation at its timeout, this teardown never runs, and a process the
+ * render left behind makes the before-check refuse every later render in that execution
+ * environment until Lambda retires it. A run therefore takes a deadline and stops waiting for the
+ * render early enough that its own teardown always finishes first.
  */
 
 /** One process as listed by a ProcessTable. */
@@ -46,9 +51,17 @@ export interface RenderWorkspace {
   tmpDir: string;
 }
 
+export interface RunOptions {
+  /**
+   * Epoch ms by which the run must have returned, teardown included. A render still going when
+   * only the teardown's time is left fails with RenderDeadlineError, and its processes are killed.
+   */
+  deadline?: number;
+}
+
 export interface RenderEnvironment {
   /** Runs one render between the checks above; its result is released only if teardown verifies. */
-  run<T>(render: (workspace: RenderWorkspace) => Promise<T>): Promise<T>;
+  run<T>(render: (workspace: RenderWorkspace) => Promise<T>, options?: RunOptions): Promise<T>;
 }
 
 export interface RenderEnvironmentOptions {
@@ -69,7 +82,17 @@ export class RenderEnvironmentError extends Error {
   }
 }
 
+/** The render ran out of the time its invocation had left; retryable, and the environment stays usable. */
+export class RenderDeadlineError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'RenderDeadlineError';
+  }
+}
+
 const KILL_TIMEOUT_MS = 5_000;
+/** Teardown time beyond the kill loop: two /proc scans and emptying the scratch root (ms). */
+const TEARDOWN_MARGIN_MS = 3_000;
 const KILL_POLL_MS = 50;
 const EXITED_STATES = new Set(['Z', 'X', 'x']);
 const WORKSPACE_PREFIX = 'thumbnail-render-';
@@ -112,7 +135,7 @@ export function createRenderEnvironment({
   };
 
   return {
-    async run<T>(render: (workspace: RenderWorkspace) => Promise<T>): Promise<T> {
+    async run<T>(render: (workspace: RenderWorkspace) => Promise<T>, { deadline }: RunOptions = {}): Promise<T> {
       if (poisonedBy) throw new RenderEnvironmentError(`render environment already failed a check: ${poisonedBy}`);
       if (busy) throw new RenderEnvironmentError('a render is already running in this environment');
       busy = true;
@@ -128,7 +151,9 @@ export function createRenderEnvironment({
 
         let outcome: { ok: true; value: T } | { ok: false; error: unknown };
         try {
-          outcome = { ok: true, value: await render(await createWorkspace(scratchRoot)) };
+          const rendering = createWorkspace(scratchRoot).then(render);
+          const renderBy = deadline === undefined ? undefined : deadline - killTimeoutMs - TEARDOWN_MARGIN_MS;
+          outcome = { ok: true, value: await settleBy(rendering, renderBy) };
         } catch (error) {
           outcome = { ok: false, error };
         }
@@ -283,4 +308,18 @@ function describe(entries: readonly ProcessEntry[]): string {
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/** Settles as `work` does, or rejects with RenderDeadlineError once `by` (epoch ms) passes first. */
+function settleBy<T>(work: Promise<T>, by: number | undefined): Promise<T> {
+  if (by === undefined) return work;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(
+      () => reject(new RenderDeadlineError('the render did not finish in the time its invocation had left')),
+      Math.max(0, by - Date.now())
+    );
+  });
+  // race() also handles `work` rejecting later, once the teardown has killed its browser.
+  return Promise.race([work, expired]).finally(() => clearTimeout(timer));
 }

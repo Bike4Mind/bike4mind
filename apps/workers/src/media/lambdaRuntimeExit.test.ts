@@ -38,7 +38,7 @@ describe('exitAfterEachInvocation', () => {
 
     await wrap(handler)({ documentUrl: 'https://example.test/doc' }, CONTEXT);
 
-    expect(handler).toHaveBeenCalledWith({ documentUrl: 'https://example.test/doc' });
+    expect(handler).toHaveBeenCalledWith({ documentUrl: 'https://example.test/doc' }, { deadline: undefined });
     expect(fetchImpl).toHaveBeenCalledWith(
       RESPONSE_URL,
       expect.objectContaining({
@@ -84,6 +84,17 @@ describe('exitAfterEachInvocation', () => {
     );
     expect(order).toEqual([`post ${ERROR_URL}`, 'exit 0']);
     expect(console.error).toHaveBeenCalledWith(expect.stringContaining('invocation failed'), failure);
+  });
+
+  it("gives the handler a deadline just short of the invocation's own", async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    const handler = vi.fn(async () => ({ status: 'timed-out' }));
+
+    await wrap(handler)({}, { ...CONTEXT, getRemainingTimeInMillis: () => 60_000 });
+    expect(handler).toHaveBeenCalledWith({}, { deadline: 1_059_000 });
+
+    await wrap(handler)({}, CONTEXT);
+    expect(handler).toHaveBeenLastCalledWith({}, { deadline: undefined });
   });
 
   it.each([

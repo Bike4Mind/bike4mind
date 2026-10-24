@@ -86,8 +86,9 @@ describe('publish thumbnail renderer handler', () => {
       return result;
     });
 
-    await run(request);
+    await run(request, { deadline: 1_234_567 });
     expect(environment.run).toHaveBeenCalledTimes(1);
+    expect(environment.run).toHaveBeenCalledWith(expect.any(Function), { deadline: 1_234_567 });
     const [{ openContext: bound }] = h.renderHtmlThumbnail.mock.calls[0];
     await bound(THUMBNAIL_CONTEXT_OPTIONS);
     expect(openContext).toHaveBeenCalledWith(THUMBNAIL_CONTEXT_OPTIONS, WORKSPACE);
@@ -164,9 +165,12 @@ describe('deployed publish thumbnail renderer', () => {
       .spyOn(process, 'exit')
       .mockImplementation(((code: number) => void order.push(`exit ${code}`)) as never);
 
-    await handler(request, CONTEXT);
+    await handler(request, { ...CONTEXT, getRemainingTimeInMillis: () => 70_000 });
 
     expect(h.lambdaEnvironmentRun).toHaveBeenCalledTimes(1);
+    const [, runOptions] = h.lambdaEnvironmentRun.mock.calls[0];
+    expect(runOptions.deadline).toBeGreaterThan(Date.now() + 60_000);
+    expect(runOptions.deadline).toBeLessThan(Date.now() + 70_000);
     const [{ openContext: bound }] = h.renderHtmlThumbnail.mock.calls[0];
     await bound(THUMBNAIL_CONTEXT_OPTIONS);
     expect(h.openLambdaChromiumContext).toHaveBeenCalledWith(THUMBNAIL_CONTEXT_OPTIONS, WORKSPACE);

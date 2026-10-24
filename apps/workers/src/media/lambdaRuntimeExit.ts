@@ -16,10 +16,20 @@
 const RUNTIME_API_VERSION = '2018-06-01';
 /** Ceiling on one POST to the local Runtime API (ms). */
 const POST_TIMEOUT_MS = 10_000;
+/** Time kept back from the handler's deadline for posting its outcome (ms); a local POST takes far less. */
+const POST_RESERVE_MS = 1_000;
 
 /** The slice of the Lambda context this needs; declared here because the renderer imports no AWS packages. */
 export interface InvocationContext {
   awsRequestId: string;
+  /** Time left before Lambda's own timeout kills the runtime (ms). */
+  getRemainingTimeInMillis?: () => number;
+}
+
+/** What the wrapped handler is told about its invocation. */
+export interface Invocation {
+  /** Epoch ms by which the handler must settle for its outcome to be posted; undefined when unknown. */
+  deadline?: number;
 }
 
 export interface ExitAfterEachInvocationOptions {
@@ -31,7 +41,7 @@ export interface ExitAfterEachInvocationOptions {
 
 /** Wraps `handler` so each invocation posts its own outcome to the Runtime API, then exits the runtime. */
 export function exitAfterEachInvocation(
-  handler: (event: unknown) => Promise<unknown>,
+  handler: (event: unknown, invocation: Invocation) => Promise<unknown>,
   { runtimeApi, fetchImpl, exit = code => process.exit(code) }: ExitAfterEachInvocationOptions = {}
 ) {
   return async (event: unknown, context: InvocationContext): Promise<void> => {
@@ -41,11 +51,14 @@ export function exitAfterEachInvocation(
       throw new Error('the publish thumbnail renderer runs only under the Lambda Runtime API');
     }
 
+    const remainingMs = context.getRemainingTimeInMillis?.();
+    const deadline = remainingMs === undefined ? undefined : Date.now() + remainingMs - POST_RESERVE_MS;
+
     let post: { kind: 'response' | 'error'; body: string; headers: Record<string, string> };
     try {
       post = {
         kind: 'response',
-        body: JSON.stringify(await handler(event)),
+        body: JSON.stringify(await handler(event, { deadline })),
         headers: { 'Content-Type': 'application/json' },
       };
     } catch (err) {

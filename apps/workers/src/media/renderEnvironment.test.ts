@@ -14,6 +14,7 @@ import {
   createRenderEnvironment,
   parseProcStat,
   procfsProcessTable,
+  RenderDeadlineError,
   RenderEnvironmentError,
   type ProcessEntry,
   type RenderWorkspace,
@@ -205,6 +206,27 @@ describe('createRenderEnvironment', () => {
     expect(processes.table.kill).toHaveBeenCalledWith(200);
     expect(readdirSync(scratchRoot)).toEqual([]);
     await expect(environment.run(async () => 'rendered')).resolves.toBe('rendered');
+  });
+
+  it('stops waiting for a render at the deadline, still kills its processes, and stays usable', async () => {
+    const processes = fakeProcesses(platform());
+    const environment = environmentWith(processes.table, 1_000);
+    // The teardown keeps its kill timeout plus a fixed margin; this leaves the render about 50 ms.
+    const deadline = Date.now() + 1_000 + 3_000 + 50;
+
+    const overrun = environment.run(
+      async () => {
+        processes.spawn(proc(200, SELF, 'chromium'));
+        return new Promise<string>(() => undefined);
+      },
+      { deadline }
+    );
+
+    await expect(overrun).rejects.toBeInstanceOf(RenderDeadlineError);
+    expect(processes.table.kill).toHaveBeenCalledWith(200);
+    expect(await processes.table.list()).toEqual(platform());
+    expect(readdirSync(scratchRoot)).toEqual([]);
+    await expect(environment.run(async () => 'rendered', { deadline: Date.now() + 60_000 })).resolves.toBe('rendered');
   });
 
   it('refuses a second render while one is running', async () => {

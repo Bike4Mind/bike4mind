@@ -1,6 +1,11 @@
-import { exitAfterEachInvocation } from './lambdaRuntimeExit';
+import { exitAfterEachInvocation, type Invocation } from './lambdaRuntimeExit';
 import { openLambdaChromiumContext, type OpenWorkspaceContext } from './launchLambdaChromium';
-import { createRenderEnvironment, procfsProcessTable, type RenderEnvironment } from './renderEnvironment';
+import {
+  createRenderEnvironment,
+  procfsProcessTable,
+  type RenderEnvironment,
+  type RenderWorkspace,
+} from './renderEnvironment';
 import { renderHtmlThumbnail, ThumbnailRenderTimeoutError } from './renderHtmlThumbnail';
 import {
   MAX_THUMBNAIL_DOCUMENT_BYTES,
@@ -42,9 +47,9 @@ export function createThumbnailRendererHandler({
   environment,
   loadDocument = fetchThumbnailDocument,
 }: ThumbnailRendererDeps) {
-  return async (event: unknown): Promise<ThumbnailRenderResponse> => {
+  return async (event: unknown, { deadline }: Invocation = {}): Promise<ThumbnailRenderResponse> => {
     const request = ThumbnailRenderRequestSchema.parse(event);
-    return environment.run(async (workspace): Promise<ThumbnailRenderResponse> => {
+    const render = async (workspace: RenderWorkspace): Promise<ThumbnailRenderResponse> => {
       const srcdoc = await loadDocument(request.documentUrl);
 
       let image: Buffer;
@@ -62,7 +67,8 @@ export function createThumbnailRendererHandler({
         throw new Error(`thumbnail image is ${image.length} bytes, over the ${MAX_THUMBNAIL_IMAGE_BYTES}-byte limit`);
       }
       return { status: 'rendered', imageBase64: image.toString('base64') };
-    });
+    };
+    return environment.run(render, { deadline });
   };
 }
 
