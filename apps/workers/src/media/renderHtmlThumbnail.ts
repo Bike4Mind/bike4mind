@@ -8,8 +8,10 @@ import type { BrowserContext, BrowserContextOptions } from 'playwright-core';
  * smoke run can pass Playwright's.
  *
  * Isolation, outermost first:
- *  - a separate function with no application credentials or permissions (infra/queues.ts);
- *  - a fresh browser context: no cookies, storage, credentials or service workers, downloads off;
+ *  - a separate function with no application credentials or permissions (infra/queues.ts), whose
+ *    execution environment serves one render only (lambdaRuntimeExit.ts);
+ *  - a fresh browser context on an empty per-render profile (renderEnvironment.ts): no cookies,
+ *    storage, credentials or service workers, downloads off;
  *  - every request is aborted unless it is a GET for one of `allowedScriptUrls` exactly (the
  *    blessed library scripts), WebSockets are closed, and WebRTC is removed from every frame;
  *  - the document runs in `<iframe sandbox="allow-scripts">` - an opaque origin that cannot
