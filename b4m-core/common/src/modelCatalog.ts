@@ -98,6 +98,17 @@ export type ToModelInfoIsTotal = Expect<
 >;
 
 /**
+ * Every reason discovery writes on its own refusal starts with this prefix, so a reader can tell a
+ * disable discovery invented from one a provider reported ("not entitled in this AWS account").
+ * The discovery service's promotion.ts builds its verdicts from it; the catalog merge reads it to
+ * decide whether an unpromoted row's disable is a placeholder curation may reclaim.
+ */
+export const DISCOVERY_VERDICT_PREFIX = 'discovered, ';
+
+export const isDiscoveryVerdict = (reason: unknown): reason is string =>
+  typeof reason === 'string' && reason.startsWith(DISCOVERY_VERDICT_PREFIX);
+
+/**
  * The record -> ModelInfo adapter: one place where every ModelInfo field a
  * catalog record does not carry gets its default. Each default degrades to the
  * visible, recoverable behavior rather than the silent or expensive one.

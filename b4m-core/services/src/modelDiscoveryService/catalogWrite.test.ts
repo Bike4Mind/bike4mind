@@ -3,8 +3,9 @@ import {
   ModelBackend,
   type IModelCatalogRow,
   type IModelCatalogRowInput,
+  type ModelInfo,
 } from '@bike4mind/common';
-import { resolveCatalogRecords } from '@bike4mind/llm-adapters';
+import { mergeCatalogWithDrops, resolveCatalogRecords } from '@bike4mind/llm-adapters';
 import { describe, expect, it } from 'vitest';
 import { testCredentials } from './__fixtures__/fakes';
 import { DISCOVERY_CONTRIBUTOR, planCatalogWrites, type CatalogWriteInput } from './catalogWrite';
@@ -186,10 +187,28 @@ describe('planCatalogWrites', () => {
           }
         : null;
 
+    /** The adapter literal the seven-id catalog carries for this model, once it is curated. */
+    const curated: ModelInfo = {
+      id: MODEL as ModelInfo['id'],
+      type: 'text',
+      name: 'Claude Opus 9',
+      backend: ModelBackend.Bedrock,
+      contextWindow: 200_000,
+      max_tokens: 8_192,
+      pricing: {},
+      can_stream: true,
+      supportsTools: true,
+      supportsImageVariation: false,
+      rank: 1,
+      description: 'the curated description',
+    };
+
     const bedrockRun = (
       inferenceTypes: string[],
       entitlement?: BedrockAvailability,
-      previous?: IModelCatalogRowInput
+      previous?: IModelCatalogRowInput,
+      // A priced run promotes on price; the unpriced ones pin what a run with no price in force does.
+      priced = true
     ): Partial<CatalogWriteInput> => ({
       contributions: [
         {
@@ -198,7 +217,7 @@ describe('planCatalogWrites', () => {
           records: normalizeBedrockModels({
             summaries: [summary(inferenceTypes)],
             availability: entitlement ? new Map([[MODEL, entitlement]]) : undefined,
-          }).map(record => ({ ...record, pricing: { inputPerMTok: 15, outputPerMTok: 75 } })),
+          }).map(record => (priced ? { ...record, pricing: { inputPerMTok: 15, outputPerMTok: 75 } } : record)),
         },
       ],
       coveredBackends: new Set<string>([ModelBackend.Bedrock]),
@@ -259,6 +278,223 @@ describe('planCatalogWrites', () => {
       expect(disabled.patch).toMatchObject({ autoDisabledReason: 'not entitled in this AWS account' });
 
       expect(plan(bedrockRun(['ON_DEMAND'], unentitled, disabled)).rows).toHaveLength(0);
+    });
+
+    it('serves a curated model disabled by a provider-declared disable', () => {
+      // Pins the availability half only: the Bedrock introduction already carries the curated name
+      // and claims no limits, so the name and window assertions would hold with or without a yield.
+      // The identity/limits side is pinned in mergeCatalog.test.ts.
+      const { rows } = plan(bedrockRun(['ON_DEMAND'], { ...available, authorizationStatus: 'NOT_AUTHORIZED' }));
+
+      const { models } = mergeCatalogWithDrops([curated], rows as unknown as IModelCatalogRow[], {
+        apiKeys: null,
+        isSelfHost: false,
+        bedrockReachable: true,
+      });
+
+      expect(models[0]).toMatchObject({
+        name: 'Claude Opus 9',
+        contextWindow: 200_000,
+        disabled: true,
+        disabledReason: 'not entitled in this AWS account',
+      });
+    });
+
+    it('keeps a provider-declared disable when a later run has no availability answer', () => {
+      const unentitled = { ...available, authorizationStatus: 'NOT_AUTHORIZED' };
+      const first = plan(bedrockRun(['ON_DEMAND'], unentitled, undefined, false));
+      expect(first.rows[0].patch).toMatchObject({
+        autoDisabled: true,
+        autoDisabledReason: 'not entitled in this AWS account',
+      });
+
+      // A throttled availability call returns null by contract, so this run only re-states the
+      // listing and promotion denies on price. Its verdict must not overwrite the provider's answer,
+      // which leaves nothing for the run to write.
+      const second = plan(bedrockRun(['ON_DEMAND'], undefined, first.rows[0], false));
+      expect(second.rows).toHaveLength(0);
+
+      // Nothing is rewritten, so run 1's row is the one the read path serves.
+      const { models } = mergeCatalogWithDrops([curated], first.rows as unknown as IModelCatalogRow[], {
+        apiKeys: null,
+        isSelfHost: false,
+        bedrockReachable: true,
+      });
+
+      expect(models[0]).toMatchObject({
+        disabled: true,
+        disabledReason: 'not entitled in this AWS account',
+      });
+    });
+
+    it.each(['priced', 'all'] as const)(
+      'keeps a discovered provider disable when availability is unknown under policy %s',
+      policy => {
+        const unentitled = { ...available, authorizationStatus: 'NOT_AUTHORIZED' };
+        const first = plan(bedrockRun(['ON_DEMAND'], unentitled, undefined, false));
+
+        const second = plan({
+          ...bedrockRun(['ON_DEMAND'], undefined, first.rows[0]),
+          policy,
+        });
+
+        expect(second.diff.every(entry => !entry.promoted)).toBe(true);
+        const held = asBase([...first.rows, ...second.rows]).get(MODEL)?.record;
+        expect(held).toMatchObject({
+          lifecycle: { status: 'discovered' },
+          autoDisabled: true,
+          autoDisabledReason: 'not entitled in this AWS account',
+        });
+      }
+    );
+
+    it('keeps a provider-credited legacy verdict disable when a newly trusted price arrives', () => {
+      const unentitled = { ...available, authorizationStatus: 'NOT_AUTHORIZED' };
+      const first = plan(bedrockRun(['ON_DEMAND'], unentitled, undefined, false)).rows[0];
+      const restamped = {
+        ...first,
+        patch: { ...first.patch, autoDisabledReason: 'discovered, awaiting price' },
+      };
+
+      const second = plan(bedrockRun(['ON_DEMAND'], undefined, restamped));
+
+      expect(second.diff.every(entry => !entry.promoted)).toBe(true);
+      expect(asBase([restamped, ...second.rows]).get(MODEL)?.record).toMatchObject({
+        lifecycle: { status: 'discovered' },
+        autoDisabled: true,
+        autoDisabledReason: 'discovered, awaiting price',
+      });
+    });
+
+    // The contributor is a supply credit, so the writer has to align it with the disable in force:
+    // the read path reads a provider credit as proof the provider is what disabled the model.
+    it('credits a run decision to discovery even when the same run cleared the provider disable', () => {
+      const unentitled = { ...available, authorizationStatus: 'NOT_AUTHORIZED' };
+      const first = plan({ ...bedrockRun(['ON_DEMAND'], unentitled, undefined, false), policy: 'manual' });
+      expect(first.rows[0].contributors).toContainEqual({ group: 'availability', source: 'bedrock' });
+
+      // The provider now says callable, and a manual policy's promotion refuses for its own reason.
+      const second = plan({ ...bedrockRun(['ON_DEMAND'], available, first.rows[0]), policy: 'manual' });
+
+      expect(second.rows[0].patch).toMatchObject({
+        autoDisabled: true,
+        autoDisabledReason: 'discovered, awaiting admin approval',
+      });
+      expect(second.rows[0].contributors).toContainEqual({ group: 'availability', source: 'discovery' });
+
+      const { models } = mergeCatalogWithDrops([curated], second.rows as unknown as IModelCatalogRow[], {
+        apiKeys: null,
+        isSelfHost: false,
+        bedrockReachable: true,
+      });
+
+      expect(models[0]).toMatchObject({ name: 'Claude Opus 9', contextWindow: 200_000 });
+      expect(models[0].disabled, "the credit is discovery's, so curation reclaims the disable").toBeFalsy();
+    });
+
+    it('persists a cleared legacy provider credit even when promotion restates the same verdict', () => {
+      const unentitled = { ...available, authorizationStatus: 'NOT_AUTHORIZED' };
+      const first = plan({ ...bedrockRun(['ON_DEMAND'], unentitled), policy: 'manual' }).rows[0];
+      const legacy = {
+        ...first,
+        patch: { ...first.patch, autoDisabledReason: 'discovered, awaiting admin approval' },
+      };
+
+      const next = plan({ ...bedrockRun(['ON_DEMAND'], available, legacy), policy: 'manual' });
+
+      expect(next.rows).toHaveLength(1);
+      expect(next.rows[0].patch).toEqual(legacy.patch);
+      expect(next.diff[0].changedKeys).toEqual(['contributors']);
+      expect(next.rows[0].contributors).toContainEqual({ group: 'availability', source: 'discovery' });
+      const { models } = mergeCatalogWithDrops([curated], next.rows as unknown as IModelCatalogRow[], {
+        apiKeys: null,
+        isSelfHost: false,
+        bedrockReachable: true,
+      });
+      expect(models[0].disabled).toBeFalsy();
+
+      const repeated = plan({ ...bedrockRun(['ON_DEMAND'], available, next.rows[0]), policy: 'manual' });
+      expect(repeated.rows).toHaveLength(0);
+    });
+
+    // No availability answer this run (a throttled call returns null by contract), so the disable
+    // in force stands; the row is written because the listing moved another field.
+    const relistedWithoutAnswer = (previous: IModelCatalogRowInput, policy?: CatalogWriteInput['policy']) =>
+      plan({
+        ...bedrockRun(['ON_DEMAND'], undefined, previous, false),
+        ...(policy && { policy }),
+        contributions: [
+          {
+            name: 'bedrock',
+            kind: 'provider',
+            records: normalizeBedrockModels({
+              summaries: [{ ...summary(['ON_DEMAND']), inputModalities: ['TEXT', 'IMAGE'] }],
+            }),
+          },
+        ],
+      });
+
+    it('keeps the provider credit on a row that writes a carried provider reason', () => {
+      const unentitled = { ...available, authorizationStatus: 'NOT_AUTHORIZED' };
+      const first = plan(bedrockRun(['ON_DEMAND'], unentitled, undefined, false));
+
+      const second = relistedWithoutAnswer(first.rows[0]);
+
+      expect(second.rows[0].patch).toMatchObject({
+        autoDisabled: true,
+        autoDisabledReason: 'not entitled in this AWS account',
+      });
+      expect(second.rows[0].contributors).toContainEqual({ group: 'availability', source: 'bedrock' });
+
+      const { models } = mergeCatalogWithDrops([curated], second.rows as unknown as IModelCatalogRow[], {
+        apiKeys: null,
+        isSelfHost: false,
+        bedrockReachable: true,
+      });
+
+      expect(models[0]).toMatchObject({ disabled: true, disabledReason: 'not entitled in this AWS account' });
+    });
+
+    // The row main's writer left when a throttled run restamped a provider disable to a verdict: the
+    // wording is discovery's but the credit is still the provider's (mergeCatalog.test.ts pins its merge).
+    it('keeps the provider credit on a verdict-worded disable this run did not decide', () => {
+      const unentitled = { ...available, authorizationStatus: 'NOT_AUTHORIZED' };
+      const first = plan(bedrockRun(['ON_DEMAND'], unentitled, undefined, false)).rows[0];
+      const legacy = { ...first, patch: { ...first.patch, autoDisabledReason: 'discovered, awaiting admin approval' } };
+
+      const next = relistedWithoutAnswer(legacy, 'manual');
+
+      expect(next.rows[0].patch).toMatchObject({ autoDisabled: true });
+      expect(next.rows[0].contributors).toContainEqual({ group: 'availability', source: 'bedrock' });
+
+      const { models } = mergeCatalogWithDrops([curated], next.rows as unknown as IModelCatalogRow[], {
+        apiKeys: null,
+        isSelfHost: false,
+        bedrockReachable: true,
+      });
+
+      expect(models[0]).toMatchObject({ disabled: true, disabledReason: 'discovered, awaiting admin approval' });
+    });
+
+    // Rows written before contributors existed carry no credit map; the merge then reads the wording.
+    it('leaves availability uncredited on a pre-contributor row that carries a provider reason', () => {
+      const unentitled = { ...available, authorizationStatus: 'NOT_AUTHORIZED' };
+      const { contributors: _omitted, ...preContributor } = plan(
+        bedrockRun(['ON_DEMAND'], unentitled, undefined, false)
+      ).rows[0];
+
+      const next = relistedWithoutAnswer(preContributor);
+
+      expect(next.rows[0].patch).toMatchObject({ autoDisabledReason: 'not entitled in this AWS account' });
+      expect(next.rows[0].contributors?.find(credit => credit.group === 'availability')).toBeUndefined();
+
+      const { models } = mergeCatalogWithDrops([curated], next.rows as unknown as IModelCatalogRow[], {
+        apiKeys: null,
+        isSelfHost: false,
+        bedrockReachable: true,
+      });
+
+      expect(models[0]).toMatchObject({ disabled: true, disabledReason: 'not entitled in this AWS account' });
     });
 
     it('leaves a manual disable in force when it lifts its own', () => {

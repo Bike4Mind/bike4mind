@@ -3,6 +3,7 @@ import {
   ModelRecordWrite,
   normalizeAggregatorKey,
   type FieldGroup,
+  type ICatalogContributor,
   type IModelCatalogRowInput,
   type IModelDiscoveryState,
   type ModelRecord,
@@ -328,6 +329,12 @@ export interface LifecyclePlanInput {
    * Absent for a model whose only row is the seed, which keeps backing it.
    */
   priorDiscoveryGroups?: ReadonlyMap<string, readonly FieldGroup[]>;
+  /**
+   * Contributors on that same superseded row, per model, kept by the graduation row it replaces.
+   * Blanket-crediting `discovery` would tell the read path discovery invented a disable a provider
+   * declared; the `availability` credit is the one the read path interprets.
+   */
+  priorContributors?: ReadonlyMap<string, readonly ICatalogContributor[]>;
   autoRemap: DiscoveryAutoRemapPolicy;
   operatorOwnedModelIds: ReadonlySet<string>;
   runStartedAt: Date;
@@ -464,7 +471,15 @@ export function planLifecycle(plannerInput: LifecyclePlanInput): LifecyclePlan {
       patch: record,
       ownedGroups,
       effectiveFrom: input.runStartedAt,
-      contributors: ownedGroups.map(group => ({ group, source: DISCOVERY_CONTRIBUTOR })),
+      // The same rule the folded branch applies: a group the superseded row already carried keeps
+      // the source credited for it.
+      contributors: ownedGroups.map(
+        group =>
+          input.priorContributors?.get(entry.modelId)?.find(credit => credit.group === group) ?? {
+            group,
+            source: DISCOVERY_CONTRIBUTOR,
+          }
+      ),
       note: `${ABSENCE_NOTE_PREFIX}${input.runStartedAt.toISOString()}`,
       runId: input.runId,
     });
