@@ -1,5 +1,10 @@
 import type { Request } from 'express';
-import { FirstRunEvents, type IUserAcquisition } from '@bike4mind/common';
+import {
+  FirstRunEvents,
+  isSyntheticIdentity,
+  parseSyntheticDomainList,
+  type IUserAcquisition,
+} from '@bike4mind/common';
 import { adminSettingsRepository, User, userRepository } from '@bike4mind/database';
 import type { AcquisitionTouches } from '@bike4mind/server-utils/lib/subscriptions/acquisition';
 import { readConsentedAcquisitionTouches } from './acquisition';
@@ -15,31 +20,9 @@ import { logEventSafe } from '@server/utils/analyticsLog';
 // this half feeds Overwatch, which can tell them apart, so it sends them marked with the synthetic
 // lane (lane.ts).
 
-export const SYNTHETIC_USERNAME_PREFIX = 'persona-';
-
-/** Lower-cased domains from a comma/whitespace separated list; leading `@` tolerated. */
-export function parseDomainList(raw: unknown): string[] {
-  if (typeof raw !== 'string') return [];
-  return raw
-    .split(/[\s,]+/)
-    .map(d => d.trim().toLowerCase().replace(/^@/, ''))
-    .filter(Boolean);
-}
-
-/** Whether an account is a test persona: the username prefix, or an email on (or under) a test domain. */
-export function isSyntheticIdentity(
-  identity: { username?: string | null; email?: string | null },
-  testDomains: readonly string[]
-): boolean {
-  if (identity.username?.toLowerCase().startsWith(SYNTHETIC_USERNAME_PREFIX)) return true;
-  const domain = identity.email?.split('@')[1]?.toLowerCase();
-  if (!domain) return false;
-  return testDomains.some(d => domain === d || domain.endsWith(`.${d}`));
-}
-
 async function syntheticTestDomains(): Promise<string[]> {
   try {
-    return parseDomainList(await adminSettingsRepository.getSettingsValue('syntheticUserEmailDomains'));
+    return parseSyntheticDomainList(await adminSettingsRepository.getSettingsValue('syntheticUserEmailDomains'));
   } catch {
     return [];
   }

@@ -801,7 +801,7 @@ export function PublishShareModal({
         <Typography level="title-lg" sx={{ mb: 0.5 }}>
           {phase === 'shared' ? (reopened ? 'Already shared' : 'Shared & ready') : 'Share'}
         </Typography>
-        <Typography level="body-sm" sx={{ mb: 2, opacity: 0.8 }} data-testid="publish-share-intro">
+        <Typography level="body-sm" textColor="text.secondary" sx={{ mb: 2 }} data-testid="publish-share-intro">
           {phase === 'shared'
             ? reopened
               ? 'This is already published. Change who can see it below - choosing Private stops this link from working for anyone else.'
@@ -834,7 +834,7 @@ export function PublishShareModal({
               />
             </RadioGroup>
             {mode === 'update' && (
-              <Typography level="body-xs" sx={{ mt: 0.75, opacity: 0.75 }}>
+              <Typography level="body-xs" textColor="text.tertiary" sx={{ mt: 0.75 }}>
                 {existing.versionsCount >= 2
                   ? `Currently ${existing.versionsCount} versions - your update becomes the newest, switchable on the published page.`
                   : 'Re-publishing adds a 2nd version and turns on the version switcher on the published page.'}
@@ -884,7 +884,7 @@ export function PublishShareModal({
                       </Typography>
                       <Typography
                         level="body-xs"
-                        sx={{ opacity: 0.75 }}
+                        textColor="text.tertiary"
                         data-testid={`publish-share-visibility-${o.value}-hint`}
                       >
                         {linkNote ? `${o.hint}. ${linkNote}` : o.hint}
@@ -919,7 +919,12 @@ export function PublishShareModal({
               // Update flow: the modal doesn't hydrate the existing gate, so this
               // control starts neutral. Reassure the owner their current setting
               // is untouched - handleCreate only sends a gate when gateTouched.
-              <Typography level="body-xs" sx={{ mb: 0.75, opacity: 0.75 }} data-testid="publish-share-gate-preserved">
+              <Typography
+                level="body-xs"
+                textColor="text.tertiary"
+                sx={{ mb: 0.75 }}
+                data-testid="publish-share-gate-preserved"
+              >
                 Any existing access setting is kept unless you change it here.
               </Typography>
             )}
@@ -960,7 +965,7 @@ export function PublishShareModal({
                         <Typography level="title-sm" sx={{ lineHeight: 1.2 }}>
                           {o.label}
                         </Typography>
-                        <Typography level="body-xs" sx={{ opacity: 0.75 }}>
+                        <Typography level="body-xs" textColor="text.tertiary">
                           {o.hint}
                         </Typography>
                       </Box>
@@ -982,7 +987,7 @@ export function PublishShareModal({
                   }}
                   slotProps={{ input: { 'data-testid': 'publish-share-gate-passphrase', autoComplete: 'off' } }}
                 />
-                <Typography level="body-xs" sx={{ mt: 0.5, opacity: 0.75 }}>
+                <Typography level="body-xs" textColor="text.tertiary" sx={{ mt: 0.5 }}>
                   Share it however you like - anyone with the link and passphrase can view. It&apos;s stored only as a
                   hash; to change it later, set a new one.
                 </Typography>
@@ -1000,7 +1005,7 @@ export function PublishShareModal({
                   }}
                   slotProps={{ input: { 'data-testid': 'publish-share-gate-domains' } }}
                 />
-                <Typography level="body-xs" sx={{ mt: 0.5, opacity: 0.75 }}>
+                <Typography level="body-xs" textColor="text.tertiary" sx={{ mt: 0.5 }}>
                   Viewers sign in (or sign up free) with a verified email on one of these domains.
                 </Typography>
               </Box>
@@ -1040,7 +1045,7 @@ export function PublishShareModal({
                 {/* FormHelperText, not Typography: only a FormHelperText child registers itself into
                     Joy's FormControl context and lands in the switch's aria-describedby, so a screen-
                     reader user actually hears this caveat instead of just the label. */}
-                <FormHelperText sx={{ opacity: 0.75 }}>
+                <FormHelperText sx={{ color: 'text.tertiary' }}>
                   Off by default. When off, the link still works for anyone you send it to - it just won&apos;t show up
                   in Google. Link previews in chat apps work either way.
                 </FormHelperText>
@@ -1067,7 +1072,7 @@ export function PublishShareModal({
             <ChatBubbleOutlineIcon fontSize="small" />
             <Box>
               <FormLabel sx={{ mb: 0 }}>Allow comments</FormLabel>
-              <Typography level="body-xs" sx={{ opacity: 0.75 }}>
+              <Typography level="body-xs" textColor="text.tertiary">
                 Viewers can leave feedback; you can AI-revise from it.
               </Typography>
             </Box>
@@ -1144,7 +1149,12 @@ export function PublishShareModal({
                     {storedGate === null ? 'Private link anyone can open, no sign-in' : 'Private link'}
                   </FormLabel>
                 </Box>
-                <Typography level="body-xs" sx={{ opacity: 0.75, mb: 1 }} data-testid="publish-share-token-hint">
+                <Typography
+                  level="body-xs"
+                  textColor="text.tertiary"
+                  sx={{ mb: 1 }}
+                  data-testid="publish-share-token-hint"
+                >
                   {storedGate === undefined
                     ? 'Check the access settings before sharing this private link.'
                     : isPublic

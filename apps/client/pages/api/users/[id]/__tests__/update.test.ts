@@ -109,6 +109,7 @@ vi.mock('@bike4mind/services', async orig => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
+  adminSettingsRepository: { findBySettingName: vi.fn() },
   realtimeConnectionRepository: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
   User: {
     findById: (...a: unknown[]) => {
@@ -159,6 +160,7 @@ vi.mock('@server/utils/adminAudit', async importOriginal => ({
 // The gate's own behaviour is covered in server/auth/stepUp.test.ts; here only where it applies.
 vi.mock('@server/auth/stepUp', () => ({ requireStepUp: mockRequireStepUp }));
 
+import { adminSettingsRepository } from '@bike4mind/database';
 import handler from '../update';
 
 const run = ({
@@ -578,6 +580,17 @@ describe('PUT /api/users/:id/update - self-service admin-only field discard', ()
     const json = res._getJSONData();
     expect(json.ignoredFields).toBeUndefined();
     expect(mockUpdateUser).toHaveBeenCalledWith(SELF.id, { name: 'New Name' }, expect.anything());
+  });
+
+  it('hands the self-service update the admin settings that decide a reserved username', async () => {
+    const { promise } = run({ user: SELF, userId: SELF.id, body: { name: 'New Name' } });
+    await promise;
+
+    expect(mockUpdateUser).toHaveBeenCalledWith(
+      SELF.id,
+      { name: 'New Name' },
+      { db: expect.objectContaining({ adminSettings: adminSettingsRepository }) }
+    );
   });
 
   it('reports an empty-body update with no admin-only fields sent as having none ignored', async () => {

@@ -1928,3 +1928,42 @@ describe.each(['list', 'grid'] as const)('PublishedArtifactsTabContent - focus a
     if (view === 'grid') expect(screen.getByTestId('published-artifact-settings-modal')).not.toBeNull();
   });
 });
+
+describe('PublishedArtifactsTabContent - helper text contrast', () => {
+  /** Helper text is dimmed by a theme text token, never `opacity`, which stacks on the token and drops it below AA. */
+  const expectTokenDimmed = (el: HTMLElement, token: 'secondary' | 'tertiary') => {
+    const style = getComputedStyle(el);
+    expect(['', '1']).toContain(style.opacity);
+    expect(style.color).toContain(`--joy-palette-text-${token}`);
+  };
+
+  it('dims the intro, pager and row settings helper text with a text token, not opacity', async () => {
+    usePublishedArtifactsView.setState({ view: 'list' });
+    mockList.mockResolvedValue(page([bundleRow], { total: 60 }));
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    expandRow('pub-1');
+
+    expectTokenDimmed(screen.getByText(/Everything you've published as a live link/), 'secondary');
+    expectTokenDimmed(within(screen.getByTestId('published-artifacts-pager')).getByText(/of 60/), 'tertiary');
+    const settings = screen.getByTestId('published-artifact-settings-pub-1');
+    expectTokenDimmed(within(settings).getByText(`0/${PUBLISH_TAGS_MAX}`), 'tertiary');
+    expectTokenDimmed(within(settings).getByText('Visibility'), 'tertiary');
+    expectTokenDimmed(within(settings).getByText('Comments'), 'tertiary');
+    expectTokenDimmed(screen.getByTestId('published-artifact-single-version-pub-1'), 'tertiary');
+  });
+
+  it('dims the empty-library message with a text token, not opacity', async () => {
+    mockList.mockResolvedValue(page([]));
+    renderTab();
+    expectTokenDimmed(await screen.findByTestId('published-artifacts-empty'), 'secondary');
+  });
+
+  it('dims the no-matches message with a text token, not opacity', async () => {
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    mockList.mockResolvedValue(page([]));
+    fireEvent.change(screen.getByTestId('published-artifacts-search'), { target: { value: 'nothing matches' } });
+    expectTokenDimmed(await screen.findByTestId('published-artifacts-no-matches'), 'secondary');
+  });
+});

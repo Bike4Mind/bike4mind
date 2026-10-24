@@ -456,3 +456,26 @@ describe('AccessGateEditor - a gate stored on a non-public page', () => {
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Gate removed - open to anyone with the link'));
   });
 });
+
+describe('AccessGateEditor - helper text contrast', () => {
+  /** Opacity stacks on the text token and drops helper text below AA, including inside the tinted show-once note. */
+  const expectTokenDimmed = (el: HTMLElement) => {
+    const style = getComputedStyle(el);
+    expect(['', '1']).toContain(style.opacity);
+    expect(style.color).toContain('--joy-palette-text-tertiary');
+  };
+
+  it('dims the live-gate passphrase hint with a text token, not opacity', () => {
+    renderEditor('public', { kind: 'passphrase' });
+    expectTokenDimmed(screen.getByText(/A passphrase is set\. It cannot be shown or recovered/));
+  });
+
+  it('dims the show-once note hint with a text token, not opacity', async () => {
+    renderEditor('public');
+    pickGate('passphrase');
+    fireEvent.change(screen.getByTestId('manage-gate-passphrase-input'), { target: { value: 'longenough1' } });
+    fireEvent.click(screen.getByTestId('manage-gate-apply'));
+    await waitFor(() => expect(screen.getByTestId('manage-gate-passphrase-justset')).not.toBeNull());
+    expectTokenDimmed(screen.getByText(/This will not be shown again/));
+  });
+});
