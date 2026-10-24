@@ -1,5 +1,7 @@
+import type { BrowserContextOptions } from 'playwright-core';
 import type { OpenThumbnailContext } from './renderHtmlThumbnail';
 import { THUMBNAIL_CHROMIUM_ARGS } from './renderHtmlThumbnail';
+import type { RenderWorkspace } from './renderEnvironment';
 
 /**
  * @sparticuz/chromium defaults that weaken page isolation and that a screenshot never needs. The
@@ -11,33 +13,36 @@ const DROPPED_SPARTICUZ_ARGS = new Set(['--disable-web-security', '--allow-runni
 /**
  * Environment the browser process inherits. Playwright passes the whole parent environment by
  * default, which on Lambda carries the function's role credentials; the browser needs none of
- * that, only what @sparticuz/chromium sets up for fonts and its libraries.
+ * that, only what @sparticuz/chromium sets up for fonts and its libraries. HOME and TMPDIR point
+ * into the render's own workspace instead.
  */
-const BROWSER_ENV_KEYS = ['HOME', 'TMPDIR', 'PATH', 'FONTCONFIG_PATH', 'LD_LIBRARY_PATH'];
+const BROWSER_ENV_KEYS = ['PATH', 'FONTCONFIG_PATH', 'LD_LIBRARY_PATH'];
+
+/** Opens the render's browser context inside its per-render workspace (renderEnvironment.ts). */
+export type OpenWorkspaceContext = (
+  options: BrowserContextOptions,
+  workspace: RenderWorkspace
+) => ReturnType<OpenThumbnailContext>;
 
 /**
  * Launch the Lambda-packaged Chromium (Amazon Linux only; see infra/queues.ts for why both packages
- * ship unbundled) and open one context for a thumbnail render. Imported lazily so nothing else that
- * loads this module pays for, or needs, the browser packages.
+ * ship unbundled) on the workspace's empty profile and open the render's context. Closing the
+ * context closes the browser. Imported lazily so nothing else that loads this module pays for, or
+ * needs, the browser packages.
  */
-export const openLambdaChromiumContext: OpenThumbnailContext = async options => {
+export const openLambdaChromiumContext: OpenWorkspaceContext = async (options, workspace) => {
   const [{ chromium: playwright }, { default: chromium }] = await Promise.all([
     import('playwright-core'),
     import('@sparticuz/chromium'),
   ]);
-  const browser = await playwright.launch({
+  const context = await playwright.launchPersistentContext(workspace.userDataDir, {
+    ...options,
     args: [...chromium.args.filter(arg => !DROPPED_SPARTICUZ_ARGS.has(arg)), ...THUMBNAIL_CHROMIUM_ARGS],
     executablePath: await chromium.executablePath(),
     headless: true,
-    env: browserEnv(),
+    env: { ...browserEnv(), HOME: workspace.tmpDir, TMPDIR: workspace.tmpDir },
   });
-  try {
-    const context = await browser.newContext(options);
-    return { context, close: () => browser.close() };
-  } catch (err) {
-    await browser.close().catch(() => undefined);
-    throw err;
-  }
+  return { context, close: () => context.close() };
 };
 
 function browserEnv(): Record<string, string> {

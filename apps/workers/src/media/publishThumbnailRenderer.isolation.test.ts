@@ -17,8 +17,11 @@ const MEDIA_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ENTRY = path.join(MEDIA_DIR, 'publishThumbnailRenderer.ts');
 /** Packages the renderer may load: the browser, the encoder, and schema validation. Nothing reads config. */
 const ALLOWED_PACKAGES = new Set(['playwright-core', '@sparticuz/chromium', 'sharp', 'zod']);
-/** The only module that may read the process environment: it copies an explicit allowlist into the browser. */
-const MAY_READ_ENV = new Set(['launchLambdaChromium.ts']);
+/**
+ * The only modules that may read the process environment: one copies an explicit allowlist into the
+ * browser, the other reads the local Runtime API address it posts each outcome to.
+ */
+const MAY_READ_ENV = new Set(['launchLambdaChromium.ts', 'lambdaRuntimeExit.ts']);
 const BUILTINS = new Set(builtinModules);
 
 function importsOf(file: string): string[] {
@@ -66,8 +69,10 @@ describe('publish thumbnail renderer isolation', () => {
   it('imports nothing beyond its siblings and the browser, encoder and schema packages', () => {
     expect(graph.violations).toEqual([]);
     expect(graph.files).toEqual([
+      'lambdaRuntimeExit.ts',
       'launchLambdaChromium.ts',
       'publishThumbnailRenderer.ts',
+      'renderEnvironment.ts',
       'renderHtmlThumbnail.ts',
       'thumbnailRendererContract.ts',
     ]);
@@ -81,9 +86,11 @@ describe('publish thumbnail renderer isolation', () => {
     }
   });
 
-  it('reads the process environment only to build the browser allowlist', () => {
+  it('reads the process environment only for the browser allowlist and the Runtime API address', () => {
     const readers = graph.files.filter(file => /process\.env/.test(readFileSync(path.join(MEDIA_DIR, file), 'utf8')));
     expect(readers.filter(file => !MAY_READ_ENV.has(file))).toEqual([]);
+    const runtimeExit = readFileSync(path.join(MEDIA_DIR, 'lambdaRuntimeExit.ts'), 'utf8');
+    expect(runtimeExit.match(/process\.env(?:\.\w+|\[[^\]]*\])?/g)).toEqual(['process.env.AWS_LAMBDA_RUNTIME_API']);
   });
 
   it('would catch a forbidden import', () => {
