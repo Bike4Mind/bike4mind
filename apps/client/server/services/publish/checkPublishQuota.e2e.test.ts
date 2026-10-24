@@ -14,7 +14,8 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
 
 // Against a real database, so the aggregation pipeline itself is under test: a mocked aggregate
 // cannot show that page count is no longer enforced, that an owner with no rows reads as zero
-// usage, or that soft-deleted and overwritten rows stay out of the byte sum.
+// usage, that soft-deleted and overwritten rows stay out of the byte sum, or which archived
+// versions count.
 
 let mongoServer: MongoMemoryServer;
 
@@ -44,7 +45,18 @@ interface PageOverrides {
   slug?: string;
   bytes?: number;
   deletedAt?: Date | null;
+  sha256Index?: string;
+  versions?: ReturnType<typeof version>[];
 }
+
+/** A version-history entry; `indexBytes` left out is an entry recorded before it was tracked. */
+const version = (sha256Index: string, indexBytes?: number) => ({
+  publishedAt: new Date('2026-10-01T00:00:00.000Z'),
+  publishedBy: OWNER,
+  size: { totalBytes: indexBytes ?? 1024, fileCount: 1 },
+  sha256Index,
+  ...(indexBytes === undefined ? {} : { indexBytes }),
+});
 
 let seq = 0;
 const page = (over: PageOverrides = {}) => {
@@ -62,6 +74,8 @@ const page = (over: PageOverrides = {}) => {
     storageKeyPrefix: '',
     manifest: [],
     size: { totalBytes: over.bytes ?? 1024, fileCount: 1 },
+    sha256Index: over.sha256Index,
+    versions: over.versions ?? [],
     deletedAt: over.deletedAt ?? null,
   };
 };
@@ -156,6 +170,8 @@ describe('checkInPlaceRewriteQuota (real database)', () => {
     slug: SLUG,
     size: { totalBytes: PAGE_BYTES },
   });
+  /** The page once rewritten to new content, with no version history to archive. */
+  const next = (bytes: number) => ({ bytes, fileCount: 1, sha256Index: 'sha-next', versions: [] });
 
   it('allows growth that lands exactly on the cap and refuses one byte more, counting only the delta', async () => {
     // The rest of the owner's pages leave exactly 500 bytes of room for this page to grow into.
@@ -164,13 +180,13 @@ describe('checkInPlaceRewriteQuota (real database)', () => {
 
     const exact = await checkInPlaceRewriteQuota({
       artifact: rewritten(),
-      next: { bytes: PAGE_BYTES + room, fileCount: 1 },
+      next: next(PAGE_BYTES + room),
     });
     expect(exact).toEqual({ ok: true });
 
     const over = await checkInPlaceRewriteQuota({
       artifact: rewritten(),
-      next: { bytes: PAGE_BYTES + room + 1, fileCount: 1 },
+      next: next(PAGE_BYTES + room + 1),
     });
     if (over.ok) throw new Error('expected growth past the cap to be refused');
     expect(over.status).toBe(413);
@@ -187,16 +203,12 @@ describe('checkInPlaceRewriteQuota (real database)', () => {
   it('allows a rewrite that does not grow the page, even for an owner already over the cap', async () => {
     await seed([page({ slug: SLUG, bytes: PAGE_BYTES }), page({ bytes: USER_CAP })]);
 
-    expect(
-      await checkInPlaceRewriteQuota({ artifact: rewritten(), next: { bytes: PAGE_BYTES, fileCount: 1 } })
-    ).toEqual({ ok: true });
-    expect(
-      await checkInPlaceRewriteQuota({ artifact: rewritten(), next: { bytes: PAGE_BYTES - 1, fileCount: 1 } })
-    ).toEqual({ ok: true });
+    expect(await checkInPlaceRewriteQuota({ artifact: rewritten(), next: next(PAGE_BYTES) })).toEqual({ ok: true });
+    expect(await checkInPlaceRewriteQuota({ artifact: rewritten(), next: next(PAGE_BYTES - 1) })).toEqual({ ok: true });
 
     const grows = await checkInPlaceRewriteQuota({
       artifact: rewritten(),
-      next: { bytes: PAGE_BYTES + 1, fileCount: 1 },
+      next: next(PAGE_BYTES + 1),
     });
     expect(grows.ok).toBe(false);
   });
@@ -209,7 +221,7 @@ describe('checkInPlaceRewriteQuota (real database)', () => {
 
     const result = await checkInPlaceRewriteQuota({
       artifact: rewritten({ tier: 'organization', scopeId: ORG }),
-      next: { bytes: PAGE_BYTES + 1, fileCount: 1 },
+      next: next(PAGE_BYTES + 1),
     });
 
     if (result.ok) throw new Error('expected the full org to refuse the growth');
@@ -222,9 +234,144 @@ describe('checkInPlaceRewriteQuota (real database)', () => {
     const result = await checkInPlaceRewriteQuota({
       isAdmin: true,
       artifact: rewritten(),
-      next: { bytes: PAGE_BYTES * 2, fileCount: 1 },
+      next: next(PAGE_BYTES * 2),
     });
 
     expect(result).toEqual({ ok: true });
+  });
+
+  it('counts archiving the replaced version as growth, so a same-size revision is refused at the cap', async () => {
+    const versions = [version('sha-current', 400)];
+    await seed([
+      page({ slug: SLUG, bytes: PAGE_BYTES, sha256Index: 'sha-current', versions }),
+      page({ bytes: USER_CAP - PAGE_BYTES }),
+    ]);
+
+    const result = await checkInPlaceRewriteQuota({
+      artifact: { ...rewritten(), sha256Index: 'sha-current', versions },
+      next: { ...next(PAGE_BYTES), versions: [...versions, version('sha-next', 400)] },
+    });
+
+    if (result.ok) throw new Error('expected the archived version to push the owner past the cap');
+    expect(result.details).toEqual({
+      scope: 'user',
+      limit: USER_CAP,
+      current: USER_CAP - PAGE_BYTES,
+      attempted: USER_CAP + 400,
+    });
+  });
+
+  it('allows a rewrite to unchanged content, which archives nothing new, for an owner over the cap', async () => {
+    const versions = [version('sha-earlier', 300), version('sha-current', 400)];
+    await seed([
+      page({ slug: SLUG, bytes: PAGE_BYTES, sha256Index: 'sha-current', versions }),
+      page({ bytes: USER_CAP }),
+    ]);
+
+    const result = await checkInPlaceRewriteQuota({
+      artifact: { ...rewritten(), sha256Index: 'sha-current', versions },
+      next: { bytes: PAGE_BYTES, fileCount: 1, sha256Index: 'sha-current', versions },
+    });
+
+    expect(result).toEqual({ ok: true });
+  });
+
+  it('allows a restore that only swaps which archived version is current, for an owner over the cap', async () => {
+    const versions = [version('sha-earlier', 300), version('sha-current', 400)];
+    await seed([
+      page({ slug: SLUG, bytes: PAGE_BYTES, sha256Index: 'sha-current', versions }),
+      page({ bytes: USER_CAP }),
+    ]);
+
+    const result = await checkInPlaceRewriteQuota({
+      artifact: { ...rewritten(), sha256Index: 'sha-current', versions },
+      next: { bytes: PAGE_BYTES - 400 + 300, fileCount: 1, sha256Index: 'sha-earlier', versions },
+    });
+
+    expect(result).toEqual({ ok: true });
+  });
+});
+
+describe('archived versions in usage (real database)', () => {
+  it('counts archived versions, but not the current one or entries recorded before indexBytes', async () => {
+    await seed([
+      page({
+        bytes: 1000,
+        sha256Index: 'sha-current',
+        versions: [version('sha-a', 300), version('sha-legacy'), version('sha-current', 500)],
+      }),
+    ]);
+
+    const fits = await checkPublishQuota({ ownerId: OWNER, incoming: { bytes: USER_CAP - 1300, fileCount: 1 } });
+    expect(fits).toEqual({ ok: true });
+
+    const over = await checkPublishQuota({ ownerId: OWNER, incoming: { bytes: USER_CAP - 1300 + 1, fileCount: 1 } });
+    if (over.ok) throw new Error('expected the archived version to count toward the user byte cap');
+    expect(over.details.current).toBe(1300);
+  });
+
+  it('counts archived versions on the org ladder too', async () => {
+    // Another member's org page leaves 1,000 bytes of room only once its archived version counts.
+    await seed([
+      page({
+        ownerId: 'member-2',
+        tier: 'organization',
+        scopeId: ORG,
+        bytes: ORG_CAP - 1300,
+        sha256Index: 'sha-current',
+        versions: [version('sha-a', 300), version('sha-current', 1000)],
+      }),
+    ]);
+    const publish = (bytes: number) =>
+      checkPublishQuota({ ownerId: OWNER, orgScopeId: ORG, incoming: { bytes, fileCount: 1 } });
+
+    expect(await publish(1000)).toEqual({ ok: true });
+
+    const over = await publish(1001);
+    if (over.ok) throw new Error('expected the archived version to count toward the org byte cap');
+    expect(over.details).toMatchObject({ scope: 'org', current: ORG_CAP - 1000 });
+  });
+
+  it("leaves a soft-deleted page's archived versions out", async () => {
+    await seed([
+      page({
+        bytes: 1000,
+        sha256Index: 'sha-current',
+        versions: [version('sha-a', USER_CAP), version('sha-current', 1000)],
+        deletedAt: new Date(),
+      }),
+    ]);
+
+    const result = await checkPublishQuota({ ownerId: OWNER, incoming: { bytes: USER_CAP, fileCount: 1 } });
+
+    expect(result).toEqual({ ok: true });
+  });
+
+  it("takes the replaced page's archived versions out with its row, for the caller to add back", async () => {
+    await seed([
+      page({
+        slug: 'mine',
+        bytes: 1000,
+        sha256Index: 'sha-current',
+        versions: [version('sha-a', 300), version('sha-current', 1000)],
+      }),
+      page({ bytes: USER_CAP - 1300 }),
+    ]);
+    const replacing = { tier: 'user', scopeId: OWNER, slug: 'mine' } as const;
+
+    const fits = await checkPublishQuota({
+      ownerId: OWNER,
+      incoming: { bytes: 1000, fileCount: 1, archivedBytes: 300 },
+      replacing,
+    });
+    expect(fits).toEqual({ ok: true });
+
+    const over = await checkPublishQuota({
+      ownerId: OWNER,
+      incoming: { bytes: 1000, fileCount: 1, archivedBytes: 301 },
+      replacing,
+    });
+    if (over.ok) throw new Error('expected the archived bytes to count');
+    expect(over.details).toMatchObject({ current: USER_CAP - 1300, attempted: USER_CAP + 1 });
   });
 });

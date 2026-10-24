@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { createHash } from 'node:crypto';
 import { PUBLISH_QUOTAS, TooManyRequestsError } from '@bike4mind/common';
 
 /**
@@ -374,5 +375,120 @@ describe('restore - daily publish allowance', () => {
     expect(m.refund).toHaveBeenCalledTimes(1);
     expect(recordWrites()).toHaveLength(0);
     expect(lockReleased()).toBe(true);
+  });
+});
+
+// Each revise/restore archives the replaced index.html under versions/, and those archived bytes
+// count toward the storage quota (see checkInPlaceRewriteQuota).
+describe('archived versions', () => {
+  const sha = (html: string) => createHash('sha256').update(html).digest('hex');
+  const pushedVersions = () =>
+    (recordWrites()[0][1] as { $push: { versions: { $each: Array<Record<string, unknown>> } } }).$push.versions.$each;
+  const archiveOf = (versionSha: string) =>
+    m.upload.mock.calls.find(c => c[1] === `${PREFIX}versions/${versionSha}.html`)?.[0] as Buffer | undefined;
+  /** Storage holds CURRENT at index.html and `html` archived under `versionSha`. */
+  const archivedVersionIs = (versionSha: string, html: string) =>
+    m.download.mockImplementation((key: string) =>
+      Promise.resolve(Buffer.from(key.endsWith(`versions/${versionSha}.html`) ? html : CURRENT))
+    );
+
+  it('revise records indexBytes on the version it archives and on the new one', async () => {
+    m.findOneLean.mockResolvedValue({ ...artifact(), versions: [{ sha256Index: 'sha-prev', indexBytes: 50 }] });
+
+    const res = await run(reviseHandler);
+
+    expect(res.statusCode).toBe(200);
+    expect(pushedVersions()).toEqual([
+      expect.objectContaining({ sha256Index: 'sha-current', indexBytes: CURRENT.length }),
+      expect.objectContaining({ sha256Index: sha(BIGGER), indexBytes: BIGGER.length }),
+    ]);
+    expect(archiveOf('sha-current')?.length).toBe(CURRENT.length);
+  });
+
+  it('restore records indexBytes on the version it archives and on a restored copy history lacks', async () => {
+    m.findOneLean.mockResolvedValue({ ...artifact(), versions: [{ sha256Index: 'sha-prev', indexBytes: 50 }] });
+
+    const res = await run(restoreHandler);
+
+    expect(res.statusCode).toBe(200);
+    expect(pushedVersions()).toEqual([
+      expect.objectContaining({ sha256Index: 'sha-current', indexBytes: CURRENT.length }),
+      expect.objectContaining({ sha256Index: sha(BIGGER), indexBytes: BIGGER.length }),
+    ]);
+    expect(archiveOf('sha-current')?.length).toBe(CURRENT.length);
+  });
+
+  it('revise refuses a revision that shrinks the bundle once archiving the current version passes the cap', async () => {
+    const versions = [
+      { sha256Index: 'sha-prev', indexBytes: 50 },
+      { sha256Index: 'sha-current', indexBytes: CURRENT.length },
+    ];
+    m.findOneLean.mockResolvedValue({ ...artifact(), versions });
+    modelReturns(SMALLER);
+    // The page's footprint grows by the revised index.html: the bundle shrinks, the archive gains CURRENT.
+    const footprint = CURRENT.length + ASSET_BYTES + 50;
+
+    otherPagesLeave(SMALLER.length, footprint);
+    expect((await run(reviseHandler)).statusCode).toBe(200);
+
+    vi.clearAllMocks();
+    otherPagesLeave(SMALLER.length - 1, footprint);
+    const res = await run(reviseHandler);
+
+    expect(res.statusCode).toBe(413);
+    expect(res.body).toMatchObject({ code: 'quota_bytes_exceeded', details: { attempted: USER_CAP + 1 } });
+    expect(indexWrites()).toHaveLength(0);
+    expect(recordWrites()).toHaveLength(0);
+  });
+
+  it('revise allows a revision that leaves the page unchanged, even for an owner over the cap', async () => {
+    const page = { ...artifact(), sha256Index: sha(CURRENT) };
+    m.findOneLean.mockResolvedValue({ ...page, versions: [{ sha256Index: sha(CURRENT), indexBytes: CURRENT.length }] });
+    modelReturns(CURRENT);
+    m.aggregate.mockResolvedValue([{ totalBytes: USER_CAP * 2 }]);
+
+    const res = await run(reviseHandler);
+
+    expect(res.statusCode).toBe(200);
+    expect(m.aggregate).not.toHaveBeenCalled();
+    expect(pushedVersions()).toEqual([]);
+  });
+
+  it('restore refuses when the version it archives passes the cap and the restored one was never counted', async () => {
+    // The restored version predates indexBytes, so its archived copy counted 0 before and frees nothing.
+    m.findOneLean.mockResolvedValue({
+      ...artifact(),
+      previousVersionMeta: { sha256Index: sha(SMALLER) },
+      versions: [{ sha256Index: sha(SMALLER) }, { sha256Index: 'sha-current', indexBytes: CURRENT.length }],
+    });
+    archivedVersionIs(sha(SMALLER), SMALLER);
+    otherPagesLeave(SMALLER.length - 1);
+
+    const res = await run(restoreHandler);
+
+    expect(res.statusCode).toBe(413);
+    expect(res.body).toMatchObject({ code: 'quota_bytes_exceeded', details: { attempted: USER_CAP + 1 } });
+    expect(indexWrites()).toHaveLength(0);
+    expect(recordWrites()).toHaveLength(0);
+    expect(m.consume).not.toHaveBeenCalled();
+  });
+
+  it('restore that swaps which archived version is current adds nothing, even for an owner over the cap', async () => {
+    m.findOneLean.mockResolvedValue({
+      ...artifact(),
+      previousVersionMeta: { sha256Index: sha(SMALLER) },
+      versions: [
+        { sha256Index: sha(SMALLER), indexBytes: SMALLER.length },
+        { sha256Index: 'sha-current', indexBytes: CURRENT.length },
+      ],
+    });
+    archivedVersionIs(sha(SMALLER), SMALLER);
+    m.aggregate.mockResolvedValue([{ totalBytes: USER_CAP * 2 }]);
+
+    const res = await run(restoreHandler);
+
+    expect(res.statusCode).toBe(200);
+    expect(m.aggregate).not.toHaveBeenCalled();
+    expect(pushedVersions()).toEqual([]);
   });
 });

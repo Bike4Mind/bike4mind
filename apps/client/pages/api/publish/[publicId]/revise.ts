@@ -4,7 +4,7 @@ import * as cheerio from 'cheerio';
 import { getPublishedArtifactsStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { enqueuePublishThumbnail } from '@bike4mind/server-utils/utils/publishThumbnails';
 import { PublishedArtifact, Annotation } from '@bike4mind/database';
-import type { IMessage, PublishScopeTier, PublishVisibility } from '@bike4mind/common';
+import type { ArtifactVersionMeta, IMessage, PublishScopeTier, PublishVisibility } from '@bike4mind/common';
 import {
   validateBundle,
   buildPublishUrlPath,
@@ -56,7 +56,7 @@ interface ReviseArtifactLean {
   manifest: Array<{ path: string; size: number; mimeType: string; sha256: string }>;
   publishedAt: Date;
   source: { kind: 'bundle' | 'reply' | 'fabfile' };
-  versions?: Array<{ sha256Index: string }>;
+  versions?: Array<{ sha256Index: string; indexBytes?: number }>;
 }
 
 interface OpenAnnotationLean {
@@ -227,47 +227,23 @@ const handler = baseApi().post(async (req, res) => {
       f.path === 'index.html' ? { ...f, size: revisedBuf.length, sha256: newIndexSha } : f
     );
     const totalBytes = newManifest.reduce((sum, f) => sum + f.size, 0);
-
-    // Storage quota on the net change: only index.html is rewritten, so the page grows by the
-    // revised index.html's size minus the current one's (see checkInPlaceRewriteQuota).
-    const quota = await checkInPlaceRewriteQuota({
-      isAdmin: req.user.isAdmin,
-      artifact,
-      next: { bytes: totalBytes, fileCount: newManifest.length },
-    });
-    if (!quota.ok) {
-      return res.status(quota.status).json({ error: quota.error, code: quota.code, details: quota.details });
-    }
-
-    // Preserve the current version's CONTENT before overwriting so a bad
+    // The current version's CONTENT, archived below before overwriting so a bad
     // revision can be rolled back (previousVersionMeta only stores metadata).
-    await storage
-      .upload(Buffer.from(currentHtml, 'utf-8'), `${artifact.storageKeyPrefix}versions/${currentSha}.html`, {
-        ContentType: 'text/html',
-      })
-      .catch(() =>
-        req.logger.warn(`[REVISE] ${publicId} failed to archive previous version ${currentSha.slice(0, 12)}`)
-      );
-
-    // ── Write the new index.html in place + recompute version metadata. ──
-    await storage.upload(revisedBuf, `${artifact.storageKeyPrefix}index.html`, { ContentType: 'text/html' });
+    const archivedBuf = Buffer.from(currentHtml, 'utf-8');
     const now = new Date();
 
     // Record the version, deduped by content sha and backfilling the version being
     // replaced if history doesn't yet contain it (see restore.ts for rationale).
+    // `indexBytes` is the index.html an entry has archived, or will archive once replaced.
     const haveShas = new Set((artifact.versions ?? []).map(v => v.sha256Index));
-    const versionsToPush: Array<{
-      publishedAt: Date;
-      publishedBy: string;
-      size: typeof artifact.size;
-      sha256Index: string;
-    }> = [];
+    const versionsToPush: ArtifactVersionMeta[] = [];
     if (!haveShas.has(currentSha)) {
       versionsToPush.push({
         publishedAt: artifact.publishedAt,
         publishedBy: artifact.lastPublishedBy ?? artifact.ownerId,
         size: artifact.size,
         sha256Index: currentSha,
+        indexBytes: archivedBuf.length,
       });
       haveShas.add(currentSha);
     }
@@ -277,8 +253,36 @@ const handler = baseApi().post(async (req, res) => {
         publishedBy: String(req.user.id),
         size: { totalBytes, fileCount: newManifest.length },
         sha256Index: newIndexSha,
+        indexBytes: revisedBuf.length,
       });
     }
+
+    // Storage quota on the net change (see checkInPlaceRewriteQuota): index.html is rewritten and
+    // the current one is archived, so a revision that changes the page grows it even if no larger.
+    const quota = await checkInPlaceRewriteQuota({
+      isAdmin: req.user.isAdmin,
+      artifact,
+      next: {
+        bytes: totalBytes,
+        fileCount: newManifest.length,
+        sha256Index: newIndexSha,
+        versions: [...(artifact.versions ?? []), ...versionsToPush],
+      },
+    });
+    if (!quota.ok) {
+      return res.status(quota.status).json({ error: quota.error, code: quota.code, details: quota.details });
+    }
+
+    await storage
+      .upload(archivedBuf, `${artifact.storageKeyPrefix}versions/${currentSha}.html`, {
+        ContentType: 'text/html',
+      })
+      .catch(() =>
+        req.logger.warn(`[REVISE] ${publicId} failed to archive previous version ${currentSha.slice(0, 12)}`)
+      );
+
+    // Write the new index.html in place, then the version metadata.
+    await storage.upload(revisedBuf, `${artifact.storageKeyPrefix}index.html`, { ContentType: 'text/html' });
 
     await PublishedArtifact.updateOne(
       { publicId, deletedAt: null },

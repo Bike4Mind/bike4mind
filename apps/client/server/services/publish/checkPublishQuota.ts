@@ -9,7 +9,8 @@ import { PUBLISH_QUOTAS, type PublishScopeTier } from '@bike4mind/common';
  * aggregate, bounding storage cost. There is no page-count cap; abuse is
  * handled per page by report and takedown.
  *
- * Aggregate-on-read: we sum `size.totalBytes` over active rows for the owner,
+ * Aggregate-on-read: we sum each active row's footprint for the owner - its
+ * `size.totalBytes` plus its archived versions (see `archivedVersionBytes`) -
  * exclude the artifact being overwritten (a re-publish replaces bytes, it does
  * not add them), then check that the incoming publish still fits. See the
  * overshoot caveat on `PUBLISH_QUOTAS`.
@@ -27,8 +28,12 @@ export interface PublishQuotaInput {
   /** Org id when publishing into an organization scope - drives the org ladder. */
   orgScopeId?: string | null;
   isAdmin?: boolean;
-  /** Footprint of the publish being attempted. */
-  incoming: { bytes: number; fileCount: number };
+  /**
+   * Footprint of the publish being attempted. `archivedBytes` is what the page's archived versions
+   * will occupy once it lands (`archivedVersionBytes` over its history after this publish): they
+   * are counted here because `replacing` takes the whole row, archived versions included, out of usage.
+   */
+  incoming: { bytes: number; fileCount: number; archivedBytes?: number };
   /**
    * The artifact this publish overwrites in place, if any. Its current
    * footprint is excluded from usage so a same-key re-publish isn't double
@@ -51,7 +56,40 @@ export type PublishQuotaResult =
       details: { scope: 'user' | 'org'; limit: number; current: number; attempted: number };
     };
 
-/** Sum active artifact bytes for a match filter, excluding one key. */
+/** A version-history entry, as far as storage is concerned. */
+export interface VersionBytes {
+  sha256Index: string;
+  indexBytes?: number;
+}
+
+/**
+ * Bytes a page's archived versions occupy: the `indexBytes` of every history entry except the
+ * current one, whose bytes are the live index.html already counted in `size.totalBytes`.
+ * Must stay in sync with ARCHIVED_VERSION_BYTES, the same sum inside the usage aggregation.
+ */
+export function archivedVersionBytes(
+  versions: readonly VersionBytes[] | undefined,
+  currentSha: string | undefined
+): number {
+  // Entries recorded before indexBytes was tracked count 0, so no owner is pushed over a cap retroactively.
+  return (versions ?? []).reduce((sum, v) => (v.sha256Index === currentSha ? sum : sum + (v.indexBytes ?? 0)), 0);
+}
+
+// archivedVersionBytes as a per-row aggregation expression, so usage stays a single query.
+const ARCHIVED_VERSION_BYTES = {
+  $reduce: {
+    input: { $ifNull: ['$versions', []] },
+    initialValue: 0,
+    in: {
+      $add: [
+        '$$value',
+        { $cond: [{ $eq: ['$$this.sha256Index', '$sha256Index'] }, 0, { $ifNull: ['$$this.indexBytes', 0] }] },
+      ],
+    },
+  },
+};
+
+/** Sum active artifact footprints (bundle plus archived versions) for a match filter, excluding one key. */
 async function aggregateUsage(
   match: Record<string, unknown>,
   replacing?: { tier: PublishScopeTier; scopeId: string; slug: string } | null
@@ -63,7 +101,12 @@ async function aggregateUsage(
   }
   const [row] = await PublishedArtifact.aggregate<{ totalBytes: number }>([
     { $match: filter },
-    { $group: { _id: null, totalBytes: { $sum: '$size.totalBytes' } } },
+    {
+      $group: {
+        _id: null,
+        totalBytes: { $sum: { $add: [{ $ifNull: ['$size.totalBytes', 0] }, ARCHIVED_VERSION_BYTES] } },
+      },
+    },
   ]);
   return { totalBytes: row?.totalBytes ?? 0 };
 }
@@ -78,16 +121,19 @@ function fmtBytes(bytes: number): string {
 function evaluate(
   scope: 'user' | 'org',
   usage: QuotaUsage,
-  incoming: { bytes: number; fileCount: number },
+  incoming: PublishQuotaInput['incoming'],
   caps: { maxTotalBytes: number }
 ): Extract<PublishQuotaResult, { ok: false }> | null {
-  const projectedBytes = usage.totalBytes + incoming.bytes;
+  const archivedBytes = incoming.archivedBytes ?? 0;
+  const pageBytes = incoming.bytes + archivedBytes;
+  const projectedBytes = usage.totalBytes + pageBytes;
   if (projectedBytes > caps.maxTotalBytes) {
+    const versionsNote = archivedBytes > 0 ? ' including its earlier versions' : '';
     return {
       ok: false,
       status: 413,
       code: 'quota_bytes_exceeded',
-      error: `Publish storage quota reached: this publish (${fmtBytes(incoming.bytes)}) would exceed your ${scope} limit of ${fmtBytes(
+      error: `Publish storage quota reached: this publish (${fmtBytes(pageBytes)}${versionsNote}) would exceed your ${scope} limit of ${fmtBytes(
         caps.maxTotalBytes
       )} (${fmtBytes(usage.totalBytes)} already used). Delete an existing page to free space.`,
       details: { scope, limit: caps.maxTotalBytes, current: usage.totalBytes, attempted: projectedBytes },
@@ -120,35 +166,38 @@ export async function checkPublishQuota(input: PublishQuotaInput): Promise<Publi
 
 export interface InPlaceRewriteQuotaInput {
   isAdmin?: boolean;
-  /** The live page being rewritten: its owner is charged, and its current size is the baseline. */
+  /** The live page being rewritten: its owner is charged, and its current footprint is the baseline. */
   artifact: {
     ownerId: string;
     tier: PublishScopeTier;
     scopeId: string;
     slug: string;
     size: { totalBytes: number };
+    sha256Index?: string;
+    versions?: readonly VersionBytes[];
   };
-  /** The page's footprint once rewritten. */
-  next: { bytes: number; fileCount: number };
+  /** The page once rewritten: its bundle, its new current version and its whole version history. */
+  next: { bytes: number; fileCount: number; sha256Index: string; versions: readonly VersionBytes[] };
 }
 
 /**
- * Quota for rewriting a live page's bundle in place (revise, restore), counting the net change:
- * the page's current bytes leave usage and its new total comes in, exactly as a same-slug
- * re-publish is counted. A rewrite that does not grow the page adds nothing, so it is allowed
- * even for an owner already over a cap (a restore to a smaller version only frees space).
- *
- * Only live pages' current bundles are counted, here as on every publish path: the prior
- * index.html each revise/restore/re-publish archives under `versions/` is not part of usage.
+ * Quota for rewriting a live page in place (revise, restore), counting the net change in its
+ * footprint, exactly as a same-slug re-publish is counted: the bundle plus the archived versions.
+ * Replacing the current version archives its index.html, so a rewrite to new content grows the
+ * page by the new index.html even when the bundle does not grow. A rewrite that does not grow the
+ * footprint (unchanged content, or a restore that only swaps which archived version is current)
+ * is allowed even for an owner already over a cap.
  */
 export async function checkInPlaceRewriteQuota(input: InPlaceRewriteQuotaInput): Promise<PublishQuotaResult> {
   const { artifact, next } = input;
-  if (next.bytes <= artifact.size.totalBytes) return { ok: true };
+  const nextArchivedBytes = archivedVersionBytes(next.versions, next.sha256Index);
+  const currentFootprint = artifact.size.totalBytes + archivedVersionBytes(artifact.versions, artifact.sha256Index);
+  if (next.bytes + nextArchivedBytes <= currentFootprint) return { ok: true };
   return checkPublishQuota({
     ownerId: artifact.ownerId,
     orgScopeId: artifact.tier === 'organization' ? artifact.scopeId : null,
     isAdmin: input.isAdmin,
-    incoming: next,
+    incoming: { bytes: next.bytes, fileCount: next.fileCount, archivedBytes: nextArchivedBytes },
     replacing: { tier: artifact.tier, scopeId: artifact.scopeId, slug: artifact.slug },
   });
 }
