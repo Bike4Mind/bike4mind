@@ -12,7 +12,8 @@ import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
 import { claimPendingAction } from '@server/utils/pendingActionExecutor';
 import { loadFabFileAttachment, resolvePendingActionTarget } from '@server/utils/pendingActionTarget';
 import { assertCustomMcpEnabled } from '@server/mcpConnections/customMcpAccess';
-import { customMcpToolHost } from '@server/mcpConnections/customMcpToolHost';
+import { customMcpToolHost, isCustomToolStillOffered } from '@server/mcpConnections/customMcpToolHost';
+import { describeCustomCallFailure } from '@server/mcpConnections/describeRemoteMcpError';
 import { downloadAttachmentUrl } from '@server/utils/downloadAttachmentUrl';
 import { getSelectedRepositoriesForMcp } from '@bike4mind/server-utils/integrations/github/github-repo-helper';
 import { JIRA_UPLOAD_ATTACHMENT, CONFLUENCE_UPLOAD_ATTACHMENT } from '@bike4mind/mcp/atlassian/constants';
@@ -125,6 +126,12 @@ const handler = baseApi().post(async (req, res) => {
     const { connectionId, displayName } = pendingAction.customConnector;
     // Before the claim, so a disabled feature leaves the action in place.
     await assertCustomMcpEnabled(user);
+    // Also before the claim: a connection or tool that is no longer usable would fail after the
+    // action was consumed, and the user could not retry.
+    if (!(await isCustomToolStillOffered(user.id, connectionId, pendingAction.tool))) {
+      logger.warn('[Web MCP Confirm] Custom connector tool is no longer available', { questId });
+      return res.status(409).json({ error: `${displayName} no longer offers this action.` });
+    }
     if (!(await claimPendingAction(questId, pendingAction.ts))) {
       logger.warn('[Web MCP Confirm] Pending action already claimed', { questId });
       return res.status(409).json({ error: 'This action has already been processed.' });
@@ -149,11 +156,8 @@ const handler = baseApi().post(async (req, res) => {
         tool: pendingAction.tool,
         error: error instanceof Error ? error.message : String(error),
       });
-      // invokeRemoteMcp errors carry fixed user-facing text, never the server's own.
-      return res.status(200).json({
-        success: false,
-        message: error instanceof Error ? error.message : 'Action failed',
-      });
+      // Never the server's own text: describeCustomCallFailure maps to fixed lines.
+      return res.status(200).json({ success: false, message: describeCustomCallFailure(error) });
     }
   }
 

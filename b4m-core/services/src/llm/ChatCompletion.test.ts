@@ -8638,6 +8638,90 @@ describe('ChatCompletionProcess', () => {
       }
     );
 
+    it.each([
+      { disableUserIntegrations: undefined, expected: false },
+      { disableUserIntegrations: true, expected: true },
+    ])(
+      'request disableUserIntegrations=$disableUserIntegrations -> buildMcpTools disableUserIntegrations=$expected',
+      async ({ disableUserIntegrations, expected }) => {
+        const buildMcpToolsSpy = vi
+          .spyOn(ToolBuilder.prototype, 'buildMcpTools')
+          .mockResolvedValue({ mcpToolsByServer: {}, serverAgentConfig: {}, customMcpToolNames: new Set() });
+        buildMcpToolsSpy.mockClear();
+        try {
+          await runWithBuildToolsSpy({ message: 'Compare the smartphones', disableUserIntegrations });
+          expect(buildMcpToolsSpy.mock.calls[0]?.[0]?.disableUserIntegrations).toBe(expected);
+        } finally {
+          buildMcpToolsSpy.mockRestore();
+        }
+      }
+    );
+
+    describe('custom connector pending actions', () => {
+      const request = {
+        toolName: 'create',
+        args: { title: 'x' },
+        connectionId: 'c1',
+        slug: 'acme',
+        displayName: 'Acme',
+        urlHost: 'mcp.acme.test',
+      };
+
+      // Runs a turn with buildMcpTools stubbed and returns the callback the turn handed it.
+      const captureOnPendingAction = async (sessionOwnerId: string) => {
+        const buildMcpToolsSpy = vi
+          .spyOn(ToolBuilder.prototype, 'buildMcpTools')
+          .mockResolvedValue({ mcpToolsByServer: {}, serverAgentConfig: {}, customMcpToolNames: new Set() });
+        buildMcpToolsSpy.mockClear();
+        try {
+          mockSession.userId = sessionOwnerId;
+          await runWithBuildToolsSpy({ message: 'Create the thing' });
+          const onPendingAction = buildMcpToolsSpy.mock.calls[0]?.[0]?.onPendingAction;
+          if (!onPendingAction) throw new Error('buildMcpTools received no onPendingAction');
+          return onPendingAction;
+        } finally {
+          buildMcpToolsSpy.mockRestore();
+        }
+      };
+
+      const savedPendingActions = () =>
+        [...mockDb.quests.updateIfUnfinished.mock.calls, ...mockDb.quests.update.mock.calls]
+          .map(([quest]) => quest?.pendingAction)
+          .filter(Boolean);
+
+      it('persists the action with its connector ref on the quest when the session owner is acting', async () => {
+        const onPendingAction = await captureOnPendingAction('user1');
+        mockDb.quests.updateIfUnfinished.mockClear();
+        mockDb.quests.update.mockClear();
+
+        await onPendingAction(request);
+
+        expect(savedPendingActions()).toEqual([
+          {
+            tool: 'create',
+            params: { title: 'x' },
+            ts: expect.any(Number),
+            customConnector: {
+              connectionId: 'c1',
+              slug: 'acme',
+              displayName: 'Acme',
+              urlHost: 'mcp.acme.test',
+            },
+          },
+        ]);
+      });
+
+      it('refuses and persists nothing when a teammate in a shared session is acting', async () => {
+        const onPendingAction = await captureOnPendingAction('someone-else');
+        mockDb.quests.updateIfUnfinished.mockClear();
+        mockDb.quests.update.mockClear();
+
+        await expect(onPendingAction(request)).rejects.toThrow(/notebook owner/);
+
+        expect(savedPendingActions()).toEqual([]);
+      });
+    });
+
     it('treats an empty allowedAgents allowlist as "no delegation" rather than "delegation to nothing"', async () => {
       // Pre-fix, `allowedAgents: []` would still trip the `!= null` predicate and
       // expose `delegate_to_agent` to the model, but the resulting store had zero

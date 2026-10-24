@@ -40,6 +40,18 @@ export interface AgentMcpTools {
 }
 
 /**
+ * A run's `approvedTools` plus the read-only custom tools it may call without a card. Both the
+ * top-level run and a dispatched child seed their lists through here; anything not listed (every
+ * custom write) stays `needs_approval` under `classifyToolPermission`.
+ */
+export function withReadOnlyCustomTools(
+  approvedTools: readonly string[] | undefined,
+  readOnlyCustomToolNames: readonly string[]
+): string[] {
+  return [...new Set([...(approvedTools ?? []), ...readOnlyCustomToolNames])];
+}
+
+/**
  * Load MCP tool definitions for Agent Mode (agent_executor) from DB-cached
  * schemas. Mirrors ToolBuilder.buildMcpTools for the executor, which has no
  * client-supplied server list, so it always loads ALL enabled servers for the

@@ -675,6 +675,12 @@ describe('subagent permission-list producer hops in agentExecutor', () => {
     expect(baseFields![0]).toContain('deniedTools: [...deniedTools],');
   });
 
+  it('seeds the top-level run with the read-only custom tools its loader returned', () => {
+    expect(source).toContain(
+      'const approvedTools = withReadOnlyCustomTools(execution.approvedTools, readOnlyCustomToolNames);'
+    );
+  });
+
   it('hands the run lists to the DAG dispatcher', () => {
     const call = source.match(/makeDagDispatcher\(\{[\s\S]*?\n {4}\}\);/);
     expect(call, 'makeDagDispatcher call site not found in agentExecutor.ts').not.toBeNull();
@@ -682,9 +688,9 @@ describe('subagent permission-list producer hops in agentExecutor', () => {
   });
 
   it('gates a dispatched child on its own row, in both its tool deps and its orchestrator', () => {
-    expect(source).toContain(
-      'const childToolPermissions = { approvedTools: child.approvedTools ?? [], deniedTools: child.deniedTools ?? [] };'
-    );
+    expect(source).toContain('const childToolPermissions = {');
+    expect(source).toContain('approvedTools: withReadOnlyCustomTools(child.approvedTools, readOnlyCustomToolNames),');
+    expect(source).toContain('deniedTools: child.deniedTools ?? [],');
     const childDeps = dispatchPart.match(toolDepsRe);
     expect(childDeps, 'dispatched child toolDeps literal not found in agentExecutor.ts').not.toBeNull();
     expect(childDeps![0]).toContain('toolPermissions: childToolPermissions,');

@@ -64,7 +64,6 @@ import { premiumWorkspaceDeniedTools } from '@server/premium-generated/premiumWo
 import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';
 import { buildMcpEnvVariables } from '@server/utils/mcpEnv';
 import { LLMEvents, TelemetryEvents } from '@server/utils/eventBus';
-import { customMcpToolHost } from '@server/mcpConnections/customMcpToolHost';
 import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
 
 /**
@@ -228,7 +227,6 @@ export const getDefaultChatCompletionOptions = (): DefaultChatCompletionOptions 
     loadSystemPromptById,
     summarizeSession: summarizeSession,
     contextSummarizeSession: contextSummarizeSession,
-    customMcp: customMcpToolHost,
     getMcpClient: async (
       mcpServer: IMcpServerDocument
     ): Promise<{

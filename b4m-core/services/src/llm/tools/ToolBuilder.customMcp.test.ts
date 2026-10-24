@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ToolBuilder, type ToolBuilderConfig } from './ToolBuilder';
-import type { CustomMcpToolHost } from './customMcpTools';
+import { CUSTOM_MCP_DATA_NOTICE, type CustomMcpToolHost } from './customMcpTools';
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), updateMetadata: vi.fn() };
 
@@ -40,10 +40,15 @@ const builderWith = (customMcp: CustomMcpToolHost | undefined, builtIns: unknown
     customMcp,
   } as unknown as ToolBuilderConfig);
 
-const run = (builder: ToolBuilder, onPendingAction = vi.fn(async () => undefined)) =>
+const run = (
+  builder: ToolBuilder,
+  onPendingAction = vi.fn(async () => undefined),
+  extra: { requestedMcpServers?: string[]; disableUserIntegrations?: boolean } = {}
+) =>
   builder.buildMcpTools({
     enableMCPServer: true,
     requestedMcpServers: undefined,
+    ...extra,
     defaultAdminSettings: {},
     userMessage: '',
     logger,
@@ -93,6 +98,41 @@ describe('ToolBuilder buildMcpTools - custom connectors', () => {
     const { mcpToolsByServer } = await run(builderWith(host as never, [builtIn]));
 
     expect(Object.keys(mcpToolsByServer)).toEqual(['notion']);
+  });
+
+  it('offers no custom tool when user integrations are disabled, even with no promptMode', async () => {
+    const host = { listConnections: vi.fn(async () => [connection]), callTool: vi.fn() };
+    const { mcpToolsByServer, customMcpToolNames } = await run(builderWith(host as never), undefined, {
+      disableUserIntegrations: true,
+    });
+
+    expect(mcpToolsByServer).toEqual({});
+    expect(customMcpToolNames.size).toBe(0);
+    expect(host.listConnections).not.toHaveBeenCalled();
+  });
+
+  it('still offers custom tools when the composer sends an empty built-in server list', async () => {
+    const host = { listConnections: vi.fn(async () => [connection]), callTool: vi.fn() };
+    const { mcpToolsByServer } = await run(builderWith(host as never), undefined, { requestedMcpServers: [] });
+
+    expect(mcpToolsByServer.acme.map(t => t.name)).toEqual(['acme__search', 'acme__create']);
+  });
+
+  it('adds the connector-output-is-data notice to the tool prompt only when custom tools are offered', async () => {
+    const build = async (hasCustomMcpTools: boolean) =>
+      (
+        await builderWith(undefined).buildToolPrompt({
+          mcpTools: [{ name: 'acme__search' }],
+          hasCustomMcpTools,
+          sessionId: 's1',
+          message: 'hi',
+          logger,
+          processStartTime: Date.now(),
+        } as never)
+      )?.content;
+
+    expect(await build(true)).toContain(CUSTOM_MCP_DATA_NOTICE);
+    expect(await build(false)).not.toContain(CUSTOM_MCP_DATA_NOTICE);
   });
 
   it('offers nothing custom without a host', async () => {

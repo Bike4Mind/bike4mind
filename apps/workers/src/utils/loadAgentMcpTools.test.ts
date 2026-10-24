@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
-import { loadAgentMcpTools } from './loadAgentMcpTools';
+import { classifyToolPermission } from '@bike4mind/common';
+import { loadAgentMcpTools, withReadOnlyCustomTools } from './loadAgentMcpTools';
 
 const logger = { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() } as any;
 const getMcpClient = vi.fn(async () => ({
@@ -214,12 +215,36 @@ describe('loadAgentMcpTools - custom connectors', () => {
     expect(readOnlyCustomToolNames).toEqual(['acme__search']);
   });
 
-  it('seeds nothing when the org requires approval for every call', async () => {
-    const { readOnlyCustomToolNames } = await run({
+  it('seeds nothing when the org requires approval for every call, but still offers the tools', async () => {
+    const { mcpToolsByServer, readOnlyCustomToolNames } = await run({
       listConnections: vi.fn(async () => [offer({ requireApprovalForAll: true })]),
       callTool: vi.fn(),
     });
     expect(readOnlyCustomToolNames).toEqual([]);
+    expect(mcpToolsByServer.acme.map(t => t.name)).toEqual(['acme__search', 'acme__create']);
+  });
+
+  it('does not seed a tool that claims read-only and destructive at once', async () => {
+    const { mcpToolsByServer, readOnlyCustomToolNames } = await run({
+      listConnections: vi.fn(async () => [
+        offer({
+          tools: [tool('wipe', { readOnlyHint: true, destructiveHint: true }), tool('search', { readOnlyHint: true })],
+        }),
+      ]),
+      callTool: vi.fn(),
+    });
+    expect(mcpToolsByServer.acme.map(t => t.name)).toEqual(['acme__wipe', 'acme__search']);
+    expect(readOnlyCustomToolNames).toEqual(['acme__search']);
+  });
+
+  it('leaves a custom write needing approval and a seeded read allowed under the shared classifier', async () => {
+    const { readOnlyCustomToolNames } = await run({
+      listConnections: vi.fn(async () => [offer()]),
+      callTool: vi.fn(),
+    });
+    const approved = withReadOnlyCustomTools([], readOnlyCustomToolNames);
+    expect(classifyToolPermission('acme__create', approved, [])).toBe('needs_approval');
+    expect(classifyToolPermission('acme__search', approved, [])).toBe('allowed');
   });
 
   it('keeps built-in tools when the custom host fails', async () => {
@@ -238,5 +263,19 @@ describe('loadAgentMcpTools - custom connectors', () => {
       { userId: 'u1', enableMCPServer: true }
     );
     expect(Object.keys(mcpToolsByServer)).toEqual(['atlassian']);
+  });
+});
+
+describe('withReadOnlyCustomTools', () => {
+  it('unions the run list with the read-only names, without duplicates', () => {
+    expect(withReadOnlyCustomTools(['mcp__x', 'acme__search'], ['acme__search', 'acme__list'])).toEqual([
+      'mcp__x',
+      'acme__search',
+      'acme__list',
+    ]);
+  });
+
+  it('treats a missing run list as empty', () => {
+    expect(withReadOnlyCustomTools(undefined, ['acme__search'])).toEqual(['acme__search']);
   });
 });

@@ -61,7 +61,8 @@ export function isReadOnlyCustomTool(tool: Pick<IMcpConnectionTool, 'annotations
   return tool.annotations?.readOnlyHint === true && tool.annotations.destructiveHint !== true;
 }
 
-const isOffered = (tool: IMcpConnectionTool, connection: CustomMcpConnectionOffer) =>
+/** Whether a connection currently offers this tool to a model: reviewed, enabled and allowed by policy. */
+export const isCustomToolOffered = (tool: IMcpConnectionTool, connection: CustomMcpConnectionOffer) =>
   tool.enabled && tool.state === 'active' && (connection.allowWriteTools || isReadOnlyCustomTool(tool));
 
 /** `<slug>__<tool>`, with the tool part hashed down when the id would pass the provider's 64-char limit. */
@@ -82,7 +83,7 @@ export async function loadCustomMcpConnections(
   let remaining = maxTools;
   const kept: CustomMcpConnectionOffer[] = [];
   for (const connection of await host.listConnections(userId)) {
-    const tools = connection.tools.filter(tool => isOffered(tool, connection));
+    const tools = connection.tools.filter(tool => isCustomToolOffered(tool, connection));
     if (tools.length > remaining) {
       logger.warn(`[MCP] Custom tool cap of ${maxTools} reached; dropping tools from ${connection.slug}`);
     }
@@ -110,7 +111,8 @@ function flattenContent(content: unknown[] | undefined): string {
 const attr = (value: string) => value.replace(/["<>\r\n]/g, '');
 
 function wrapUntrusted(connection: CustomConnectorPendingRef, body: string): string {
-  const safe = body.replace(/<\/untrusted_tool_result/gi, '<\\/untrusted_tool_result');
+  // Both tags: a spoofed opening tag could claim another connector's provenance mid-body.
+  const safe = body.replace(/<(\/?)untrusted_tool_result/gi, '<\\$1untrusted_tool_result');
   return `<untrusted_tool_result connector="${attr(connection.slug)}" host="${attr(connection.urlHost)}">\n${safe}\n</untrusted_tool_result>`;
 }
 
@@ -126,7 +128,7 @@ export function generateCustomMcpTools(
     urlHost: connection.urlHost,
   };
   return connection.tools
-    .filter(tool => isOffered(tool, connection))
+    .filter(tool => isCustomToolOffered(tool, connection))
     .map(tool => {
       const name = customMcpToolId(connection.slug, tool.name);
       const needsApproval = connection.requireApprovalForAll || !isReadOnlyCustomTool(tool);

@@ -241,7 +241,7 @@ import { resolveExecutionMementoGates } from '@server/utils/resolveExecutionMeme
 import { getFirstIterationSkillsPreamble } from '@workers/utils/getFirstIterationSkillsPreamble';
 import { getMcpClientAdapter } from '@server/utils/getMcpClientAdapter';
 import { customMcpToolHost } from '@server/mcpConnections/customMcpToolHost';
-import { loadAgentMcpTools, type AgentMcpTools } from '@workers/utils/loadAgentMcpTools';
+import { loadAgentMcpTools, withReadOnlyCustomTools, type AgentMcpTools } from '@workers/utils/loadAgentMcpTools';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { ApiGatewayManagementApiClient, PostToConnectionCommand } from '@aws-sdk/client-apigatewaymanagementapi';
 import type { Context, SQSBatchResponse, SQSEvent } from 'aws-lambda';
@@ -1434,7 +1434,7 @@ async function processExecution(
     // Load current approved/denied tools for permission checking. In-process children are gated
     // on these same lists (`toolPermissions` below); dispatched children and DAG nodes get a
     // copy on their row.
-    const approvedTools = [...new Set([...(execution.approvedTools ?? []), ...readOnlyCustomToolNames])];
+    const approvedTools = withReadOnlyCustomTools(execution.approvedTools, readOnlyCustomToolNames);
     const deniedTools = [...(execution.deniedTools ?? [])];
 
     const subagentTracker: ServerSubagentTracker = {
@@ -3914,7 +3914,7 @@ async function processSubagentDispatch(
     // A dispatched child (subagent or DAG node) cannot pause for approval, so its tool calls
     // are refused unless the parent's lists, copied onto its row at creation, allow them.
     const childToolPermissions = {
-      approvedTools: [...new Set([...(child.approvedTools ?? []), ...readOnlyCustomToolNames])],
+      approvedTools: withReadOnlyCustomTools(child.approvedTools, readOnlyCustomToolNames),
       deniedTools: child.deniedTools ?? [],
     };
     const toolDeps: ToolBuilderDeps = {

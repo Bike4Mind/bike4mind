@@ -927,7 +927,8 @@ const PendingActionButtonsContent: FC<PendingActionButtonsProps> = ({ pendingAct
           {JSON.stringify(pendingAction.params, null, 2)}
         </Box>
       )}
-      <GitHubProjectActionTarget tool={pendingAction.tool} params={pendingAction.params} />
+      {/* display_* params are injected by the built-in wrappers; on a custom action they are model-supplied. */}
+      {!customConnector && <GitHubProjectActionTarget tool={pendingAction.tool} params={pendingAction.params} />}
       <Stack direction="row" spacing={1}>
         <Button
           size="sm"

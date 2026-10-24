@@ -172,7 +172,9 @@ export function stripServerOnlyArgs(args: unknown): unknown {
  * OpenAI requires 'properties' on object schemas - MCP tools like current_user
  * return { type: 'object' } without it, causing 400 errors.
  */
-export function normalizeToolParameters(rest: Record<string, unknown>): ICompletionOptionTools['toolSchema']['parameters'] {
+export function normalizeToolParameters(
+  rest: Record<string, unknown>
+): ICompletionOptionTools['toolSchema']['parameters'] {
   const rawParameters = rest?.input_schema ?? rest?.inputSchema ?? rest?.parameters;
   if (isPlainObject(rawParameters)) {
     const properties = isPlainObject(rawParameters.properties)

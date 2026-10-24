@@ -3243,7 +3243,13 @@ export class ChatCompletionProcess {
         logger,
         processStartTime,
         quest,
+        disableUserIntegrations: userIntegrationsDisabled,
         onPendingAction: async ({ toolName, args, ...customConnector }) => {
+          // The pending action is quest-scoped but the connection is the acting user's, and only the
+          // session owner may confirm: a teammate's write could never run and would show their connector.
+          if (session.userId !== this.user.id) {
+            throw new Error('Custom connector actions that need approval can only be run by the notebook owner.');
+          }
           quest.pendingAction = { tool: toolName, params: args, ts: Date.now(), customConnector };
           await saveQuest(quest);
         },

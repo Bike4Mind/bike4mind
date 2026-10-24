@@ -1,5 +1,5 @@
 import { mcpConnectionRepository } from '@bike4mind/database';
-import type { CustomMcpToolHost } from '@bike4mind/services/llm';
+import { isCustomToolOffered, type CustomMcpToolHost } from '@bike4mind/services/llm';
 import { evaluateConnectionPolicy, resolveCustomMcpContext } from './customMcpAccess';
 import { invokeRemoteMcp } from './invokeRemoteMcp';
 
@@ -36,3 +36,18 @@ export const customMcpToolHost: CustomMcpToolHost = {
   callTool: ({ connectionId, userId, toolName, args, approved }) =>
     invokeRemoteMcp({ action: 'callTool', connectionId, userId, toolName, args, approved }),
 };
+
+/**
+ * Whether the user's connection still offers this tool (enabled, connected, reviewed, policy allows
+ * it). The confirm route asks before it claims an approved action, so a deterministic refusal leaves
+ * the card in place instead of consuming it.
+ */
+export async function isCustomToolStillOffered(
+  userId: string,
+  connectionId: string,
+  toolName: string
+): Promise<boolean> {
+  const connection = (await customMcpToolHost.listConnections(userId)).find(c => c.connectionId === connectionId);
+  const tool = connection?.tools.find(candidate => candidate.name === toolName);
+  return Boolean(connection && tool && isCustomToolOffered(tool, connection));
+}

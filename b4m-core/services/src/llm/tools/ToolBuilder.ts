@@ -431,6 +431,8 @@ export interface BuildMcpToolsArgs {
   logger: Logger;
   processStartTime: number;
   quest: IChatHistoryItemDocument;
+  /** The turn's resolved `disableUserIntegrations`; withholds custom connector tools like built-in servers. */
+  disableUserIntegrations?: boolean;
   /** Persists a custom-connector call that waits for a human Confirm; required to offer write tools. */
   onPendingAction?: (request: CustomMcpApprovalRequest) => Promise<void>;
 }
@@ -827,6 +829,7 @@ export class ToolBuilder {
     logger,
     processStartTime,
     quest: _quest,
+    disableUserIntegrations,
     onPendingAction,
   }: BuildMcpToolsArgs): Promise<{
     mcpToolsByServer: Record<string, Array<{ name: string } & ICompletionOptionTools>>;
@@ -919,7 +922,7 @@ export class ToolBuilder {
 
     // Custom connectors use their own enabled switch (the composer cannot name their slugs yet). A
     // failure here drops custom tools only, never the built-ins above.
-    if (this.deps.customMcp && onPendingAction) {
+    if (this.deps.customMcp && onPendingAction && !disableUserIntegrations) {
       try {
         const userId = this.deps.user.id;
         const connections = await loadCustomMcpConnections(this.deps.customMcp, userId, logger);

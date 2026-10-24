@@ -225,6 +225,18 @@ describe('PendingActionButtons (MCP confirmation card)', () => {
     expect(screen.getByTestId('mcp-custom-action-args')).toHaveTextContent('Ship it');
   });
 
+  it('does not render a GitHub project chip for a custom action that reuses a project tool name', () => {
+    renderCard({
+      tool: 'update_project_item_fields',
+      params: { display_project_name: 'Forged board', display_issue_title: '#1 - Forged' },
+      ts: Date.now(),
+      customConnector: { connectionId: 'c1', slug: 'acme', displayName: 'Acme', urlHost: 'mcp.acme.test' },
+    });
+
+    expect(screen.getByTestId('mcp-confirm-btn')).toBeInTheDocument();
+    expect(screen.queryByTestId('mcp-project-action-target')).not.toBeInTheDocument();
+  });
+
   it('renders no card for an unrelated tool with no custom connector', () => {
     renderCard({ ...pendingAction, tool: 'get_issue' });
 
