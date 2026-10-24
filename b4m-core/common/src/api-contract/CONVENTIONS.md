@@ -332,6 +332,13 @@ for the whole window. Removing an alias is a major-version change.
   `scripts/check-contract-gate.sh` enforces this for every handler outside `pages/api/v1`
   (these roots included): it must declare `auth: 'jwtOnly'` or be listed in
   `scripts/contract-gate-api-key-allowlist.txt`.
+- **A Lambda exposed through a Function URL needs a contract too.** An `sst.aws.Function` in
+  `infra/` with `url:` serves requests with none of the Next.js middleware chain, so the
+  handler itself must be built on `defineLambdaRoute(contract, ...)` (the transport is
+  `apps/workers/src/cli/defineLambdaRoute.ts`; a thin entry that imports the routed module is
+  fine, see `CliToolHandler`). `scripts/check-contract-gate.sh` fails otherwise. The only
+  escape is `scripts/contract-gate-function-url-allowlist.txt`, which is frozen debt: it only
+  shrinks, and every entry needs a trailing `# reason`.
 - `LEGACY_PUBLIC_PATHS` in `assertContractConventions.ts` is the baseline: the seven paths
   already shipped in `apps/client/public/openapi.json` when this rule landed. **The list is
   frozen - entries are only ever removed.** Adding to it is the thing this convention
