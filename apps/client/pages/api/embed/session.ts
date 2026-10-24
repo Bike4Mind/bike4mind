@@ -29,7 +29,7 @@ import { isAuthInfraFailure, setAuthInfraFailureHeaders } from '@server/auth/api
 import { randomUUID } from 'crypto';
 import { flattenHeaders } from '@server/utils/flattenHeaders';
 import { signEmbedSessionToken, EMBED_SESSION_TTL_SECONDS } from '@server/embed/embedSessionToken';
-import { isEmbedOriginAllowed } from '@server/embed/firstPartyOrigin';
+import { resolveEmbedOriginDecision } from '@server/embed/firstPartyOrigin';
 import { IdentifiedEmbedMintSchema, resolveIdentifiedEmbedUser } from '@server/embed/identifiedEmbedUser';
 import { cacheRepository } from '@bike4mind/database';
 import { UserApiKeyAuditLog } from '@bike4mind/database/auth';
@@ -59,15 +59,10 @@ const handler = baseApi({ auth: false })
       return res.status(401).json({ error: 'unauthorized', error_description: message });
     }
 
-    // Defense-in-depth: if a browser Origin is present it must be on the key's
-    // allow-list. A non-browser caller (no Origin) is gated by the key alone.
-    // `Origin: null` (sandboxed iframe) is treated as absent, matching the chat
-    // route - the credential is the boundary, so a hard 403 here would only break
-    // a legitimate sandboxed embed without stopping anyone. Our own serving
-    // origin is implicitly permitted: the /embed/* widget page mints from the app
-    // host, which can never appear on an allow-list (see firstPartyOrigin.ts).
-    const origin = headers.origin && headers.origin !== 'null' ? headers.origin : undefined;
-    if (origin && !isEmbedOriginAllowed(origin, info.allowedOrigins, headers.host)) {
+    // Defense-in-depth: a browser Origin must be on the key's allow-list; a
+    // non-browser caller (no Origin) is gated by the key alone. Our own serving
+    // origin is implicitly permitted (see firstPartyOrigin.ts).
+    if (!resolveEmbedOriginDecision(headers.origin, info.allowedOrigins, headers.host).allowed) {
       return res.status(403).json({ error: 'forbidden', error_description: 'Origin not allowed for this embed key' });
     }
 

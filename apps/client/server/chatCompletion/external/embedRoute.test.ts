@@ -350,8 +350,27 @@ describe('POST /api/embed/chat', () => {
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
 
-  it('treats Origin: null (sandboxed iframe) as absent rather than 403', async () => {
+  it('denies an opaque origin when the key restricts origins', async () => {
     const res = await post(CHAT, { origin: 'null' });
+    expect(res.status).toBe(403);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('serves an opaque origin when the key has no allowed origins', async () => {
+    mockVerifyEmbedApiKey.mockResolvedValue({ ...VALID_INFO, allowedOrigins: [] });
+    const res = await post(CHAT, { origin: 'null' });
+    expect(res.status).toBe(200);
+    expect(mockExecuteCompletion).toHaveBeenCalledTimes(1);
+  });
+
+  it('serves an origin on the key allow-list', async () => {
+    const res = await post(CHAT, { origin: 'https://example.com' });
+    expect(res.status).toBe(200);
+    expect(mockExecuteCompletion).toHaveBeenCalledTimes(1);
+  });
+
+  it('still serves a request that carries no Origin header', async () => {
+    const res = await post(CHAT);
     expect(res.status).toBe(200);
     expect(mockExecuteCompletion).toHaveBeenCalledTimes(1);
   });

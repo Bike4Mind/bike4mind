@@ -10,8 +10,8 @@ import { PUBLISH_HOST } from '@server/services/publish/validateBundle';
  *
  * The credential stays the security boundary: a non-browser caller can omit
  * Origin entirely and is already let through, so permitting our own origin adds
- * no attack surface. Must stay in lockstep across BOTH origin gates:
- * pages/api/embed/session.ts and server/chatCompletion/external/embedRoute.ts.
+ * no attack surface. Every embed origin gate decides through
+ * resolveEmbedOriginDecision below, so they cannot drift.
  *
  * EXACT host match only - deliberately NOT a subtree match on PUBLISH_HOST. The
  * widget page is served from exactly `app.<domain>`, so an exact match is all
@@ -42,11 +42,8 @@ export function isFirstPartyEmbedOrigin(
 }
 
 /**
- * The full embed origin decision, shared verbatim by the mint gate
- * (pages/api/embed/session.ts) and the chat gate (embedRoute.ts) so the two
- * can never drift: a present browser Origin passes when it is our own serving
- * origin OR on the key's allow-list. Callers handle the absent/null-Origin
- * case (credential-only) before calling this.
+ * A present, non-opaque browser Origin passes when it is our own serving origin
+ * OR on the key's allow-list. Only called through resolveEmbedOriginDecision.
  */
 export function isEmbedOriginAllowed(
   origin: string,
@@ -54,4 +51,23 @@ export function isEmbedOriginAllowed(
   requestHost: string | undefined
 ): boolean {
   return isFirstPartyEmbedOrigin(origin, requestHost) || isOriginPermitted(origin, allowedOrigins);
+}
+
+/**
+ * Single origin decision for every embed gate (session, history, chat). An absent
+ * Origin is a non-browser caller and is left to the credential. The opaque literal
+ * `null` is denied when the key restricts origins, and otherwise treated as absent.
+ * Any other Origin goes through isEmbedOriginAllowed.
+ * `null` is not treated as absent: a browser cannot omit Origin, so the
+ * server-to-server argument does not cover it, and allowing it would let any
+ * page use a restricted key.
+ */
+export function resolveEmbedOriginDecision(
+  rawOrigin: string | undefined,
+  allowedOrigins: string[] | undefined,
+  requestHost: string | undefined
+): { allowed: boolean } {
+  if (!rawOrigin) return { allowed: true };
+  if (rawOrigin === 'null') return { allowed: !allowedOrigins?.length };
+  return { allowed: isEmbedOriginAllowed(rawOrigin, allowedOrigins, requestHost) };
 }
