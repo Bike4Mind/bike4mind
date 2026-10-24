@@ -100,13 +100,14 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
         priceId,
         durationMonths,
         grantedBy: req.user.id,
-        onGranted: async ({ credits }) => {
+        onGranted: async ({ credits, creditTransactionId }) => {
           await recordAdminActionFromRequest(req, {
             action: 'user.subscription.granted',
             target: { kind: 'user', id: user.id, displayName: user.email ?? user.username },
             summary: `granted individual subscription for ${durationMonths} month(s)`,
             reason,
             details: { subscriptionType: 'individual', priceId, credits, durationMonths },
+            related: creditTransactionId ? { creditTransactionId } : undefined,
           });
         },
       });
@@ -225,7 +226,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
 
         // Add credits to organization
         const creditsToAdd = seats * teamPlan.creditsPerSeat * durationMonths;
-        await creditService.addCredits(
+        const { creditTransactionId } = await creditService.addCreditsWithLedgerRow(
           {
             ownerId: targetOrganization.id,
             ownerType: CreditHolderType.Organization,
@@ -262,6 +263,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
             durationMonths,
             organizationOwnerId: targetOrganization.userId,
           },
+          related: creditTransactionId ? { creditTransactionId } : undefined,
         });
 
         req.logger.info(`Admin ${req.user.id} granted team subscription to organization ${targetOrganization.id}`, {

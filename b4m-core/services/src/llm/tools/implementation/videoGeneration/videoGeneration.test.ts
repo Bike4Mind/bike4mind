@@ -3,11 +3,15 @@ import { videoGenerationTool, isVideoToolConfig, type VideoToolConfig } from './
 
 const okJob = { ok: true as const, created: true, job: { id: 'job1' } };
 
-const build = (createJob: VideoToolConfig['createJob'], { questId }: { questId?: string } = { questId: 'q1' }) => {
+const build = (
+  createJob: VideoToolConfig['createJob'],
+  { questId }: { questId?: string } = { questId: 'q1' },
+  deliveryNote?: string
+) => {
   const statusUpdate = vi.fn().mockResolvedValue(undefined);
   const onStart = vi.fn();
   const onFinish = vi.fn();
-  const config: VideoToolConfig = { usableModels: ['test-video'], createJob };
+  const config: VideoToolConfig = { usableModels: ['test-video'], createJob, deliveryNote };
   const context = { userId: 'u1', organizationId: null, questId, statusUpdate, onStart, onFinish } as never;
   return { tool: videoGenerationTool.implementation(context, config), statusUpdate, onStart, onFinish };
 };
@@ -20,6 +24,13 @@ describe('video_generation tool', () => {
     expect(result).toEqual({ jobId: 'job1', estimatedSeconds: 8 });
     expect(createJob.mock.calls[0][0]).toMatchObject({ source: 'agent', questId: 'q1', user: { id: 'u1' } });
     expect(statusUpdate).toHaveBeenCalledWith({ generationJobs: [{ id: 'job1', kind: 'video' }] });
+  });
+
+  it('adds the surface delivery note to the result when the config carries one', async () => {
+    const createJob = vi.fn().mockResolvedValue(okJob);
+    const { tool } = build(createJob, { questId: 'q1' }, 'It will be posted here.');
+    const result = JSON.parse(await tool.toolFn({ model: 'test-video', prompt: 'a cat' }));
+    expect(result).toEqual({ jobId: 'job1', estimatedSeconds: 8, note: 'It will be posted here.' });
   });
 
   it('sends image-to-video when an input image id is given', async () => {

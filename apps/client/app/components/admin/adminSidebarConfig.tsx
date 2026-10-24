@@ -107,6 +107,7 @@ export enum AdminTab {
   GrowthPricing = 64,
   IntegrationDemand = 65,
   AuditLog = 66,
+  Dashboard = 67,
 }
 
 /**
@@ -162,7 +163,12 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
       { Icon: HandshakeIcon, tab: AdminTab.PartnerSignupRules, label: 'Partner Signup Rules' },
       { Icon: EmailIcon, tab: AdminTab.EmailMarketing, label: 'Email Marketing' },
       { Icon: PeopleIcon, tab: AdminTab.Subscriptions, label: 'Subscriptions' },
-      { Icon: BusinessIcon, tab: AdminTab.Organizations, label: 'Organizations' },
+      {
+        Icon: BusinessIcon,
+        tab: AdminTab.Organizations,
+        label: 'Organizations',
+        testid: 'admin-organizations-tab-btn',
+      },
       { Icon: CreditCardIcon, tab: AdminTab.CreditAnalytics, label: 'Credit Analytics' },
       {
         Icon: TrendingUpIcon,

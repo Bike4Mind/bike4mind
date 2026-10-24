@@ -8,7 +8,7 @@ import { directTwinId } from './routeTwinNames';
 
 // apiKeys=null assembles only the keyless backends (Bedrock/AWS/BFL), all
 // static - no network. Pick a Bedrock text model as the overlay target.
-const TARGET = ChatModels.CLAUDE_4_5_SONNET_BEDROCK;
+const TARGET = ChatModels.CLAUDE_4_6_SONNET_BEDROCK;
 
 const row: IModelCatalogRow = {
   modelId: TARGET,

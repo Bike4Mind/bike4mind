@@ -160,9 +160,14 @@ describe('sessionSideEffects', () => {
   });
 
   describe('publishSummarizeSession', () => {
-    it('publishes a Summarize event with callTagging and trigger', async () => {
-      await publishSummarizeSession('sess-1', 'manual');
-      expect(summarizePublish).toHaveBeenCalledWith({ sessionId: 'sess-1', callTagging: true, trigger: 'manual' });
+    it('publishes a Summarize event with callTagging, trigger and the payer', async () => {
+      await publishSummarizeSession('sess-1', 'manual', 'sharee-1');
+      expect(summarizePublish).toHaveBeenCalledWith({
+        sessionId: 'sess-1',
+        callTagging: true,
+        trigger: 'manual',
+        payerId: 'sharee-1',
+      });
     });
   });
 

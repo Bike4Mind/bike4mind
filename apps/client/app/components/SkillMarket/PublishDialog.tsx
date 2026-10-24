@@ -28,7 +28,12 @@ import GroupsIcon from '@mui/icons-material/Groups';
 import LinkIcon from '@mui/icons-material/Link';
 import ShieldIcon from '@mui/icons-material/Shield';
 import { useNavigate } from '@tanstack/react-router';
-import type { ISkill, SkillListingVisibility } from '@bike4mind/common';
+import {
+  SKILL_LISTING_MAX_TAGS as MAX_TAGS,
+  SKILL_LISTING_TAG_PATTERN as TAG_PATTERN,
+  type ISkill,
+  type SkillListingVisibility,
+} from '@bike4mind/common';
 import { getErrorMessage } from '@client/app/utils/error';
 import {
   useMarketMe,
@@ -39,14 +44,11 @@ import {
 } from '@client/app/hooks/data/skillMarket';
 import ScanResult from './ScanResult';
 
-const TAG_PATTERN = /^[a-z0-9][a-z0-9-]{0,23}$/;
-const MAX_TAGS = 5;
-
 const VISIBILITY_OPTIONS: Array<{ value: SkillListingVisibility; title: string; body: string; icon: ReactElement }> = [
   {
     value: 'public',
     title: 'Public',
-    body: 'Anyone on Bike4Mind can find and import it. Held for a reviewer if the scan flags anything.',
+    body: 'Anyone on Bike4Mind can find and import it.',
     icon: <PublicIcon />,
   },
   {
@@ -320,8 +322,8 @@ const PublishDialog: FC<PublishDialogProps> = ({ onClose, skill, ownSkills = [] 
               <Alert variant="soft" color="neutral" startDecorator={<ShieldIcon />}>
                 <Typography level="body-sm">
                   Every submission gets an automated safety scan and an AI-written summary of what it really does, shown
-                  next to your description. Skills that use tools which act outside the chat need a reviewer before
-                  going live. Future edits are submitted as new versions.
+                  next to your description. At every visibility, the scan can reject a submission or hold it for a
+                  reviewer before it goes live. Future edits are submitted as new versions.
                 </Typography>
               </Alert>
 

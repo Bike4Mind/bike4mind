@@ -27,6 +27,14 @@ export interface PremiumRouteDescriptor {
   path: string;
   lazyImport: () => Promise<{ default: ComponentType }>;
   /**
+   * STRUCTURAL field: optional card on the admin landing page, linking to the literal `path`.
+   * `partitionPremiumRoutes` throws when it is set on a path with a `$param` segment.
+   */
+  adminDashboard?: {
+    label: string;
+    description: string;
+  };
+  /**
    * STRUCTURAL field (like `path`/`lazyImport`, NOT a gating prop - the
    * "gating fields map 1:1 to RestrictedPage" rule above does not apply to it).
    * Selects the route's parent in the SPA tree:
@@ -302,6 +310,43 @@ export type PremiumWorkspaceGrantDisplays = Readonly<Record<string, readonly Pre
  * the build.
  */
 export type PremiumToolDisplayLabels = Readonly<Record<string, string>>;
+
+/**
+ * Entitlement registry rows an overlay adds (`b4mContributions.entitlementGrants`) to the built-in
+ * rows in lib/entitlements/registry.ts, in new territory only: a row that changes a built-in tag,
+ * implication or credit amount, or grants a key core already grants, is dropped. Literal data like
+ * the labels above, so the client bundle never imports overlay code. Keys and tags arrive normalized
+ * (lowercase); `base`, `datalake:` and `embed:` keys and `source:` tags are reserved. An implication
+ * must start from a key a contribution grants, and signup credits sit on contributed staff keys. Two
+ * overlays giving one id different values, or one key two granting tags, fail the build.
+ */
+export interface PremiumEntitlementGrants {
+  readonly tagGrants?: readonly { readonly tag: string; readonly entitlements: readonly string[] }[];
+  readonly impliedEntitlements?: readonly { readonly ifHeld: string; readonly alsoGrant: readonly string[] }[];
+  readonly signupCredits?: readonly { readonly key: string; readonly credits: number }[];
+  /** Keys conferred on internal staff domains, on top of the built-in set. */
+  readonly internalStaffEntitlements?: readonly string[];
+}
+
+/**
+ * An API-key scope an overlay adds (`b4mContributions.apiKeyScopes`) to the built-in catalog in
+ * constants/apiKeyScopes.ts. Literal data, so the client bundle never imports overlay code. The value
+ * is `<resource>:<action>`; the `admin`, `cc-bridge`, `embed` and `datalake` resources are reserved.
+ * A contributed scope is never confined and is always self-mintable: the contract has no field for
+ * either. With `requiredEntitlement` set, the scope is offered to a user holding that key, and to
+ * every admin and developer-tagged user regardless (the bypass in isApiKeyScopeOffered, wider than
+ * requestHasEntitlement's admin-only one), so a route serving a paid feature must also check the
+ * entitlement itself. Two overlays giving one value different rows fail the build; an identical
+ * repeat collapses.
+ */
+export interface PremiumApiKeyScope {
+  readonly value: string;
+  readonly label: string;
+  readonly description: string;
+  /** `METHOD /path` lines shown in the scope docs; informational, never used for routing. */
+  readonly endpoints: readonly string[];
+  readonly requiredEntitlement?: string;
+}
 
 /** What core hands a reply accessory about the reply it sits under. */
 export interface PremiumReplyAccessoryProps {

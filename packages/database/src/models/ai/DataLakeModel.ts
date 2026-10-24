@@ -1586,6 +1586,17 @@ const DataLakeBatchSchema = new mongoose.Schema(
     // Background AI-tagging phase - orthogonal to `status` (see TaxonomyStatus's doc
     // comment for why it isn't layered onto the ingest status instead).
     wantsTaxonomy: { type: Boolean, default: false },
+    taxonomyBilling: {
+      type: new mongoose.Schema(
+        {
+          organizationId: { type: String, default: null },
+          apiKeyId: { type: String },
+          source: { type: String, enum: ['api', 'cli', 'desktop'] },
+        },
+        { _id: false }
+      ),
+      default: undefined,
+    },
     taxonomyStatus: {
       type: String,
       enum: ['none', 'queued', 'analyzing', 'ready', 'applying', 'applied', 'failed', 'dismissed'],

@@ -14,6 +14,7 @@ import {
   QueryComplexityType,
   getTextModelCost,
   getTurnsCost,
+  buildUsagePriceStamp,
   CACHE_READ_MULTIPLIER,
   ModelInfo,
   ModelBackend,
@@ -53,6 +54,8 @@ import {
   isClaudeModelId,
   questGenerationJobs,
   resolveWorkspaceDeniedTools,
+  filterRunnableModels,
+  type LLMModelConfig,
   applyWorkspaceSessionSettings,
 } from '@bike4mind/common';
 import {
@@ -94,6 +97,14 @@ import {
   safeInputWindow,
   withTokenEstimateMultiplier,
 } from '@bike4mind/utils';
+import {
+  isRequestTimeoutError,
+  isSlowModelTimeoutError,
+  isStreamIdleTimeoutError,
+  isToolPairingError,
+  isTruncatedStreamError,
+} from './llmErrorPredicates';
+import { TurnTimingRecorder } from './turnTiming';
 import type { FabFileNotice, EmbeddingCredential } from '@bike4mind/utils';
 import { buildAttachmentNoticePrompt, toAttachmentNoticeStrings } from './attachmentNotices';
 import { buildPromptMetaModel } from './buildPromptMetaModel';
@@ -107,9 +118,8 @@ import {
   toRetrievalFilter,
   type RetrievalExclusionOptions,
 } from '@bike4mind/utils/retrievalExclusion';
+import { sentMaxTokensFor } from '@bike4mind/llm-adapters/model-sizing';
 import {
-  buildThinkingParams,
-  resolveDispatchForRecord,
   resolveOutputMaxTokens,
   reasonsWithinOutputBudget,
   getAvailableModels,
@@ -119,6 +129,7 @@ import {
   resolveDeprecatedModelId,
   isTurnEndingTool,
   ResponsesStreamTruncatedError,
+  LlmTimeoutError,
 } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { ToolCacheManager } from './tools/ToolCacheManager';
@@ -134,6 +145,7 @@ import { buildSystemPromptSourceFiles } from './buildSystemPromptSourceFiles';
 import { resolveCorrectionContext } from './buildCorrectionContext';
 import { resolveDataSourceStatus } from './dataSourceStatus';
 import { scrubMissingKnowledgeIds } from '../sessionService/scrubMissingKnowledgeIds';
+import { scrubStaleSystemFiles } from '../sessionService/scrubStaleFileReferences';
 import { LATTICE_TOOL_NAMES } from './tools';
 import { createWebSearchBudget, MAX_WEB_SEARCHES_PER_TURN } from './tools/implementation/websearch';
 import { createToolFailureGuard } from './tools/toolFailureGuard';
@@ -149,6 +161,7 @@ import {
 // Re-exported so the resolver below and the type it returns stay reachable from one import, while
 // the declaration stays beside the context contract it has to satisfy.
 export type { EntitlementResolution };
+import { createModelAdmission, loadModelConfigurations, type ModelAdmission } from './modelAdmission';
 import { datalakeTagsFrom } from '../dataLakeService/getDataLakePrompts';
 import { countNotServingNamedLakes } from '../dataLakeService/countNotServingNamedLakes';
 import {
@@ -172,7 +185,7 @@ import type { MusicToolConfig } from './tools/implementation/musicGeneration';
 import { applyModerationHit, MODERATION_POLICY, moderationThrottleKey } from '../userService/moderationPolicy';
 import { ToolDefinition } from './tools/base/types';
 import { ServerAgentStore } from './agents/ServerAgentStore';
-import throttle from 'lodash/throttle.js';
+import { createStreamingStatusSender } from './streamingStatusSender';
 import {
   AutoNameSessionFeature,
   ChatCompletionFeature,
@@ -200,17 +213,21 @@ import {
   buildTaggedContextMessages,
   filterByPromptMode,
   filterFeaturesByPromptMode,
+  isPerTurnContext,
+  markHistoryCacheAnchor,
   markShareablePrefixBoundary,
   PROMPT_MODE_SOURCES,
   PROMPT_SOURCE_METADATA,
   resolveForcedRetrieval,
   SYSTEM_PROMPT_PRIORITY,
+  relocatePerTurnContext,
   resolveSkipAutoOffers,
   lakeContentTokens,
   toPromptDetails,
   type PromptSourceId,
 } from './systemPromptSources';
 import { buildSystemPromptText, type SystemPromptTextDisclosure } from './systemPromptDisclosure';
+import { buildViewRegistryAdminMessages } from './viewRegistryPrompt';
 import { vetPreauthorizedLakeIds } from '../dataLakeService/vetPreauthorizedLakeIds';
 import { vetReaderConsentDatalakeTags } from './vetReaderConsentDatalakeTags';
 import {
@@ -250,6 +267,7 @@ import {
 } from './systemPromptFloorTelemetry';
 import { buildArtifactEmissionMessages, resolveArtifactsEnabled } from './artifactGating';
 import {
+  resolveStickyAutoAddedTools,
   shouldOfferBlogTools,
   shouldOfferDataLakeTools,
   shouldOfferDelegation,
@@ -274,6 +292,9 @@ const THROTTLE_INTERVAL = 100;
 const DISABLE_SERVER_THROTTLING = process.env.DISABLE_SERVER_THROTTLING === 'true';
 const STREAMING_HEARTBEAT_INTERVAL_MS = 10_000;
 const STREAMING_HEARTBEAT_ERROR_ESCALATION_THRESHOLD = 3;
+
+/** Final reply when the model stayed too slow through its retry and any fallback. Not "busy": the provider never said so. */
+export const SLOW_MODEL_ERROR_REPLY = 'The AI model took too long to respond. Please try again in a moment.';
 
 // Context management constants: message-history limits per query type
 
@@ -363,6 +384,16 @@ export const KNOWLEDGE_SEARCH_TOOL_NAME = 'search_knowledge_base';
 const PER_TOOL_SCHEMA_RESERVE_TOKENS = 120; // rough serialized {name,description,input_schema} per enabled tool
 
 /** Coerce an admin-setting value to a fraction in (0, 1], falling back when invalid. */
+// Same check as `isValidTimeZone` in apps/client/pages/api/users/counterLogs.ts.
+export function isValidTimeZone(timeZone: string): boolean {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function clampFraction(raw: unknown, fallback: number): number {
   const parsed = typeof raw === 'number' ? raw : parseFloat(String(raw));
   return Number.isFinite(parsed) && parsed > 0 && parsed <= 1 ? parsed : fallback;
@@ -389,16 +420,11 @@ export function dropOldestHistoryTurn(history: IMessage[]): IMessage[] | null {
 }
 
 /**
- * Conservative fallback for simple query max history.
- * Used before model info is available.
+ * Conservative cap on a requested history count, applied before model info is available. The same for
+ * every query: a count that varied with per-turn complexity moved the history window's start each
+ * turn, which re-writes the provider's prompt cache (see HISTORY_WINDOW_STEP).
  */
-const SIMPLE_QUERY_FALLBACK_MAX = 25;
-
-/**
- * Conservative fallback for complex query max history.
- * Used before model info is available.
- */
-const COMPLEX_QUERY_FALLBACK_MAX = 60;
+const HISTORY_COUNT_FALLBACK_MAX = 60;
 
 /**
  * Calculate optimal history count based on model context window.
@@ -430,31 +456,6 @@ function calculateOptimalHistoryCount(contextWindow: number): number {
 }
 
 /**
- * Get maximum history for simple queries.
- * Simple queries need less context but should still scale with model capacity.
- *
- * @param contextWindow - Model's context window size in tokens
- * @returns Maximum history messages for simple queries
- */
-function getSimpleQueryMaxHistory(contextWindow: number): number {
-  // Simple queries get 40% of the optimal history count
-  const optimal = calculateOptimalHistoryCount(contextWindow);
-  return Math.max(MIN_HISTORY_COUNT, Math.floor(optimal * 0.4));
-}
-
-/**
- * Get maximum history for complex queries.
- * Complex queries benefit from more context.
- *
- * @param contextWindow - Model's context window size in tokens
- * @returns Maximum history messages for complex queries
- */
-function getComplexQueryMaxHistory(contextWindow: number): number {
-  // Complex queries get the full optimal history count
-  return calculateOptimalHistoryCount(contextWindow);
-}
-
-/**
  * Narrow a requested history count to what the model's context window supports.
  *
  * Unlimited is an intent rather than a count, so it returns before any arithmetic. The marker is
@@ -467,19 +468,15 @@ function getComplexQueryMaxHistory(contextWindow: number): number {
 export function resolveModelAwareHistoryCount({
   historyCount,
   contextWindow,
-  isSimpleQuery,
 }: {
   historyCount: number;
   contextWindow: number;
-  isSimpleQuery: boolean;
 }): number {
   if (isUnlimitedHistory(historyCount)) return historyCount;
 
-  const modelAwareMax = isSimpleQuery
-    ? getSimpleQueryMaxHistory(contextWindow)
-    : getComplexQueryMaxHistory(contextWindow);
-
-  return Math.min(historyCount, modelAwareMax);
+  // Per model, never per query: it has to hold still across a session's turns (see
+  // HISTORY_COUNT_FALLBACK_MAX).
+  return Math.min(historyCount, calculateOptimalHistoryCount(contextWindow));
 }
 
 /**
@@ -549,19 +546,14 @@ export function resolveQuestErrorCode(error: unknown): QuestErrorCode | undefine
  */
 export const FORCE_FALLBACK_TEST_MARKER = '[[force-provider-fallback]]';
 
-function isToolPairingError(error: Error): boolean {
-  const msg = error.message.toLowerCase();
-  // Match known Anthropic tool-pairing failure patterns:
-  // - messages mentioning both "tool_use" and "tool_result"
-  // - messages mentioning "tool_use_id" (e.g., "unexpected tool_use_id")
-  const hasToolUseAndResult = msg.includes('tool_use') && msg.includes('tool_result');
-  const hasToolUseIdVariant = msg.includes('tool_use_id');
-  return hasToolUseAndResult || hasToolUseIdVariant;
-}
+/**
+ * Sibling of FORCE_FALLBACK_TEST_MARKER, under the same preview/E2E-only gate: makes every
+ * Anthropic-family hop fail with our own stream idle timeout, so QA can watch the slow-model
+ * retry, the fallback hop after it, and the turn-timing record without waiting out a real stall.
+ */
+export const FORCE_STREAM_STALL_TEST_MARKER = '[[force-stream-stall]]';
 
-export function isRequestTimeoutError(error: Error): boolean {
-  return error.message.includes('request timeout') || error.message.includes('Request timeout');
-}
+export { isRequestTimeoutError, isStreamIdleTimeoutError };
 
 /**
  * True when an error is a request abort/cancellation (user stop, client
@@ -579,18 +571,13 @@ export function isAbortError(error: unknown): boolean {
   return error.message.toLowerCase().includes('aborted');
 }
 
-export function isStreamIdleTimeoutError(error: Error): boolean {
-  return error.message.includes('stream timeout') || error.message.includes('Stream timeout');
-}
-
 /**
  * True when a completion failure is a service fault worth counting on the operator
  * `ProcessingFailed` metric. Approximates the terminal branches of the quest-level error handler
  * (billing, abort, request/stream timeout, truncated Responses stream, tool pairing, overloaded,
  * context overflow), which resolve the quest without rethrowing and so never reached /process's
- * failure path. It is not an exact mirror: the handler matches timeouts case-sensitively and
- * rethrows 4xx HTTPErrors (so /process counts them), whereas CLI and embed treat 4xx as caller input
- * and skip them. The CLI and embed routes call this; /process does not.
+ * failure path. It is not an exact mirror: the handler rethrows 4xx HTTPErrors (so /process counts
+ * them), whereas CLI and embed treat 4xx as caller input and skip them. The CLI and embed routes call this; /process does not.
  */
 export function isOperatorFault(error: unknown): boolean {
   if (resolveQuestErrorCode(error)) return false;
@@ -599,7 +586,8 @@ export function isOperatorFault(error: unknown): boolean {
   return !(
     isAbortError(error) ||
     isRequestTimeoutError(error) ||
-    isStreamIdleTimeoutError(error) ||
+    isTruncatedStreamError(error) ||
+    isSlowModelTimeoutError(error) ||
     error instanceof ResponsesStreamTruncatedError ||
     isToolPairingError(error) ||
     isOverloadedError(error) ||
@@ -897,21 +885,7 @@ export function researchModeUsages(
   });
 }
 
-/**
- * The max_tokens the adapter actually sends for a `maxTokens` request: the Anthropic adapters raise
- * it for thinking (buildThinkingParams), every other adapter sends it unchanged. Credit holds and
- * the member cap are priced on this, so they cover what the model may really produce.
- */
-export function sentMaxTokensFor(
-  modelInfo: ModelInfo,
-  thinking: { enabled?: boolean; budget_tokens?: number } | null | undefined,
-  maxTokens: number
-): number {
-  if (!thinking?.enabled || !modelInfo.can_think) return maxTokens;
-  const adapterFamily = resolveDispatchForRecord(modelInfo)?.adapterFamily;
-  if (adapterFamily !== 'anthropic-messages' && adapterFamily !== 'bedrock-anthropic') return maxTokens;
-  return buildThinkingParams(modelInfo.id, modelInfo, thinking.budget_tokens ?? 16000, maxTokens).maxTokens;
-}
+export { sentMaxTokensFor } from '@bike4mind/llm-adapters/model-sizing';
 
 export class ChatCompletionProcess {
   public db: IChatCompletionServiceOptions['db'];
@@ -927,6 +901,7 @@ export class ChatCompletionProcess {
   public summarizeSession: IChatCompletionServiceOptions['summarizeSession'];
   public contextSummarizeSession: IChatCompletionServiceOptions['contextSummarizeSession'];
   public slackWebhookUrl: string;
+  public createCompletionMeter: IChatCompletionServiceOptions['createCompletionMeter'];
   public features: Map<featureNames, ChatCompletionFeature>;
   public userAbility: MongoAbility | null = null;
   public sessionId: string;
@@ -996,6 +971,8 @@ export class ChatCompletionProcess {
   public priorUserPrompts?: string[];
 
   private getEntitlements: IChatCompletionServiceOptions['getEntitlements'];
+  /** Set once the turn's model resolves; gates the deprecated remap and every fallback hop. */
+  private modelAdmission?: ModelAdmission;
   private entitlementsResolved = false;
   /**
    * Set only in `resolveEntitlementKeys()`'s catch branch and reported back through that method's
@@ -1140,6 +1117,7 @@ export class ChatCompletionProcess {
     this.features = options.features || new Map<featureNames, ChatCompletionFeature>();
     this.tokenizer = options.tokenizer;
     this.slackWebhookUrl = options.slackWebhookUrl;
+    this.createCompletionMeter = options.createCompletionMeter;
     this.sessionId = options.sessionId;
     this.cacheRepository = options.cacheRepository;
     this.publishTelemetryAlert = options.publishTelemetryAlert;
@@ -1722,8 +1700,14 @@ export class ChatCompletionProcess {
       imageConfig,
       audioConfig,
       deepResearchConfig,
-      timezone: userTimezone,
+      timezone: requestedTimezone,
     } = parsedBody;
+    // Callers send this unchecked (the browser can report `Etc/Unknown`), and `Intl` throws on a
+    // zone it rejects, so fall back to server time instead of failing the turn.
+    const userTimezone = requestedTimezone && isValidTimeZone(requestedTimezone) ? requestedTimezone : undefined;
+    if (requestedTimezone && !userTimezone) {
+      this.logger.warn(`Ignoring unrecognised timezone "${requestedTimezone}"; using server time`);
+    }
 
     // Companion pairing now runs once in `resolveEnabledTools` (see process()), after the
     // per-session union and attached-knowledge offer, so session-forced and auto-offered
@@ -1911,6 +1895,14 @@ export class ChatCompletionProcess {
     const enableMementos = initialEnableMementos;
     let enableAgents = initialEnableAgents;
     const { questId, sessionId, promptMode } = parsedBody;
+    // From the attempt's timestamp, not createdAt: a user retry reuses the quest doc. The snapshot
+    // replaces any record a previous attempt left, before the first frame streams it. Backend-
+    // reported retries and slot waits land through `onChange`, so live frames and a last save
+    // (a Lambda that dies mid-turn) carry them too, not only the sites below that record directly.
+    const turnTiming = new TurnTimingRecorder(quest.timestamp, processStartTime, logger, snapshot => {
+      quest.turnTiming = snapshot;
+    });
+    quest.turnTiming = turnTiming.snapshot();
 
     // Variables to store actual timing durations
     let actualArtifactProcessingDuration = 0;
@@ -2032,41 +2024,22 @@ export class ChatCompletionProcess {
         enableAgents = false;
       }
 
-      // Reduce history for simple queries to optimize cost and performance
-      // Use conservative fallback here; dynamic adjustment happens after modelInfo is available
-      // Unlimited carries no count to cap, so leave it for buildAndSortMessages to interpret.
-      if (!isUnlimitedHistory(historyCount)) {
-        const originalHistoryCount = historyCount;
-        historyCount = Math.min(historyCount, SIMPLE_QUERY_FALLBACK_MAX);
-
-        if (originalHistoryCount > historyCount) {
-          logger.info(`📉 [SIMPLE_QUERY] History pruned for simple query optimization`, {
-            original: originalHistoryCount,
-            reduced: historyCount,
-            sessionId,
-          });
-        }
-      }
-
+      // History is deliberately NOT reduced for simple queries: the count sets where the history
+      // window starts, and one that changed with each turn's complexity rewrote the prompt cache.
       logger.info(
-        `🚀 [SIMPLE_QUERY] Optimizations: QuestMaster=${enableQuestMaster ? 'ON (explicit)' : 'OFF'}, Mementos=OFF, Agents=${enableAgents ? 'ON' : 'OFF'}, History=${
-          isUnlimitedHistory(historyCount) ? 'unlimited' : historyCount
-        }`
+        `[SIMPLE_QUERY] Optimizations: QuestMaster=${enableQuestMaster ? 'ON (explicit)' : 'OFF'}, Mementos=OFF, Agents=${enableAgents ? 'ON' : 'OFF'}`
       );
-    } else {
-      // For complex queries, apply conservative cap before model info is available
-      // Dynamic model-aware adjustment happens after modelInfo is fetched
-      if (!isUnlimitedHistory(historyCount) && historyCount > COMPLEX_QUERY_FALLBACK_MAX) {
-        logger.info(
-          `📊 [COMPLEX_QUERY] Initial cap at ${COMPLEX_QUERY_FALLBACK_MAX} messages (will adjust based on model)`,
-          {
-            original: historyCount,
-            capped: COMPLEX_QUERY_FALLBACK_MAX,
-            sessionId,
-          }
-        );
-        historyCount = COMPLEX_QUERY_FALLBACK_MAX;
-      }
+    }
+
+    // Conservative cap before model info is available; the model-aware adjustment happens after
+    // modelInfo is fetched. Same for every query, whatever its complexity.
+    if (!isUnlimitedHistory(historyCount) && historyCount > HISTORY_COUNT_FALLBACK_MAX) {
+      logger.info(`[HISTORY_CAP] Initial cap at ${HISTORY_COUNT_FALLBACK_MAX} messages (will adjust based on model)`, {
+        original: historyCount,
+        capped: HISTORY_COUNT_FALLBACK_MAX,
+        sessionId,
+      });
+      historyCount = HISTORY_COUNT_FALLBACK_MAX;
     }
 
     logger.info(`⏱️ [${Date.now() - processStartTime}ms] === PROGRESSIVE LOADING PHASE START ===`);
@@ -2075,6 +2048,14 @@ export class ChatCompletionProcess {
     let finalQuest: IChatHistoryItemDocument | null = null;
     let cancelWatcherInterval: NodeJS.Timeout | null = null;
     let streamingHeartbeatInterval: NodeJS.Timeout | null = null;
+    // Assigned once the streaming sender exists. A pending trailing send reads `quest` at fire
+    // time, so it must be dropped before any terminal write or it publishes `done`/`stopped`
+    // ahead of settlement and the terminal save.
+    let cancelPendingStreamingSend: (() => void) | null = null;
+    const setTerminalQuestStatus = (target: IChatHistoryItemDocument, status: 'done' | 'stopped') => {
+      cancelPendingStreamingSend?.();
+      target.status = status;
+    };
     // Replaced once the turn's deliverable baselines exist; until then nothing can have answered.
     let clearStaleFallbackInfoIfNoAnswer = () => {
       quest.fallbackInfo = null;
@@ -2142,8 +2123,9 @@ export class ChatCompletionProcess {
 
       if (!loadedSession) {
         // Try to clean up the quest if session doesn't exist
-        quest.status = 'stopped';
+        setTerminalQuestStatus(quest, 'stopped');
         quest.replies = ['Session not found. Please create a new session or refresh the page.'];
+        turnTiming.finish();
         await saveQuest(quest);
         return;
       }
@@ -2159,7 +2141,10 @@ export class ChatCompletionProcess {
       const latestQuestStatus = await this.db.quests.findByIdWithStatus(questId);
       if (latestQuestStatus?.status === 'stopped') {
         logger.info(`Quest ${questId} was stopped before processing started`);
-        quest.status = 'stopped';
+        setTerminalQuestStatus(quest, 'stopped');
+        // The finally block's terminal frame carries the record, so end it here rather than
+        // leaving a total-less record that would read as "still running" forever.
+        turnTiming.finish();
         return;
       }
       quest.status = 'running';
@@ -2297,15 +2282,12 @@ export class ChatCompletionProcess {
       // The invisible-failure warning ("caller has knowledge but no knowledge tool offered")
       // moved to after buildTools, where the authoritative post-build tool list is known.
 
-      const throttledSend = DISABLE_SERVER_THROTTLING
-        ? () => this.sendStatusUpdate(quest, null) // No throttling - direct send
-        : throttle(
-            () => {
-              return this.sendStatusUpdate(quest, null);
-            },
-            THROTTLE_INTERVAL,
-            { leading: true }
-          );
+      const throttledSend = createStreamingStatusSender(
+        () => this.sendStatusUpdate(quest, null),
+        THROTTLE_INTERVAL,
+        DISABLE_SERVER_THROTTLING
+      );
+      cancelPendingStreamingSend = () => throttledSend.cancel();
 
       // Streaming heartbeat: persist quest state to MongoDB every 10s during streaming.
       // Without this, quest.replies and quest.updatedAt stay stale until completion, so a mid-stream
@@ -2460,6 +2442,16 @@ export class ChatCompletionProcess {
       if (!modelInfo || !llm) {
         throw new Error('Invalid LLM backend specified');
       }
+      this.modelAdmission = createModelAdmission({
+        user: this.user,
+        configs: await loadModelConfigurations(this.db.adminSettings),
+        getEntitlements: async () => (await this.resolveEntitlementKeys()).keys,
+        models,
+        enforceCredits: getSettingsValue('enforceCredits', defaultAdminSettings) === true,
+      });
+      // Always the final id, remapped or not: /api/chat admits the requested model in
+      // ChatCompletionInvoke, but the quest/Slack queue handlers construct this class directly.
+      await this.modelAdmission.assert(modelInfo.id);
       // Queue and agent runs skip ChatCompletionInvoke, so the redirect is first seen here. Record it
       // with the same convention Invoke uses: model.name is what answers, redirectedFrom what was asked.
       if (quest.promptMeta && resolvedModelId !== model) {
@@ -2502,10 +2494,8 @@ export class ChatCompletionProcess {
           historyFetchLimit: resolveHistoryFetchLimit(historyCount),
         });
       } else {
-        const modelAwareMax = isSimpleQuery
-          ? getSimpleQueryMaxHistory(contextWindow)
-          : getComplexQueryMaxHistory(contextWindow);
-        const adjustedHistoryCount = resolveModelAwareHistoryCount({ historyCount, contextWindow, isSimpleQuery });
+        const modelAwareMax = calculateOptimalHistoryCount(contextWindow);
+        const adjustedHistoryCount = resolveModelAwareHistoryCount({ historyCount, contextWindow });
 
         if (adjustedHistoryCount < historyCount) {
           logger.info(`📊 [DYNAMIC_HISTORY] Adjusting history based on model context window`, {
@@ -2529,10 +2519,11 @@ export class ChatCompletionProcess {
         historyCount = adjustedHistoryCount;
       }
 
-      // Use default admin settings for immediate processing
-      const adminModerationEnabled = this.getDefaultSettingValue('ModerationEnabled', defaultAdminSettings);
-      const adminSettingsEnforceCredits = this.getDefaultSettingValue('enforceCredits', defaultAdminSettings);
-      const enableMCPServer = this.getDefaultSettingValue('EnableMCPServer', defaultAdminSettings);
+      // Schema-aware reads: an absent row takes the setting's default (enforceCredits is on for
+      // hosted), not false, so a missing row can never switch billing off.
+      const adminModerationEnabled = getSettingsValue('ModerationEnabled', defaultAdminSettings) === true;
+      const adminSettingsEnforceCredits = getSettingsValue('enforceCredits', defaultAdminSettings) === true;
+      const enableMCPServer = getSettingsValue('EnableMCPServer', defaultAdminSettings) === true;
       if (adminSettingsEnforceCredits && !this.db.creditTransactions) {
         throw new BadRequestError('Enforce credits is enabled but credit transactions are not available');
       }
@@ -2698,6 +2689,7 @@ export class ChatCompletionProcess {
               fabFileIds: sessionFabFileIds,
               questId,
               questMaster,
+              organizationId: organization?.id ?? null,
             });
 
             const elapsed = Date.now() - featureStartTime;
@@ -2717,6 +2709,14 @@ export class ChatCompletionProcess {
       const takeoverFeature = featureResults.find(({ result }) => result?.shouldContinue === false);
       if (takeoverFeature) {
         logger.log(`✅ Feature '${takeoverFeature.name}' has taken over processing`);
+        // The feature finishes the turn outside this flow, so this partial record (no total, only
+        // the queue wait) would render as "still running" on a reply it never tracked. Drop it
+        // rather than have the Answer diagnosis claim coverage the turn did not get. The setup save
+        // already persisted it, and a `$set` of `undefined` is dropped, so unset it in the DB too.
+        quest.turnTiming = undefined;
+        void this.db.quests
+          .update({ id: quest.id }, { unset: ['turnTiming'] })
+          .catch(error => logger.warn('Failed to drop turnTiming after feature takeover:', error));
         this.sendStatusUpdate(quest, null, { immediate: true });
         return;
       }
@@ -2893,28 +2893,27 @@ export class ChatCompletionProcess {
       // of when it was added to enabledTools.
       let hasContentTransform = false;
       if (!skipAutoOffers) {
+        // Tools this turn's signals call for that the request did not already name. They join the
+        // session's persisted set below, so the tool list never shrinks again once a tool appears.
+        const triggered: string[] = [];
+        const trigger = (tool: string) => {
+          if (!enabledTools.includes(tool)) triggered.push(tool);
+        };
+
         const blogGates = shouldOfferBlogTools({
           isAdmin: this.user.isAdmin,
           hasBlogIntegration: Boolean(this.user.blogIntegration),
           message,
           priorToolNames,
         });
-        if (blogGates.publish && !enabledTools.includes('blog_publish')) {
-          enabledTools.push('blog_publish');
-        }
-        if (blogGates.edit && !enabledTools.includes('blog_edit')) {
-          enabledTools.push('blog_edit');
-        }
-        if (blogGates.draft && !enabledTools.includes('blog_draft')) {
-          enabledTools.push('blog_draft');
-        }
-        hasContentTransform = blogGates.draft;
+        if (blogGates.publish) trigger('blog_publish');
+        if (blogGates.edit) trigger('blog_edit');
+        if (blogGates.draft) trigger('blog_draft');
 
         // The only honest gate for `skill` is whether this user has a model-invocable skill - a
         // user with zero skills used to pay ~161 tokens for a tool whose every call returns "you
         // have no LLM-invocable skills defined", with no catalog in the prompt to name one.
         if (
-          !enabledTools.includes('skill') &&
           shouldOfferSkillTool({
             hasSkillRepository: Boolean(this.db.skills),
             invocableSkillCount: (quest as QuestWithSkillCatalog)._skillCatalog?.length ?? 0,
@@ -2922,19 +2921,42 @@ export class ChatCompletionProcess {
             priorToolNames,
           })
         ) {
-          enabledTools.push('skill');
+          trigger('skill');
         }
 
-        if (
-          await shouldOfferDataLakeTools({
-            message,
-            priorToolNames,
-            dataLakesEnabled: async () => Boolean(await this.db.adminSettings.getSettingsValue('EnableDataLakes')),
-          })
-        ) {
-          for (const tool of DATA_LAKE_TOOL_NAMES) {
-            if (!enabledTools.includes(tool)) enabledTools.push(tool);
-          }
+        const dataLakesEnabled = async () => Boolean(await this.db.adminSettings.getSettingsValue('EnableDataLakes'));
+        if (await shouldOfferDataLakeTools({ message, priorToolNames, dataLakesEnabled })) {
+          DATA_LAKE_TOOL_NAMES.forEach(trigger);
+        }
+
+        const sticky = await resolveStickyAutoAddedTools({
+          persisted: session.autoAddedTools,
+          triggered,
+          eligibility: {
+            isAdmin: Boolean(this.user.isAdmin),
+            hasBlogIntegration: Boolean(this.user.blogIntegration),
+            hasSkillRepository: Boolean(this.db.skills),
+            dataLakesEnabled,
+          },
+        });
+        // Sorted, so a given set always reaches the provider in the same order.
+        for (const tool of sticky.tools) {
+          if (!enabledTools.includes(tool)) enabledTools.push(tool);
+        }
+        // Read off the final set, not this turn's regex: a blog_draft carried over from an earlier
+        // turn needs its tool-prompt section just as much as the turn that triggered it.
+        hasContentTransform = blogGates.draft || sticky.tools.includes('blog_draft');
+
+        if (sticky.newlyTriggered.length > 0) {
+          session.autoAddedTools = [...new Set([...(session.autoAddedTools ?? []), ...sticky.newlyTriggered])];
+          // A failed write costs stickiness on the next turn, never this one.
+          await this.db.sessions.addAutoAddedTools?.(session.id, sticky.newlyTriggered).catch(error => {
+            logger.warn('[AutoAddedTools] Failed to persist auto-added tools on the session', {
+              sessionId: session.id,
+              tools: sticky.newlyTriggered,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
         }
       }
 
@@ -3113,14 +3135,38 @@ export class ChatCompletionProcess {
       // inline (audio, an image on a vision-less model, a held or oversized image), and detaching
       // those would destroy notebook contents as a side effect of an ordinary prompt. The helper
       // re-checks both halves; see its docstring for the two gates.
-      const scrubbed = await scrubMissingKnowledgeIds(session.knowledgeIds ?? [], dataSources.fileNotices, {
-        db: { fabFiles: this.db.fabfiles, sessions: this.db.sessions },
-        logger: this.logger,
-      });
+      const scrubbed = await scrubMissingKnowledgeIds(
+        session.knowledgeIds ?? [],
+        dataSources.fileNotices,
+        { db: { fabFiles: this.db.fabfiles, sessions: this.db.sessions }, logger: this.logger },
+        session.id
+      );
       if (scrubbed.length > 0) {
         // Keep the in-memory copy in step so later reads in this run see the cleaned set.
         const removed = new Set(scrubbed);
         session.knowledgeIds = (session.knowledgeIds ?? []).filter((id: string) => !removed.has(id));
+      }
+      // The same ghost can live in the user's own system files, which are re-sent on every prompt of
+      // every session. Same gates; the admin-wide list is only reported, never edited from a turn.
+      const scrubbedSystemFiles = await scrubStaleSystemFiles(
+        this.user.id,
+        dataSources.enabledSystemFileIds,
+        dataSources.fileNotices,
+        { db: { fabFiles: this.db.fabfiles, users: this.db.users }, logger: this.logger }
+      );
+      if (scrubbedSystemFiles.length > 0) {
+        const removed = new Set(scrubbedSystemFiles);
+        this.user.systemFiles = (this.user.systemFiles ?? []).filter(entry => !removed.has(entry.fileId));
+        this.systemFilesCache?.delete(`system-files-${this.user.id}`);
+      }
+      const globalSystemFileIdSet = new Set(dataSources.globalSystemFileIds);
+      const unresolvedGlobalSystemFiles = dataSources.fileNotices.filter(
+        notice => notice.band === 'unresolved' && globalSystemFileIdSet.has(notice.fabFileId)
+      ).length;
+      if (unresolvedGlobalSystemFiles > 0) {
+        this.logger.warn('The SystemFiles admin setting lists files that did not resolve', {
+          count: unresolvedGlobalSystemFiles,
+        });
       }
 
       // Persisted before the completion runs: an attachment that failed to arrive is worth showing
@@ -3182,6 +3228,7 @@ export class ChatCompletionProcess {
         subagentTelemetryData: this.subagentTelemetryData,
         sendStatusUpdate: (q, status, options) => this.sendStatusUpdate(q, status, options),
         onToolPreamble: this.onToolPreamble,
+        modelAdmission: this.modelAdmission,
         decide: this.decide,
       });
 
@@ -3287,6 +3334,10 @@ export class ChatCompletionProcess {
         ? await resolveToolConfigSafely('music_generation', musicToolConfigResolver, logger)
         : null;
 
+      const subagentModels = agentStore
+        ? await this.loadSubagentModels(models, modelInfo, entitlementKeys, logger)
+        : undefined;
+
       let allTools = toolBuilder.buildTools({
         enabledTools,
         // Auto-offers are OUR additions, not the caller's, and MCP tools are merged past the
@@ -3321,6 +3372,7 @@ export class ChatCompletionProcess {
           adminSettingsEnforceCredits: !!adminSettingsEnforceCredits,
           models,
         },
+        subagentModels,
         agentOnlyMcpServers,
         apiKeyTable,
         getAbortSignal: () => abortSignalHolder.signal,
@@ -3571,7 +3623,7 @@ export class ChatCompletionProcess {
       // The built list drops video_generation without a usable config (buildSharedTools), so this is the real offer.
       const videoGenerationAvailable = allTools?.some(t => t.toolSchema.name === 'video_generation') ?? false;
 
-      const toolPromptMessage = await toolBuilder.buildToolPrompt({
+      const toolPromptMessages = await toolBuilder.buildToolPrompt({
         toolPromptId,
         hasContentTransform: hasContentTransform && blogDraftAvailable,
         hasChessEngine: enabledTools.includes('chess_engine'),
@@ -3606,6 +3658,10 @@ export class ChatCompletionProcess {
       const messageBuildingStartTime = Date.now();
       // Generate current date context for the AI.
       // Use user's browser timezone if available, otherwise fall back to server timezone.
+      //
+      // Per timezone-day, so it sits BEHIND the deployment-wide shareable prefix (see
+      // PER_CALLER_AUTHORED_SOURCES); leading the stack, it made that prefix a cache write per
+      // user per day. It is still inside the caller's own cached region, hence:
       //
       // DAY granularity only, deliberately NO clock time. This block sits inside the
       // cached system prefix: the Anthropic caching adapter marks the LAST system block with
@@ -3693,35 +3749,29 @@ export class ChatCompletionProcess {
             content: getSettingsValue('AbstentionPrompt', defaultAdminSettings, ABSTENTION_PROMPT),
           },
         ],
-        // Inject view registry summary when the navigate_view tool reached the model
+        // Inject view registry summary when the navigate_view tool reached the model. The base list
+        // is the same for every user (shareable prefix); the admin views and the current-page
+        // emphasis vary per caller and ride behind it as viewRegistryAdmin.
         viewRegistry: navigateViewAvailable
           ? [
               {
                 role: 'system' as const,
                 // Dropped again if the turn later continues without tools; see stripToolDependentMessages.
                 requiresTool: 'navigate_view',
-                content: (() => {
-                  // Extract current path from extraContextMessages for context-aware prompting
-                  const viewCtx = extraContextMessages.find(
-                    m => typeof m.content === 'string' && m.content.includes('[Current View Context]')
-                  );
-                  const ctxStr = typeof viewCtx?.content === 'string' ? viewCtx.content : '';
-                  const currentPath = ctxStr.match(/Path:\s*(\S+)/)?.[1] || '';
-                  let summary = getViewSummaryForLLM({ isAdmin: this.user?.isAdmin });
-                  // Add path-specific emphasis
-                  if (currentPath.startsWith('/admin')) {
-                    summary +=
-                      '\n\nThe user is currently on the Admin page. When they ask about any admin feature, you MUST call navigate_view with the matching admin.* tab.';
-                  }
-                  return summary;
-                })(),
+                content: getViewSummaryForLLM({ isAdmin: false }),
               },
             ]
+          : [],
+        viewRegistryAdmin: navigateViewAvailable
+          ? buildViewRegistryAdminMessages({ isAdmin: this.user?.isAdmin === true, extraContextMessages })
           : [],
         // Prompt-only, so unlike viewRegistry it needs no tool and runs on every in-app turn;
         // withheld with the other auto-offers - see replyChoicesOffered.
         replyChoices: replyChoicesOffered ? [{ role: 'system' as const, content: REPLY_CHOICES_GUIDANCE }] : [],
-        toolPrompt: toolPromptMessage ? [toolPromptMessage] : [], // Tool prompt, blog draft, MCP guidance, conversation context, agent delegation
+        // Split so the per-user half (timezone, MCP integrations, conversation entities, agent
+        // roster) cannot cut the shareable prefix short; see ToolPromptMessages.
+        toolPrompt: toolPromptMessages.guidance ? [toolPromptMessages.guidance] : [],
+        toolContext: toolPromptMessages.context ? [toolPromptMessages.context] : [],
         agentDetection: featureContextMessages['agentDetection'], // Add agent system prompts
         questMaster: featureContextMessages['questMaster'],
         organizationPrompt: featureContextMessages['organizationPrompt'], // Add team-wide system prompt
@@ -3768,6 +3818,17 @@ export class ChatCompletionProcess {
       // to translate it (Anthropic-family does, the others ignore it per the field's contract),
       // and the cacheStrategy built later in this method still governs the other breakpoints.
       markShareablePrefixBoundary(admittedContextMessages);
+      // The per-turn sources that ride in the current user turn instead of system (see
+      // PER_TURN_CONTEXT_SOURCES). Not under a promptMode: those callers asked for a request
+      // they can compare against the bare model, and moving their own system messages would alter it.
+      // `extraContext` moves only where the producer flagged it: the same channel carries the real
+      // system prompt of voice, Slack and programmatic launches.
+      const perTurnExtraContext = new Set<IMessage>(extraContextMessages.filter(m => m.perTurn === true) as IMessage[]);
+      const perTurnContextMessages = new Set<IMessage>(
+        promptMode
+          ? []
+          : admittedContextMessages.filter(t => isPerTurnContext(t, perTurnExtraContext)).map(t => t.message)
+      );
       const contextAndSystemMessages: IMessage[] = admittedContextMessages.map(t => t.message);
       // Carries each message's source across into the builder, which sees only an IMessage[] and so
       // could otherwise decide what to drop on array position alone. Keyed by reference, which survives
@@ -3807,6 +3868,9 @@ export class ChatCompletionProcess {
         buildOptions
       );
       let messages = firstBuild.messages;
+      // Where the cache breakpoint belongs: the last message the next turn will reproduce as history.
+      // Reassigned by the overflow-recovery rebuild below, which sheds turns and rebuilds `messages`.
+      let lastHistoryMessage = previousMessages.at(-1);
       const messageTruncationInfo = firstBuild.messageTruncation;
       // Unlike messageTruncationInfo, this DOES get refreshed by the overflow-recovery rebuild below -
       // that rebuild produces fresh message identities, so pinning to the first build would report
@@ -3966,6 +4030,7 @@ export class ChatCompletionProcess {
             const trimmed = dropOldestHistoryTurn(recoveryHistory);
             if (!trimmed) break; // only the most-recent turn left: system/tools/prompt itself is oversized
             recoveryHistory = trimmed;
+            lastHistoryMessage = recoveryHistory.at(-1);
             // messageTruncationInfo is deliberately not refreshed here - it stays pinned to the first build.
             // Reserve toolSchemaTokens up front: this loop recomputes inputTokens as effectiveTotalTokens
             // + toolSchemaTokens at the bottom of every iteration, so budgeting this rebuild on the raw
@@ -4171,7 +4236,8 @@ export class ChatCompletionProcess {
             admittedContextMessages,
             deliveredMessages,
             undefined,
-            injectedBlocks
+            injectedBlocks,
+            perTurnContextMessages
           );
         } catch (promptTextError) {
           logger.warn(`📊 Failed to itemize the effective system prompt:`, promptTextError);
@@ -4658,6 +4724,21 @@ export class ChatCompletionProcess {
       // Start the cancellation watcher
       startCancellationWatcher();
 
+      // The request body. Per-turn context moves from the system prompt into the front of the current
+      // user message here, last: budgeting, delivery telemetry and overflow recovery above all work
+      // on the system-role form, and `messages` stays that form for everything persisted from it.
+      // The history breakpoint is flagged on the message itself, before relocation, so both the
+      // adapter's same-role merge and the tool rounds below see the same object.
+      const anchoredMessages = markHistoryCacheAnchor(messages, lastHistoryMessage);
+      const turnContext = relocatePerTurnContext(
+        anchoredMessages,
+        perTurnContextMessages,
+        currentUserPromptMessages[0]
+      );
+      let outboundMessages = turnContext.messages;
+      // The adapter's own end-of-array anchor would only add a breakpoint on the volatile current turn.
+      const historyAnchorMarked = anchoredMessages !== messages;
+
       // Check if Research Mode is enabled and handle parallel processing
       if (isResearchMode) {
         logger.info(
@@ -4669,7 +4750,7 @@ export class ChatCompletionProcess {
         // Handle Research Mode parallel processing
         const researchResults = await researchModeService.processResearchMode(
           researchMode,
-          messages,
+          outboundMessages,
           options as ICompletionOptions,
           async (configId: string, streamedTexts: (string | null | undefined)[], completionInfo?: unknown) => {
             // Handle streaming for each configuration
@@ -4682,7 +4763,7 @@ export class ChatCompletionProcess {
         // abort the controller, so the terminal status has to reflect that rather than
         // unconditionally claiming the turn finished.
         quest.researchModeResults = researchResults;
-        quest.status = successStatus();
+        setTerminalQuestStatus(quest, successStatus());
 
         // This branch returns before the normal settlement, so each configuration's usage settles
         // the hold here; one that streamed nothing (failed or cancelled up front) costs nothing.
@@ -4718,6 +4799,9 @@ export class ChatCompletionProcess {
           })),
         });
 
+        // This path skips the normal finalize below, so end the record here: the reply is done
+        // and its Answer diagnosis would otherwise show "still running" permanently.
+        turnTiming.finish();
         await saveQuest(quest);
 
         // Send final status update to complete the Research Mode processing
@@ -4736,6 +4820,7 @@ export class ChatCompletionProcess {
       );
 
       timer.phase('llm_completion');
+      turnTiming.markLlmRequestStarted();
       logger.info(`⏱️ [${Date.now() - processStartTime}ms] === LLM STREAMING PHASE START ===`);
 
       // Bounded multi-hop fallback: a provider-wide outage walks the preference chain one
@@ -4877,21 +4962,23 @@ export class ChatCompletionProcess {
             });
 
             // Determine cache strategy (enable for multi-turn conversations with 2+ messages)
-            const messageCount = messages.length;
+            const messageCount = outboundMessages.length;
             const hasTools = !!options.tools?.length;
 
             // Count message types for debugging
             const messageBreakdown = {
-              system: messages.filter(m => m.role === 'system').length,
-              user: messages.filter(m => m.role === 'user').length,
-              assistant: messages.filter(m => m.role === 'assistant').length,
+              system: outboundMessages.filter(m => m.role === 'system').length,
+              user: outboundMessages.filter(m => m.role === 'user').length,
+              assistant: outboundMessages.filter(m => m.role === 'assistant').length,
             };
 
             const cacheStrategy: ICacheStrategy = {
               enableCaching: messageCount >= 2, // Enable caching for multi-turn conversations
               cacheSystemPrompt: true, // Always cache system prompts
               cacheTools: hasTools, // Cache tools if present
-              cacheConversationHistory: messageCount >= 2, // Cache history for multi-turn
+              // A flagged history message already closes the cached prefix; asking the adapter for
+              // its own end-of-array anchor would cache the current turn as well.
+              cacheConversationHistory: !historyAnchorMarked && messageCount >= 2, // Cache history for multi-turn
               cacheTTL: '5m', // Use 5-minute TTL for active conversations
               conversationId: quest.id, // Use quest ID for xAI cache affinity
             };
@@ -4923,23 +5010,33 @@ export class ChatCompletionProcess {
             // takes the real overloaded-error path: same-model overload retries on the primary,
             // then forceSwitch through the fallback chain - matching how a genuine sustained
             // outage degrades. See the Guide for Testers.
-            if (
+            const previewTestMarkerActive = (marker: string) =>
               process.env.E2E_ENDPOINTS_ENABLED === 'true' &&
               (currentModel.backend === ModelBackend.Bedrock || currentModel.backend === ModelBackend.Anthropic) &&
-              JSON.stringify(messages).includes(FORCE_FALLBACK_TEST_MARKER)
-            ) {
+              JSON.stringify(outboundMessages).includes(marker);
+            if (previewTestMarkerActive(FORCE_FALLBACK_TEST_MARKER)) {
               const forced = new Error(
                 `ServiceUnavailableException: simulated ${currentModel.backend} outage for fallback testing (preview only)`
               );
               forced.name = 'ServiceUnavailableException';
               throw forced;
             }
+            // Same gate; the real typed timeout the backend raises, so the loop takes the slow path.
+            if (previewTestMarkerActive(FORCE_STREAM_STALL_TEST_MARKER)) {
+              throw new LlmTimeoutError(
+                'stream_idle',
+                idleTimeoutSeconds * 1000,
+                `stream timeout - simulated ${currentModel.backend} stall (preview only)`
+              );
+            }
 
             await currentLlm.complete(
               currentModel.id,
-              messages,
+              outboundMessages,
               {
                 ...options,
+                // Per attempt: a fallback hop must name the model that actually serves it.
+                modelDisplayName: currentModel.name,
                 // The preference is set from a selector shown only for OpenAI-style reasoning models, so
                 // it must not retune Claude, whose adapters honour reasoningEffort for the completions API.
                 // Checked per attempt: a fallback can swap a GPT model for a Claude one (and back).
@@ -4952,6 +5049,7 @@ export class ChatCompletionProcess {
                 cacheStrategy,
                 _internal: {
                   ...options._internal,
+                  turnTelemetry: turnTiming.sink,
                   enableIdleTimeout,
                   enableRequestTimeout: enableIdleTimeout,
                   idleTimeoutMs: idleTimeoutSeconds * 1000,
@@ -4991,19 +5089,11 @@ export class ChatCompletionProcess {
                     this.sendStatusUpdate(quest, 'First model response', { statusAt: new Date(), silent: true });
 
                     logger.info(`⏱️ [${Date.now() - processStartTime}ms] Time to first chunk: ${timeToFirstChunk}ms`);
-                    logger.info(
-                      `🔍 [DEBUG] First content chunk: ${JSON.stringify(streamedTexts.slice(0, 2))} (Model: ${
-                        currentModel.id
-                      })`
-                    );
+                    logger.info('First content chunk received', { modelId: currentModel.id });
                   }
                 } else if (chunkCount === 0 && streamedTexts.some(text => text != null)) {
                   // Some models might send empty or whitespace-only first chunks
-                  logger.info(
-                    `⚠️ [DEBUG] Empty first chunk received for ${currentModel.id}: ${JSON.stringify(
-                      streamedTexts.slice(0, 2)
-                    )}`
-                  );
+                  logger.info('Empty first chunk received', { modelId: currentModel.id });
                 }
 
                 chunkCount++;
@@ -5038,7 +5128,7 @@ export class ChatCompletionProcess {
                   transitionMode = rapidReplySettings?.transitionMode || 'replace';
 
                   logger.info(
-                    `🔍 [TRANSITION_DEBUG] Query complexity: ${queryComplexity}, Transition mode: ${transitionMode}, Rapid reply content: "${rapidReplyContent}"`
+                    `[TRANSITION_DEBUG] Query complexity: ${queryComplexity}, Transition mode: ${transitionMode}, Rapid reply length: ${rapidReplyContent.length}`
                   );
 
                   // Handle transition based on mode
@@ -5139,7 +5229,11 @@ export class ChatCompletionProcess {
             // the last error-severity log on the abort path; the backends and the
             // formatted summary below were already downgraded. Real failures still dump
             // at error with the full stack.
-            if (isAbortError(lastError) || lastError instanceof ResponsesStreamTruncatedError) {
+            if (
+              isAbortError(lastError) ||
+              isStreamIdleTimeoutError(lastError) ||
+              lastError instanceof ResponsesStreamTruncatedError
+            ) {
               logger.warn(lastError);
             } else {
               logger.error(lastError);
@@ -5192,6 +5286,8 @@ export class ChatCompletionProcess {
                 `🔧 [Tool Pairing Recovery] Detected tool pairing error, stripping tool blocks from history and retrying`
               );
               messages = stripAllToolBlocks(messages, logger);
+              outboundMessages = stripAllToolBlocks(outboundMessages, logger);
+              turnTiming.recordRetry(lastError, 0, currentModel.id);
 
               resetStreamStateForRetry();
 
@@ -5204,9 +5300,14 @@ export class ChatCompletionProcess {
               throw lastError;
             }
 
+            // A timeout our own timers raised means a slow model, not a busy provider. Checked
+            // explicitly so it never takes the overload branch, even worded the old way ("may be
+            // overloaded") by a backend deployed before the typed timeout errors.
+            const isSlowModelTimeout = isSlowModelTimeoutError(lastError);
+
             // Same-model retry: for overloaded errors, retry with exponential backoff
             // before falling back to a different model (transient outages often resolve quickly)
-            if (isOverloadedError(lastError) && fallbackAttempt === 0) {
+            if (!isSlowModelTimeout && isOverloadedError(lastError) && fallbackAttempt === 0) {
               const MAX_OVERLOAD_RETRIES = 3;
               const BASE_DELAY_MS = 2000;
               overloadRetryCount++;
@@ -5226,6 +5327,7 @@ export class ChatCompletionProcess {
                   { statusAt: new Date() }
                 );
 
+                turnTiming.recordRetry(lastError, totalDelay, currentModel.id);
                 await new Promise(resolve => setTimeout(resolve, totalDelay));
 
                 resetStreamStateForRetry();
@@ -5251,6 +5353,7 @@ export class ChatCompletionProcess {
 
               this.sendStatusUpdate(quest, 'AI service is slow, retrying...', { statusAt: new Date() });
 
+              turnTiming.recordRetry(lastError, TIMEOUT_RETRY_DELAY_MS + jitter, currentModel.id);
               await new Promise(resolve => setTimeout(resolve, TIMEOUT_RETRY_DELAY_MS + jitter));
 
               resetStreamStateForRetry();
@@ -5260,7 +5363,8 @@ export class ChatCompletionProcess {
 
             // Stream idle timeout retry: for mid-stream stalls, retry once with short backoff.
             // Unlike request timeouts (model never started), stream idle timeouts mean the model
-            // started responding but stalled - likely transient overload. One retry before fallback.
+            // started responding but stalled. One retry, then fall back: repeating the same stall
+            // on the same model wastes minutes.
             if (isStreamIdleTimeoutError(lastError) && !streamIdleTimeoutRetried) {
               streamIdleTimeoutRetried = true;
               const STREAM_IDLE_RETRY_DELAY_MS = 3000;
@@ -5272,6 +5376,7 @@ export class ChatCompletionProcess {
 
               this.sendStatusUpdate(quest, 'AI service is slow, retrying...', { statusAt: new Date() });
 
+              turnTiming.recordRetry(lastError, STREAM_IDLE_RETRY_DELAY_MS + jitter, currentModel.id);
               await new Promise(resolve => setTimeout(resolve, STREAM_IDLE_RETRY_DELAY_MS + jitter));
 
               resetStreamStateForRetry();
@@ -5302,11 +5407,14 @@ export class ChatCompletionProcess {
                 apiKeyTable,
                 logger,
                 {
-                  forceSwitch: overloadRetriesExhausted,
+                  // A timeout that reaches here has spent its one same-model retry. triedModelIds
+                  // already excludes the failed model; forceSwitch states that intent outright.
+                  forceSwitch: overloadRetriesExhausted || isSlowModelTimeout,
                   excludeModelIds: triedModelIds,
                   preferUntriedBackend: isFinalHop,
                   endUserId: this.user.id,
                   requireTools: !!options.tools?.length,
+                  isAdmitted: this.modelAdmission?.admits,
                 }
               );
 
@@ -5323,6 +5431,9 @@ export class ChatCompletionProcess {
               primaryFailureReason ??= sanitizeTelemetryError(lastError);
               fallbackAttempt++;
               triedModelIds.add(currentModel.id);
+              // The failure that caused the hop is a retry too, on another model.
+              turnTiming.recordRetry(lastError, 0, failedModel.id);
+              turnTiming.recordFallbackHop();
 
               logger.info(`🔄 [Fallback] Switching to fallback model: ${currentModel.id} (attempt ${fallbackAttempt})`);
 
@@ -5392,7 +5503,7 @@ export class ChatCompletionProcess {
 
         // Mark quest as done when all the replies are received
         const finalStatus = successStatus();
-        quest.status = finalStatus;
+        setTerminalQuestStatus(quest, finalStatus);
         clearStaleFallbackInfoIfNoAnswer();
         const visibleCharsBeforeStrip = countVisibleChars(quest.replies);
         // A Stop that resolves ends the stream wherever it was, same as the rejecting Stop below.
@@ -5431,8 +5542,11 @@ export class ChatCompletionProcess {
           });
         }
 
+        // Widen explicitly: the terminal flip happens inside setTerminalQuestStatus, so control
+        // flow analysis still believes status is 'running' at this point.
+        const statusAtEnd = quest.status as IChatHistoryItemDocument['status'];
         const incompleteAnswerNotice = buildIncompleteAnswerNotice({
-          stopped: quest.status === 'stopped',
+          stopped: statusAtEnd === 'stopped',
           toolCallCount: toolCallsSeen,
           visibleCharsAfterLastToolCall: countVisibleChars(quest.replies) - visibleCharsAtLastToolCall,
           stopReason: actualTokenUsage.stopReason,
@@ -5448,7 +5562,7 @@ export class ChatCompletionProcess {
         });
         // When the reply ended on a stripped call, say why in place of the generic notice. An answer
         // written after the call gets no notice: "try again" next to it would read as "you got nothing".
-        const narratedCallLeftNoAnswer = narratedStrip.endsOnCall && quest.status !== 'stopped';
+        const narratedCallLeftNoAnswer = narratedStrip.endsOnCall && statusAtEnd !== 'stopped';
         const turnNotice = narratedCallLeftNoAnswer ? NARRATED_TOOL_CALL_NOTICE : incompleteAnswerNotice;
         if (incompleteAnswerNotice && !narratedCallLeftNoAnswer) {
           logger.warn('[IncompleteAnswer] Turn ended without an answer after its last tool call', {
@@ -6039,6 +6153,15 @@ export class ChatCompletionProcess {
             });
           }
 
+          // Same turns / tier basis the estimatedCost branches above priced on.
+          const priceStamp = buildUsagePriceStamp(currentModel, {
+            turns: hasProviderUsage ? actualTokenUsage.turnUsage : undefined,
+            tierBasisTokens: hasProviderUsage
+              ? settledInputTokens + cacheReadInputTokens + cacheCreationInputTokens
+              : localInputTokens,
+            localEstimate: !hasProviderUsage,
+          });
+
           // Dual-write usage event: ties frozen COGS to credits debited
           // for margin reporting. Fire-and-forget - must never affect billing.
           this.db.usageEvents
@@ -6067,6 +6190,7 @@ export class ChatCompletionProcess {
               providerOutputTokens: actualTokenUsage?.outputTokens,
               costUsd: estimatedCost,
               creditsCharged: textCreditsUsed,
+              ...priceStamp,
               // Quest-level write-off (uncollected part of the whole settlement,
               // tools included), recorded on the chat settlement event so
               // collected revenue = sum(creditsCharged) - sum(writtenOffCredits).
@@ -6240,7 +6364,7 @@ export class ChatCompletionProcess {
           quest.promptMeta.warnings = [...(quest.promptMeta.warnings ?? []), earlyStopStamp.warning];
         }
 
-        quest.status = successStatus();
+        setTerminalQuestStatus(quest, successStatus());
         clearStaleFallbackInfoIfNoAnswer();
 
         // Context Telemetry: Finalize and attach to promptMeta
@@ -6444,10 +6568,13 @@ export class ChatCompletionProcess {
           }
         }
 
-        quest.status = successStatus();
+        setTerminalQuestStatus(quest, successStatus());
         clearStaleFallbackInfoIfNoAnswer();
 
         timer.phase('save');
+        // Before the terminal frame, so totalMs rides it and the awaited save below rather than
+        // only the fire-and-forget final save.
+        turnTiming.finish();
 
         // P4-b: Fire-and-forget status update, don't block on WebSocket delivery
         this.sendStatusUpdate(quest, `Completed Quest`, { statusAt: new Date(), silent: true });
@@ -6550,18 +6677,26 @@ export class ChatCompletionProcess {
         // Post-streaming processing failed, but the reply is already streamed.
         // Do NOT overwrite quest.reply, quest.replies, or quest.status - keep status as 'done'.
         logger.error(`❌ [POST_PROCESS] Error in post-streaming processing for quest ${questId}:`, postProcessError);
-        quest.status = successStatus();
+        setTerminalQuestStatus(quest, successStatus());
         clearStaleFallbackInfoIfNoAnswer();
+        turnTiming.finish();
         // Ensure quest is persisted as 'done' even if the error occurred before the normal save
         await saveQuest(quest);
       }
     } catch (err) {
       const totalResponseTime = Date.now() - processStartTime;
+      // Every branch below that saves the quest keeps the failed turn's timing too.
+      turnTiming.finish();
 
-      // A Stop or disconnect that threw still bills what streamed; the rollback below then has
-      // nothing left to refund. Any other failure refunds the whole hold. Keyed on the basis, not
-      // the hold: a hold the caller already released (a stuck turn) still bills the full actual.
-      if (this.reservationBasis && this.reservedCreditsOwnerId && isAbortError(err)) {
+      // A Stop or disconnect that threw, or a later tool call refused for credits, still bills what
+      // streamed and the tools already delivered; the rollback below then has nothing left to refund.
+      // Any other failure refunds the whole hold. Keyed on the basis, not the hold: a hold the caller
+      // already released (a stuck turn) still bills the full actual.
+      if (
+        this.reservationBasis &&
+        this.reservedCreditsOwnerId &&
+        (isAbortError(err) || resolveQuestErrorCode(err) === 'insufficient_credits')
+      ) {
         await this.settleAbortedReservation(quest, processStartTime, logger).catch(settleError =>
           logger.error(`Failed to settle the aborted turn for quest ${questId}; refunding its hold`, settleError)
         );
@@ -6607,7 +6742,7 @@ export class ChatCompletionProcess {
         isAbortError(err) && (await this.db.quests.findByIdWithStatus(questId).catch(() => null))?.status === 'stopped';
       if (stoppedByUser) {
         logger.log(`Chat completion was stopped by user for quest ${questId}`);
-        quest.status = 'stopped';
+        setTerminalQuestStatus(quest, 'stopped');
         // Same rules as the success path, so an abort that rejects and one that resolves persist alike.
         flagNarratedToolCalls(applyNarratedToolCallStrip(quest, turnOfferedToolNames, { truncated: true }).toolNames);
         clearStaleFallbackInfoIfNoAnswer();
@@ -6632,7 +6767,7 @@ export class ChatCompletionProcess {
       };
       setErrorReply((err as Error).message);
       quest.type = 'error';
-      quest.status = 'done';
+      setTerminalQuestStatus(quest, 'done');
       // A turn can switch models and still fail; no model answered it, so it must not claim one did.
       quest.fallbackInfo = null;
       // Classifier for the client's "Add Credits" CTA. Chat reservation throws
@@ -6658,31 +6793,31 @@ export class ChatCompletionProcess {
         logger.log(`Chat completion was stopped by user for quest ${questId}: ${err.message}`);
         setErrorReply('The request was interrupted. Please try sending your message again.');
         quest.type = 'error';
-        quest.status = 'done';
+        setTerminalQuestStatus(quest, 'done');
         finalQuest = await saveQuest(quest);
         return;
-      } else if (err instanceof ResponsesStreamTruncatedError) {
+      } else if (
+        err instanceof ResponsesStreamTruncatedError ||
+        (err instanceof Error && isTruncatedStreamError(err))
+      ) {
         // WARN, not error: an upstream close mid-stream is recoverable by resending, and error
         // severity would trip the CloudWatch ERROR alert path.
         logger.warn(`[Truncated] Quest ${questId}: ${err.message}`);
         setErrorReply('The request was interrupted. Please try sending your message again.');
         quest.type = 'error';
-        quest.status = 'done';
+        setTerminalQuestStatus(quest, 'done');
         finalQuest = await saveQuest(quest);
         return;
-      } else if (
-        err instanceof Error &&
-        (err.message.includes('request timeout') || err.message.includes('stream timeout'))
-      ) {
+      } else if (err instanceof Error && isSlowModelTimeoutError(err)) {
         // WARN, not error: an upstream request/idle timeout is expected and
         // recoverable (the user gets the retry message below and the backend
         // already emitted trend metrics). Logging at error severity re-trips the
         // CloudWatch ERROR to LiveOps/Slack alert path that the backend WARN downgrade
         // was meant to avoid.
         logger.warn(`[Timeout] Quest ${questId}: ${err.message}`);
-        setErrorReply('The AI service is currently experiencing high demand. Please try again in a few minutes.');
+        setErrorReply(SLOW_MODEL_ERROR_REPLY);
         quest.type = 'error';
-        quest.status = 'done';
+        setTerminalQuestStatus(quest, 'done');
         finalQuest = await saveQuest(quest);
         return;
       } else if (err instanceof Error && isToolPairingError(err)) {
@@ -6690,14 +6825,14 @@ export class ChatCompletionProcess {
         logger.error(`[Tool Pairing Error] Quest ${questId}: ${err.message}`);
         setErrorReply('I encountered an issue with the conversation history. Please try again or start a new session.');
         quest.type = 'error';
-        quest.status = 'done';
+        setTerminalQuestStatus(quest, 'done');
         finalQuest = await saveQuest(quest);
         return;
       } else if (err instanceof Error && isOverloadedError(err)) {
         logger.error(`[Overloaded Error] Quest ${questId}: ${err.message}`);
         setErrorReply('The AI service is currently experiencing high demand. Please try again in a few minutes.');
         quest.type = 'error';
-        quest.status = 'done';
+        setTerminalQuestStatus(quest, 'done');
         finalQuest = await saveQuest(quest);
         return;
       } else if (err instanceof Error && err.message.startsWith('Your request is too large for')) {
@@ -6707,6 +6842,9 @@ export class ChatCompletionProcess {
       }
       throw err;
     } finally {
+      // A throw inside the catch can reach here before any terminal write, so the pending
+      // trailing send is dropped here too - the publish below is the only terminal frame.
+      cancelPendingStreamingSend?.();
       if (cancelWatcherInterval) {
         clearInterval(cancelWatcherInterval);
       }
@@ -6796,7 +6934,7 @@ export class ChatCompletionProcess {
    * the full actual. A failed balance update restores the claim for the caller's rollback to refund.
    */
   private async settleReservation(
-    quest: { id: string; sessionId: string },
+    quest: { id: string; sessionId: string; creditsUsed?: number | null },
     usages: ReservationUsage[],
     processStartTime: number,
     logger: Logger,
@@ -6839,6 +6977,7 @@ export class ChatCompletionProcess {
     }
     logger.info(`Credits settled for quest ${quest.id}: reserved=${reserved}, actual=${totalCredits}, delta=${delta}`);
     this.reservedCreditHolder = null;
+    quest.creditsUsed = totalCredits;
 
     for (const usage of priced) {
       this.db.usageEvents
@@ -6858,6 +6997,8 @@ export class ChatCompletionProcess {
           cacheWriteTokens: usage.cacheCreationInputTokens ?? 0,
           costUsd: usage.costUsd,
           creditsCharged: usage.credits,
+          // getTextModelCost above tiered on inputTokens (its default basis).
+          ...buildUsagePriceStamp(usage.modelInfo, { tierBasisTokens: usage.inputTokens }),
           writtenOffCredits: writtenOffCredits > 0 && usage === priced[0] ? writtenOffCredits : undefined,
           status,
           latencyMs: Date.now() - processStartTime,
@@ -6922,7 +7063,7 @@ export class ChatCompletionProcess {
    * billable, and the caller's rollback refunds the whole hold.
    */
   private async settleAbortedReservation(
-    quest: { id: string; sessionId: string; replies?: string[] | null; reply?: string | null },
+    quest: IChatHistoryItemDocument,
     processStartTime: number,
     logger: Logger
   ): Promise<void> {
@@ -6955,6 +7096,17 @@ export class ChatCompletionProcess {
             cacheCreationInputTokens,
           }
         : { modelInfo: basis.modelInfo, inputTokens: basis.inputTokens, outputTokens };
+    if (quest.promptMeta) {
+      const calls = [...(quest.promptMeta.functionCalls ?? [])];
+      // A thrown tool call may prevent the backend's final toolsUsed callback. Keep delivered charges visible.
+      for (const [name, charges] of this.toolCreditsMap) {
+        const recordedCalls = calls.filter(call => call.name === name).length;
+        for (let index = recordedCalls; index < charges.length; index++) {
+          calls.push({ name, parameters: {} });
+        }
+      }
+      quest.promptMeta.functionCalls = settleToolCallCredits(calls, this.toolCreditsMap);
+    }
     await this.settleReservation(quest, [usage], processStartTime, logger, 'error', toolCredits);
   }
 
@@ -7117,6 +7269,36 @@ When using tools that require file IDs (like edit_image), use the ID shown above
   }
 
   /**
+   * The models a chat-delegated subagent may run on: the user's runnable catalog under the rule
+   * ChatCompletionInvoke admits the turn's model by (`filterRunnableModels`), plus the turn's own
+   * model, which a subagent pinned to anything else falls back to. Fails closed to the turn's
+   * model alone when the model configurations cannot be read.
+   */
+  private async loadSubagentModels(
+    models: ModelInfo[],
+    turnModel: ModelInfo,
+    entitlementKeys: string[],
+    logger: Logger
+  ): Promise<ModelInfo[]> {
+    let configurations: LLMModelConfig[];
+    try {
+      const setting = await this.db.adminSettings.findOne({ settingName: 'llmModelConfigurations' });
+      configurations = Array.isArray(setting?.settingValue) ? (setting.settingValue as LLMModelConfig[]) : [];
+    } catch (err) {
+      logger.warn('[Delegation] failed to read model configurations; subagents run on the turn model only', err);
+      return [turnModel];
+    }
+    const runnable = filterRunnableModels(
+      models,
+      configurations,
+      this.user.tags ?? [],
+      this.user.isAdmin ?? false,
+      entitlementKeys
+    );
+    return runnable.includes(turnModel) ? runnable : [turnModel, ...runnable];
+  }
+
+  /**
    * Load admin settings in background (non-blocking).
    * Returns a promise that resolves when real settings are available.
    */
@@ -7126,7 +7308,9 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     try {
       logger.info(`⏱️ [${Date.now() - processStartTime}ms] Background admin settings fetch started`);
 
-      const adminSettings = await getSettingsMap(this.db, { logger });
+      // skipCache: the billing/access flags in this map gate money, and this process outlives an
+      // admin write made by another one. One read here, once per turn - not per chunk.
+      const adminSettings = await getSettingsMap(this.db, { logger, skipCache: true });
 
       const fetchTime = Date.now() - adminSettingsStartTime;
       logger.info(`⏱️ [${Date.now() - processStartTime}ms] Background admin settings completed in ${fetchTime}ms`);
@@ -7134,19 +7318,16 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       return adminSettings;
     } catch (error) {
       logger.warn(`Background admin settings fetch failed after ${Date.now() - adminSettingsStartTime}ms:`, error);
-      // Return defaults if background fetch fails
-      return this.getDefaultAdminSettings();
+      // A stale-but-real map beats fabricated defaults here: getDefaultAdminSettings() hardcodes
+      // enforceCredits 'true', which would charge a deployment whose admin turned metering off.
+      // Fall back to the cached map, and to the defaults only when there is no cached map either.
+      try {
+        return await getSettingsMap(this.db, { logger });
+      } catch (cacheError) {
+        logger.warn('Cached admin settings fallback failed too; using defaults:', cacheError);
+        return this.getDefaultAdminSettings();
+      }
     }
-  }
-
-  /**
-   * Get setting value with default fallback.
-   * Works with both default settings and real admin settings.
-   */
-  private getDefaultSettingValue(key: string, settings: Record<string, string | number | boolean>): boolean {
-    const value = settings[key];
-    if (!value) return false;
-    return value.toString().toLowerCase() === 'true' || value.toString() === '1';
   }
 
   private async buildOptimizedFeatures(

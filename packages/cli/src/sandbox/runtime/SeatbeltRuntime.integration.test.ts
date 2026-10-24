@@ -4,7 +4,8 @@
  */
 import { describe, it, expect, afterAll } from 'vitest';
 import { execSync } from 'child_process';
-import { existsSync, mkdirSync, rmSync } from 'fs';
+import net from 'net';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import path from 'path';
 import os from 'os';
 import { SeatbeltRuntime } from './SeatbeltRuntime.js';
@@ -44,6 +45,77 @@ describe.skipIf(process.platform !== 'darwin')('SeatbeltRuntime integration', ()
       expect(output.trim()).toBe('hello');
     } finally {
       cleanupWrapped(wrapped.cleanupPaths);
+    }
+  });
+
+  it.each([true, false])(
+    'protects missing metadata and credentials with write confinement %s',
+    writeOnlyToWorkingDir => {
+      const fixture = mkdtempSync(path.join(os.tmpdir(), 'b4m-seatbelt-security-'));
+      try {
+        const cwd = path.join(fixture, 'workspace');
+        mkdirSync(path.join(cwd, '.git'), { recursive: true });
+        const credentialPath = path.join(fixture, 'credential');
+        writeFileSync(credentialPath, 'dummy-token');
+        const commands = [
+          `cat "${credentialPath}"`,
+          `touch "${path.join(cwd, '.git/config')}"`,
+          `mkdir "${path.join(cwd, '.git/hooks')}"`,
+          `mkdir "${path.join(cwd, '.bike4mind')}"`,
+        ];
+        for (const command of commands) {
+          const wrapped = runtime.wrapCommand({
+            command,
+            cwd,
+            filesystemConfig: {
+              writeOnlyToWorkingDir,
+              allowedReadPaths: [fixture, credentialPath],
+              deniedPaths: [credentialPath],
+            },
+            networkEnabled: false,
+          });
+          try {
+            expect(() =>
+              execSync(wrapped.commandString, { encoding: 'utf-8', timeout: 10000, stdio: 'pipe' })
+            ).toThrow();
+          } finally {
+            cleanupWrapped(wrapped.cleanupPaths);
+          }
+        }
+        expect(existsSync(path.join(cwd, '.git/config'))).toBe(false);
+        expect(existsSync(path.join(cwd, '.git/hooks'))).toBe(false);
+        expect(existsSync(path.join(cwd, '.bike4mind'))).toBe(false);
+      } finally {
+        rmSync(fixture, { recursive: true, force: true });
+      }
+    }
+  );
+
+  it('allows loopback but no other IP when network is enabled through a proxy', async () => {
+    const proxy = net.createServer(socket => socket.destroy());
+    await new Promise<void>(resolve => proxy.listen(0, '127.0.0.1', resolve));
+    const probe = (host: string, port: number) => `out=$(nc -z -w 2 ${host} ${port} 2>&1) && echo open || echo closed`;
+    const listenAndConnect = (host: string) =>
+      `node -e "const s=require('net').createServer(c=>c.end()).listen(0,'${host}',()=>require('net').connect(s.address().port,'${host}',()=>{console.log('loopback');process.exit(0)}))" 2>&1 || echo failed`;
+    const wrapped = runtime.wrapCommand({
+      command: [
+        probe('127.0.0.1', (proxy.address() as net.AddressInfo).port),
+        listenAndConnect('127.0.0.1'),
+        listenAndConnect('::1'),
+        `nc -v -z -w 2 127.0.0.2 9 2>&1 | grep -q 'not permitted' && echo denied || echo allowed`,
+      ].join('; '),
+      cwd: TEST_DIR,
+      filesystemConfig: { writeOnlyToWorkingDir: true, allowedReadPaths: [], deniedPaths: [] },
+      networkEnabled: true,
+      proxyPort: (proxy.address() as net.AddressInfo).port,
+    });
+
+    try {
+      const output = execSync(wrapped.commandString, { encoding: 'utf-8', timeout: 15000 });
+      expect(output.trim().split('\n')).toEqual(['open', 'loopback', 'loopback', 'denied']);
+    } finally {
+      cleanupWrapped(wrapped.cleanupPaths);
+      proxy.close();
     }
   });
 

@@ -31,15 +31,13 @@ describe('API reference scopes table', () => {
     const requiredLines = API_REFERENCE_CONTENT.split('\n').filter(line =>
       /^\*\*Required API-key scope\b[^*]*:\*\*/.test(line)
     );
-    // Only the tokens after the label: the "scope for refineText" form names an endpoint, not a scope.
+    // Only the tokens after the label, so prose before the colon is never read as a scope.
     const required = requiredLines.flatMap(line =>
       [...line.slice(line.indexOf(':**')).matchAll(/`([^`]+)`/g)].map(match => match[1])
     );
 
-    // Pin both label forms (plain and "scope for X"); the tokens alone would not catch a dropped line.
-    expect(requiredLines).toHaveLength(3);
-    expect(requiredLines.some(line => line.includes('for `refineText`'))).toBe(true);
-    expect(required).toContain('ai:generate');
+    // Pin the line count; the tokens alone would not catch a dropped line.
+    expect(requiredLines).toHaveLength(2);
     expect(required).toContain('projects:read');
     expect(required).toContain('projects:write');
     expect(required).toContain('agents:read');
@@ -60,7 +58,13 @@ describe('API reference scopes table', () => {
     expect(
       getApiReferenceContent(
         'https://b4m.test',
-        genericApiKeyScopesFor({ hasOptiAccess: false, hasOverwatchAccess: false, hearthEnabled: false })
+        genericApiKeyScopesFor({
+          hasOptiAccess: false,
+          hasOverwatchAccess: false,
+          hearthEnabled: false,
+          bypass: false,
+          entitlements: new Set(),
+        })
       )
     ).not.toContain('optihashi:');
   });
@@ -148,6 +152,11 @@ describe('API reference facts shared with the generated docs', () => {
     const publicSection = section('## Public endpoints (generated docs)');
     expect(publicSection).toContain('Async jobs');
     expect(publicSection).not.toContain('(or the job resource) until it is terminal');
+  });
+
+  it('names the text-refinement endpoint in the generated-docs inventory', () => {
+    // The only pointer a reader gets to the v1 route this page does not document by hand.
+    expect(section('## Public endpoints (generated docs)')).toContain('`/api/v1/text-refinements`');
   });
 
   it('points at the generated docs for the reads exempt from the per-day ceiling', () => {

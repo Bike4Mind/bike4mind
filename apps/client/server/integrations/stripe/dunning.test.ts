@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const mockList = vi.fn();
 const mockVoidInvoice = vi.fn();
 
-vi.mock('@server/integrations/stripe/stripe', () => ({
+vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   stripe: {
     invoices: {
       list: (...args: unknown[]) => mockList(...args),

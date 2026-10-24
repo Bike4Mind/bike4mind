@@ -1,6 +1,7 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, waitFor } from '@testing-library/react';
+import { FIRST_SIGNUP_SESSION_KEY } from '@client/app/utils/firstSignupSession';
 
 // Hoisted mocks (must be available inside vi.mock factory functions)
 const {
@@ -67,14 +68,6 @@ vi.mock('@client/app/utils/signupConversion', () => ({
   trackSignupConversion: mockTrackSignupConversion,
 }));
 
-// Stub MUI Joy to avoid needing a CssVarsProvider in every test.
-vi.mock('@mui/joy', () => ({
-  Container: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  Box: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  Typography: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  CircularProgress: () => <div data-testid="spinner" />,
-}));
-
 type MfaChallengeOptions = {
   onComplete: (result: { accessToken: string; user: unknown }) => void;
   onCancel: (mode: 'verify' | 'setup') => void;
@@ -103,6 +96,7 @@ const TOKENS = { token: 'tok', userId: 'u1', error: undefined };
 const USER_DATA = { id: 'u1', name: 'Test User' };
 
 beforeEach(() => {
+  localStorage.clear();
   vi.clearAllMocks();
   mockSearch = { redirectTo: '/new' };
   mockCurrentUser = null;
@@ -122,6 +116,15 @@ describe('AuthSuccessPage', () => {
     expect(mockNavigate).not.toHaveBeenCalled();
     // A routine login is not a signup - no conversion.
     expect(mockTrackSignupConversion).not.toHaveBeenCalled();
+    expect(localStorage.getItem(FIRST_SIGNUP_SESSION_KEY)).toBeNull();
+  });
+
+  it('marks a fresh SAML session without recording an ad conversion', async () => {
+    mockParseAuthParams.mockReturnValue({ ...TOKENS, firstSignupSession: true });
+    render(<AuthSuccessPage />);
+    await waitFor(() => expect(mockApplyRedirect).toHaveBeenCalled());
+    expect(JSON.parse(localStorage.getItem(FIRST_SIGNUP_SESSION_KEY) as string).userId).toBe(USER_DATA.id);
+    expect(mockTrackSignupConversion).not.toHaveBeenCalled();
   });
 
   it('fires the signup conversion exactly once for a brand-new OAuth account', async () => {
@@ -131,6 +134,7 @@ describe('AuthSuccessPage', () => {
 
     await waitFor(() => expect(mockApplyRedirect).toHaveBeenCalledWith(mockRouterHistory, '/new'));
     expect(mockTrackSignupConversion).toHaveBeenCalledExactlyOnceWith('google');
+    expect(JSON.parse(localStorage.getItem(FIRST_SIGNUP_SESSION_KEY) as string).userId).toBe(USER_DATA.id);
   });
 
   it('does not fire the signup conversion when the user fetch fails', async () => {
@@ -257,6 +261,7 @@ describe('AuthSuccessPage', () => {
 
       expect(mockSetCurrentUser).toHaveBeenCalledWith(USER_DATA);
       expect(mockTrackSignupConversion).toHaveBeenCalledExactlyOnceWith('github');
+      expect(JSON.parse(localStorage.getItem(FIRST_SIGNUP_SESSION_KEY) as string).userId).toBe(USER_DATA.id);
       expect(mockApplyRedirect).toHaveBeenCalledWith(mockRouterHistory, '/new');
     });
 

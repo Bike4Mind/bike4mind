@@ -1,9 +1,11 @@
+import type { LakeSourceShredDb } from '../dataLakeService/lakeMembership';
 import {
   IDataLakeRepository,
   IFabFileRepository,
   ITagRepository,
   IUserDocument,
   LakeAuditPrincipal,
+  MAX_LAKE_FILE_TAG_NAME_LENGTH,
 } from '@bike4mind/common';
 import { secureParameters, BadRequestError } from '@bike4mind/utils';
 import { z } from 'zod';
@@ -34,34 +36,35 @@ export type TagUpdateParams = z.infer<typeof tagUpdateSchema>;
 type TagUpdateWrite = TagUpdateParams & { updatedAt: Date };
 
 interface TagUpdateAdapters extends LakeMembershipAuditAdapters {
-  db: LakeMembershipAuditAdapters['db'] & {
-    // `update` is spelled out rather than picked off ITagRepository, deliberately. IBaseRepository
-    // declares it as a property-syntax function type, so strictFunctionTypes checks its parameter
-    // contravariantly and a `Partial<IBaseTag>` one refuses the IFileTag-typed repository the
-    // file-tag route passes (`TagType` vs `TagType.FILE`) - which is what forced a double cast at
-    // that call site. Naming the narrow shape this service actually writes takes both repositories
-    // cast-free. tagService/remove needs no equivalent: nothing in its Pick has a tag in parameter
-    // position.
-    tags: Pick<ITagRepository, 'findByIdAndUserId' | 'findAllByUserId' | 'delete'> & {
-      update: (data: TagUpdateWrite) => Promise<unknown>;
+  db: LakeMembershipAuditAdapters['db'] &
+    LakeSourceShredDb & {
+      // `update` is spelled out rather than picked off ITagRepository, deliberately. IBaseRepository
+      // declares it as a property-syntax function type, so strictFunctionTypes checks its parameter
+      // contravariantly and a `Partial<IBaseTag>` one refuses the IFileTag-typed repository the
+      // file-tag route passes (`TagType` vs `TagType.FILE`) - which is what forced a double cast at
+      // that call site. Naming the narrow shape this service actually writes takes both repositories
+      // cast-free. tagService/remove needs no equivalent: nothing in its Pick has a tag in parameter
+      // position.
+      tags: Pick<ITagRepository, 'findByIdAndUserId' | 'findAllByUserId' | 'delete'> & {
+        update: (data: TagUpdateWrite) => Promise<unknown>;
+      };
+      // computeDataLakeStats stays in this Pick even though this file never calls it directly:
+      // recomputeLakeStats below forwards this same `db` object and requires it on `fabFiles`.
+      fabFiles: Pick<
+        IFabFileRepository,
+        'updateTagsByUserId' | 'dedupeTagByUserId' | 'computeDataLakeStats' | 'claimTagRewriteByUserId'
+      >;
+      dataLakes: Pick<IDataLakeRepository, 'find' | 'setStats' | 'activateIfDraft'>;
+      // The config-audit repos, OPTIONAL and forwarded straight to recomputeLakeStats below: a
+      // prefix-arm rename or delete can flip a draft lake to active, and without these that
+      // transition records nothing at all. Optional because this service has many callers and the
+      // recorder degrades to a no-op when they are absent - see LakeConfigAuditAdapters.
+      lakeConfigChangeEvents?: LakeConfigAuditAdapters['db']['lakeConfigChangeEvents'];
+      adminSettings?: LakeConfigAuditAdapters['db']['adminSettings'];
+      // Only for the static-registry admin check below - this door had no actor beyond a raw
+      // userId string until that check needed isAdmin.
+      users: { findById: (id: string) => Promise<Pick<IUserDocument, 'isAdmin'> | null> };
     };
-    // computeDataLakeStats stays in this Pick even though this file never calls it directly:
-    // recomputeLakeStats below forwards this same `db` object and requires it on `fabFiles`.
-    fabFiles: Pick<
-      IFabFileRepository,
-      'updateTagsByUserId' | 'dedupeTagByUserId' | 'computeDataLakeStats' | 'claimTagRewriteByUserId'
-    >;
-    dataLakes: Pick<IDataLakeRepository, 'find' | 'setStats' | 'activateIfDraft'>;
-    // The config-audit repos, OPTIONAL and forwarded straight to recomputeLakeStats below: a
-    // prefix-arm rename or delete can flip a draft lake to active, and without these that
-    // transition records nothing at all. Optional because this service has many callers and the
-    // recorder degrades to a no-op when they are absent - see LakeConfigAuditAdapters.
-    lakeConfigChangeEvents?: LakeConfigAuditAdapters['db']['lakeConfigChangeEvents'];
-    adminSettings?: LakeConfigAuditAdapters['db']['adminSettings'];
-    // Only for the static-registry admin check below - this door had no actor beyond a raw
-    // userId string until that check needed isAdmin.
-    users: { findById: (id: string) => Promise<Pick<IUserDocument, 'isAdmin'> | null> };
-  };
   /**
    * See tagService/remove: forwarded to recomputeLakeStats so an audit failure on the
    * draft -> active flip reaches the structured logger rather than `console.warn`. Optional for the
@@ -141,6 +144,14 @@ export const update = async (userId: string, params: TagUpdateParams, adapters: 
   // edit still carries `name` and must not touch a single file; but `foo` -> `Foo` is a real
   // rename, because the files store the old casing.
   const renaming = newName !== undefined && newName !== tag.name;
+
+  // Capped on a real rename only: tags created before create was capped may be over-long and must
+  // stay editable. Checked before any write; the file rewrite is not transactional.
+  if (renaming && newName.length > MAX_LAKE_FILE_TAG_NAME_LENGTH) {
+    throw new BadRequestError(
+      `Tag Service - Update: a tag name cannot be longer than ${MAX_LAKE_FILE_TAG_NAME_LENGTH} characters`
+    );
+  }
 
   // Every usable fileTagPrefix ends in ':' (see prefixArmTagNames), so a colon-free name on
   // both sides of the rename can never touch one - skip the lake lookup for the common case.

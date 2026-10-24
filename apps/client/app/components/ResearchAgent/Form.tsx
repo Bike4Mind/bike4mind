@@ -18,7 +18,12 @@ import {
 } from '@mui/joy';
 import { IResearchAgent } from '@bike4mind/common';
 import { useForm } from 'react-hook-form';
-import { SmartToy, Description, Badge, Save, Cancel, Psychology } from '@mui/icons-material';
+import SmartToy from '@mui/icons-material/SmartToy';
+import Description from '@mui/icons-material/Description';
+import Badge from '@mui/icons-material/Badge';
+import Save from '@mui/icons-material/Save';
+import Cancel from '@mui/icons-material/Cancel';
+import Psychology from '@mui/icons-material/Psychology';
 import {
   blue,
   brand,

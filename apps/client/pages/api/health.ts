@@ -17,9 +17,14 @@ const handler = baseApi({ auth: false })
     })
   )
   .get((_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    const revision = process.env.B4M_DEPLOYED_REVISION;
+    const fingerprint = process.env.B4M_BUILD_FINGERPRINT;
     return res.status(200).json({
       status: 'ok',
       stage: Config.STAGE,
+      ...(revision && /^[a-f0-9]{40}$/.test(revision) ? { deployedRevision: revision } : {}),
+      ...(fingerprint && /^[a-f0-9]{64}$/.test(fingerprint) ? { buildFingerprint: fingerprint } : {}),
       timestamp: new Date().toISOString(),
       uptimeSeconds: Math.round(process.uptime()),
     });

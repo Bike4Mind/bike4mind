@@ -1,5 +1,5 @@
 /** How many identical calls in a row make a loop. Matches opencode's threshold. */
-const THRESHOLD = 3;
+export const THRESHOLD = 3;
 
 /**
  * Remembers the last few tool calls of each conversation, so the same call made again and again

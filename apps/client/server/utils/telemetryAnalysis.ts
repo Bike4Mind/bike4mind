@@ -15,7 +15,7 @@ import {
   formatFingerprintComment,
   formatSemanticFingerprintComment,
   formatPrimaryAnomaly,
-} from '@server/services/telemetryFingerprint';
+} from '@bike4mind/server-utils/services/telemetryFingerprint';
 import { escapeMarkdown } from '@bike4mind/server-utils/utils/markdownEscape';
 import { type IssueForDedup } from '@bike4mind/server-utils/services/issueDedup';
 import { type Priority } from '@bike4mind/server-utils/services/issueLabels';
@@ -622,7 +622,7 @@ export async function generateLLMAnalysis(
     throw new Error('LLM returned empty response');
   }
 
-  logger.debug(`[ContextTelemetry] Raw LLM response (${responseText.length} chars): ${responseText.slice(0, 500)}`);
+  logger.debug('[ContextTelemetry] LLM response received', { responseLength: responseText.length });
 
   const parsed = JSON.parse(extractAnalysisJson(responseText));
   const validated = LLMAnalysisSchema.safeParse(parsed);

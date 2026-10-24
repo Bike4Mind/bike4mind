@@ -96,11 +96,12 @@ export const notifyEventLogsToSlack = async ({
   }
 };
 
-export async function postMessageToSlack(slackWebhookUrl: string, message: string): Promise<void> {
+/** Never throws; resolves true only when Slack accepted the message, so a caller can retry. */
+export async function postMessageToSlack(slackWebhookUrl: string, message: string): Promise<boolean> {
   try {
     if (!slackWebhookUrl) {
       Logger.error('postMessageToSlack: Error posting message to Slack: slackWebhookUrl is not set');
-      return;
+      return false;
     }
 
     await axios.post(
@@ -108,10 +109,14 @@ export async function postMessageToSlack(slackWebhookUrl: string, message: strin
       { text: message },
       {
         headers: { 'Content-Type': 'application/json' },
+        // ms; a stalled webhook must fail as false rather than hold a cron run until its Lambda timeout.
+        timeout: 10_000,
       }
     );
+    return true;
   } catch (error) {
     Logger.error('Error posting message to Slack:', error);
+    return false;
   }
 }
 

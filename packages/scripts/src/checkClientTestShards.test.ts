@@ -88,20 +88,23 @@ function readLegBlocks(contents: string): Array<{ filter: string; script: string
     });
 }
 
-describe('apps/workers integration leg in ci.yml', () => {
-  // The workers real-Mongo suites run only in this unsharded leg - the `misc` leg runs the workers
-  // unit lane, not `test:integration`. It has no `--shard` args, so every guard above skips it, and
+describe.each([
+  { pkgName: '@bike4mind/workers', dir: ['apps', 'workers'] },
+  { pkgName: '@bike4mind/server-utils', dir: ['packages', 'server-utils'] },
+])('$pkgName integration leg in ci.yml', ({ pkgName, dir }) => {
+  // Each package's real-Mongo suites run only in its unsharded leg - the `misc` leg runs the unit
+  // lane, not `test:integration`. It has no `--shard` args, so every guard above skips it, and
   // deleting it would leave CI green with those suites never running.
-  it('declares exactly one `test:integration` leg for @bike4mind/workers', () => {
+  it('declares exactly one `test:integration` leg', () => {
     const legs = readLegBlocks(fs.readFileSync(CI_WORKFLOW, 'utf8')).filter(
-      leg => leg.filter === '--filter @bike4mind/workers' && leg.script === 'test:integration'
+      leg => leg.filter === `--filter ${pkgName}` && leg.script === 'test:integration'
     );
     expect(legs).toHaveLength(1);
   });
 
-  it('points at a script apps/workers actually defines', () => {
-    const pkg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'apps', 'workers', 'package.json'), 'utf8'));
-    expect(pkg.scripts?.['test:integration'], 'apps/workers has no test:integration script').toBeDefined();
+  it('points at a script the package actually defines', () => {
+    const pkg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, ...dir, 'package.json'), 'utf8'));
+    expect(pkg.scripts?.['test:integration'], `${pkgName} has no test:integration script`).toBeDefined();
   });
 });
 

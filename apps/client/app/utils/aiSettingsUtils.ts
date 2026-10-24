@@ -272,6 +272,8 @@ export const refitMaxTokensForModel = (
  * the session and whether the write should be wrapped in a transition.
  */
 export const buildModelSelectionPatch = (modelInfo: ModelInfo) => ({
+  sessionModelOverride: null,
+  hasExplicitSessionModelSelection: true,
   model: modelInfo.id,
   max_tokens: computeDefaultMaxTokens(modelInfo),
   ...(FIXED_TEMPERATURE_MODELS.has(modelInfo.id) && { temperature: 1.0 }),

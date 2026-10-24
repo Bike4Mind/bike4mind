@@ -14,7 +14,7 @@ vi.mock('@server/imageGenerations/imageEdit', () => ({
   getImageEdit: () => ({ process: h.process }),
 }));
 
-vi.mock('@server/generationCallback/dispatchQuestCallback', () => ({
+vi.mock('@bike4mind/server-utils/generationCallback/dispatchQuestCallback', () => ({
   dispatchQuestCallback: h.dispatchQuestCallback,
 }));
 

@@ -10,6 +10,8 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
 // Import after mock
 const { encryptToken, decryptToken, encryptEnvVariables, decryptEnvVariables } = await import('./tokenEncryption');
 
+const defaultMcpOwner = { id: 'mcp-record', name: 'test-server', userId: 'test-user' };
+
 describe('tokenEncryption', () => {
   const key1 = generateEncryptionKey();
   const key2 = generateEncryptionKey();
@@ -31,10 +33,10 @@ describe('tokenEncryption', () => {
       expect(encryptToken(undefined)).toBeNull();
     });
 
-    it('should be idempotent — skip already-encrypted values', () => {
+    it('encrypts ciphertext-shaped input as literal plaintext', () => {
       const encrypted = encryptToken('xoxb-my-token')!;
       const doubleEncrypted = encryptToken(encrypted);
-      expect(doubleEncrypted).toBe(encrypted);
+      expect(decryptToken(doubleEncrypted)).toBe(encrypted);
     });
   });
 
@@ -88,19 +90,18 @@ describe('tokenEncryption', () => {
         { key: 'API_KEY', value: 'secret-key' },
         { key: 'TOKEN', value: 'secret-token' },
       ];
-      const encrypted = encryptEnvVariables(vars);
+      const encrypted = encryptEnvVariables(vars, defaultMcpOwner);
       expect(encrypted[0].key).toBe('API_KEY');
       expect(encrypted[0].value).not.toBe('secret-key');
       expect(encrypted[1].key).toBe('TOKEN');
       expect(encrypted[1].value).not.toBe('secret-token');
     });
 
-    // PUT sends stored values back through this function, so a second pass must not encrypt the
-    // ciphertext again - that would leave a credential nothing can decrypt.
-    it('should leave already-encrypted values unchanged', () => {
-      const once = encryptEnvVariables([{ key: 'API_KEY', value: 'secret-key' }]);
+    // A request cannot use ciphertext shape as proof of trusted storage provenance.
+    it('encrypts submitted ciphertext-shaped env values literally', () => {
+      const once = encryptEnvVariables([{ key: 'API_KEY', value: 'secret-key' }], defaultMcpOwner);
 
-      expect(encryptEnvVariables(once)).toEqual(once);
+      expect(decryptEnvVariables(encryptEnvVariables(once, defaultMcpOwner), defaultMcpOwner)).toEqual(once);
     });
   });
 
@@ -113,8 +114,21 @@ describe('tokenEncryption', () => {
       mockConfig.SECRET_ENCRYPTION_KEY = key2;
       mockConfig.SECRET_ENCRYPTION_KEY_PREVIOUS = key1;
 
-      const decrypted = decryptEnvVariables(vars);
+      const decrypted = decryptEnvVariables(vars, defaultMcpOwner);
       expect(decrypted[0].value).toBe('secret-key');
     });
+  });
+});
+
+describe('MCP secret ownership', () => {
+  it('rejects an env blob copied to another owner, server or field', () => {
+    mockConfig.SECRET_ENCRYPTION_KEY = generateEncryptionKey();
+    const owner = { id: 'server-a', userId: 'user-a', name: 'server-a' };
+    const vars = encryptEnvVariables([{ key: 'API_KEY', value: 'provider-secret' }], owner);
+    expect(decryptEnvVariables(vars, owner)[0].value).toBe('provider-secret');
+    expect(() => decryptEnvVariables(vars, { ...owner, userId: 'user-b' })).toThrow();
+    expect(() => decryptEnvVariables(vars, { ...owner, id: 'server-b' })).toThrow();
+    expect(() => decryptEnvVariables([{ ...vars[0], key: 'OTHER_KEY' }], owner)).toThrow();
+    expect(decryptEnvVariables(encryptEnvVariables(vars, owner), owner)).toEqual(vars);
   });
 });

@@ -46,6 +46,7 @@ export const API_ERROR_CODES = [
   'unsupported_mode',
   'missing_input_image',
   'unexpected_input_image',
+  'unsupported_input_role',
   'unsupported_audio_option',
   'invalid_request',
   'model_disabled',

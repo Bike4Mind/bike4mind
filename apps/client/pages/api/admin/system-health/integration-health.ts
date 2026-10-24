@@ -10,9 +10,9 @@ import {
   INTEGRATION_HEALTH_INTEGRATIONS,
 } from '@bike4mind/database';
 import type { IntegrationName, CircuitBreakerMode } from '@bike4mind/database';
-import { getHealthSummary, runAllProbes, runProbe } from '@server/services/integrationHealthService';
+import { getHealthSummary, runAllProbes, runProbe } from '@bike4mind/server-utils/services/integrationHealthService';
 import { getStatus, clearCache } from '@bike4mind/server-utils/services/integrationCircuitBreaker';
-import { getAllBreakerStates, resetBreaker } from '@server/services/mcpCircuitBreakers';
+import { flushBreakerMetrics, getAllBreakerStates, resetBreaker } from '@bike4mind/server-utils/services/mcpCircuitBreakers';
 
 const ensureAdmin = (isAdmin?: boolean | null) => {
   if (!isAdmin) {
@@ -60,6 +60,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
     // Include real-time in-memory circuit breaker states
     const circuitBreakers = getAllBreakerStates();
+    // Reading state can move an OPEN breaker to HALF_OPEN, which starts a transition metric.
+    await flushBreakerMetrics();
 
     res.setHeader('Cache-Control', 'private, max-age=30');
     return res.json({ integrations, circuitBreakers });
@@ -135,6 +137,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     // When resetting to auto, also clear the in-memory circuit breaker state
     if (mode === 'auto') {
       resetBreaker(integration as string);
+      await flushBreakerMetrics();
     }
 
     return res.json({

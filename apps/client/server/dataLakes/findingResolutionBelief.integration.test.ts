@@ -53,7 +53,7 @@ vi.mock('@bike4mind/server-utils/memory/mementoQueryEmbedding', () => ({
 
 import { recordFindingResolutionBelief } from './recordFindingResolutionBelief';
 import { createLedgerMemoryStore } from '@bike4mind/server-utils/memory/ledgerMemoryStore';
-import { recallLakeMemory } from '@server/memory/recallLakeMemory';
+import { recallLakeMemory } from '@bike4mind/server-utils/memory/recallLakeMemory';
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 
@@ -144,6 +144,7 @@ describe("a curator's ruling, from the click to the model's turn (#3049)", () =>
       lakes: [{ datalakeTag: LAKE_TAG, ownerUserId: OWNER }],
       k: 24,
       resolveReachableSources,
+      resolveMemberSources: async (_tag: string, ids: string[]) => new Set(ids),
     } as never);
 
     expect(recalled).toHaveLength(1);
@@ -169,6 +170,7 @@ describe("a curator's ruling, from the click to the model's turn (#3049)", () =>
       lakes: [{ datalakeTag: LAKE_TAG, ownerUserId: OWNER }],
       k: 24,
       resolveReachableSources: async () => new Set<string>(),
+      resolveMemberSources: async (_tag: string, ids: string[]) => new Set(ids),
     } as never);
 
     expect(recalled).toEqual([]);

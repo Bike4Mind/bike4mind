@@ -21,6 +21,7 @@ const {
   mockGetSettingsMap,
   mockInvoke,
   mockProcess,
+  mockWriteStaticCompletion,
 } = vi.hoisted(() => ({
   mockVerifyVoiceSessionToken: vi.fn(),
   mockFindDuplicateQuests: vi.fn(),
@@ -28,12 +29,16 @@ const {
   mockGetSettingsMap: vi.fn(),
   mockInvoke: vi.fn(),
   mockProcess: vi.fn(),
+  mockWriteStaticCompletion: vi.fn(),
 }));
 
 // Bypass baseApi's whole middleware chain (connectDB, passport, api-key auth) - this
 // route only cares about the body its own handler builds, and `.post()` here hands
 // back the raw handler so tests can call it directly. Mirrors
 // pages/api/data-lakes/__tests__/semantic-search.test.ts.
+// The real billing helpers read repositories (and mongoose models via entitlements) the database mock lacks.
+vi.mock('@server/billing/meterPlatformCompletion', () => ({ createCompletionMeter: vi.fn() }));
+vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const chain: Record<string, unknown> = {};
@@ -48,6 +53,16 @@ vi.mock('@server/voice/voiceSessionToken', () => ({
 }));
 
 vi.mock('@server/premium-generated/premiumLlmTools.generated', () => ({ premiumLlmTools: {} }));
+
+// The wiring module reads infra Resources at load; the resolver is the unit under test, not the job engine.
+const mockBuildVideoToolConfig = vi.fn();
+vi.mock('@server/generationJobs/wiring', () => ({
+  getVideoJobDeps: () => ({ deps: 'availability' }),
+  getCreateVideoJobDeps: () => ({ deps: 'create' }),
+}));
+vi.mock('@bike4mind/server-utils/videoGenerations/buildVideoToolConfig', () => ({
+  buildVideoToolConfig: (...args: unknown[]) => mockBuildVideoToolConfig(...args),
+}));
 
 vi.mock('@server/utils/chatCompletionDefaults', () => ({
   getDefaultChatCompletionOptions: () => ({}),
@@ -98,7 +113,7 @@ vi.mock('@bike4mind/voice', () => ({
   openAiSseChunk: () => 'chunk',
   openAiSseDone: () => 'done',
   stripSpokenThinking: (text: string) => text,
-  writeStaticCompletion: () => {},
+  writeStaticCompletion: (...args: unknown[]) => mockWriteStaticCompletion(...args),
 }));
 
 import handler from '../completions';
@@ -213,6 +228,146 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - turn auth', () => {
     expect((mockInvoke.mock.calls[0][0] as InvokeArg).apiKeyId).toBeUndefined();
     expect((mockProcess.mock.calls[0][0] as ProcessArg).body.authOrigin).toBe('session');
     expect((mockProcess.mock.calls[0][0] as ProcessArg).body.apiKeyId).toBeUndefined();
+  });
+});
+
+describe('POST /api/voice/v2/llm-proxy/chat/completions - video generation', () => {
+  beforeEach(primeSuccessfulTurn);
+
+  type VideoBody = { body: { tools?: string[] } };
+  type VideoProcessArg = VideoBody & { videoToolConfigResolver?: () => Promise<unknown> };
+
+  it('offers video_generation on both bodies and hands process() a resolver carrying the on-screen delivery note', async () => {
+    const config = { usableModels: ['test-video'], createJob: vi.fn() };
+    mockBuildVideoToolConfig.mockResolvedValue(config);
+
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect((mockInvoke.mock.calls[0][0] as VideoBody).body.tools).toContain('video_generation');
+    const processArg = mockProcess.mock.calls[0][0] as VideoProcessArg;
+    expect(processArg.body.tools).toContain('video_generation');
+    // The handler only hands over the resolver; process() (mocked here) is what runs the usable-model lookup.
+    expect(mockBuildVideoToolConfig).not.toHaveBeenCalled();
+    expect(await processArg.videoToolConfigResolver?.()).toEqual({
+      ...config,
+      createJob: expect.any(Function),
+      deliveryNote: expect.stringContaining('appears on screen in this session chat'),
+    });
+    expect(mockBuildVideoToolConfig).toHaveBeenCalledWith('user-1', {
+      availability: { deps: 'availability' },
+      createDeps: { deps: 'create' },
+    });
+  });
+
+  it('does not offer the tool, or a resolver, to a call minted by an API key', async () => {
+    mockVerifyVoiceSessionToken.mockReturnValue({
+      userId: 'user-1',
+      sessionId: 'session-1',
+      organizationId: '',
+      reasoningModelId: 'test-model',
+      authOrigin: 'apiKey',
+      apiKeyId: 'key-1',
+      voiceHoldStartedAt: recentHold(),
+    });
+
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect((mockInvoke.mock.calls[0][0] as VideoBody).body.tools).not.toContain('video_generation');
+    const processArg = mockProcess.mock.calls[0][0] as VideoProcessArg;
+    expect(processArg.body.tools).not.toContain('video_generation');
+    expect(processArg.videoToolConfigResolver).toBeUndefined();
+    expect(mockBuildVideoToolConfig).not.toHaveBeenCalled();
+  });
+
+  it('keeps the inline built-ins alongside the video tool', async () => {
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect((mockProcess.mock.calls[0][0] as VideoBody).body.tools).toEqual(
+      expect.arrayContaining(['web_search', 'search_knowledge_base', 'video_generation'])
+    );
+  });
+});
+
+describe('POST /api/voice/v2/llm-proxy/chat/completions - duplicate turns', () => {
+  beforeEach(primeSuccessfulTurn);
+
+  // currentTurnUserMessage is mocked to 'hello there'
+  const quest = (overrides: Record<string, unknown>) => ({ prompt: 'hello there', status: 'done', ...overrides });
+
+  it('drops a retry while the original turn is still running, speaking nothing', async () => {
+    mockFindDuplicateQuests.mockResolvedValue([quest({ status: 'running' })]);
+
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect(mockInvoke).not.toHaveBeenCalled();
+    expect(mockWriteStaticCompletion).toHaveBeenCalledWith(expect.anything(), expect.anything(), '');
+  });
+
+  // A dropped connection stops the quest but leaves the billed video job its tool call already created.
+  it('drops a retry of a stopped turn that already started a video job, and says so', async () => {
+    mockFindDuplicateQuests.mockResolvedValue([
+      quest({ status: 'stopped', generationJobs: [{ id: 'job-1', kind: 'video' }] }),
+    ]);
+
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect(mockInvoke).not.toHaveBeenCalled();
+    expect(mockProcess).not.toHaveBeenCalled();
+    expect(mockWriteStaticCompletion).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.stringContaining('already being made')
+    );
+  });
+
+  it('drops a retry of a stopped turn that claimed a video start before its job ref was written', async () => {
+    mockFindDuplicateQuests.mockResolvedValue([quest({ status: 'stopped', agentVideoClipsClaimed: 1 })]);
+
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect(mockProcess).not.toHaveBeenCalled();
+    expect(mockWriteStaticCompletion).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.stringContaining('already being made')
+    );
+  });
+
+  it('also recognizes a video job recorded on the legacy videoJobIds field', async () => {
+    mockFindDuplicateQuests.mockResolvedValue([quest({ status: 'stopped', videoJobIds: ['job-1'] })]);
+
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect(mockProcess).not.toHaveBeenCalled();
+  });
+
+  it('still answers a retry of a stopped turn that never started a job', async () => {
+    mockFindDuplicateQuests.mockResolvedValue([quest({ status: 'stopped' })]);
+
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect(mockProcess).toHaveBeenCalledTimes(1);
+  });
+
+  it('still answers an identical repeat of a done turn that started a video job', async () => {
+    mockFindDuplicateQuests.mockResolvedValue([
+      quest({ status: 'done', generationJobs: [{ id: 'job-1', kind: 'video' }] }),
+    ]);
+
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect(mockProcess).toHaveBeenCalledTimes(1);
+  });
+
+  it('still answers the same words after a non-video job, or a video job on a different prompt', async () => {
+    mockFindDuplicateQuests.mockResolvedValue([
+      quest({ status: 'stopped', generationJobs: [{ id: 'song-1', kind: 'music' }] }),
+      quest({ prompt: 'something else', status: 'stopped', generationJobs: [{ id: 'job-2', kind: 'video' }] }),
+    ]);
+
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect(mockProcess).toHaveBeenCalledTimes(1);
   });
 });
 

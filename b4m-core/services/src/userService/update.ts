@@ -53,15 +53,16 @@ export const updateUserSchema = z.object({
     .nullable()
     .optional(),
   securityQuestions: z
-    .array(z.object({ question: z.string(), answer: z.string() }))
+    .array(z.object({ question: z.string().max(512), answer: z.string().max(1024) }))
+    .max(10)
     .nullable()
     .optional(),
   // `photoUrl` is intentionally NOT in the self-service schema (same reasoning as
-  // `tags` above): it is an S3 key that upload-photo.ts derives server-side and later
-  // dereferences for DELETION (storage.delete + AppFile removal). A self-set value would
-  // let a caller point it at a resource they do not own, turning their next photo upload
-  // into an arbitrary-file delete. The dedicated upload-photo endpoint is the only writer;
-  // secureParameters strips any `photoUrl` a caller sends here.
+  // `tags` above): it is an S3 key that apps/client/pages/api/users/[id]/confirm-photo.ts
+  // writes and later dereferences for DELETION (storage.delete + AppFile removal). A self-set
+  // value would let a caller point it at a resource they do not own, turning their next photo
+  // upload into an arbitrary-file delete. The dedicated confirm-photo endpoint is the only
+  // writer; secureParameters strips any `photoUrl` a caller sends here.
   showCreditsUsed: z.boolean().optional(),
   preferences: z
     .object({
@@ -97,6 +98,7 @@ export const updateUserSchema = z.object({
       agentModeDefault: z.enum(['off', 'auto', 'on']).optional(),
       showFunTools: z.boolean().optional(),
       showSplashCards: z.boolean().optional(),
+      desktopPromoDismissed: z.boolean().optional(),
     })
     .nullable()
     .optional(),
@@ -121,6 +123,37 @@ export function applyBaseUserUpdates(user: IUserDocument, params: UpdateUserPara
     }
     const hashedPassword = bcrypt.hashSync(params.password, 10);
     params.password = hashedPassword;
+  }
+
+  if (params.securityQuestions) {
+    const stored = user.securityQuestions ?? [];
+    // Each stored answer is claimed at most once. Matching on text alone collapses two stored
+    // answers to the same question onto the first one, silently dropping the second.
+    const claimed = new Set<number>();
+
+    // An answered entry keeps the slot it occupies, so a blank submitted at the same position
+    // cannot fall back onto an answer the user just replaced.
+    params.securityQuestions.forEach((question, i) => {
+      if (question.answer && stored[i]?.question === question.question) claimed.add(i);
+    });
+
+    params.securityQuestions = params.securityQuestions.map((question, i) => {
+      if (question.answer) return question;
+      const sameIndex = stored[i]?.question === question.question && !claimed.has(i) ? i : -1;
+      const index =
+        sameIndex >= 0
+          ? sameIndex
+          : stored.findIndex((entry, j) => !claimed.has(j) && entry.question === question.question);
+      if (index < 0) {
+        throw new BadRequestError('An answer is required for a new or renamed security question');
+      }
+      const existing = stored[index];
+      if (!existing.answer) {
+        throw new BadRequestError('An answer is required for a new or renamed security question');
+      }
+      claimed.add(index);
+      return { ...question, answer: existing.answer };
+    });
   }
 
   return {

@@ -121,6 +121,7 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     surface: { type: String, required: false },
     enabledTools: [{ type: String, required: false }],
     disabledTools: [{ type: String, required: false }],
+    autoAddedTools: [{ type: String, required: false }],
     disableUserIntegrations: { type: Boolean, required: false },
     userSetFields: { type: [String], required: false, default: undefined },
     forceKnowledgeRetrieval: { type: Boolean, required: false },
@@ -522,6 +523,25 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     );
     return result.modifiedCount;
   }
+  async pullKnowledgeIdsFromSession(sessionId: string, fabFileIds: string[]) {
+    if (fabFileIds.length === 0 || !mongoose.isObjectIdOrHexString(sessionId)) return false;
+    // Matching on the ids too means a session holding none of them is not written at all, so its
+    // timestamps are not bumped (which would reorder it in the session list).
+    const result = await this.sessionModel.updateOne(
+      { _id: sessionId, knowledgeIds: { $in: fabFileIds } },
+      { $pull: { knowledgeIds: { $in: fabFileIds } } }
+    );
+    return result.modifiedCount > 0;
+  }
+  async pullKnowledgeIdsForUsers(userIds: string[], fabFileIds: string[]) {
+    if (userIds.length === 0 || fabFileIds.length === 0) return 0;
+    // `deletedAt: null` puts this on the (deletedAt, userId, lastUpdated) index and skips deleted notebooks.
+    const result = await this.sessionModel.updateMany(
+      { deletedAt: null, userId: { $in: userIds }, knowledgeIds: { $in: fabFileIds } },
+      { $pull: { knowledgeIds: { $in: fabFileIds } } }
+    );
+    return result.modifiedCount;
+  }
   /** Ids come from `project.sessionIds`, declared `[{ type: String }]` - see usableObjectIds. */
   async findAllByIds(ids: string[], options?: { includeDeleted?: boolean }) {
     const query = this.sessionModel.find({ _id: { $in: usableObjectIds(ids, 'SessionModel.findAllByIds') } });
@@ -538,6 +558,11 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
       throw new NotFoundError('Session not found');
     }
     return session;
+  }
+
+  async addAutoAddedTools(sessionId: string, toolNames: string[]) {
+    if (toolNames.length === 0) return;
+    await this.sessionModel.updateOne({ _id: sessionId }, { $addToSet: { autoAddedTools: { $each: toolNames } } });
   }
 
   async detachAgent(sessionId: string, agentId: string) {

@@ -36,7 +36,7 @@ import EmailIcon from '@mui/icons-material/Email';
 
 import UsernameText from './UsernameText';
 import { FormEvent, useEffect, useState } from 'react';
-import { cloneDeep } from 'lodash';
+import cloneDeep from 'lodash/cloneDeep';
 import { toast } from 'sonner';
 import { brandAlpha } from '../../utils/themes/colors';
 import { api } from '@client/app/contexts/ApiContext';

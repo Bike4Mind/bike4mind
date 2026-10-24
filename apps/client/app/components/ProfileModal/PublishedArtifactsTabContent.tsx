@@ -110,13 +110,6 @@ function apiError(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback;
 }
 
-const VISIBILITY_LABEL: Record<PublishVisibility, string> = {
-  public: PUBLISH_ACCESS_META.public.label,
-  organization: PUBLISH_ACCESS_META.organization.label,
-  project: PUBLISH_ACCESS_META.project.label,
-  private: PUBLISH_ACCESS_META.private.label,
-};
-
 /** Column template shared by the header and every row, so each piece of metadata lines up down the
  *  list: cover, title (takes the slack), access, versions, views, published date, actions. Fixed widths
  *  are sized for the widest content in each column (a "Passphrase" chip, "12 versions"). */
@@ -279,20 +272,23 @@ export default function PublishedArtifactsTabContent() {
   const toggleFilter = <K extends keyof Filters>(key: K, value: Filters[K]) =>
     setFilter(key, (filters[key] === value ? null : value) as Filters[K]);
 
+  const patchRow = (publicId: string, patch: Partial<ManagedArtifact>) =>
+    qc.setQueriesData<ManagedListPage>({ queryKey: ['published-artifacts', 'mine'] }, prev =>
+      prev ? { ...prev, artifacts: prev.artifacts.map(a => (a.publicId === publicId ? { ...a, ...patch } : a)) } : prev
+    );
+
   const invalidate = () => void qc.invalidateQueries({ queryKey: ['published-artifacts', 'mine'] });
 
   /** A gate edit in the sharing panel: patch the row in place so its access badge is right at once,
    *  and refresh only the facet counts. A full list refetch could drop the row from a filtered or
    *  re-sorted page, unmounting the panel and the show-once passphrase it is still displaying. */
-  const onGateChange = (publicId: string, gate: PublishAccessGateRead) => {
-    qc.setQueriesData<ManagedListPage>({ queryKey: ['published-artifacts', 'mine'] }, prev =>
-      prev
-        ? {
-            ...prev,
-            artifacts: prev.artifacts.map(a => (a.publicId === publicId ? { ...a, gateKind: gate?.kind } : a)),
-          }
-        : prev
-    );
+  const onGateChange = async (publicId: string, gate: PublishAccessGateRead) => {
+    // A list response started before the gate save must not overwrite its new badge.
+    await qc.cancelQueries({
+      queryKey: ['published-artifacts', 'mine'],
+      predicate: query => query.queryKey[2] !== 'facets',
+    });
+    patchRow(publicId, { gateKind: gate?.kind });
     void qc.invalidateQueries({ queryKey: ['published-artifacts', 'mine', 'facets'] });
   };
 
@@ -351,11 +347,7 @@ export default function PublishedArtifactsTabContent() {
     // cache is corrected here rather than by the refetch, `busy` settling on the mutation is now
     // harmless - do not "fix" it back into a dependency on refetch timing.
     onMutate: v => {
-      qc.setQueriesData<ManagedListPage>({ queryKey: ['published-artifacts', 'mine'] }, prev =>
-        prev
-          ? { ...prev, artifacts: prev.artifacts.map(a => (a.publicId === v.publicId ? { ...a, tags: v.tags } : a)) }
-          : prev
-      );
+      patchRow(v.publicId, { tags: v.tags });
     },
     onSuccess: () => {
       toast.success('Tags updated');
@@ -962,7 +954,7 @@ export default function PublishedArtifactsTabContent() {
                       >
                         {visibilityChoicesFor(a).map(v => (
                           <Option key={v} value={v} data-testid={`published-artifact-visibility-option-${v}`}>
-                            {VISIBILITY_LABEL[v]}
+                            {isPublishAccess(v) ? PUBLISH_ACCESS_META[v].label : v}
                           </Option>
                         ))}
                       </Select>
@@ -1119,7 +1111,7 @@ export default function PublishedArtifactsTabContent() {
                       title={a.title}
                       shareUrl={url}
                       visibility={a.visibility}
-                      onGateChange={gate => onGateChange(a.publicId, gate)}
+                      onGateChange={gate => void onGateChange(a.publicId, gate)}
                     />
                   </Box>
                 )}

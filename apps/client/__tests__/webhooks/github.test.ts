@@ -60,7 +60,7 @@ vi.mock('sst', () => ({
 }));
 
 // Mock IntegrationAuditLogger
-vi.mock('@server/integrations/integrationAuditLogger', () => {
+vi.mock('@bike4mind/server-utils/integrations/integrationAuditLogger', () => {
   const mockLogger = {
     setUserId: vi.fn(),
     setWorkspaceId: vi.fn(),

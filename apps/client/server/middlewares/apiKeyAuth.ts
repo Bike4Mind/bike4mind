@@ -1,8 +1,9 @@
 import { userApiKeyService, userService } from '@bike4mind/services';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { User } from '@bike4mind/database';
-import { ApiKeyScope, resolveApiCompletionSource, type ScopeForbiddenErrorSchema } from '@bike4mind/common';
+import { ApiKeyScopeValue, resolveApiCompletionSource, type ScopeForbiddenErrorSchema } from '@bike4mind/common';
 import { UnauthorizedError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
 import { logEvent } from '@server/utils/analyticsLog';
 import { UserApiKeyEvents } from '@bike4mind/common';
 import ability from '@server/auth/ability';
@@ -17,6 +18,7 @@ import type { z } from 'zod';
 import { decideScopeGate, parseStagedScopes, SCOPE_STAGING_ENV_VAR } from '@server/middlewares/apiKeyScopeGate';
 import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
 import { resolveRouteTemplate } from '@server/utils/resolveRouteTemplate';
+import { apiKeyGrantsAdmin, withholdAdminRole } from '@server/auth/apiKeyAdminScope';
 
 type ScopeForbiddenDetail = Pick<z.infer<typeof ScopeForbiddenErrorSchema>, 'required_scopes' | 'also_required_scopes'>;
 
@@ -26,8 +28,8 @@ type ScopeForbiddenDetail = Pick<z.infer<typeof ScopeForbiddenErrorSchema>, 'req
  * leaked key should not enumerate. A confined key on a scope-less route gets neither.
  */
 function scopeForbiddenDetail(
-  requiredScopes: ApiKeyScope[] | undefined,
-  alsoRequiredScopes: ApiKeyScope[] | undefined
+  requiredScopes: ApiKeyScopeValue[] | undefined,
+  alsoRequiredScopes: ApiKeyScopeValue[] | undefined
 ): ScopeForbiddenDetail {
   return {
     ...(requiredScopes?.length ? { required_scopes: requiredScopes } : {}),
@@ -57,7 +59,7 @@ const hashApiKeyForLogging = (apiKey: string): string => {
  *   requiredScopes resolves. No staging grace period - see decideScopeGate's
  *   doc comment (apiKeyScopeGate.ts).
  */
-export const apiKeyAuth = (requiredScopes?: ApiKeyScope[], alsoRequiredScopes?: ApiKeyScope[]) => {
+export const apiKeyAuth = (requiredScopes?: ApiKeyScopeValue[], alsoRequiredScopes?: ApiKeyScopeValue[]) => {
   return async (req: Request, res: Response, next: NextFunction) => {
     // If already authenticated via JWT, skip API key auth
     if (req.user) {
@@ -159,6 +161,9 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScope[], alsoRequiredScopes?: 
       }
       // The same gate the JWT/CLI/WebSocket surfaces use, so the two cannot drift.
       assertAccountStateUsable(user);
+
+      // Admin authority over an API key comes from the key's scope, not from who minted it.
+      if (!apiKeyGrantsAdmin(validation.scopes)) withholdAdminRole(user);
 
       req.user = user;
       req.apiKeyInfo = {
@@ -269,8 +274,11 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScope[], alsoRequiredScopes?: 
         throw error;
       }
 
-      req.logger?.error('API key authentication error', error);
-      throw new UnauthorizedError('Authentication failed');
+      // Every credential miss above throws Unauthorized/Forbidden, so anything else is our fault.
+      // A 401 here would tell a machine client its key is bad and stop it retrying an infra blip.
+      // warn: errorHandler logs the resulting 5xx at error, which is the one line that should alarm.
+      req.logger?.warn('API key authentication error', error);
+      throw toApiKeyAuthError(error);
     }
   };
 };
@@ -285,6 +293,6 @@ export const isApiKeyAuth = (req: Request): boolean => {
 /**
  * Helper function to get API key scopes from request
  */
-export const getApiKeyScopes = (req: Request): ApiKeyScope[] => {
+export const getApiKeyScopes = (req: Request): ApiKeyScopeValue[] => {
   return req.apiKeyInfo?.scopes || [];
 };

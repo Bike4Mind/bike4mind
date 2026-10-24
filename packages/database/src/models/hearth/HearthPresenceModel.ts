@@ -20,11 +20,30 @@ import { CcAgentStatus, type ICcAgentStatus } from '@bike4mind/common';
 export type HearthPresenceState = ICcAgentStatus;
 
 /**
- * Read order for the roster: most-blocking first. Permission blocks outrank
- * questions because a permission prompt halts execution outright, and they are
- * the dominant blocked state in practice. Exported because the sort runs in the
- * aggregation (see hearthRepository.presenceForChannel) and both places must
- * agree on the ranking.
+ * A row not heard from for this long is "probably not live". ONE window, two
+ * jobs: presenceForChannel ranks rows older than this below fresh ones, and the
+ * presence route publishes the same value so the panel dims by the same
+ * threshold the sort used - one shared value, so the two cannot drift apart.
+ * The panel measures it on the client clock, so skew can still shift its line.
+ *
+ * A liveness hint, not a filter: the roster never filters a row out by age, and
+ * the server cannot know the answer - a session idle for ten minutes is dead to
+ * a dashboard and perfectly normal to an agent that reports on a heartbeat - so
+ * this is only the shared default for "probably not live". The row cap is a
+ * separate bound: a full roster sheds its lowest-ranked rows, so a stale row
+ * can be truncated away even though this value never excludes one.
+ */
+export const PRESENCE_STALE_AFTER_MS = 5 * 60 * 1000;
+
+/**
+ * Read order WITHIN a freshness tier: most-blocking first. Fresh rows outrank
+ * stale ones whatever their state, so this rank decides the order only among
+ * rows inside PRESENCE_STALE_AFTER_MS, and again among rows outside it.
+ * Permission blocks outrank questions because a permission prompt halts
+ * execution outright, and they are the dominant blocked state in practice.
+ * Exported because the sort runs in the aggregation (see
+ * hearthRepository.presenceForChannel) and both places must agree on the
+ * ranking.
  */
 export const PRESENCE_STATE_RANK: Readonly<Record<HearthPresenceState, number>> = {
   awaiting_permission: 0,

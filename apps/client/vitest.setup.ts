@@ -1,6 +1,14 @@
+/// <reference types="@testing-library/jest-dom" />
 import { vi } from 'vitest';
-import '@testing-library/jest-dom';
 import { webcrypto } from 'node:crypto';
+
+// DOM matchers only where there is a DOM. This file serves both projects, and loading jest-dom
+// cost every node-project file ~80ms for matchers it cannot use. Keyed on `window` rather than on
+// the project because a file can switch environment with a `@vitest-environment` docblock. The
+// reference above keeps the matcher types global, as the static import used to.
+if (typeof window !== 'undefined') {
+  await import('@testing-library/jest-dom/vitest');
+}
 
 // Stripe price IDs are account-tied and sourced from NEXT_PUBLIC_* env vars with no
 // brand fallback (issue #9306). Seed real-format dummy ids here so the staged

@@ -60,6 +60,9 @@ export const DEFAULT_MANIFEST = {
   SECOPS_ZAP_DISPATCH_TOKEN: { kind: 'secret', optional: true },
   SECOPS_ZAP_INGEST_TOKEN: { kind: 'secret', optional: true },
   SECRET_ENCRYPTION_KEY: { kind: 'secret' },
+  // Optional here so dev/local/self-host can run keyless; the key provider refuses to MINT a DEK on
+  // a deployed stage without it (packages/server-utils/src/memory/factCipher.ts).
+  MEMORY_KEY_SECRET: { kind: 'secret', optional: true },
   SECRET_ENCRYPTION_KEY_PREVIOUS: { kind: 'secret', optional: true },
   SESSION_SECRET: { kind: 'secret' },
   SLACK_ERROR_REPORTING_WEBHOOK_URL: { kind: 'secret', optional: true },
@@ -154,7 +157,6 @@ export const DEFAULT_MANIFEST = {
   HistoryUploadCompleteFunction: { kind: 'function' },
   ImageProcessor: { kind: 'function' },
   NotebookImportCompleteFunction: { kind: 'function' },
-  SlackEventBus: { kind: 'function' },
   mcpHandler: { kind: 'function', optional: true },
   // --- service ---
   // Always-on chatCompletion HTTP service the frontend dispatches quests to

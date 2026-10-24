@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
-import { ModelRecordWrite, groupsTouchedByPatch, isModelDeprecated } from '@bike4mind/common';
+import { ChatModels, ModelRecordWrite, groupsTouchedByPatch, isModelDeprecated, toModelInfo } from '@bike4mind/common';
 import type { IModelCatalogRow, ModelInfo } from '@bike4mind/common';
 import {
   GeminiBackend,
@@ -38,6 +38,18 @@ describe('model catalog seed (no DB)', () => {
     // Fix with: pnpm turbo:core:build && pnpm --filter @bike4mind/database generate:model-catalog-seed
     const generated = await generateModelCatalogSeed();
     expect(generated).toEqual(seed.entries);
+  });
+
+  it('keeps superseded OpenAI models selectable after a catalog round-trip', () => {
+    for (const modelId of [ChatModels.GPT5_6_SOL, ChatModels.GPT5_4, ChatModels.GPT5_2, ChatModels.GPT5]) {
+      const entry = seed.entries.find(candidate => candidate.modelId === modelId);
+      expect(entry?.patch.lifecycle).toMatchObject({ isSuperseded: true, status: 'active' });
+      const record = ModelRecordWrite.parse(entry?.patch);
+      expect(record.type).toBe('text');
+      const model = toModelInfo({ ...record, type: 'text' });
+      expect(model).toMatchObject({ isSuperseded: true, disabled: false });
+      expect(isModelDeprecated(model)).toBe(false);
+    }
   });
 
   it('the seed carries a valid generation timestamp (the deterministic effectiveFrom)', () => {

@@ -92,6 +92,7 @@ const SlackInstallPage = lazy(() => import('./routes/integrations/slack/install'
 const SlackSuccessPage = lazy(() => import('./routes/integrations/slack/success'));
 const SlackErrorPage = lazy(() => import('./routes/integrations/slack/error'));
 const EmailUnsubscribePage = lazy(() => import('./routes/email/unsubscribe'));
+const DesktopDownloadPage = lazy(() => import('./routes/desktop'));
 const AtlassianSelectSitePage = lazy(() => import('./routes/integrations/atlassian/select-site'));
 const ActivatePage = lazy(() => import('./routes/activate'));
 const OAuthAuthorizePage = lazy(() => import('./routes/oauth/authorize'));
@@ -1205,6 +1206,17 @@ const emailUnsubscribeRoute = createRoute({
   },
 });
 
+// Desktop app download page - no layout, public, so it can be linked from anywhere.
+const desktopDownloadRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/desktop',
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <DesktopDownloadPage />
+    </Suspense>
+  ),
+});
+
 // OAuth Authorization endpoint - no layout, public
 const oauthAuthorizeRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -1307,6 +1319,7 @@ const routeTree = rootRoute.addChildren([
   slackSuccessRoute,
   slackErrorRoute,
   emailUnsubscribeRoute,
+  desktopDownloadRoute,
   // Atlassian integration routes (no layout)
   atlassianSelectSiteRoute,
   // OAuth Authorization endpoint

@@ -1,11 +1,12 @@
 import type { Request } from 'express';
-import type { IUserAcquisition } from '@bike4mind/common';
+import { FirstRunEvents, type IUserAcquisition } from '@bike4mind/common';
 import { adminSettingsRepository, User, userRepository } from '@bike4mind/database';
 import type { AcquisitionTouches } from '@bike4mind/server-utils/lib/subscriptions/acquisition';
 import { readConsentedAcquisitionTouches } from './acquisition';
 import { emitProductEvent, HOST_PRODUCT_ID } from './emitActiveEvent';
 import { pseudonymizeUserId } from './pseudonymize';
 import { stableEventId } from './signupEvents';
+import { logEventSafe } from '@server/utils/analyticsLog';
 
 // Server half of the funnel instrumentation. The client half (begin_checkout, upsell_*) is
 // app/utils/funnelEvents.ts; both skip users flagged isSynthetic so test personas never reach
@@ -143,6 +144,15 @@ export async function emitFunnelEvent(opts: {
   return true;
 }
 
+// A stage an admin caused (create-user, bulk-create-users, an admin verifying the email) is still
+// the stage, but not a day its user was active: `userAction: false` keeps Overwatch from counting
+// them in DAU, or as a new user, before they have signed in once; their first real request does
+// that. Overwatch also leaves `userAction: false` signups out of the funnel's signup count, so an
+// admin-created account does not inflate signups either.
+function funnelMethodMetadata(method: string): { method: string; userAction?: false } {
+  return { method, ...(method === 'admin' && { userAction: false as const }) };
+}
+
 /**
  * The funnel stages of a brand-new account. An unverified signup with nothing granted skips
  * credits_granted: the stable eventId would lock in 0 and drop the grant that arrives at
@@ -156,7 +166,7 @@ export async function emitSignupFunnelEvents(opts: {
   emailVerified: boolean;
   creditsGranted: number;
 }): Promise<void> {
-  const metadata = { method: opts.method };
+  const metadata = funnelMethodMetadata(opts.method);
   await Promise.all([
     opts.emailVerified && emitFunnelEvent({ user: opts.user, event: 'email_verified', metadata }),
     (opts.emailVerified || opts.creditsGranted > 0) &&
@@ -179,7 +189,7 @@ export async function emitEmailVerifiedFunnelEvents(opts: {
   creditsGranted: number;
 }): Promise<void> {
   if (!signedUpAfterLaunch(opts.user.createdAt)) return;
-  const metadata = { method: opts.method };
+  const metadata = funnelMethodMetadata(opts.method);
   await Promise.all([
     emitFunnelEvent({ user: opts.user, event: 'email_verified', metadata }),
     emitFunnelEvent({
@@ -201,12 +211,14 @@ export async function recordFirstValue(opts: {
   user: FunnelUser & { createdAt?: Date | string | null };
   feature: string;
   now?: Date;
+  onRecorded?: () => Promise<void>;
 }): Promise<boolean> {
   if (!signedUpAfterLaunch(opts.user.createdAt)) return false;
   try {
     const now = opts.now ?? new Date();
     const res = await User.updateOne({ _id: opts.user.id, firstValueAt: null }, { $set: { firstValueAt: now } });
     if (res.modifiedCount !== 1) return false;
+    await opts.onRecorded?.();
     const createdAt = opts.user.createdAt ? new Date(opts.user.createdAt).getTime() : NaN;
     return await emitFunnelEvent({
       user: opts.user,
@@ -233,10 +245,19 @@ export async function recordFirstValue(opts: {
  */
 export async function recordFirstChatValue(opts: {
   user: FunnelUser & { createdAt?: Date | string | null; firstValueAt?: Date | null };
-  loadQuest: () => Promise<{ status?: string; type?: string } | null | undefined>;
+  loadQuest: () => Promise<{ status?: string; type?: string; creditsUsed?: number } | null | undefined>;
 }): Promise<boolean> {
   if (opts.user.firstValueAt || !signedUpAfterLaunch(opts.user.createdAt)) return false;
   const quest = await opts.loadQuest().catch(() => undefined);
   if (quest?.status !== 'done' || quest.type === 'error') return false;
-  return recordFirstValue({ user: opts.user, feature: 'chat' });
+  return recordFirstValue({
+    user: opts.user,
+    feature: 'chat',
+    onRecorded: () =>
+      logEventSafe({
+        userId: opts.user.id,
+        type: FirstRunEvents.FIRST_ANSWER_CREDITS,
+        metadata: { credits: quest.creditsUsed ?? 0 },
+      }),
+  });
 }

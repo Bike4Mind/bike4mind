@@ -1,5 +1,7 @@
 import { Logger } from '@bike4mind/observability';
+import type { ToolResultValidator } from '@bike4mind/llm-adapters';
 import { ToolDefinition, ToolContext } from '../../base/types';
+import { FAILED_RESULT_SCORE } from '../../base/resultValidators';
 import { GetEffectiveApiKeyAdapters, getFirecrawlConfig } from '../../../../apiKeyService';
 import { CitableSource, UnprocessableEntityError } from '@bike4mind/common';
 import { FirecrawlError } from '@mendable/firecrawl-js';
@@ -339,6 +341,52 @@ async function buildWebFetchResult(
   };
 }
 
+// Expected failures web_fetch returns as text rather than throwing, so the agent can carry on.
+// Firecrawl rethrows its 403 as UnsupportedScrapeTargetError.
+const FIRECRAWL_FAILURE_MESSAGES: Record<number, { userMessage: string; statusLabel: string }> = {
+  400: {
+    userMessage: `This site requires advanced browser features that are not available. Try using web_search to find the information instead.`,
+    statusLabel: 'actions not supported',
+  },
+  403: {
+    userMessage: `This site cannot be accessed by the web scraper \u2014 it blocks automated access or is not supported. Try using web_search to find the information instead.`,
+    statusLabel: 'site not supported',
+  },
+  408: {
+    userMessage: `The page timed out before loading completely \u2014 the site may be slow or require heavy JavaScript rendering. Try using web_search to find the information instead.`,
+    statusLabel: 'scrape timed out',
+  },
+  502: {
+    userMessage: `The website returned a Bad Gateway error \u2014 it may be temporarily unavailable. Try again later or use web_search to find the information instead.`,
+    statusLabel: 'bad gateway',
+  },
+  503: {
+    userMessage: `The website is temporarily unavailable (Service Unavailable). Try again later or use web_search to find the information instead.`,
+    statusLabel: 'service unavailable',
+  },
+  504: {
+    userMessage: `The website took too long to respond (Gateway Timeout). Try again later or use web_search to find the information instead.`,
+    statusLabel: 'gateway timeout',
+  },
+};
+
+const WEB_FETCH_PDF_TOO_LARGE_MSG =
+  'This PDF is too large to process via URL. Please download the file and upload it directly instead.';
+
+const WEB_FETCH_UNREACHABLE_MSG =
+  'The page could not be reached \u2014 the server may be down, unreachable, or blocking automated access. ' +
+  'Try using web_search to find the information instead.';
+
+const WEB_FETCH_FAILURE_MESSAGES = new Set([
+  ...Object.values(FIRECRAWL_FAILURE_MESSAGES).map(m => m.userMessage),
+  WEB_FETCH_PDF_TOO_LARGE_MSG,
+  WEB_FETCH_UNREACHABLE_MSG,
+]);
+
+/** Scores the failures web_fetch reports as text; a fetched page is left to the default score. */
+export const validateWebFetchResult: ToolResultValidator = result =>
+  WEB_FETCH_FAILURE_MESSAGES.has(result) ? FAILED_RESULT_SCORE : undefined;
+
 export const webFetchTool: ToolDefinition = {
   name: 'web_fetch',
   implementation: (context: ToolContext) => ({
@@ -400,34 +448,8 @@ export const webFetchTool: ToolDefinition = {
             : error instanceof FirecrawlError
               ? error.statusCode
               : undefined;
-        if (firecrawlStatus !== undefined && [400, 403, 408, 502, 503, 504].includes(firecrawlStatus)) {
-          const statusMessages: Record<number, { userMessage: string; statusLabel: string }> = {
-            400: {
-              userMessage: `This site requires advanced browser features that are not available. Try using web_search to find the information instead.`,
-              statusLabel: 'actions not supported',
-            },
-            403: {
-              userMessage: `This site cannot be accessed by the web scraper — it blocks automated access or is not supported. Try using web_search to find the information instead.`,
-              statusLabel: 'site not supported',
-            },
-            408: {
-              userMessage: `The page timed out before loading completely — the site may be slow or require heavy JavaScript rendering. Try using web_search to find the information instead.`,
-              statusLabel: 'scrape timed out',
-            },
-            502: {
-              userMessage: `The website returned a Bad Gateway error — it may be temporarily unavailable. Try again later or use web_search to find the information instead.`,
-              statusLabel: 'bad gateway',
-            },
-            503: {
-              userMessage: `The website is temporarily unavailable (Service Unavailable). Try again later or use web_search to find the information instead.`,
-              statusLabel: 'service unavailable',
-            },
-            504: {
-              userMessage: `The website took too long to respond (Gateway Timeout). Try again later or use web_search to find the information instead.`,
-              statusLabel: 'gateway timeout',
-            },
-          };
-          const { userMessage, statusLabel } = statusMessages[firecrawlStatus];
+        if (firecrawlStatus !== undefined && firecrawlStatus in FIRECRAWL_FAILURE_MESSAGES) {
+          const { userMessage, statusLabel } = FIRECRAWL_FAILURE_MESSAGES[firecrawlStatus];
           context.logger.warn('WebFetch expected Firecrawl failure', {
             url: params.url,
             statusCode: firecrawlStatus,
@@ -444,7 +466,7 @@ export const webFetchTool: ToolDefinition = {
             error: errorMessage,
           });
           await context.statusUpdate({}, 'WebFetch: PDF too large');
-          return `This PDF is too large to process via URL. Please download the file and upload it directly instead.`;
+          return WEB_FETCH_PDF_TOO_LARGE_MSG;
         }
 
         // Network-level errors (no response, connection reset, blocked redirect, ...) - return a
@@ -470,7 +492,7 @@ export const webFetchTool: ToolDefinition = {
             error: errorMessage,
           });
           await context.statusUpdate({}, 'WebFetch: network error');
-          return `The page could not be reached — the server may be down, unreachable, or blocking automated access. Try using web_search to find the information instead.`;
+          return WEB_FETCH_UNREACHABLE_MSG;
         }
 
         // Unexpected errors - log as error and rethrow
@@ -479,6 +501,7 @@ export const webFetchTool: ToolDefinition = {
         throw error;
       }
     },
+    validateResult: validateWebFetchResult,
     toolSchema: {
       name: 'web_fetch',
       description:

@@ -29,7 +29,8 @@ export function resolveModelPriceRow(
  * here (they feed getTextModelCost via ModelInfo.pricing); per_minute and
  * per_image rows are consumed by their own settlement paths. A model with no
  * per_token row in force keeps its adapter literal - the fallback that keeps
- * zero-config self-host deployments working.
+ * zero-config self-host deployments working. A catalog-priced model also carries
+ * priceSource and priceRowId; a literal-priced one carries neither.
  */
 export function applyModelPriceCatalog(models: ModelInfo[], rows: IModelPrice[], at: Date = new Date()): ModelInfo[] {
   if (rows.length === 0) return models;
@@ -41,6 +42,7 @@ export function applyModelPriceCatalog(models: ModelInfo[], rows: IModelPrice[],
     for (const [threshold, tier] of Object.entries(row.pricing)) {
       pricing[Number(threshold)] = tier;
     }
-    return { ...model, pricing };
+    // Provenance rides along so settlement can stamp which row priced a call (UsageEvent.priceRowId).
+    return { ...model, pricing, priceSource: 'catalog', ...(row.id ? { priceRowId: row.id } : {}) };
   });
 }

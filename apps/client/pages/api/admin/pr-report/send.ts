@@ -21,6 +21,7 @@ import { prReportService } from '@bike4mind/services';
 import { ForbiddenError } from '@bike4mind/utils';
 
 import { createSendDeps, loadPrReportConfig } from '@server/services/prReport/context';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 const sendBodySchema = z.object({
   text: z.string(),
@@ -82,6 +83,16 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post<Request<{}
   });
 
   if (outcome.ok) {
+    // Only a post made by this call is audited; 'deduped' and 'deliveryUnknown' did not post here.
+    if (outcome.response.outcome === 'sent') {
+      await recordAdminActionFromRequest(req, {
+        action: 'support.pr_report.sent',
+        target: { kind: 'system', id: 'pr_report', displayName: 'PR report' },
+        summary: `sent PR report for ${config.repo}`,
+        details: { repo: config.repo, textLength: parsedBody.data.text.length },
+      });
+    }
+
     // All three are successful REQUESTS. 'deliveryUnknown' in particular is not an
     // error: it reports an uncertain delivery, and the client must surface it as
     // "check the channel before retrying" rather than enabling a retry.

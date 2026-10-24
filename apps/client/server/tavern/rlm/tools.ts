@@ -65,9 +65,9 @@ const SUB_LLM_PRICING = new Map<string, { inputPerToken: number; outputPerToken:
   [HAIKU_MODEL_ID, { inputPerToken: 1e-6, outputPerToken: 5e-6 }],
 ]);
 
-/** Rough chars-per-token for the pre-flight cost estimate. Settled with real
- *  usage as soon as the call returns, so it only has to be the right order. */
-const ESTIMATE_CHARS_PER_TOKEN = 4;
+/** Pre-flight input estimate: one token per UTF-8 byte plus message framing, an upper bound for any
+ *  text. Concurrent calls are admitted on it and settlement clamps to the cap, so it must not undershoot. */
+const ESTIMATE_FRAMING_TOKENS = 16;
 
 /** One shared abort signal per tool call - see `timeouts.ts` for the ladder. */
 const toolHttpDeadline = () => AbortSignal.timeout(TOOL_HTTP_TIMEOUT_MS);
@@ -330,7 +330,7 @@ export function buildDataLakeTools(deps: DataLakeToolDeps): ReplToolMap {
     // once the provider had already billed all N. Worst-case pricing, since a
     // reservation that under-estimates is a cap that under-enforces.
     const estimatedCostUsd =
-      Math.ceil(a.prompt.length / ESTIMATE_CHARS_PER_TOKEN) * pricing.inputPerToken +
+      (Buffer.byteLength(a.prompt, 'utf8') + ESTIMATE_FRAMING_TOKENS) * pricing.inputPerToken +
       maxTokens * pricing.outputPerToken;
     const reservation = deps.session.reserveSubLlm({ estimatedCostUsd });
 

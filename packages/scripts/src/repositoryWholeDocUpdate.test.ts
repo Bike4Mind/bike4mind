@@ -54,7 +54,6 @@ const ALLOWED = new Map<string, string>([
   ['apps/client/pages/api/quest-plans/[id]/index.ts::changes', PARTIAL],
   ['apps/client/pages/api/sessions/[id]/agents/[agentId]/config.ts::patch', 'leaf paths of the validated body'],
   ['apps/client/pages/api/secret-rotations/[id]/index.ts::params', 'parsed request body'],
-  ['apps/client/pages/api/skills/[id]/index.ts::patch', PARTIAL],
   ['apps/client/pages/api/sre/patterns/[id].ts::updates', PARTIAL],
   ['b4m-core/services/src/artifactService/delete.ts::updateData', PARTIAL],
   ['b4m-core/services/src/fabFileService/edit.ts::updatedFile', PARTIAL],
@@ -66,9 +65,9 @@ const ALLOWED = new Map<string, string>([
   ['b4m-core/services/src/tagService/update.ts::buildData', 'id plus validated params'],
   ['packages/scripts/generateAgentSystemPrompts.ts::updateData', PARTIAL],
 ]);
-const ALLOWED_ENTRIES = 24;
+const ALLOWED_ENTRIES = 23;
 // Sum of the per-entry SITE_COUNTs; pinned so a new site under an existing key is not absorbed silently.
-const TOTAL_SITES = 26;
+const TOTAL_SITES = 25;
 const SITE_COUNT = new Map<string, number>([
   ['b4m-core/services/src/latticeService/latticeModelService.ts::updatedModel', 3],
 ]);

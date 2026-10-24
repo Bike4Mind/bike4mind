@@ -1,6 +1,10 @@
 import { ADMIN_AUDIT_LOG_TAB_SLUG, ADMIN_FEEDBACK_TAB_SLUG, ADMIN_USERS_TAB_SLUG } from '@bike4mind/common';
 import { AdminTab } from './adminSidebarConfig';
-import { ADMIN_SETTINGS_TAB_SLUG } from './adminTabParams';
+import {
+  ADMIN_MODEL_LOGS_TAB_SLUG,
+  ADMIN_SETTINGS_TAB_SLUG,
+  ADMIN_WEBHOOK_AUDIT_LOGS_TAB_SLUG,
+} from './adminTabParams';
 
 /**
  * AdminTab -> URL slug, for the console's `?tab=` param.
@@ -11,6 +15,7 @@ import { ADMIN_SETTINGS_TAB_SLUG } from './adminTabParams';
  * new tab without a slug a compile error. Never change an existing slug.
  */
 const ADMIN_TAB_TO_SLUG: Readonly<Record<AdminTab, string>> = {
+  [AdminTab.Dashboard]: 'dashboard',
   [AdminTab.Users]: ADMIN_USERS_TAB_SLUG,
   [AdminTab.AdminSettings]: ADMIN_SETTINGS_TAB_SLUG,
   [AdminTab.Feedback]: ADMIN_FEEDBACK_TAB_SLUG,
@@ -29,7 +34,7 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<AdminTab, string>> = {
   [AdminTab.CreditAnalytics]: 'credit-analytics',
   [AdminTab.SecretsRotation]: 'secrets-rotation',
   [AdminTab.BulkImport]: 'bulk-import',
-  [AdminTab.ModelLogs]: 'model-logs',
+  [AdminTab.ModelLogs]: ADMIN_MODEL_LOGS_TAB_SLUG,
   [AdminTab.ModelMetrics]: 'model-metrics',
   [AdminTab.EventMetrics]: 'event-metrics',
   [AdminTab.SystemPrompts]: 'system-prompts',
@@ -48,7 +53,7 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<AdminTab, string>> = {
   [AdminTab.SystemSecrets]: 'system-secrets',
   [AdminTab.LiveOpsTriage]: 'live-ops-triage',
   [AdminTab.EmailMarketing]: 'email-marketing',
-  [AdminTab.WebhookAuditLogs]: 'webhook-audit-logs',
+  [AdminTab.WebhookAuditLogs]: ADMIN_WEBHOOK_AUDIT_LOGS_TAB_SLUG,
   [AdminTab.GitHubConnection]: 'github-connection',
   [AdminTab.HelpAnalytics]: 'help-analytics',
   [AdminTab.ContextInspector]: 'context-inspector',

@@ -42,7 +42,7 @@ import {
 } from '@bike4mind/fab-pipeline';
 import { getSettingsValue } from '../settings';
 import { Logger } from '@bike4mind/observability';
-import { ensureToolPairingIntegrity } from '@bike4mind/llm-adapters';
+import { ensureToolPairingIntegrity, isConverseBedrockModel } from '@bike4mind/llm-adapters';
 import { getFileContent } from '../fabfile';
 import { escapeRegex } from '../escapeRegex';
 import { BadRequestError, CorruptedFileError } from '../errors';
@@ -407,6 +407,22 @@ function historyTextReply(item: Pick<IChatHistoryItem, 'replies' | 'researchMode
 }
 
 /**
+ * A prompt the user stopped before the model produced anything replayable. Replaying it leaves a user
+ * turn with no assistant turn, so the next prompt reads as two asks in a row and gets both answered.
+ * A stop after some output keeps its turn, so partial work is still part of the history.
+ */
+export function isStoppedBeforeReply(
+  item: Pick<IChatHistoryItem, 'status' | 'replies' | 'researchModeResults' | 'structuredReplies' | 'promptMeta'>
+): boolean {
+  return (
+    item.status === 'stopped' &&
+    !historyTextReply(item) &&
+    !item.structuredReplies?.length &&
+    replayableToolCalls(item.promptMeta?.functionCalls).length === 0
+  );
+}
+
+/**
  * Whether the slot `historyTextReply` picks (the first non-`<think>` one) is also the turn's last
  * visible slot. On a multi-slot turn it is a pre-tool preamble, which must never carry the block.
  */
@@ -553,6 +569,38 @@ export async function generateSafeEmbedding(
 }
 
 /**
+ * Quests between one history-window start and the next once a session outgrows its limit. A window
+ * that slid by one quest per turn changed the head of the conversation on every request, so the
+ * provider's prompt cache (prefix-based) never matched past the system prompt. Stepping the start
+ * keeps the prefix byte-identical for STEP turns at a time.
+ */
+export const HISTORY_WINDOW_STEP = 10;
+
+/**
+ * The step a window may actually use. Capped at half the limit: at limit 10 and step 10 the window
+ * would collapse to a single quest right after each step, which is no history at all for a
+ * small-context model.
+ */
+export function historyWindowStep(limit: number, step: number = HISTORY_WINDOW_STEP): number {
+  return Math.min(step, Math.max(1, Math.floor(limit / 2)));
+}
+
+/**
+ * Index (0-based, oldest first) of the first prior quest in the history window, given the number of
+ * quests before the current turn and the window `limit`. The window is quests [start, priorQuestCount):
+ * never longer than `limit`, and `start` only moves every `step` quests.
+ */
+export function resolveHistoryWindowStart(
+  priorQuestCount: number,
+  limit: number,
+  step: number = HISTORY_WINDOW_STEP
+): number {
+  if (priorQuestCount <= limit) return 0;
+  const effectiveStep = historyWindowStep(limit, step);
+  return Math.ceil((priorQuestCount - limit) / effectiveStep) * effectiveStep;
+}
+
+/**
  * Return the previous messages from the database, and the total number of previous messages.
  *
  * `historyCount` is a window in quests: null means the default page size, 0 or below means no
@@ -570,7 +618,9 @@ export async function fetchAndProcessPreviousMessages(
     includeReplyChoices = false,
   }: {
     db: {
-      quests: Pick<IChatHistoryItemRepository, 'getMostRecentChatHistory'>;
+      // countBySessionId is optional so a caller with a minimal repository keeps the newest-N window.
+      quests: Pick<IChatHistoryItemRepository, 'getMostRecentChatHistory'> &
+        Partial<Pick<IChatHistoryItemRepository, 'countBySessionId'>>;
     };
     /**
      * When set, keep only the newest turns whose estimated size fits this many
@@ -618,7 +668,10 @@ export async function fetchAndProcessPreviousMessages(
       fetchTime?: number;
       itemCount?: number;
       oldestIncludedQuestId?: string | null;
-      /** Older turns dropped from the verbatim window by verbatimTokenBudget (0 when none). */
+      /**
+       * Older turns verbatimTokenBudget leaves out of the window (0 when none). Reported before the
+       * cache-grid snap, so the snap cannot hide token pressure from summarization.
+       */
       excludedOlderQuestCount?: number;
       /** Recently generated images (bare storage keys + originating prompt), newest first. */
       recentGeneratedImages?: { key: string; prompt: string }[];
@@ -657,6 +710,10 @@ export async function fetchAndProcessPreviousMessages(
     } items)`
   );
 
+  // limit + 1 back means the session holds at least `limit` prior quests, the only case where the
+  // window can need aligning (see below). Read before the pop; shorter sessions skip the count query.
+  const mayExceedWindow = chatHistoryItems.length > limit;
+
   // Reverse the chat history items and remove the last item (the current prompt)
   chatHistoryItems.reverse();
 
@@ -666,11 +723,48 @@ export async function fetchAndProcessPreviousMessages(
     chatHistoryItems.pop();
   }
 
+  // Past `limit` quests the newest-N window would drop the oldest quest every turn, changing the head
+  // of the prompt each time and defeating the provider's prefix cache. Align its start to a step
+  // boundary instead (see resolveHistoryWindowStart). The aligned window is never longer than `limit`,
+  // so it lies inside the quests already fetched and costs no second fetch.
+  //
+  // A caller who asked for unlimited history wants every turn, so alignment is skipped for it - the
+  // fetch page would otherwise cap that choice at a fraction of itself. The token-budget trim below
+  // uses the same anchor, so it is skipped for unlimited history too.
+  let windowStartIndex: number | null = null;
+  if (!isUnlimitedHistory(historyCount) && (mayExceedWindow || verbatimTokenBudget) && db.quests.countBySessionId) {
+    // The count only improves cache locality; a transient failure must not fail the whole turn.
+    // Without it the window keeps the pre-alignment newest-N shape.
+    let questCount: number | null = null;
+    try {
+      questCount = await db.quests.countBySessionId(session.id);
+    } catch (error) {
+      Logger.globalInstance.warn('History quest count failed; keeping the unaligned window', {
+        sessionId: session.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    if (questCount !== null) {
+      // The count includes the current turn's quest. Floored at what was fetched in case a concurrent
+      // write made the two reads disagree.
+      const priorQuestCount = Math.max(questCount - 1, chatHistoryItems.length);
+      const windowStart = resolveHistoryWindowStart(priorQuestCount, limit);
+      windowStartIndex = priorQuestCount - chatHistoryItems.length;
+      const dropCount = Math.min(Math.max(windowStart - windowStartIndex, 0), chatHistoryItems.length - 1);
+      if (dropCount > 0) {
+        chatHistoryItems.splice(0, dropCount);
+        windowStartIndex += dropCount;
+      }
+    }
+  }
+
   // Filter out messages already covered by contextSummary.
   // MongoDB ObjectIds are time-ordered; string comparison gives correct temporal ordering.
   if (session.contextSummaryUpToQuestId) {
     const boundary = session.contextSummaryUpToQuestId;
     const filtered = chatHistoryItems.filter(item => item.id > boundary);
+    if (windowStartIndex !== null) windowStartIndex += chatHistoryItems.length - filtered.length;
     chatHistoryItems.splice(0, chatHistoryItems.length, ...filtered);
   }
 
@@ -694,7 +788,25 @@ export async function fetchAndProcessPreviousMessages(
       }
     }
     if (keepFromIndex > 0) {
-      excludedOlderQuestCount = keepFromIndex;
+      // Snap the window start to the same step grid the count window uses. The budget is sized from
+      // this turn's message and tool list, so it moves every turn; left unaligned, this trim slides
+      // the window start one quest per turn and busts the cache in exactly the long sessions the
+      // alignment above exists for. Prefer the next grid point at or above the trim, so the window
+      // never holds more than the budget estimated; fall back to the one below only when stepping up
+      // would drop the newest turn (the end of the window is fixed at the newest quest). When the
+      // point below drops nothing either, keep the raw trim: the summarizer folds only quests older
+      // than oldestIncludedQuestId, so a window left whole would re-fire summarization every turn
+      // without compacting anything.
+      const rawTrim = keepFromIndex;
+      if (windowStartIndex !== null) {
+        const step = historyWindowStep(limit);
+        const absoluteStart = windowStartIndex + rawTrim;
+        const snappedUp = Math.ceil(absoluteStart / step) * step - windowStartIndex;
+        const snappedDown = Math.floor(absoluteStart / step) * step - windowStartIndex;
+        keepFromIndex = snappedUp <= chatHistoryItems.length - 1 ? snappedUp : snappedDown > 0 ? snappedDown : rawTrim;
+      }
+      // Never report less than the pre-snap trim: a 0 here reads downstream as "no token pressure".
+      excludedOlderQuestCount = Math.max(rawTrim, keepFromIndex);
       chatHistoryItems.splice(0, keepFromIndex);
     }
   }
@@ -703,6 +815,7 @@ export async function fetchAndProcessPreviousMessages(
 
   // Convert to IMessage format with tool pairing reconstruction.
   const convertedMessages = chatHistoryItems.reduce((acc, cur) => {
+    if (isStoppedBeforeReply(cur)) return acc;
     if (cur.prompt) acc.push({ role: 'user', content: cur.prompt });
 
     const toolCalls = replayableToolCalls(cur.promptMeta?.functionCalls);
@@ -870,6 +983,7 @@ export async function fetchAgentConversationHistory(
     : chatHistoryItems;
 
   return items.reduce((acc, cur) => {
+    if (isStoppedBeforeReply(cur)) return acc;
     if (cur.prompt) acc.push({ role: 'user', content: cur.prompt });
     // Same text-only fallback as fetchAndProcessPreviousMessages, so the agent sees the actual
     // answer (including Research Mode answers), not internal thoughts.
@@ -1614,7 +1728,9 @@ export async function processFabFilesServer(
             if (
               modelInfo.backend === ModelBackend.Anthropic ||
               modelInfo.id.includes('anthropic') ||
-              modelInfo.id.includes('gemini')
+              modelInfo.id.includes('gemini') ||
+              modelInfo.adapterFamily === 'bedrock-converse' ||
+              isConverseBedrockModel(String(modelInfo.id))
             ) {
               // Check image size before downloading (Anthropic has 5MB base64 limit)
               // We use 3.5MB as safe threshold since base64 encoding adds ~33% overhead
@@ -3170,7 +3286,7 @@ export async function buildAndSortMessages(
     logger.log('\nFinal Combined Messages:');
     messages.forEach((msg, i) => {
       const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
-      logger.log(`  ${i + 1}. Role: ${msg.role}, Content: ${content.substring(0, 50)}...`);
+      logger.log(`  ${i + 1}. Role: ${msg.role}, Content length: ${content.length}`);
     });
 
     logger.log(`\nTotal messages: ${messages.length}`);

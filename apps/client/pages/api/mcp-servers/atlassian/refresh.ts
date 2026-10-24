@@ -46,7 +46,7 @@ const handler = baseApi().post(async (req, res) => {
     }
 
     const tokenData: TokenResponse = await tokenResponse.json();
-    const nextRefreshToken = tokenData.refresh_token ?? user.atlassianConnect.refreshToken;
+    const nextRefreshToken = tokenData.refresh_token ?? decryptToken(user.atlassianConnect.refreshToken);
     if (!nextRefreshToken) {
       throw new Error('Refresh token missing from Atlassian response');
     }
@@ -81,11 +81,14 @@ const handler = baseApi().post(async (req, res) => {
 
       await mcpServerRepository.update({
         id: server.id,
-        envVariables: encryptEnvVariables([
-          { key: 'ATLASSIAN_ACCESS_TOKEN', value: tokenData.access_token },
-          { key: 'ATLASSIAN_CLOUD_ID', value: primaryResource.id },
-          { key: 'ATLASSIAN_SITE_URL', value: siteUrl },
-        ]),
+        envVariables: encryptEnvVariables(
+          [
+            { key: 'ATLASSIAN_ACCESS_TOKEN', value: tokenData.access_token },
+            { key: 'ATLASSIAN_CLOUD_ID', value: primaryResource.id },
+            { key: 'ATLASSIAN_SITE_URL', value: siteUrl },
+          ],
+          server
+        ),
       });
     }
 

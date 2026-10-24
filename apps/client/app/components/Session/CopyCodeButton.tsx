@@ -1,5 +1,6 @@
 import { IconButton, Tooltip } from '@mui/joy';
-import { Check, ContentCopy } from '@mui/icons-material';
+import Check from '@mui/icons-material/Check';
+import ContentCopy from '@mui/icons-material/ContentCopy';
 import { useCopyToClipboard } from '@client/app/hooks/useCopyToClipboard';
 import { CopyCodeButtonProps } from './types/UserPromptTypes';
 import { actionButtonSx } from '@client/app/components/common/actionButtonSx';

@@ -94,7 +94,7 @@ vi.mock('@server/websocket/utils', () => ({
   sendToClient: (...args: unknown[]) => mockSendToClient(...args),
 }));
 
-vi.mock('@server/integrations/stripe/stripe', () => ({
+vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   isStripeConfigured: vi.fn().mockReturnValue(true),
   stripe: {
     webhooks: { constructEvent: (...args: unknown[]) => mockConstructEvent(...args) },
@@ -465,7 +465,14 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
           reportFailure: true,
           userId: 'user123',
           utm: { source: 'widgets', campaign: 'launch' },
-          metadata: { touch: 'first', attribution: 'self-reported', kind: 'credits', value: 9.99, currency: 'USD' },
+          metadata: {
+            touch: 'first',
+            attribution: 'self-reported',
+            kind: 'credits',
+            value: 9.99,
+            currency: 'USD',
+            userAction: false,
+          },
         });
         expect(res.status).toHaveBeenCalledWith(200);
       });

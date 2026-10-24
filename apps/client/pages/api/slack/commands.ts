@@ -1,10 +1,11 @@
+import { VERIFIED_SLACK_IDENTITY_FILTER } from '@bike4mind/common';
 import { initializeSlackPackage } from '@server/integrations/slack/slackPackageInit';
 initializeSlackPackage();
 
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { verifySlackRequest } from '@server/integrations/slack/slackWebhookVerification';
-import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
+import { IntegrationAuditLogger } from '@bike4mind/server-utils/integrations/integrationAuditLogger';
 import { User, Session, connectDB } from '@bike4mind/database';
 import { slackDevWorkspaceRepository } from '@bike4mind/database/infra';
 import { createSession } from '@server/managers/sessionManager';
@@ -47,6 +48,7 @@ const SlackCommandSchema = z.object({
 async function findUserBySlackId(slackUserId: string) {
   const user = await User.findOne({
     'slackSettings.slackUserId': slackUserId,
+    ...VERIFIED_SLACK_IDENTITY_FILTER,
   });
   return user;
 }
@@ -64,6 +66,7 @@ const withTimeout = <T>(promise: Promise<T>, timeoutMs: number, errorMessage: st
 async function findUserBySlackIdWithToken(slackUserId: string) {
   const user = await User.findOne({
     'slackSettings.slackUserId': slackUserId,
+    ...VERIFIED_SLACK_IDENTITY_FILTER,
   }).select('+slackSettings.slackUserToken');
 
   // Debug: log what we found to verify stored slackUserId matches

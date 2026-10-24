@@ -3,23 +3,26 @@ import Card from '@mui/joy/Card';
 import CircularProgress from '@mui/joy/CircularProgress';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
+import { ReauthNotice } from '../auth/ReauthNotice';
 import { SignInCard } from '../auth/SignInCard';
 import { SignedInPanel } from '../auth/SignedInPanel';
 import { useAuthState } from '../auth/useAuthState';
 import { ChatShell } from '../chat/ChatShell';
+import { AppUpdateNotice } from '../chat/UpdateNotice';
 
 export function Home() {
   const state = useAuthState();
 
-  // Signed in, the window belongs to the conversation; identity moves to the sidebar footer.
-  if (state?.status === 'signed-in') {
+  // Signed in, the window belongs to the conversation; identity moves to the sidebar footer. A
+  // session that expired under the user keeps it too, mounted in the same place so nothing in it
+  // (the composer's draft above all) is torn down while they sign in again.
+  if (state?.status === 'signed-in' || state?.reauthRequired) {
     return (
-      <ChatShell
-        auth={state}
-        account={(status, openSettings) => (
-          <SignedInPanel state={state} status={status} onOpenSettings={openSettings} />
-        )}
-      />
+      <>
+        <ChatShell auth={state} account={status => <SignedInPanel state={state} status={status} />} />
+        {state.reauthRequired && <ReauthNotice state={state} />}
+        <AppUpdateNotice />
+      </>
     );
   }
 
@@ -37,6 +40,7 @@ export function Home() {
           <SignInCard state={state} />
         )}
       </Card>
+      <AppUpdateNotice />
     </Box>
   );
 }

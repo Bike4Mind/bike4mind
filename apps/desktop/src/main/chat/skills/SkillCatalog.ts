@@ -1,12 +1,15 @@
+import { existsSync, watch, type FSWatcher } from 'node:fs';
 import { homedir } from 'node:os';
-import { resolve } from 'node:path';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import {
   CustomCommandStore,
+  type CachedCommandFile,
   filterAIVisibleSkills,
   filterUserVisibleSkills,
   type CustomCommand,
   type RemoteSkillSource,
 } from '@bike4mind/cli/skills';
+import type { AuthLogger } from '@bike4mind/client-auth';
 import type { SkillSource, SkillSummary, SkillsState } from '@shared/skills';
 import type { ProjectTrustStore } from './ProjectTrustStore';
 
@@ -32,14 +35,23 @@ import type { ProjectTrustStore } from './ProjectTrustStore';
 export type RemoteSkills = () => { key: string; source: RemoteSkillSource } | null;
 
 /**
- * How long a scan is reused before the directories are walked again.
- *
- * Short on purpose. The picker opens on a keystroke, so a scan per keystroke would stat a few
- * hundred files while the user types; but a skill the user just wrote has to appear without
- * restarting the app, which a long cache would break. A couple of seconds covers a burst of
- * typing and nothing else.
+ * How long a scan is trusted without a change event. Watchers invalidate a scan the moment a file
+ * changes; this only bounds how stale it can get where a watch never fires (a network mount, a root
+ * created after the first scan).
  */
-const CACHE_MS = 2_000;
+const CACHE_MS = 60_000;
+
+/** An editor saves a file as a burst of events; one rescan covers the burst. */
+const WATCH_DEBOUNCE_MS = 200;
+
+/** Trusted project roots watched at once. Past this the least recent falls back to the TTL. */
+const MAX_WATCHED_PROJECTS = 4;
+
+const COMMAND_DIRS = [
+  ['.bike4mind', 'commands'],
+  ['.claude', 'commands'],
+  ['.claude', 'skills'],
+] as const;
 
 interface Cached {
   at: number;
@@ -49,11 +61,21 @@ interface Cached {
 export class SkillCatalog {
   private readonly cache = new Map<string, Cached>();
   private readonly inFlight = new Map<string, Promise<CustomCommand[]>>();
+  private readonly fileCache = new Map<string, CachedCommandFile>();
+  private readonly aiVisible = new WeakMap<CustomCommand[], readonly CustomCommand[]>();
+  private readonly globalWatchers: FSWatcher[] = [];
+  /** Trusted project root -> its watchers, least recently scanned first. */
+  private readonly projectWatchers = new Map<string, FSWatcher[]>();
+  private watchingGlobal = false;
+  private debounce: NodeJS.Timeout | null = null;
+  /** Bumped on every invalidation, so a scan that started before a change does not cache its result. */
+  private generation = 0;
   private changes = 0;
 
   constructor(
     private readonly trust: ProjectTrustStore,
-    private readonly remote: RemoteSkills = () => null
+    private readonly remote: RemoteSkills = () => null,
+    private readonly logger?: Pick<AuthLogger, 'debug'>
   ) {}
 
   /**
@@ -96,11 +118,20 @@ export class SkillCatalog {
    * Distinct from `state`, which answers the composer's question: a skill may be the user's to
    * invoke and not the model's (`disable-model-invocation`), or the model's and not the
    * picker's (`user-invocable: false`).
+   *
+   * The same array for as long as one scan is cached, so SkillsPromptCache can build the prompt
+   * section once per scan rather than once per session.
    */
-  async forModel(projectRoot: string | null): Promise<CustomCommand[]> {
+  async forModel(projectRoot: string | null): Promise<readonly CustomCommand[]> {
     const root = projectRoot ? resolve(projectRoot) : null;
     const trusted = root ? await this.trust.isTrusted(root) : false;
-    return filterAIVisibleSkills(await this.load(root, trusted));
+    const all = await this.load(root, trusted);
+    let visible = this.aiVisible.get(all);
+    if (!visible) {
+      visible = filterAIVisibleSkills(all);
+      this.aiVisible.set(all, visible);
+    }
+    return visible;
   }
 
   /** One skill by name, for the send path. Undefined when it does not exist or is withheld. */
@@ -118,7 +149,7 @@ export class SkillCatalog {
     const root = resolve(projectRoot);
     if (trusted) await this.trust.trust(root);
     else await this.trust.revoke(root);
-    this.cache.clear();
+    this.invalidate();
     this.changes++;
   }
 
@@ -128,8 +159,24 @@ export class SkillCatalog {
    */
   invalidateAccount(): void {
     this.remote()?.source.invalidate();
-    this.cache.clear();
+    this.invalidate();
     this.changes++;
+  }
+
+  dispose(): void {
+    if (this.debounce) clearTimeout(this.debounce);
+    this.debounce = null;
+    for (const watcher of this.globalWatchers) watcher.close();
+    this.globalWatchers.length = 0;
+    for (const watchers of this.projectWatchers.values()) for (const watcher of watchers) watcher.close();
+    this.projectWatchers.clear();
+  }
+
+  /** Deliberately leaves `changes` alone: a skill edit must not move the per-session prompt snapshot. */
+  private invalidate(): void {
+    this.generation++;
+    this.cache.clear();
+    this.inFlight.clear();
   }
 
   private load(root: string | null, trusted: boolean): Promise<CustomCommand[]> {
@@ -144,7 +191,9 @@ export class SkillCatalog {
     const running = this.inFlight.get(key);
     if (running) return running;
 
-    const loading = this.scan(key, root, trusted, account?.source).finally(() => this.inFlight.delete(key));
+    const loading = this.scan(key, root, trusted, account?.source).finally(() => {
+      if (this.inFlight.get(key) === loading) this.inFlight.delete(key);
+    });
     this.inFlight.set(key, loading);
     return loading;
   }
@@ -159,15 +208,125 @@ export class SkillCatalog {
     // process.cwd() - for a packaged Electron app, wherever the user happened to launch it
     // from. The home directory is passed instead, and `setProjectTrusted` is never called for
     // it, so its project directories are not scanned and only ~/.claude/skills loads.
-    const store = new CustomCommandStore(root ?? homedir(), { remoteSource });
+    const startedAt = performance.now();
+    const generation = this.generation;
+    this.watch(root, trusted);
+    const store = new CustomCommandStore(root ?? homedir(), { remoteSource, fileCache: this.fileCache });
     // Honestly, not to make a test pass: false for an untrusted root is the whole gate, and
     // false for "no project" is what keeps repo skills out of a Chat session.
     store.setProjectTrusted(trusted);
     await store.loadCommands();
 
     const commands = store.getAllCommands();
-    this.cache.set(key, { at: Date.now(), commands });
+    this.logger?.debug(
+      `SKILLS: scanned ${commands.length} commands for ${key} in ${Math.round(performance.now() - startedAt)}ms`
+    );
+    if (generation === this.generation) this.cache.set(key, { at: Date.now(), commands });
     return commands;
+  }
+
+  /**
+   * Watches the roots a scan reads, so the next read after an edit rescans. Bounded by roots, not
+   * sessions: the three global directories plus at most MAX_WATCHED_PROJECTS trusted checkouts.
+   */
+  private watch(root: string | null, trusted: boolean): void {
+    if (!this.watchingGlobal) {
+      this.watchingGlobal = true;
+      const home = homedir();
+      const rearm = () => {
+        for (const watcher of this.globalWatchers) watcher.close();
+        this.globalWatchers.length = 0;
+        this.watchingGlobal = false;
+      };
+      for (const parts of COMMAND_DIRS) this.watchDirectory(join(home, ...parts), home, this.globalWatchers, rearm);
+    }
+    if (!root || !trusted) return;
+    const existing = this.projectWatchers.get(root);
+    this.projectWatchers.delete(root);
+    if (existing) {
+      this.projectWatchers.set(root, existing);
+      return;
+    }
+    const watchers: FSWatcher[] = [];
+    const rearm = () => {
+      if (this.projectWatchers.get(root) !== watchers) return;
+      for (const watcher of watchers) watcher.close();
+      this.projectWatchers.delete(root);
+    };
+    for (const parts of COMMAND_DIRS) this.watchDirectory(join(root, ...parts), root, watchers, rearm);
+    this.projectWatchers.set(root, watchers);
+    for (const [oldest, stale] of this.projectWatchers) {
+      if (this.projectWatchers.size <= MAX_WATCHED_PROJECTS) break;
+      for (const watcher of stale) watcher.close();
+      this.projectWatchers.delete(oldest);
+      this.forgetFiles(oldest);
+    }
+  }
+
+  /** `rearm` drops this root's watchers so the next scan watches it afresh. */
+  private watchDirectory(directory: string, stopAt: string, into: FSWatcher[], rearm: () => void): void {
+    // Checked rather than caught: on Linux a recursive watch of a missing folder fails later, as
+    // an 'error' event, so a throw would never send it to watchForCreation.
+    if (!existsSync(directory)) {
+      this.watchForCreation(directory, stopAt, into, rearm);
+      return;
+    }
+    try {
+      this.track(
+        watch(directory, { recursive: true, persistent: false }, () => this.changed()),
+        into
+      );
+    } catch {
+      // Not watchable here: the TTL covers it.
+    }
+  }
+
+  /**
+   * A root that does not exist yet, as in a project with no skills so far: the nearest folder that
+   * does is watched for the one entry leading to it, and its creation re-arms the root. Without
+   * this a first skill would wait out the TTL.
+   */
+  private watchForCreation(directory: string, stopAt: string, into: FSWatcher[], rearm: () => void): void {
+    for (let missing = directory; missing !== stopAt && dirname(missing) !== missing; missing = dirname(missing)) {
+      if (!existsSync(dirname(missing))) continue;
+      const leading = basename(missing);
+      try {
+        const watcher = watch(dirname(missing), { persistent: false }, (_event, name) => {
+          // No name, or the deeper path, when the platform coalesces a `mkdir -p` into one event.
+          if (name && name !== leading && !name.startsWith(leading + sep)) return;
+          rearm();
+          this.changed();
+        });
+        this.track(watcher, into);
+      } catch {
+        // Not watchable here: the TTL covers it.
+      }
+      return;
+    }
+  }
+
+  private track(watcher: FSWatcher, into: FSWatcher[]): void {
+    watcher.on('error', () => {
+      watcher.close();
+      const index = into.indexOf(watcher);
+      if (index >= 0) into.splice(index, 1);
+      this.changed();
+    });
+    into.push(watcher);
+  }
+
+  private changed(): void {
+    if (this.debounce) clearTimeout(this.debounce);
+    this.debounce = setTimeout(() => {
+      this.debounce = null;
+      this.invalidate();
+    }, WATCH_DEBOUNCE_MS);
+    this.debounce.unref();
+  }
+
+  private forgetFiles(root: string): void {
+    const prefix = root.endsWith(sep) ? root : root + sep;
+    for (const path of this.fileCache.keys()) if (path.startsWith(prefix)) this.fileCache.delete(path);
   }
 }
 

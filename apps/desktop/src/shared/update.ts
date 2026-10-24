@@ -32,6 +32,10 @@ export interface UpdateState {
   percent: number;
   /** When a check last REACHED the feed, epoch ms. A failed check leaves it alone. */
   checkedAt: number | null;
+  /** Release notes / download page for `version`, when the feed is one we know how to link to. */
+  releaseUrl: string | null;
+  /** The newer version the user closed the floating notice for. Persisted by main. */
+  dismissedVersion: string | null;
 }
 
 export type UpdateEvent =
@@ -57,6 +61,8 @@ export function initialUpdateState(currentVersion: string, supported: boolean): 
     version: null,
     percent: 0,
     checkedAt: null,
+    releaseUrl: null,
+    dismissedVersion: null,
   };
 }
 
@@ -161,6 +167,98 @@ export function updateAttention(state: UpdateState): string | undefined {
   if (state.status === 'available') return 'Update';
   if (state.status === 'ready') return 'Restart';
   return undefined;
+}
+
+interface ParsedVersion {
+  core: [number, number, number];
+  prerelease: string[];
+}
+
+const SEMVER =
+  /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z.-]+)?$/;
+
+function parseVersion(version: string): ParsedVersion | null {
+  const match = SEMVER.exec(version.trim());
+  if (!match) return null;
+  return {
+    core: [Number(match[1]), Number(match[2]), Number(match[3])],
+    prerelease: match[4] ? match[4].split('.') : [],
+  };
+}
+
+function compareIdentifiers(left: string, right: string): number {
+  const leftNumeric = /^\d+$/.test(left);
+  const rightNumeric = /^\d+$/.test(right);
+  if (leftNumeric && rightNumeric) return Math.sign(Number(left) - Number(right));
+  // SemVer 11.4.3: numeric identifiers sort below alphanumeric ones.
+  if (leftNumeric) return -1;
+  if (rightNumeric) return 1;
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function compareCores(left: ParsedVersion, right: ParsedVersion): number {
+  for (let index = 0; index < 3; index++) {
+    const difference = left.core[index] - right.core[index];
+    if (difference !== 0) return Math.sign(difference);
+  }
+  return 0;
+}
+
+/**
+ * SemVer precedence: -1, 0 or 1, or null when either side is not a version at all.
+ * Build metadata is ignored, as the spec says.
+ */
+export function compareVersions(left: string, right: string): number | null {
+  const a = parseVersion(left);
+  const b = parseVersion(right);
+  if (!a || !b) return null;
+
+  const core = compareCores(a, b);
+  if (core !== 0) return core;
+
+  // A release outranks any prerelease of the same core.
+  if (a.prerelease.length === 0 || b.prerelease.length === 0) {
+    return Math.sign(b.prerelease.length - a.prerelease.length);
+  }
+  const length = Math.max(a.prerelease.length, b.prerelease.length);
+  for (let index = 0; index < length; index++) {
+    if (a.prerelease[index] === undefined) return -1;
+    if (b.prerelease[index] === undefined) return 1;
+    const difference = compareIdentifiers(a.prerelease[index], b.prerelease[index]);
+    if (difference !== 0) return difference;
+  }
+  return 0;
+}
+
+/**
+ * Whether `candidate` is a release the running build should be told about.
+ *
+ * A locally packaged build is versioned `<newest desktop tag>-local.<sha>` by
+ * scripts/package-local.cjs, which is code at or after that tag. Plain SemVer ranks it BELOW the
+ * tag it was cut from, so the same release would be offered back to it forever; comparing only
+ * the core version keeps it quiet until a strictly newer release ships. Anything unparsable is
+ * not newer: a notice we cannot justify is worse than none.
+ */
+export function isNewerRelease(candidate: string, current: string): boolean {
+  const next = parseVersion(candidate);
+  const running = parseVersion(current);
+  if (!next || !running) return false;
+  if (running.prerelease[0] === 'local') return compareCores(next, running) > 0;
+  return (compareVersions(candidate, current) ?? 0) > 0;
+}
+
+/**
+ * The version the floating "update available" notice should announce, or null for no notice.
+ *
+ * Shown while anything newer is on offer - found, downloading or staged - and hidden for the one
+ * version the user dismissed. A later version is a different string, so it shows again.
+ */
+export function updateNoticeVersion(state: UpdateState): string | null {
+  if (state.status !== 'available' && state.status !== 'downloading' && state.status !== 'ready') return null;
+  const version = state.version;
+  if (!version || !isNewerRelease(version, state.currentVersion)) return null;
+  if (state.dismissedVersion === version) return null;
+  return version;
 }
 
 /** What the app is in the middle of, counted across every conversation. */

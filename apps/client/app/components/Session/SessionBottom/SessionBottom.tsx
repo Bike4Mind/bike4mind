@@ -72,7 +72,12 @@ import { useMcpServerSync } from './useMcpServerSync';
 import { useMessageDraft } from './useMessageDraft';
 import { useSessionFiles } from './useSessionFiles';
 import { useSendMessage } from './useSendMessage';
-import { createBlockedSendToastGate, getSendBlockedReason } from './sendBlockedReason';
+import {
+  createBlockedSendToastGate,
+  getBlockedSendToastLabel,
+  getSendBlockedReason,
+  type SendBlockedReason,
+} from './sendBlockedReason';
 import { sendPromptViaComposer } from './sendPromptViaComposer';
 import { useModerationScanFallback } from './useModerationScanFallback';
 import { useRollDice } from './useRollDice';
@@ -85,6 +90,11 @@ import ResearchModeIndicator from '@client/app/components/Session/AISettings/Res
 import { pickerAttachedAgents } from './resolveDispatchAgent';
 import { SlashCommandSuggestions } from '@client/app/components/common/CommandSuggestions';
 import { useContentTransformDetector } from '@client/app/hooks/useContentTransformDetector';
+import { AffordableModelOffer } from '../AffordableModelOffer';
+import { useAffordableModelOffer } from '../useAffordableModelOffer';
+import { estimateNextInputTokens } from '@client/app/utils/creditEstimate';
+import { FirstRunEvents } from '@bike4mind/common';
+import { useLogEvent } from '@client/app/hooks/data/analytics';
 
 type Props = {
   /**
@@ -96,6 +106,7 @@ type Props = {
 
 const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments = true }, ref) => {
   const { t } = useTranslation();
+  const { mutate: logEvent } = useLogEvent();
   const { currentSession, currentSessionId, setCurrentSession, workBenchAgents } = useSessions();
   // While a new session is being confirmed by the server (optimistic pre-navigation),
   // pass null to all hooks that make real API calls so they don't fire against the
@@ -176,6 +187,9 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   // LLM state needed for rendering (send logic reads its own slice internally)
   const model = useLLM(s => s.model);
   const max_tokens = useLLM(s => s.max_tokens);
+  const thinking = useLLM(s => s.thinking);
+  const researchModeEnabled = useLLM(s => s.researchMode.enabled);
+  const agentModeEnabled = useLLM(s => s.agentMode.enabled);
   const sessionFilesOpen = useAdvancedAISettings(state => state.sessionFilesOpen);
   const setSessionFilesOpen = useAdvancedAISettings(state => state.setSessionFilesOpen);
   const [stream, setStream] = useState<boolean>(true);
@@ -212,6 +226,12 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   // 30MB (`MaxFileSize`'s schema default), not the old unrelated 100MB.
   const maxFileSize = Number(useGetSettingsValue('MaxFileSize')) || 30;
   const enforceCredits = !!useGetSettingsValue('enforceCredits');
+  const affordableOffer = useAffordableModelOffer({
+    enforceCredits: enforceCredits,
+    modelsLoaded: !!modelInfo,
+    selectedModelId: model,
+    sessionId: currentSessionId,
+  });
 
   // Out of credits replaces the message box outright (see CreditsWarning); the low-credits
   // notice sits above it without blocking typing.
@@ -355,6 +375,21 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
 
   const [shouldToastBlockedSend] = useState(() => createBlockedSendToastGate());
   const [shouldToastBlockedClick] = useState(() => createBlockedSendToastGate({ toastEveryReason: true }));
+  // Separate from the toast gates so every reason is logged (incl. 'generating'), once per reason per window.
+  const [shouldLogBlockedSend] = useState(() => createBlockedSendToastGate({ toastEveryReason: true }));
+  const logBlockedSend = useCallback(
+    (reason: SendBlockedReason) => {
+      if (shouldLogBlockedSend(reason)) logEvent({ type: FirstRunEvents.SEND_BLOCKED, metadata: { reason } });
+    },
+    [shouldLogBlockedSend, logEvent]
+  );
+  const handleVoiceSendBlocked = useCallback(
+    (reason: SendBlockedReason) => {
+      logBlockedSend(reason);
+      if (shouldToastBlockedClick(reason)) toast.info(getBlockedSendToastLabel(reason, t));
+    },
+    [shouldToastBlockedClick, logBlockedSend, t]
+  );
   const handleEditorSubmit = useCallback(async () => {
     // Same gate as the Send button: Enter must not send what the button would refuse. The
     // tooltip explaining why is out of sight while typing, so say it here too.
@@ -364,8 +399,9 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
       toastInfo: toast.info,
       t,
       handleSendClick,
+      onBlocked: logBlockedSend,
     });
-  }, [sendBlockedReason, shouldToastBlockedSend, t, handleSendClick]);
+  }, [sendBlockedReason, shouldToastBlockedSend, t, handleSendClick, logBlockedSend]);
 
   // Expose handleSendClick for programmatic use (e.g., InteractiveChessBoard, reply-choice
   // buttons); resolves false when the send was refused before dispatch so a caller can undo
@@ -382,8 +418,9 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
         toastInfo: toast.info,
         t,
         handleSendClick,
+        onBlocked: logBlockedSend,
       }),
-    [sendBlockedReason, shouldToastBlockedClick, t, handleSendClick]
+    [sendBlockedReason, shouldToastBlockedClick, t, handleSendClick, logBlockedSend]
   );
   useEffect(() => {
     registerSendPrompt(sendPromptCallback);
@@ -562,6 +599,25 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
         ref={notesRef}
         sx={[aboveBoxSx, { display: 'flex', flexDirection: 'column', gap: '8px', '&:not(:empty)': { mb: '8px' } }]}
       >
+        {affordableOffer.show && (
+          <AffordableModelOffer
+            enabled={!researchModeEnabled && !agentModeEnabled && displayAgents.length === 0}
+            models={modelInfo ?? []}
+            accessibleModelIds={accessibleModels.map(candidate => candidate.id)}
+            selectedModelId={model}
+            credits={effectiveCredits}
+            inputTokens={estimateNextInputTokens(
+              contextUsage?.actualInputTokens,
+              chatInputValue,
+              model,
+              contextUsage?.inputModelId
+            )}
+            selectedMaxTokens={max_tokens}
+            thinking={thinking}
+            onSelect={affordableOffer.onSelect}
+            onDismiss={affordableOffer.onDismiss}
+          />
+        )}
         <LowCreditsWarning
           show={creditUi.lowCreditsNotice}
           currentCredits={effectiveCredits}
@@ -831,6 +887,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
           handleStopMessage={handleStopMessage}
           pendingAutoSubmitGoal={pendingAutoSubmitGoal}
           sendBlockedReason={sendBlockedReason}
+          onVoiceSendBlocked={handleVoiceSendBlocked}
           isModelsLoading={isModelsLoading}
           isVoiceSessionEnabled={isVoiceSessionEnabled}
           voiceEngine={voiceEngine}

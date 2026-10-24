@@ -499,9 +499,12 @@ async function processMcpServerWebhook(message: z.infer<typeof McpServerWebhookP
 
   // Get MCP server (may have been deleted since enqueueing)
   const mcpServer = await mcpServerRepository.findById(mcpServerId);
-  if (!mcpServer) {
-    logger.warn('MCP server not found, skipping', { mcpServerId });
-    return; // Don't retry - server was deleted
+  if (!mcpServer || mcpServer.userId.toString() !== userId || !mcpServer.enabled) {
+    logger.warn('MCP server unavailable, skipping', {
+      mcpServerId,
+      reason: !mcpServer ? 'not_found' : mcpServer.userId.toString() !== userId ? 'owner_mismatch' : 'disabled',
+    });
+    return; // Don't retry: server deleted, disabled, or not owned by this user
   }
 
   // SRE revision detection runs independently of the handler registry.
@@ -521,7 +524,7 @@ async function processMcpServerWebhook(message: z.infer<typeof McpServerWebhookP
     return;
   }
 
-  const registry = createHandlerRegistry(logger);
+  const registry = createHandlerRegistry(logger, mcpServer.userId.toString());
   const handler = getHandler(registry, eventType);
 
   if (handler) {
