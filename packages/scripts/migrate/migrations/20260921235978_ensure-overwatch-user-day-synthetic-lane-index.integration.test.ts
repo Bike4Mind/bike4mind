@@ -14,6 +14,8 @@ const INDEX_NAME = OVERWATCH_USER_DAY_SYNTHETIC_LANE_INDEX;
 // The index every product-and-date read already uses. The migration builds ONE index, so this one
 // staying dropped guards that narrowing; the planner test rebuilds it to compete against.
 const UNIQUE_INDEX_NAME = 'productId_1_date_1_userId_1';
+// The default name an unfiltered index on the same key gets, which a stage may already have.
+const UNFILTERED_SAME_KEY_NAME = 'productId_1_date_1';
 
 let server: Awaited<ReturnType<typeof createMongoServer>>;
 
@@ -35,6 +37,7 @@ beforeEach(async () => {
   // autoIndex may have built it on connect; the migration's job is to build it where it is absent.
   await safeDropIndex(OverwatchUserDay.collection, INDEX_NAME);
   await safeDropIndex(OverwatchUserDay.collection, UNIQUE_INDEX_NAME);
+  await safeDropIndex(OverwatchUserDay.collection, UNFILTERED_SAME_KEY_NAME);
 });
 
 /** Every index name the winning plan reads, wherever the engine nests its stages. */
@@ -103,6 +106,24 @@ describe('ensure-overwatch-user-day-synthetic-lane-index migration (real DB)', (
 
     const idx = (await OverwatchUserDay.collection.indexes()).find(i => i.name === INDEX_NAME);
     expect(idx).toBeDefined();
+  });
+
+  it('builds beside an unfiltered index on the same key without a conflict, and leaves it alone', async () => {
+    // Unnamed, the partial index would take this default name and fail on such a stage.
+    await OverwatchUserDay.collection.createIndex({ productId: 1, date: 1 });
+
+    await migration.up();
+    await migration.up();
+    await OverwatchUserDay.createIndexes();
+
+    const sameKey = (await OverwatchUserDay.collection.indexes())
+      .filter(i => JSON.stringify(i.key) === JSON.stringify({ productId: 1, date: 1 }))
+      .map(i => ({ name: i.name, partialFilterExpression: i.partialFilterExpression }))
+      .sort((a, b) => a.name!.localeCompare(b.name!));
+    expect(sameKey).toEqual([
+      { name: UNFILTERED_SAME_KEY_NAME, partialFilterExpression: undefined },
+      { name: INDEX_NAME, partialFilterExpression: { lane: 'synthetic' } },
+    ]);
   });
 
   it('agrees with the schema declaration, so autoIndex after it is a no-op', async () => {
