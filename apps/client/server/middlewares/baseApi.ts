@@ -1,6 +1,7 @@
 import { authMiddleware, auth } from '@server/auth/auth';
 import { registerToolGearObserver } from '@bike4mind/server-utils/services/gears/toolGearObserver';
 import { logging } from '@server/middlewares/logging';
+import { deployRevision } from '@server/middlewares/deployRevision';
 import errorHandler from '@server/middlewares/errorHandler';
 import { apiKeyAuth } from '@server/middlewares/apiKeyAuth';
 import { oauthRouteGate } from '@server/middlewares/oauthRouteGate';
@@ -133,6 +134,10 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
     req.receivedAt = new Date();
     next();
   });
+
+  // Immediately after the stamp, ahead of connectDB, the body-size 413 and every auth middleware
+  // (the things that can reject): even a 413/401 must tell a stale tab that a deploy happened.
+  router.use(deployRevision);
 
   // Add req.logger early in the middleware chain, so subsequent
   // middlewares can take advantage of it.
