@@ -95,6 +95,8 @@ const handler = baseApi({ auth: false }).post(
         emailVerified: email ? (emailVerified ?? true) : false,
         tags: [...(includePredefinedTags === false ? [] : PREDEFINED_USER_TAGS), ...(tags ?? [])],
         initialCredits: initialCredits ?? DEFAULT_E2E_INITIAL_CREDITS,
+        // Secret-gated and disabled in production: the persona harness mints test accounts here.
+        allowReservedUsername: true,
       },
       { db: { users: userRepository } }
     );
