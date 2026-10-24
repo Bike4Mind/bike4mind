@@ -1209,9 +1209,10 @@ describe('mergeCatalog: a discovery introduction under a curated record', () => 
     // The row a writer that credited a group to whoever supplied its first field leaves when one run
     // both clears the provider's disable and has its promotion refused: the disable in force is
     // discovery's verdict, but the clearance supplied `autoDisabled`, so the row credits the
-    // provider. That writer can no longer be told from one that carried a provider's reason, and
-    // the contributor is what the read path trusts - so such a row keeps its disable until a later
-    // run rewrites the credit. The contributor, not the wording, says who disabled it.
+    // provider. That row cannot be told from the one main's writer left by restamping a provider
+    // disable to a verdict, and the contributor is what the read path trusts - so it keeps its
+    // disable until a run that decides the disable itself re-credits it (a run with no availability
+    // answer keeps the credit). The contributor, not the wording, says who disabled it.
     const [merged] = mergeCatalog(
       [seed],
       [

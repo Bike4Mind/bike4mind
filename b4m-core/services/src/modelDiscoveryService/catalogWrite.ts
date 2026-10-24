@@ -668,12 +668,13 @@ function planOne(
         };
     ownedGroups.add('lifecycle');
     ownedGroups.add('availability');
-    // `contributorsFor` credits a group to whoever supplied its first field, and a clearance this
-    // same run applied supplies `autoDisabled` from the provider. The disable written here is
-    // whichever is in force: a reason carried from the provider stays the provider's, while a
-    // verdict this run decided is discovery's, and the read path reads the credit as proof of who
-    // disabled the model.
-    if (record.autoDisabled === true && isDiscoveryVerdict(record.autoDisabledReason)) {
+    // The read path reads the `availability` credit as who disabled the model, so a verdict is
+    // credited to discovery only when this run decided the disable: the row was not disabled
+    // before, or this run cleared the source's own disable first (whose clearance would otherwise
+    // take the credit). A row already disabled that got no availability answer keeps its carried
+    // credit, whatever its wording: a pre-change writer restamped provider disables to verdicts.
+    const decidedThisRun = base.autoDisabled !== true || clearsSourceDisable;
+    if (record.autoDisabled === true && decidedThisRun && isDiscoveryVerdict(record.autoDisabledReason)) {
       derivedGroups.add('availability');
     }
   }
@@ -939,14 +940,15 @@ function contributorsFor(
   // A group re-claimed but not re-observed keeps the provenance of the row it
   // supersedes; crediting discovery would erase which feed the data came from.
   const carried = new Map((prior ?? []).map(entry => [entry.group, entry.source] as const));
-  return owned.map(group => ({
-    group,
-    source: derived?.has(group)
-      ? DISCOVERY_CONTRIBUTOR
-      : (bySource.get(group) ??
-        carried.get(group) ??
-        (group === 'dispatch' ? DISPATCH_SEED_CONTRIBUTOR : DISCOVERY_CONTRIBUTOR)),
-  }));
+  return owned.flatMap(group => {
+    if (derived?.has(group)) return [{ group, source: DISCOVERY_CONTRIBUTOR }];
+    const source = bySource.get(group) ?? carried.get(group);
+    if (source) return [{ group, source }];
+    // An unknown `availability` supplier is left uncredited: the read path takes a discovery credit
+    // as proof discovery invented the disable, and without one it falls back to the reason's wording.
+    if (group === 'availability') return [];
+    return [{ group, source: group === 'dispatch' ? DISPATCH_SEED_CONTRIBUTOR : DISCOVERY_CONTRIBUTOR }];
+  });
 }
 
 /**

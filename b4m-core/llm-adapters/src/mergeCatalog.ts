@@ -333,10 +333,11 @@ function yieldsToCuration(row: IModelCatalogRow, group: FieldGroup): boolean {
  * no better claim on it.
  *
  * The row's `availability` contributor decides when it has one. It is a supply credit, not a
- * property of the disable, and the writer aligns the two: a reason carried forward from the
- * provider keeps the provider's credit, while a verdict the run decided is credited to discovery
- * even when that run also cleared the provider's disable first. Only rows written before
- * contributors existed fall back to the wording.
+ * property of the disable, and the writer aligns the two: it credits discovery only when the run
+ * decided the disable (the row was not disabled before, or the run cleared the source's own disable
+ * and promotion then refused). A disable already in force that the run got no availability answer
+ * for keeps its carried credit, whatever its wording. A row with no `availability` credit (written
+ * before contributors existed, or re-claimed from one) falls back to the wording.
  */
 function inventsDisable(row: IModelCatalogRow): boolean {
   if (row.patch.autoDisabled !== true) return false;
