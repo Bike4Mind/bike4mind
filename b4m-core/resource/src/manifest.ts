@@ -71,7 +71,6 @@ export const DEFAULT_MANIFEST = {
   STRIPE_SECRET_KEY: { kind: 'secret', optional: true },
   STRIPE_WEBHOOK_SECRET: { kind: 'secret', optional: true },
   SUPPORT_EMAIL: { kind: 'secret', optional: true },
-  WHATS_NEW_DISTRIBUTION_URL: { kind: 'secret', optional: true },
   XAI_API_KEY: { kind: 'secret', optional: true },
   // --- bucket ---
   appFilesBucket: { kind: 'bucket' },

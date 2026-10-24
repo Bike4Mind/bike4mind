@@ -241,10 +241,6 @@ const AdminSettingsTab: React.FC = () => {
           'recommendedModelIds',
           'RapidReplySettings',
           'SystemFiles',
-          // What's New settings are managed in the What's New Modals tab
-          'whatsNewAutomationEnabled',
-          'whatsNewConfig',
-          'whatsNewSyncConfig',
           // Release notes config is edited in the Release notes tab
           'releaseNotesConfig',
           // SRE Agent config has its own dedicated admin tab

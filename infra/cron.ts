@@ -162,39 +162,6 @@ const emailCampaignSchedulerCron = new sst.aws.Cron('emailCampaignScheduler', {
 });
 
 /**
- * What's New Sync Cron
- * Fetches latest What's New modal from production S3 and imports to local DB.
- *
- * CRITICAL: Only enabled for non-production environments (dev, staging, forks)
- * - production: DISABLED - production is the source the others import from
- * - dev/staging/forks: ENABLED - imports modals from production
- *
- * Schedule: Daily at 9am UTC (3am CST)
- * Checks autoSyncEnabled config before importing.
- */
-const whatsNewSyncCron = new sst.aws.Cron('whatsNewSyncCron', {
-  schedule: 'cron(0 9 * * ? *)', // 9am UTC daily (3am CST)
-  function: {
-    handler: 'apps/workers/src/cron/whatsNewSync.handler',
-    vpc: lambdaVpc,
-    link: [...allSecrets],
-    timeout: '2 minutes',
-    runtime: 'nodejs24.x',
-    environment: {
-      ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-    permissions: [
-      {
-        actions: ['cloudwatch:PutMetricData'],
-        resources: ['*'],
-      },
-    ],
-  },
-  // CRITICAL: Only enabled for non-production stages
-  enabled: $app.stage !== 'production',
-});
-
-/**
  * LiveOps Triage Dispatcher (Multi-Config)
  * Dispatches triage jobs to SQS for each enabled LiveOpsTriageConfig.
  *
@@ -1176,7 +1143,6 @@ export {
   apiKeyBaselineCalculation,
   agentProactiveMessageCron,
   emailCampaignSchedulerCron,
-  whatsNewSyncCron,
   liveopsTriageDispatcherCron,
   cloudSecurityScanCron,
   integrationHealthCheckCron,

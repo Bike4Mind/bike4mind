@@ -874,12 +874,6 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     '46192bc0ad1641d27b655120bc3bc9de6e1003d2cd276ff80e9c8064facb0408',
     'Hosted production analytics report; not applicable to a portable deployment.'
   ),
-  hostedOnly(
-    'schedule:infra/cron.ts:whatsNewSyncCron',
-    'c22c6f1da3086a35aef715f6e018e820751605f3b9bd9015ec3066fb890198cd',
-    'Imports hosted announcements; not applicable to a portable deployment.',
-    ['cloudwatch:PutMetricData']
-  ),
   gap(
     'schedule:infra/securityAlerts.ts:SecurityAlertsSchedule',
     'aa4dee6442687bf18f254f1de11a4180049760781332890f006025e80f059ca6',
@@ -887,7 +881,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'service:infra/chatCompletion.ts:ChatCompletion',
-    '65af60de937670b66a99962bfbc993c488f83eefa3689135e8252693eb326f17',
+    '2e99e42af22470bad5bf523944d2da1c76e017d54de27ee6b55d96b3b68758c7',
     ['bedrock:*', 'cloudwatch:PutMetricData', 'events:PutEvents', 'execute-api:ManageConnections']
   ),
   gap('service:infra/searxng.ts:Searxng', '16fc0b23bc4d075e5c4e98cbb502ff6dfc37aac7fbf9bd4f7429cd4202b2f370'),
