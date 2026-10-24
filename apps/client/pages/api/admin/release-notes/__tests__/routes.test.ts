@@ -634,3 +634,50 @@ describe('/api/admin/release-notes/config', () => {
     }
   );
 });
+
+describe('release note admin audit', () => {
+  it('records an updated entry for an admin edit', async () => {
+    m.edit.mockResolvedValue({ kind: 'ok', note: note() });
+    await call(editHandler, { method: 'PATCH', query: { id: ID }, body: { headline: 'Faster search' } });
+
+    const auditCalls = m.audit.mock.calls.filter(([, input]) => input.action === 'settings.release_note.updated');
+    expect(auditCalls).toHaveLength(1);
+    expect(auditCalls[0][1]).toMatchObject({
+      action: 'settings.release_note.updated',
+      target: { kind: 'settings', id: ID },
+      details: { releaseTag: 'v1.2.3', fields: ['headline'] },
+    });
+  });
+
+  it('does not record the video attach done by a release-notes:write key', async () => {
+    m.attachVideo.mockResolvedValue({ kind: 'ok', note: note() });
+    const video = { landscapeUrl: 'https://d111.cloudfront.net/wide.mp4', portraitUrl: null };
+    await call(editHandler, {
+      method: 'PATCH',
+      query: { id: ID },
+      body: { video },
+      keyScopes: ['release-notes:write'],
+    });
+
+    expect(m.audit).not.toHaveBeenCalled();
+  });
+
+  it('records a status_changed entry carrying the action', async () => {
+    m.hide.mockResolvedValue({ kind: 'ok', note: note({ status: 'hidden' }) });
+    await call(statusHandler, { method: 'POST', query: { id: ID }, body: { action: 'hide' } });
+
+    expect(m.audit).toHaveBeenCalledTimes(1);
+    expect(m.audit.mock.calls[0][1]).toMatchObject({
+      action: 'settings.release_note.status_changed',
+      target: { kind: 'settings', id: ID },
+      details: { releaseTag: 'v1.2.3', action: 'hide' },
+    });
+  });
+
+  it('records nothing when the mutation finds no note', async () => {
+    m.publishNow.mockResolvedValueOnce({ kind: 'notFound' });
+    await call(statusHandler, { method: 'POST', query: { id: ID }, body: { action: 'publishNow' } });
+
+    expect(m.audit).not.toHaveBeenCalled();
+  });
+});
