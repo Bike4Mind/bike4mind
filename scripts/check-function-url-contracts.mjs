@@ -59,25 +59,6 @@ export function stripComments(source) {
     for (let k = from; k < to; k++) if (out[k] !== '\n' && out[k] !== '\r') out[k] = ' ';
   };
 
-  // Index just past the `}` closing a `${...}`; $i is right after the `${`.
-  function interpolationEnd(i) {
-    let depth = 1;
-    while (i < source.length) {
-      const c = source[i];
-      if (c === '"' || c === "'" || c === '`') {
-        i = stringEnd(i);
-      } else if (c === '{') {
-        depth++;
-        i++;
-      } else if (c === '}' && --depth === 0) {
-        return i + 1;
-      } else {
-        i++;
-      }
-    }
-    return i;
-  }
-
   // Index just past the literal opening at $i.
   function stringEnd(i) {
     const quote = source[i];
@@ -88,7 +69,9 @@ export function stripComments(source) {
       } else if (source[i] === quote) {
         return i + 1;
       } else if (quote === '`' && source[i] === '$' && source[i + 1] === '{') {
-        i = interpolationEnd(i + 2);
+        // Interpolation is code again, so re-enter the scanner rather than
+        // counting braces here: a comment inside it must still be blanked.
+        i = scan(i + 2, 1);
       } else {
         i++;
       }

@@ -71,6 +71,15 @@ describe('stripComments', () => {
     expect(clean).not.toContain('gone');
     expect(clean).toHaveLength(source.length);
   });
+
+  it('blanks a comment inside a template interpolation', () => {
+    const source = 'const p = `${a /* gone */ + b}`;';
+    const clean = stripComments(source);
+    expect(clean).not.toContain('gone');
+    expect(clean).toContain('${a ');
+    expect(clean).toContain('+ b}`;');
+    expect(clean).toHaveLength(source.length);
+  });
 });
 
 describe('findUrlFunctions', () => {
