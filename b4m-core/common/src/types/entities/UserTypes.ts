@@ -255,6 +255,8 @@ export interface IUser extends ICreditHolder {
   level: UserLevelType;
   isBanned: boolean;
   isModerated: boolean;
+  /** Admin override that trusts the account for personal API keys (userApiKeyService/trust.ts). Absent on legacy docs. */
+  apiKeyTrustApproved?: boolean;
   /**
    * Per-user moderation tracking + auto-throttle/suspend state.
    * Absent until the user's first moderation hit. `moderation.status === 'suspended'`

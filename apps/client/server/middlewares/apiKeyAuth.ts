@@ -19,6 +19,7 @@ import { decideScopeGate, parseStagedScopes, SCOPE_STAGING_ENV_VAR } from '@serv
 import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
 import { resolveRouteTemplate } from '@server/utils/resolveRouteTemplate';
 import { apiKeyGrantsAdmin, withholdAdminRole } from '@server/auth/apiKeyAdminScope';
+import { applyUntrustedRateLimit } from '@server/utils/apiKeyTrust';
 
 type ScopeForbiddenDetail = Pick<z.infer<typeof ScopeForbiddenErrorSchema>, 'required_scopes' | 'also_required_scopes'>;
 
@@ -162,6 +163,14 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScopeValue[], alsoRequiredScop
       // The same gate the JWT/CLI/WebSocket surfaces use, so the two cannot drift.
       assertAccountStateUsable(user);
 
+      // Judged before the admin role is withheld: trust is about the account, not the key's
+      // authority, so an admin's key without the admin scope is still an admin-owned key.
+      const rateLimit = await applyUntrustedRateLimit(
+        user,
+        { rateLimit: validation.rateLimit!, billingOwnerType: validation.billingOwnerType },
+        req
+      );
+
       // Admin authority over an API key comes from the key's scope, not from who minted it.
       if (!apiKeyGrantsAdmin(validation.scopes)) withholdAdminRole(user);
 
@@ -169,7 +178,7 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScopeValue[], alsoRequiredScop
       req.apiKeyInfo = {
         keyId: validation.keyId!,
         scopes: validation.scopes!,
-        rateLimit: validation.rateLimit!,
+        rateLimit,
         expiresAt: validation.expiresAt,
         productId: validation.productId,
         billingOwnerType: validation.billingOwnerType,
