@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Box,
@@ -99,6 +99,25 @@ function apiError(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback;
 }
 
+/** Where keyboard focus goes once a delete lands. */
+type DeleteFocusTarget = { kind: 'item'; publicId: string } | { kind: 'search' } | { kind: 'heading' };
+
+/**
+ * The next row or card after the deleted one, else the one before it. With neither left the page is
+ * empty: the search box is the nearest control that survives, except when the whole library is
+ * emptied, which removes the toolbar - then the tab heading is all that is left to land on.
+ */
+function focusTargetAfterDelete(
+  artifacts: ManagedArtifact[],
+  deletedId: string,
+  libraryEmpties: boolean
+): DeleteFocusTarget {
+  const i = artifacts.findIndex(a => a.publicId === deletedId);
+  const neighbour = i < 0 ? undefined : (artifacts[i + 1] ?? artifacts[i - 1]);
+  if (neighbour) return { kind: 'item', publicId: neighbour.publicId };
+  return { kind: libraryEmpties ? 'heading' : 'search' };
+}
+
 /** Column template shared by the header and every row, so each piece of metadata lines up down the
  *  list: cover, title (takes the slack), access, versions, views, published date, actions. Fixed widths
  *  are sized for the widest content in each column (a "Passphrase" chip, "12 versions"). */
@@ -180,6 +199,20 @@ export default function PublishedArtifactsTabContent() {
   const setView = usePublishedArtifactsView(s => s.setView);
   /** Grid view only: the artifact whose settings dialog is open. */
   const [settingsId, setSettingsId] = useState<string | null>(null);
+  // Focus after a delete. The row or card the user acted on is about to disappear, which would drop
+  // keyboard focus to the page body, so focus moves to a neighbour's title link (found by id through
+  // `titleLinks`) instead. The move is queued in a ref and applied from an effect so it runs after
+  // the settings dialog has closed - see that effect below. `focusTick` only wakes the effect.
+  const titleLinks = useRef(new Map<string, HTMLAnchorElement>());
+  const searchRef = useRef<HTMLInputElement>(null);
+  const headingRef = useRef<HTMLElement>(null);
+  const pendingFocus = useRef<DeleteFocusTarget | null>(null);
+  const [focusTick, setFocusTick] = useState(0);
+  /** Ref callback for one artifact's title link, in either view. */
+  const titleRef = (publicId: string) => (el: HTMLAnchorElement | null) => {
+    if (el) titleLinks.current.set(publicId, el);
+    else titleLinks.current.delete(publicId);
+  };
   // The hook owns the search text: `q` is what the input shows (never laggy) and `debouncedQ` is
   // what the request uses, so typing does not fire one call per keystroke.
   const { value: q, debouncedValue: debouncedQ, setValue: setQ } = useDebounceValue('', 300);
@@ -342,8 +375,10 @@ export default function PublishedArtifactsTabContent() {
   });
   const deleteMut = useMutation({
     // `wasLastOnPage` is passed in by the caller, which knows the rendered row count, rather than
-    // read from a ref: it decides whether this delete empties the current page.
-    mutationFn: (v: { publicId: string; wasLastOnPage: boolean }) => deletePublishedArtifact(v.publicId),
+    // read from a ref: it decides whether this delete empties the current page. `focusTarget` is
+    // worked out at click time for the same reason - the list it is derived from is about to change.
+    mutationFn: (v: { publicId: string; wasLastOnPage: boolean; focusTarget: DeleteFocusTarget }) =>
+      deletePublishedArtifact(v.publicId),
     onSuccess: (_d, v) => {
       toast.success('Artifact deleted');
       // Step back a page when that was the last row on this one. Otherwise `skip` points past the
@@ -362,7 +397,10 @@ export default function PublishedArtifactsTabContent() {
       // to be refreshed too - otherwise deleting the last artifact carrying a label keeps offering
       // it for up to the staleTime.
       void qc.invalidateQueries({ queryKey: ['publish-tag-vocabulary'] });
+      pendingFocus.current = v.focusTarget;
+      setFocusTick(t => t + 1);
     },
+    // A failed delete moves nothing: the dialog stays open and focus stays on the control used.
     onError: (e: unknown) => toast.error(apiError(e, 'Failed to delete')),
   });
 
@@ -466,6 +504,23 @@ export default function PublishedArtifactsTabContent() {
     setSettingsId(null);
   };
 
+  const dialogOpen = Boolean(settingsArtifact);
+  useEffect(() => {
+    const target = pendingFocus.current;
+    // The settings dialog's focus trap hands focus back to its opener when it unmounts, and that
+    // opener is the card being deleted. The dialog closes in the same commit as this request, and
+    // unmount effects run before mount effects, so moving focus from here lands after that restore
+    // instead of losing to it (focusing straight from onSuccess does lose). The dialogOpen check
+    // holds the move back should the two ever land in separate commits.
+    if (!target || dialogOpen) return;
+    pendingFocus.current = null;
+    const item = target.kind === 'item' ? titleLinks.current.get(target.publicId) : undefined;
+    // The search box still exists at this moment even when emptying the library is about to remove
+    // it, so the heading target skips it rather than focus something that is about to unmount.
+    const search = target.kind === 'heading' ? null : searchRef.current;
+    (item ?? search ?? headingRef.current)?.focus();
+  }, [focusTick, dialogOpen]);
+
   /** The one settings panel, shared by the list row (inline, when expanded) and the grid card
    *  (in a dialog), wired to this tab's mutations. */
   const settingsFor = (a: ManagedArtifact, url: string) => (
@@ -486,7 +541,15 @@ export default function PublishedArtifactsTabContent() {
       onPrint={() => void runPrint(a)}
       onRefresh={() => refreshMut.mutate(a)}
       onRestore={() => restoreMut.mutate(a.publicId)}
-      onDelete={() => deleteMut.mutate({ publicId: a.publicId, wasLastOnPage: artifacts.length <= 1 })}
+      onDelete={() =>
+        deleteMut.mutate({
+          publicId: a.publicId,
+          wasLastOnPage: artifacts.length <= 1,
+          // The whole library goes with this one only when nothing is filtering it, which is also
+          // when the toolbar (and its search box) stops rendering.
+          focusTarget: focusTargetAfterDelete(artifacts, a.publicId, total <= 1 && !filtering),
+        })
+      }
     />
   );
 
@@ -514,7 +577,14 @@ export default function PublishedArtifactsTabContent() {
 
   return (
     <Box data-testid="published-artifacts-tab">
-      <Typography level="title-md" sx={{ mb: 0.5 }}>
+      {/* Focusable only from code (tabIndex -1): the landing spot after the last artifact is deleted. */}
+      <Typography
+        ref={headingRef}
+        level="title-md"
+        tabIndex={-1}
+        data-testid="published-artifacts-heading"
+        sx={{ mb: 0.5, '&:focus': { outline: 'none' } }}
+      >
         Live Artifacts
       </Typography>
       <Typography level="body-sm" sx={{ mb: 2, opacity: 0.8 }}>
@@ -536,7 +606,7 @@ export default function PublishedArtifactsTabContent() {
               }}
               placeholder="Search titles and descriptions"
               startDecorator={<SearchIcon sx={{ fontSize: 16 }} />}
-              slotProps={{ input: { 'data-testid': 'published-artifacts-search' } }}
+              slotProps={{ input: { ref: searchRef, 'data-testid': 'published-artifacts-search' } }}
               sx={{ flex: '1 1 16rem', minWidth: '12rem' }}
             />
             <Select
@@ -731,6 +801,7 @@ export default function PublishedArtifactsTabContent() {
                 url={url}
                 onCopyLink={() => void copyLink(url)}
                 onOpenSettings={() => openSettings(a.publicId)}
+                titleRef={titleRef(a.publicId)}
               />
             );
           })}
@@ -799,6 +870,7 @@ export default function PublishedArtifactsTabContent() {
                   <Box sx={{ gridArea: 'title', display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
                     <Tooltip title="Opens in a new tab" describeChild>
                       <Link
+                        ref={titleRef(a.publicId)}
                         href={url}
                         target="_blank"
                         rel="noopener noreferrer"

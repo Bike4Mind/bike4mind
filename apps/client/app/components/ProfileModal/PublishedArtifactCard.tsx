@@ -16,6 +16,8 @@ export interface PublishedArtifactCardProps {
   onCopyLink: () => void;
   /** Opens the same settings the list row shows when expanded. */
   onOpenSettings: () => void;
+  /** Ref to the title link, so the tab can move focus here after a neighbouring card is deleted. */
+  titleRef?: React.Ref<HTMLAnchorElement>;
 }
 
 /** Solid, not blurred or translucent: the badge sits on whatever the thumbnail shows, so its
@@ -37,7 +39,13 @@ const BADGE_BACKING_SX = {
  * keep their own clicks and a keyboard user tabs through title, copy, More. Every test id is
  * `published-artifact-card-<part>-<publicId>`, the list row's scheme with `card-` added.
  */
-export function PublishedArtifactCard({ artifact: a, url, onCopyLink, onOpenSettings }: PublishedArtifactCardProps) {
+export function PublishedArtifactCard({
+  artifact: a,
+  url,
+  onCopyLink,
+  onOpenSettings,
+  titleRef,
+}: PublishedArtifactCardProps) {
   const isBundle = a.source.kind === 'bundle';
   const versions = a.versionsCount ?? 0;
   const views = a.viewCount ?? 0;
@@ -68,6 +76,7 @@ export function PublishedArtifactCard({ artifact: a, url, onCopyLink, onOpenSett
             would replace it. */}
         <Tooltip title="Opens in a new tab" describeChild>
           <Link
+            ref={titleRef}
             href={url}
             target="_blank"
             rel="noopener noreferrer"

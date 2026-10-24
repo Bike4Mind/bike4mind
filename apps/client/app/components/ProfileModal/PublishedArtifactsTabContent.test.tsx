@@ -1,5 +1,5 @@
 import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
@@ -1561,5 +1561,142 @@ describe('PublishedArtifactsTabContent - grid dialog focus, sharing state and na
     const grid = screen.getByTestId('published-artifacts-grid');
     expect(grid.getAttribute('role')).toBe('list');
     expect(within(grid).getAllByRole('listitem')).toHaveLength(2);
+  });
+});
+
+describe.each(['list', 'grid'] as const)('PublishedArtifactsTabContent - focus after delete (%s view)', view => {
+  const first = { ...bundleRow, publicId: 'pub-1', title: 'First artifact' };
+  const second = { ...bundleRow, publicId: 'pub-2', title: 'Second artifact' };
+  const third = { ...bundleRow, publicId: 'pub-3', title: 'Third artifact' };
+  type Row = typeof first;
+
+  const rowTestId = (r: Row) =>
+    view === 'grid' ? `published-artifact-card-${r.publicId}` : `published-artifact-${r.publicId}`;
+  const titleLink = (r: Row) =>
+    view === 'grid'
+      ? screen.getByTestId(`published-artifact-card-title-${r.publicId}`)
+      : within(screen.getByTestId(rowTestId(r))).getByRole('link', { name: r.title });
+
+  /** Opens the settings the way a keyboard user does and returns the focused Delete button. */
+  const focusDelete = (r: Row) => {
+    if (view === 'grid') {
+      const more = screen.getByTestId(`published-artifact-card-more-${r.publicId}`);
+      more.focus();
+      fireEvent.click(more);
+    } else {
+      expandRow(r.publicId);
+    }
+    const del = screen.getByTestId(`published-artifact-delete-${r.publicId}`);
+    del.focus();
+    return del;
+  };
+
+  const renderRows = async (rows: Row[], over: Record<string, unknown> = {}) => {
+    mockList.mockResolvedValue(page(rows, over));
+    usePublishedArtifactsView.setState({ view });
+    renderTab();
+    await screen.findByTestId(rowTestId(rows[0]));
+  };
+
+  let confirmSpy: { mockRestore: () => void };
+  beforeEach(() => {
+    confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    vi.mocked(deletePublishedArtifact).mockReset().mockResolvedValue(undefined);
+  });
+  afterEach(() => confirmSpy.mockRestore());
+
+  it('focuses the next title when a middle item is deleted, and keeps it there once the row is gone', async () => {
+    await renderRows([first, second, third]);
+    mockList.mockResolvedValue(page([first, third]));
+    const del = focusDelete(second);
+
+    fireEvent.click(del);
+    await waitFor(() => expect(document.activeElement).toBe(titleLink(third)));
+
+    await waitFor(() => expect(screen.queryByTestId(rowTestId(second))).toBeNull());
+    expect(document.activeElement).toBe(titleLink(third));
+  });
+
+  it('focuses the first remaining title when the first item is deleted', async () => {
+    await renderRows([first, second, third]);
+    mockList.mockResolvedValue(page([second, third]));
+
+    fireEvent.click(focusDelete(first));
+    await waitFor(() => expect(document.activeElement).toBe(titleLink(second)));
+  });
+
+  it('focuses the previous title when the last item is deleted', async () => {
+    await renderRows([first, second, third]);
+    mockList.mockResolvedValue(page([first, second]));
+    const del = focusDelete(third);
+
+    fireEvent.click(del);
+    await waitFor(() => expect(document.activeElement).toBe(titleLink(second)));
+
+    await waitFor(() => expect(screen.queryByTestId(rowTestId(third))).toBeNull());
+    expect(document.activeElement).toBe(titleLink(second));
+  });
+
+  it('focuses the search input when the only item in a filtered view is deleted', async () => {
+    await renderRows([first]);
+    const search = screen.getByTestId('published-artifacts-search');
+    fireEvent.change(search, { target: { value: 'first' } });
+    await waitFor(() => expect(mockList.mock.calls.some(c => (c[0] as { q?: string }).q === 'first')).toBe(true));
+    mockList.mockResolvedValue(page([], { total: 0 }));
+
+    fireEvent.click(focusDelete(first));
+    await waitFor(() => expect(document.activeElement).toBe(search));
+
+    await waitFor(() => expect(screen.queryByTestId(rowTestId(first))).toBeNull());
+    expect(document.activeElement).toBe(search);
+  });
+
+  it('focuses the search input when the only item on a later page is deleted', async () => {
+    let deleted = false;
+    vi.mocked(deletePublishedArtifact).mockImplementation(async () => {
+      deleted = true;
+    });
+    mockList.mockImplementation(async (q: { skip?: number }) =>
+      q.skip === 25 ? page([second], { total: 26, skip: 25 }) : page([first], { total: deleted ? 25 : 26, skip: 0 })
+    );
+    usePublishedArtifactsView.setState({ view });
+    renderTab();
+    await screen.findByTestId(rowTestId(first));
+    fireEvent.click(screen.getByTestId('published-artifacts-next'));
+    await screen.findByTestId(rowTestId(second));
+
+    fireEvent.click(focusDelete(second));
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId('published-artifacts-search')));
+
+    // The page steps back, and the search input is still where focus is.
+    await screen.findByTestId(rowTestId(first));
+    expect(document.activeElement).toBe(screen.getByTestId('published-artifacts-search'));
+  });
+
+  it('focuses the tab heading when the whole library is emptied, since the toolbar goes with it', async () => {
+    await renderRows([first]);
+    mockList.mockResolvedValue(page([], { total: 0 }));
+
+    fireEvent.click(focusDelete(first));
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId('published-artifacts-heading')));
+
+    await screen.findByTestId('published-artifacts-empty');
+    expect(screen.queryByTestId('published-artifacts-search')).toBeNull();
+    expect(document.activeElement).toBe(screen.getByTestId('published-artifacts-heading'));
+  });
+
+  it('leaves focus where it was when the delete fails', async () => {
+    await renderRows([first, second, third]);
+    vi.mocked(deletePublishedArtifact).mockRejectedValue(new Error('Server said no'));
+    const del = focusDelete(second);
+
+    fireEvent.click(del);
+    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith('Server said no'));
+    await waitFor(() => expect(del.hasAttribute('disabled')).toBe(false));
+
+    expect(document.activeElement).toBe(del);
+    // Nothing was removed, and in the grid the dialog is still the place focus lives.
+    expect(screen.getByTestId(rowTestId(second))).not.toBeNull();
+    if (view === 'grid') expect(screen.getByTestId('published-artifact-settings-modal')).not.toBeNull();
   });
 });
