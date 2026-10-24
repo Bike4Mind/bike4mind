@@ -153,14 +153,18 @@ export const PUBLISH_LIMITS = {
 /**
  * Cumulative per-owner publish quotas, distinct from the
  * per-bundle `PUBLISH_LIMITS` above. These cap how much a single user (or a
- * single organization scope) may host in aggregate, bounding both storage cost
- * and the abuse/phishing-hosting surface.
+ * single organization scope) may host in aggregate.
+ *
+ * The byte cap is the cost guard. There is deliberately no page-count cap: a
+ * count adds nothing to the byte bound, and it stops the heaviest sharers.
+ * Abuse (phishing hosting) is handled per page by report and takedown, plus
+ * rate limits, not by a lifetime quota.
  *
  * Enforcement is aggregate-on-read: at publish time we sum `size.totalBytes`
- * and count active rows for the owner, then compare against these caps. Two
+ * for the owner's active rows, then compare against these caps. Two
  * concurrent publishes can each read stale usage and both pass, so the true
  * ceiling may be briefly exceeded by roughly one in-flight bundle. That
- * overshoot is acceptable for a cost/abuse guard (it is not a billing
+ * overshoot is acceptable for a cost guard (it is not a billing
  * boundary); a hard limit would require transactional reservation.
  *
  * `user` caps apply to every artifact a user owns (by `ownerId`), regardless of
@@ -168,16 +172,13 @@ export const PUBLISH_LIMITS = {
  * an organization scope (`tier: 'organization'`, `scopeId: <orgId>`). A publish
  * into an org scope is checked against BOTH ladders.
  *
- * Values are deliberately generous (a cost/abuse backstop, not a product
- * limit) and are intended to be tunable.
+ * Values are deliberately generous and are intended to be tunable.
  */
 export const PUBLISH_QUOTAS = {
   user: {
-    maxArtifacts: 100,
     maxTotalBytes: 500 * 1024 * 1024, // 500 MB
   },
   org: {
-    maxArtifacts: 1000,
     maxTotalBytes: 5 * 1024 * 1024 * 1024, // 5 GB
   },
 } as const;

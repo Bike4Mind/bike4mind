@@ -162,13 +162,13 @@ describe('SharePublisher', () => {
 
   it('reads a quota refusal as a limit rather than a fault', async () => {
     post.mockImplementationOnce(async () => {
-      throw httpError(413, { error: 'Published-artifact limit reached', code: 'publish_quota_artifacts' });
+      throw httpError(413, { error: 'Publish storage quota reached', code: 'quota_bytes_exceeded' });
     });
 
     const result = await publisher.publish(request());
 
     expect(result.status).toBe('quota');
-    expect(result.reason).toBe('Published-artifact limit reached');
+    expect(result.reason).toBe('Publish storage quota reached');
   });
 
   it('says the outcome is UNKNOWN when finalize never answered', async () => {
