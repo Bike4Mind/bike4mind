@@ -73,6 +73,7 @@ import {
   shouldWarnElidedArtifact,
   validateMermaidSyntax,
 } from '@client/app/utils/artifactParser';
+import { groupReactArtifacts } from '@client/app/utils/reactArtifactGroup';
 import RechartsRenderer from '../Charts/RechartsRenderer';
 import ChessBoard from '../Chess/ChessBoard';
 import { useSessions } from '@client/app/contexts/SessionsContext';
@@ -1430,6 +1431,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
 
   const chessArtifacts = useMemo(() => artifacts.filter(a => a.type === 'chess'), [artifacts]);
   const nonChessArtifacts = useMemo(() => artifacts.filter(a => a.type !== 'chess'), [artifacts]);
+  const reactArtifactGroups = useMemo(() => groupReactArtifacts(nonChessArtifacts), [nonChessArtifacts]);
 
   // Resolved ahead of render so an unparseable board yields null rather than an empty
   // artifact Stack (which would still contribute its margins as a phantom gap).
@@ -1910,9 +1912,11 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
             <ArtifactRenderer
               key={`${artifact.type}_${artifact.identifier}_${index}`}
               artifact={artifact}
-              index={index}
+              // The full parse's index, chess included, which is what persistence numbers ids by.
+              index={artifacts.indexOf(artifact)}
               messageId={messageId ?? 'unknown'}
               sessionId={currentSessionId ?? undefined}
+              reactGroup={reactArtifactGroups.get(artifact)}
             />
           ))}
         </Stack>
