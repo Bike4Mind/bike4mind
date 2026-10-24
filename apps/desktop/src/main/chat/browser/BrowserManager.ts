@@ -949,7 +949,7 @@ export class BrowserManager implements BrowserProvider {
         this.push(sessionId);
         this.apply();
       },
-      onSnapshot: snapshot => void Promise.resolve(this.onSnapshot(sessionId, snapshot)).catch(() => undefined),
+      onSnapshot: snapshot => void this.recordSnapshot(sessionId, snapshot),
       onWindowOpen: (url, fromAgent, background) => this.openFromPage(sessionId, tab, url, fromAgent, background),
       // Out of the input event first: Cmd+W destroys the very contents that is dispatching it.
       onShortcut: shortcut => setImmediate(() => void this.onShortcut(sessionId, shortcut)),
@@ -959,6 +959,14 @@ export class BrowserManager implements BrowserProvider {
     if (activate || !tabs.active) this.activate(sessionId, tab);
     else this.push(sessionId);
     return tab;
+  }
+
+  private async recordSnapshot(sessionId: string, snapshot: BrowserSnapshot): Promise<void> {
+    try {
+      await this.onSnapshot(sessionId, snapshot);
+    } catch (error) {
+      console.warn('BROWSER: could not index page snapshot:', error);
+    }
   }
 
   /**

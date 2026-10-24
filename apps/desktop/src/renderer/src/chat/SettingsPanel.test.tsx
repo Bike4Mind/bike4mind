@@ -76,7 +76,7 @@ describe('the Settings screen', () => {
 
   /** The caption came with the picker: it is the one thing the picker cannot say about itself. */
   it('keeps the line saying how far the server choice reaches', () => {
-    expect(html).toContain('Every conversation in this app talks to one server.');
+    expect(html).toContain('Hosted conversations use this server. Local models run on this device.');
   });
 
   it('says what the General page owns', () => {

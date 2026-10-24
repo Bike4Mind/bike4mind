@@ -306,7 +306,7 @@ export class SessionStore {
 
     let preparing = this.prepared.get(directory);
     if (!preparing) {
-      preparing = this.prepare(directory);
+      preparing = this.prepare(directory, !scope.local);
       this.prepared.set(directory, preparing);
     }
     this.lastDirectory = await preparing;
@@ -320,9 +320,9 @@ export class SessionStore {
    * the scope prepared after this one finds none. Nothing marks it as done, because an empty
    * base directory IS done - a marker could only ever come to disagree with the files.
    */
-  private async prepare(directory: string): Promise<string> {
+  private async prepare(directory: string, adoptLegacy: boolean): Promise<string> {
     await mkdir(directory, { recursive: true });
-    await migrateLegacySessions(this.baseDirectory, directory);
+    if (adoptLegacy) await migrateLegacySessions(this.baseDirectory, directory);
     return directory;
   }
 

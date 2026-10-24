@@ -1,4 +1,6 @@
+import { useRef, useState } from 'react';
 import Box from '@mui/joy/Box';
+import Button from '@mui/joy/Button';
 import Card from '@mui/joy/Card';
 import CircularProgress from '@mui/joy/CircularProgress';
 import Stack from '@mui/joy/Stack';
@@ -12,15 +14,32 @@ import { AppUpdateNotice } from '../chat/UpdateNotice';
 
 export function Home() {
   const state = useAuthState();
+  const [localChat, setLocalChat] = useState(false);
+  const chatScope = useRef('device-local');
+  if (state && state.status !== 'initializing' && !state.reauthRequired) {
+    chatScope.current = `${state.environment.url}:${state.user?.id ?? 'device-local'}`;
+  }
 
   // Signed in, the window belongs to the conversation; identity moves to the sidebar footer. A
   // session that expired under the user keeps it too, mounted in the same place so nothing in it
   // (the composer's draft above all) is torn down while they sign in again.
-  if (state?.status === 'signed-in' || state?.reauthRequired) {
+  if (state?.status === 'signed-in' || state?.reauthRequired || localChat) {
     return (
       <>
-        <ChatShell auth={state} account={status => <SignedInPanel state={state} status={status} />} />
-        {state.reauthRequired && <ReauthNotice state={state} />}
+        <ChatShell
+          key={chatScope.current}
+          auth={state}
+          account={status =>
+            state?.status === 'signed-in' || state?.reauthRequired ? (
+              <SignedInPanel state={state} status={status} />
+            ) : (
+              <Button onClick={() => setLocalChat(false)} data-testid="local-chat-signin-btn">
+                Sign in
+              </Button>
+            )
+          }
+        />
+        {state?.reauthRequired && <ReauthNotice state={state} />}
         <AppUpdateNotice />
       </>
     );
@@ -38,6 +57,11 @@ export function Home() {
           </Stack>
         ) : (
           <SignInCard state={state} />
+        )}
+        {(state?.status === 'signed-out' || state?.status === 'unconfigured') && (
+          <Button variant="outlined" onClick={() => setLocalChat(true)} data-testid="auth-local-chat-btn">
+            Use local models
+          </Button>
         )}
       </Card>
       <AppUpdateNotice />

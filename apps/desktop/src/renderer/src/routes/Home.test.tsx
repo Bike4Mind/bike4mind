@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, useState } from 'react';
+import { act, useState, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import type { AuthState } from '@shared/auth';
@@ -9,9 +9,14 @@ import { Home } from './Home';
 // The real shell pulls in the whole chat stack; what matters here is whether Home keeps it
 // mounted, which a draft held in its own state shows directly.
 vi.mock('../chat/ChatShell', () => ({
-  ChatShell: () => {
+  ChatShell: ({ account }: { account?: (status: null) => ReactNode }) => {
     const [draft, setDraft] = useState('');
-    return <textarea data-testid="composer-input" value={draft} onChange={event => setDraft(event.target.value)} />;
+    return (
+      <>
+        <textarea data-testid="composer-input" value={draft} onChange={event => setDraft(event.target.value)} />
+        {account?.(null)}
+      </>
+    );
   },
 }));
 vi.mock('../auth/SignedInPanel', () => ({ SignedInPanel: () => null }));
@@ -153,4 +158,27 @@ describe('Home when the session expires mid-conversation', () => {
     expect(byTestId('composer-input')).toBeNull();
     expect(byTestId('auth-signin-btn')).not.toBeNull();
   });
+});
+
+it.each(['signed-out', 'unconfigured'] as const)('opens local chat without signing in from %s', async status => {
+  await mount();
+  act(() => push({ ...base, status, user: undefined }));
+  expect(byTestId('composer-input')).toBeNull();
+  act(() => byTestId('auth-local-chat-btn')?.click());
+  expect(byTestId('composer-input')).not.toBeNull();
+  expect(signIn).not.toHaveBeenCalled();
+  act(() => byTestId('local-chat-signin-btn')?.click());
+  expect(byTestId('composer-input')).toBeNull();
+  expect(byTestId('auth-local-chat-btn')).not.toBeNull();
+});
+
+it('replaces the local conversation view when an authenticated account becomes active', async () => {
+  await mount();
+  act(() => push({ ...base, status: 'signed-out', user: undefined }));
+  act(() => byTestId('auth-local-chat-btn')?.click());
+  const composer = byTestId('composer-input') as HTMLTextAreaElement;
+  type(composer, 'device-only draft');
+  act(() => push(base));
+  expect(byTestId('composer-input')).not.toBe(composer);
+  expect((byTestId('composer-input') as HTMLTextAreaElement).value).toBe('');
 });

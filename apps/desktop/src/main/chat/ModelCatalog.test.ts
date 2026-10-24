@@ -125,6 +125,40 @@ describe('ModelCatalog', () => {
     expect((await catalog.list()).models.some(model => model.id.startsWith('local:'))).toBe(false);
   });
 
+  it('discovers a newly started local runtime without expiring or refetching the hosted list', async () => {
+    const local = { models: vi.fn().mockResolvedValue([]) };
+    catalog = new ModelCatalog(
+      {
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        getApiClient: () => ({ get }) as unknown as AuthenticatedApiClient,
+        getEnvironmentUrl: () => environmentUrl,
+      },
+      local as never
+    );
+    await catalog.list();
+    local.models.mockResolvedValue([{ id: 'local:ollama:qwen', name: 'qwen' }]);
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 5_001);
+    expect((await catalog.list()).models.map(model => model.id)).toEqual([
+      'claude-sonnet-4-5-20250929',
+      'local:ollama:qwen',
+    ]);
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([false, true])('offers local models while signed out or the hosted catalog fails (%s)', async failed => {
+    if (failed) get.mockRejectedValue(new Error('offline'));
+    catalog = new ModelCatalog(
+      {
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        getApiClient: () => (failed ? ({ get } as unknown as AuthenticatedApiClient) : null),
+        getEnvironmentUrl: () => environmentUrl,
+      },
+      { models: async () => [{ id: 'local:ollama:qwen', name: 'qwen' }] } as never
+    );
+    expect(await catalog.list()).toEqual({ models: [{ id: 'local:ollama:qwen', name: 'qwen' }] });
+    if (!failed) expect(get).not.toHaveBeenCalled();
+  });
+
   it('retains thinking capability through an expired failed read without offering stale models', async () => {
     get.mockResolvedValueOnce({ models: [wireModel({ id: 'qwen3:8b', backend: 'ollama', can_think: true })] });
     await catalog.list();

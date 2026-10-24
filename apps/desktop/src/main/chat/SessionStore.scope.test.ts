@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { SessionStore } from './SessionStore';
-import { sessionScopeKey, type SessionScope } from './sessionScope';
+import { sessionScopeKey, sessionScopeForChat, type SessionScope } from './sessionScope';
+import type { AuthState } from '@shared/auth';
 
 const MODEL = 'test-model';
 
@@ -225,5 +226,46 @@ describe('SessionStore migration of unscoped conversations', () => {
     at(null);
     expect(await store.list()).toEqual([]);
     expect(await readdir(root)).toEqual(['legacy-one.json']);
+  });
+});
+
+describe('SessionStore device-local conversations', () => {
+  const signedOut: AuthState = {
+    status: 'signed-out',
+    environment: { preset: 'hosted', url: HOSTED, label: 'Hosted' },
+    hostedAvailable: true,
+    storage: 'available',
+    busy: 'idle',
+  };
+
+  it('creates and lists fresh signed-out chats, with account and device storage isolated across switches', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b4m-device-local-'));
+    let auth = signedOut;
+    const store = new SessionStore(root, MODEL, 'launch', () => sessionScopeForChat(auth));
+    const local = await store.create('local:llama');
+    expect((await store.list()).map(session => session.id)).toEqual([local.id]);
+    expect(await readdir(root)).toEqual(['device-local']);
+    auth = { ...signedOut, status: 'signed-in', user: { id: ALICE } };
+    expect(await store.list()).toEqual([]);
+    expect(await store.get(local.id)).toBeNull();
+    const hosted = await store.create();
+    auth = signedOut;
+    expect((await store.list()).map(session => session.id)).toEqual([local.id]);
+    expect(await store.get(hosted.id)).toBeNull();
+    const relaunched = new SessionStore(root, MODEL, 'new-launch', () => sessionScopeForChat(auth));
+    expect((await relaunched.list()).map(session => session.id)).toEqual([local.id]);
+  });
+
+  it('never adopts loose legacy account transcripts into the signed-out device namespace', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b4m-device-legacy-'));
+    await writeFile(join(root, 'legacy.json'), JSON.stringify({ id: 'legacy', title: 'private', messages: [] }));
+    let auth = signedOut;
+    const store = new SessionStore(root, MODEL, 'launch', () => sessionScopeForChat(auth));
+    expect(await store.list()).toEqual([]);
+    expect(await store.get('legacy')).toBeNull();
+    await store.create('local:llama');
+    expect(await readdir(root)).toContain('legacy.json');
+    auth = { ...signedOut, status: 'signed-in', user: { id: ALICE } };
+    expect((await store.list()).map(session => session.id)).toEqual(['legacy']);
   });
 });

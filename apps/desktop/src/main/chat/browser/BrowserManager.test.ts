@@ -1135,3 +1135,67 @@ describe('BrowserManager screenshots', () => {
     expect(contents.debuggerAttached).toBe(true);
   });
 });
+
+describe('BrowserManager snapshot indexing', () => {
+  const snapshot = {
+    url: 'https://example.com/',
+    title: 'Example',
+    text: 'moon',
+    truncated: false,
+    model: {
+      url: 'https://example.com/',
+      title: 'Example',
+      capturedAt: '2026-10-24T12:00:00.000Z',
+      blocks: [{ id: 'b1', kind: 'text', text: 'moon' }],
+      actions: [],
+      claims: [],
+      truncated: false,
+    },
+  };
+
+  beforeEach(() => {
+    contents.handlers.clear();
+    contents.loadingMainFrame = false;
+    contents.script = () => Promise.resolve(snapshot);
+  });
+
+  it('passes the validated snapshot and owning session identity to the indexer', async () => {
+    const index = vi.fn();
+    const manager = new BrowserManager(undefined, undefined, index);
+    const first = await manager.context('first', async () => undefined).page();
+    const second = await manager.context('second', async () => undefined).page();
+    const parsed = await first.snapshot(1000);
+    expect(index).toHaveBeenLastCalledWith('first', parsed);
+    expect(index.mock.calls[0][1]).toBe(parsed);
+    await second.snapshot(1000);
+    expect(index).toHaveBeenLastCalledWith('second', snapshot);
+    manager.closeAll();
+  });
+
+  it.each(['synchronous', 'asynchronous'])('reports %s indexing failures without losing the snapshot', async kind => {
+    const error = new Error('history disk failure');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const manager = new BrowserManager(undefined, undefined, () => {
+        if (kind === 'synchronous') throw error;
+        return Promise.reject(error);
+      });
+      const page = await manager.context('first', async () => undefined).page();
+      await expect(page.snapshot(1000)).resolves.toEqual(snapshot);
+      expect(warn).toHaveBeenCalledWith('BROWSER: could not index page snapshot:', error);
+      manager.closeAll();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('does not send an invalid snapshot to the indexer', async () => {
+    const index = vi.fn();
+    const manager = new BrowserManager(undefined, undefined, index);
+    const page = await manager.context('first', async () => undefined).page();
+    contents.script = () => Promise.resolve({ ...snapshot, model: { ...snapshot.model, capturedAt: 'invalid' } });
+    await expect(page.snapshot(1000)).rejects.toThrow();
+    expect(index).not.toHaveBeenCalled();
+    manager.closeAll();
+  });
+});

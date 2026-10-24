@@ -11,7 +11,7 @@ import Typography from '@mui/joy/Typography';
 import type { AuthState } from '@shared/auth';
 import type { ChatProject, ChatSessionMode, ChatSessionSummary } from '@shared/chat';
 import type { SkillMarketListingRef } from '@shared/skillMarket';
-import { SESSION_TITLE_MAX_LENGTH } from '@shared/chat';
+import { LOCAL_MODEL_PREFIX, SESSION_TITLE_MAX_LENGTH } from '@shared/chat';
 import { effectiveContextLimit } from '@shared/contextLimit';
 import { activeTodos } from '@shared/todos';
 import { ArtifactLibraryPanel } from './ArtifactLibraryPanel';
@@ -263,12 +263,16 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
     });
   }, []);
 
-  const selectSession = useCallback((sessionId: string) => {
-    // A screen takes over the same pane the transcript lives in, so picking a conversation has
-    // to put it back or the click reads as doing nothing.
-    setScreen('conversation');
-    setActiveId(sessionId);
-  }, []);
+  const selectSession = useCallback(
+    (sessionId: string) => {
+      // History search spans both modes, so the owning mode follows the selected result.
+      const selected = sessions.find(session => session.id === sessionId);
+      if (selected) setMode(selected.mode);
+      setScreen('conversation');
+      setActiveId(sessionId);
+    },
+    [sessions]
+  );
 
   const terminalOpen = !!activeId && terminalSessions.includes(activeId);
   const setTerminalOpen = useCallback((sessionId: string, open: boolean) => {
@@ -1011,7 +1015,13 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
             attachments={draft}
             blockedReason={blockedReason}
             // Blocked rather than refused: a refused send has already cleared the box.
-            notReady={auth?.reauthRequired ? 'Sign in' : unbound ? 'No folder' : null}
+            notReady={
+              auth?.reauthRequired && !conversation.session?.model.startsWith(LOCAL_MODEL_PREFIX)
+                ? 'Sign in'
+                : unbound
+                  ? 'No folder'
+                  : null
+            }
             usage={composerUsage}
             placeholder={
               conversation.session?.mode === 'code' ? 'Describe a task or ask a question' : 'Send a message...'

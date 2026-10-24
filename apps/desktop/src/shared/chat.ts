@@ -826,6 +826,8 @@ export type ChatMoveToBackgroundResult = { ok: true; process: BackgroundProcessI
  * provider keys - so this is genuinely per-deployment and per-account, and the desktop client
  * never ships a list of its own.
  */
+export const LOCAL_MODEL_PREFIX = 'local:ollama:';
+
 export interface ChatModelOption {
   id: string;
   name: string;

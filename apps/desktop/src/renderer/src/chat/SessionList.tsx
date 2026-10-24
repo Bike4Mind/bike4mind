@@ -36,7 +36,7 @@ import {
   type ChatSessionStatus,
   type ChatSessionSummary,
 } from '@shared/chat';
-import type { LocalHistoryResult } from '@shared/history';
+import { useLocalHistory } from './localHistory';
 import type { PrSummary } from '@shared/pullRequest';
 import { sectionOf, type SidebarSection, type SidebarSectionsState } from '@shared/sidebarSections';
 import { capRows, raisedRows, setGroupLimit, useGroupLimit } from './groupCap';
@@ -792,27 +792,7 @@ export function SessionList({
   footer?: ReactNode;
 }) {
   const [query, setQuery] = useState('');
-  const [historyResults, setHistoryResults] = useState<LocalHistoryResult[]>([]);
-  useEffect(() => {
-    const needle = query.trim();
-    if (!needle) {
-      setHistoryResults([]);
-      return;
-    }
-    let cancelled = false;
-    const timer = setTimeout(
-      () =>
-        void window.b4m.chat
-          .searchHistory(needle)
-          .then(results => !cancelled && setHistoryResults(results))
-          .catch(() => !cancelled && setHistoryResults([])),
-      120
-    );
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [query]);
+  const { results: historyResults, error: historyError } = useLocalHistory(query, sessions);
   // Declared above the collapsed rail's early return, so collapsing and re-expanding comes back
   // to the width the user set rather than to the default.
   const [width, setWidth] = useState(readSidebarWidth);
@@ -1169,8 +1149,17 @@ export function SessionList({
             startDecorator={<SearchIcon />}
             slotProps={{ input: { 'data-testid': 'chat-search-input' } }}
           />
+          {historyError && (
+            <Alert size="sm" color="danger" data-testid="local-history-error">
+              {historyError}
+            </Alert>
+          )}
           {historyResults.length > 0 && (
-            <List size="sm" data-testid="local-history-results">
+            <List
+              size="sm"
+              sx={{ maxHeight: '30vh', overflowY: 'auto', ...thinScrollbarSx }}
+              data-testid="local-history-results"
+            >
               {historyResults.map(result => (
                 <ListItem key={result.id}>
                   <ListItemButton onClick={() => onSelect(result.sessionId)} data-testid="local-history-result">

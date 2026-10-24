@@ -34,18 +34,28 @@ export class LocalHistory {
 
   constructor(
     path: string,
-    private readonly scope: () => string | null = () => 'default'
+    private readonly scope: () => string | null = () => 'default',
+    private readonly changed: () => void = () => {}
   ) {
     this.db = new DatabaseSync(path);
-    this.migrate();
+    try {
+      this.migrate();
+    } catch (error) {
+      this.db.close();
+      throw error;
+    }
   }
 
   close(): void {
     this.db.close();
   }
 
-  captureSession(session: ChatSession): void {
-    if (!session.historyEnabled || !this.scope()) return;
+  scopeKey(): string | null {
+    return this.scope();
+  }
+
+  captureSession(session: ChatSession, expectedScope = this.scope()): void {
+    if (!session.historyEnabled || !expectedScope || this.scope() !== expectedScope) return;
     const content = safeContent(
       session.messages
         .filter(message => !message.system)
@@ -76,6 +86,9 @@ export class LocalHistory {
   }
 
   search(query: string, limit = 30): LocalHistoryResult[] {
+    const scope = this.scope();
+    if (!scope || !query.trim()) return [];
+    const resultLimit = Number.isFinite(limit) ? Math.max(1, Math.min(Math.trunc(limit), 100)) : 30;
     const match = query
       .trim()
       .split(/\s+/)
@@ -89,9 +102,9 @@ export class LocalHistory {
          FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid
         WHERE entries_fts MATCH ? AND e.scope = ? ORDER BY bm25(entries_fts), e.captured_at DESC LIMIT ?`
       )
-      .all(match, this.scope() ?? '', Math.max(1, Math.min(limit, 100))) as Record<string, unknown>[];
+      .all(match, scope, resultLimit) as Record<string, unknown>[];
     const lexical = rows.map(toResult);
-    if (lexical.length >= limit) return lexical;
+    if (lexical.length >= resultLimit) return lexical;
     const seen = new Set(lexical.map(row => row.id));
     const queryVector = embedding(query);
     const semantic = (
@@ -99,30 +112,37 @@ export class LocalHistory {
         .prepare(
           'SELECT id, kind, session_id, title, url, captured_at, content, embedding FROM entries WHERE scope = ? ORDER BY captured_at DESC LIMIT 500'
         )
-        .all(this.scope() ?? '') as Record<string, unknown>[]
+        .all(scope) as Record<string, unknown>[]
     )
       .filter(row => !seen.has(String(row.id)))
       .map(row => ({ row, score: cosine(queryVector, parseEmbedding(String(row.embedding ?? ''))) }))
       .filter(candidate => candidate.score >= 0.2)
       .sort((left, right) => right.score - left.score)
-      .slice(0, limit - lexical.length)
+      .slice(0, resultLimit - lexical.length)
       .map(({ row }) => toResult({ ...row, snippet: snippet(String(row.content ?? ''), query) }));
     return [...lexical, ...semantic];
   }
 
   clear(): LocalHistoryState {
-    this.db.prepare('DELETE FROM entries WHERE scope = ?').run(this.scope() ?? '');
+    const scope = this.scope();
+    if (!scope) return { entries: 0 };
+    this.db.prepare('DELETE FROM entries WHERE scope = ?').run(scope);
+    this.changed();
     return this.state();
   }
 
-  removeSession(sessionId: string): void {
-    this.db.prepare('DELETE FROM entries WHERE session_id = ? AND scope = ?').run(sessionId, this.scope() ?? '');
+  removeSession(sessionId: string, expectedScope = this.scope()): void {
+    if (!expectedScope) return;
+    this.db.prepare('DELETE FROM entries WHERE session_id = ? AND scope = ?').run(sessionId, expectedScope);
+    this.changed();
   }
 
   state(): LocalHistoryState {
-    const row = this.db
-      .prepare('SELECT CAST(COUNT(*) AS TEXT) AS count FROM entries WHERE scope = ?')
-      .get(this.scope() ?? '') as { count: string };
+    const scope = this.scope();
+    if (!scope) return { entries: 0 };
+    const row = this.db.prepare('SELECT CAST(COUNT(*) AS TEXT) AS count FROM entries WHERE scope = ?').get(scope) as {
+      count: string;
+    };
     return { entries: Number(row.count) };
   }
 
@@ -160,19 +180,20 @@ export class LocalHistory {
         'DELETE FROM entries WHERE rowid IN (SELECT rowid FROM entries WHERE scope = ? ORDER BY captured_at DESC LIMIT -1 OFFSET ?)'
       )
       .run(scope, MAX_ENTRIES);
+    this.changed();
   }
 
   private migrate(): void {
     const version = Number(this.db.prepare('PRAGMA user_version').get()?.user_version ?? 0);
     if (version > SCHEMA_VERSION) throw new Error('Local history was created by a newer Bike4Mind version.');
-    if (version === 1) this.db.exec("ALTER TABLE entries ADD COLUMN embedding TEXT NOT NULL DEFAULT '[]'");
-    if (version > 0 && version < 3) {
-      this.db.exec("ALTER TABLE entries ADD COLUMN scope TEXT NOT NULL DEFAULT ''");
-      const scope = this.scope();
-      if (scope) this.db.prepare('UPDATE entries SET id = ? || id, scope = ?').run(`${scope}:`, scope);
-    }
-    this.db.exec(`
-      PRAGMA journal_mode = WAL;
+    this.db.exec('PRAGMA journal_mode = WAL');
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      if (version === 1) this.db.exec("ALTER TABLE entries ADD COLUMN embedding TEXT NOT NULL DEFAULT '[]'");
+      // Legacy rows have no verified owner. Keep them inaccessible rather than assigning
+      // them to whichever account happens to be signed in during migration.
+      if (version > 0 && version < 3) this.db.exec("ALTER TABLE entries ADD COLUMN scope TEXT NOT NULL DEFAULT ''");
+      this.db.exec(`
       CREATE TABLE IF NOT EXISTS entries(id TEXT PRIMARY KEY, kind TEXT NOT NULL, session_id TEXT NOT NULL,
         title TEXT NOT NULL, url TEXT NOT NULL, content TEXT NOT NULL, captured_at TEXT NOT NULL,
         embedding TEXT NOT NULL DEFAULT '[]', scope TEXT NOT NULL DEFAULT '');
@@ -186,14 +207,20 @@ export class LocalHistory {
         INSERT INTO entries_fts(rowid, title, content) VALUES (new.rowid, new.title, new.content); END;
       PRAGMA user_version = ${SCHEMA_VERSION};
     `);
-    if (version === 1) {
-      const rows = this.db.prepare('SELECT id, title, content FROM entries').all() as {
-        id: string;
-        title: string;
-        content: string;
-      }[];
-      const update = this.db.prepare('UPDATE entries SET embedding = ? WHERE id = ?');
-      for (const row of rows) update.run(JSON.stringify(embedding(`${row.title}\n${row.content}`)), row.id);
+      if (version < SCHEMA_VERSION) this.db.exec("INSERT INTO entries_fts(entries_fts) VALUES ('rebuild')");
+      if (version === 1) {
+        const rows = this.db.prepare('SELECT id, title, content FROM entries').all() as {
+          id: string;
+          title: string;
+          content: string;
+        }[];
+        const update = this.db.prepare('UPDATE entries SET embedding = ? WHERE id = ?');
+        for (const row of rows) update.run(JSON.stringify(embedding(`${row.title}\n${row.content}`)), row.id);
+      }
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
     }
   }
 }

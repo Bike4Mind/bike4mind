@@ -552,7 +552,11 @@ export function useConversation(
       if (summary.id !== activeSessionId.current) return;
       // The project too: a worktree landing under an open session is pushed this way, and the
       // chips have to stop saying it is on its way.
-      setSession(current => (current ? { ...current, title: summary.title, project: summary.project } : current));
+      setSession(current =>
+        current
+          ? { ...current, title: summary.title, project: summary.project, historyEnabled: summary.historyEnabled }
+          : current
+      );
     });
   }, []);
 
@@ -990,10 +994,16 @@ export function useConversation(
   const setHistory = useCallback(
     async (enabled: boolean) => {
       if (!sessionId) return;
-      const updated = await window.b4m.chat.setSessionHistory(sessionId, enabled);
-      if (!updated) return;
-      setSession(current => (current ? { ...current, historyEnabled: updated.historyEnabled } : current));
-      onSummaryChanged(updated);
+      try {
+        const updated = await window.b4m.chat.setSessionHistory(sessionId, enabled);
+        if (!updated) return;
+        setSession(current =>
+          current?.id === sessionId ? { ...current, historyEnabled: updated.historyEnabled } : current
+        );
+        onSummaryChanged(updated);
+      } catch (error) {
+        setNotice(`Could not update local history. ${error instanceof Error ? error.message : String(error)}`);
+      }
     },
     [sessionId, onSummaryChanged]
   );

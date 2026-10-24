@@ -69,6 +69,8 @@ export interface ModelCatalogDeps {
 export class ModelCatalog {
   private cache: { environmentUrl: string; models: ChatModelOption[]; expiresAt: number } | null = null;
 
+  private localCache: { models: ChatModelOption[]; expiresAt: number } | null = null;
+
   /** Separate from `cache` because the two views are read on different paths; see listImageModels. */
   private imageCache: { environmentUrl: string; models: string[]; expiresAt: number } | null = null;
 
@@ -82,10 +84,13 @@ export class ModelCatalog {
   /** Cached models for the current environment, without a round trip. Null when nothing is cached. */
   cached(): ChatModelOption[] | null {
     const entry = this.cache;
+    if (!this.deps.getApiClient()) {
+      return this.localCache && Date.now() < this.localCache.expiresAt ? this.localCache.models : null;
+    }
     if (!entry) return null;
     if (entry.environmentUrl !== this.deps.getEnvironmentUrl()) return null;
     if (Date.now() >= entry.expiresAt) return null;
-    return entry.models;
+    return this.mergeLocal(entry.models);
   }
 
   /** Retain a known thinking preference through a failed refresh, without offering stale models. */
@@ -96,12 +101,12 @@ export class ModelCatalog {
   }
 
   async list(force = false): Promise<ChatModelCatalog> {
-    if (!force) {
+    const local = await this.listLocal(force);
+    if (!force && this.deps.getApiClient()) {
       const hit = this.cached();
       if (hit) return { models: hit };
     }
 
-    const local = await this.local.models();
     const api = this.deps.getApiClient();
     if (!api) return local.length ? { models: local } : { models: [], error: 'Sign in to see models.' };
 
@@ -117,20 +122,32 @@ export class ModelCatalog {
         : { models: [], error: 'Could not load the model list from this server.' };
     }
 
-    models = [...models.filter(model => !local.some(candidate => candidate.id === model.id)), ...local];
     if (models.length === 0) {
       this.cache = null;
       this.deps.logger.warn('CHAT: server returned no tool-capable text models');
-      return { models: [] };
+      return { models: local };
     }
 
     this.cache = {
       environmentUrl: this.deps.getEnvironmentUrl(),
       models,
-      expiresAt: Date.now() + (local.length > 0 ? 5_000 : CACHE_TTL_MS),
+      expiresAt: Date.now() + CACHE_TTL_MS,
     };
     this.deps.logger.debug(`CHAT: ${models.length} model(s) available`);
-    return { models };
+    return { models: this.mergeLocal(models) };
+  }
+
+  /** Device discovery never depends on the configured server or account. */
+  async listLocal(force = false): Promise<ChatModelOption[]> {
+    if (force || !this.localCache || Date.now() >= this.localCache.expiresAt) {
+      this.localCache = { models: await this.local.models(), expiresAt: Date.now() + 5_000 };
+    }
+    return this.localCache.models;
+  }
+
+  private mergeLocal(hosted: ChatModelOption[]): ChatModelOption[] {
+    const local = this.localCache && Date.now() < this.localCache.expiresAt ? this.localCache.models : [];
+    return [...hosted.filter(model => !local.some(candidate => candidate.id === model.id)), ...local];
   }
 
   /**

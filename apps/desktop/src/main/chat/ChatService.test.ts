@@ -7,9 +7,12 @@ import type { ChatStreamEvent } from '@shared/chat';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
 import { SessionStore } from './SessionStore';
+import { LocalHistory } from './LocalHistory';
 import type { AccessStore } from './tools/AccessStore';
 import type { ModelCatalog } from './ModelCatalog';
 import { LOCAL_MODEL_PREFIX } from './OllamaLocal';
+import type { CompletionRequest } from './completions';
+import type { CompletionStreamEvent } from './streamEvents';
 
 function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
@@ -86,6 +89,7 @@ describe('ChatService', () => {
     const local = {
       stream: vi.fn(async (request, emit) => {
         expect(request.tools).toEqual([]);
+        expect(String(request.messages[0].content)).not.toMatch(/call request_directory|web_search|ask_user/);
         emit({ type: 'content', text: 'Offline answer', stopReason: 'end_turn' });
       }),
     };
@@ -136,9 +140,77 @@ describe('ChatService', () => {
     expect((await service.getSession(id))?.model).toBe(model);
   });
 
+  it.each([false, true])(
+    'keeps local naming, suggestions, compaction and Continue on device (signed in: %s)',
+    async signedIn => {
+      const model = `${LOCAL_MODEL_PREFIX}llama3.2`;
+      const localStore = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-local-privacy-')), model);
+      const localEvents: ChatStreamEvent[] = [];
+      const option = { id: model, name: 'Local', supportsTools: false };
+      const local = {
+        stream: vi.fn(async (request: CompletionRequest, emit: (event: CompletionStreamEvent) => void) => {
+          if (request.thinking === false) emit({ type: 'content', text: '<think>private reasoning</think>' });
+          emit({ type: 'content', text: 'Useful local answer', stopReason: 'end_turn' });
+        }),
+      };
+      const localService = new ChatService({
+        store: localStore,
+        access: { list: async () => [] } as unknown as AccessStore,
+        models: {
+          list: async () => ({ models: [option] }),
+          listLocal: async () => [option],
+          cached: () => [option],
+        } as unknown as ModelCatalog,
+        local: local as never,
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        getApiClient: () => (signedIn ? apiClient : null),
+        getEnvironmentUrl: () => '',
+        emit: event => localEvents.push(event),
+      });
+      const { id } = await localService.createSession();
+      expect(await localService.send(id, 'private prompt')).toMatchObject({ ok: true });
+      await waitFor(localEvents, 'done');
+      await vi.waitUntil(() => !localService.isSessionBusy(id));
+      await vi.waitUntil(async () => (await localStore.get(id))?.title === 'Useful local answer');
+      await localService.suggestNextPrompt(id, 'hosted-model');
+      expect(await localService.compactContext(id)).toMatchObject({ ok: true });
+      await localStore.appendMessage(id, {
+        id: 'resume-me',
+        role: 'assistant',
+        content: 'Partial',
+        createdAt: new Date().toISOString(),
+        stopReason: 'tool_turn_limit',
+      });
+      expect(await localService.continueReply(id)).toMatchObject({ ok: true });
+      await vi.waitUntil(() => !localService.isSessionBusy(id));
+      expect(local.stream.mock.calls.length).toBeGreaterThanOrEqual(5);
+      expect(local.stream.mock.calls.every(([request]) => request.model === model)).toBe(true);
+      local.stream.mockRejectedValueOnce(new Error('local runtime disconnected'));
+      expect(await localService.send(id, 'retry locally')).toMatchObject({ ok: true });
+      await waitFor(localEvents, 'error');
+      expect((await localStore.get(id))?.messages.at(-1)?.error).toContain('local runtime disconnected');
+      expect(post).not.toHaveBeenCalled();
+      expect(get).not.toHaveBeenCalled();
+    }
+  );
+
+  it('reports unavailable local history without changing the session opt-in', async () => {
+    const { id } = await service.createSession();
+    expect(() => service.searchHistory('anything')).toThrow('Local history is unavailable');
+    await expect(service.setSessionHistory(id, true)).rejects.toThrow('Local history is unavailable');
+    expect((await store.get(id))?.historyEnabled).not.toBe(true);
+  });
+
   it('drops indexed history when it is switched off or the session is deleted', async () => {
-    const history = { removeSession: vi.fn(), captureSession: vi.fn(), search: vi.fn(() => []) };
+    const history = {
+      scopeKey: () => 'account-a',
+      removeSession: vi.fn(),
+      captureSession: vi.fn(),
+      search: vi.fn(() => []),
+    };
+    const summaryChanged = vi.fn();
     const service = new ChatService({
+      summaryChanged,
       store,
       access: { list: async () => [] } as unknown as AccessStore,
       history: history as never,
@@ -149,12 +221,89 @@ describe('ChatService', () => {
     });
     const { id } = await service.createSession();
     await service.setSessionHistory(id, true);
+    expect(summaryChanged).toHaveBeenLastCalledWith(expect.objectContaining({ id, historyEnabled: true }));
     expect(history.captureSession).toHaveBeenCalledTimes(1);
     await service.setSessionHistory(id, false);
-    expect(history.removeSession).toHaveBeenCalledWith(id);
+    expect(summaryChanged).toHaveBeenLastCalledWith(expect.objectContaining({ id }));
+    expect(summaryChanged.mock.calls.at(-1)?.[0].historyEnabled).not.toBe(true);
+    expect(history.removeSession).toHaveBeenCalledWith(id, 'account-a');
     history.removeSession.mockClear();
     await service.deleteSession(id);
-    expect(history.removeSession).toHaveBeenCalledWith(id);
+    expect(history.removeSession).toHaveBeenCalledWith(id, 'account-a');
+  });
+
+  it('keeps the original history namespace through async turn acceptance and reply completion', async () => {
+    let scope = 'account-a';
+    const history = new LocalHistory(':memory:', () => scope);
+    const scopedService = new ChatService({
+      store,
+      history,
+      access: { list: async () => [] } as unknown as AccessStore,
+      logger: { debug: vi.fn(), warn: vi.fn() },
+      getApiClient: () => apiClient,
+      getEnvironmentUrl: () => 'http://localhost:3000',
+      emit: event => events.push(event),
+    });
+    const { id } = await scopedService.createSession();
+    await scopedService.setSessionHistory(id, true);
+    const get = store.get.bind(store);
+    vi.spyOn(store, 'get').mockImplementationOnce(async sessionId => {
+      const session = await get(sessionId);
+      scope = 'account-b';
+      return session;
+    });
+    expect(await scopedService.send(id, 'confidential lunar message')).toMatchObject({ ok: true });
+    await waitFor(events, 'start');
+    stream.write(frame({ type: 'content', text: 'confidential lunar answer', stopReason: 'end_turn' }));
+    stream.write(frame('[DONE]'));
+    await waitFor(events, 'done');
+    expect(history.state()).toEqual({ entries: 0 });
+    expect(history.search('confidential')).toEqual([]);
+    scope = 'account-a';
+    expect(history.state()).toEqual({ entries: 1 });
+    history.close();
+  });
+
+  it('restores the previous opt-in when explicit indexing fails', async () => {
+    const history = new LocalHistory(':memory:');
+    const indexedService = new ChatService({
+      store,
+      history,
+      access: { list: async () => [] } as unknown as AccessStore,
+      logger: { debug: vi.fn(), warn: vi.fn() },
+      getApiClient: () => apiClient,
+      getEnvironmentUrl: () => 'http://localhost:3000',
+      emit: event => events.push(event),
+    });
+    const { id } = await indexedService.createSession();
+    history.close();
+    await expect(indexedService.setSessionHistory(id, true)).rejects.toThrow();
+    expect((await store.get(id))?.historyEnabled).not.toBe(true);
+  });
+
+  it('does not duplicate or fail a persisted reply when background history indexing fails', async () => {
+    const history = new LocalHistory(':memory:');
+    const warn = vi.fn();
+    const indexedService = new ChatService({
+      store,
+      history,
+      access: { list: async () => [] } as unknown as AccessStore,
+      logger: { debug: vi.fn(), warn },
+      getApiClient: () => apiClient,
+      getEnvironmentUrl: () => 'http://localhost:3000',
+      emit: event => events.push(event),
+    });
+    const { id } = await indexedService.createSession();
+    await indexedService.setSessionHistory(id, true);
+    history.close();
+    await indexedService.send(id, 'hello');
+    await waitFor(events, 'start');
+    stream.write(frame({ type: 'content', text: 'one answer', stopReason: 'end_turn' }));
+    stream.write(frame('[DONE]'));
+    await waitFor(events, 'done');
+    expect(events.filter(event => event.type === 'error')).toEqual([]);
+    expect((await store.get(id))?.messages.filter(message => message.role === 'assistant')).toHaveLength(1);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('could not index conversation history'));
   });
 
   // A window opening a conversation mid-turn has only getSession to go on: replies are stored

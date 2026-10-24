@@ -122,6 +122,7 @@ export const IPC_CHANNELS = {
   chatSearchHistory: 'chat:search-history',
   chatClearHistory: 'chat:clear-history',
   chatHistoryState: 'chat:history-state',
+  chatHistoryChanged: 'chat:history-changed',
   chatSetSessionReasoningEffort: 'chat:set-session-reasoning-effort',
   chatSetSessionPinned: 'chat:set-session-pinned',
   /**
@@ -570,6 +571,7 @@ export interface DesktopApi {
     searchHistory(query: string): Promise<LocalHistoryResult[]>;
     clearHistory(): Promise<LocalHistoryState>;
     historyState(): Promise<LocalHistoryState>;
+    onHistoryChanged(listener: () => void): () => void;
     /** How hard this conversation's model should think. Null when the session is gone. */
     setSessionReasoningEffort(sessionId: string, effort: ReasoningEffortSetting): Promise<ChatSessionSummary | null>;
     /** Pin a conversation to the top of the sidebar. Null when the session is gone. */

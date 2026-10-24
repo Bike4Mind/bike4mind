@@ -101,6 +101,11 @@ const api: DesktopApi = {
     searchHistory: (query: string) => ipcRenderer.invoke(IPC_CHANNELS.chatSearchHistory, query),
     clearHistory: () => ipcRenderer.invoke(IPC_CHANNELS.chatClearHistory),
     historyState: () => ipcRenderer.invoke(IPC_CHANNELS.chatHistoryState),
+    onHistoryChanged: listener => {
+      const handler = () => listener();
+      ipcRenderer.on(IPC_CHANNELS.chatHistoryChanged, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.chatHistoryChanged, handler);
+    },
     setSessionReasoningEffort: (sessionId: string, effort: ReasoningEffortSetting) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionReasoningEffort, sessionId, effort),
     setSessionPinned: (sessionId: string, pinned: boolean) =>

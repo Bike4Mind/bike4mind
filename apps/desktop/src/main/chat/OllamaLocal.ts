@@ -1,18 +1,30 @@
 import { StringDecoder } from 'node:string_decoder';
-import type { ChatModelOption } from '@shared/chat';
+import { z } from 'zod';
+import { LOCAL_MODEL_PREFIX, type ChatModelOption } from '@shared/chat';
 import type { CompletionMessage, CompletionRequest } from './completions';
 import type { CompletionStreamEvent } from './streamEvents';
 
-export const LOCAL_MODEL_PREFIX = 'local:ollama:';
+export { LOCAL_MODEL_PREFIX } from '@shared/chat';
 const OLLAMA_URL = 'http://127.0.0.1:11434';
 const TIMEOUT_MS = 1_000;
+const remoteFields = { remote_host: z.string().optional(), remote_model: z.string().optional() };
+const tagsSchema = z.object({ models: z.array(z.object({ name: z.string().min(1), ...remoteFields })) });
+const showSchema = z.object({
+  capabilities: z.array(z.string()),
+  model_info: z.record(z.string(), z.unknown()).optional(),
+  ...remoteFields,
+});
+
+function usesRemoteModel(model: { remote_host?: string; remote_model?: string }): boolean {
+  return !!(model.remote_host?.trim() || model.remote_model?.trim());
+}
 
 export class OllamaLocal {
   async models(): Promise<ChatModelOption[]> {
-    const tags = (await this.json('/api/tags').catch(() => null)) as { models?: { name?: unknown }[] } | null;
-    if (!Array.isArray(tags?.models)) return [];
+    const tags = tagsSchema.safeParse(await this.json('/api/tags').catch(() => null));
+    if (!tags.success) return [];
     return (
-      await Promise.all(tags.models.flatMap(row => (typeof row.name === 'string' ? [this.model(row.name)] : [])))
+      await Promise.all(tags.data.models.filter(row => !usesRemoteModel(row)).map(row => this.model(row.name)))
     ).filter((model): model is ChatModelOption => model !== null);
   }
 
@@ -23,6 +35,11 @@ export class OllamaLocal {
   ): Promise<void> {
     const model = request.model.startsWith(LOCAL_MODEL_PREFIX) ? request.model.slice(LOCAL_MODEL_PREFIX.length) : '';
     if (!model) throw new Error('Invalid local model id.');
+    const inspection = showSchema.parse(await this.json('/api/show', { name: model }, signal));
+    // A localhost daemon can proxy cloud models, including aliases without a cloud suffix.
+    // Inspect again before sending private messages, even when discovery was cached.
+    if (usesRemoteModel(inspection)) throw new Error('Cloud-backed Ollama models cannot be used as local models.');
+    if (!inspection.capabilities.includes('completion')) throw new Error('This Ollama model cannot answer chat.');
     const response = await fetch(`${OLLAMA_URL}/api/chat`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -31,7 +48,7 @@ export class OllamaLocal {
         model,
         stream: true,
         messages: toMessages(request.messages),
-        ...(request.thinking ? { think: true } : {}),
+        ...(request.thinking !== undefined ? { think: request.thinking } : {}),
         ...(request.maxTokens ? { options: { num_predict: request.maxTokens } } : {}),
         ...(request.tools?.length
           ? { tools: request.tools.map(tool => ({ type: 'function', function: tool.toolSchema })) }
@@ -42,27 +59,33 @@ export class OllamaLocal {
     const reader = response.body.getReader();
     const decoder = new StringDecoder('utf8');
     let pending = '';
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      pending += decoder.write(Buffer.from(value));
-      const lines = pending.split('\n');
-      pending = lines.pop() ?? '';
-      for (const line of lines) emitLine(line, onEvent);
+    let completed = false;
+    const consume = (line: string) => {
+      if (line.trim()) completed = emitLine(line, onEvent) || completed;
+    };
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        pending += decoder.write(Buffer.from(value));
+        const lines = pending.split('\n');
+        pending = lines.pop() ?? '';
+        for (const line of lines) consume(line);
+      }
+      consume(pending + decoder.end());
+      if (!completed) throw new Error('Ollama stream ended before the reply finished.');
+    } finally {
+      await reader.cancel().catch(() => undefined);
+      reader.releaseLock();
     }
-    emitLine(pending, onEvent);
   }
 
   private async model(name: string): Promise<ChatModelOption | null> {
-    const show = (await this.json('/api/show', { name }).catch(() => null)) as {
-      capabilities?: unknown;
-      model_info?: unknown;
-    } | null;
-    const capabilities = Array.isArray(show?.capabilities)
-      ? show.capabilities.filter((x): x is string => typeof x === 'string')
-      : [];
-    const info =
-      show?.model_info && typeof show.model_info === 'object' ? (show.model_info as Record<string, unknown>) : {};
+    const show = showSchema.safeParse(await this.json('/api/show', { name }).catch(() => null));
+    // Embedding-only models cannot answer /api/chat; failed inspection is not a plain-text capability.
+    if (!show.success || usesRemoteModel(show.data) || !show.data.capabilities.includes('completion')) return null;
+    const capabilities = show.data.capabilities;
+    const info = show.data.model_info ?? {};
     const contextWindow = Object.entries(info).find(
       ([key, value]) => key.endsWith('.context_length') && typeof value === 'number'
     )?.[1];
@@ -77,19 +100,19 @@ export class OllamaLocal {
     };
   }
 
-  private async json(path: string, body?: unknown): Promise<unknown> {
+  private async json(path: string, body?: unknown, signal?: AbortSignal): Promise<unknown> {
     const response = await fetch(`${OLLAMA_URL}${path}`, {
       method: body ? 'POST' : 'GET',
       headers: body ? { 'content-type': 'application/json' } : undefined,
       body: body ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]) : AbortSignal.timeout(TIMEOUT_MS),
     });
     if (!response.ok) throw new Error(`Ollama returned HTTP ${response.status}.`);
     return response.json();
   }
 }
 
-interface Block {
+type Block = {
   type?: unknown;
   text?: unknown;
   id?: unknown;
@@ -98,7 +121,7 @@ interface Block {
   tool_use_id?: unknown;
   content?: unknown;
   source?: { data?: unknown };
-}
+};
 
 function blockText(content: unknown): string {
   if (typeof content === 'string') return content;
@@ -152,15 +175,16 @@ function toMessages(messages: CompletionMessage[]): Record<string, unknown>[] {
   });
 }
 
-function emitLine(line: string, onEvent: (event: CompletionStreamEvent) => void): void {
-  if (!line.trim()) return;
+function emitLine(line: string, onEvent: (event: CompletionStreamEvent) => void): boolean {
+  if (!line.trim()) return false;
   let frame: unknown;
   try {
     frame = JSON.parse(line);
   } catch {
-    return;
+    throw new Error('Ollama returned a malformed stream frame.');
   }
   emitFrame(frame, onEvent);
+  return !!frame && typeof frame === 'object' && 'done' in frame && frame.done === true;
 }
 
 function emitFrame(frame: unknown, onEvent: (event: CompletionStreamEvent) => void): void {
