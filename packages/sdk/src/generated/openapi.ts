@@ -1460,6 +1460,8 @@ export interface components {
       enable_mementos?: boolean;
       enable_lattice?: boolean;
       enable_artifacts?: boolean;
+      /** @description Admin only. Scripted per-iteration confidence scores (0 to 1) that replace the real score at the confidence gate: entry i scores iteration i + 1, and iterations past the end use the real score. The gate pauses the run for review on a streak of consecutive evaluated iterations below its threshold (currently 2), so script one low entry per iteration you want in the streak. Only iterations that ran tools are evaluated, scripted or not, and a finished run never pauses. A non-admin caller gets 403. */
+      confidence_overrides?: number[];
     };
     getAgentExecutionResponse200: {
       id: string;
@@ -5712,7 +5714,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key holds neither the `ai:chat` nor the `ai:generate` scope, or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`). */
+      /** @description The API key holds neither the `ai:chat` nor the `ai:generate` scope, or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`), or a non-admin caller sent `confidence_overrides`. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */

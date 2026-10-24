@@ -2721,6 +2721,7 @@ async function processExecution(
           approvedTools,
           deniedTools,
           confidenceGateThreshold: orchestrationProfile?.confidenceGateThreshold ?? CONFIDENCE_GATE_THRESHOLD,
+          confidenceOverrides: execution.confidenceOverrides,
         },
         {
           executeGatedToolCall: call => agent.executeGatedToolCall(call),
@@ -3225,12 +3226,15 @@ async function processExecution(
         reachedMaxIterations: iterationResult.reachedMaxIterations,
         threshold: confidenceGateThreshold,
         iterationSteps: iterationResult.allSteps,
+        confidenceOverrides: execution.confidenceOverrides,
       });
       // Telemetry: record every iteration the gate evaluates -
       // including ones that complete in the same turn (isComplete=true) or
       // clear the threshold - so `evaluatedCount` is the true denominator for
       // fire rate. `recordGateEmitted` below increments the numerator only on
       // a real pause. Baseline observability before touching signal quality.
+      // A scripted (`overridden`) iteration advances the streak but skips the
+      // telemetry counters: it would skew the real fire rate.
       const decision = await decideIterationConfidencePause(gate, (confidence, options) =>
         agentExecutionRepository.recordIterationConfidence(executionId, confidence, options)
       );
@@ -3264,8 +3268,9 @@ async function processExecution(
           return;
         }
         // Telemetry (#56 M1.1): count this real pause only after `setPendingGate`
-        // confirms it landed (i.e. not raced by a concurrent abort).
-        await agentExecutionRepository.recordGateEmitted(executionId);
+        // confirms it landed (i.e. not raced by a concurrent abort). A scripted pause is not
+        // counted, matching the telemetry `recordIterationConfidence` skipped above.
+        if (!gate.overridden) await agentExecutionRepository.recordGateEmitted(executionId);
         await sendWs('confidence_gate', { executionId, ...gatePayload });
         // Emit a `progress` event with the paused status so the client's
         // existing `progress` subscriber flips the client store's status to
