@@ -171,6 +171,31 @@ describe('SharePublisher', () => {
     expect(result.reason).toBe('Publish storage quota reached');
   });
 
+  it('shows the daily publish limit message instead of a bare 429', async () => {
+    post.mockImplementationOnce(async () => {
+      throw httpError(429, {
+        error: "You've published a lot today. Try again in 42 minutes.",
+        code: 'publish_rate_limited',
+        retryAfter: 2520,
+      });
+    });
+
+    const result = await publisher.publish(request());
+
+    expect(result).toEqual({ status: 'quota', reason: "You've published a lot today. Try again in 42 minutes." });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('names the daily publish limit when its 429 carries no message', async () => {
+    post.mockImplementationOnce(async () => {
+      throw httpError(429, { code: 'publish_rate_limited' });
+    });
+
+    const result = await publisher.publish(request());
+
+    expect(result).toEqual({ status: 'quota', reason: "You've published a lot today. Try again later." });
+  });
+
   it('reads a finalize-time quota refusal as a limit and names storage when the server gives no message', async () => {
     post.mockImplementation(async (url: string) => {
       if (url.endsWith('/upload-url')) {

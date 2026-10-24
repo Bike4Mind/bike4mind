@@ -7,6 +7,7 @@ import { PublishShareModal } from './PublishShareModal';
 import { PUBLISH_ACCESS_META, type PublishAccess } from './PublishAccessBadge';
 import type { PublishResult, PublishVisibility } from '@bike4mind/common';
 import { toast } from 'sonner';
+import { AxiosError } from 'axios';
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
 
@@ -1401,5 +1402,41 @@ describe('PublishShareModal - access options match the Live Artifacts badge', ()
     await waitFor(() =>
       expect(screen.getByTestId('publish-share-token-create').textContent).toBe('Create private link')
     );
+  });
+});
+
+describe('PublishShareModal - a refused publish shows the server reason', () => {
+  const refusal = (status: number, data: Record<string, unknown>) => {
+    const error = new AxiosError('Request failed');
+    error.response = { status, data } as AxiosError['response'];
+    return error;
+  };
+
+  afterEach(() => {
+    vi.mocked(toast.error).mockClear();
+  });
+
+  it.each([
+    {
+      status: 429,
+      data: {
+        error: "You've published a lot today. Try again in 42 minutes.",
+        code: 'publish_rate_limited',
+        retryAfter: 2520,
+      },
+    },
+    { status: 413, data: { error: 'Publish storage quota reached', code: 'quota_bytes_exceeded' } },
+  ])('toasts the $status message rather than a generic failure', async ({ status, data }) => {
+    const publish = vi.fn().mockRejectedValue(refusal(status, data));
+    render(
+      <Wrapper>
+        <PublishShareModal open onClose={() => {}} publish={publish} title="My artifact" defaultVisibility="private" />
+      </Wrapper>
+    );
+
+    fireEvent.click(screen.getByTestId('publish-share-create'));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(data.error));
+    expect(screen.queryByTestId('publish-share-url')).toBeNull();
   });
 });
