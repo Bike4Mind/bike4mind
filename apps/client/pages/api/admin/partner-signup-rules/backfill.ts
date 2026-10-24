@@ -14,6 +14,7 @@ import { assertOrganizationExists } from '@server/entitlements/assertOrganizatio
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { auditSeatCeilingRaised } from '@server/organizations/notifySeatCeilingRaised';
 import { postMessageToSlack } from '@server/integrations/slack/slack';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { z } from 'zod';
 
 /**
@@ -155,6 +156,15 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
         req.logger.error(`Partner-rule backfill seat-raise summary alert failed for org ${rule.organizationId}`, err)
       );
     }
+
+    // Best effort: each candidate commits on its own, so there is no single transaction to tie a
+    // strict entry to; this records the run's outcome once the loop has finished.
+    await recordAdminActionFromRequest(req, {
+      action: 'org.partner_signup_rule.backfilled',
+      target: { kind: 'organization', id: rule.organizationId, displayName: organization?.name ?? rule.organizationId },
+      summary: `backfilled ${tally.added} ${rule.domain} users into the partner organization`,
+      details: { ruleId: rule.id, domain: rule.domain, matched: candidates.length, ...tally },
+    });
 
     return res.status(200).json({
       dryRun: false,
