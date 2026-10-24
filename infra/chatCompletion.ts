@@ -4,6 +4,7 @@ import { ecsEnvSecret, ecsResourceSecrets, ecsSecretsVersion } from './ecsSecret
 import { eventBus } from './eventBus';
 import { imageProcessor } from './imageProcessor';
 import { mcpHandler } from './mcp';
+import { providerFederation } from './providerFederation';
 import { generationJobQueue } from './queues';
 import { cdnUrlForLambdaEnv, router, routePrefix } from './router';
 import { searxngUrl } from './searxng';
@@ -155,6 +156,7 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
       actions: ['aws-marketplace:ViewSubscriptions', 'aws-marketplace:Subscribe', 'aws-marketplace:Unsubscribe'],
       resources: ['*'],
     },
+    ...providerFederation.permissions,
   ],
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
@@ -172,6 +174,7 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
     // that run web search (also infra/agentExecutor.ts, infra/queues.ts); the URL resolves only
     // inside the VPC.
     ...(searxngUrl ? { SEARXNG_BASE_URL: searxngUrl } : {}),
+    ...providerFederation.environment,
   },
   logging: {
     // Long enough to investigate a model-fallback or billing report after the fact; these

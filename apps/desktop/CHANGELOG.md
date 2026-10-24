@@ -18,6 +18,8 @@
 
 ## Unreleased
 
+- Add opt-in, account-scoped local history search and local Ollama chat without sign-in.
+
 - Show the personal credit balance against the monthly plan allowance in the footer ring, with last-turn costs in its tooltip and context usage in the separate Context panel.
 
 - Show spawned sessions immediately while their worktrees prepare, with queued messages and visible startup failures; preserve accepted input and attachments if startup fails.

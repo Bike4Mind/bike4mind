@@ -42,12 +42,46 @@ describe('toPublicFeedVideo', () => {
     });
   });
 
+  it('reads the fields of a Mongoose subdocument, whose values sit behind prototype accessors', () => {
+    vi.stubEnv('APP_URL', 'https://app.example.com/');
+    class VideoSubdocument {
+      get landscapeUrl() {
+        return upload('modals/wide.mp4');
+      }
+      get landscapePosterUrl() {
+        return upload('modals/wide.jpg');
+      }
+      get portraitUrl() {
+        return 'https://d111.cloudfront.net/tall.mp4';
+      }
+      get portraitPosterUrl() {
+        return null;
+      }
+    }
+    const subdocument = new VideoSubdocument();
+    expect(toPublicFeedVideo('n1', subdocument, BUCKET)).toEqual({
+      landscape_url: 'https://app.example.com/api/v1/whats-new/media/n1/landscape',
+      landscape_poster_url: 'https://app.example.com/api/v1/whats-new/media/n1/landscape-poster',
+      portrait_url: 'https://d111.cloudfront.net/tall.mp4',
+      portrait_poster_url: null,
+    });
+  });
+
   it('serves the media route relative to the reader when APP_URL is unset', () => {
     vi.stubEnv('APP_URL', '');
     expect(toPublicFeedVideo('n1', video, BUCKET)).toEqual({
       landscape_url: '/api/v1/whats-new/media/n1/landscape',
       landscape_poster_url: '/api/v1/whats-new/media/n1/landscape-poster',
       portrait_url: 'https://d111.cloudfront.net/tall.mp4',
+      portrait_poster_url: null,
+    });
+  });
+
+  it('serializes absent and null video fields as null', () => {
+    expect(toPublicFeedVideo('n1', { landscapeUrl: null }, BUCKET)).toEqual({
+      landscape_url: null,
+      landscape_poster_url: null,
+      portrait_url: null,
       portrait_poster_url: null,
     });
   });
@@ -61,6 +95,33 @@ describe('toPublicFeedImage', () => {
     expect(toPublicFeedImage('n1', image, BUCKET)).toEqual({
       landscape_url: 'https://app.example.com/api/v1/whats-new/media/n1/image-landscape',
       portrait_url: 'https://d111.cloudfront.net/tall.png',
+    });
+  });
+
+  it('reads image fields through prototype accessors without mutating the source', () => {
+    vi.stubEnv('APP_URL', 'https://app.example.com/');
+    class ImageSubdocument {
+      get landscapeUrl() {
+        return upload('modals/still.png');
+      }
+      get portraitUrl() {
+        return 'https://d111.cloudfront.net/tall.png';
+      }
+    }
+    const subdocument = new ImageSubdocument();
+
+    expect(toPublicFeedImage('n1', subdocument, BUCKET)).toEqual({
+      landscape_url: 'https://app.example.com/api/v1/whats-new/media/n1/image-landscape',
+      portrait_url: 'https://d111.cloudfront.net/tall.png',
+    });
+    expect(subdocument.landscapeUrl).toBe(upload('modals/still.png'));
+    expect(subdocument.portraitUrl).toBe('https://d111.cloudfront.net/tall.png');
+  });
+
+  it('serializes absent and null image fields as null', () => {
+    expect(toPublicFeedImage('n1', { landscapeUrl: null }, BUCKET)).toEqual({
+      landscape_url: null,
+      portrait_url: null,
     });
   });
 

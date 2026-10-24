@@ -9,7 +9,11 @@ import {
 } from './apiErrorCodes';
 import { QUEST_ERROR_CODES } from './types/entities/SessionTypes';
 import { TTS_ERROR_CODES, ttsErrorResponseSchema } from './voiceGeneration';
-import { COMPLETION_TOOL_ERROR_CODES, CompletionSseErrorEventSchema } from './schemas/cliCompletions';
+import {
+  ASSISTANT_PREFILL_UNSUPPORTED_ERROR_CODE,
+  COMPLETION_TOOL_ERROR_CODES,
+  CompletionSseErrorEventSchema,
+} from './schemas/cliCompletions';
 import { VIDEO_GENERATION_API_ERROR_CODES, VIDEO_JOB_PUBLIC_ERROR_CODES } from './schemas/videoGenerations';
 import { MUSIC_GENERATION_API_ERROR_CODES, MUSIC_JOB_PUBLIC_ERROR_CODES } from './schemas/musicGenerations';
 import { DECISIONS_ERROR_CODES } from './schemas/decisions';
@@ -62,6 +66,7 @@ describe('API_ERROR_CODES', () => {
       AGENT_LIMIT_REACHED_ERROR_CODE,
       BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,
       REQUEST_TIMEOUT_ERROR_CODE,
+      ASSISTANT_PREFILL_UNSUPPORTED_ERROR_CODE,
     ]);
     expect(API_ERROR_CODES.filter(code => !emitted.has(code))).toEqual([]);
   });

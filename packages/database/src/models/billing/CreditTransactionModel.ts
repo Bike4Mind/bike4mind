@@ -117,6 +117,7 @@ const CreditTransactionSchema = new Schema<ICreditTransactionDocument>(
 CreditTransactionSchema.index({ userId: 1, createdAt: -1 });
 CreditTransactionSchema.index({ stripePaymentIntentId: 1 }, { unique: true, sparse: true });
 CreditTransactionSchema.index({ ownerId: 1, ownerType: 1, createdAt: -1 });
+CreditTransactionSchema.index({ ownerType: 1, createdAt: -1, type: 1 });
 CreditTransactionSchema.index({ stripeDisputeId: 1 }, { unique: true, sparse: true });
 CreditTransactionSchema.index({ stripeRefundId: 1 }, { unique: true, sparse: true });
 CreditTransactionSchema.index({ transactionId: 1 }, { unique: true, sparse: true });

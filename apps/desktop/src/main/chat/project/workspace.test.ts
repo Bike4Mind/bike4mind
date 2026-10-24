@@ -523,8 +523,8 @@ describe('SpareWorktrees', () => {
   async function spareReady(main: string, container: string): Promise<void> {
     await vi.waitUntil(
       async () => {
-        if (!(await listWorktrees(main)).some(entry => entry.path === spareAt(container))) return false;
         try {
+          if (!(await listWorktrees(main)).some(entry => entry.path === spareAt(container))) return false;
           const directory = (await git(spareAt(container), ['rev-parse', '--absolute-git-dir'])).trim();
           return (await readFile(join(directory, 'b4m-spare'), 'utf8')).startsWith('bike4mind-spare:');
         } catch {

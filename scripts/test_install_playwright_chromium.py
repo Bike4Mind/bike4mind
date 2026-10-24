@@ -230,8 +230,12 @@ class TimeoutProcessGroupTests(unittest.TestCase):
                             self.assertTrue(pid_file.exists(), 'child did not start')
                             child_pid = int(pid_file.read_text())
                             child_stat = Path(f'/proc/{child_pid}/stat')
-                            if child_stat.exists():
-                                self.assertEqual(child_stat.read_text().split()[2], 'Z', 'child survived hard deadline')
+                            try:
+                                state = child_stat.read_text().split()[2]
+                            except (FileNotFoundError, ProcessLookupError):
+                                pass  # Already reaped between checking the path and reading it.
+                            else:
+                                self.assertEqual(state, 'Z', 'child survived hard deadline')
                         finally:
                             try:
                                 os.killpg(process.pid, signal.SIGKILL)

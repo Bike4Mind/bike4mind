@@ -1,3 +1,4 @@
+import '@client/lib/settings/registerContributedSettings';
 import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
 import {
   adminSettingsRepository,

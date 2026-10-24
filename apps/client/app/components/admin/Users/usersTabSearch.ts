@@ -1,3 +1,4 @@
+import { USER_ID_PARAM } from '@bike4mind/common';
 import type { IGetUsersParams } from '@client/app/utils/userAPICalls';
 import { oneOf, parsePage, parseStringList, toNumber } from '../adminSearchValues';
 
@@ -35,7 +36,7 @@ export const USERS_SORT_PARAM = 'sort';
 export const USERS_ORDER_PARAM = 'order';
 export const USERS_ORG_PARAM = 'org';
 export const USERS_TAGS_PARAM = 'tags';
-export const USERS_USER_ID_PARAM = 'userId';
+export const USERS_USER_ID_PARAM = USER_ID_PARAM;
 
 /** The params that describe the list view; `userId` (the open user) is separate. */
 const USERS_VIEW_PARAMS = [

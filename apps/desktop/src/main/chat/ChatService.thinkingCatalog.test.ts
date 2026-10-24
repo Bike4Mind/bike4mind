@@ -26,11 +26,14 @@ describe('thinking preference after a catalog refresh failure', () => {
         models: [{ id: 'qwen3:8b', type: 'text', backend: 'ollama', supportsTools: true, can_think: true }],
       });
       const logger = { debug: vi.fn(), warn: vi.fn() };
-      const models = new ModelCatalog({
-        logger,
-        getEnvironmentUrl: () => environmentUrl,
-        getApiClient: () => ({ get: getModels }) as unknown as AuthenticatedApiClient,
-      });
+      const models = new ModelCatalog(
+        {
+          logger,
+          getEnvironmentUrl: () => environmentUrl,
+          getApiClient: () => ({ get: getModels }) as unknown as AuthenticatedApiClient,
+        },
+        { models: async () => [] } as never
+      );
       const post = vi.fn().mockResolvedValue({ data: new PassThrough(), status: 200 });
       const service = new ChatService({
         store: new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-thinking-catalog-')), 'qwen3:8b'),
