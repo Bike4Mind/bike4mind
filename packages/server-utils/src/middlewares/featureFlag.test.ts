@@ -7,7 +7,12 @@ vi.mock('@bike4mind/utils', () => ({ getSettingByName: getSettingByNameMock }));
 vi.mock('@bike4mind/database', () => ({ adminSettingsRepository: {} }));
 // EnableQuestMaster is a defaultValue:true boolean flag - the case where an admin-disabled
 // value must NOT fall back to the (enabled) default.
-vi.mock('@bike4mind/common', () => ({ settingsMap: { EnableQuestMaster: { defaultValue: true } } }));
+// ContributedDefaultOn stands in for a registered extension setting: resolvable, but absent from settingsMap.
+vi.mock('@bike4mind/common', () => {
+  const settingsMap: Record<string, { defaultValue: unknown }> = { EnableQuestMaster: { defaultValue: true } };
+  const contributed: Record<string, { defaultValue: unknown }> = { ContributedDefaultOn: { defaultValue: true } };
+  return { settingsMap, resolveSettingDefinition: (key: string) => settingsMap[key] ?? contributed[key] };
+});
 
 import { isFeatureEnabled, requireFeatureEnabled } from './featureFlag';
 
@@ -58,6 +63,11 @@ describe('isFeatureEnabled', () => {
   it('falls back to the default when the setting is absent', async () => {
     getSettingByNameMock.mockResolvedValue(null);
     await expect(isFeatureEnabled('EnableQuestMaster')).resolves.toBe(true);
+  });
+
+  it('falls back to a contributed setting default when the setting is absent', async () => {
+    getSettingByNameMock.mockResolvedValue(null);
+    await expect(isFeatureEnabled('ContributedDefaultOn' as SettingKeyArg)).resolves.toBe(true);
   });
 
   // `Once`: under vitest 4.1 a persistent rejected mock after a beforeEach reset is reported as a

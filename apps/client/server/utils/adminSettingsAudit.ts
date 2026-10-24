@@ -1,4 +1,4 @@
-import { settingsMap, type AuditChange, type AuditEntry, type SettingKey } from '@bike4mind/common';
+import { resolveSettingDefinition, type AuditChange, type AuditEntry } from '@bike4mind/common';
 import { adminAuditService } from '@bike4mind/services';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
@@ -8,7 +8,7 @@ const isPlainRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const isSensitiveSetting = (settingName: string): boolean =>
-  Object.hasOwn(settingsMap, settingName) && settingsMap[settingName as SettingKey].isSensitive === true;
+  resolveSettingDefinition(settingName)?.isSensitive === true;
 
 /** Large JSON settings (e.g. sreAgentConfig) record only the top-level keys that differ, one change each. */
 export const diffSettingChanges = (field: string, before: unknown, after: unknown): AuditChange[] => {
