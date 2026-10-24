@@ -17,6 +17,9 @@ import { getLogoUrl, buildEmailLogoImg, escapeHtml } from '@bike4mind/server-uti
 import { randomUUID } from 'crypto';
 import { z } from 'zod';
 import { emitSignupFunnelEvents, recordSyntheticIdentity } from '@server/analytics/funnel';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+
+const AUDITED_USER_ID_LIMIT = 100;
 
 const userImportSchema = z.object({
   email: z.email('Invalid email format'),
@@ -59,6 +62,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
       throw new BadRequestError('Invalid input: users array is required and must not be empty');
     }
 
+    const createdUserIds: string[] = [];
+    const startingCreditsById = new Map<string, number>();
     const results = await Promise.all(
       users.map(async userData => {
         try {
@@ -86,6 +91,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
               },
             }
           );
+
+          createdUserIds.push(newUser.id);
+          startingCreditsById.set(newUser.id, validatedData.startingCredits ?? 0);
 
           const isSynthetic = await recordSyntheticIdentity(newUser);
           await emitSignupFunnelEvents({
@@ -177,6 +185,24 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
         }
       })
     );
+
+    // Rows commit independently, even when later processing fails. One best-effort entry covers
+    // every created account so a failed audit write cannot 500 a created batch.
+    if (createdUserIds.length > 0) {
+      const auditedIds = createdUserIds.slice(0, AUDITED_USER_ID_LIMIT);
+      await recordAdminActionFromRequest(req, {
+        action: 'user.bulk_created',
+        target: { kind: 'system', id: 'bulk-create-users', displayName: 'Bulk user import' },
+        summary: `bulk created ${createdUserIds.length} user(s)`,
+        details: {
+          count: createdUserIds.length,
+          failedCount: results.filter(r => !r.success).length,
+          createdUserIds: auditedIds,
+          startingCreditsTotal: [...startingCreditsById.values()].reduce((sum, credits) => sum + credits, 0),
+          startingCreditsByUserId: Object.fromEntries(auditedIds.map(id => [id, startingCreditsById.get(id) ?? 0])),
+        },
+      });
+    }
 
     // Validates after users are created and invites sent: a bad success row would 500 a batch that
     // succeeded and a retry would hit duplicates, so keep the row schema permissive.
