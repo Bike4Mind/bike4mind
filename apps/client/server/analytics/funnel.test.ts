@@ -151,7 +151,7 @@ describe('recordSyntheticIdentity', () => {
     [{ id: 'u1', username: 'persona-admin', email: 'a@real.example' }, ''],
     [{ id: 'u2', username: 'admin-seeded', email: 'a@test.example' }, 'test.example'],
   ])(
-    'persists a synthetic admin-created account and keeps every funnel emit out of Overwatch',
+    'persists a synthetic admin-created account and sends its funnel stages marked with the synthetic lane',
     async (user, domains) => {
       mockGetSetting.mockResolvedValue(domains);
 
@@ -165,7 +165,12 @@ describe('recordSyntheticIdentity', () => {
 
       expect(isSynthetic).toBe(true);
       expect(mockUserUpdate).toHaveBeenCalledWith({ id: user.id, isSynthetic: true });
-      expect(mockEmit).not.toHaveBeenCalled();
+      // Both marks travel: the lane says it is a persona, and the admin mark still keeps it out
+      // of DAU until its own first request.
+      expect(mockEmit.mock.calls.map(([event]) => [event.event, event.metadata])).toEqual([
+        ['credits_granted', { amount: 50, source: 'signup', method: 'admin', userAction: false, lane: 'synthetic' }],
+        ['signup_completed', { method: 'admin', userAction: false, lane: 'synthetic' }],
+      ]);
     }
   );
 });
@@ -188,9 +193,31 @@ describe('emitFunnelEvent', () => {
     });
   });
 
-  it('skips synthetic users', async () => {
-    expect(await emitFunnelEvent({ user: { id: 'u1', isSynthetic: true }, event: 'email_verified' })).toBe(false);
-    expect(mockEmit).not.toHaveBeenCalled();
+  it("sends a synthetic user's stage marked with the synthetic lane instead of skipping it", async () => {
+    expect(await emitFunnelEvent({ user: { id: 'u1', isSynthetic: true }, event: 'email_verified' })).toBe(true);
+    expect(mockEmit).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'email_verified', userId: 'u1', metadata: { lane: 'synthetic' } })
+    );
+  });
+
+  it('lets no caller metadata unmark a synthetic user', async () => {
+    await emitFunnelEvent({
+      user: { id: 'u1', isSynthetic: true },
+      event: 'signup_completed',
+      metadata: { lane: 'real' },
+    });
+    expect(mockEmit.mock.calls[0][0].metadata).toEqual({ lane: 'synthetic' });
+  });
+
+  it("leaves a real user's stage unmarked, and sends no empty metadata", async () => {
+    await emitFunnelEvent({ user: { id: 'u1', isSynthetic: false }, event: 'email_verified' });
+    await emitFunnelEvent({
+      user: { id: 'u2', isSynthetic: null },
+      event: 'signup_completed',
+      metadata: { method: 'otc' },
+    });
+    expect(mockEmit.mock.calls[0][0]).not.toHaveProperty('metadata');
+    expect(mockEmit.mock.calls[1][0].metadata).toEqual({ method: 'otc' });
   });
 
   it('never throws when the emitter rejects', async () => {
@@ -307,10 +334,15 @@ describe('recordFirstValue', () => {
     expect(mockEmit).not.toHaveBeenCalled();
   });
 
-  it('records the stage but emits nothing for a synthetic user', async () => {
-    expect(await recordFirstValue({ user: { ...user, isSynthetic: true }, feature: 'chat', now })).toBe(false);
+  it('records the stage and emits first_value marked with the synthetic lane for a synthetic user', async () => {
+    expect(await recordFirstValue({ user: { ...user, isSynthetic: true }, feature: 'chat', now })).toBe(true);
     expect(mockUpdateOne).toHaveBeenCalledTimes(1);
-    expect(mockEmit).not.toHaveBeenCalled();
+    expect(mockEmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'first_value',
+        metadata: { feature: 'chat', secondsSinceSignup: 100, lane: 'synthetic' },
+      })
+    );
   });
 
   it('never throws when the write fails', async () => {

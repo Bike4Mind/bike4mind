@@ -83,6 +83,33 @@ describe('analyticsMiddleware — gating', () => {
   });
 });
 
+describe('analyticsMiddleware - synthetic lane', () => {
+  it("marks a synthetic user's active event with the synthetic lane", () => {
+    const mw = analyticsMiddleware();
+    mw(
+      makeReq({
+        user: {
+          id: 'persona-1',
+          isSystem: false,
+          level: 'DemoUser',
+          subscribedUntil: null,
+          isSynthetic: true,
+        } as never,
+      }),
+      res,
+      next
+    );
+    expect(emitActiveEvent).toHaveBeenCalledWith(expect.objectContaining({ isSynthetic: true }));
+    expect(next).toHaveBeenCalled();
+  });
+
+  it('does not mark a user without the flag', () => {
+    const mw = analyticsMiddleware();
+    mw(makeReq(), res, next);
+    expect(emitActiveEvent).toHaveBeenCalledWith(expect.objectContaining({ isSynthetic: false }));
+  });
+});
+
 describe('analyticsMiddleware — throttle', () => {
   it('emits only once for the same user on the same day', () => {
     const mw = analyticsMiddleware();
