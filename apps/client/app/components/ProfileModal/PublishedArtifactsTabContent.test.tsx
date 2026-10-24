@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes/themePrimitives';
@@ -71,7 +71,9 @@ vi.mock('@client/app/components/common/ManageSharingPanel', () => ({
   ),
 }));
 
+import { deletePublishedArtifact } from '@client/app/utils/publishApi';
 import PublishedArtifactsTabContent from './PublishedArtifactsTabContent';
+import { PUBLISHED_ARTIFACTS_VIEW_KEY, usePublishedArtifactsView } from './usePublishedArtifactsView';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const renderTab = () => {
@@ -83,6 +85,7 @@ const renderTab = () => {
       </CssVarsProvider>
     </QueryClientProvider>
   );
+  return qc;
 };
 
 const bundleRow = {
@@ -122,6 +125,9 @@ const expandRow = (publicId: string) => fireEvent.click(screen.getByTestId(`publ
 const sourcedRow = { ...bundleRow, publicId: 'pub-3', source: { kind: 'bundle', artifactId: 'artifact_html_x_1_0' } };
 
 beforeEach(() => {
+  // The view preference is a module-level store backed by localStorage, so it outlives a test unless reset.
+  localStorage.clear();
+  usePublishedArtifactsView.setState({ view: 'list' });
   mockList.mockReset().mockResolvedValue(page([bundleRow]));
   mockExport.mockReset().mockResolvedValue('# exported');
   mockDownloadData.mockReset();
@@ -1132,5 +1138,332 @@ describe('PublishedArtifactsTabContent - access badge and aligned columns', () =
     await waitFor(() =>
       expect(screen.getByTestId('published-artifact-access-pub-1').getAttribute('data-access')).toBe('public')
     );
+  });
+});
+
+describe('PublishedArtifactsTabContent - list / grid view', () => {
+  const lastQuery = () => {
+    const listCalls = mockList.mock.calls.map(c => c[0] as Record<string, unknown>).filter(c => c.facets !== true);
+    return listCalls[listCalls.length - 1];
+  };
+  const goGrid = () => fireEvent.click(screen.getByTestId('published-artifacts-view-grid'));
+  const pubTwo = { ...replyRow, title: 'Energy portfolio study', viewCount: 12_345 };
+  const pubThree = { ...sourcedRow, title: 'Desktop app mockup', visibility: 'private' };
+
+  it('defaults to the list, which is what the tab looked like before the toggle', async () => {
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    expect(screen.queryByTestId('published-artifacts-grid')).toBeNull();
+    expect(screen.getByTestId('published-artifacts-view-list').getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByTestId('published-artifacts-view-grid').getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('switches between list and grid with the segmented toggle', async () => {
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+
+    goGrid();
+    expect(screen.getByTestId('published-artifacts-grid')).not.toBeNull();
+    expect(screen.queryByTestId('published-artifact-pub-1')).toBeNull();
+    expect(screen.getByTestId('published-artifact-card-pub-1')).not.toBeNull();
+    expect(screen.getByTestId('published-artifacts-view-grid').getAttribute('aria-pressed')).toBe('true');
+    // The list's column header only labels list columns.
+    expect(screen.queryByTestId('published-artifacts-columns')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('published-artifacts-view-list'));
+    expect(screen.queryByTestId('published-artifacts-grid')).toBeNull();
+    expect(screen.getByTestId('published-artifact-pub-1')).not.toBeNull();
+  });
+
+  it('keeps one view on when the pressed button is clicked again', async () => {
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    goGrid();
+    goGrid();
+    expect(screen.getByTestId('published-artifacts-grid')).not.toBeNull();
+  });
+
+  it('persists the choice to localStorage', async () => {
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    goGrid();
+    expect(JSON.parse(localStorage.getItem(PUBLISHED_ARTIFACTS_VIEW_KEY) ?? '{}').state.view).toBe('grid');
+
+    fireEvent.click(screen.getByTestId('published-artifacts-view-list'));
+    expect(JSON.parse(localStorage.getItem(PUBLISHED_ARTIFACTS_VIEW_KEY) ?? '{}').state.view).toBe('list');
+  });
+
+  it('opens in the stored view on the next visit', async () => {
+    localStorage.setItem(PUBLISHED_ARTIFACTS_VIEW_KEY, JSON.stringify({ state: { view: 'grid' }, version: 0 }));
+    await usePublishedArtifactsView.persist.rehydrate();
+    renderTab();
+    await screen.findByTestId('published-artifact-card-pub-1');
+    expect(screen.getByTestId('published-artifacts-view-grid').getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('falls back to the list for a stored value it does not recognise', async () => {
+    localStorage.setItem(PUBLISHED_ARTIFACTS_VIEW_KEY, JSON.stringify({ state: { view: 'carousel' }, version: 0 }));
+    await usePublishedArtifactsView.persist.rehydrate();
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    expect(screen.queryByTestId('published-artifacts-grid')).toBeNull();
+  });
+
+  it('renders one card per artifact, each with badge, title, meta and the row-scheme test ids', async () => {
+    mockList.mockResolvedValue(page([bundleRow, pubTwo, pubThree]));
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    goGrid();
+
+    expect(screen.getByTestId('published-artifacts-grid').children).toHaveLength(3);
+    for (const [id, title, access] of [
+      ['pub-1', 'My Artifact', 'public'],
+      ['pub-2', 'Energy portfolio study', 'public'],
+      ['pub-3', 'Desktop app mockup', 'private'],
+    ]) {
+      expect(screen.getByTestId(`published-artifact-card-${id}`)).not.toBeNull();
+      expect(screen.getByTestId(`published-artifact-card-title-${id}`).textContent).toBe(title);
+      expect(screen.getByTestId(`published-artifact-card-access-${id}`).getAttribute('data-access')).toBe(access);
+      expect(screen.getByTestId(`published-artifact-card-date-${id}`)).not.toBeNull();
+      expect(screen.getByTestId(`published-artifact-card-views-${id}`)).not.toBeNull();
+      expect(screen.getByTestId(`published-artifact-card-copy-${id}`)).not.toBeNull();
+      expect(screen.getByTestId(`published-artifact-card-more-${id}`)).not.toBeNull();
+    }
+    // A reply has no version history, so its card shows no versions.
+    expect(screen.queryByTestId('published-artifact-card-versions-pub-2')).toBeNull();
+    expect(screen.getByTestId('published-artifact-card-versions-pub-1').textContent).toBe('1 version');
+  });
+
+  it('applies search, filters and the pager to the grid exactly as to the list', async () => {
+    mockList.mockResolvedValue(
+      page([bundleRow], {
+        total: 60,
+        facets: { kind: { bundle: 1 }, visibility: {}, gate: {}, comments: 0, tag: {} },
+      })
+    );
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    goGrid();
+
+    fireEvent.change(screen.getByTestId('published-artifacts-search'), { target: { value: 'planning' } });
+    await waitFor(() => expect(lastQuery().q).toBe('planning'));
+
+    fireEvent.click(screen.getByTestId('published-artifacts-facet-kind-bundle'));
+    await waitFor(() => expect(lastQuery().kind).toBe('bundle'));
+
+    expect(screen.getByTestId('published-artifacts-pager').textContent).toContain('of 60');
+    fireEvent.click(screen.getByTestId('published-artifacts-next'));
+    await waitFor(() => expect(lastQuery().skip).toBe(25));
+    // Still the grid after the page turned.
+    expect(screen.getByTestId('published-artifacts-grid')).not.toBeNull();
+  });
+
+  it('shows the same empty state in the grid', async () => {
+    mockList.mockResolvedValue(page([], { total: 0 }));
+    renderTab();
+    await screen.findByTestId('published-artifacts-empty');
+    expect(screen.queryByTestId('published-artifacts-grid')).toBeNull();
+  });
+
+  it('copies the share link from a card', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    goGrid();
+
+    fireEvent.click(screen.getByTestId('published-artifact-card-copy-pub-1'));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(`${window.location.origin}/p/u/erik/s`));
+    expect(mockToastSuccess).toHaveBeenCalledWith('Link copied');
+    vi.unstubAllGlobals();
+  });
+
+  it('opens the same settings panel in a dialog when More is clicked', async () => {
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    goGrid();
+
+    expect(screen.queryByTestId('published-artifact-settings-modal')).toBeNull();
+    fireEvent.click(screen.getByTestId('published-artifact-card-more-pub-1'));
+
+    const dialog = screen.getByTestId('published-artifact-settings-modal');
+    // The controls the list row shows when expanded, under the same test ids.
+    for (const id of ['visibility', 'comments', 'manage', 'save-html', 'save-pdf', 'restore', 'delete']) {
+      expect(within(dialog).getByTestId(`published-artifact-${id}-pub-1`), id).not.toBeNull();
+    }
+    expect(within(dialog).getByTestId('published-artifact-tag-input-pub-1')).not.toBeNull();
+    expect(within(dialog).getByTestId('published-artifact-single-version-pub-1')).not.toBeNull();
+    expect(within(dialog).getByText('My Artifact')).not.toBeNull();
+  });
+
+  it('mounts the sharing panel from the dialog, and unmounts it when the dialog closes', async () => {
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    goGrid();
+    fireEvent.click(screen.getByTestId('published-artifact-card-more-pub-1'));
+
+    expect(screen.queryByTestId('stub-panel-pub-1')).toBeNull();
+    fireEvent.click(screen.getByTestId('published-artifact-manage-pub-1'));
+    expect(screen.getByTestId('stub-panel-pub-1')).not.toBeNull();
+
+    fireEvent.click(screen.getByTestId('published-artifact-settings-close'));
+    await waitFor(() => expect(screen.queryByTestId('published-artifact-settings-modal')).toBeNull());
+    expect(screen.queryByTestId('stub-panel-pub-1')).toBeNull();
+
+    // Reopening starts with the sharing panel shut, like a freshly expanded row.
+    fireEvent.click(screen.getByTestId('published-artifact-card-more-pub-1'));
+    expect(screen.queryByTestId('stub-panel-pub-1')).toBeNull();
+  });
+
+  it('runs the same handlers from the dialog as from the row (export)', async () => {
+    mockExport.mockResolvedValue('<html></html>');
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    goGrid();
+    fireEvent.click(screen.getByTestId('published-artifact-card-more-pub-1'));
+
+    fireEvent.click(screen.getByTestId('published-artifact-save-html-pub-1'));
+    await waitFor(() =>
+      expect(mockDownloadData).toHaveBeenCalledWith('<html></html>', 'my-artifact.html', 'text/html; charset=utf-8')
+    );
+    expect(mockExport).toHaveBeenCalledWith('/p/u/erik/s', 'html');
+  });
+
+  it('refreshes from source from the dialog after confirmation', async () => {
+    mockList.mockResolvedValue(page([sourcedRow]));
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-3');
+    goGrid();
+    fireEvent.click(screen.getByTestId('published-artifact-card-more-pub-3'));
+
+    fireEvent.click(screen.getByTestId('published-artifact-refresh-pub-3'));
+    await waitFor(() => expect(mockRefresh).toHaveBeenCalledTimes(1));
+    vi.restoreAllMocks();
+  });
+
+  it('closes the dialog when the artifact is deleted from it', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    vi.mocked(deletePublishedArtifact).mockResolvedValue(undefined);
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    goGrid();
+    fireEvent.click(screen.getByTestId('published-artifact-card-more-pub-1'));
+
+    fireEvent.click(screen.getByTestId('published-artifact-delete-pub-1'));
+    await waitFor(() => expect(screen.queryByTestId('published-artifact-settings-modal')).toBeNull());
+    expect(deletePublishedArtifact).toHaveBeenCalledWith('pub-1');
+    vi.restoreAllMocks();
+  });
+
+  it('closes the dialog when its artifact leaves the list, and does not reopen it if it returns', async () => {
+    const qc = renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    goGrid();
+    fireEvent.click(screen.getByTestId('published-artifact-card-more-pub-1'));
+    expect(screen.getByTestId('published-artifact-settings-modal')).not.toBeNull();
+
+    // e.g. a visibility change under an active visibility filter drops the row on the refetch.
+    mockList.mockResolvedValue(page([pubTwo]));
+    await qc.invalidateQueries({ queryKey: ['published-artifacts', 'mine'] });
+    await waitFor(() => expect(screen.queryByTestId('published-artifact-settings-modal')).toBeNull());
+
+    mockList.mockResolvedValue(page([bundleRow]));
+    await qc.invalidateQueries({ queryKey: ['published-artifacts', 'mine'] });
+    await screen.findByTestId('published-artifact-card-pub-1');
+    expect(screen.queryByTestId('published-artifact-settings-modal')).toBeNull();
+  });
+
+  it('uses the thumbnail in the list row cover slot when the artifact has one', async () => {
+    mockList.mockResolvedValue(page([{ ...bundleRow, thumbnailUrl: 'https://cdn.example/thumbs/pub-1.png' }]));
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    const img = screen.getByTestId('published-artifact-cover-pub-1-image');
+    expect(img.getAttribute('src')).toBe('https://cdn.example/thumbs/pub-1.png');
+
+    fireEvent.error(img);
+    expect(screen.queryByTestId('published-artifact-cover-pub-1-image')).toBeNull();
+    expect(screen.getByTestId('published-artifact-cover-pub-1').textContent).toBe('M');
+  });
+
+  it('uses the thumbnail on the card, and the letter cover when there is none', async () => {
+    mockList.mockResolvedValue(page([{ ...bundleRow, thumbnailUrl: 'https://cdn.example/thumbs/pub-1.png' }, pubTwo]));
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    goGrid();
+
+    expect(screen.getByTestId('published-artifact-card-cover-pub-1-image')).not.toBeNull();
+    expect(screen.queryByTestId('published-artifact-card-cover-pub-2-image')).toBeNull();
+    expect(screen.getByTestId('published-artifact-card-cover-pub-2').textContent).toBe('E');
+  });
+});
+
+describe('PublishedArtifactsTabContent - grid dialog, facet labels and container layout', () => {
+  it('moves the card badge as soon as the sharing panel in the dialog changes the gate', async () => {
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    fireEvent.click(screen.getByTestId('published-artifacts-view-grid'));
+    fireEvent.click(screen.getByTestId('published-artifact-card-more-pub-1'));
+    fireEvent.click(screen.getByTestId('published-artifact-manage-pub-1'));
+    const listCalls = () => mockList.mock.calls.filter(c => (c[0] as { facets?: boolean }).facets !== true).length;
+    const listBefore = listCalls();
+
+    fireEvent.click(screen.getByTestId('stub-panel-set-passphrase-pub-1'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('published-artifact-card-access-pub-1').getAttribute('data-access')).toBe('passphrase')
+    );
+    // The dialog (and the show-once passphrase in its panel) survives, and the page is not refetched.
+    expect(screen.getByTestId('stub-panel-pub-1')).not.toBeNull();
+    expect(listCalls()).toBe(listBefore);
+  });
+
+  it('labels the Type facet chips with names for people, and still filters on the raw kind', async () => {
+    mockList.mockResolvedValue(
+      page([bundleRow], {
+        facets: { kind: { bundle: 2, reply: 1, fabfile: 1 }, visibility: {}, gate: {}, comments: 0, tag: {} },
+      })
+    );
+    renderTab();
+    await screen.findByTestId('published-artifacts-facet-kind-bundle');
+
+    const text = (kind: string) =>
+      screen.getByTestId(`published-artifacts-facet-kind-${kind}`).closest('div')?.textContent;
+    expect(text('bundle')).toBe('Bundle 2');
+    expect(text('reply')).toBe('Reply 1');
+    expect(text('fabfile')).toBe('File 1');
+
+    fireEvent.click(screen.getByTestId('published-artifacts-facet-kind-fabfile'));
+    await waitFor(() =>
+      expect(
+        mockList.mock.calls
+          .map(c => c[0] as Record<string, unknown>)
+          .filter(c => c.facets !== true)
+          .pop()?.kind
+      ).toBe('fabfile')
+    );
+  });
+
+  it('shows the same human label in the settings panel source chip', async () => {
+    mockList.mockResolvedValue(page([{ ...bundleRow, source: { kind: 'fabfile' } }]));
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    expandRow('pub-1');
+    expect(screen.getByTestId('published-artifact-settings-pub-1').textContent).toContain('File');
+  });
+
+  it('switches the row layout on the list width, not the viewport', async () => {
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    const css = Array.from(document.querySelectorAll('style'))
+      .map(s => s.textContent ?? '')
+      .join('\n');
+    // The list wrapper is the size container, and the wide layout hangs off it.
+    expect(css).toMatch(/container-type:\s*inline-size/);
+    expect(css).toMatch(/@container \(min-width:\s*720px\)/);
+    // No row rule is still keyed to the md viewport breakpoint.
+    const rowRules = css.split('}').filter(r => r.includes('grid-template-areas'));
+    expect(rowRules.length).toBeGreaterThan(0);
+    expect(rowRules.some(r => /@media/.test(r))).toBe(false);
   });
 });
