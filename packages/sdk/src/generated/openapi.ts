@@ -7345,6 +7345,37 @@ export interface operations {
           'application/json': components['schemas']['generateMusicResponse422'];
         };
       };
+      /** @description The API key exceeded its rate limit, or the provider stayed at its concurrency limit for longer than the request could wait. `Retry-After` says when to try again; reserved credits are refunded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Seconds to wait before retrying. */
+          'Retry-After'?: string;
+          /** @description RFC 9745: when this endpoint was deprecated. Always `@1792022400` on this endpoint. */
+          Deprecation?: string;
+          /** @description RFC 8594: the first day this endpoint may stop being served. Always `Fri, 15 Jan 2027 00:00:00 GMT` on this endpoint. */
+          Sunset?: string;
+          /** @description RFC 8288: the replacement endpoint (`rel="successor-version"`). Always `</api/v1/music-generations>; rel="successor-version"` on this endpoint. */
+          Link?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
       /** @description The provider failed to generate the track; reserved credits are refunded. */
       502: {
         headers: {
@@ -7621,6 +7652,31 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['generateSoundEffectResponse422'];
+        };
+      };
+      /** @description The API key exceeded its rate limit, or the provider stayed at its concurrency limit for longer than the request could wait. `Retry-After` says when to try again; reserved credits are refunded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Seconds to wait before retrying. */
+          'Retry-After'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
         };
       };
       /** @description The provider failed to generate the effect; reserved credits are refunded. */

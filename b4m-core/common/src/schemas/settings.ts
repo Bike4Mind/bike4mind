@@ -513,6 +513,8 @@ export const SettingKeySchema = z.enum([
   'enableVoiceSession',
   'voiceV2Enabled',
   'elevenLabsServerApiKey',
+  'elevenLabsMusicConcurrencyLimit',
+  'elevenLabsSoundConcurrencyLimit',
   'voiceSessionAiVoice',
   'voiceSessionTranscriptionModel',
   'voiceSessionVadType',
@@ -1858,6 +1860,8 @@ export const API_SERVICE_GROUPS = {
       { key: 'voiceSessionVadEagerness', order: 5 },
       { key: 'voiceV2Enabled', order: 6 },
       { key: 'elevenLabsServerApiKey', order: 7 },
+      { key: 'elevenLabsMusicConcurrencyLimit', order: 8 },
+      { key: 'elevenLabsSoundConcurrencyLimit', order: 9 },
     ],
   },
   XAI: {
@@ -4736,6 +4740,34 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.VOICE_SESSION.id,
     order: 11,
+  }),
+  // Defaults mirror the ElevenLabs plan's concurrency caps; raise them when the plan is upgraded.
+  // Read by runElevenLabsWithCapacity in @bike4mind/services.
+  elevenLabsMusicConcurrencyLimit: makeNumberSetting({
+    key: 'elevenLabsMusicConcurrencyLimit',
+    name: 'ElevenLabs Music Concurrency Limit',
+    defaultValue: 2,
+    min: 1,
+    max: 100,
+    int: true,
+    description:
+      'How many music generations from the music API may run at once on the server ElevenLabs key, across all users (async music generation jobs, which chat uses, are not counted). Match it to the ElevenLabs plan: extra requests wait briefly for a free slot instead of failing with a provider 429. Requests on a personal ElevenLabs key are not counted.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.VOICE_SESSION.id,
+    order: 12,
+  }),
+  elevenLabsSoundConcurrencyLimit: makeNumberSetting({
+    key: 'elevenLabsSoundConcurrencyLimit',
+    name: 'ElevenLabs Sound-Effects Concurrency Limit',
+    defaultValue: 5,
+    min: 1,
+    max: 100,
+    int: true,
+    description:
+      'How many sound-effect generations from the sound-effects API and chat may run at once on the server ElevenLabs key, across all users. Match it to the ElevenLabs plan: extra requests wait briefly for a free slot instead of failing with a provider 429. Requests on a personal ElevenLabs key are not counted.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.VOICE_SESSION.id,
+    order: 13,
   }),
   voiceSessionAiVoice: makeStringSetting({
     key: 'voiceSessionAiVoice',
