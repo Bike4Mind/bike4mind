@@ -343,6 +343,23 @@ describe('Hearth models + MongoHearthStore', () => {
       expect(await HearthChannel.exists({ _id: channel._id })).not.toBeNull();
     });
 
+    it('rolls back an unused row that lost the re-count and refuses instead of returning it', async () => {
+      await seedChannels(USER, MAX_HEARTH_CHANNELS_PER_USER - 1);
+      let createdId: unknown;
+      const realCreate = HearthChannel.create.bind(HearthChannel);
+      const create = vi.spyOn(HearthChannel, 'create').mockImplementationOnce((async (doc: unknown) => {
+        const row = await realCreate(doc as never);
+        createdId = row._id;
+        await HearthChannel.insertMany([{ userId: new Types.ObjectId(USER), name: 'filler' }]);
+        return row;
+      }) as never);
+
+      await capRefusal(hearthRepository.createChannel(USER, 'loser'));
+      create.mockRestore();
+
+      expect(await HearthChannel.exists({ _id: createdId })).toBeNull();
+    });
+
     it('a storage failure on create propagates unchanged, not as a cap refusal', async () => {
       const boom = new Error('storage down');
       const create = vi.spyOn(HearthChannel, 'create').mockRejectedValueOnce(boom as never);
