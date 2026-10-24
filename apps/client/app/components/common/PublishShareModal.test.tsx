@@ -1403,3 +1403,84 @@ describe('PublishShareModal - access options match the Live Artifacts badge', ()
     );
   });
 });
+
+describe('PublishShareModal - helper text contrast', () => {
+  /** Helper text is dimmed by a theme text token, never `opacity`, which stacks on the token and drops it below AA. */
+  const expectTokenDimmed = (el: HTMLElement, token: 'secondary' | 'tertiary') => {
+    const style = getComputedStyle(el);
+    expect(['', '1']).toContain(style.opacity);
+    expect(style.color).toContain(`--joy-palette-text-${token}`);
+  };
+
+  const renderModal = (props: Partial<React.ComponentProps<typeof PublishShareModal>> = {}) =>
+    render(
+      <Wrapper>
+        <PublishShareModal
+          open
+          onClose={() => {}}
+          publish={noopPublish}
+          title="My artifact"
+          defaultVisibility="public"
+          {...props}
+        />
+      </Wrapper>
+    );
+
+  it('dims the intro, option hints and toggle explanations with a text token, not opacity', async () => {
+    renderModal({
+      resolveExisting: () =>
+        Promise.resolve({
+          title: 'My artifact',
+          versionsCount: 2,
+          slug: 's',
+          visibility: 'public',
+          commentPolicy: 'open',
+        }),
+    });
+    await screen.findByTestId('publish-share-mode-update');
+
+    expectTokenDimmed(screen.getByTestId('publish-share-intro'), 'secondary');
+    expectTokenDimmed(screen.getByText(/Currently 2 versions/), 'tertiary');
+    expectTokenDimmed(screen.getByTestId('publish-share-gate-preserved'), 'tertiary');
+    expectTokenDimmed(
+      within(screen.getByTestId('publish-share-visibility-public')).getByText(/Anyone you send the link to/),
+      'tertiary'
+    );
+    expectTokenDimmed(screen.getByText('Viewers just open the link'), 'tertiary');
+    expectTokenDimmed(
+      within(screen.getByTestId('publish-share-discoverable-text')).getByText(/Off by default/),
+      'tertiary'
+    );
+    expectTokenDimmed(screen.getByText(/Viewers can leave feedback/), 'tertiary');
+
+    fireEvent.click(radio('passphrase')!);
+    expectTokenDimmed(screen.getByText(/Share it however you like/), 'tertiary');
+    fireEvent.click(radio('domain')!);
+    expectTokenDimmed(screen.getByText(/Viewers sign in \(or sign up free\)/), 'tertiary');
+  });
+
+  it('dims the shared-phase intro and private-link hint with a text token, not opacity', async () => {
+    (api.get as unknown as ReturnType<typeof vi.fn>).mockReset().mockImplementation((url: string) =>
+      Promise.resolve({
+        data: url.endsWith('/share-token') ? { shareToken: 'TOK', shareLinks: [] } : { artifact: { accessGate: null } },
+      })
+    );
+    renderModal({
+      defaultVisibility: 'private',
+      publish: vi.fn().mockResolvedValue({
+        publicId: 'live-1',
+        url: '/p/u/u1/s',
+        tier: 'user',
+        scopeId: 'u1',
+        slug: 's',
+        visibility: 'private',
+        publishedAt: '2026-01-01T00:00:00.000Z',
+      }),
+    });
+    fireEvent.click(screen.getByTestId('publish-share-create'));
+    const hint = await screen.findByTestId('publish-share-token-hint');
+
+    expectTokenDimmed(hint, 'tertiary');
+    expectTokenDimmed(screen.getByTestId('publish-share-intro'), 'secondary');
+  });
+});

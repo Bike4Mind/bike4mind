@@ -240,7 +240,7 @@ export function AccessGateEditor({
           ref={hintRef}
           tabIndex={-1}
           level="body-xs"
-          sx={{ opacity: 0.75 }}
+          textColor="text.tertiary"
           data-testid={`${testIdPrefix}-needs-public`}
         >
           To add a passphrase or domain restriction here, set visibility to Public.
@@ -393,7 +393,7 @@ export function AccessGateEditor({
                   </Button>
                 </Tooltip>
               </Box>
-              <Typography level="body-xs" sx={{ opacity: 0.75, mt: 0.5 }}>
+              <Typography level="body-xs" textColor="text.tertiary" sx={{ mt: 0.5 }}>
                 {hasLiveGate
                   ? 'A passphrase is set. It cannot be shown or recovered - to change it, enter or generate a new one, which stops the old one working.'
                   : 'Stored hashed - it cannot be shown again after you apply it, so copy it now if you need to share it.'}
@@ -432,7 +432,7 @@ export function AccessGateEditor({
                   {copied ? <CheckIcon sx={{ fontSize: 16 }} /> : <ContentCopyIcon sx={{ fontSize: 16 }} />}
                 </IconButton>
               </Box>
-              <Typography level="body-xs" sx={{ opacity: 0.75, mt: 0.5 }}>
+              <Typography level="body-xs" textColor="text.tertiary" sx={{ mt: 0.5 }}>
                 This will not be shown again. To get a new one, set another passphrase.
               </Typography>
             </Sheet>
