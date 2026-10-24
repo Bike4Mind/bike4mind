@@ -42,6 +42,30 @@ describe('toPublicFeedVideo', () => {
     });
   });
 
+  it('reads the fields of a Mongoose subdocument, whose values sit behind prototype accessors', () => {
+    vi.stubEnv('APP_URL', 'https://app.example.com/');
+    const subdocument = Object.create({
+      get landscapeUrl() {
+        return upload('modals/wide.mp4');
+      },
+      get landscapePosterUrl() {
+        return upload('modals/wide.jpg');
+      },
+      get portraitUrl() {
+        return 'https://d111.cloudfront.net/tall.mp4';
+      },
+      get portraitPosterUrl() {
+        return null;
+      },
+    });
+    expect(toPublicFeedVideo('n1', subdocument, BUCKET)).toEqual({
+      landscape_url: 'https://app.example.com/api/v1/whats-new/media/n1/landscape',
+      landscape_poster_url: 'https://app.example.com/api/v1/whats-new/media/n1/landscape-poster',
+      portrait_url: 'https://d111.cloudfront.net/tall.mp4',
+      portrait_poster_url: null,
+    });
+  });
+
   it('serves the media route relative to the reader when APP_URL is unset', () => {
     vi.stubEnv('APP_URL', '');
     expect(toPublicFeedVideo('n1', video, BUCKET)).toEqual({
