@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes/themePrimitives';
@@ -57,9 +57,18 @@ vi.mock('@client/app/utils/printToPdf', () => ({
   printHtmlForPdf: (...a: unknown[]) => mockPrint(...a),
 }));
 
-// Stub the panel so this test targets the toggle wiring, not the panel's fetch.
+// Stub the panel so this test targets the toggle wiring, not the panel's fetch. The buttons stand
+// in for a gate apply in the real AccessGateEditor.
 vi.mock('@client/app/components/common/ManageSharingPanel', () => ({
-  ManageSharingPanel: (p: { publicId: string }) => <div data-testid={`stub-panel-${p.publicId}`} />,
+  ManageSharingPanel: (p: { publicId: string; onGateChange?: (gate: { kind: 'passphrase' } | null) => void }) => (
+    <div data-testid={`stub-panel-${p.publicId}`}>
+      <button
+        data-testid={`stub-panel-set-passphrase-${p.publicId}`}
+        onClick={() => p.onGateChange?.({ kind: 'passphrase' })}
+      />
+      <button data-testid={`stub-panel-clear-gate-${p.publicId}`} onClick={() => p.onGateChange?.(null)} />
+    </div>
+  ),
 }));
 
 import PublishedArtifactsTabContent from './PublishedArtifactsTabContent';
@@ -837,6 +846,20 @@ describe('PublishedArtifactsTabContent - tag review fixes', () => {
 });
 
 describe('PublishedArtifactsTabContent - visibility choices follow the scope tier', () => {
+  it('keeps an unexpected stored visibility selectable when the row is expanded', async () => {
+    mockList.mockResolvedValue(page([{ ...bundleRow, visibility: 'unlisted' }]));
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    expandRow('pub-1');
+
+    const select = screen.getByTestId('published-artifact-visibility-pub-1').querySelector('button');
+    expect(select?.textContent).toBe('unlisted');
+    if (!select) throw new Error('Visibility select did not render');
+    fireEvent.click(select);
+    expect(await screen.findByTestId('published-artifact-visibility-option-unlisted')).not.toBeNull();
+    expect(screen.getByTestId('published-artifact-visibility-option-private')).not.toBeNull();
+  });
+
   const teamRow = { ...replyRow, publicId: 'pub-t', tier: 'organization', scopeId: 'org1', visibility: 'organization' };
   const visibilitySelect = (publicId: string) =>
     screen.getByTestId(`published-artifact-visibility-${publicId}`).querySelector('button') as HTMLButtonElement;
@@ -878,4 +901,288 @@ describe('PublishedArtifactsTabContent - visibility choices follow the scope tie
     expect(await screen.findByTestId('published-artifact-visibility-option-private')).not.toBeNull();
     expect(screen.queryByTestId('published-artifact-visibility-option-organization')).toBeNull();
   });
+});
+
+describe('PublishedArtifactsTabContent - access badge and aligned columns', () => {
+  const lastQuery = () => {
+    const listCalls = mockList.mock.calls.map(c => c[0] as Record<string, unknown>).filter(c => c.facets !== true);
+    return listCalls[listCalls.length - 1];
+  };
+  const accessRows = [
+    { ...bundleRow, publicId: 'acc-public' },
+    { ...bundleRow, publicId: 'acc-pass', gateKind: 'passphrase' },
+    { ...bundleRow, publicId: 'acc-domain', gateKind: 'domain' },
+    { ...bundleRow, publicId: 'acc-org', tier: 'organization', visibility: 'organization' },
+    { ...bundleRow, publicId: 'acc-project', tier: 'project', visibility: 'project' },
+    { ...bundleRow, publicId: 'acc-private', visibility: 'private' },
+  ];
+
+  it('shows one access badge per row, naming each of the six states', async () => {
+    mockList.mockResolvedValue(page(accessRows));
+    renderTab();
+    await screen.findByTestId('published-artifact-access-acc-public');
+
+    const expected: Array<[string, string, string]> = [
+      ['acc-public', 'public', 'Public'],
+      ['acc-pass', 'passphrase', 'Passphrase'],
+      ['acc-domain', 'domain', 'Domain'],
+      ['acc-org', 'organization', 'Team'],
+      ['acc-project', 'project', 'Project'],
+      ['acc-private', 'private', 'Private'],
+    ];
+    for (const [id, access, label] of expected) {
+      const badge = screen.getByTestId(`published-artifact-access-${id}`);
+      expect(badge.getAttribute('data-access')).toBe(access);
+      expect(badge.textContent).toBe(label);
+      // Word and icon together: the state is never carried by color alone.
+      expect(badge.querySelector('svg')).not.toBeNull();
+    }
+  });
+
+  it('reads a passphrase link as Passphrase only - no separate Public chip or lock icon', async () => {
+    mockList.mockResolvedValue(page([{ ...bundleRow, gateKind: 'passphrase' }]));
+    renderTab();
+    await screen.findByTestId('published-artifact-access-pub-1');
+
+    const meta = screen.getByTestId('published-artifact-meta-pub-1');
+    expect(meta.textContent).toContain('Passphrase');
+    expect(meta.textContent).not.toContain('Public');
+    // The raw visibility word from the old chip is gone too.
+    expect(meta.textContent).not.toContain('public');
+    expect(meta.querySelector('[data-testid="LockIcon"]')).toBeNull();
+    expect(meta.querySelector('[data-testid="DomainIcon"]')).toBeNull();
+  });
+
+  it('keeps the versions column populated: a count for 2+ versions, a muted "1 version" otherwise', async () => {
+    mockList.mockResolvedValue(
+      page([
+        { ...bundleRow, publicId: 'v-many', versionsCount: 4 },
+        { ...bundleRow, publicId: 'v-one', versionsCount: 1 },
+        { ...bundleRow, publicId: 'v-unset', versionsCount: undefined },
+      ])
+    );
+    renderTab();
+    await screen.findByTestId('published-artifact-versions-v-many');
+
+    expect(screen.getByTestId('published-artifact-versions-v-many').textContent).toBe('4 versions');
+    expect(screen.getByTestId('published-artifact-versions-v-one').textContent).toBe('1 version');
+    expect(screen.getByTestId('published-artifact-versions-v-unset').textContent).toBe('1 version');
+  });
+
+  it('leaves the versions cell empty for a reply snapshot, which has no version history', async () => {
+    mockList.mockResolvedValue(page([replyRow]));
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-2');
+
+    expect(screen.queryByTestId('published-artifact-versions-pub-2')).toBeNull();
+    // The row still renders every other column.
+    expect(screen.getByTestId('published-artifact-access-pub-2')).not.toBeNull();
+    expect(screen.getByTestId('published-artifact-views-pub-2').textContent).toBe('0');
+  });
+
+  it('shows the view count and a short published date in their own cells', async () => {
+    mockList.mockResolvedValue(page([{ ...bundleRow, viewCount: 1234, publishedAt: '2020-03-05T12:00:00.000Z' }]));
+    renderTab();
+    await screen.findByTestId('published-artifact-views-pub-1');
+
+    expect(screen.getByTestId('published-artifact-views-pub-1').textContent).toBe('1234');
+    expect(screen.getByTestId('published-artifact-date-pub-1').textContent).toMatch(/2020/);
+  });
+
+  it('abbreviates a very large view count so it cannot outgrow its column', async () => {
+    mockList.mockResolvedValue(page([{ ...bundleRow, viewCount: 1_250_000 }]));
+    renderTab();
+    await screen.findByTestId('published-artifact-views-pub-1');
+
+    expect(screen.getByTestId('published-artifact-views-pub-1').textContent).not.toBe('1250000');
+    expect(screen.getByTestId('published-artifact-views-pub-1').getAttribute('title')).toBe('1250000 views');
+  });
+
+  it('keeps a four-digit view count exact and abbreviates from 10,000', async () => {
+    mockList.mockResolvedValue(
+      page([
+        { ...bundleRow, publicId: 'views-4', viewCount: 9_999 },
+        { ...bundleRow, publicId: 'views-5', viewCount: 10_000 },
+      ])
+    );
+    renderTab();
+    await screen.findByTestId('published-artifact-views-views-4');
+
+    expect(screen.getByTestId('published-artifact-views-views-4').textContent).toBe('9999');
+    const compact = screen.getByTestId('published-artifact-views-views-5').textContent;
+    expect(compact).not.toBe('10000');
+    expect(compact).toBe(new Intl.NumberFormat(undefined, { notation: 'compact' }).format(10_000));
+  });
+
+  it('labels the columns with a header row', async () => {
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+
+    const header = screen.getByTestId('published-artifacts-columns');
+    for (const word of ['Title', 'Access', 'Versions', 'Views', 'Published']) {
+      expect(header.textContent).toContain(word);
+    }
+    // The date cell is publishedAt; "Updated" would promise the updatedAt order of the
+    // Recently updated sort, which a rename or tag edit also moves.
+    expect(header.textContent).not.toContain('Updated');
+  });
+
+  it('groups the facet chips under Tags, Type, Access and Comments, with visibility and gate together', async () => {
+    mockList.mockResolvedValue(
+      page([bundleRow], {
+        facets: {
+          kind: { bundle: 5 },
+          visibility: { public: 4, private: 1 },
+          gate: { passphrase: 2, domain: 1 },
+          comments: 3,
+          tag: { northwind: 2 },
+        },
+      })
+    );
+    renderTab();
+    await screen.findByTestId('published-artifacts-facet-gate-passphrase');
+
+    const group = (id: string) => screen.getByTestId(`published-artifacts-facet-group-${id}`);
+    expect(group('tags').textContent).toContain('Tags');
+    expect(group('type').textContent).toContain('Type');
+    expect(group('comments').textContent).toContain('Comments');
+
+    const access = group('access');
+    expect(access.textContent).toContain('Access');
+    for (const id of ['visibility-public', 'visibility-private', 'gate-passphrase', 'gate-domain']) {
+      expect(access.querySelector(`[data-testid="published-artifacts-facet-${id}"]`)).not.toBeNull();
+    }
+    expect(access.querySelector('[data-testid="published-artifacts-facet-kind-bundle"]')).toBeNull();
+
+    // Same counts as before, now in the badge's own words and with its icons.
+    const passphrase = screen.getByTestId('published-artifacts-facet-gate-passphrase').closest('div');
+    expect(passphrase?.textContent).toBe('Passphrase 2');
+    expect(passphrase?.querySelector('svg')).not.toBeNull();
+    const priv = screen.getByTestId('published-artifacts-facet-visibility-private').closest('div');
+    expect(priv?.textContent).toBe('Private 1');
+    expect(priv?.querySelector('svg')).not.toBeNull();
+    // The Public filter counts gated pages too, unlike the badge, and says so.
+    expect(screen.getByTestId('published-artifacts-facet-visibility-public').getAttribute('title')).toMatch(
+      /including passphrase and domain gated/
+    );
+    // The group label already says Comments; the chip does not repeat it.
+    expect(screen.getByTestId('published-artifacts-facet-comments').closest('div')?.textContent).toBe('On 3');
+  });
+
+  it('omits a facet group that has no chips instead of showing an orphan label', async () => {
+    mockList.mockResolvedValue(
+      page([bundleRow], { facets: { kind: { bundle: 1 }, visibility: {}, gate: {}, comments: 0, tag: {} } })
+    );
+    renderTab();
+    await screen.findByTestId('published-artifacts-facet-kind-bundle');
+
+    expect(screen.getByTestId('published-artifacts-facet-group-type')).not.toBeNull();
+    for (const id of ['tags', 'access', 'comments']) {
+      expect(screen.queryByTestId(`published-artifacts-facet-group-${id}`)).toBeNull();
+    }
+  });
+
+  it('still filters on a gate chip and on a visibility chip', async () => {
+    mockList.mockResolvedValue(
+      page([bundleRow], {
+        facets: { kind: {}, visibility: { public: 3 }, gate: { passphrase: 1 }, comments: 0, tag: {} },
+      })
+    );
+    renderTab();
+    await screen.findByTestId('published-artifacts-facet-gate-passphrase');
+
+    fireEvent.click(screen.getByTestId('published-artifacts-facet-gate-passphrase'));
+    await waitFor(() => expect(lastQuery().gate).toBe('passphrase'));
+
+    fireEvent.click(screen.getByTestId('published-artifacts-facet-visibility-public'));
+    await waitFor(() => expect(lastQuery().visibility).toBe('public'));
+  });
+
+  it('still filters on the comments chip', async () => {
+    mockList.mockResolvedValue(
+      page([bundleRow], { facets: { kind: {}, visibility: {}, gate: {}, comments: 2, tag: {} } })
+    );
+    renderTab();
+    await screen.findByTestId('published-artifacts-facet-comments');
+
+    fireEvent.click(screen.getByTestId('published-artifacts-facet-comments'));
+    await waitFor(() => expect(lastQuery().comments).toBe('on'));
+  });
+
+  it('keeps the gate visible on a private row, which the Passphrase filter also returns', async () => {
+    // The server enforces a gate on a non-public page's private links, and counts it under the
+    // gate facet - so the row must not read as a bare Private chip once that filter is on.
+    mockList.mockResolvedValue(page([{ ...bundleRow, visibility: 'private', gateKind: 'passphrase' }]));
+    renderTab();
+    const badge = await screen.findByTestId('published-artifact-access-pub-1');
+
+    expect(badge.textContent).toBe('Private');
+    expect(badge.getAttribute('data-link-gate')).toBe('passphrase');
+    expect(badge.querySelector('[data-testid="KeyIcon"]')).not.toBeNull();
+    expect(badge.getAttribute('title')).toMatch(/Private links also need the passphrase/);
+  });
+
+  it('moves the badge as soon as the sharing panel changes the gate, without refetching the page', async () => {
+    renderTab();
+    await screen.findByTestId('published-artifact-access-pub-1');
+    expandRow('pub-1');
+    fireEvent.click(screen.getByTestId('published-artifact-manage-pub-1'));
+    const listCalls = () => mockList.mock.calls.filter(c => (c[0] as { facets?: boolean }).facets !== true).length;
+    const facetCalls = () => mockList.mock.calls.filter(c => (c[0] as { facets?: boolean }).facets === true).length;
+    const listBefore = listCalls();
+    const facetsBefore = facetCalls();
+
+    fireEvent.click(screen.getByTestId('stub-panel-set-passphrase-pub-1'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('published-artifact-access-pub-1').getAttribute('data-access')).toBe('passphrase')
+    );
+    // The open panel stays mounted (its show-once passphrase lives there), and the counts refresh.
+    expect(screen.getByTestId('stub-panel-pub-1')).not.toBeNull();
+    await waitFor(() => expect(facetCalls()).toBeGreaterThan(facetsBefore));
+    expect(listCalls()).toBe(listBefore);
+
+    fireEvent.click(screen.getByTestId('stub-panel-clear-gate-pub-1'));
+    await waitFor(() =>
+      expect(screen.getByTestId('published-artifact-access-pub-1').getAttribute('data-access')).toBe('public')
+    );
+  });
+
+  it.each([
+    [undefined, 'passphrase', 'set-passphrase'],
+    ['passphrase', 'public', 'clear-gate'],
+  ] as const)(
+    'keeps a gate edit from %s to %s when an older list response arrives',
+    async (gateKind, access, action) => {
+      const oldPage = page([{ ...bundleRow, gateKind }]);
+      const pendingList = Promise.withResolvers<ReturnType<typeof page>>();
+      let listLoads = 0;
+      mockList.mockImplementation((query: { facets?: boolean }) => {
+        if (query.facets) return Promise.resolve(page([]));
+        listLoads += 1;
+        return listLoads === 1 ? Promise.resolve(oldPage) : pendingList.promise;
+      });
+      renderTab();
+      await screen.findByTestId('published-artifact-access-pub-1');
+      expandRow('pub-1');
+      fireEvent.click(screen.getByTestId('published-artifact-manage-pub-1'));
+
+      // Another row setting can start a list refresh while the gate editor remains usable.
+      fireEvent.click(screen.getByTestId('published-artifact-comments-pub-1').querySelector('input')!);
+      await waitFor(() => expect(listLoads).toBe(2));
+      fireEvent.click(screen.getByTestId(`stub-panel-${action}-pub-1`));
+      await waitFor(() =>
+        expect(screen.getByTestId('published-artifact-access-pub-1').getAttribute('data-access')).toBe(access)
+      );
+
+      await act(async () => {
+        pendingList.resolve(oldPage);
+        await pendingList.promise;
+        await new Promise(resolve => setTimeout(resolve, 0));
+      });
+      expect(screen.getByTestId('published-artifact-access-pub-1').getAttribute('data-access')).toBe(access);
+      expect(screen.getByTestId('stub-panel-pub-1')).not.toBeNull();
+      expect(listLoads).toBe(2);
+    }
+  );
 });
