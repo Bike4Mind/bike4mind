@@ -12,6 +12,7 @@ import { buildDevWafRuleJson, getDevWafMeta, parseWafBlockedIps } from './wafPol
 import { WAF_REDACTED_HEADERS } from './wafRedaction';
 import { secrets } from './secrets';
 import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
+import { buildDlqAgeMetricQueries } from '@bike4mind/infra';
 
 // WAF is disabled by default. Enable via ENABLE_WAF=true environment variable.
 // For production and dev, set ENABLE_WAF=true in GitHub Variables.
@@ -321,7 +322,7 @@ if (isWafEnabled && $app.stage === 'production' && wafAiRateLimitAlarmTopic && w
       period: 60,
       statistic: 'Maximum',
       threshold: 0,
-      treatMissingData: 'notBreaching',
+      treatMissingData: 'ignore',
       dimensions: { QueueName: wafAlarmDlq.name },
       alarmActions: [wafOobAlarmTopic.arn],
       tags: { Application: 'WAF', Severity: 'Critical', MonitoringType: 'DLQ' },
@@ -339,13 +340,11 @@ if (isWafEnabled && $app.stage === 'production' && wafAiRateLimitAlarmTopic && w
         'WafAlarmSlackHandlerDlq oldest message exceeds 1 hour -- WAF alert delivery to Slack has been failing for an extended period.',
       comparisonOperator: 'GreaterThanThreshold',
       evaluationPeriods: 1,
-      metricName: 'ApproximateAgeOfOldestMessage',
-      namespace: 'AWS/SQS',
-      period: 60,
-      statistic: 'Maximum',
       threshold: 3600,
-      treatMissingData: 'notBreaching',
-      dimensions: { QueueName: wafAlarmDlq.name },
+      treatMissingData: 'ignore',
+      // Same IF(visible > 0, age, 0) metric math as the fleet age alarms; see
+      // b4m-core/infra/src/dlqAlarmSpecs.ts for why and its residuals.
+      metricQueries: buildDlqAgeMetricQueries(60, { QueueName: wafAlarmDlq.name }),
       alarmActions: [wafOobAlarmTopic.arn],
       tags: { Application: 'WAF', Severity: 'High', MonitoringType: 'DLQ' },
     },
