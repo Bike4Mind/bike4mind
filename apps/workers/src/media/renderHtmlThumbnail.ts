@@ -3,10 +3,12 @@ import type { BrowserContext, BrowserContextOptions } from 'playwright-core';
 
 /**
  * Screenshot an untrusted HTML document into a small WebP. Used for owner-only publish thumbnails
- * (queueHandlers/publishThumbnail.ts); the browser itself comes from `openContext`, so the Lambda
- * passes @sparticuz/chromium (launchLambdaChromium.ts) and a local smoke run can pass Playwright's.
+ * by the renderer function (publishThumbnailRenderer.ts); the browser itself comes from
+ * `openContext`, so the Lambda passes @sparticuz/chromium (launchLambdaChromium.ts) and a local
+ * smoke run can pass Playwright's.
  *
  * Isolation, outermost first:
+ *  - a separate function with no application credentials or permissions (infra/queues.ts);
  *  - a fresh browser context: no cookies, storage, credentials or service workers, downloads off;
  *  - every request is aborted unless it is a GET for one of `allowedScriptUrls` exactly (the
  *    blessed library scripts), WebSockets are closed, and WebRTC is removed from every frame;

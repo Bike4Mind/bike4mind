@@ -10,9 +10,10 @@ import { PUBLISH_HOST } from './validateBundle';
  * (apps/workers/src/queueHandlers/publishThumbnail.ts).
  *
  * Built straight from storage with the worker's own read access, so a gated or private artifact
- * is never exposed through any URL to be screenshotted: no serve route, no signed link, no new
- * token. Every bundle asset is inlined (renderSandboxedBundle's `inline` mode, the gated-viewer
- * model), which leaves the blessed library scripts as the only thing the render could fetch.
+ * is never exposed through any URL to be screenshotted: no serve route, no link into the artifact's
+ * own files, no new token. The renderer function receives only this built document. Every bundle
+ * asset is inlined (renderSandboxedBundle's `inline` mode, the gated-viewer model), which leaves
+ * the blessed library scripts as the only thing the render could fetch.
  *
  * A baked sign-up gate is rendered dismissed, as the owner sees the page: the thumbnail depicts
  * the artifact, not the anonymous-viewer prompt. Media that is always streamed (video, audio, PDF)

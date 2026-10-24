@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { buildThumbnailDocument } from '@server/services/publish/buildThumbnailDocument';
 import { PublishedArtifact, recordPublishedArtifactThumbnail } from '@bike4mind/database';
@@ -10,16 +11,30 @@ import {
   type PublishThumbnailJob,
 } from '@bike4mind/server-utils/utils/publishThumbnails';
 import { PUBLISH_HOST } from '@server/services/publish/validateBundle';
-import { openLambdaChromiumContext } from '@workers/media/launchLambdaChromium';
+import { invokeThumbnailRenderer, ThumbnailRendererError } from '@workers/media/invokeThumbnailRenderer';
 import {
-  renderHtmlThumbnail,
-  ThumbnailRenderTimeoutError,
-  type OpenThumbnailContext,
-} from '@workers/media/renderHtmlThumbnail';
+  MAX_THUMBNAIL_DOCUMENT_BYTES,
+  MAX_THUMBNAIL_IMAGE_BYTES,
+  isWebp,
+  type ThumbnailRenderRequest,
+  type ThumbnailRenderResponse,
+} from '@workers/media/thumbnailRendererContract';
 
 const THUMBNAIL_CACHE_CONTROL = 'private, max-age=31536000, immutable';
 
-export type PublishThumbnailOutcome = 'rendered' | 'missing' | 'unsupported' | 'superseded' | 'timed-out' | 'discarded';
+/**
+ * Where the document waits for the renderer to fetch it. Under `drafts/` so the bucket's 1-day
+ * expire-drafts rule (infra/buckets.ts) reaps any copy the delete below misses; a draft id is a
+ * UUID, so this segment never collides with a real draft.
+ */
+export const THUMBNAIL_STAGING_PREFIX = 'drafts/thumbnail-renders/';
+/** Lifetime of the renderer's link to the staged document (s); it is fetched at invoke start. */
+const STAGED_DOCUMENT_URL_TTL_SECONDS = 5 * 60;
+
+export type PublishThumbnailOutcome =
+  'rendered' | 'missing' | 'unsupported' | 'superseded' | 'timed-out' | 'too-large' | 'discarded';
+
+export type RenderThumbnail = (request: ThumbnailRenderRequest) => Promise<ThumbnailRenderResponse>;
 
 interface ThumbnailArtifactLean {
   publicId: string;
@@ -33,16 +48,22 @@ interface ThumbnailArtifactLean {
 /**
  * Render and store one owner-only thumbnail (job contract: packages/server-utils/src/utils/publishThumbnails.ts).
  *
+ * This handler holds the access (database, private bucket) and never runs page code. It builds the
+ * fully inlined document, stages it, and has the renderer function - which has no application
+ * credentials or permissions (media/publishThumbnailRenderer.ts) - turn it into a WebP, which it
+ * then validates, stores and records.
+ *
  * Retry semantics, per the dispatchWithLogger contract: anything that says nothing about the
- * artifact itself - the browser failing to launch, storage or the database erroring - throws, so
- * SQS redelivers and eventually dead-letters it. Outcomes that a retry cannot change are consumed:
- * the artifact is gone or not a bundle, a newer version superseded the job, or the page wedged the
- * renderer past its deadline (an author's busy loop would do that every time).
+ * artifact itself - the renderer failing or answering badly, storage or the database erroring -
+ * throws, so SQS redelivers and eventually dead-letters it. Outcomes that a retry cannot change are
+ * consumed: the artifact is gone or not a bundle, a newer version superseded the job, the document
+ * is too large to render, or the page wedged the renderer past its deadline (an author's busy loop
+ * would do that every time).
  */
 export async function processPublishThumbnailJob(
   job: PublishThumbnailJob,
   logger: Pick<Logger, 'info' | 'warn'>,
-  openContext: OpenThumbnailContext = openLambdaChromiumContext
+  render: RenderThumbnail = invokeThumbnailRenderer
 ): Promise<PublishThumbnailOutcome> {
   const artifact = await PublishedArtifact.findOne({ publicId: job.publicId, deletedAt: null })
     .select('publicId source storageKeyPrefix sha256Index manifest moderationStatus')
@@ -66,19 +87,33 @@ export async function processPublishThumbnailJob(
     logger.info(`[publishThumbnail] ${job.publicId} rendering without ${document.droppedAssets.length} asset(s)`);
   }
 
-  let image: Buffer;
+  const documentBytes = Buffer.from(document.srcdoc, 'utf-8');
+  if (documentBytes.length > MAX_THUMBNAIL_DOCUMENT_BYTES) {
+    logger.warn(`[publishThumbnail] ${job.publicId} document is ${documentBytes.length} bytes; not rendering it`);
+    return 'too-large';
+  }
+
+  const stagingKey = `${THUMBNAIL_STAGING_PREFIX}${randomUUID()}.html`;
+  await storage.upload(documentBytes, stagingKey, { ContentType: 'text/html; charset=utf-8' });
+  let response: ThumbnailRenderResponse;
   try {
-    image = await renderHtmlThumbnail({
-      srcdoc: document.srcdoc,
-      allowedScriptUrls: document.allowedScriptUrls,
-      openContext,
+    const documentUrl = await storage.getSignedUrl(stagingKey, 'get', { expiresIn: STAGED_DOCUMENT_URL_TTL_SECONDS });
+    response = await render({ documentUrl, allowedScriptUrls: document.allowedScriptUrls });
+  } finally {
+    await storage.delete(stagingKey).catch((err: unknown) => {
+      const reason = err instanceof Error ? err.message : String(err);
+      logger.warn(`[publishThumbnail] ${job.publicId} staged document left for the drafts expiry: ${reason}`);
     });
-  } catch (err) {
-    if (err instanceof ThumbnailRenderTimeoutError) {
-      logger.warn(`[publishThumbnail] ${job.publicId} render timed out; keeping the previous thumbnail`);
-      return 'timed-out';
-    }
-    throw err;
+  }
+
+  if (response.status === 'timed-out') {
+    logger.warn(`[publishThumbnail] ${job.publicId} render timed out; keeping the previous thumbnail`);
+    return 'timed-out';
+  }
+  // The renderer is the untrusted side of this call: store nothing but a bounded WebP.
+  const image = Buffer.from(response.imageBase64, 'base64');
+  if (image.length > MAX_THUMBNAIL_IMAGE_BYTES || !isWebp(image)) {
+    throw new ThumbnailRendererError(`thumbnail renderer returned ${image.length} bytes that are not a usable WebP`);
   }
 
   const key = publishThumbnailKey(job.publicId, job.versionId);
@@ -92,8 +127,15 @@ export async function processPublishThumbnailJob(
     renderedAt: new Date(),
   });
   if (!recorded) {
-    // Published over or deleted mid-render: nothing points at this object, so do not leave it behind.
-    await storage.delete(key).catch(() => undefined);
+    // Published over or deleted mid-render. A late re-render of a version the artifact has since
+    // left writes the same key the record may still show until the newer render lands, so only
+    // delete the upload when nothing points at it.
+    const stillShown = await PublishedArtifact.exists({
+      publicId: job.publicId,
+      deletedAt: null,
+      'thumbnail.key': key,
+    });
+    if (!stillShown) await storage.delete(key).catch(() => undefined);
     return 'discarded';
   }
   if (recorded.replacedKey && isPublishThumbnailKeyFor(job.publicId, recorded.replacedKey)) {

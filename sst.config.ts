@@ -65,8 +65,8 @@ export default $config({
     //    `await import('@huggingface/transformers')` never runs. Without this,
     //    esbuild fails every voyageai-bundling Function with
     //    `Could not resolve "@huggingface/transformers"`.
-    //  - playwright-core: only the publish-thumbnail Function imports it, and
-    //    that Function `install`s it (infra/queues.ts). Listed here because its
+    //  - playwright-core: only the PublishThumbnailRenderer Function imports it,
+    //    and that Function `install`s it (infra/queues.ts). Listed here because its
     //    core bundle requires chromium-bidi lazily, which does not resolve when
     //    bundled, and scripts/check-lambda-bundle.mjs reads only this list.
     // (Registered before any Function is created so the transform applies to all.)

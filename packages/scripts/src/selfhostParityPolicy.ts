@@ -155,6 +155,11 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     '7fd2b40ddb22e4265c76224cd77f1cef0bf20dff5af7cae37d3b81a3994c315a'
   ),
   gap('function:infra/mcp.ts:mcpHandler', 'e3bfed090995364d360c725c2215d1295cff7f6e64722943495293d1899b6334'),
+  hostedOnly(
+    'function:infra/queues.ts:PublishThumbnailRenderer',
+    'e146492579f79a754d05fc7cc3c33d106832038ad0ee18126bcd1fec336f8314',
+    'Renders publish thumbnails for the hosted-only publishThumbnailQueue, invoked synchronously by its handler; it packages a Lambda-only headless Chromium the self-host worker image does not ship.'
+  ),
   gap(
     'logSubscription:infra/logMonitor.ts:createLogSubscriptions()',
     '235e9ebbdccd1202b354d558a713998832b152cf9093cb995f23e12e2c091997',
@@ -521,8 +526,9 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   hostedOnly(
     'queue:infra/queues.ts:publishThumbnailQueue',
-    '5de8a1aa0e5c959b31b09b323e8e7a88503c73056d922a65395ae4100e57ce72',
-    'Owner-only publish thumbnails render in a Lambda-packaged headless Chromium; the self-host worker image ships no browser, so publish skips the enqueue and cards keep their generated cover.'
+    'b0d6fe4ecd4ae79b88939db259082881e4b0f40a07f1e71036efb9aa6260cc23',
+    'Owner-only publish thumbnails render in a Lambda-packaged headless Chromium; the self-host worker image ships no browser, so publish skips the enqueue and cards keep their generated cover.',
+    ['lambda:InvokeFunction']
   ),
   broker(
     'queue:infra/queues.ts:publishThumbnailQueueDLQ',

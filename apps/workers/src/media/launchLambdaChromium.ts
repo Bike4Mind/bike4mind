@@ -10,8 +10,8 @@ const DROPPED_SPARTICUZ_ARGS = new Set(['--disable-web-security', '--allow-runni
 
 /**
  * Environment the browser process inherits. Playwright passes the whole parent environment by
- * default, which on Lambda carries the role credentials and the key to the linked secrets; the
- * renderer needs none of that, only what @sparticuz/chromium sets up for fonts and its libraries.
+ * default, which on Lambda carries the function's role credentials; the browser needs none of
+ * that, only what @sparticuz/chromium sets up for fonts and its libraries.
  */
 const BROWSER_ENV_KEYS = ['HOME', 'TMPDIR', 'PATH', 'FONTCONFIG_PATH', 'LD_LIBRARY_PATH'];
 

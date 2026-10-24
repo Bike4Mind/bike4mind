@@ -767,13 +767,38 @@ const questExportQueueSubscription = questExportQueue.subscribe(
 
 // Publish Thumbnail Queue
 // Owner-only thumbnails of published bundles: one message per artifact version, enqueued by publish
-// finalize, restore and AI revise (enqueuePublishThumbnail in packages/server-utils). The handler
-// renders the stored bundle in headless Chromium (@sparticuz/chromium) and writes a WebP to the
-// private published-artifacts bucket. Hosted only - the self-host worker image ships no browser
-// (see selfhostParityPolicy.ts and manifestCoverage.test.ts).
+// finalize, restore and AI revise (enqueuePublishThumbnail in packages/server-utils). Hosted only -
+// the self-host worker image ships no browser (see selfhostParityPolicy.ts and
+// manifestCoverage.test.ts).
+//
+// Two functions. The queue handler (orchestrator) has the database and the private bucket: it
+// loads the artifact, checks the version, builds the fully inlined document, stages it under
+// drafts/ and invokes the renderer, then stores and records the WebP it gets back. The renderer
+// runs the page in headless Chromium (@sparticuz/chromium) and has no application credentials or
+// permissions: no link, no secrets, no VPC, no environment of its own, only the logging role. It reads
+// the staged document through a short-lived presigned link and returns the image inline.
+// infra/__tests__/publishThumbnailRenderer.test.ts holds both sides of that split.
+const publishThumbnailRenderer = new sst.aws.Function('PublishThumbnailRenderer', {
+  handler: 'apps/workers/src/media/publishThumbnailRenderer.handler',
+  runtime: 'nodejs24.x',
+  // Document fetch (15 s) + browser launch + the 35 s render deadline + encode and close.
+  timeout: '75 seconds',
+  // Chromium needs the headroom; @sparticuz/chromium documents ~1.6 GB as its floor.
+  memory: '2048 MB',
+  nodejs: {
+    // @sparticuz/chromium resolves its brotli-packed binary relative to its own package dir, so it
+    // cannot be bundled; playwright-core loads its protocol/driver files the same way. sharp is a
+    // native addon (sst externalizes it by default but only ships it when installed). install
+    // runs npm for the Lambda's linux platform, so the right prebuilds land in the zip.
+    install: ['@sparticuz/chromium', 'playwright-core', 'sharp'],
+    esbuild: {
+      external: ['@sparticuz/chromium', 'playwright-core', 'sharp'],
+    },
+  },
+});
 const publishThumbnailQueueDLQ = new sst.aws.Queue('publishThumbnailQueueDLQ', {});
 const publishThumbnailQueue = new sst.aws.Queue('publishThumbnailQueue', {
-  visibilityTimeout: '2 minutes', // > the 60-second handler timeout + margin
+  visibilityTimeout: '4 minutes', // > the 150-second handler timeout + margin
   dlq: {
     queue: publishThumbnailQueueDLQ.arn,
     retry: 2,
@@ -783,31 +808,25 @@ const publishThumbnailQueueSubscription = publishThumbnailQueue.subscribe(
   {
     handler: 'apps/workers/src/queueHandlers/publishThumbnail.dispatch',
     runtime: 'nodejs24.x',
-    timeout: '60 seconds',
-    // Chromium needs the headroom; @sparticuz/chromium documents ~1.6 GB as its floor.
-    memory: '2048 MB',
+    // Document build + the renderer invoke (aborted client-side at 90 s) + the upload and record.
+    timeout: '150 seconds',
+    memory: '1024 MB',
     vpc: lambdaVpc,
     link: [...allSecrets, publishedArtifactsBucket],
+    permissions: [{ actions: ['lambda:InvokeFunction'], resources: [publishThumbnailRenderer.arn] }],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
       // Origin the blessed /static/lib scripts load from inside the render (renderSandboxedBundle).
       APP_URL: $dev ? 'http://localhost:3000' : appUrlForLambdaEnv(),
-    },
-    nodejs: {
-      // @sparticuz/chromium resolves its brotli-packed binary relative to its own package dir, so it
-      // cannot be bundled; playwright-core loads its protocol/driver files the same way. sharp is a
-      // native addon (sst externalizes it by default but only ships it when installed). install
-      // runs npm for the Lambda's linux platform, so the right prebuilds land in the zip.
-      install: ['@sparticuz/chromium', 'playwright-core', 'sharp'],
-      esbuild: {
-        external: ['@sparticuz/chromium', 'playwright-core', 'sharp'],
-      },
+      // Read by apps/workers/src/media/invokeThumbnailRenderer.ts.
+      PUBLISH_THUMBNAIL_RENDERER_FUNCTION: publishThumbnailRenderer.name,
     },
   },
   {
     ...SINGLE_RECORD_BATCH,
     // Each render holds a 2 GB Chromium for up to a minute, and a backfill can enqueue the whole
-    // library at once; cap the fan-out without reserving account concurrency.
+    // library at once; cap the fan-out without reserving account concurrency. The renderer is
+    // only ever invoked from here, so this caps it too.
     transform: { eventSourceMapping: { scalingConfig: { maximumConcurrency: 5 } } },
   }
 );
@@ -1731,6 +1750,7 @@ export {
   webhookDeliveryQueueSubscription,
   questExportQueueSubscription,
   publishThumbnailQueueSubscription,
+  publishThumbnailRenderer,
   dataLakeCleanupQueueSubscription,
   dataLakeTaxonomyQueueSubscription,
   dataLakeResearchQueueSubscription,
