@@ -105,10 +105,15 @@ import {
   supportsPromptCache,
   withCacheBreakpoints,
   type CompletionMessage,
+  type CompletionRequest,
 } from './completions';
 import { describeAlways } from './approvalScope';
 import { reasoningEffortFor, requestsThinking } from './reasoningEffort';
 import { addUsage, foldUsage } from './streamEvents';
+import type { CompletionStreamEvent } from './streamEvents';
+import { LOCAL_MODEL_PREFIX, OllamaLocal } from './OllamaLocal';
+import type { LocalHistory } from './LocalHistory';
+import type { LocalHistoryResult } from '@shared/history';
 import { findStaleResults, historyRounds, sentHistory, toolResultContent } from './contextPruning';
 import { stalePlanReminder, unfinishedPlanReminder } from './planReminder';
 import { buildExploreContext, shouldOfferExplore } from './explore';
@@ -407,6 +412,8 @@ export interface ChatServiceDeps {
   screen?: ScreenCapturer;
   /** Fits an image a tool shows the model. Absent in tests, where file_read then describes an image in text. */
   prepareImage?: ImageContext['prepare'];
+  history?: LocalHistory;
+  local?: OllamaLocal;
   /** Paths kept out of reach of shell commands whatever the user granted. Enforced by the file tools, and by the shell only when SANDBOX_SHELL_COMMANDS is on. */
   protectedPaths?: readonly string[];
   /**
@@ -599,6 +606,7 @@ export class ChatService {
    * before its next tool call instead of holding the set it started with. See `refreshScope`.
    */
   private readonly scopeVersions = new Map<string, number>();
+  private readonly historySettings = new Map<string, symbol>();
 
   /**
    * Sends being accepted, per session. A send awaits the store and the model catalog before its
@@ -753,6 +761,49 @@ export class ChatService {
 
   listModels(force = false): Promise<ChatModelCatalog> {
     return this.deps.models?.list(force) ?? Promise.resolve({ models: [] });
+  }
+
+  async setSessionHistory(sessionId: string, enabled: boolean): Promise<ChatSessionSummary | null> {
+    if (enabled && !this.deps.history) throw new Error('Local history is unavailable. Restart the app and try again.');
+    const historyScope = this.deps.history?.scopeKey() ?? null;
+    const storeScope = this.deps.store.scopeKey();
+    const historyRevision = this.deps.history?.revision();
+    const key = `${storeScope}:${sessionId}`;
+    const operation = Symbol();
+    this.historySettings.set(key, operation);
+    const isCurrentOperation = () => this.historySettings.get(key) === operation;
+    try {
+      const previous = enabled ? await this.deps.store.get(sessionId) : null;
+      const previouslyEnabled = previous?.historyEnabled === true;
+      const summary = await this.deps.store.setHistoryEnabled(sessionId, enabled, storeScope, isCurrentOperation);
+      if (!isCurrentOperation()) return null;
+      if (!enabled) this.deps.history?.removeSession(sessionId, historyScope);
+      const session = summary && enabled ? await this.deps.store.get(sessionId) : null;
+      if (!isCurrentOperation()) return null;
+      if (session) {
+        try {
+          this.deps.history?.captureSession(session, historyScope, historyRevision);
+        } catch (error) {
+          if (this.deps.history?.scopeKey() === historyScope && this.deps.history?.revision() === historyRevision) {
+            try {
+              await this.deps.store.setHistoryEnabled(sessionId, previouslyEnabled, storeScope, isCurrentOperation);
+            } catch (rollbackError) {
+              this.deps.logger.warn(`CHAT: could not restore history preference: ${String(rollbackError)}`);
+            }
+          }
+          throw error;
+        }
+      }
+      if (summary && isCurrentOperation()) this.deps.summaryChanged?.(summary);
+      return summary;
+    } finally {
+      if (isCurrentOperation()) this.historySettings.delete(key);
+    }
+  }
+
+  searchHistory(query: string): LocalHistoryResult[] {
+    if (!this.deps.history) throw new Error('Local history is unavailable. Restart the app and try again.');
+    return this.deps.history.search(query);
   }
 
   /** What Settings offers for the next-prompt hint; see suggestionModelChoices. */
@@ -1341,8 +1392,9 @@ export class ChatService {
    * be left that could turn a forgotten dev server off.
    */
   async deleteImportedSession(sessionId: string, scopeKey: string): Promise<'removed' | 'forked' | 'missing'> {
+    const historyScope = this.deps.history?.scopeKey() ?? null;
     const outcome = await this.deps.store.deleteImported(sessionId, scopeKey);
-    if (outcome === 'removed') await this.cleanupDeletedSession(sessionId, false);
+    if (outcome === 'removed') await this.cleanupDeletedSession(sessionId, false, historyScope);
     return outcome;
   }
 
@@ -1350,9 +1402,14 @@ export class ChatService {
     await this.cleanupDeletedSession(sessionId, true);
   }
 
-  private async cleanupDeletedSession(sessionId: string, deleteStoredSession: boolean): Promise<void> {
+  private async cleanupDeletedSession(
+    sessionId: string,
+    deleteStoredSession: boolean,
+    historyScope = this.deps.history?.scopeKey() ?? null
+  ): Promise<void> {
     // Before the stop, so an open card is recorded as closed by the delete rather than by a stop.
     this.deps.approvals?.forgetSession(sessionId);
+    this.deps.history?.removeSession(sessionId, historyScope);
     this.stop(sessionId);
     this.doomLoop.forget(sessionId);
     this.webSearches.forget(sessionId);
@@ -1369,6 +1426,9 @@ export class ChatService {
     this.deps.videoJobs?.forgetSession(sessionId);
     await this.deps.media?.forgetSession(sessionId);
     if (deleteStoredSession) await this.deps.store.delete(sessionId);
+    // The stopped reply can settle and reindex while process/browser cleanup is awaiting I/O.
+    // Once the serialized delete has finished, no later append can resurrect the session.
+    this.deps.history?.removeSession(sessionId, historyScope);
     this.deps.activity?.forget(sessionId);
     this.deps.queue?.forget(sessionId);
     await this.deps.sidebarSections?.forgetSession(sessionId).catch((err: unknown) => {
@@ -1447,6 +1507,7 @@ export class ChatService {
     attachments: readonly ChatAttachment[],
     options: SendOptions
   ): Promise<SendMessageResult> {
+    const historyScope = this.deps.history?.scopeKey() ?? null;
     const { released } = options;
     const prompt = text.trim();
     // An attachment is a message on its own: "look at this" with a screenshot needs no prose.
@@ -1560,7 +1621,8 @@ export class ChatService {
         existing,
         invocation,
         skillCommand,
-        turnOptions
+        turnOptions,
+        historyScope
       );
     } finally {
       this.accepting.delete(sessionId);
@@ -1576,12 +1638,14 @@ export class ChatService {
     existing: ChatSession,
     invocation: ReturnType<typeof parseSkillInvocation>,
     skillCommand: Awaited<ReturnType<SkillCatalog['get']>>,
-    options: SendOptions
+    options: SendOptions,
+    historyScope: string | null
   ): Promise<SendMessageResult> {
     const { released, seedHops } = options;
     const notes = released?.notes ?? options.notes;
     const api = this.deps.getApiClient();
-    if (!api) return { ok: false, error: 'Sign in to send a message.' };
+    if (!api && !existing.model.startsWith(LOCAL_MODEL_PREFIX))
+      return { ok: false, error: 'Sign in to send a message.' };
     // First turns only: they are where a session start spends its time.
     const timer = existing.messages.length === 0 ? new PhaseTimer() : undefined;
 
@@ -1672,7 +1736,7 @@ export class ChatService {
     // A relay, an auto-fix and a spawn's seed prompt all start a turn nobody typed here.
     if (!released?.relay && !released?.automatic && seedHops === undefined) this.attendedTurns.add(sessionId);
     else this.attendedTurns.delete(sessionId);
-    const replyId = this.startReply(session, api, undefined, released?.relay?.hops ?? seedHops ?? 0);
+    const replyId = this.startReply(session, api, historyScope, undefined, released?.relay?.hops ?? seedHops ?? 0);
 
     // After the reply is in flight, and never awaited: a first answer that waited on a title
     // request would be a worse product than one with a truncated name. The row changes when
@@ -1705,13 +1769,15 @@ export class ChatService {
    * this can never be the thing that makes a finished conversation spend another turn.
    */
   async continueReply(sessionId: string): Promise<SendMessageResult> {
+    const historyScope = this.deps.history?.scopeKey() ?? null;
     if (this.isBusy(sessionId)) return { ok: false, error: 'This conversation is still replying.' };
 
     const api = this.deps.getApiClient();
-    if (!api) return { ok: false, error: 'Sign in to continue this reply.' };
-
     const session = await this.deps.store.get(sessionId);
     if (!session) return { ok: false, error: 'That conversation no longer exists.' };
+
+    if (!api && !session.model.startsWith(LOCAL_MODEL_PREFIX))
+      return { ok: false, error: 'Sign in to continue this reply.' };
 
     const last = session.messages[session.messages.length - 1];
     if (!last || last.role !== 'assistant' || !isResumableStop(last.stopReason)) {
@@ -1720,7 +1786,7 @@ export class ChatService {
 
     // Reached only from the Continue button, so whoever clicked it is there to answer a card.
     this.attendedTurns.add(sessionId);
-    const replyId = this.startReply(session, api, {
+    const replyId = this.startReply(session, api, historyScope, {
       id: last.id,
       content: last.content,
       // A message stored before rounds were recorded resumes as one round holding everything it
@@ -1830,7 +1896,8 @@ export class ChatService {
   private async compact(session: ChatSession, focus: string, automatic: boolean): Promise<ContextBoundaryResult> {
     const sessionId = session.id;
     const api = this.deps.getApiClient();
-    if (!api) return { ok: false, error: 'Sign in to compact this conversation.' };
+    if (!api && !session.model.startsWith(LOCAL_MODEL_PREFIX))
+      return { ok: false, error: 'Sign in to compact this conversation.' };
 
     if (!hasClearableHistory(session.messages)) {
       return { ok: false, error: 'There is nothing in this conversation to compact yet.' };
@@ -1842,10 +1909,8 @@ export class ChatService {
     let answer = '';
     try {
       timer = setTimeout(() => controller.abort(), COMPACT_TIMEOUT_MS);
-      const { endpoint } = await this.resolveServerConfig(api);
-      await streamCompletion(
-        api.getAxiosInstance(),
-        endpoint,
+      await this.streamAuxiliary(
+        api,
         {
           // The session's own model, as asked: a summary of a long coding conversation is the
           // kind of reading a small model does badly, and this one is the handoff everything
@@ -1911,7 +1976,8 @@ export class ChatService {
    */
   private startReply(
     session: ChatSession,
-    api: AuthenticatedApiClient,
+    api: AuthenticatedApiClient | null,
+    historyScope: string | null,
     resume?: ResumedReply & { id: string },
     /**
      * How far down an agent-to-agent chain this turn is: 0 for one the user typed, and the
@@ -1927,7 +1993,7 @@ export class ChatService {
     this.deps.activity?.replyStarted(sessionId);
     if (hops !== undefined) this.turnRelay.set(sessionId, { hops, sends: 0 });
 
-    void this.runReply(session, replyId, api, controller, resume)
+    void this.runReply(session, replyId, api, controller, historyScope, resume)
       // runReply already catches, so this only covers a throw from its own bookkeeping. A turn
       // whose end cannot be classified is treated as failed, which HOLDS the queue rather than
       // firing it - the safe direction when the outcome is unknown.
@@ -1944,7 +2010,7 @@ export class ChatService {
         // spawned run gives its concurrency slot back and reports to its parent, and a parent
         // that was mid-turn takes delivery of anything that finished while it was busy.
         // Reporting to the PARENT writes a different session's file, so it needs no ordering here.
-        void this.settleSpawnedTurn(sessionId);
+        void this.settleSpawnedTurn(sessionId, session.model.startsWith(LOCAL_MODEL_PREFIX));
 
         // Awaited, and before the queue: both append to THIS session, and appendMessage is a
         // read-modify-write with no lock of its own - overlapping them would let the later
@@ -1973,6 +2039,8 @@ export class ChatService {
     const available = this.deps.models?.cached();
     if (!available || available.length === 0) return { session };
     if (available.some(model => model.id === session.model)) return { session };
+    // A device-local model is never swapped for a hosted one: that would send the conversation to the server.
+    if (session.model.startsWith(LOCAL_MODEL_PREFIX)) return { session };
 
     const replacement = await this.pickModel(available);
     if (!replacement) return { session };
@@ -2058,8 +2126,9 @@ export class ChatService {
   private async runReply(
     session: ChatSession,
     replyId: string,
-    api: AuthenticatedApiClient,
+    api: AuthenticatedApiClient | null,
     controller: AbortController,
+    historyScope: string | null,
     resume?: ResumedReply
   ): Promise<TurnOutcome> {
     const sessionId = session.id;
@@ -2092,16 +2161,21 @@ export class ChatService {
     try {
       // Read before any await: a folder changed while the config loads must still reach the first refresh.
       let scopeVersion = this.scopeVersion(sessionId);
-      const serverConfig = await this.resolveServerConfig(api);
+      const localTurn = session.model.startsWith(LOCAL_MODEL_PREFIX);
+      if (!api && !localTurn) throw new Error('Sign in to send a message.');
+      const serverConfig = api && !localTurn ? await this.resolveServerConfig(api) : { endpoint: '', cdnUrl: '' };
       // A spawned session's seed run has nobody watching it; a turn the user typed into it does.
       const ask = !session.origin || this.attendedTurns.has(sessionId);
       let { roots, workingDirectory } = await this.resolveToolScope(session);
-      const media = this.buildMediaContext(session, api, serverConfig.cdnUrl);
+      const media = api && !localTurn ? this.buildMediaContext(session, api, serverConfig.cdnUrl) : undefined;
       // A wrapper over the client and nothing more: a turn that never searches makes no request.
-      const web = webContextFor(api, {
-        searches: this.webSearches.turn(sessionId),
-        log: line => this.deps.logger.warn(line),
-      });
+      const web =
+        api && !localTurn
+          ? webContextFor(api, {
+              searches: this.webSearches.turn(sessionId),
+              log: line => this.deps.logger.warn(line),
+            })
+          : undefined;
       // Started now and awaited where the tool list is built, so it overlaps the reads below.
       // Asked every turn that can generate, from a short cache: a server with no video model gets
       // no generate_video at all rather than one that fails when called.
@@ -2119,7 +2193,10 @@ export class ChatService {
       // Re-read after a round that changed which servers are connected; see mcpToolsChanged.
       let mcpTools = this.deps.mcp?.tools() ?? [];
       let mcpServers = (await this.deps.mcp?.state())?.servers ?? [];
-      const catalog = await this.deps.models?.list();
+      const catalog =
+        localTurn && this.deps.models?.listLocal
+          ? { models: await this.deps.models.listLocal() }
+          : await this.deps.models?.list();
       const cacheable = supportsPromptCache(catalog?.models ?? [], session.model);
       const modelOption = catalog?.models.find(option => option.id === session.model);
       const maxTokens = modelOption?.maxOutputTokens;
@@ -2144,7 +2221,7 @@ export class ChatService {
         : undefined;
       const offerExplore = shouldOfferExplore(catalog?.models ?? [], session.model);
       const exploreFor = (granted: readonly string[]): ExploreContext | undefined =>
-        granted.length > 0 && offerExplore
+        api && !localTurn && granted.length > 0 && offerExplore
           ? buildExploreContext({
               axios: api.getAxiosInstance(),
               endpoint: serverConfig.endpoint,
@@ -2175,24 +2252,26 @@ export class ChatService {
         : undefined;
       const videoModels = await videoModelsRead;
       const toolsFor = (granted: readonly string[]) =>
-        toolsForRequest({
-          modelId: session.model,
-          roots: granted,
-          media: !!media,
-          video: videoModels,
-          host: !!host,
-          explore: !!explore,
-          browser: !!browser,
-          screen: !!screen,
-          memory: !!memory,
-          skills: !!skills,
-          web: true,
-          // See ToolDefinition.interactive.
-          ask,
-          suggestions: !session.origin,
-          mcp: mcpTools.map(binding => binding.definition.schema),
-          mcpServers: !!this.deps.mcp,
-        });
+        modelOption?.supportsTools === false || (localTurn && !modelOption)
+          ? []
+          : toolsForRequest({
+              modelId: session.model,
+              roots: granted,
+              media: !!media,
+              video: videoModels,
+              host: !!host,
+              explore: !!explore,
+              browser: !!browser,
+              screen: !!screen,
+              memory: !!memory,
+              skills: !!skills,
+              web: !!web,
+              // See ToolDefinition.interactive.
+              ask,
+              suggestions: !session.origin,
+              mcp: mcpTools.map(binding => binding.definition.schema),
+              mcpServers: !!this.deps.mcp,
+            });
       let tools = toolsFor(roots);
       // A resumed reply replays the interrupted turn's tool results to the model, so untrusted
       // text it had already read is still in front of it: it starts out as tainted as the turn
@@ -2222,24 +2301,25 @@ export class ChatService {
       );
       const projectContext = await contextBlock;
       const skillsSection = await skillsBlock;
+      const toolsSupported = modelOption?.supportsTools !== false && (!localTurn || !!modelOption);
       const systemMessage = () =>
         buildSystemMessage(
-          roots,
-          !!media,
-          !!host,
-          !!explore,
-          this.deps.mcp ? mcpServers : null,
+          toolsSupported ? roots : [],
+          toolsSupported && !!media,
+          toolsSupported && !!host,
+          toolsSupported && !!explore,
+          toolsSupported && this.deps.mcp ? mcpServers : null,
           session.project,
           this.deps.dependencies?.promptLines(session.id) ?? [],
           projectContext,
-          !!browser,
+          toolsSupported && !!browser,
           patchEdits,
-          !!memory,
-          skillsSection,
-          ask,
+          toolsSupported && !!memory,
+          toolsSupported ? skillsSection : '',
+          toolsSupported && ask,
           session.model,
-          true,
-          !!screen
+          toolsSupported && !!web,
+          toolsSupported && !!screen
         );
       wire.unshift(systemMessage());
       // Taken whether or not it is used, so a nudge the model ignored once does not follow the
@@ -2281,48 +2361,65 @@ export class ChatService {
           this.emit({ type: 'phase', sessionId, messageId: replyId, phase })
         );
         setPhase(WAITING);
-        const failure = await streamRound(
-          api.getAxiosInstance(),
-          serverConfig.endpoint,
-          {
-            model: session.model,
-            messages: cacheable ? withCacheBreakpoints(wire) : wire,
-            tools,
-            thinking: askForThinking,
-            // Dev log only; never sent on the wire. See CompletionRequest.sessionId.
-            sessionId,
-            ...effortField,
-            ...(maxTokens ? { maxTokens } : {}),
-          },
-          event => {
-            if (event.type === 'meta') probe?.frame('meta');
-            // `error` never reaches here (the transport throws on it); `meta` carries no reply.
-            if (event.type === 'error' || event.type === 'meta') return;
-            if (event.text || event.type === 'tool_use') timer.firstToken();
-            if (event.text) {
-              const split = splitThinking.push(event.text);
-              // An empty split is either a bare thinking marker or text the filter is holding
-              // back as a possible partial marker; only the first is a thinking frame.
-              const marker = !split.text && !split.reasoning && THINK_MARKER.test(event.text);
-              probe?.frame(split.text ? 'text' : split.reasoning ? 'reasoning' : marker ? 'marker' : 'text');
-              if (split.text) setPhase(RESPONDING);
-              else if (split.reasoning || marker) setPhase(THINKING);
-              append(split);
-            }
-            if (event.toolStarted) {
-              probe?.frame('toolStart');
-              setPhase({ kind: 'writing-tool', name: event.toolStarted.name });
-            }
-            if (event.type === 'tool_use') {
-              probe?.frame('toolUse');
-              if (event.tools) requested.push(...event.tools);
-              if (event.thinking) turnThinking = event.thinking;
-            }
-            if (event.stopReason) stopReason = event.stopReason;
-            turnUsage = foldUsage(turnUsage, event);
-          },
-          controller.signal
-        );
+        const onCompletionEvent = (event: CompletionStreamEvent): void => {
+          // `error` never reaches here (the transport throws on it); `meta` carries no reply.
+          if (event.type === 'meta') probe?.frame('meta');
+          if (event.type === 'error' || event.type === 'meta') return;
+          if (event.text || event.type === 'tool_use') timer.firstToken();
+          if (event.text) {
+            const split = splitThinking.push(event.text);
+            // An empty split is either a bare thinking marker or text the filter is holding
+            // back as a possible partial marker; only the first is a thinking frame.
+            const marker = !split.text && !split.reasoning && THINK_MARKER.test(event.text);
+            probe?.frame(split.text ? 'text' : split.reasoning ? 'reasoning' : marker ? 'marker' : 'text');
+            if (split.text) setPhase(RESPONDING);
+            else if (split.reasoning || marker) setPhase(THINKING);
+            append(split);
+          }
+          if (event.toolStarted) {
+            probe?.frame('toolStart');
+            setPhase({ kind: 'writing-tool', name: event.toolStarted.name });
+          }
+          if (event.type === 'tool_use') {
+            probe?.frame('toolUse');
+            if (event.tools) requested.push(...event.tools);
+            if (event.thinking) turnThinking = event.thinking;
+          }
+          if (event.stopReason) stopReason = event.stopReason;
+          turnUsage = foldUsage(turnUsage, event);
+        };
+        const failure = session.model.startsWith(LOCAL_MODEL_PREFIX)
+          ? await streamLocalRound(
+              this.deps.local ?? new OllamaLocal(),
+              {
+                model: session.model,
+                messages: wire,
+                tools,
+                thinking: askForThinking,
+                // Dev log only; never sent on the wire. See CompletionRequest.sessionId.
+                sessionId,
+                ...effortField,
+                ...(maxTokens ? { maxTokens } : {}),
+              },
+              onCompletionEvent,
+              controller.signal
+            )
+          : await streamRound(
+              api!.getAxiosInstance(),
+              serverConfig.endpoint,
+              {
+                model: session.model,
+                messages: cacheable ? withCacheBreakpoints(wire) : wire,
+                tools,
+                thinking: askForThinking,
+                // Dev log only; never sent on the wire. See CompletionRequest.sessionId.
+                sessionId,
+                ...effortField,
+                ...(maxTokens ? { maxTokens } : {}),
+              },
+              onCompletionEvent,
+              controller.signal
+            );
         append(splitThinking.flush());
         const timing = timer.end();
         if (probe) this.logRoundPhases(sessionId, session.model, roundIndex, probe.end());
@@ -2561,7 +2658,7 @@ export class ChatService {
       const parsed = produced.map(round => ({ round, ...extractArtifacts(round.text) }));
       const newArtifacts = parsed.flatMap(entry => entry.artifacts);
       const published =
-        newArtifacts.length > 0 && this.deps.artifacts
+        !localTurn && newArtifacts.length > 0 && this.deps.artifacts
           ? await this.deps.artifacts.publish(newArtifacts, sessionId)
           : newArtifacts;
       // A resumed run only ever sees markup the rounds AFTER the interruption emitted - the
@@ -2587,7 +2684,7 @@ export class ChatService {
       const keepRounds = toolCalls.length > 0 || rounds.some(round => round.reasoning);
       const finalContent = joinRounds(rounds.map(round => round.text));
 
-      await this.settleReply(sessionId, !!resume, {
+      await this.settleReply(sessionId, !!resume, historyScope, {
         id: replyId,
         role: 'assistant',
         content: finalContent,
@@ -2630,7 +2727,7 @@ export class ChatService {
 
       // Persisted even though it failed: a thread that silently drops the turn leaves the
       // user's own prompt sitting there with no explanation next time they open it.
-      await this.settleReply(sessionId, !!resume, {
+      await this.settleReply(sessionId, !!resume, historyScope, {
         id: replyId,
         role: 'assistant',
         content,
@@ -2692,18 +2789,24 @@ export class ChatService {
    * short" chip stranded between them would describe the loop's bookkeeping rather than what
    * the model did.
    */
-  private async settleReply(sessionId: string, resumed: boolean, message: ChatMessage): Promise<void> {
+  private async settleReply(
+    sessionId: string,
+    resumed: boolean,
+    historyScope: string | null,
+    message: ChatMessage
+  ): Promise<void> {
     // Dropped before the write, never after: a read that saw both the stored reply and the live
     // one would fold the stream onto the finished text twice. A read in the gap sees neither,
     // and the 'done' that follows hands the reply over whole.
     this.live.delete(sessionId);
     if (!resumed) {
-      await this.deps.store.appendMessage(sessionId, message);
+      const updated = await this.deps.store.appendMessage(sessionId, message);
+      if (updated) this.captureSessionHistory(updated, historyScope);
       return;
     }
     // stopReason and error are set explicitly, undefined included: a resumed run that finishes
     // must clear the budget stop the previous one left behind, and `Partial` would keep it.
-    await this.deps.store.updateMessage(sessionId, message.id, {
+    const updated = await this.deps.store.updateMessage(sessionId, message.id, {
       content: message.content,
       stopReason: message.stopReason,
       error: message.error,
@@ -2713,6 +2816,15 @@ export class ChatService {
       artifacts: message.artifacts,
       usage: message.usage,
     });
+    if (updated) this.captureSessionHistory(updated, historyScope);
+  }
+
+  private captureSessionHistory(session: ChatSession, historyScope: string | null): void {
+    try {
+      this.deps.history?.captureSession(session, historyScope);
+    } catch (error) {
+      this.deps.logger.warn(`CHAT: could not index conversation history: ${String(error)}`);
+    }
   }
 
   /**
@@ -3086,6 +3198,10 @@ export class ChatService {
   private buildHostContext(session: ChatSession): HostContext | undefined {
     const project = session.project;
     if (!project) return undefined;
+    const visibleTitle = (target: Pick<ChatSession, 'title' | 'model'>): string =>
+      !session.model.startsWith(LOCAL_MODEL_PREFIX) && target.model.startsWith(LOCAL_MODEL_PREFIX)
+        ? 'Local conversation'
+        : target.title;
 
     const addressable = async (sessionId: string): Promise<ChatSession | null> => {
       if (!isValidSessionId(sessionId)) return null;
@@ -3112,18 +3228,21 @@ export class ChatService {
         return all
           .filter(entry => entry.project?.directory === project.directory)
           .filter(entry => includeArchived || !entry.archived)
-          .map(entry => this.toHostView(entry));
+          .map(entry => ({ ...this.toHostView(entry), title: visibleTitle(entry) }));
       },
 
       readSession: async sessionId => {
         const target = await addressable(sessionId);
+        if (target?.model.startsWith(LOCAL_MODEL_PREFIX) && !session.model.startsWith(LOCAL_MODEL_PREFIX)) {
+          throw new Error('A hosted model cannot read a device-local conversation. Open it directly to read it.');
+        }
         return target ? renderTranscript(target) : null;
       },
 
       setArchived: async (sessionId, archived) => {
         if (!(await addressable(sessionId))) return null;
         const updated = await this.setSessionArchived(sessionId, archived);
-        return updated ? this.toHostView(updated) : null;
+        return updated ? { ...this.toHostView(updated), title: visibleTitle(updated) } : null;
       },
 
       deleteSession: async sessionId => {
@@ -3132,7 +3251,10 @@ export class ChatService {
         return true;
       },
 
-      describeSession: async sessionId => (await addressable(sessionId))?.title ?? null,
+      describeSession: async sessionId => {
+        const target = await addressable(sessionId);
+        return target ? visibleTitle(target) : null;
+      },
 
       sendTo: async (targetId, message) => this.relayMessage(session, await addressable(targetId), targetId, message),
 
@@ -3418,11 +3540,23 @@ export class ChatService {
     if (!target) {
       return { ok: false, reason: 'no-target', message: 'No conversation with that id in this project.' };
     }
+    if (from.model.startsWith(LOCAL_MODEL_PREFIX) && !target.model.startsWith(LOCAL_MODEL_PREFIX)) {
+      return {
+        ok: false,
+        reason: 'unavailable',
+        message:
+          'A device-local conversation cannot send messages to a hosted model. Choose a local conversation instead.',
+      };
+    }
+    const title =
+      !from.model.startsWith(LOCAL_MODEL_PREFIX) && target.model.startsWith(LOCAL_MODEL_PREFIX)
+        ? 'Local conversation'
+        : target.title;
     if (target.archived === true) {
       return {
         ok: false,
         reason: 'archived',
-        message: `"${target.title}" is archived. Ask the user to restore it before sending to it.`,
+        message: `"${title}" is archived. Ask the user to restore it before sending to it.`,
       };
     }
 
@@ -3480,7 +3614,7 @@ export class ChatService {
     this.flushQueue(targetId);
 
     this.deps.logger.debug(`CHAT: relayed a message from ${from.id} to ${targetId} at hop ${budget.hops + 1}`);
-    return { ok: true, sessionId: targetId, title: target.title, queued };
+    return { ok: true, sessionId: targetId, title, queued };
   }
 
   /**
@@ -3763,6 +3897,7 @@ export class ChatService {
       });
       if (!retained) await onFailed?.(reason);
       await this.deliverChildReport(parentId, {
+        localOnly: child.model.startsWith(LOCAL_MODEL_PREFIX),
         content:
           `The session you started, "${child.title}" (${child.id}), could not start and ${outcome}: ${reason} ` +
           (retained
@@ -3846,7 +3981,7 @@ export class ChatService {
    * is the unattended behaviour this task deliberately does not build. What lands instead is a
    * message the user reads and the model sees on the next turn either of them takes.
    */
-  private async settleSpawnedTurn(sessionId: string): Promise<void> {
+  private async settleSpawnedTurn(sessionId: string, localOnly: boolean): Promise<void> {
     const watch = this.spawnWatch.get(sessionId);
     if (!watch) return;
     this.spawnWatch.delete(sessionId);
@@ -3854,6 +3989,7 @@ export class ChatService {
     const child = await this.deps.store.get(sessionId);
     if (!child) return;
     await this.deliverChildReport(watch.parentSessionId, {
+      localOnly,
       content: describeChildOutcome(child),
       display: childOutcomeDisplay(child),
     });
@@ -3882,11 +4018,14 @@ export class ChatService {
     this.childReports.delete(sessionId);
 
     for (const report of queued) {
+      const parent = report.localOnly ? await this.deps.store.get(sessionId) : null;
+      const withheld = report.localOnly && !parent?.model.startsWith(LOCAL_MODEL_PREFIX);
+      const localNotice = 'A device-local child session finished. Open that conversation to read its report.';
       const message: ChatMessage = {
         id: randomUUID(),
         role: 'user',
-        content: report.content,
-        display: report.display,
+        content: withheld ? localNotice : report.content,
+        display: withheld ? localNotice : report.display,
         createdAt: new Date().toISOString(),
         system: true,
       };
@@ -4627,6 +4766,30 @@ export class ChatService {
     return resolveDefaultModel(models, [remembered, this.deps.preferredModel]);
   }
 
+  /** Auxiliary generations honor the same device-local boundary as the main reply. */
+  private async streamAuxiliary(
+    api: AuthenticatedApiClient | null,
+    request: CompletionRequest,
+    onEvent: (event: CompletionStreamEvent) => void,
+    signal: AbortSignal
+  ): Promise<void> {
+    if (request.model.startsWith(LOCAL_MODEL_PREFIX)) {
+      const thinking = createThinkFilter();
+      await (this.deps.local ?? new OllamaLocal()).stream(
+        { ...request, thinking: false },
+        event =>
+          onEvent({ ...event, ...('text' in event && event.text ? { text: thinking.push(event.text).text } : {}) }),
+        signal
+      );
+      const tail = thinking.flush().text;
+      if (tail) onEvent({ type: 'content', text: tail });
+      return;
+    }
+    if (!api) throw new Error('Sign in to use a hosted model.');
+    const { endpoint } = await this.resolveServerConfig(api);
+    await streamCompletion(api.getAxiosInstance(), endpoint, request, onEvent, signal);
+  }
+
   /**
    * Give a new conversation a name of its own, replacing the truncated first prompt.
    *
@@ -4643,25 +4806,25 @@ export class ChatService {
    * row underneath it still has to say which of five conversations about that repo this is, and
    * a generated name does that better than the truncation it gets today.
    */
-  private async nameSession(session: ChatSession, api: AuthenticatedApiClient, prompt: string): Promise<void> {
+  private async nameSession(session: ChatSession, api: AuthenticatedApiClient | null, prompt: string): Promise<void> {
     const controller = new AbortController();
     let timer: NodeJS.Timeout | undefined;
 
     // Everything is inside, including reading the catalog: this runs as a floating promise, so
     // a throw out of it would be an unhandled rejection in main rather than a missing title.
     try {
-      const model = pickTitleModel(this.deps.models?.cached() ?? [], session.model);
+      const model = session.model.startsWith(LOCAL_MODEL_PREFIX)
+        ? session.model
+        : pickTitleModel(this.deps.models?.cached() ?? [], session.model);
       if (!model) return;
 
       // Bounded on its own rather than tied to the turn: a title is worth a few seconds and no
       // more, and the reply it runs beside can legitimately last half an hour.
       timer = setTimeout(() => controller.abort(), TITLE_TIMEOUT_MS);
 
-      const { endpoint } = await this.resolveServerConfig(api);
       let reply = '';
-      await streamCompletion(
-        api.getAxiosInstance(),
-        endpoint,
+      await this.streamAuxiliary(
+        api,
         { model, messages: titleRequestMessages(prompt), tools: [], maxTokens: TITLE_MAX_TOKENS },
         event => {
           if (event.type === 'content' || event.type === 'tool_use') reply += event.text ?? '';
@@ -4709,8 +4872,6 @@ export class ChatService {
     this.cancelSuggestion(sessionId);
 
     const api = this.deps.getApiClient();
-    if (!api) return null;
-
     const controller = new AbortController();
     this.suggesting.set(sessionId, controller);
     let timer: NodeJS.Timeout | undefined;
@@ -4731,8 +4892,12 @@ export class ChatService {
         .find(message => message.role === 'user' && !message.system && message.content.trim());
       if (!prompt) return null;
 
-      const available = this.deps.models?.cached() ?? (await this.listModels()).models;
-      const model = pickSuggestionModel(available, preferredModel);
+      const available = session.model.startsWith(LOCAL_MODEL_PREFIX)
+        ? []
+        : (this.deps.models?.cached() ?? (await this.listModels()).models);
+      const model = session.model.startsWith(LOCAL_MODEL_PREFIX)
+        ? { id: session.model, name: session.model, backend: 'local-ollama' }
+        : pickSuggestionModel(available, preferredModel);
       if (!model) return null;
 
       timer = setTimeout(
@@ -4740,11 +4905,9 @@ export class ChatService {
         isLocalModel(model) ? LOCAL_SUGGESTION_TIMEOUT_MS : SUGGESTION_TIMEOUT_MS
       );
 
-      const { endpoint } = await this.resolveServerConfig(api);
       let answer = '';
-      await streamCompletion(
-        api.getAxiosInstance(),
-        endpoint,
+      await this.streamAuxiliary(
+        api,
         {
           model: model.id,
           messages: suggestionRequestMessages(prompt.content, reply.content),
@@ -5288,6 +5451,21 @@ async function streamRound(...args: Parameters<typeof streamCompletion>): Promis
   }
 }
 
+async function streamLocalRound(
+  local: OllamaLocal,
+  request: CompletionRequest,
+  onEvent: (event: CompletionStreamEvent) => void,
+  signal?: AbortSignal
+): Promise<Error | null> {
+  try {
+    await local.stream(request, onEvent, signal);
+    return null;
+  } catch (err) {
+    if (signal?.aborted) return null;
+    return err instanceof Error ? err : new Error(String(err));
+  }
+}
+
 /**
  * Whether a failure is the conversation having outgrown the model's context window.
  *
@@ -5420,10 +5598,11 @@ function renderTranscript(session: ChatSession): string {
  * childOutcomeDisplay. They are composed together and travel together so a report cannot reach
  * the transcript with only one of them.
  */
-interface ChildReport {
+type ChildReport = {
+  localOnly?: boolean;
   content: string;
   display: string;
-}
+};
 
 /**
  * What a finished spawned session tells its parent.

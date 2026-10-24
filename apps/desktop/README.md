@@ -96,6 +96,28 @@ the switch off or changing models clears the current hint and discards late answ
 previous choice. Ollama completion requests time out after 30 seconds; hosted requests after
 five. Loading the model list can add time before generation starts.
 
+## Local history and offline models
+
+Turn on **Local history** in a conversation to index its messages and visited browser pages
+on this device. Use **Search conversations** in the sidebar to search opted-in history while
+offline. Turning the switch off removes that conversation from the index. Settings -> General ->
+Local history -> **Clear local history** clears the current account's index; it does not delete
+the original conversations or disable future capture in opted-in sessions.
+
+Run Ollama locally on `127.0.0.1:11434` with a downloaded chat model, then choose that model
+in the model picker. From the signed-out screen, choose **Use local models**. These models
+send inference requests to the local daemon; cloud-backed Ollama models are excluded.
+Local requests use a 4,096-token context by default, capped at the model's supported window.
+To use a larger window, set `PARAMETER num_ctx 8192` (or another supported size) in the
+model's Ollama Modelfile; discovery and inference use the same explicit context size.
+Local Code sessions can still use network tools when permitted, so offline inference does not
+make tool execution offline.
+
+If a model is missing, check that Ollama is running at that address and the installed model
+supports chat, then refresh the model list. If history is missing, check the conversation's
+switch and the selected account. A clear or search error is shown in the interface; retry after
+resolving the reported problem. The search index is separate from the saved conversations.
+
 ## Import from Claude
 
 Open Settings -> Import to enable Claude Code sync or select a claude.ai data export.

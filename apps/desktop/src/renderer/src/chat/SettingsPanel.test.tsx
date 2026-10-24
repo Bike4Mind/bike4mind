@@ -27,6 +27,8 @@ describe('the Settings screen', () => {
     expect(html).toContain('data-entry="server"');
     expect(html).toContain('data-entry="updates"');
     expect(html).toContain('data-entry="worktree-default"');
+    expect(html).toContain('data-entry="local-history"');
+    expect(html).toContain('settings-clear-history-btn');
     expect(html).not.toContain('data-entry="permissions"');
     expect(html).not.toContain('data-entry="claude-import"');
   });
@@ -74,7 +76,7 @@ describe('the Settings screen', () => {
 
   /** The caption came with the picker: it is the one thing the picker cannot say about itself. */
   it('keeps the line saying how far the server choice reaches', () => {
-    expect(html).toContain('Every conversation in this app talks to one server.');
+    expect(html).toContain('Hosted conversations use this server. Local models run on this device.');
   });
 
   it('says what the General page owns', () => {
